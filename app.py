@@ -1,796 +1,690 @@
-import os, requests, traceback
+import os, threading, traceback, difflib, io, csv as csvmod
+import requests
+from datetime import datetime, timezone
 from flask import Flask, jsonify
 from flask_cors import CORS
-from datetime import datetime, timezone, timedelta
 
 app = Flask(__name__)
 CORS(app)
 
-MLB_API = "https://statsapi.mlb.com/api/v1"
+_HERE = os.path.dirname(os.path.abspath(__file__))
+DASHBOARD_HTML = open(os.path.join(_HERE, 'dashboard.html')).read()
+DEEP_DIVE_HTML = open(os.path.join(_HERE, 'deepdive.html')).read()
 
-TEAM_LOGOS = {
-    "ARI":"https://www.mlbstatic.com/team-logos/109.svg","ATL":"https://www.mlbstatic.com/team-logos/144.svg",
-    "BAL":"https://www.mlbstatic.com/team-logos/110.svg","BOS":"https://www.mlbstatic.com/team-logos/111.svg",
-    "CHC":"https://www.mlbstatic.com/team-logos/112.svg","CWS":"https://www.mlbstatic.com/team-logos/145.svg",
-    "CIN":"https://www.mlbstatic.com/team-logos/113.svg","CLE":"https://www.mlbstatic.com/team-logos/114.svg",
-    "COL":"https://www.mlbstatic.com/team-logos/115.svg","DET":"https://www.mlbstatic.com/team-logos/116.svg",
-    "HOU":"https://www.mlbstatic.com/team-logos/117.svg","KC":"https://www.mlbstatic.com/team-logos/118.svg",
-    "LAA":"https://www.mlbstatic.com/team-logos/108.svg","LAD":"https://www.mlbstatic.com/team-logos/119.svg",
-    "MIA":"https://www.mlbstatic.com/team-logos/146.svg","MIL":"https://www.mlbstatic.com/team-logos/158.svg",
-    "MIN":"https://www.mlbstatic.com/team-logos/142.svg","NYM":"https://www.mlbstatic.com/team-logos/121.svg",
-    "NYY":"https://www.mlbstatic.com/team-logos/147.svg","OAK":"https://www.mlbstatic.com/team-logos/133.svg",
-    "PHI":"https://www.mlbstatic.com/team-logos/143.svg","PIT":"https://www.mlbstatic.com/team-logos/134.svg",
-    "SD":"https://www.mlbstatic.com/team-logos/135.svg","SEA":"https://www.mlbstatic.com/team-logos/136.svg",
-    "SF":"https://www.mlbstatic.com/team-logos/137.svg","STL":"https://www.mlbstatic.com/team-logos/138.svg",
-    "TB":"https://www.mlbstatic.com/team-logos/139.svg","TEX":"https://www.mlbstatic.com/team-logos/140.svg",
-    "TOR":"https://www.mlbstatic.com/team-logos/141.svg","WSH":"https://www.mlbstatic.com/team-logos/120.svg",
-}
-
+MLB_API   = "https://statsapi.mlb.com/api/v1"
+WX_API    = "https://api.open-meteo.com/v1/forecast"
+LOGO_BASE = "https://www.mlbstatic.com/team-logos/{team_id}.svg"
 PARK_FACTORS = {
-    "COL":{"run":1.18,"hr":1.22},"BOS":{"run":1.08,"hr":1.09},"CIN":{"run":1.07,"hr":1.11},
-    "PHI":{"run":1.06,"hr":1.07},"TEX":{"run":1.05,"hr":1.06},"NYY":{"run":1.04,"hr":1.10},
-    "CHC":{"run":1.03,"hr":1.05},"MIL":{"run":1.02,"hr":1.04},"LAD":{"run":0.97,"hr":0.96},
-    "OAK":{"run":0.96,"hr":0.93},"SF":{"run":0.94,"hr":0.89},"SD":{"run":0.93,"hr":0.91},
-    "MIA":{"run":0.92,"hr":0.88},"SEA":{"run":0.95,"hr":0.92},
+    133:1.08,144:0.92,110:0.97,111:1.04,112:0.97,137:0.95,109:1.06,
+    145:1.03,116:1.00,158:0.97,142:1.00,147:0.97,143:1.03,140:1.05,
+    146:0.95,121:0.97,136:0.93,138:1.02,141:0.98,139:0.99,108:0.96,
+    117:0.97,135:0.98,120:0.98,134:0.97,119:0.95,118:1.02,114:1.01,
+    113:0.94,115:1.00,158:0.97
 }
 
-STADIUM_COORDS = {
-    "ARI": (33.4455, -112.0667), "ATL": (33.8907, -84.4677), "BAL": (39.2839, -76.6217),
-    "BOS": (42.3467, -71.0972), "CHC": (41.9484, -87.6553), "CWS": (41.8300, -87.6338),
-    "CIN": (39.0979, -84.5081), "CLE": (41.4962, -81.6852), "COL": (39.7559, -104.9942),
-    "DET": (42.3390, -83.0485), "HOU": (29.7573, -95.3555), "KC": (39.0517, -94.4803),
-    "LAA": (33.8003, -117.8827), "LAD": (34.0739, -118.2400), "MIA": (25.7781, -80.2197),
-    "MIL": (43.0280, -87.9712), "MIN": (44.9817, -93.2776), "NYM": (40.7571, -73.8458),
-    "NYY": (40.8296, -73.9262), "PHI": (39.9061, -75.1665), "PIT": (40.4469, -80.0057),
-    "SD": (32.7073, -117.1573), "SEA": (47.5914, -122.3325), "SF": (37.7786, -122.3893),
-    "STL": (38.6226, -90.1928), "TB": (27.7683, -82.6534), "TEX": (32.7513, -97.0825),
-    "TOR": (43.6414, -79.3894), "WSH": (38.8730, -77.0074), "AZ": (33.4455, -112.0667),
-}
+# ── FanGraphs Cache ───────────────────────────────────────────────────────────
+_fg_lock = threading.Lock()
+_fg_bat  = {}
+_fg_pit  = {}
+_fg_loaded    = False
+_fg_load_date = None
 
-WX_CODES = {
-    0: "Clear", 1: "Mostly Clear", 2: "Partly Cloudy", 3: "Cloudy", 45: "Fog", 48: "Fog",
-    51: "Light Drizzle", 53: "Drizzle", 55: "Heavy Drizzle", 61: "Light Rain", 63: "Rain",
-    65: "Heavy Rain", 71: "Light Snow", 73: "Snow", 75: "Heavy Snow", 80: "Rain Showers",
-    81: "Rain Showers", 82: "Heavy Showers", 95: "Thunderstorm"
-}
-
-def deg_to_cardinal(deg):
-    dirs = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"]
-    return dirs[round(float(deg) / 22.5) % 16]
-
-def get_hourly_weather(home_abbr, game_time_utc):
-    coords = STADIUM_COORDS.get(home_abbr)
-    if not coords:
-        return {}
+def _load_fg_data():
+    global _fg_bat, _fg_pit, _fg_loaded, _fg_load_date
+    year = datetime.now().year
     try:
-        lat, lon = coords
-        game_dt = datetime.fromisoformat(game_time_utc.replace("Z", "+00:00")).replace(minute=0, second=0, microsecond=0)
-        r = requests.get(
-            "https://api.open-meteo.com/v1/forecast",
-            params={
-                "latitude": lat,
-                "longitude": lon,
-                "hourly": "temperature_2m,precipitation_probability,weather_code,wind_speed_10m,wind_direction_10m",
-                "wind_speed_unit": "mph",
-                "temperature_unit": "fahrenheit",
-                "precipitation_unit": "inch",
-                "timezone": "UTC",
-                "forecast_days": 2,
-            },
-            timeout=8,
-        )
-        r.raise_for_status()
-        j = r.json().get("hourly", {})
-        times = [datetime.fromisoformat(t) for t in j.get("time", [])]
-        if not times:
-            return {}
-        idx = min(range(len(times)), key=lambda i: abs(times[i] - game_dt))
-        temp = round(j.get("temperature_2m", [70])[idx])
-        rain = j.get("precipitation_probability", [0])[idx]
-        wind_speed = round(j.get("wind_speed_10m", [0])[idx])
-        wind_dir = deg_to_cardinal(j.get("wind_direction_10m", [0])[idx])
-        code = j.get("weather_code", [0])[idx]
-        return {
-            "temp": str(temp),
-            "wind": f"{wind_speed} mph {wind_dir}",
-            "condition": WX_CODES.get(code, "Unknown"),
-            "rainChance": rain,
-        }
-    except Exception as e:
-        print(f"[get_hourly_weather] {e}")
-        return {}
-
-def utc_to_et(utc_str):
-    """Convert MLB UTC game time to Eastern Time string."""
+        import pybaseball as pb
+        pb.cache.enable()
+        df = pb.batting_stats(year, qual=1)
+        bat = {}
+        for _, r in df.iterrows():
+            k = str(r.get("Name","")).strip().lower()
+            if k:
+                bat[k] = {
+                    "fg_avg": round(float(r.get("AVG") or 0),3),
+                    "fg_obp": round(float(r.get("OBP") or 0),3),
+                    "fg_slg": round(float(r.get("SLG") or 0),3),
+                    "fg_ops": round(float(r.get("OPS") or 0),3),
+                    "fg_woba":round(float(r.get("wOBA") or 0),3),
+                    "fg_wrc": int(r.get("wRC+") or 0),
+                    "fg_pa":  int(r.get("PA")   or 0),
+                    "fg_r":   int(r.get("R")    or 0),
+                    "fg_hr":  int(r.get("HR")   or 0),
+                    "fg_rbi": int(r.get("RBI")  or 0),
+                    "fg_sb":  int(r.get("SB")   or 0),
+                    "fg_war": round(float(r.get("WAR") or 0),1),
+                }
+        with _fg_lock: _fg_bat = bat
+        print(f"[FG] Batting: {len(bat)}")
+    except Exception as ex:
+        print("[FG] Batting failed:", ex)
     try:
-        dt_utc = datetime.fromisoformat(utc_str.replace("Z", "+00:00"))
-        # EST = UTC-5, EDT = UTC-4 (approx Apr-Oct)
-        dt_et  = dt_utc - timedelta(hours=4)
-        hour   = dt_et.hour
-        minute = dt_et.minute
-        ampm   = "PM" if hour >= 12 else "AM"
-        hour12 = hour % 12 or 12
-        return f"{hour12}:{minute:02d} {ampm} ET"
-    except Exception:
-        return "TBD"
+        import pybaseball as pb
+        df = pb.pitching_stats(year, qual=1)
+        pit = {}
+        for _, r in df.iterrows():
+            k = str(r.get("Name","")).strip().lower()
+            if k:
+                pit[k] = {
+                    "fg_era":  round(float(r.get("ERA")  or 0),2),
+                    "fg_fip":  round(float(r.get("FIP")  or 0),2),
+                    "fg_xfip": round(float(r.get("xFIP") or 0),2),
+                    "fg_whip": round(float(r.get("WHIP") or 0),2),
+                    "fg_k9":   round(float(r.get("K/9")  or 0),2),
+                    "fg_bb9":  round(float(r.get("BB/9") or 0),2),
+                    "fg_hr9":  round(float(r.get("HR/9") or 0),2),
+                    "fg_kpct": round(float(r.get("K%")   or 0),3),
+                    "fg_bbpct":round(float(r.get("BB%")  or 0),3),
+                    "fg_babip":round(float(r.get("BABIP") or 0),3),
+                    "fg_lob":  round(float(r.get("LOB%") or 0),3),
+                    "fg_war":  round(float(r.get("WAR")  or 0),1),
+                    "fg_ip":   round(float(r.get("IP")   or 0),1),
+                    "fg_g":    int(r.get("G")  or 0),
+                    "fg_gs":   int(r.get("GS") or 0),
+                    "fg_w":    int(r.get("W")  or 0),
+                    "fg_l":    int(r.get("L")  or 0),
+                }
+        with _fg_lock: _fg_pit = pit
+        print(f"[FG] Pitching: {len(pit)}")
+    except Exception as ex:
+        print("[FG] Pitching failed:", ex)
+    with _fg_lock:
+        _fg_loaded    = True
+        _fg_load_date = datetime.now().date()
 
+def _maybe_refresh_fg():
+    with _fg_lock:
+        loaded = _fg_loaded; date = _fg_load_date
+    if not loaded or date != datetime.now().date():
+        threading.Thread(target=_load_fg_data, daemon=True).start()
+
+def _fuzzy_lookup(name, cache):
+    if not name or not cache: return {}
+    k = name.strip().lower()
+    if k in cache: return cache[k]
+    m = difflib.get_close_matches(k, cache.keys(), n=1, cutoff=0.82)
+    return cache[m[0]] if m else {}
+
+def fg_batter(name):
+    with _fg_lock: c = dict(_fg_bat)
+    return _fuzzy_lookup(name, c)
+
+def fg_pitcher(name):
+    with _fg_lock: c = dict(_fg_pit)
+    return _fuzzy_lookup(name, c)
+
+# ── Baseball Savant Cache ─────────────────────────────────────────────────────
+_sv_lock         = threading.Lock()
+_sv_pit_xstats   = {}
+_sv_bat_xstats   = {}
+_sv_bat_statcast = {}
+_sv_arsenal_pct  = {}
+_sv_arsenal_velo = {}
+_sv_loaded    = False
+_sv_load_date = None
+
+PITCH_ORDER  = ["ff","si","fc","st","sl","cu","ch","fs","kn","sv"]
+PITCH_LABELS = {
+    "ff":"4-Seam","si":"Sinker","fc":"Cutter","st":"Sweeper",
+    "sl":"Slider","cu":"Curveball","ch":"Changeup",
+    "fs":"Splitter","kn":"Knuckleball","sv":"Slurve",
+}
+
+def _sv_key(raw):
+    if "," in raw:
+        last, first = raw.split(",", 1)
+        return (first.strip() + " " + last.strip()).lower()
+    return raw.strip().lower()
+
+def _sv_f(val):
+    try: return round(float(val), 2)
+    except: return "N/A"
+
+def _fetch_sv_csv(url):
+    r = requests.get(url, headers={"User-Agent":"Mozilla/5.0"}, timeout=15)
+    r.raise_for_status()
+    text = r.text.lstrip("\ufeff")
+    return list(csvmod.DictReader(io.StringIO(text)))
+
+def _load_savant_data():
+    global _sv_pit_xstats, _sv_bat_xstats, _sv_bat_statcast
+    global _sv_arsenal_pct, _sv_arsenal_velo, _sv_loaded, _sv_load_date
+    y = datetime.now().year
+    BASE = "https://baseballsavant.mlb.com"
+
+    # 1. Pitcher xERA
+    try:
+        rows = _fetch_sv_csv(f"{BASE}/leaderboard/expected_statistics?type=pitcher&year={y}&position=&team=&min=1&csv=true")
+        d = {}
+        for row in rows:
+            raw = row.get("last_name, first_name","").strip()
+            if not raw: continue
+            d[_sv_key(raw)] = {
+                "sv_xera":  _sv_f(row.get("xera")),
+                "sv_era_p": _sv_f(row.get("era")),
+                "sv_xwoba_p": _sv_f(row.get("est_woba")),
+                "sv_pid":   row.get("player_id",""),
+            }
+        with _sv_lock: _sv_pit_xstats = d
+        print(f"[Savant] Pitcher xStats: {len(d)}")
+    except Exception as ex:
+        print("[Savant] Pitcher xStats failed:", ex)
+
+    # 2. Batter xBA/xSLG/xwOBA
+    try:
+        rows = _fetch_sv_csv(f"{BASE}/leaderboard/expected_statistics?type=batter&year={y}&position=&team=&min=1&csv=true")
+        d = {}
+        for row in rows:
+            raw = row.get("last_name, first_name","").strip()
+            if not raw: continue
+            d[_sv_key(raw)] = {
+                "sv_xba":   _sv_f(row.get("est_ba")),
+                "sv_xslg":  _sv_f(row.get("est_slg")),
+                "sv_xwoba": _sv_f(row.get("est_woba")),
+                "sv_pid":   row.get("player_id",""),
+            }
+        with _sv_lock: _sv_bat_xstats = d
+        print(f"[Savant] Batter xStats: {len(d)}")
+    except Exception as ex:
+        print("[Savant] Batter xStats failed:", ex)
+
+    # 3. Statcast batter EV / HH% / Barrel%
+    try:
+        rows = _fetch_sv_csv(f"{BASE}/leaderboard/statcast?type=batter&year={y}&position=&team=&min=q&csv=true")
+        d = {}
+        for row in rows:
+            raw = row.get("last_name, first_name","").strip()
+            if not raw: continue
+            d[_sv_key(raw)] = {
+                "sv_ev":     _sv_f(row.get("avg_hit_speed")),
+                "sv_hh_pct": _sv_f(row.get("ev95percent")),
+                "sv_brl_pct":_sv_f(row.get("brl_percent")),
+                "sv_brl_pa": _sv_f(row.get("brl_pa")),
+                "sv_la":     _sv_f(row.get("avg_hit_angle")),
+                "sv_ss_pct": _sv_f(row.get("anglesweetspotpercent")),
+                "sv_max_ev": _sv_f(row.get("max_hit_speed")),
+            }
+        with _sv_lock: _sv_bat_statcast = d
+        print(f"[Savant] Batter Statcast: {len(d)}")
+    except Exception as ex:
+        print("[Savant] Batter Statcast failed:", ex)
+
+    # 4. Pitch arsenal % usage
+    try:
+        rows = _fetch_sv_csv(f"{BASE}/leaderboard/pitch-arsenals?year={y}&min=1&type=n_&hand=&csv=true")
+        d = {}
+        for row in rows:
+            raw = row.get("last_name, first_name","").strip()
+            if not raw: continue
+            pitches = {}
+            for pt in PITCH_ORDER:
+                v = row.get("n_" + pt,"").strip()
+                if v:
+                    try: pitches[pt] = round(float(v), 1)
+                    except: pass
+            if pitches: d[_sv_key(raw)] = pitches
+        with _sv_lock: _sv_arsenal_pct = d
+        print(f"[Savant] Arsenal %: {len(d)}")
+    except Exception as ex:
+        print("[Savant] Arsenal % failed:", ex)
+
+    # 5. Pitch arsenal velocities
+    try:
+        rows = _fetch_sv_csv(f"{BASE}/leaderboard/pitch-arsenals?year={y}&min=1&type=avg_speed&hand=&csv=true")
+        d = {}
+        for row in rows:
+            raw = row.get("last_name, first_name","").strip()
+            if not raw: continue
+            velos = {}
+            for pt in PITCH_ORDER:
+                v = row.get(pt + "_avg_speed","").strip()
+                if v:
+                    try: velos[pt] = round(float(v), 1)
+                    except: pass
+            if velos: d[_sv_key(raw)] = velos
+        with _sv_lock: _sv_arsenal_velo = d
+        print(f"[Savant] Arsenal velo: {len(d)}")
+    except Exception as ex:
+        print("[Savant] Arsenal velo failed:", ex)
+
+    with _sv_lock:
+        _sv_loaded    = True
+        _sv_load_date = datetime.now().date()
+    print("[Savant] All caches ready")
+
+def _maybe_refresh_savant():
+    with _sv_lock:
+        loaded = _sv_loaded; date = _sv_load_date
+    if not loaded or date != datetime.now().date():
+        threading.Thread(target=_load_savant_data, daemon=True).start()
+
+def sv_pitcher(name):
+    with _sv_lock:
+        xs = dict(_sv_pit_xstats)
+        ap = dict(_sv_arsenal_pct)
+        av = dict(_sv_arsenal_velo)
+    r = dict(_fuzzy_lookup(name, xs))
+    r["sv_arsenal_pct"]  = _fuzzy_lookup(name, ap)
+    r["sv_arsenal_velo"] = _fuzzy_lookup(name, av)
+    return r
+
+def sv_batter(name):
+    with _sv_lock:
+        xs = dict(_sv_bat_xstats)
+        sc = dict(_sv_bat_statcast)
+    r = dict(_fuzzy_lookup(name, xs))
+    r.update(_fuzzy_lookup(name, sc))
+    return r
+
+# ── MLB API Helpers ───────────────────────────────────────────────────────────
 def fetch_schedule(date_str):
+    url = (f"{MLB_API}/schedule?sportId=1&date={date_str}"
+           "&hydrate=team,probablePitcher,linescore,venue,weather")
+    r = requests.get(url, timeout=10); r.raise_for_status()
+    dates = r.json().get("dates", [])
+    return dates[0].get("games", []) if dates else []
+
+def get_weather(lat, lon):
     try:
-        r = requests.get(f"{MLB_API}/schedule", params={
-            "sportId": 1, "date": date_str,
-            "hydrate": "team,probablePitcher,weather,venue,linescore"
-        }, timeout=10)
+        r = requests.get(WX_API, params={
+            "latitude":lat,"longitude":lon,
+            "hourly":"temperature_2m,precipitation_probability,windspeed_10m,weathercode",
+            "temperature_unit":"fahrenheit","windspeed_unit":"mph",
+            "forecast_days":1,"timezone":"auto"
+        }, timeout=6)
         r.raise_for_status()
-        games = []
-        for d in r.json().get("dates", []):
-            games.extend(d.get("games", []))
-        return games
-    except Exception as e:
-        print(f"[schedule] {e}")
-        return []
+        h = r.json().get("hourly",{})
+        idx = 13
+        wcode_map = {0:"Clear",1:"Mainly Clear",2:"Partly Cloudy",3:"Overcast",
+                     45:"Foggy",48:"Foggy",51:"Drizzle",53:"Drizzle",55:"Drizzle",
+                     61:"Rain",63:"Rain",65:"Heavy Rain",71:"Snow",73:"Snow",75:"Snow",
+                     80:"Showers",81:"Showers",82:"Heavy Showers",
+                     95:"Thunderstorm",96:"Thunderstorm",99:"Thunderstorm"}
+        wcode = h.get("weathercode",[0]*24)[idx]
+        return {
+            "temp":       round(h.get("temperature_2m",[70]*24)[idx]),
+            "rain_chance":h.get("precipitation_probability",[0]*24)[idx],
+            "wind_speed": round(h.get("windspeed_10m",[0]*24)[idx]),
+            "condition":  wcode_map.get(wcode, "Clear"),
+        }
+    except: return {"temp":"N/A","rain_chance":"N/A","wind_speed":"N/A","condition":"N/A"}
+
+def pitcher_stats_mlb(player_id):
+    try:
+        r = requests.get(f"{MLB_API}/people/{player_id}/stats?stats=season&group=pitching&season={datetime.now().year}", timeout=8)
+        r.raise_for_status()
+        splits = r.json().get("stats",[{}])[0].get("splits",[])
+        if not splits: return {}
+        s = splits[0].get("stat",{})
+        return {
+            "era":  s.get("era","N/A"), "whip": s.get("whip","N/A"),
+            "ip":   s.get("inningsPitched","N/A"),
+            "wins": s.get("wins",0), "losses": s.get("losses",0),
+            "g":    s.get("gamesPlayed",0), "gs": s.get("gamesStarted",0),
+            "k9":   round(float(s.get("strikeoutsPer9Inn",0) or 0),2),
+            "bb9":  round(float(s.get("walksPer9Inn",0) or 0),2),
+            "hr9":  round(float(s.get("homeRunsPer9",0) or 0),2),
+        }
+    except: return {}
+
+def get_batters_from_boxscore(team_data, side):
+    out = []
+    batters = team_data.get("batters",[])
+    players = team_data.get("players",{})
+    for pid in batters:
+        key = f"ID{pid}"
+        p   = players.get(key,{})
+        name= p.get("person",{}).get("fullName","")
+        pos = p.get("position",{}).get("abbreviation","?")
+        s   = p.get("stats",{}).get("batting",{})
+        ss  = p.get("seasonStats",{}).get("batting",{})
+        slot= p.get("battingOrder",0)
+        try: slot = int(str(slot)[0])
+        except: slot = 0
+        fgb = fg_batter(name)
+        svb = sv_batter(name)
+        out.append({
+            "slot": slot, "id": pid, "name": name, "pos": pos,
+            "avg":  ss.get("avg",  fgb.get("fg_avg",".---")),
+            "obp":  ss.get("obp",  fgb.get("fg_obp",".---")),
+            "slg":  ss.get("slg",  fgb.get("fg_slg",".---")),
+            "ops":  ss.get("ops",  fgb.get("fg_ops",".---")),
+            "ab":   s.get("atBats",0), "hits": s.get("hits",0),
+            "hr":   s.get("homeRuns",0), "rbi": s.get("rbi",0),
+            # FanGraphs
+            "fg_pa":  fgb.get("fg_pa","N/A"), "fg_r":  fgb.get("fg_r","N/A"),
+            "fg_sb":  fgb.get("fg_sb","N/A"), "fg_woba":fgb.get("fg_woba","N/A"),
+            "fg_wrc": fgb.get("fg_wrc","N/A"), "fg_war":fgb.get("fg_war","N/A"),
+            # Baseball Savant
+            "sv_xba":    svb.get("sv_xba","N/A"),
+            "sv_xslg":   svb.get("sv_xslg","N/A"),
+            "sv_xwoba":  svb.get("sv_xwoba","N/A"),
+            "sv_ev":     svb.get("sv_ev","N/A"),
+            "sv_hh_pct": svb.get("sv_hh_pct","N/A"),
+            "sv_brl_pct":svb.get("sv_brl_pct","N/A"),
+            "sv_la":     svb.get("sv_la","N/A"),
+        })
+    return out
 
 def parse_game(g):
     try:
-        pk        = g.get("gamePk", 0)
-        status    = g.get("status", {}).get("abstractGameState", "Preview")
-        game_time = g.get("gameDate", "")
-        away      = g.get("teams", {}).get("away", {}).get("team", {})
-        home      = g.get("teams", {}).get("home", {}).get("team", {})
-        away_abbr = away.get("abbreviation", "???")
-        home_abbr = home.get("abbreviation", "???")
-        away_p    = g.get("teams", {}).get("away", {}).get("probablePitcher", {})
-        home_p    = g.get("teams", {}).get("home", {}).get("probablePitcher", {})
-        weather   = g.get("weather", {})
-        pf        = PARK_FACTORS.get(home_abbr, {}).get("run", 1.0)
-        wx        = get_hourly_weather(home_abbr, game_time) or {
-            "temp": weather.get("temp", "N/A"),
-            "wind": weather.get("wind", "N/A"),
-            "condition": weather.get("condition", "N/A"),
-            "rainChance": "N/A",
-        }
-
+        pk   = g.get("gamePk")
+        stat = g.get("status",{}).get("detailedState","Scheduled")
+        st   = "Live" if "Progress" in stat else ("Final" if "Final" in stat else "Scheduled")
+        away = g.get("teams",{}).get("away",{})
+        home = g.get("teams",{}).get("home",{})
+        at   = away.get("team",{}); ht = home.get("team",{})
+        aid  = at.get("id"); hid = ht.get("id")
+        ap   = away.get("probablePitcher",{}); hp = home.get("probablePitcher",{})
+        ven  = g.get("venue",{})
+        vloc = ven.get("location",{})
+        lat  = vloc.get("defaultCoordinates",{}).get("latitude")
+        lon  = vloc.get("defaultCoordinates",{}).get("longitude")
+        wx   = get_weather(lat, lon) if lat and lon else {}
+        gt   = g.get("gameDate","")
         try:
-            temp_val  = int(str(wx.get("temp", "70")).strip())
-            heat_boost= max(0, (temp_val - 70) * 0.2)
-        except Exception:
-            temp_val  = 70
-            heat_boost= 0
-
-        edge    = round(min(15, max(1, (pf - 1) * 40 + heat_boost + 5)), 1)
-        bar_pct = int(min(95, max(8, edge * 6.5)))
-
+            dt_utc = datetime.fromisoformat(gt.replace("Z","+00:00"))
+            dt_et  = dt_utc.astimezone()
+            gt_fmt = dt_et.strftime("%-I:%M %p ET")
+        except: gt_fmt = "TBD"
+        pf   = PARK_FACTORS.get(hid, 1.0)
+        ap_n = ap.get("fullName","TBD"); hp_n = hp.get("fullName","TBD")
+        fgap = fg_pitcher(ap_n); fghp = fg_pitcher(hp_n)
+        era_a = float(fgap.get("fg_era") or 4.50); era_h = float(fghp.get("fg_era") or 4.50)
+        edge = round(abs(era_a - era_h) * 2 + (pf - 1.0) * 10, 1)
+        bar  = min(100, int(edge * 9))
+        wc   = (wx.get("condition","") or "").lower()
+        wi   = "🌧" if "rain" in wc else ("⛅" if "cloud" in wc else "☀")
         return {
-            "gamePk":      pk,
-            "status":      status,
-            "gameTime":    utc_to_et(game_time),
-            "awayAbbr":    away_abbr,
-            "homeAbbr":    home_abbr,
-            "awayName":    away.get("name", "Away"),
-            "homeName":    home.get("name", "Home"),
-            "awayLogo":    TEAM_LOGOS.get(away_abbr, ""),
-            "homeLogo":    TEAM_LOGOS.get(home_abbr, ""),
-            "awayPitcher": away_p.get("fullName", "TBD"),
-            "homePitcher": home_p.get("fullName", "TBD"),
-            "venue":       g.get("venue", {}).get("name", ""),
-            "temp":        wx.get("temp", "N/A"),
-            "wind":        wx.get("wind", "N/A"),
-            "condition":   wx.get("condition", "N/A"),
-            "rainChance":  wx.get("rainChance", "N/A"),
-            "parkFactor":  pf,
-            "edge":        edge,
-            "barPct":      bar_pct,
+            "gamePk": pk, "status": st,
+            "awayAbbr": at.get("abbreviation","?"), "awayName": at.get("name",""),
+            "homeAbbr": ht.get("abbreviation","?"), "homeName": ht.get("name",""),
+            "awayLogo": LOGO_BASE.format(team_id=aid) if aid else "",
+            "homeLogo": LOGO_BASE.format(team_id=hid) if hid else "",
+            "awayPitcher": ap_n, "homePitcher": hp_n,
+            "venue": ven.get("name",""), "gameTime": gt_fmt,
+            "parkFactor": pf, "edge": edge, "barPct": bar,
+            "temp": wx.get("temp","N/A"), "wind": f"{wx.get('wind_speed','?')} mph",
+            "condition": wx.get("condition",""), "rainChance": wx.get("rain_chance","N/A"),
+            "weatherIcon": wi,
         }
-    except Exception as e:
-        tb_str = traceback.format_exc(); print(f"[parse_game] {e}"); print(tb_str)
-        return None
+    except Exception as ex:
+        print("[parse_game]", ex); return None
 
-def pitcher_stats(pid):
-    try:
-        r = requests.get(f"{MLB_API}/people/{pid}/stats", params={
-            "stats": "season", "group": "pitching",
-            "season": datetime.now().year
-        }, timeout=8)
-        r.raise_for_status()
-        splits = r.json().get("stats", [{}])[0].get("splits", [])
-        if splits:
-            s = splits[0].get("stat", {})
-            return {"era": s.get("era","N/A"), "whip": s.get("whip","N/A"),
-                    "k9": s.get("strikeoutsPer9Inn","N/A"),
-                    "ip": s.get("inningsPitched","N/A"),
-                    "wins": s.get("wins",0), "losses": s.get("losses",0)}
-    except Exception as e:
-        print(f"[pitcher_stats] {e}")
-    return {"era":"N/A","whip":"N/A","k9":"N/A","ip":"N/A","wins":0,"losses":0}
-
-# ─────────────────────────────────────────
-# MAIN DASHBOARD HTML
-# ─────────────────────────────────────────
-DASHBOARD_HTML = """<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MLB Analytics Hub</title>
-<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-:root{--c:#00e5ff;--m:#e040fb;--g:#00e676;--bg:#050a18;--card:#0a1628;--b:rgba(0,229,255,.18);--t:#e0f0ff;--mu:#6a8db0}
-body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--t);min-height:100vh}
-body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,229,255,.012) 2px,rgba(0,229,255,.012) 4px);pointer-events:none;z-index:9999}
-nav{display:flex;align-items:center;justify-content:space-between;padding:14px 32px;background:rgba(5,10,24,.95);backdrop-filter:blur(16px);border-bottom:1px solid var(--b);position:sticky;top:0;z-index:100;box-shadow:0 0 30px rgba(0,229,255,.1)}
-.logo{font-family:'Orbitron',monospace;font-size:1.4rem;font-weight:900;color:var(--c);text-shadow:0 0 20px rgba(0,229,255,.6);letter-spacing:3px}
-.nav-r{display:flex;align-items:center;gap:18px}
-.live{display:flex;align-items:center;gap:6px;font-size:.7rem;letter-spacing:2px;color:var(--g);font-family:'Orbitron',monospace}
-.dot{width:8px;height:8px;border-radius:50%;background:var(--g);box-shadow:0 0 8px var(--g);animation:blink 1.4s ease-in-out infinite}
-@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
-#clk{font-family:'Orbitron',monospace;font-size:.95rem;color:var(--c);min-width:100px;text-align:right}
-.strip{display:flex;align-items:center;justify-content:space-between;padding:18px 32px;background:linear-gradient(90deg,rgba(0,229,255,.05),rgba(224,64,251,.04));border-bottom:1px solid var(--b)}
-.strip-title{font-family:'Orbitron',monospace;font-size:1rem;color:var(--mu);letter-spacing:5px}
-.strip-stats{display:flex;gap:32px}
-.ss{text-align:center}
-.ss-v{font-family:'Orbitron',monospace;font-size:1.6rem;font-weight:700;color:var(--c);text-shadow:0 0 12px rgba(0,229,255,.4)}
-.ss-l{font-size:.65rem;color:var(--mu);letter-spacing:2px;margin-top:2px}
-.main{padding:28px 32px;max-width:1600px;margin:0 auto}
-.sh{font-family:'Orbitron',monospace;font-size:.78rem;color:var(--mu);letter-spacing:4px;margin-bottom:20px;display:flex;align-items:center;gap:12px}
-.sh::after{content:'';flex:1;height:1px;background:linear-gradient(90deg,var(--b),transparent)}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:20px}
-.card{background:var(--card);border:1px solid var(--b);border-radius:16px;padding:22px;cursor:pointer;transition:all .3s cubic-bezier(.16,1,.3,1);position:relative;overflow:hidden}
-.card::after{content:'';position:absolute;inset:0;background:linear-gradient(135deg,rgba(0,229,255,.03),rgba(224,64,251,.03));opacity:0;transition:opacity .3s}
-.card:hover{transform:translateY(-6px);border-color:var(--c);box-shadow:0 0 35px rgba(0,229,255,.22),0 20px 40px rgba(0,0,0,.5)}
-.card:hover::after{opacity:1}
-.ct{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
-.badge{font-size:.62rem;letter-spacing:2px;padding:3px 10px;border-radius:20px;font-family:'Orbitron',monospace;font-weight:700}
-.bs{background:rgba(0,229,255,.08);color:var(--c);border:1px solid rgba(0,229,255,.25)}
-.bl{background:rgba(0,230,118,.1);color:var(--g);border:1px solid rgba(0,230,118,.3);animation:pb 2s ease-in-out infinite}
-.bf{background:rgba(106,141,176,.1);color:var(--mu);border:1px solid rgba(106,141,176,.2)}
-@keyframes pb{0%,100%{box-shadow:0 0 0 0 rgba(0,230,118,.4)}50%{box-shadow:0 0 0 3px rgba(0,230,118,0)}}
-.ctime{font-size:.72rem;color:var(--mu);font-family:'Orbitron',monospace}
-.mu{display:flex;align-items:center;justify-content:center;gap:14px;margin-bottom:16px}
-.tb{display:flex;flex-direction:column;align-items:center;gap:7px;flex:1}
-.tlw{width:62px;height:62px;border-radius:50%;border:2px solid var(--b);background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;overflow:hidden;transition:all .3s}
-.card:hover .tlw{border-color:var(--c);box-shadow:0 0 16px rgba(0,229,255,.3)}
-.tlw img{width:42px;height:42px;object-fit:contain}
-.ta{font-family:'Orbitron',monospace;font-size:.82rem;font-weight:700}
-.vs{font-family:'Orbitron',monospace;font-size:.68rem;color:var(--mu);letter-spacing:2px}
-.pr{display:flex;justify-content:space-between;margin-bottom:12px;padding:9px 12px;background:rgba(0,0,0,.3);border-radius:8px;border:1px solid rgba(255,255,255,.04)}
-.pi{text-align:center;flex:1}
-.pl{font-size:.58rem;color:var(--mu);letter-spacing:2px;margin-bottom:2px}
-.pn{font-size:.7rem;color:var(--t);font-weight:600}
-.wr{display:flex;align-items:center;gap:8px;margin-bottom:12px;padding:7px 10px;background:rgba(0,0,0,.2);border-radius:7px}
-.wt{font-size:.7rem;color:var(--mu)}
-.wt span{color:var(--t);font-weight:600}
-.eb{margin-bottom:8px}
-.ebl{display:flex;justify-content:space-between;margin-bottom:4px}
-.ebl span{font-size:.62rem;color:var(--mu);letter-spacing:1px}
-.ebl strong{font-size:.75rem;color:var(--c);font-family:'Orbitron',monospace}
-.bar{height:7px;background:rgba(255,255,255,.06);border-radius:4px;overflow:hidden}
-.fill{height:100%;border-radius:4px;background:linear-gradient(90deg,var(--c),var(--m));box-shadow:0 0 8px rgba(0,229,255,.3);transition:width 1.2s cubic-bezier(.16,1,.3,1)}
-.vn{font-size:.62rem;color:var(--mu);text-align:center;margin-top:8px;letter-spacing:1px}
-.ap{display:flex;align-items:center;justify-content:center;gap:6px;margin-top:12px;width:100%;padding:9px;border-radius:8px;background:linear-gradient(90deg,rgba(0,229,255,.1),rgba(224,64,251,.07));border:1px solid rgba(0,229,255,.2);font-size:.7rem;color:var(--c);letter-spacing:2px;font-family:'Orbitron',monospace;font-weight:700;transition:all .2s;cursor:pointer}
-.card:hover .ap{background:linear-gradient(90deg,rgba(0,229,255,.2),rgba(224,64,251,.14));border-color:var(--c)}
-.sw{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:280px;gap:14px}
-.sp{width:44px;height:44px;border:3px solid rgba(0,229,255,.15);border-top-color:var(--c);border-radius:50%;animation:spin 1s linear infinite}
-@keyframes spin{to{transform:rotate(360deg)}}
-.st{font-family:'Orbitron',monospace;font-size:.78rem;color:var(--mu);letter-spacing:3px}
-.ng{text-align:center;padding:60px 20px}
-.ng-i{font-size:3rem;margin-bottom:16px;opacity:.4}
-footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.65rem;color:var(--mu);letter-spacing:2px;font-family:'Orbitron',monospace;margin-top:20px}
-@media(max-width:768px){nav{padding:12px 16px}.logo{font-size:1.05rem}.strip{flex-direction:column;gap:12px;padding:14px 16px;align-items:flex-start}.strip-stats{gap:20px}.main{padding:16px}}
-</style>
-</head>
-<body>
-<nav>
-  <div class="logo">&#9889; MLB ANALYTICS HUB</div>
-  <div class="nav-r">
-    <div id="dt" style="font-size:.72rem;color:var(--mu);font-family:'Orbitron',monospace"></div>
-    <div id="clk"></div>
-    <div class="live"><div class="dot"></div>LIVE</div>
-  </div>
-</nav>
-<div class="strip">
-  <div class="strip-title">COMMAND CENTER</div>
-  <div class="strip-stats">
-    <div class="ss"><div class="ss-v" id="sg">-</div><div class="ss-l">GAMES TODAY</div></div>
-    <div class="ss"><div class="ss-v" id="sl">-</div><div class="ss-l">LIVE NOW</div></div>
-    <div class="ss"><div class="ss-v" id="se">-</div><div class="ss-l">AVG EDGE</div></div>
-    <div class="ss"><div class="ss-v" id="sh">-</div><div class="ss-l">HIGH CONF</div></div>
-  </div>
-</div>
-<div class="main">
-  <div class="sh">TODAY'S GAMES</div>
-  <div id="gc"><div class="sw"><div class="sp"></div><div class="st">LOADING GAMES...</div></div></div>
-</div>
-<footer>MLB ANALYTICS HUB &nbsp;&#124;&nbsp; POWERED BY MLB STATS API &nbsp;&#124;&nbsp; FOR ENTERTAINMENT PURPOSES</footer>
-<script>
-function tick(){
-  const n=new Date(),h=n.getHours(),m=n.getMinutes(),s=n.getSeconds();
-  document.getElementById('clk').textContent=`${(h%12||12).toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}${h>=12?'PM':'AM'}`;
-  document.getElementById('dt').textContent=n.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'}).toUpperCase();
-}
-setInterval(tick,1000);tick();
-
-function wicon(c){c=(c||'').toLowerCase();if(c.includes('rain'))return'&#127783;';if(c.includes('cloud'))return'&#9925;';if(c.includes('clear')||c.includes('sun'))return'&#9728;';return'&#127780;';}
-
-function mkCard(g){
-  const bc=g.status==='Live'?'bl':g.status==='Final'?'bf':'bs';
-  const bl=g.status==='Live'?'&#9679; LIVE':g.status==='Final'?'FINAL':'SCHEDULED';
-  const aL=g.awayLogo?`<img src="${g.awayLogo}" alt="${g.awayAbbr}" width="42" height="42" loading="lazy">`:`<span style="font-family:Orbitron;font-size:.9rem;color:var(--c)">${g.awayAbbr}</span>`;
-  const hL=g.homeLogo?`<img src="${g.homeLogo}" alt="${g.homeAbbr}" width="42" height="42" loading="lazy">`:`<span style="font-family:Orbitron;font-size:.9rem;color:var(--c)">${g.homeAbbr}</span>`;
-  const rain=(g.rainChance!==undefined && g.rainChance!=='N/A')?` &nbsp;&#124;&nbsp; ${g.rainChance}% rain`:'';
-  const hW=g.temp&&g.temp!='N/A'?`<div class="wr"><span>${wicon(g.condition)}</span><span class="wt"><span>${g.temp}&deg;F</span> &nbsp;&#124;&nbsp; ${g.wind}${rain}</span></div>`:'';
-  return `<div class="card" onclick="location.href='/deep-dive/${g.gamePk}'">
-    <div class="ct"><span class="badge ${bc}">${bl}</span><span class="ctime">${g.gameTime}</span></div>
-    <div class="mu">
-      <div class="tb"><div class="tlw">${aL}</div><div class="ta">${g.awayAbbr}</div></div>
-      <div class="vs">VS</div>
-      <div class="tb"><div class="tlw">${hL}</div><div class="ta">${g.homeAbbr}</div></div>
-    </div>
-    <div class="pr">
-      <div class="pi"><div class="pl">AWAY SP</div><div class="pn">${g.awayPitcher}</div></div>
-      <div style="width:1px;background:rgba(255,255,255,.05)"></div>
-      <div class="pi"><div class="pl">HOME SP</div><div class="pn">${g.homePitcher}</div></div>
-    </div>
-    ${hW}
-    <div class="eb">
-      <div class="ebl"><span>MODEL EDGE</span><strong>${g.edge}%</strong></div>
-      <div class="bar"><div class="fill" style="width:0%" data-w="${g.barPct}%"></div></div>
-    </div>
-    <div class="vn">${g.venue}</div>
-    <div class="ap">&#9889; DEEP DIVE ANALYSIS</div>
-  </div>`;
-}
-
-async function load(){
-  try{
-    const r=await fetch('/api/games/today');
-    const d=await r.json();
-    if(!d.success)throw new Error(d.error||'API error');
-    const gs=d.games;
-    document.getElementById('sg').textContent=gs.length||'0';
-    document.getElementById('sl').textContent=gs.filter(g=>g.status==='Live').length;
-    document.getElementById('se').textContent=gs.length?(gs.reduce((s,g)=>s+g.edge,0)/gs.length).toFixed(1)+'%':'--';
-    document.getElementById('sh').textContent=gs.filter(g=>g.edge>=8).length;
-    if(!gs.length){document.getElementById('gc').innerHTML='<div class="ng"><div class="ng-i">&#9918;</div><h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px">NO GAMES TODAY</h3></div>';return;}
-    document.getElementById('gc').innerHTML=`<div class="grid">${gs.map(mkCard).join('')}</div>`;
-    requestAnimationFrame(()=>{document.querySelectorAll('.fill').forEach(e=>{setTimeout(()=>{e.style.width=e.dataset.w;},150);});});
-  }catch(e){
-    document.getElementById('gc').innerHTML=`<div class="sw"><div style="background:rgba(224,64,251,.08);border:1px solid rgba(224,64,251,.3);border-radius:12px;padding:24px 32px;text-align:center"><h3 style="color:var(--m);font-family:Orbitron;margin-bottom:8px">CONNECTION ERROR</h3><p style="color:var(--mu);font-size:.82rem">${e.message}</p></div></div>`;
-  }
-}
-load();setInterval(load,5*60*1000);
-</script>
-</body>
-</html>"""
-
-# ─────────────────────────────────────────
-# DEEP DIVE HTML
-# ─────────────────────────────────────────
-DEEP_DIVE_HTML = """<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Deep Dive &#8212; MLB Analytics Hub</title>
-<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-:root{--c:#00e5ff;--m:#e040fb;--g:#00e676;--o:#ff9800;--bg:#050a18;--card:#0a1628;--b:rgba(0,229,255,.18);--t:#e0f0ff;--mu:#6a8db0}
-body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--t);min-height:100vh}
-body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,229,255,.012) 2px,rgba(0,229,255,.012) 4px);pointer-events:none;z-index:9999}
-nav{display:flex;align-items:center;justify-content:space-between;padding:14px 32px;background:rgba(5,10,24,.95);backdrop-filter:blur(16px);border-bottom:1px solid var(--b);position:sticky;top:0;z-index:100}
-.logo{font-family:'Orbitron',monospace;font-size:1.2rem;font-weight:900;color:var(--c);text-shadow:0 0 20px rgba(0,229,255,.5)}
-.back{display:flex;align-items:center;gap:8px;padding:8px 20px;background:rgba(0,229,255,.07);border:1px solid rgba(0,229,255,.22);border-radius:8px;color:var(--c);font-family:'Orbitron',monospace;font-size:.68rem;letter-spacing:2px;cursor:pointer;text-decoration:none;transition:all .2s}
-.back:hover{background:rgba(0,229,255,.14);border-color:var(--c)}
-.mh{padding:28px 32px;background:linear-gradient(135deg,rgba(0,229,255,.04),rgba(224,64,251,.04));border-bottom:1px solid var(--b)}
-.mhi{max-width:860px;margin:0 auto;text-align:center}
-.mht{display:flex;align-items:center;justify-content:center;gap:28px;margin-bottom:18px}
-.mhte{display:flex;flex-direction:column;align-items:center;gap:9px}
-.mhl{width:76px;height:76px;border-radius:50%;border:2px solid var(--b);background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;overflow:hidden}
-.mhl img{width:54px;height:54px;object-fit:contain}
-.mha{font-family:'Orbitron',monospace;font-size:1.1rem;font-weight:700}
-.mhfn{font-size:.75rem;color:var(--mu)}
-.mhvs{font-family:'Orbitron',monospace;font-size:1.4rem;color:var(--mu)}
-.mhm{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
-.bdg{padding:4px 14px;border-radius:20px;font-size:.65rem;letter-spacing:2px;font-family:'Orbitron',monospace}
-.bc{background:rgba(0,229,255,.1);color:var(--c);border:1px solid rgba(0,229,255,.22)}
-.bg{background:rgba(0,230,118,.1);color:var(--g);border:1px solid rgba(0,230,118,.22)}
-.bo{background:rgba(255,152,0,.1);color:var(--o);border:1px solid rgba(255,152,0,.22)}
-.dg{display:grid;grid-template-columns:1fr 1fr;gap:18px;padding:22px 32px;max-width:1300px;margin:0 auto}
-.fw{grid-column:1/-1}
-.pnl{background:var(--card);border:1px solid var(--b);border-radius:14px;padding:20px;position:relative;overflow:hidden}
-.pnl::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--c),var(--m))}
-.pt{font-family:'Orbitron',monospace;font-size:.68rem;color:var(--mu);letter-spacing:3px;margin-bottom:15px;display:flex;align-items:center;gap:7px}
-.en{font-family:'Orbitron',monospace;font-size:3rem;font-weight:900;text-shadow:0 0 30px rgba(0,229,255,.4);line-height:1}
-.el{font-size:.68rem;color:var(--mu);letter-spacing:3px;margin-top:5px}
-.cb{height:10px;background:rgba(255,255,255,.06);border-radius:5px;overflow:hidden;margin-top:8px}
-.cf{height:100%;background:linear-gradient(90deg,var(--c),var(--m));border-radius:5px;transition:width 1.5s cubic-bezier(.16,1,.3,1);box-shadow:0 0 8px rgba(0,229,255,.3)}
-.wg{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.ws{background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.05);border-radius:8px;padding:12px;text-align:center}
-.wi{font-size:1.4rem;margin-bottom:5px}
-.wv{font-family:'Orbitron',monospace;font-size:.95rem;font-weight:700}
-.wl{font-size:.6rem;color:var(--mu);letter-spacing:1px;margin-top:3px}
-.wi2{margin-top:10px;padding:9px 12px;background:rgba(0,229,255,.05);border:1px solid rgba(0,229,255,.12);border-radius:8px;font-size:.72rem;color:var(--c);text-align:center;line-height:1.5}
-.pg{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-.pc{background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.05);border-radius:10px;padding:15px;text-align:center}
-.pc h4{font-family:'Orbitron',monospace;font-size:.75rem;color:var(--c);margin-bottom:3px}
-.pct{font-size:.62rem;color:var(--mu);margin-bottom:11px;letter-spacing:1px}
-.sr{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.04)}
-.sr:last-child{border-bottom:none}
-.sk{font-size:.68rem;color:var(--mu)}
-.sv{font-size:.75rem;font-weight:600;font-family:'Orbitron',monospace}
-.sg{color:var(--g)!important}.sw2{color:var(--o)!important}
-.pkg{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.ps{background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.05);border-radius:8px;padding:12px;text-align:center}
-.pv{font-family:'Orbitron',monospace;font-size:1.3rem;font-weight:700}
-.plb{font-size:.6rem;color:var(--mu);letter-spacing:1px;margin-top:3px}
-.lt{display:flex;gap:8px;margin-bottom:12px}
-.tb2{padding:6px 14px;border-radius:6px;font-size:.68rem;letter-spacing:2px;font-family:'Orbitron',monospace;cursor:pointer;border:1px solid rgba(255,255,255,.1);background:transparent;color:var(--mu);transition:all .2s}
-.tb2.ac{background:rgba(0,229,255,.1);border-color:var(--c);color:var(--c)}
-table{width:100%;border-collapse:collapse}
-th{font-size:.6rem;color:var(--mu);letter-spacing:2px;text-align:left;padding:6px 8px;border-bottom:1px solid var(--b);font-family:'Orbitron',monospace}
-td{font-size:.75rem;padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.04)}
-tr:hover td{background:rgba(0,229,255,.03)}
-.on{color:var(--mu);font-family:'Orbitron',monospace;font-size:.68rem}
-.pb3{display:inline-block;padding:2px 7px;border-radius:4px;background:rgba(0,229,255,.08);color:var(--c);font-size:.62rem;font-family:'Orbitron',monospace}
-.ag{color:var(--g)}.am{color:var(--o)}.al{color:var(--mu)}
-.selg{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:14px}
-.selc{background:rgba(0,0,0,.26);border:1px solid rgba(255,255,255,.05);border-radius:10px;padding:14px}
-.selh{font-family:'Orbitron',monospace;font-size:.66rem;color:var(--mu);letter-spacing:2px;margin-bottom:10px}
-.selc label{display:block;font-size:.64rem;color:var(--mu);letter-spacing:1px;margin:8px 0 5px}
-.selc select{width:100%;background:#081220;border:1px solid rgba(0,229,255,.18);color:var(--t);padding:10px 12px;border-radius:8px;font-size:.78rem;outline:none}
-.selc select:focus{border-color:var(--c);box-shadow:0 0 0 2px rgba(0,229,255,.12)}
-.projg{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-.projc{background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.05);border-radius:12px;padding:16px}
-.projt{font-family:'Orbitron',monospace;font-size:.7rem;color:var(--c);letter-spacing:2px;margin-bottom:10px}
-.projsub{font-size:.72rem;color:var(--mu);margin-bottom:10px;line-height:1.5}
-.projrow{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.04)}
-.projrow:last-child{border-bottom:none}
-.projk{font-size:.7rem;color:var(--mu)}
-.projv{font-size:.78rem;color:var(--t);font-weight:600;font-family:'Orbitron',monospace}
-.projnote{margin-top:12px;font-size:.68rem;color:var(--mu);line-height:1.5}
-.sp{width:32px;height:32px;border:2px solid rgba(0,229,255,.15);border-top-color:var(--c);border-radius:50%;animation:spin 1s linear infinite;margin:20px auto}
-@keyframes spin{to{transform:rotate(360deg)}}
-.lt2{text-align:center;font-family:'Orbitron',monospace;font-size:.68rem;color:var(--mu);letter-spacing:3px}
-.na{color:var(--mu);font-size:.78rem;padding:16px 0;text-align:center;line-height:1.6}
-@media(max-width:860px){.dg{grid-template-columns:1fr;padding:14px 16px}.fw{grid-column:1}.pg{grid-template-columns:1fr}nav{padding:12px 16px}.mh{padding:18px 16px}}
-</style>
-</head>
-<body>
-<nav>
-  <div class="logo">&#9889; MLB ANALYTICS HUB</div>
-  <a class="back" href="/">&#8592; DASHBOARD</a>
-</nav>
-<div class="mh">
-  <div class="mhi">
-    <div id="mhTeams" class="mht"><div class="sp" style="margin:0 auto"></div></div>
-    <div class="mhm" id="mhMeta"></div>
-  </div>
-</div>
-<div class="dg">
-  <div class="pnl"><div class="pt">&#127919; MODEL EDGE SCORE</div><div id="edgeP"><div class="sp"></div></div></div>
-  <div class="pnl"><div class="pt">&#127780; WEATHER CONDITIONS</div><div id="wxP"><div class="sp"></div></div></div>
-  <div class="pnl fw"><div class="pt">&#9918; STARTING PITCHERS</div><div id="pitP"><div class="sp"></div><div class="lt2" style="margin-top:8px">LOADING PITCHER DATA...</div></div></div>
-  <div class="pnl"><div class="pt">&#127960; PARK FACTORS</div><div id="pkP"><div class="sp"></div></div></div>
-  <div class="pnl"><div class="pt">&#128202; MATCHUP ANALYSIS</div><div id="maP"><div class="sp"></div></div></div>
-  <div class="pnl fw">
-    <div class="pt">&#127919; MATCHUP PROJECTIONS</div>
-    <div class="selg">
-      <div class="selc">
-        <div class="selh">BATTER PROJECTION</div>
-        <label for="batterSel">Select batter</label>
-        <select id="batterSel" onchange="updateProjectionView()"><option value="">Loading hitters...</option></select>
-        <label for="batterPitcherSel">Opposing pitcher</label>
-        <select id="batterPitcherSel" onchange="updateProjectionView()"><option value="">Loading pitchers...</option></select>
-      </div>
-      <div class="selc">
-        <div class="selh">PITCHER PROJECTION</div>
-        <label for="pitcherSel">Select pitcher</label>
-        <select id="pitcherSel" onchange="updateProjectionView()"><option value="">Loading pitchers...</option></select>
-        <label for="pitcherTargetSel">Opposing lineup anchor</label>
-        <select id="pitcherTargetSel" onchange="updateProjectionView()"><option value="">Loading hitters...</option></select>
-      </div>
-    </div>
-    <div id="projP"><p class="na">Choose a batter or pitcher to generate matchup-based projections.</p></div>
-  </div>
-
-  <div class="pnl fw">
-    <div class="pt">&#128203; LINEUP ANALYSIS</div>
-    <div class="lt"><button class="tb2 ac" onclick="showTab('away')">AWAY LINEUP</button><button class="tb2" onclick="showTab('home')">HOME LINEUP</button></div>
-    <div id="luP"><div class="sp"></div></div>
-  </div>
-</div>
-<script>
-const GPK=parseInt(window.location.pathname.split('/').pop());
-let GD=null,PD=null,AL=[],HL=[];
-
-function num(v,d=0){
-  const n=parseFloat(String(v).replace(/^[.]/,'0.'));
-  return Number.isFinite(n)?n:d;
-}
-function batterProjection(b,p){
-  const avg=num(b.avg,.240), obp=num(b.obp,avg+.060), slg=num(b.slg,avg*1.6), ops=num(b.ops,obp+slg);
-  const era=num((p.stats||{}).era,4.20), whip=num((p.stats||{}).whip,1.30), k9=num((p.stats||{}).k9,8.0);
-  const hitProb=Math.max(.12,Math.min(.68, avg + (whip-1.25)*0.08 - (era-4.0)*0.015));
-  const hits=(3.9*hitProb).toFixed(2);
-  const tb=(Math.max(0.3,3.8*(slg*.72)*(1+(whip-1.2)*0.12-(k9-8)*0.025))).toFixed(2);
-  const hrPct=(Math.max(2,Math.min(28, 6 + (slg-.380)*38 + (era-4.0)*2.2))*1).toFixed(1);
-  const rbiPct=(Math.max(8,Math.min(55, 18 + (ops-.700)*42 + (era-4.0)*2.5))).toFixed(1);
-  const kRisk=(Math.max(8,Math.min(45, 16 + (k9-8)*3.2 - (avg-.250)*55))).toFixed(1);
-  return {hits,tb,hrPct,rbiPct,kRisk};
-}
-function pitcherProjection(p, lineup){
-  const era=num((p.stats||{}).era,4.20), whip=num((p.stats||{}).whip,1.30), k9=num((p.stats||{}).k9,8.0);
-  const lineupAvg=lineup.length?lineup.reduce((s,x)=>s+num(x.avg,.240),0)/lineup.length:.240;
-  const lineupOps=lineup.length?lineup.reduce((s,x)=>s+num(x.ops,.700),0)/lineup.length:.700;
-  const outs=Math.max(9,Math.min(21, 16.5 - (era-4.0)*0.9 - (lineupOps-.700)*6.5)).toFixed(1);
-  const ks=Math.max(2,Math.min(10, (outs/3)*(k9/9)*(1-(lineupAvg-.250)*1.4))).toFixed(1);
-  const er=Math.max(0.5,Math.min(5.5, (outs/3)*(era/9)*(1+(lineupOps-.700)*1.3))).toFixed(1);
-  const baserunners=Math.max(3,Math.min(11, (outs/3)*whip*(1+(lineupAvg-.250)*1.1))).toFixed(1);
-  return {outs,ks,er,baserunners,lineupAvg:(lineupAvg).toFixed(3),lineupOps:(lineupOps).toFixed(3)};
-}
-function allBatters(){
-  const away=(AL||[]).map(b=>({...b, team:'away', teamLabel:GD?.awayAbbr||'AWAY'}));
-  const home=(HL||[]).map(b=>({...b, team:'home', teamLabel:GD?.homeAbbr||'HOME'}));
-  return away.concat(home);
-}
-function allPitchers(){
-  if(!PD||!PD.success) return [];
-  return [
-    {...(PD.awayPitcher||{}), side:'away', teamLabel:GD?.awayAbbr||'AWAY'},
-    {...(PD.homePitcher||{}), side:'home', teamLabel:GD?.homeAbbr||'HOME'}
-  ].filter(x=>x && x.name);
-}
-function populateProjectionSelectors(){
-  const batSel=document.getElementById('batterSel');
-  const batPitSel=document.getElementById('batterPitcherSel');
-  const pitSel=document.getElementById('pitcherSel');
-  const pitTarSel=document.getElementById('pitcherTargetSel');
-  if(!batSel||!batPitSel||!pitSel||!pitTarSel) return;
-  const batters=allBatters();
-  const pitchers=allPitchers();
-  batSel.innerHTML = '<option value="">Select a batter...</option>' + batters.map((b,i)=>`<option value="${i}">${b.teamLabel} — ${b.slot}. ${b.name}</option>`).join('');
-  batPitSel.innerHTML = '<option value="">Select pitcher...</option>' + pitchers.map((p,i)=>`<option value="${i}">${p.teamLabel} — ${p.name}</option>`).join('');
-  pitSel.innerHTML = '<option value="">Select a pitcher...</option>' + pitchers.map((p,i)=>`<option value="${i}">${p.teamLabel} — ${p.name}</option>`).join('');
-  pitTarSel.innerHTML = '<option value="">Select opposing hitter...</option>' + batters.map((b,i)=>`<option value="${i}">${b.teamLabel} — ${b.slot}. ${b.name}</option>`).join('');
-  if(!batSel.value && batters.length) batSel.value='0';
-  if(!pitSel.value && pitchers.length) pitSel.value='0';
-  if(!pitTarSel.value && batters.length) pitTarSel.value='0';
-  const selB = batters[batSel.value||0];
-  if(selB && pitchers.length){
-    const opp = pitchers.findIndex(p=>p.side !== selB.team);
-    batPitSel.value = String(opp >= 0 ? opp : 0);
-  }
-  const selP = pitchers[pitSel.value||0];
-  if(selP && batters.length){
-    const oppB = batters.findIndex(b=>b.team !== selP.side);
-    pitTarSel.value = String(oppB >= 0 ? oppB : 0);
-  }
-  updateProjectionView();
-}
-function updateProjectionView(){
-  const batters=allBatters(), pitchers=allPitchers();
-  const b = batters[document.getElementById('batterSel')?.value];
-  const bp = pitchers[document.getElementById('batterPitcherSel')?.value];
-  const p = pitchers[document.getElementById('pitcherSel')?.value];
-  const tb = batters[document.getElementById('pitcherTargetSel')?.value];
-  let left = '<p class="na">Select a batter and opposing pitcher.</p>';
-  let right = '<p class="na">Select a pitcher and opposing hitter anchor.</p>';
-  if(b && bp){
-    const pr = batterProjection(b,bp);
-    left = `<div class="projc"><div class="projt">BATTER OUTLOOK</div><div class="projsub">${b.teamLabel} ${b.name} vs ${bp.teamLabel} ${bp.name}</div><div class="projrow"><span class="projk">Projected hits</span><span class="projv">${pr.hits}</span></div><div class="projrow"><span class="projk">Projected total bases</span><span class="projv">${pr.tb}</span></div><div class="projrow"><span class="projk">HR probability</span><span class="projv">${pr.hrPct}%</span></div><div class="projrow"><span class="projk">RBI probability</span><span class="projv">${pr.rbiPct}%</span></div><div class="projrow"><span class="projk">Strikeout risk</span><span class="projv">${pr.kRisk}%</span></div><div class="projnote">Model inputs: batter AVG/OBP/SLG/OPS blended with opposing starter ERA, WHIP, and K/9.</div></div>`;
-  }
-  if(p){
-    const oppLineup = (p.side==='away') ? HL : AL;
-    const pr2 = pitcherProjection(p, oppLineup);
-    const anchorTxt = tb ? `${tb.teamLabel} ${tb.name}` : 'opposing lineup';
-    right = `<div class="projc"><div class="projt">PITCHER OUTLOOK</div><div class="projsub">${p.teamLabel} ${p.name} vs ${p.side==='away' ? GD?.homeAbbr : GD?.awayAbbr} lineup, anchor: ${anchorTxt}</div><div class="projrow"><span class="projk">Projected outs</span><span class="projv">${pr2.outs}</span></div><div class="projrow"><span class="projk">Projected strikeouts</span><span class="projv">${pr2.ks}</span></div><div class="projrow"><span class="projk">Projected earned runs</span><span class="projv">${pr2.er}</span></div><div class="projrow"><span class="projk">Projected baserunners</span><span class="projv">${pr2.baserunners}</span></div><div class="projrow"><span class="projk">Opp lineup AVG / OPS</span><span class="projv">${pr2.lineupAvg} / ${pr2.lineupOps}</span></div><div class="projnote">Model inputs: starter ERA, WHIP, K/9 plus opposing lineup average and OPS from the posted batting order.</div></div>`;
-  }
-  const projP=document.getElementById('projP');
-  if(projP) projP.innerHTML = `<div class="projg">${left}${right}</div>`;
-}
-
-
-function wic(c){c=(c||'').toLowerCase();if(c.includes('rain'))return'&#127783;';if(c.includes('cloud'))return'&#9925;';if(c.includes('clear')||c.includes('sun'))return'&#9728;';return'&#127780;';}
-function ec(e){const v=parseFloat(e);if(isNaN(v))return'';return v<3.0?'sg':v<4.5?'':'sw2';}
-function ac(a){const v=parseFloat(a);if(isNaN(v))return'al';return v>=.280?'ag':v>=.240?'am':'al';}
-
-async function loadGame(){
-  try{
-    const r=await fetch('/api/games/today');
-    const d=await r.json();
-    if(!d.success)throw new Error(d.error||'failed');
-    GD=(d.games||[]).find(g=>g.gamePk==GPK);
-    if(!GD)throw new Error('Game not found. It may not be scheduled for today.');
-    renderHeader();renderEdge();renderWx();renderPark();renderMatchup();
-    populateProjectionSelectors();
-  }catch(e){
-    document.getElementById('mhTeams').innerHTML=`<p style="color:var(--m);font-family:Orbitron;font-size:.85rem">${e.message}</p>`;
-    ['edgeP','wxP','pkP','maP'].forEach(id=>{document.getElementById(id).innerHTML=`<p class="na">Data unavailable</p>`;});
-  }
-}
-async function loadPitchers(){
-  try{
-    const r=await fetch('/api/pitchers/'+GPK);
-    PD=await r.json();
-    renderPitchers();
-    populateProjectionSelectors();
-  }catch(e){document.getElementById('pitP').innerHTML=`<p class="na">Pitcher data unavailable</p>`;}
-}
-async function loadLineups(){
-  try{
-    const r=await fetch('/api/game/'+GPK);
-    const d=await r.json();
-    if(d.success){AL=d.awayBatters||[];HL=d.homeBatters||[];}
-    showTab('away');
-    populateProjectionSelectors();
-  }catch(e){document.getElementById('luP').innerHTML=`<p class="na">Lineup not yet posted. Check back ~3 hours before first pitch.</p>`;}
-}
-
-function renderHeader(){
-  const g=GD;
-  const ai=g.awayLogo?`<img src="${g.awayLogo}" alt="${g.awayAbbr}" width="54" height="54" style="object-fit:contain">`:`<span style="font-family:Orbitron;color:var(--c);font-size:1rem">${g.awayAbbr}</span>`;
-  const hi=g.homeLogo?`<img src="${g.homeLogo}" alt="${g.homeAbbr}" width="54" height="54" style="object-fit:contain">`:`<span style="font-family:Orbitron;color:var(--c);font-size:1rem">${g.homeAbbr}</span>`;
-  const sc=g.status==='Live'?'bg':g.status==='Final'?'':'bc';
-  document.getElementById('mhTeams').innerHTML=`<div class="mhte"><div class="mhl">${ai}</div><div class="mha">${g.awayAbbr}</div><div class="mhfn">${g.awayName}</div></div><div class="mhvs">VS</div><div class="mhte"><div class="mhl">${hi}</div><div class="mha">${g.homeAbbr}</div><div class="mhfn">${g.homeName}</div></div>`;
-  document.getElementById('mhMeta').innerHTML=`<span class="bdg bc">${g.gameTime}</span><span class="bdg ${sc}">${g.status.toUpperCase()}</span><span class="bdg bo">PARK ${g.parkFactor}x</span>${g.venue?`<span class="bdg bc">${g.venue}</span>`:''}`;
-}
-function renderEdge(){
-  const g=GD,conf=g.edge>=8?'HIGH':g.edge>=5?'MEDIUM':'LOW',col=g.edge>=8?'var(--g)':g.edge>=5?'var(--c)':'var(--mu)';
-  document.getElementById('edgeP').innerHTML=`<div style="text-align:center;padding:12px 0">
-    <div class="en" style="color:${col}">${g.edge}%</div><div class="el">MODEL EDGE SCORE</div>
-    <div style="margin-top:14px">
-      <div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="font-size:.62rem;color:var(--mu);letter-spacing:2px">CONFIDENCE</span><span style="font-family:Orbitron;font-size:.72rem;color:${col}">${conf}</span></div>
-      <div class="cb"><div class="cf" style="width:0%" data-w="${g.barPct}%"></div></div>
-      <div style="display:flex;justify-content:space-between;margin-top:4px"><span style="font-size:.58rem;color:var(--mu)">LOW</span><span style="font-size:.58rem;color:var(--mu)">MED</span><span style="font-size:.58rem;color:var(--mu)">HIGH</span></div>
-    </div></div>`;
-  setTimeout(()=>{document.querySelectorAll('.cf').forEach(e=>{e.style.width=e.dataset.w;});},200);
-}
-function renderWx(){
-  const g=GD;
-  if(!g.temp||g.temp==='N/A'){document.getElementById('wxP').innerHTML=`<p class="na">Weather data not yet available for this game.</p>`;return;}
-  const tv=parseInt(g.temp)||70;
-  const imp=tv>80?'&#128293; HOT &mdash; Ball carries well. Hitters favored.':tv<50?'&#129398; COLD &mdash; Ball dies. Pitchers favored.':'&#9989; NEUTRAL &mdash; Standard conditions.';
-  document.getElementById('wxP').innerHTML=`<div class="wg" style="grid-template-columns:1fr 1fr 1fr"><div class="ws"><div class="wi">${wic(g.condition)}</div><div class="wv">${g.temp}&deg;F</div><div class="wl">TEMPERATURE</div></div><div class="ws"><div class="wi">&#128168;</div><div class="wv" style="font-size:.82rem">${g.wind||'N/A'}</div><div class="wl">WIND</div></div><div class="ws"><div class="wi">&#127783;</div><div class="wv">${g.rainChance ?? 'N/A'}%</div><div class="wl">RAIN CHANCE</div></div></div><div class="wi2">${imp}</div>`;
-}
-function renderPitchers(){
-  function pc(p,lbl){
-    const s=p.stats||{},has=s.era&&s.era!=='N/A';
-    const rows=has?`<div class="sr"><span class="sk">ERA</span><span class="sv ${ec(s.era)}">${s.era}</span></div><div class="sr"><span class="sk">WHIP</span><span class="sv">${s.whip}</span></div><div class="sr"><span class="sk">K/9</span><span class="sv">${s.k9}</span></div><div class="sr"><span class="sk">IP</span><span class="sv">${s.ip}</span></div><div class="sr"><span class="sk">W-L</span><span class="sv">${s.wins}-${s.losses}</span></div>`:`<p class="na" style="font-size:.7rem">No season stats yet</p>`;
-    return `<div class="pc"><h4>${p.name||'TBD'}</h4><div class="pct">${lbl}</div>${rows}</div>`;
-  }
-  if(!PD||!PD.success){document.getElementById('pitP').innerHTML=`<p class="na">Pitcher stats unavailable</p>`;return;}
-  document.getElementById('pitP').innerHTML=`<div class="pg">${pc(PD.awayPitcher,GD?GD.awayName:'AWAY')}${pc(PD.homePitcher,GD?GD.homeName:'HOME')}</div>`;
-}
-function renderPark(){
-  const g=GD,pf=g.parkFactor||1.0,type=pf>=1.05?'Hitter-Friendly':pf<=0.95?'Pitcher-Friendly':'Neutral',col=pf>=1.05?'var(--o)':pf<=0.95?'var(--g)':'var(--c)';
-  const desc=pf>=1.05?`&#128293; <strong style="color:var(--o)">${g.venue||'This park'}</strong> significantly boosts offense.`:pf<=0.95?`&#9968; <strong style="color:var(--g)">${g.venue||'This park'}</strong> suppresses offense. Favor unders.`:`&#9989; <strong style="color:var(--c)">${g.venue||'This park'}</strong> plays neutral.`;
-  document.getElementById('pkP').innerHTML=`<div class="pkg"><div class="ps"><div class="pv" style="color:${col}">${pf}x</div><div class="plb">RUN FACTOR</div></div><div class="ps"><div class="pv" style="color:${col};font-size:.95rem">${type}</div><div class="plb">PARK TYPE</div></div></div><div style="margin-top:12px;padding:10px;background:rgba(0,0,0,.3);border-radius:8px;font-size:.72rem;color:var(--mu);line-height:1.6">${desc}</div>`;
-}
-function renderMatchup(){
-  const g=GD;
-  document.getElementById('maP').innerHTML=`
-    <div class="sr"><span class="sk">AWAY</span><span class="sv" style="color:var(--t)">${g.awayName}</span></div>
-    <div class="sr"><span class="sk">HOME</span><span class="sv" style="color:var(--t)">${g.homeName}</span></div>
-    <div class="sr"><span class="sk">VENUE</span><span class="sv" style="font-family:Inter;font-weight:600;font-size:.72rem;color:var(--t)">${g.venue||'TBD'}</span></div>
-    <div class="sr"><span class="sk">GAME TIME</span><span class="sv">${g.gameTime}</span></div>
-    <div class="sr"><span class="sk">MODEL EDGE</span><span class="sv" style="color:var(--c)">${g.edge}%</span></div>
-    <div class="sr"><span class="sk">PARK FACTOR</span><span class="sv" style="color:var(--o)">${g.parkFactor}x</span></div>
-    <div class="sr"><span class="sk">STATUS</span><span class="sv" style="color:${g.status==='Live'?'var(--g)':'var(--c)'}">${g.status.toUpperCase()}</span></div>`;
-}
-function showTab(side){
-  document.querySelectorAll('.tb2').forEach((b,i)=>b.classList.toggle('ac',(i===0&&side==='away')||(i===1&&side==='home')));
-  const lu=side==='away'?AL:HL;
-  if(!lu||!lu.length){document.getElementById('luP').innerHTML=`<p class="na">Lineup not yet posted. Check back ~3 hours before first pitch.</p>`;return;}
-  const rows=lu.map((p,i)=>`<tr><td class="on">${i+1}</td><td>${p.name}</td><td><span class="pb3">${p.pos}</span></td><td class="${ac(p.avg)}">${p.avg}</td><td>${p.ab}</td><td>${p.hits}</td><td>${p.hr}</td><td>${p.rbi}</td></tr>`).join('');
-  document.getElementById('luP').innerHTML=`<table><thead><tr><th>#</th><th>PLAYER</th><th>POS</th><th>AVG</th><th>AB</th><th>H</th><th>HR</th><th>RBI</th></tr></thead><tbody>${rows}</tbody></table>`;
-}
-loadGame();loadPitchers();loadLineups();
-</script>
-</body>
-</html>"""
-
-# ─────────────────────────────────────────
-# ROUTES — serve HTML as strings (no template files needed!)
-# ─────────────────────────────────────────
+# ── Routes ────────────────────────────────────────────────────────────────────
 @app.route("/")
-def index():
-    return DASHBOARD_HTML, 200, {"Content-Type": "text/html; charset=utf-8"}
+def dashboard():
+    return DASHBOARD_HTML
 
-@app.route("/deep-dive/<game_pk>")
+@app.route("/deep-dive/<int:game_pk>")
 def deep_dive(game_pk):
-    # Accept any game_pk (int or string) — no type-casting that could 404
-    return DEEP_DIVE_HTML, 200, {"Content-Type": "text/html; charset=utf-8"}
+    return DEEP_DIVE_HTML
+
+@app.route("/api/status")
+def api_status():
+    with _fg_lock:
+        fgl, fgd, fgb, fgp = _fg_loaded, _fg_load_date, len(_fg_bat), len(_fg_pit)
+    with _sv_lock:
+        svl, svd = _sv_loaded, _sv_load_date
+        svpi, svbi, svsc, svar = len(_sv_pit_xstats), len(_sv_bat_xstats), len(_sv_bat_statcast), len(_sv_arsenal_pct)
+    return jsonify({
+        "fangraphs": {"loaded":fgl,"date":str(fgd),"batters":fgb,"pitchers":fgp},
+        "savant":    {"loaded":svl,"date":str(svd),"pit_xstats":svpi,"bat_xstats":svbi,"statcast":svsc,"arsenals":svar},
+    })
 
 @app.route("/api/games/today")
 def api_games_today():
+    _maybe_refresh_fg()
+    _maybe_refresh_savant()
     try:
         date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        raw      = fetch_schedule(date_str)
-        games    = [x for x in (parse_game(g) for g in raw) if x is not None]
-        return jsonify({"success": True, "date": date_str, "games": games, "count": len(games)})
-    except Exception as e:
-        tb_str = traceback.format_exc(); print(f"[api_games_today] {e}"); print(tb_str)
-        return jsonify({"success": False, "error": str(e), "games": []}), 500
+        raw   = fetch_schedule(date_str)
+        games = [g for g in [parse_game(x) for x in raw] if g]
+        return jsonify({"success":True,"games":games,"count":len(games)})
+    except Exception as ex:
+        print("[api_games_today]", traceback.format_exc())
+        return jsonify({"success":False,"error":str(ex),"games":[]}), 500
 
-@app.route("/api/game/<game_pk>")
+@app.route("/api/game/<int:game_pk>")
 def api_game_detail(game_pk):
     try:
         r = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=10)
         r.raise_for_status()
-        data      = r.json()
-        away_team = data.get("teams", {}).get("away", {})
-        home_team = data.get("teams", {}).get("home", {})
-        def get_batters(team_data):
-            out = []
-            for pid, p in team_data.get("players", {}).items():
-                order = p.get("battingOrder")
-                if not order:
-                    continue
-                try:
-                    order_int = int(str(order).strip())
-                    if order_int % 100 != 0:
-                        continue
-                    slot = order_int // 100
-                except Exception:
-                    continue
-                pos = p.get("position", {}).get("abbreviation", "")
-                s  = p.get("stats", {}).get("batting", {})
-                ss = p.get("seasonStats", {}).get("batting", {})
-                out.append({
-                    "slot": slot,
-                    "id": p.get("person", {}).get("id"),
-                    "name": p.get("person", {}).get("fullName", ""),
-                    "pos":  pos,
-                    "avg":  ss.get("avg", ".---"),
-                    "obp":  ss.get("obp", ".---"),
-                    "slg":  ss.get("slg", ".---"),
-                    "ops":  ss.get("ops", ".---"),
-                    "seasonHr": ss.get("homeRuns", 0),
-                    "seasonRbi": ss.get("rbi", 0),
-                    "seasonSo": ss.get("strikeOuts", 0),
-                    "ab":   s.get("atBats", 0),
-                    "hits": s.get("hits", 0),
-                    "hr":   s.get("homeRuns", 0),
-                    "rbi":  s.get("rbi", 0),
-                })
-            out.sort(key=lambda x: x["slot"])
-            return out[:9]
-        return jsonify({"success": True, "awayBatters": get_batters(away_team), "homeBatters": get_batters(home_team)})
-    except Exception as e:
-        _tb = traceback.format_exc()
-        print(f"[api_game_detail] {e} | {_tb}")
-        return jsonify({"success": False, "error": str(e), "awayBatters": [], "homeBatters": []})
+        d = r.json().get("teams",{})
+        return jsonify({
+            "success": True,
+            "awayBatters": get_batters_from_boxscore(d.get("away",{}), "away"),
+            "homeBatters": get_batters_from_boxscore(d.get("home",{}), "home"),
+        })
+    except Exception as ex:
+        print("[api_game_detail]", traceback.format_exc())
+        return jsonify({"success":False,"error":str(ex),"awayBatters":[],"homeBatters":[]}), 500
 
-@app.route("/api/pitchers/<game_pk>")
+@app.route("/api/pitchers/<int:game_pk>")
 def api_pitchers(game_pk):
     try:
         raw = fetch_schedule(datetime.now(timezone.utc).strftime("%Y-%m-%d"))
         for g in raw:
-            if str(g.get("gamePk", "")) == str(game_pk):
-                ap = g.get("teams", {}).get("away", {}).get("probablePitcher", {})
-                hp = g.get("teams", {}).get("home", {}).get("probablePitcher", {})
+            if g.get("gamePk") == game_pk:
+                ap = g.get("teams",{}).get("away",{}).get("probablePitcher",{})
+                hp = g.get("teams",{}).get("home",{}).get("probablePitcher",{})
+                an = ap.get("fullName","TBD"); hn = hp.get("fullName","TBD")
+                # Merge MLB API + FanGraphs + Savant for each pitcher
+                def build_pitcher_stats(name, pid):
+                    mlb = pitcher_stats_mlb(pid) if pid else {}
+                    fg  = fg_pitcher(name)
+                    sv  = sv_pitcher(name)
+                    s   = dict(mlb)
+                    s.update(fg)
+                    for k,v in sv.items():
+                        if k not in ("sv_arsenal_pct","sv_arsenal_velo"):
+                            s[k] = v
+                    s["sv_arsenal_pct"]  = sv.get("sv_arsenal_pct",{})
+                    s["sv_arsenal_velo"] = sv.get("sv_arsenal_velo",{})
+                    return s
                 return jsonify({
                     "success": True,
-                    "awayPitcher": {"id": ap.get("id"), "name": ap.get("fullName", "TBD"), "stats": pitcher_stats(ap["id"]) if ap.get("id") else {}},
-                    "homePitcher": {"id": hp.get("id"), "name": hp.get("fullName", "TBD"), "stats": pitcher_stats(hp["id"]) if hp.get("id") else {}},
+                    "awayPitcher": {"id":ap.get("id"),"name":an,"stats":build_pitcher_stats(an,ap.get("id"))},
+                    "homePitcher": {"id":hp.get("id"),"name":hn,"stats":build_pitcher_stats(hn,hp.get("id"))},
                 })
-        return jsonify({"success": False, "error": "Game not found",
-                        "awayPitcher": {"name": "TBD", "stats": {}},
-                        "homePitcher": {"name": "TBD", "stats": {}}})
-    except Exception as e:
-        tb_str = traceback.format_exc(); print(f"[api_pitchers] {e}"); print(tb_str)
-        return jsonify({"success": False, "error": str(e),
-                        "awayPitcher": {"name": "TBD", "stats": {}},
-                        "homePitcher": {"name": "TBD", "stats": {}}})
+        return jsonify({"success":False,"error":"Game not found","awayPitcher":{},"homePitcher":{}})
+    except Exception as ex:
+        print("[api_pitchers]", traceback.format_exc())
+        return jsonify({"success":False,"error":str(ex),"awayPitcher":{},"homePitcher":{}}), 500
 
 @app.errorhandler(404)
-def not_found(e):
-    return jsonify({"error": "Not found", "path": str(e)}), 404
-
+def e404(e): return jsonify({"error":"Not found"}), 404
 @app.errorhandler(500)
-def server_error(e):
-    _msg = str(e); _tb = str(traceback.format_exc()); print(f"[500] " + _msg); print(_tb)
-    return jsonify({"error": "Internal server error", "detail": str(e)}), 500
+def e500(e): return jsonify({"error":str(e)}), 500
+
+
+# ── Phase 3 Routes ────────────────────────────────────────────────────────────
+@app.route("/api/game-projection/<int:game_pk>")
+def api_game_projection(game_pk):
+    try:
+        raw = fetch_schedule(datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+        gdata = next((g for g in raw if g.get("gamePk") == game_pk), None)
+        if not gdata:
+            return jsonify({"success": False, "error": "Game not found"})
+        away_t = gdata.get("teams",{}).get("away",{})
+        home_t = gdata.get("teams",{}).get("home",{})
+        ap = away_t.get("probablePitcher",{}); hp = home_t.get("probablePitcher",{})
+        ap_n = ap.get("fullName","TBD"); hp_n = hp.get("fullName","TBD")
+        hid = home_t.get("team",{}).get("id")
+        pf = PARK_FACTORS.get(hid, 1.0)
+        ap_mlb = pitcher_stats_mlb(ap.get("id")) if ap.get("id") else {}
+        hp_mlb = pitcher_stats_mlb(hp.get("id")) if hp.get("id") else {}
+        ap_fg = fg_pitcher(ap_n); hp_fg = fg_pitcher(hp_n)
+        ap_sv = sv_pitcher(ap_n); hp_sv = sv_pitcher(hp_n)
+        def best_era(sv, fg, mlb):
+            for v in [sv.get("sv_xera"), fg.get("fg_era"), mlb.get("era")]:
+                try:
+                    f = float(v)
+                    if 0 < f < 12: return f
+                except: pass
+            return 4.50
+        def best_fip(fg, fallback):
+            try:
+                f = float(fg.get("fg_fip",0))
+                if 0 < f < 12: return f
+            except: pass
+            return fallback
+        # home pitcher faces away lineup, away pitcher faces home lineup
+        away_pit_era = best_era(hp_sv, hp_fg, hp_mlb)
+        home_pit_era = best_era(ap_sv, ap_fg, ap_mlb)
+        away_pit_fip = best_fip(hp_fg, away_pit_era)
+        home_pit_fip = best_fip(ap_fg, home_pit_era)
+        # Try to get lineup xwOBA
+        try:
+            r = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=10)
+            r.raise_for_status()
+            box = r.json().get("teams",{})
+            away_bats = get_batters_from_boxscore(box.get("away",{}), "away")
+            home_bats = get_batters_from_boxscore(box.get("home",{}), "home")
+        except:
+            away_bats = []; home_bats = []
+        def lineup_xwoba(bats):
+            vals = []
+            for b in bats:
+                for k in ["sv_xwoba","fg_woba"]:
+                    try:
+                        f = float(b.get(k,0))
+                        if 0.1 < f < 0.6: vals.append(f); break
+                    except: pass
+                else:
+                    vals.append(0.320)
+            return round(sum(vals)/len(vals), 3) if vals else 0.320
+        away_xwoba = lineup_xwoba(away_bats)
+        home_xwoba = lineup_xwoba(home_bats)
+        # Blended ERA: 60% xERA/ERA + 40% FIP
+        away_blend = 0.6*away_pit_era + 0.4*away_pit_fip
+        home_blend = 0.6*home_pit_era + 0.4*home_pit_fip
+        # Base runs model (empirical: 4.5 R/G MLB avg)
+        away_runs = 4.50 * (4.50/away_blend) * (away_xwoba/0.320) * pf
+        home_runs = 4.50 * (4.50/home_blend) * (home_xwoba/0.320) * pf
+        # Weather adjustment
+        ven = gdata.get("venue",{}); vloc = ven.get("location",{})
+        lat = vloc.get("defaultCoordinates",{}).get("latitude")
+        lon = vloc.get("defaultCoordinates",{}).get("longitude")
+        wx = get_weather(lat, lon) if lat and lon else {}
+        wx_adj = 0.0
+        try:
+            t = float(wx.get("temp","70"))
+            if t > 82: wx_adj = 0.20
+            elif t > 76: wx_adj = 0.10
+            elif t < 48: wx_adj = -0.20
+            elif t < 56: wx_adj = -0.10
+        except: pass
+        away_runs = round(away_runs + wx_adj, 1)
+        home_runs = round(home_runs + wx_adj, 1)
+        total = round(away_runs + home_runs, 1)
+        run_env = "HIGH" if total > 9.5 else ("LOW" if total < 7.5 else "NEUTRAL")
+        at_abbr = away_t.get("team",{}).get("abbreviation","AWAY")
+        ht_abbr = home_t.get("team",{}).get("abbreviation","HOME")
+        diff = abs(home_runs - away_runs)
+        if diff > 0.7:
+            fav = ht_abbr if home_runs > away_runs else at_abbr
+        else:
+            fav = "EVEN"
+        return jsonify({
+            "success": True,
+            "awayAbbr": at_abbr, "homeAbbr": ht_abbr,
+            "awayRuns": away_runs, "homeRuns": home_runs,
+            "total": total, "runEnv": run_env, "favorite": fav,
+            "awayXwoba": away_xwoba, "homeXwoba": home_xwoba,
+            "awayPitcherEra": round(away_pit_era,2),
+            "homePitcherEra": round(home_pit_era,2),
+            "awayPitcherFip": round(away_pit_fip,2),
+            "homePitcherFip": round(home_pit_fip,2),
+            "parkFactor": pf, "wxAdj": wx_adj,
+        })
+    except Exception as ex:
+        print("[api_game_projection]", traceback.format_exc())
+        return jsonify({"success":False,"error":str(ex)}), 500
+
+@app.route("/api/player-splits/<int:player_id>/<string:group>")
+def api_player_splits(player_id, group):
+    try:
+        year = datetime.now().year
+        # Platoon splits (vl = vs lefty, vr = vs righty)
+        pr = requests.get(
+            f"{MLB_API}/people/{player_id}/stats",
+            params={"stats":"statSplits","group":group,"season":year,"sitCodes":"vl,vr"},
+            timeout=8
+        )
+        pr.raise_for_status()
+        platoon = {}
+        for sp in pr.json().get("stats",[{}])[0].get("splits",[]):
+            code = sp.get("split",{}).get("code","")
+            s = sp.get("stat",{})
+            if code in ("vl","vr"):
+                platoon[code] = {
+                    "avg":  s.get("avg","---"), "obp": s.get("obp","---"),
+                    "slg":  s.get("slg","---"), "ops": s.get("ops","---"),
+                    "pa":   s.get("plateAppearances",0),
+                    "hr":   s.get("homeRuns",0),
+                    "woba": s.get("woba","---"),
+                }
+        # Game log (recent form)
+        lr = requests.get(
+            f"{MLB_API}/people/{player_id}/stats",
+            params={"stats":"gameLog","group":group,"season":year},
+            timeout=8
+        )
+        lr.raise_for_status()
+        all_games = lr.json().get("stats",[{}])[0].get("splits",[])
+        last7 = all_games[-7:] if len(all_games) >= 7 else all_games
+        recent = []
+        if group == "hitting":
+            for sp in last7:
+                s = sp.get("stat",{})
+                recent.append({
+                    "date": sp.get("date",""), "opp": sp.get("opponent",{}).get("abbreviation",""),
+                    "ab": s.get("atBats",0), "h": s.get("hits",0),
+                    "hr": s.get("homeRuns",0), "rbi": s.get("rbi",0),
+                    "k":  s.get("strikeOuts",0), "bb": s.get("baseOnBalls",0),
+                    "avg": s.get("avg","---"),
+                })
+            l7_ab  = sum(g["ab"] for g in recent)
+            l7_h   = sum(g["h"]  for g in recent)
+            l7_hr  = sum(g["hr"] for g in recent)
+            l7_rbi = sum(g["rbi"] for g in recent)
+            l7_k   = sum(g["k"]  for g in recent)
+            l7_avg = round(l7_h/l7_ab,3) if l7_ab > 0 else 0
+            is_hot  = l7_avg >= 0.310 or l7_hr >= 2
+            is_cold = l7_avg < 0.150 and l7_ab >= 12
+            return jsonify({
+                "success":True, "group":"hitting",
+                "platoon": platoon, "recentGames": recent,
+                "l7_avg": l7_avg, "l7_hr": l7_hr, "l7_rbi": l7_rbi, "l7_k": l7_k,
+                "isHot": is_hot, "isCold": is_cold,
+            })
+        else:
+            for sp in last7:
+                s = sp.get("stat",{})
+                recent.append({
+                    "date": sp.get("date",""), "opp": sp.get("opponent",{}).get("abbreviation",""),
+                    "ip": s.get("inningsPitched","0"), "er": s.get("earnedRuns",0),
+                    "k": s.get("strikeOuts",0), "bb": s.get("baseOnBalls",0),
+                    "h": s.get("hits",0),
+                })
+            l7_er = sum(g["er"] for g in recent)
+            l7_k  = sum(g["k"]  for g in recent)
+            is_hot  = l7_er <= 4 and len(recent) >= 2
+            is_cold = l7_er >= 9 and len(recent) >= 2
+            return jsonify({
+                "success":True, "group":"pitching",
+                "platoon": platoon, "recentGames": recent,
+                "l7_er": l7_er, "l7_k": l7_k,
+                "isHot": is_hot, "isCold": is_cold,
+            })
+    except Exception as ex:
+        print("[api_player_splits]", traceback.format_exc())
+        return jsonify({"success":False,"error":str(ex),"platoon":{},"recentGames":[]}), 500
+
+# Boot background loaders
+threading.Thread(target=_load_fg_data,      daemon=True).start()
+threading.Thread(target=_load_savant_data,  daemon=True).start()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

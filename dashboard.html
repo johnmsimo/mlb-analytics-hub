@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>MLB Analytics Hub</title>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--c:#00e5ff;--m:#e040fb;--g:#00e676;--o:#ff9800;--sv:#00b8d4;--bg:#050a18;--card:#0a1628;--b:rgba(0,229,255,.18);--t:#e0f0ff;--mu:#6a8db0;--fg:#fa6400}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--t);min-height:100vh}
+body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,229,255,.012) 2px,rgba(0,229,255,.012) 4px);pointer-events:none;z-index:9999}
+nav{display:flex;align-items:center;justify-content:space-between;padding:14px 32px;background:rgba(5,10,24,.95);backdrop-filter:blur(16px);border-bottom:1px solid var(--b);position:sticky;top:0;z-index:100}
+.logo{font-family:'Orbitron',monospace;font-size:1.4rem;font-weight:900;color:var(--c);text-shadow:0 0 20px rgba(0,229,255,.6);letter-spacing:3px}
+.nav-r{display:flex;align-items:center;gap:18px}
+.live-dot{display:flex;align-items:center;gap:6px;font-size:.7rem;letter-spacing:2px;color:var(--g);font-family:'Orbitron',monospace}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--g);box-shadow:0 0 8px var(--g);animation:blink 1.4s ease-in-out infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+#clk{font-family:'Orbitron',monospace;font-size:.95rem;color:var(--c);min-width:100px;text-align:right}
+.srcbar{background:linear-gradient(90deg,rgba(250,100,0,.06),rgba(0,184,212,.04),rgba(0,229,255,.03));border-bottom:1px solid rgba(255,255,255,.07);padding:7px 32px;font-size:.62rem;letter-spacing:2px;font-family:'Orbitron',monospace;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.fgtag{padding:2px 9px;border-radius:10px;background:rgba(250,100,0,.14);color:var(--fg);border:1px solid rgba(250,100,0,.28)}
+.svtag{padding:2px 9px;border-radius:10px;background:rgba(0,184,212,.12);color:var(--sv);border:1px solid rgba(0,184,212,.28)}
+.strip{display:flex;align-items:center;justify-content:space-between;padding:18px 32px;background:linear-gradient(90deg,rgba(0,229,255,.05),rgba(224,64,251,.04));border-bottom:1px solid var(--b);flex-wrap:wrap;gap:12px}
+.strip-title{font-family:'Orbitron',monospace;font-size:1rem;color:var(--mu);letter-spacing:5px}
+.strip-stats{display:flex;gap:32px;flex-wrap:wrap}
+.ss{text-align:center}.ss-v{font-family:'Orbitron',monospace;font-size:1.6rem;font-weight:700;color:var(--c);text-shadow:0 0 12px rgba(0,229,255,.4)}.ss-l{font-size:.65rem;color:var(--mu);letter-spacing:2px;margin-top:2px}
+.main{padding:28px 32px;max-width:1600px;margin:0 auto}
+.sh{font-family:'Orbitron',monospace;font-size:.78rem;color:var(--mu);letter-spacing:4px;margin-bottom:20px;display:flex;align-items:center;gap:12px}
+.sh::after{content:'';flex:1;height:1px;background:linear-gradient(90deg,var(--b),transparent)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:20px}
+.card{background:var(--card);border:1px solid var(--b);border-radius:16px;padding:22px;cursor:pointer;transition:all .3s cubic-bezier(.16,1,.3,1);position:relative;overflow:hidden}
+.card:hover{transform:translateY(-6px);border-color:var(--c);box-shadow:0 0 35px rgba(0,229,255,.22),0 20px 40px rgba(0,0,0,.5)}
+.ct{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+.badge{font-size:.62rem;letter-spacing:2px;padding:3px 10px;border-radius:20px;font-family:'Orbitron',monospace;font-weight:700}
+.bs{background:rgba(0,229,255,.08);color:var(--c);border:1px solid rgba(0,229,255,.25)}
+.bl{background:rgba(0,230,118,.1);color:var(--g);border:1px solid rgba(0,230,118,.3);animation:pb 2s ease-in-out infinite}
+.bf{background:rgba(106,141,176,.1);color:var(--mu);border:1px solid rgba(106,141,176,.2)}
+@keyframes pb{0%,100%{box-shadow:0 0 0 0 rgba(0,230,118,.4)}50%{box-shadow:0 0 0 3px rgba(0,230,118,0)}}
+.ctime{font-size:.72rem;color:var(--mu);font-family:'Orbitron',monospace}
+.mu{display:flex;align-items:center;justify-content:center;gap:14px;margin-bottom:16px}
+.tb{display:flex;flex-direction:column;align-items:center;gap:7px;flex:1}
+.tlw{width:62px;height:62px;border-radius:50%;border:2px solid var(--b);background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;overflow:hidden;transition:all .3s}
+.card:hover .tlw{border-color:var(--c);box-shadow:0 0 16px rgba(0,229,255,.3)}
+.tlw img{width:42px;height:42px;object-fit:contain}
+.ta{font-family:'Orbitron',monospace;font-size:.82rem;font-weight:700}
+.vs{font-family:'Orbitron',monospace;font-size:.68rem;color:var(--mu);letter-spacing:2px}
+.pr{display:flex;justify-content:space-between;margin-bottom:12px;padding:9px 12px;background:rgba(0,0,0,.3);border-radius:8px;border:1px solid rgba(255,255,255,.04)}
+.pi{text-align:center;flex:1}
+.pl{font-size:.58rem;color:var(--mu);letter-spacing:2px;margin-bottom:2px}
+.pn{font-size:.7rem;color:var(--t);font-weight:600}
+.wr{display:flex;align-items:center;gap:8px;margin-bottom:12px;padding:7px 10px;background:rgba(0,0,0,.2);border-radius:7px;font-size:.7rem;color:var(--mu)}
+.wr span.val{color:var(--t);font-weight:600}
+.eb{margin-bottom:8px}
+.ebl{display:flex;justify-content:space-between;margin-bottom:4px}
+.ebl span{font-size:.62rem;color:var(--mu);letter-spacing:1px}
+.ebl strong{font-size:.75rem;color:var(--c);font-family:'Orbitron',monospace}
+.bar{height:7px;background:rgba(255,255,255,.06);border-radius:4px;overflow:hidden}
+.fill{height:100%;border-radius:4px;background:linear-gradient(90deg,var(--c),var(--m));box-shadow:0 0 8px rgba(0,229,255,.3);transition:width 1.2s cubic-bezier(.16,1,.3,1)}
+.vn{font-size:.62rem;color:var(--mu);text-align:center;margin-top:8px;letter-spacing:1px}
+.ap{display:flex;align-items:center;justify-content:center;gap:6px;margin-top:12px;width:100%;padding:9px;border-radius:8px;background:linear-gradient(90deg,rgba(0,229,255,.1),rgba(224,64,251,.07));border:1px solid rgba(0,229,255,.2);font-size:.7rem;color:var(--c);letter-spacing:2px;font-family:'Orbitron',monospace;font-weight:700;transition:all .2s;cursor:pointer}
+.card:hover .ap{background:linear-gradient(90deg,rgba(0,229,255,.2),rgba(224,64,251,.14));border-color:var(--c)}
+.sw{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:280px;gap:14px}
+.sp{width:44px;height:44px;border:3px solid rgba(0,229,255,.15);border-top-color:var(--c);border-radius:50%;animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.st{font-family:'Orbitron',monospace;font-size:.78rem;color:var(--mu);letter-spacing:3px}
+.ng{text-align:center;padding:60px 20px}
+footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.65rem;color:var(--mu);letter-spacing:2px;font-family:'Orbitron',monospace;margin-top:20px}
+@media(max-width:768px){nav{padding:12px 16px}.logo{font-size:1.05rem}.strip{padding:14px 16px}.main{padding:16px}.srcbar{padding:7px 16px}}
+</style>
+</head>
+<body>
+<nav>
+  <div class="logo">&#9889; MLB ANALYTICS HUB</div>
+  <div class="nav-r">
+    <div id="dt" style="font-size:.72rem;color:var(--mu);font-family:'Orbitron',monospace"></div>
+    <div id="clk"></div>
+    <div class="live-dot"><div class="dot"></div>LIVE</div>
+  </div>
+</nav>
+<div class="srcbar">
+  <span class="fgtag">FG</span> FANGRAPHS: wOBA &middot; wRC+ &middot; FIP &middot; xFIP &middot; WAR
+  &nbsp;|&nbsp;
+  <span class="svtag">SV</span> BASEBALL SAVANT: xERA &middot; xBA &middot; xSLG &middot; xwOBA &middot; EV &middot; HH% &middot; Barrel% &middot; Pitch Arsenal
+</div>
+<div class="strip">
+  <div class="strip-title">COMMAND CENTER</div>
+  <div class="strip-stats">
+    <div class="ss"><div class="ss-v" id="sg">-</div><div class="ss-l">GAMES TODAY</div></div>
+    <div class="ss"><div class="ss-v" id="sl">-</div><div class="ss-l">LIVE NOW</div></div>
+    <div class="ss"><div class="ss-v" id="se">-</div><div class="ss-l">AVG EDGE</div></div>
+    <div class="ss"><div class="ss-v" id="sh">-</div><div class="ss-l">HIGH CONF</div></div>
+  </div>
+</div>
+<div class="main">
+  <div class="sh">TODAY&#39;S GAMES</div>
+  <div id="gc"><div class="sw"><div class="sp"></div><div class="st">LOADING GAMES...</div></div></div>
+</div>
+<footer>MLB ANALYTICS HUB &nbsp;|&nbsp; DATA: MLB API &middot; FANGRAPHS &middot; BASEBALL SAVANT &middot; OPEN-METEO &nbsp;|&nbsp; FOR ENTERTAINMENT PURPOSES ONLY</footer>
+<script>
+function tick(){var n=new Date(),h=n.getHours(),m=n.getMinutes(),s=n.getSeconds(),h12=(h%12||12),ap=h>=12?'PM':'AM';document.getElementById('clk').textContent=('0'+h12).slice(-2)+':'+('0'+m).slice(-2)+':'+('0'+s).slice(-2)+' '+ap;document.getElementById('dt').textContent=n.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'}).toUpperCase();}
+setInterval(tick,1000);tick();
+function wicon(c){var s=(c||'').toLowerCase();if(s.indexOf('rain')>=0||s.indexOf('shower')>=0)return'&#127783;';if(s.indexOf('thunder')>=0)return'&#9928;';if(s.indexOf('cloud')>=0)return'&#9925;';if(s.indexOf('fog')>=0)return'&#127787;';if(s.indexOf('snow')>=0)return'&#10052;';if(s.indexOf('clear')>=0||s.indexOf('sun')>=0)return'&#9728;';return'&#127780;';}
+function mkCard(g){
+  var bc=g.status==='Live'?'bl':g.status==='Final'?'bf':'bs';
+  var bl=g.status==='Live'?'&#9679; LIVE':g.status==='Final'?'FINAL':'SCHEDULED';
+  var aL=g.awayLogo?'<img src="'+g.awayLogo+'" alt="'+g.awayAbbr+'" width="42" height="42" loading="lazy">'
+    :'<span style="font-family:Orbitron;font-size:.9rem;color:var(--c)">'+g.awayAbbr+'</span>';
+  var hL=g.homeLogo?'<img src="'+g.homeLogo+'" alt="'+g.homeAbbr+'" width="42" height="42" loading="lazy">'
+    :'<span style="font-family:Orbitron;font-size:.9rem;color:var(--c)">'+g.homeAbbr+'</span>';
+  var rT=(g.rainChance!==undefined&&g.rainChance!=='N/A')?' | '+g.rainChance+'% rain':'';
+  var hW=g.temp&&g.temp!='N/A'
+    ?'<div class="wr"><span>'+wicon(g.condition)+'</span><span class="val">'+g.temp+'&deg;F</span><span> | </span><span class="val">'+g.wind+'</span>'+rT+'</div>':'';
+  return '<div class="card" onclick="location.href=\'/deep-dive/'+g.gamePk+'\'">'
+    +'<div class="ct"><span class="badge '+bc+'">'+bl+'</span><span class="ctime">'+g.gameTime+'</span></div>'
+    +'<div class="mu"><div class="tb"><div class="tlw">'+aL+'</div><div class="ta">'+g.awayAbbr+'</div></div>'
+    +'<div class="vs">VS</div>'
+    +'<div class="tb"><div class="tlw">'+hL+'</div><div class="ta">'+g.homeAbbr+'</div></div></div>'
+    +'<div class="pr"><div class="pi"><div class="pl">AWAY SP</div><div class="pn">'+g.awayPitcher+'</div></div>'
+    +'<div style="width:1px;background:rgba(255,255,255,.05)"></div>'
+    +'<div class="pi"><div class="pl">HOME SP</div><div class="pn">'+g.homePitcher+'</div></div></div>'
+    +hW
+    +'<div class="eb"><div class="ebl"><span>MODEL EDGE</span><strong>'+g.edge+'%</strong></div>'
+    +'<div class="bar"><div class="fill" style="width:0%" data-w="'+g.barPct+'%"></div></div></div>'
+    +'<div class="vn">'+g.venue+'</div>'
+    +'<div class="ap">&#9889; DEEP DIVE ANALYSIS</div>'
+    +'</div>';
+}
+function load(){
+  fetch('/api/games/today').then(function(r){return r.json();}).then(function(d){
+    if(!d.success)throw new Error(d.error||'API error');
+    var gs=d.games;
+    document.getElementById('sg').textContent=gs.length||'0';
+    document.getElementById('sl').textContent=gs.filter(function(g){return g.status==='Live';}).length;
+    var edges=gs.map(function(g){return g.edge;});
+    document.getElementById('se').textContent=edges.length?(edges.reduce(function(a,b){return a+b;},0)/edges.length).toFixed(1)+'%':'--';
+    document.getElementById('sh').textContent=gs.filter(function(g){return g.edge>=8;}).length;
+    if(!gs.length){document.getElementById('gc').innerHTML='<div class="ng"><h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px">NO GAMES TODAY</h3></div>';return;}
+    document.getElementById('gc').innerHTML='<div class="grid">'+gs.map(mkCard).join('')+'</div>';
+    setTimeout(function(){document.querySelectorAll('.fill').forEach(function(e){e.style.width=e.getAttribute('data-w');});},150);
+  }).catch(function(e){
+    document.getElementById('gc').innerHTML='<div class="sw"><div style="background:rgba(224,64,251,.08);border:1px solid rgba(224,64,251,.3);border-radius:12px;padding:24px 32px;text-align:center"><h3 style="color:var(--m);font-family:Orbitron;margin-bottom:8px">CONNECTION ERROR</h3><p style="color:var(--mu);font-size:.82rem">'+e.message+'</p></div></div>';
+  });
+}
+load();setInterval(load,300000);
+</script>
+</body>
+</html>
