@@ -1323,6 +1323,150 @@ def _summarize_pitcher(lines):
     }
 
 
+
+
+# ── Player Profile: Game Logs, Platoon Splits, Statcast, AI Scout ────────────
+def _ai_scout_report(name, pos, season, platoon, recent, fg, sv, is_pitcher):
+    PITCH_NAMES = {"ff":"4-Seam FB","si":"Sinker","fc":"Cutter","st":"Sweeper",
+                   "sl":"Slider","cu":"Curveball","ch":"Changeup","fs":"Splitter","kn":"Knuckleball"}
+    lines = []
+    l7 = recent[-7:] if recent else []
+    if not is_pitcher:
+        l7_ab = sum(g.get("ab",0) for g in l7)
+        l7_h  = sum(g.get("h",0)  for g in l7)
+        l7_hr = sum(g.get("hr",0) for g in l7)
+        l7_avg = round(l7_h/l7_ab,3) if l7_ab > 0 else None
+        if l7_avg is not None:
+            if l7_avg >= .310:
+                lines.append(f"🔥 <b>HOT STREAK</b>: {name} batting <b>.{int(l7_avg*1000):03d}</b> over last 7 games" + (f" with {l7_hr} HR" if l7_hr else "") + " — prime target for hits/TB props.")
+            elif l7_avg < .160 and l7_ab >= 12:
+                lines.append(f"❄️ <b>COLD STREAK</b>: {name} hitting just .{int(l7_avg*1000):03d} over last 7 — fade on hits props until signs of life return.")
+            else:
+                lines.append(f"📊 <b>Recent Form</b>: {name} is batting .{int(l7_avg*1000):03d} over the last 7 games.")
+        try:
+            xba = float(sv.get("sv_xba") or 0); avg = float(fg.get("fg_avg") or season.get("avg","0") or 0)
+            if xba and avg:
+                gap = round(xba - avg, 3)
+                if gap >= 0.030:
+                    lines.append(f"📈 <b>Positive Regression Alert</b>: xBA of {xba:.3f} is +{gap:.3f} above actual AVG — Statcast says {name} is hitting it better than results show.")
+                elif gap <= -0.030:
+                    lines.append(f"📉 <b>Negative Regression Risk</b>: xBA {xba:.3f} is {gap:.3f} below actual AVG — results are outpacing contact quality.")
+        except: pass
+        try:
+            ev = float(sv.get("sv_ev") or 0); brl = float(sv.get("sv_brl_pct") or 0)
+            if ev >= 91:
+                lines.append(f"💥 <b>Elite EV</b>: {ev:.1f} mph avg exit velo" + (f" + {brl:.1f}% barrel rate" if brl >= 8 else "") + " — consistent hard contact profile.")
+            if brl >= 12:
+                lines.append(f"🎯 <b>Barrel Machine</b>: {brl:.1f}% barrel rate — elite HR and extra-base upside.")
+        except: pass
+        try:
+            kpct = float(sv.get("sv_k_pct") or fg.get("fg_kpct") or 0)
+            if kpct >= 0.28: lines.append(f"⚡ <b>Strikeout Risk</b>: {kpct*100:.0f}% K rate caps the hits prop floor.")
+            elif kpct and kpct <= 0.14: lines.append(f"🎯 <b>Contact Hitter</b>: {kpct*100:.0f}% K rate gives a consistent hits floor.")
+        except: pass
+        vl = platoon.get("vl",{}); vr = platoon.get("vr",{})
+        try:
+            ops_vl = float(vl.get("ops","0") or 0); ops_vr = float(vr.get("ops","0") or 0)
+            if ops_vl > 0 and ops_vr > 0 and abs(ops_vl-ops_vr) >= 0.080:
+                fav = "LHP" if ops_vl > ops_vr else "RHP"
+                lines.append(f"🆚 <b>Platoon Edge vs {fav}</b>: OPS {max(ops_vl,ops_vr):.3f} vs {fav} vs {min(ops_vl,ops_vr):.3f} opposite — check tonight's pitcher hand.")
+        except: pass
+        try:
+            wrc = int(fg.get("fg_wrc") or 0)
+            if wrc >= 130: lines.append(f"⭐ <b>Elite Offense</b>: wRC+ of {wrc} — premium prop target on good matchups.")
+            elif wrc and wrc <= 80: lines.append(f"📉 <b>Below Average</b>: wRC+ of {wrc} — avoid props unless facing weak pitching.")
+        except: pass
+        lines.append("🎰 <b>Betting Angle</b>: Best on hits/TB props — confirm platoon matchup and opposing pitcher hand before placing.")
+    else:
+        try:
+            era = float(fg.get("fg_era") or season.get("era","4.5") or 4.5)
+            xera = float(sv.get("sv_xera") or 0); fip = float(fg.get("fg_fip") or 0)
+            if xera and era - xera >= 0.70:
+                lines.append(f"📈 <b>Unlucky ERA</b>: xERA {xera:.2f} vs ERA {era:.2f} — Statcast says {name} is pitching better than results. Lean into K props.")
+            if fip and era - fip >= 0.55:
+                lines.append(f"🔵 <b>FIP Divergence</b>: FIP ({fip:.2f}) well below ERA ({era:.2f}) — defense is inflating ERA.")
+        except: pass
+        try:
+            k9 = float(fg.get("fg_k9") or 0)
+            if k9 >= 10: lines.append(f"🔥 <b>Strikeout Weapon</b>: {k9:.1f} K/9 — hammer K overs aggressively when lines are reasonable.")
+            elif k9 and k9 <= 6.5: lines.append(f"⚠️ <b>Contact Pitcher</b>: {k9:.1f} K/9 — low strikeout ceiling limits K prop upside.")
+        except: pass
+        try:
+            bb9 = float(fg.get("fg_bb9") or 0)
+            if bb9 >= 4.5: lines.append(f"⚡ <b>Control Issues</b>: {bb9:.1f} BB/9 — free baserunners elevate opponent scoring props.")
+        except: pass
+        try:
+            arsenal = sv.get("sv_arsenal_pct") or {}
+            if arsenal:
+                top = max(arsenal.items(), key=lambda x: x[1])
+                lines.append(f"⚾ <b>Primary Weapon</b>: {PITCH_NAMES.get(top[0], top[0].upper())} at {top[1]:.0f}% usage.")
+        except: pass
+        lines.append("🎰 <b>Betting Angle</b>: Target K props aggressively — hammer K overs on days with reasonable lines.")
+    return lines
+
+
+@app.route("/api/player/<int:player_id>")
+def api_player_profile(player_id):
+    try:
+        year = datetime.now(ET).year
+        info_r = requests.get(f"{MLB_API}/people/{player_id}", params={"hydrate":"currentTeam"}, timeout=8)
+        info_r.raise_for_status()
+        person = info_r.json().get("people",[{}])[0]
+        name      = person.get("fullName","?")
+        pos       = person.get("primaryPosition",{}).get("abbreviation","?")
+        team      = person.get("currentTeam",{}).get("name","?")
+        team_abbr = person.get("currentTeam",{}).get("abbreviation","?")
+        bats      = person.get("batSide",{}).get("code","?")
+        throws    = person.get("pitchHand",{}).get("code","?")
+        is_pitcher = pos in ("P","SP","RP","CL")
+        group     = "pitching" if is_pitcher else "hitting"
+        season_stats = {}
+        try:
+            sr = requests.get(f"{MLB_API}/people/{player_id}/stats",
+                params={"stats":"season","group":group,"season":year}, timeout=8)
+            splits = sr.json().get("stats",[{}])
+            if splits and splits[0].get("splits"):
+                season_stats = splits[0]["splits"][-1].get("stat",{})
+        except: pass
+        game_logs = []
+        try:
+            lr = requests.get(f"{MLB_API}/people/{player_id}/stats",
+                params={"stats":"gameLog","group":group,"season":year}, timeout=8)
+            all_games = lr.json().get("stats",[{}])[0].get("splits",[])
+            for sp in (all_games[-15:] if len(all_games) >= 15 else all_games):
+                s = sp.get("stat",{})
+                if group == "hitting":
+                    game_logs.append({"date":sp.get("date","")[:10],"opp":sp.get("opponent",{}).get("abbreviation",""),
+                        "ab":s.get("atBats",0),"h":s.get("hits",0),"hr":s.get("homeRuns",0),
+                        "rbi":s.get("rbi",0),"k":s.get("strikeOuts",0),"bb":s.get("baseOnBalls",0),
+                        "avg":s.get("avg","---"),"tb":s.get("totalBases",0)})
+                else:
+                    game_logs.append({"date":sp.get("date","")[:10],"opp":sp.get("opponent",{}).get("abbreviation",""),
+                        "ip":s.get("inningsPitched","0"),"er":s.get("earnedRuns",0),"k":s.get("strikeOuts",0),
+                        "bb":s.get("baseOnBalls",0),"h":s.get("hits",0),"era":s.get("era","---")})
+        except: pass
+        platoon = {}
+        try:
+            pr = requests.get(f"{MLB_API}/people/{player_id}/stats",
+                params={"stats":"statSplits","group":group,"season":year,"sitCodes":"vl,vr"}, timeout=8)
+            for sp in pr.json().get("stats",[{}])[0].get("splits",[]):
+                code = sp.get("split",{}).get("code",""); s = sp.get("stat",{})
+                if code in ("vl","vr"):
+                    platoon[code] = {"avg":s.get("avg","---"),"obp":s.get("obp","---"),
+                        "slg":s.get("slg","---"),"ops":s.get("ops","---"),
+                        "pa":s.get("plateAppearances",0),"hr":s.get("homeRuns",0),
+                        "k":s.get("strikeOuts",0),"bb":s.get("baseOnBalls",0),"woba":s.get("woba","---")}
+        except: pass
+        fg = fg_pitcher(name) if is_pitcher else fg_batter(name)
+        sv = sv_pitcher(name) if is_pitcher else sv_batter(name)
+        ai_lines = _ai_scout_report(name, pos, season_stats, platoon, game_logs, fg, sv, is_pitcher)
+        return jsonify({"success":True,"playerId":player_id,"name":name,"pos":pos,
+            "team":team,"teamAbbr":team_abbr,"bats":bats,"throws":throws,
+            "isPitcher":is_pitcher,"season":season_stats,"gameLogs":game_logs,
+            "platoon":platoon,"fg":fg,"sv":sv,"aiLines":ai_lines})
+    except Exception as ex:
+        return jsonify({"success":False,"error":str(ex)}), 500
+
 @app.route('/api/simulate/<int:game_pk>')
 def api_simulate(game_pk):
     try:
