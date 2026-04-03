@@ -151,11 +151,90 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .gl-row span:first-child{text-align:left;color:var(--mu);font-size:.62rem}
 @media(max-width:860px){.gp-grid{grid-template-columns:1fr}.gp-row{grid-template-columns:1fr 1fr}.sp-grid{grid-template-columns:1fr}}
 
+
+/* Phase 4 Monte Carlo */
+.mc-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:10px}
+.mc-card{background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.05);border-radius:10px;padding:12px;text-align:center}
+.mc-v{font-family:'Orbitron',monospace;font-size:1.12rem;font-weight:700;color:var(--c)}
+.mc-l{font-size:.56rem;color:var(--mu);letter-spacing:2px;margin-top:4px}
+.mc-mini{font-size:.64rem;color:var(--mu);margin-top:8px;line-height:1.6}
+.mc-box-wrap{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:12px}
+.mc-box{background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.05);border-radius:10px;padding:12px;overflow:auto}
+.mc-box h4{font-family:'Orbitron',monospace;font-size:.68rem;color:var(--c);letter-spacing:2px;margin-bottom:8px}
+.mc-table{width:100%;border-collapse:collapse;font-size:.66rem}
+.mc-table th{font-size:.52rem;color:var(--mu);letter-spacing:2px;text-align:left;padding:5px 4px;border-bottom:1px solid var(--b);font-family:'Orbitron',monospace;white-space:nowrap}
+.mc-table td{padding:5px 4px;border-bottom:1px solid rgba(255,255,255,.04);white-space:nowrap}
+.mc-note{margin-top:10px;font-size:.62rem;color:var(--mu);line-height:1.6}
+@media(max-width:860px){.mc-grid{grid-template-columns:1fr 1fr}.mc-box-wrap{grid-template-columns:1fr}}
+
+
+.edge-grid{display:grid;grid-template-columns:1.1fr .9fr;gap:14px;margin-top:12px}
+.edge-box{background:rgba(0,0,0,.26);border:1px solid rgba(255,255,255,.05);border-radius:10px;padding:12px;overflow:auto}
+.edge-k{font-size:.58rem;color:var(--mu);letter-spacing:2px;font-family:'Orbitron',monospace}
+.edge-v{font-size:.9rem;color:var(--c);font-family:'Orbitron',monospace;font-weight:700}
+.edge-table{width:100%;border-collapse:collapse;font-size:.65rem}
+.edge-table th,.edge-table td{padding:6px 4px;border-bottom:1px solid rgba(255,255,255,.04);white-space:nowrap;text-align:left}
+.edge-table th{font-size:.52rem;color:var(--mu);letter-spacing:2px;font-family:'Orbitron',monospace}
+@media(max-width:860px){.edge-grid{grid-template-columns:1fr}}
+
+
+/* Phase 8 projections hub */
+.proj-hub{display:grid;grid-template-columns:1.2fr .8fr;gap:14px}
+.proj-list,.proj-detail{background:rgba(0,0,0,.24);border:1px solid rgba(255,255,255,.06);border-radius:12px;padding:14px}
+.proj-tools{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+.proj-tools select{background:#081220;border:1px solid rgba(0,229,255,.16);color:var(--t);padding:8px 10px;border-radius:8px;font-size:.72rem;min-width:180px}
+.proj-tools .mini{font-size:.6rem;color:var(--mu);letter-spacing:1px}
+.proj-rank{width:100%;border-collapse:collapse;font-size:.68rem}
+.proj-rank th,.proj-rank td{padding:7px 6px;border-bottom:1px solid rgba(255,255,255,.04);white-space:nowrap;text-align:left;vertical-align:top}
+.proj-rank th{font-size:.52rem;color:var(--mu);letter-spacing:2px;font-family:'Orbitron',monospace}
+.proj-rank tr{cursor:pointer}
+.proj-rank tr:hover td{background:rgba(0,229,255,.04)}
+.proj-rank tr.sel td{background:rgba(0,229,255,.08)}
+.edge-pos{color:#60f6a9;font-weight:700}.edge-neu{color:#f7d774;font-weight:700}.edge-na{color:var(--mu)}
+.badge-up{display:inline-block;padding:2px 8px;border-radius:999px;background:rgba(0,230,118,.1);color:var(--g);border:1px solid rgba(0,230,118,.2);font-size:.58rem;font-family:'Orbitron',monospace;letter-spacing:1px}
+.badge-watch{display:inline-block;padding:2px 8px;border-radius:999px;background:rgba(255,152,0,.12);color:var(--o);border:1px solid rgba(255,152,0,.24);font-size:.58rem;font-family:'Orbitron',monospace;letter-spacing:1px}
+.detail-title{font-family:'Orbitron',monospace;font-size:.84rem;color:var(--c);letter-spacing:2px;margin-bottom:6px}
+.detail-sub{font-size:.66rem;color:var(--mu);margin-bottom:10px;line-height:1.6}
+.reason-box{background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.09);border-radius:10px;padding:12px;margin-top:10px}
+.reason-head{font-family:'Orbitron',monospace;font-size:.58rem;color:var(--sv);letter-spacing:2px;margin-bottom:8px}
+.reason-list{display:grid;gap:6px}
+.reason-item{font-size:.68rem;line-height:1.55;color:var(--t)}
+.mini-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+.mini-card{background:rgba(0,0,0,.22);border:1px solid rgba(255,255,255,.05);border-radius:10px;padding:10px}
+.mini-card h5{font-family:'Orbitron',monospace;font-size:.56rem;color:var(--mu);letter-spacing:2px;margin-bottom:8px}
+.statline{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.04)}
+.statline:last-child{border-bottom:none}
+.statline span:first-child{font-size:.64rem;color:var(--mu)}
+.statline span:last-child{font-size:.7rem;font-family:'Orbitron',monospace}
+.proj-blurb{font-size:.68rem;line-height:1.6;color:var(--t);margin-top:10px}
+@media(max-width:980px){.proj-hub{grid-template-columns:1fr}.mini-grid{grid-template-columns:1fr}}
+
+
+/* Phase 9 projections filters */
+.proj-search{flex:1;min-width:220px;background:#081220;border:1px solid rgba(0,229,255,.16);color:var(--t);padding:8px 10px;border-radius:8px;font-size:.72rem}
+.filter-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0 10px}
+.filter-chip{padding:7px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.03);color:var(--mu);font-size:.58rem;font-family:'Orbitron',monospace;letter-spacing:1px;cursor:pointer}
+.filter-chip.on{background:rgba(0,229,255,.10);border-color:rgba(0,229,255,.24);color:var(--c)}
+.best-toggle{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:999px;border:1px solid rgba(0,230,118,.22);background:rgba(0,230,118,.08);color:var(--g);font-size:.58rem;font-family:'Orbitron',monospace;letter-spacing:1px;cursor:pointer}
+.best-toggle.off{border-color:rgba(255,255,255,.08);background:rgba(255,255,255,.03);color:var(--mu)}
+.empty-proj{padding:18px 10px;color:var(--mu);font-size:.72rem;line-height:1.6}
+
+
+/* Phase 11 live adjustment overlay */
+.adjust-banner{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0 0 12px}
+.adjust-pill{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;background:rgba(0,229,255,.08);border:1px solid rgba(0,229,255,.18);font-size:.56rem;font-family:'Orbitron',monospace;letter-spacing:1px;color:var(--c)}
+.adjust-note{font-size:.62rem;color:var(--mu);line-height:1.55;margin-bottom:10px}
+.adjust-card{background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.1);border-radius:10px;padding:10px;margin:10px 0}
+.adjust-card .statline span:last-child{color:var(--c)}
+
+
+.brand{display:flex;align-items:center;gap:14px}.brand img{width:52px;height:52px;object-fit:contain;filter:drop-shadow(0 0 10px rgba(0,229,255,.22))}.brand-text{display:flex;flex-direction:column;gap:2px}.brand-name{font-family:Orbitron,sans-serif;font-weight:800;letter-spacing:1.5px;color:var(--cyan)}.brand-sub{font-size:.72rem;color:var(--mut)}@media(max-width:700px){.brand img{width:42px;height:42px}.brand-sub{display:none}}
+
 </style>
 </head>
 <body>
 <nav>
-  <div class="logo">&#9889; MLB ANALYTICS HUB</div>
+  <div class="brand"><img src="/static/logo.png" alt="MLB Analytics Hub logo"><div class="brand-text"><div class="brand-name">MLB ANALYTICS HUB</div><div class="brand-sub">Deep-dive projection intelligence</div></div></div>
   <a class="back" href="/">&#8592; DASHBOARD</a>
 </nav>
 <div class="srcbar">
@@ -197,8 +276,9 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
   <div class="pnl fw pnl-src">
     <div class="pt">&#128203; LINEUP ANALYSIS <span class="tag-fg">FANGRAPHS</span><span class="tag-sv">SAVANT</span></div>
     <div class="lt">
-      <button class="tb2 ac" onclick="showTab('away')">AWAY LINEUP</button>
-      <button class="tb2" onclick="showTab('home')">HOME LINEUP</button>
+      <button class="tb2 ac" data-tab="away" onclick="showTab('away')">AWAY LINEUP</button>
+      <button class="tb2" data-tab="home" onclick="showTab('home')">HOME LINEUP</button>
+      <button class="tb2" data-tab="proj" onclick="showTab('proj')">PROJECTIONS</button>
     </div>
     <div id="luP"><div class="spinner"></div></div>
   </div>
@@ -794,6 +874,1015 @@ loadLineups = function() {
 
 // Boot Phase 3
 loadGameProjection();
+
+
+
+// ── Phase 4 Monte Carlo Simulation UI ────────────────────────────────────────
+var SIM_DATA = null;
+
+function pct(v){
+  var n = parseFloat(v); if(isNaN(n)) return '---'; return (n*100).toFixed(1)+'%';
+}
+
+function ensureSimWrap(){
+  if(document.getElementById('simWrap')) return;
+  var wrap = document.createElement('div');
+  wrap.id = 'simWrap';
+  wrap.className = 'pnl fw pnl-src';
+  wrap.innerHTML = '<div class="pt">&#127922; MONTE CARLO SIMULATION <span class="tag-sv">800 RUNS</span></div><div id="simPanel"><div class="spinner"></div></div>';
+  var dg = document.querySelector('.dg');
+  if(dg){
+    var projPanel = document.querySelector('#projP');
+    if(projPanel && projPanel.closest('.pnl')) dg.insertBefore(wrap, projPanel.closest('.pnl'));
+    else dg.appendChild(wrap);
+  }
+}
+
+function loadSimulation(){
+  ensureSimWrap();
+  fetch('/api/simulate/' + GPK).then(function(r){return r.json();}).then(function(d){
+    SIM_DATA = d;
+    renderSimulation();
+    renderPropPanel();
+  }).catch(function(e){
+    var el = document.getElementById('simPanel');
+    if(el) el.innerHTML = '<p class="na">Simulation unavailable: '+e.message+'</p>';
+  });
+}
+
+function renderSampleBox(teamKey, abbr, spName){
+  var box = SIM_DATA.sampleBoxscore[teamKey];
+  var rows = (box.batters||[]).map(function(p){
+    return '<tr><td>'+p.slot+'</td><td>'+p.name+'</td><td>'+p.pos+'</td><td>'+p.ab+'</td><td>'+p.h+'</td><td>'+p.hr+'</td><td>'+p.rbi+'</td><td>'+p.r+'</td><td>'+p.bb+'</td><td>'+p.k+'</td><td>'+p.tb+'</td></tr>';
+  }).join('');
+  return '<div class="mc-box"><h4>'+abbr+' SAMPLE BOX SCORE</h4>'
+    + '<table class="mc-table"><thead><tr><th>#</th><th>PLAYER</th><th>POS</th><th>AB</th><th>H</th><th>HR</th><th>RBI</th><th>R</th><th>BB</th><th>K</th><th>TB</th></tr></thead><tbody>'
+    + rows + '</tbody></table>'
+    + '<div class="mc-note"><strong style="color:var(--c)">Starter:</strong> '+spName+' &nbsp;|&nbsp; Team R/H: '+box.runs+'/'+box.hits+' &nbsp;|&nbsp; BB: '+box.bb+' &nbsp;|&nbsp; K: '+box.k+'</div></div>';
+}
+
+function renderSimulation(){
+  var el = document.getElementById('simPanel');
+  if(!el) return;
+  if(!SIM_DATA || !SIM_DATA.success){
+    el.innerHTML = '<p class="na">Simulation data unavailable.</p>'; return;
+  }
+  var m = SIM_DATA.meta || {}, t = SIM_DATA.team || {}, sp = SIM_DATA.sampleBoxscore || {};
+  el.innerHTML = ''
+    + '<div class="mc-grid">'
+    + '<div class="mc-card"><div class="mc-v">'+m.awayAbbr+' '+t.away_mean_runs.toFixed(2)+'</div><div class="mc-l">MEAN AWAY RUNS</div></div>'
+    + '<div class="mc-card"><div class="mc-v">'+m.homeAbbr+' '+t.home_mean_runs.toFixed(2)+'</div><div class="mc-l">MEAN HOME RUNS</div></div>'
+    + '<div class="mc-card"><div class="mc-v">'+t.mean_total.toFixed(2)+'</div><div class="mc-l">MEAN TOTAL RUNS</div></div>'
+    + '<div class="mc-card"><div class="mc-v">'+m.sims+'</div><div class="mc-l">SIMULATIONS</div></div>'
+    + '</div>'
+    + '<div class="mc-grid">'
+    + '<div class="mc-card"><div class="mc-v">'+pct(t.away_win_pct)+'</div><div class="mc-l">'+m.awayAbbr+' WIN %</div></div>'
+    + '<div class="mc-card"><div class="mc-v">'+pct(t.home_win_pct)+'</div><div class="mc-l">'+m.homeAbbr+' WIN %</div></div>'
+    + '<div class="mc-card"><div class="mc-v">'+pct(t.p_9plus_total)+'</div><div class="mc-l">P(TOTAL 9+)</div></div>'
+    + '<div class="mc-card"><div class="mc-v">'+pct(t.p_10plus_total)+'</div><div class="mc-l">P(TOTAL 10+)</div></div>'
+    + '</div>'
+    + '<div class="mc-mini">Simulation is built from player-level PA outcomes using lineup order, current batter quality, opposing starter metrics, generic bullpen handoff, and park factor.</div>'
+    + '<div class="mc-box-wrap">'
+    + renderSampleBox('away', m.awayAbbr, sp.home_pitcher || 'Opp SP')
+    + renderSampleBox('home', m.homeAbbr, sp.away_pitcher || 'Opp SP')
+    + '</div>';
+}
+
+// Replace heuristic prop panel with distribution output when simulation is ready
+renderPropPanel = function(){
+  var container = document.getElementById('propPanel');
+  if(!container) return;
+  if(!SIM_DATA || !SIM_DATA.success){
+    container.innerHTML = '<p class="na">Waiting for simulation...</p>';
+    return;
+  }
+  var m = SIM_DATA.meta || {};
+  var away = (SIM_DATA.playerProps && SIM_DATA.playerProps.away) ? SIM_DATA.playerProps.away.slice() : [];
+  var home = (SIM_DATA.playerProps && SIM_DATA.playerProps.home) ? SIM_DATA.playerProps.home.slice() : [];
+  away.forEach(function(x){x.team=m.awayAbbr || 'AWAY';});
+  home.forEach(function(x){x.team=m.homeAbbr || 'HOME';});
+  var rows = away.concat(home).sort(function(a,b){return (a.team+b.slot).localeCompare(b.team+a.slot);}).map(function(p){
+    return '<tr>'
+      + '<td><span class="pos-tag">'+p.team+'</span></td>'
+      + '<td style="font-size:.72rem">'+p.slot+'. '+p.name+'</td>'
+      + '<td><span class="pos-tag">'+p.pos+'</span></td>'
+      + '<td class="sv-c">'+p.mean_hits.toFixed(2)+'</td>'
+      + '<td class="sv-c">'+pct(p.p_1plus_hit)+'</td>'
+      + '<td class="sv-c">'+pct(p.p_2plus_hit)+'</td>'
+      + '<td class="sv-c">'+p.mean_tb.toFixed(2)+'</td>'
+      + '<td class="sv-c">'+pct(p.p_2plus_tb)+'</td>'
+      + '<td class="sv-c">'+pct(p.p_1plus_hr)+'</td>'
+      + '<td class="sv-c">'+pct(p.p_1plus_rbi)+'</td>'
+      + '<td class="sv-c">'+pct(p.p_1plus_run)+'</td>'
+      + '<td class="sv-c">'+pct(p.p_1plus_k)+'</td>'
+      + '</tr>';
+  }).join('');
+  var aps = SIM_DATA.pitcherProps ? SIM_DATA.pitcherProps.awayStarter : null;
+  var hps = SIM_DATA.pitcherProps ? SIM_DATA.pitcherProps.homeStarter : null;
+  container.innerHTML = ''
+    + '<div style="overflow-x:auto"><table class="lu-table"><thead><tr>'
+    + '<th>TEAM</th><th>PLAYER</th><th>POS</th><th class="sv-h">MEAN H</th><th class="sv-h">P(1+H)</th><th class="sv-h">P(2+H)</th><th class="sv-h">MEAN TB</th><th class="sv-h">P(2+TB)</th><th class="sv-h">P(HR)</th><th class="sv-h">P(RBI)</th><th class="sv-h">P(RUN)</th><th class="sv-h">P(K)</th>'
+    + '</tr></thead><tbody>'+rows+'</tbody></table></div>'
+    + '<div class="mc-box-wrap" style="margin-top:12px">'
+    + '<div class="mc-box"><h4>STARTER DISTRIBUTION — '+(aps?aps.name:'Away SP')+'</h4>'
+    + (aps?'<table class="mc-table"><tbody>'
+      + '<tr><td>Mean outs</td><td>'+aps.mean_outs.toFixed(2)+'</td><td>P(15+ outs)</td><td>'+pct(aps.p_15plus_outs)+'</td></tr>'
+      + '<tr><td>Mean K</td><td>'+aps.mean_k.toFixed(2)+'</td><td>P(5+ K)</td><td>'+pct(aps.p_5plus_k)+'</td></tr>'
+      + '<tr><td>Mean ER</td><td>'+aps.mean_er.toFixed(2)+'</td><td>P(3+ ER)</td><td>'+pct(aps.p_3plus_er)+'</td></tr>'
+      + '</tbody></table>':'<p class="na">No starter data</p>')
+    + '</div>'
+    + '<div class="mc-box"><h4>STARTER DISTRIBUTION — '+(hps?hps.name:'Home SP')+'</h4>'
+    + (hps?'<table class="mc-table"><tbody>'
+      + '<tr><td>Mean outs</td><td>'+hps.mean_outs.toFixed(2)+'</td><td>P(15+ outs)</td><td>'+pct(hps.p_15plus_outs)+'</td></tr>'
+      + '<tr><td>Mean K</td><td>'+hps.mean_k.toFixed(2)+'</td><td>P(5+ K)</td><td>'+pct(hps.p_5plus_k)+'</td></tr>'
+      + '<tr><td>Mean ER</td><td>'+hps.mean_er.toFixed(2)+'</td><td>P(3+ ER)</td><td>'+pct(hps.p_3plus_er)+'</td></tr>'
+      + '</tbody></table>':'<p class="na">No starter data</p>')
+    + '</div></div>'
+    + '<div class="legend"><span style="color:var(--sv)">&#127922; Prop panel now uses 800 Monte Carlo simulations instead of lean signals.</span></div>';
+};
+
+// Trigger simulation after lineups/pitchers have had time to load
+setTimeout(loadSimulation, 1800);
+
+
+
+// ── Phase 5 UI overrides: team bullpen + handedness-aware display ────────────
+function renderSimulation(){
+  var el = document.getElementById('simPanel');
+  if(!el) return;
+  if(!SIM_DATA || !SIM_DATA.success){ el.innerHTML = '<p class="na">Simulation data unavailable.</p>'; return; }
+  var m = SIM_DATA.meta || {}, t = SIM_DATA.team || {}, h = SIM_DATA.handedness || {}, pp = SIM_DATA.pitcherProps || {}, sp = SIM_DATA.sampleBoxscore || {};
+  var awayBP = pp.awayBullpen || {}, homeBP = pp.homeBullpen || {};
+  el.innerHTML = ''
+    + '<div class="mc-grid">'
+    + '<div class="mc-card"><div class="mc-v">'+m.awayAbbr+' '+t.away_mean_runs.toFixed(2)+'</div><div class="mc-l">MEAN AWAY RUNS</div></div>'
+    + '<div class="mc-card"><div class="mc-v">'+m.homeAbbr+' '+t.home_mean_runs.toFixed(2)+'</div><div class="mc-l">MEAN HOME RUNS</div></div>'
+    + '<div class="mc-card"><div class="mc-v">'+t.mean_total.toFixed(2)+'</div><div class="mc-l">MEAN TOTAL</div></div>'
+    + '<div class="mc-card"><div class="mc-v">'+m.sims+'</div><div class="mc-l">SIMULATIONS</div></div>'
+    + '</div>'
+    + '<div class="mc-grid">'
+    + '<div class="mc-card"><div class="mc-v">'+pct(t.away_win_pct)+'</div><div class="mc-l">'+m.awayAbbr+' WIN %</div></div>'
+    + '<div class="mc-card"><div class="mc-v">'+pct(t.home_win_pct)+'</div><div class="mc-l">'+m.homeAbbr+' WIN %</div></div>'
+    + '<div class="mc-card"><div class="mc-v">'+pct(t.p_9plus_total)+'</div><div class="mc-l">P(TOTAL 9+)</div></div>'
+    + '<div class="mc-card"><div class="mc-v">'+pct(t.p_10plus_total)+'</div><div class="mc-l">P(TOTAL 10+)</div></div>'
+    + '</div>'
+    + '<div class="mc-box-wrap">'
+    + '<div class="mc-box"><h4>HANDEDNESS CONTEXT</h4><table class="mc-table"><tbody>'
+      + '<tr><td>'+m.awayAbbr+' lineup</td><td>L '+(h.awayLineup?h.awayLineup.L:0)+' / R '+(h.awayLineup?h.awayLineup.R:0)+' / S '+(h.awayLineup?h.awayLineup.S:0)+'</td></tr>'
+      + '<tr><td>'+m.homeAbbr+' lineup</td><td>L '+(h.homeLineup?h.homeLineup.L:0)+' / R '+(h.homeLineup?h.homeLineup.R:0)+' / S '+(h.homeLineup?h.homeLineup.S:0)+'</td></tr>'
+      + '<tr><td>'+m.awayAbbr+' SP hand</td><td>'+(h.awayStarterHand||'R')+'</td></tr>'
+      + '<tr><td>'+m.homeAbbr+' SP hand</td><td>'+(h.homeStarterHand||'R')+'</td></tr>'
+      + '</tbody></table></div>'
+    + '<div class="mc-box"><h4>TEAM BULLPEN DISTRIBUTIONS</h4><table class="mc-table"><tbody>'
+      + '<tr><td>'+(awayBP.name|| (m.awayAbbr+ ' Bullpen'))+'</td><td>ER '+(awayBP.mean_er||0).toFixed?awayBP.mean_er.toFixed(2):awayBP.mean_er+'</td><td>K '+(awayBP.mean_k||0).toFixed?awayBP.mean_k.toFixed(2):awayBP.mean_k+'</td></tr>'
+      + '<tr><td>'+(homeBP.name|| (m.homeAbbr+ ' Bullpen'))+'</td><td>ER '+(homeBP.mean_er||0).toFixed?homeBP.mean_er.toFixed(2):homeBP.mean_er+'</td><td>K '+(homeBP.mean_k||0).toFixed?homeBP.mean_k.toFixed(2):homeBP.mean_k+'</td></tr>'
+      + '<tr><td>'+m.awayAbbr+' BP P(2+ER)</td><td>'+pct(awayBP.p_2plus_er||0)+'</td><td>P(3+ER) '+pct(awayBP.p_3plus_er||0)+'</td></tr>'
+      + '<tr><td>'+m.homeAbbr+' BP P(2+ER)</td><td>'+pct(homeBP.p_2plus_er||0)+'</td><td>P(3+ER) '+pct(homeBP.p_3plus_er||0)+'</td></tr>'
+      + '</tbody></table></div>'
+    + '</div>'
+    + '<div class="mc-mini">Phase 5 adds team-specific bullpen context and handedness-aware matchup adjustments using batter batting side plus MLB split data when available.</div>'
+    + '<div class="mc-box-wrap">'
+    + renderSampleBox('away', m.awayAbbr, sp.home_pitcher || 'Opp SP')
+    + renderSampleBox('home', m.homeAbbr, sp.away_pitcher || 'Opp SP')
+    + '</div>';
+}
+
+renderPropPanel = function(){
+  var container = document.getElementById('propPanel');
+  if(!container) return;
+  if(!SIM_DATA || !SIM_DATA.success){ container.innerHTML = '<p class="na">Waiting for simulation...</p>'; return; }
+  var m = SIM_DATA.meta || {}, h = SIM_DATA.handedness || {};
+  var away = (SIM_DATA.playerProps && SIM_DATA.playerProps.away) ? SIM_DATA.playerProps.away.slice() : [];
+  var home = (SIM_DATA.playerProps && SIM_DATA.playerProps.home) ? SIM_DATA.playerProps.home.slice() : [];
+  away.forEach(function(x){x.team=m.awayAbbr || 'AWAY'; x.oppHand=h.homeStarterHand || 'R';});
+  home.forEach(function(x){x.team=m.homeAbbr || 'HOME'; x.oppHand=h.awayStarterHand || 'R';});
+  var rows = away.concat(home).sort(function(a,b){return (a.team+a.slot).localeCompare(b.team+b.slot);}).map(function(p){
+    return '<tr>'
+      + '<td><span class="pos-tag">'+p.team+'</span></td>'
+      + '<td style="font-size:.72rem">'+p.slot+'. '+p.name+'</td>'
+      + '<td><span class="pos-tag">'+p.pos+'</span></td>'
+      + '<td><span class="pos-tag">'+(p.bats||'S')+'/'+(p.oppHand||'R')+'</span></td>'
+      + '<td class="sv-c">'+p.mean_hits.toFixed(2)+'</td>'
+      + '<td class="sv-c">'+pct(p.p_1plus_hit)+'</td>'
+      + '<td class="sv-c">'+pct(p.p_2plus_hit)+'</td>'
+      + '<td class="sv-c">'+p.mean_tb.toFixed(2)+'</td>'
+      + '<td class="sv-c">'+pct(p.p_2plus_tb)+'</td>'
+      + '<td class="sv-c">'+pct(p.p_1plus_hr)+'</td>'
+      + '<td class="sv-c">'+pct(p.p_1plus_rbi)+'</td>'
+      + '<td class="sv-c">'+pct(p.p_1plus_run)+'</td>'
+      + '<td class="sv-c">'+pct(p.p_1plus_k)+'</td>'
+      + '</tr>';
+  }).join('');
+  var aps = SIM_DATA.pitcherProps ? SIM_DATA.pitcherProps.awayStarter : null;
+  var hps = SIM_DATA.pitcherProps ? SIM_DATA.pitcherProps.homeStarter : null;
+  var abp = SIM_DATA.pitcherProps ? SIM_DATA.pitcherProps.awayBullpen : null;
+  var hbp = SIM_DATA.pitcherProps ? SIM_DATA.pitcherProps.homeBullpen : null;
+  container.innerHTML = ''
+    + '<div style="overflow-x:auto"><table class="lu-table"><thead><tr>'
+    + '<th>TEAM</th><th>PLAYER</th><th>POS</th><th>B/P</th><th class="sv-h">MEAN H</th><th class="sv-h">P(1+H)</th><th class="sv-h">P(2+H)</th><th class="sv-h">MEAN TB</th><th class="sv-h">P(2+TB)</th><th class="sv-h">P(HR)</th><th class="sv-h">P(RBI)</th><th class="sv-h">P(RUN)</th><th class="sv-h">P(K)</th>'
+    + '</tr></thead><tbody>'+rows+'</tbody></table></div>'
+    + '<div class="mc-box-wrap" style="margin-top:12px">'
+    + '<div class="mc-box"><h4>STARTER + BULLPEN — '+(aps?aps.name:'Away SP')+'</h4>'
+    + (aps?'<table class="mc-table"><tbody>'
+      + '<tr><td>Pitch hand</td><td>'+(aps.pitchHand||'R')+'</td><td>Mean outs</td><td>'+aps.mean_outs.toFixed(2)+'</td></tr>'
+      + '<tr><td>Mean K</td><td>'+aps.mean_k.toFixed(2)+'</td><td>P(5+ K)</td><td>'+pct(aps.p_5plus_k)+'</td></tr>'
+      + '<tr><td>Mean ER</td><td>'+aps.mean_er.toFixed(2)+'</td><td>P(3+ ER)</td><td>'+pct(aps.p_3plus_er)+'</td></tr>'
+      + '<tr><td>Bullpen mean ER</td><td>'+((abp&&abp.mean_er!=null)?abp.mean_er.toFixed(2):'---')+'</td><td>BP P(2+ER)</td><td>'+pct(abp?abp.p_2plus_er:0)+'</td></tr>'
+      + '</tbody></table>':'<p class="na">No starter data</p>')
+    + '</div>'
+    + '<div class="mc-box"><h4>STARTER + BULLPEN — '+(hps?hps.name:'Home SP')+'</h4>'
+    + (hps?'<table class="mc-table"><tbody>'
+      + '<tr><td>Pitch hand</td><td>'+(hps.pitchHand||'R')+'</td><td>Mean outs</td><td>'+hps.mean_outs.toFixed(2)+'</td></tr>'
+      + '<tr><td>Mean K</td><td>'+hps.mean_k.toFixed(2)+'</td><td>P(5+ K)</td><td>'+pct(hps.p_5plus_k)+'</td></tr>'
+      + '<tr><td>Mean ER</td><td>'+hps.mean_er.toFixed(2)+'</td><td>P(3+ ER)</td><td>'+pct(hps.p_3plus_er)+'</td></tr>'
+      + '<tr><td>Bullpen mean ER</td><td>'+((hbp&&hbp.mean_er!=null)?hbp.mean_er.toFixed(2):'---')+'</td><td>BP P(2+ER)</td><td>'+pct(hbp?hbp.p_2plus_er:0)+'</td></tr>'
+      + '</tbody></table>':'<p class="na">No starter data</p>')
+    + '</div></div>'
+    + '<div class="legend"><span style="color:var(--sv)">&#127922; Phase 5 prop panel uses Monte Carlo distributions with batting-side vs pitch-hand context and team bullpen adjustments.</span></div>';
+};
+
+setTimeout(function(){ if(SIM_DATA && SIM_DATA.success){ renderSimulation(); renderPropPanel(); } else { loadSimulation(); } }, 2600);
+
+
+
+// ── Phase 6 UI overrides: percentiles + steals + bullpen tiers ───────────────
+function pp(v){ return (typeof v === 'number' ? v.toFixed(2) : '---'); }
+function tierRow(name, t){
+  if(!t) return '';
+  return '<tr><td>'+name+'</td><td>'+pp(t.mean_er)+'</td><td>'+pp(t.mean_k)+'</td><td>'+pp(t.p50_outs)+'</td><td>'+pct(t.p_2plus_er||0)+'</td></tr>';
+}
+function renderSampleBox(teamKey, abbr, spName){
+  var box = SIM_DATA.sampleBoxscore[teamKey];
+  var rows = (box.batters||[]).map(function(p){
+    return '<tr><td>'+p.slot+'</td><td>'+p.name+'</td><td>'+p.pos+'</td><td>'+p.ab+'</td><td>'+p.h+'</td><td>'+p.hr+'</td><td>'+p.rbi+'</td><td>'+p.r+'</td><td>'+p.bb+'</td><td>'+p.k+'</td><td>'+p.tb+'</td><td>'+p.sb+'</td></tr>';
+  }).join('');
+  return '<div class="mc-box"><h4>'+abbr+' SAMPLE BOX SCORE</h4>'
+    + '<table class="mc-table"><thead><tr><th>#</th><th>PLAYER</th><th>POS</th><th>AB</th><th>H</th><th>HR</th><th>RBI</th><th>R</th><th>BB</th><th>K</th><th>TB</th><th>SB</th></tr></thead><tbody>'
+    + rows + '</tbody></table>'
+    + '<div class="mc-note"><strong style="color:var(--c)">Starter:</strong> '+spName+' &nbsp;|&nbsp; Team R/H: '+box.runs+'/'+box.hits+' &nbsp;|&nbsp; BB: '+box.bb+' &nbsp;|&nbsp; K: '+box.k+' &nbsp;|&nbsp; SB: '+(box.sb||0)+'</div></div>';
+}
+function renderSimulation(){
+  var el = document.getElementById('simPanel');
+  if(!el) return;
+  if(!SIM_DATA || !SIM_DATA.success){ el.innerHTML = '<p class="na">Simulation data unavailable.</p>'; return; }
+  var m = SIM_DATA.meta || {}, t = SIM_DATA.team || {}, h = SIM_DATA.handedness || {}, ppx = SIM_DATA.pitcherProps || {}, sp = SIM_DATA.sampleBoxscore || {};
+  var awt = ppx.awayBullpenTiers || {}, hmt = ppx.homeBullpenTiers || {};
+  el.innerHTML = ''
+    + '<div class="mc-grid">'
+    + '<div class="mc-card"><div class="mc-v">'+m.awayAbbr+' '+t.away_mean_runs.toFixed(2)+'</div><div class="mc-l">MEAN AWAY RUNS</div></div>'
+    + '<div class="mc-card"><div class="mc-v">'+m.homeAbbr+' '+t.home_mean_runs.toFixed(2)+'</div><div class="mc-l">MEAN HOME RUNS</div></div>'
+    + '<div class="mc-card"><div class="mc-v">'+t.mean_total.toFixed(2)+'</div><div class="mc-l">MEAN TOTAL</div></div>'
+    + '<div class="mc-card"><div class="mc-v">'+m.sims+'</div><div class="mc-l">SIMULATIONS</div></div>'
+    + '</div>'
+    + '<div class="mc-grid">'
+    + '<div class="mc-card"><div class="mc-v">'+pct(t.away_win_pct)+'</div><div class="mc-l">'+m.awayAbbr+' WIN %</div></div>'
+    + '<div class="mc-card"><div class="mc-v">'+pct(t.home_win_pct)+'</div><div class="mc-l">'+m.homeAbbr+' WIN %</div></div>'
+    + '<div class="mc-card"><div class="mc-v">'+pct(t.p_9plus_total)+'</div><div class="mc-l">P(TOTAL 9+)</div></div>'
+    + '<div class="mc-card"><div class="mc-v">'+pct(t.p_10plus_total)+'</div><div class="mc-l">P(TOTAL 10+)</div></div>'
+    + '</div>'
+    + '<div class="mc-box-wrap">'
+    + '<div class="mc-box"><h4>HANDEDNESS CONTEXT</h4><table class="mc-table"><tbody>'
+      + '<tr><td>'+m.awayAbbr+' lineup</td><td>L '+(h.awayLineup?h.awayLineup.L:0)+' / R '+(h.awayLineup?h.awayLineup.R:0)+' / S '+(h.awayLineup?h.awayLineup.S:0)+'</td></tr>'
+      + '<tr><td>'+m.homeAbbr+' lineup</td><td>L '+(h.homeLineup?h.homeLineup.L:0)+' / R '+(h.homeLineup?h.homeLineup.R:0)+' / S '+(h.homeLineup?h.homeLineup.S:0)+'</td></tr>'
+      + '<tr><td>'+m.awayAbbr+' SP hand</td><td>'+(h.awayStarterHand||'R')+'</td></tr>'
+      + '<tr><td>'+m.homeAbbr+' SP hand</td><td>'+(h.homeStarterHand||'R')+'</td></tr>'
+      + '</tbody></table></div>'
+    + '<div class="mc-box"><h4>BULLPEN TIERS</h4><table class="mc-table"><thead><tr><th>TIER</th><th>ER</th><th>K</th><th>P50 OUTS</th><th>P(2+ER)</th></tr></thead><tbody>'
+      + tierRow(m.awayAbbr+' CL', awt.closer)
+      + tierRow(m.awayAbbr+' SU', awt.setup)
+      + tierRow(m.awayAbbr+' MID', awt.middle)
+      + tierRow(m.homeAbbr+' CL', hmt.closer)
+      + tierRow(m.homeAbbr+' SU', hmt.setup)
+      + tierRow(m.homeAbbr+' MID', hmt.middle)
+      + '</tbody></table></div>'
+    + '</div>'
+    + '<div class="mc-mini">Phase 6 adds percentile outputs, stolen-base simulation, and bullpen tier usage by game state on top of the handedness-aware Monte Carlo engine.</div>'
+    + '<div class="mc-box-wrap">'
+    + renderSampleBox('away', m.awayAbbr, sp.home_pitcher || 'Opp SP')
+    + renderSampleBox('home', m.homeAbbr, sp.away_pitcher || 'Opp SP')
+    + '</div>';
+}
+renderPropPanel = function(){
+  var container = document.getElementById('propPanel');
+  if(!container) return;
+  if(!SIM_DATA || !SIM_DATA.success){ container.innerHTML = '<p class="na">Waiting for simulation...</p>'; return; }
+  var m = SIM_DATA.meta || {}, h = SIM_DATA.handedness || {};
+  var away = (SIM_DATA.playerProps && SIM_DATA.playerProps.away) ? SIM_DATA.playerProps.away.slice() : [];
+  var home = (SIM_DATA.playerProps && SIM_DATA.playerProps.home) ? SIM_DATA.playerProps.home.slice() : [];
+  away.forEach(function(x){x.team=m.awayAbbr || 'AWAY'; x.oppHand=h.homeStarterHand || 'R';});
+  home.forEach(function(x){x.team=m.homeAbbr || 'HOME'; x.oppHand=h.awayStarterHand || 'R';});
+  var rows = away.concat(home).sort(function(a,b){return (a.team+a.slot).localeCompare(b.team+b.slot);}).map(function(p){
+    return '<tr>'
+      + '<td><span class="pos-tag">'+p.team+'</span></td>'
+      + '<td style="font-size:.72rem">'+p.slot+'. '+p.name+'</td>'
+      + '<td><span class="pos-tag">'+p.pos+'</span></td>'
+      + '<td><span class="pos-tag">'+(p.bats||'S')+'/'+(p.oppHand||'R')+'</span></td>'
+      + '<td class="sv-c">'+p.mean_hits.toFixed(2)+'</td>'
+      + '<td class="sv-c">'+pct(p.p_1plus_hit)+'</td>'
+      + '<td class="sv-c">'+pct(p.p_2plus_hit)+'</td>'
+      + '<td class="sv-c">'+p.p10_hits+'/'+p.p50_hits+'/'+p.p90_hits+'</td>'
+      + '<td class="sv-c">'+p.mean_tb.toFixed(2)+'</td>'
+      + '<td class="sv-c">'+p.p10_tb+'/'+p.p50_tb+'/'+p.p90_tb+'</td>'
+      + '<td class="sv-c">'+pct(p.p_1plus_hr)+'</td>'
+      + '<td class="sv-c">'+pct(p.p_1plus_rbi)+'</td>'
+      + '<td class="sv-c">'+pct(p.p_1plus_run)+'</td>'
+      + '<td class="sv-c">'+pct(p.p_1plus_sb)+'</td>'
+      + '</tr>';
+  }).join('');
+  var aps = SIM_DATA.pitcherProps ? SIM_DATA.pitcherProps.awayStarter : null;
+  var hps = SIM_DATA.pitcherProps ? SIM_DATA.pitcherProps.homeStarter : null;
+  var abp = SIM_DATA.pitcherProps ? SIM_DATA.pitcherProps.awayBullpen : null;
+  var hbp = SIM_DATA.pitcherProps ? SIM_DATA.pitcherProps.homeBullpen : null;
+  container.innerHTML = ''
+    + '<div style="overflow-x:auto"><table class="lu-table"><thead><tr>'
+    + '<th>TEAM</th><th>PLAYER</th><th>POS</th><th>B/P</th><th class="sv-h">MEAN H</th><th class="sv-h">P(1+H)</th><th class="sv-h">P(2+H)</th><th class="sv-h">H P10/50/90</th><th class="sv-h">MEAN TB</th><th class="sv-h">TB P10/50/90</th><th class="sv-h">P(HR)</th><th class="sv-h">P(RBI)</th><th class="sv-h">P(RUN)</th><th class="sv-h">P(SB)</th>'
+    + '</tr></thead><tbody>'+rows+'</tbody></table></div>'
+    + '<div class="mc-box-wrap" style="margin-top:12px">'
+    + '<div class="mc-box"><h4>STARTER + BP — '+(aps?aps.name:'Away SP')+'</h4>'
+    + (aps?'<table class="mc-table"><tbody>'
+      + '<tr><td>Pitch hand</td><td>'+(aps.pitchHand||'R')+'</td><td>P10/P50/P90 outs</td><td>'+aps.p10_outs+'/'+aps.p50_outs+'/'+aps.p90_outs+'</td></tr>'
+      + '<tr><td>Mean K</td><td>'+aps.mean_k.toFixed(2)+'</td><td>P10/P50/P90 K</td><td>'+aps.p10_k+'/'+aps.p50_k+'/'+aps.p90_k+'</td></tr>'
+      + '<tr><td>Mean ER</td><td>'+aps.mean_er.toFixed(2)+'</td><td>P10/P50/P90 ER</td><td>'+aps.p10_er+'/'+aps.p50_er+'/'+aps.p90_er+'</td></tr>'
+      + '<tr><td>Bullpen mean ER</td><td>'+((abp&&abp.mean_er!=null)?abp.mean_er.toFixed(2):'---')+'</td><td>BP P(2+ER)</td><td>'+pct(abp?abp.p_2plus_er:0)+'</td></tr>'
+      + '</tbody></table>':'<p class="na">No starter data</p>')
+    + '</div>'
+    + '<div class="mc-box"><h4>STARTER + BP — '+(hps?hps.name:'Home SP')+'</h4>'
+    + (hps?'<table class="mc-table"><tbody>'
+      + '<tr><td>Pitch hand</td><td>'+(hps.pitchHand||'R')+'</td><td>P10/P50/P90 outs</td><td>'+hps.p10_outs+'/'+hps.p50_outs+'/'+hps.p90_outs+'</td></tr>'
+      + '<tr><td>Mean K</td><td>'+hps.mean_k.toFixed(2)+'</td><td>P10/P50/P90 K</td><td>'+hps.p10_k+'/'+hps.p50_k+'/'+hps.p90_k+'</td></tr>'
+      + '<tr><td>Mean ER</td><td>'+hps.mean_er.toFixed(2)+'</td><td>P10/P50/P90 ER</td><td>'+hps.p10_er+'/'+hps.p50_er+'/'+hps.p90_er+'</td></tr>'
+      + '<tr><td>Bullpen mean ER</td><td>'+((hbp&&hbp.mean_er!=null)?hbp.mean_er.toFixed(2):'---')+'</td><td>BP P(2+ER)</td><td>'+pct(hbp?hbp.p_2plus_er:0)+'</td></tr>'
+      + '</tbody></table>':'<p class="na">No starter data</p>')
+    + '</div></div>'
+    + '<div class="legend"><span style="color:var(--sv)">&#127922; Phase 6 prop panel adds percentiles and stolen-base probability on top of the matchup-aware simulation.</span></div>';
+};
+setTimeout(function(){ if(SIM_DATA && SIM_DATA.success){ renderSimulation(); renderPropPanel(); } else { loadSimulation(); } }, 3200);
+
+
+
+// ── Phase 7 UI: lineup confirmation, live odds, edge calculations ───────────
+var MARKET_DATA = null;
+function impliedFromAmerican(price){
+  var p = parseFloat(price); if(isNaN(p) || p===0) return null;
+  return p > 0 ? 100/(p+100) : (-p)/((-p)+100);
+}
+function ensureMarketWrap(){
+  if(document.getElementById('marketWrap')) return;
+  var wrap = document.createElement('div');
+  wrap.id = 'marketWrap';
+  wrap.className = 'pnl fw pnl-src';
+  wrap.innerHTML = '<div class="pt">&#128200; MARKET / EDGE SCREEN <span class="tag-sv">PHASE 7</span></div><div id="marketPanel"><div class="spinner"></div></div>';
+  var dg = document.querySelector('.dg');
+  if(dg) dg.appendChild(wrap);
+}
+function loadMarketData(){
+  ensureMarketWrap();
+  fetch('/api/market/' + GPK).then(function(r){ return r.json(); }).then(function(d){
+    MARKET_DATA = d;
+    renderMarketPanel();
+  }).catch(function(e){
+    var el = document.getElementById('marketPanel');
+    if(el) el.innerHTML = '<p class="na">Market data unavailable: '+e.message+'</p>';
+  });
+}
+function findSimPlayer(name){
+  if(!SIM_DATA || !SIM_DATA.playerProps) return null;
+  var all = (SIM_DATA.playerProps.away||[]).concat(SIM_DATA.playerProps.home||[]);
+  var hit = all.find(function(p){ return (p.name||'').toLowerCase() === (name||'').toLowerCase(); });
+  return hit || null;
+}
+function findSimPitcher(name){
+  if(!SIM_DATA || !SIM_DATA.pitcherProps) return null;
+  var arr = [SIM_DATA.pitcherProps.awayStarter, SIM_DATA.pitcherProps.homeStarter];
+  return arr.find(function(p){ return p && (p.name||'').toLowerCase() === (name||'').toLowerCase(); }) || null;
+}
+function modelProbForLine(kind, line, obj){
+  var ln = parseFloat(line);
+  if(obj == null || isNaN(ln)) return null;
+  if(kind === 'batter_hits'){
+    if(ln <= 0.5) return obj.p_1plus_hit; if(ln <= 1.5) return obj.p_2plus_hit;
+  }
+  if(kind === 'batter_total_bases'){
+    if(ln <= 1.5) return obj.p_2plus_tb;
+  }
+  if(kind === 'batter_home_runs'){
+    if(ln <= 0.5) return obj.p_1plus_hr;
+  }
+  if(kind === 'batter_rbis'){
+    if(ln <= 0.5) return obj.p_1plus_rbi;
+  }
+  if(kind === 'batter_runs_scored'){
+    if(ln <= 0.5) return obj.p_1plus_run;
+  }
+  if(kind === 'batter_stolen_bases'){
+    if(ln <= 0.5) return obj.p_1plus_sb;
+  }
+  if(kind === 'pitcher_strikeouts'){
+    if(ln <= 3.5) return obj.p_4plus_k; if(ln <= 4.5) return obj.p_5plus_k; if(ln <= 5.5) return obj.p_6plus_k;
+  }
+  return null;
+}
+function buildEdges(){
+  if(!SIM_DATA || !MARKET_DATA || !MARKET_DATA.success) return [];
+  var edges = [];
+  var ml = MARKET_DATA.lines ? MARKET_DATA.lines.moneyline : null;
+  var tot = MARKET_DATA.lines ? MARKET_DATA.lines.total : null;
+  var meta = SIM_DATA.meta || {}, team = SIM_DATA.team || {};
+  if(ml && ml.away && ml.away.implied != null){
+    edges.push({type:'Moneyline', target:meta.awayAbbr, side:'Away', line:ml.away.price, book:ml.away.bookmaker, model:team.away_win_pct, implied:ml.away.implied, edge:team.away_win_pct-ml.away.implied});
+  }
+  if(ml && ml.home && ml.home.implied != null){
+    edges.push({type:'Moneyline', target:meta.homeAbbr, side:'Home', line:ml.home.price, book:ml.home.bookmaker, model:team.home_win_pct, implied:ml.home.implied, edge:team.home_win_pct-ml.home.implied});
+  }
+  if(tot && tot.line != null){
+    var overProb = null;
+    var underProb = null;
+    var ln = parseFloat(tot.line);
+    if(ln <= 7.5) overProb = team.p_8plus_total;
+    else if(ln <= 8.5) overProb = team.p_9plus_total;
+    else if(ln <= 9.5) overProb = team.p_10plus_total;
+    if(overProb != null){
+      underProb = 1 - overProb;
+      if(tot.over_implied != null) edges.push({type:'Total', target:'Game Total', side:'Over '+tot.line, line:tot.over_price, book:tot.bookmaker, model:overProb, implied:tot.over_implied, edge:overProb-tot.over_implied});
+      if(tot.under_implied != null) edges.push({type:'Total', target:'Game Total', side:'Under '+tot.line, line:tot.under_price, book:tot.bookmaker, model:underProb, implied:tot.under_implied, edge:underProb-tot.under_implied});
+    }
+  }
+  (MARKET_DATA.playerProps||[]).forEach(function(p){
+    var isPitcher = p.market_key === 'pitcher_strikeouts';
+    var obj = isPitcher ? findSimPitcher(p.player) : findSimPlayer(p.player);
+    var modelOver = modelProbForLine(p.market_key, p.line, obj);
+    if(modelOver == null) return;
+    if(p.over_implied != null) edges.push({type:p.market_key, target:p.player, side:'Over '+p.line, line:p.over_price, book:p.bookmaker, model:modelOver, implied:p.over_implied, edge:modelOver-p.over_implied});
+    if(p.under_implied != null) edges.push({type:p.market_key, target:p.player, side:'Under '+p.line, line:p.under_price, book:p.bookmaker, model:(1-modelOver), implied:p.under_implied, edge:(1-modelOver)-p.under_implied});
+  });
+  return edges.sort(function(a,b){ return b.edge - a.edge; });
+}
+function renderMarketPanel(){
+  var el = document.getElementById('marketPanel');
+  if(!el) return;
+  if(!MARKET_DATA || !MARKET_DATA.success){ el.innerHTML = '<p class="na">Market data unavailable.</p>'; return; }
+  var m = MARKET_DATA.meta || {}, l = MARKET_DATA.lineup || {}, lines = MARKET_DATA.lines || {};
+  if(!m.oddsApiConfigured){
+    el.innerHTML = '<div class="edge-grid"><div class="edge-box"><div class="edge-k">LINEUP TRACKING</div><div class="edge-v">'+(m.awayAbbr||'AWAY')+' '+(l.awayConfirmed?'CONFIRMED':'PENDING')+' / '+(m.homeAbbr||'HOME')+' '+(l.homeConfirmed?'CONFIRMED':'PENDING')+'</div><div class="mc-note">Away lineup count: '+(l.awayCount||0)+' &nbsp;|&nbsp; Home lineup count: '+(l.homeCount||0)+' &nbsp;|&nbsp; Status: '+(l.status||'Scheduled')+'</div></div><div class="edge-box"><div class="edge-k">ODDS IMPORT</div><div class="mc-note">Set an <strong style="color:var(--c)">ODDS_API_KEY</strong> environment variable to enable live moneyline, total, and player-prop import plus edge calculations.</div></div></div>';
+    return;
+  }
+  var edges = buildEdges().slice(0, 18);
+  var edgeRows = edges.map(function(x){
+    return '<tr><td>'+x.type+'</td><td>'+x.target+'</td><td>'+x.side+'</td><td>'+x.book+'</td><td>'+x.line+'</td><td>'+pct(x.model)+'</td><td>'+pct(x.implied)+'</td><td style="color:'+(x.edge>=0.03?'#60f6a9':'#f7d774')+'">'+pct(x.edge)+'</td></tr>';
+  }).join('');
+  var ml = lines.moneyline || {}, tot = lines.total || {};
+  el.innerHTML = ''
+    + '<div class="edge-grid">'
+    + '<div class="edge-box"><div class="edge-k">LINEUP TRACKING</div><div class="edge-v">'+(m.awayAbbr||'AWAY')+' '+(l.awayConfirmed?'CONFIRMED':'PENDING')+' / '+(m.homeAbbr||'HOME')+' '+(l.homeConfirmed?'CONFIRMED':'PENDING')+'</div><div class="mc-note">Away lineup count: '+(l.awayCount||0)+' &nbsp;|&nbsp; Home lineup count: '+(l.homeCount||0)+' &nbsp;|&nbsp; Status: '+(l.status||'Scheduled')+'</div><div class="mc-note">Featured books: '+(m.bookmakersFeatured||0)+' &nbsp;|&nbsp; Prop books: '+(m.bookmakersProps||0)+' &nbsp;|&nbsp; Odds event found: '+(m.oddsEventFound?'YES':'NO')+'</div></div>'
+    + '<div class="edge-box"><div class="edge-k">LIVE LINES</div>'
+    + '<div class="mc-note">Moneyline — '+(m.awayAbbr||'AWAY')+': '+((ml.away&&ml.away.price!=null)?ml.away.price+' @ '+ml.away.bookmaker:'N/A')+' &nbsp;|&nbsp; '+(m.homeAbbr||'HOME')+': '+((ml.home&&ml.home.price!=null)?ml.home.price+' @ '+ml.home.bookmaker:'N/A')+'</div>'
+    + '<div class="mc-note">Total — '+((tot.line!=null)?tot.line+' O '+tot.over_price+' / U '+tot.under_price+' @ '+tot.bookmaker:'N/A')+'</div></div>'
+    + '</div>'
+    + '<div class="edge-box"><div class="edge-k">TOP MODEL EDGES</div><table class="edge-table"><thead><tr><th>MARKET</th><th>TARGET</th><th>SIDE</th><th>BOOK</th><th>ODDS</th><th>MODEL</th><th>IMPLIED</th><th>EDGE</th></tr></thead><tbody>'
+    + (edgeRows || '<tr><td colspan="8">No mapped edges yet. Odds may be unavailable or unmatched to current simulation outputs.</td></tr>')
+    + '</tbody></table></div>';
+}
+setTimeout(loadMarketData, 3800);
+
+
+
+// ── Projections Tab: ranked prop board + player deep dive ───────────────────
+var ACTIVE_TAB = 'away';
+var PROJ_ROWS = [];
+var SELECTED_PROJ = null;
+var __oldShowTab = (typeof showTab === 'function') ? showTab : null;
+
+function pct2(v){ var n=parseFloat(v); return isNaN(n)?'N/A':(n*100).toFixed(1)+'%'; }
+function fmt2(v){ var n=parseFloat(v); return isNaN(n)?'N/A':n.toFixed(2); }
+function safeNum(v){ var n=parseFloat(v); return isNaN(n)?null:n; }
+function getLineupPlayer(name){
+  var all=(AL||[]).concat(HL||[]);
+  for(var i=0;i<all.length;i++){ if((all[i].name||'').toLowerCase()===(name||'').toLowerCase()) return all[i]; }
+  return null;
+}
+function getTeamForPlayer(name){
+  var low=(name||'').toLowerCase();
+  for(var i=0;i<(AL||[]).length;i++) if((AL[i].name||'').toLowerCase()===low) return 'away';
+  for(var j=0;j<(HL||[]).length;j++) if((HL[j].name||'').toLowerCase()===low) return 'home';
+  return null;
+}
+function getOppPitcher(team){
+  if(!SIM_DATA || !SIM_DATA.pitcherProps) return null;
+  return team==='away' ? SIM_DATA.pitcherProps.homeStarter : SIM_DATA.pitcherProps.awayStarter;
+}
+function getOppHand(team){
+  if(!SIM_DATA || !SIM_DATA.handedness) return 'R';
+  return team==='away' ? (SIM_DATA.handedness.homeStarterHand||'R') : (SIM_DATA.handedness.awayStarterHand||'R');
+}
+function lookupMarketProp(player, marketKey, line){
+  if(!MARKET_DATA || !MARKET_DATA.playerProps) return null;
+  for(var i=0;i<MARKET_DATA.playerProps.length;i++){
+    var p=MARKET_DATA.playerProps[i];
+    if((p.player||'').toLowerCase()===(player||'').toLowerCase() && p.market_key===marketKey && parseFloat(p.line)===parseFloat(line)) return p;
+  }
+  return null;
+}
+function marketLabel(k, line){
+  if(k==='batter_hits') return 'Hits O'+line;
+  if(k==='batter_total_bases') return 'Total Bases O'+line;
+  if(k==='batter_home_runs') return 'HR O'+line;
+  if(k==='batter_rbis') return 'RBI O'+line;
+  if(k==='batter_runs_scored') return 'Runs O'+line;
+  if(k==='batter_stolen_bases') return 'SB O'+line;
+  if(k==='pitcher_strikeouts') return 'Strikeouts O'+line;
+  return k+' O'+line;
+}
+function confidenceTag(score){
+  if(score>=0.10) return '<span class="badge-up">A-TIER</span>';
+  if(score>=0.04) return '<span class="badge-watch">WATCH</span>';
+  return '<span class="badge-watch">MODEL</span>';
+}
+function splitText(lp, oppHand){
+  if(!lp) return 'Split data unavailable.';
+  var avg = oppHand==='L' ? lp.vs_l_avg : lp.vs_r_avg;
+  var ops = oppHand==='L' ? lp.vs_l_ops : lp.vs_r_ops;
+  if(avg==='N/A' || ops==='N/A' || avg==null || ops==null) return 'Current handedness split is not posted, so the model falls back to overall skill and Statcast quality.';
+  return 'Against '+oppHand+'-handed pitching he carries a split AVG of '+avg+' and OPS of '+ops+'.';
+}
+function contactText(lp){
+  if(!lp) return 'Statcast quality unavailable.';
+  return 'Underlying contact quality shows xBA '+pv(lp.sv_xba,'N/A')+', xSLG '+pv(lp.sv_xslg,'N/A')+', xwOBA '+pv(lp.sv_xwoba,'N/A')+', EV '+pv(lp.sv_ev,'N/A')+', HH% '+pv(lp.sv_hh_pct,'N/A')+', Barrel% '+pv(lp.sv_brl_pct,'N/A')+'.';
+}
+function buildReasoning(row){
+  var bits=[];
+  if(row.kind==='pitcher'){
+    bits.push('The simulation projects '+row.player+' for '+fmt2(row.mean)+' strikeouts against this lineup, with a model over probability of '+pct2(row.prob)+'.');
+    bits.push('Percentile support is strong at K P10/P50/P90 = '+fmt2(row.p10)+' / '+fmt2(row.p50)+' / '+fmt2(row.p90)+', which frames both floor and ceiling.');
+    if(row.market && row.market.over_implied!=null) bits.push('The imported market implies '+pct2(row.market.over_implied)+' on the over, creating a model edge of '+pct2(row.edge)+'.');
+    else bits.push('No mapped book line is loaded, so this ranking is driven by pure simulation confidence rather than market edge.');
+    return bits;
+  }
+  bits.push(row.player+' projects as a strong '+marketLabel(row.marketKey,row.line)+' angle because the simulation gives '+pct2(row.prob)+' on the over with mean '+fmt2(row.mean)+'.');
+  bits.push(splitText(row.lineup,row.oppHand));
+  bits.push(contactText(row.lineup));
+  if(row.market && row.market.over_implied!=null) bits.push('The sportsbook price implies '+pct2(row.market.over_implied)+' while the model is at '+pct2(row.prob)+', creating a '+pct2(row.edge)+' edge.');
+  else bits.push('No mapped sportsbook line is loaded, so the ranking is driven by model probability, percentiles, and matchup quality only.');
+  return bits;
+}
+function addProjRow(rows, base){
+  var score = (base.edge!=null ? base.edge*100 : 0) + base.prob;
+  base.score = score;
+  base.reasons = buildReasoning(base);
+  rows.push(base);
+}
+function buildProjectionRows(){
+  if(!SIM_DATA || !SIM_DATA.success) return [];
+  var rows=[];
+  var away=(SIM_DATA.playerProps&&SIM_DATA.playerProps.away)||[];
+  var home=(SIM_DATA.playerProps&&SIM_DATA.playerProps.home)||[];
+  var hitProps=[
+    {k:'batter_hits', line:0.5, field:'p_1plus_hit', mean:'mean_hits', p10:'p10_hits', p50:'p50_hits', p90:'p90_hits'},
+    {k:'batter_hits', line:1.5, field:'p_2plus_hit', mean:'mean_hits', p10:'p10_hits', p50:'p50_hits', p90:'p90_hits'},
+    {k:'batter_total_bases', line:1.5, field:'p_2plus_tb', mean:'mean_tb', p10:'p10_tb', p50:'p50_tb', p90:'p90_tb'},
+    {k:'batter_home_runs', line:0.5, field:'p_1plus_hr', mean:'mean_hr', p10:null, p50:null, p90:null},
+    {k:'batter_rbis', line:0.5, field:'p_1plus_rbi', mean:'mean_rbi', p10:null, p50:null, p90:null},
+    {k:'batter_runs_scored', line:0.5, field:'p_1plus_run', mean:'mean_runs', p10:null, p50:null, p90:null},
+    {k:'batter_stolen_bases', line:0.5, field:'p_1plus_sb', mean:'mean_sb', p10:null, p50:null, p90:null}
+  ];
+  function processHitters(arr, teamAbbr){
+    arr.forEach(function(p){
+      var team = getTeamForPlayer(p.name);
+      var lp = getLineupPlayer(p.name);
+      var opp = getOppPitcher(team);
+      var oppHand = getOppHand(team);
+      hitProps.forEach(function(def){
+        var prob = safeNum(p[def.field]);
+        if(prob==null || prob < 0.08) return;
+        var mkt = lookupMarketProp(p.name, def.k, def.line);
+        var edge = (mkt && mkt.over_implied!=null) ? (prob - mkt.over_implied) : null;
+        addProjRow(rows, {
+          kind:'hitter', team:teamAbbr, player:p.name, pos:p.pos, bats:p.bats||'S', oppPitcher:opp?opp.name:'Opp SP', oppHand:oppHand,
+          marketKey:def.k, line:def.line, prob:prob, mean:safeNum(p[def.mean])||0, p10:def.p10?safeNum(p[def.p10]):null, p50:def.p50?safeNum(p[def.p50]):null, p90:def.p90?safeNum(p[def.p90]):null,
+          market:mkt, edge:edge, lineup:lp
+        });
+      });
+    });
+  }
+  processHitters(away, SIM_DATA.meta.awayAbbr||'AWAY');
+  processHitters(home, SIM_DATA.meta.homeAbbr||'HOME');
+  var aps=SIM_DATA.pitcherProps?SIM_DATA.pitcherProps.awayStarter:null;
+  var hps=SIM_DATA.pitcherProps?SIM_DATA.pitcherProps.homeStarter:null;
+  [
+    {p:aps, team:SIM_DATA.meta.awayAbbr||'AWAY'},
+    {p:hps, team:SIM_DATA.meta.homeAbbr||'HOME'}
+  ].forEach(function(obj){
+    if(!obj.p) return;
+    [3.5,4.5,5.5].forEach(function(line){
+      var field = line<=3.5 ? 'p_4plus_k' : line<=4.5 ? 'p_5plus_k' : 'p_6plus_k';
+      var prob = safeNum(obj.p[field]);
+      if(prob==null || prob < 0.10) return;
+      var mkt = lookupMarketProp(obj.p.name, 'pitcher_strikeouts', line);
+      var edge = (mkt && mkt.over_implied!=null) ? (prob - mkt.over_implied) : null;
+      addProjRow(rows, {
+        kind:'pitcher', team:obj.team, player:obj.p.name, pos:'SP', bats:'-', oppPitcher:'', oppHand:obj.p.pitchHand||'R', marketKey:'pitcher_strikeouts', line:line, prob:prob, mean:safeNum(obj.p.mean_k)||0,
+        p10:safeNum(obj.p.p10_k), p50:safeNum(obj.p.p50_k), p90:safeNum(obj.p.p90_k), market:mkt, edge:edge, lineup:null
+      });
+    });
+  });
+  rows.sort(function(a,b){ return (b.score||0) - (a.score||0); });
+  rows.forEach(function(r,i){ r.rank=i+1; });
+  return rows;
+}
+function projectionRowHtml(r, idx){
+  var reason = (r.reasons&&r.reasons[0]) ? r.reasons[0] : '';
+  return '<tr class="'+(SELECTED_PROJ===idx?'sel':'')+'" onclick="selectProjection('+idx+')">'
+    + '<td>'+r.rank+'</td><td><span class="pos-tag">'+r.team+'</span></td><td>'+r.player+'</td><td>'+marketLabel(r.marketKey,r.line)+'</td><td>'+pct2(r.prob)+'</td><td>'+(r.edge!=null?'<span class="'+(r.edge>=0.03?'edge-pos':'edge-neu')+'">'+pct2(r.edge)+'</span>':'<span class="edge-na">N/A</span>')+'</td><td>'+confidenceTag(r.edge!=null?r.edge:r.prob)+'</td><td style="max-width:340px;white-space:normal">'+reason+'</td></tr>';
+}
+function renderProjectionDetail(){
+  if(SELECTED_PROJ==null || !PROJ_ROWS[SELECTED_PROJ]) return '<p class="na">Select a ranked projection to open the player and matchup dive.</p>';
+  var r=PROJ_ROWS[SELECTED_PROJ], lp=r.lineup, m=r.market;
+  var title = r.player+' — '+marketLabel(r.marketKey,r.line);
+  var subtitle = r.kind==='pitcher'
+    ? 'Ranked '+r.rank+' overall for '+r.team+'. The model is leaning into strikeout volume based on simulated distribution and matchup context.'
+    : 'Ranked '+r.rank+' overall for '+r.team+'. This deep dive explains why the model likes this player and matchup.';
+  var reasons = (r.reasons||[]).map(function(x){ return '<div class="reason-item">• '+x+'</div>'; }).join('');
+  var detail = ''
+    + '<div class="detail-title">'+title+'</div>'
+    + '<div class="detail-sub">'+subtitle+'</div>'
+    + '<div class="mini-grid">'
+    + '<div class="mini-card"><h5>MODEL VIEW</h5>'
+      + '<div class="statline"><span>Over probability</span><span>'+pct2(r.prob)+'</span></div>'
+      + '<div class="statline"><span>Mean projection</span><span>'+fmt2(r.mean)+'</span></div>'
+      + '<div class="statline"><span>Percentile band</span><span>'+(r.p10!=null?fmt2(r.p10)+' / '+fmt2(r.p50)+' / '+fmt2(r.p90):'N/A')+'</span></div>'
+      + '<div class="statline"><span>Ranking score</span><span>'+fmt2(r.score)+'</span></div>'
+    + '</div>'
+    + '<div class="mini-card"><h5>MARKET VIEW</h5>'
+      + '<div class="statline"><span>Book line</span><span>'+(m?(m.line+' @ '+m.bookmaker):'No live line')+'</span></div>'
+      + '<div class="statline"><span>Over price</span><span>'+(m&&m.over_price!=null?m.over_price:'N/A')+'</span></div>'
+      + '<div class="statline"><span>Implied over</span><span>'+(m&&m.over_implied!=null?pct2(m.over_implied):'N/A')+'</span></div>'
+      + '<div class="statline"><span>Model edge</span><span>'+(r.edge!=null?pct2(r.edge):'N/A')+'</span></div>'
+    + '</div>'
+    + '</div>';
+  if(r.kind==='hitter'){
+    detail += '<div class="mini-grid">'
+      + '<div class="mini-card"><h5>PLAYER PROFILE</h5>'
+        + '<div class="statline"><span>Bat / Position</span><span>'+(r.bats||'S')+' / '+(r.pos||'')+'</span></div>'
+        + '<div class="statline"><span>AVG / OBP / SLG</span><span>'+(lp?pv(lp.avg,'N/A')+' / '+pv(lp.obp,'N/A')+' / '+pv(lp.slg,'N/A'):'N/A')+'</span></div>'
+        + '<div class="statline"><span>xBA / xSLG</span><span>'+(lp?pv(lp.sv_xba,'N/A')+' / '+pv(lp.sv_xslg,'N/A'):'N/A')+'</span></div>'
+        + '<div class="statline"><span>xwOBA / wRC+</span><span>'+(lp?pv(lp.sv_xwoba,'N/A')+' / '+pv(lp.fg_wrc,'N/A'):'N/A')+'</span></div>'
+      + '</div>'
+      + '<div class="mini-card"><h5>MATCHUP PROFILE</h5>'
+        + '<div class="statline"><span>Opposing starter</span><span>'+(r.oppPitcher||'Opp SP')+'</span></div>'
+        + '<div class="statline"><span>Bats / Throws</span><span>'+(r.bats||'S')+' vs '+(r.oppHand||'R')+'</span></div>'
+        + '<div class="statline"><span>Split AVG / OPS</span><span>'+(lp?(r.oppHand==='L'?pv(lp.vs_l_avg,'N/A')+' / '+pv(lp.vs_l_ops,'N/A'):pv(lp.vs_r_avg,'N/A')+' / '+pv(lp.vs_r_ops,'N/A')):'N/A')+'</span></div>'
+        + '<div class="statline"><span>EV / HH% / Barrel%</span><span>'+(lp?pv(lp.sv_ev,'N/A')+' / '+pv(lp.sv_hh_pct,'N/A')+' / '+pv(lp.sv_brl_pct,'N/A'):'N/A')+'</span></div>'
+      + '</div>'
+      + '</div>';
+  }
+  detail += '<div class="reason-box"><div class="reason-head">AI ANALYSIS REASONING</div><div class="reason-list">'+reasons+'</div></div>'
+    + '<div class="proj-blurb">AI summary: '+(r.reasons&&r.reasons.length?r.reasons.join(' '):'No additional reasoning available.')+'</div>';
+  return detail;
+}
+function renderProjectionHub(){
+  var box=document.getElementById('luP');
+  if(!box) return;
+  if(!SIM_DATA || !SIM_DATA.success){ box.innerHTML='<p class="na">Waiting for Monte Carlo simulation before building the ranked projections board.</p>'; return; }
+  PROJ_ROWS = buildProjectionRows();
+  if(!PROJ_ROWS.length){ box.innerHTML='<p class="na">No ranked player projections are available yet for this matchup.</p>'; return; }
+  if(SELECTED_PROJ==null || !PROJ_ROWS[SELECTED_PROJ]) SELECTED_PROJ=0;
+  var uniq=[]; var seen={};
+  PROJ_ROWS.forEach(function(r){ if(!seen[r.player]){ seen[r.player]=1; uniq.push(r.player); } });
+  var playerSel = uniq.map(function(n){ var selected = (PROJ_ROWS[SELECTED_PROJ]&&PROJ_ROWS[SELECTED_PROJ].player===n)?' selected':''; return '<option value="'+n+'"'+selected+'>'+n+'</option>'; }).join('');
+  var rows = PROJ_ROWS.map(function(r,i){ return projectionRowHtml(r,i); }).join('');
+  box.innerHTML = ''
+    + '<div class="proj-hub">'
+    + '<div class="proj-list">'
+      + '<div class="proj-tools"><select id="projPlayerPick" onchange="jumpToProjection(this.value)"><option value="">Jump to player...</option>'+playerSel+'</select><span class="mini">Ranked from best to worst by model edge when live odds exist, otherwise by pure simulation confidence.</span></div>'
+      + '<table class="proj-rank"><thead><tr><th>#</th><th>TEAM</th><th>PLAYER</th><th>PROP</th><th>MODEL</th><th>EDGE</th><th>GRADE</th><th>AI THESIS</th></tr></thead><tbody>'+rows+'</tbody></table>'
+    + '</div>'
+    + '<div class="proj-detail">'+renderProjectionDetail()+'</div>'
+    + '</div>';
+}
+function selectProjection(i){ SELECTED_PROJ=i; if(ACTIVE_TAB==='proj') renderProjectionHub(); }
+function jumpToProjection(name){
+  if(!name) return;
+  for(var i=0;i<PROJ_ROWS.length;i++) if(PROJ_ROWS[i].player===name){ SELECTED_PROJ=i; break; }
+  renderProjectionHub();
+}
+function syncTabButtons(tab){
+  document.querySelectorAll('.tb2[data-tab]').forEach(function(btn){ btn.classList.toggle('ac', btn.getAttribute('data-tab')===tab); });
+}
+showTab = function(tab){
+  ACTIVE_TAB = tab;
+  syncTabButtons(tab);
+  if(tab==='proj'){ renderProjectionHub(); return; }
+  if(__oldShowTab) __oldShowTab(tab);
+};
+
+var __oldRenderPropPanel = (typeof renderPropPanel === 'function') ? renderPropPanel : null;
+renderPropPanel = function(){
+  if(__oldRenderPropPanel) __oldRenderPropPanel();
+  if(ACTIVE_TAB==='proj') renderProjectionHub();
+};
+var __oldRenderMarketPanel = (typeof renderMarketPanel === 'function') ? renderMarketPanel : null;
+renderMarketPanel = function(){
+  if(__oldRenderMarketPanel) __oldRenderMarketPanel();
+  if(ACTIVE_TAB==='proj') renderProjectionHub();
+};
+setTimeout(function(){ if(ACTIVE_TAB==='proj') renderProjectionHub(); }, 4500);
+
+
+
+// ── Phase 9 UI overrides: search + prop filters + best bets only ────────────
+var PROJ_FILTER = 'all';
+var PROJ_SEARCH = '';
+var BEST_ONLY = false;
+function projectionFilterLabel(v){
+  var map={all:'ALL',hits:'HITS',tb:'TOTAL BASES',hr:'HOME RUNS',rbi:'RBI',runs:'RUNS',sb:'STOLEN BASES',k:'PITCHER K'};
+  return map[v]||v.toUpperCase();
+}
+function projectionTypeFromKey(k){
+  if(k==='batter_hits') return 'hits';
+  if(k==='batter_total_bases') return 'tb';
+  if(k==='batter_home_runs') return 'hr';
+  if(k==='batter_rbis') return 'rbi';
+  if(k==='batter_runs_scored') return 'runs';
+  if(k==='batter_stolen_bases') return 'sb';
+  if(k==='pitcher_strikeouts') return 'k';
+  return 'other';
+}
+function filteredProjectionRows(){
+  var rows=(PROJ_ROWS||[]).slice();
+  if(PROJ_FILTER!=='all') rows=rows.filter(function(r){ return projectionTypeFromKey(r.marketKey)===PROJ_FILTER; });
+  if(PROJ_SEARCH){
+    var q=PROJ_SEARCH.toLowerCase();
+    rows=rows.filter(function(r){
+      return (r.player||'').toLowerCase().indexOf(q)>-1 || (r.team||'').toLowerCase().indexOf(q)>-1 || marketLabel(r.marketKey,r.line).toLowerCase().indexOf(q)>-1 || (r.pos||'').toLowerCase().indexOf(q)>-1;
+    });
+  }
+  if(BEST_ONLY){
+    rows=rows.filter(function(r){
+      if(r.edge!=null) return r.edge>=0.03;
+      return r.prob>=0.58;
+    });
+  }
+  return rows;
+}
+function setProjectionFilter(v){ PROJ_FILTER=v; SELECTED_PROJ=0; renderProjectionHub(); }
+function setBestOnly(v){ BEST_ONLY=!!v; SELECTED_PROJ=0; renderProjectionHub(); }
+function setProjectionSearch(v){ PROJ_SEARCH=v||''; SELECTED_PROJ=0; renderProjectionHub(); }
+function renderProjectionHub(){
+  var box=document.getElementById('luP');
+  if(!box) return;
+  if(!SIM_DATA || !SIM_DATA.success){ box.innerHTML='<p class="na">Waiting for Monte Carlo simulation before building the ranked projections board.</p>'; return; }
+  PROJ_ROWS = buildProjectionRows();
+  if(!PROJ_ROWS.length){ box.innerHTML='<p class="na">No ranked player projections are available yet for this matchup.</p>'; return; }
+  var rowsFiltered = filteredProjectionRows();
+  var uniquePlayers=[]; var seen={};
+  PROJ_ROWS.forEach(function(r){ if(!seen[r.player]){ seen[r.player]=1; uniquePlayers.push(r.player); } });
+  if(rowsFiltered.length===0){
+    box.innerHTML = ''
+      + '<div class="proj-hub">'
+      + '<div class="proj-list">'
+      + '<div class="proj-tools"><input id="projSearch" class="proj-search" placeholder="Search player, team, or prop..." value="'+(PROJ_SEARCH||'').replace(/"/g,'&quot;')+'" oninput="setProjectionSearch(this.value)"><span class="mini">Filter the ranked board by player name, team, or prop market.</span></div>'
+      + '<div class="filter-row">'
+      + ['all','hits','tb','hr','rbi','runs','sb','k'].map(function(f){ return '<button class="filter-chip '+(PROJ_FILTER===f?'on':'')+'" onclick="setProjectionFilter(\''+f+'\')">'+projectionFilterLabel(f)+'</button>'; }).join('')
+      + '<button class="best-toggle '+(BEST_ONLY?'':'off')+'" onclick="setBestOnly('+(BEST_ONLY?'false':'true')+')">BEST BETS ONLY '+(BEST_ONLY?'ON':'OFF')+'</button>'
+      + '</div><div class="empty-proj">No projections match the current search and filter settings.</div></div>'
+      + '<div class="proj-detail"><div class="detail-title">FILTERS ACTIVE</div><div class="detail-sub">Adjust search, prop type, or best-bets mode to repopulate the board.</div></div></div>';
+    return;
+  }
+  if(SELECTED_PROJ==null || !rowsFiltered[SELECTED_PROJ]) SELECTED_PROJ=0;
+  var selectedGlobal = PROJ_ROWS.indexOf(rowsFiltered[SELECTED_PROJ]);
+  var playerSel = uniquePlayers.map(function(n){
+    var selected = (rowsFiltered[SELECTED_PROJ]&&rowsFiltered[SELECTED_PROJ].player===n)?' selected':'';
+    return '<option value="'+n+'"'+selected+'>'+n+'</option>';
+  }).join('');
+  var rows = rowsFiltered.map(function(r,i){
+    var globalIndex = PROJ_ROWS.indexOf(r);
+    return '<tr class="'+(i===SELECTED_PROJ?'sel':'')+'" onclick="selectProjectionFiltered('+globalIndex+')">'
+      + '<td>'+r.rank+'</td><td><span class="pos-tag">'+r.team+'</span></td><td>'+r.player+'</td><td>'+marketLabel(r.marketKey,r.line)+'</td><td>'+pct2(r.prob)+'</td><td>'+(r.edge!=null?'<span class="'+(r.edge>=0.03?'edge-pos':'edge-neu')+'">'+pct2(r.edge)+'</span>':'<span class="edge-na">N/A</span>')+'</td><td>'+confidenceTag(r.edge!=null?r.edge:r.prob)+'</td><td style="max-width:340px;white-space:normal">'+((r.reasons&&r.reasons[0])?r.reasons[0]:'')+'</td></tr>';
+  }).join('');
+  box.innerHTML = ''
+    + '<div class="proj-hub">'
+    + '<div class="proj-list">'
+      + '<div class="proj-tools">'
+      + '<input id="projSearch" class="proj-search" placeholder="Search player, team, or prop..." value="'+(PROJ_SEARCH||'').replace(/"/g,'&quot;')+'" oninput="setProjectionSearch(this.value)">'
+      + '<select id="projPlayerPick" onchange="jumpToProjection(this.value)"><option value="">Jump to player...</option>'+playerSel+'</select>'
+      + '<span class="mini">Ranked by live edge when odds exist, otherwise by simulation confidence and matchup quality.</span>'
+      + '</div>'
+      + '<div class="filter-row">'
+      + ['all','hits','tb','hr','rbi','runs','sb','k'].map(function(f){ return '<button class="filter-chip '+(PROJ_FILTER===f?'on':'')+'" onclick="setProjectionFilter(\''+f+'\')">'+projectionFilterLabel(f)+'</button>'; }).join('')
+      + '<button class="best-toggle '+(BEST_ONLY?'':'off')+'" onclick="setBestOnly('+(BEST_ONLY?'false':'true')+')">BEST BETS ONLY '+(BEST_ONLY?'ON':'OFF')+'</button>'
+      + '</div>'
+      + '<table class="proj-rank"><thead><tr><th>#</th><th>TEAM</th><th>PLAYER</th><th>PROP</th><th>MODEL</th><th>EDGE</th><th>GRADE</th><th>AI THESIS</th></tr></thead><tbody>'+rows+'</tbody></table>'
+    + '</div>'
+    + '<div class="proj-detail">'+renderProjectionDetailByRow(rowsFiltered[SELECTED_PROJ])+'</div>'
+    + '</div>';
+}
+function renderProjectionDetailByRow(r){
+  if(!r) return '<p class="na">Select a ranked projection to open the player and matchup dive.</p>';
+  var old = SELECTED_PROJ;
+  var idx = PROJ_ROWS.indexOf(r);
+  if(idx>-1) SELECTED_PROJ=idx;
+  var html = renderProjectionDetail();
+  SELECTED_PROJ = old;
+  return html;
+}
+function selectProjectionFiltered(globalIndex){
+  var rowsFiltered = filteredProjectionRows();
+  for(var i=0;i<rowsFiltered.length;i++) if(PROJ_ROWS.indexOf(rowsFiltered[i])===globalIndex){ SELECTED_PROJ=i; break; }
+  if(ACTIVE_TAB==='proj') renderProjectionHub();
+}
+var __oldJumpToProjection = (typeof jumpToProjection === 'function') ? jumpToProjection : null;
+jumpToProjection = function(name){
+  if(!name) return;
+  PROJ_SEARCH='';
+  var rowsFiltered = filteredProjectionRows();
+  for(var i=0;i<rowsFiltered.length;i++) if(rowsFiltered[i].player===name){ SELECTED_PROJ=i; renderProjectionHub(); return; }
+  if(__oldJumpToProjection) __oldJumpToProjection(name);
+};
+
+
+
+// ── Phase 11: apply saved tracker adjustments to live board and edges ────────
+var LIVE_ADJUST = {
+  captured_per_game: 14,
+  best_edge_threshold: 0.03,
+  best_prob_threshold: 0.58,
+  market_multipliers: {
+    batter_hits: 1.00,
+    batter_total_bases: 1.00,
+    batter_home_runs: 1.00,
+    batter_rbis: 1.00,
+    batter_runs_scored: 1.00,
+    batter_stolen_bases: 1.00,
+    pitcher_strikeouts: 1.00
+  }
+};
+function clamp01(v){ return Math.max(0.01, Math.min(0.99, parseFloat(v)||0)); }
+function liveMult(mk){
+  if(!LIVE_ADJUST || !LIVE_ADJUST.market_multipliers) return 1;
+  var x = parseFloat(LIVE_ADJUST.market_multipliers[mk]);
+  return isNaN(x) || x <= 0 ? 1 : x;
+}
+function adjustedProb(prob, mk){
+  var p = parseFloat(prob); if(isNaN(p)) return null;
+  return clamp01(p * liveMult(mk));
+}
+function activeEdgeThreshold(){ return parseFloat((LIVE_ADJUST||{}).best_edge_threshold || 0.03); }
+function activeProbThreshold(){ return parseFloat((LIVE_ADJUST||{}).best_prob_threshold || 0.58); }
+function loadLiveAdjustments(){
+  fetch('/api/tracker/adjustments').then(function(r){ return r.json(); }).then(function(d){
+    if(d && d.success && d.adjustments){ LIVE_ADJUST = d.adjustments; }
+    if(typeof renderProjectionHub === 'function' && ACTIVE_TAB==='proj') renderProjectionHub();
+    if(typeof renderMarketPanel === 'function' && MARKET_DATA) renderMarketPanel();
+  }).catch(function(){ /* keep defaults */ });
+}
+function adjustmentSummaryHtml(){
+  return '<div class="adjust-banner">'
+    + '<span class="adjust-pill">EDGE THRESHOLD '+pct2(activeEdgeThreshold())+'</span>'
+    + '<span class="adjust-pill">BEST-PROB '+pct2(activeProbThreshold())+'</span>'
+    + '<span class="adjust-pill">HITS x'+fmt2(liveMult('batter_hits'))+'</span>'
+    + '<span class="adjust-pill">TB x'+fmt2(liveMult('batter_total_bases'))+'</span>'
+    + '<span class="adjust-pill">HR x'+fmt2(liveMult('batter_home_runs'))+'</span>'
+    + '<span class="adjust-pill">RBI x'+fmt2(liveMult('batter_rbis'))+'</span>'
+    + '<span class="adjust-pill">RUNS x'+fmt2(liveMult('batter_runs_scored'))+'</span>'
+    + '<span class="adjust-pill">SB x'+fmt2(liveMult('batter_stolen_bases'))+'</span>'
+    + '<span class="adjust-pill">K x'+fmt2(liveMult('pitcher_strikeouts'))+'</span>'
+    + '</div><div class="adjust-note">These live rankings are being modified by the saved tracker adjustments, so your daily tuning now changes the projection board and best-bet logic in real time.</div>';
+}
+
+var __phase11BuildProjectionRows = buildProjectionRows;
+buildProjectionRows = function(){
+  var rows = __phase11BuildProjectionRows ? __phase11BuildProjectionRows() : [];
+  rows.forEach(function(r){
+    var raw = (r.rawProb != null) ? parseFloat(r.rawProb) : parseFloat(r.prob);
+    if(isNaN(raw)) raw = null;
+    r.rawProb = raw;
+    r.adjustmentMult = liveMult(r.marketKey);
+    if(raw != null) r.prob = adjustedProb(raw, r.marketKey);
+    if(r.market && r.market.over_implied != null && r.prob != null) r.edge = r.prob - r.market.over_implied;
+    r.score = ((r.edge != null ? r.edge * 100 : 0) + (parseFloat(r.prob)||0));
+    r.reasons = buildReasoning(r);
+  });
+  rows.sort(function(a,b){ return (b.score||0) - (a.score||0); });
+  rows.forEach(function(r,i){ r.rank = i+1; });
+  return rows;
+};
+
+var __phase11BuildEdges = buildEdges;
+buildEdges = function(){
+  if(!SIM_DATA || !MARKET_DATA || !MARKET_DATA.success) return [];
+  var edges = [];
+  var ml = MARKET_DATA.lines ? MARKET_DATA.lines.moneyline : null;
+  var tot = MARKET_DATA.lines ? MARKET_DATA.lines.total : null;
+  var meta = SIM_DATA.meta || {}, team = SIM_DATA.team || {};
+  if(ml && ml.away && ml.away.implied != null){
+    edges.push({type:'Moneyline', target:meta.awayAbbr, side:'Away', line:ml.away.price, book:ml.away.bookmaker, model:team.away_win_pct, implied:ml.away.implied, edge:team.away_win_pct-ml.away.implied});
+  }
+  if(ml && ml.home && ml.home.implied != null){
+    edges.push({type:'Moneyline', target:meta.homeAbbr, side:'Home', line:ml.home.price, book:ml.home.bookmaker, model:team.home_win_pct, implied:ml.home.implied, edge:team.home_win_pct-ml.home.implied});
+  }
+  if(tot && tot.line != null){
+    var overProb = null, underProb = null, ln = parseFloat(tot.line);
+    if(ln <= 7.5) overProb = team.p_8plus_total; else if(ln <= 8.5) overProb = team.p_9plus_total; else if(ln <= 9.5) overProb = team.p_10plus_total;
+    if(overProb != null){
+      underProb = 1 - overProb;
+      if(tot.over_implied != null) edges.push({type:'Total', target:'Game Total', side:'Over '+tot.line, line:tot.over_price, book:tot.bookmaker, model:overProb, implied:tot.over_implied, edge:overProb-tot.over_implied});
+      if(tot.under_implied != null) edges.push({type:'Total', target:'Game Total', side:'Under '+tot.line, line:tot.under_price, book:tot.bookmaker, model:underProb, implied:tot.under_implied, edge:underProb-tot.under_implied});
+    }
+  }
+  (MARKET_DATA.playerProps||[]).forEach(function(p){
+    var isPitcher = p.market_key === 'pitcher_strikeouts';
+    var obj = isPitcher ? findSimPitcher(p.player) : findSimPlayer(p.player);
+    var rawOver = modelProbForLine(p.market_key, p.line, obj);
+    if(rawOver == null) return;
+    var modelOver = adjustedProb(rawOver, p.market_key);
+    if(p.over_implied != null) edges.push({type:p.market_key, target:p.player, side:'Over '+p.line, line:p.over_price, book:p.bookmaker, model:modelOver, implied:p.over_implied, edge:modelOver-p.over_implied, adj:liveMult(p.market_key)});
+    if(p.under_implied != null) edges.push({type:p.market_key, target:p.player, side:'Under '+p.line, line:p.under_price, book:p.bookmaker, model:(1-modelOver), implied:p.under_implied, edge:(1-modelOver)-p.under_implied, adj:liveMult(p.market_key)});
+  });
+  return edges.sort(function(a,b){ return b.edge - a.edge; });
+};
+
+var __phase11Reasoning = buildReasoning;
+buildReasoning = function(row){
+  var bits = __phase11Reasoning ? __phase11Reasoning(row) : [];
+  if(row && row.rawProb != null && row.prob != null){
+    bits.push('Saved tracker tuning applies a multiplier of '+fmt2(row.adjustmentMult||1)+' to this market, shifting the live probability from '+pct2(row.rawProb)+' to '+pct2(row.prob)+'.');
+  }
+  if(row && row.edge != null){
+    bits.push('The live best-bet threshold is '+pct2(activeEdgeThreshold())+' edge, so this projection currently grades as '+(row.edge >= activeEdgeThreshold() ? 'an actionable best bet.' : 'a watchlist play rather than a best bet.'));
+  } else if(row && row.prob != null) {
+    bits.push('No live line is mapped, so the fallback best-bet threshold is '+pct2(activeProbThreshold())+' model probability.');
+  }
+  return bits;
+};
+
+var __phase11ConfidenceTag = confidenceTag;
+confidenceTag = function(score){
+  if(score >= activeEdgeThreshold()) return '<span class="badge-up">BEST BET</span>';
+  if(score >= activeEdgeThreshold() * 0.5) return '<span class="badge-watch">WATCH</span>';
+  return '<span class="badge-watch">MODEL</span>';
+};
+
+var __phase11FilteredProjectionRows = filteredProjectionRows;
+filteredProjectionRows = function(){
+  var rows = (PROJ_ROWS||[]).slice();
+  if(PROJ_FILTER!=='all') rows=rows.filter(function(r){ return projectionTypeFromKey(r.marketKey)===PROJ_FILTER; });
+  if(PROJ_SEARCH){
+    var q=PROJ_SEARCH.toLowerCase();
+    rows=rows.filter(function(r){
+      return (r.player||'').toLowerCase().indexOf(q)>-1 || (r.team||'').toLowerCase().indexOf(q)>-1 || marketLabel(r.marketKey,r.line).toLowerCase().indexOf(q)>-1 || (r.pos||'').toLowerCase().indexOf(q)>-1;
+    });
+  }
+  if(BEST_ONLY){
+    rows=rows.filter(function(r){
+      if(r.edge!=null) return r.edge>=activeEdgeThreshold();
+      return (parseFloat(r.prob)||0)>=activeProbThreshold();
+    });
+  }
+  return rows;
+};
+
+var __phase11RenderProjectionDetail = renderProjectionDetail;
+renderProjectionDetail = function(){
+  var html = __phase11RenderProjectionDetail ? __phase11RenderProjectionDetail() : '';
+  if(SELECTED_PROJ==null || !PROJ_ROWS[SELECTED_PROJ]) return html;
+  var r = PROJ_ROWS[SELECTED_PROJ];
+  var block = '<div class="adjust-card"><div class="detail-title" style="font-size:.62rem;margin-bottom:8px">LIVE TUNING IMPACT</div>'
+    + '<div class="mini-grid" style="margin-top:0">'
+    + '<div class="mini-card"><h5>PROBABILITY SHIFT</h5>'
+      + '<div class="statline"><span>Raw model</span><span>'+pct2(r.rawProb)+'</span></div>'
+      + '<div class="statline"><span>Multiplier</span><span>x'+fmt2(r.adjustmentMult||1)+'</span></div>'
+      + '<div class="statline"><span>Adjusted model</span><span>'+pct2(r.prob)+'</span></div>'
+    + '</div>'
+    + '<div class="mini-card"><h5>BET GATE</h5>'
+      + '<div class="statline"><span>Edge threshold</span><span>'+pct2(activeEdgeThreshold())+'</span></div>'
+      + '<div class="statline"><span>Prob fallback</span><span>'+pct2(activeProbThreshold())+'</span></div>'
+      + '<div class="statline"><span>Status</span><span>'+((r.edge!=null && r.edge>=activeEdgeThreshold()) || (r.edge==null && r.prob>=activeProbThreshold()) ? 'ACTIVE' : 'WATCH')+'</span></div>'
+    + '</div></div></div>';
+  if(html.indexOf('AI ANALYSIS REASONING')>-1) return html.replace('<div class="reason-box">', block+'<div class="reason-box">');
+  return block + html;
+};
+
+var __phase11RenderProjectionHub = renderProjectionHub;
+renderProjectionHub = function(){
+  if(__phase11RenderProjectionHub) __phase11RenderProjectionHub();
+  var list = document.querySelector('#luP .proj-list');
+  if(list && !list.querySelector('.adjust-banner')){
+    list.insertAdjacentHTML('afterbegin', adjustmentSummaryHtml());
+  }
+};
+
+var __phase11RenderMarketPanel = renderMarketPanel;
+renderMarketPanel = function(){
+  if(__phase11RenderMarketPanel) __phase11RenderMarketPanel();
+  var el = document.getElementById('marketPanel');
+  if(el && !el.querySelector('.adjust-note')){
+    var note = document.createElement('div');
+    note.className = 'adjust-note';
+    note.innerHTML = 'Player-prop edges on this screen now use the saved tracker multipliers from the daily tuning panel, while moneyline and totals stay on raw simulation probabilities.';
+    el.appendChild(note);
+  }
+};
+
+setTimeout(loadLiveAdjustments, 1200);
 
 </script>
 </body>
