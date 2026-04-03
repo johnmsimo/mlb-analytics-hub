@@ -319,7 +319,9 @@ def get_weather(lat, lon, game_hour=13):
             "wind_speed": round(h.get("windspeed_10m",[0]*24)[idx]),
             "condition":  wcode_map.get(wcode, "Clear"),
         }
-    except: return {"temp":"N/A","rain_chance":"N/A","wind_speed":"N/A","condition":"N/A"}
+    except Exception as ex:
+        print(f"[get_weather] lat={lat} lon={lon} hour={game_hour} err={ex}")
+        return {"temp":"N/A","rain_chance":"N/A","wind_speed":"N/A","condition":"N/A"}
 
 def pitcher_stats_mlb(player_id):
     try:
@@ -389,14 +391,29 @@ def parse_game(g):
         aid  = at.get("id"); hid = ht.get("id")
         ap   = away.get("probablePitcher",{}); hp = home.get("probablePitcher",{})
         ven  = g.get("venue",{})
-        vloc = ven.get("location",{})
-        lat  = vloc.get("defaultCoordinates",{}).get("latitude")
-        lon  = vloc.get("defaultCoordinates",{}).get("longitude")
+        venue_id = ven.get("id")
+        vloc = ven.get("location",{}) or {}
+        coords = vloc.get("defaultCoordinates",{}) or {}
+        lat  = coords.get("latitude")
+        lon  = coords.get("longitude")
+        if (lat is None or lon is None) and venue_id:
+            try:
+                vr = requests.get(f"{MLB_API}/venues/{venue_id}", timeout=8)
+                vr.raise_for_status()
+                venues = vr.json().get("venues", [])
+                if venues:
+                    venue_detail = venues[0]
+                    vloc2 = venue_detail.get("location", {}) or {}
+                    coords2 = vloc2.get("defaultCoordinates", {}) or {}
+                    lat = coords2.get("latitude")
+                    lon = coords2.get("longitude")
+            except Exception as ex:
+                print(f"[venue_weather_fallback] venue_id={venue_id} err={ex}")
         try:
             dt_utc_wx = datetime.fromisoformat(g.get("gameDate","").replace("Z","+00:00"))
             game_hour_et = dt_utc_wx.astimezone(ET).hour
         except: game_hour_et = 13
-        wx   = get_weather(lat, lon, game_hour_et) if lat and lon else {}
+        wx = get_weather(lat, lon, game_hour_et) if lat is not None and lon is not None else {"temp":"N/A","rain_chance":"N/A","wind_speed":"N/A","condition":"N/A"}
         gt   = g.get("gameDate","")
         try:
             dt_utc = datetime.fromisoformat(gt.replace("Z","+00:00"))
@@ -2806,6 +2823,98 @@ def _attribution_dashboard(end_date_str, window_days):
 def api_tracker_attribution_dashboard(date_str):
     window = int(request.args.get('window', 14) or 14)
     return jsonify({'success': True, 'date': date_str, 'window': window, 'dashboard': _attribution_dashboard(date_str, window)})
+
+
+
+TEAM_HEADSHOT_BASE = "https://img.mlbstatic.com/mlb-photos/image/upload/w_180,q_auto:best/v1/people/{player_id}/headshot/67/current"
+
+@app.route('/api/teams/overview')
+def api_teams_overview():
+    try:
+        teams_resp = requests.get(f"{MLB_API}/teams?sportId=1", timeout=10)
+        teams_resp.raise_for_status()
+        teams_raw = teams_resp.json().get('teams', [])
+        teams = []
+        for t in sorted(teams_raw, key=lambda x: x.get('abbreviation', '')):
+            tid = t.get('id')
+            roster_resp = requests.get(f"{MLB_API}/teams/{tid}/roster", timeout=10)
+            roster = roster_resp.json().get('roster', []) if roster_resp.ok else []
+            players = []
+            for r in roster[:40]:
+                person = r.get('person', {})
+                pid = person.get('id')
+                name = person.get('fullName', 'Unknown')
+                pos = (r.get('position', {}) or {}).get('abbreviation', '?')
+                if pos == 'P':
+                    stats = pitcher_stats_mlb(pid) if pid else {}
+                    stat_line = {
+                        'label1': 'ERA', 'value1': stats.get('era') or stats.get('fg_era') or stats.get('sv_xera') or '—',
+                        'label2': 'WHIP', 'value2': stats.get('whip') or '—',
+                        'label3': 'SO', 'value3': stats.get('strikeOuts') or stats.get('k') or '—',
+                    }
+                else:
+                    stats = batter_stats(name)
+                    stat_line = {
+                        'label1': 'AVG', 'value1': stats.get('avg') or stats.get('sv_xba') or '—',
+                        'label2': 'OPS', 'value2': stats.get('ops') or stats.get('obp') or '—',
+                        'label3': 'HR', 'value3': stats.get('homeRuns') or stats.get('sv_barrel_pct') or '—',
+                    }
+                players.append({
+                    'id': pid,
+                    'name': name,
+                    'pos': pos,
+                    'image': TEAM_HEADSHOT_BASE.format(player_id=pid) if pid else '',
+                    **stat_line,
+                })
+            teams.append({
+                'id': tid,
+                'abbr': t.get('abbreviation', '?'),
+                'name': t.get('name', ''),
+                'logo': LOGO_BASE.format(team_id=tid),
+                'players': players,
+            })
+        return jsonify({'success': True, 'teams': teams})
+    except Exception as ex:
+        return jsonify({'success': False, 'error': str(ex), 'teams': []}), 500
+
+
+@app.route('/api/projections/monte-carlo')
+def api_projections_monte_carlo():
+    try:
+        date_str = datetime.now(ET).strftime('%Y-%m-%d')
+        raw = fetch_schedule(date_str)
+        games = []
+        ranked = []
+        for g in raw:
+            game_pk = g.get('gamePk')
+            away = g.get('teams', {}).get('away', {}).get('team', {}).get('abbreviation', '?')
+            home = g.get('teams', {}).get('home', {}).get('team', {}).get('abbreviation', '?')
+            try:
+                with app.test_request_context():
+                    market_resp = api_market(game_pk)
+                market = market_resp.get_json() if hasattr(market_resp, 'get_json') else None
+            except Exception:
+                market = None
+            top_props = []
+            if isinstance(market, dict) and market.get('success'):
+                props = sorted(list(market.get('bestBets', []) or []), key=lambda x: (float(x.get('edge') or 0), float(x.get('adj_prob') or 0)), reverse=True)
+                for p in props[:12]:
+                    row = {
+                        'player': p.get('player'),
+                        'market': p.get('market_key') or p.get('market'),
+                        'line': p.get('line'),
+                        'bookmaker': p.get('bookmaker'),
+                        'price': p.get('over_price'),
+                        'edge': p.get('edge'),
+                        'prob': p.get('adj_prob') or p.get('prob_over'),
+                    }
+                    top_props.append(row)
+                    ranked.append({'matchup': f'{away} @ {home}', **row})
+            games.append({'gamePk': game_pk, 'matchup': f'{away} @ {home}', 'topProps': top_props})
+        ranked = sorted(ranked, key=lambda x: (float(x.get('edge') or 0), float(x.get('prob') or 0)), reverse=True)
+        return jsonify({'success': True, 'games': games, 'topProps': ranked[:60]})
+    except Exception as ex:
+        return jsonify({'success': False, 'error': str(ex), 'games': [], 'topProps': []}), 500
 
 
 @app.route('/api/lineup/<int:game_pk>')

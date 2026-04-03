@@ -84,6 +84,19 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .lu-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:110px}
 .lu-pending{font-size:.68rem;color:var(--mu);padding:6px 0;font-style:italic}
 
+
+.topnav{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:16px 0 0}
+.tabbtn{padding:10px 16px;border:1px solid rgba(0,229,255,.18);border-radius:999px;background:rgba(255,255,255,.03);color:var(--mu);font-family:Orbitron,monospace;font-size:.68rem;letter-spacing:1.6px;cursor:pointer}
+.tabbtn.active{background:linear-gradient(90deg,rgba(0,229,255,.15),rgba(224,64,251,.12));color:var(--c);border-color:rgba(0,229,255,.35)}
+.view{display:none}.view.active{display:block}
+.panel{background:linear-gradient(180deg,rgba(10,16,28,.96),rgba(11,19,33,.96));border:1px solid rgba(0,229,255,.12);border-radius:20px;padding:18px;box-shadow:0 18px 50px rgba(0,0,0,.25)}
+.team-toolbar,.mc-toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px}.select{background:#0d1423;border:1px solid var(--b);border-radius:10px;padding:10px 12px;color:var(--c);font-family:Orbitron,monospace;font-size:.72rem}
+.team-head{display:flex;align-items:center;gap:12px;margin-bottom:14px}.team-head img.team-logo{width:56px;height:56px;object-fit:contain}.team-name{font-family:Orbitron,monospace;color:var(--c);font-size:1rem;letter-spacing:1.4px}.team-meta{font-size:.74rem;color:var(--mu)}
+.roster-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}.player-card{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:14px;padding:12px}.player-top{display:flex;align-items:center;gap:10px}.player-photo{width:54px;height:54px;border-radius:12px;object-fit:cover;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.06)}.player-name{font-weight:700;color:var(--c)}.player-pos{font-family:Orbitron,monospace;font-size:.62rem;color:var(--cyan);letter-spacing:1px;margin-bottom:4px}.stat-row{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:10px}.stat{background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.08);border-radius:10px;padding:8px}.stat-l{font-size:.56rem;color:var(--mu);font-family:Orbitron,monospace;letter-spacing:1px}.stat-v{font-size:.78rem;color:var(--c);margin-top:4px}
+.mc-card{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:14px;padding:12px;margin-bottom:12px}.mc-top{display:flex;justify-content:space-between;gap:8px;align-items:center}.mc-match{font-family:Orbitron,monospace;color:var(--c);letter-spacing:1px}.mc-mini{font-size:.72rem;color:var(--mu);margin-top:6px}.prop-table{width:100%;border-collapse:collapse;margin-top:8px}.prop-table th,.prop-table td{padding:8px 6px;border-bottom:1px solid rgba(255,255,255,.05);font-size:.72rem;text-align:left}.prop-table th{color:var(--mu);font-family:Orbitron,monospace;font-size:.62rem;letter-spacing:1px}.pillish{display:inline-flex;padding:4px 8px;border-radius:999px;background:rgba(0,229,255,.08);border:1px solid rgba(0,229,255,.14);color:var(--cyan);font-family:Orbitron,monospace;font-size:.6rem;letter-spacing:1px}
+footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;justify-content:center}
+@media(max-width:800px){.roster-grid{grid-template-columns:1fr}.player-photo{width:46px;height:46px}.team-head img.team-logo{width:46px;height:46px}}
+
 </style>
 </head>
 <body>
@@ -95,11 +108,6 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
     <div class="live-dot"><div class="dot"></div>LIVE</div>
   </div>
 </nav>
-<div class="srcbar">
-  <span class="fgtag">FG</span> FANGRAPHS: wOBA &middot; wRC+ &middot; FIP &middot; xFIP &middot; WAR
-  &nbsp;|&nbsp;
-  <span class="svtag">SV</span> BASEBALL SAVANT: xERA &middot; xBA &middot; xSLG &middot; xwOBA &middot; EV &middot; HH% &middot; Barrel% &middot; Pitch Arsenal
-</div>
 <div class="strip">
   <div class="strip-title">COMMAND CENTER</div>
   <div class="strip-stats">
@@ -109,11 +117,32 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
     <div class="ss"><div class="ss-v" id="sh">-</div><div class="ss-l">HIGH CONF</div></div>
   </div>
 </div>
-<div class="main">
-  <div class="sh">TODAY&#39;S GAMES</div>
-  <div id="gc"><div class="sw"><div class="sp"></div><div class="st">LOADING GAMES...</div></div></div>
+<div class="topnav">
+  <button class="tabbtn active" onclick="switchView('gamesView',this)">TODAY'S GAMES</button>
+  <button class="tabbtn" onclick="switchView('teamsView',this)">TEAMS</button>
+  <button class="tabbtn" onclick="switchView('mcView',this)">MONTE CARLO PROJECTIONS</button>
 </div>
-<footer>MLB ANALYTICS HUB &nbsp;|&nbsp; DATA: MLB API &middot; FANGRAPHS &middot; BASEBALL SAVANT &middot; OPEN-METEO &nbsp;|&nbsp; FOR ENTERTAINMENT PURPOSES ONLY</footer>
+<div class="main">
+  <div id="gamesView" class="view active">
+    <div class="sh">TODAY&#39;S GAMES</div>
+    <div id="gc"><div class="sw"><div class="sp"></div><div class="st">LOADING GAMES...</div></div></div>
+  </div>
+  <div id="teamsView" class="view">
+    <div class="panel">
+      <div class="sh">TEAM TABS</div>
+      <div class="team-toolbar"><select id="teamSelect" class="select"></select><span class="pillish" id="teamStatus">Loading teams…</span></div>
+      <div id="teamWrap"><div class="sw"><div class="sp"></div><div class="st">LOADING TEAM DATA...</div></div></div>
+    </div>
+  </div>
+  <div id="mcView" class="view">
+    <div class="panel">
+      <div class="sh">MONTE CARLO PROJECTIONS</div>
+      <div class="mc-toolbar"><span class="pillish" id="mcStatus">Loading projection board…</span></div>
+      <div id="mcWrap"><div class="sw"><div class="sp"></div><div class="st">LOADING PROJECTIONS...</div></div></div>
+    </div>
+  </div>
+</div>
+<footer><div class="footstack"><div>MLB ANALYTICS HUB &nbsp;|&nbsp; DATA: MLB API &middot; FANGRAPHS &middot; BASEBALL SAVANT &middot; OPEN-METEO</div><div><span class="fgtag">FG</span> FANGRAPHS: wOBA &middot; wRC+ &middot; FIP &middot; xFIP &middot; WAR &nbsp;|&nbsp; <span class="svtag">SV</span> BASEBALL SAVANT: xERA &middot; xBA &middot; xSLG &middot; xwOBA &middot; EV &middot; HH% &middot; Barrel% &middot; Pitch Arsenal</div><div>FOR ENTERTAINMENT PURPOSES ONLY</div></div></footer>
 <script>
 function tick(){var n=new Date(),h=n.getHours(),m=n.getMinutes(),s=n.getSeconds(),h12=(h%12||12),ap=h>=12?'PM':'AM';document.getElementById('clk').textContent=('0'+h12).slice(-2)+':'+('0'+m).slice(-2)+':'+('0'+s).slice(-2)+' '+ap;document.getElementById('dt').textContent=n.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'}).toUpperCase();}
 setInterval(tick,1000);tick();
@@ -178,6 +207,38 @@ function renderLineup(pk, d){
   el.innerHTML=cols(d.away, 'AWAY', d.awayConfirmed)+cols(d.home, 'HOME', d.homeConfirmed);
 }
 
+
+let TEAM_DATA={teams:[]}, MC_DATA={games:[],topProps:[]};
+function switchView(id, btn){ document.querySelectorAll('.view').forEach(v=>v.classList.remove('active')); document.getElementById(id).classList.add('active'); document.querySelectorAll('.tabbtn').forEach(b=>b.classList.remove('active')); if(btn) btn.classList.add('active'); }
+function numOrDash(v){ return (v===undefined||v===null||v==='') ? '—' : v; }
+function renderTeam(team){
+  const wrap=document.getElementById('teamWrap');
+  if(!team){ wrap.innerHTML='<div class="ng"><h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px">NO TEAM DATA</h3></div>'; return; }
+  wrap.innerHTML='<div class="team-head"><img class="team-logo" src="'+team.logo+'" alt="'+team.abbr+'" loading="lazy" width="56" height="56"><div><div class="team-name">'+team.name+'</div><div class="team-meta">'+team.players.length+' roster entries loaded</div></div></div>'
+    +'<div class="roster-grid">'+(team.players||[]).map(function(p){return '<div class="player-card"><div class="player-top"><img class="player-photo" src="'+(p.image||'')+'" alt="'+p.name+'" loading="lazy" width="54" height="54"><div><div class="player-pos">'+(p.pos||'?')+'</div><div class="player-name">'+(p.name||'?')+'</div></div></div><div class="stat-row"><div class="stat"><div class="stat-l">'+p.label1+'</div><div class="stat-v">'+numOrDash(p.value1)+'</div></div><div class="stat"><div class="stat-l">'+p.label2+'</div><div class="stat-v">'+numOrDash(p.value2)+'</div></div><div class="stat"><div class="stat-l">'+p.label3+'</div><div class="stat-v">'+numOrDash(p.value3)+'</div></div></div></div>';}).join('')+'</div>';
+}
+function loadTeams(){
+  fetch('/api/teams/overview').then(r=>r.json()).then(function(d){
+    if(!d.success) throw new Error(d.error||'Team load failed');
+    TEAM_DATA=d;
+    const sel=document.getElementById('teamSelect');
+    sel.innerHTML=(d.teams||[]).map(t=>'<option value="'+t.id+'">'+t.abbr+' — '+t.name+'</option>').join('');
+    document.getElementById('teamStatus').textContent=(d.teams||[]).length+' teams loaded';
+    if((d.teams||[]).length) renderTeam(d.teams[0]);
+    sel.onchange=function(){ renderTeam((TEAM_DATA.teams||[]).find(t=>String(t.id)===String(sel.value))); };
+  }).catch(function(e){ document.getElementById('teamStatus').textContent=e.message; document.getElementById('teamWrap').innerHTML='<div class="ng"><h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px">TEAM LOAD FAILED</h3></div>'; });
+}
+function marketLabelLite(m){ const map={batter_hits:'Hits',batter_total_bases:'Total Bases',batter_home_runs:'Home Runs',batter_rbis:'RBIs',batter_runs_scored:'Runs',batter_stolen_bases:'SB',pitcher_strikeouts:'Pitcher Ks'}; return map[m]||m||'Market'; }
+function renderMC(d){
+  const wrap=document.getElementById('mcWrap');
+  const games=d.games||[];
+  wrap.innerHTML=games.map(function(g){ const rows=(g.topProps||[]).slice(0,8).map(function(p){ return '<tr><td>'+p.player+'</td><td>'+marketLabelLite(p.market)+'</td><td>'+numOrDash(p.line)+'</td><td>'+numOrDash(p.bookmaker)+'</td><td>'+numOrDash(p.price)+'</td><td>'+((parseFloat(p.edge||0)*100).toFixed(1))+'%</td><td>'+((parseFloat(p.prob||0)*100).toFixed(1))+'%</td></tr>'; }).join(''); return '<div class="mc-card"><div class="mc-top"><div class="mc-match">'+g.matchup+'</div><span class="pillish">'+(g.topProps||[]).length+' props</span></div><div class="mc-mini">Current simulation board and best projected playable edges for this game.</div><table class="prop-table"><thead><tr><th>PLAYER</th><th>MARKET</th><th>LINE</th><th>BOOK</th><th>PRICE</th><th>EDGE</th><th>PROB</th></tr></thead><tbody>'+(rows||'<tr><td colspan="7">No projections available yet</td></tr>')+'</tbody></table></div>'; }).join('') || '<div class="ng"><h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px">NO PROJECTIONS AVAILABLE</h3></div>';
+  document.getElementById('mcStatus').textContent=(d.topProps||[]).length+' ranked props loaded';
+}
+function loadMC(){
+  fetch('/api/projections/monte-carlo').then(r=>r.json()).then(function(d){ if(!d.success) throw new Error(d.error||'Projection load failed'); MC_DATA=d; renderMC(d); }).catch(function(e){ document.getElementById('mcStatus').textContent=e.message; document.getElementById('mcWrap').innerHTML='<div class="ng"><h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px">PROJECTION LOAD FAILED</h3></div>'; });
+}
+
 function load(){
   fetch('/api/games/today').then(function(r){return r.json();}).then(function(d){
     if(!d.success)throw new Error(d.error||'API error');
@@ -195,7 +256,7 @@ function load(){
     document.getElementById('gc').innerHTML='<div class="sw"><div style="background:rgba(224,64,251,.08);border:1px solid rgba(224,64,251,.3);border-radius:12px;padding:24px 32px;text-align:center"><h3 style="color:var(--m);font-family:Orbitron;margin-bottom:8px">CONNECTION ERROR</h3><p style="color:var(--mu);font-size:.82rem">'+e.message+'</p></div></div>';
   });
 }
-load();setInterval(load,300000);
+load();loadTeams();loadMC();setInterval(load,60000);
 </script>
 <a class="tracker-fab" href="/tracker" target="_blank" rel="noopener noreferrer">DAILY TRACKER</a>
 </body>
