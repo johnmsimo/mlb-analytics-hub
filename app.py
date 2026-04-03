@@ -595,11 +595,31 @@ def api_game_projection(game_pk):
         # Base runs model (empirical: 4.5 R/G MLB avg)
         away_runs = 4.50 * (4.50/away_blend) * (away_xwoba/0.320) * pf
         home_runs = 4.50 * (4.50/home_blend) * (home_xwoba/0.320) * pf
-        # Weather adjustment
-        ven = gdata.get("venue",{}); vloc = ven.get("location",{})
-        lat = vloc.get("defaultCoordinates",{}).get("latitude")
-        lon = vloc.get("defaultCoordinates",{}).get("longitude")
-        wx = get_weather(lat, lon) if lat and lon else {}
+        # Weather adjustment — with venue fallback
+        ven = gdata.get("venue", {})
+        venue_id = ven.get("id")
+        vloc = ven.get("location", {}) or {}
+        coords = vloc.get("defaultCoordinates", {}) or {}
+        lat = coords.get("latitude")
+        lon = coords.get("longitude")
+        if (lat is None or lon is None) and venue_id:
+            try:
+                vr = requests.get(f"{MLB_API}/venues/{venue_id}", timeout=8)
+                vr.raise_for_status()
+                venues = vr.json().get("venues", [])
+                if venues:
+                    vloc2 = venues[0].get("location", {}) or {}
+                    coords2 = vloc2.get("defaultCoordinates", {}) or {}
+                    lat = coords2.get("latitude")
+                    lon = coords2.get("longitude")
+            except Exception as ex:
+                print(f"[proj_venue_fallback] venue_id={venue_id} err={ex}")
+        try:
+            dt_utc_wx = datetime.fromisoformat(gdata.get("gameDate","").replace("Z","+00:00"))
+            proj_hour = dt_utc_wx.astimezone(ET).hour
+        except Exception:
+            proj_hour = 13
+        wx = get_weather(lat, lon, proj_hour) if lat is not None and lon is not None else {}
         wx_adj = 0.0
         try:
             t = float(wx.get("temp","70"))
@@ -2853,11 +2873,12 @@ def api_teams_overview():
                         'label3': 'SO', 'value3': stats.get('strikeOuts') or stats.get('k') or '—',
                     }
                 else:
-                    stats = batter_stats(name)
+                    fgb = fg_batter(name)
+                    svb = sv_batter(name)
                     stat_line = {
-                        'label1': 'AVG', 'value1': stats.get('avg') or stats.get('sv_xba') or '—',
-                        'label2': 'OPS', 'value2': stats.get('ops') or stats.get('obp') or '—',
-                        'label3': 'HR', 'value3': stats.get('homeRuns') or stats.get('sv_barrel_pct') or '—',
+                        'label1': 'AVG', 'value1': fgb.get('fg_avg') or svb.get('sv_xba') or '—',
+                        'label2': 'OPS', 'value2': fgb.get('fg_ops') or fgb.get('fg_obp') or '—',
+                        'label3': 'wOBA', 'value3': fgb.get('fg_woba') or svb.get('sv_xwoba') or '—',
                     }
                 players.append({
                     'id': pid,
@@ -2887,32 +2908,60 @@ def api_projections_monte_carlo():
         ranked = []
         for g in raw:
             game_pk = g.get('gamePk')
-            away = g.get('teams', {}).get('away', {}).get('team', {}).get('abbreviation', '?')
-            home = g.get('teams', {}).get('home', {}).get('team', {}).get('abbreviation', '?')
-            try:
-                with app.test_request_context():
-                    market_resp = api_market(game_pk)
-                market = market_resp.get_json() if hasattr(market_resp, 'get_json') else None
-            except Exception:
-                market = None
+            away_team = g.get('teams', {}).get('away', {}).get('team', {})
+            home_team = g.get('teams', {}).get('home', {}).get('team', {})
+            away = away_team.get('abbreviation', '?')
+            home = home_team.get('abbreviation', '?')
+            matchup = f'{away} @ {home}'
             top_props = []
-            if isinstance(market, dict) and market.get('success'):
-                props = sorted(list(market.get('bestBets', []) or []), key=lambda x: (float(x.get('edge') or 0), float(x.get('adj_prob') or 0)), reverse=True)
-                for p in props[:12]:
-                    row = {
+            try:
+                away_p = g.get('teams', {}).get('away', {}).get('probablePitcher', {})
+                home_p = g.get('teams', {}).get('home', {}).get('probablePitcher', {})
+                try:
+                    box = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=8).json().get('teams', {})
+                    away_lineup = get_batters_from_boxscore(box.get('away', {}), 'away')
+                    home_lineup = get_batters_from_boxscore(box.get('home', {}), 'home')
+                except Exception:
+                    away_lineup, home_lineup = [], []
+                valid_names = set(x.get('name') for x in away_lineup + home_lineup if x.get('name'))
+                if away_p.get('fullName'): valid_names.add(away_p['fullName'])
+                if home_p.get('fullName'): valid_names.add(home_p['fullName'])
+                event, _ = _find_odds_event(away_team.get('name', ''), home_team.get('name', ''))
+                props_books = _load_event_odds(event.get('id') if event else None, featured_only=False) if event else []
+                props = _parse_prop_markets(props_books, valid_names)
+                scored = []
+                for p in props:
+                    op = p.get('over_implied')
+                    up = p.get('under_implied')
+                    if op is None or up is None:
+                        continue
+                    vig = op + up
+                    if vig <= 0:
+                        continue
+                    fair = op / vig
+                    price = p.get('over_price')
+                    if price is None:
+                        continue
+                    book_implied = _american_to_implied(price)
+                    edge = round(fair - book_implied, 4) if book_implied else 0
+                    scored.append({
                         'player': p.get('player'),
-                        'market': p.get('market_key') or p.get('market'),
+                        'market': p.get('market_key'),
                         'line': p.get('line'),
                         'bookmaker': p.get('bookmaker'),
-                        'price': p.get('over_price'),
-                        'edge': p.get('edge'),
-                        'prob': p.get('adj_prob') or p.get('prob_over'),
-                    }
-                    top_props.append(row)
-                    ranked.append({'matchup': f'{away} @ {home}', **row})
-            games.append({'gamePk': game_pk, 'matchup': f'{away} @ {home}', 'topProps': top_props})
-        ranked = sorted(ranked, key=lambda x: (float(x.get('edge') or 0), float(x.get('prob') or 0)), reverse=True)
-        return jsonify({'success': True, 'games': games, 'topProps': ranked[:60]})
+                        'price': price,
+                        'edge': round(edge, 4),
+                        'prob': round(fair, 4),
+                    })
+                scored = sorted(scored, key=lambda x: x['edge'], reverse=True)
+                top_props = scored[:12]
+                for row in top_props:
+                    ranked.append({'matchup': matchup, **row})
+            except Exception as ex:
+                print(f"[mc_game] {game_pk} {ex}")
+            games.append({'gamePk': game_pk, 'matchup': matchup, 'topProps': top_props})
+        ranked = sorted(ranked, key=lambda x: x.get('edge', 0), reverse=True)
+        return jsonify({'success': True, 'date': date_str, 'games': games, 'topProps': ranked[:60]})
     except Exception as ex:
         return jsonify({'success': False, 'error': str(ex), 'games': [], 'topProps': []}), 500
 
