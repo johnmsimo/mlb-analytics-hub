@@ -154,8 +154,10 @@ function mkCard(g){
     :'<span style="font-family:Orbitron;font-size:.9rem;color:var(--c)">'+g.awayAbbr+'</span>';
   var hL=g.homeLogo?'<img src="'+g.homeLogo+'" alt="'+g.homeAbbr+'" width="42" height="42" loading="lazy">'
     :'<span style="font-family:Orbitron;font-size:.9rem;color:var(--c)">'+g.homeAbbr+'</span>';
-  var rT=(g.rainChance!==undefined&&g.rainChance!=='N/A')?' | '+g.rainChance+'% rain':'';
-  var hW=g.temp&&g.temp!='N/A'
+  var rT=(g.rainChance!==undefined&&g.rainChance!=='N/A'&&g.rainChance!==0)?' | '+g.rainChance+'% rain':'';
+  var hW=g.temp==='DOME'
+    ?'<div class="wr"><span>&#127968;</span><span class="val" style="color:var(--cyan);font-size:.7rem;letter-spacing:1px">DOME — INDOOR</span></div>'
+    :g.temp&&g.temp!='N/A'
     ?'<div class="wr"><span>'+wicon(g.condition)+'</span><span class="val">'+g.temp+'&deg;F</span><span> | </span><span class="val">'+g.wind+'</span>'+rT+'</div>':'';
   return '<div class="card" onclick="location.href=\'/deep-dive/'+g.gamePk+'\'">'
     +'<div class="ct"><span class="badge '+bc+'">'+bl+'</span><span class="ctime">'+g.gameTime+'</span></div>'

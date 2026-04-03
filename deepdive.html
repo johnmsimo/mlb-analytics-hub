@@ -351,7 +351,15 @@ function renderEdge(){
 function renderWx(){
   var g=GD;
   if(!g.temp||g.temp==='N/A'){document.getElementById('wxP').innerHTML='<p class="na">Weather data not yet available.</p>';return;}
-  var tv=parseInt(g.temp)||70,rc=g.rainChance!=='N/A'?g.rainChance+'%':'N/A';
+  if(g.temp==='DOME'){
+    document.getElementById('wxP').innerHTML=
+      '<div class="wg"><div class="ws"><div class="wi">&#127968;</div><div class="wv" style="font-size:.74rem">DOME</div><div class="wl">VENUE</div></div>'
+      +'<div class="ws"><div class="wi">&#9989;</div><div class="wv" style="font-size:.74rem">INDOOR</div><div class="wl">CONDITIONS</div></div>'
+      +'<div class="ws"><div class="wi">&#127788;</div><div class="wv">72&deg;F</div><div class="wl">EST TEMP</div></div></div>'
+      +'<div class="wi2">&#127968; DOME / RETRACTABLE ROOF — Controlled indoor conditions. Weather adjustments suppressed.</div>';
+    return;
+  }
+  var tv=parseInt(g.temp)||70,rc=g.rainChance!=='N/A'&&g.rainChance!==0?g.rainChance+'%':'N/A';
   var imp=tv>80?'&#128293; HOT — Ball carries. Hitters favored.':tv<50?'&#129398; COLD — Ball dies. Pitchers favored.':'&#9989; NEUTRAL — Standard conditions.';
   document.getElementById('wxP').innerHTML=
     '<div class="wg"><div class="ws"><div class="wi">'+wic(g.condition)+'</div><div class="wv">'+g.temp+'°F</div><div class="wl">TEMP</div></div>'

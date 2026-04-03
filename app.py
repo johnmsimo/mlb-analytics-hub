@@ -26,71 +26,53 @@ VALUE_HISTORY_STORE = os.path.join(DATA_DIR, 'value_history.json')
 MLB_API   = "https://statsapi.mlb.com/api/v1"
 WX_API    = "https://api.open-meteo.com/v1/forecast"
 
-# Hardcoded MLB stadium coordinates (lat, lon) keyed by MLB venue ID
+# MLB stadium coordinates keyed by MLB venue ID (from /api/v1/venues)
 STADIUM_COORDS = {
-    3:    (40.6331, -74.0029),   # Yankee Stadium (old)
-    4:    (41.4960, -81.6852),   # Progressive Field, Cleveland
-    5:    (42.3467, -83.0488),   # Comerica Park, Detroit
-    7:    (39.7559, -104.9942),  # Coors Field, Denver
-    8:    (29.7572, -95.3554),   # Minute Maid Park, Houston
-    9:    (34.1459, -118.2085),  # Dodger Stadium, LA
-    10:   (33.8453, -84.3895),   # Truist Park, Atlanta
-    14:   (47.5914, -122.3320),  # T-Mobile Park, Seattle
-    15:   (37.7786, -122.3893),  # Oracle Park, SF
-    17:   (25.7783, -80.2197),   # loanDepot Park, Miami
-    19:   (44.9817, -93.2777),   # Target Field, Minneapolis
-    20:   (38.8922, -77.0073),   # Nationals Park, DC
-    21:   (35.1381, -90.0502),   # AutoZone Park (Memphis - MiLB, skip)
-    22:   (40.7961, -111.8903),  # Delta Center (placeholder)
-    26:   (42.6897, -73.6951),   # placeholder
-    27:   (37.3285, -121.9006),  # Oakland Coliseum
-    28:   (33.4453, -112.0667),  # Chase Field, Phoenix
-    30:   (43.6414, -79.3894),   # Rogers Centre, Toronto
-    31:   (30.3232, -81.6557),   # Dunedin (spring)
-    32:   (25.9782, -80.2954),   # Roger Dean (spring)
-    2392: (38.8922, -77.0073),   # Nationals Park
-    2394: (42.3467, -83.0488),   # Comerica
-    2395: (41.8299, -87.6338),   # Guaranteed Rate Field, Chicago
-    2681: (40.8296, -73.9262),   # Yankee Stadium
-    2690: (42.3467, -83.0488),   # Comerica
-    3289: (39.7559, -104.9942),  # Coors
-    3312: (33.8453, -84.3895),   # Truist
-    3313: (29.7572, -95.3554),   # Minute Maid
-    3809: (41.4960, -81.6852),   # Progressive
-    4169: (40.7571, -73.8458),   # Citi Field, NY Mets
-    4705: (34.0739, -118.2400),  # Dodger Stadium (correct)
-    5325: (42.3467, -71.0972),   # Fenway Park, Boston
-    5380: (41.8299, -87.6338),   # Guaranteed Rate
-    14503:(39.0561, -76.8755),   # Camden Yards, Baltimore
-    15510:(38.5780, -121.4990),  # Sutter Health Park
-    22:(40.7571, -73.8458),      # Citi Field fallback
-    # Common venue IDs used in current MLB schedule
-    680:  (37.7786, -122.3893),  # Oracle Park
-    1:    (41.8299, -87.6338),   # Wrigley Field
-    2:    (41.8299, -87.6338),   # Guaranteed Rate
-    5:    (33.4453, -112.0667),  # Chase Field
-    13:   (39.1021, -84.5074),   # Great American Ball Park, Cincinnati
-    2519: (40.4468, -79.9608),   # PNC Park, Pittsburgh
-    2593: (39.1021, -84.5074),   # GABP
-    3633: (38.6226, -90.1928),   # Busch Stadium, St. Louis
-    4087: (36.1660, -86.7783),   # Truist Park Nashville (MiLB)
-    4321: (32.7474, -97.0839),   # Globe Life Field, TX
-    4705: (34.0739, -118.2400),  # Dodger Stadium
-    5325: (42.3467, -71.0972),   # Fenway
-    5380: (41.8299, -87.6338),   # GR Field
-    7:    (39.7559, -104.9942),  # Coors
-    8:    (29.7572, -95.3554),   # Minute Maid
-    12:   (25.7783, -80.2197),   # loanDepot
-    14:   (47.5914, -122.3320),  # T-Mobile
-    15:   (37.7786, -122.3893),  # Oracle
-    17:   (25.7783, -80.2197),   # loanDepot
-    19:   (44.9817, -93.2777),   # Target Field
-    20:   (38.8922, -77.0073),   # Nationals Park
-    27:   (37.3285, -121.9006),  # Coliseum
-    28:   (33.4453, -112.0667),  # Chase
-    29:   (43.0410, -76.1020),   # NBT (Syracuse)
-    30:   (43.6414, -79.3894),   # Rogers
-    2:    (41.8299, -87.6338),
+    1:    (33.80019044, -117.8823996),  # Angel Stadium, Anaheim
+    2:    (39.283787,   -76.621689),    # Oriole Park at Camden Yards, Baltimore
+    3:    (42.346456,   -71.097441),    # Fenway Park, Boston
+    4:    (41.83,       -87.634167),    # Rate Field (Guaranteed Rate), Chicago
+    5:    (41.495861,   -81.685255),    # Progressive Field, Cleveland
+    7:    (39.051567,   -94.480483),    # Kauffman Stadium, Kansas City
+    12:   (27.767778,   -82.6525),      # Tropicana Field, St. Petersburg (dome)
+    14:   (43.64155,    -79.38915),     # Rogers Centre, Toronto (dome)
+    15:   (33.445302,   -112.066687),   # Chase Field, Phoenix (retractable)
+    17:   (41.948171,   -87.655503),    # Wrigley Field, Chicago
+    19:   (39.756042,   -104.994136),   # Coors Field, Denver
+    22:   (34.07368,    -118.24053),    # Dodger Stadium, Los Angeles
+    31:   (40.446904,   -80.005753),    # PNC Park, Pittsburgh
+    32:   (43.02838,    -87.97099),     # American Family Field, Milwaukee (retractable)
+    680:  (47.591333,   -122.33251),    # T-Mobile Park, Seattle (retractable)
+    2392: (29.756967,   -95.355509),    # Daikin Park (Minute Maid), Houston (retractable)
+    2394: (42.3391151,  -83.048695),    # Comerica Park, Detroit (retractable)
+    2395: (37.778383,   -122.389448),   # Oracle Park, San Francisco
+    2529: (38.57994,    -121.51246),    # Sutter Health Park, Sacramento
+    2602: (39.097389,   -84.506611),    # Great American Ball Park, Cincinnati
+    2680: (32.707861,   -117.157278),   # Petco Park, San Diego
+    2681: (39.90539086, -75.16716957),  # Citizens Bank Park, Philadelphia
+    2889: (38.62256667, -90.19286667),  # Busch Stadium, St. Louis
+    3289: (40.75753012, -73.84559155),  # Citi Field, New York (Mets)
+    3309: (38.872861,   -77.007501),    # Nationals Park, Washington DC
+    3312: (44.981829,   -93.277891),    # Target Field, Minneapolis
+    3313: (40.82919482, -73.9264977),   # Yankee Stadium, New York
+    4169: (25.77796236, -80.21951795),  # loanDepot park, Miami (retractable)
+    4705: (33.890672,   -84.467641),    # Truist Park, Atlanta
+    5325: (32.747299,   -97.081818),    # Globe Life Field, Arlington TX (retractable)
+    4321: (32.747299,   -97.081818),    # Globe Life Field alt ID
+}
+
+# Domed / retractable-roof stadiums (weather is always INDOOR/controlled)
+DOME_VENUES = {
+    12,    # Tropicana Field (fixed dome)
+    14,    # Rogers Centre (retractable)
+    15,    # Chase Field (retractable)
+    32,    # American Family Field (retractable)
+    680,   # T-Mobile Park (retractable)
+    2392,  # Daikin Park / Minute Maid (retractable)
+    2394,  # Comerica Park (retractable)
+    4169,  # loanDepot park (retractable)
+    5325,  # Globe Life Field (retractable)
+    4321,  # Globe Life Field alt
 }
 
 LOGO_BASE = "https://www.mlbstatic.com/team-logos/{team_id}.svg"
@@ -365,6 +347,9 @@ def fetch_schedule(date_str):
     return dates[0].get("games", []) if dates else []
 
 def get_weather(lat, lon, game_hour=13, venue_id=None):
+    # Dome/retractable roof: return indoor conditions immediately
+    if venue_id and venue_id in DOME_VENUES:
+        return {"temp":"DOME","rain_chance":0,"wind_speed":0,"condition":"Dome","dome":True}
     # Last-resort: fill coords from hardcoded stadium map
     if (lat is None or lon is None) and venue_id and venue_id in STADIUM_COORDS:
         lat, lon = STADIUM_COORDS[venue_id]
@@ -673,13 +658,14 @@ def api_game_projection(game_pk):
             proj_hour = 13
         wx = get_weather(lat, lon, proj_hour, venue_id=venue_id_wx)
         wx_adj = 0.0
-        try:
-            t = float(wx.get("temp","70"))
-            if t > 82: wx_adj = 0.20
-            elif t > 76: wx_adj = 0.10
-            elif t < 48: wx_adj = -0.20
-            elif t < 56: wx_adj = -0.10
-        except: pass
+        if not wx.get("dome"):
+            try:
+                t = float(wx.get("temp","70"))
+                if t > 82: wx_adj = 0.20
+                elif t > 76: wx_adj = 0.10
+                elif t < 48: wx_adj = -0.20
+                elif t < 56: wx_adj = -0.10
+            except: pass
         away_runs = round(away_runs + wx_adj, 1)
         home_runs = round(home_runs + wx_adj, 1)
         total = round(away_runs + home_runs, 1)
