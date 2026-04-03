@@ -71,6 +71,19 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 
 .brand{display:flex;align-items:center;gap:14px}.brand img{width:52px;height:52px;object-fit:contain;filter:drop-shadow(0 0 10px rgba(0,229,255,.22))}.brand-text{display:flex;flex-direction:column;gap:2px}.brand-name{font-family:Orbitron,sans-serif;font-weight:800;letter-spacing:1.5px;color:var(--cyan)}.brand-sub{font-size:.72rem;color:var(--mut)}@media(max-width:700px){.brand img{width:42px;height:42px}.brand-sub{display:none}}
 
+
+.lineup-toggle{width:100%;background:none;border:1px solid rgba(0,229,255,.18);border-radius:8px;color:var(--c);font-family:Orbitron,sans-serif;font-size:.6rem;letter-spacing:1.5px;padding:6px 10px;cursor:pointer;margin-top:8px;transition:background .2s}
+.lineup-toggle:hover{background:rgba(0,229,255,.07)}
+.lineup-section{display:none;margin-top:8px;border-top:1px solid rgba(255,255,255,.06);padding-top:8px}
+.lineup-section.open{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.lu-col{display:flex;flex-direction:column;gap:3px}
+.lu-head{font-family:Orbitron,sans-serif;font-size:.58rem;letter-spacing:1.5px;color:var(--mu);margin-bottom:3px}
+.lu-row{font-size:.68rem;color:var(--c);display:flex;gap:5px;align-items:center}
+.lu-num{color:var(--mu);min-width:14px;font-family:Orbitron,sans-serif;font-size:.58rem}
+.lu-pos{min-width:22px;color:var(--cyan);font-family:Orbitron,sans-serif;font-size:.58rem}
+.lu-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:110px}
+.lu-pending{font-size:.68rem;color:var(--mu);padding:6px 0;font-style:italic}
+
 </style>
 </head>
 <body>
@@ -127,9 +140,44 @@ function mkCard(g){
     +'<div class="eb"><div class="ebl"><span>MODEL EDGE</span><strong>'+g.edge+'%</strong></div>'
     +'<div class="bar"><div class="fill" style="width:0%" data-w="'+g.barPct+'%"></div></div></div>'
     +'<div class="vn">'+g.venue+'</div>'
+    +'<button class="lineup-toggle" onclick="toggleLineup(event,'+g.gamePk+')">&#9776; SHOW LINEUP</button>'
+    +'<div class="lineup-section" id="lu-'+g.gamePk+'"><div class="lu-pending">Loading lineup…</div></div>'
     +'<div class="ap">&#9889; DEEP DIVE ANALYSIS</div>'
     +'</div>';
 }
+
+var LINEUPS={};
+function toggleLineup(e, pk){
+  e.stopPropagation();
+  var el=document.getElementById('lu-'+pk);
+  var btn=e.currentTarget;
+  if(!el) return;
+  var open=el.classList.toggle('open');
+  btn.textContent=open?'\u2715 HIDE LINEUP':'\u2261 SHOW LINEUP';
+  if(open && !LINEUPS[pk]){
+    fetch('/api/lineup/'+pk).then(function(r){return r.json();}).then(function(d){
+      LINEUPS[pk]=d;
+      renderLineup(pk, d);
+    }).catch(function(){
+      document.getElementById('lu-'+pk).innerHTML='<div class="lu-pending">Lineup unavailable</div>';
+    });
+  }
+}
+function renderLineup(pk, d){
+  var el=document.getElementById('lu-'+pk); if(!el) return;
+  var posMap={'C':'C','1B':'1B','2B':'2B','SS':'SS','3B':'3B','LF':'LF','CF':'CF','RF':'RF','DH':'DH','P':'P'};
+  function cols(arr, label, conf){
+    if(!arr||!arr.length) return '<div class="lu-col"><div class="lu-head">'+label+'</div><div class="lu-pending">'+(conf?'Lineup pending':'Not yet posted')+'</div></div>';
+    var rows=arr.slice(0,9).map(function(p,i){
+      var pos=(p.position||'').replace('Designated Hitter','DH').replace('Pitcher','P');
+      pos=pos.length>3?pos.substring(0,2):pos;
+      return '<div class="lu-row"><span class="lu-num">'+(i+1)+'</span><span class="lu-pos">'+(pos||'?')+'</span><span class="lu-name">'+(p.name||'?').split(' ').pop()+'</span></div>';
+    }).join('');
+    return '<div class="lu-col"><div class="lu-head">'+label+(conf?' &#10003;':' (exp)')+'</div>'+rows+'</div>';
+  }
+  el.innerHTML=cols(d.away, 'AWAY', d.awayConfirmed)+cols(d.home, 'HOME', d.homeConfirmed);
+}
+
 function load(){
   fetch('/api/games/today').then(function(r){return r.json();}).then(function(d){
     if(!d.success)throw new Error(d.error||'API error');
@@ -142,6 +190,7 @@ function load(){
     if(!gs.length){document.getElementById('gc').innerHTML='<div class="ng"><h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px">NO GAMES TODAY</h3></div>';return;}
     document.getElementById('gc').innerHTML='<div class="grid">'+gs.map(mkCard).join('')+'</div>';
     setTimeout(function(){document.querySelectorAll('.fill').forEach(function(e){e.style.width=e.getAttribute('data-w');});},150);
+    gs.forEach(function(g){ fetch('/api/lineup/'+g.gamePk).then(function(r){return r.json();}).then(function(d){ LINEUPS[g.gamePk]=d; var el=document.getElementById('lu-'+g.gamePk); if(el) renderLineup(g.gamePk, d); }); });
   }).catch(function(e){
     document.getElementById('gc').innerHTML='<div class="sw"><div style="background:rgba(224,64,251,.08);border:1px solid rgba(224,64,251,.3);border-radius:12px;padding:24px 32px;text-align:center"><h3 style="color:var(--m);font-family:Orbitron;margin-bottom:8px">CONNECTION ERROR</h3><p style="color:var(--mu);font-size:.82rem">'+e.message+'</p></div></div>';
   });

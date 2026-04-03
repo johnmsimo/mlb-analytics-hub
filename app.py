@@ -1,6 +1,11 @@
 import os, threading, traceback, difflib, io, csv as csvmod, json, re
 import requests
 from datetime import datetime, timezone
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo
+ET = ZoneInfo("America/New_York")
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
@@ -291,7 +296,7 @@ def fetch_schedule(date_str):
     dates = r.json().get("dates", [])
     return dates[0].get("games", []) if dates else []
 
-def get_weather(lat, lon):
+def get_weather(lat, lon, game_hour=13):
     try:
         r = requests.get(WX_API, params={
             "latitude":lat,"longitude":lon,
@@ -301,7 +306,7 @@ def get_weather(lat, lon):
         }, timeout=6)
         r.raise_for_status()
         h = r.json().get("hourly",{})
-        idx = 13
+        idx = max(0, min(23, int(game_hour)))
         wcode_map = {0:"Clear",1:"Mainly Clear",2:"Partly Cloudy",3:"Overcast",
                      45:"Foggy",48:"Foggy",51:"Drizzle",53:"Drizzle",55:"Drizzle",
                      61:"Rain",63:"Rain",65:"Heavy Rain",71:"Snow",73:"Snow",75:"Snow",
@@ -387,11 +392,15 @@ def parse_game(g):
         vloc = ven.get("location",{})
         lat  = vloc.get("defaultCoordinates",{}).get("latitude")
         lon  = vloc.get("defaultCoordinates",{}).get("longitude")
-        wx   = get_weather(lat, lon) if lat and lon else {}
+        try:
+            dt_utc_wx = datetime.fromisoformat(g.get("gameDate","").replace("Z","+00:00"))
+            game_hour_et = dt_utc_wx.astimezone(ET).hour
+        except: game_hour_et = 13
+        wx   = get_weather(lat, lon, game_hour_et) if lat and lon else {}
         gt   = g.get("gameDate","")
         try:
             dt_utc = datetime.fromisoformat(gt.replace("Z","+00:00"))
-            dt_et  = dt_utc.astimezone()
+            dt_et  = dt_utc.astimezone(ET)
             gt_fmt = dt_et.strftime("%-I:%M %p ET")
         except: gt_fmt = "TBD"
         pf   = PARK_FACTORS.get(hid, 1.0)
@@ -2797,6 +2806,21 @@ def _attribution_dashboard(end_date_str, window_days):
 def api_tracker_attribution_dashboard(date_str):
     window = int(request.args.get('window', 14) or 14)
     return jsonify({'success': True, 'date': date_str, 'window': window, 'dashboard': _attribution_dashboard(date_str, window)})
+
+
+@app.route('/api/lineup/<int:game_pk>')
+def api_lineup(game_pk):
+    try:
+        r = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=10)
+        d = r.json().get('teams', {})
+        away = get_batters_from_boxscore(d.get('away', {}), 'away')
+        home = get_batters_from_boxscore(d.get('home', {}), 'home')
+        away_conf = len(away) >= 9
+        home_conf = len(home) >= 9
+        return jsonify({'success': True, 'gamePk': game_pk, 'away': away[:9], 'home': home[:9], 'awayConfirmed': away_conf, 'homeConfirmed': home_conf})
+    except Exception as ex:
+        return jsonify({'success': False, 'gamePk': game_pk, 'away': [], 'home': [], 'awayConfirmed': False, 'homeConfirmed': False, 'error': str(ex)})
+
 
 # Boot background loaders
 threading.Thread(target=_load_fg_data,      daemon=True).start()

@@ -3,3 +3,4 @@ flask-cors>=4.0.0
 requests>=2.31.0
 pybaseball>=2.2.7
 gunicorn>=21.2.0
+tzdata
