@@ -339,11 +339,6 @@ def sv_batter(name):
     return r
 
 # ── MLB API Helpers ───────────────────────────────────────────────────────────
-
-
-def current_et_date_str():
-    return datetime.now(ET).strftime("%Y-%m-%d")
-
 def fetch_schedule(date_str):
     url = (f"{MLB_API}/schedule?sportId=1&date={date_str}"
            "&hydrate=team,probablePitcher,linescore,venue,weather")
@@ -524,7 +519,7 @@ def api_games_today():
     _maybe_refresh_fg()
     _maybe_refresh_savant()
     try:
-        date_str = (request.args.get("date") or "").strip() or current_et_date_str()
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         raw   = fetch_schedule(date_str)
         games = [g for g in [parse_game(x) for x in raw] if g]
         return jsonify({"success":True,"games":games,"count":len(games)})
@@ -550,7 +545,7 @@ def api_game_detail(game_pk):
 @app.route("/api/pitchers/<int:game_pk>")
 def api_pitchers(game_pk):
     try:
-        raw = fetch_schedule(current_et_date_str())
+        raw = fetch_schedule(datetime.now(timezone.utc).strftime("%Y-%m-%d"))
         for g in raw:
             if g.get("gamePk") == game_pk:
                 ap = g.get("teams",{}).get("away",{}).get("probablePitcher",{})
@@ -589,7 +584,7 @@ def e500(e): return jsonify({"error":str(e)}), 500
 @app.route("/api/game-projection/<int:game_pk>")
 def api_game_projection(game_pk):
     try:
-        raw = fetch_schedule(current_et_date_str())
+        raw = fetch_schedule(datetime.now(timezone.utc).strftime("%Y-%m-%d"))
         gdata = next((g for g in raw if g.get("gamePk") == game_pk), None)
         if not gdata:
             return jsonify({"success": False, "error": "Game not found"})
@@ -874,7 +869,7 @@ def hitter_split_profile(player_id):
 def team_pitching_context(team_id):
     if not team_id:
         return {}
-    key = (team_id, current_et_date_str())
+    key = (team_id, datetime.now().date().isoformat())
     if key in _team_pitch_cache:
         return _team_pitch_cache[key]
     year = datetime.now().year
@@ -1328,154 +1323,10 @@ def _summarize_pitcher(lines):
     }
 
 
-
-
-# ── Player Profile: Game Logs, Platoon Splits, Statcast, AI Scout ────────────
-def _ai_scout_report(name, pos, season, platoon, recent, fg, sv, is_pitcher):
-    PITCH_NAMES = {"ff":"4-Seam FB","si":"Sinker","fc":"Cutter","st":"Sweeper",
-                   "sl":"Slider","cu":"Curveball","ch":"Changeup","fs":"Splitter","kn":"Knuckleball"}
-    lines = []
-    l7 = recent[-7:] if recent else []
-    if not is_pitcher:
-        l7_ab = sum(g.get("ab",0) for g in l7)
-        l7_h  = sum(g.get("h",0)  for g in l7)
-        l7_hr = sum(g.get("hr",0) for g in l7)
-        l7_avg = round(l7_h/l7_ab,3) if l7_ab > 0 else None
-        if l7_avg is not None:
-            if l7_avg >= .310:
-                lines.append(f"🔥 <b>HOT STREAK</b>: {name} batting <b>.{int(l7_avg*1000):03d}</b> over last 7 games" + (f" with {l7_hr} HR" if l7_hr else "") + " — prime target for hits/TB props.")
-            elif l7_avg < .160 and l7_ab >= 12:
-                lines.append(f"❄️ <b>COLD STREAK</b>: {name} hitting just .{int(l7_avg*1000):03d} over last 7 — fade on hits props until signs of life return.")
-            else:
-                lines.append(f"📊 <b>Recent Form</b>: {name} is batting .{int(l7_avg*1000):03d} over the last 7 games.")
-        try:
-            xba = float(sv.get("sv_xba") or 0); avg = float(fg.get("fg_avg") or season.get("avg","0") or 0)
-            if xba and avg:
-                gap = round(xba - avg, 3)
-                if gap >= 0.030:
-                    lines.append(f"📈 <b>Positive Regression Alert</b>: xBA of {xba:.3f} is +{gap:.3f} above actual AVG — Statcast says {name} is hitting it better than results show.")
-                elif gap <= -0.030:
-                    lines.append(f"📉 <b>Negative Regression Risk</b>: xBA {xba:.3f} is {gap:.3f} below actual AVG — results are outpacing contact quality.")
-        except: pass
-        try:
-            ev = float(sv.get("sv_ev") or 0); brl = float(sv.get("sv_brl_pct") or 0)
-            if ev >= 91:
-                lines.append(f"💥 <b>Elite EV</b>: {ev:.1f} mph avg exit velo" + (f" + {brl:.1f}% barrel rate" if brl >= 8 else "") + " — consistent hard contact profile.")
-            if brl >= 12:
-                lines.append(f"🎯 <b>Barrel Machine</b>: {brl:.1f}% barrel rate — elite HR and extra-base upside.")
-        except: pass
-        try:
-            kpct = float(sv.get("sv_k_pct") or fg.get("fg_kpct") or 0)
-            if kpct >= 0.28: lines.append(f"⚡ <b>Strikeout Risk</b>: {kpct*100:.0f}% K rate caps the hits prop floor.")
-            elif kpct and kpct <= 0.14: lines.append(f"🎯 <b>Contact Hitter</b>: {kpct*100:.0f}% K rate gives a consistent hits floor.")
-        except: pass
-        vl = platoon.get("vl",{}); vr = platoon.get("vr",{})
-        try:
-            ops_vl = float(vl.get("ops","0") or 0); ops_vr = float(vr.get("ops","0") or 0)
-            if ops_vl > 0 and ops_vr > 0 and abs(ops_vl-ops_vr) >= 0.080:
-                fav = "LHP" if ops_vl > ops_vr else "RHP"
-                lines.append(f"🆚 <b>Platoon Edge vs {fav}</b>: OPS {max(ops_vl,ops_vr):.3f} vs {fav} vs {min(ops_vl,ops_vr):.3f} opposite — check tonight's pitcher hand.")
-        except: pass
-        try:
-            wrc = int(fg.get("fg_wrc") or 0)
-            if wrc >= 130: lines.append(f"⭐ <b>Elite Offense</b>: wRC+ of {wrc} — premium prop target on good matchups.")
-            elif wrc and wrc <= 80: lines.append(f"📉 <b>Below Average</b>: wRC+ of {wrc} — avoid props unless facing weak pitching.")
-        except: pass
-        lines.append("🎰 <b>Betting Angle</b>: Best on hits/TB props — confirm platoon matchup and opposing pitcher hand before placing.")
-    else:
-        try:
-            era = float(fg.get("fg_era") or season.get("era","4.5") or 4.5)
-            xera = float(sv.get("sv_xera") or 0); fip = float(fg.get("fg_fip") or 0)
-            if xera and era - xera >= 0.70:
-                lines.append(f"📈 <b>Unlucky ERA</b>: xERA {xera:.2f} vs ERA {era:.2f} — Statcast says {name} is pitching better than results. Lean into K props.")
-            if fip and era - fip >= 0.55:
-                lines.append(f"🔵 <b>FIP Divergence</b>: FIP ({fip:.2f}) well below ERA ({era:.2f}) — defense is inflating ERA.")
-        except: pass
-        try:
-            k9 = float(fg.get("fg_k9") or 0)
-            if k9 >= 10: lines.append(f"🔥 <b>Strikeout Weapon</b>: {k9:.1f} K/9 — hammer K overs aggressively when lines are reasonable.")
-            elif k9 and k9 <= 6.5: lines.append(f"⚠️ <b>Contact Pitcher</b>: {k9:.1f} K/9 — low strikeout ceiling limits K prop upside.")
-        except: pass
-        try:
-            bb9 = float(fg.get("fg_bb9") or 0)
-            if bb9 >= 4.5: lines.append(f"⚡ <b>Control Issues</b>: {bb9:.1f} BB/9 — free baserunners elevate opponent scoring props.")
-        except: pass
-        try:
-            arsenal = sv.get("sv_arsenal_pct") or {}
-            if arsenal:
-                top = max(arsenal.items(), key=lambda x: x[1])
-                lines.append(f"⚾ <b>Primary Weapon</b>: {PITCH_NAMES.get(top[0], top[0].upper())} at {top[1]:.0f}% usage.")
-        except: pass
-        lines.append("🎰 <b>Betting Angle</b>: Target K props aggressively — hammer K overs on days with reasonable lines.")
-    return lines
-
-
-@app.route("/api/player/<int:player_id>")
-def api_player_profile(player_id):
-    try:
-        year = datetime.now(ET).year
-        info_r = requests.get(f"{MLB_API}/people/{player_id}", params={"hydrate":"currentTeam"}, timeout=8)
-        info_r.raise_for_status()
-        person = info_r.json().get("people",[{}])[0]
-        name      = person.get("fullName","?")
-        pos       = person.get("primaryPosition",{}).get("abbreviation","?")
-        team      = person.get("currentTeam",{}).get("name","?")
-        team_abbr = person.get("currentTeam",{}).get("abbreviation","?")
-        bats      = person.get("batSide",{}).get("code","?")
-        throws    = person.get("pitchHand",{}).get("code","?")
-        is_pitcher = pos in ("P","SP","RP","CL")
-        group     = "pitching" if is_pitcher else "hitting"
-        season_stats = {}
-        try:
-            sr = requests.get(f"{MLB_API}/people/{player_id}/stats",
-                params={"stats":"season","group":group,"season":year}, timeout=8)
-            splits = sr.json().get("stats",[{}])
-            if splits and splits[0].get("splits"):
-                season_stats = splits[0]["splits"][-1].get("stat",{})
-        except: pass
-        game_logs = []
-        try:
-            lr = requests.get(f"{MLB_API}/people/{player_id}/stats",
-                params={"stats":"gameLog","group":group,"season":year}, timeout=8)
-            all_games = lr.json().get("stats",[{}])[0].get("splits",[])
-            for sp in (all_games[-15:] if len(all_games) >= 15 else all_games):
-                s = sp.get("stat",{})
-                if group == "hitting":
-                    game_logs.append({"date":sp.get("date","")[:10],"opp":sp.get("opponent",{}).get("abbreviation",""),
-                        "ab":s.get("atBats",0),"h":s.get("hits",0),"hr":s.get("homeRuns",0),
-                        "rbi":s.get("rbi",0),"k":s.get("strikeOuts",0),"bb":s.get("baseOnBalls",0),
-                        "avg":s.get("avg","---"),"tb":s.get("totalBases",0)})
-                else:
-                    game_logs.append({"date":sp.get("date","")[:10],"opp":sp.get("opponent",{}).get("abbreviation",""),
-                        "ip":s.get("inningsPitched","0"),"er":s.get("earnedRuns",0),"k":s.get("strikeOuts",0),
-                        "bb":s.get("baseOnBalls",0),"h":s.get("hits",0),"era":s.get("era","---")})
-        except: pass
-        platoon = {}
-        try:
-            pr = requests.get(f"{MLB_API}/people/{player_id}/stats",
-                params={"stats":"statSplits","group":group,"season":year,"sitCodes":"vl,vr"}, timeout=8)
-            for sp in pr.json().get("stats",[{}])[0].get("splits",[]):
-                code = sp.get("split",{}).get("code",""); s = sp.get("stat",{})
-                if code in ("vl","vr"):
-                    platoon[code] = {"avg":s.get("avg","---"),"obp":s.get("obp","---"),
-                        "slg":s.get("slg","---"),"ops":s.get("ops","---"),
-                        "pa":s.get("plateAppearances",0),"hr":s.get("homeRuns",0),
-                        "k":s.get("strikeOuts",0),"bb":s.get("baseOnBalls",0),"woba":s.get("woba","---")}
-        except: pass
-        fg = fg_pitcher(name) if is_pitcher else fg_batter(name)
-        sv = sv_pitcher(name) if is_pitcher else sv_batter(name)
-        ai_lines = _ai_scout_report(name, pos, season_stats, platoon, game_logs, fg, sv, is_pitcher)
-        return jsonify({"success":True,"playerId":player_id,"name":name,"pos":pos,
-            "team":team,"teamAbbr":team_abbr,"bats":bats,"throws":throws,
-            "isPitcher":is_pitcher,"season":season_stats,"gameLogs":game_logs,
-            "platoon":platoon,"fg":fg,"sv":sv,"aiLines":ai_lines})
-    except Exception as ex:
-        return jsonify({"success":False,"error":str(ex)}), 500
-
 @app.route('/api/simulate/<int:game_pk>')
 def api_simulate(game_pk):
     try:
-        raw = fetch_schedule(current_et_date_str())
+        raw = fetch_schedule(datetime.now(timezone.utc).strftime('%Y-%m-%d'))
         g = next((x for x in raw if x.get('gamePk') == game_pk), None)
         if not g:
             return jsonify({'success': False, 'error': 'Game not found'}), 404
@@ -1730,7 +1581,7 @@ def _parse_prop_markets(bookmakers, valid_names):
 @app.route('/api/market/<int:game_pk>')
 def api_market(game_pk):
     try:
-        raw = fetch_schedule(current_et_date_str())
+        raw = fetch_schedule(datetime.now(timezone.utc).strftime('%Y-%m-%d'))
         g = next((x for x in raw if x.get('gamePk') == game_pk), None)
         if not g:
             return jsonify({'success': False, 'error': 'Game not found'}), 404
@@ -3251,6 +3102,194 @@ def api_lineup(game_pk):
         return jsonify({'success': True, 'gamePk': game_pk, 'away': away[:9], 'home': home[:9], 'awayConfirmed': away_conf, 'homeConfirmed': home_conf})
     except Exception as ex:
         return jsonify({'success': False, 'gamePk': game_pk, 'away': [], 'home': [], 'awayConfirmed': False, 'homeConfirmed': False, 'error': str(ex)})
+
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PARLAY BUILDER — Routes  (injected)
+# ══════════════════════════════════════════════════════════════════════════════
+
+PARLAY_STORE = os.path.join(DATA_DIR, 'parlay_slips.json')
+
+def _parlay_store():
+    return _load_json(PARLAY_STORE, {})
+
+
+@app.route('/parlays')
+def parlays_page():
+    return open(os.path.join(_HERE, 'parlays.html')).read()
+
+
+@app.route('/api/parlay/analyze', methods=['POST'])
+def api_parlay_analyze():
+    """AI parlay correlation + edge analysis."""
+    try:
+        data = request.json or {}
+        legs = data.get('legs', [])
+        if len(legs) < 2:
+            return jsonify({'success': False, 'error': 'Need at least 2 legs'}), 400
+
+        probs = [max(0.05, min(0.95, float(l.get('prob') or 0.5))) for l in legs]
+
+        # ── Correlation detection ─────────────────────────────────────────
+        correlations, corr_adj = [], 1.0
+        games = {}
+        for leg in legs:
+            games.setdefault(str(leg.get('gamePk', 'unk')), []).append(leg)
+
+        for gpk, gls in games.items():
+            if len(gls) < 2:
+                continue
+            # Same-team hitters → positive correlation
+            tc = {}
+            for gl in gls:
+                if gl.get('marketKey', '') != 'pitcher_strikeouts':
+                    t = gl.get('team', '')
+                    tc[t] = tc.get(t, 0) + 1
+            for t, cnt in tc.items():
+                if cnt >= 2:
+                    corr_adj *= (1.0 + 0.04 * (cnt - 1))
+                    correlations.append({'type': 'positive', 'color': '#00e676', 'icon': '⚡',
+                        'desc': f'{cnt} {t} hitters face same pitcher — positive game-script correlation'})
+            # Pitcher K over vs opposing hitter hits over → negative
+            pitchers = [gl for gl in gls if gl.get('marketKey') == 'pitcher_strikeouts']
+            hitters  = [gl for gl in gls if gl.get('marketKey') != 'pitcher_strikeouts']
+            for p_leg in pitchers:
+                for h_leg in hitters:
+                    if h_leg.get('team') != p_leg.get('team'):
+                        corr_adj *= 0.93
+                        correlations.append({'type': 'negative', 'color': '#ff9800', 'icon': '⚠️',
+                            'desc': f"{p_leg.get('player','Pitcher')} K over conflicts with {h_leg.get('player','Hitter')} hits over — opposing same-game props"})
+            if len(pitchers) >= 2:
+                correlations.append({'type': 'neutral', 'color': '#6a8db0', 'icon': 'ℹ️',
+                    'desc': 'Two SP props from same game — independent but total K floor caps both'})
+
+        # ── Combined probability ──────────────────────────────────────────
+        combined_fair = 1.0
+        for p in probs:
+            combined_fair *= p
+        combined_fair = min(0.95, combined_fair * corr_adj)
+
+        implied_list = [_american_to_implied(l.get('price')) for l in legs]
+        implied_list = [x for x in implied_list if x]
+        combined_implied = None
+        if implied_list:
+            combined_implied = 1.0
+            for ip in implied_list:
+                combined_implied *= ip
+
+        parlay_edge = round(combined_fair - combined_implied, 4) if combined_implied else None
+
+        approx_odds = None
+        if combined_implied and 0 < combined_implied < 1:
+            approx_odds = (round(100.0 / combined_implied - 100) if combined_implied < 0.5
+                           else round(-combined_implied / (1.0 - combined_implied) * 100))
+
+        # ── Verdict ───────────────────────────────────────────────────────
+        if parlay_edge is not None:
+            if   parlay_edge > 0.04  and combined_fair > 0.20:
+                verdict, v_col, v_bg = 'STRONG LEAN', '#00e676', 'rgba(0,230,118,.12)'
+            elif parlay_edge > 0.015 and combined_fair > 0.12:
+                verdict, v_col, v_bg = 'LEAN PLAY',   '#76ff03', 'rgba(118,255,3,.10)'
+            elif parlay_edge < -0.05:
+                verdict, v_col, v_bg = 'AVOID',        '#f44336', 'rgba(244,67,54,.12)'
+            elif parlay_edge < 0:
+                verdict, v_col, v_bg = 'MARGINAL',     '#ff9800', 'rgba(255,152,0,.10)'
+            else:
+                verdict, v_col, v_bg = 'NEUTRAL',      '#6a8db0', 'rgba(106,141,176,.10)'
+        else:
+            verdict, v_col, v_bg = 'NO LINES', '#6a8db0', 'rgba(106,141,176,.10)'
+
+        # ── Risk flags ────────────────────────────────────────────────────
+        flags = []
+        if len(legs) >= 5:
+            flags.append('5+ leg parlays hit <5% on average — consider splitting into 2–3 leg combos for better EV')
+        elif len(legs) == 4:
+            flags.append('4-leg parlays are high-risk — each added leg multiplies model uncertainty')
+        if any(l.get('marketKey') == 'batter_home_runs' for l in legs):
+            flags.append('HR props carry extreme variance — one cold at-bat collapses the parlay')
+        if sum(1 for l in legs if l.get('marketKey') == 'pitcher_strikeouts') >= 2:
+            flags.append('Multiple pitcher K props stack independent K-rate model assumptions')
+        same_team = max((sum(1 for l in legs if l.get('team', '') == t)
+                         for t in set(l.get('team', '') for l in legs)), default=0)
+        if same_team >= 3:
+            flags.append(f'{same_team} legs from same team — single bad game script wipes the entire parlay')
+
+        # ── Per-leg reasoning ─────────────────────────────────────────────
+        reasons = []
+        for i, leg in enumerate(legs):
+            nm = leg.get('player', 'Player')
+            mk = (leg.get('marketKey') or '').replace('batter_', '').replace('pitcher_', 'P.').replace('_', ' ')
+            ln, pb = leg.get('line', ''), probs[i]
+            try:    eg_f = float(leg.get('edge') or 0)
+            except: eg_f = 0.0
+            if   eg_f > 0.05:  icon, note = '✅', f'{pb*100:.0f}% prob, +{eg_f*100:.1f}% edge — anchor leg'
+            elif eg_f > 0.01:  icon, note = '🟡', f'{pb*100:.0f}% prob, +{eg_f*100:.1f}% edge — soft value'
+            elif eg_f < 0:     icon, note = '🔴', f'{pb*100:.0f}% prob, {eg_f*100:.1f}% edge — weakens parlay'
+            else:               icon, note = '⚪', f'{pb*100:.0f}% prob — no live line to verify edge'
+            reasons.append(f'{icon} {nm} {mk.title()} o{ln}: {note}')
+
+        return jsonify({
+            'success':          True,
+            'legs':             len(legs),
+            'combinedFairProb': round(combined_fair, 4),
+            'combinedImplied':  round(combined_implied, 4) if combined_implied else None,
+            'parlayEdge':       parlay_edge,
+            'approxOdds':       approx_odds,
+            'verdict':          verdict,
+            'verdictColor':     v_col,
+            'verdictBg':        v_bg,
+            'correlations':     correlations,
+            'flags':            flags,
+            'reasons':          reasons,
+            'corrAdj':          round(corr_adj, 3),
+        })
+    except Exception as ex:
+        print('[api_parlay_analyze]', traceback.format_exc())
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
+@app.route('/api/parlay/<date_str>', methods=['GET'])
+def api_parlay_list(date_str):
+    store = _parlay_store()
+    return jsonify({'success': True, 'date': date_str, 'parlays': store.get(date_str, [])})
+
+
+@app.route('/api/parlay/<date_str>', methods=['POST'])
+def api_parlay_save(date_str):
+    try:
+        data  = request.json or {}
+        store = _parlay_store()
+        day   = store.setdefault(date_str, [])
+        slip  = {
+            'id':        f'parlay_{date_str}_{len(day)+1:03d}',
+            'createdAt': datetime.now().isoformat(),
+            'legs':      data.get('legs', []),
+            'analysis':  data.get('analysis', {}),
+            'grade':     None,
+            'gradedAt':  None,
+        }
+        day.append(slip)
+        _save_json(PARLAY_STORE, store)
+        return jsonify({'success': True, 'parlay': slip})
+    except Exception as ex:
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
+@app.route('/api/parlay/<date_str>/<parlay_id>/grade', methods=['POST'])
+def api_parlay_grade(date_str, parlay_id):
+    try:
+        data  = request.json or {}
+        store = _parlay_store()
+        for slip in store.get(date_str, []):
+            if slip.get('id') == parlay_id:
+                slip['grade']    = data.get('grade')
+                slip['gradedAt'] = datetime.now().isoformat()
+                break
+        _save_json(PARLAY_STORE, store)
+        return jsonify({'success': True})
+    except Exception as ex:
+        return jsonify({'success': False, 'error': str(ex)}), 500
 
 
 # Boot background loaders
