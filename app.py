@@ -3581,3 +3581,46 @@ threading.Thread(target=_load_savant_data,  daemon=True).start()
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
+
+
+@app.route("/api/game/livedata/<int:game_pk>")
+def api_game_livedata(game_pk):
+    try:
+        r = requests.get("https://statsapi.mlb.com/api/v1.1/game/{}/feed/live".format(game_pk), timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        ls = data.get("liveData",{}).get("linescore",{})
+        box = data.get("liveData",{}).get("boxscore",{})
+        gd = data.get("gameData",{})
+        sd = gd.get("status",{}).get("detailedState","")
+        inum = ls.get("currentInning",0); ihalf = ls.get("inningHalf","Top")
+        if any(x in sd for x in ["Middle","Mid ","Between"]): ilbl="MID {}".format(inum)
+        elif ihalf=="Bottom": ilbl="BOT {}".format(inum)
+        else: ilbl="TOP {}".format(inum)
+        ht=ls.get("teams",{}).get("home",{}); at=ls.get("teams",{}).get("away",{})
+        off=ls.get("offense",{})
+        bases={"first":bool(off.get("first")),"second":bool(off.get("second")),"third":bool(off.get("third"))}
+        bid=(off.get("batter") or {}).get("id"); bname=(off.get("batter") or {}).get("fullName","")
+        od=(off.get("onDeck") or {}).get("fullName",""); ih2=(off.get("inHole") or {}).get("fullName","")
+        pid2=(ls.get("defense",{}).get("pitcher") or {}).get("id")
+        pname=(ls.get("defense",{}).get("pitcher") or {}).get("fullName","")
+        pip="—"; per="—"; bab=0; bah=0; baops="—"
+        for side in ("home","away"):
+            pl=box.get("teams",{}).get(side,{}).get("players",{})
+            if pid2:
+                ps=pl.get("ID{}".format(pid2),{}); st=ps.get("stats",{}).get("pitching",{})
+                if st: pip=st.get("inningsPitched","—"); per=st.get("earnedRuns","—")
+            if bid:
+                bs=pl.get("ID{}".format(bid),{}); bst=bs.get("stats",{}).get("batting",{})
+                bss=bs.get("seasonStats",{}).get("batting",{})
+                if bst: bab=bst.get("atBats",0); bah=bst.get("hits",0)
+                if bss: baops=bss.get("ops","—")
+        return jsonify({"success":True,"gamePk":game_pk,"statusDetail":sd,"inningLabel":ilbl,
+            "balls":ls.get("balls",0),"strikes":ls.get("strikes",0),"outs":ls.get("outs",0),
+            "awayRuns":at.get("runs",0),"awayHits":at.get("hits",0),"awayErrors":at.get("errors",0),
+            "homeRuns":ht.get("runs",0),"homeHits":ht.get("hits",0),"homeErrors":ht.get("errors",0),
+            "bases":bases,"pitcher":{"name":pname,"ip":pip,"er":per},
+            "batter":{"name":bname,"ab":bab,"h":bah,"ops":baops},"dueUp":[od,ih2]})
+    except Exception as ex:
+        print("[api_game_livedata]",ex)
+        return jsonify({"success":False,"error":str(ex)}),500
