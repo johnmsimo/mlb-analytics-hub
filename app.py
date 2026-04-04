@@ -3346,6 +3346,234 @@ def api_odds_cache_clear():
     _ODDS_CACHE.clear()
     return jsonify({'success': True, 'message': 'Odds cache cleared'})
 
+
+# ── MLB STADIUM COORDINATES ─────────────────────────────────────────────────
+# team_id → {name, lat, lon, roof}  roof: 'open'|'retractable'|'dome'
+MLB_STADIUMS = {
+    133: {'name': 'Oakland Coliseum',       'lat': 37.7516, 'lon': -122.2005, 'roof': 'open'},
+    134: {'name': 'PNC Park',               'lat': 40.4469, 'lon': -80.0057,  'roof': 'open'},
+    135: {'name': 'Petco Park',             'lat': 32.7076, 'lon': -117.1570, 'roof': 'open'},
+    136: {'name': 'T-Mobile Park',          'lat': 47.5913, 'lon': -122.3325, 'roof': 'retractable'},
+    137: {'name': 'Oracle Park',            'lat': 37.7785, 'lon': -122.3893, 'roof': 'open'},
+    138: {'name': 'Busch Stadium',          'lat': 38.6226, 'lon': -90.1928,  'roof': 'open'},
+    139: {'name': 'Tropicana Field',        'lat': 27.7682, 'lon': -82.6534,  'roof': 'dome'},
+    140: {'name': 'Globe Life Field',       'lat': 32.7473, 'lon': -97.0822,  'roof': 'retractable'},
+    141: {'name': 'Rogers Centre',          'lat': 43.6414, 'lon': -79.3894,  'roof': 'retractable'},
+    142: {'name': 'Target Field',           'lat': 44.9817, 'lon': -93.2781,  'roof': 'open'},
+    143: {'name': 'Citizens Bank Park',     'lat': 39.9061, 'lon': -75.1665,  'roof': 'open'},
+    144: {'name': 'Truist Park',            'lat': 33.8908, 'lon': -84.4678,  'roof': 'open'},
+    145: {'name': 'Guaranteed Rate Field',  'lat': 41.8300, 'lon': -87.6339,  'roof': 'open'},
+    146: {'name': 'loanDepot Park',         'lat': 25.7781, 'lon': -80.2197,  'roof': 'retractable'},
+    147: {'name': 'Yankee Stadium',         'lat': 40.8296, 'lon': -73.9262,  'roof': 'open'},
+    158: {'name': 'American Family Field',  'lat': 43.0280, 'lon': -87.9712,  'roof': 'retractable'},
+    108: {'name': 'Angel Stadium',          'lat': 33.8003, 'lon': -117.8827, 'roof': 'open'},
+    109: {'name': 'Chase Field',            'lat': 33.4455, 'lon': -112.0667, 'roof': 'retractable'},
+    110: {'name': 'Camden Yards',           'lat': 39.2839, 'lon': -76.6217,  'roof': 'open'},
+    111: {'name': 'Fenway Park',            'lat': 42.3467, 'lon': -71.0972,  'roof': 'open'},
+    112: {'name': 'Wrigley Field',          'lat': 41.9484, 'lon': -87.6553,  'roof': 'open'},
+    113: {'name': 'Great American Ball Park','lat': 39.0979, 'lon': -84.5082, 'roof': 'open'},
+    114: {'name': 'Progressive Field',     'lat': 41.4962, 'lon': -81.6852,  'roof': 'open'},
+    115: {'name': 'Coors Field',            'lat': 39.7559, 'lon': -104.9942, 'roof': 'open'},
+    116: {'name': 'Comerica Park',          'lat': 42.3390, 'lon': -83.0485,  'roof': 'open'},
+    117: {'name': 'Minute Maid Park',       'lat': 29.7572, 'lon': -95.3555,  'roof': 'retractable'},
+    118: {'name': 'Kauffman Stadium',       'lat': 39.0517, 'lon': -94.4803,  'roof': 'open'},
+    119: {'name': 'Dodger Stadium',         'lat': 34.0739, 'lon': -118.2400, 'roof': 'open'},
+    120: {'name': 'Nationals Park',         'lat': 38.8730, 'lon': -77.0074,  'roof': 'open'},
+    121: {'name': 'Citi Field',             'lat': 40.7571, 'lon': -73.8458,  'roof': 'open'},
+}
+
+# WMO weather code → human label
+def _wmo_label(code):
+    c = int(code or 0)
+    if c == 0:   return 'Clear'
+    if c <= 3:   return 'Partly Cloudy'
+    if c <= 19:  return 'Foggy'
+    if c <= 29:  return 'Drizzle'
+    if c <= 39:  return 'Dust/Sand'
+    if c <= 49:  return 'Fog'
+    if c <= 59:  return 'Drizzle'
+    if c <= 69:  return 'Rain'
+    if c <= 79:  return 'Snow/Ice'
+    if c <= 84:  return 'Rain Showers'
+    if c <= 94:  return 'Thunderstorms'
+    return 'Severe'
+
+# Wind direction degrees → compass
+def _wind_dir_label(deg):
+    if deg is None: return ''
+    dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE',
+            'S','SSW','SW','WSW','W','WNW','NW','NNW']
+    return dirs[round(float(deg) / 22.5) % 16]
+
+# ── Weather cache (30 min TTL per stadium) ────────────────────────────────────
+_WEATHER_CACHE = {}
+WEATHER_CACHE_TTL = 1800
+
+def _weather_cache_get(key):
+    e = _WEATHER_CACHE.get(key)
+    if e and (time.time() - e['ts']) < WEATHER_CACHE_TTL:
+        return e['data']
+    return None
+
+def _weather_cache_set(key, data):
+    _WEATHER_CACHE[key] = {'data': data, 'ts': time.time()}
+
+def _fetch_weather(lat, lon, game_hour_utc=None):
+    """Fetch weather from Open-Meteo (free, no key needed)."""
+    cache_key = f'weather_{lat:.3f}_{lon:.3f}'
+    cached = _weather_cache_get(cache_key)
+    if cached:
+        print(f'[weather] {cache_key} from cache')
+        return cached
+    try:
+        params = {
+            'latitude':  lat,
+            'longitude': lon,
+            'current': 'temperature_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m,relative_humidity_2m,precipitation_probability,is_day',
+            'hourly':  'temperature_2m,wind_speed_10m,wind_direction_10m,precipitation_probability,weather_code',
+            'temperature_unit': 'fahrenheit',
+            'wind_speed_unit':  'mph',
+            'precipitation_unit': 'inch',
+            'timezone': 'auto',
+            'forecast_days': 1,
+        }
+        r = requests.get('https://api.open-meteo.com/v1/forecast',
+                         params=params, timeout=10)
+        r.raise_for_status()
+        raw = r.json()
+
+        current = raw.get('current', {})
+        hourly  = raw.get('hourly', {})
+
+        # Pick the hour closest to game time if available
+        game_temp = game_wind = game_precip_prob = None
+        if game_hour_utc is not None and hourly.get('time'):
+            try:
+                times = hourly['time']
+                game_str = game_hour_utc[:13]   # "2026-04-04T19"
+                for i, t in enumerate(times):
+                    if t[:13] == game_str:
+                        game_temp        = hourly['temperature_2m'][i]
+                        game_wind        = hourly['wind_speed_10m'][i]
+                        game_precip_prob = hourly['precipitation_probability'][i]
+                        break
+            except:
+                pass
+
+        temp        = game_temp or current.get('temperature_2m')
+        wind_speed  = game_wind or current.get('wind_speed_10m')
+        wind_deg    = current.get('wind_direction_10m')
+        precip_prob = game_precip_prob if game_precip_prob is not None else current.get('precipitation_probability', 0)
+        humidity    = current.get('relative_humidity_2m')
+        wmo_code    = current.get('weather_code', 0)
+        feels_like  = current.get('apparent_temperature')
+
+        result = {
+            'temp_f':       round(float(temp or 72), 1),
+            'feels_like_f': round(float(feels_like or temp or 72), 1),
+            'wind_mph':     round(float(wind_speed or 0), 1),
+            'wind_dir_deg': wind_deg,
+            'wind_dir':     _wind_dir_label(wind_deg),
+            'precip_prob':  int(precip_prob or 0),
+            'humidity':     int(humidity or 50),
+            'condition':    _wmo_label(wmo_code),
+            'wmo_code':     int(wmo_code),
+        }
+        _weather_cache_set(cache_key, result)
+        print(f'[weather] fetched {cache_key}: {result["temp_f"]}°F wind={result["wind_mph"]}mph {result["wind_dir"]}')
+        return result
+    except Exception as ex:
+        print(f'[weather] error: {ex}')
+        return None
+
+def _weather_impact(weather, is_dome=False):
+    """Return impact multipliers for offense and HR based on conditions."""
+    if not weather or is_dome:
+        return {'offense_mult': 1.0, 'hr_mult': 1.0, 'k_mult': 1.0,
+                'rain_risk': False, 'alerts': []}
+
+    alerts = []
+    offense_mult = 1.0
+    hr_mult      = 1.0
+    k_mult       = 1.0
+
+    temp = weather.get('temp_f', 72)
+    wind = weather.get('wind_mph', 0)
+    precip = weather.get('precip_prob', 0)
+
+    # Temperature impact
+    if temp >= 85:
+        offense_mult += 0.04; hr_mult += 0.06
+        alerts.append('🌡️ Hot (ball carries)')
+    elif temp >= 75:
+        offense_mult += 0.02; hr_mult += 0.03
+    elif temp <= 45:
+        offense_mult -= 0.05; hr_mult -= 0.07; k_mult += 0.03
+        alerts.append('🥶 Cold (pitcher edge)')
+    elif temp <= 55:
+        offense_mult -= 0.02; hr_mult -= 0.03
+
+    # Wind impact (simplified — without park orientation data)
+    if wind >= 15:
+        hr_mult += 0.05; alerts.append(f'💨 Wind {wind:.0f}mph')
+    elif wind >= 10:
+        hr_mult += 0.02; alerts.append(f'🌬️ Breezy {wind:.0f}mph')
+    elif wind <= 3:
+        alerts.append('🪟 Calm wind')
+
+    # Rain/precip
+    rain_risk = precip >= 40
+    if precip >= 60:
+        alerts.append(f'☔ Rain likely ({precip}%)')
+    elif precip >= 40:
+        alerts.append(f'🌧️ Rain possible ({precip}%)')
+
+    # Coors altitude bonus always present
+    return {
+        'offense_mult': round(offense_mult, 3),
+        'hr_mult':      round(hr_mult, 3),
+        'k_mult':       round(k_mult, 3),
+        'rain_risk':    rain_risk,
+        'alerts':       alerts,
+    }
+
+
+@app.route('/api/weather/<int:game_pk>')
+def api_weather(game_pk):
+    try:
+        raw = fetch_schedule(datetime.now(timezone.utc).strftime('%Y-%m-%d'))
+        g   = next((x for x in raw if x.get('gamePk') == game_pk), None)
+        if not g:
+            return jsonify({'success': False, 'error': 'Game not found'}), 404
+
+        home_team_id = g.get('teams', {}).get('home', {}).get('team', {}).get('id')
+        stadium      = MLB_STADIUMS.get(home_team_id)
+        game_time    = g.get('gameDate')   # ISO string e.g. "2026-04-04T23:10:00Z"
+
+        if not stadium:
+            return jsonify({'success': False, 'error': 'Stadium coordinates not found'})
+
+        is_dome    = stadium['roof'] == 'dome'
+        is_covered = stadium['roof'] != 'open'
+
+        weather = _fetch_weather(stadium['lat'], stadium['lon'], game_time) if not is_dome else None
+        impact  = _weather_impact(weather, is_dome=is_dome)
+
+        return jsonify({
+            'success':     True,
+            'stadium':     stadium['name'],
+            'roof':        stadium['roof'],
+            'is_dome':     is_dome,
+            'is_covered':  is_covered,
+            'game_time':   game_time,
+            'weather':     weather,
+            'impact':      impact,
+        })
+    except Exception as ex:
+        print('[api_weather]', traceback.format_exc())
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
 # Boot background loaders
 threading.Thread(target=_load_fg_data,      daemon=True).start()
 threading.Thread(target=_load_savant_data,  daemon=True).start()

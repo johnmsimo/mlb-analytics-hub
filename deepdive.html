@@ -303,6 +303,26 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
   #slipToggle{bottom:20px;}
 }
 
+
+/* ── Weather Widget ─────────────────────────────────────────────── */
+#weatherBar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  padding:8px 14px;background:rgba(0,229,255,.04);
+  border-bottom:1px solid rgba(0,229,255,.1);
+  font-family:Orbitron,monospace;font-size:.62rem;letter-spacing:.5px;min-height:38px;}
+#weatherBar.dome{background:rgba(120,80,255,.06);border-bottom-color:rgba(120,80,255,.15);}
+.wx-item{display:flex;align-items:center;gap:5px;color:rgba(255,255,255,.75);}
+.wx-item span{color:var(--c);}
+.wx-alert{padding:2px 8px;border-radius:999px;font-size:.58rem;font-weight:700;
+  letter-spacing:.5px;border:1px solid;}
+.wx-alert.hot {background:rgba(255,160,0,.12);border-color:rgba(255,160,0,.4);color:#ffa030;}
+.wx-alert.cold{background:rgba(80,160,255,.12);border-color:rgba(80,160,255,.4);color:#50a0ff;}
+.wx-alert.rain{background:rgba(0,200,255,.1); border-color:rgba(0,200,255,.35);color:#00c8ff;}
+.wx-alert.wind{background:rgba(200,255,100,.1);border-color:rgba(200,255,100,.35);color:#c8ff64;}
+.wx-alert.dome{background:rgba(160,100,255,.1);border-color:rgba(160,100,255,.35);color:#a064ff;}
+.wx-alert.info{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.2);color:rgba(255,255,255,.6);}
+#weatherBar .wx-spinner{color:rgba(255,255,255,.3);animation:spin 1s linear infinite;display:inline-block;}
+@keyframes spin{to{transform:rotate(360deg);}}
+
 </style>
 </head>
 <body>
@@ -348,6 +368,7 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
   </div>
   <div class="pnl fw pnl-src">
     <div class="pt">&#128203; LINEUP ANALYSIS <span class="tag-fg">FANGRAPHS</span><span class="tag-sv">SAVANT</span></div>
+  <div id="weatherBar"><span class="wx-spinner">⟳</span></div>
     <div class="lt">
       <button class="tb2 ac" data-tab="away" onclick="showTab('away')">AWAY LINEUP</button>
       <button class="tb2" data-tab="home" onclick="showTab('home')">HOME LINEUP</button>
@@ -2159,6 +2180,87 @@ function sendParlayToTracker(){
   }).catch(function(){ btn.textContent='📋 SEND TO TRACKER'; btn.disabled=false; });
 }
 // ═══════════════════ END PARLAY SLIP ═══════════════════
+
+
+// ── WEATHER ──────────────────────────────────────────────────────────────────
+var WEATHER_DATA = null;
+
+function loadWeather(){
+  var bar = document.getElementById('weatherBar');
+  if(!bar) return;
+  bar.innerHTML = '<span class="wx-spinner">⟳</span> Loading weather...';
+  fetch('/api/weather/'+GPK)
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      WEATHER_DATA = d;
+      renderWeatherBar(d);
+    })
+    .catch(function(){ 
+      var bar=document.getElementById('weatherBar');
+      if(bar) bar.innerHTML='<span style="opacity:.4;font-size:.6rem">Weather unavailable</span>';
+    });
+}
+
+function renderWeatherBar(d){
+  var bar = document.getElementById('weatherBar');
+  if(!bar) return;
+  if(!d || !d.success){ bar.innerHTML='<span style="opacity:.4;font-size:.6rem">Weather unavailable</span>'; return; }
+
+  if(d.is_dome){
+    bar.className='dome';
+    bar.innerHTML = '<span class="wx-alert dome">🏟️ DOME — Weather neutral</span>'
+      + '<span class="wx-item" style="margin-left:6px;opacity:.5">' + d.stadium + '</span>';
+    return;
+  }
+  bar.className='';
+  if(!d.weather){ bar.innerHTML='<span style="opacity:.4;font-size:.6rem">Weather data unavailable</span>'; return; }
+
+  var w = d.weather;
+  var imp = d.impact || {};
+  var alerts = imp.alerts || [];
+
+  // Core weather items
+  var html = '';
+  html += '<span class="wx-item">🌡️ <span>'+w.temp_f+'°F</span></span>';
+  html += '<span class="wx-item" style="color:rgba(255,255,255,.35)">|</span>';
+  if(w.wind_mph > 0){
+    html += '<span class="wx-item">💨 <span>'+w.wind_mph+' mph '+w.wind_dir+'</span></span>';
+    html += '<span class="wx-item" style="color:rgba(255,255,255,.35)">|</span>';
+  }
+  html += '<span class="wx-item">💧 <span>'+w.precip_prob+'% precip</span></span>';
+  html += '<span class="wx-item" style="color:rgba(255,255,255,.35)">|</span>';
+  html += '<span class="wx-item">☁️ <span>'+w.condition+'</span></span>';
+  html += '<span class="wx-item" style="color:rgba(255,255,255,.35)">|</span>';
+  html += '<span class="wx-item" style="opacity:.5">'+d.stadium+'</span>';
+
+  // Alert badges
+  if(alerts.length){
+    html += '<span class="wx-item" style="color:rgba(255,255,255,.35)">|</span>';
+    alerts.forEach(function(a){
+      var cls = 'info';
+      if(a.indexOf('Hot')>-1||a.indexOf('🌡️')>-1)       cls='hot';
+      else if(a.indexOf('Cold')>-1||a.indexOf('🥶')>-1)  cls='cold';
+      else if(a.indexOf('Rain')>-1||a.indexOf('☔')>-1||a.indexOf('🌧️')>-1) cls='rain';
+      else if(a.indexOf('Wind')>-1||a.indexOf('💨')>-1||a.indexOf('🌬️')>-1) cls='wind';
+      html += '<span class="wx-alert '+cls+'">'+a+'</span> ';
+    });
+  }
+
+  // Impact line
+  var offMult = parseFloat(imp.offense_mult||1);
+  var hrMult  = parseFloat(imp.hr_mult||1);
+  if(Math.abs(offMult-1) > 0.01 || Math.abs(hrMult-1) > 0.01){
+    html += '<span class="wx-item" style="color:rgba(255,255,255,.35)">|</span>';
+    var offSign = offMult > 1 ? '+' : '';
+    var hrSign  = hrMult  > 1 ? '+' : '';
+    html += '<span class="wx-item" style="font-size:.58rem;opacity:.7">'
+      + 'Offense: <span style="color:'+(offMult>1?'#4dff80':'#ff6060')+'">'+offSign+Math.round((offMult-1)*100)+'%</span> '
+      + ' HR: <span style="color:'+(hrMult>1?'#4dff80':'#ff6060')+'">'+hrSign+Math.round((hrMult-1)*100)+'%</span>'
+      + '</span>';
+  }
+
+  bar.innerHTML = html;
+}
 
 </script>
 
