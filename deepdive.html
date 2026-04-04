@@ -1567,9 +1567,29 @@ function buildProjectionRows(){
 }
 function projectionRowHtml(r, idx){
   var reason = (r.reasons&&r.reasons[0]) ? r.reasons[0] : '';
-  var pKey = (r.player||'')+'|'+(r.marketKey||'')+'|'+(r.line||'');
-  return '<tr class="'+(SELECTED_PROJ===idx?'sel':'')+'" onclick="selectProjection('+idx+')">' + '<td>'+r.rank+'</td><td><span class="pos-tag">'+r.team+'</span></td><td>'+r.player+'</td><td>'+marketLabel(r.marketKey,r.line)+'</td><td>'+pct2(r.prob)+'</td><td>'+(r.edge!=null?'<span class="'+(r.edge>=0.03?'edge-pos':'edge-neu')+'">'+pct2(r.edge)+'</span>':'<span class="edge-na">N/A</span>')+'</td><td>'+confidenceTag(r.edge!=null?r.edge:r.prob)+'</td><td style="max-width:340px;white-space:normal">'+reason+'</td><td onclick="event.stopPropagation()" style="white-space:nowrap"><button class="btn-parlay" data-parlay-key="'+pKey+'" onclick="addToParlay(PROJ_ROWS['+idx+'])">+ PARLAY</button></td></tr>';
+  var pKey   = (r.player||'')+'|'+(r.marketKey||'')+'|'+(r.line||'');
+  var rowObj = JSON.stringify({
+    player:r.player||'', team:r.team||'', marketKey:r.marketKey||'',
+    line:r.line||'', prob:r.prob||0.5,
+    edge:r.edge!=null?r.edge:null, pos:r.pos||''
+  });
+  var enc = encodeURIComponent(rowObj).replace(/'/g,'%27');
+  return '<tr class="'+(SELECTED_PROJ===idx?'sel':'')+'" onclick="selectProjection('+idx+')">'
+    + '<td>'+r.rank+'</td>'
+    + '<td><span class="pos-tag">'+r.team+'</span></td>'
+    + '<td>'+r.player+'</td>'
+    + '<td>'+marketLabel(r.marketKey,r.line)+'</td>'
+    + '<td>'+pct2(r.prob)+'</td>'
+    + '<td>'+(r.edge!=null?'<span class="'+(r.edge>=0.03?'edge-pos':'edge-neu')+'">'+pct2(r.edge)+'</span>':'<span class="edge-na">N/A</span>')+'</td>'
+    + '<td>'+confidenceTag(r.edge!=null?r.edge:r.prob)+'</td>'
+    + '<td style="max-width:340px;white-space:normal">'+reason+'</td>'
+    + '<td onclick="event.stopPropagation()" style="white-space:nowrap">'
+    +   '<button class="btn-parlay" data-parlay-key="'+pKey+'" data-row="'+enc+'"'
+    +   ' onclick="addParlayFromBtn(this);event.stopPropagation()">+ PARLAY</button>'
+    + '</td>'
+    + '</tr>';
 }
+
 function renderProjectionDetail(){
   if(SELECTED_PROJ==null || !PROJ_ROWS[SELECTED_PROJ]) return '<p class="na">Select a ranked projection to open the player and matchup dive.</p>';
   var r=PROJ_ROWS[SELECTED_PROJ], lp=r.lineup, m=r.market;
@@ -1630,16 +1650,20 @@ function renderProjectionHub(){
     + '<div class="proj-hub">'
     + '<div class="proj-list">'
       + '<div class="proj-tools"><select id="projPlayerPick" onchange="jumpToProjection(this.value)"><option value="">Jump to player...</option>'+playerSel+'</select><span class="mini">Ranked from best to worst by model edge when live odds exist, otherwise by pure simulation confidence.</span></div>'
-      + '<table class="proj-rank"><thead><tr><th>#</th><th>TEAM</th><th>PLAYER</th><th>PROP</th><th>MODEL</th><th>EDGE</th><th>GRADE</th><th>AI THESIS</th></tr></thead><tbody>'+rows+'</tbody></table>'
+      + '<table class="proj-rank"><thead><tr><th>#</th><th>TEAM</th><th>PLAYER</th><th>PROP</th><th>MODEL</th><th>EDGE</th><th>GRADE</th><th>AI THESIS</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>'
     + '</div>'
     + '<div class="proj-detail">'+renderProjectionDetail()+'</div>'
     + '</div>';
 }
-function selectProjection(i){ SELECTED_PROJ=i; if(ACTIVE_TAB==='proj') renderProjectionHub(); }
+function selectProjection(i){
+  SELECTED_PROJ=i;
+  if(ACTIVE_TAB==='proj'){ renderProjectionHub(); restoreParlayButtons(); }
+}
 function jumpToProjection(name){
   if(!name) return;
   for(var i=0;i<PROJ_ROWS.length;i++) if(PROJ_ROWS[i].player===name){ SELECTED_PROJ=i; break; }
   renderProjectionHub();
+  restoreParlayButtons();
 }
 function syncTabButtons(tab){
   document.querySelectorAll('.tb2[data-tab]').forEach(function(btn){ btn.classList.toggle('ac', btn.getAttribute('data-tab')===tab); });
@@ -1990,6 +2014,23 @@ function addToParlay(row){
     b.classList.add('added'); b.textContent = '✓ ADDED';
   });
 }
+
+function addParlayFromBtn(btn){
+  try {
+    var row = JSON.parse(decodeURIComponent(btn.getAttribute('data-row')));
+    addToParlay(row);
+  } catch(e){ console.error('[parlay] button error:', e); }
+}
+
+function restoreParlayButtons(){
+  PARLAY_LEGS.forEach(function(l){
+    var key = (l.player||'')+'|'+(l.marketKey||'')+'|'+(l.line||'');
+    document.querySelectorAll('[data-parlay-key="'+key+'"]').forEach(function(b){
+      b.classList.add('added'); b.textContent = '\u2713 ADDED';
+    });
+  });
+}
+
 
 function removeFromParlay(idx){
   var removed = PARLAY_LEGS.splice(idx, 1)[0];

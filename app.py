@@ -1467,25 +1467,48 @@ def _american_to_implied(price):
         return None
 
 
+
+# ── ODDS CACHE (saves API credits) ─────────────────────────────────────────────
+_ODDS_CACHE = {}
+ODDS_CACHE_TTL_EVENTS   = 1800   # 30 min — events list
+ODDS_CACHE_TTL_FEATURED = 720    # 12 min — h2h/totals
+ODDS_CACHE_TTL_PROPS    = 720    # 12 min — player props
+
+def _odds_cache_get(key):
+    entry = _ODDS_CACHE.get(key)
+    if entry and (time.time() - entry['ts']) < entry['ttl']:
+        return entry['data']
+    return None
+
+def _odds_cache_set(key, data, ttl):
+    _ODDS_CACHE[key] = {'data': data, 'ts': time.time(), 'ttl': ttl}
+
 def _find_odds_event(away_name, home_name):
     if not ODDS_API_KEY:
         return None, []
-    try:
-        r = requests.get(
-            'https://api.the-odds-api.com/v4/sports/baseball_mlb/events',
-            params={'apiKey': ODDS_API_KEY, 'dateFormat': 'iso'},
-            timeout=12,
-        )
-        r.raise_for_status()
-        events = r.json() or []
-        na = _norm_name(away_name)
-        nh = _norm_name(home_name)
-        for ev in events:
-            if _norm_name(ev.get('away_team')) == na and _norm_name(ev.get('home_team')) == nh:
-                return ev, events
-        return None, events
-    except:
-        return None, []
+    cached = _odds_cache_get('events_list')
+    if cached is not None:
+        events = cached
+        print('[odds] events_list from cache')
+    else:
+        try:
+            r = requests.get(
+                'https://api.the-odds-api.com/v4/sports/baseball_mlb/events',
+                params={'apiKey': ODDS_API_KEY, 'dateFormat': 'iso'},
+                timeout=12,
+            )
+            r.raise_for_status()
+            events = r.json() or []
+            _odds_cache_set('events_list', events, ODDS_CACHE_TTL_EVENTS)
+            print(f'[odds] events_list fetched from API ({len(events)} events)')
+        except:
+            return None, []
+    na = _norm_name(away_name)
+    nh = _norm_name(home_name)
+    for ev in events:
+        if _norm_name(ev.get('away_team')) == na and _norm_name(ev.get('home_team')) == nh:
+            return ev, events
+    return None, events
 
 
 def _best_moneyline(bookmakers, away_name, home_name):
@@ -1537,14 +1560,26 @@ def _load_event_odds(event_id, featured_only=False):
     if not ODDS_API_KEY or not event_id:
         return []
     markets = 'h2h,totals' if featured_only else 'batter_hits,batter_total_bases,batter_home_runs,batter_rbis,batter_runs_scored,batter_stolen_bases,pitcher_strikeouts'
+    ttl = ODDS_CACHE_TTL_FEATURED if featured_only else ODDS_CACHE_TTL_PROPS
+    cache_key = f'odds_{event_id}_{"feat" if featured_only else "props"}'
+    cached = _odds_cache_get(cache_key)
+    if cached is not None:
+        print(f'[odds] {cache_key} served from cache')
+        return cached
     try:
         r = requests.get(
             f'https://api.the-odds-api.com/v4/sports/baseball_mlb/events/{event_id}/odds',
-            params={'apiKey': ODDS_API_KEY, 'regions': ODDS_REGION, 'markets': markets, 'oddsFormat': 'american', 'dateFormat': 'iso'},
+            params={'apiKey': ODDS_API_KEY, 'regions': ODDS_REGION, 'markets': markets,
+                    'oddsFormat': 'american', 'dateFormat': 'iso'},
             timeout=15,
         )
         r.raise_for_status()
-        return r.json().get('bookmakers', []) or []
+        bookmakers = r.json().get('bookmakers', []) or []
+        remaining  = r.headers.get('x-requests-remaining', '?')
+        used       = r.headers.get('x-requests-used', '?')
+        print(f'[odds] fetched {cache_key} | used={used} remaining={remaining}')
+        _odds_cache_set(cache_key, bookmakers, ttl)
+        return bookmakers
     except:
         return []
 
@@ -3249,14 +3284,12 @@ def api_parlay_analyze():
         return jsonify({'success': False, 'error': str(ex)}), 500
 
 
-@app.route('/api/parlay/<date_str>', methods=['GET'])
-def api_parlay_list(date_str):
-    store = _parlay_store()
-    return jsonify({'success': True, 'date': date_str, 'parlays': store.get(date_str, [])})
-
-
-@app.route('/api/parlay/<date_str>', methods=['POST'])
-def api_parlay_save(date_str):
+@app.route('/api/parlay/<date_str>', methods=['GET', 'POST'])
+def api_parlay_handler(date_str):
+    """GET: list parlays for date. POST: save new parlay slip."""
+    if request.method == 'GET':
+        store = _parlay_store()
+        return jsonify({'success': True, 'date': date_str, 'parlays': store.get(date_str, [])})
     try:
         data  = request.json or {}
         store = _parlay_store()
@@ -3291,6 +3324,27 @@ def api_parlay_grade(date_str, parlay_id):
     except Exception as ex:
         return jsonify({'success': False, 'error': str(ex)}), 500
 
+
+
+@app.route('/api/odds/cache-status')
+def api_odds_cache_status():
+    """Monitor API credit usage and cache state."""
+    now = time.time()
+    entries = []
+    for key, val in _ODDS_CACHE.items():
+        age  = int(now - val['ts'])
+        ttl  = val['ttl']
+        left = max(0, ttl - age)
+        entries.append({'key': key, 'age_s': age, 'ttl_s': ttl,
+                        'expires_in_s': left, 'alive': left > 0})
+    return jsonify({'success': True, 'cached_entries': len(entries), 'entries': entries})
+
+
+@app.route('/api/odds/cache-clear', methods=['POST'])
+def api_odds_cache_clear():
+    """Force-clear the odds cache to fetch fresh data."""
+    _ODDS_CACHE.clear()
+    return jsonify({'success': True, 'message': 'Odds cache cleared'})
 
 # Boot background loaders
 threading.Thread(target=_load_fg_data,      daemon=True).start()
