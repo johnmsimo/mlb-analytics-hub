@@ -230,99 +230,6 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 
 .brand{display:flex;align-items:center;gap:14px}.brand img{width:52px;height:52px;object-fit:contain;filter:drop-shadow(0 0 10px rgba(0,229,255,.22))}.brand-text{display:flex;flex-direction:column;gap:2px}.brand-name{font-family:Orbitron,sans-serif;font-weight:800;letter-spacing:1.5px;color:var(--cyan)}.brand-sub{font-size:.72rem;color:var(--mut)}@media(max-width:700px){.brand img{width:42px;height:42px}.brand-sub{display:none}}
 
-
-/* ═══════════════════ PARLAY SLIP ═══════════════════ */
-#parlaySlip{position:fixed;right:0;top:60px;width:316px;height:calc(100vh - 60px);
-  background:rgba(5,10,24,.97);border-left:1px solid rgba(0,229,255,.22);
-  display:flex;flex-direction:column;z-index:200;
-  transform:translateX(100%);transition:transform .3s cubic-bezier(.16,1,.3,1);}
-#parlaySlip.open{transform:translateX(0);}
-.slip-hdr{padding:12px 14px 10px;border-bottom:1px solid rgba(0,229,255,.14);
-  display:flex;align-items:center;justify-content:space-between;flex-shrink:0;}
-.slip-title{font-family:Orbitron,monospace;font-size:.72rem;color:var(--c);letter-spacing:2px;}
-.slip-count{background:var(--c);color:#050a18;font-family:Orbitron,monospace;
-  font-size:.6rem;font-weight:900;padding:1px 7px;border-radius:999px;}
-.slip-body{flex:1;overflow-y:auto;padding:10px 12px;}
-.slip-empty{padding:24px 10px;text-align:center;color:var(--mu);font-size:.7rem;line-height:1.7;}
-.slip-leg{background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.14);
-  border-radius:8px;padding:9px 28px 9px 10px;margin-bottom:7px;position:relative;}
-.slip-leg-player{font-size:.74rem;font-weight:600;color:var(--t);margin-bottom:2px;}
-.slip-leg-market{font-size:.62rem;color:var(--mu);}
-.slip-leg-prob{font-family:Orbitron,monospace;font-size:.68rem;color:var(--g);}
-.slip-leg-rm{position:absolute;top:7px;right:8px;font-size:.85rem;color:var(--mu);
-  cursor:pointer;background:none;border:none;line-height:1;transition:color .15s;padding:0;}
-.slip-leg-rm:hover{color:#f44336;}
-.slip-stats{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin:10px 0;
-  padding:10px 0;border-top:1px dashed rgba(0,229,255,.1);border-bottom:1px dashed rgba(0,229,255,.1);}
-.slip-stat-box{text-align:center;}
-.slip-stat-v{font-family:Orbitron,monospace;font-size:.82rem;font-weight:700;color:var(--c);}
-.slip-stat-l{font-size:.52rem;color:var(--mu);letter-spacing:1px;margin-top:2px;}
-.slip-ftr{padding:10px 12px;border-top:1px solid rgba(0,229,255,.14);flex-shrink:0;
-  display:flex;flex-direction:column;gap:7px;}
-.slip-btn{width:100%;padding:9px;border-radius:7px;font-family:Orbitron,monospace;
-  font-size:.62rem;letter-spacing:2px;cursor:pointer;border:1px solid;transition:all .2s;}
-.slip-btn-ai{background:rgba(0,229,255,.08);border-color:rgba(0,229,255,.3);color:var(--c);}
-.slip-btn-ai:hover{background:rgba(0,229,255,.16);}
-.slip-btn-ai:disabled,.slip-btn-send:disabled{opacity:.4;cursor:not-allowed;}
-.slip-btn-send{background:rgba(0,230,118,.1);border-color:rgba(0,230,118,.3);color:var(--g);}
-.slip-btn-send:hover{background:rgba(0,230,118,.18);}
-.slip-btn-clear{background:rgba(244,67,54,.06);border-color:rgba(244,67,54,.2);color:#f44336;font-size:.58rem;}
-.slip-btn-clear:hover{background:rgba(244,67,54,.14);}
-.slip-ai-panel{background:rgba(0,0,0,.45);border:1px solid rgba(0,229,255,.16);
-  border-radius:10px;margin:8px 0;padding:12px;}
-.slip-verdict{text-align:center;padding:8px;border-radius:8px;margin-bottom:10px;}
-.slip-verdict-v{font-family:Orbitron,monospace;font-size:1.05rem;font-weight:900;}
-.slip-verdict-s{font-size:.58rem;letter-spacing:1px;margin-top:3px;color:var(--mu);}
-.slip-sec-hdr{font-family:Orbitron,monospace;font-size:.55rem;letter-spacing:2px;margin:8px 0 4px;}
-.slip-corr-item{font-size:.62rem;line-height:1.55;padding:3px 0;
-  border-bottom:1px solid rgba(255,255,255,.04);}
-.slip-reason{font-size:.62rem;color:var(--mu);line-height:1.55;padding:3px 0;}
-.slip-flag{font-size:.6rem;color:#ff9800;padding:3px 0;line-height:1.5;}
-#slipToggle{position:fixed;right:0;bottom:110px;background:rgba(0,229,255,.12);
-  border:1px solid rgba(0,229,255,.3);border-right:none;color:var(--c);
-  font-family:Orbitron,monospace;font-size:.56rem;letter-spacing:1px;
-  padding:10px 6px;border-radius:8px 0 0 8px;cursor:pointer;z-index:201;
-  writing-mode:vertical-lr;transform:rotate(180deg);transition:background .2s;display:flex;
-  align-items:center;gap:4px;}
-#slipToggle:hover{background:rgba(0,229,255,.22);}
-#slipBadge{background:var(--c);color:#050a18;font-size:.55rem;font-weight:900;
-  padding:1px 5px;border-radius:999px;display:none;}
-.btn-parlay{background:rgba(0,229,255,.1);border:1px solid rgba(0,229,255,.35);
-  color:rgba(0,229,255,.9);font-size:.85rem;font-weight:700;
-  width:26px;height:26px;border-radius:50%;cursor:pointer;
-  display:inline-flex;align-items:center;justify-content:center;
-  transition:background .15s,transform .1s;padding:0;line-height:1;}
-.btn-parlay:hover{background:rgba(0,229,255,.25);transform:scale(1.15);}
-.btn-parlay:active{transform:scale(.9);}
-.btn-parlay.added{background:rgba(0,255,128,.18);border-color:rgba(0,255,128,.5);
-  color:rgba(0,255,128,1);}
-@media(max-width:860px){
-  #parlaySlip{width:100vw;top:auto;bottom:0;height:72vh;
-    transform:translateY(100%);border-left:none;border-top:1px solid rgba(0,229,255,.22);}
-  #parlaySlip.open{transform:translateY(0);}
-  #slipToggle{bottom:20px;}
-}
-
-
-/* ── Weather Widget ─────────────────────────────────────────────── */
-#weatherBar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
-  padding:8px 14px;background:rgba(0,229,255,.04);
-  border-bottom:1px solid rgba(0,229,255,.1);
-  font-family:Orbitron,monospace;font-size:.62rem;letter-spacing:.5px;min-height:38px;}
-#weatherBar.dome{background:rgba(120,80,255,.06);border-bottom-color:rgba(120,80,255,.15);}
-.wx-item{display:flex;align-items:center;gap:5px;color:rgba(255,255,255,.75);}
-.wx-item span{color:var(--c);}
-.wx-alert{padding:2px 8px;border-radius:999px;font-size:.58rem;font-weight:700;
-  letter-spacing:.5px;border:1px solid;}
-.wx-alert.hot {background:rgba(255,160,0,.12);border-color:rgba(255,160,0,.4);color:#ffa030;}
-.wx-alert.cold{background:rgba(80,160,255,.12);border-color:rgba(80,160,255,.4);color:#50a0ff;}
-.wx-alert.rain{background:rgba(0,200,255,.1); border-color:rgba(0,200,255,.35);color:#00c8ff;}
-.wx-alert.wind{background:rgba(200,255,100,.1);border-color:rgba(200,255,100,.35);color:#c8ff64;}
-.wx-alert.dome{background:rgba(160,100,255,.1);border-color:rgba(160,100,255,.35);color:#a064ff;}
-.wx-alert.info{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.2);color:rgba(255,255,255,.6);}
-#weatherBar .wx-spinner{color:rgba(255,255,255,.3);animation:spin 1s linear infinite;display:inline-block;}
-@keyframes spin{to{transform:rotate(360deg);}}
-
 </style>
 </head>
 <body>
@@ -368,7 +275,6 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
   </div>
   <div class="pnl fw pnl-src">
     <div class="pt">&#128203; LINEUP ANALYSIS <span class="tag-fg">FANGRAPHS</span><span class="tag-sv">SAVANT</span></div>
-  <div id="weatherBar"><span class="wx-spinner">⟳</span></div>
     <div class="lt">
       <button class="tb2 ac" data-tab="away" onclick="showTab('away')">AWAY LINEUP</button>
       <button class="tb2" data-tab="home" onclick="showTab('home')">HOME LINEUP</button>
@@ -1592,34 +1498,9 @@ function buildProjectionRows(){
 }
 function projectionRowHtml(r, idx){
   var reason = (r.reasons&&r.reasons[0]) ? r.reasons[0] : '';
-  var pKey   = (r.player||'')+'|'+(r.marketKey||'')+'|'+(r.line||'');
-  var rowObj = JSON.stringify({
-    player:r.player||'', team:r.team||'', marketKey:r.marketKey||'',
-    line:r.line||'', prob:r.prob||0.5,
-    edge:r.edge!=null?r.edge:null, pos:r.pos||''
-  });
-  var enc = encodeURIComponent(rowObj).replace(/'/g,'%27');
-  var inSlip = PARLAY_LEGS.some(function(l){
-    return ((l.player||'')+'|'+(l.marketKey||'')+'|'+(l.line||''))===pKey;
-  });
-  var btnLabel = inSlip ? '\u2713' : '+';
-  var btnCls   = 'btn-parlay' + (inSlip ? ' added' : '');
   return '<tr class="'+(SELECTED_PROJ===idx?'sel':'')+'" onclick="selectProjection('+idx+')">'
-    + '<td onclick="event.stopPropagation()" style="padding:0 5px;width:30px">'
-    +   '<button class="'+btnCls+'" data-parlay-key="'+pKey+'" data-row="'+enc+'"'
-    +   ' onclick="addParlayFromBtn(this);event.stopPropagation()" title="Add to parlay">'+btnLabel+'</button>'
-    + '</td>'
-    + '<td>'+r.rank+'</td>'
-    + '<td><span class="pos-tag">'+r.team+'</span></td>'
-    + '<td>'+r.player+'</td>'
-    + '<td>'+marketLabel(r.marketKey,r.line)+'</td>'
-    + '<td>'+pct2(r.prob)+'</td>'
-    + '<td>'+(r.edge!=null?'<span class="'+(r.edge>=0.03?'edge-pos':'edge-neu')+'">'+pct2(r.edge)+'</span>':'<span class="edge-na">N/A</span>')+'</td>'
-    + '<td>'+confidenceTag(r.edge!=null?r.edge:r.prob)+'</td>'
-    + '<td style="max-width:280px;white-space:normal">'+reason+'</td>'
-    + '</tr>';
+    + '<td>'+r.rank+'</td><td><span class="pos-tag">'+r.team+'</span></td><td>'+r.player+'</td><td>'+marketLabel(r.marketKey,r.line)+'</td><td>'+pct2(r.prob)+'</td><td>'+(r.edge!=null?'<span class="'+(r.edge>=0.03?'edge-pos':'edge-neu')+'">'+pct2(r.edge)+'</span>':'<span class="edge-na">N/A</span>')+'</td><td>'+confidenceTag(r.edge!=null?r.edge:r.prob)+'</td><td style="max-width:340px;white-space:normal">'+reason+'</td></tr>';
 }
-
 function renderProjectionDetail(){
   if(SELECTED_PROJ==null || !PROJ_ROWS[SELECTED_PROJ]) return '<p class="na">Select a ranked projection to open the player and matchup dive.</p>';
   var r=PROJ_ROWS[SELECTED_PROJ], lp=r.lineup, m=r.market;
@@ -1680,20 +1561,16 @@ function renderProjectionHub(){
     + '<div class="proj-hub">'
     + '<div class="proj-list">'
       + '<div class="proj-tools"><select id="projPlayerPick" onchange="jumpToProjection(this.value)"><option value="">Jump to player...</option>'+playerSel+'</select><span class="mini">Ranked from best to worst by model edge when live odds exist, otherwise by pure simulation confidence.</span></div>'
-      + '<table class="proj-rank"><thead><tr><th style="width:30px"></th><th>#</th><th>TEAM</th><th>PLAYER</th><th>PROP</th><th>MODEL</th><th>EDGE</th><th>GRADE</th><th>AI THESIS</th></tr></thead><tbody>'+rows+'</tbody></table>'
+      + '<table class="proj-rank"><thead><tr><th>#</th><th>TEAM</th><th>PLAYER</th><th>PROP</th><th>MODEL</th><th>EDGE</th><th>GRADE</th><th>AI THESIS</th></tr></thead><tbody>'+rows+'</tbody></table>'
     + '</div>'
     + '<div class="proj-detail">'+renderProjectionDetail()+'</div>'
     + '</div>';
 }
-function selectProjection(i){
-  SELECTED_PROJ=i;
-  if(ACTIVE_TAB==='proj'){ renderProjectionHub(); restoreParlayButtons(); }
-}
+function selectProjection(i){ SELECTED_PROJ=i; if(ACTIVE_TAB==='proj') renderProjectionHub(); }
 function jumpToProjection(name){
   if(!name) return;
   for(var i=0;i<PROJ_ROWS.length;i++) if(PROJ_ROWS[i].player===name){ SELECTED_PROJ=i; break; }
   renderProjectionHub();
-  restoreParlayButtons();
 }
 function syncTabButtons(tab){
   document.querySelectorAll('.tb2[data-tab]').forEach(function(btn){ btn.classList.toggle('ac', btn.getAttribute('data-tab')===tab); });
@@ -2015,281 +1892,6 @@ renderMarketPanel = function(){
 
 setTimeout(loadLiveAdjustments, 1200);
 
-
-// ═══════════════════ PARLAY SLIP ═══════════════════
-var PARLAY_LEGS = [], PARLAY_ANALYSIS = null, SLIP_OPEN = false;
-
-function toggleSlip(){
-  SLIP_OPEN = !SLIP_OPEN;
-  document.getElementById('parlaySlip').classList.toggle('open', SLIP_OPEN);
-  var tb = document.getElementById('slipToggle');
-  if(tb && !SLIP_OPEN){
-    var n = PARLAY_LEGS.length;
-    tb.innerHTML = (n ? '<span id="slipBadge">'+n+'</span>' : '') + '\uD83C\uDFAF PARLAY';
-  }
-}
-
-function addToParlay(row){
-  var key = (row.player||'')+'|'+(row.marketKey||'')+'|'+(row.line||'');
-  var existIdx = PARLAY_LEGS.findIndex(function(l){
-    return ((l.player||'')+'|'+(l.marketKey||'')+'|'+(l.line||''))===key;
-  });
-  if(existIdx > -1){ removeFromParlay(existIdx); return; }
-  if(PARLAY_LEGS.length >= 8){ alert('Max 8 legs per parlay.'); return; }
-  PARLAY_LEGS.push({
-    player: row.player||'', team: row.team||'', marketKey: row.marketKey||'',
-    line: row.line||'', prob: row.prob||0.5, edge: row.edge||null,
-    price: row.market ? (row.market.over_price||null) : null,
-    gamePk: GPK||null, pos: row.pos||''
-  });
-  PARLAY_ANALYSIS = null;
-  renderSlip();
-  if(!SLIP_OPEN) toggleSlip();
-  document.querySelectorAll('[data-parlay-key="'+key+'"]').forEach(function(b){
-    b.classList.add('added'); b.textContent = '✓ ADDED';
-  });
-}
-
-function addParlayFromBtn(btn){
-  try {
-    var row = JSON.parse(decodeURIComponent(btn.getAttribute('data-row')));
-    addToParlay(row);
-  } catch(e){ console.error('[parlay] button error:', e); }
-}
-
-function restoreParlayButtons(){
-  PARLAY_LEGS.forEach(function(l){
-    var key = (l.player||'')+'|'+(l.marketKey||'')+'|'+(l.line||'');
-    document.querySelectorAll('[data-parlay-key="'+key+'"]').forEach(function(b){
-      b.classList.add('added'); b.textContent = '\u2713 ADDED';
-    });
-  });
-}
-
-
-function removeFromParlay(idx){
-  var removed = PARLAY_LEGS.splice(idx, 1)[0];
-  if(removed){
-    var key = (removed.player||'')+'|'+(removed.marketKey||'')+'|'+(removed.line||'');
-    document.querySelectorAll('[data-parlay-key="'+key+'"]').forEach(function(b){
-      b.classList.remove('added'); b.textContent = '+ PARLAY';
-    });
-  }
-  PARLAY_ANALYSIS = null; renderSlip();
-}
-
-function clearSlip(){
-  PARLAY_LEGS.forEach(function(l){
-    var key = (l.player||'')+'|'+(l.marketKey||'')+'|'+(l.line||'');
-    document.querySelectorAll('[data-parlay-key="'+key+'"]').forEach(function(b){
-      b.classList.remove('added'); b.textContent = '+ PARLAY';
-    });
-  });
-  PARLAY_LEGS = []; PARLAY_ANALYSIS = null; renderSlip();
-}
-
-function renderSlip(){
-  var n = PARLAY_LEGS.length;
-  document.getElementById('slipLegCount').textContent = n+' LEG'+(n!==1?'S':'');
-  var _sb=document.getElementById('slipBadge'); if(_sb) _sb.textContent = n;
-  if(_sb) _sb.style.display = n ? 'inline-block':'none';
-  document.getElementById('slipAiBtn').disabled   = n < 2;
-  document.getElementById('slipSendBtn').disabled = n < 2 || !PARLAY_ANALYSIS;
-  document.getElementById('slipFtr').style.display = n ? '' : 'none';
-  var body = document.getElementById('slipBody');
-  if(!n){
-    body.innerHTML = '<div class="slip-empty">Add props from the Ranked<br>Projections board below.</div>';
-    document.getElementById('slipStatsRow').innerHTML = '';
-    return;
-  }
-  body.innerHTML = PARLAY_LEGS.map(function(l,i){
-    var mk = (l.marketKey||'').replace('batter_','').replace('pitcher_','P.').replace(/_/g,' ');
-    var eg = l.edge!=null ? ((parseFloat(l.edge)||0)*100).toFixed(1)+'%' : 'N/A';
-    var eC = l.edge!=null && parseFloat(l.edge)>0 ? 'var(--g)' : 'var(--mu)';
-    return '<div class="slip-leg">'+
-      '<button class="slip-leg-rm" onclick="removeFromParlay('+i+')">✕</button>'+
-      '<div class="slip-leg-player">'+l.player+'</div>'+
-      '<div class="slip-leg-market"><span style="color:var(--c)">'+l.team+'</span>  '+mk.toUpperCase()+' o'+l.line+'</div>'+
-      '<span class="slip-leg-prob">'+((parseFloat(l.prob)||0)*100).toFixed(0)+'%</span>'+
-      '<span style="font-size:.58rem;color:'+eC+';margin-left:8px">Edge '+eg+'</span></div>';
-  }).join('') + (PARLAY_ANALYSIS ? buildAiPanelHtml(PARLAY_ANALYSIS) : '');
-
-  if(PARLAY_ANALYSIS){
-    var a = PARLAY_ANALYSIS;
-    var eg2 = a.parlayEdge!=null ? (a.parlayEdge>=0?'+':'')+(a.parlayEdge*100).toFixed(1)+'%' : 'N/A';
-    document.getElementById('slipStatsRow').innerHTML =
-      '<div class="slip-stat-box"><div class="slip-stat-v" style="color:'+a.verdictColor+'">'+a.verdict+'</div><div class="slip-stat-l">VERDICT</div></div>'+
-      '<div class="slip-stat-box"><div class="slip-stat-v">'+((a.combinedFairProb||0)*100).toFixed(1)+'%</div><div class="slip-stat-l">FAIR PROB</div></div>'+
-      '<div class="slip-stat-box"><div class="slip-stat-v">'+(a.approxOdds!=null?(a.approxOdds>0?'+':'')+a.approxOdds:'N/A')+'</div><div class="slip-stat-l">EST ODDS</div></div>';
-  } else {
-    var np = PARLAY_LEGS.reduce(function(acc,l){ return acc*Math.max(0.05,parseFloat(l.prob)||0.5); },1);
-    document.getElementById('slipStatsRow').innerHTML =
-      '<div class="slip-stat-box"><div class="slip-stat-v">'+PARLAY_LEGS.length+'</div><div class="slip-stat-l">LEGS</div></div>'+
-      '<div class="slip-stat-box"><div class="slip-stat-v">'+(np*100).toFixed(1)+'%</div><div class="slip-stat-l">NAIVE PROB</div></div>'+
-      '<div class="slip-stat-box"><div class="slip-stat-v" style="color:var(--mu)">RUN AI</div><div class="slip-stat-l">FOR VERDICT</div></div>';
-  }
-}
-
-function buildAiPanelHtml(a){
-  var eg = a.parlayEdge!=null ? (a.parlayEdge>=0?'+':'')+(a.parlayEdge*100).toFixed(1)+'%' : 'N/A';
-  var im = a.combinedImplied!=null ? (a.combinedImplied*100).toFixed(1)+'%' : 'N/A';
-  var corrs = (a.correlations||[]).map(function(c){
-    return '<div class="slip-corr-item"><span style="color:'+c.color+'">'+c.icon+'</span> '+c.desc+'</div>';
-  }).join('');
-  var flags = (a.flags||[]).map(function(f){
-    return '<div class="slip-flag">⚠️ '+f+'</div>';
-  }).join('');
-  var reasons = (a.reasons||[]).map(function(r){
-    return '<div class="slip-reason">'+r+'</div>';
-  }).join('');
-  return '<div class="slip-ai-panel">'+
-    '<div class="slip-verdict" style="background:'+a.verdictBg+'">'+
-      '<div class="slip-verdict-v" style="color:'+a.verdictColor+'">'+a.verdict+'</div>'+
-      '<div class="slip-verdict-s">'+((a.combinedFairProb||0)*100).toFixed(1)+'% FAIR &nbsp;|&nbsp; '+im+' IMPLIED &nbsp;|&nbsp; '+eg+' EDGE</div>'+
-    '</div>'+
-    (corrs ? '<div class="slip-sec-hdr" style="color:var(--sv)">CORRELATIONS</div>'+corrs : '')+
-    (flags ? '<div class="slip-sec-hdr" style="color:#ff9800">RISK FLAGS</div>'+flags : '')+
-    '<div class="slip-sec-hdr" style="color:var(--mu)">LEG BREAKDOWN</div>'+reasons+
-  '</div>';
-}
-
-function analyzeParlay(){
-  var btn = document.getElementById('slipAiBtn');
-  btn.disabled = true; btn.textContent = '⏳ ANALYZING...';
-  fetch('/api/parlay/analyze',{method:'POST',headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({legs: PARLAY_LEGS})
-  }).then(function(r){ return r.json(); }).then(function(d){
-    btn.textContent = '🔬 AI ANALYSIS';
-    if(!d.success){ alert('Analysis error: '+d.error); btn.disabled=false; return; }
-    PARLAY_ANALYSIS = d; renderSlip();
-    document.getElementById('slipSendBtn').disabled = false;
-  }).catch(function(e){ btn.textContent='🔬 AI ANALYSIS'; btn.disabled=false; });
-}
-
-function sendParlayToTracker(){
-  if(!PARLAY_ANALYSIS){ alert('Run AI analysis first.'); return; }
-  var today = new Date().toISOString().slice(0,10);
-  var btn = document.getElementById('slipSendBtn');
-  btn.disabled = true; btn.textContent = '⏳ SAVING...';
-  fetch('/api/parlay/'+today,{method:'POST',headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({legs: PARLAY_LEGS, analysis: PARLAY_ANALYSIS})
-  }).then(function(r){ return r.json(); }).then(function(d){
-    if(!d.success){ alert('Save failed: '+d.error); btn.disabled=false; btn.textContent='📋 SEND TO TRACKER'; return; }
-    btn.textContent='✅ SAVED!'; btn.style.cssText='background:rgba(0,230,118,.2);color:var(--g);border-color:var(--g)';
-    setTimeout(function(){ btn.textContent='📋 SEND TO TRACKER'; btn.style.cssText=''; btn.disabled=false; },3000);
-  }).catch(function(){ btn.textContent='📋 SEND TO TRACKER'; btn.disabled=false; });
-}
-// ═══════════════════ END PARLAY SLIP ═══════════════════
-
-
-// ── WEATHER ──────────────────────────────────────────────────────────────────
-var WEATHER_DATA = null;
-
-function loadWeather(){
-  var bar = document.getElementById('weatherBar');
-  if(!bar) return;
-  bar.innerHTML = '<span class="wx-spinner">⟳</span> Loading weather...';
-  fetch('/api/weather/'+GPK)
-    .then(function(r){ return r.json(); })
-    .then(function(d){
-      WEATHER_DATA = d;
-      renderWeatherBar(d);
-    })
-    .catch(function(){ 
-      var bar=document.getElementById('weatherBar');
-      if(bar) bar.innerHTML='<span style="opacity:.4;font-size:.6rem">Weather unavailable</span>';
-    });
-}
-
-function renderWeatherBar(d){
-  var bar = document.getElementById('weatherBar');
-  if(!bar) return;
-  if(!d || !d.success){ bar.innerHTML='<span style="opacity:.4;font-size:.6rem">Weather unavailable</span>'; return; }
-
-  if(d.is_dome){
-    bar.className='dome';
-    bar.innerHTML = '<span class="wx-alert dome">🏟️ DOME — Weather neutral</span>'
-      + '<span class="wx-item" style="margin-left:6px;opacity:.5">' + d.stadium + '</span>';
-    return;
-  }
-  bar.className='';
-  if(!d.weather){ bar.innerHTML='<span style="opacity:.4;font-size:.6rem">Weather data unavailable</span>'; return; }
-
-  var w = d.weather;
-  var imp = d.impact || {};
-  var alerts = imp.alerts || [];
-
-  // Core weather items
-  var html = '';
-  html += '<span class="wx-item">🌡️ <span>'+w.temp_f+'°F</span></span>';
-  html += '<span class="wx-item" style="color:rgba(255,255,255,.35)">|</span>';
-  if(w.wind_mph > 0){
-    html += '<span class="wx-item">💨 <span>'+w.wind_mph+' mph '+w.wind_dir+'</span></span>';
-    html += '<span class="wx-item" style="color:rgba(255,255,255,.35)">|</span>';
-  }
-  html += '<span class="wx-item">💧 <span>'+w.precip_prob+'% precip</span></span>';
-  html += '<span class="wx-item" style="color:rgba(255,255,255,.35)">|</span>';
-  html += '<span class="wx-item">☁️ <span>'+w.condition+'</span></span>';
-  html += '<span class="wx-item" style="color:rgba(255,255,255,.35)">|</span>';
-  html += '<span class="wx-item" style="opacity:.5">'+d.stadium+'</span>';
-
-  // Alert badges
-  if(alerts.length){
-    html += '<span class="wx-item" style="color:rgba(255,255,255,.35)">|</span>';
-    alerts.forEach(function(a){
-      var cls = 'info';
-      if(a.indexOf('Hot')>-1||a.indexOf('🌡️')>-1)       cls='hot';
-      else if(a.indexOf('Cold')>-1||a.indexOf('🥶')>-1)  cls='cold';
-      else if(a.indexOf('Rain')>-1||a.indexOf('☔')>-1||a.indexOf('🌧️')>-1) cls='rain';
-      else if(a.indexOf('Wind')>-1||a.indexOf('💨')>-1||a.indexOf('🌬️')>-1) cls='wind';
-      html += '<span class="wx-alert '+cls+'">'+a+'</span> ';
-    });
-  }
-
-  // Impact line
-  var offMult = parseFloat(imp.offense_mult||1);
-  var hrMult  = parseFloat(imp.hr_mult||1);
-  if(Math.abs(offMult-1) > 0.01 || Math.abs(hrMult-1) > 0.01){
-    html += '<span class="wx-item" style="color:rgba(255,255,255,.35)">|</span>';
-    var offSign = offMult > 1 ? '+' : '';
-    var hrSign  = hrMult  > 1 ? '+' : '';
-    html += '<span class="wx-item" style="font-size:.58rem;opacity:.7">'
-      + 'Offense: <span style="color:'+(offMult>1?'#4dff80':'#ff6060')+'">'+offSign+Math.round((offMult-1)*100)+'%</span> '
-      + ' HR: <span style="color:'+(hrMult>1?'#4dff80':'#ff6060')+'">'+hrSign+Math.round((hrMult-1)*100)+'%</span>'
-      + '</span>';
-  }
-
-  bar.innerHTML = html;
-}
-
 </script>
-
-<!-- ══════════════════ PARLAY SLIP PANEL ══════════════════ -->
-<button id="slipToggle" onclick="toggleSlip()">
-  <span id="slipBadge">0</span>🎯 PARLAY
-</button>
-<div id="parlaySlip" role="complementary" aria-label="Parlay slip">
-  <div class="slip-hdr">
-    <span class="slip-title">🎯 PARLAY SLIP</span>
-    <div style="display:flex;align-items:center;gap:8px">
-      <span class="slip-count" id="slipLegCount">0 LEGS</span>
-      <button onclick="toggleSlip()" aria-label="Close parlay slip"
-        style="background:none;border:none;color:rgba(0,229,255,.8);font-size:1.25rem;
-               cursor:pointer;padding:0 4px;line-height:1;border-radius:4px;
-               transition:color .15s;" onmouseover="this.style.color='#fff'"
-               onmouseout="this.style.color='rgba(0,229,255,.8)'">✕</button>
-    </div>
-  </div>
-  <div class="slip-body" id="slipBody">
-    <div class="slip-empty">Add props from the Ranked<br>Projections board below.</div>
-  </div>
-  <div class="slip-ftr" id="slipFtr" style="display:none">
-    <div class="slip-stats" id="slipStatsRow"></div>
-    <button class="slip-btn slip-btn-ai" id="slipAiBtn" onclick="analyzeParlay()" disabled>🔬 AI ANALYSIS</button>
-    <button class="slip-btn slip-btn-send" id="slipSendBtn" onclick="sendParlayToTracker()" disabled>📋 SEND TO TRACKER</button>
-    <button class="slip-btn slip-btn-clear" onclick="clearSlip()">✕ CLEAR SLIP</button>
-  </div>
-</div>
-
 </body>
 </html>

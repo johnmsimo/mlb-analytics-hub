@@ -1467,48 +1467,25 @@ def _american_to_implied(price):
         return None
 
 
-
-# ── ODDS CACHE (saves API credits) ─────────────────────────────────────────────
-_ODDS_CACHE = {}
-ODDS_CACHE_TTL_EVENTS   = 1800   # 30 min — events list
-ODDS_CACHE_TTL_FEATURED = 720    # 12 min — h2h/totals
-ODDS_CACHE_TTL_PROPS    = 720    # 12 min — player props
-
-def _odds_cache_get(key):
-    entry = _ODDS_CACHE.get(key)
-    if entry and (time.time() - entry['ts']) < entry['ttl']:
-        return entry['data']
-    return None
-
-def _odds_cache_set(key, data, ttl):
-    _ODDS_CACHE[key] = {'data': data, 'ts': time.time(), 'ttl': ttl}
-
 def _find_odds_event(away_name, home_name):
     if not ODDS_API_KEY:
         return None, []
-    cached = _odds_cache_get('events_list')
-    if cached is not None:
-        events = cached
-        print('[odds] events_list from cache')
-    else:
-        try:
-            r = requests.get(
-                'https://api.the-odds-api.com/v4/sports/baseball_mlb/events',
-                params={'apiKey': ODDS_API_KEY, 'dateFormat': 'iso'},
-                timeout=12,
-            )
-            r.raise_for_status()
-            events = r.json() or []
-            _odds_cache_set('events_list', events, ODDS_CACHE_TTL_EVENTS)
-            print(f'[odds] events_list fetched from API ({len(events)} events)')
-        except:
-            return None, []
-    na = _norm_name(away_name)
-    nh = _norm_name(home_name)
-    for ev in events:
-        if _norm_name(ev.get('away_team')) == na and _norm_name(ev.get('home_team')) == nh:
-            return ev, events
-    return None, events
+    try:
+        r = requests.get(
+            'https://api.the-odds-api.com/v4/sports/baseball_mlb/events',
+            params={'apiKey': ODDS_API_KEY, 'dateFormat': 'iso'},
+            timeout=12,
+        )
+        r.raise_for_status()
+        events = r.json() or []
+        na = _norm_name(away_name)
+        nh = _norm_name(home_name)
+        for ev in events:
+            if _norm_name(ev.get('away_team')) == na and _norm_name(ev.get('home_team')) == nh:
+                return ev, events
+        return None, events
+    except:
+        return None, []
 
 
 def _best_moneyline(bookmakers, away_name, home_name):
@@ -1560,26 +1537,14 @@ def _load_event_odds(event_id, featured_only=False):
     if not ODDS_API_KEY or not event_id:
         return []
     markets = 'h2h,totals' if featured_only else 'batter_hits,batter_total_bases,batter_home_runs,batter_rbis,batter_runs_scored,batter_stolen_bases,pitcher_strikeouts'
-    ttl = ODDS_CACHE_TTL_FEATURED if featured_only else ODDS_CACHE_TTL_PROPS
-    cache_key = f'odds_{event_id}_{"feat" if featured_only else "props"}'
-    cached = _odds_cache_get(cache_key)
-    if cached is not None:
-        print(f'[odds] {cache_key} served from cache')
-        return cached
     try:
         r = requests.get(
             f'https://api.the-odds-api.com/v4/sports/baseball_mlb/events/{event_id}/odds',
-            params={'apiKey': ODDS_API_KEY, 'regions': ODDS_REGION, 'markets': markets,
-                    'oddsFormat': 'american', 'dateFormat': 'iso'},
+            params={'apiKey': ODDS_API_KEY, 'regions': ODDS_REGION, 'markets': markets, 'oddsFormat': 'american', 'dateFormat': 'iso'},
             timeout=15,
         )
         r.raise_for_status()
-        bookmakers = r.json().get('bookmakers', []) or []
-        remaining  = r.headers.get('x-requests-remaining', '?')
-        used       = r.headers.get('x-requests-used', '?')
-        print(f'[odds] fetched {cache_key} | used={used} remaining={remaining}')
-        _odds_cache_set(cache_key, bookmakers, ttl)
-        return bookmakers
+        return r.json().get('bookmakers', []) or []
     except:
         return []
 
@@ -3139,440 +3104,89 @@ def api_lineup(game_pk):
         return jsonify({'success': False, 'gamePk': game_pk, 'away': [], 'home': [], 'awayConfirmed': False, 'homeConfirmed': False, 'error': str(ex)})
 
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# PARLAY BUILDER — Routes  (injected)
-# ══════════════════════════════════════════════════════════════════════════════
-
-PARLAY_STORE = os.path.join(DATA_DIR, 'parlay_slips.json')
-
-def _parlay_store():
-    return _load_json(PARLAY_STORE, {})
-
-
-@app.route('/parlays')
-def parlays_page():
-    return open(os.path.join(_HERE, 'parlays.html')).read()
-
-
-@app.route('/api/parlay/analyze', methods=['POST'])
-def api_parlay_analyze():
-    """AI parlay correlation + edge analysis."""
+@app.route('/api/game/livedata/<int:game_pk>')
+def api_game_livedata(game_pk):
     try:
-        data = request.json or {}
-        legs = data.get('legs', [])
-        if len(legs) < 2:
-            return jsonify({'success': False, 'error': 'Need at least 2 legs'}), 400
-
-        probs = [max(0.05, min(0.95, float(l.get('prob') or 0.5))) for l in legs]
-
-        # ── Correlation detection ─────────────────────────────────────────
-        correlations, corr_adj = [], 1.0
-        games = {}
-        for leg in legs:
-            games.setdefault(str(leg.get('gamePk', 'unk')), []).append(leg)
-
-        for gpk, gls in games.items():
-            if len(gls) < 2:
-                continue
-            # Same-team hitters → positive correlation
-            tc = {}
-            for gl in gls:
-                if gl.get('marketKey', '') != 'pitcher_strikeouts':
-                    t = gl.get('team', '')
-                    tc[t] = tc.get(t, 0) + 1
-            for t, cnt in tc.items():
-                if cnt >= 2:
-                    corr_adj *= (1.0 + 0.04 * (cnt - 1))
-                    correlations.append({'type': 'positive', 'color': '#00e676', 'icon': '⚡',
-                        'desc': f'{cnt} {t} hitters face same pitcher — positive game-script correlation'})
-            # Pitcher K over vs opposing hitter hits over → negative
-            pitchers = [gl for gl in gls if gl.get('marketKey') == 'pitcher_strikeouts']
-            hitters  = [gl for gl in gls if gl.get('marketKey') != 'pitcher_strikeouts']
-            for p_leg in pitchers:
-                for h_leg in hitters:
-                    if h_leg.get('team') != p_leg.get('team'):
-                        corr_adj *= 0.93
-                        correlations.append({'type': 'negative', 'color': '#ff9800', 'icon': '⚠️',
-                            'desc': f"{p_leg.get('player','Pitcher')} K over conflicts with {h_leg.get('player','Hitter')} hits over — opposing same-game props"})
-            if len(pitchers) >= 2:
-                correlations.append({'type': 'neutral', 'color': '#6a8db0', 'icon': 'ℹ️',
-                    'desc': 'Two SP props from same game — independent but total K floor caps both'})
-
-        # ── Combined probability ──────────────────────────────────────────
-        combined_fair = 1.0
-        for p in probs:
-            combined_fair *= p
-        combined_fair = min(0.95, combined_fair * corr_adj)
-
-        implied_list = [_american_to_implied(l.get('price')) for l in legs]
-        implied_list = [x for x in implied_list if x]
-        combined_implied = None
-        if implied_list:
-            combined_implied = 1.0
-            for ip in implied_list:
-                combined_implied *= ip
-
-        parlay_edge = round(combined_fair - combined_implied, 4) if combined_implied else None
-
-        approx_odds = None
-        if combined_implied and 0 < combined_implied < 1:
-            approx_odds = (round(100.0 / combined_implied - 100) if combined_implied < 0.5
-                           else round(-combined_implied / (1.0 - combined_implied) * 100))
-
-        # ── Verdict ───────────────────────────────────────────────────────
-        if parlay_edge is not None:
-            if   parlay_edge > 0.04  and combined_fair > 0.20:
-                verdict, v_col, v_bg = 'STRONG LEAN', '#00e676', 'rgba(0,230,118,.12)'
-            elif parlay_edge > 0.015 and combined_fair > 0.12:
-                verdict, v_col, v_bg = 'LEAN PLAY',   '#76ff03', 'rgba(118,255,3,.10)'
-            elif parlay_edge < -0.05:
-                verdict, v_col, v_bg = 'AVOID',        '#f44336', 'rgba(244,67,54,.12)'
-            elif parlay_edge < 0:
-                verdict, v_col, v_bg = 'MARGINAL',     '#ff9800', 'rgba(255,152,0,.10)'
-            else:
-                verdict, v_col, v_bg = 'NEUTRAL',      '#6a8db0', 'rgba(106,141,176,.10)'
-        else:
-            verdict, v_col, v_bg = 'NO LINES', '#6a8db0', 'rgba(106,141,176,.10)'
-
-        # ── Risk flags ────────────────────────────────────────────────────
-        flags = []
-        if len(legs) >= 5:
-            flags.append('5+ leg parlays hit <5% on average — consider splitting into 2–3 leg combos for better EV')
-        elif len(legs) == 4:
-            flags.append('4-leg parlays are high-risk — each added leg multiplies model uncertainty')
-        if any(l.get('marketKey') == 'batter_home_runs' for l in legs):
-            flags.append('HR props carry extreme variance — one cold at-bat collapses the parlay')
-        if sum(1 for l in legs if l.get('marketKey') == 'pitcher_strikeouts') >= 2:
-            flags.append('Multiple pitcher K props stack independent K-rate model assumptions')
-        same_team = max((sum(1 for l in legs if l.get('team', '') == t)
-                         for t in set(l.get('team', '') for l in legs)), default=0)
-        if same_team >= 3:
-            flags.append(f'{same_team} legs from same team — single bad game script wipes the entire parlay')
-
-        # ── Per-leg reasoning ─────────────────────────────────────────────
-        reasons = []
-        for i, leg in enumerate(legs):
-            nm = leg.get('player', 'Player')
-            mk = (leg.get('marketKey') or '').replace('batter_', '').replace('pitcher_', 'P.').replace('_', ' ')
-            ln, pb = leg.get('line', ''), probs[i]
-            try:    eg_f = float(leg.get('edge') or 0)
-            except: eg_f = 0.0
-            if   eg_f > 0.05:  icon, note = '✅', f'{pb*100:.0f}% prob, +{eg_f*100:.1f}% edge — anchor leg'
-            elif eg_f > 0.01:  icon, note = '🟡', f'{pb*100:.0f}% prob, +{eg_f*100:.1f}% edge — soft value'
-            elif eg_f < 0:     icon, note = '🔴', f'{pb*100:.0f}% prob, {eg_f*100:.1f}% edge — weakens parlay'
-            else:               icon, note = '⚪', f'{pb*100:.0f}% prob — no live line to verify edge'
-            reasons.append(f'{icon} {nm} {mk.title()} o{ln}: {note}')
-
-        return jsonify({
-            'success':          True,
-            'legs':             len(legs),
-            'combinedFairProb': round(combined_fair, 4),
-            'combinedImplied':  round(combined_implied, 4) if combined_implied else None,
-            'parlayEdge':       parlay_edge,
-            'approxOdds':       approx_odds,
-            'verdict':          verdict,
-            'verdictColor':     v_col,
-            'verdictBg':        v_bg,
-            'correlations':     correlations,
-            'flags':            flags,
-            'reasons':          reasons,
-            'corrAdj':          round(corr_adj, 3),
-        })
-    except Exception as ex:
-        print('[api_parlay_analyze]', traceback.format_exc())
-        return jsonify({'success': False, 'error': str(ex)}), 500
-
-
-@app.route('/api/parlay/<date_str>', methods=['GET', 'POST'])
-def api_parlay_handler(date_str):
-    """GET: list parlays for date. POST: save new parlay slip."""
-    if request.method == 'GET':
-        store = _parlay_store()
-        return jsonify({'success': True, 'date': date_str, 'parlays': store.get(date_str, [])})
-    try:
-        data  = request.json or {}
-        store = _parlay_store()
-        day   = store.setdefault(date_str, [])
-        slip  = {
-            'id':        f'parlay_{date_str}_{len(day)+1:03d}',
-            'createdAt': datetime.now().isoformat(),
-            'legs':      data.get('legs', []),
-            'analysis':  data.get('analysis', {}),
-            'grade':     None,
-            'gradedAt':  None,
-        }
-        day.append(slip)
-        _save_json(PARLAY_STORE, store)
-        return jsonify({'success': True, 'parlay': slip})
-    except Exception as ex:
-        return jsonify({'success': False, 'error': str(ex)}), 500
-
-
-@app.route('/api/parlay/<date_str>/<parlay_id>/grade', methods=['POST'])
-def api_parlay_grade(date_str, parlay_id):
-    try:
-        data  = request.json or {}
-        store = _parlay_store()
-        for slip in store.get(date_str, []):
-            if slip.get('id') == parlay_id:
-                slip['grade']    = data.get('grade')
-                slip['gradedAt'] = datetime.now().isoformat()
-                break
-        _save_json(PARLAY_STORE, store)
-        return jsonify({'success': True})
-    except Exception as ex:
-        return jsonify({'success': False, 'error': str(ex)}), 500
-
-
-
-@app.route('/api/odds/cache-status')
-def api_odds_cache_status():
-    """Monitor API credit usage and cache state."""
-    now = time.time()
-    entries = []
-    for key, val in _ODDS_CACHE.items():
-        age  = int(now - val['ts'])
-        ttl  = val['ttl']
-        left = max(0, ttl - age)
-        entries.append({'key': key, 'age_s': age, 'ttl_s': ttl,
-                        'expires_in_s': left, 'alive': left > 0})
-    return jsonify({'success': True, 'cached_entries': len(entries), 'entries': entries})
-
-
-@app.route('/api/odds/cache-clear', methods=['POST'])
-def api_odds_cache_clear():
-    """Force-clear the odds cache to fetch fresh data."""
-    _ODDS_CACHE.clear()
-    return jsonify({'success': True, 'message': 'Odds cache cleared'})
-
-
-# ── MLB STADIUM COORDINATES ─────────────────────────────────────────────────
-# team_id → {name, lat, lon, roof}  roof: 'open'|'retractable'|'dome'
-MLB_STADIUMS = {
-    133: {'name': 'Oakland Coliseum',       'lat': 37.7516, 'lon': -122.2005, 'roof': 'open'},
-    134: {'name': 'PNC Park',               'lat': 40.4469, 'lon': -80.0057,  'roof': 'open'},
-    135: {'name': 'Petco Park',             'lat': 32.7076, 'lon': -117.1570, 'roof': 'open'},
-    136: {'name': 'T-Mobile Park',          'lat': 47.5913, 'lon': -122.3325, 'roof': 'retractable'},
-    137: {'name': 'Oracle Park',            'lat': 37.7785, 'lon': -122.3893, 'roof': 'open'},
-    138: {'name': 'Busch Stadium',          'lat': 38.6226, 'lon': -90.1928,  'roof': 'open'},
-    139: {'name': 'Tropicana Field',        'lat': 27.7682, 'lon': -82.6534,  'roof': 'dome'},
-    140: {'name': 'Globe Life Field',       'lat': 32.7473, 'lon': -97.0822,  'roof': 'retractable'},
-    141: {'name': 'Rogers Centre',          'lat': 43.6414, 'lon': -79.3894,  'roof': 'retractable'},
-    142: {'name': 'Target Field',           'lat': 44.9817, 'lon': -93.2781,  'roof': 'open'},
-    143: {'name': 'Citizens Bank Park',     'lat': 39.9061, 'lon': -75.1665,  'roof': 'open'},
-    144: {'name': 'Truist Park',            'lat': 33.8908, 'lon': -84.4678,  'roof': 'open'},
-    145: {'name': 'Guaranteed Rate Field',  'lat': 41.8300, 'lon': -87.6339,  'roof': 'open'},
-    146: {'name': 'loanDepot Park',         'lat': 25.7781, 'lon': -80.2197,  'roof': 'retractable'},
-    147: {'name': 'Yankee Stadium',         'lat': 40.8296, 'lon': -73.9262,  'roof': 'open'},
-    158: {'name': 'American Family Field',  'lat': 43.0280, 'lon': -87.9712,  'roof': 'retractable'},
-    108: {'name': 'Angel Stadium',          'lat': 33.8003, 'lon': -117.8827, 'roof': 'open'},
-    109: {'name': 'Chase Field',            'lat': 33.4455, 'lon': -112.0667, 'roof': 'retractable'},
-    110: {'name': 'Camden Yards',           'lat': 39.2839, 'lon': -76.6217,  'roof': 'open'},
-    111: {'name': 'Fenway Park',            'lat': 42.3467, 'lon': -71.0972,  'roof': 'open'},
-    112: {'name': 'Wrigley Field',          'lat': 41.9484, 'lon': -87.6553,  'roof': 'open'},
-    113: {'name': 'Great American Ball Park','lat': 39.0979, 'lon': -84.5082, 'roof': 'open'},
-    114: {'name': 'Progressive Field',     'lat': 41.4962, 'lon': -81.6852,  'roof': 'open'},
-    115: {'name': 'Coors Field',            'lat': 39.7559, 'lon': -104.9942, 'roof': 'open'},
-    116: {'name': 'Comerica Park',          'lat': 42.3390, 'lon': -83.0485,  'roof': 'open'},
-    117: {'name': 'Minute Maid Park',       'lat': 29.7572, 'lon': -95.3555,  'roof': 'retractable'},
-    118: {'name': 'Kauffman Stadium',       'lat': 39.0517, 'lon': -94.4803,  'roof': 'open'},
-    119: {'name': 'Dodger Stadium',         'lat': 34.0739, 'lon': -118.2400, 'roof': 'open'},
-    120: {'name': 'Nationals Park',         'lat': 38.8730, 'lon': -77.0074,  'roof': 'open'},
-    121: {'name': 'Citi Field',             'lat': 40.7571, 'lon': -73.8458,  'roof': 'open'},
-}
-
-# WMO weather code → human label
-def _wmo_label(code):
-    c = int(code or 0)
-    if c == 0:   return 'Clear'
-    if c <= 3:   return 'Partly Cloudy'
-    if c <= 19:  return 'Foggy'
-    if c <= 29:  return 'Drizzle'
-    if c <= 39:  return 'Dust/Sand'
-    if c <= 49:  return 'Fog'
-    if c <= 59:  return 'Drizzle'
-    if c <= 69:  return 'Rain'
-    if c <= 79:  return 'Snow/Ice'
-    if c <= 84:  return 'Rain Showers'
-    if c <= 94:  return 'Thunderstorms'
-    return 'Severe'
-
-# Wind direction degrees → compass
-def _wind_dir_label(deg):
-    if deg is None: return ''
-    dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE',
-            'S','SSW','SW','WSW','W','WNW','NW','NNW']
-    return dirs[round(float(deg) / 22.5) % 16]
-
-# ── Weather cache (30 min TTL per stadium) ────────────────────────────────────
-_WEATHER_CACHE = {}
-WEATHER_CACHE_TTL = 1800
-
-def _weather_cache_get(key):
-    e = _WEATHER_CACHE.get(key)
-    if e and (time.time() - e['ts']) < WEATHER_CACHE_TTL:
-        return e['data']
-    return None
-
-def _weather_cache_set(key, data):
-    _WEATHER_CACHE[key] = {'data': data, 'ts': time.time()}
-
-def _fetch_weather(lat, lon, game_hour_utc=None):
-    """Fetch weather from Open-Meteo (free, no key needed)."""
-    cache_key = f'weather_{lat:.3f}_{lon:.3f}'
-    cached = _weather_cache_get(cache_key)
-    if cached:
-        print(f'[weather] {cache_key} from cache')
-        return cached
-    try:
-        params = {
-            'latitude':  lat,
-            'longitude': lon,
-            'current': 'temperature_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m,relative_humidity_2m,precipitation_probability,is_day',
-            'hourly':  'temperature_2m,wind_speed_10m,wind_direction_10m,precipitation_probability,weather_code',
-            'temperature_unit': 'fahrenheit',
-            'wind_speed_unit':  'mph',
-            'precipitation_unit': 'inch',
-            'timezone': 'auto',
-            'forecast_days': 1,
-        }
-        r = requests.get('https://api.open-meteo.com/v1/forecast',
-                         params=params, timeout=10)
+        r = requests.get(f"https://statsapi.mlb.com/api/v1.1/game/{game_pk}/feed/live", timeout=10)
         r.raise_for_status()
-        raw = r.json()
+        data = r.json()
+        linescore = data.get('liveData', {}).get('linescore', {})
+        box = data.get('liveData', {}).get('boxscore', {})
+        game_data = data.get('gameData', {})
+        status_detail = game_data.get('status', {}).get('detailedState', '')
 
-        current = raw.get('current', {})
-        hourly  = raw.get('hourly', {})
+        inning_num = linescore.get('currentInning', 0)
+        inning_half = linescore.get('inningHalf', 'Top')
+        if any(x in status_detail for x in ['Middle', 'Mid ', 'Between']):
+            inning_label = f'MID {inning_num}'
+        elif inning_half == 'Bottom':
+            inning_label = f'BOT {inning_num}'
+        else:
+            inning_label = f'TOP {inning_num}'
 
-        # Pick the hour closest to game time if available
-        game_temp = game_wind = game_precip_prob = None
-        if game_hour_utc is not None and hourly.get('time'):
-            try:
-                times = hourly['time']
-                game_str = game_hour_utc[:13]   # "2026-04-04T19"
-                for i, t in enumerate(times):
-                    if t[:13] == game_str:
-                        game_temp        = hourly['temperature_2m'][i]
-                        game_wind        = hourly['wind_speed_10m'][i]
-                        game_precip_prob = hourly['precipitation_probability'][i]
-                        break
-            except:
-                pass
-
-        temp        = game_temp or current.get('temperature_2m')
-        wind_speed  = game_wind or current.get('wind_speed_10m')
-        wind_deg    = current.get('wind_direction_10m')
-        precip_prob = game_precip_prob if game_precip_prob is not None else current.get('precipitation_probability', 0)
-        humidity    = current.get('relative_humidity_2m')
-        wmo_code    = current.get('weather_code', 0)
-        feels_like  = current.get('apparent_temperature')
-
-        result = {
-            'temp_f':       round(float(temp or 72), 1),
-            'feels_like_f': round(float(feels_like or temp or 72), 1),
-            'wind_mph':     round(float(wind_speed or 0), 1),
-            'wind_dir_deg': wind_deg,
-            'wind_dir':     _wind_dir_label(wind_deg),
-            'precip_prob':  int(precip_prob or 0),
-            'humidity':     int(humidity or 50),
-            'condition':    _wmo_label(wmo_code),
-            'wmo_code':     int(wmo_code),
+        home = linescore.get('teams', {}).get('home', {})
+        away = linescore.get('teams', {}).get('away', {})
+        offense = linescore.get('offense', {})
+        defense = linescore.get('defense', {})
+        bases = {
+            'first': bool(offense.get('first')),
+            'second': bool(offense.get('second')),
+            'third': bool(offense.get('third')),
         }
-        _weather_cache_set(cache_key, result)
-        print(f'[weather] fetched {cache_key}: {result["temp_f"]}°F wind={result["wind_mph"]}mph {result["wind_dir"]}')
-        return result
-    except Exception as ex:
-        print(f'[weather] error: {ex}')
-        return None
 
-def _weather_impact(weather, is_dome=False):
-    """Return impact multipliers for offense and HR based on conditions."""
-    if not weather or is_dome:
-        return {'offense_mult': 1.0, 'hr_mult': 1.0, 'k_mult': 1.0,
-                'rain_risk': False, 'alerts': []}
+        batter = offense.get('batter') or {}
+        on_deck = offense.get('onDeck') or {}
+        in_hole = offense.get('inHole') or {}
+        pitcher = defense.get('pitcher') or {}
 
-    alerts = []
-    offense_mult = 1.0
-    hr_mult      = 1.0
-    k_mult       = 1.0
+        batter_id = batter.get('id')
+        pitcher_id = pitcher.get('id')
+        batter_name = batter.get('fullName', '')
+        pitcher_name = pitcher.get('fullName', '')
 
-    temp = weather.get('temp_f', 72)
-    wind = weather.get('wind_mph', 0)
-    precip = weather.get('precip_prob', 0)
+        pitcher_ip, pitcher_er = '—', '—'
+        batter_ab, batter_h, batter_ops = 0, 0, '—'
 
-    # Temperature impact
-    if temp >= 85:
-        offense_mult += 0.04; hr_mult += 0.06
-        alerts.append('🌡️ Hot (ball carries)')
-    elif temp >= 75:
-        offense_mult += 0.02; hr_mult += 0.03
-    elif temp <= 45:
-        offense_mult -= 0.05; hr_mult -= 0.07; k_mult += 0.03
-        alerts.append('🥶 Cold (pitcher edge)')
-    elif temp <= 55:
-        offense_mult -= 0.02; hr_mult -= 0.03
-
-    # Wind impact (simplified — without park orientation data)
-    if wind >= 15:
-        hr_mult += 0.05; alerts.append(f'💨 Wind {wind:.0f}mph')
-    elif wind >= 10:
-        hr_mult += 0.02; alerts.append(f'🌬️ Breezy {wind:.0f}mph')
-    elif wind <= 3:
-        alerts.append('🪟 Calm wind')
-
-    # Rain/precip
-    rain_risk = precip >= 40
-    if precip >= 60:
-        alerts.append(f'☔ Rain likely ({precip}%)')
-    elif precip >= 40:
-        alerts.append(f'🌧️ Rain possible ({precip}%)')
-
-    # Coors altitude bonus always present
-    return {
-        'offense_mult': round(offense_mult, 3),
-        'hr_mult':      round(hr_mult, 3),
-        'k_mult':       round(k_mult, 3),
-        'rain_risk':    rain_risk,
-        'alerts':       alerts,
-    }
-
-
-@app.route('/api/weather/<int:game_pk>')
-def api_weather(game_pk):
-    try:
-        raw = fetch_schedule(datetime.now(timezone.utc).strftime('%Y-%m-%d'))
-        g   = next((x for x in raw if x.get('gamePk') == game_pk), None)
-        if not g:
-            return jsonify({'success': False, 'error': 'Game not found'}), 404
-
-        home_team_id = g.get('teams', {}).get('home', {}).get('team', {}).get('id')
-        stadium      = MLB_STADIUMS.get(home_team_id)
-        game_time    = g.get('gameDate')   # ISO string e.g. "2026-04-04T23:10:00Z"
-
-        if not stadium:
-            return jsonify({'success': False, 'error': 'Stadium coordinates not found'})
-
-        is_dome    = stadium['roof'] == 'dome'
-        is_covered = stadium['roof'] != 'open'
-
-        weather = _fetch_weather(stadium['lat'], stadium['lon'], game_time) if not is_dome else None
-        impact  = _weather_impact(weather, is_dome=is_dome)
+        for side in ('home', 'away'):
+            players = box.get('teams', {}).get(side, {}).get('players', {})
+            if pitcher_id:
+                ps = players.get(f'ID{pitcher_id}', {})
+                pst = ps.get('stats', {}).get('pitching', {})
+                if pst:
+                    pitcher_ip = pst.get('inningsPitched', '—')
+                    pitcher_er = pst.get('earnedRuns', '—')
+            if batter_id:
+                bs = players.get(f'ID{batter_id}', {})
+                bst = bs.get('stats', {}).get('batting', {})
+                bss = bs.get('seasonStats', {}).get('batting', {})
+                if bst:
+                    batter_ab = bst.get('atBats', 0)
+                    batter_h = bst.get('hits', 0)
+                if bss:
+                    batter_ops = bss.get('ops', '—')
 
         return jsonify({
-            'success':     True,
-            'stadium':     stadium['name'],
-            'roof':        stadium['roof'],
-            'is_dome':     is_dome,
-            'is_covered':  is_covered,
-            'game_time':   game_time,
-            'weather':     weather,
-            'impact':      impact,
+            'success': True,
+            'gamePk': game_pk,
+            'statusDetail': status_detail,
+            'inningLabel': inning_label,
+            'balls': linescore.get('balls', 0),
+            'strikes': linescore.get('strikes', 0),
+            'outs': linescore.get('outs', 0),
+            'awayRuns': away.get('runs', 0),
+            'awayHits': away.get('hits', 0),
+            'awayErrors': away.get('errors', 0),
+            'homeRuns': home.get('runs', 0),
+            'homeHits': home.get('hits', 0),
+            'homeErrors': home.get('errors', 0),
+            'bases': bases,
+            'pitcher': {'name': pitcher_name, 'ip': pitcher_ip, 'er': pitcher_er},
+            'batter': {'name': batter_name, 'ab': batter_ab, 'h': batter_h, 'ops': batter_ops},
+            'dueUp': [on_deck.get('fullName', ''), in_hole.get('fullName', '')],
         })
     except Exception as ex:
-        print('[api_weather]', traceback.format_exc())
+        print('[api_game_livedata]', traceback.format_exc())
         return jsonify({'success': False, 'error': str(ex)}), 500
-
 
 # Boot background loaders
 threading.Thread(target=_load_fg_data,      daemon=True).start()
@@ -3581,46 +3195,3 @@ threading.Thread(target=_load_savant_data,  daemon=True).start()
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
-
-
-@app.route("/api/game/livedata/<int:game_pk>")
-def api_game_livedata(game_pk):
-    try:
-        r = requests.get("https://statsapi.mlb.com/api/v1.1/game/{}/feed/live".format(game_pk), timeout=10)
-        r.raise_for_status()
-        data = r.json()
-        ls = data.get("liveData",{}).get("linescore",{})
-        box = data.get("liveData",{}).get("boxscore",{})
-        gd = data.get("gameData",{})
-        sd = gd.get("status",{}).get("detailedState","")
-        inum = ls.get("currentInning",0); ihalf = ls.get("inningHalf","Top")
-        if any(x in sd for x in ["Middle","Mid ","Between"]): ilbl="MID {}".format(inum)
-        elif ihalf=="Bottom": ilbl="BOT {}".format(inum)
-        else: ilbl="TOP {}".format(inum)
-        ht=ls.get("teams",{}).get("home",{}); at=ls.get("teams",{}).get("away",{})
-        off=ls.get("offense",{})
-        bases={"first":bool(off.get("first")),"second":bool(off.get("second")),"third":bool(off.get("third"))}
-        bid=(off.get("batter") or {}).get("id"); bname=(off.get("batter") or {}).get("fullName","")
-        od=(off.get("onDeck") or {}).get("fullName",""); ih2=(off.get("inHole") or {}).get("fullName","")
-        pid2=(ls.get("defense",{}).get("pitcher") or {}).get("id")
-        pname=(ls.get("defense",{}).get("pitcher") or {}).get("fullName","")
-        pip="—"; per="—"; bab=0; bah=0; baops="—"
-        for side in ("home","away"):
-            pl=box.get("teams",{}).get(side,{}).get("players",{})
-            if pid2:
-                ps=pl.get("ID{}".format(pid2),{}); st=ps.get("stats",{}).get("pitching",{})
-                if st: pip=st.get("inningsPitched","—"); per=st.get("earnedRuns","—")
-            if bid:
-                bs=pl.get("ID{}".format(bid),{}); bst=bs.get("stats",{}).get("batting",{})
-                bss=bs.get("seasonStats",{}).get("batting",{})
-                if bst: bab=bst.get("atBats",0); bah=bst.get("hits",0)
-                if bss: baops=bss.get("ops","—")
-        return jsonify({"success":True,"gamePk":game_pk,"statusDetail":sd,"inningLabel":ilbl,
-            "balls":ls.get("balls",0),"strikes":ls.get("strikes",0),"outs":ls.get("outs",0),
-            "awayRuns":at.get("runs",0),"awayHits":at.get("hits",0),"awayErrors":at.get("errors",0),
-            "homeRuns":ht.get("runs",0),"homeHits":ht.get("hits",0),"homeErrors":ht.get("errors",0),
-            "bases":bases,"pitcher":{"name":pname,"ip":pip,"er":per},
-            "batter":{"name":bname,"ab":bab,"h":bah,"ops":baops},"dueUp":[od,ih2]})
-    except Exception as ex:
-        print("[api_game_livedata]",ex)
-        return jsonify({"success":False,"error":str(ex)}),500
