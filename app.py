@@ -339,6 +339,11 @@ def sv_batter(name):
     return r
 
 # ── MLB API Helpers ───────────────────────────────────────────────────────────
+
+
+def current_et_date_str():
+    return datetime.now(ET).strftime("%Y-%m-%d")
+
 def fetch_schedule(date_str):
     url = (f"{MLB_API}/schedule?sportId=1&date={date_str}"
            "&hydrate=team,probablePitcher,linescore,venue,weather")
@@ -519,7 +524,7 @@ def api_games_today():
     _maybe_refresh_fg()
     _maybe_refresh_savant()
     try:
-        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        date_str = (request.args.get("date") or "").strip() or current_et_date_str()
         raw   = fetch_schedule(date_str)
         games = [g for g in [parse_game(x) for x in raw] if g]
         return jsonify({"success":True,"games":games,"count":len(games)})
@@ -545,7 +550,7 @@ def api_game_detail(game_pk):
 @app.route("/api/pitchers/<int:game_pk>")
 def api_pitchers(game_pk):
     try:
-        raw = fetch_schedule(datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+        raw = fetch_schedule(current_et_date_str())
         for g in raw:
             if g.get("gamePk") == game_pk:
                 ap = g.get("teams",{}).get("away",{}).get("probablePitcher",{})
@@ -584,7 +589,7 @@ def e500(e): return jsonify({"error":str(e)}), 500
 @app.route("/api/game-projection/<int:game_pk>")
 def api_game_projection(game_pk):
     try:
-        raw = fetch_schedule(datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+        raw = fetch_schedule(current_et_date_str())
         gdata = next((g for g in raw if g.get("gamePk") == game_pk), None)
         if not gdata:
             return jsonify({"success": False, "error": "Game not found"})
@@ -869,7 +874,7 @@ def hitter_split_profile(player_id):
 def team_pitching_context(team_id):
     if not team_id:
         return {}
-    key = (team_id, datetime.now().date().isoformat())
+    key = (team_id, current_et_date_str())
     if key in _team_pitch_cache:
         return _team_pitch_cache[key]
     year = datetime.now().year
@@ -1470,7 +1475,7 @@ def api_player_profile(player_id):
 @app.route('/api/simulate/<int:game_pk>')
 def api_simulate(game_pk):
     try:
-        raw = fetch_schedule(datetime.now(timezone.utc).strftime('%Y-%m-%d'))
+        raw = fetch_schedule(current_et_date_str())
         g = next((x for x in raw if x.get('gamePk') == game_pk), None)
         if not g:
             return jsonify({'success': False, 'error': 'Game not found'}), 404
@@ -1725,7 +1730,7 @@ def _parse_prop_markets(bookmakers, valid_names):
 @app.route('/api/market/<int:game_pk>')
 def api_market(game_pk):
     try:
-        raw = fetch_schedule(datetime.now(timezone.utc).strftime('%Y-%m-%d'))
+        raw = fetch_schedule(current_et_date_str())
         g = next((x for x in raw if x.get('gamePk') == game_pk), None)
         if not g:
             return jsonify({'success': False, 'error': 'Game not found'}), 404

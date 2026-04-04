@@ -151,6 +151,16 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
 .sp-edge{margin-top:12px;padding:11px 14px;background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.13);border-radius:9px;font-size:.7rem;color:var(--te)}
 @media(max-width:600px){.sp-grid{grid-template-columns:1fr}.pm-sg{grid-template-columns:repeat(3,1fr)}}
 
+
+.games-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:16px;padding:12px 14px;background:rgba(255,255,255,.03);border:1px solid rgba(0,229,255,.10);border-radius:14px}
+.games-date-tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.date-chip{padding:10px 14px;border:1px solid rgba(0,229,255,.18);border-radius:999px;background:rgba(0,229,255,.06);color:var(--c);font-family:Orbitron,monospace;font-size:.66rem;letter-spacing:1.3px;cursor:pointer}
+.date-chip:hover{background:rgba(0,229,255,.12)}
+.date-chip.active{background:linear-gradient(90deg,rgba(0,229,255,.18),rgba(224,64,251,.12));border-color:rgba(0,229,255,.34)}
+.date-picker{background:#0d1423;border:1px solid var(--b);border-radius:10px;padding:10px 12px;color:var(--c);font-family:Orbitron,monospace;font-size:.72rem}
+.schedule-note{font-size:.72rem;color:var(--mu)}
+@media(max-width:700px){.games-toolbar{align-items:flex-start}.games-date-tools{width:100%}.date-picker{width:100%}}
+
 </style>
 </head>
 <body>
@@ -179,6 +189,7 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
 <div class="main">
   <div id="gamesView" class="view active">
     <div class="sh">TODAY&#39;S GAMES</div>
+    <div class="games-toolbar"><div class="games-date-tools"><button class="date-chip" id="prevDateBtn">&#9664; PREV</button><button class="date-chip active" id="todayDateBtn">TODAY</button><button class="date-chip" id="nextDateBtn">NEXT &#9654;</button><input type="date" id="gamesDateInput" class="date-picker"><span class="pillish" id="gamesDateLabel">Loading date...</span></div><div class="schedule-note">Schedule uses Eastern Time, so Friday night stays on Friday until midnight ET.</div></div>
     <div id="gc"><div class="sw"><div class="sp"></div><div class="st">LOADING GAMES...</div></div></div>
   </div>
   <div id="teamsView" class="view">
@@ -295,24 +306,17 @@ function loadMC(){
   fetch('/api/projections/monte-carlo').then(r=>r.json()).then(function(d){ if(!d.success) throw new Error(d.error||'Projection load failed'); MC_DATA=d; renderMC(d); }).catch(function(e){ document.getElementById('mcStatus').textContent=e.message; document.getElementById('mcWrap').innerHTML='<div class="ng"><h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px">PROJECTION LOAD FAILED</h3></div>'; });
 }
 
-function load(){
-  fetch('/api/games/today').then(function(r){return r.json();}).then(function(d){
-    if(!d.success)throw new Error(d.error||'API error');
-    var gs=d.games;
-    document.getElementById('sg').textContent=gs.length||'0';
-    document.getElementById('sl').textContent=gs.filter(function(g){return g.status==='Live';}).length;
-    var edges=gs.map(function(g){return g.edge;});
-    document.getElementById('se').textContent=edges.length?(edges.reduce(function(a,b){return a+b;},0)/edges.length).toFixed(1)+'%':'--';
-    document.getElementById('sh').textContent=gs.filter(function(g){return g.edge>=8;}).length;
-    if(!gs.length){document.getElementById('gc').innerHTML='<div class="ng"><h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px">NO GAMES TODAY</h3></div>';return;}
-    document.getElementById('gc').innerHTML='<div class="grid">'+gs.map(mkCard).join('')+'</div>';
-    setTimeout(function(){document.querySelectorAll('.fill').forEach(function(e){e.style.width=e.getAttribute('data-w');});},150);
-    gs.forEach(function(g){ fetch('/api/lineup/'+g.gamePk).then(function(r){return r.json();}).then(function(d){ LINEUPS[g.gamePk]=d; var el=document.getElementById('lu-'+g.gamePk); if(el) renderLineup(g.gamePk, d); }); });
-  }).catch(function(e){
-    document.getElementById('gc').innerHTML='<div class="sw"><div style="background:rgba(224,64,251,.08);border:1px solid rgba(224,64,251,.3);border-radius:12px;padding:24px 32px;text-align:center"><h3 style="color:var(--m);font-family:Orbitron;margin-bottom:8px">CONNECTION ERROR</h3><p style="color:var(--mu);font-size:.82rem">'+e.message+'</p></div></div>';
-  });
-}
-load();loadTeams();loadMC();setInterval(load,60000);
+function etTodayStr(){const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());const y=parts.find(p=>p.type==='year').value,m=parts.find(p=>p.type==='month').value,d=parts.find(p=>p.type==='day').value;return y+'-'+m+'-'+d}
+function fmtDateLabel(v){try{const dt=new Date(v+'T12:00:00');return dt.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',year:'numeric'})}catch(e){return v}}
+let selectedGamesDate=etTodayStr();
+function syncDateUI(){var inp=document.getElementById('gamesDateInput'),lbl=document.getElementById('gamesDateLabel'),todayBtn=document.getElementById('todayDateBtn');if(inp) inp.value=selectedGamesDate;if(lbl) lbl.textContent=fmtDateLabel(selectedGamesDate);if(todayBtn) todayBtn.classList.toggle('active',selectedGamesDate===etTodayStr())}
+function shiftGamesDate(days){var dt=new Date(selectedGamesDate+'T12:00:00');dt.setDate(dt.getDate()+days);selectedGamesDate=dt.toISOString().slice(0,10);syncDateUI();load(selectedGamesDate)}
+function load(dateStr){if(dateStr) selectedGamesDate=dateStr;syncDateUI();fetch('/api/games/today?date='+encodeURIComponent(selectedGamesDate)).then(function(r){return r.json()}).then(function(d){if(!d.success)throw new Error(d.error||'API error');var gs=d.games;document.getElementById('sg').textContent=gs.length||0;document.getElementById('sl').textContent=gs.filter(function(g){return g.status==='Live'}).length;var edges=gs.map(function(g){return g.edge});document.getElementById('se').textContent=edges.length?(edges.reduce(function(a,b){return a+b},0)/edges.length).toFixed(1):'--';document.getElementById('sh').textContent=gs.filter(function(g){return g.edge>=8}).length;if(!gs.length){document.getElementById('gc').innerHTML='<div class="ng"><h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px">NO GAMES FOR '+fmtDateLabel(selectedGamesDate).toUpperCase()+'</h3></div>';return}document.getElementById('gc').innerHTML='<div class="grid">'+gs.map(mkCard).join('')+'</div>';setTimeout(function(){document.querySelectorAll('.fill').forEach(function(e){e.style.width=e.getAttribute('data-w')+'%'})},150);gs.forEach(function(g){fetch('/api/lineup/'+g.gamePk).then(function(r){return r.json()}).then(function(d){LINEUPS[g.gamePk]=d;var el=document.getElementById('lu-'+g.gamePk);if(el) renderLineup(g.gamePk,d)})})}).catch(function(e){document.getElementById('gc').innerHTML='<div class="sw"><div style="background:rgba(224,64,251,.08);border:1px solid rgba(224,64,251,.3);border-radius:12px;padding:24px 32px;text-align:center"><h3 style="color:var(--m);font-family:Orbitron;margin-bottom:8px">CONNECTION ERROR</h3><p style="color:var(--mu);font-size:.82rem">'+e.message+'</p></div></div>'})}
+document.getElementById('gamesDateInput').addEventListener('change',function(e){selectedGamesDate=e.target.value||etTodayStr();syncDateUI();load(selectedGamesDate)});
+document.getElementById('prevDateBtn').addEventListener('click',function(){shiftGamesDate(-1)});
+document.getElementById('nextDateBtn').addEventListener('click',function(){shiftGamesDate(1)});
+document.getElementById('todayDateBtn').addEventListener('click',function(){selectedGamesDate=etTodayStr();syncDateUI();load(selectedGamesDate)});
+syncDateUI();load();loadTeams();loadMC();setInterval(function(){load(selectedGamesDate)},60000);
 </script>
 <a class="tracker-fab" href="/tracker" target="_blank" rel="noopener noreferrer">DAILY TRACKER</a>
 
