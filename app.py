@@ -3109,6 +3109,243 @@ def api_lineup(game_pk):
 
 
 
+
+
+# ── Matchup Auto-Signals (weather + pitching + park) ─────────────────────────
+@app.route('/api/matchup-auto-signals/<int:game_pk>')
+def api_matchup_auto_signals(game_pk):
+    try:
+        # ── Pull game data ────────────────────────────────────────────────────
+        today = datetime.now(ET).strftime('%Y-%m-%d')
+        raw_games = _fetch_games_for_date(today)
+        gd = next((g for g in raw_games if g.get('gamePk') == game_pk), None)
+        if not gd:
+            return jsonify({'success': False, 'error': 'Game not found'}), 404
+
+        ven      = gd.get('venue', {})
+        venue_id = ven.get('id')
+        is_dome  = venue_id in DOME_VENUES
+        pf       = float(PARK_FACTORS.get(gd.get('teams', {}).get('home', {})
+                         .get('team', {}).get('id', 0), 1.0))
+
+        # ── Weather ───────────────────────────────────────────────────────────
+        lat = ven.get('location', {}).get('defaultCoordinates', {}).get('latitude')
+        lon = ven.get('location', {}).get('defaultCoordinates', {}).get('longitude')
+        from dateutil import parser as dtparser
+        try:
+            game_dt   = dtparser.parse(gd.get('gameDate', ''))
+            game_hour = game_dt.astimezone(ET).hour
+        except Exception:
+            game_hour = 19
+        wx = get_weather(lat, lon, game_hour, venue_id=venue_id)
+
+        # ── Pitcher stats ─────────────────────────────────────────────────────
+        pd_data = _fetch_probable_pitchers(game_pk)
+        ap = pd_data.get('awayPitcher') or {}
+        hp = pd_data.get('homePitcher') or {}
+
+        def _stat(p, *keys):
+            for k in keys:
+                v = (p.get('stats') or {}).get(k) or p.get(k)
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    pass
+            return None
+
+        def _avg(*vals):
+            clean = [v for v in vals if v is not None]
+            return sum(clean) / len(clean) if clean else None
+
+        fip_a = _stat(ap, 'fg_fip', 'era', 'fg_era')
+        fip_h = _stat(hp, 'fg_fip', 'era', 'fg_era')
+        k9_a  = _stat(ap, 'fg_k9', 'k9')
+        k9_h  = _stat(hp, 'fg_k9', 'k9')
+        era_a = _stat(ap, 'sv_xera', 'fg_era', 'era')
+        era_h = _stat(hp, 'sv_xera', 'fg_era', 'era')
+
+        avg_fip = _avg(fip_a, fip_h)
+        avg_k9  = _avg(k9_a,  k9_h)
+        avg_era = _avg(era_a, era_h)
+
+        # ── Build adjustments ─────────────────────────────────────────────────
+        sliders = dict(batter_hits=0, batter_total_bases=0,
+                       batter_home_runs=0, batter_rbis=0, pitcher_strikeouts=0)
+        signals = {}
+        reasons = []
+
+        if is_dome:
+            reasons.append('Retractable/dome venue — weather neutralized, base model used')
+        else:
+            # Temperature
+            temp = wx.get('temp')
+            try:
+                t = float(temp)
+                if t < 45:
+                    sliders['batter_hits']       -= 10
+                    sliders['batter_total_bases'] -= 10
+                    sliders['batter_home_runs']   -= 14
+                    sliders['batter_rbis']        -= 8
+                    reasons.append(f'Very cold ({t:.0f}°F) — ball dies, HR/TB suppressed')
+                    signals['weather_risk'] = True
+                elif t < 55:
+                    sliders['batter_hits']       -= 6
+                    sliders['batter_total_bases'] -= 6
+                    sliders['batter_home_runs']   -= 10
+                    reasons.append(f'Cold weather ({t:.0f}°F) — mild offense suppression')
+                    signals['weather_risk'] = True
+                elif t > 88:
+                    sliders['batter_hits']       += 6
+                    sliders['batter_total_bases'] += 6
+                    sliders['batter_home_runs']   += 10
+                    reasons.append(f'Hot & humid ({t:.0f}°F) — ball carries, favor offense')
+                elif t > 78:
+                    sliders['batter_hits']       += 3
+                    sliders['batter_total_bases'] += 3
+                    sliders['batter_home_runs']   += 5
+                    reasons.append(f'Warm weather ({t:.0f}°F) — slight offensive boost')
+            except (TypeError, ValueError):
+                pass
+
+            # Rain
+            rain = wx.get('rain_chance')
+            try:
+                r = float(rain)
+                if r >= 60:
+                    sliders['batter_hits']       -= 10
+                    sliders['batter_total_bases'] -= 9
+                    sliders['pitcher_strikeouts'] -= 8
+                    reasons.append(f'High rain chance ({r:.0f}%) — game pace & grip impacted')
+                    signals['weather_risk'] = True
+                elif r >= 35:
+                    sliders['batter_hits']       -= 6
+                    sliders['batter_total_bases'] -= 5
+                    reasons.append(f'Rain chance ({r:.0f}%) — potential disruption')
+                    signals['weather_risk'] = True
+            except (TypeError, ValueError):
+                pass
+
+            # Wind
+            wind_str = wx.get('wind_speed', '')
+            try:
+                wspd = float(str(wind_str).split()[0])
+                if wspd >= 18:
+                    sliders['batter_home_runs']   += 8
+                    sliders['batter_total_bases'] += 5
+                    reasons.append(f'High wind ({wspd:.0f} mph) — ball movement increases variance')
+                elif wspd >= 12:
+                    sliders['batter_home_runs']   += 4
+                    reasons.append(f'Moderate wind ({wspd:.0f} mph) — minor HR variance')
+            except (TypeError, ValueError, IndexError):
+                pass
+
+        # Park factor
+        if pf >= 1.09:
+            sliders['batter_home_runs']   += 12
+            sliders['batter_total_bases'] += 8
+            sliders['batter_hits']        += 4
+            reasons.append(f'Hitter-friendly park (factor {pf:.2f}) — favor HR/TB overs')
+            signals['park_factor_up'] = True
+        elif pf >= 1.05:
+            sliders['batter_home_runs']   += 7
+            sliders['batter_total_bases'] += 4
+            reasons.append(f'Slightly hitter-friendly park (factor {pf:.2f})')
+            signals['park_factor_up'] = True
+        elif pf <= 0.91:
+            sliders['batter_home_runs']   -= 10
+            sliders['batter_total_bases'] -= 6
+            sliders['batter_hits']        -= 4
+            reasons.append(f'Pitcher-friendly park (factor {pf:.2f}) — fade power props')
+        elif pf <= 0.95:
+            sliders['batter_home_runs']   -= 6
+            sliders['batter_total_bases'] -= 3
+            reasons.append(f'Slightly pitcher-friendly park (factor {pf:.2f})')
+
+        # Pitching matchup — FIP
+        if avg_fip is not None:
+            if avg_fip < 3.30:
+                sliders['batter_hits']       -= 12
+                sliders['batter_total_bases'] -= 10
+                sliders['batter_home_runs']   -= 10
+                sliders['batter_rbis']        -= 10
+                reasons.append(f'Elite pitching matchup (avg FIP {avg_fip:.2f}) — fade batting overs')
+            elif avg_fip < 3.80:
+                sliders['batter_hits']       -= 7
+                sliders['batter_total_bases'] -= 6
+                sliders['batter_home_runs']   -= 7
+                reasons.append(f'Strong pitching matchup (avg FIP {avg_fip:.2f}) — modest batting fade')
+            elif avg_fip > 5.20:
+                sliders['batter_hits']       += 12
+                sliders['batter_total_bases'] += 10
+                sliders['batter_rbis']        += 8
+                reasons.append(f'Weak pitching matchup (avg FIP {avg_fip:.2f}) — favor batting overs')
+                signals['hot_offense'] = True
+            elif avg_fip > 4.60:
+                sliders['batter_hits']       += 7
+                sliders['batter_total_bases'] += 5
+                reasons.append(f'Below-avg pitching (avg FIP {avg_fip:.2f}) — slight batting lift')
+
+        # Pitching matchup — K/9
+        if avg_k9 is not None:
+            if avg_k9 >= 10.0:
+                sliders['pitcher_strikeouts'] += 15
+                reasons.append(f'High-K starters (avg K/9 {avg_k9:.1f}) — back strikeout overs')
+                signals['elevated_k_zone'] = True
+            elif avg_k9 >= 8.8:
+                sliders['pitcher_strikeouts'] += 8
+                reasons.append(f'Above-avg K/9 ({avg_k9:.1f}) — mild strikeout boost')
+            elif avg_k9 < 6.5:
+                sliders['pitcher_strikeouts'] -= 12
+                reasons.append(f'Low-K starters (avg K/9 {avg_k9:.1f}) — fade strikeout overs')
+            elif avg_k9 < 7.5:
+                sliders['pitcher_strikeouts'] -= 6
+                reasons.append(f'Below-avg K/9 ({avg_k9:.1f}) — modest K fade')
+
+        # Mismatch detection (one SP elite, other poor)
+        if fip_a is not None and fip_h is not None:
+            diff = abs(fip_a - fip_h)
+            if diff >= 1.5:
+                reasons.append(f'Large SP FIP gap ({fip_a:.2f} vs {fip_h:.2f}) — SP mismatch in play')
+                signals['pitcher_mismatch'] = True
+
+        # Convert delta to multipliers and clamp
+        final = {}
+        for k, delta in sliders.items():
+            final[k] = round(max(0.60, min(1.40, 1.0 + delta / 100.0)), 4)
+
+        # Confidence from overall picture
+        pos_signals = sum(1 for d in sliders.values() if d > 6)
+        neg_signals = sum(1 for d in sliders.values() if d < -6)
+        confidence = 3
+        if pos_signals >= 3:    confidence = 4
+        if pos_signals >= 4:    confidence = 5
+        if neg_signals >= 3:    confidence = 2
+        if neg_signals >= 4:    confidence = 1
+        if not reasons:
+            confidence = 3
+            reasons.append('Neutral matchup — no significant adjustments needed')
+
+        return jsonify({
+            'success':    True,
+            'gamePk':     game_pk,
+            'sliders':    final,
+            'signals':    signals,
+            'reasons':    reasons,
+            'confidence': confidence,
+            'isDome':     is_dome,
+            'meta': {
+                'temp':    wx.get('temp'),
+                'wind':    wx.get('wind_speed'),
+                'rain':    wx.get('rain_chance'),
+                'parkFactor': pf,
+                'avgFip':  avg_fip,
+                'avgK9':   avg_k9,
+            }
+        })
+    except Exception as ex:
+        print('[api_matchup_auto_signals]', __import__('traceback').format_exc())
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
 # ── Matchup Review ────────────────────────────────────────────────────────────
 def _load_reviews():
     return _load_json(REVIEW_STORE, {})

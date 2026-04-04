@@ -281,6 +281,21 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .rev-hist-note{color:#8b9eb0;line-height:1.35}
 .rev-hist-tracker{font-size:.55rem;font-family:'Orbitron',monospace;color:#4a7a4a}
 
+
+/* ── Auto-Analyze ─────────────────────────────────────────────────── */
+.rev-auto-btn{font-family:'Orbitron',monospace;font-size:.58rem;letter-spacing:1.5px;padding:6px 14px;background:rgba(100,255,180,.08);border:1px solid rgba(100,255,180,.3);border-radius:6px;color:#64ffb4;cursor:pointer;transition:background .18s,border-color .18s}
+.rev-auto-btn:hover{background:rgba(100,255,180,.16);border-color:rgba(100,255,180,.5)}
+.rev-auto-btn.running{opacity:.55;pointer-events:none;animation:rev-pulse 1s infinite}
+.rev-auto-btn.done{background:rgba(100,255,180,.18);border-color:rgba(100,255,180,.55);color:#a0ffd4}
+@keyframes rev-pulse{0%,100%{opacity:.55}50%{opacity:.9}}
+.rev-reasons{margin-top:8px;display:flex;flex-direction:column;gap:5px}
+.rev-reason-row{display:flex;align-items:flex-start;gap:8px;padding:6px 10px;background:rgba(100,255,180,.04);border:1px solid rgba(100,255,180,.1);border-radius:7px;font-size:.65rem;line-height:1.4}
+.rev-reason-icon{flex-shrink:0;font-size:.8rem;margin-top:1px}
+.rev-reason-text{color:#9ec8b0}
+.rev-reason-row.warn{background:rgba(255,160,50,.04);border-color:rgba(255,160,50,.14)}
+.rev-reason-row.warn .rev-reason-text{color:#d4a060}
+.rev-auto-badge{display:inline-flex;align-items:center;gap:4px;font-family:'Orbitron',monospace;font-size:.52rem;letter-spacing:1px;padding:3px 8px;background:rgba(100,255,180,.12);border:1px solid rgba(100,255,180,.3);border-radius:4px;color:#64ffb4;margin-left:8px}
+
 </style>
 </head>
 <body>
@@ -1942,7 +1957,92 @@ renderMarketPanel = function(){
 };
 
 
-// ── Model Review ─────────────────────────────────────────────────────────────
+// ── Model Review ────────────────────────────────────────────────────────────
+// ── Auto-Analyze ─────────────────────────────────────────────────────────────
+function autoAnalyzeMatchup(silent){
+  var btn = document.getElementById('revAutoBtn');
+  if(btn){ btn.classList.add('running'); btn.textContent = '⏳ ANALYZING...'; }
+
+  fetch('/api/matchup-auto-signals/' + GPK)
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(btn){ btn.classList.remove('running'); btn.classList.add('done'); btn.textContent = '🤖 AUTO-ANALYZE'; }
+      if(!d.success){ return; }
+
+      // Apply signals
+      REV_SIGNALS = d.signals || {};
+      document.querySelectorAll('#revSignals .rev-sig').forEach(function(el){
+        el.classList.toggle('active', !!REV_SIGNALS[el.getAttribute('data-key')]);
+      });
+
+      // Apply sliders
+      var ov = d.sliders || {};
+      Object.keys(ov).forEach(function(m){
+        var sl = document.querySelector('.rev-slider[data-market="'+m+'"]');
+        if(!sl) return;
+        sl.value = Math.round(parseFloat(ov[m]) * 100);
+        sl.dispatchEvent(new Event('input'));
+      });
+
+      // Apply confidence stars
+      if(d.confidence){
+        REV_CONFIDENCE = d.confidence;
+        document.querySelectorAll('#revStars .rev-star').forEach(function(s){
+          s.classList.toggle('on', parseInt(s.getAttribute('data-v')) <= REV_CONFIDENCE);
+        });
+      }
+
+      // Show badge
+      var badge = document.getElementById('revAutoBadge');
+      if(badge) badge.style.display = '';
+
+      // Show source label
+      var src = document.getElementById('revAutoSource');
+      if(src && d.meta){
+        var parts = [];
+        if(d.meta.temp && d.meta.temp !== 'N/A' && d.meta.temp !== 'DOME')
+          parts.push(d.meta.temp + '°F');
+        if(d.meta.rain && d.meta.rain !== 'N/A')
+          parts.push(d.meta.rain + '% rain');
+        if(d.meta.avgFip)
+          parts.push('FIP ' + parseFloat(d.meta.avgFip).toFixed(2));
+        if(d.meta.avgK9)
+          parts.push('K/9 ' + parseFloat(d.meta.avgK9).toFixed(1));
+        if(d.meta.parkFactor)
+          parts.push('PF ' + parseFloat(d.meta.parkFactor).toFixed(2));
+        src.textContent = parts.join(' · ');
+      }
+
+      // Render reason chips
+      var reasons = d.reasons || [];
+      var wrap = document.getElementById('revReasons');
+      if(wrap && reasons.length){
+        wrap.style.display = '';
+        wrap.innerHTML = reasons.map(function(r){
+          var isWarn = /suppressed|cold|rain|fade|weak|low-k|below/i.test(r);
+          var icon = isWarn ? '⚠️' : '✅';
+          return '<div class="rev-reason-row'+(isWarn?' warn':'')+'">'
+               + '<div class="rev-reason-icon">'+icon+'</div>'
+               + '<div class="rev-reason-text">'+r+'</div>'
+               + '</div>';
+        }).join('');
+      } else if(wrap){
+        wrap.style.display = 'none';
+      }
+
+      if(!silent){
+        var note = document.createElement('div');
+        note.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:rgba(100,255,180,.15);border:1px solid rgba(100,255,180,.4);border-radius:10px;padding:10px 22px;font-family:Orbitron,monospace;font-size:.63rem;color:#64ffb4;letter-spacing:1.5px;z-index:9999';
+        note.textContent = '✓ SLIDERS AUTO-SET — ' + reasons.length + ' FACTORS ANALYZED';
+        document.body.appendChild(note);
+        setTimeout(function(){ note.remove(); }, 2800);
+      }
+    })
+    .catch(function(){
+      if(btn){ btn.classList.remove('running'); btn.textContent = '🤖 AUTO-ANALYZE'; }
+    });
+}
+─
 var REV_CONFIDENCE = 3;
 var REV_SIGNALS = {};
 
@@ -1992,7 +2092,12 @@ function initReviewPanel(){
 
   // Load existing saved review
   fetch('/api/matchup-review/' + GPK).then(function(r){ return r.json(); }).then(function(d){
-    if(d.review && d.review.savedAt) loadReviewIntoUI(d.review);
+    if(d.review && d.review.savedAt){
+      loadReviewIntoUI(d.review);
+    } else {
+      // No saved review yet — auto-analyze silently on first load
+      setTimeout(function(){ autoAnalyzeMatchup(true); }, 400);
+    }
     loadReviewHistory();
   });
 }
@@ -2129,8 +2234,14 @@ setTimeout(initReviewPanel, 600);
     <div class="pt">&#129504; MODEL REVIEW <span class="tag-fg">ANALYST</span></div>
     <div class="rev-panel">
       <div class="rev-hdr">
-        <div class="rev-title" id="revTitle">MATCHUP REVIEW</div>
-        <div class="rev-status" id="revStatus">NOT SAVED</div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <div class="rev-title" id="revTitle">MATCHUP REVIEW</div>
+          <span id="revAutoBadge" style="display:none" class="rev-auto-badge">✓ AUTO-ANALYZED</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <button class="rev-auto-btn" id="revAutoBtn" onclick="autoAnalyzeMatchup()">🤖 AUTO-ANALYZE</button>
+          <div class="rev-status" id="revStatus">NOT SAVED</div>
+        </div>
       </div>
       <div class="rev-body">
 
@@ -2183,7 +2294,10 @@ setTimeout(initReviewPanel, 600);
 
         <!-- MARKET OVERRIDES -->
         <div>
-          <div class="rev-section-title">Market Confidence Multipliers</div>
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <div class="rev-section-title" style="margin-bottom:0">Market Confidence Multipliers</div>
+            <div id="revAutoSource" style="font-size:.55rem;color:#3a6a5a;font-family:'Orbitron',monospace;letter-spacing:1px"></div>
+          </div>
           <div class="rev-sliders" id="revSliders">
             <div class="rev-slider-row"><div class="rev-slider-label">HITS</div><input type="range" class="rev-slider" data-market="batter_hits" min="60" max="140" value="100"><div class="rev-slider-val" id="sv_batter_hits">1.00×</div></div>
             <div class="rev-slider-row"><div class="rev-slider-label">TOTAL BASES</div><input type="range" class="rev-slider" data-market="batter_total_bases" min="60" max="140" value="100"><div class="rev-slider-val" id="sv_batter_total_bases">1.00×</div></div>
@@ -2194,6 +2308,7 @@ setTimeout(initReviewPanel, 600);
         </div>
 
         <!-- CONFIDENCE + NOTES -->
+        <div id="revReasons" class="rev-reasons" style="display:none"></div>
         <div class="rev-meta">
           <div class="rev-conf-wrap">
             <label>CONFIDENCE LEVEL</label>
