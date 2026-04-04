@@ -1,0 +1,586 @@
+
+<!-- ═══════════════════════════════════════════════════════
+     PLAYER PROFILE MODAL  (injected patch)
+═══════════════════════════════════════════════════════ -->
+<style>
+/* ── Modal overlay ── */
+#playerModal{display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.75);
+  backdrop-filter:blur(4px);align-items:center;justify-content:center;padding:12px}
+#playerModal.open{display:flex}
+.pm-wrap{background:#161b22;border:1px solid #30363d;border-radius:14px;
+  width:min(780px,100%);max-height:90dvh;overflow:hidden;display:flex;flex-direction:column;
+  box-shadow:0 24px 60px rgba(0,0,0,.6)}
+.pm-header{display:flex;align-items:center;gap:14px;padding:18px 20px 14px;
+  border-bottom:1px solid #21262d;background:#0d1117}
+.pm-headshot{width:56px;height:56px;border-radius:50%;object-fit:cover;
+  background:#21262d;border:2px solid #30363d;flex-shrink:0}
+.pm-meta{flex:1;min-width:0}
+.pm-name{font-size:1.15rem;font-weight:700;color:#e6edf3;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.pm-sub{font-size:.78rem;color:#8b949e;margin-top:2px}
+.pm-badge{padding:3px 8px;border-radius:20px;font-size:.68rem;font-weight:600;
+  letter-spacing:.04em;text-transform:uppercase}
+.pm-badge.hot{background:#1c2d1c;color:#3fb950;border:1px solid #238636}
+.pm-badge.cold{background:#2d1c1c;color:#f85149;border:1px solid #da3633}
+.pm-close{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;
+  justify-content:center;background:none;border:1px solid #30363d;color:#8b949e;
+  cursor:pointer;font-size:1.1rem;flex-shrink:0;transition:all .15s}
+.pm-close:hover{background:#21262d;color:#e6edf3}
+/* ── Tabs ── */
+.pm-tabs{display:flex;gap:2px;padding:10px 12px 0;background:#0d1117;
+  border-bottom:1px solid #21262d;overflow-x:auto;scrollbar-width:none}
+.pm-tabs::-webkit-scrollbar{display:none}
+.pm-tab{padding:7px 14px;border-radius:6px 6px 0 0;font-size:.75rem;font-weight:600;
+  letter-spacing:.04em;text-transform:uppercase;color:#8b949e;cursor:pointer;
+  background:none;border:none;white-space:nowrap;border-bottom:2px solid transparent;
+  transition:all .15s}
+.pm-tab:hover{color:#c9d1d9;background:#161b22}
+.pm-tab.active{color:#58a6ff;border-bottom-color:#58a6ff;background:#161b22}
+/* ── Body ── */
+.pm-body{flex:1;overflow-y:auto;padding:20px;scrollbar-width:thin;
+  scrollbar-color:#30363d #0d1117}
+/* ── Stat grid ── */
+.stat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:10px;margin-bottom:16px}
+.stat-box{background:#0d1117;border:1px solid #21262d;border-radius:10px;
+  padding:12px 10px;text-align:center}
+.stat-box .sv{font-size:1.3rem;font-weight:700;color:#e6edf3;line-height:1}
+.stat-box .sl{font-size:.65rem;color:#8b949e;margin-top:4px;text-transform:uppercase;letter-spacing:.05em}
+.stat-box.hi .sv{color:#3fb950}
+.stat-box.lo .sv{color:#f85149}
+.stat-box.accent .sv{color:#58a6ff}
+/* ── Section headers ── */
+.pm-sec{font-size:.7rem;font-weight:700;color:#8b949e;text-transform:uppercase;
+  letter-spacing:.08em;margin:18px 0 10px;padding-bottom:6px;
+  border-bottom:1px solid #21262d}
+/* ── Game log table ── */
+.pm-table{width:100%;border-collapse:collapse;font-size:.78rem}
+.pm-table th{color:#8b949e;font-weight:600;text-align:right;padding:5px 8px;
+  border-bottom:1px solid #21262d;white-space:nowrap;font-size:.68rem}
+.pm-table th:first-child,.pm-table td:first-child{text-align:left}
+.pm-table td{color:#c9d1d9;text-align:right;padding:5px 8px;border-bottom:1px solid #161b22}
+.pm-table tr.hot-row td{background:#162010}
+.pm-table tr.cold-row td{background:#200f0f}
+.pm-table tr:hover td{background:#161b22}
+/* ── Splits bars ── */
+.split-row{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.split-label{font-size:.72rem;color:#8b949e;width:60px;flex-shrink:0}
+.split-bar-wrap{flex:1;background:#0d1117;border-radius:4px;height:8px;overflow:hidden;
+  border:1px solid #21262d}
+.split-bar{height:100%;border-radius:4px;transition:width .4s ease}
+.split-val{font-size:.72rem;color:#e6edf3;width:50px;text-align:right;flex-shrink:0;font-weight:600}
+.split-edge{font-size:.65rem;padding:2px 7px;border-radius:20px;flex-shrink:0}
+.split-edge.pos{background:#162010;color:#3fb950}
+.split-edge.neg{background:#200f0f;color:#f85149}
+/* ── Arsenal bars ── */
+.arsenal-row{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.arsenal-pitch{font-size:.73rem;color:#e6edf3;font-weight:600;width:70px;flex-shrink:0}
+.arsenal-bar-wrap{flex:1;background:#0d1117;border-radius:4px;height:10px;overflow:hidden;border:1px solid #21262d}
+.arsenal-bar{height:100%;border-radius:4px;background:linear-gradient(90deg,#1f6feb,#388bfd)}
+.arsenal-pct{font-size:.72rem;color:#58a6ff;width:42px;text-align:right;flex-shrink:0}
+.arsenal-velo{font-size:.72rem;color:#8b949e;width:52px;text-align:right;flex-shrink:0}
+/* ── Scout card ── */
+.scout-line{background:#0d1117;border:1px solid #21262d;border-radius:10px;
+  padding:14px 16px;margin-bottom:10px;font-size:.82rem;color:#c9d1d9;line-height:1.6}
+.scout-line strong{color:#e6edf3}
+.scout-angle{background:#0c1929;border:1px solid #1f6feb;border-radius:10px;
+  padding:14px 16px;font-size:.84rem;color:#58a6ff;line-height:1.5;margin-top:14px}
+/* ── Spinner ── */
+.pm-spin{display:flex;align-items:center;justify-content:center;height:160px;color:#8b949e;font-size:.85rem;gap:10px}
+.pm-spin::before{content:"";width:20px;height:20px;border:2px solid #30363d;
+  border-top-color:#58a6ff;border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+/* ── Source labels ── */
+.src-fg{font-size:.6rem;color:#f0883e;background:#2d1f0e;border-radius:3px;
+  padding:1px 5px;vertical-align:middle;margin-left:4px}
+.src-sv{font-size:.6rem;color:#3fb950;background:#0d2114;border-radius:3px;
+  padding:1px 5px;vertical-align:middle;margin-left:4px}
+.src-mlb{font-size:.6rem;color:#58a6ff;background:#0c1929;border-radius:3px;
+  padding:1px 5px;vertical-align:middle;margin-left:4px}
+</style>
+
+<!-- Modal HTML skeleton -->
+<div id="playerModal" role="dialog" aria-modal="true" aria-labelledby="pmPlayerName">
+  <div class="pm-wrap">
+    <div class="pm-header">
+      <img id="pmHeadshot" class="pm-headshot" src="" alt="Player headshot">
+      <div class="pm-meta">
+        <div class="pm-name" id="pmPlayerName">Loading…</div>
+        <div class="pm-sub" id="pmPlayerSub"></div>
+      </div>
+      <span id="pmStreakBadge" class="pm-badge" style="display:none"></span>
+      <button class="pm-close" id="pmClose" aria-label="Close">✕</button>
+    </div>
+    <div class="pm-tabs" id="pmTabs">
+      <button class="pm-tab active" data-tab="overview">OVERVIEW</button>
+      <button class="pm-tab" data-tab="gamelog">GAME LOG</button>
+      <button class="pm-tab" data-tab="splits">L/R SPLITS</button>
+      <button class="pm-tab" data-tab="arsenal">ARSENAL</button>
+      <button class="pm-tab" data-tab="scout">🤖 AI SCOUT</button>
+    </div>
+    <div class="pm-body" id="pmBody"><div class="pm-spin">Loading player data…</div></div>
+  </div>
+</div>
+
+<script>
+// ──────────────────────────────────────────────
+//  PLAYER PROFILE MODAL  —  v2 full build
+// ──────────────────────────────────────────────
+(function () {
+  const modal   = document.getElementById('playerModal');
+  const pmClose = document.getElementById('pmClose');
+  const pmBody  = document.getElementById('pmBody');
+  const pmTabs  = document.querySelectorAll('.pm-tab');
+  const pmName  = document.getElementById('pmPlayerName');
+  const pmSub   = document.getElementById('pmPlayerSub');
+  const pmBadge = document.getElementById('pmStreakBadge');
+  const pmShot  = document.getElementById('pmHeadshot');
+
+  let _data = null;
+  let _tab  = 'overview';
+
+  // ── Open / close ──────────────────────────────
+  function closeModal() {
+    modal.classList.remove('open');
+    document.body.style.overflow = '';
+    _data = null;
+  }
+
+  pmClose.addEventListener('click', closeModal);
+  modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+  // ── Tab switching ─────────────────────────────
+  pmTabs.forEach(t => {
+    t.addEventListener('click', () => {
+      pmTabs.forEach(x => x.classList.remove('active'));
+      t.classList.add('active');
+      _tab = t.dataset.tab;
+      if (_data) renderTab(_tab, _data);
+    });
+  });
+
+  // ── Public entry point ─────────────────────────
+  window.openPlayerModal = function (player) {
+    _tab = 'overview';
+    pmTabs.forEach(t => t.classList.toggle('active', t.dataset.tab === 'overview'));
+
+    pmName.textContent  = player.name || 'Player';
+    pmSub.textContent   = '';
+    pmBadge.style.display = 'none';
+    pmShot.src = player.image || `https://img.mlbstatic.com/mlb-photos/image/upload/d_people:generic:headshot:67:current.png/w_213,q_auto:best/v1/people/${player.id}/headshot/67/current`;
+    pmShot.onerror = () => { pmShot.src = ''; };
+
+    pmBody.innerHTML = '<div class="pm-spin">Fetching player data…</div>';
+    modal.classList.add('open');
+    document.body.style.overflow = 'hidden';
+
+    fetch(`/api/player/${player.id}`)
+      .then(r => r.json())
+      .then(d => {
+        if (!d.success) throw new Error(d.error || 'API error');
+        _data = d;
+
+        // Update header
+        pmName.textContent = d.player.name;
+        const handStr = d.isPitcher
+          ? `Throws ${d.player.throws}`
+          : `Bats ${d.player.bats}`;
+        pmSub.textContent = `${d.player.pos}  ·  ${d.player.team}  ·  ${handStr}`;
+
+        if (d.l7) {
+          if (d.l7.isHot)  { pmBadge.textContent = '🔥 HOT'; pmBadge.className = 'pm-badge hot'; pmBadge.style.display = 'inline-block'; }
+          if (d.l7.isCold) { pmBadge.textContent = '❄️ COLD'; pmBadge.className = 'pm-badge cold'; pmBadge.style.display = 'inline-block'; }
+        }
+
+        renderTab(_tab, _data);
+      })
+      .catch(err => {
+        pmBody.innerHTML = `<div style="padding:24px;color:#f85149;font-size:.85rem">
+          ⚠️ Could not load player data — ${err.message}</div>`;
+      });
+  };
+
+  // ── Helpers ───────────────────────────────────
+  const f3  = v => (v == null || v === 'N/A' || v === '---') ? '—' : (+v).toFixed(3);
+  const f2  = v => (v == null || v === 'N/A' || v === '---') ? '—' : (+v).toFixed(2);
+  const f1  = v => (v == null || v === 'N/A' || v === '---') ? '—' : (+v).toFixed(1);
+  const fi  = v => (v == null || v === 'N/A' || v === '---') ? '—' : Math.round(+v);
+  const fv  = v => (v == null || v === 'N/A' || v === '---') ? 0  : +v;
+
+  function statBox(val, lbl, cls='') {
+    return `<div class="stat-box ${cls}"><div class="sv">${val}</div><div class="sl">${lbl}</div></div>`;
+  }
+
+  function pctBar(pct, color='#58a6ff') {
+    const w = Math.min(100, Math.max(0, pct));
+    return `<div class="split-bar-wrap"><div class="split-bar" style="width:${w}%;background:${color}"></div></div>`;
+  }
+
+  const PITCH_LABELS = {
+    ff:'4-Seam', si:'Sinker', fc:'Cutter', st:'Sweeper',
+    sl:'Slider', cu:'Curveball', ch:'Changeup', fs:'Splitter', kn:'Knuckleball', sv2:'Slurve'
+  };
+
+  // ── Tab renderers ─────────────────────────────
+
+  function renderOverview(d) {
+    const s = d.season || {}, fg = d.fg || {}, sv = d.savant || {};
+    let html = '';
+
+    if (!d.isPitcher) {
+      // ---- HITTER ----
+      const avg = s.avg || fg.fg_avg || '—';
+      const ops = s.ops || fg.fg_ops || '—';
+      const wrc = fg.fg_wrc;
+      const war = fg.fg_war;
+      const xba = sv.sv_xba;
+      const ev  = sv.sv_ev;
+      const brl = sv.sv_brl_pct;
+      const woba= fg.fg_woba || sv.sv_xwoba;
+
+      // Streak quality colour
+      const l7 = d.l7 || {};
+      const l7avg = l7.avg || 0;
+      const avgCls = l7avg >= 0.310 ? 'hi' : l7avg > 0 && l7avg < 0.150 ? 'lo' : '';
+
+      html += `<div class="pm-sec">Season Batting <span class="src-mlb">MLB</span></div>`;
+      html += `<div class="stat-grid">
+        ${statBox(avg, 'AVG')}
+        ${statBox(f3(s.obp || fg.fg_obp), 'OBP')}
+        ${statBox(f3(s.slg || fg.fg_slg), 'SLG')}
+        ${statBox(ops, 'OPS')}
+        ${statBox(s.homeRuns ?? '—', 'HR')}
+        ${statBox(s.rbi ?? '—', 'RBI')}
+        ${statBox(s.gamesPlayed ?? '—', 'G')}
+        ${statBox(fg.fg_pa ?? '—', 'PA')}
+      </div>`;
+
+      html += `<div class="pm-sec">Advanced <span class="src-fg">FG</span></div>`;
+      html += `<div class="stat-grid">
+        ${statBox(f3(woba), 'wOBA', fv(fg.fg_woba) >= 0.370 ? 'hi' : fv(fg.fg_woba) < 0.300 ? 'lo' : '')}
+        ${statBox(wrc != null ? fi(wrc) : '—', 'wRC+', fv(wrc) >= 130 ? 'hi' : fv(wrc) < 80 ? 'lo' : '')}
+        ${statBox(war != null ? f1(war) : '—', 'WAR', fv(war) >= 2 ? 'hi' : '')}
+        ${statBox(fg.fg_r ?? '—', 'R')}
+        ${statBox(fg.fg_sb ?? '—', 'SB')}
+      </div>`;
+
+      html += `<div class="pm-sec">Statcast <span class="src-sv">SV</span></div>`;
+      html += `<div class="stat-grid">
+        ${statBox(f3(xba), 'xBA', fv(xba) >= 0.280 ? 'hi' : fv(xba) < 0.220 ? 'lo' : '')}
+        ${statBox(f3(sv.sv_xslg), 'xSLG')}
+        ${statBox(f3(sv.sv_xwoba), 'xwOBA', fv(sv.sv_xwoba) >= 0.360 ? 'hi' : '')}
+        ${statBox(f1(ev), 'Exit Velo', fv(ev) >= 92 ? 'hi' : '')}
+        ${statBox(sv.sv_hh_pct != null ? fi(sv.sv_hh_pct)+'%' : '—', 'HardHit%')}
+        ${statBox(sv.sv_brl_pct != null ? f1(brl)+'%' : '—', 'Barrel%', fv(brl) >= 10 ? 'hi' : '')}
+        ${statBox(f1(sv.sv_la), 'Launch Ang')}
+        ${statBox(sv.sv_max_ev != null ? f1(sv.sv_max_ev) : '—', 'Max EV')}
+      </div>`;
+
+      if (d.l7 && Object.keys(d.l7).length) {
+        html += `<div class="pm-sec">Last 7 Games</div>`;
+        html += `<div class="stat-grid">
+          ${statBox(l7avg > 0 ? f3(l7avg) : '—', 'AVG', avgCls)}
+          ${statBox(l7.hr ?? '—', 'HR', (l7.hr||0) >= 2 ? 'hi' : '')}
+          ${statBox(l7.rbi ?? '—', 'RBI')}
+          ${statBox(l7.k ?? '—', 'K')}
+          ${statBox(l7.bb ?? '—', 'BB')}
+        </div>`;
+      }
+
+    } else {
+      // ---- PITCHER ----
+      html += `<div class="pm-sec">Season Pitching <span class="src-mlb">MLB</span></div>`;
+      html += `<div class="stat-grid">
+        ${statBox(f2(s.era || fg.fg_era), 'ERA', fv(s.era||fg.fg_era) < 3.2 ? 'hi' : fv(s.era||fg.fg_era) > 5 ? 'lo' : '')}
+        ${statBox(f2(s.whip || fg.fg_whip), 'WHIP')}
+        ${statBox(s.inningsPitched || '—', 'IP')}
+        ${statBox(s.wins != null ? `${s.wins}-${s.losses}` : '—', 'W-L')}
+        ${statBox(s.gamesStarted ?? '—', 'GS')}
+        ${statBox(s.strikeOuts ?? '—', 'K')}
+      </div>`;
+
+      html += `<div class="pm-sec">Advanced <span class="src-fg">FG</span></div>`;
+      html += `<div class="stat-grid">
+        ${statBox(f2(fg.fg_fip), 'FIP')}
+        ${statBox(f2(fg.fg_xfip), 'xFIP')}
+        ${statBox(f1(fg.fg_k9), 'K/9', fv(fg.fg_k9) >= 10 ? 'hi' : '')}
+        ${statBox(f1(fg.fg_bb9), 'BB/9')}
+        ${statBox(fg.fg_kpct ? (fv(fg.fg_kpct)*100).toFixed(1)+'%' : '—', 'K%')}
+        ${statBox(fg.fg_war != null ? f1(fg.fg_war) : '—', 'WAR', fv(fg.fg_war) >= 2 ? 'hi' : '')}
+      </div>`;
+
+      html += `<div class="pm-sec">Statcast <span class="src-sv">SV</span></div>`;
+      html += `<div class="stat-grid">
+        ${statBox(f2(sv.sv_xera), 'xERA', fv(sv.sv_xera) < 3.2 ? 'hi' : fv(sv.sv_xera) > 5 ? 'lo' : '')}
+        ${statBox(f3(sv.sv_xwoba_p), 'xwOBA')}
+      </div>`;
+
+      if (d.l7 && Object.keys(d.l7).length) {
+        html += `<div class="pm-sec">Last 7 Games</div>`;
+        html += `<div class="stat-grid">
+          ${statBox(d.l7.er ?? '—', 'ER', (d.l7.isCold) ? 'lo' : (d.l7.isHot) ? 'hi' : '')}
+          ${statBox(d.l7.k ?? '—', 'K', fv(d.l7.k) >= 28 ? 'hi' : '')}
+        </div>`;
+      }
+    }
+
+    return html;
+  }
+
+  function renderGameLog(d) {
+    const gl = d.gamelog || [];
+    if (!gl.length) return '<div style="color:#8b949e;padding:20px 0;font-size:.85rem">No game log data available.</div>';
+
+    let html = `<div class="pm-sec">Recent Games (last ${gl.length})</div>`;
+
+    if (!d.isPitcher) {
+      html += `<table class="pm-table"><thead><tr>
+        <th>Date</th><th>OPP</th><th>AB</th><th>H</th><th>HR</th>
+        <th>RBI</th><th>K</th><th>BB</th><th>SB</th><th>AVG</th>
+      </tr></thead><tbody>`;
+      for (const g of [...gl].reverse()) {
+        const h = +g.h || 0;
+        const hot  = h >= 3 || (+g.hr >= 1 && h >= 2);
+        const cold = h === 0 && +g.ab >= 3;
+        const cls  = hot ? 'hot-row' : cold ? 'cold-row' : '';
+        html += `<tr class="${cls}">
+          <td>${g.date?.slice(5) || '—'}</td><td>${g.opp||'—'}</td>
+          <td>${g.ab}</td><td>${h}</td><td>${g.hr||0}</td>
+          <td>${g.rbi||0}</td><td>${g.k||0}</td><td>${g.bb||0}</td>
+          <td>${g.sb||0}</td><td>${g.avg||'—'}</td>
+        </tr>`;
+      }
+      html += '</tbody></table>';
+    } else {
+      html += `<table class="pm-table"><thead><tr>
+        <th>Date</th><th>OPP</th><th>IP</th><th>H</th>
+        <th>ER</th><th>K</th><th>BB</th><th>HR</th>
+      </tr></thead><tbody>`;
+      for (const g of [...gl].reverse()) {
+        const er = +g.er || 0;
+        const hot  = er <= 1 && parseFloat(g.ip) >= 5;
+        const cold = er >= 4;
+        const cls  = hot ? 'hot-row' : cold ? 'cold-row' : '';
+        html += `<tr class="${cls}">
+          <td>${g.date?.slice(5)||'—'}</td><td>${g.opp||'—'}</td>
+          <td>${g.ip}</td><td>${g.h||0}</td>
+          <td>${er}</td><td>${g.k||0}</td><td>${g.bb||0}</td><td>${g.hr||0}</td>
+        </tr>`;
+      }
+      html += '</tbody></table>';
+    }
+
+    // L7 summary bar
+    if (d.l7 && Object.keys(d.l7).length && !d.isPitcher) {
+      const l = d.l7;
+      html += `<div class="pm-sec">L7 Summary</div>`;
+      html += `<div class="stat-grid">
+        ${statBox(l.avg > 0 ? f3(l.avg) : '—', 'AVG', l.isHot ? 'hi' : l.isCold ? 'lo' : '')}
+        ${statBox(l.hr ?? '—', 'HR')}
+        ${statBox(l.rbi ?? '—', 'RBI')}
+        ${statBox(l.k ?? '—', 'K')}
+        ${statBox(l.bb ?? '—', 'BB')}
+      </div>`;
+    }
+
+    return html;
+  }
+
+  function renderSplits(d) {
+    const p = d.platoon || {};
+    const vl = p.vl || {}, vr = p.vr || {};
+
+    if (!vl.avg && !vr.avg && !vl.era && !vr.era) {
+      return '<div style="color:#8b949e;padding:20px 0;font-size:.85rem">No split data available for this player yet.</div>';
+    }
+
+    let html = '';
+
+    if (!d.isPitcher) {
+      // Determine platoon edge
+      const opsL = fv(vl.ops), opsR = fv(vr.ops);
+      const maxOps = Math.max(opsL, opsR, 0.001);
+      const diff = Math.abs(opsL - opsR);
+      const hasEdge = diff >= 0.060;
+
+      if (hasEdge) {
+        const fav = opsL > opsR ? 'LHP' : 'RHP';
+        const favOps = opsL > opsR ? opsL : opsR;
+        html += `<div style="background:#0c2010;border:1px solid #238636;border-radius:10px;
+          padding:12px 16px;margin-bottom:16px;font-size:.82rem;color:#3fb950">
+          🔄 <strong>Platoon Edge:</strong> Stronger vs ${fav} — OPS ${favOps.toFixed(3)} vs ${(opsL > opsR ? opsR : opsL).toFixed(3)}
+        </div>`;
+      }
+
+      const metrics = [
+        { lbl: 'AVG', kl: vl.avg, kr: vr.avg, fmt: f3, max: 0.350 },
+        { lbl: 'OBP', kl: vl.obp, kr: vr.obp, fmt: f3, max: 0.450 },
+        { lbl: 'SLG', kl: vl.slg, kr: vr.slg, fmt: f3, max: 0.650 },
+        { lbl: 'OPS', kl: vl.ops, kr: vr.ops, fmt: f3, max: 1.000 },
+      ];
+
+      for (const met of metrics) {
+        const vL = fv(met.kl), vR = fv(met.kr);
+        const pctL = (vL / met.max) * 100;
+        const pctR = (vR / met.max) * 100;
+        const better = vL > vR ? '#3fb950' : '#f85149';
+        const betterR = vR > vL ? '#3fb950' : '#f85149';
+
+        html += `<div class="pm-sec">${met.lbl} — vs LHP vs RHP</div>`;
+        html += `<div class="split-row">
+          <div class="split-label" style="color:#8b949e;font-size:.7rem">vs LHP</div>
+          ${pctBar(pctL, vL >= vR ? '#3fb950' : '#58a6ff')}
+          <div class="split-val">${met.fmt(met.kl)}</div>
+          <div class="split-edge ${vL >= vR ? 'pos' : 'neg'}">${vl.pa || 0} PA</div>
+        </div>`;
+        html += `<div class="split-row">
+          <div class="split-label" style="color:#8b949e;font-size:.7rem">vs RHP</div>
+          ${pctBar(pctR, vR > vL ? '#3fb950' : '#58a6ff')}
+          <div class="split-val">${met.fmt(met.kr)}</div>
+          <div class="split-edge ${vR > vL ? 'pos' : 'neg'}">${vr.pa || 0} PA</div>
+        </div>`;
+      }
+
+      html += `<div class="pm-sec">Counts</div>`;
+      html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">`;
+      html += `<div><div style="font-size:.7rem;color:#8b949e;margin-bottom:6px">vs LHP</div>
+        <div class="stat-grid" style="grid-template-columns:repeat(3,1fr)">
+          ${statBox(vl.hr??'—','HR')}${statBox(vl.k??'—','K')}${statBox(vl.bb??'—','BB')}
+        </div></div>`;
+      html += `<div><div style="font-size:.7rem;color:#8b949e;margin-bottom:6px">vs RHP</div>
+        <div class="stat-grid" style="grid-template-columns:repeat(3,1fr)">
+          ${statBox(vr.hr??'—','HR')}${statBox(vr.k??'—','K')}${statBox(vr.bb??'—','BB')}
+        </div></div>`;
+      html += `</div>`;
+
+    } else {
+      // Pitcher splits
+      const metrics = [
+        { lbl: 'ERA', kl: vl.era, kr: vr.era, fmt: f2, max: 7.0, lowerBetter: true },
+        { lbl: 'WHIP', kl: vl.whip, kr: vr.whip, fmt: f2, max: 2.0, lowerBetter: true },
+      ];
+      for (const met of metrics) {
+        const vL = fv(met.kl), vR = fv(met.kr);
+        const pctL = met.lowerBetter ? (1 - vL/met.max)*100 : (vL/met.max)*100;
+        const pctR = met.lowerBetter ? (1 - vR/met.max)*100 : (vR/met.max)*100;
+
+        html += `<div class="pm-sec">${met.lbl} — vs LHH vs RHH</div>`;
+        html += `<div class="split-row">
+          <div class="split-label" style="color:#8b949e;font-size:.7rem">vs LHH</div>
+          ${pctBar(pctL, '#3fb950')}
+          <div class="split-val">${met.fmt(met.kl)}</div>
+          <div class="split-edge ${met.lowerBetter ? (vL<=vR?'pos':'neg') : (vL>=vR?'pos':'neg')}">${vl.pa||0} BF</div>
+        </div>`;
+        html += `<div class="split-row">
+          <div class="split-label" style="color:#8b949e;font-size:.7rem">vs RHH</div>
+          ${pctBar(pctR, '#58a6ff')}
+          <div class="split-val">${met.fmt(met.kr)}</div>
+          <div class="split-edge ${met.lowerBetter ? (vR<=vL?'pos':'neg') : (vR>=vL?'pos':'neg')}">${vr.pa||0} BF</div>
+        </div>`;
+      }
+      html += `<div class="pm-sec">K / BB</div>`;
+      html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">`;
+      html += `<div><div style="font-size:.7rem;color:#8b949e;margin-bottom:6px">vs LHH</div>
+        <div class="stat-grid" style="grid-template-columns:repeat(2,1fr)">
+          ${statBox(vl.k??'—','K')}${statBox(vl.bb??'—','BB')}
+        </div></div>`;
+      html += `<div><div style="font-size:.7rem;color:#8b949e;margin-bottom:6px">vs RHH</div>
+        <div class="stat-grid" style="grid-template-columns:repeat(2,1fr)">
+          ${statBox(vr.k??'—','K')}${statBox(vr.bb??'—','BB')}
+        </div></div>`;
+      html += '</div>';
+    }
+
+    return html;
+  }
+
+  function renderArsenal(d) {
+    if (!d.isPitcher) {
+      // Hitter — show plate discipline + exit velo breakdown
+      const sv = d.savant || {}, fg = d.fg || {};
+      let html = `<div class="pm-sec">Contact Profile <span class="src-sv">SV</span></div>`;
+      html += `<div class="stat-grid">
+        ${statBox(f1(sv.sv_ev), 'Exit Velo', fv(sv.sv_ev) >= 92 ? 'hi' : '')}
+        ${statBox(f1(sv.sv_max_ev), 'Max EV')}
+        ${statBox(sv.sv_brl_pct != null ? f1(sv.sv_brl_pct)+'%' : '—', 'Barrel%', fv(sv.sv_brl_pct) >= 10 ? 'hi' : '')}
+        ${statBox(sv.sv_hh_pct != null ? f1(sv.sv_hh_pct)+'%' : '—', 'Hard Hit%')}
+        ${statBox(f1(sv.sv_la), 'Launch Ang')}
+        ${statBox(sv.sv_ss_pct != null ? f1(sv.sv_ss_pct)+'%' : '—', 'Sweetspot%')}
+      </div>`;
+      html += `<div class="pm-sec">Plate Discipline <span class="src-fg">FG</span></div>`;
+      html += `<div class="stat-grid">
+        ${statBox(fg.fg_kpct ? (fv(fg.fg_kpct)*100).toFixed(1)+'%' : '—', 'K%', fv(fg.fg_kpct) > 0.28 ? 'lo' : '')}
+        ${statBox(fg.fg_bbpct ? (fv(fg.fg_bbpct)*100).toFixed(1)+'%' : '—', 'BB%', fv(fg.fg_bbpct) > 0.12 ? 'hi' : '')}
+        ${statBox(f3(fg.fg_babip), 'BABIP')}
+      </div>`;
+      return html;
+    }
+
+    const ar = d.arsenal || {};
+    const pcts  = ar.pct  || {};
+    const velos = ar.velo || {};
+    const pitches = Object.keys(pcts);
+
+    if (!pitches.length) {
+      return '<div style="color:#8b949e;padding:20px 0;font-size:.85rem">No arsenal data available for this pitcher.</div>';
+    }
+
+    // Sort by usage descending
+    const sorted = pitches.sort((a, b) => (pcts[b]||0) - (pcts[a]||0));
+    const maxPct = Math.max(...sorted.map(p => pcts[p]||0), 1);
+
+    let html = `<div class="pm-sec">Pitch Arsenal <span class="src-sv">SV</span></div>`;
+    for (const pt of sorted) {
+      const label  = PITCH_LABELS[pt] || pt.toUpperCase();
+      const pct    = pcts[pt] || 0;
+      const velo   = velos[pt];
+      const barW   = (pct / maxPct) * 100;
+      const colors = { ff:'#e3b341', si:'#f0883e', fc:'#79c0ff', st:'#3fb950',
+                       sl:'#ff7b72', cu:'#d2a8ff', ch:'#58a6ff', fs:'#a5d6ff',
+                       kn:'#ffa657', sv2:'#ff9e85' };
+      const barColor = colors[pt] || '#58a6ff';
+
+      html += `<div class="arsenal-row">
+        <div class="arsenal-pitch">${label}</div>
+        <div class="arsenal-bar-wrap"><div class="arsenal-bar" style="width:${barW}%;background:${barColor}"></div></div>
+        <div class="arsenal-pct">${pct.toFixed(1)}%</div>
+        <div class="arsenal-velo">${velo ? velo.toFixed(1)+' mph' : '—'}</div>
+      </div>`;
+    }
+
+    return html;
+  }
+
+  function renderScout(d) {
+    if (!d.scout) return '<div style="color:#8b949e;padding:20px 0;font-size:.85rem">Scout report unavailable.</div>';
+
+    const lines = d.scout.split('\n\n').filter(Boolean);
+    let html = `<div class="pm-sec">🤖 AI Scouting Report — Betting Focus</div>`;
+
+    for (const line of lines) {
+      if (line.startsWith('\n') || line.includes('Betting Angle')) {
+        html += `<div class="scout-angle">${line.trim().replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')}</div>`;
+      } else {
+        html += `<div class="scout-line">${line.trim().replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')}</div>`;
+      }
+    }
+
+    // Monte Carlo summary if available from sim data
+    html += `<div class="pm-sec" style="margin-top:20px">Key Stats Summary</div>`;
+    html += renderOverview(d);
+
+    return html;
+  }
+
+  function renderTab(tab, d) {
+    switch (tab) {
+      case 'overview': pmBody.innerHTML = renderOverview(d); break;
+      case 'gamelog':  pmBody.innerHTML = renderGameLog(d);  break;
+      case 'splits':   pmBody.innerHTML = renderSplits(d);   break;
+      case 'arsenal':  pmBody.innerHTML = renderArsenal(d);  break;
+      case 'scout':    pmBody.innerHTML = renderScout(d);    break;
+    }
+  }
+
+})();
+</script>
