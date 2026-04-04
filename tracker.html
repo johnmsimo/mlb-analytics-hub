@@ -1,797 +1,662 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>MLB Analytics Hub</title>
-<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>MLB Analytics Hub — Daily Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Orbitron:wght@500;700;800&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 <style>
-:root{--bg:#050b14;--panel:#0b1524;--panel2:#0f1d31;--line:#19314b;--txt:#e9f3ff;--mut:#8da8c7;--cyan:#00e5ff;--green:#34d399;--gold:#fbbf24;--red:#fb7185}
-*{box-sizing:border-box}body{margin:0;font-family:Inter,sans-serif;background:radial-gradient(circle at top,#10223d 0,#050b14 55%);color:var(--txt)}
-a{color:inherit;text-decoration:none}.wrap{max-width:1500px;margin:0 auto;padding:20px}.top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}.title{font-family:Orbitron,sans-serif;font-size:1.35rem;color:var(--cyan);letter-spacing:2px}.sub{color:var(--mut);font-size:.86rem}.btn{background:linear-gradient(90deg,#0b2338,#13304d);border:1px solid var(--line);color:var(--txt);padding:10px 14px;border-radius:10px;cursor:pointer}.btn.primary{border-color:#0b4c72;background:linear-gradient(90deg,#09344d,#0a4a6b)}.btn.green{border-color:#176443;background:linear-gradient(90deg,#103b2d,#14533f)}.btn.gold{border-color:#7a5a13;background:linear-gradient(90deg,#3e3210,#5f4b16)}.cards{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-top:16px}.card{background:rgba(11,21,36,.9);border:1px solid var(--line);border-radius:14px;padding:14px}.k{font-family:Orbitron,sans-serif;font-size:.58rem;letter-spacing:2px;color:var(--mut)}.v{font-family:Orbitron,sans-serif;font-size:1.2rem;color:var(--cyan);margin-top:8px}.grid{display:grid;grid-template-columns:1.05fr .95fr;gap:14px;margin-top:16px}.panel{background:rgba(11,21,36,.94);border:1px solid var(--line);border-radius:14px;padding:14px}.pt{font-family:Orbitron,sans-serif;font-size:.72rem;letter-spacing:2px;color:var(--cyan);margin-bottom:12px}.controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.controls input,.controls select{background:#07111d;border:1px solid var(--line);color:var(--txt);padding:10px 12px;border-radius:10px}.table-wrap{overflow:auto}.tbl{width:100%;border-collapse:collapse;font-size:.72rem}.tbl th,.tbl td{padding:8px 6px;border-bottom:1px solid rgba(255,255,255,.05);text-align:left;white-space:nowrap}.tbl th{font-family:Orbitron,sans-serif;font-size:.52rem;letter-spacing:2px;color:var(--mut)}.win{color:var(--green);font-weight:700}.loss{color:var(--red);font-weight:700}.push{color:var(--gold);font-weight:700}.pending{color:var(--mut);font-weight:700}.adj-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.field{display:flex;flex-direction:column;gap:6px}.field label{font-size:.68rem;color:var(--mut)}.field input{background:#07111d;border:1px solid var(--line);color:var(--txt);padding:9px 10px;border-radius:10px}.mini{font-size:.68rem;color:var(--mut);line-height:1.6}.pill{display:inline-block;padding:4px 9px;border-radius:999px;background:rgba(0,229,255,.09);border:1px solid rgba(0,229,255,.18);font-size:.58rem;font-family:Orbitron,sans-serif;color:var(--cyan)}
-@media(max-width:1100px){.cards{grid-template-columns:repeat(2,1fr)}.grid{grid-template-columns:1fr}.adj-grid{grid-template-columns:1fr}}
-
-.cal-grid{display:grid;grid-template-columns:.92fr 1.08fr;gap:14px;margin-top:14px}.cal-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.cal-card{background:rgba(11,21,36,.9);border:1px solid var(--line);border-radius:12px;padding:12px}.cal-v{font-family:Orbitron,sans-serif;font-size:1.05rem;color:var(--cyan);margin-top:6px}.cal-actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.chip{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;border:1px solid var(--line);background:rgba(255,255,255,.03);font-size:.58rem;font-family:Orbitron,sans-serif;letter-spacing:1px;color:var(--mut);cursor:pointer}.chip.on{border-color:rgba(0,229,255,.28);background:rgba(0,229,255,.08);color:var(--cyan)}.up{color:var(--green);font-weight:700}.down{color:var(--red);font-weight:700}.hold{color:var(--gold);font-weight:700}.check{transform:scale(1.05)}
-@media(max-width:1100px){.cal-grid{grid-template-columns:1fr}.cal-cards{grid-template-columns:repeat(2,1fr)}}
-
-
-.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
-.chart-panel{background:rgba(11,21,36,.94);border:1px solid var(--line);border-radius:14px;padding:14px}
-.chart-wrap{position:relative;height:280px}
-.log-list{display:grid;gap:10px;max-height:280px;overflow:auto}
-.log-item{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.05);border-radius:10px;padding:10px}
-.log-top{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:6px}
-.log-time{font-family:Orbitron,sans-serif;font-size:.58rem;letter-spacing:1px;color:var(--cyan)}
-.log-type{font-size:.58rem;font-family:Orbitron,sans-serif;letter-spacing:1px;color:var(--mut)}
-.log-note{font-size:.68rem;color:var(--mut);line-height:1.5}
-.market-pick{min-width:180px}
-@media(max-width:1100px){.chart-grid{grid-template-columns:1fr}}
-
-
-.value-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px}
-.value-card{background:rgba(11,21,36,.9);border:1px solid var(--line);border-radius:12px;padding:12px}
-.value-v{font-family:Orbitron,sans-serif;font-size:1.05rem;color:var(--cyan);margin-top:6px}
-.dual-log{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
-@media(max-width:1100px){.value-grid{grid-template-columns:repeat(2,1fr)}.dual-log{grid-template-columns:1fr}}
-
-
-.slip-hero{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px}
-.slip-card{background:linear-gradient(180deg,rgba(0,229,255,.08),rgba(255,255,255,.02));border:1px solid rgba(0,229,255,.18);border-radius:14px;padding:12px}
-.slip-v{font-family:Orbitron,sans-serif;font-size:1.05rem;color:var(--cyan);margin-top:6px}
-.slip-grid{display:grid;grid-template-columns:1.1fr .9fr;gap:14px;margin-top:14px}
-.tier{display:inline-flex;align-items:center;justify-content:center;min-width:26px;padding:4px 8px;border-radius:999px;font-family:Orbitron,sans-serif;font-size:.58rem;letter-spacing:1px;border:1px solid var(--line)}
-.tier-a{color:#7ef9c6;border-color:rgba(52,211,153,.35);background:rgba(52,211,153,.08)}
-.tier-b{color:#9de9ff;border-color:rgba(0,229,255,.35);background:rgba(0,229,255,.08)}
-.tier-c{color:#ffd57f;border-color:rgba(251,191,36,.35);background:rgba(251,191,36,.08)}
-.tier-d{color:#ff9aac;border-color:rgba(251,113,133,.35);background:rgba(251,113,133,.08)}
-.cardout{display:grid;gap:10px}
-.card-item{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:12px;padding:12px}
-.card-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
-.card-name{font-weight:700;color:var(--txt)}
-.card-meta{color:var(--mut);font-size:.72rem;margin-top:4px}
-.card-tags{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
-.card-tag{padding:5px 8px;border-radius:999px;border:1px solid var(--line);font-size:.62rem;color:var(--mut);font-family:Orbitron,sans-serif;letter-spacing:1px}
-@media(max-width:1100px){.slip-hero{grid-template-columns:repeat(2,1fr)}.slip-grid{grid-template-columns:1fr}}
-
-
-.audit-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px}
-.audit-card{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:12px}
-.audit-v{font-family:Orbitron,sans-serif;font-size:1.02rem;color:var(--cyan);margin-top:6px}
-@media(max-width:1100px){.audit-grid{grid-template-columns:repeat(2,1fr)}}
-
-
-.attr-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-top:12px}
-.attr-card{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:12px}
-.attr-v{font-family:Orbitron,sans-serif;font-size:1.02rem;color:var(--cyan);margin-top:6px}
-@media(max-width:1100px){.attr-grid{grid-template-columns:repeat(2,1fr)}}
-
-
-.brand{display:flex;align-items:center;gap:14px}.app-logo{width:56px;height:56px;object-fit:contain;filter:drop-shadow(0 0 10px rgba(0,229,255,.22))}.brand-stack{display:flex;flex-direction:column;gap:2px}@media(max-width:700px){.app-logo{width:44px;height:44px}}
-
+:root{--bg:#06101b;--bg2:#081523;--panel:#0c1828;--panel2:#102033;--line:#1b3550;--line2:rgba(255,255,255,.06);--txt:#eaf4ff;--mut:#86a4c4;--faint:#55708d;--cyan:#00e5ff;--cyan2:#7cefff;--green:#34d399;--gold:#fbbf24;--red:#fb7185;--blue:#60a5fa;--shadow:0 18px 48px rgba(0,0,0,.32);--radius:18px;--rsm:12px}
+*{box-sizing:border-box;margin:0;padding:0}html{scroll-behavior:smooth;-webkit-text-size-adjust:none;text-size-adjust:none}
+body{background:radial-gradient(circle at top,#122743 0,#06101b 55%);color:var(--txt);font:15px/1.55 Inter,sans-serif;min-height:100dvh}
+a{color:inherit;text-decoration:none}button,input,select{font:inherit;color:inherit}button{cursor:pointer;background:none;border:none}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}
+.skip{position:absolute;left:-9999px;top:auto}.skip:focus{left:12px;top:12px;z-index:9999;background:#fff;color:#000;padding:8px 14px;border-radius:8px}
+.wrap{max-width:1640px;margin:0 auto;padding:20px 16px}
+/* topbar */
+.topbar{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:14px}
+.brand-logo{width:52px;height:52px;object-fit:contain;filter:drop-shadow(0 0 12px rgba(0,229,255,.22))}
+.brand-title{font-family:Orbitron,sans-serif;font-size:1.25rem;letter-spacing:2px;color:var(--cyan)}
+.brand-sub{color:var(--mut);font-size:.84rem;max-width:60ch;margin-top:3px}
+.top-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+/* buttons */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:10px 14px;border-radius:11px;border:1px solid var(--line);background:linear-gradient(180deg,#0c1d30,#0a1625);color:var(--txt);transition:border-color .16s,transform .16s,box-shadow .16s;min-height:40px}
+.btn:hover{border-color:rgba(0,229,255,.3);transform:translateY(-1px);box-shadow:0 4px 16px rgba(0,229,255,.08)}
+.btn:active{transform:translateY(0)}
+.btn.primary{background:linear-gradient(180deg,#0d3f59,#0a2b41);border-color:rgba(0,229,255,.28)}
+.btn.green{background:linear-gradient(180deg,#15533e,#123729);border-color:rgba(52,211,153,.3)}
+.btn.gold{background:linear-gradient(180deg,#614b16,#3c2f0f);border-color:rgba(251,191,36,.3)}
+.btn.ghost{background:rgba(255,255,255,.02)}
+.btn.sm{padding:7px 11px;font-size:.76rem}
+.btn:disabled{opacity:.45;pointer-events:none}
+/* pill */
+.pill{display:inline-flex;align-items:center;gap:7px;padding:6px 10px;border-radius:999px;border:1px solid var(--line);background:rgba(255,255,255,.03);font-family:Orbitron,sans-serif;font-size:.62rem;letter-spacing:1.2px;color:var(--mut)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--cyan);box-shadow:0 0 12px rgba(0,229,255,.6);flex-shrink:0}
+/* panels */
+.panel{background:linear-gradient(180deg,rgba(12,24,40,.96),rgba(10,18,31,.98));border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow)}
+.pp{padding:16px}
+.ph{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:13px}
+.kicker{font-family:Orbitron,sans-serif;font-size:.58rem;letter-spacing:2px;color:var(--mut);text-transform:uppercase;margin-bottom:4px}
+.sec{font-family:Orbitron,sans-serif;font-size:.84rem;letter-spacing:1.6px;color:var(--cyan);text-transform:uppercase}
+/* hero area */
+.hero{margin-top:16px;display:grid;grid-template-columns:1.15fr .85fr;gap:14px}
+/* summary grid */
+.sgrid{display:grid;grid-template-columns:repeat(6,1fr);gap:10px}
+.sc{padding:12px;border-radius:13px;background:rgba(255,255,255,.03);border:1px solid var(--line2)}
+.mk{font-family:Orbitron,sans-serif;font-size:.55rem;letter-spacing:1.8px;color:var(--mut);text-transform:uppercase}
+.mv{font-family:Orbitron,sans-serif;font-size:1.1rem;color:var(--cyan);margin-top:7px}
+.ms{font-size:.73rem;color:var(--mut);margin-top:5px}
+/* control row */
+.cr{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+/* workflow cards */
+.wflow{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:12px}
+.wc{padding:12px;border-radius:13px;border:1px solid var(--line2);background:rgba(255,255,255,.025)}
+.ws{font-family:Orbitron,sans-serif;font-size:.56rem;letter-spacing:2px;color:var(--cyan)}
+.wt{font-weight:700;margin-top:6px;font-size:.88rem}
+.wd{color:var(--mut);font-size:.76rem;line-height:1.5;margin-top:5px}
+/* layout */
+.layout{display:grid;grid-template-columns:270px minmax(0,1fr);gap:14px;margin-top:14px;align-items:start}
+.sidebar{position:sticky;top:12px}
+.navcard{padding:14px}
+.navlist{display:grid;gap:9px;margin-top:11px}
+.navbtn{width:100%;text-align:left;padding:13px;border-radius:13px;border:1px solid var(--line);background:rgba(255,255,255,.02);display:flex;gap:11px;align-items:flex-start;transition:.16s ease}
+.navbtn:hover,.navbtn.active{border-color:rgba(0,229,255,.28);background:rgba(0,229,255,.07)}
+.nnum{min-width:26px;height:26px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;font:700 .68rem Orbitron,sans-serif;color:var(--cyan);background:rgba(0,229,255,.1);border:1px solid rgba(0,229,255,.16);flex-shrink:0;margin-top:1px}
+.nc strong{display:block;font-size:.85rem}
+.nc span{display:block;margin-top:3px;font-size:.72rem;color:var(--mut);line-height:1.45}
+/* stages */
+.stage{display:none}.stage.active{display:block}
+.sstack{display:grid;gap:14px}
+/* grid helpers */
+.two{display:grid;grid-template-columns:1.06fr .94fr;gap:14px}
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.four{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+/* fields */
+.fields{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.field{display:grid;gap:5px}
+.field label{font-size:.66rem;color:var(--mut);letter-spacing:.5px}
+.finput{width:100%;background:#08111d;border:1px solid var(--line);border-radius:11px;padding:10px 11px;min-height:40px;transition:border-color .16s}
+.finput:focus{outline:none;border-color:rgba(0,229,255,.35)}
+/* market grids */
+.mgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+.mc{padding:13px;border-radius:13px;border:1px solid var(--line2);background:rgba(255,255,255,.02)}
+.mc h4{margin:0 0 9px;font-size:.75rem;color:var(--cyan2);font-family:Orbitron,sans-serif;letter-spacing:.9px}
+/* mini cards */
+.mcards{display:grid;grid-template-columns:repeat(4,1fr);gap:9px}
+.mcard{padding:11px;border-radius:12px;background:rgba(255,255,255,.03);border:1px solid var(--line2)}
+/* table */
+.tw{overflow:auto;border:1px solid var(--line2);border-radius:13px}
+table.tbl{width:100%;border-collapse:collapse;font-size:.73rem}
+.tbl th,.tbl td{padding:9px 8px;border-bottom:1px solid rgba(255,255,255,.05);text-align:left;white-space:nowrap;vertical-align:top}
+.tbl th{font-family:Orbitron,sans-serif;font-size:.52rem;letter-spacing:1.6px;color:var(--mut);text-transform:uppercase;background:rgba(255,255,255,.02);position:sticky;top:0;z-index:1}
+.tbl tbody tr:hover td{background:rgba(0,229,255,.04)}
+.tbl td.wrap-cell{white-space:normal;min-width:220px;line-height:1.4;color:var(--mut);max-width:320px}
+/* status badges */
+.badge{font-weight:700;font-family:Orbitron,sans-serif;font-size:.62rem;letter-spacing:.8px}
+.win{color:var(--green)}.loss{color:var(--red)}.push{color:var(--gold)}.pending{color:var(--mut)}
+/* tier tags */
+.tag{display:inline-flex;padding:4px 8px;border-radius:999px;font-family:Orbitron,sans-serif;font-size:.57rem;letter-spacing:.9px;border:1px solid var(--line)}
+.tier-A{color:#7ef9c6;border-color:rgba(52,211,153,.35);background:rgba(52,211,153,.08)}
+.tier-B{color:#9de9ff;border-color:rgba(0,229,255,.35);background:rgba(0,229,255,.08)}
+.tier-C{color:#ffd57f;border-color:rgba(251,191,36,.35);background:rgba(251,191,36,.08)}
+.tier-D{color:#ff9aac;border-color:rgba(251,113,133,.35);background:rgba(251,113,133,.08)}
+/* bet cards */
+.bcard{padding:12px;border-radius:13px;background:rgba(255,255,255,.03);border:1px solid var(--line2)}
+.bt{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}
+.bname{font-weight:700;font-size:.9rem}
+.bmeta{font-size:.74rem;color:var(--mut);margin-top:4px}
+.btags{display:flex;gap:7px;flex-wrap:wrap;margin-top:7px}
+/* subtabs */
+.stabs{display:flex;gap:8px;flex-wrap:wrap}
+.stab{padding:9px 13px;border-radius:999px;border:1px solid var(--line);background:rgba(255,255,255,.02);font-family:Orbitron,sans-serif;font-size:.63rem;letter-spacing:1px;color:var(--mut);transition:.16s ease}
+.stab:hover{border-color:rgba(0,229,255,.2)}
+.stab.active{border-color:rgba(0,229,255,.3);background:rgba(0,229,255,.09);color:var(--cyan)}
+.sview{display:none}.sview.active{display:block}
+/* chart box */
+.chartbox{height:260px;position:relative}
+/* log */
+.loglist{display:grid;gap:9px;max-height:260px;overflow:auto}
+.litem{padding:10px;border-radius:12px;border:1px solid var(--line2);background:rgba(255,255,255,.025)}
+.ltop{display:flex;justify-content:space-between;gap:8px;align-items:center}
+.ltop strong{font-size:.72rem}
+.litem p{margin:6px 0 0;color:var(--mut);font-size:.75rem;line-height:1.45}
+/* notice */
+.notice{padding:11px 13px;border-radius:11px;border:1px solid rgba(0,229,255,.14);background:rgba(0,229,255,.04);color:var(--mut);font-size:.78rem;line-height:1.55}
+/* responsive */
+@media(max-width:1280px){.sgrid{grid-template-columns:repeat(3,1fr)}.hero,.two,.layout,.wflow{grid-template-columns:1fr}.sidebar{position:static}.mcards,.four{grid-template-columns:1fr 1fr}.fields,.mgrid{grid-template-columns:1fr}}
+@media(max-width:760px){.wrap{padding:14px 12px}.brand-logo{width:40px;height:40px}.brand-title{font-size:1rem}.sgrid,.mcards,.four{grid-template-columns:1fr 1fr}.top-actions,.cr,.stabs{width:100%}.btn{width:100%}.btn.sm{width:auto}.tbl td.wrap-cell{min-width:160px}}
+.footer{padding:16px 0 6px;color:var(--faint);font-size:.73rem;text-align:center}
 </style>
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
+<a class="skip" href="#main">Skip to main content</a>
 <div class="wrap">
-  <div class="top">
-    <div class="brand"><img src="/static/logo.png" alt="MLB Analytics Hub logo" class="app-logo"><div class="brand-stack"><div class="title">MLB ANALYTICS HUB</div><div class="sub">Daily projection tracker, bankroll control, CLV attribution, and portfolio management for MLB prop analysis.</div></div></div>
-    <div class="controls"><a class="btn" href="/" target="_blank" rel="noopener noreferrer">Dashboard</a><a class="btn" href="/tracker" target="_blank" rel="noopener noreferrer">Refresh Tracker</a></div>
-  </div>
-  <div class="panel" style="margin-top:16px">
-    <div class="pt">SLATE CONTROLS</div>
-    <div class="controls">
-      <input type="date" id="trackDate" />
-      <button class="btn primary" onclick="captureDay()">Capture Day</button>
-      <button class="btn" onclick="captureClosing()">Capture Closing Lines</button>
-      <button class="btn gold" onclick="gradeDay()">Grade Results</button>
-      <button class="btn" onclick="loadDay()">Reload</button>
-      <button class="btn green" onclick="loadBetSlip()">Build Bet Slip</button>
-      <span class="pill" id="stampPill">No data loaded</span>
-    </div>
-    <div class="mini" style="margin-top:10px">Capture uses the current model board for every game on the selected date and stores the top projections in a daily tracker file. Grade Results checks final MLB box scores and marks each recommendation as win, loss, or push.</div>
-  </div>
 
-  <div class="cards">
-    <div class="card"><div class="k">PICKS</div><div class="v" id="sumPicks">0</div></div>
-    <div class="card"><div class="k">GRADED</div><div class="v" id="sumGraded">0</div></div>
-    <div class="card"><div class="k">WINS</div><div class="v" id="sumWins">0</div></div>
-    <div class="card"><div class="k">LOSSES</div><div class="v" id="sumLosses">0</div></div>
-    <div class="card"><div class="k">HIT RATE</div><div class="v" id="sumHitRate">0%</div></div>
-    <div class="card"><div class="k">BANKROLL</div><div class="v" id="sumBankroll">$0</div></div>
-    <div class="card"><div class="k">PLANNED RISK</div><div class="v" id="sumPlannedRisk">$0</div></div>
-    <div class="card"><div class="k">LIVE ROLL</div><div class="v" id="sumLiveRoll">$0</div></div>
-    <div class="card"><div class="k">ROI $</div><div class="v" id="sumProfitDollars">$0</div></div>
-    <div class="card"><div class="k">DAILY RISK CAP</div><div class="v" id="sumRiskCap">$0</div></div>
-  </div>
-
-  <div class="grid">
-    <div class="panel">
-      <div class="pt">TRACKED PROJECTIONS</div>
-      <div class="table-wrap"><table class="tbl" id="entriesTbl"><thead><tr><th>GAME</th><th>PLAYER</th><th>MARKET</th><th>LINE</th><th>MODEL</th><th>EDGE</th><th>OPEN</th><th>STAKE</th><th>STAKE $</th><th>CLOSE</th><th>CLV</th><th>P/L</th><th>ACTUAL</th><th>RESULT</th><th>REASON</th></tr></thead><tbody><tr><td colspan="15">Loading…</td></tr></tbody></table></div>
-    </div>
+<header class="topbar">
+  <div class="brand">
+    <img class="brand-logo" src="/static/logo.png" alt="MLB Analytics Hub" width="52" height="52" loading="lazy">
     <div>
-      <div class="panel">
-        <div class="pt">MODEL ADJUSTMENTS</div>
-        <div class="adj-grid">
-          <div class="field"><label>Bankroll ($)</label><input id="bankroll" type="number" step="1"></div>
-          <div class="field"><label>Kelly fraction</label><input id="kelly_fraction" type="number" step="0.01"></div>
-          <div class="field"><label>Unit size %</label><input id="unit_size_pct" type="number" step="0.001"></div>
-          <div class="field"><label>Max bet %</label><input id="max_bet_pct" type="number" step="0.001"></div>
-          <div class="field"><label>Max daily risk %</label><input id="max_daily_risk_pct" type="number" step="0.001"></div>
-          <div class="field"><label>Max team exposure %</label><input id="max_team_exposure_pct" type="number" step="0.001"></div>
-          <div class="field"><label>Max market exposure %</label><input id="max_market_exposure_pct" type="number" step="0.001"></div>
-          <div class="field"><label>Max game exposure %</label><input id="max_game_exposure_pct" type="number" step="0.001"></div>
-          <div class="field"><label>Captured per game</label><input id="captured_per_game" type="number" step="1"></div>
-          <div class="field"><label>Best edge threshold</label><input id="best_edge_threshold" type="number" step="0.01"></div>
-          <div class="field"><label>Best prob threshold</label><input id="best_prob_threshold" type="number" step="0.01"></div>
-          <div class="field"><label>Hits multiplier</label><input id="m_batter_hits" type="number" step="0.01"></div>
-          <div class="field"><label>Total bases multiplier</label><input id="m_batter_total_bases" type="number" step="0.01"></div>
-          <div class="field"><label>Home runs multiplier</label><input id="m_batter_home_runs" type="number" step="0.01"></div>
-          <div class="field"><label>RBI multiplier</label><input id="m_batter_rbis" type="number" step="0.01"></div>
-          <div class="field"><label>Runs multiplier</label><input id="m_batter_runs_scored" type="number" step="0.01"></div>
-          <div class="field"><label>SB multiplier</label><input id="m_batter_stolen_bases" type="number" step="0.01"></div>
-          <div class="field"><label>Pitcher K multiplier</label><input id="m_pitcher_strikeouts" type="number" step="0.01"></div>
-        </div>
-        <div class="controls" style="margin-top:12px"><button class="btn green" onclick="saveAdjustments()">Save Adjustments</button></div>
-        <div class="mini" style="margin-top:10px">These multipliers are applied to future daily tracker captures so you can tune market aggressiveness from the app without changing code every day.</div>
-      </div>
-      
-      <div class="panel" style="margin-top:14px">
-        <div class="pt">MARKET BREAKDOWN</div>
-        <div class="table-wrap"><table class="tbl" id="marketTbl"><thead><tr><th>MARKET</th><th>PICKS</th><th>WINS</th><th>LOSSES</th><th>PUSHES</th></tr></thead><tbody><tr><td colspan="5">No data yet</td></tr></tbody></table></div>
-      </div>
-      <div class="panel" style="margin-top:14px">
-        <div class="pt">AUTO CALIBRATION</div>
-        <div class="controls" style="margin-bottom:10px">
-          <select id="calWindow"><option value="7">Last 7 days</option><option value="14">Last 14 days</option></select>
-          <button class="btn" onclick="loadCalibration()">Refresh Calibration</button>
-          <button class="btn green" onclick="applyCalibration()">Apply Suggested Changes</button>
-          <span class="pill" id="calPill">Awaiting calibration run</span>
-        </div>
-        <div class="mini">This module scans recent graded tracker results, compares actual hit rate versus target by market, and proposes multiplier changes that you can approve from inside the app.</div>
-        <div class="cal-grid">
-          <div>
-            <div class="cal-cards">
-              <div class="cal-card"><div class="k">WINDOW PICKS</div><div class="cal-v" id="calTracked">0</div></div>
-              <div class="cal-card"><div class="k">WINDOW GRADED</div><div class="cal-v" id="calGraded">0</div></div>
-              <div class="cal-card"><div class="k">WINDOW HIT RATE</div><div class="cal-v" id="calHitRate">0%</div></div>
-              <div class="cal-card"><div class="k">AVG EDGE</div><div class="cal-v" id="calAvgEdge">0%</div></div>
-            </div>
-            <div class="panel" style="margin-top:12px;padding:12px">
-              <div class="pt" style="margin-bottom:8px">APPROVAL</div>
-              <div class="mini" id="calSummaryTxt">Run calibration to load suggestions.</div>
-            </div>
-          </div>
-          <div>
-            <div class="table-wrap"><table class="tbl" id="calTbl"><thead><tr><th>USE</th><th>MARKET</th><th>SAMPLE</th><th>HIT RATE</th><th>TARGET</th><th>CURRENT</th><th>SUGGESTED</th><th>ACTION</th><th>NOTES</th></tr></thead><tbody><tr><td colspan="9">No calibration yet</td></tr></tbody></table></div>
-          </div>
-        </div>
-            <div class="panel" style="margin-top:14px">
-        <div class="pt">CALIBRATION DASHBOARD</div>
-        <div class="controls" style="margin-bottom:10px">
-          <select id="trendMarket" class="market-pick"></select>
-          <button class="btn" onclick="loadCalibrationDashboard()">Refresh Trends</button>
-          <span class="pill" id="trendPill">Awaiting trend data</span>
-        </div>
-        <div class="mini">Track rolling hit rate, average edge, multiplier history, and recent adjustment events so you can see whether the calibration layer is stabilizing each market over time.</div>
-        <div class="chart-grid">
-          <div class="chart-panel"><div class="pt" style="margin-bottom:8px">DAILY PERFORMANCE</div><div class="chart-wrap"><canvas id="overallTrendChart"></canvas></div></div>
-          <div class="chart-panel"><div class="pt" style="margin-bottom:8px">MARKET TREND</div><div class="chart-wrap"><canvas id="marketTrendChart"></canvas></div></div>
-          <div class="chart-panel"><div class="pt" style="margin-bottom:8px">MULTIPLIER HISTORY</div><div class="chart-wrap"><canvas id="multiplierTrendChart"></canvas></div></div>
-          <div class="chart-panel"><div class="pt" style="margin-bottom:8px">RECENT CHANGE LOG</div><div class="log-list" id="changeLog"></div></div>
-              <div class="panel" style="margin-top:14px">
-        <div class="pt">VALUE DASHBOARD</div>
-        <div class="controls" style="margin-bottom:10px">
-          <select id="valueMarket" class="market-pick"></select>
-          <button class="btn" onclick="loadValueDashboard()">Refresh Value</button>
-          <span class="pill" id="valuePill">Awaiting value data</span>
-        </div>
-        <div class="mini">Track simulated flat-stake profit, ROI, and closing-line value so the app can judge whether projections are beating the market and not just posting raw hit rate.</div>
-        <div class="value-grid">
-          <div class="value-card"><div class="k">WINDOW UNITS</div><div class="value-v" id="valueUnits">0.00u</div></div>
-          <div class="value-card"><div class="k">WINDOW ROI</div><div class="value-v" id="valueROI">0.0%</div></div>
-          <div class="value-card"><div class="k">AVG CLV</div><div class="value-v" id="valueCLV">0.0%</div></div>
-          <div class="value-card"><div class="k">POSITIVE CLV RATE</div><div class="value-v" id="valueCLVRate">0.0%</div></div>
-        </div>
-        <div class="chart-grid">
-          <div class="chart-panel"><div class="pt" style="margin-bottom:8px">UNITS AND ROI</div><div class="chart-wrap"><canvas id="roiTrendChart"></canvas></div></div>
-          <div class="chart-panel"><div class="pt" style="margin-bottom:8px">MARKET VALUE TREND</div><div class="chart-wrap"><canvas id="marketValueChart"></canvas></div></div>
-        </div>
-        <div class="dual-log">
-          <div class="chart-panel"><div class="pt" style="margin-bottom:8px">TOP CLV</div><div class="table-wrap"><table class="tbl" id="topClvTbl"><thead><tr><th>PLAYER</th><th>MARKET</th><th>OPEN</th><th>CLOSE</th><th>CLV</th><th>P/L</th></tr></thead><tbody><tr><td colspan="6">No CLV data</td></tr></tbody></table></div></div>
-          <div class="chart-panel"><div class="pt" style="margin-bottom:8px">TOP PROFIT</div><div class="table-wrap"><table class="tbl" id="topProfitTbl"><thead><tr><th>PLAYER</th><th>MARKET</th><th>OPEN</th><th>RESULT</th><th>P/L</th><th>TEAM</th></tr></thead><tbody><tr><td colspan="6">No profit data</td></tr></tbody></table></div></div>
-        </div>
-      </div>
-
-      <div class="panel" style="margin-top:14px">
-        <div class="pt">BET SLIP BUILDER</div>
-        <div class="controls" style="margin-bottom:10px">
-          <button class="btn green" onclick="loadBetSlip()">Refresh Card</button>
-          <span class="pill" id="slipPill">Awaiting final card</span>
-        </div>
-        <div class="mini">This module turns the approved portfolio into a usable final card with ranked singles, confidence tiers, a core card, a flex group, and a few simple parlay constructions for optional review.</div>
-        <div class="slip-hero">
-          <div class="slip-card"><div class="k">RECOMMENDED BETS</div><div class="slip-v" id="slipCount">0</div></div>
-          <div class="slip-card"><div class="k">CORE CARD</div><div class="slip-v" id="slipCore">0</div></div>
-          <div class="slip-card"><div class="k">FLEX CARD</div><div class="slip-v" id="slipFlex">0</div></div>
-          <div class="slip-card"><div class="k">CARD RISK</div><div class="slip-v" id="slipRisk">$0</div></div>
-        </div>
-        <div class="slip-grid">
-          <div class="chart-panel">
-            <div class="pt" style="margin-bottom:8px">TODAY'S CARD</div>
-            <div class="cardout" id="slipSingles"><div class="card-item">No final card yet.</div></div>
-          </div>
-          <div>
-            <div class="chart-panel">
-              <div class="pt" style="margin-bottom:8px">CORE BETS</div>
-              <div class="table-wrap"><table class="tbl" id="slipCoreTbl"><thead><tr><th>#</th><th>PLAYER</th><th>MARKET</th><th>TIER</th><th>STAKE $</th></tr></thead><tbody><tr><td colspan="5">No core card</td></tr></tbody></table></div>
-            </div>
-            <div class="chart-panel" style="margin-top:14px">
-              <div class="pt" style="margin-bottom:8px">PARLAY IDEAS</div>
-              <div class="table-wrap"><table class="tbl" id="slipParlayTbl"><thead><tr><th>NAME</th><th>LEGS</th><th>AVG EDGE</th><th>AVG PROB</th><th>PROXY RISK</th></tr></thead><tbody><tr><td colspan="5">No parlay ideas</td></tr></tbody></table></div>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div class="panel" style="margin-top:14px">
-        <div class="pt">BANKROLL CURVE & CARD AUDIT</div>
-        <div class="controls" style="margin-bottom:10px">
-          <button class="btn" onclick="loadBankrollAudit()">Refresh Audit</button>
-          <span class="pill" id="auditPill">Awaiting bankroll audit</span>
-        </div>
-        <div class="mini">This panel tracks cumulative bankroll movement across the selected window and audits whether A-tier, core-card, and flex-card plays are actually producing the returns you want.</div>
-        <div class="audit-grid">
-          <div class="audit-card"><div class="k">START BANKROLL</div><div class="audit-v" id="auditStart">$0</div></div>
-          <div class="audit-card"><div class="k">END BANKROLL</div><div class="audit-v" id="auditEnd">$0</div></div>
-          <div class="audit-card"><div class="k">WINDOW PROFIT</div><div class="audit-v" id="auditProfit">$0</div></div>
-          <div class="audit-card"><div class="k">ACTIVE DAYS</div><div class="audit-v" id="auditDays">0</div></div>
-        </div>
-        <div class="chart-grid">
-          <div class="chart-panel"><div class="pt" style="margin-bottom:8px">BANKROLL CURVE</div><div class="chart-wrap"><canvas id="bankrollCurveChart"></canvas></div></div>
-          <div class="chart-panel"><div class="pt" style="margin-bottom:8px">DAILY CARD P/L</div><div class="chart-wrap"><canvas id="dailyCardPLChart"></canvas></div></div>
-        </div>
-        <div class="dual-log">
-          <div class="chart-panel"><div class="pt" style="margin-bottom:8px">TIER AUDIT</div><div class="table-wrap"><table class="tbl" id="tierAuditTbl"><thead><tr><th>TIER</th><th>BETS</th><th>W-L-P</th><th>RISK $</th><th>PROFIT $</th><th>ROI</th></tr></thead><tbody><tr><td colspan="6">No audit yet</td></tr></tbody></table></div></div>
-          <div class="chart-panel"><div class="pt" style="margin-bottom:8px">CARD BUCKET AUDIT</div><div class="table-wrap"><table class="tbl" id="cardAuditTbl"><thead><tr><th>BUCKET</th><th>BETS</th><th>W-L-P</th><th>RISK $</th><th>PROFIT $</th><th>ROI</th></tr></thead><tbody><tr><td colspan="6">No audit yet</td></tr></tbody></table></div></div>
-        </div>
-      </div>
-      <div class="panel" style="margin-top:14px">
-        <div class="pt">CLV ATTRIBUTION & EDGE REPORT</div>
-        <div class="controls" style="margin-bottom:10px">
-          <button class="btn" onclick="loadAttributionDashboard()">Refresh Attribution</button>
-          <span class="pill" id="attrPill">Awaiting attribution report</span>
-        </div>
-        <div class="mini">This report separates market wins that were backed by positive closing-line value from results that were mostly variance, then breaks that performance down by market and confidence tier.</div>
-        <div class="attr-grid">
-          <div class="attr-card"><div class="k">GRADED BETS</div><div class="attr-v" id="attrGraded">0</div></div>
-          <div class="attr-card"><div class="k">RISKED</div><div class="attr-v" id="attrRisk">$0</div></div>
-          <div class="attr-card"><div class="k">PROFIT</div><div class="attr-v" id="attrProfit">$0</div></div>
-          <div class="attr-card"><div class="k">ROI</div><div class="attr-v" id="attrROI">0%</div></div>
-          <div class="attr-card"><div class="k">AVG CLV</div><div class="attr-v" id="attrCLV">0%</div></div>
-        </div>
-        <div class="chart-grid">
-          <div class="chart-panel"><div class="pt" style="margin-bottom:8px">DAILY CLV VS ROI</div><div class="chart-wrap"><canvas id="attrDailyChart"></canvas></div></div>
-          <div class="chart-panel"><div class="pt" style="margin-bottom:8px">TIER EDGE EFFICIENCY</div><div class="chart-wrap"><canvas id="attrTierChart"></canvas></div></div>
-        </div>
-        <div class="dual-log">
-          <div class="chart-panel"><div class="pt" style="margin-bottom:8px">MARKET ATTRIBUTION</div><div class="table-wrap"><table class="tbl" id="attrMarketTbl"><thead><tr><th>MARKET</th><th>BETS</th><th>AVG CLV</th><th>PROFIT $</th><th>ROI</th><th>HIT</th></tr></thead><tbody><tr><td colspan="6">No market attribution yet</td></tr></tbody></table></div></div>
-          <div class="chart-panel"><div class="pt" style="margin-bottom:8px">TIER ATTRIBUTION</div><div class="table-wrap"><table class="tbl" id="attrTierTbl"><thead><tr><th>TIER</th><th>BETS</th><th>AVG EDGE</th><th>AVG CLV</th><th>PROFIT $</th><th>ROI</th></tr></thead><tbody><tr><td colspan="6">No tier attribution yet</td></tr></tbody></table></div></div>
-        </div>
-      </div>
-      <div class="panel" style="margin-top:14px">
-        <div class="pt">PORTFOLIO CONSTRAINTS</div>
-        <div class="controls" style="margin-bottom:10px">
-          <button class="btn" onclick="loadPortfolioPlan()">Refresh Portfolio</button>
-          <span class="pill" id="portfolioPill">Awaiting portfolio plan</span>
-        </div>
-        <div class="mini">This layer turns the slate into a risk-managed portfolio by accepting only bets that pass the edge gate and fit inside team, market, game, and total daily exposure limits.</div>
-        <div class="value-grid">
-          <div class="value-card"><div class="k">ACCEPTED BETS</div><div class="value-v" id="pfAccepted">0</div></div>
-          <div class="value-card"><div class="k">REJECTED BETS</div><div class="value-v" id="pfRejected">0</div></div>
-          <div class="value-card"><div class="k">ACCEPTED RISK</div><div class="value-v" id="pfRisk">$0</div></div>
-          <div class="value-card"><div class="k">REMAINING CAP</div><div class="value-v" id="pfRemain">$0</div></div>
-        </div>
-        <div class="dual-log">
-          <div class="chart-panel"><div class="pt" style="margin-bottom:8px">APPROVED BETS</div><div class="table-wrap"><table class="tbl" id="pfAcceptedTbl"><thead><tr><th>PLAYER</th><th>MARKET</th><th>TEAM</th><th>STAKE $</th><th>EDGE</th><th>STATUS</th></tr></thead><tbody><tr><td colspan="6">No portfolio plan</td></tr></tbody></table></div></div>
-          <div class="chart-panel"><div class="pt" style="margin-bottom:8px">REJECTED BETS</div><div class="table-wrap"><table class="tbl" id="pfRejectedTbl"><thead><tr><th>PLAYER</th><th>MARKET</th><th>TEAM</th><th>STAKE $</th><th>EDGE</th><th>REASON</th></tr></thead><tbody><tr><td colspan="6">No portfolio plan</td></tr></tbody></table></div></div>
-        </div>
-        <div class="dual-log">
-          <div class="chart-panel"><div class="pt" style="margin-bottom:8px">TEAM EXPOSURE</div><div class="table-wrap"><table class="tbl" id="pfTeamTbl"><thead><tr><th>TEAM</th><th>RISK $</th><th>RISK %</th></tr></thead><tbody><tr><td colspan="3">No exposure data</td></tr></tbody></table></div></div>
-          <div class="chart-panel"><div class="pt" style="margin-bottom:8px">MARKET EXPOSURE</div><div class="table-wrap"><table class="tbl" id="pfMarketTbl"><thead><tr><th>MARKET</th><th>RISK $</th><th>RISK %</th></tr></thead><tbody><tr><td colspan="3">No exposure data</td></tr></tbody></table></div></div>
-        </div>
-      </div>
-</div>
-      </div>
+      <div class="brand-title">MLB ANALYTICS HUB</div>
+      <div class="brand-sub">Daily tracker — set the slate, capture the board, close and grade, then review calibration, CLV, and bankroll performance.</div>
     </div>
   </div>
-</div>
-<script>
-const today = new Date().toISOString().slice(0,10);
-document.getElementById('trackDate').value = today;
-function pct(v){ return ((parseFloat(v)||0)*100).toFixed(1)+'%'; }
-function fmtEdge(v){ return v==null ? 'N/A' : ((parseFloat(v)||0)*100).toFixed(1)+'%'; }
-function marketLabel(k){ return ({batter_hits:'Hits',batter_total_bases:'Total Bases',batter_home_runs:'HR',batter_rbis:'RBI',batter_runs_scored:'Runs',batter_stolen_bases:'SB',pitcher_strikeouts:'Pitcher K'})[k] || k; }
-function fillAdjustments(a){
-  document.getElementById('bankroll').value = a.bankroll;
-  document.getElementById('kelly_fraction').value = a.kelly_fraction;
-  document.getElementById('unit_size_pct').value = a.unit_size_pct;
-  document.getElementById('max_bet_pct').value = a.max_bet_pct;
-  document.getElementById('max_daily_risk_pct').value = a.max_daily_risk_pct;
-  document.getElementById('max_team_exposure_pct').value = a.max_team_exposure_pct;
-  document.getElementById('max_market_exposure_pct').value = a.max_market_exposure_pct;
-  document.getElementById('max_game_exposure_pct').value = a.max_game_exposure_pct;
-  document.getElementById('captured_per_game').value = a.captured_per_game;
-  document.getElementById('best_edge_threshold').value = a.best_edge_threshold;
-  document.getElementById('best_prob_threshold').value = a.best_prob_threshold;
-  Object.keys(a.market_multipliers||{}).forEach(k=>{ const el=document.getElementById('m_'+k); if(el) el.value = a.market_multipliers[k]; });
-}
-function renderSummary(s){
-  document.getElementById('sumPicks').textContent = s.picks || 0;
-  document.getElementById('sumGraded').textContent = s.graded || 0;
-  document.getElementById('sumWins').textContent = s.wins || 0;
-  document.getElementById('sumLosses').textContent = s.losses || 0;
-  document.getElementById('sumHitRate').textContent = pct(s.hit_rate || 0);
-  window.__TRACKER_VALUE = (s.value || {});
-  const br = s.bankroll || {};
-  document.getElementById('sumBankroll').textContent = '$'+(parseFloat(br.starting_bankroll||0).toFixed(0));
-  document.getElementById('sumPlannedRisk').textContent = '$'+(parseFloat(br.planned_stake||0).toFixed(0));
-  document.getElementById('sumLiveRoll').textContent = '$'+(parseFloat(br.live_bankroll||0).toFixed(0));
-  document.getElementById('sumProfitDollars').textContent = '$'+(parseFloat((s.value||{}).dollars||0).toFixed(0));
-  document.getElementById('sumRiskCap').textContent = '$'+(parseFloat(br.daily_risk_cap||0).toFixed(0));
-  const body = document.querySelector('#marketTbl tbody');
-  const items = s.by_market || {};
-  const rows = Object.keys(items).map(k => `<tr><td>${marketLabel(k)}</td><td>${items[k].picks}</td><td class="win">${items[k].wins}</td><td class="loss">${items[k].losses}</td><td class="push">${items[k].pushes}</td></tr>`).join('');
-  body.innerHTML = rows || '<tr><td colspan="5">No data yet</td></tr>';
-}
-function renderEntries(entries){
-  const body = document.querySelector('#entriesTbl tbody');
-  body.innerHTML = (entries||[]).map(r => `<tr><td>${r.team} | ${r.gamePk}</td><td>${r.player}</td><td>${marketLabel(r.marketKey)}</td><td>O ${r.line}</td><td>${pct(r.adjProb)}</td><td>${fmtEdge(r.edge)}</td><td>${r.openingPrice==null?'N/A':r.openingPrice}</td><td>${r.stakePct==null?'N/A':fmtEdge(r.stakePct)}</td><td>${r.stakeDollars==null?'N/A':'$'+parseFloat(r.stakeDollars).toFixed(2)}</td><td>${r.closingPrice==null?'N/A':r.closingPrice}</td><td>${r.clvEdge==null?'N/A':fmtEdge(r.clvEdge)}</td><td>${r.profitDollars==null?'—':'$'+parseFloat(r.profitDollars).toFixed(2)}</td><td>${r.actual==null?'—':r.actual}</td><td class="${r.grade||'pending'}">${(r.grade||'pending').toUpperCase()}</td><td style="white-space:normal;max-width:340px">${r.reason || ''}</td></tr>`).join('') || '<tr><td colspan="15">No captured entries for this date.</td></tr>';
-}
-async function loadAdjustments(){
-  const res = await fetch('/api/tracker/adjustments'); const data = await res.json(); if(data.success) fillAdjustments(data.adjustments);
-}
-async function loadDay(){
-  const ds = document.getElementById('trackDate').value; const res = await fetch('/api/tracker/date/'+ds); const data = await res.json();
-  if(data.success){ renderEntries(data.entries||[]); renderSummary(data.summary||{}); fillAdjustments(data.adjustments||{}); document.getElementById('stampPill').textContent = (data.capturedAt ? 'Captured: '+data.capturedAt.slice(0,19).replace('T',' ') : 'No capture yet') + (data.closingCapturedAt ? ' | Closing: '+data.closingCapturedAt.slice(0,19).replace('T',' ') : '') + (data.gradedAt ? ' | Graded: '+data.gradedAt.slice(0,19).replace('T',' ') : ''); }
-}
-async function captureDay(){
-  const ds = document.getElementById('trackDate').value; document.getElementById('stampPill').textContent='Capturing...';
-  const res = await fetch('/api/tracker/capture/'+ds, {method:'POST'}); const data = await res.json();
-  if(data.success){ renderEntries(data.entries||[]); renderSummary(data.summary||{}); document.getElementById('stampPill').textContent='Captured: '+(data.capturedAt||''); loadValueDashboard(); loadPortfolioPlan(); loadBetSlip(); loadBankrollAudit(); loadAttributionDashboard(); }
-  else { alert(data.error || 'Capture failed'); }
-}
-async function captureClosing(){
-  const ds = document.getElementById('trackDate').value; document.getElementById('stampPill').textContent='Capturing closing lines...';
-  const res = await fetch('/api/tracker/close/'+ds, {method:'POST'}); const data = await res.json();
-  if(data.success){ renderEntries(data.entries||[]); renderSummary(data.summary||{}); document.getElementById('stampPill').textContent='Closing captured: '+(data.closingCapturedAt||''); loadValueDashboard(); loadPortfolioPlan(); loadBetSlip(); loadBankrollAudit(); loadAttributionDashboard(); }
-  else { alert(data.error || 'Closing capture failed'); }
-}
-async function gradeDay(){
-  const ds = document.getElementById('trackDate').value; document.getElementById('stampPill').textContent='Grading...';
-  const res = await fetch('/api/tracker/grade/'+ds, {method:'POST'}); const data = await res.json();
-  if(data.success){ renderEntries(data.entries||[]); renderSummary(data.summary||{}); document.getElementById('stampPill').textContent='Graded: '+(data.gradedAt||''); loadValueDashboard(); loadPortfolioPlan(); loadBetSlip(); loadBankrollAudit(); loadAttributionDashboard(); }
-  else { alert(data.error || 'Grade failed'); }
-}
-async function saveAdjustments(){
-  const payload = {
-    bankroll: parseFloat(document.getElementById('bankroll').value || '1000'),
-    kelly_fraction: parseFloat(document.getElementById('kelly_fraction').value || '0.50'),
-    unit_size_pct: parseFloat(document.getElementById('unit_size_pct').value || '0.01'),
-    max_bet_pct: parseFloat(document.getElementById('max_bet_pct').value || '0.03'),
-    max_daily_risk_pct: parseFloat(document.getElementById('max_daily_risk_pct').value || '0.12'),
-    max_team_exposure_pct: parseFloat(document.getElementById('max_team_exposure_pct').value || '0.05'),
-    max_market_exposure_pct: parseFloat(document.getElementById('max_market_exposure_pct').value || '0.05'),
-    max_game_exposure_pct: parseFloat(document.getElementById('max_game_exposure_pct').value || '0.08'),
-    captured_per_game: parseInt(document.getElementById('captured_per_game').value || '14', 10),
-    best_edge_threshold: parseFloat(document.getElementById('best_edge_threshold').value || '0.03'),
-    best_prob_threshold: parseFloat(document.getElementById('best_prob_threshold').value || '0.58'),
-    market_multipliers: {
-      batter_hits: parseFloat(document.getElementById('m_batter_hits').value || '1'),
-      batter_total_bases: parseFloat(document.getElementById('m_batter_total_bases').value || '1'),
-      batter_home_runs: parseFloat(document.getElementById('m_batter_home_runs').value || '1'),
-      batter_rbis: parseFloat(document.getElementById('m_batter_rbis').value || '1'),
-      batter_runs_scored: parseFloat(document.getElementById('m_batter_runs_scored').value || '1'),
-      batter_stolen_bases: parseFloat(document.getElementById('m_batter_stolen_bases').value || '1'),
-      pitcher_strikeouts: parseFloat(document.getElementById('m_pitcher_strikeouts').value || '1')
-    }
-  };
-  const res = await fetch('/api/tracker/adjustments', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)}); const data = await res.json();
-  if(data.success){ fillAdjustments(data.adjustments); alert('Adjustments saved. New captures will use these values.'); loadCalibrationDashboard(); loadValueDashboard(); loadPortfolioPlan(); loadBetSlip(); loadBankrollAudit(); loadAttributionDashboard(); }
-}
+  <div class="top-actions">
+    <span class="pill" id="statusPill"><span class="dot"></span><span id="statusTxt">Ready</span></span>
+    <a class="btn ghost" href="/" target="_blank" rel="noopener noreferrer">Dashboard</a>
+    <button class="btn" id="reloadTopBtn">Reload Day</button>
+  </div>
+</header>
 
-
-let CALIBRATION = null;
-function fmtPct(v){ return ((parseFloat(v)||0)*100).toFixed(1)+'%'; }
-function fmtMult(v){ return (parseFloat(v)||0).toFixed(3); }
-function calActionClass(a){ return a==='increase'?'up':(a==='decrease'?'down':'hold'); }
-function loadCalibration(){
-  const ds = document.getElementById('trackDate').value;
-  const w = document.getElementById('calWindow').value || '7';
-  document.getElementById('calPill').textContent = 'Loading calibration...';
-  fetch('/api/tracker/calibration/'+ds+'?window='+w).then(r=>r.json()).then(data=>{
-    if(!data.success) throw new Error(data.error||'Calibration failed');
-    CALIBRATION = data;
-    renderCalibration(data);
-    document.getElementById('calPill').textContent = 'Calibration ready: '+w+'d window';
-  }).catch(err=>{ document.getElementById('calPill').textContent = err.message; });
-}
-function renderCalibration(data){
-  const s = data.summary || {};
-  document.getElementById('calTracked').textContent = s.tracked || 0;
-  document.getElementById('calGraded').textContent = s.graded || 0;
-  document.getElementById('calHitRate').textContent = fmtPct(s.hit_rate || 0);
-  document.getElementById('calAvgEdge').textContent = fmtPct(s.avg_edge || 0);
-  const markets = data.markets || [];
-  const body = document.querySelector('#calTbl tbody');
-  body.innerHTML = markets.map(m => `<tr>
-    <td><input class="check" type="checkbox" data-market="${m.marketKey}" ${m.action!=='hold'?'checked':''}></td>
-    <td>${marketLabel(m.marketKey)}</td>
-    <td>${m.graded}</td>
-    <td>${fmtPct(m.hit_rate)}</td>
-    <td>${fmtPct(m.target_rate)}</td>
-    <td>${fmtMult(m.current_multiplier)}</td>
-    <td>${fmtMult(m.suggested_multiplier)}</td>
-    <td class="${calActionClass(m.action)}">${m.action.toUpperCase()}</td>
-    <td style="white-space:normal;max-width:320px">${m.confidence} · ${m.rationale}</td>
-  </tr>`).join('') || '<tr><td colspan="9">No graded samples found in this window.</td></tr>';
-  const actionable = markets.filter(m => m.action !== 'hold');
-  document.getElementById('calSummaryTxt').textContent = actionable.length
-    ? actionable.length + ' markets have suggested changes. Review the checkboxes, then apply only the ones you want.'
-    : 'No meaningful multiplier changes are suggested right now. The model is close to target or the sample is too small.';
-}
-function selectedCalibrationMarkets(){
-  return Array.from(document.querySelectorAll('#calTbl input[type="checkbox"]:checked')).map(el => el.getAttribute('data-market'));
-}
-function applyCalibration(){
-  const ds = document.getElementById('trackDate').value;
-  const w = parseInt(document.getElementById('calWindow').value || '7', 10);
-  const markets = selectedCalibrationMarkets();
-  document.getElementById('calPill').textContent = 'Applying suggestions...';
-  fetch('/api/tracker/calibration/apply', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({date: ds, window: w, markets})
-  }).then(r=>r.json()).then(data=>{
-    if(!data.success) throw new Error(data.error || 'Apply failed');
-    fillAdjustments(data.adjustments);
-    const applied = (data.applied||[]).map(x => marketLabel(x.marketKey)+'→'+fmtMult(x.suggested_multiplier)).join(', ');
-    document.getElementById('calPill').textContent = applied ? 'Applied: '+applied : 'No changes applied';
-    loadCalibration();
-    loadCalibrationDashboard();
-    loadValueDashboard();
-  }).catch(err=>{ document.getElementById('calPill').textContent = err.message; });
-}
-const __oldLoadDay = loadDay;
-loadDay = async function(){ await __oldLoadDay(); loadCalibration(); loadCalibrationDashboard(); loadValueDashboard(); loadPortfolioPlan(); loadBetSlip(); loadBankrollAudit(); loadAttributionDashboard(); };
-
-
-
-let CAL_DASH = null;
-let TRACKER_CHARTS = {};
-function destroyChart(key){ if(TRACKER_CHARTS[key]){ TRACKER_CHARTS[key].destroy(); TRACKER_CHARTS[key]=null; } }
-function chartBase(){
-  return {
-    responsive:true, maintainAspectRatio:false,
-    plugins:{legend:{labels:{color:'#cfe7ff'}}},
-    scales:{
-      x:{ticks:{color:'#8da8c7'}, grid:{color:'rgba(255,255,255,.05)'}},
-      y:{ticks:{color:'#8da8c7'}, grid:{color:'rgba(255,255,255,.05)'}}
-    }
-  };
-}
-function chartPct(v){ return v==null ? null : Math.round(parseFloat(v)*1000)/10; }
-function ensureTrendMarketOptions(markets){
-  const el = document.getElementById('trendMarket');
-  if(!el) return;
-  const current = el.value;
-  el.innerHTML = (markets||[]).map(m => `<option value="${m}">${marketLabel(m)}</option>`).join('');
-  if(current && markets.includes(current)) el.value = current;
-}
-function renderOverallTrend(series){
-  destroyChart('overall');
-  const el = document.getElementById('overallTrendChart'); if(!el) return;
-  const labels = (series||[]).map(x => x.date.slice(5));
-  TRACKER_CHARTS.overall = new Chart(el.getContext('2d'), {
-    type:'line',
-    data:{labels, datasets:[
-      {label:'Hit Rate %', data:(series||[]).map(x => chartPct(x.hit_rate)), borderColor:'#00e5ff', backgroundColor:'rgba(0,229,255,.18)', tension:.28, yAxisID:'y'},
-      {label:'Avg Edge %', data:(series||[]).map(x => chartPct(x.avg_edge)), borderColor:'#fbbf24', backgroundColor:'rgba(251,191,36,.18)', tension:.28, yAxisID:'y'}
-    ]},
-    options: chartBase()
-  });
-}
-function renderMarketTrend(series, marketKey){
-  destroyChart('market');
-  const el = document.getElementById('marketTrendChart'); if(!el) return;
-  const labels = (series||[]).map(x => x.date.slice(5));
-  const cfg = chartBase();
-  cfg.scales.y1 = {position:'right', ticks:{color:'#8da8c7'}, grid:{display:false}};
-  TRACKER_CHARTS.market = new Chart(el.getContext('2d'), {
-    data:{labels, datasets:[
-      {type:'bar', label:'Graded', data:(series||[]).map(x => x.graded || 0), backgroundColor:'rgba(52,211,153,.24)', borderColor:'#34d399', yAxisID:'y1'},
-      {type:'line', label:marketLabel(marketKey)+' Hit Rate %', data:(series||[]).map(x => chartPct(x.hit_rate)), borderColor:'#00e5ff', backgroundColor:'rgba(0,229,255,.18)', tension:.28, yAxisID:'y'},
-      {type:'line', label:'Avg Edge %', data:(series||[]).map(x => chartPct(x.avg_edge)), borderColor:'#fb7185', backgroundColor:'rgba(251,113,133,.18)', tension:.28, yAxisID:'y'}
-    ]},
-    options: cfg
-  });
-}
-function renderMultiplierTrend(points, marketKey){
-  destroyChart('mult');
-  const el = document.getElementById('multiplierTrendChart'); if(!el) return;
-  const labels = (points||[]).map(x => (x.timestamp||'').slice(5,16).replace('T',' '));
-  TRACKER_CHARTS.mult = new Chart(el.getContext('2d'), {
-    type:'line',
-    data:{labels, datasets:[
-      {label:marketLabel(marketKey)+' Multiplier', data:(points||[]).map(x => parseFloat(x.multiplier||1)), borderColor:'#34d399', backgroundColor:'rgba(52,211,153,.16)', tension:.22}
-    ]},
-    options: chartBase()
-  });
-}
-function renderChangeLog(events){
-  const el = document.getElementById('changeLog'); if(!el) return;
-  el.innerHTML = (events||[]).slice().reverse().map(e => {
-    const applied = (e.applied||[]).map(x => marketLabel(x.marketKey)+'→'+(parseFloat(x.suggested_multiplier||1).toFixed(3))).join(', ');
-    return `<div class="log-item"><div class="log-top"><span class="log-time">${(e.timestamp||'').slice(0,19).replace('T',' ')}</span><span class="log-type">${(e.eventType||'event').replace('_',' ').toUpperCase()}</span></div><div class="log-note">${e.note || 'Adjustment event'}${applied ? ' · '+applied : ''}</div></div>`;
-  }).join('') || '<div class="log-item"><div class="log-note">No adjustment history yet.</div></div>';
-}
-function selectedTrendMarket(){
-  const el = document.getElementById('trendMarket');
-  return el && el.value ? el.value : 'batter_hits';
-}
-function renderCalibrationDashboard(data){
-  CAL_DASH = data;
-  ensureTrendMarketOptions(data.availableMarkets || []);
-  const mk = selectedTrendMarket();
-  renderOverallTrend(data.overallSeries || []);
-  renderMarketTrend((data.marketSeries || {})[mk] || [], mk);
-  renderMultiplierTrend((data.multiplierHistory || {})[mk] || [], mk);
-  renderChangeLog(data.events || []);
-}
-function loadCalibrationDashboard(){
-  const ds = document.getElementById('trackDate').value;
-  const w = document.getElementById('calWindow').value || '14';
-  document.getElementById('trendPill').textContent = 'Loading trends...';
-  fetch('/api/tracker/calibration/dashboard/'+ds+'?window='+w).then(r=>r.json()).then(data => {
-    if(!data.success) throw new Error(data.error || 'Trend load failed');
-    renderCalibrationDashboard(data);
-    document.getElementById('trendPill').textContent = 'Trend window: '+w+'d';
-  }).catch(err => { document.getElementById('trendPill').textContent = err.message; });
-}
-document.addEventListener('change', function(e){
-  if(e.target && e.target.id === 'trendMarket' && CAL_DASH){
-    renderCalibrationDashboard(CAL_DASH);
-  }
-});
-
-
-
-let VALUE_DASH = null;
-function ensureValueMarketOptions(markets){
-  const el = document.getElementById('valueMarket'); if(!el) return;
-  const current = el.value;
-  el.innerHTML = (markets||[]).map(m => `<option value="${m}">${marketLabel(m)}</option>`).join('');
-  if(current && markets.includes(current)) el.value = current;
-}
-function unitsFmt(v){ const n=parseFloat(v||0); return (n>0?'+':'') + n.toFixed(2) + 'u'; }
-function renderRoiTrend(series){
-  destroyChart('roi');
-  const el = document.getElementById('roiTrendChart'); if(!el) return;
-  const labels = (series||[]).map(x => x.date.slice(5));
-  const cfg = chartBase(); cfg.scales.y1 = {position:'right', ticks:{color:'#8da8c7'}, grid:{display:false}};
-  TRACKER_CHARTS.roi = new Chart(el.getContext('2d'), {
-    data:{labels, datasets:[
-      {type:'bar', label:'Units', data:(series||[]).map(x => parseFloat(x.units||0)), backgroundColor:'rgba(52,211,153,.25)', borderColor:'#34d399', yAxisID:'y1'},
-      {type:'line', label:'ROI %', data:(series||[]).map(x => chartPct(x.roi)), borderColor:'#00e5ff', backgroundColor:'rgba(0,229,255,.16)', tension:.25, yAxisID:'y'},
-      {type:'line', label:'Avg CLV %', data:(series||[]).map(x => chartPct(x.avg_clv)), borderColor:'#fbbf24', backgroundColor:'rgba(251,191,36,.16)', tension:.25, yAxisID:'y'}
-    ]}, options: cfg
-  });
-}
-function renderMarketValueTrend(series, mk){
-  destroyChart('mvalue');
-  const el = document.getElementById('marketValueChart'); if(!el) return;
-  TRACKER_CHARTS.mvalue = new Chart(el.getContext('2d'), {
-    data:{labels:(series||[]).map(x => x.date.slice(5)), datasets:[
-      {type:'line', label:marketLabel(mk)+' ROI %', data:(series||[]).map(x => chartPct(x.roi)), borderColor:'#00e5ff', backgroundColor:'rgba(0,229,255,.16)', tension:.25},
-      {type:'line', label:'Positive CLV %', data:(series||[]).map(x => chartPct(x.clv_pos_rate)), borderColor:'#fb7185', backgroundColor:'rgba(251,113,133,.16)', tension:.25},
-      {type:'line', label:'Avg CLV %', data:(series||[]).map(x => chartPct(x.avg_clv)), borderColor:'#34d399', backgroundColor:'rgba(52,211,153,.16)', tension:.25}
-    ]}, options: chartBase()
-  });
-}
-function renderMiniValueTables(data){
-  const topClv = document.querySelector('#topClvTbl tbody');
-  const topProfit = document.querySelector('#topProfitTbl tbody');
-  topClv.innerHTML = (data.topCLV||[]).map(r => `<tr><td>${r.player}</td><td>${marketLabel(r.marketKey)}</td><td>${r.openingPrice ?? 'N/A'}</td><td>${r.closingPrice ?? 'N/A'}</td><td>${fmtEdge(r.clvEdge)}</td><td>${r.profitUnits==null?'—':unitsFmt(r.profitUnits)}</td></tr>`).join('') || '<tr><td colspan="6">No CLV data</td></tr>';
-  topProfit.innerHTML = (data.topProfit||[]).map(r => `<tr><td>${r.player}</td><td>${marketLabel(r.marketKey)}</td><td>${r.openingPrice ?? 'N/A'}</td><td class="${r.grade||'pending'}">${(r.grade||'pending').toUpperCase()}</td><td>${r.profitUnits==null?'—':unitsFmt(r.profitUnits)}</td><td>${r.team}</td></tr>`).join('') || '<tr><td colspan="6">No profit data</td></tr>';
-}
-function renderValueDashboard(data){
-  VALUE_DASH = data;
-  ensureValueMarketOptions(data.availableMarkets || []);
-  const mk = document.getElementById('valueMarket').value || (data.availableMarkets||[])[0];
-  document.getElementById('valueUnits').textContent = unitsFmt((data.windowSummary||{}).units || 0);
-  document.getElementById('valueROI').textContent = fmtPct((data.windowSummary||{}).roi || 0);
-  document.getElementById('valueCLV').textContent = fmtPct((data.windowSummary||{}).avg_clv || 0);
-  document.getElementById('valueCLVRate').textContent = fmtPct((data.windowSummary||{}).clv_positive_rate || 0);
-  renderRoiTrend(data.overallSeries || []);
-  renderMarketValueTrend((data.marketSeries||{})[mk] || [], mk);
-  renderMiniValueTables(data);
-}
-function loadValueDashboard(){
-  const ds = document.getElementById('trackDate').value;
-  const w = document.getElementById('calWindow').value || '14';
-  document.getElementById('valuePill').textContent = 'Loading value...';
-  fetch('/api/tracker/value/dashboard/'+ds+'?window='+w).then(r=>r.json()).then(data => {
-    if(!data.success) throw new Error(data.error || 'Value load failed');
-    renderValueDashboard(data);
-    document.getElementById('valuePill').textContent = 'Value window: '+w+'d';
-  }).catch(err => { document.getElementById('valuePill').textContent = err.message; });
-}
-document.addEventListener('change', function(e){
-  if(e.target && e.target.id === 'valueMarket' && VALUE_DASH){ renderValueDashboard(VALUE_DASH); }
-});
-
-
-
-let PORTFOLIO_DATA = null;
-function cashFmt(v){ return '$'+(parseFloat(v||0).toFixed(2)); }
-function renderPortfolioPlan(data){
-  PORTFOLIO_DATA = data;
-  const p = (data.portfolio || {}), s = (p.summary || {}), e = (p.exposure || {});
-  document.getElementById('pfAccepted').textContent = s.accepted_count || 0;
-  document.getElementById('pfRejected').textContent = s.rejected_count || 0;
-  document.getElementById('pfRisk').textContent = cashFmt(s.accepted_risk || 0);
-  document.getElementById('pfRemain').textContent = cashFmt(s.remaining_risk || 0);
-  document.getElementById('portfolioPill').textContent = 'Daily cap '+cashFmt(s.daily_cap || 0)+' | Team cap '+cashFmt(s.team_cap || 0)+' | Market cap '+cashFmt(s.market_cap || 0);
-
-  document.querySelector('#pfAcceptedTbl tbody').innerHTML = (p.accepted || []).map(r => `<tr><td>${r.player}</td><td>${marketLabel(r.marketKey)}</td><td>${r.team}</td><td>${cashFmt(r.stakeDollars)}</td><td>${fmtEdge(r.edge)}</td><td class="win">ACCEPTED</td></tr>`).join('') || '<tr><td colspan="6">No accepted bets yet</td></tr>';
-  document.querySelector('#pfRejectedTbl tbody').innerHTML = (p.rejected || []).map(r => `<tr><td>${r.player}</td><td>${marketLabel(r.marketKey)}</td><td>${r.team}</td><td>${cashFmt(r.stakeDollars)}</td><td>${fmtEdge(r.edge)}</td><td style="white-space:normal;max-width:280px">${r.portfolioReason || 'Rejected'}</td></tr>`).join('') || '<tr><td colspan="6">No rejected bets</td></tr>';
-  document.querySelector('#pfTeamTbl tbody').innerHTML = ((e.teams)||[]).map(r => `<tr><td>${r.key}</td><td>${cashFmt(r.risk)}</td><td>${fmtEdge(r.risk_pct)}</td></tr>`).join('') || '<tr><td colspan="3">No exposure data</td></tr>';
-  document.querySelector('#pfMarketTbl tbody').innerHTML = ((e.markets)||[]).map(r => `<tr><td>${marketLabel(r.key)}</td><td>${cashFmt(r.risk)}</td><td>${fmtEdge(r.risk_pct)}</td></tr>`).join('') || '<tr><td colspan="3">No exposure data</td></tr>';
-}
-async function loadPortfolioPlan(){
-  const ds = document.getElementById('trackDate').value;
-  document.getElementById('portfolioPill').textContent = 'Loading portfolio...';
-  const res = await fetch('/api/tracker/portfolio/'+ds); const data = await res.json();
-  if(data.success){ renderPortfolioPlan(data); } else { document.getElementById('portfolioPill').textContent = data.error || 'Portfolio load failed'; }
-}
-
-
-
-let BETSLIP_DATA = null;
-function tierClass(t){ return 'tier tier-'+String(t||'d').toLowerCase(); }
-function renderBetSlip(data){
-  BETSLIP_DATA = data;
-  const b = (data.betslip || {}), s = (b.summary || {});
-  document.getElementById('slipCount').textContent = s.recommended_bets || 0;
-  document.getElementById('slipCore').textContent = s.core_bets || 0;
-  document.getElementById('slipFlex').textContent = s.flex_bets || 0;
-  document.getElementById('slipRisk').textContent = cashFmt(s.total_risk || 0);
-  document.getElementById('slipPill').textContent = 'Avg edge '+fmtEdge(s.avg_edge || 0)+' | Avg prob '+pct(s.avg_prob || 0);
-
-  const singles = b.singles || [];
-  document.getElementById('slipSingles').innerHTML = singles.map(r => `
-    <div class="card-item">
-      <div class="card-top">
-        <div>
-          <div class="card-name">#${r.rank} ${r.player}</div>
-          <div class="card-meta">${marketLabel(r.marketKey)} OVER ${r.line} • ${r.team} • ${r.bookmaker || 'Book N/A'}</div>
-        </div>
-        <span class="${tierClass(r.confidenceTier)}">${r.confidenceTier}</span>
-      </div>
-      <div class="card-tags">
-        <span class="card-tag">EDGE ${fmtEdge(r.edge)}</span>
-        <span class="card-tag">MODEL ${pct(r.adjProb)}</span>
-        <span class="card-tag">STAKE ${cashFmt(r.stakeDollars)}</span>
-        <span class="card-tag">RISK ${fmtEdge(r.stakePct)}</span>
-      </div>
-      <div class="card-meta">${r.reason || ''}</div>
+<!-- HERO SUMMARY -->
+<section class="hero">
+  <div class="panel pp">
+    <div class="ph">
+      <div><div class="kicker">Daily control</div><div class="sec">Slate workflow</div></div>
     </div>
-  `).join('') || '<div class="card-item">No approved bets are available for the selected date.</div>';
+    <div class="cr" style="margin-bottom:12px">
+      <input class="finput" type="date" id="trackDate" aria-label="Slate date" style="max-width:160px">
+      <button class="btn primary" id="loadDayBtn">Load Day</button>
+      <button class="btn" id="captureBtn">Capture Slate</button>
+      <button class="btn gold" id="closeBtn">Capture Closing</button>
+      <button class="btn green" id="gradeBtn">Grade Results</button>
+    </div>
+    <div class="wflow">
+      <div class="wc"><div class="ws">STEP 1</div><div class="wt">Build the card</div><div class="wd">Set thresholds, capture the board, inspect tracked entries, build the bet slip.</div></div>
+      <div class="wc"><div class="ws">STEP 2</div><div class="wt">Close and grade</div><div class="wd">Pull closing prices, mark finished games, measure realized edge and CLV.</div></div>
+      <div class="wc"><div class="ws">STEP 3</div><div class="wt">Review performance</div><div class="wd">Use calibration, value, bankroll, and attribution dashboards to tune tomorrow.</div></div>
+    </div>
+  </div>
+  <div class="panel pp">
+    <div class="ph">
+      <div><div class="kicker">Snapshot</div><div class="sec">Today's numbers</div></div>
+      <span class="pill" id="stampPill">No day loaded</span>
+    </div>
+    <div class="sgrid">
+      <div class="sc"><div class="mk">Picks</div><div class="mv" id="sumPicks">0</div></div>
+      <div class="sc"><div class="mk">Graded</div><div class="mv" id="sumGraded">0</div></div>
+      <div class="sc"><div class="mk">Hit Rate</div><div class="mv" id="sumHitRate">—</div></div>
+      <div class="sc"><div class="mk">Bankroll</div><div class="mv" id="sumBankroll">$0</div></div>
+      <div class="sc"><div class="mk">At Risk</div><div class="mv" id="sumRisk">$0</div></div>
+      <div class="sc"><div class="mk">Profit</div><div class="mv" id="sumProfit">$0</div></div>
+    </div>
+  </div>
+</section>
 
-  document.querySelector('#slipCoreTbl tbody').innerHTML = (b.core || []).map(r => `<tr><td>${r.rank}</td><td>${r.player}</td><td>${marketLabel(r.marketKey)} O${r.line}</td><td><span class="${tierClass(r.confidenceTier)}">${r.confidenceTier}</span></td><td>${cashFmt(r.stakeDollars)}</td></tr>`).join('') || '<tr><td colspan="5">No core card</td></tr>';
-  document.querySelector('#slipParlayTbl tbody').innerHTML = (b.parlays || []).map(p => `<tr><td>${p.name}</td><td>${(p.legs||[]).map(x => `${x.player} ${marketLabel(x.marketKey)} O${x.line}`).join(' | ')}</td><td>${fmtEdge(p.avg_edge)}</td><td>${pct(p.avg_prob)}</td><td>${cashFmt(p.proxy_risk)}</td></tr>`).join('') || '<tr><td colspan="5">No parlay ideas</td></tr>';
-}
-async function loadBetSlip(){
-  const ds = document.getElementById('trackDate').value;
-  document.getElementById('slipPill').textContent = 'Building final card...';
-  const res = await fetch('/api/tracker/betslip/'+ds); const data = await res.json();
-  if(data.success){ renderBetSlip(data); } else { document.getElementById('slipPill').textContent = data.error || 'Bet slip failed'; }
-}
+<div class="layout" id="main">
 
+  <!-- SIDEBAR NAV -->
+  <aside class="sidebar">
+    <div class="panel navcard">
+      <div class="kicker">Workflow</div>
+      <div class="navlist">
+        <button class="navbtn active" data-stage="build">
+          <span class="nnum">1</span>
+          <span class="nc"><strong>Build Card</strong><span>Settings, slate capture, filters, working board, and bet slip.</span></span>
+        </button>
+        <button class="navbtn" data-stage="grade">
+          <span class="nnum">2</span>
+          <span class="nc"><strong>Close &amp; Grade</strong><span>Closing line pull, result grading, and settled entries.</span></span>
+        </button>
+        <button class="navbtn" data-stage="review">
+          <span class="nnum">3</span>
+          <span class="nc"><strong>Review Performance</strong><span>Calibration, CLV, bankroll curve, and attribution.</span></span>
+        </button>
+      </div>
+    </div>
+  </aside>
 
+  <!-- MAIN STAGES -->
+  <main class="sstack">
 
-let AUDIT_DATA = null;
-function renderBankrollCurve(curve){
-  destroyChart('bankrollCurve');
-  const el = document.getElementById('bankrollCurveChart'); if(!el) return;
-  TRACKER_CHARTS.bankrollCurve = new Chart(el.getContext('2d'), {
-    data:{labels:(curve||[]).map(x=>x.date.slice(5)), datasets:[
-      {type:'line', label:'Bankroll', data:(curve||[]).map(x=>parseFloat(x.bankroll||0)), borderColor:'#00e5ff', backgroundColor:'rgba(0,229,255,.16)', tension:.25, fill:true},
-      {type:'line', label:'Risk', data:(curve||[]).map(x=>parseFloat(x.risk||0)), borderColor:'#fbbf24', backgroundColor:'rgba(251,191,36,.10)', tension:.25}
-    ]}, options: chartBase()
-  });
-}
-function renderDailyCardPL(curve){
-  destroyChart('dailyCardPL');
-  const el = document.getElementById('dailyCardPLChart'); if(!el) return;
-  TRACKER_CHARTS.dailyCardPL = new Chart(el.getContext('2d'), {
-    data:{labels:(curve||[]).map(x=>x.date.slice(5)), datasets:[
-      {type:'bar', label:'Profit $', data:(curve||[]).map(x=>parseFloat(x.profit||0)), backgroundColor:(curve||[]).map(x=>parseFloat(x.profit||0)>=0?'rgba(52,211,153,.30)':'rgba(251,113,133,.28)'), borderColor:(curve||[]).map(x=>parseFloat(x.profit||0)>=0?'#34d399':'#fb7185')},
-      {type:'line', label:'ROI %', data:(curve||[]).map(x=>chartPct(x.roi)), borderColor:'#8b5cf6', backgroundColor:'rgba(139,92,246,.12)', tension:.25}
-    ]}, options: chartBase()
-  });
-}
-function renderAuditTables(d){
-  document.querySelector('#tierAuditTbl tbody').innerHTML = (d.tierAudit||[]).map(r => `<tr><td>${r.bucket}</td><td>${r.bets}</td><td>${r.wins}-${r.losses}-${r.pushes}</td><td>${cashFmt(r.risk)}</td><td>${cashFmt(r.profit)}</td><td>${fmtPct(r.roi)}</td></tr>`).join('') || '<tr><td colspan="6">No audit yet</td></tr>';
-  document.querySelector('#cardAuditTbl tbody').innerHTML = (d.cardAudit||[]).map(r => `<tr><td>${String(r.bucket||'').replace('_',' ').toUpperCase()}</td><td>${r.bets}</td><td>${r.wins}-${r.losses}-${r.pushes}</td><td>${cashFmt(r.risk)}</td><td>${cashFmt(r.profit)}</td><td>${fmtPct(r.roi)}</td></tr>`).join('') || '<tr><td colspan="6">No audit yet</td></tr>';
-}
-function renderBankrollAudit(data){
-  AUDIT_DATA = data;
-  const d = data.dashboard || {}, s = d.summary || {};
-  document.getElementById('auditStart').textContent = cashFmt(s.start_bankroll || 0);
-  document.getElementById('auditEnd').textContent = cashFmt(s.end_bankroll || 0);
-  document.getElementById('auditProfit').textContent = cashFmt(s.total_profit || 0);
-  document.getElementById('auditDays').textContent = s.active_days || 0;
-  document.getElementById('auditPill').textContent = 'Window '+(s.window_days || data.window || 0)+'d | Avg daily ROI '+fmtPct(s.avg_daily_roi || 0);
-  renderBankrollCurve(d.curve || []);
-  renderDailyCardPL(d.curve || []);
-  renderAuditTables(d);
-}
-async function loadBankrollAudit(){
-  const ds = document.getElementById('trackDate').value;
-  const w = document.getElementById('calWindow').value || '14';
-  document.getElementById('auditPill').textContent = 'Loading audit...';
-  const res = await fetch('/api/tracker/bankroll/dashboard/'+ds+'?window='+w); const data = await res.json();
-  if(data.success){ renderBankrollAudit(data); } else { document.getElementById('auditPill').textContent = data.error || 'Audit failed'; }
-}
+    <!-- ===== STAGE 1: BUILD ===== -->
+    <section class="stage active" id="stage-build">
 
+      <!-- Settings + quick card info -->
+      <div class="two" style="margin-bottom:14px">
+        <div class="panel pp">
+          <div class="ph">
+            <div><div class="kicker">Setup</div><div class="sec">Model adjustments</div></div>
+            <button class="btn green sm" id="saveAdjBtn">Save settings</button>
+          </div>
+          <div class="fields">
+            <div class="field"><label for="f_bankroll">Bankroll ($)</label><input class="finput" id="f_bankroll" type="number" step="1"></div>
+            <div class="field"><label for="f_kelly">Kelly fraction</label><input class="finput" id="f_kelly" type="number" step="0.01"></div>
+            <div class="field"><label for="f_unit">Unit size %</label><input class="finput" id="f_unit" type="number" step="0.001"></div>
+            <div class="field"><label for="f_maxbet">Max bet %</label><input class="finput" id="f_maxbet" type="number" step="0.001"></div>
+            <div class="field"><label for="f_maxday">Max daily risk %</label><input class="finput" id="f_maxday" type="number" step="0.001"></div>
+            <div class="field"><label for="f_cap">Captured per game</label><input class="finput" id="f_cap" type="number" step="1"></div>
+            <div class="field"><label for="f_edgethresh">Edge threshold</label><input class="finput" id="f_edgethresh" type="number" step="0.01"></div>
+            <div class="field"><label for="f_probthresh">Prob threshold</label><input class="finput" id="f_probthresh" type="number" step="0.01"></div>
+            <div class="field"><label for="f_teamexp">Max team exposure %</label><input class="finput" id="f_teamexp" type="number" step="0.001"></div>
+            <div class="field"><label for="f_mktexp">Max market exposure %</label><input class="finput" id="f_mktexp" type="number" step="0.001"></div>
+            <div class="field"><label for="f_gameexp">Max game exposure %</label><input class="finput" id="f_gameexp" type="number" step="0.001"></div>
+          </div>
+          <div class="mgrid">
+            <div class="mc"><h4>Hitter multipliers</h4>
+              <div class="fields">
+                <div class="field"><label for="m_hits">Hits</label><input class="finput" id="m_hits" type="number" step="0.01"></div>
+                <div class="field"><label for="m_tb">Total bases</label><input class="finput" id="m_tb" type="number" step="0.01"></div>
+                <div class="field"><label for="m_hr">Home runs</label><input class="finput" id="m_hr" type="number" step="0.01"></div>
+                <div class="field"><label for="m_rbi">RBIs</label><input class="finput" id="m_rbi" type="number" step="0.01"></div>
+              </div>
+            </div>
+            <div class="mc"><h4>Context multipliers</h4>
+              <div class="fields">
+                <div class="field"><label for="m_runs">Runs scored</label><input class="finput" id="m_runs" type="number" step="0.01"></div>
+                <div class="field"><label for="m_sb">Stolen bases</label><input class="finput" id="m_sb" type="number" step="0.01"></div>
+                <div class="field"><label for="m_k">Pitcher Ks</label><input class="finput" id="m_k" type="number" step="0.01"></div>
+              </div>
+            </div>
+          </div>
+        </div>
 
+        <div class="panel pp">
+          <div class="ph"><div><div class="kicker">Card info</div><div class="sec">Day stats</div></div><span class="pill" id="buildPill">Load a day first</span></div>
+          <div class="mcards">
+            <div class="mcard"><div class="mk">Wins</div><div class="mv" id="cWins">0</div></div>
+            <div class="mcard"><div class="mk">Losses</div><div class="mv" id="cLosses">0</div></div>
+            <div class="mcard"><div class="mk">Pushes</div><div class="mv" id="cPushes">0</div></div>
+            <div class="mcard"><div class="mk">Avg CLV</div><div class="mv" id="cCLV">—</div></div>
+          </div>
+          <div class="notice" style="margin-top:12px">Use this stage before first pitch. Capture the current board, review tracked entries, and build the final card. Come back to Stage 2 after games end.</div>
+          <div class="cr" style="margin-top:12px">
+            <button class="btn primary" id="captureBtn2">Capture slate now</button>
+            <button class="btn" id="loadSlipBtn">Build bet slip</button>
+            <button class="btn ghost" id="reloadDayBtn2">Reload date</button>
+          </div>
+          <div class="split" style="margin-top:12px">
+            <div class="mcard"><div class="mk">Card plays</div><div class="mv" id="slipCount">0</div><div class="ms">Singles from the final card.</div></div>
+            <div class="mcard"><div class="mk">Card risk</div><div class="mv" id="slipRisk">$0</div><div class="ms">Estimated capital committed.</div></div>
+          </div>
+          <div class="tw" style="margin-top:12px">
+            <table class="tbl" id="marketTbl">
+              <thead><tr><th>Market</th><th>Picks</th><th>Wins</th><th>Losses</th><th>Pushes</th></tr></thead>
+              <tbody><tr><td colspan="5">No data loaded.</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
 
-let ATTR_DATA = null;
-function renderAttrDaily(daily){
-  destroyChart('attrDaily');
-  const el = document.getElementById('attrDailyChart'); if(!el) return;
-  TRACKER_CHARTS.attrDaily = new Chart(el.getContext('2d'), {
-    data:{labels:(daily||[]).map(x=>x.date.slice(5)), datasets:[
-      {type:'line', label:'Avg CLV %', data:(daily||[]).map(x=>chartPct(x.avg_clv)), borderColor:'#fbbf24', backgroundColor:'rgba(251,191,36,.14)', tension:.25},
-      {type:'line', label:'ROI %', data:(daily||[]).map(x=>chartPct(x.roi)), borderColor:'#00e5ff', backgroundColor:'rgba(0,229,255,.14)', tension:.25},
-      {type:'bar', label:'Profit $', data:(daily||[]).map(x=>parseFloat(x.profit||0)), backgroundColor:'rgba(52,211,153,.22)', borderColor:'#34d399'}
-    ]}, options: chartBase()
-  });
-}
-function renderAttrTier(tiers){
-  destroyChart('attrTier');
-  const el = document.getElementById('attrTierChart'); if(!el) return;
-  TRACKER_CHARTS.attrTier = new Chart(el.getContext('2d'), {
-    data:{labels:(tiers||[]).map(x=>x.bucket), datasets:[
-      {type:'bar', label:'ROI %', data:(tiers||[]).map(x=>chartPct(x.roi)), backgroundColor:'rgba(0,229,255,.24)', borderColor:'#00e5ff'},
-      {type:'line', label:'Avg CLV %', data:(tiers||[]).map(x=>chartPct(x.avg_clv)), borderColor:'#fbbf24', backgroundColor:'rgba(251,191,36,.14)', tension:.25},
-      {type:'line', label:'Hit %', data:(tiers||[]).map(x=>chartPct(x.hit_rate)), borderColor:'#fb7185', backgroundColor:'rgba(251,113,133,.12)', tension:.25}
-    ]}, options: chartBase()
-  });
-}
-function renderAttributionDashboard(data){
-  ATTR_DATA = data;
-  const d = data.dashboard || {}, s = d.summary || {};
-  document.getElementById('attrGraded').textContent = s.graded || 0;
-  document.getElementById('attrRisk').textContent = cashFmt(s.risk || 0);
-  document.getElementById('attrProfit').textContent = cashFmt(s.profit || 0);
-  document.getElementById('attrROI').textContent = fmtPct(s.roi || 0);
-  document.getElementById('attrCLV').textContent = fmtPct(s.avg_clv || 0);
-  document.getElementById('attrPill').textContent = 'Window '+(data.window||0)+'d | Positive-CLV days '+fmtPct(s.positive_clv_rate || 0);
-  renderAttrDaily(d.daily || []);
-  renderAttrTier(d.tierAudit || []);
-  document.querySelector('#attrMarketTbl tbody').innerHTML = (d.marketAudit||[]).map(r => `<tr><td>${marketLabel(r.bucket)}</td><td>${r.bets}</td><td>${fmtPct(r.avg_clv)}</td><td>${cashFmt(r.profit)}</td><td>${fmtPct(r.roi)}</td><td>${fmtPct(r.hit_rate)}</td></tr>`).join('') || '<tr><td colspan="6">No market attribution yet</td></tr>';
-  document.querySelector('#attrTierTbl tbody').innerHTML = (d.tierAudit||[]).map(r => `<tr><td>${r.bucket}</td><td>${r.bets}</td><td>${fmtPct(r.avg_edge)}</td><td>${fmtPct(r.avg_clv)}</td><td>${cashFmt(r.profit)}</td><td>${fmtPct(r.roi)}</td></tr>`).join('') || '<tr><td colspan="6">No tier attribution yet</td></tr>';
-}
-async function loadAttributionDashboard(){
-  const ds = document.getElementById('trackDate').value;
-  const w = document.getElementById('calWindow').value || '14';
-  document.getElementById('attrPill').textContent = 'Loading attribution...';
-  const res = await fetch('/api/tracker/attribution/dashboard/'+ds+'?window='+w); const data = await res.json();
-  if(data.success){ renderAttributionDashboard(data); } else { document.getElementById('attrPill').textContent = data.error || 'Attribution failed'; }
-}
+      <!-- Working board -->
+      <div class="panel pp" style="margin-bottom:14px">
+        <div class="ph">
+          <div><div class="kicker">Working board</div><div class="sec">Tracked projections</div></div>
+          <div class="cr">
+            <select class="finput" id="fMkt" style="max-width:160px" aria-label="Filter market"><option value="">All markets</option></select>
+            <select class="finput" id="fRes" style="max-width:140px" aria-label="Filter result"><option value="">All results</option><option value="pending">Pending</option><option value="win">Win</option><option value="loss">Loss</option><option value="push">Push</option></select>
+            <select class="finput" id="fSort" style="max-width:160px" aria-label="Sort by"><option value="score">Score</option><option value="edge">Edge</option><option value="adjProb">Adj Prob</option><option value="profitDollars">Profit $</option></select>
+          </div>
+        </div>
+        <div class="tw">
+          <table class="tbl" id="entriesTbl">
+            <thead><tr><th>Matchup</th><th>Player</th><th>Market</th><th>Line</th><th>Adj Prob</th><th>Edge</th><th>Mean</th><th>Open</th><th>Stake $</th><th>Close</th><th>CLV</th><th>Actual</th><th>Result</th><th>Tier</th><th>P/L $</th><th>Reason</th></tr></thead>
+            <tbody><tr><td colspan="16">No entries loaded.</td></tr></tbody>
+          </table>
+        </div>
+      </div>
 
-loadAdjustments().then(loadDay);
+      <!-- Bet slip -->
+      <div class="split">
+        <div class="panel pp">
+          <div class="ph"><div><div class="kicker">Final card</div><div class="sec">Singles</div></div><span class="pill" id="slipPill">Awaiting card build</span></div>
+          <div id="slipSingles"><div class="bcard">No card built yet. Capture the slate then click "Build bet slip".</div></div>
+        </div>
+        <div class="panel pp">
+          <div class="ph"><div><div class="kicker">Optional</div><div class="sec">Parlay ideas</div></div></div>
+          <div class="tw">
+            <table class="tbl" id="slipParlayTbl">
+              <thead><tr><th>Name</th><th>Legs</th><th>Avg Edge</th><th>Avg Prob</th><th>Risk $</th></tr></thead>
+              <tbody><tr><td colspan="5">No parlay ideas loaded.</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== STAGE 2: GRADE ===== -->
+    <section class="stage" id="stage-grade">
+      <div class="two" style="margin-bottom:14px">
+        <div class="panel pp">
+          <div class="ph"><div><div class="kicker">Settle board</div><div class="sec">Close and grade</div></div><span class="pill" id="gradePill">Pull closing before grading</span></div>
+          <div class="wflow">
+            <div class="wc"><div class="ws">A</div><div class="wt">Reload date</div><div class="wd">Confirm the correct slate is loaded before pulling market close and final results.</div></div>
+            <div class="wc"><div class="ws">B</div><div class="wt">Capture close</div><div class="wd">Store closing over prices so CLV can be measured vs opening board.</div></div>
+            <div class="wc"><div class="ws">C</div><div class="wt">Grade results</div><div class="wd">Auto-fetch final MLB box scores and mark each bet win, loss, push, or pending.</div></div>
+          </div>
+          <div class="cr" style="margin-top:12px">
+            <button class="btn" id="closeBtn2">Capture closing lines</button>
+            <button class="btn gold" id="gradeBtn2">Grade finished games</button>
+            <button class="btn ghost" id="reloadGradeBtn">Reload date</button>
+          </div>
+          <div class="mcards" style="margin-top:12px">
+            <div class="mcard"><div class="mk">Closing at</div><div class="mv" id="closeStamp" style="font-size:.72rem">—</div></div>
+            <div class="mcard"><div class="mk">Graded at</div><div class="mv" id="gradedStamp" style="font-size:.72rem">—</div></div>
+            <div class="mcard"><div class="mk">+CLV rate</div><div class="mv" id="gCLVRate">—</div></div>
+            <div class="mcard"><div class="mk">ROI</div><div class="mv" id="gROI">—</div></div>
+          </div>
+        </div>
+        <div class="panel pp">
+          <div class="ph"><div><div class="kicker">Outcome totals</div><div class="sec">Results</div></div></div>
+          <div class="sgrid">
+            <div class="sc"><div class="mk">Wins</div><div class="mv" id="gWins">0</div></div>
+            <div class="sc"><div class="mk">Losses</div><div class="mv" id="gLosses">0</div></div>
+            <div class="sc"><div class="mk">Pushes</div><div class="mv" id="gPushes">0</div></div>
+            <div class="sc"><div class="mk">Profit $</div><div class="mv" id="gProfit">$0</div></div>
+            <div class="sc"><div class="mk">Staked $</div><div class="mv" id="gStaked">$0</div></div>
+            <div class="sc"><div class="mk">Avg CLV</div><div class="mv" id="gAvgCLV">—</div></div>
+          </div>
+        </div>
+      </div>
+      <div class="panel pp">
+        <div class="ph"><div><div class="kicker">Settled entries</div><div class="sec">Grade table</div></div></div>
+        <div class="tw">
+          <table class="tbl" id="gradeTbl">
+            <thead><tr><th>Player</th><th>Team</th><th>Market</th><th>Line</th><th>Open</th><th>Close</th><th>CLV</th><th>Stake $</th><th>Actual</th><th>Result</th><th>P/L $</th></tr></thead>
+            <tbody><tr><td colspan="11">No graded data loaded.</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== STAGE 3: REVIEW ===== -->
+    <section class="stage" id="stage-review">
+      <div class="panel pp">
+        <div class="ph">
+          <div><div class="kicker">Review dashboards</div><div class="sec">Performance</div></div>
+          <div class="stabs">
+            <button class="stab active" data-sub="calibration">Calibration</button>
+            <button class="stab" data-sub="value">Value / CLV</button>
+            <button class="stab" data-sub="bankroll">Bankroll</button>
+            <button class="stab" data-sub="attribution">Attribution</button>
+          </div>
+        </div>
+
+        <!-- CALIBRATION -->
+        <div class="sview active" id="sub-calibration">
+          <div class="cr" style="margin-bottom:11px">
+            <select class="finput" id="calWindow" style="max-width:140px"><option value="7">Last 7 days</option><option value="14" selected>Last 14 days</option><option value="30">Last 30 days</option></select>
+            <button class="btn sm" id="loadCalBtn">Refresh</button>
+            <button class="btn green sm" id="applyCalBtn">Apply suggestions</button>
+            <span class="pill" id="calPill">Awaiting calibration</span>
+          </div>
+          <div class="mcards">
+            <div class="mcard"><div class="mk">Tracked</div><div class="mv" id="calTracked">0</div></div>
+            <div class="mcard"><div class="mk">Graded</div><div class="mv" id="calGraded">0</div></div>
+            <div class="mcard"><div class="mk">Hit Rate</div><div class="mv" id="calHR">—</div></div>
+            <div class="mcard"><div class="mk">Avg Edge</div><div class="mv" id="calEdge">—</div></div>
+          </div>
+          <div class="split" style="margin-top:12px">
+            <div class="panel pp">
+              <div class="sec" style="font-size:.74rem;margin-bottom:10px">Suggested multiplier changes</div>
+              <div class="tw">
+                <table class="tbl" id="calTbl">
+                  <thead><tr><th>Use</th><th>Market</th><th>Sample</th><th>Hit%</th><th>Target%</th><th>Current</th><th>Suggested</th><th>Action</th></tr></thead>
+                  <tbody><tr><td colspan="8">Run calibration first.</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="panel pp">
+              <div class="sec" style="font-size:.74rem;margin-bottom:10px">Calibration change log</div>
+              <div class="loglist" id="changeLog"><div class="litem"><p>No recent events.</p></div></div>
+            </div>
+          </div>
+          <div class="split" style="margin-top:12px">
+            <div class="panel pp">
+              <div class="sec" style="font-size:.74rem;margin-bottom:10px">Overall hit rate trend</div>
+              <div class="chartbox"><canvas id="overallTrendChart"></canvas></div>
+            </div>
+            <div class="panel pp">
+              <div class="sec" style="font-size:.74rem;margin-bottom:10px">Multiplier history</div>
+              <div class="chartbox"><canvas id="multiplierChart"></canvas></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- VALUE / CLV -->
+        <div class="sview" id="sub-value">
+          <div class="cr" style="margin-bottom:11px">
+            <select class="finput" id="valWindow" style="max-width:140px"><option value="7">Last 7 days</option><option value="14" selected>Last 14 days</option><option value="30">Last 30 days</option></select>
+            <button class="btn sm" id="loadValBtn">Refresh</button>
+            <span class="pill" id="valPill">Awaiting value data</span>
+          </div>
+          <div class="mcards">
+            <div class="mcard"><div class="mk">Units</div><div class="mv" id="vUnits">—</div></div>
+            <div class="mcard"><div class="mk">ROI</div><div class="mv" id="vROI">—</div></div>
+            <div class="mcard"><div class="mk">Avg CLV</div><div class="mv" id="vCLV">—</div></div>
+            <div class="mcard"><div class="mk">+CLV rate</div><div class="mv" id="vCLVRate">—</div></div>
+          </div>
+          <div class="split" style="margin-top:12px">
+            <div class="panel pp">
+              <div class="sec" style="font-size:.74rem;margin-bottom:10px">Daily units / ROI</div>
+              <div class="chartbox"><canvas id="roiChart"></canvas></div>
+            </div>
+            <div class="panel pp">
+              <div class="sec" style="font-size:.74rem;margin-bottom:10px">Top CLV performers</div>
+              <div class="tw">
+                <table class="tbl" id="topClvTbl">
+                  <thead><tr><th>Player</th><th>Market</th><th>Open</th><th>Close</th><th>CLV</th><th>P/L $</th></tr></thead>
+                  <tbody><tr><td colspan="6">No CLV data yet.</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- BANKROLL -->
+        <div class="sview" id="sub-bankroll">
+          <div class="cr" style="margin-bottom:11px">
+            <select class="finput" id="brWindow" style="max-width:140px"><option value="7">Last 7 days</option><option value="14" selected>Last 14 days</option><option value="30">Last 30 days</option></select>
+            <button class="btn sm" id="loadBRBtn">Refresh</button>
+            <span class="pill" id="brPill">Awaiting bankroll data</span>
+          </div>
+          <div class="mcards">
+            <div class="mcard"><div class="mk">Start bankroll</div><div class="mv" id="brStart">$0</div></div>
+            <div class="mcard"><div class="mk">End bankroll</div><div class="mv" id="brEnd">$0</div></div>
+            <div class="mcard"><div class="mk">Total profit</div><div class="mv" id="brProfit">$0</div></div>
+            <div class="mcard"><div class="mk">Active days</div><div class="mv" id="brDays">0</div></div>
+          </div>
+          <div class="split" style="margin-top:12px">
+            <div class="panel pp"><div class="sec" style="font-size:.74rem;margin-bottom:10px">Bankroll curve</div><div class="chartbox"><canvas id="bankrollChart"></canvas></div></div>
+            <div class="panel pp"><div class="sec" style="font-size:.74rem;margin-bottom:10px">Daily P/L</div><div class="chartbox"><canvas id="dailyPLChart"></canvas></div></div>
+          </div>
+          <div class="split" style="margin-top:12px">
+            <div class="panel pp">
+              <div class="sec" style="font-size:.74rem;margin-bottom:10px">Tier audit</div>
+              <div class="tw"><table class="tbl" id="tierAuditTbl"><thead><tr><th>Tier</th><th>Bets</th><th>W-L-P</th><th>Risk $</th><th>Profit $</th><th>ROI</th></tr></thead><tbody><tr><td colspan="6">No data.</td></tr></tbody></table></div>
+            </div>
+            <div class="panel pp">
+              <div class="sec" style="font-size:.74rem;margin-bottom:10px">Card bucket audit</div>
+              <div class="tw"><table class="tbl" id="cardAuditTbl"><thead><tr><th>Bucket</th><th>Bets</th><th>W-L-P</th><th>Risk $</th><th>Profit $</th><th>ROI</th></tr></thead><tbody><tr><td colspan="6">No data.</td></tr></tbody></table></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ATTRIBUTION -->
+        <div class="sview" id="sub-attribution">
+          <div class="cr" style="margin-bottom:11px">
+            <select class="finput" id="attrWindow" style="max-width:140px"><option value="7">Last 7 days</option><option value="14" selected>Last 14 days</option><option value="30">Last 30 days</option></select>
+            <button class="btn sm" id="loadAttrBtn">Refresh</button>
+            <span class="pill" id="attrPill">Awaiting attribution</span>
+          </div>
+          <div class="mcards">
+            <div class="mcard"><div class="mk">Graded bets</div><div class="mv" id="atGraded">0</div></div>
+            <div class="mcard"><div class="mk">Risk $</div><div class="mv" id="atRisk">$0</div></div>
+            <div class="mcard"><div class="mk">Profit $</div><div class="mv" id="atProfit">$0</div></div>
+            <div class="mcard"><div class="mk">ROI</div><div class="mv" id="atROI">—</div></div>
+          </div>
+          <div class="split" style="margin-top:12px">
+            <div class="panel pp">
+              <div class="sec" style="font-size:.74rem;margin-bottom:10px">By market</div>
+              <div class="tw"><table class="tbl" id="attrMktTbl"><thead><tr><th>Market</th><th>Bets</th><th>Risk $</th><th>Profit $</th><th>ROI</th><th>Avg CLV</th></tr></thead><tbody><tr><td colspan="6">No data.</td></tr></tbody></table></div>
+            </div>
+            <div class="panel pp">
+              <div class="sec" style="font-size:.74rem;margin-bottom:10px">By tier</div>
+              <div class="tw"><table class="tbl" id="attrTierTbl"><thead><tr><th>Tier</th><th>Bets</th><th>Risk $</th><th>Profit $</th><th>ROI</th><th>Avg CLV</th></tr></thead><tbody><tr><td colspan="6">No data.</td></tr></tbody></table></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<div class="footer">MLB Analytics Hub · Daily Tracker · Production build</div>
+</div>
+
+<script>
+const ML={batterhits:'Hits',battertotalbases:'Total Bases',batterhomeruns:'Home Runs',batterrbis:'RBIs',batterrunsscored:'Runs',batterstolenbases:'SB',pitcherstrikeouts:'Pitcher Ks'};
+const st={date:'',day:null,adj:null,slip:null,calMarkets:new Set(),charts:{}};
+const $=id=>document.getElementById(id);
+const money=v=>Number(v||0).toLocaleString('en-US',{style:'currency',currency:'USD',maximumFractionDigits:2});
+const pct=(v,d=1)=>`${(Number(v||0)*100).toFixed(d)}%`;
+const num=(v,d=2)=>{const n=Number(v);return Number.isFinite(n)?n.toFixed(d):'—'};
+const safe=(v,fb='—')=>(v===undefined||v===null||v==='')?fb:v;
+const ts=v=>{if(!v)return'—';try{return new Date(v).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}catch{return v}};
+const status=t=>$('statusTxt').textContent=t;
+async function api(url,opts={}){const r=await fetch(url,{headers:{'Content-Type':'application/json'},...opts});const d=await r.json().catch(()=>({success:false,error:'Invalid response'}));if(!r.ok||d.success===false)throw new Error(d.error||`HTTP ${r.status}`);return d}
+function today(){const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
+function readDate(){st.date=$('trackDate').value||today();return st.date}
+function bindNav(){
+  document.querySelectorAll('.navbtn').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.navbtn').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.querySelectorAll('.stage').forEach(s=>s.classList.remove('active'));$(`stage-${b.dataset.stage}`).classList.add('active')}));
+  document.querySelectorAll('.stab').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.stab').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.querySelectorAll('.sview').forEach(v=>v.classList.remove('active'));$(`sub-${b.dataset.sub}`).classList.add('active')}));
+}
+function setAdj(a){st.adj=a||{};const mm=a?.marketmultipliers||{};
+  $('f_bankroll').value=a?.bankroll??1000;$('f_kelly').value=a?.kellyfraction??0.5;$('f_unit').value=a?.unitsizepct??0.01;$('f_maxbet').value=a?.maxbetpct??0.03;$('f_maxday').value=a?.maxdailyriskpct??0.12;$('f_cap').value=a?.capturedpergame??14;$('f_edgethresh').value=a?.bestedgethreshold??0.03;$('f_probthresh').value=a?.bestprobthreshold??0.58;$('f_teamexp').value=a?.maxteamexposurepct??0.05;$('f_mktexp').value=a?.maxmarketexposurepct??0.05;$('f_gameexp').value=a?.maxgameexposurepct??0.08;
+  $('m_hits').value=mm?.batterhits??1;$('m_tb').value=mm?.battertotalbases??1;$('m_hr').value=mm?.batterhomeruns??1;$('m_rbi').value=mm?.batterrbis??1;$('m_runs').value=mm?.batterrunsscored??1;$('m_sb').value=mm?.batterstolenbases??1;$('m_k').value=mm?.pitcherstrikeouts??1;
+}
+function collectAdj(){return{bankroll:+$('f_bankroll').value||0,kellyfraction:+$('f_kelly').value||0,unitsizepct:+$('f_unit').value||0,maxbetpct:+$('f_maxbet').value||0,maxdailyriskpct:+$('f_maxday').value||0,capturedpergame:+$('f_cap').value||0,bestedgethreshold:+$('f_edgethresh').value||0,bestprobthreshold:+$('f_probthresh').value||0,maxteamexposurepct:+$('f_teamexp').value||0,maxmarketexposurepct:+$('f_mktexp').value||0,maxgameexposurepct:+$('f_gameexp').value||0,marketmultipliers:{batterhits:+$('m_hits').value||1,battertotalbases:+$('m_tb').value||1,batterhomeruns:+$('m_hr').value||1,batterrbis:+$('m_rbi').value||1,batterrunsscored:+$('m_runs').value||1,batterstolenbases:+$('m_sb').value||1,pitcherstrikeouts:+$('m_k').value||1}}}
+function renderSummary(day){
+  const entries=day?.entries||[];const graded=entries.filter(r=>['win','loss','push'].includes(r.grade));
+  const wins=graded.filter(r=>r.grade==='win').length;const losses=graded.filter(r=>r.grade==='loss').length;const pushes=graded.filter(r=>r.grade==='push').length;
+  const staked=graded.reduce((a,r)=>a+Number(r.stakeDollars||0),0)||entries.reduce((a,r)=>a+Number(r.stakeDollars||0),0);
+  const profit=graded.reduce((a,r)=>a+Number(r.profitDollars||0),0);
+  const clvs=graded.map(r=>Number(r.clvEdge)).filter(Number.isFinite);
+  const roi=staked>0?profit/staked:0;
+  const posClvRate=clvs.length?clvs.filter(v=>v>0).length/clvs.length:null;
+  const avgClv=clvs.length?clvs.reduce((a,b)=>a+b,0)/clvs.length:null;
+  $('sumPicks').textContent=safe(day?.summary?.picks,0);
+  $('sumGraded').textContent=safe(day?.summary?.graded,0);
+  $('sumHitRate').textContent=day?.summary?.hitrate!=null?pct(day.summary.hitrate,1):'—';
+  $('sumBankroll').textContent=money(st.adj?.bankroll||0);
+  $('sumRisk').textContent=money(staked);
+  $('sumProfit').textContent=money(profit);
+  $('stampPill').textContent=day?.capturedAt?`Captured ${ts(day.capturedAt)}`:'No capture yet';
+  $('cWins').textContent=wins;$('cLosses').textContent=losses;$('cPushes').textContent=pushes;
+  $('cCLV').textContent=avgClv!=null?pct(avgClv,1):'—';
+  $('closeStamp').textContent=day?.closingCapturedAt?ts(day.closingCapturedAt):'—';
+  $('gradedStamp').textContent=day?.gradedAt?ts(day.gradedAt):'—';
+  $('gCLVRate').textContent=posClvRate!=null?pct(posClvRate,1):'—';
+  $('gROI').textContent=staked>0?pct(roi,1):'—';
+  $('gWins').textContent=wins;$('gLosses').textContent=losses;$('gPushes').textContent=pushes;
+  $('gProfit').textContent=money(profit);$('gStaked').textContent=money(staked);
+  $('gAvgCLV').textContent=avgClv!=null?pct(avgClv,1):'—';
+}
+function renderMarketTable(day){
+  const rows=Object.entries(day?.summary?.bymarket||{});
+  $('marketTbl').querySelector('tbody').innerHTML=rows.length?rows.map(([mk,v])=>`<tr><td>${ML[mk]||mk}</td><td>${v.picks||0}</td><td>${v.wins||0}</td><td>${v.losses||0}</td><td>${v.pushes||0}</td></tr>`).join(''):'<tr><td colspan="5">No market data.</td></tr>';
+}
+function populateMktFilter(entries){const mkts=[...new Set((entries||[]).map(r=>r.marketKey).filter(Boolean))].sort();$('fMkt').innerHTML='<option value="">All markets</option>'+mkts.map(m=>`<option value="${m}">${ML[m]||m}</option>`).join('')}
+function entryRows(){
+  let rows=[...(st.day?.entries||[])];const mk=$('fMkt').value,res=$('fRes').value,sort=$('fSort').value;
+  if(mk)rows=rows.filter(r=>r.marketKey===mk);if(res)rows=rows.filter(r=>(r.grade||'pending')===res);
+  rows.sort((a,b)=>Number(b[sort]||0)-Number(a[sort]||0));return rows;
+}
+function renderEntries(){
+  const rows=entryRows();const tc=r=>(r.confidenceTier||'D');
+  $('entriesTbl').querySelector('tbody').innerHTML=rows.length?rows.map(r=>{const res=(r.grade||'pending').toLowerCase();return`<tr><td>${safe(r.team,'')} vs ${safe(r.opp,'')}</td><td>${safe(r.player)}</td><td>${ML[r.marketKey]||r.marketKey}</td><td>${safe(r.line,'—')}</td><td>${pct(r.adjProb||0,1)}</td><td>${r.edge!=null?pct(r.edge,1):'—'}</td><td>${safe(r.modelMean,'—')}</td><td>${safe(r.openingPrice,'—')}</td><td>${money(r.stakeDollars||0)}</td><td>${safe(r.closingPrice,'—')}</td><td>${r.clvEdge!=null?pct(r.clvEdge,1):'—'}</td><td>${safe(r.actual,'—')}</td><td class="badge ${res}">${res.toUpperCase()}</td><td><span class="tag tier-${tc(r)}">${tc(r)}</span></td><td>${r.profitDollars!=null?money(r.profitDollars):'—'}</td><td class="wrap-cell">${safe(r.reason,'—')}</td></tr>`}).join(''):'<tr><td colspan="16">No entries match filters.</td></tr>';
+}
+function renderGradeTable(){
+  const rows=st.day?.entries||[];
+  $('gradeTbl').querySelector('tbody').innerHTML=rows.length?rows.map(r=>{const res=(r.grade||'pending').toLowerCase();return`<tr><td>${safe(r.player)}</td><td>${safe(r.team)}</td><td>${ML[r.marketKey]||r.marketKey}</td><td>${safe(r.line,'—')}</td><td>${safe(r.openingPrice,'—')}</td><td>${safe(r.closingPrice,'—')}</td><td>${r.clvEdge!=null?pct(r.clvEdge,1):'—'}</td><td>${money(r.stakeDollars||0)}</td><td>${safe(r.actual,'—')}</td><td class="badge ${res}">${res.toUpperCase()}</td><td>${r.profitDollars!=null?money(r.profitDollars):'—'}</td></tr>`}).join(''):'<tr><td colspan="11">No data.</td></tr>';
+}
+function renderSlip(data){
+  st.slip=data||null;const slip=data?.betslip||data||{};const singles=slip.singles||[];const parlays=slip.parlays||[];
+  $('slipCount').textContent=singles.length;$('slipRisk').textContent=money(slip.summary?.totalrisk||singles.reduce((a,r)=>a+Number(r.stakeDollars||0),0));
+  $('slipPill').textContent=singles.length?`${singles.length} plays loaded`:'No card built';
+  $('slipSingles').innerHTML=singles.length?singles.map((r,i)=>`<div class="bcard"><div class="bt"><div><div class="bname">${i+1}. ${safe(r.player)}</div><div class="bmeta">${safe(r.team)} · ${ML[r.marketKey]||r.marketKey} Over ${safe(r.line,'—')}</div></div><span class="tag tier-${r.confidenceTier||'D'}">${r.confidenceTier||'D'}</span></div><div class="btags"><span class="tag">Prob ${pct(r.adjProb||0,1)}</span><span class="tag">Edge ${r.edge!=null?pct(r.edge,1):'—'}</span><span class="tag">Stake ${money(r.stakeDollars||0)}</span></div></div>`).join(''):'<div class="bcard">No final card available for this date.</div>';
+  $('slipParlayTbl').querySelector('tbody').innerHTML=parlays.length?parlays.map(p=>`<tr><td>${safe(p.name,'Parlay')}</td><td>${(p.legs||[]).length}</td><td>${pct(p.avgedge||p.avgEdge||0,1)}</td><td>${pct(p.avgprob||p.avgProb||0,1)}</td><td>${money(p.proxyrisk||p.proxyRiskDollars||0)}</td></tr>`).join(''):'<tr><td colspan="5">No parlay ideas.</td></tr>';
+}
+function destroyChart(name){if(st.charts[name]){st.charts[name].destroy();st.charts[name]=null}}
+const chartDefaults={responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#86a4c4',font:{family:'Inter',size:11}}}},scales:{x:{ticks:{color:'#86a4c4',maxRotation:30},grid:{color:'rgba(255,255,255,.04)'}},y:{ticks:{color:'#86a4c4'},grid:{color:'rgba(255,255,255,.04)'}}}};
+function lineChart(id,name,labels,data,label,color){destroyChart(name);if(!$(id))return;st.charts[name]=new Chart($(id).getContext('2d'),{type:'line',data:{labels,datasets:[{label,data,borderColor:color,backgroundColor:color+'18',tension:.25,fill:true,pointRadius:3}]},options:chartDefaults})}
+function barChart(id,name,labels,data,label,colors){destroyChart(name);if(!$(id))return;st.charts[name]=new Chart($(id).getContext('2d'),{type:'bar',data:{labels,datasets:[{label,data,backgroundColor:Array.isArray(colors)?colors:colors}]},options:chartDefaults})}
+
+async function loadAdj(){const d=await api('/api/tracker/adjustments');setAdj(d.adjustments)}
+async function saveAdj(){status('Saving…');const d=await api('/api/tracker/adjustments',{method:'POST',body:JSON.stringify(collectAdj())});setAdj(d.adjustments);$('buildPill').textContent='Settings saved';status('Settings saved')}
+async function loadDay(){const date=readDate();status('Loading day…');const d=await api(`/api/tracker/date/${date}`);st.day=d;renderSummary(d);renderMarketTable(d);populateMktFilter(d.entries||[]);renderEntries();renderGradeTable();$('buildPill').textContent=d.capturedAt?`Loaded ${ts(d.capturedAt)}`:'No capture for this date';status('Day loaded')}
+async function captureDay(){const date=readDate();status('Capturing slate…');const d=await api(`/api/tracker/capture/${date}`,{method:'POST'});st.day=d;renderSummary(d);renderMarketTable(d);populateMktFilter(d.entries||[]);renderEntries();renderGradeTable();$('buildPill').textContent=`${d.entries?.length||0} entries captured`;status('Captured');try{await loadSlip()}catch{}}
+async function captureClose(){const date=readDate();status('Capturing closing lines…');const d=await api(`/api/tracker/close/${date}`,{method:'POST'});st.day=d;renderSummary(d);renderEntries();renderGradeTable();$('gradePill').textContent=d.closingCapturedAt?`Closing at ${ts(d.closingCapturedAt)}`:'Done';status('Closing lines captured')}
+async function gradeDay(){const date=readDate();status('Grading…');const d=await api(`/api/tracker/grade/${date}`,{method:'POST'});st.day=d;renderSummary(d);renderMarketTable(d);renderEntries();renderGradeTable();$('gradePill').textContent=d.gradedAt?`Graded ${ts(d.gradedAt)}`:'Done';status('Graded')}
+async function loadSlip(){const date=readDate();status('Building slip…');const d=await api(`/api/tracker/betslip/${date}`);renderSlip(d);status('Slip loaded')}
+async function loadCal(){
+  const date=readDate();const w=+$('calWindow').value||14;status('Calibrating…');
+  const d=await api(`/api/tracker/calibration/${date}?window=${w}`);
+  const s=d.summary||{};$('calTracked').textContent=s.tracked||0;$('calGraded').textContent=s.graded||0;$('calHR').textContent=s.hitrate!=null?pct(s.hitrate,1):'—';$('calEdge').textContent=s.avgedge!=null?pct(s.avgedge,1):'—';
+  const rows=d.markets||[];st.calMarkets=new Set(rows.filter(r=>r.action!=='hold').map(r=>r.marketKey));
+  $('calTbl').querySelector('tbody').innerHTML=rows.length?rows.map(r=>`<tr><td><input type="checkbox" class="cal-cb" data-mk="${r.marketKey}" ${st.calMarkets.has(r.marketKey)?'checked':''}></td><td>${ML[r.marketKey]||r.marketKey}</td><td>${r.graded||0}</td><td>${pct(r.hitrate||0,1)}</td><td>${pct(r.targetrate||0,1)}</td><td>${num(r.currentmultiplier,3)}</td><td>${num(r.suggestedmultiplier,3)}</td><td>${safe(r.action,'hold').toUpperCase()}</td></tr>`).join(''):'<tr><td colspan="8">No calibration rows.</td></tr>';
+  document.querySelectorAll('.cal-cb').forEach(el=>el.addEventListener('change',e=>{const mk=e.target.dataset.mk;e.target.checked?st.calMarkets.add(mk):st.calMarkets.delete(mk)}));
+  const td=await api(`/api/tracker/calibration-dashboard/${date}?window=${w}`);
+  const overall=td.overallSeries||[];lineChart('overallTrendChart','overallTrendChart',overall.map(x=>x.date),overall.map(x=>Number(x.hitrate||0)*100),'Hit Rate %','#00e5ff');
+  const firstMkt=(td.availableMarkets||[])[0];const hist=(td.multiplierHistory||{})[firstMkt]||[];lineChart('multiplierChart','multiplierChart',hist.map(x=>ts(x.timestamp)),hist.map(x=>Number(x.multiplier||0)),'Multiplier','#34d399');
+  $('changeLog').innerHTML=(td.events||[]).length?(td.events||[]).slice().reverse().map(ev=>`<div class="litem"><div class="ltop"><strong>${safe(ev.eventType)}</strong><span style="font-size:.68rem;color:var(--faint)">${ts(ev.timestamp)}</span></div><p>${safe(ev.note,'No note')}</p></div>`).join(''):'<div class="litem"><p>No events in window.</p></div>';
+  $('calPill').textContent=`Window ${w}d loaded`;status('Calibration loaded');
+}
+async function applyCal(){
+  if(!st.calMarkets.size){$('calPill').textContent='Select a market first';return}
+  const date=readDate();const w=+$('calWindow').value||14;status('Applying…');
+  await api('/api/tracker/calibration/apply',{method:'POST',body:JSON.stringify({date,window:w,markets:[...st.calMarkets]})});
+  $('calPill').textContent='Multipliers applied';await loadAdj();await loadCal();status('Applied');
+}
+async function loadVal(){
+  const date=readDate();const w=+$('valWindow').value||14;status('Loading value…');
+  const d=await api(`/api/tracker/value-dashboard/${date}?window=${w}`);
+  const s=d.windowSummary||{};$('vUnits').textContent=s.units!=null?`${num(s.units,2)}u`:'—';$('vROI').textContent=s.roi!=null?pct(s.roi,1):'—';$('vCLV').textContent=s.avgclv!=null?pct(s.avgclv,1):'—';$('vCLVRate').textContent=s.clvpositiverate!=null?pct(s.clvpositiverate,1):'—';
+  const overall=d.overallSeries||[];barChart('roiChart','roiChart',overall.map(x=>x.date),overall.map(x=>Number(x.units||0)),'Units',overall.map(x=>Number(x.units||0)>=0?'rgba(52,211,153,.6)':'rgba(251,113,133,.6)'));
+  $('topClvTbl').querySelector('tbody').innerHTML=(d.topCLV||[]).length?(d.topCLV||[]).map(r=>`<tr><td>${safe(r.player)}</td><td>${ML[r.marketKey]||r.marketKey}</td><td>${safe(r.openingPrice,'—')}</td><td>${safe(r.closingPrice,'—')}</td><td>${r.clvEdge!=null?pct(r.clvEdge,1):'—'}</td><td>${r.profitDollars!=null?money(r.profitDollars):'—'}</td></tr>`).join(''):'<tr><td colspan="6">No CLV data in window.</td></tr>';
+  $('valPill').textContent=`Window ${w}d`;status('Value loaded');
+}
+async function loadBR(){
+  const date=readDate();const w=+$('brWindow').value||14;status('Loading bankroll…');
+  const d=await api(`/api/tracker/bankroll-dashboard/${date}?window=${w}`);
+  const db=d.dashboard||{};const s=db.summary||{};
+  $('brStart').textContent=money(s.startbankroll||0);$('brEnd').textContent=money(s.endbankroll||0);$('brProfit').textContent=money(s.totalprofit||0);$('brDays').textContent=s.activedays||0;
+  const curve=db.curve||[];lineChart('bankrollChart','bankrollChart',curve.map(x=>x.date),curve.map(x=>Number(x.bankroll||0)),'Bankroll','#00e5ff');
+  barChart('dailyPLChart','dailyPLChart',curve.map(x=>x.date),curve.map(x=>Number(x.profit||0)),'Daily P/L',curve.map(x=>Number(x.profit||0)>=0?'rgba(52,211,153,.6)':'rgba(251,113,133,.6)'));
+  const auditRow=(r,type)=>`<tr><td>${r.bucket||r.key||r[type]||'—'}</td><td>${r.bets||0}</td><td>${r.wins||0}-${r.losses||0}-${r.pushes||0}</td><td>${money(r.risk||0)}</td><td>${money(r.profit||0)}</td><td>${r.roi!=null?pct(r.roi,1):'—'}</td></tr>`;
+  $('tierAuditTbl').querySelector('tbody').innerHTML=(db.tierAudit||[]).length?(db.tierAudit||[]).map(r=>auditRow(r,'tier')).join(''):'<tr><td colspan="6">No data.</td></tr>';
+  $('cardAuditTbl').querySelector('tbody').innerHTML=(db.cardAudit||[]).length?(db.cardAudit||[]).map(r=>auditRow(r,'bucket')).join(''):'<tr><td colspan="6">No data.</td></tr>';
+  $('brPill').textContent=`Window ${w}d`;status('Bankroll loaded');
+}
+async function loadAttr(){
+  const date=readDate();const w=+$('attrWindow').value||14;status('Loading attribution…');
+  const d=await api(`/api/tracker/attribution-dashboard/${date}?window=${w}`);
+  const db=d.dashboard||{};const s=db.summary||{};
+  $('atGraded').textContent=s.graded||s.bets||0;$('atRisk').textContent=money(s.risk||0);$('atProfit').textContent=money(s.profit||0);$('atROI').textContent=s.roi!=null?pct(s.roi,1):'—';
+  const atRow=r=>`<tr><td>${ML[r.name||r.key]||r.name||r.key||'—'}</td><td>${r.bets||0}</td><td>${money(r.risk||0)}</td><td>${money(r.profit||0)}</td><td>${r.roi!=null?pct(r.roi,1):'—'}</td><td>${r.avgclv!=null?pct(r.avgclv,1):'—'}</td></tr>`;
+  $('attrMktTbl').querySelector('tbody').innerHTML=(db.marketAudit||[]).length?(db.marketAudit||[]).map(atRow).join(''):'<tr><td colspan="6">No data.</td></tr>';
+  $('attrTierTbl').querySelector('tbody').innerHTML=(db.tierAudit||[]).length?(db.tierAudit||[]).map(atRow).join(''):'<tr><td colspan="6">No data.</td></tr>';
+  $('attrPill').textContent=`Window ${w}d`;status('Attribution loaded');
+}
+function wire(){
+  bindNav();
+  $('trackDate').addEventListener('change',readDate);
+  $('fMkt').addEventListener('change',renderEntries);$('fRes').addEventListener('change',renderEntries);$('fSort').addEventListener('change',renderEntries);
+  const pairs=[['reloadTopBtn',loadDay],['loadDayBtn',loadDay],['reloadDayBtn2',loadDay],['reloadGradeBtn',loadDay],['captureBtn',captureDay],['captureBtn2',captureDay],['closeBtn',captureClose],['closeBtn2',captureClose],['gradeBtn',gradeDay],['gradeBtn2',gradeDay],['saveAdjBtn',saveAdj],['loadSlipBtn',loadSlip],['loadCalBtn',loadCal],['applyCalBtn',applyCal],['loadValBtn',loadVal],['loadBRBtn',loadBR],['loadAttrBtn',loadAttr]];
+  pairs.forEach(([id,fn])=>$(id).addEventListener('click',()=>fn().catch(e=>{status(e.message);console.error(e)})));
+}
+async function boot(){
+  $('trackDate').value=today();readDate();wire();
+  try{await loadAdj();await loadDay();
+    await Promise.allSettled([loadSlip(),loadCal(),loadVal(),loadBR(),loadAttr()]);
+    status('Tracker ready');
+  }catch(e){status(e.message);console.error(e)}
+}
+boot();
 </script>
 </body>
 </html>
