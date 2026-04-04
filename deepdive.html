@@ -281,17 +281,21 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 #slipToggle{position:fixed;right:0;bottom:110px;background:rgba(0,229,255,.12);
   border:1px solid rgba(0,229,255,.3);border-right:none;color:var(--c);
   font-family:Orbitron,monospace;font-size:.56rem;letter-spacing:1px;
-  padding:10px 6px;border-radius:8px 0 0 8px;cursor:pointer;z-index:199;
+  padding:10px 6px;border-radius:8px 0 0 8px;cursor:pointer;z-index:201;
   writing-mode:vertical-lr;transform:rotate(180deg);transition:background .2s;display:flex;
   align-items:center;gap:4px;}
 #slipToggle:hover{background:rgba(0,229,255,.22);}
 #slipBadge{background:var(--c);color:#050a18;font-size:.55rem;font-weight:900;
   padding:1px 5px;border-radius:999px;display:none;}
-.btn-parlay{padding:2px 7px;font-size:.55rem;font-family:Orbitron,monospace;letter-spacing:1px;
-  background:rgba(0,229,255,.07);border:1px solid rgba(0,229,255,.2);color:var(--c);
-  border-radius:4px;cursor:pointer;transition:all .15s;white-space:nowrap;}
-.btn-parlay:hover{background:rgba(0,229,255,.18);}
-.btn-parlay.added{background:rgba(0,230,118,.12);border-color:rgba(0,230,118,.3);color:var(--g);}
+.btn-parlay{background:rgba(0,229,255,.1);border:1px solid rgba(0,229,255,.35);
+  color:rgba(0,229,255,.9);font-size:.85rem;font-weight:700;
+  width:26px;height:26px;border-radius:50%;cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;
+  transition:background .15s,transform .1s;padding:0;line-height:1;}
+.btn-parlay:hover{background:rgba(0,229,255,.25);transform:scale(1.15);}
+.btn-parlay:active{transform:scale(.9);}
+.btn-parlay.added{background:rgba(0,255,128,.18);border-color:rgba(0,255,128,.5);
+  color:rgba(0,255,128,1);}
 @media(max-width:860px){
   #parlaySlip{width:100vw;top:auto;bottom:0;height:72vh;
     transform:translateY(100%);border-left:none;border-top:1px solid rgba(0,229,255,.22);}
@@ -1574,7 +1578,16 @@ function projectionRowHtml(r, idx){
     edge:r.edge!=null?r.edge:null, pos:r.pos||''
   });
   var enc = encodeURIComponent(rowObj).replace(/'/g,'%27');
+  var inSlip = PARLAY_LEGS.some(function(l){
+    return ((l.player||'')+'|'+(l.marketKey||'')+'|'+(l.line||''))===pKey;
+  });
+  var btnLabel = inSlip ? '\u2713' : '+';
+  var btnCls   = 'btn-parlay' + (inSlip ? ' added' : '');
   return '<tr class="'+(SELECTED_PROJ===idx?'sel':'')+'" onclick="selectProjection('+idx+')">'
+    + '<td onclick="event.stopPropagation()" style="padding:0 5px;width:30px">'
+    +   '<button class="'+btnCls+'" data-parlay-key="'+pKey+'" data-row="'+enc+'"'
+    +   ' onclick="addParlayFromBtn(this);event.stopPropagation()" title="Add to parlay">'+btnLabel+'</button>'
+    + '</td>'
     + '<td>'+r.rank+'</td>'
     + '<td><span class="pos-tag">'+r.team+'</span></td>'
     + '<td>'+r.player+'</td>'
@@ -1582,11 +1595,7 @@ function projectionRowHtml(r, idx){
     + '<td>'+pct2(r.prob)+'</td>'
     + '<td>'+(r.edge!=null?'<span class="'+(r.edge>=0.03?'edge-pos':'edge-neu')+'">'+pct2(r.edge)+'</span>':'<span class="edge-na">N/A</span>')+'</td>'
     + '<td>'+confidenceTag(r.edge!=null?r.edge:r.prob)+'</td>'
-    + '<td style="max-width:340px;white-space:normal">'+reason+'</td>'
-    + '<td onclick="event.stopPropagation()" style="white-space:nowrap">'
-    +   '<button class="btn-parlay" data-parlay-key="'+pKey+'" data-row="'+enc+'"'
-    +   ' onclick="addParlayFromBtn(this);event.stopPropagation()">+ PARLAY</button>'
-    + '</td>'
+    + '<td style="max-width:280px;white-space:normal">'+reason+'</td>'
     + '</tr>';
 }
 
@@ -1650,7 +1659,7 @@ function renderProjectionHub(){
     + '<div class="proj-hub">'
     + '<div class="proj-list">'
       + '<div class="proj-tools"><select id="projPlayerPick" onchange="jumpToProjection(this.value)"><option value="">Jump to player...</option>'+playerSel+'</select><span class="mini">Ranked from best to worst by model edge when live odds exist, otherwise by pure simulation confidence.</span></div>'
-      + '<table class="proj-rank"><thead><tr><th>#</th><th>TEAM</th><th>PLAYER</th><th>PROP</th><th>MODEL</th><th>EDGE</th><th>GRADE</th><th>AI THESIS</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>'
+      + '<table class="proj-rank"><thead><tr><th style="width:30px"></th><th>#</th><th>TEAM</th><th>PLAYER</th><th>PROP</th><th>MODEL</th><th>EDGE</th><th>GRADE</th><th>AI THESIS</th></tr></thead><tbody>'+rows+'</tbody></table>'
     + '</div>'
     + '<div class="proj-detail">'+renderProjectionDetail()+'</div>'
     + '</div>';
@@ -1992,6 +2001,11 @@ var PARLAY_LEGS = [], PARLAY_ANALYSIS = null, SLIP_OPEN = false;
 function toggleSlip(){
   SLIP_OPEN = !SLIP_OPEN;
   document.getElementById('parlaySlip').classList.toggle('open', SLIP_OPEN);
+  var tb = document.getElementById('slipToggle');
+  if(tb && !SLIP_OPEN){
+    var n = PARLAY_LEGS.length;
+    tb.innerHTML = (n ? '<span id="slipBadge">'+n+'</span>' : '') + '\uD83C\uDFAF PARLAY';
+  }
 }
 
 function addToParlay(row){
@@ -2056,8 +2070,8 @@ function clearSlip(){
 function renderSlip(){
   var n = PARLAY_LEGS.length;
   document.getElementById('slipLegCount').textContent = n+' LEG'+(n!==1?'S':'');
-  document.getElementById('slipBadge').textContent = n;
-  document.getElementById('slipBadge').style.display = n ? 'block':'none';
+  var _sb=document.getElementById('slipBadge'); if(_sb) _sb.textContent = n;
+  if(_sb) _sb.style.display = n ? 'inline-block':'none';
   document.getElementById('slipAiBtn').disabled   = n < 2;
   document.getElementById('slipSendBtn').disabled = n < 2 || !PARLAY_ANALYSIS;
   document.getElementById('slipFtr').style.display = n ? '' : 'none';
@@ -2155,7 +2169,14 @@ function sendParlayToTracker(){
 <div id="parlaySlip" role="complementary" aria-label="Parlay slip">
   <div class="slip-hdr">
     <span class="slip-title">🎯 PARLAY SLIP</span>
-    <span class="slip-count" id="slipLegCount">0 LEGS</span>
+    <div style="display:flex;align-items:center;gap:8px">
+      <span class="slip-count" id="slipLegCount">0 LEGS</span>
+      <button onclick="toggleSlip()" aria-label="Close parlay slip"
+        style="background:none;border:none;color:rgba(0,229,255,.8);font-size:1.25rem;
+               cursor:pointer;padding:0 4px;line-height:1;border-radius:4px;
+               transition:color .15s;" onmouseover="this.style.color='#fff'"
+               onmouseout="this.style.color='rgba(0,229,255,.8)'">✕</button>
+    </div>
   </div>
   <div class="slip-body" id="slipBody">
     <div class="slip-empty">Add props from the Ranked<br>Projections board below.</div>
