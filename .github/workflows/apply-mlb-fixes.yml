@@ -1,0 +1,237 @@
+name: Apply MLB Dashboard Fixes
+
+on:
+  workflow_dispatch:   # run manually from Actions tab
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Patch dashboard.html and app.py
+        run: |
+          python3 - << 'PYEOF'
+          import re, pathlib, shutil, sys
+
+          DASH = pathlib.Path("dashboard.html")
+          APP  = pathlib.Path("app.py")
+
+          for p in [DASH, APP]:
+              if not p.exists():
+                  sys.exit(f"ERROR: {p.name} not found")
+
+          src = DASH.read_text(encoding="utf-8")
+          app = APP.read_text(encoding="utf-8")
+          print(f"Read dashboard.html {len(src):,} chars")
+          print(f"Read app.py {len(app):,} chars")
+          changes = []
+
+          # ── FIX 1: p.position → (p.pos||p.position||'') ─────────────────────
+          pat1 = re.compile(
+              r'p\.position\.replace\s*\(\s*[\'"]Designated Hitter[\'"]\s*,\s*[\'"]DH[\'"]\s*\)'
+              r'\.replace\s*\(\s*[\'"]Pitcher[\'"]\s*,\s*[\'"]P[\'"]\s*\)',
+              re.DOTALL
+          )
+          if pat1.search(src):
+              src = pat1.sub(
+                  "(p.pos||p.position||'').replace('Designated Hitter','DH').replace('Pitcher','P')",
+                  src, count=1
+              )
+              changes.append("FIX-1: position bug fixed")
+          else:
+              pat1b = re.compile(r'var pos\s*=\s*p\.position\b')
+              if pat1b.search(src):
+                  src = pat1b.sub("var pos = (p.pos||p.position||'')", src, count=1)
+                  changes.append("FIX-1b: position bug fixed (fallback)")
+              else:
+                  changes.append("FIX-1: pattern NOT found — check manually")
+
+          # ── FIX 2: live slot in mkCard ────────────────────────────────────────
+          SLOT = '${g.status===\'Live\'?`<div id="ls-${g.gamePk}" class="ls-ph"></div>`:\'\'}'
+          if 'ls-ph' not in src:
+              pat2 = re.compile(r'(<div\s+class=["\']?pr["\']?\s*>)', re.DOTALL)
+              m2 = pat2.search(src)
+              if m2:
+                  src = src[:m2.start()] + SLOT + src[m2.start():]
+                  changes.append("FIX-2: live slot inserted before .pr")
+              else:
+                  changes.append("FIX-2: .pr block NOT found — check manually")
+          else:
+              changes.append("FIX-2: already present, skipped")
+
+          # ── FIX 3: wire initLiveCards ─────────────────────────────────────────
+          WIRE = "if(window.initLiveCards)initLiveCards(gs);"
+          if 'initLiveCards(gs)' not in src:
+              matches = list(re.finditer(r'gs\.forEach\s*\(', src))
+              if matches:
+                  m3 = matches[-1]
+                  src = src[:m3.start()] + WIRE + src[m3.start():]
+                  changes.append("FIX-3: initLiveCards wired")
+              else:
+                  changes.append("FIX-3: gs.forEach NOT found — check manually")
+          else:
+              changes.append("FIX-3: already present, skipped")
+
+          # ── FIX 4: inject live CSS+JS ─────────────────────────────────────────
+          LIVE_BLOCK = """
+          <style>
+          .ls-ph,.ls-wrap{display:block}
+          .ls-wrap{margin:10px 0 8px;background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.14);border-radius:10px;overflow:hidden;font-size:.72rem}
+          .ls-inn{display:flex;align-items:center;justify-content:space-between;padding:6px 12px 4px;background:rgba(0,229,255,.07);border-bottom:1px solid rgba(0,229,255,.1)}
+          .ls-lbl{font-family:Orbitron,monospace;font-size:.68rem;color:#00e5ff;letter-spacing:1.5px;font-weight:700}
+          .ls-dots{display:flex;gap:4px;align-items:center}
+          .ls-dot{width:9px;height:9px;border-radius:50%;border:1.5px solid rgba(0,229,255,.35);background:transparent}
+          .ls-dot.on{background:#ff9800;border-color:#ff9800}
+          .ls-cnt{font-family:Orbitron,monospace;font-size:.62rem;color:#8b949e;letter-spacing:1px}
+          .ls-cnt span{color:#00e5ff;font-weight:700}
+          .ls-sc{display:grid;grid-template-columns:1fr auto;padding:8px 12px 6px}
+          .ls-rhe{width:100%}
+          .ls-hdr{display:grid;grid-template-columns:52px repeat(3,30px);font-family:Orbitron,monospace;font-size:.55rem;color:#4a5a6a;letter-spacing:1px;padding-bottom:2px;border-bottom:1px solid rgba(255,255,255,.06);margin-bottom:4px}
+          .ls-row{display:grid;grid-template-columns:52px repeat(3,30px);align-items:center;padding:2px 0}
+          .ls-row.bat .ls-ab{color:#00e5ff}
+          .ls-ab{font-family:Orbitron,monospace;font-size:.65rem;color:#8b9eb0;font-weight:700;letter-spacing:.5px}
+          .ls-v{font-family:Orbitron,monospace;font-size:.72rem;color:#e0eaff;font-weight:700;text-align:center}
+          .ls-v.r{color:#00e5ff;font-size:.8rem}
+          .ls-dmnd{width:46px;height:46px;flex-shrink:0;padding-left:10px}
+          .ls-dmnd svg{width:46px;height:46px}
+          .ls-plyrs{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:5px 10px 8px;border-top:1px solid rgba(255,255,255,.05)}
+          .ls-plyr{background:rgba(0,0,0,.25);border-radius:7px;padding:6px 8px}
+          .ls-plbl{font-family:Orbitron,monospace;font-size:.5rem;color:#4a5a7a;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:2px}
+          .ls-pnm{font-size:.68rem;color:#c9d8e8;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px}
+          .ls-pst{font-size:.6rem;color:#5a7a9a;margin-top:1px}
+          .ls-due{padding:4px 10px 7px;border-top:1px solid rgba(255,255,255,.04);font-size:.58rem;color:#4a6a8a;font-family:Orbitron,monospace;letter-spacing:.8px}
+          .ls-due span{color:#7090a8;margin-left:6px}
+          .ls-wait{padding:10px;text-align:center;font-family:Orbitron,monospace;font-size:.58rem;color:rgba(0,229,255,.4);letter-spacing:2px;animation:ls-p 1.4s ease-in-out infinite}
+          @keyframes ls-p{0%,100%{opacity:.4}50%{opacity:1}}
+          </style>
+          <script>
+          (function(){
+          var _T={};
+          function dmnd(b){
+            var on='rgba(0,229,255,1)',off='rgba(0,229,255,.15)';
+            function sq(x,y,f){var c=f?on:off,s=f?'filter:drop-shadow(0 0 4px rgba(0,229,255,.8))':'';
+              return '<rect x="'+(x-5)+'" y="'+(y-5)+'" width="10" height="10" rx="1.5" transform="rotate(45,'+x+','+y+')" fill="'+c+'" style="'+s+'"/>';}
+            return '<svg viewBox="0 0 46 46"><polyline points="23,4 41,23 23,42 5,23 23,4" fill="none" stroke="rgba(0,229,255,.12)" stroke-width="1"/>'+sq(23,4,b.second)+sq(5,23,b.third)+sq(41,23,b.first)+sq(23,42,false)+'</svg>';
+          }
+          function mkLS(d,aA,hA){
+            if(!d||!d.success)return '<div class="ls-wait">LIVE DATA UNAVAILABLE</div>';
+            var btm=d.inningLabel&&d.inningLabel.indexOf('BOT')===0;
+            var dots=[0,1,2].map(function(i){return '<div class="ls-dot'+(i<d.outs?' on':'')+'"></div>';}).join('');
+            var pi=d.pitcher||{},ba=d.batter||{};
+            var due=(d.dueUp||[]).filter(Boolean).map(function(n){return n.split(' ').pop();}).join(', ');
+            return '<div class="ls-inn"><div class="ls-lbl">'+(d.inningLabel||'—')+'</div><div class="ls-dots">'+dots+'</div><div class="ls-cnt">B<span>'+d.balls+'</span> S<span>'+d.strikes+'</span></div></div>'+
+              '<div class="ls-sc"><div><div class="ls-rhe">'+
+              '<div class="ls-hdr"><span></span><span>R</span><span>H</span><span>E</span></div>'+
+              '<div class="ls-row'+(!btm?' bat':'')+'"><div class="ls-ab">'+aA+'</div><div class="ls-v r">'+d.awayRuns+'</div><div class="ls-v">'+d.awayHits+'</div><div class="ls-v">'+d.awayErrors+'</div></div>'+
+              '<div class="ls-row'+(btm?' bat':'')+'"><div class="ls-ab">'+hA+'</div><div class="ls-v r">'+d.homeRuns+'</div><div class="ls-v">'+d.homeHits+'</div><div class="ls-v">'+d.homeErrors+'</div></div>'+
+              '</div></div><div class="ls-dmnd">'+dmnd(d.bases||{})+'</div></div>'+
+              '<div class="ls-plyrs">'+
+              '<div class="ls-plyr"><div class="ls-plbl">PITCHING</div><div class="ls-pnm">'+(pi.name||'—')+'</div><div class="ls-pst">'+(pi.ip||'—')+' IP · '+(pi.er!==undefined?pi.er:'—')+' ER</div></div>'+
+              '<div class="ls-plyr"><div class="ls-plbl">AT BAT</div><div class="ls-pnm">'+(ba.name||'—')+'</div><div class="ls-pst">'+(ba.h||0)+'-'+(ba.ab||0)+' · '+(ba.ops||'—')+' OPS</div></div></div>'+
+              (due?'<div class="ls-due">DUE UP <span>'+due+'</span></div>':'');
+          }
+          function go(pk,aA,hA){
+            var el=document.getElementById('ls-'+pk);if(!el)return;
+            fetch('/api/game/livedata/'+pk)
+              .then(function(r){return r.json();})
+              .then(function(d){var e=document.getElementById('ls-'+pk);if(e){e.className='ls-wrap';e.innerHTML=mkLS(d,aA,hA);}})
+              .catch(function(){var e=document.getElementById('ls-'+pk);if(e)e.innerHTML='<div class="ls-wait">UNAVAILABLE</div>';});
+          }
+          window.stopAllLivePolling=function(){Object.keys(_T).forEach(function(k){clearInterval(_T[k]);delete _T[k];});};
+          window.initLiveCards=function(games){
+            stopAllLivePolling();
+            (games||[]).forEach(function(g){
+              if(g.status!=='Live')return;
+              var el=document.getElementById('ls-'+g.gamePk);
+              if(!el)return;
+              el.className='ls-wrap';
+              el.innerHTML='<div class="ls-wait">● FETCHING LIVE DATA…</div>';
+              go(g.gamePk,g.awayAbbr,g.homeAbbr);
+              _T[g.gamePk]=setInterval(function(){
+                if(!document.getElementById('ls-'+g.gamePk)){clearInterval(_T[g.gamePk]);delete _T[g.gamePk];return;}
+                go(g.gamePk,g.awayAbbr,g.homeAbbr);
+              },30000);
+            });
+          };
+          })();
+          </script>"""
+
+          if 'ls-ph' in src and 'ls-wrap' not in src.split('ls-ph')[0][-100:]:
+              changes.append("FIX-4: SKIP (slot exists but CSS missing — injecting)")
+          if 'initLiveCards' in src and '@keyframes ls-p' not in src:
+              if '</body>' in src:
+                  src = src.replace('</body>', LIVE_BLOCK + '\n</body>', 1)
+              else:
+                  src += '\n' + LIVE_BLOCK
+              changes.append("FIX-4: live CSS+JS injected")
+          elif '@keyframes ls-p' in src:
+              changes.append("FIX-4: already present, skipped")
+
+          # ── FIX 5: app.py livedata route ─────────────────────────────────────
+          if '/api/game/livedata/' not in app:
+              ROUTE = '''
+
+          @app.route("/api/game/livedata/<int:game_pk>")
+          def api_game_livedata(game_pk):
+              try:
+                  r = requests.get("https://statsapi.mlb.com/api/v1.1/game/{}/feed/live".format(game_pk), timeout=10)
+                  r.raise_for_status()
+                  data = r.json()
+                  ls = data.get("liveData",{}).get("linescore",{})
+                  box = data.get("liveData",{}).get("boxscore",{})
+                  gd = data.get("gameData",{})
+                  sd = gd.get("status",{}).get("detailedState","")
+                  inum = ls.get("currentInning",0); ihalf = ls.get("inningHalf","Top")
+                  if any(x in sd for x in ["Middle","Mid ","Between"]): ilbl="MID {}".format(inum)
+                  elif ihalf=="Bottom": ilbl="BOT {}".format(inum)
+                  else: ilbl="TOP {}".format(inum)
+                  ht=ls.get("teams",{}).get("home",{}); at=ls.get("teams",{}).get("away",{})
+                  off=ls.get("offense",{})
+                  bases={"first":bool(off.get("first")),"second":bool(off.get("second")),"third":bool(off.get("third"))}
+                  bid=(off.get("batter") or {}).get("id"); bname=(off.get("batter") or {}).get("fullName","")
+                  od=(off.get("onDeck") or {}).get("fullName",""); ih2=(off.get("inHole") or {}).get("fullName","")
+                  pid2=(ls.get("defense",{}).get("pitcher") or {}).get("id")
+                  pname=(ls.get("defense",{}).get("pitcher") or {}).get("fullName","")
+                  pip="\u2014"; per="\u2014"; bab=0; bah=0; baops="\u2014"
+                  for side in ("home","away"):
+                      pl=box.get("teams",{}).get(side,{}).get("players",{})
+                      if pid2:
+                          ps=pl.get("ID{}".format(pid2),{}); st=ps.get("stats",{}).get("pitching",{})
+                          if st: pip=st.get("inningsPitched","\u2014"); per=st.get("earnedRuns","\u2014")
+                      if bid:
+                          bs=pl.get("ID{}".format(bid),{}); bst=bs.get("stats",{}).get("batting",{})
+                          bss=bs.get("seasonStats",{}).get("batting",{})
+                          if bst: bab=bst.get("atBats",0); bah=bst.get("hits",0)
+                          if bss: baops=bss.get("ops","\u2014")
+                  return jsonify({"success":True,"gamePk":game_pk,"statusDetail":sd,"inningLabel":ilbl,
+                      "balls":ls.get("balls",0),"strikes":ls.get("strikes",0),"outs":ls.get("outs",0),
+                      "awayRuns":at.get("runs",0),"awayHits":at.get("hits",0),"awayErrors":at.get("errors",0),
+                      "homeRuns":ht.get("runs",0),"homeHits":ht.get("hits",0),"homeErrors":ht.get("errors",0),
+                      "bases":bases,"pitcher":{"name":pname,"ip":pip,"er":per},
+                      "batter":{"name":bname,"ab":bab,"h":bah,"ops":baops},"dueUp":[od,ih2]})
+              except Exception as ex:
+                  print("[api_game_livedata]",ex)
+                  return jsonify({"success":False,"error":str(ex)}),500
+          '''
+              app += ROUTE
+              changes.append("FIX-5: livedata route added to app.py")
+          else:
+              changes.append("FIX-5: app.py route already present")
+
+          DASH.write_text(src, encoding="utf-8")
+          APP.write_text(app, encoding="utf-8")
+          print("\n".join(changes))
+          print("DONE")
+          PYEOF
+
+      - name: Commit changes
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add dashboard.html app.py
+          git diff --cached --quiet && echo "No changes to commit" || git commit -m "fix: position display + live gameplay panel"
+          git push
