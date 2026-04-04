@@ -505,7 +505,7 @@ table.tbl{width:100%;border-collapse:collapse;font-size:.73rem}
   </main>
 </div>
 
-<div class="footer">MLB Analytics Hub · Daily Tracker · Production build</div>
+<div class="footer">MLB Analytics Hub · Daily Tracker · v2.1 (tz-fixed)</div>
 </div>
 
 <script>
@@ -516,10 +516,35 @@ const money=v=>Number(v||0).toLocaleString('en-US',{style:'currency',currency:'U
 const pct=(v,d=1)=>`${(Number(v||0)*100).toFixed(d)}%`;
 const num=(v,d=2)=>{const n=Number(v);return Number.isFinite(n)?n.toFixed(d):'—'};
 const safe=(v,fb='—')=>(v===undefined||v===null||v==='')?fb:v;
-const ts=v=>{if(!v)return'—';try{return new Date(v).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}catch{return v}};
+
+// ─── TIMEZONE FIX ───────────────────────────────────────────────────────────
+// The Render server stores timestamps via Python datetime.now().isoformat()
+// which produces naive strings like "2026-04-04T03:20:00.123456" (no Z / offset).
+// Without a suffix, JavaScript Date() treats the string as LOCAL time, so a
+// UTC 3:20 AM stamp appears as "Apr 4 at 3:20 AM" instead of "Apr 3 at 11:20 PM".
+// Fix: append "Z" to any naive ISO string so JS correctly interprets it as UTC
+// and then renders it in the user's local timezone (EDT = UTC-4).
+const ts = v => {
+  if (!v) return '—';
+  try {
+    // If the string has no timezone indicator, treat it as UTC
+    const utc = (v.includes('Z') || v.includes('+') || v.match(/-\d\d:\d\d$/)) ? v : v + 'Z';
+    return new Date(utc).toLocaleString('en-US', {
+      month: 'short', day: 'numeric',
+      hour: 'numeric', minute: '2-digit'
+    });
+  } catch { return v; }
+};
+// ────────────────────────────────────────────────────────────────────────────
+
+// today() uses LOCAL date so the date picker always shows the user's calendar day
+const today = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+};
+
 const status=t=>$('statusTxt').textContent=t;
 async function api(url,opts={}){const r=await fetch(url,{headers:{'Content-Type':'application/json'},...opts});const d=await r.json().catch(()=>({success:false,error:'Invalid response'}));if(!r.ok||d.success===false)throw new Error(d.error||`HTTP ${r.status}`);return d}
-function today(){const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
 function readDate(){st.date=$('trackDate').value||today();return st.date}
 function bindNav(){
   document.querySelectorAll('.navbtn').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.navbtn').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.querySelectorAll('.stage').forEach(s=>s.classList.remove('active'));$(`stage-${b.dataset.stage}`).classList.add('active')}));
@@ -545,6 +570,7 @@ function renderSummary(day){
   $('sumBankroll').textContent=money(st.adj?.bankroll||0);
   $('sumRisk').textContent=money(staked);
   $('sumProfit').textContent=money(profit);
+  // ts() now correctly converts UTC timestamps to local time
   $('stampPill').textContent=day?.capturedAt?`Captured ${ts(day.capturedAt)}`:'No capture yet';
   $('cWins').textContent=wins;$('cLosses').textContent=losses;$('cPushes').textContent=pushes;
   $('cCLV').textContent=avgClv!=null?pct(avgClv,1):'—';
@@ -651,7 +677,9 @@ function wire(){
 }
 async function boot(){
   $('trackDate').value=today();readDate();wire();
-  try{await loadAdj();await loadDay();
+  try{
+    await loadAdj();
+    await loadDay();
     await Promise.allSettled([loadSlip(),loadCal(),loadVal(),loadBR(),loadAttr()]);
     status('Tracker ready');
   }catch(e){status(e.message);console.error(e)}
