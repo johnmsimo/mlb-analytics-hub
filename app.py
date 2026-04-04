@@ -22,57 +22,61 @@ TRACKER_STORE = os.path.join(DATA_DIR, 'daily_tracker.json')
 ADJUST_STORE = os.path.join(DATA_DIR, 'model_adjustments.json')
 CAL_HISTORY_STORE = os.path.join(DATA_DIR, 'calibration_history.json')
 VALUE_HISTORY_STORE = os.path.join(DATA_DIR, 'value_history.json')
+REVIEW_STORE = os.path.join(DATA_DIR, 'matchup_reviews.json')
 
 MLB_API   = "https://statsapi.mlb.com/api/v1"
 WX_API    = "https://api.open-meteo.com/v1/forecast"
 
 # MLB stadium coordinates keyed by MLB venue ID (from /api/v1/venues)
 STADIUM_COORDS = {
-    1:    (33.80019044, -117.8823996),  # Angel Stadium, Anaheim
-    2:    (39.283787,   -76.621689),    # Oriole Park at Camden Yards, Baltimore
-    3:    (42.346456,   -71.097441),    # Fenway Park, Boston
-    4:    (41.83,       -87.634167),    # Rate Field (Guaranteed Rate), Chicago
-    5:    (41.495861,   -81.685255),    # Progressive Field, Cleveland
-    7:    (39.051567,   -94.480483),    # Kauffman Stadium, Kansas City
-    12:   (27.767778,   -82.6525),      # Tropicana Field, St. Petersburg (dome)
-    14:   (43.64155,    -79.38915),     # Rogers Centre, Toronto (dome)
-    15:   (33.445302,   -112.066687),   # Chase Field, Phoenix (retractable)
-    17:   (41.948171,   -87.655503),    # Wrigley Field, Chicago
-    19:   (39.756042,   -104.994136),   # Coors Field, Denver
-    22:   (34.07368,    -118.24053),    # Dodger Stadium, Los Angeles
-    31:   (40.446904,   -80.005753),    # PNC Park, Pittsburgh
-    32:   (43.02838,    -87.97099),     # American Family Field, Milwaukee (retractable)
-    680:  (47.591333,   -122.33251),    # T-Mobile Park, Seattle (retractable)
-    2392: (29.756967,   -95.355509),    # Daikin Park (Minute Maid), Houston (retractable)
-    2394: (42.3391151,  -83.048695),    # Comerica Park, Detroit (retractable)
-    2395: (37.778383,   -122.389448),   # Oracle Park, San Francisco
-    2529: (38.57994,    -121.51246),    # Sutter Health Park, Sacramento
-    2602: (39.097389,   -84.506611),    # Great American Ball Park, Cincinnati
-    2680: (32.707861,   -117.157278),   # Petco Park, San Diego
-    2681: (39.90539086, -75.16716957),  # Citizens Bank Park, Philadelphia
-    2889: (38.62256667, -90.19286667),  # Busch Stadium, St. Louis
-    3289: (40.75753012, -73.84559155),  # Citi Field, New York (Mets)
-    3309: (38.872861,   -77.007501),    # Nationals Park, Washington DC
-    3312: (44.981829,   -93.277891),    # Target Field, Minneapolis
-    3313: (40.82919482, -73.9264977),   # Yankee Stadium, New York
-    4169: (25.77796236, -80.21951795),  # loanDepot park, Miami (retractable)
-    4705: (33.890672,   -84.467641),    # Truist Park, Atlanta
-    5325: (32.747299,   -97.081818),    # Globe Life Field, Arlington TX (retractable)
-    4321: (32.747299,   -97.081818),    # Globe Life Field alt ID
+    # ── American League ───────────────────────────────────────────────────────
+    1:    (33.7994,  -117.8829),  # Angel Stadium — Los Angeles Angels
+    2:    (39.2839,   -76.6214),  # Oriole Park at Camden Yards — Baltimore Orioles
+    3:    (42.3467,   -71.0972),  # Fenway Park — Boston Red Sox
+    4:    (41.8299,   -87.6338),  # Guaranteed Rate Field — Chicago White Sox
+    5:    (41.4963,   -81.6852),  # Progressive Field — Cleveland Guardians
+    7:    (39.0515,   -94.4815),  # Kauffman Stadium — Kansas City Royals
+    12:   (27.7682,   -82.6534),  # Tropicana Field — Tampa Bay Rays (dome)
+    14:   (43.6414,   -79.3892),  # Rogers Centre — Toronto Blue Jays (retractable)
+    680:  (47.5914,  -122.3325),  # T-Mobile Park — Seattle Mariners (retractable)
+    2392: (29.7573,   -95.3553),  # Minute Maid Park — Houston Astros (retractable)
+    2394: (42.3409,   -83.0485),  # Comerica Park — Detroit Tigers (retractable)
+    2529: (38.5824,  -121.5165),  # Sutter Health Park — Oakland Athletics
+    3312: (44.9817,   -93.2776),  # Target Field — Minnesota Twins
+    3313: (40.8296,   -73.9265),  # Yankee Stadium — New York Yankees
+    5325: (32.7473,   -97.0826),  # Globe Life Field — Texas Rangers (retractable)
+    4321: (32.7473,   -97.0826),  # Globe Life Field — alt venue ID
+
+    # ── National League ───────────────────────────────────────────────────────
+    15:   (33.4453,  -112.0667),  # Chase Field — Arizona Diamondbacks (retractable)
+    17:   (41.9484,   -87.6553),  # Wrigley Field — Chicago Cubs
+    19:   (39.7561,  -104.9942),  # Coors Field — Colorado Rockies
+    22:   (34.0739,  -118.2400),  # Dodger Stadium — Los Angeles Dodgers
+    31:   (40.4469,   -80.0057),  # PNC Park — Pittsburgh Pirates
+    32:   (43.0280,   -87.9715),  # American Family Field — Milwaukee Brewers (retractable)
+    2395: (37.7786,  -122.3893),  # Oracle Park — San Francisco Giants
+    2602: (39.0979,   -84.5068),  # Great American Ball Park — Cincinnati Reds
+    2680: (32.7073,  -117.1569),  # Petco Park — San Diego Padres
+    2681: (39.9059,   -75.1664),  # Citizens Bank Park — Philadelphia Phillies
+    2889: (38.6226,   -90.1928),  # Busch Stadium — St. Louis Cardinals
+    3289: (40.7571,   -73.8458),  # Citi Field — New York Mets
+    3309: (38.8730,   -77.0074),  # Nationals Park — Washington Nationals
+    4169: (25.7783,   -80.2195),  # loanDepot park — Miami Marlins (retractable)
+    4705: (33.8905,   -84.4677),  # Truist Park — Atlanta Braves
 }
 
 # Domed / retractable-roof stadiums (weather is always INDOOR/controlled)
 DOME_VENUES = {
-    12,    # Tropicana Field (fixed dome)
-    14,    # Rogers Centre (retractable)
-    15,    # Chase Field (retractable)
-    32,    # American Family Field (retractable)
-    680,   # T-Mobile Park (retractable)
-    2392,  # Daikin Park / Minute Maid (retractable)
-    2394,  # Comerica Park (retractable)
-    4169,  # loanDepot park (retractable)
-    5325,  # Globe Life Field (retractable)
-    4321,  # Globe Life Field alt
+    12,    # Tropicana Field — Tampa Bay Rays (fixed dome)
+    14,    # Rogers Centre — Toronto Blue Jays (retractable)
+    15,    # Chase Field — Arizona Diamondbacks (retractable)
+    32,    # American Family Field — Milwaukee Brewers (retractable)
+    680,   # T-Mobile Park — Seattle Mariners (retractable)
+    2392,  # Minute Maid Park — Houston Astros (retractable)
+    2394,  # Comerica Park — Detroit Tigers (retractable)
+    4169,  # loanDepot park — Miami Marlins (retractable)
+    5325,  # Globe Life Field — Texas Rangers (retractable)
+    4321,  # Globe Life Field — alt venue ID (retractable)
 }
 
 LOGO_BASE = "https://www.mlbstatic.com/team-logos/{team_id}.svg"
@@ -3103,6 +3107,73 @@ def api_lineup(game_pk):
     except Exception as ex:
         return jsonify({'success': False, 'gamePk': game_pk, 'away': [], 'home': [], 'awayConfirmed': False, 'homeConfirmed': False, 'error': str(ex)})
 
+
+
+# ── Matchup Review ────────────────────────────────────────────────────────────
+def _load_reviews():
+    return _load_json(REVIEW_STORE, {})
+
+def _save_reviews(data):
+    _save_json(REVIEW_STORE, data)
+
+def _review_key(game_pk):
+    return f"{datetime.now(ET).strftime('%Y-%m-%d')}:{game_pk}"
+
+@app.route('/api/matchup-review/<int:game_pk>', methods=['GET'])
+def api_get_matchup_review(game_pk):
+    try:
+        reviews = _load_reviews()
+        key = _review_key(game_pk)
+        rev = reviews.get(key) or {}
+        return jsonify({'success': True, 'gamePk': game_pk, 'key': key, 'review': rev})
+    except Exception as ex:
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+@app.route('/api/matchup-review/<int:game_pk>', methods=['POST'])
+def api_save_matchup_review(game_pk):
+    try:
+        payload = request.get_json(force=True) or {}
+        reviews = _load_reviews()
+        key = _review_key(game_pk)
+        existing = reviews.get(key) or {}
+        existing.update({
+            'gamePk':   game_pk,
+            'date':     datetime.now(ET).strftime('%Y-%m-%d'),
+            'savedAt':  datetime.now().isoformat(),
+            'signals':          payload.get('signals', {}),
+            'marketOverrides':  payload.get('marketOverrides', {}),
+            'confidence':       payload.get('confidence', 3),
+            'notes':            payload.get('notes', ''),
+            'sendToTracker':    payload.get('sendToTracker', False),
+        })
+        reviews[key] = existing
+
+        # Optionally propagate market overrides into the global tracker adjustments
+        if payload.get('sendToTracker') and payload.get('marketOverrides'):
+            adj = _get_adjustments()
+            for mk, mult in payload['marketOverrides'].items():
+                if mk in adj['market_multipliers']:
+                    cur  = float(adj['market_multipliers'][mk])
+                    new_m = round(min(2.0, max(0.40, cur * float(mult))), 4)
+                    adj['market_multipliers'][mk] = new_m
+            _save_json(ADJUST_STORE, adj)
+            _append_calibration_history('matchup_review', adj,
+                {'note': f'Matchup review game {game_pk}', 'date': existing['date']})
+
+        _save_reviews(reviews)
+        return jsonify({'success': True, 'key': key, 'review': existing})
+    except Exception as ex:
+        print('[api_save_matchup_review]', traceback.format_exc())
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+@app.route('/api/matchup-review/history')
+def api_review_history():
+    try:
+        reviews = _load_reviews()
+        out = sorted(reviews.values(), key=lambda r: r.get('savedAt',''), reverse=True)
+        return jsonify({'success': True, 'reviews': out[:120]})
+    except Exception as ex:
+        return jsonify({'success': False, 'error': str(ex)}), 500
 
 @app.route('/api/game/livedata/<int:game_pk>')
 def api_game_livedata(game_pk):
