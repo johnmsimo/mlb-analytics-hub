@@ -3114,7 +3114,6 @@ def api_game_livedata(game_pk):
         box = data.get('liveData', {}).get('boxscore', {})
         game_data = data.get('gameData', {})
         status_detail = game_data.get('status', {}).get('detailedState', '')
-
         inning_num = linescore.get('currentInning', 0)
         inning_half = linescore.get('inningHalf', 'Top')
         if any(x in status_detail for x in ['Middle', 'Mid ', 'Between']):
@@ -3123,66 +3122,59 @@ def api_game_livedata(game_pk):
             inning_label = f'BOT {inning_num}'
         else:
             inning_label = f'TOP {inning_num}'
-
         home = linescore.get('teams', {}).get('home', {})
         away = linescore.get('teams', {}).get('away', {})
         offense = linescore.get('offense', {})
         defense = linescore.get('defense', {})
         bases = {
-            'first': bool(offense.get('first')),
+            'first':  bool(offense.get('first')),
             'second': bool(offense.get('second')),
-            'third': bool(offense.get('third')),
+            'third':  bool(offense.get('third')),
         }
-
-        batter = offense.get('batter') or {}
-        on_deck = offense.get('onDeck') or {}
-        in_hole = offense.get('inHole') or {}
+        batter  = offense.get('batter')  or {}
+        on_deck = offense.get('onDeck')  or {}
+        in_hole = offense.get('inHole')  or {}
         pitcher = defense.get('pitcher') or {}
-
-        batter_id = batter.get('id')
+        batter_id  = batter.get('id')
         pitcher_id = pitcher.get('id')
-        batter_name = batter.get('fullName', '')
-        pitcher_name = pitcher.get('fullName', '')
-
-        pitcher_ip, pitcher_er = '—', '—'
-        batter_ab, batter_h, batter_ops = 0, 0, '—'
-
+        pitcher_ip = pitcher_er = '—'
+        batter_ab = batter_h = 0
+        batter_ops = '—'
         for side in ('home', 'away'):
             players = box.get('teams', {}).get(side, {}).get('players', {})
             if pitcher_id:
-                ps = players.get(f'ID{pitcher_id}', {})
+                ps  = players.get(f'ID{pitcher_id}', {})
                 pst = ps.get('stats', {}).get('pitching', {})
                 if pst:
                     pitcher_ip = pst.get('inningsPitched', '—')
                     pitcher_er = pst.get('earnedRuns', '—')
             if batter_id:
-                bs = players.get(f'ID{batter_id}', {})
+                bs  = players.get(f'ID{batter_id}', {})
                 bst = bs.get('stats', {}).get('batting', {})
                 bss = bs.get('seasonStats', {}).get('batting', {})
                 if bst:
                     batter_ab = bst.get('atBats', 0)
-                    batter_h = bst.get('hits', 0)
+                    batter_h  = bst.get('hits', 0)
                 if bss:
                     batter_ops = bss.get('ops', '—')
-
         return jsonify({
             'success': True,
             'gamePk': game_pk,
             'statusDetail': status_detail,
             'inningLabel': inning_label,
-            'balls': linescore.get('balls', 0),
+            'balls':   linescore.get('balls',   0),
             'strikes': linescore.get('strikes', 0),
-            'outs': linescore.get('outs', 0),
-            'awayRuns': away.get('runs', 0),
-            'awayHits': away.get('hits', 0),
+            'outs':    linescore.get('outs',    0),
+            'awayRuns':   away.get('runs',   0),
+            'awayHits':   away.get('hits',   0),
             'awayErrors': away.get('errors', 0),
-            'homeRuns': home.get('runs', 0),
-            'homeHits': home.get('hits', 0),
+            'homeRuns':   home.get('runs',   0),
+            'homeHits':   home.get('hits',   0),
             'homeErrors': home.get('errors', 0),
             'bases': bases,
-            'pitcher': {'name': pitcher_name, 'ip': pitcher_ip, 'er': pitcher_er},
-            'batter': {'name': batter_name, 'ab': batter_ab, 'h': batter_h, 'ops': batter_ops},
-            'dueUp': [on_deck.get('fullName', ''), in_hole.get('fullName', '')],
+            'pitcher': {'name': pitcher.get('fullName',''), 'ip': pitcher_ip, 'er': pitcher_er},
+            'batter':  {'name': batter.get('fullName',''),  'ab': batter_ab,  'h': batter_h, 'ops': batter_ops},
+            'dueUp': [on_deck.get('fullName',''), in_hole.get('fullName','')],
         })
     except Exception as ex:
         print('[api_game_livedata]', traceback.format_exc())
