@@ -95,12 +95,16 @@ def _load_fg_data():
     global _fg_bat, _fg_pit, _fg_loaded, _fg_load_date
     year = datetime.now().year
     try:
-        import pybaseball as pb
-        pb.cache.enable()
-        df = pb.batting_stats(year, qual=1)
+        hdrs = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+        fg_bat_url = (f"https://www.fangraphs.com/api/leaders/major-league/data?"
+                      f"age=&pos=all&stats=bat&lg=all&qual=1&season={year}&season1={year}"
+                      f"&ind=0&team=&rost=&players=&type=8&sortdir=default&pageitems=2000&pagenum=1")
+        resp = requests.get(fg_bat_url, headers=hdrs, timeout=15)
+        resp.raise_for_status()
+        rows = resp.json().get("data", [])
         bat = {}
-        for _, r in df.iterrows():
-            k = str(r.get("Name","")).strip().lower()
+        for r in rows:
+            k = str(r.get("PlayerName","")).strip().lower()
             if k:
                 bat[k] = {
                     "fg_avg": round(float(r.get("AVG") or 0),3),
@@ -121,11 +125,15 @@ def _load_fg_data():
     except Exception as ex:
         print("[FG] Batting failed:", ex)
     try:
-        import pybaseball as pb
-        df = pb.pitching_stats(year, qual=1)
+        fg_pit_url = (f"https://www.fangraphs.com/api/leaders/major-league/data?"
+                      f"age=&pos=all&stats=pit&lg=all&qual=1&season={year}&season1={year}"
+                      f"&ind=0&team=&rost=&players=&type=8&sortdir=default&pageitems=2000&pagenum=1")
+        resp2 = requests.get(fg_pit_url, headers=hdrs, timeout=15)
+        resp2.raise_for_status()
+        rows2 = resp2.json().get("data", [])
         pit = {}
-        for _, r in df.iterrows():
-            k = str(r.get("Name","")).strip().lower()
+        for r in rows2:
+            k = str(r.get("PlayerName","")).strip().lower()
             if k:
                 pit[k] = {
                     "fg_era":  round(float(r.get("ERA")  or 0),2),
