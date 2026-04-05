@@ -333,7 +333,7 @@ function renderHeader(){
     +'<div class="mhte"><div class="mhl">'+hi+'</div><div class="mha">'+g.homeAbbr+'</div><div class="mhfn">'+g.homeName+'</div></div>';
   document.getElementById('mhMeta').innerHTML=
     '<span class="bdg bc">'+g.gameTime+'</span>'
-    +(g.doubleHeader?'<span style="display:inline-block;margin-left:5px;padding:1px 6px;font-size:.58rem;font-family:Orbitron,monospace;letter-spacing:1.5px;border-radius:3px;background:rgba(255,152,0,.14);color:#ff9800;border:1px solid rgba(255,152,0,.35);vertical-align:middle">DH·G'+g.gameNumber+'</span>':'')+'<span class="bdg '+sc+'">'+g.status.toUpperCase()+'</span>'
+    +'<span class="bdg '+sc+'">'+g.status.toUpperCase()+'</span>'
     +'<span class="bdg bo">PARK '+g.parkFactor+'x</span>'
     +(g.venue?'<span class="bdg bc">'+g.venue+'</span>':'');
 }
@@ -385,7 +385,7 @@ function renderMatchup(){
     '<div class="sr"><span class="sk">AWAY</span><span class="sv2" style="font-family:Inter;font-size:.7rem">'+g.awayName+'</span></div>'
     +'<div class="sr"><span class="sk">HOME</span><span class="sv2" style="font-family:Inter;font-size:.7rem">'+g.homeName+'</span></div>'
     +'<div class="sr"><span class="sk">VENUE</span><span class="sv2" style="font-family:Inter;font-size:.66rem">'+(g.venue||'TBD')+'</span></div>'
-    +'<div class="sr"><span class="sk">GAME TIME</span><span class="sv2">'+g.gameTime+'</span></div>'+(g.doubleHeader?'<div class="sr"><span class="sk">GAME #</span><span class="sv2" style="color:#ff9800;font-family:Orbitron,monospace">DH · Game '+g.gameNumber+'</span></div>':'')
+    +'<div class="sr"><span class="sk">GAME TIME</span><span class="sv2">'+g.gameTime+'</span></div>'
     +'<div class="sr"><span class="sk">EDGE</span><span class="sv2" style="color:var(--c)">'+g.edge+'%</span></div>'
     +'<div class="sr"><span class="sk">PARK</span><span class="sv2" style="color:var(--o)">'+g.parkFactor+'x</span></div>';
 }

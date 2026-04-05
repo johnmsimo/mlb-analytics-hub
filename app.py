@@ -444,9 +444,7 @@ def get_batters_from_boxscore(team_data, side):
 
 def parse_game(g):
     try:
-        pk       = g.get("gamePk")
-        game_num = g.get("gameNumber", 1)          # DH: game 1 or 2
-        is_dh    = g.get("doubleHeader", "N") == "Y"  # DH: True/False
+        pk   = g.get("gamePk")
         stat = g.get("status",{}).get("detailedState","Scheduled")
         st   = "Live" if "Progress" in stat else ("Final" if "Final" in stat else "Scheduled")
         away = g.get("teams",{}).get("away",{})
@@ -491,8 +489,6 @@ def parse_game(g):
             "temp": wx.get("temp","N/A"), "wind": f"{wx.get('wind_speed','?')} mph",
             "condition": wx.get("condition",""), "rainChance": wx.get("rain_chance","N/A"),
             "weatherIcon": wi,
-            "gameNumber":  game_num,
-            "doubleHeader": is_dh,
         }
     except Exception as ex:
         print("[parse_game]", ex); return None
@@ -522,9 +518,8 @@ def api_status():
 def api_games_today():
     _maybe_refresh_fg()
     _maybe_refresh_savant()
-    _maybe_refresh_injuries()
     try:
-        date_str = request.args.get("date") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         raw   = fetch_schedule(date_str)
         games = [g for g in [parse_game(x) for x in raw] if g]
         return jsonify({"success":True,"games":games,"count":len(games)})
@@ -579,237 +574,6 @@ def api_pitchers(game_pk):
         print("[api_pitchers]", traceback.format_exc())
         return jsonify({"success":False,"error":str(ex),"awayPitcher":{},"homePitcher":{}}), 500
 
-
-@app.route('/api/injuries/today')
-def api_injuries_today():
-    """Return all currently IL/DTD players for today's games."""
-    _maybe_refresh_injuries()
-    with _INJURY_LOCK:
-        snapshot = dict(_INJURY_CACHE)
-    active_il = [v for v in snapshot.values() if v.get("status") != "ACTIVE"]
-    active_il.sort(key=lambda x: x.get("date", ""), reverse=True)
-    return jsonify(success=True, count=len(active_il), players=active_il)
-
-@app.route('/api/injuries/<int:game_pk>')
-def api_injuries_game(game_pk):
-    """Return IL/DTD flags for players in a specific game's lineups."""
-    _maybe_refresh_injuries()
-    try:
-        r = requests.get(f"{MLBAPI}/game/{game_pk}/boxscore", timeout=10)
-        r.raise_for_status()
-        teams = r.json().get("teams", {})
-        flags = {"away": [], "home": []}
-        for side in ("away", "home"):
-            td = teams.get(side, {})
-            all_pids = list(td.get("batters", [])) + list(td.get("pitchers", []))
-            for pid in all_pids:
-                inj = get_injury_status(pid)
-                if inj:
-                    flags[side].append(inj)
-        return jsonify(success=True, gamePk=game_pk, flags=flags)
-    except Exception as ex:
-        print("[api_injuries_game]", ex)
-        return jsonify(success=False, error=str(ex)), 500
-
-
-@app.route('/api/lineup-status/<int:game_pk>')
-def api_lineup_status(game_pk):
-    """Return today's lineups with IL/DTD status overlaid on each player."""
-    _maybe_refresh_injuries()
-    try:
-        r = requests.get(f"{MLBAPI}/game/{game_pk}/boxscore", timeout=10)
-        r.raise_for_status()
-        teams = r.json().get("teams", {})
-        result = {}
-        for side in ("away", "home"):
-            td = teams.get(side, {})
-            players = td.get("players", {})
-            batters = td.get("batters", [])
-            lineup = []
-            for pid in batters:
-                key = f"ID{pid}"
-                p = players.get(key, {})
-                name = p.get("person", {}).get("fullName", "")
-                inj  = get_injury_status(pid)
-                batting_order = p.get("battingOrder", 0)
-                try:
-                    slot = int(str(batting_order)[0])
-                except:
-                    slot = 0
-                lineup.append({
-                    "id": pid,
-                    "name": name,
-                    "slot": slot,
-                    "pos": p.get("position", {}).get("abbreviation", ""),
-                    "injuryStatus": inj.get("status") if inj else None,
-                    "injuryDesc": inj.get("description") if inj else None,
-                    "flagged": bool(inj),
-                })
-            lineup.sort(key=lambda x: x["slot"])
-            result[side] = lineup
-        return jsonify(success=True, gamePk=game_pk, lineups=result)
-    except Exception as ex:
-        return jsonify(success=False, error=str(ex)), 500
-
-
-@app.route('/api/roster-moves/today')
-def api_roster_moves_today():
-    """Last 24h roster moves — IL placements, activations, recalls."""
-    _maybe_refresh_injuries()
-    from datetime import timedelta
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
-    try:
-        r = requests.get(
-            f"{MLBAPI}/transactions",
-            params={"sportId": 1, "startDate": yesterday, "endDate": today},
-            timeout=10
-        )
-        r.raise_for_status()
-        moves = []
-        for tx in r.json().get("transactions", []):
-            ttype = (tx.get("typeDesc") or "").lower()
-            if any(k in ttype for k in ("placed", "recalled", "activated", "transferred", "select")):
-                moves.append({
-                    "date": tx.get("date"),
-                    "player": tx.get("person", {}).get("fullName", ""),
-                    "playerId": tx.get("person", {}).get("id"),
-                    "team": (tx.get("toTeam") or tx.get("fromTeam") or {}).get("abbreviation", ""),
-                    "type": tx.get("typeDesc", ""),
-                    "description": tx.get("description", ""),
-                })
-        moves.sort(key=lambda x: x.get("date", ""), reverse=True)
-        return jsonify(success=True, count=len(moves), moves=moves[:50])
-    except Exception as ex:
-        return jsonify(success=False, error=str(ex)), 500
-
-
-@app.route('/api/live/<int:game_pk>')
-def api_live_game(game_pk):
-    """Live linescore + current at-bat state from MLB Stats API."""
-    try:
-        # Linescore — inning scores, runs, hits, errors, outs, bases, count
-        ls_r = requests.get(
-            f"{MLBAPI}/game/{game_pk}/linescore",
-            timeout=8
-        )
-        ls_r.raise_for_status()
-        ls = ls_r.json()
-
-        innings_data = ls.get("innings", [])
-        innings = []
-        for inn in innings_data:
-            innings.append({
-                "num":   inn.get("num", 0),
-                "away":  inn.get("away", {}).get("runs", "-"),
-                "home":  inn.get("home", {}).get("runs", "-"),
-            })
-
-        away_runs   = ls.get("teams", {}).get("away", {}).get("runs", 0)
-        home_runs   = ls.get("teams", {}).get("home", {}).get("runs", 0)
-        away_hits   = ls.get("teams", {}).get("away", {}).get("hits", 0)
-        home_hits   = ls.get("teams", {}).get("home", {}).get("hits", 0)
-        away_errors = ls.get("teams", {}).get("away", {}).get("errors", 0)
-        home_errors = ls.get("teams", {}).get("home", {}).get("errors", 0)
-
-        outs       = ls.get("outs", 0)
-        inning_num = ls.get("currentInning", 0)
-        inning_half= ls.get("inningHalf", "Top")   # "Top" or "Bottom"
-        balls      = ls.get("balls", 0)
-        strikes    = ls.get("strikes", 0)
-
-        # Bases occupied
-        offense    = ls.get("offense", {})
-        on_first   = bool(offense.get("first"))
-        on_second  = bool(offense.get("second"))
-        on_third   = bool(offense.get("third"))
-
-        batter_obj   = offense.get("batter", {})
-        pitcher_obj  = ls.get("defense", {}).get("pitcher", {})
-        batter_name  = batter_obj.get("fullName", "")
-        pitcher_name = pitcher_obj.get("fullName", "")
-        batter_id    = batter_obj.get("id", "")
-        pitcher_id   = pitcher_obj.get("id", "")
-
-        # Headshot URLs (MLB CDN)
-        def headshot(pid):
-            return f"https://img.mlbstatic.com/mlb-photos/image/upload/d_people:generic:headshot:67:current.png/w_213,q_auto:best/v1/people/{pid}/headshot/67/current" if pid else ""
-
-        # Pull live boxscore for pitcher IP/ERA and batter OPS
-        pitcher_ip = ""; pitcher_era = ""; batter_ops = ""; batter_ab = ""
-        broadcasts = []
-        away_record = ""; home_record = ""
-        try:
-            bs_r = requests.get(f"{MLBAPI}/game/{game_pk}/boxscore", timeout=8)
-            if bs_r.ok:
-                bs = bs_r.json()
-                # Broadcast
-                bs_info_r = requests.get(f"{MLBAPI}/game/{game_pk}/feed/live?fields=gameData,game,teams,teamName,record,wins,losses,broadcasts,name", timeout=8)
-                if bs_info_r.ok:
-                    gd = bs_info_r.json().get("gameData", {})
-                    away_rec = gd.get("teams", {}).get("away", {}).get("record", {})
-                    home_rec = gd.get("teams", {}).get("home", {}).get("record", {})
-                    away_record = f"{away_rec.get('wins','')}-{away_rec.get('losses','')}" if away_rec else ""
-                    home_record = f"{home_rec.get('wins','')}-{home_rec.get('losses','')}" if home_rec else ""
-                    for b in gd.get("broadcasts", []):
-                        broadcasts.append(b.get("name",""))
-                # Pitcher stats from boxscore
-                teams_bs = bs.get("teams", {})
-                for side in ["away","home"]:
-                    pitchers = teams_bs.get(side, {}).get("pitchers", [])
-                    pid_list = [str(p) for p in pitchers]
-                    players  = teams_bs.get(side, {}).get("players", {})
-                    for pid_key, pdata in players.items():
-                        p = pdata.get("person", {})
-                        if str(pitcher_id) and str(p.get("id","")) == str(pitcher_id):
-                            st = pdata.get("stats", {}).get("pitching", {})
-                            outs_p = st.get("outs", 0)
-                            pitcher_ip  = f"{outs_p//3}.{outs_p%3}"
-                            era_v = st.get("era", "")
-                            pitcher_era = f"{float(era_v):.2f}" if era_v not in ("","-.--","-") else "0.00"
-                        if str(batter_id) and str(p.get("id","")) == str(batter_id):
-                            st = pdata.get("stats", {}).get("batting", {})
-                            batter_ab  = f"{st.get('atBats',0)}-{st.get('hits',0)}"
-                            ops_v = st.get("ops", "")
-                            batter_ops = f"{float(ops_v):.3f}" if ops_v and ops_v not in ("","-.---") else ""
-        except Exception as bex:
-            print("[api_live boxscore]", bex)
-
-        return jsonify(
-            success      = True,
-            gamePk       = game_pk,
-            inning       = inning_num,
-            inningHalf   = inning_half,
-            outs         = outs,
-            balls        = balls,
-            strikes      = strikes,
-            onFirst      = on_first,
-            onSecond     = on_second,
-            onThird      = on_third,
-            batter       = batter_name,
-            pitcher      = pitcher_name,
-            batterId     = batter_id,
-            pitcherId    = pitcher_id,
-            batterHeadshot  = headshot(batter_id),
-            pitcherHeadshot = headshot(pitcher_id),
-            pitcherIP    = pitcher_ip,
-            pitcherERA   = pitcher_era,
-            batterAB     = batter_ab,
-            batterOPS    = batter_ops,
-            awayRecord   = away_record,
-            homeRecord   = home_record,
-            broadcasts   = broadcasts,
-            awayRuns     = away_runs,
-            homeRuns     = home_runs,
-            awayHits     = away_hits,
-            homeHits     = home_hits,
-            awayErrors   = away_errors,
-            homeErrors   = home_errors,
-            innings      = innings,
-        )
-    except Exception as ex:
-        print("[api_live_game]", ex)
-        return jsonify(success=False, error=str(ex)), 500
 @app.errorhandler(404)
 def e404(e): return jsonify({"error":"Not found"}), 404
 @app.errorhandler(500)
@@ -1049,83 +813,6 @@ def _pct(values, q):
     w = pos - lo
     return arr[lo] * (1 - w) + arr[hi] * w
 
-
-# ── Injury / Transaction Cache ──────────────────────────────────────────────
-_INJURY_CACHE = {}
-_INJURY_CACHE_DATE = None
-_INJURY_LOCK = threading.Lock()
-
-def _load_injury_data():
-    """Pull today's IL placements + activations from MLB Stats API /transactions."""
-    global _INJURY_CACHE, _INJURY_CACHE_DATE
-    from datetime import timedelta
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    start = (datetime.now(timezone.utc) - timedelta(days=3)).strftime("%Y-%m-%d")
-    data = {}
-    try:
-        r = requests.get(
-            f"{MLBAPI}/transactions",
-            params={"sportId": 1, "startDate": start, "endDate": today},
-            timeout=10
-        )
-        r.raise_for_status()
-        for tx in r.json().get("transactions", []):
-            pid   = tx.get("person", {}).get("id")
-            desc  = (tx.get("description") or "").lower()
-            ttype = (tx.get("typeDesc") or "").lower()
-            if not pid:
-                continue
-            if "60-day" in desc or "60-day" in ttype:
-                status = "IL-60"
-            elif "15-day" in desc or "15-day" in ttype:
-                status = "IL-15"
-            elif "10-day" in desc or "10-day" in ttype:
-                status = "IL-10"
-            elif "7-day" in desc or "7-day" in ttype:
-                status = "IL-7"
-            elif "day-to-day" in desc or "dtd" in desc:
-                status = "DTD"
-            elif "recalled" in ttype or "activated" in ttype:
-                status = "ACTIVE"
-            elif "placed" in ttype:
-                status = "IL-10"
-            else:
-                continue
-            # Keep most recent transaction per player
-            existing = data.get(pid)
-            if not existing or tx.get("date", "") >= existing.get("date", ""):
-                data[pid] = {
-                    "status": status,
-                    "description": tx.get("description", ""),
-                    "date": tx.get("date", today),
-                    "playerId": pid,
-                    "playerName": tx.get("person", {}).get("fullName", ""),
-                    "teamId": (tx.get("toTeam") or tx.get("fromTeam") or {}).get("id"),
-                }
-    except Exception as ex:
-        print("[_load_injury_data]", ex)
-    with _INJURY_LOCK:
-        _INJURY_CACHE.clear()
-        _INJURY_CACHE.update(data)
-        _INJURY_CACHE_DATE = datetime.now(timezone.utc).date()
-    print(f"[injuries] {len(data)} statuses loaded")
-
-def _maybe_refresh_injuries():
-    with _INJURY_LOCK:
-        loaded = bool(_INJURY_CACHE_DATE)
-        date   = _INJURY_CACHE_DATE
-    if not loaded or date != datetime.now(timezone.utc).date():
-        threading.Thread(target=_load_injury_data, daemon=True).start()
-
-def get_injury_status(player_id):
-    """Return injury dict or None if player is active/unknown."""
-    if not player_id:
-        return None
-    with _INJURY_LOCK:
-        entry = dict(_INJURY_CACHE.get(player_id, {}))
-    if not entry or entry.get("status") == "ACTIVE":
-        return None
-    return entry
 
 def player_profile(player_id):
     if not player_id:
@@ -1780,8 +1467,7 @@ def _american_to_implied(price):
         return None
 
 
-def _find_odds_event(away_name, home_name, game_number=1):
-    # game_number=2 selects 2nd matching event (doubleheader same-team games)
+def _find_odds_event(away_name, home_name):
     if not ODDS_API_KEY:
         return None, []
     try:
@@ -1794,11 +1480,9 @@ def _find_odds_event(away_name, home_name, game_number=1):
         events = r.json() or []
         na = _norm_name(away_name)
         nh = _norm_name(home_name)
-        matches = [ev for ev in events
-                   if _norm_name(ev.get('away_team')) == na and _norm_name(ev.get('home_team')) == nh]
-        if matches:
-            idx = min(game_number - 1, len(matches) - 1)
-            return matches[idx], events
+        for ev in events:
+            if _norm_name(ev.get('away_team')) == na and _norm_name(ev.get('home_team')) == nh:
+                return ev, events
         return None, events
     except:
         return None, []
@@ -1921,8 +1605,7 @@ def api_market(game_pk):
         if away_p.get('fullName'): valid_names.add(away_p.get('fullName'))
         if home_p.get('fullName'): valid_names.add(home_p.get('fullName'))
 
-        game_number = g.get('gameNumber', 1)
-        event, events = _find_odds_event(away_name, home_name, game_number=game_number)
+        event, events = _find_odds_event(away_name, home_name)
         featured = _load_event_odds(event.get('id') if event else None, featured_only=True) if event else []
         props_books = _load_event_odds(event.get('id') if event else None, featured_only=False) if event else []
         props = _parse_prop_markets(props_books, valid_names)
@@ -3406,6 +3089,118 @@ def api_projections_monte_carlo():
     except Exception as ex:
         return jsonify({'success': False, 'error': str(ex), 'games': [], 'topProps': []}), 500
 
+
+
+@app.route('/api/live/<int:game_pk>')
+def api_live_game(game_pk):
+    """MLB.com-style live panel data: score, bases, count, pitcher/batter with headshots."""
+    try:
+        import requests as _req
+        ls_r = _req.get(f"{MLB_API}/game/{game_pk}/linescore", timeout=8)
+        ls_r.raise_for_status()
+        ls = ls_r.json()
+
+        innings_data = ls.get("innings", [])
+        innings = [{"num": i.get("num",0), "away": i.get("away",{}).get("runs"), "home": i.get("home",{}).get("runs")} for i in innings_data]
+
+        t        = ls.get("teams", {})
+        away_runs= t.get("away",{}).get("runs", 0)
+        home_runs= t.get("home",{}).get("runs", 0)
+        away_hits= t.get("away",{}).get("hits", 0)
+        home_hits= t.get("home",{}).get("hits", 0)
+        away_err = t.get("away",{}).get("errors", 0)
+        home_err = t.get("home",{}).get("errors", 0)
+
+        outs        = ls.get("outs", 0)
+        inning_num  = ls.get("currentInning", 0)
+        inning_half = ls.get("inningHalf", "Top")
+        balls       = ls.get("balls", 0)
+        strikes     = ls.get("strikes", 0)
+
+        offense     = ls.get("offense", {})
+        defense     = ls.get("defense", {})
+        batter_obj  = offense.get("batter", {})
+        pitcher_obj = defense.get("pitcher", {})
+        batter_name = batter_obj.get("fullName", "")
+        pitcher_name= pitcher_obj.get("fullName", "")
+        batter_id   = batter_obj.get("id", "")
+        pitcher_id  = pitcher_obj.get("id", "")
+
+        on_first  = bool(offense.get("first"))
+        on_second = bool(offense.get("second"))
+        on_third  = bool(offense.get("third"))
+
+        def headshot(pid):
+            if not pid: return ""
+            return f"https://img.mlbstatic.com/mlb-photos/image/upload/d_people:generic:headshot:67:current.png/w_213,q_auto:best/v1/people/{pid}/headshot/67/current"
+
+        # Pitcher & batter stats from boxscore
+        pitcher_ip = ""; pitcher_era = ""; batter_ab = ""; batter_ops = ""
+        broadcasts = []; away_record = ""; home_record = ""
+        try:
+            bs_r = _req.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=8)
+            if bs_r.ok:
+                bs = bs_r.json()
+                for side in ["away","home"]:
+                    players = bs.get("teams",{}).get(side,{}).get("players",{})
+                    for pkey, pdata in players.items():
+                        pid = str(pdata.get("person",{}).get("id",""))
+                        if pitcher_id and pid == str(pitcher_id):
+                            st = pdata.get("stats",{}).get("pitching",{})
+                            o  = st.get("outs", 0)
+                            pitcher_ip  = f"{o//3}.{o%3}"
+                            era = st.get("era","")
+                            try: pitcher_era = f"{float(era):.2f}"
+                            except: pitcher_era = "0.00"
+                        if batter_id and pid == str(batter_id):
+                            st = pdata.get("stats",{}).get("batting",{})
+                            batter_ab = f"{st.get('atBats',0)}-{st.get('hits',0)}"
+                            ops = st.get("ops","")
+                            try: batter_ops = f"{float(ops):.3f}"
+                            except: batter_ops = ""
+        except Exception as bex:
+            print("[live boxscore]", bex)
+
+        # Team records + broadcasts from feed/live
+        try:
+            fd_r = _req.get(
+                f"{MLB_API.replace('/v1','')}/v1.1/game/{game_pk}/feed/live"
+                "?fields=gameData,teams,record,wins,losses,broadcasts,name",
+                timeout=8
+            )
+            if fd_r.ok:
+                gd = fd_r.json().get("gameData", {})
+                ar = gd.get("teams",{}).get("away",{}).get("record",{})
+                hr = gd.get("teams",{}).get("home",{}).get("record",{})
+                if ar: away_record = f"{ar.get('wins','')}-{ar.get('losses','')}"
+                if hr: home_record = f"{hr.get('wins','')}-{hr.get('losses','')}"
+                for b in gd.get("broadcasts", []):
+                    n = b.get("name","")
+                    if n: broadcasts.append(n)
+        except Exception as fex:
+            print("[live feed/live]", fex)
+
+        return jsonify(
+            success=True, gamePk=game_pk,
+            inning=inning_num, inningHalf=inning_half,
+            outs=outs, balls=balls, strikes=strikes,
+            onFirst=on_first, onSecond=on_second, onThird=on_third,
+            batter=batter_name, pitcher=pitcher_name,
+            batterId=batter_id, pitcherId=pitcher_id,
+            batterHeadshot=headshot(batter_id),
+            pitcherHeadshot=headshot(pitcher_id),
+            pitcherIP=pitcher_ip, pitcherERA=pitcher_era,
+            batterAB=batter_ab, batterOPS=batter_ops,
+            awayRecord=away_record, homeRecord=home_record,
+            broadcasts=broadcasts,
+            awayRuns=away_runs, homeRuns=home_runs,
+            awayHits=away_hits, homeHits=home_hits,
+            awayErrors=away_err, homeErrors=home_err,
+            innings=innings,
+        )
+    except Exception as ex:
+        print("[api_live_game]", ex)
+        return jsonify(success=False, error=str(ex))
 
 @app.route('/api/lineup/<int:game_pk>')
 def api_lineup(game_pk):
