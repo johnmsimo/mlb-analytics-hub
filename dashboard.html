@@ -110,35 +110,83 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
 #injury-bar .inj-dismiss:hover{color:rgba(255,255,255,.7)}
 #injury-bar.show{display:flex}
 
-/* ── Live Game Feed ───────────────────────────────────────────────── */
-.live-score-bar{margin-top:10px;padding:10px 12px;background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.12);border-radius:8px;font-size:.68rem}
-.ls-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;font-family:'Orbitron',monospace;font-size:.6rem;color:var(--mu)}
-.ls-inning{color:#00e5ff;font-weight:700;letter-spacing:1px}
-.ls-count{display:flex;gap:8px;align-items:center}
-.ls-count-val{color:var(--c)}
-.ls-scoreline{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}
-.ls-team-score{display:flex;align-items:center;gap:8px;flex:1}
-.ls-abbr{font-family:'Orbitron',monospace;font-size:.65rem;color:var(--mu);min-width:28px}
-.ls-runs{font-family:'Orbitron',monospace;font-size:1.3rem;font-weight:700;color:var(--c)}
-.ls-rhe{font-size:.58rem;color:var(--mu);display:flex;gap:4px}
-.ls-rhe span{background:rgba(255,255,255,.05);border-radius:3px;padding:1px 4px}
-.ls-diamond{position:relative;width:36px;height:36px;flex-shrink:0}
-.ls-diamond .base{position:absolute;width:11px;height:11px;border:1.5px solid rgba(255,255,255,.2);transform:rotate(45deg);background:transparent;border-radius:1px}
-.ls-diamond .base.on{background:rgba(255,193,7,.85);border-color:#ffc107}
-.ls-diamond .b1{bottom:0;right:0}
-.ls-diamond .b2{top:0;left:50%;transform:translateX(-50%) rotate(45deg)}
-.ls-diamond .b3{bottom:0;left:0}
-.ls-diamond .home{position:absolute;bottom:-4px;left:50%;transform:translateX(-50%);width:9px;height:9px;background:rgba(255,255,255,.15);clip-path:polygon(50% 0%,100% 40%,80% 100%,20% 100%,0% 40%)}
-.ls-outs{display:flex;gap:4px;align-items:center;margin-top:6px}
-.ls-out-dot{width:9px;height:9px;border-radius:50%;border:1.5px solid rgba(255,255,255,.25);background:transparent}
-.ls-out-dot.filled{background:rgba(0,229,255,.7);border-color:#00e5ff}
-.ls-matchup{margin-top:6px;font-size:.62rem;color:var(--mu);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ls-matchup span{color:rgba(255,255,255,.55)}
-.ls-innings-scroll{display:flex;gap:2px;overflow-x:auto;margin-top:6px;padding-bottom:2px}
-.ls-inn-cell{text-align:center;min-width:20px;font-size:.58rem;flex-shrink:0}
-.ls-inn-cell .inn-num{color:var(--mu);border-bottom:1px solid var(--b);padding-bottom:1px;margin-bottom:1px}
-.ls-inn-cell .inn-r{color:var(--c)}
-.ls-loading{font-size:.65rem;color:var(--mu);text-align:center;padding:8px 0;font-style:italic}
+
+
+/* ══════════════════════════════════════════════════════
+   MLB.com-Style Live Game Panel
+   ══════════════════════════════════════════════════════ */
+.live-panel{margin-top:12px;border-radius:12px;overflow:hidden;border:1px solid rgba(0,229,255,.18);background:rgba(5,14,30,.85)}
+
+/* Inning header bar */
+.lp-header{display:flex;align-items:center;justify-content:space-between;padding:7px 14px;background:rgba(0,229,255,.07);border-bottom:1px solid rgba(0,229,255,.12)}
+.lp-inning{font-family:'Orbitron',monospace;font-size:.72rem;font-weight:700;color:#00e5ff;letter-spacing:2px}
+.lp-count{display:flex;gap:12px;align-items:center}
+.lp-count-item{font-family:'Orbitron',monospace;font-size:.62rem;color:rgba(255,255,255,.45)}
+.lp-count-item b{color:#e0f0ff;margin-left:3px}
+
+/* Score rows */
+.lp-scores{padding:10px 14px 8px}
+.lp-row{display:flex;align-items:center;gap:8px;padding:5px 0}
+.lp-row+.lp-row{border-top:1px solid rgba(255,255,255,.05)}
+.lp-logo{width:28px;height:28px;object-fit:contain;flex-shrink:0}
+.lp-logo-placeholder{width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-family:'Orbitron',monospace;font-size:.55rem;color:var(--mu);flex-shrink:0}
+.lp-team-name{flex:1;font-size:.78rem;font-weight:600;color:#e0f0ff}
+.lp-record{font-size:.6rem;color:var(--mu);margin-left:4px;font-weight:400}
+.lp-rhe{display:flex;gap:0}
+.lp-rhe-cell{width:32px;text-align:center;font-family:'Orbitron',monospace;font-size:.85rem;font-weight:700;color:#e0f0ff}
+.lp-rhe-cell.r{color:#fff;font-size:1rem}
+.lp-rhe-cell.dim{color:rgba(255,255,255,.35);font-size:.75rem}
+
+/* RHE column headers */
+.lp-rhe-headers{display:flex;justify-content:flex-end;padding:0 14px 2px;gap:0}
+.lp-rhe-hdr{width:32px;text-align:center;font-size:.55rem;letter-spacing:1.5px;color:var(--mu);font-family:'Orbitron',monospace}
+
+/* Diamond + outs block */
+.lp-state{display:flex;align-items:center;justify-content:space-between;padding:8px 14px;border-top:1px solid rgba(255,255,255,.05)}
+.lp-diamond-wrap{position:relative;width:52px;height:52px}
+.lp-base{position:absolute;width:14px;height:14px;border:1.5px solid rgba(255,255,255,.2);transform:rotate(45deg);background:transparent;border-radius:2px;transition:all .3s}
+.lp-base.on{background:#ffc107;border-color:#ffc107;box-shadow:0 0 8px rgba(255,193,7,.5)}
+.lp-base.b1{bottom:2px;right:2px}
+.lp-base.b2{top:2px;left:50%;transform:translateX(-50%) rotate(45deg)}
+.lp-base.b3{bottom:2px;left:2px}
+.lp-home{position:absolute;bottom:-2px;left:50%;transform:translateX(-50%);width:11px;height:11px;background:rgba(255,255,255,.12);clip-path:polygon(50% 0%,100% 38%,80% 100%,20% 100%,0% 38%)}
+.lp-outs-wrap{display:flex;flex-direction:column;align-items:center;gap:4px}
+.lp-outs-label{font-size:.52rem;letter-spacing:2px;color:var(--mu);font-family:'Orbitron',monospace}
+.lp-outs-dots{display:flex;gap:5px}
+.lp-out-dot{width:10px;height:10px;border-radius:50%;border:1.5px solid rgba(255,255,255,.2);background:transparent;transition:all .25s}
+.lp-out-dot.filled{background:rgba(0,229,255,.75);border-color:#00e5ff;box-shadow:0 0 5px rgba(0,229,255,.4)}
+
+/* Count display */
+.lp-count-display{display:flex;flex-direction:column;align-items:center;gap:2px}
+.lp-count-big{font-family:'Orbitron',monospace;font-size:1.1rem;font-weight:700;color:#e0f0ff;letter-spacing:2px}
+.lp-count-sub{font-size:.52rem;color:var(--mu);letter-spacing:1px}
+
+/* Pitcher / Batter row */
+.lp-matchup{display:grid;grid-template-columns:1fr 1fr;gap:1px;border-top:1px solid rgba(255,255,255,.06)}
+.lp-person{display:flex;align-items:center;gap:8px;padding:8px 12px;background:rgba(0,0,0,.25)}
+.lp-person:first-child{border-right:1px solid rgba(255,255,255,.05)}
+.lp-person-photo{width:36px;height:36px;border-radius:50%;object-fit:cover;background:rgba(255,255,255,.06);flex-shrink:0;border:1.5px solid rgba(0,229,255,.2)}
+.lp-person-photo-placeholder{width:36px;height:36px;border-radius:50%;background:rgba(0,229,255,.06);border:1.5px solid rgba(0,229,255,.15);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.lp-person-info{min-width:0}
+.lp-person-role{font-size:.52rem;letter-spacing:2px;color:var(--mu);font-family:'Orbitron',monospace;margin-bottom:1px}
+.lp-person-name{font-size:.7rem;font-weight:600;color:#e0f0ff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lp-person-stat{font-size:.6rem;color:var(--mu);margin-top:1px}
+.lp-person-stat span{color:rgba(255,255,255,.5)}
+
+/* Broadcasts footer */
+.lp-broadcast{padding:5px 14px 7px;font-size:.58rem;color:var(--mu);border-top:1px solid rgba(255,255,255,.04)}
+.lp-broadcast b{color:rgba(255,255,255,.35);font-weight:500}
+
+/* Inning linescore strip */
+.lp-linescore{padding:4px 14px 8px;overflow-x:auto}
+.lp-ls-table{display:flex;gap:2px;min-width:max-content}
+.lp-ls-col{display:flex;flex-direction:column;align-items:center;gap:1px}
+.lp-ls-hdr{font-size:.52rem;color:var(--mu);font-family:'Orbitron',monospace;padding:0 4px;border-bottom:1px solid rgba(255,255,255,.08);margin-bottom:1px}
+.lp-ls-cell{font-size:.65rem;font-family:'Orbitron',monospace;color:rgba(255,255,255,.4);padding:0 4px;min-width:20px;text-align:center}
+.lp-ls-cell.cur{color:#00e5ff;font-weight:700}
+
+.lp-loading{padding:14px;text-align:center;font-size:.65rem;color:var(--mu);font-style:italic}
+
 </style>
 </head>
 <body>
@@ -222,8 +270,8 @@ function mkCard(g){
     +'<div class="eb"><div class="ebl"><span>MODEL EDGE</span><strong>'+g.edge+'%</strong></div>'
     +'<div class="bar"><div class="fill" style="width:0%" data-w="'+g.barPct+'%"></div></div></div>'
     +'<div class="vn">'+g.venue+'</div>'
+    +'<div id="live-panel-'+g.gamePk+'"><div class="lp-loading">&#9679; Loading live feed…</div></div>''
     +'<button class="lineup-toggle" onclick="toggleLineup(event,'+g.gamePk+')">&#9776; SHOW LINEUP</button>'
-    +'<div id="live-bar-'+g.gamePk+'" class="live-bar-slot"></div>'
     +'<div class="lineup-section" id="lu-'+g.gamePk+'"><div class="lu-pending">Loading lineup…</div></div>'
     +'<div class="ap">&#9889; DEEP DIVE ANALYSIS</div>'
     +'</div>';
@@ -357,7 +405,12 @@ function escHtml(s){
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-// ── Live Game Feed ──────────────────────────────────────────────────────────
+
+
+
+// ══════════════════════════════════════════════════════
+//  MLB.com-Style Live Game Panel
+// ══════════════════════════════════════════════════════
 var livePollers = {};
 
 function startLivePoll(g) {
@@ -365,102 +418,169 @@ function startLivePoll(g) {
   var pk = g.gamePk;
   fetchLiveData(pk, g);
   if (livePollers[pk]) clearInterval(livePollers[pk]);
-  livePollers[pk] = setInterval(function(){ fetchLiveData(pk, g); }, 30000);
+  livePollers[pk] = setInterval(function(){ fetchLiveData(pk, g); }, 28000);
 }
 
 function fetchLiveData(pk, g) {
   fetch('/api/live/' + pk)
-    .then(function(r){ if(!r.ok) throw new Error(r.status); return r.json(); })
-    .then(function(d){ if(d.success) renderLiveBar(pk, d, g); })
-    .catch(function(){});
+    .then(function(r){ if(!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(function(d){ if(d.success) renderLivePanel(pk, d, g); else showLiveError(pk,'No live data'); })
+    .catch(function(e){ console.warn('[LiveFeed] pk='+pk, e); showLiveError(pk,'Live feed unavailable'); });
 }
 
-function renderLiveBar(pk, d, g) {
-  var el = document.getElementById('live-bar-' + pk);
+function showLiveError(pk, msg) {
+  var el = document.getElementById('live-panel-' + pk);
+  if (el) el.innerHTML = '<div class="lp-loading">' + msg + '</div>';
+}
+
+function renderLivePanel(pk, d, g) {
+  var el = document.getElementById('live-panel-' + pk);
   if (!el) return;
 
-  var halfArrow = d.inningHalf === 'Top' ? '&#9650;' : '&#9660;';
+  var halfArrow = (d.inningHalf === 'Top' || d.inningHalf === 'top') ? '&#9650; TOP' : '&#9660; BOT';
   var inningLabel = halfArrow + ' ' + d.inning;
 
-  // Outs dots
+  // Outs
   var outDots = '';
-  for (var i = 0; i < 3; i++) {
-    outDots += '<div class="ls-out-dot' + (i < d.outs ? ' filled' : '') + '"></div>';
-  }
+  for (var i = 0; i < 3; i++)
+    outDots += '<div class="lp-out-dot' + (i < d.outs ? ' filled' : '') + '"></div>';
 
-  // Diamond bases
+  // Bases
   var b1 = d.onFirst  ? ' on' : '';
   var b2 = d.onSecond ? ' on' : '';
   var b3 = d.onThird  ? ' on' : '';
 
-  // Inning-by-inning scroll (last 6 innings)
-  var innHTML = '';
-  var showInns = d.innings.slice(-6);
-  showInns.forEach(function(inn) {
-    innHTML += '<div class="ls-inn-cell">'
-      + '<div class="inn-num">' + inn.num + '</div>'
-      + '<div class="inn-r inn-away">' + (inn.away !== undefined ? inn.away : '-') + '</div>'
-      + '<div class="inn-r inn-home">' + (inn.home !== undefined ? inn.home : '-') + '</div>'
+  // Team logo helpers
+  function logoHtml(url, abbr, side) {
+    return url
+      ? '<img src="'+url+'" alt="'+abbr+'" class="lp-logo" loading="lazy">'
+      : '<div class="lp-logo-placeholder">'+abbr+'</div>';
+  }
+
+  // Pitcher headshot
+  function personPhoto(url, role) {
+    if (url) return '<img src="'+url+'" class="lp-person-photo" alt="'+role+'" loading="lazy" onerror="this.style.display='none'">';
+    return '<div class="lp-person-photo-placeholder"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(0,229,255,.4)" stroke-width="1.5"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg></div>';
+  }
+
+  // Records
+  var awayRec = d.awayRecord ? ' <span class="lp-record">'+d.awayRecord+'</span>' : '';
+  var homeRec = d.homeRecord ? ' <span class="lp-record">'+d.homeRecord+'</span>' : '';
+
+  // Linescore strip (last 6)
+  var lsCols = '';
+  var recentInns = (d.innings || []).slice(-6);
+  recentInns.forEach(function(inn){
+    lsCols += '<div class="lp-ls-col">'
+      + '<div class="lp-ls-hdr">'+inn.num+'</div>'
+      + '<div class="lp-ls-cell">'+(inn.away !== undefined && inn.away !== null ? inn.away : '-')+'</div>'
+      + '<div class="lp-ls-cell">'+(inn.home !== undefined && inn.home !== null ? inn.home : '-')+'</div>'
       + '</div>';
   });
 
-  // Batter/Pitcher matchup
-  var matchup = '';
-  if (d.batter || d.pitcher) {
-    matchup = '<div class="ls-matchup">'
-      + (d.batter  ? 'AB: <span>' + escName(d.batter)  + '</span> ' : '')
-      + (d.pitcher ? 'vs <span>' + escName(d.pitcher) + '</span>' : '')
-      + '</div>';
-  }
+  // Broadcasts
+  var broadcastHtml = '';
+  if (d.broadcasts && d.broadcasts.length)
+    broadcastHtml = '<div class="lp-broadcast"><b>Watch on: </b>'+d.broadcasts.join(', ')+'</div>';
 
-  el.innerHTML = '<div class="live-score-bar">'
-    + '<div class="ls-header">'
-    +   '<span class="ls-inning">' + inningLabel + '</span>'
-    +   '<div class="ls-count">'
-    +     '<span class="ls-count-val">B:<b>' + d.balls + '</b></span>'
-    +     '<span class="ls-count-val">S:<b>' + d.strikes + '</b></span>'
+  // Pitcher stats
+  var pitcherStatHtml = '';
+  if (d.pitcherIP || d.pitcherERA)
+    pitcherStatHtml = '<div class="lp-person-stat">'
+      +(d.pitcherIP ? '<span>'+d.pitcherIP+' IP</span> ' : '')
+      +(d.pitcherERA ? '| <span>'+d.pitcherERA+' ERA</span>' : '')
+      +'</div>';
+
+  // Batter stats
+  var batterStatHtml = '';
+  if (d.batterAB || d.batterOPS)
+    batterStatHtml = '<div class="lp-person-stat">'
+      +(d.batterAB ? '<span>'+d.batterAB+'</span> ' : '')
+      +(d.batterOPS ? '| <span>.'+d.batterOPS.replace('0.','')+'</span> OPS' : '')
+      +'</div>';
+
+  el.innerHTML =
+    '<div class="live-panel">'
+
+    // Header: inning + count
+    + '<div class="lp-header">'
+    +   '<span class="lp-inning">'+inningLabel+'</span>'
+    +   '<div class="lp-count">'
+    +     '<span class="lp-count-item">B <b>'+d.balls+'</b></span>'
+    +     '<span class="lp-count-item">S <b>'+d.strikes+'</b></span>'
     +   '</div>'
     + '</div>'
 
-    + '<div class="ls-scoreline">'
-    +   '<div class="ls-team-score">'
-    +     '<span class="ls-abbr">' + (g.awayAbbr||'AWY') + '</span>'
-    +     '<span class="ls-runs">' + d.awayRuns + '</span>'
-    +     '<div class="ls-rhe">'
-    +       '<span title="Hits">' + d.awayHits + 'H</span>'
-    +       '<span title="Errors">' + d.awayErrors + 'E</span>'
+    // RHE headers
+    + '<div class="lp-rhe-headers"><span class="lp-rhe-hdr">R</span><span class="lp-rhe-hdr">H</span><span class="lp-rhe-hdr">E</span></div>'
+
+    // Scores
+    + '<div class="lp-scores">'
+    +   '<div class="lp-row">'
+    +     logoHtml(g.awayLogo, g.awayAbbr, 'away')
+    +     '<span class="lp-team-name">'+g.awayName+awayRec+'</span>'
+    +     '<div class="lp-rhe">'
+    +       '<div class="lp-rhe-cell r">'+d.awayRuns+'</div>'
+    +       '<div class="lp-rhe-cell dim">'+d.awayHits+'</div>'
+    +       '<div class="lp-rhe-cell dim">'+d.awayErrors+'</div>'
     +     '</div>'
     +   '</div>'
-
-    +   '<div class="ls-diamond">'
-    +     '<div class="base b2' + b2 + '"></div>'
-    +     '<div class="base b1' + b1 + '"></div>'
-    +     '<div class="base b3' + b3 + '"></div>'
-    +     '<div class="home"></div>'
-    +   '</div>'
-
-    +   '<div class="ls-team-score" style="justify-content:flex-end;text-align:right">'
-    +     '<div class="ls-rhe" style="flex-direction:column;align-items:flex-end">'
-    +       '<span>' + d.homeHits + 'H</span>'
-    +       '<span>' + d.homeErrors + 'E</span>'
+    +   '<div class="lp-row">'
+    +     logoHtml(g.homeLogo, g.homeAbbr, 'home')
+    +     '<span class="lp-team-name">'+g.homeName+homeRec+'</span>'
+    +     '<div class="lp-rhe">'
+    +       '<div class="lp-rhe-cell r">'+d.homeRuns+'</div>'
+    +       '<div class="lp-rhe-cell dim">'+d.homeHits+'</div>'
+    +       '<div class="lp-rhe-cell dim">'+d.homeErrors+'</div>'
     +     '</div>'
-    +     '<span class="ls-runs">' + d.homeRuns + '</span>'
-    +     '<span class="ls-abbr" style="text-align:right">' + (g.homeAbbr||'HME') + '</span>'
     +   '</div>'
     + '</div>'
 
-    + '<div class="ls-outs">'
-    +   '<span style="font-size:.58rem;color:var(--mu);margin-right:4px;font-family:Orbitron,monospace">OUTS</span>'
-    +   outDots
+    // Diamond + outs + count
+    + '<div class="lp-state">'
+    +   '<div class="lp-diamond-wrap">'
+    +     '<div class="lp-base b2'+b2+'"></div>'
+    +     '<div class="lp-base b1'+b1+'"></div>'
+    +     '<div class="lp-base b3'+b3+'"></div>'
+    +     '<div class="lp-home"></div>'
+    +   '</div>'
+    +   '<div class="lp-outs-wrap">'
+    +     '<div class="lp-outs-label">OUTS</div>'
+    +     '<div class="lp-outs-dots">'+outDots+'</div>'
+    +   '</div>'
+    +   '<div class="lp-count-display">'
+    +     '<div class="lp-count-big">'+d.balls+' - '+d.strikes+'</div>'
+    +     '<div class="lp-count-sub">B - S</div>'
+    +   '</div>'
     + '</div>'
 
-    + (innHTML ? '<div class="ls-innings-scroll">' + innHTML + '</div>' : '')
-    + matchup
+    // Pitcher / Batter
+    + '<div class="lp-matchup">'
+    +   '<div class="lp-person">'
+    +     personPhoto(d.pitcherHeadshot, 'pitcher')
+    +     '<div class="lp-person-info">'
+    +       '<div class="lp-person-role">PITCHING '+g.awayAbbr+'</div>'
+    +       '<div class="lp-person-name">'+(d.pitcher ? d.pitcher.split(' ').slice(-1)[0] : '—')+'</div>'
+    +       pitcherStatHtml
+    +     '</div>'
+    +   '</div>'
+    +   '<div class="lp-person">'
+    +     personPhoto(d.batterHeadshot, 'batter')
+    +     '<div class="lp-person-info">'
+    +       '<div class="lp-person-role">AT BAT '+g.homeAbbr+'</div>'
+    +       '<div class="lp-person-name">'+(d.batter ? d.batter.split(' ').slice(-1)[0] : '—')+'</div>'
+    +       batterStatHtml
+    +     '</div>'
+    +   '</div>'
+    + '</div>'
+
+    // Linescore
+    + (lsCols ? '<div class="lp-linescore"><div class="lp-ls-table">'+lsCols+'</div></div>' : '')
+
+    // Broadcast
+    + broadcastHtml
+
     + '</div>';
-}
-
-function escName(s) {
-  return String(s).split(' ').pop();  // last name only
 }
 
 </script>

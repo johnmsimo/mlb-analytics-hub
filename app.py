@@ -724,8 +724,56 @@ def api_live_game(game_pk):
         on_second  = bool(offense.get("second"))
         on_third   = bool(offense.get("third"))
 
-        batter_name  = offense.get("batter",  {}).get("fullName", "")
-        pitcher_name = ls.get("defense", {}).get("pitcher", {}).get("fullName", "")
+        batter_obj   = offense.get("batter", {})
+        pitcher_obj  = ls.get("defense", {}).get("pitcher", {})
+        batter_name  = batter_obj.get("fullName", "")
+        pitcher_name = pitcher_obj.get("fullName", "")
+        batter_id    = batter_obj.get("id", "")
+        pitcher_id   = pitcher_obj.get("id", "")
+
+        # Headshot URLs (MLB CDN)
+        def headshot(pid):
+            return f"https://img.mlbstatic.com/mlb-photos/image/upload/d_people:generic:headshot:67:current.png/w_213,q_auto:best/v1/people/{pid}/headshot/67/current" if pid else ""
+
+        # Pull live boxscore for pitcher IP/ERA and batter OPS
+        pitcher_ip = ""; pitcher_era = ""; batter_ops = ""; batter_ab = ""
+        broadcasts = []
+        away_record = ""; home_record = ""
+        try:
+            bs_r = requests.get(f"{MLBAPI}/game/{game_pk}/boxscore", timeout=8)
+            if bs_r.ok:
+                bs = bs_r.json()
+                # Broadcast
+                bs_info_r = requests.get(f"{MLBAPI}/game/{game_pk}/feed/live?fields=gameData,game,teams,teamName,record,wins,losses,broadcasts,name", timeout=8)
+                if bs_info_r.ok:
+                    gd = bs_info_r.json().get("gameData", {})
+                    away_rec = gd.get("teams", {}).get("away", {}).get("record", {})
+                    home_rec = gd.get("teams", {}).get("home", {}).get("record", {})
+                    away_record = f"{away_rec.get('wins','')}-{away_rec.get('losses','')}" if away_rec else ""
+                    home_record = f"{home_rec.get('wins','')}-{home_rec.get('losses','')}" if home_rec else ""
+                    for b in gd.get("broadcasts", []):
+                        broadcasts.append(b.get("name",""))
+                # Pitcher stats from boxscore
+                teams_bs = bs.get("teams", {})
+                for side in ["away","home"]:
+                    pitchers = teams_bs.get(side, {}).get("pitchers", [])
+                    pid_list = [str(p) for p in pitchers]
+                    players  = teams_bs.get(side, {}).get("players", {})
+                    for pid_key, pdata in players.items():
+                        p = pdata.get("person", {})
+                        if str(pitcher_id) and str(p.get("id","")) == str(pitcher_id):
+                            st = pdata.get("stats", {}).get("pitching", {})
+                            outs_p = st.get("outs", 0)
+                            pitcher_ip  = f"{outs_p//3}.{outs_p%3}"
+                            era_v = st.get("era", "")
+                            pitcher_era = f"{float(era_v):.2f}" if era_v not in ("","-.--","-") else "0.00"
+                        if str(batter_id) and str(p.get("id","")) == str(batter_id):
+                            st = pdata.get("stats", {}).get("batting", {})
+                            batter_ab  = f"{st.get('atBats',0)}-{st.get('hits',0)}"
+                            ops_v = st.get("ops", "")
+                            batter_ops = f"{float(ops_v):.3f}" if ops_v and ops_v not in ("","-.---") else ""
+        except Exception as bex:
+            print("[api_live boxscore]", bex)
 
         return jsonify(
             success      = True,
@@ -740,6 +788,17 @@ def api_live_game(game_pk):
             onThird      = on_third,
             batter       = batter_name,
             pitcher      = pitcher_name,
+            batterId     = batter_id,
+            pitcherId    = pitcher_id,
+            batterHeadshot  = headshot(batter_id),
+            pitcherHeadshot = headshot(pitcher_id),
+            pitcherIP    = pitcher_ip,
+            pitcherERA   = pitcher_era,
+            batterAB     = batter_ab,
+            batterOPS    = batter_ops,
+            awayRecord   = away_record,
+            homeRecord   = home_record,
+            broadcasts   = broadcasts,
             awayRuns     = away_runs,
             homeRuns     = home_runs,
             awayHits     = away_hits,
