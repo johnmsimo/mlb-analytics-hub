@@ -98,6 +98,20 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
 @media(max-width:800px){.roster-grid{grid-template-columns:1fr}.player-photo{width:46px;height:46px}.team-head img.team-logo{width:46px;height:46px}}
 
 .ls-ph{display:none}.ls-wrap{display:block;margin:10px 0 8px;background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.14);border-radius:10px;overflow:hidden;font-size:.72rem}.ls-inn{display:flex;align-items:center;justify-content:space-between;padding:6px 12px 4px;background:rgba(0,229,255,.07);border-bottom:1px solid rgba(0,229,255,.1)}.ls-lbl{font-family:Orbitron,monospace;font-size:.68rem;color:#00e5ff;letter-spacing:1.5px;font-weight:700}.ls-dots{display:flex;gap:4px;align-items:center}.ls-dot{width:9px;height:9px;border-radius:50%;border:1.5px solid rgba(0,229,255,.35);background:transparent}.ls-dot.on{background:#ff9800;border-color:#ff9800}.ls-cnt{font-family:Orbitron,monospace;font-size:.62rem;color:#8b949e;letter-spacing:1px}.ls-cnt span{color:#00e5ff;font-weight:700}.ls-sc{display:grid;grid-template-columns:1fr auto;padding:8px 12px 6px}.ls-rhe{width:100%}.ls-hdr{display:grid;grid-template-columns:52px repeat(3,30px);font-family:Orbitron,monospace;font-size:.55rem;color:#4a5a6a;letter-spacing:1px;padding-bottom:2px;border-bottom:1px solid rgba(255,255,255,.06);margin-bottom:4px}.ls-row{display:grid;grid-template-columns:52px repeat(3,30px);align-items:center;padding:2px 0}.ls-row.bat .ls-ab{color:#00e5ff}.ls-ab{font-family:Orbitron,monospace;font-size:.65rem;color:#8b9eb0;font-weight:700;letter-spacing:.5px}.ls-v{font-family:Orbitron,monospace;font-size:.72rem;color:#e0eaff;font-weight:700;text-align:center}.ls-v.r{color:#00e5ff;font-size:.8rem}.ls-dmnd{width:46px;height:46px;flex-shrink:0;padding-left:10px}.ls-dmnd svg{width:46px;height:46px}.ls-plyrs{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:5px 10px 8px;border-top:1px solid rgba(255,255,255,.05)}.ls-plyr{background:rgba(0,0,0,.25);border-radius:7px;padding:6px 8px}.ls-plbl{font-family:Orbitron,monospace;font-size:.5rem;color:#4a5a7a;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:2px}.ls-pnm{font-size:.68rem;color:#c9d8e8;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px}.ls-pst{font-size:.6rem;color:#5a7a9a;margin-top:1px}.ls-due{padding:4px 10px 7px;border-top:1px solid rgba(255,255,255,.04);font-size:.58rem;color:#4a6a8a;font-family:Orbitron,monospace;letter-spacing:.8px}.ls-due span{color:#7090a8;margin-left:6px}.ls-wait{padding:10px;text-align:center;font-family:Orbitron,monospace;font-size:.58rem;color:rgba(0,229,255,.4);letter-spacing:2px;animation:ls-p 1.4s ease-in-out infinite}@keyframes ls-p{0%,100%{opacity:.4}50%{opacity:1}}
+
+/* ── Date Navigator ──────────────────────────────────────────────── */
+.date-nav{display:flex;align-items:center;justify-content:center;gap:10px;padding:10px 16px 4px;flex-wrap:wrap}
+.date-nav-btn{font-family:'Orbitron',monospace;font-size:.55rem;letter-spacing:1.5px;padding:7px 14px;background:rgba(0,229,255,.06);border:1px solid rgba(0,229,255,.18);border-radius:7px;color:var(--c);cursor:pointer;transition:background .15s,border-color .15s;white-space:nowrap}
+.date-nav-btn:hover{background:rgba(0,229,255,.14);border-color:rgba(0,229,255,.4)}
+.date-nav-btn:disabled{opacity:.3;cursor:not-allowed;pointer-events:none}
+.date-nav-btn.today-btn{background:rgba(0,229,255,.12);border-color:rgba(0,229,255,.5);color:var(--c);font-weight:700}
+.date-nav-btn.today-btn.active-today{background:rgba(100,255,180,.12);border-color:rgba(100,255,180,.45);color:#64ffb4}
+.date-nav-center{display:flex;flex-direction:column;align-items:center;gap:2px;min-width:160px}
+.date-nav-label{font-family:'Orbitron',monospace;font-size:.78rem;letter-spacing:2px;color:var(--c);font-weight:700;text-align:center}
+.date-nav-sub{font-size:.58rem;color:var(--mu);letter-spacing:1.5px;font-family:'Orbitron',monospace;text-align:center}
+.date-nav-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#64ffb4;margin-right:5px;animation:pulse 1.8s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(.8)}}
+
 </style>
 </head>
 <body>
@@ -119,13 +133,23 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
   </div>
 </div>
 <div class="topnav">
-  <button class="tabbtn active" onclick="switchView('gamesView',this)">TODAY'S GAMES</button>
+  <button class="tabbtn active" id="gamesTabBtn" onclick="switchView('gamesView',this)">GAMES</button>
   <button class="tabbtn" onclick="switchView('teamsView',this)">TEAMS</button>
   <button class="tabbtn" onclick="switchView('mcView',this)">MONTE CARLO PROJECTIONS</button>
 </div>
+<!-- Date Navigator -->
+<div class="date-nav" id="dateNavBar">
+  <button class="date-nav-btn" id="btnPrevDay" onclick="shiftDay(-1)">&#9664; PREV</button>
+  <div class="date-nav-center">
+    <div class="date-nav-label" id="dateNavLabel">--</div>
+    <div class="date-nav-sub" id="dateNavSub">LOADING...</div>
+  </div>
+  <button class="date-nav-btn today-btn" id="btnToday" onclick="goToday()">TODAY</button>
+  <button class="date-nav-btn" id="btnNextDay" onclick="shiftDay(1)">NEXT &#9654;</button>
+</div>
 <div class="main">
   <div id="gamesView" class="view active">
-    <div class="sh">TODAY&#39;S GAMES</div>
+    <div class="sh" id="gamesViewTitle">TODAY&#39;S GAMES</div>
     <div id="gc"><div class="sw"><div class="sp"></div><div class="st">LOADING GAMES...</div></div></div>
   </div>
   <div id="teamsView" class="view">
@@ -288,8 +312,99 @@ function initLiveCards(games){
   });
 }
 
+
+// ── Date Navigator ────────────────────────────────────────────────────────────
+var _SEL_DATE = null;   // null = today
+
+function _etToday(){
+  // Use Intl to get current ET date regardless of server timezone
+  var now = new Date();
+  var parts = new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',
+    year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(now);
+  var y=parts.find(function(p){return p.type==='year';}).value;
+  var m=parts.find(function(p){return p.type==='month';}).value;
+  var d=parts.find(function(p){return p.type==='day';}).value;
+  return y+'-'+m+'-'+d;
+}
+
+function _addDays(dateStr, n){
+  var d = new Date(dateStr + 'T12:00:00');
+  d.setDate(d.getDate() + n);
+  var y=d.getFullYear();
+  var m=('0'+(d.getMonth()+1)).slice(-2);
+  var dd=('0'+d.getDate()).slice(-2);
+  return y+'-'+m+'-'+dd;
+}
+
+function _formatNavLabel(dateStr){
+  var today = _etToday();
+  var yesterday = _addDays(today, -1);
+  var tomorrow = _addDays(today, 1);
+  var d = new Date(dateStr + 'T12:00:00');
+  var days=['SUN','MON','TUE','WED','THU','FRI','SAT'];
+  var months=['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+  var label = days[d.getDay()] + ', ' + months[d.getMonth()] + ' ' + d.getDate();
+  var sub = '';
+  if(dateStr === today) sub = '<span class="date-nav-dot"></span>TODAY';
+  else if(dateStr === yesterday) sub = 'YESTERDAY';
+  else if(dateStr === tomorrow) sub = 'TOMORROW';
+  else sub = dateStr;
+  return {label: label, sub: sub, isToday: dateStr === today};
+}
+
+function _updateNavUI(dateStr){
+  var info = _formatNavLabel(dateStr);
+  var labelEl = document.getElementById('dateNavLabel');
+  var subEl   = document.getElementById('dateNavSub');
+  var todayBtn = document.getElementById('btnToday');
+  var titleEl = document.getElementById('gamesViewTitle');
+  if(labelEl) labelEl.textContent = info.label;
+  if(subEl)   subEl.innerHTML = info.sub;
+  if(todayBtn){
+    if(info.isToday){ todayBtn.classList.add('active-today'); todayBtn.disabled = true; }
+    else { todayBtn.classList.remove('active-today'); todayBtn.disabled = false; }
+  }
+  if(titleEl){
+    if(info.isToday) titleEl.textContent = "TODAY\u2019S GAMES";
+    else titleEl.textContent = info.label + ' GAMES';
+  }
+  // Disable NEXT if it's today or tomorrow (don't go too far ahead)
+  var today = _etToday();
+  var tomorrow = _addDays(today, 1);
+  var nextBtn = document.getElementById('btnNextDay');
+  if(nextBtn) nextBtn.disabled = (dateStr >= tomorrow);
+  // Disable PREV if more than 30 days ago
+  var prevBtn = document.getElementById('btnPrevDay');
+  if(prevBtn){
+    var minDate = _addDays(today, -30);
+    prevBtn.disabled = (dateStr <= minDate);
+  }
+}
+
+function shiftDay(n){
+  var current = _SEL_DATE || _etToday();
+  var next = _addDays(current, n);
+  _SEL_DATE = next;
+  _updateNavUI(next);
+  load();
+}
+
+function goToday(){
+  _SEL_DATE = null;
+  _updateNavUI(_etToday());
+  load();
+}
+
+// Init nav on page load
+(function(){
+  _SEL_DATE = null;
+  _updateNavUI(_etToday());
+})();
+
 function load(){
-  fetch('/api/games/today').then(function(r){return r.json();}).then(function(d){
+  var _dateParam = _SEL_DATE ? ('?date='+_SEL_DATE) : '';
+  fetch('/api/games/today'+_dateParam).then(function(r){return r.json();}).then(function(d){
+    if(d.date) _updateNavUI(d.date);
     if(!d.success)throw new Error(d.error||'API error');
     var gs=d.games;
     document.getElementById('sg').textContent=gs.length||'0';

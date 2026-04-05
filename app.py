@@ -523,10 +523,21 @@ def api_games_today():
     _maybe_refresh_fg()
     _maybe_refresh_savant()
     try:
-        date_str = datetime.now(ET).strftime("%Y-%m-%d")
+        # Accept optional ?date=YYYY-MM-DD for calendar navigation
+        date_param = request.args.get("date", "").strip()
+        if date_param:
+            try:
+                datetime.strptime(date_param, "%Y-%m-%d")  # validate format
+                date_str = date_param
+            except ValueError:
+                date_str = datetime.now(ET).strftime("%Y-%m-%d")
+        else:
+            date_str = datetime.now(ET).strftime("%Y-%m-%d")
         raw   = fetch_schedule(date_str)
         games = [g for g in [parse_game(x) for x in raw] if g]
-        return jsonify({"success":True,"games":games,"count":len(games)})
+        today_str = datetime.now(ET).strftime("%Y-%m-%d")
+        return jsonify({"success":True,"games":games,"count":len(games),
+                        "date":date_str,"isToday":(date_str==today_str)})
     except Exception as ex:
         print("[api_games_today]", traceback.format_exc())
         return jsonify({"success":False,"error":str(ex),"games":[]}), 500
