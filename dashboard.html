@@ -97,6 +97,18 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;justify-content:center}
 @media(max-width:800px){.roster-grid{grid-template-columns:1fr}.player-photo{width:46px;height:46px}.team-head img.team-logo{width:46px;height:46px}}
 
+
+/* ── Injury Alert Bar ─────────────────────────────────────────────── */
+#injury-bar{display:none;align-items:center;gap:10px;padding:8px 24px;background:rgba(255,59,48,.07);border-bottom:2px solid rgba(255,59,48,.25);font-size:.72rem;font-family:'Orbitron',monospace;letter-spacing:1px;overflow:hidden;flex-wrap:wrap}
+#injury-bar .inj-label{color:#ff3b30;font-weight:700;white-space:nowrap;display:flex;align-items:center;gap:6px}
+#injury-bar .inj-label svg{flex-shrink:0}
+.inj-pill{display:inline-flex;align-items:center;gap:5px;background:rgba(255,59,48,.12);border:1px solid rgba(255,59,48,.3);border-radius:4px;padding:3px 8px;color:#ff6b63;white-space:nowrap;cursor:default}
+.inj-pill .inj-status{font-size:.62rem;background:rgba(255,59,48,.25);border-radius:2px;padding:1px 4px;color:#ff3b30;font-weight:700}
+.inj-pill .inj-team{color:rgba(255,255,255,.45);font-size:.62rem}
+#injury-bar .inj-more{color:rgba(255,255,255,.35);font-size:.65rem;white-space:nowrap}
+#injury-bar .inj-dismiss{margin-left:auto;cursor:pointer;color:rgba(255,255,255,.3);font-size:.9rem;padding:0 4px;flex-shrink:0}
+#injury-bar .inj-dismiss:hover{color:rgba(255,255,255,.7)}
+#injury-bar.show{display:flex}
 </style>
 </head>
 <body>
@@ -108,6 +120,15 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
     <div class="live-dot"><div class="dot"></div>LIVE</div>
   </div>
 </nav>
+<div id="injury-bar">
+  <span class="inj-label">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#ff3b30" stroke-width="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+    INJURY ALERT
+  </span>
+  <div id="inj-pills"></div>
+  <span id="inj-more" class="inj-more"></span>
+  <span class="inj-dismiss" onclick="document.getElementById('injury-bar').classList.remove('show')" title="Dismiss">✕</span>
+</div>
 <div class="strip">
   <div class="strip-title">COMMAND CENTER</div>
   <div class="strip-stats">
@@ -253,12 +274,56 @@ function load(){
     if(!gs.length){document.getElementById('gc').innerHTML='<div class="ng"><h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px">NO GAMES TODAY</h3></div>';return;}
     document.getElementById('gc').innerHTML='<div class="grid">'+gs.map(mkCard).join('')+'</div>';
     setTimeout(function(){document.querySelectorAll('.fill').forEach(function(e){e.style.width=e.getAttribute('data-w');});},150);
+    loadRosterMoves();
     gs.forEach(function(g){ fetch('/api/lineup/'+g.gamePk).then(function(r){if(!r.ok)throw new Error('lineup '+r.status);return r.json();}).then(function(d){ LINEUPS[g.gamePk]=d; var el=document.getElementById('lu-'+g.gamePk); if(el) renderLineup(g.gamePk, d); }); });
   }).catch(function(e){
     document.getElementById('gc').innerHTML='<div class="sw"><div style="background:rgba(224,64,251,.08);border:1px solid rgba(224,64,251,.3);border-radius:12px;padding:24px 32px;text-align:center"><h3 style="color:var(--m);font-family:Orbitron;margin-bottom:8px">CONNECTION ERROR</h3><p style="color:var(--mu);font-size:.82rem">'+e.message+'</p><p style="color:var(--mu);font-size:.72rem;margin-top:6px">Try refreshing. If this persists check Render service logs.</p></div></div>';
   });
 }
 load();loadTeams();loadMC();setInterval(load,60000);
+
+function loadRosterMoves(){
+  fetch('/api/roster-moves/today').then(function(r){
+    if(!r.ok) return null;
+    return r.json();
+  }).then(function(d){
+    if(!d||!d.success||!d.moves||!d.moves.length) return;
+    // Filter to IL placements and DTD only (not recalls/activations for alert)
+    var relevant=d.moves.filter(function(m){
+      var t=(m.type||'').toLowerCase();
+      return t.includes('placed')||t.includes('injured')||t.includes('transfer');
+    });
+    if(!relevant.length) return;
+    var bar=document.getElementById('injury-bar');
+    var pills=document.getElementById('inj-pills');
+    var moreEl=document.getElementById('inj-more');
+    var MAX=6;
+    var show=relevant.slice(0,MAX);
+    var rest=relevant.length-MAX;
+    pills.innerHTML=show.map(function(m){
+      var status=getInjStatus(m.type);
+      return '<span class="inj-pill">'
+        +'<span class="inj-status">'+status+'</span>'
+        +escHtml(m.player)
+        +'<span class="inj-team">'+escHtml(m.team||'')+'</span>'
+        +'</span>';
+    }).join('');
+    moreEl.textContent=rest>0?'+'+rest+' more':'';
+    bar.classList.add('show');
+  }).catch(function(){});
+}
+function getInjStatus(typeStr){
+  var t=(typeStr||'').toLowerCase();
+  if(t.includes('60')) return 'IL-60';
+  if(t.includes('15')) return 'IL-15';
+  if(t.includes('10')) return 'IL-10';
+  if(t.includes('7-day')) return 'IL-7';
+  if(t.includes('day-to-day')||t.includes('dtd')) return 'DTD';
+  return 'IL';
+}
+function escHtml(s){
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
 </script>
 <a class="tracker-fab" href="/tracker" target="_blank" rel="noopener noreferrer">DAILY TRACKER</a>
 </body>

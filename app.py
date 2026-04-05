@@ -522,6 +522,7 @@ def api_status():
 def api_games_today():
     _maybe_refresh_fg()
     _maybe_refresh_savant()
+    _maybe_refresh_injuries()
     try:
         date_str = request.args.get("date") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
         raw   = fetch_schedule(date_str)
@@ -577,6 +578,110 @@ def api_pitchers(game_pk):
     except Exception as ex:
         print("[api_pitchers]", traceback.format_exc())
         return jsonify({"success":False,"error":str(ex),"awayPitcher":{},"homePitcher":{}}), 500
+
+
+@app.route('/api/injuries/today')
+def api_injuries_today():
+    """Return all currently IL/DTD players for today's games."""
+    _maybe_refresh_injuries()
+    with _INJURY_LOCK:
+        snapshot = dict(_INJURY_CACHE)
+    active_il = [v for v in snapshot.values() if v.get("status") != "ACTIVE"]
+    active_il.sort(key=lambda x: x.get("date", ""), reverse=True)
+    return jsonify(success=True, count=len(active_il), players=active_il)
+
+@app.route('/api/injuries/<int:game_pk>')
+def api_injuries_game(game_pk):
+    """Return IL/DTD flags for players in a specific game's lineups."""
+    _maybe_refresh_injuries()
+    try:
+        r = requests.get(f"{MLBAPI}/game/{game_pk}/boxscore", timeout=10)
+        r.raise_for_status()
+        teams = r.json().get("teams", {})
+        flags = {"away": [], "home": []}
+        for side in ("away", "home"):
+            td = teams.get(side, {})
+            all_pids = list(td.get("batters", [])) + list(td.get("pitchers", []))
+            for pid in all_pids:
+                inj = get_injury_status(pid)
+                if inj:
+                    flags[side].append(inj)
+        return jsonify(success=True, gamePk=game_pk, flags=flags)
+    except Exception as ex:
+        print("[api_injuries_game]", ex)
+        return jsonify(success=False, error=str(ex)), 500
+
+
+@app.route('/api/lineup-status/<int:game_pk>')
+def api_lineup_status(game_pk):
+    """Return today's lineups with IL/DTD status overlaid on each player."""
+    _maybe_refresh_injuries()
+    try:
+        r = requests.get(f"{MLBAPI}/game/{game_pk}/boxscore", timeout=10)
+        r.raise_for_status()
+        teams = r.json().get("teams", {})
+        result = {}
+        for side in ("away", "home"):
+            td = teams.get(side, {})
+            players = td.get("players", {})
+            batters = td.get("batters", [])
+            lineup = []
+            for pid in batters:
+                key = f"ID{pid}"
+                p = players.get(key, {})
+                name = p.get("person", {}).get("fullName", "")
+                inj  = get_injury_status(pid)
+                batting_order = p.get("battingOrder", 0)
+                try:
+                    slot = int(str(batting_order)[0])
+                except:
+                    slot = 0
+                lineup.append({
+                    "id": pid,
+                    "name": name,
+                    "slot": slot,
+                    "pos": p.get("position", {}).get("abbreviation", ""),
+                    "injuryStatus": inj.get("status") if inj else None,
+                    "injuryDesc": inj.get("description") if inj else None,
+                    "flagged": bool(inj),
+                })
+            lineup.sort(key=lambda x: x["slot"])
+            result[side] = lineup
+        return jsonify(success=True, gamePk=game_pk, lineups=result)
+    except Exception as ex:
+        return jsonify(success=False, error=str(ex)), 500
+
+
+@app.route('/api/roster-moves/today')
+def api_roster_moves_today():
+    """Last 24h roster moves — IL placements, activations, recalls."""
+    _maybe_refresh_injuries()
+    from datetime import timedelta
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+    try:
+        r = requests.get(
+            f"{MLBAPI}/transactions",
+            params={"sportId": 1, "startDate": yesterday, "endDate": today},
+            timeout=10
+        )
+        r.raise_for_status()
+        moves = []
+        for tx in r.json().get("transactions", []):
+            ttype = (tx.get("typeDesc") or "").lower()
+            if any(k in ttype for k in ("placed", "recalled", "activated", "transferred", "select")):
+                moves.append({
+                    "date": tx.get("date"),
+                    "player": tx.get("person", {}).get("fullName", ""),
+                    "playerId": tx.get("person", {}).get("id"),
+                    "team": (tx.get("toTeam") or tx.get("fromTeam") or {}).get("abbreviation", ""),
+                    "type": tx.get("typeDesc", ""),
+                    "description": tx.get("description", ""),
+                })
+        moves.sort(key=lambda x: x.get("date", ""), reverse=True)
+        return jsonify(success=True, count=len(moves), moves=moves[:50])
+    except Exception as ex:
+        return jsonify(success=False, error=str(ex)), 500
 
 @app.errorhandler(404)
 def e404(e): return jsonify({"error":"Not found"}), 404
@@ -817,6 +922,83 @@ def _pct(values, q):
     w = pos - lo
     return arr[lo] * (1 - w) + arr[hi] * w
 
+
+# ── Injury / Transaction Cache ──────────────────────────────────────────────
+_INJURY_CACHE = {}
+_INJURY_CACHE_DATE = None
+_INJURY_LOCK = threading.Lock()
+
+def _load_injury_data():
+    """Pull today's IL placements + activations from MLB Stats API /transactions."""
+    global _INJURY_CACHE, _INJURY_CACHE_DATE
+    from datetime import timedelta
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    start = (datetime.now(timezone.utc) - timedelta(days=3)).strftime("%Y-%m-%d")
+    data = {}
+    try:
+        r = requests.get(
+            f"{MLBAPI}/transactions",
+            params={"sportId": 1, "startDate": start, "endDate": today},
+            timeout=10
+        )
+        r.raise_for_status()
+        for tx in r.json().get("transactions", []):
+            pid   = tx.get("person", {}).get("id")
+            desc  = (tx.get("description") or "").lower()
+            ttype = (tx.get("typeDesc") or "").lower()
+            if not pid:
+                continue
+            if "60-day" in desc or "60-day" in ttype:
+                status = "IL-60"
+            elif "15-day" in desc or "15-day" in ttype:
+                status = "IL-15"
+            elif "10-day" in desc or "10-day" in ttype:
+                status = "IL-10"
+            elif "7-day" in desc or "7-day" in ttype:
+                status = "IL-7"
+            elif "day-to-day" in desc or "dtd" in desc:
+                status = "DTD"
+            elif "recalled" in ttype or "activated" in ttype:
+                status = "ACTIVE"
+            elif "placed" in ttype:
+                status = "IL-10"
+            else:
+                continue
+            # Keep most recent transaction per player
+            existing = data.get(pid)
+            if not existing or tx.get("date", "") >= existing.get("date", ""):
+                data[pid] = {
+                    "status": status,
+                    "description": tx.get("description", ""),
+                    "date": tx.get("date", today),
+                    "playerId": pid,
+                    "playerName": tx.get("person", {}).get("fullName", ""),
+                    "teamId": (tx.get("toTeam") or tx.get("fromTeam") or {}).get("id"),
+                }
+    except Exception as ex:
+        print("[_load_injury_data]", ex)
+    with _INJURY_LOCK:
+        _INJURY_CACHE.clear()
+        _INJURY_CACHE.update(data)
+        _INJURY_CACHE_DATE = datetime.now(timezone.utc).date()
+    print(f"[injuries] {len(data)} statuses loaded")
+
+def _maybe_refresh_injuries():
+    with _INJURY_LOCK:
+        loaded = bool(_INJURY_CACHE_DATE)
+        date   = _INJURY_CACHE_DATE
+    if not loaded or date != datetime.now(timezone.utc).date():
+        threading.Thread(target=_load_injury_data, daemon=True).start()
+
+def get_injury_status(player_id):
+    """Return injury dict or None if player is active/unknown."""
+    if not player_id:
+        return None
+    with _INJURY_LOCK:
+        entry = dict(_INJURY_CACHE.get(player_id, {}))
+    if not entry or entry.get("status") == "ACTIVE":
+        return None
+    return entry
 
 def player_profile(player_id):
     if not player_id:
