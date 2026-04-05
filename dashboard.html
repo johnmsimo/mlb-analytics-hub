@@ -222,8 +222,8 @@ function mkCard(g){
     +'<div class="eb"><div class="ebl"><span>MODEL EDGE</span><strong>'+g.edge+'%</strong></div>'
     +'<div class="bar"><div class="fill" style="width:0%" data-w="'+g.barPct+'%"></div></div></div>'
     +'<div class="vn">'+g.venue+'</div>'
-    +(g.status==='Live'?'<div id="live-bar-'+g.gamePk+'" class="live-bar-slot"><div class="live-score-bar"><div class="ls-loading">&#9679; Fetching live data...</div></div></div>':'<div id="live-bar-'+g.gamePk+'" class="live-bar-slot"></div>')'
     +'<button class="lineup-toggle" onclick="toggleLineup(event,'+g.gamePk+')">&#9776; SHOW LINEUP</button>'
+    +'<div id="live-bar-'+g.gamePk+'" class="live-bar-slot"></div>'
     +'<div class="lineup-section" id="lu-'+g.gamePk+'"><div class="lu-pending">Loading lineup…</div></div>'
     +'<div class="ap">&#9889; DEEP DIVE ANALYSIS</div>'
     +'</div>';
@@ -370,20 +370,9 @@ function startLivePoll(g) {
 
 function fetchLiveData(pk, g) {
   fetch('/api/live/' + pk)
-    .then(function(r){ if(!r.ok) throw new Error('live API ' + r.status); return r.json(); })
-    .then(function(d){
-      if(d.success){
-        renderLiveBar(pk, d, g);
-      } else {
-        var el=document.getElementById('live-bar-'+pk);
-        if(el) el.innerHTML='<div class="live-score-bar"><div class="ls-loading">Live data unavailable</div></div>';
-      }
-    })
-    .catch(function(err){
-      console.warn('[LiveFeed] gamePk='+pk, err);
-      var el=document.getElementById('live-bar-'+pk);
-      if(el) el.innerHTML='<div class="live-score-bar"><div class="ls-loading">Live feed error — retrying...</div></div>';
-    });
+    .then(function(r){ if(!r.ok) throw new Error(r.status); return r.json(); })
+    .then(function(d){ if(d.success) renderLiveBar(pk, d, g); })
+    .catch(function(){});
 }
 
 function renderLiveBar(pk, d, g) {
