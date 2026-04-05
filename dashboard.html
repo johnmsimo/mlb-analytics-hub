@@ -318,27 +318,21 @@ function initLiveCards(games){
 var DNAV_DATE = null; // null = today
 
 function dnavEtToday() {
-  // Compute ET date via UTC offset — no Intl.formatToParts, no Date(isoString)
-  var now = new Date();
-  var utcMs = now.getTime() + (now.getTimezoneOffset() * 60000);
-  // Determine DST: EDT (UTC-4) or EST (UTC-5)
-  // EDT runs second Sunday March -> first Sunday November
-  var y = new Date(utcMs).getUTCFullYear();
-  function nthSun(month, n) { // nth Sunday of given month (0=Jan)
-    var d = new Date(Date.UTC(y, month, 1));
-    var dow = d.getUTCDay(); // 0=Sun
-    return new Date(Date.UTC(y, month, 1 + ((7 - dow) % 7) + (n - 1) * 7));
-  }
-  var edtStart = nthSun(2, 2); // 2nd Sun March
-  var edtEnd   = nthSun(10, 1); // 1st Sun November
-  var utcNow   = new Date(utcMs);
-  var isDST    = utcNow >= edtStart && utcNow < edtEnd;
-  var offsetMs = isDST ? (-4 * 3600000) : (-5 * 3600000);
-  var etMs     = utcMs + offsetMs;
-  var etDate   = new Date(etMs);
-  var mo = ('0' + (etDate.getUTCMonth() + 1)).slice(-2);
-  var dd = ('0' + etDate.getUTCDate()).slice(-2);
-  return etDate.getUTCFullYear() + '-' + mo + '-' + dd;
+  // Use toLocaleDateString with America/New_York — supported on all iOS Safari
+  // Returns "MM/DD/YYYY" for en-US locale with explicit options
+  try {
+    var s = new Date().toLocaleDateString('en-US', {
+      timeZone: 'America/New_York',
+      year: 'numeric', month: '2-digit', day: '2-digit'
+    });
+    var p = s.split('/');
+    if (p.length >= 3 && p[2].length >= 4) {
+      return p[2].slice(0, 4) + '-' + p[0] + '-' + p[1];
+    }
+  } catch(e) {}
+  // Fallback: device local time (acceptable for most users)
+  var n = new Date();
+  return n.getFullYear() + '-' + ('0'+(n.getMonth()+1)).slice(-2) + '-' + ('0'+n.getDate()).slice(-2);
 }
 
 function dnavAddDays(ymd, n) {
@@ -402,7 +396,7 @@ dnavUpdateUI(dnavEtToday());
 function load(){
   var _dp = DNAV_DATE ? ('?date=' + DNAV_DATE) : '';
   fetch('/api/games/today' + _dp).then(function(r){return r.json();}).then(function(d){
-    if(d.date && !DNAV_DATE) dnavUpdateUI(d.date);
+    dnavUpdateUI(DNAV_DATE || dnavEtToday());
     if(!d.success)throw new Error(d.error||'API error');
     var gs=d.games;
     document.getElementById('sg').textContent=gs.length||'0';
