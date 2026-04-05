@@ -109,36 +109,6 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
 #injury-bar .inj-dismiss{margin-left:auto;cursor:pointer;color:rgba(255,255,255,.3);font-size:.9rem;padding:0 4px;flex-shrink:0}
 #injury-bar .inj-dismiss:hover{color:rgba(255,255,255,.7)}
 #injury-bar.show{display:flex}
-
-/* ── Live Game Feed ───────────────────────────────────────────────── */
-.live-score-bar{margin-top:10px;padding:10px 12px;background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.12);border-radius:8px;font-size:.68rem}
-.ls-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;font-family:'Orbitron',monospace;font-size:.6rem;color:var(--mu)}
-.ls-inning{color:#00e5ff;font-weight:700;letter-spacing:1px}
-.ls-count{display:flex;gap:8px;align-items:center}
-.ls-count-val{color:var(--c)}
-.ls-scoreline{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}
-.ls-team-score{display:flex;align-items:center;gap:8px;flex:1}
-.ls-abbr{font-family:'Orbitron',monospace;font-size:.65rem;color:var(--mu);min-width:28px}
-.ls-runs{font-family:'Orbitron',monospace;font-size:1.3rem;font-weight:700;color:var(--c)}
-.ls-rhe{font-size:.58rem;color:var(--mu);display:flex;gap:4px}
-.ls-rhe span{background:rgba(255,255,255,.05);border-radius:3px;padding:1px 4px}
-.ls-diamond{position:relative;width:36px;height:36px;flex-shrink:0}
-.ls-diamond .base{position:absolute;width:11px;height:11px;border:1.5px solid rgba(255,255,255,.2);transform:rotate(45deg);background:transparent;border-radius:1px}
-.ls-diamond .base.on{background:rgba(255,193,7,.85);border-color:#ffc107}
-.ls-diamond .b1{bottom:0;right:0}
-.ls-diamond .b2{top:0;left:50%;transform:translateX(-50%) rotate(45deg)}
-.ls-diamond .b3{bottom:0;left:0}
-.ls-diamond .home{position:absolute;bottom:-4px;left:50%;transform:translateX(-50%);width:9px;height:9px;background:rgba(255,255,255,.15);clip-path:polygon(50% 0%,100% 40%,80% 100%,20% 100%,0% 40%)}
-.ls-outs{display:flex;gap:4px;align-items:center;margin-top:6px}
-.ls-out-dot{width:9px;height:9px;border-radius:50%;border:1.5px solid rgba(255,255,255,.25);background:transparent}
-.ls-out-dot.filled{background:rgba(0,229,255,.7);border-color:#00e5ff}
-.ls-matchup{margin-top:6px;font-size:.62rem;color:var(--mu);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ls-matchup span{color:rgba(255,255,255,.55)}
-.ls-innings-scroll{display:flex;gap:2px;overflow-x:auto;margin-top:6px;padding-bottom:2px}
-.ls-inn-cell{text-align:center;min-width:20px;font-size:.58rem;flex-shrink:0}
-.ls-inn-cell .inn-num{color:var(--mu);border-bottom:1px solid var(--b);padding-bottom:1px;margin-bottom:1px}
-.ls-inn-cell .inn-r{color:var(--c)}
-.ls-loading{font-size:.65rem;color:var(--mu);text-align:center;padding:8px 0;font-style:italic}
 </style>
 </head>
 <body>
@@ -223,7 +193,6 @@ function mkCard(g){
     +'<div class="bar"><div class="fill" style="width:0%" data-w="'+g.barPct+'%"></div></div></div>'
     +'<div class="vn">'+g.venue+'</div>'
     +'<button class="lineup-toggle" onclick="toggleLineup(event,'+g.gamePk+')">&#9776; SHOW LINEUP</button>'
-    +'<div id="live-bar-'+g.gamePk+'" class="live-bar-slot"></div>'
     +'<div class="lineup-section" id="lu-'+g.gamePk+'"><div class="lu-pending">Loading lineup…</div></div>'
     +'<div class="ap">&#9889; DEEP DIVE ANALYSIS</div>'
     +'</div>';
@@ -306,8 +275,7 @@ function load(){
     document.getElementById('gc').innerHTML='<div class="grid">'+gs.map(mkCard).join('')+'</div>';
     setTimeout(function(){document.querySelectorAll('.fill').forEach(function(e){e.style.width=e.getAttribute('data-w');});},150);
     loadRosterMoves();
-    gs.forEach(function(g){
-    startLivePoll(g); fetch('/api/lineup/'+g.gamePk).then(function(r){if(!r.ok)throw new Error('lineup '+r.status);return r.json();}).then(function(d){ LINEUPS[g.gamePk]=d; var el=document.getElementById('lu-'+g.gamePk); if(el) renderLineup(g.gamePk, d); }); });
+    gs.forEach(function(g){ fetch('/api/lineup/'+g.gamePk).then(function(r){if(!r.ok)throw new Error('lineup '+r.status);return r.json();}).then(function(d){ LINEUPS[g.gamePk]=d; var el=document.getElementById('lu-'+g.gamePk); if(el) renderLineup(g.gamePk, d); }); });
   }).catch(function(e){
     document.getElementById('gc').innerHTML='<div class="sw"><div style="background:rgba(224,64,251,.08);border:1px solid rgba(224,64,251,.3);border-radius:12px;padding:24px 32px;text-align:center"><h3 style="color:var(--m);font-family:Orbitron;margin-bottom:8px">CONNECTION ERROR</h3><p style="color:var(--mu);font-size:.82rem">'+e.message+'</p><p style="color:var(--mu);font-size:.72rem;margin-top:6px">Try refreshing. If this persists check Render service logs.</p></div></div>';
   });
@@ -356,113 +324,6 @@ function getInjStatus(typeStr){
 function escHtml(s){
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
-
-// ── Live Game Feed ──────────────────────────────────────────────────────────
-var livePollers = {};
-
-function startLivePoll(g) {
-  if (g.status !== 'Live') return;
-  var pk = g.gamePk;
-  fetchLiveData(pk, g);
-  if (livePollers[pk]) clearInterval(livePollers[pk]);
-  livePollers[pk] = setInterval(function(){ fetchLiveData(pk, g); }, 30000);
-}
-
-function fetchLiveData(pk, g) {
-  fetch('/api/live/' + pk)
-    .then(function(r){ if(!r.ok) throw new Error(r.status); return r.json(); })
-    .then(function(d){ if(d.success) renderLiveBar(pk, d, g); })
-    .catch(function(){});
-}
-
-function renderLiveBar(pk, d, g) {
-  var el = document.getElementById('live-bar-' + pk);
-  if (!el) return;
-
-  var halfArrow = d.inningHalf === 'Top' ? '&#9650;' : '&#9660;';
-  var inningLabel = halfArrow + ' ' + d.inning;
-
-  // Outs dots
-  var outDots = '';
-  for (var i = 0; i < 3; i++) {
-    outDots += '<div class="ls-out-dot' + (i < d.outs ? ' filled' : '') + '"></div>';
-  }
-
-  // Diamond bases
-  var b1 = d.onFirst  ? ' on' : '';
-  var b2 = d.onSecond ? ' on' : '';
-  var b3 = d.onThird  ? ' on' : '';
-
-  // Inning-by-inning scroll (last 6 innings)
-  var innHTML = '';
-  var showInns = d.innings.slice(-6);
-  showInns.forEach(function(inn) {
-    innHTML += '<div class="ls-inn-cell">'
-      + '<div class="inn-num">' + inn.num + '</div>'
-      + '<div class="inn-r inn-away">' + (inn.away !== undefined ? inn.away : '-') + '</div>'
-      + '<div class="inn-r inn-home">' + (inn.home !== undefined ? inn.home : '-') + '</div>'
-      + '</div>';
-  });
-
-  // Batter/Pitcher matchup
-  var matchup = '';
-  if (d.batter || d.pitcher) {
-    matchup = '<div class="ls-matchup">'
-      + (d.batter  ? 'AB: <span>' + escName(d.batter)  + '</span> ' : '')
-      + (d.pitcher ? 'vs <span>' + escName(d.pitcher) + '</span>' : '')
-      + '</div>';
-  }
-
-  el.innerHTML = '<div class="live-score-bar">'
-    + '<div class="ls-header">'
-    +   '<span class="ls-inning">' + inningLabel + '</span>'
-    +   '<div class="ls-count">'
-    +     '<span class="ls-count-val">B:<b>' + d.balls + '</b></span>'
-    +     '<span class="ls-count-val">S:<b>' + d.strikes + '</b></span>'
-    +   '</div>'
-    + '</div>'
-
-    + '<div class="ls-scoreline">'
-    +   '<div class="ls-team-score">'
-    +     '<span class="ls-abbr">' + (g.awayAbbr||'AWY') + '</span>'
-    +     '<span class="ls-runs">' + d.awayRuns + '</span>'
-    +     '<div class="ls-rhe">'
-    +       '<span title="Hits">' + d.awayHits + 'H</span>'
-    +       '<span title="Errors">' + d.awayErrors + 'E</span>'
-    +     '</div>'
-    +   '</div>'
-
-    +   '<div class="ls-diamond">'
-    +     '<div class="base b2' + b2 + '"></div>'
-    +     '<div class="base b1' + b1 + '"></div>'
-    +     '<div class="base b3' + b3 + '"></div>'
-    +     '<div class="home"></div>'
-    +   '</div>'
-
-    +   '<div class="ls-team-score" style="justify-content:flex-end;text-align:right">'
-    +     '<div class="ls-rhe" style="flex-direction:column;align-items:flex-end">'
-    +       '<span>' + d.homeHits + 'H</span>'
-    +       '<span>' + d.homeErrors + 'E</span>'
-    +     '</div>'
-    +     '<span class="ls-runs">' + d.homeRuns + '</span>'
-    +     '<span class="ls-abbr" style="text-align:right">' + (g.homeAbbr||'HME') + '</span>'
-    +   '</div>'
-    + '</div>'
-
-    + '<div class="ls-outs">'
-    +   '<span style="font-size:.58rem;color:var(--mu);margin-right:4px;font-family:Orbitron,monospace">OUTS</span>'
-    +   outDots
-    + '</div>'
-
-    + (innHTML ? '<div class="ls-innings-scroll">' + innHTML + '</div>' : '')
-    + matchup
-    + '</div>';
-}
-
-function escName(s) {
-  return String(s).split(' ').pop();  // last name only
-}
-
 </script>
 <a class="tracker-fab" href="/tracker" target="_blank" rel="noopener noreferrer">DAILY TRACKER</a>
 </body>
