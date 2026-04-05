@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" aria-label="MLB Analytics Hub">
+  <circle cx="32" cy="32" r="30" stroke="#00e5ff" stroke-width="2" fill="none"/>
+  <ellipse cx="32" cy="32" rx="18" ry="30" stroke="#00e5ff" stroke-width="1.5" fill="none" transform="rotate(-30 32 32)"/>
+  <circle cx="32" cy="32" r="6" fill="#00e5ff" opacity="0.85"/>
+  <path d="M14 24 Q32 8 50 24" stroke="#e040fb" stroke-width="1.5" fill="none"/>
+  <path d="M14 40 Q32 56 50 40" stroke="#e040fb" stroke-width="1.5" fill="none"/>
+  <circle cx="32" cy="32" r="30" stroke="rgba(0,229,255,0.12)" stroke-width="8" fill="none"/>
+</svg>
