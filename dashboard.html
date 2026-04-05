@@ -97,7 +97,6 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;justify-content:center}
 @media(max-width:800px){.roster-grid{grid-template-columns:1fr}.player-photo{width:46px;height:46px}.team-head img.team-logo{width:46px;height:46px}}
 
-.ls-ph{display:none}.ls-wrap{display:block;margin:10px 0 8px;background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.14);border-radius:10px;overflow:hidden;font-size:.72rem}.ls-inn{display:flex;align-items:center;justify-content:space-between;padding:6px 12px 4px;background:rgba(0,229,255,.07);border-bottom:1px solid rgba(0,229,255,.1)}.ls-lbl{font-family:Orbitron,monospace;font-size:.68rem;color:#00e5ff;letter-spacing:1.5px;font-weight:700}.ls-dots{display:flex;gap:4px;align-items:center}.ls-dot{width:9px;height:9px;border-radius:50%;border:1.5px solid rgba(0,229,255,.35);background:transparent}.ls-dot.on{background:#ff9800;border-color:#ff9800}.ls-cnt{font-family:Orbitron,monospace;font-size:.62rem;color:#8b949e;letter-spacing:1px}.ls-cnt span{color:#00e5ff;font-weight:700}.ls-sc{display:grid;grid-template-columns:1fr auto;padding:8px 12px 6px}.ls-rhe{width:100%}.ls-hdr{display:grid;grid-template-columns:52px repeat(3,30px);font-family:Orbitron,monospace;font-size:.55rem;color:#4a5a6a;letter-spacing:1px;padding-bottom:2px;border-bottom:1px solid rgba(255,255,255,.06);margin-bottom:4px}.ls-row{display:grid;grid-template-columns:52px repeat(3,30px);align-items:center;padding:2px 0}.ls-row.bat .ls-ab{color:#00e5ff}.ls-ab{font-family:Orbitron,monospace;font-size:.65rem;color:#8b9eb0;font-weight:700;letter-spacing:.5px}.ls-v{font-family:Orbitron,monospace;font-size:.72rem;color:#e0eaff;font-weight:700;text-align:center}.ls-v.r{color:#00e5ff;font-size:.8rem}.ls-dmnd{width:46px;height:46px;flex-shrink:0;padding-left:10px}.ls-dmnd svg{width:46px;height:46px}.ls-plyrs{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:5px 10px 8px;border-top:1px solid rgba(255,255,255,.05)}.ls-plyr{background:rgba(0,0,0,.25);border-radius:7px;padding:6px 8px}.ls-plbl{font-family:Orbitron,monospace;font-size:.5rem;color:#4a5a7a;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:2px}.ls-pnm{font-size:.68rem;color:#c9d8e8;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px}.ls-pst{font-size:.6rem;color:#5a7a9a;margin-top:1px}.ls-due{padding:4px 10px 7px;border-top:1px solid rgba(255,255,255,.04);font-size:.58rem;color:#4a6a8a;font-family:Orbitron,monospace;letter-spacing:.8px}.ls-due span{color:#7090a8;margin-left:6px}.ls-wait{padding:10px;text-align:center;font-family:Orbitron,monospace;font-size:.58rem;color:rgba(0,229,255,.4);letter-spacing:2px;animation:ls-p 1.4s ease-in-out infinite}@keyframes ls-p{0%,100%{opacity:.4}50%{opacity:1}}
 </style>
 </head>
 <body>
@@ -161,11 +160,11 @@ function mkCard(g){
     :g.temp&&g.temp!='N/A'
     ?'<div class="wr"><span>'+wicon(g.condition)+'</span><span class="val">'+g.temp+'&deg;F</span><span> | </span><span class="val">'+g.wind+'</span>'+rT+'</div>':'';
   return '<div class="card" onclick="location.href=\'/deep-dive/'+g.gamePk+'\'">'
-    +'<div class="ct"><span class="badge '+bc+'">'+bl+'</span><span class="ctime">'+g.gameTime+'</span></div>'
+    +'<div class="ct"><span class="badge '+bc+'">'+bl+'</span><span class="ctime">'+g.gameTime+'</span>'+(g.doubleHeader?'<span style="display:inline-block;margin-left:5px;padding:1px 6px;font-size:.58rem;font-family:Orbitron,monospace;letter-spacing:1.5px;border-radius:3px;background:rgba(255,152,0,.14);color:#ff9800;border:1px solid rgba(255,152,0,.35);vertical-align:middle">DH·G'+g.gameNumber+'</span>':'')+'</div>'
     +'<div class="mu"><div class="tb"><div class="tlw">'+aL+'</div><div class="ta">'+g.awayAbbr+'</div></div>'
     +'<div class="vs">VS</div>'
     +'<div class="tb"><div class="tlw">'+hL+'</div><div class="ta">'+g.homeAbbr+'</div></div></div>'
-    +(g.status==='Live'?'<div id="ls-'+g.gamePk+'" class="ls-ph"></div>':'')+'<div class="pr"><div class="pi"><div class="pl">AWAY SP</div><div class="pn">'+g.awayPitcher+'</div></div>'
+    +'<div class="pr"><div class="pi"><div class="pl">AWAY SP</div><div class="pn">'+g.awayPitcher+'</div></div>'
     +'<div style="width:1px;background:rgba(255,255,255,.05)"></div>'
     +'<div class="pi"><div class="pl">HOME SP</div><div class="pn">'+g.homePitcher+'</div></div></div>'
     +hW
@@ -201,7 +200,7 @@ function renderLineup(pk, d){
   function cols(arr, label, conf){
     if(!arr||!arr.length) return '<div class="lu-col"><div class="lu-head">'+label+'</div><div class="lu-pending">'+(conf?'Lineup pending':'Not yet posted')+'</div></div>';
     var rows=arr.slice(0,9).map(function(p,i){
-      var pos=(p.pos||p.position||'').replace('Designated Hitter','DH').replace('Pitcher','P');
+      var pos=(p.position||'').replace('Designated Hitter','DH').replace('Pitcher','P');
       pos=pos.length>3?pos.substring(0,2):pos;
       return '<div class="lu-row"><span class="lu-num">'+(i+1)+'</span><span class="lu-pos">'+(pos||'?')+'</span><span class="lu-name">'+(p.name||'?').split(' ').pop()+'</span></div>';
     }).join('');
@@ -242,52 +241,6 @@ function loadMC(){
   fetch('/api/projections/monte-carlo').then(r=>r.json()).then(function(d){ if(!d.success) throw new Error(d.error||'Projection load failed'); MC_DATA=d; renderMC(d); }).catch(function(e){ document.getElementById('mcStatus').textContent=e.message; document.getElementById('mcWrap').innerHTML='<div class="ng"><h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px">PROJECTION LOAD FAILED</h3></div>'; });
 }
 
-
-function liveDiamond(b){
-  var on='rgba(0,229,255,1)',off='rgba(0,229,255,.15)';
-  function sq(x,y,f){var c=f?on:off,s=f?'filter:drop-shadow(0 0 4px rgba(0,229,255,.8))':'';return '<rect x="'+(x-5)+'" y="'+(y-5)+'" width="10" height="10" rx="1.5" transform="rotate(45,'+x+','+y+')" fill="'+c+'" style="'+s+'"/>';}
-  return '<svg viewBox="0 0 46 46" xmlns="http://www.w3.org/2000/svg"><polyline points="23,4 41,23 23,42 5,23 23,4" fill="none" stroke="rgba(0,229,255,.12)" stroke-width="1"/>'+sq(23,4,b.second)+sq(5,23,b.third)+sq(41,23,b.first)+sq(23,42,false)+'</svg>';
-}
-function liveMarkup(d,aA,hA){
-  if(!d||!d.success) return '<div class="ls-wait">LIVE DATA UNAVAILABLE</div>';
-  var btm=d.inningLabel&&d.inningLabel.indexOf('BOT')===0;
-  var dots=[0,1,2].map(function(i){return '<div class="ls-dot'+(i<d.outs?' on':'')+'"></div>';}).join('');
-  var pi=d.pitcher||{},ba=d.batter||{};
-  var due=(d.dueUp||[]).filter(Boolean).map(function(n){return n.split(' ').pop();}).join(', ');
-  return '<div class="ls-inn"><div class="ls-lbl">'+(d.inningLabel||'—')+'</div><div class="ls-dots">'+dots+'</div><div class="ls-cnt">B<span>'+d.balls+'</span> S<span>'+d.strikes+'</span></div></div>'+
-    '<div class="ls-sc"><div><div class="ls-rhe">'+
-    '<div class="ls-hdr"><span></span><span>R</span><span>H</span><span>E</span></div>'+
-    '<div class="ls-row'+(!btm?' bat':'')+'"><div class="ls-ab">'+aA+'</div><div class="ls-v r">'+d.awayRuns+'</div><div class="ls-v">'+d.awayHits+'</div><div class="ls-v">'+d.awayErrors+'</div></div>'+
-    '<div class="ls-row'+(btm?' bat':'')+'"><div class="ls-ab">'+hA+'</div><div class="ls-v r">'+d.homeRuns+'</div><div class="ls-v">'+d.homeHits+'</div><div class="ls-v">'+d.homeErrors+'</div></div>'+
-    '</div></div><div class="ls-dmnd">'+liveDiamond(d.bases||{})+'</div></div>'+
-    '<div class="ls-plyrs">'+
-    '<div class="ls-plyr"><div class="ls-plbl">PITCHING</div><div class="ls-pnm">'+(pi.name||'—')+'</div><div class="ls-pst">'+(pi.ip||'—')+' IP · '+((pi.er!==undefined&&pi.er!==null)?pi.er:'—')+' ER</div></div>'+
-    '<div class="ls-plyr"><div class="ls-plbl">AT BAT</div><div class="ls-pnm">'+(ba.name||'—')+'</div><div class="ls-pst">'+(ba.h||0)+'-'+(ba.ab||0)+' · '+(ba.ops||'—')+' OPS</div></div></div>'+
-    (due?'<div class="ls-due">DUE UP <span>'+due+'</span></div>':'');
-}
-var LIVE_TIMERS={};
-function stopAllLivePolling(){Object.keys(LIVE_TIMERS).forEach(function(k){clearInterval(LIVE_TIMERS[k]);delete LIVE_TIMERS[k];});}
-function fetchLiveCard(gamePk,awayAbbr,homeAbbr){
-  var el=document.getElementById('ls-'+gamePk); if(!el) return;
-  fetch('/api/game/livedata/'+gamePk).then(function(r){return r.json();}).then(function(d){
-    var box=document.getElementById('ls-'+gamePk); if(!box) return;
-    box.className='ls-wrap'; box.innerHTML=liveMarkup(d,awayAbbr,homeAbbr);
-  }).catch(function(){var box=document.getElementById('ls-'+gamePk); if(box) box.innerHTML='<div class="ls-wait">UNAVAILABLE</div>';});
-}
-function initLiveCards(games){
-  stopAllLivePolling();
-  (games||[]).forEach(function(g){
-    if(g.status!=='Live') return;
-    var el=document.getElementById('ls-'+g.gamePk); if(!el) return;
-    el.className='ls-wrap'; el.innerHTML='<div class="ls-wait">● FETCHING LIVE DATA…</div>';
-    fetchLiveCard(g.gamePk,g.awayAbbr,g.homeAbbr);
-    LIVE_TIMERS[g.gamePk]=setInterval(function(){
-      if(!document.getElementById('ls-'+g.gamePk)){clearInterval(LIVE_TIMERS[g.gamePk]);delete LIVE_TIMERS[g.gamePk];return;}
-      fetchLiveCard(g.gamePk,g.awayAbbr,g.homeAbbr);
-    },30000);
-  });
-}
-
 function load(){
   fetch('/api/games/today').then(function(r){return r.json();}).then(function(d){
     if(!d.success)throw new Error(d.error||'API error');
@@ -300,7 +253,6 @@ function load(){
     if(!gs.length){document.getElementById('gc').innerHTML='<div class="ng"><h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px">NO GAMES TODAY</h3></div>';return;}
     document.getElementById('gc').innerHTML='<div class="grid">'+gs.map(mkCard).join('')+'</div>';
     setTimeout(function(){document.querySelectorAll('.fill').forEach(function(e){e.style.width=e.getAttribute('data-w');});},150);
-    if(window.initLiveCards) initLiveCards(gs);
     gs.forEach(function(g){ fetch('/api/lineup/'+g.gamePk).then(function(r){return r.json();}).then(function(d){ LINEUPS[g.gamePk]=d; var el=document.getElementById('lu-'+g.gamePk); if(el) renderLineup(g.gamePk, d); }); });
   }).catch(function(e){
     document.getElementById('gc').innerHTML='<div class="sw"><div style="background:rgba(224,64,251,.08);border:1px solid rgba(224,64,251,.3);border-radius:12px;padding:24px 32px;text-align:center"><h3 style="color:var(--m);font-family:Orbitron;margin-bottom:8px">CONNECTION ERROR</h3><p style="color:var(--mu);font-size:.82rem">'+e.message+'</p></div></div>';

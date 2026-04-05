@@ -22,7 +22,6 @@ TRACKER_STORE = os.path.join(DATA_DIR, 'daily_tracker.json')
 ADJUST_STORE = os.path.join(DATA_DIR, 'model_adjustments.json')
 CAL_HISTORY_STORE = os.path.join(DATA_DIR, 'calibration_history.json')
 VALUE_HISTORY_STORE = os.path.join(DATA_DIR, 'value_history.json')
-REVIEW_STORE = os.path.join(DATA_DIR, 'matchup_reviews.json')
 
 MLB_API   = "https://statsapi.mlb.com/api/v1"
 WX_API    = "https://api.open-meteo.com/v1/forecast"
@@ -445,7 +444,9 @@ def get_batters_from_boxscore(team_data, side):
 
 def parse_game(g):
     try:
-        pk   = g.get("gamePk")
+        pk       = g.get("gamePk")
+        game_num = g.get("gameNumber", 1)          # DH: game 1 or 2
+        is_dh    = g.get("doubleHeader", "N") == "Y"  # DH: True/False
         stat = g.get("status",{}).get("detailedState","Scheduled")
         st   = "Live" if "Progress" in stat else ("Final" if "Final" in stat else "Scheduled")
         away = g.get("teams",{}).get("away",{})
@@ -490,6 +491,8 @@ def parse_game(g):
             "temp": wx.get("temp","N/A"), "wind": f"{wx.get('wind_speed','?')} mph",
             "condition": wx.get("condition",""), "rainChance": wx.get("rain_chance","N/A"),
             "weatherIcon": wi,
+            "gameNumber":  game_num,
+            "doubleHeader": is_dh,
         }
     except Exception as ex:
         print("[parse_game]", ex); return None
@@ -520,7 +523,7 @@ def api_games_today():
     _maybe_refresh_fg()
     _maybe_refresh_savant()
     try:
-        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        date_str = request.args.get("date") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
         raw   = fetch_schedule(date_str)
         games = [g for g in [parse_game(x) for x in raw] if g]
         return jsonify({"success":True,"games":games,"count":len(games)})
@@ -1468,7 +1471,8 @@ def _american_to_implied(price):
         return None
 
 
-def _find_odds_event(away_name, home_name):
+def _find_odds_event(away_name, home_name, game_number=1):
+    # game_number=2 selects 2nd matching event (doubleheader same-team games)
     if not ODDS_API_KEY:
         return None, []
     try:
@@ -1481,9 +1485,11 @@ def _find_odds_event(away_name, home_name):
         events = r.json() or []
         na = _norm_name(away_name)
         nh = _norm_name(home_name)
-        for ev in events:
-            if _norm_name(ev.get('away_team')) == na and _norm_name(ev.get('home_team')) == nh:
-                return ev, events
+        matches = [ev for ev in events
+                   if _norm_name(ev.get('away_team')) == na and _norm_name(ev.get('home_team')) == nh]
+        if matches:
+            idx = min(game_number - 1, len(matches) - 1)
+            return matches[idx], events
         return None, events
     except:
         return None, []
@@ -1606,7 +1612,8 @@ def api_market(game_pk):
         if away_p.get('fullName'): valid_names.add(away_p.get('fullName'))
         if home_p.get('fullName'): valid_names.add(home_p.get('fullName'))
 
-        event, events = _find_odds_event(away_name, home_name)
+        game_number = g.get('gameNumber', 1)
+    event, events = _find_odds_event(away_name, home_name, game_number=game_number)
         featured = _load_event_odds(event.get('id') if event else None, featured_only=True) if event else []
         props_books = _load_event_odds(event.get('id') if event else None, featured_only=False) if event else []
         props = _parse_prop_markets(props_books, valid_names)
@@ -3104,149 +3111,6 @@ def api_lineup(game_pk):
     except Exception as ex:
         return jsonify({'success': False, 'gamePk': game_pk, 'away': [], 'home': [], 'awayConfirmed': False, 'homeConfirmed': False, 'error': str(ex)})
 
-
-
-# ── Matchup Review ────────────────────────────────────────────────────────────
-def _load_reviews():
-    return _load_json(REVIEW_STORE, {})
-
-def _save_reviews(data):
-    _save_json(REVIEW_STORE, data)
-
-def _review_key(game_pk):
-    return f"{datetime.now(ET).strftime('%Y-%m-%d')}:{game_pk}"
-
-@app.route('/api/matchup-review/<int:game_pk>', methods=['GET'])
-def api_get_matchup_review(game_pk):
-    try:
-        reviews = _load_reviews()
-        key = _review_key(game_pk)
-        rev = reviews.get(key) or {}
-        return jsonify({'success': True, 'gamePk': game_pk, 'key': key, 'review': rev})
-    except Exception as ex:
-        return jsonify({'success': False, 'error': str(ex)}), 500
-
-@app.route('/api/matchup-review/<int:game_pk>', methods=['POST'])
-def api_save_matchup_review(game_pk):
-    try:
-        payload = request.get_json(force=True) or {}
-        reviews = _load_reviews()
-        key = _review_key(game_pk)
-        existing = reviews.get(key) or {}
-        existing.update({
-            'gamePk':   game_pk,
-            'date':     datetime.now(ET).strftime('%Y-%m-%d'),
-            'savedAt':  datetime.now().isoformat(),
-            'signals':          payload.get('signals', {}),
-            'marketOverrides':  payload.get('marketOverrides', {}),
-            'confidence':       payload.get('confidence', 3),
-            'notes':            payload.get('notes', ''),
-            'sendToTracker':    payload.get('sendToTracker', False),
-        })
-        reviews[key] = existing
-
-        # Optionally propagate market overrides into the global tracker adjustments
-        if payload.get('sendToTracker') and payload.get('marketOverrides'):
-            adj = _get_adjustments()
-            for mk, mult in payload['marketOverrides'].items():
-                if mk in adj['market_multipliers']:
-                    cur  = float(adj['market_multipliers'][mk])
-                    new_m = round(min(2.0, max(0.40, cur * float(mult))), 4)
-                    adj['market_multipliers'][mk] = new_m
-            _save_json(ADJUST_STORE, adj)
-            _append_calibration_history('matchup_review', adj,
-                {'note': f'Matchup review game {game_pk}', 'date': existing['date']})
-
-        _save_reviews(reviews)
-        return jsonify({'success': True, 'key': key, 'review': existing})
-    except Exception as ex:
-        print('[api_save_matchup_review]', traceback.format_exc())
-        return jsonify({'success': False, 'error': str(ex)}), 500
-
-@app.route('/api/matchup-review/history')
-def api_review_history():
-    try:
-        reviews = _load_reviews()
-        out = sorted(reviews.values(), key=lambda r: r.get('savedAt',''), reverse=True)
-        return jsonify({'success': True, 'reviews': out[:120]})
-    except Exception as ex:
-        return jsonify({'success': False, 'error': str(ex)}), 500
-
-@app.route('/api/game/livedata/<int:game_pk>')
-def api_game_livedata(game_pk):
-    try:
-        r = requests.get(f"https://statsapi.mlb.com/api/v1.1/game/{game_pk}/feed/live", timeout=10)
-        r.raise_for_status()
-        data = r.json()
-        linescore = data.get('liveData', {}).get('linescore', {})
-        box = data.get('liveData', {}).get('boxscore', {})
-        game_data = data.get('gameData', {})
-        status_detail = game_data.get('status', {}).get('detailedState', '')
-        inning_num = linescore.get('currentInning', 0)
-        inning_half = linescore.get('inningHalf', 'Top')
-        if any(x in status_detail for x in ['Middle', 'Mid ', 'Between']):
-            inning_label = f'MID {inning_num}'
-        elif inning_half == 'Bottom':
-            inning_label = f'BOT {inning_num}'
-        else:
-            inning_label = f'TOP {inning_num}'
-        home = linescore.get('teams', {}).get('home', {})
-        away = linescore.get('teams', {}).get('away', {})
-        offense = linescore.get('offense', {})
-        defense = linescore.get('defense', {})
-        bases = {
-            'first':  bool(offense.get('first')),
-            'second': bool(offense.get('second')),
-            'third':  bool(offense.get('third')),
-        }
-        batter  = offense.get('batter')  or {}
-        on_deck = offense.get('onDeck')  or {}
-        in_hole = offense.get('inHole')  or {}
-        pitcher = defense.get('pitcher') or {}
-        batter_id  = batter.get('id')
-        pitcher_id = pitcher.get('id')
-        pitcher_ip = pitcher_er = '—'
-        batter_ab = batter_h = 0
-        batter_ops = '—'
-        for side in ('home', 'away'):
-            players = box.get('teams', {}).get(side, {}).get('players', {})
-            if pitcher_id:
-                ps  = players.get(f'ID{pitcher_id}', {})
-                pst = ps.get('stats', {}).get('pitching', {})
-                if pst:
-                    pitcher_ip = pst.get('inningsPitched', '—')
-                    pitcher_er = pst.get('earnedRuns', '—')
-            if batter_id:
-                bs  = players.get(f'ID{batter_id}', {})
-                bst = bs.get('stats', {}).get('batting', {})
-                bss = bs.get('seasonStats', {}).get('batting', {})
-                if bst:
-                    batter_ab = bst.get('atBats', 0)
-                    batter_h  = bst.get('hits', 0)
-                if bss:
-                    batter_ops = bss.get('ops', '—')
-        return jsonify({
-            'success': True,
-            'gamePk': game_pk,
-            'statusDetail': status_detail,
-            'inningLabel': inning_label,
-            'balls':   linescore.get('balls',   0),
-            'strikes': linescore.get('strikes', 0),
-            'outs':    linescore.get('outs',    0),
-            'awayRuns':   away.get('runs',   0),
-            'awayHits':   away.get('hits',   0),
-            'awayErrors': away.get('errors', 0),
-            'homeRuns':   home.get('runs',   0),
-            'homeHits':   home.get('hits',   0),
-            'homeErrors': home.get('errors', 0),
-            'bases': bases,
-            'pitcher': {'name': pitcher.get('fullName',''), 'ip': pitcher_ip, 'er': pitcher_er},
-            'batter':  {'name': batter.get('fullName',''),  'ab': batter_ab,  'h': batter_h, 'ops': batter_ops},
-            'dueUp': [on_deck.get('fullName',''), in_hole.get('fullName','')],
-        })
-    except Exception as ex:
-        print('[api_game_livedata]', traceback.format_exc())
-        return jsonify({'success': False, 'error': str(ex)}), 500
 
 # Boot background loaders
 threading.Thread(target=_load_fg_data,      daemon=True).start()
