@@ -1613,7 +1613,7 @@ def api_market(game_pk):
         if home_p.get('fullName'): valid_names.add(home_p.get('fullName'))
 
         game_number = g.get('gameNumber', 1)
-    event, events = _find_odds_event(away_name, home_name, game_number=game_number)
+        event, events = _find_odds_event(away_name, home_name, game_number=game_number)
         featured = _load_event_odds(event.get('id') if event else None, featured_only=True) if event else []
         props_books = _load_event_odds(event.get('id') if event else None, featured_only=False) if event else []
         props = _parse_prop_markets(props_books, valid_names)
