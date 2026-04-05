@@ -221,8 +221,8 @@ function renderLineup(pk, d){
   function cols(arr, label, conf){
     if(!arr||!arr.length) return '<div class="lu-col"><div class="lu-head">'+label+'</div><div class="lu-pending">'+(conf?'Lineup pending':'Not yet posted')+'</div></div>';
     var rows=arr.slice(0,9).map(function(p,i){
-      var pos=(p.pos||p.position||'').replace('Designated Hitter','DH').replace('Pitcher','P').replace('Designated H','DH').replace('Two-Way','DH');
-      pos=pos.length>3?pos.substring(0,3).trim():pos;
+      var pos=(p.position||'').replace('Designated Hitter','DH').replace('Pitcher','P');
+      pos=pos.length>3?pos.substring(0,2):pos;
       return '<div class="lu-row"><span class="lu-num">'+(i+1)+'</span><span class="lu-pos">'+(pos||'?')+'</span><span class="lu-name">'+(p.name||'?').split(' ').pop()+'</span></div>';
     }).join('');
     return '<div class="lu-col"><div class="lu-head">'+label+(conf?' &#10003;':' (exp)')+'</div>'+rows+'</div>';
