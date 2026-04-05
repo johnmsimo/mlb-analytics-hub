@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
 MLB Analytics Hub — Flask Backend
-Full app.py with Eastern Time fix + all required API routes.
+All routes use Eastern Time for date resolution.
+Player profile response matches frontend expectations.
 """
 import os, re, random, traceback, requests
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from flask import Flask, jsonify, request, send_from_directory, abort
+from flask import Flask, jsonify, request, send_from_directory
 
 ET = ZoneInfo("America/New_York")
 
 MLB_API  = "https://statsapi.mlb.com/api/v1"
 FG_URL   = "https://www.fangraphs.com/api/leaders/major-league/data"
-SV_URL   = "https://baseballsavant.mlb.com/leaderboard/custom"
 
 PARK_FACTORS = {
     "Coors Field": 1.17, "Great American Ball Park": 1.08,
@@ -40,6 +40,9 @@ DOME_PARKS = {
 
 app = Flask(__name__, static_folder="static")
 
+from flask_cors import CORS
+CORS(app)
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def safe_float(v, default=None):
@@ -57,7 +60,7 @@ def et_date_str():
     return datetime.now(ET).strftime("%Y-%m-%d")
 
 def resolve_date(req):
-    """Get date from query param or fall back to ET today."""
+    """Get date from ?date= query param or fall back to ET today."""
     d = req.args.get("date", "").strip()
     if d and re.match(r'^\d{4}-\d{2}-\d{2}$', d):
         return d
@@ -283,7 +286,7 @@ def static_files(filename):
 @app.route("/api/games/today")
 def api_games_today():
     try:
-        date_str = resolve_date(request)
+        date_str = resolve_date(request)   # ← always ET-aware
         r = requests.get(f"{MLB_API}/schedule",
             params={"sportId": 1, "date": date_str,
                     "hydrate": "team,venue,probablePitcher,status,linescore",
@@ -305,7 +308,6 @@ def api_games_today():
 
 @app.route("/api/lineup/<int:game_pk>")
 def api_lineup(game_pk):
-    """Return confirmed or expected lineup for both teams."""
     try:
         r = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=10)
         r.raise_for_status()
@@ -340,7 +342,7 @@ def api_lineup(game_pk):
         print("[api_lineup]", traceback.format_exc())
         return jsonify({"success": False, "error": str(ex), "away": [], "home": [], "awayConfirmed": False, "homeConfirmed": False}), 500
 
-# ── API: Game boxscore (legacy route used by deepdive) ───────────────────────
+# ── API: Game boxscore ────────────────────────────────────────────────────────
 
 @app.route("/api/game/<int:game_pk>")
 def api_game(game_pk):
@@ -390,7 +392,7 @@ def api_game(game_pk):
 @app.route("/api/pitchers/<int:game_pk>")
 def api_pitchers(game_pk):
     try:
-        date_str = resolve_date(request)
+        date_str = resolve_date(request)   # ← ET-aware
         r = requests.get(f"{MLB_API}/schedule",
             params={"sportId": 1, "date": date_str,
                     "hydrate": "probablePitcher,team",
@@ -441,7 +443,6 @@ def api_pitchers(game_pk):
 
 @app.route("/api/teams/overview")
 def api_teams_overview():
-    """Return all 30 MLB teams with basic roster summary."""
     try:
         r = requests.get(f"{MLB_API}/teams",
             params={"sportId": 1, "activeStatus": "Active",
@@ -507,9 +508,8 @@ def api_teams_overview():
 
 @app.route("/api/projections/monte-carlo")
 def api_projections_monte_carlo():
-    """Run Monte Carlo simulations for all of today's games."""
     try:
-        date_str = resolve_date(request)
+        date_str = resolve_date(request)   # ← ET-aware
         r = requests.get(f"{MLB_API}/schedule",
             params={"sportId": 1, "date": date_str,
                     "hydrate": "team,venue,probablePitcher"},
@@ -547,7 +547,6 @@ def api_projections_monte_carlo():
             over_8  = sum(1 for t in total_runs_list if t > 8.5) / SIMS * 100
             over_9  = sum(1 for t in total_runs_list if t > 9.5) / SIMS * 100
 
-            # Build synthetic prop projections from simulation results
             top_props = [
                 {"player": away_abbr + " Team", "market": "team_total",
                  "line": round(avg_total / 2, 1), "bookmaker": "Model",
@@ -591,12 +590,12 @@ def api_projections_monte_carlo():
         print("[api_projections_monte_carlo]", traceback.format_exc())
         return jsonify({"success": False, "error": str(ex)}), 500
 
-# ── API: Single game Monte Carlo (deep dive) ──────────────────────────────────
+# ── API: Single game Monte Carlo ──────────────────────────────────────────────
 
 @app.route("/api/monte-carlo/<int:game_pk>")
 def api_monte_carlo(game_pk):
     try:
-        date_str = resolve_date(request)
+        date_str = resolve_date(request)   # ← ET-aware
         r = requests.get(f"{MLB_API}/schedule",
             params={"sportId": 1, "date": date_str, "gamePk": game_pk,
                     "hydrate": "team,venue,probablePitcher"}, timeout=10)
@@ -722,6 +721,9 @@ def api_game_livedata(game_pk):
         return jsonify({"success": False, "error": str(ex)}), 500
 
 # ── API: Player Profile ───────────────────────────────────────────────────────
+# Response shape matches dashboard.html frontend expectations:
+#   d.name, d.pos, d.team, d.isPitcher, d.throws, d.bats,
+#   d.season, d.fg, d.sv (savant), d.gameLogs (array), d.platoon, d.trend
 
 @app.route("/api/player/<int:player_id>")
 def api_player_profile(player_id):
@@ -730,49 +732,121 @@ def api_player_profile(player_id):
         bio_r = requests.get(f"{MLB_API}/people/{player_id}", timeout=8)
         bio_r.raise_for_status()
         pdata = (bio_r.json().get("people") or [{}])[0]
-        name  = pdata.get("fullName", "")
-        pos   = pdata.get("primaryPosition", {}).get("abbreviation", "?")
-        bats  = pdata.get("batSide", {}).get("code", "S")
+        name   = pdata.get("fullName", "")
+        pos    = pdata.get("primaryPosition", {}).get("abbreviation", "?")
+        bats   = pdata.get("batSide", {}).get("code", "S")
         throws = pdata.get("pitchHand", {}).get("code", "R")
-        team  = pdata.get("currentTeam", {}).get("name", "")
+        team   = pdata.get("currentTeam", {}).get("name", "")
         headshot = (f"https://img.mlbstatic.com/mlb-photos/image/upload/"
                     f"d_people:generic:headshot:67:current.png/w_213,q_auto:best/"
                     f"v1/people/{player_id}/headshot/67/current")
         is_pitcher = pos in ("P", "SP", "RP", "CL")
         group = "pitching" if is_pitcher else "hitting"
+
+        # Season stats
         sr = requests.get(f"{MLB_API}/people/{player_id}/stats",
             params={"stats": "season", "group": group, "season": year}, timeout=8)
         sr.raise_for_status()
         season_sp = (sr.json().get("stats") or [{}])[0].get("splits", [])
         season = season_sp[0].get("stat", {}) if season_sp else {}
+
+        # Game log (last 15)
         lr = requests.get(f"{MLB_API}/people/{player_id}/stats",
             params={"stats": "gameLog", "group": group, "season": year}, timeout=8)
         lr.raise_for_status()
         all_games = (lr.json().get("stats") or [{}])[0].get("splits", [])
         last15 = all_games[-15:]
-        gamelog = []
+        gameLogs = []
         if not is_pitcher:
             for sp in last15:
                 s = sp.get("stat", {})
-                gamelog.append({"date": sp.get("date", ""), "opp": sp.get("opponent", {}).get("abbreviation", ""),
-                                 "ab": s.get("atBats", 0), "h": s.get("hits", 0), "hr": s.get("homeRuns", 0),
-                                 "rbi": s.get("rbi", 0), "k": s.get("strikeOuts", 0), "bb": s.get("baseOnBalls", 0),
-                                 "sb": s.get("stolenBases", 0), "avg": s.get("avg", "---")})
+                ab = s.get("atBats", 0)
+                h  = s.get("hits", 0)
+                gameLogs.append({
+                    "date": sp.get("date", ""),
+                    "opp":  sp.get("opponent", {}).get("abbreviation", ""),
+                    "ab":   ab, "h": h,
+                    "hr":   s.get("homeRuns", 0),
+                    "rbi":  s.get("rbi", 0),
+                    "k":    s.get("strikeOuts", 0),
+                    "bb":   s.get("baseOnBalls", 0),
+                    "sb":   s.get("stolenBases", 0),
+                    "tb":   s.get("totalBases", 0),
+                    "avg":  s.get("avg", "---"),
+                    "era":  "---",
+                })
         else:
             for sp in last15:
                 s = sp.get("stat", {})
-                gamelog.append({"date": sp.get("date", ""), "opp": sp.get("opponent", {}).get("abbreviation", ""),
-                                 "ip": s.get("inningsPitched", "0"), "er": s.get("earnedRuns", 0),
-                                 "k": s.get("strikeOuts", 0), "bb": s.get("baseOnBalls", 0),
-                                 "h": s.get("hits", 0), "hr": s.get("homeRuns", 0)})
+                gameLogs.append({
+                    "date": sp.get("date", ""),
+                    "opp":  sp.get("opponent", {}).get("abbreviation", ""),
+                    "ip":   s.get("inningsPitched", "0"),
+                    "er":   s.get("earnedRuns", 0),
+                    "k":    s.get("strikeOuts", 0),
+                    "bb":   s.get("baseOnBalls", 0),
+                    "h":    s.get("hits", 0),
+                    "hr":   s.get("homeRuns", 0),
+                    "era":  s.get("era", "---"),
+                })
+
+        # Platoon splits
+        platoon = {"vl": {}, "vr": {}}
+        try:
+            split_group = "pitching" if is_pitcher else "hitting"
+            vsr = requests.get(f"{MLB_API}/people/{player_id}/stats",
+                params={"stats": "statSplits", "group": split_group,
+                        "season": year, "sitCodes": "vl,vr"}, timeout=8)
+            vsr.raise_for_status()
+            for sg in (vsr.json().get("stats") or []):
+                for sp in sg.get("splits", []):
+                    code = (sp.get("split", {}).get("code") or "").lower()
+                    if code in ("vl", "vr"):
+                        platoon[code] = sp.get("stat", {})
+        except: pass
+
+        # Trend (hot/cold/neutral based on recent gamelog)
+        trend = "neutral"
+        try:
+            if not is_pitcher and len(gameLogs) >= 5:
+                recent = gameLogs[-5:]
+                avg_ops = sum(float(g.get("avg") or 0) for g in recent) / 5
+                if avg_ops >= 0.300: trend = "hot"
+                elif avg_ops <= 0.180: trend = "cold"
+            elif is_pitcher and len(gameLogs) >= 3:
+                recent = gameLogs[-3:]
+                avg_k = sum(int(g.get("k", 0)) for g in recent) / 3
+                avg_er = sum(int(g.get("er", 0)) for g in recent) / 3
+                if avg_k >= 7 and avg_er <= 2: trend = "hot"
+                elif avg_er >= 4: trend = "cold"
+        except: pass
+
         fg = fg_pitcher(name) if is_pitcher else fg_batter(name)
         sv = sv_pitcher(name) if is_pitcher else sv_batter(name)
+
         return jsonify({
             "success": True,
-            "player": {"id": player_id, "name": name, "pos": pos, "bats": bats,
-                       "throws": throws, "team": team, "headshot": headshot},
-            "season": season, "fg": fg, "savant": sv,
-            "gamelog": gamelog, "isPitcher": is_pitcher,
+            # Top-level keys the frontend reads directly
+            "name": name,
+            "pos": pos,
+            "bats": bats,
+            "throws": throws,
+            "team": team,
+            "headshot": headshot,
+            "isPitcher": is_pitcher,
+            "trend": trend,
+            # Nested data
+            "season": season,
+            "fg": fg,
+            "sv": sv,
+            "gameLogs": gameLogs,   # frontend reads d.gameLogs
+            "platoon": platoon,
+            # Legacy nested player object (deepdive may use this)
+            "player": {
+                "id": player_id, "name": name, "pos": pos,
+                "bats": bats, "throws": throws,
+                "team": team, "headshot": headshot,
+            },
         })
     except Exception as ex:
         print("[api_player_profile]", traceback.format_exc())
