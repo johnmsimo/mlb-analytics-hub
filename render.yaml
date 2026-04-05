@@ -1,11 +1,1 @@
-services:
-  - type: web
-    name: mlb-analytics-hub
-    env: python
-    buildCommand: pip install -r requirements.txt && python fix_timezone.py
-    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 120
-    envVars:
-      - key: ODDS_API_KEY
-        sync: false
-      - key: ODDS_REGION
-        value: us
+c2VydmljZXM6CiAgLSB0eXBlOiB3ZWIKICAgIG5hbWU6IG1sYi1hbmFseXRpY3MtaHViCiAgICBlbnY6IHB5dGhvbgogICAgYnVpbGRDb21tYW5kOiBwaXAgaW5zdGFsbCAtciByZXF1aXJlbWVudHMudHh0CiAgICBzdGFydENvbW1hbmQ6IGd1bmljb3JuIGFwcDphcHAgLS1iaW5kIDAuMC4wLjA6JFBPUlQgLS13b3JrZXJzIDIgLS10aW1lb3V0IDEyMAogICAgZW52VmFyczoKICAgICAgLSBrZXk6IE9ERFNfQVBJX0tFWQogICAgICAgIHN5bmM6IGZhbHNlCiAgICAgIC0ga2V5OiBPRERTX1JFR0lPTgogICAgICAgIHZhbHVlOiB1cwo=
