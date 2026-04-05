@@ -385,62 +385,7 @@ def get_weather(lat, lon, game_hour=13, venue_id=None):
         print(f"[get_weather] lat={lat} lon={lon} hour={game_hour} venue={venue_id} err={ex}")
         return {"temp":"N/A","rain_chance":"N/A","wind_speed":"N/A","condition":"N/A"}
 
-def pitcher_stats_mlb(player_id):
-    try:
-        r = requests.get(f"{MLB_API}/people/{player_id}/stats?stats=season&group=pitching&season={datetime.now().year}", timeout=8)
-        r.raise_for_status()
-        splits = r.json().get("stats",[{}])[0].get("splits",[])
-        if not splits: return {}
-        s = splits[0].get("stat",{})
-        return {
-            "era":  s.get("era","N/A"), "whip": s.get("whip","N/A"),
-            "ip":   s.get("inningsPitched","N/A"),
-            "wins": s.get("wins",0), "losses": s.get("losses",0),
-            "g":    s.get("gamesPlayed",0), "gs": s.get("gamesStarted",0),
-            "k9":   round(float(s.get("strikeoutsPer9Inn",0) or 0),2),
-            "bb9":  round(float(s.get("walksPer9Inn",0) or 0),2),
-            "hr9":  round(float(s.get("homeRunsPer9",0) or 0),2),
-        }
-    except: return {}
 
-def get_batters_from_boxscore(team_data, side):
-    out = []
-    batters = team_data.get("batters",[])
-    players = team_data.get("players",{})
-    for pid in batters:
-        key = f"ID{pid}"
-        p   = players.get(key,{})
-        name= p.get("person",{}).get("fullName","")
-        pos = p.get("position",{}).get("abbreviation","?")
-        s   = p.get("stats",{}).get("batting",{})
-        ss  = p.get("seasonStats",{}).get("batting",{})
-        slot= p.get("battingOrder",0)
-        try: slot = int(str(slot)[0])
-        except: slot = 0
-        fgb = fg_batter(name)
-        svb = sv_batter(name)
-        out.append({
-            "slot": slot, "id": pid, "name": name, "pos": pos,
-            "avg":  ss.get("avg",  fgb.get("fg_avg",".---")),
-            "obp":  ss.get("obp",  fgb.get("fg_obp",".---")),
-            "slg":  ss.get("slg",  fgb.get("fg_slg",".---")),
-            "ops":  ss.get("ops",  fgb.get("fg_ops",".---")),
-            "ab":   s.get("atBats",0), "hits": s.get("hits",0),
-            "hr":   s.get("homeRuns",0), "rbi": s.get("rbi",0),
-            # FanGraphs
-            "fg_pa":  fgb.get("fg_pa","N/A"), "fg_r":  fgb.get("fg_r","N/A"),
-            "fg_sb":  fgb.get("fg_sb","N/A"), "fg_woba":fgb.get("fg_woba","N/A"),
-            "fg_wrc": fgb.get("fg_wrc","N/A"), "fg_war":fgb.get("fg_war","N/A"),
-            # Baseball Savant
-            "sv_xba":    svb.get("sv_xba","N/A"),
-            "sv_xslg":   svb.get("sv_xslg","N/A"),
-            "sv_xwoba":  svb.get("sv_xwoba","N/A"),
-            "sv_ev":     svb.get("sv_ev","N/A"),
-            "sv_hh_pct": svb.get("sv_hh_pct","N/A"),
-            "sv_brl_pct":svb.get("sv_brl_pct","N/A"),
-            "sv_la":     svb.get("sv_la","N/A"),
-        })
-    return out
 
 def parse_game(g):
     try:
@@ -1920,24 +1865,6 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None):
     return rows[:keep]
 
 
-def _tracker_summary(entries):
-    total = len(entries)
-    graded = [x for x in entries if x.get('grade') in ('win', 'loss', 'push')]
-    wins = sum(1 for x in graded if x.get('grade') == 'win')
-    losses = sum(1 for x in graded if x.get('grade') == 'loss')
-    pushes = sum(1 for x in graded if x.get('grade') == 'push')
-    hit_rate = round(wins / max(1, wins + losses), 3) if graded else 0.0
-    by_market = {}
-    for x in entries:
-        mk = x.get('marketKey')
-        by_market.setdefault(mk, {'picks': 0, 'wins': 0, 'losses': 0, 'pushes': 0})
-        by_market[mk]['picks'] += 1
-        if x.get('grade') == 'win': by_market[mk]['wins'] += 1
-        elif x.get('grade') == 'loss': by_market[mk]['losses'] += 1
-        elif x.get('grade') == 'push': by_market[mk]['pushes'] += 1
-    return {'picks': total, 'graded': len(graded), 'wins': wins, 'losses': losses, 'pushes': pushes, 'hit_rate': hit_rate, 'by_market': by_market}
-
-
 @app.route('/tracker')
 def tracker_page():
     return TRACKER_HTML
@@ -2197,87 +2124,10 @@ def _profit_units_from_american(price):
     return None
 
 
-def _recalc_tracker_entry(row):
-    if row.get('openingPrice') is None and row.get('marketPrice') is not None:
-        row['openingPrice'] = row.get('marketPrice')
-    row['openingImplied'] = _american_to_implied(row.get('openingPrice'))
-    if row.get('closingPrice') is not None:
-        row['closingImplied'] = _american_to_implied(row.get('closingPrice'))
-    if row.get('openingImplied') is not None and row.get('closingImplied') is not None:
-        row['clvEdge'] = round(float(row['closingImplied']) - float(row['openingImplied']), 4)
-    else:
-        row['clvEdge'] = None
-    if row.get('grade') in ('win', 'loss', 'push'):
-        if row.get('grade') == 'win':
-            row['profitUnits'] = _profit_units_from_american(row.get('openingPrice'))
-        elif row.get('grade') == 'loss':
-            row['profitUnits'] = -1.0
-        else:
-            row['profitUnits'] = 0.0
-    else:
-        row['profitUnits'] = None
-    return row
-
-
 def _recalc_tracker_entries(entries):
     for row in entries or []:
         _recalc_tracker_entry(row)
     return entries or []
-
-
-def _daily_value_series(end_date_str, window_days, market_key=None):
-    store = _tracker_store()
-    dates = list(reversed(_dates_in_window(end_date_str, window_days)))
-    series = []
-    for ds in dates:
-        rows = list((store.get(ds) or {}).get('entries', []) or [])
-        if market_key:
-            rows = [r for r in rows if r.get('marketKey') == market_key]
-        graded = [r for r in rows if r.get('grade') in ('win', 'loss', 'push')]
-        staked = len(graded)
-        units = round(sum(float(r.get('profitUnits') or 0) for r in graded if r.get('profitUnits') is not None), 4)
-        roi = round(units / max(1, staked), 4) if graded else None
-        clv = [float(r.get('clvEdge')) for r in graded if r.get('clvEdge') is not None]
-        avg_clv = round(sum(clv) / max(1, len(clv)), 4) if clv else None
-        clv_pos = round(sum(1 for x in clv if x > 0) / max(1, len(clv)), 4) if clv else None
-        series.append({'date': ds, 'staked': staked, 'units': units, 'roi': roi, 'avg_clv': avg_clv, 'clv_pos_rate': clv_pos})
-    return series
-
-
-def _value_summary(entries):
-    graded = [r for r in entries if r.get('grade') in ('win', 'loss', 'push')]
-    units = round(sum(float(r.get('profitUnits') or 0) for r in graded if r.get('profitUnits') is not None), 4)
-    roi = round(units / max(1, len(graded)), 4) if graded else 0.0
-    clv = [float(r.get('clvEdge')) for r in graded if r.get('clvEdge') is not None]
-    avg_clv = round(sum(clv) / max(1, len(clv)), 4) if clv else 0.0
-    clv_pos = round(sum(1 for x in clv if x > 0) / max(1, len(clv)), 4) if clv else 0.0
-    return {'units': units, 'roi': roi, 'avg_clv': avg_clv, 'clv_positive_rate': clv_pos, 'graded_with_clv': len(clv)}
-
-
-def _tracker_summary(entries):
-    total = len(entries)
-    graded = [x for x in entries if x.get('grade') in ('win', 'loss', 'push')]
-    wins = sum(1 for x in graded if x.get('grade') == 'win')
-    losses = sum(1 for x in graded if x.get('grade') == 'loss')
-    pushes = sum(1 for x in graded if x.get('grade') == 'push')
-    hit_rate = round(wins / max(1, wins + losses), 3) if graded else 0.0
-    by_market = {}
-    for x in entries:
-        mk = x.get('marketKey')
-        by_market.setdefault(mk, {'picks': 0, 'wins': 0, 'losses': 0, 'pushes': 0, 'units': 0.0})
-        by_market[mk]['picks'] += 1
-        if x.get('grade') == 'win':
-            by_market[mk]['wins'] += 1
-        elif x.get('grade') == 'loss':
-            by_market[mk]['losses'] += 1
-        elif x.get('grade') == 'push':
-            by_market[mk]['pushes'] += 1
-        if x.get('profitUnits') is not None:
-            by_market[mk]['units'] = round(by_market[mk]['units'] + float(x.get('profitUnits') or 0), 4)
-    return {
-        'picks': total, 'graded': len(graded), 'wins': wins, 'losses': losses, 'pushes': pushes,
-        'hit_rate': hit_rate, 'by_market': by_market, 'value': _value_summary(entries)
-    }
 
 
 @app.route('/api/tracker/close/<date_str>', methods=['POST'])
