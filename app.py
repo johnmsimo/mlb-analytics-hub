@@ -22,57 +22,61 @@ TRACKER_STORE = os.path.join(DATA_DIR, 'daily_tracker.json')
 ADJUST_STORE = os.path.join(DATA_DIR, 'model_adjustments.json')
 CAL_HISTORY_STORE = os.path.join(DATA_DIR, 'calibration_history.json')
 VALUE_HISTORY_STORE = os.path.join(DATA_DIR, 'value_history.json')
+REVIEW_STORE = os.path.join(DATA_DIR, 'matchup_reviews.json')
 
 MLB_API   = "https://statsapi.mlb.com/api/v1"
 WX_API    = "https://api.open-meteo.com/v1/forecast"
 
 # MLB stadium coordinates keyed by MLB venue ID (from /api/v1/venues)
 STADIUM_COORDS = {
-    1:    (33.80019044, -117.8823996),  # Angel Stadium, Anaheim
-    2:    (39.283787,   -76.621689),    # Oriole Park at Camden Yards, Baltimore
-    3:    (42.346456,   -71.097441),    # Fenway Park, Boston
-    4:    (41.83,       -87.634167),    # Rate Field (Guaranteed Rate), Chicago
-    5:    (41.495861,   -81.685255),    # Progressive Field, Cleveland
-    7:    (39.051567,   -94.480483),    # Kauffman Stadium, Kansas City
-    12:   (27.767778,   -82.6525),      # Tropicana Field, St. Petersburg (dome)
-    14:   (43.64155,    -79.38915),     # Rogers Centre, Toronto (dome)
-    15:   (33.445302,   -112.066687),   # Chase Field, Phoenix (retractable)
-    17:   (41.948171,   -87.655503),    # Wrigley Field, Chicago
-    19:   (39.756042,   -104.994136),   # Coors Field, Denver
-    22:   (34.07368,    -118.24053),    # Dodger Stadium, Los Angeles
-    31:   (40.446904,   -80.005753),    # PNC Park, Pittsburgh
-    32:   (43.02838,    -87.97099),     # American Family Field, Milwaukee (retractable)
-    680:  (47.591333,   -122.33251),    # T-Mobile Park, Seattle (retractable)
-    2392: (29.756967,   -95.355509),    # Daikin Park (Minute Maid), Houston (retractable)
-    2394: (42.3391151,  -83.048695),    # Comerica Park, Detroit (retractable)
-    2395: (37.778383,   -122.389448),   # Oracle Park, San Francisco
-    2529: (38.57994,    -121.51246),    # Sutter Health Park, Sacramento
-    2602: (39.097389,   -84.506611),    # Great American Ball Park, Cincinnati
-    2680: (32.707861,   -117.157278),   # Petco Park, San Diego
-    2681: (39.90539086, -75.16716957),  # Citizens Bank Park, Philadelphia
-    2889: (38.62256667, -90.19286667),  # Busch Stadium, St. Louis
-    3289: (40.75753012, -73.84559155),  # Citi Field, New York (Mets)
-    3309: (38.872861,   -77.007501),    # Nationals Park, Washington DC
-    3312: (44.981829,   -93.277891),    # Target Field, Minneapolis
-    3313: (40.82919482, -73.9264977),   # Yankee Stadium, New York
-    4169: (25.77796236, -80.21951795),  # loanDepot park, Miami (retractable)
-    4705: (33.890672,   -84.467641),    # Truist Park, Atlanta
-    5325: (32.747299,   -97.081818),    # Globe Life Field, Arlington TX (retractable)
-    4321: (32.747299,   -97.081818),    # Globe Life Field alt ID
+    # ── American League ───────────────────────────────────────────────────────
+    1:    (33.7994,  -117.8829),  # Angel Stadium — Los Angeles Angels
+    2:    (39.2839,   -76.6214),  # Oriole Park at Camden Yards — Baltimore Orioles
+    3:    (42.3467,   -71.0972),  # Fenway Park — Boston Red Sox
+    4:    (41.8299,   -87.6338),  # Guaranteed Rate Field — Chicago White Sox
+    5:    (41.4963,   -81.6852),  # Progressive Field — Cleveland Guardians
+    7:    (39.0515,   -94.4815),  # Kauffman Stadium — Kansas City Royals
+    12:   (27.7682,   -82.6534),  # Tropicana Field — Tampa Bay Rays (dome)
+    14:   (43.6414,   -79.3892),  # Rogers Centre — Toronto Blue Jays (retractable)
+    680:  (47.5914,  -122.3325),  # T-Mobile Park — Seattle Mariners (retractable)
+    2392: (29.7573,   -95.3553),  # Minute Maid Park — Houston Astros (retractable)
+    2394: (42.3409,   -83.0485),  # Comerica Park — Detroit Tigers (retractable)
+    2529: (38.5824,  -121.5165),  # Sutter Health Park — Oakland Athletics
+    3312: (44.9817,   -93.2776),  # Target Field — Minnesota Twins
+    3313: (40.8296,   -73.9265),  # Yankee Stadium — New York Yankees
+    5325: (32.7473,   -97.0826),  # Globe Life Field — Texas Rangers (retractable)
+    4321: (32.7473,   -97.0826),  # Globe Life Field — alt venue ID
+
+    # ── National League ───────────────────────────────────────────────────────
+    15:   (33.4453,  -112.0667),  # Chase Field — Arizona Diamondbacks (retractable)
+    17:   (41.9484,   -87.6553),  # Wrigley Field — Chicago Cubs
+    19:   (39.7561,  -104.9942),  # Coors Field — Colorado Rockies
+    22:   (34.0739,  -118.2400),  # Dodger Stadium — Los Angeles Dodgers
+    31:   (40.4469,   -80.0057),  # PNC Park — Pittsburgh Pirates
+    32:   (43.0280,   -87.9715),  # American Family Field — Milwaukee Brewers (retractable)
+    2395: (37.7786,  -122.3893),  # Oracle Park — San Francisco Giants
+    2602: (39.0979,   -84.5068),  # Great American Ball Park — Cincinnati Reds
+    2680: (32.7073,  -117.1569),  # Petco Park — San Diego Padres
+    2681: (39.9059,   -75.1664),  # Citizens Bank Park — Philadelphia Phillies
+    2889: (38.6226,   -90.1928),  # Busch Stadium — St. Louis Cardinals
+    3289: (40.7571,   -73.8458),  # Citi Field — New York Mets
+    3309: (38.8730,   -77.0074),  # Nationals Park — Washington Nationals
+    4169: (25.7783,   -80.2195),  # loanDepot park — Miami Marlins (retractable)
+    4705: (33.8905,   -84.4677),  # Truist Park — Atlanta Braves
 }
 
 # Domed / retractable-roof stadiums (weather is always INDOOR/controlled)
 DOME_VENUES = {
-    12,    # Tropicana Field (fixed dome)
-    14,    # Rogers Centre (retractable)
-    15,    # Chase Field (retractable)
-    32,    # American Family Field (retractable)
-    680,   # T-Mobile Park (retractable)
-    2392,  # Daikin Park / Minute Maid (retractable)
-    2394,  # Comerica Park (retractable)
-    4169,  # loanDepot park (retractable)
-    5325,  # Globe Life Field (retractable)
-    4321,  # Globe Life Field alt
+    12,    # Tropicana Field — Tampa Bay Rays (fixed dome)
+    14,    # Rogers Centre — Toronto Blue Jays (retractable)
+    15,    # Chase Field — Arizona Diamondbacks (retractable)
+    32,    # American Family Field — Milwaukee Brewers (retractable)
+    680,   # T-Mobile Park — Seattle Mariners (retractable)
+    2392,  # Minute Maid Park — Houston Astros (retractable)
+    2394,  # Comerica Park — Detroit Tigers (retractable)
+    4169,  # loanDepot park — Miami Marlins (retractable)
+    5325,  # Globe Life Field — Texas Rangers (retractable)
+    4321,  # Globe Life Field — alt venue ID (retractable)
 }
 
 LOGO_BASE = "https://www.mlbstatic.com/team-logos/{team_id}.svg"
@@ -95,16 +99,12 @@ def _load_fg_data():
     global _fg_bat, _fg_pit, _fg_loaded, _fg_load_date
     year = datetime.now().year
     try:
-        hdrs = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-        fg_bat_url = (f"https://www.fangraphs.com/api/leaders/major-league/data?"
-                      f"age=&pos=all&stats=bat&lg=all&qual=1&season={year}&season1={year}"
-                      f"&ind=0&team=&rost=&players=&type=8&sortdir=default&pageitems=2000&pagenum=1")
-        resp = requests.get(fg_bat_url, headers=hdrs, timeout=15)
-        resp.raise_for_status()
-        rows = resp.json().get("data", [])
+        import pybaseball as pb
+        pb.cache.enable()
+        df = pb.batting_stats(year, qual=1)
         bat = {}
-        for r in rows:
-            k = str(r.get("PlayerName","")).strip().lower()
+        for _, r in df.iterrows():
+            k = str(r.get("Name","")).strip().lower()
             if k:
                 bat[k] = {
                     "fg_avg": round(float(r.get("AVG") or 0),3),
@@ -125,15 +125,11 @@ def _load_fg_data():
     except Exception as ex:
         print("[FG] Batting failed:", ex)
     try:
-        fg_pit_url = (f"https://www.fangraphs.com/api/leaders/major-league/data?"
-                      f"age=&pos=all&stats=pit&lg=all&qual=1&season={year}&season1={year}"
-                      f"&ind=0&team=&rost=&players=&type=8&sortdir=default&pageitems=2000&pagenum=1")
-        resp2 = requests.get(fg_pit_url, headers=hdrs, timeout=15)
-        resp2.raise_for_status()
-        rows2 = resp2.json().get("data", [])
+        import pybaseball as pb
+        df = pb.pitching_stats(year, qual=1)
         pit = {}
-        for r in rows2:
-            k = str(r.get("PlayerName","")).strip().lower()
+        for _, r in df.iterrows():
+            k = str(r.get("Name","")).strip().lower()
             if k:
                 pit[k] = {
                     "fg_era":  round(float(r.get("ERA")  or 0),2),
@@ -393,7 +389,62 @@ def get_weather(lat, lon, game_hour=13, venue_id=None):
         print(f"[get_weather] lat={lat} lon={lon} hour={game_hour} venue={venue_id} err={ex}")
         return {"temp":"N/A","rain_chance":"N/A","wind_speed":"N/A","condition":"N/A"}
 
+def pitcher_stats_mlb(player_id):
+    try:
+        r = requests.get(f"{MLB_API}/people/{player_id}/stats?stats=season&group=pitching&season={datetime.now().year}", timeout=8)
+        r.raise_for_status()
+        splits = r.json().get("stats",[{}])[0].get("splits",[])
+        if not splits: return {}
+        s = splits[0].get("stat",{})
+        return {
+            "era":  s.get("era","N/A"), "whip": s.get("whip","N/A"),
+            "ip":   s.get("inningsPitched","N/A"),
+            "wins": s.get("wins",0), "losses": s.get("losses",0),
+            "g":    s.get("gamesPlayed",0), "gs": s.get("gamesStarted",0),
+            "k9":   round(float(s.get("strikeoutsPer9Inn",0) or 0),2),
+            "bb9":  round(float(s.get("walksPer9Inn",0) or 0),2),
+            "hr9":  round(float(s.get("homeRunsPer9",0) or 0),2),
+        }
+    except: return {}
 
+def get_batters_from_boxscore(team_data, side):
+    out = []
+    batters = team_data.get("batters",[])
+    players = team_data.get("players",{})
+    for pid in batters:
+        key = f"ID{pid}"
+        p   = players.get(key,{})
+        name= p.get("person",{}).get("fullName","")
+        pos = p.get("position",{}).get("abbreviation","?")
+        s   = p.get("stats",{}).get("batting",{})
+        ss  = p.get("seasonStats",{}).get("batting",{})
+        slot= p.get("battingOrder",0)
+        try: slot = int(str(slot)[0])
+        except: slot = 0
+        fgb = fg_batter(name)
+        svb = sv_batter(name)
+        out.append({
+            "slot": slot, "id": pid, "name": name, "pos": pos,
+            "avg":  ss.get("avg",  fgb.get("fg_avg",".---")),
+            "obp":  ss.get("obp",  fgb.get("fg_obp",".---")),
+            "slg":  ss.get("slg",  fgb.get("fg_slg",".---")),
+            "ops":  ss.get("ops",  fgb.get("fg_ops",".---")),
+            "ab":   s.get("atBats",0), "hits": s.get("hits",0),
+            "hr":   s.get("homeRuns",0), "rbi": s.get("rbi",0),
+            # FanGraphs
+            "fg_pa":  fgb.get("fg_pa","N/A"), "fg_r":  fgb.get("fg_r","N/A"),
+            "fg_sb":  fgb.get("fg_sb","N/A"), "fg_woba":fgb.get("fg_woba","N/A"),
+            "fg_wrc": fgb.get("fg_wrc","N/A"), "fg_war":fgb.get("fg_war","N/A"),
+            # Baseball Savant
+            "sv_xba":    svb.get("sv_xba","N/A"),
+            "sv_xslg":   svb.get("sv_xslg","N/A"),
+            "sv_xwoba":  svb.get("sv_xwoba","N/A"),
+            "sv_ev":     svb.get("sv_ev","N/A"),
+            "sv_hh_pct": svb.get("sv_hh_pct","N/A"),
+            "sv_brl_pct":svb.get("sv_brl_pct","N/A"),
+            "sv_la":     svb.get("sv_la","N/A"),
+        })
+    return out
 
 def parse_game(g):
     try:
@@ -472,7 +523,7 @@ def api_games_today():
     _maybe_refresh_fg()
     _maybe_refresh_savant()
     try:
-        date_str = datetime.now(ET).strftime("%Y-%m-%d")
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         raw   = fetch_schedule(date_str)
         games = [g for g in [parse_game(x) for x in raw] if g]
         return jsonify({"success":True,"games":games,"count":len(games)})
@@ -498,7 +549,7 @@ def api_game_detail(game_pk):
 @app.route("/api/pitchers/<int:game_pk>")
 def api_pitchers(game_pk):
     try:
-        raw = fetch_schedule(datetime.now(ET).strftime("%Y-%m-%d"))
+        raw = fetch_schedule(datetime.now(timezone.utc).strftime("%Y-%m-%d"))
         for g in raw:
             if g.get("gamePk") == game_pk:
                 ap = g.get("teams",{}).get("away",{}).get("probablePitcher",{})
@@ -537,7 +588,7 @@ def e500(e): return jsonify({"error":str(e)}), 500
 @app.route("/api/game-projection/<int:game_pk>")
 def api_game_projection(game_pk):
     try:
-        raw = fetch_schedule(datetime.now(ET).strftime("%Y-%m-%d"))
+        raw = fetch_schedule(datetime.now(timezone.utc).strftime("%Y-%m-%d"))
         gdata = next((g for g in raw if g.get("gamePk") == game_pk), None)
         if not gdata:
             return jsonify({"success": False, "error": "Game not found"})
@@ -1279,7 +1330,7 @@ def _summarize_pitcher(lines):
 @app.route('/api/simulate/<int:game_pk>')
 def api_simulate(game_pk):
     try:
-        raw = fetch_schedule(datetime.now(ET).strftime('%Y-%m-%d'))
+        raw = fetch_schedule(datetime.now(timezone.utc).strftime('%Y-%m-%d'))
         g = next((x for x in raw if x.get('gamePk') == game_pk), None)
         if not g:
             return jsonify({'success': False, 'error': 'Game not found'}), 404
@@ -1534,7 +1585,7 @@ def _parse_prop_markets(bookmakers, valid_names):
 @app.route('/api/market/<int:game_pk>')
 def api_market(game_pk):
     try:
-        raw = fetch_schedule(datetime.now(ET).strftime('%Y-%m-%d'))
+        raw = fetch_schedule(datetime.now(timezone.utc).strftime('%Y-%m-%d'))
         g = next((x for x in raw if x.get('gamePk') == game_pk), None)
         if not g:
             return jsonify({'success': False, 'error': 'Game not found'}), 404
@@ -1873,6 +1924,22 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None):
     return rows[:keep]
 
 
+def _tracker_summary(entries):
+    total = len(entries)
+    graded = [x for x in entries if x.get('grade') in ('win', 'loss', 'push')]
+    wins = sum(1 for x in graded if x.get('grade') == 'win')
+    losses = sum(1 for x in graded if x.get('grade') == 'loss')
+    pushes = sum(1 for x in graded if x.get('grade') == 'push')
+    hit_rate = round(wins / max(1, wins + losses), 3) if graded else 0.0
+    by_market = {}
+    for x in entries:
+        mk = x.get('marketKey')
+        by_market.setdefault(mk, {'picks': 0, 'wins': 0, 'losses': 0, 'pushes': 0})
+        by_market[mk]['picks'] += 1
+        if x.get('grade') == 'win': by_market[mk]['wins'] += 1
+        elif x.get('grade') == 'loss': by_market[mk]['losses'] += 1
+        elif x.get('grade') == 'push': by_market[mk]['pushes'] += 1
+    return {'picks': total, 'graded': len(graded), 'wins': wins, 'losses': losses, 'pushes': pushes, 'hit_rate': hit_rate, 'by_market': by_market}
 
 
 @app.route('/tracker')
@@ -2134,6 +2201,26 @@ def _profit_units_from_american(price):
     return None
 
 
+def _recalc_tracker_entry(row):
+    if row.get('openingPrice') is None and row.get('marketPrice') is not None:
+        row['openingPrice'] = row.get('marketPrice')
+    row['openingImplied'] = _american_to_implied(row.get('openingPrice'))
+    if row.get('closingPrice') is not None:
+        row['closingImplied'] = _american_to_implied(row.get('closingPrice'))
+    if row.get('openingImplied') is not None and row.get('closingImplied') is not None:
+        row['clvEdge'] = round(float(row['closingImplied']) - float(row['openingImplied']), 4)
+    else:
+        row['clvEdge'] = None
+    if row.get('grade') in ('win', 'loss', 'push'):
+        if row.get('grade') == 'win':
+            row['profitUnits'] = _profit_units_from_american(row.get('openingPrice'))
+        elif row.get('grade') == 'loss':
+            row['profitUnits'] = -1.0
+        else:
+            row['profitUnits'] = 0.0
+    else:
+        row['profitUnits'] = None
+    return row
 
 
 def _recalc_tracker_entries(entries):
@@ -2142,10 +2229,59 @@ def _recalc_tracker_entries(entries):
     return entries or []
 
 
+def _daily_value_series(end_date_str, window_days, market_key=None):
+    store = _tracker_store()
+    dates = list(reversed(_dates_in_window(end_date_str, window_days)))
+    series = []
+    for ds in dates:
+        rows = list((store.get(ds) or {}).get('entries', []) or [])
+        if market_key:
+            rows = [r for r in rows if r.get('marketKey') == market_key]
+        graded = [r for r in rows if r.get('grade') in ('win', 'loss', 'push')]
+        staked = len(graded)
+        units = round(sum(float(r.get('profitUnits') or 0) for r in graded if r.get('profitUnits') is not None), 4)
+        roi = round(units / max(1, staked), 4) if graded else None
+        clv = [float(r.get('clvEdge')) for r in graded if r.get('clvEdge') is not None]
+        avg_clv = round(sum(clv) / max(1, len(clv)), 4) if clv else None
+        clv_pos = round(sum(1 for x in clv if x > 0) / max(1, len(clv)), 4) if clv else None
+        series.append({'date': ds, 'staked': staked, 'units': units, 'roi': roi, 'avg_clv': avg_clv, 'clv_pos_rate': clv_pos})
+    return series
 
 
+def _value_summary(entries):
+    graded = [r for r in entries if r.get('grade') in ('win', 'loss', 'push')]
+    units = round(sum(float(r.get('profitUnits') or 0) for r in graded if r.get('profitUnits') is not None), 4)
+    roi = round(units / max(1, len(graded)), 4) if graded else 0.0
+    clv = [float(r.get('clvEdge')) for r in graded if r.get('clvEdge') is not None]
+    avg_clv = round(sum(clv) / max(1, len(clv)), 4) if clv else 0.0
+    clv_pos = round(sum(1 for x in clv if x > 0) / max(1, len(clv)), 4) if clv else 0.0
+    return {'units': units, 'roi': roi, 'avg_clv': avg_clv, 'clv_positive_rate': clv_pos, 'graded_with_clv': len(clv)}
 
 
+def _tracker_summary(entries):
+    total = len(entries)
+    graded = [x for x in entries if x.get('grade') in ('win', 'loss', 'push')]
+    wins = sum(1 for x in graded if x.get('grade') == 'win')
+    losses = sum(1 for x in graded if x.get('grade') == 'loss')
+    pushes = sum(1 for x in graded if x.get('grade') == 'push')
+    hit_rate = round(wins / max(1, wins + losses), 3) if graded else 0.0
+    by_market = {}
+    for x in entries:
+        mk = x.get('marketKey')
+        by_market.setdefault(mk, {'picks': 0, 'wins': 0, 'losses': 0, 'pushes': 0, 'units': 0.0})
+        by_market[mk]['picks'] += 1
+        if x.get('grade') == 'win':
+            by_market[mk]['wins'] += 1
+        elif x.get('grade') == 'loss':
+            by_market[mk]['losses'] += 1
+        elif x.get('grade') == 'push':
+            by_market[mk]['pushes'] += 1
+        if x.get('profitUnits') is not None:
+            by_market[mk]['units'] = round(by_market[mk]['units'] + float(x.get('profitUnits') or 0), 4)
+    return {
+        'picks': total, 'graded': len(graded), 'wins': wins, 'losses': losses, 'pushes': pushes,
+        'hit_rate': hit_rate, 'by_market': by_market, 'value': _value_summary(entries)
+    }
 
 
 @app.route('/api/tracker/close/<date_str>', methods=['POST'])
@@ -2971,6 +3107,386 @@ def api_lineup(game_pk):
     except Exception as ex:
         return jsonify({'success': False, 'gamePk': game_pk, 'away': [], 'home': [], 'awayConfirmed': False, 'homeConfirmed': False, 'error': str(ex)})
 
+
+
+
+
+# ── Matchup Auto-Signals (weather + pitching + park) ─────────────────────────
+@app.route('/api/matchup-auto-signals/<int:game_pk>')
+def api_matchup_auto_signals(game_pk):
+    try:
+        # ── Pull game data ────────────────────────────────────────────────────
+        today = datetime.now(ET).strftime('%Y-%m-%d')
+        raw_games = _fetch_games_for_date(today)
+        gd = next((g for g in raw_games if g.get('gamePk') == game_pk), None)
+        if not gd:
+            return jsonify({'success': False, 'error': 'Game not found'}), 404
+
+        ven      = gd.get('venue', {})
+        venue_id = ven.get('id')
+        is_dome  = venue_id in DOME_VENUES
+        pf       = float(PARK_FACTORS.get(gd.get('teams', {}).get('home', {})
+                         .get('team', {}).get('id', 0), 1.0))
+
+        # ── Weather ───────────────────────────────────────────────────────────
+        lat = ven.get('location', {}).get('defaultCoordinates', {}).get('latitude')
+        lon = ven.get('location', {}).get('defaultCoordinates', {}).get('longitude')
+        from dateutil import parser as dtparser
+        try:
+            game_dt   = dtparser.parse(gd.get('gameDate', ''))
+            game_hour = game_dt.astimezone(ET).hour
+        except Exception:
+            game_hour = 19
+        wx = get_weather(lat, lon, game_hour, venue_id=venue_id)
+
+        # ── Pitcher stats ─────────────────────────────────────────────────────
+        pd_data = _fetch_probable_pitchers(game_pk)
+        ap = pd_data.get('awayPitcher') or {}
+        hp = pd_data.get('homePitcher') or {}
+
+        def _stat(p, *keys):
+            for k in keys:
+                v = (p.get('stats') or {}).get(k) or p.get(k)
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    pass
+            return None
+
+        def _avg(*vals):
+            clean = [v for v in vals if v is not None]
+            return sum(clean) / len(clean) if clean else None
+
+        fip_a = _stat(ap, 'fg_fip', 'era', 'fg_era')
+        fip_h = _stat(hp, 'fg_fip', 'era', 'fg_era')
+        k9_a  = _stat(ap, 'fg_k9', 'k9')
+        k9_h  = _stat(hp, 'fg_k9', 'k9')
+        era_a = _stat(ap, 'sv_xera', 'fg_era', 'era')
+        era_h = _stat(hp, 'sv_xera', 'fg_era', 'era')
+
+        avg_fip = _avg(fip_a, fip_h)
+        avg_k9  = _avg(k9_a,  k9_h)
+        avg_era = _avg(era_a, era_h)
+
+        # ── Build adjustments ─────────────────────────────────────────────────
+        sliders = dict(batter_hits=0, batter_total_bases=0,
+                       batter_home_runs=0, batter_rbis=0, pitcher_strikeouts=0)
+        signals = {}
+        reasons = []
+
+        if is_dome:
+            reasons.append('Retractable/dome venue — weather neutralized, base model used')
+        else:
+            # Temperature
+            temp = wx.get('temp')
+            try:
+                t = float(temp)
+                if t < 45:
+                    sliders['batter_hits']       -= 10
+                    sliders['batter_total_bases'] -= 10
+                    sliders['batter_home_runs']   -= 14
+                    sliders['batter_rbis']        -= 8
+                    reasons.append(f'Very cold ({t:.0f}°F) — ball dies, HR/TB suppressed')
+                    signals['weather_risk'] = True
+                elif t < 55:
+                    sliders['batter_hits']       -= 6
+                    sliders['batter_total_bases'] -= 6
+                    sliders['batter_home_runs']   -= 10
+                    reasons.append(f'Cold weather ({t:.0f}°F) — mild offense suppression')
+                    signals['weather_risk'] = True
+                elif t > 88:
+                    sliders['batter_hits']       += 6
+                    sliders['batter_total_bases'] += 6
+                    sliders['batter_home_runs']   += 10
+                    reasons.append(f'Hot & humid ({t:.0f}°F) — ball carries, favor offense')
+                elif t > 78:
+                    sliders['batter_hits']       += 3
+                    sliders['batter_total_bases'] += 3
+                    sliders['batter_home_runs']   += 5
+                    reasons.append(f'Warm weather ({t:.0f}°F) — slight offensive boost')
+            except (TypeError, ValueError):
+                pass
+
+            # Rain
+            rain = wx.get('rain_chance')
+            try:
+                r = float(rain)
+                if r >= 60:
+                    sliders['batter_hits']       -= 10
+                    sliders['batter_total_bases'] -= 9
+                    sliders['pitcher_strikeouts'] -= 8
+                    reasons.append(f'High rain chance ({r:.0f}%) — game pace & grip impacted')
+                    signals['weather_risk'] = True
+                elif r >= 35:
+                    sliders['batter_hits']       -= 6
+                    sliders['batter_total_bases'] -= 5
+                    reasons.append(f'Rain chance ({r:.0f}%) — potential disruption')
+                    signals['weather_risk'] = True
+            except (TypeError, ValueError):
+                pass
+
+            # Wind
+            wind_str = wx.get('wind_speed', '')
+            try:
+                wspd = float(str(wind_str).split()[0])
+                if wspd >= 18:
+                    sliders['batter_home_runs']   += 8
+                    sliders['batter_total_bases'] += 5
+                    reasons.append(f'High wind ({wspd:.0f} mph) — ball movement increases variance')
+                elif wspd >= 12:
+                    sliders['batter_home_runs']   += 4
+                    reasons.append(f'Moderate wind ({wspd:.0f} mph) — minor HR variance')
+            except (TypeError, ValueError, IndexError):
+                pass
+
+        # Park factor
+        if pf >= 1.09:
+            sliders['batter_home_runs']   += 12
+            sliders['batter_total_bases'] += 8
+            sliders['batter_hits']        += 4
+            reasons.append(f'Hitter-friendly park (factor {pf:.2f}) — favor HR/TB overs')
+            signals['park_factor_up'] = True
+        elif pf >= 1.05:
+            sliders['batter_home_runs']   += 7
+            sliders['batter_total_bases'] += 4
+            reasons.append(f'Slightly hitter-friendly park (factor {pf:.2f})')
+            signals['park_factor_up'] = True
+        elif pf <= 0.91:
+            sliders['batter_home_runs']   -= 10
+            sliders['batter_total_bases'] -= 6
+            sliders['batter_hits']        -= 4
+            reasons.append(f'Pitcher-friendly park (factor {pf:.2f}) — fade power props')
+        elif pf <= 0.95:
+            sliders['batter_home_runs']   -= 6
+            sliders['batter_total_bases'] -= 3
+            reasons.append(f'Slightly pitcher-friendly park (factor {pf:.2f})')
+
+        # Pitching matchup — FIP
+        if avg_fip is not None:
+            if avg_fip < 3.30:
+                sliders['batter_hits']       -= 12
+                sliders['batter_total_bases'] -= 10
+                sliders['batter_home_runs']   -= 10
+                sliders['batter_rbis']        -= 10
+                reasons.append(f'Elite pitching matchup (avg FIP {avg_fip:.2f}) — fade batting overs')
+            elif avg_fip < 3.80:
+                sliders['batter_hits']       -= 7
+                sliders['batter_total_bases'] -= 6
+                sliders['batter_home_runs']   -= 7
+                reasons.append(f'Strong pitching matchup (avg FIP {avg_fip:.2f}) — modest batting fade')
+            elif avg_fip > 5.20:
+                sliders['batter_hits']       += 12
+                sliders['batter_total_bases'] += 10
+                sliders['batter_rbis']        += 8
+                reasons.append(f'Weak pitching matchup (avg FIP {avg_fip:.2f}) — favor batting overs')
+                signals['hot_offense'] = True
+            elif avg_fip > 4.60:
+                sliders['batter_hits']       += 7
+                sliders['batter_total_bases'] += 5
+                reasons.append(f'Below-avg pitching (avg FIP {avg_fip:.2f}) — slight batting lift')
+
+        # Pitching matchup — K/9
+        if avg_k9 is not None:
+            if avg_k9 >= 10.0:
+                sliders['pitcher_strikeouts'] += 15
+                reasons.append(f'High-K starters (avg K/9 {avg_k9:.1f}) — back strikeout overs')
+                signals['elevated_k_zone'] = True
+            elif avg_k9 >= 8.8:
+                sliders['pitcher_strikeouts'] += 8
+                reasons.append(f'Above-avg K/9 ({avg_k9:.1f}) — mild strikeout boost')
+            elif avg_k9 < 6.5:
+                sliders['pitcher_strikeouts'] -= 12
+                reasons.append(f'Low-K starters (avg K/9 {avg_k9:.1f}) — fade strikeout overs')
+            elif avg_k9 < 7.5:
+                sliders['pitcher_strikeouts'] -= 6
+                reasons.append(f'Below-avg K/9 ({avg_k9:.1f}) — modest K fade')
+
+        # Mismatch detection (one SP elite, other poor)
+        if fip_a is not None and fip_h is not None:
+            diff = abs(fip_a - fip_h)
+            if diff >= 1.5:
+                reasons.append(f'Large SP FIP gap ({fip_a:.2f} vs {fip_h:.2f}) — SP mismatch in play')
+                signals['pitcher_mismatch'] = True
+
+        # Convert delta to multipliers and clamp
+        final = {}
+        for k, delta in sliders.items():
+            final[k] = round(max(0.60, min(1.40, 1.0 + delta / 100.0)), 4)
+
+        # Confidence from overall picture
+        pos_signals = sum(1 for d in sliders.values() if d > 6)
+        neg_signals = sum(1 for d in sliders.values() if d < -6)
+        confidence = 3
+        if pos_signals >= 3:    confidence = 4
+        if pos_signals >= 4:    confidence = 5
+        if neg_signals >= 3:    confidence = 2
+        if neg_signals >= 4:    confidence = 1
+        if not reasons:
+            confidence = 3
+            reasons.append('Neutral matchup — no significant adjustments needed')
+
+        return jsonify({
+            'success':    True,
+            'gamePk':     game_pk,
+            'sliders':    final,
+            'signals':    signals,
+            'reasons':    reasons,
+            'confidence': confidence,
+            'isDome':     is_dome,
+            'meta': {
+                'temp':    wx.get('temp'),
+                'wind':    wx.get('wind_speed'),
+                'rain':    wx.get('rain_chance'),
+                'parkFactor': pf,
+                'avgFip':  avg_fip,
+                'avgK9':   avg_k9,
+            }
+        })
+    except Exception as ex:
+        print('[api_matchup_auto_signals]', __import__('traceback').format_exc())
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+# ── Matchup Review ────────────────────────────────────────────────────────────
+def _load_reviews():
+    return _load_json(REVIEW_STORE, {})
+
+def _save_reviews(data):
+    _save_json(REVIEW_STORE, data)
+
+def _review_key(game_pk):
+    return f"{datetime.now(ET).strftime('%Y-%m-%d')}:{game_pk}"
+
+@app.route('/api/matchup-review/<int:game_pk>', methods=['GET'])
+def api_get_matchup_review(game_pk):
+    try:
+        reviews = _load_reviews()
+        key = _review_key(game_pk)
+        rev = reviews.get(key) or {}
+        return jsonify({'success': True, 'gamePk': game_pk, 'key': key, 'review': rev})
+    except Exception as ex:
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+@app.route('/api/matchup-review/<int:game_pk>', methods=['POST'])
+def api_save_matchup_review(game_pk):
+    try:
+        payload = request.get_json(force=True) or {}
+        reviews = _load_reviews()
+        key = _review_key(game_pk)
+        existing = reviews.get(key) or {}
+        existing.update({
+            'gamePk':   game_pk,
+            'date':     datetime.now(ET).strftime('%Y-%m-%d'),
+            'savedAt':  datetime.now().isoformat(),
+            'signals':          payload.get('signals', {}),
+            'marketOverrides':  payload.get('marketOverrides', {}),
+            'confidence':       payload.get('confidence', 3),
+            'notes':            payload.get('notes', ''),
+            'sendToTracker':    payload.get('sendToTracker', False),
+        })
+        reviews[key] = existing
+
+        # Optionally propagate market overrides into the global tracker adjustments
+        if payload.get('sendToTracker') and payload.get('marketOverrides'):
+            adj = _get_adjustments()
+            for mk, mult in payload['marketOverrides'].items():
+                if mk in adj['market_multipliers']:
+                    cur  = float(adj['market_multipliers'][mk])
+                    new_m = round(min(2.0, max(0.40, cur * float(mult))), 4)
+                    adj['market_multipliers'][mk] = new_m
+            _save_json(ADJUST_STORE, adj)
+            _append_calibration_history('matchup_review', adj,
+                {'note': f'Matchup review game {game_pk}', 'date': existing['date']})
+
+        _save_reviews(reviews)
+        return jsonify({'success': True, 'key': key, 'review': existing})
+    except Exception as ex:
+        print('[api_save_matchup_review]', traceback.format_exc())
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+@app.route('/api/matchup-review/history')
+def api_review_history():
+    try:
+        reviews = _load_reviews()
+        out = sorted(reviews.values(), key=lambda r: r.get('savedAt',''), reverse=True)
+        return jsonify({'success': True, 'reviews': out[:120]})
+    except Exception as ex:
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+@app.route('/api/game/livedata/<int:game_pk>')
+def api_game_livedata(game_pk):
+    try:
+        r = requests.get(f"https://statsapi.mlb.com/api/v1.1/game/{game_pk}/feed/live", timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        linescore = data.get('liveData', {}).get('linescore', {})
+        box = data.get('liveData', {}).get('boxscore', {})
+        game_data = data.get('gameData', {})
+        status_detail = game_data.get('status', {}).get('detailedState', '')
+        inning_num = linescore.get('currentInning', 0)
+        inning_half = linescore.get('inningHalf', 'Top')
+        if any(x in status_detail for x in ['Middle', 'Mid ', 'Between']):
+            inning_label = f'MID {inning_num}'
+        elif inning_half == 'Bottom':
+            inning_label = f'BOT {inning_num}'
+        else:
+            inning_label = f'TOP {inning_num}'
+        home = linescore.get('teams', {}).get('home', {})
+        away = linescore.get('teams', {}).get('away', {})
+        offense = linescore.get('offense', {})
+        defense = linescore.get('defense', {})
+        bases = {
+            'first':  bool(offense.get('first')),
+            'second': bool(offense.get('second')),
+            'third':  bool(offense.get('third')),
+        }
+        batter  = offense.get('batter')  or {}
+        on_deck = offense.get('onDeck')  or {}
+        in_hole = offense.get('inHole')  or {}
+        pitcher = defense.get('pitcher') or {}
+        batter_id  = batter.get('id')
+        pitcher_id = pitcher.get('id')
+        pitcher_ip = pitcher_er = '—'
+        batter_ab = batter_h = 0
+        batter_ops = '—'
+        for side in ('home', 'away'):
+            players = box.get('teams', {}).get(side, {}).get('players', {})
+            if pitcher_id:
+                ps  = players.get(f'ID{pitcher_id}', {})
+                pst = ps.get('stats', {}).get('pitching', {})
+                if pst:
+                    pitcher_ip = pst.get('inningsPitched', '—')
+                    pitcher_er = pst.get('earnedRuns', '—')
+            if batter_id:
+                bs  = players.get(f'ID{batter_id}', {})
+                bst = bs.get('stats', {}).get('batting', {})
+                bss = bs.get('seasonStats', {}).get('batting', {})
+                if bst:
+                    batter_ab = bst.get('atBats', 0)
+                    batter_h  = bst.get('hits', 0)
+                if bss:
+                    batter_ops = bss.get('ops', '—')
+        return jsonify({
+            'success': True,
+            'gamePk': game_pk,
+            'statusDetail': status_detail,
+            'inningLabel': inning_label,
+            'balls':   linescore.get('balls',   0),
+            'strikes': linescore.get('strikes', 0),
+            'outs':    linescore.get('outs',    0),
+            'awayRuns':   away.get('runs',   0),
+            'awayHits':   away.get('hits',   0),
+            'awayErrors': away.get('errors', 0),
+            'homeRuns':   home.get('runs',   0),
+            'homeHits':   home.get('hits',   0),
+            'homeErrors': home.get('errors', 0),
+            'bases': bases,
+            'pitcher': {'name': pitcher.get('fullName',''), 'ip': pitcher_ip, 'er': pitcher_er},
+            'batter':  {'name': batter.get('fullName',''),  'ab': batter_ab,  'h': batter_h, 'ops': batter_ops},
+            'dueUp': [on_deck.get('fullName',''), in_hole.get('fullName','')],
+        })
+    except Exception as ex:
+        print('[api_game_livedata]', traceback.format_exc())
+        return jsonify({'success': False, 'error': str(ex)}), 500
 
 # Boot background loaders
 threading.Thread(target=_load_fg_data,      daemon=True).start()
