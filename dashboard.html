@@ -242,7 +242,7 @@ function loadMC(){
 }
 
 function load(){
-  fetch('/api/games/today').then(function(r){return r.json();}).then(function(d){
+  fetch('/api/games/today').then(function(r){if(!r.ok)throw new Error('Server error '+r.status+' – check Render logs');return r.json();}).then(function(d){
     if(!d.success)throw new Error(d.error||'API error');
     var gs=d.games;
     document.getElementById('sg').textContent=gs.length||'0';
@@ -253,9 +253,9 @@ function load(){
     if(!gs.length){document.getElementById('gc').innerHTML='<div class="ng"><h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px">NO GAMES TODAY</h3></div>';return;}
     document.getElementById('gc').innerHTML='<div class="grid">'+gs.map(mkCard).join('')+'</div>';
     setTimeout(function(){document.querySelectorAll('.fill').forEach(function(e){e.style.width=e.getAttribute('data-w');});},150);
-    gs.forEach(function(g){ fetch('/api/lineup/'+g.gamePk).then(function(r){return r.json();}).then(function(d){ LINEUPS[g.gamePk]=d; var el=document.getElementById('lu-'+g.gamePk); if(el) renderLineup(g.gamePk, d); }); });
+    gs.forEach(function(g){ fetch('/api/lineup/'+g.gamePk).then(function(r){if(!r.ok)throw new Error('lineup '+r.status);return r.json();}).then(function(d){ LINEUPS[g.gamePk]=d; var el=document.getElementById('lu-'+g.gamePk); if(el) renderLineup(g.gamePk, d); }); });
   }).catch(function(e){
-    document.getElementById('gc').innerHTML='<div class="sw"><div style="background:rgba(224,64,251,.08);border:1px solid rgba(224,64,251,.3);border-radius:12px;padding:24px 32px;text-align:center"><h3 style="color:var(--m);font-family:Orbitron;margin-bottom:8px">CONNECTION ERROR</h3><p style="color:var(--mu);font-size:.82rem">'+e.message+'</p></div></div>';
+    document.getElementById('gc').innerHTML='<div class="sw"><div style="background:rgba(224,64,251,.08);border:1px solid rgba(224,64,251,.3);border-radius:12px;padding:24px 32px;text-align:center"><h3 style="color:var(--m);font-family:Orbitron;margin-bottom:8px">CONNECTION ERROR</h3><p style="color:var(--mu);font-size:.82rem">'+e.message+'</p><p style="color:var(--mu);font-size:.72rem;margin-top:6px">Try refreshing. If this persists check Render service logs.</p></div></div>';
   });
 }
 load();loadTeams();loadMC();setInterval(load,60000);
