@@ -3122,6 +3122,188 @@ def api_lineup(game_pk):
 
 
 # ── Matchup Auto-Signals (weather + pitching + park) ─────────────────────────
+# -- Matchup Auto-Signals -------------------------------------------------------
+@app.route('/api/matchup-auto-signals/<int:game_pk>')
+def api_matchup_auto_signals(game_pk):
+    try:
+        today = datetime.now(ET).strftime('%Y-%m-%d')
+        raw_games = fetch_schedule(today)
+        gd = next((g for g in raw_games if g.get('gamePk') == game_pk), None)
+        if not gd:
+            return jsonify({'success': False, 'error': 'Game not found'}), 404
+
+        teams   = gd.get('teams', {})
+        home_id = teams.get('home', {}).get('team', {}).get('id', 0)
+        is_dome = home_id in DOME_VENUES
+        pf      = float(PARK_FACTORS.get(home_id, 1.0))
+
+        ven      = gd.get('venue', {})
+        lat      = ven.get('location', {}).get('defaultCoordinates', {}).get('latitude')
+        lon      = ven.get('location', {}).get('defaultCoordinates', {}).get('longitude')
+        try:
+            gt = gd.get('gameDate', '')
+            dt_utc = datetime.fromisoformat(gt.replace('Z', '+00:00'))
+            game_hour = dt_utc.astimezone(ET).hour
+        except Exception:
+            game_hour = 19
+        wx = get_weather(lat, lon, game_hour, venue_id=ven.get('id'))
+
+        def _sp_stats(side):
+            try:
+                prob = teams.get(side, {}).get('probablePitcher', {})
+                name = prob.get('fullName', '')
+                if not name:
+                    return {}
+                s = {}
+                s.update(fg_pitcher(name) or {})
+                for k, v in (sv_pitcher(name) or {}).items():
+                    if k not in ('sv_arsenal_pct', 'sv_arsenal_velo'):
+                        s[k] = v
+                return s
+            except Exception:
+                return {}
+
+        ap = _sp_stats('away')
+        hp = _sp_stats('home')
+
+        def _f(st, *keys):
+            for k in keys:
+                try:   return float(st.get(k))
+                except (TypeError, ValueError): pass
+            return None
+
+        def _avg(*vals):
+            c = [v for v in vals if v is not None]
+            return sum(c) / len(c) if c else None
+
+        fip_a   = _f(ap, 'fg_fip', 'fg_era')
+        fip_h   = _f(hp, 'fg_fip', 'fg_era')
+        k9_a    = _f(ap, 'fg_k9', 'k9')
+        k9_h    = _f(hp, 'fg_k9', 'k9')
+        avg_fip = _avg(fip_a, fip_h)
+        avg_k9  = _avg(k9_a, k9_h)
+
+        deltas  = dict(batter_hits=0, batter_total_bases=0,
+                       batter_home_runs=0, batter_rbis=0, pitcher_strikeouts=0)
+        signals = {}
+        reasons = []
+
+        if is_dome:
+            reasons.append('Dome/retractable venue -- weather neutralised')
+        else:
+            try:
+                t = float(wx.get('temp'))
+                if t < 45:
+                    deltas['batter_hits'] -= 10; deltas['batter_home_runs'] -= 14
+                    reasons.append('Very cold ({}F) -- ball dies, HR suppressed'.format(int(t)))
+                    signals['weather_risk'] = True
+                elif t < 55:
+                    deltas['batter_hits'] -= 6; deltas['batter_home_runs'] -= 10
+                    reasons.append('Cold ({}F) -- mild offense suppression'.format(int(t)))
+                    signals['weather_risk'] = True
+                elif t > 88:
+                    deltas['batter_hits'] += 6; deltas['batter_home_runs'] += 10
+                    reasons.append('Hot ({}F) -- ball carries'.format(int(t)))
+                elif t > 78:
+                    deltas['batter_hits'] += 3; deltas['batter_home_runs'] += 5
+                    reasons.append('Warm ({}F) -- slight offensive boost'.format(int(t)))
+            except (TypeError, ValueError):
+                pass
+            try:
+                r = float(wx.get('rain_chance'))
+                if r >= 60:
+                    deltas['batter_hits'] -= 10
+                    reasons.append('High rain ({}%) -- disruption risk'.format(int(r)))
+                    signals['weather_risk'] = True
+                elif r >= 35:
+                    deltas['batter_hits'] -= 6
+                    reasons.append('Rain chance ({}%) -- potential disruption'.format(int(r)))
+                    signals['weather_risk'] = True
+            except (TypeError, ValueError):
+                pass
+            try:
+                wspd = float(str(wx.get('wind_speed', '')).split()[0])
+                if wspd >= 18:
+                    deltas['batter_home_runs'] += 8
+                    reasons.append('High wind ({} mph)'.format(int(wspd)))
+                elif wspd >= 12:
+                    deltas['batter_home_runs'] += 4
+                    reasons.append('Moderate wind ({} mph)'.format(int(wspd)))
+            except (TypeError, ValueError, IndexError):
+                pass
+
+        if pf >= 1.09:
+            deltas['batter_home_runs'] += 12; deltas['batter_total_bases'] += 8
+            reasons.append('Hitter-friendly park (PF {:.2f})'.format(pf))
+            signals['park_factor_up'] = True
+        elif pf >= 1.05:
+            deltas['batter_home_runs'] += 7; deltas['batter_total_bases'] += 4
+            reasons.append('Slightly hitter-friendly (PF {:.2f})'.format(pf))
+            signals['park_factor_up'] = True
+        elif pf <= 0.91:
+            deltas['batter_home_runs'] -= 10; deltas['batter_total_bases'] -= 6
+            reasons.append('Pitcher-friendly park (PF {:.2f})'.format(pf))
+        elif pf <= 0.95:
+            deltas['batter_home_runs'] -= 6; deltas['batter_total_bases'] -= 3
+            reasons.append('Slightly pitcher-friendly (PF {:.2f})'.format(pf))
+
+        if avg_fip is not None:
+            if avg_fip < 3.30:
+                deltas['batter_hits'] -= 12; deltas['batter_home_runs'] -= 10
+                reasons.append('Elite pitching matchup (FIP {:.2f})'.format(avg_fip))
+            elif avg_fip < 3.80:
+                deltas['batter_hits'] -= 7; deltas['batter_home_runs'] -= 7
+                reasons.append('Strong pitching (FIP {:.2f})'.format(avg_fip))
+            elif avg_fip > 5.20:
+                deltas['batter_hits'] += 12; deltas['batter_rbis'] += 8
+                reasons.append('Weak pitching (FIP {:.2f}) -- favour batting overs'.format(avg_fip))
+                signals['hot_offense'] = True
+            elif avg_fip > 4.60:
+                deltas['batter_hits'] += 7
+                reasons.append('Below-avg pitching (FIP {:.2f})'.format(avg_fip))
+
+        if avg_k9 is not None:
+            if avg_k9 >= 10.0:
+                deltas['pitcher_strikeouts'] += 15
+                reasons.append('High-K starters (K/9 {:.1f})'.format(avg_k9))
+                signals['elevated_k_zone'] = True
+            elif avg_k9 >= 8.8:
+                deltas['pitcher_strikeouts'] += 8
+                reasons.append('Above-avg K/9 ({:.1f})'.format(avg_k9))
+            elif avg_k9 < 6.5:
+                deltas['pitcher_strikeouts'] -= 12
+                reasons.append('Low-K starters (K/9 {:.1f})'.format(avg_k9))
+            elif avg_k9 < 7.5:
+                deltas['pitcher_strikeouts'] -= 6
+                reasons.append('Below-avg K/9 ({:.1f})'.format(avg_k9))
+
+        if fip_a and fip_h and abs(fip_a - fip_h) >= 1.5:
+            reasons.append('SP mismatch (FIP {:.2f} vs {:.2f})'.format(fip_a, fip_h))
+            signals['pitcher_mismatch'] = True
+
+        sliders = {k: round(max(0.60, min(1.40, 1.0 + v / 100.0)), 4)
+                   for k, v in deltas.items()}
+        pos  = sum(1 for v in deltas.values() if v > 6)
+        neg  = sum(1 for v in deltas.values() if v < -6)
+        conf = 3
+        if pos >= 4:   conf = 5
+        elif pos >= 3: conf = 4
+        elif neg >= 4: conf = 1
+        elif neg >= 3: conf = 2
+        if not reasons:
+            reasons.append('Neutral matchup -- no significant adjustments')
+
+        return jsonify({'success': True, 'gamePk': game_pk,
+                        'sliders': sliders, 'signals': signals, 'reasons': reasons,
+                        'confidence': conf, 'isDome': is_dome,
+                        'meta': {'temp': wx.get('temp'), 'wind': wx.get('wind_speed'),
+                                 'rain': wx.get('rain_chance'), 'parkFactor': pf,
+                                 'avgFip': avg_fip, 'avgK9': avg_k9}})
+    except Exception as ex:
+        print('[api_matchup_auto_signals]', __import__('traceback').format_exc())
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
 @app.route('/api/matchup-review/<int:game_pk>', methods=['GET'])
 def api_get_matchup_review(game_pk):
     try:
