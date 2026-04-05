@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
 MLB Analytics Hub — Flask Backend
-Full app.py with Eastern Time fix for UTC rollover bug.
+Full app.py with Eastern Time fix + all required API routes.
 """
-import os, re, traceback, requests
+import os, re, random, traceback, requests
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from flask import Flask, jsonify, send_from_directory, abort
+from flask import Flask, jsonify, request, send_from_directory, abort
 
 ET = ZoneInfo("America/New_York")
 
@@ -51,6 +51,17 @@ def safe_float(v, default=None):
 def fmt_stat(v, decimals=3):
     n = safe_float(v)
     return f"{n:.{decimals}f}" if n is not None else "N/A"
+
+def et_date_str():
+    """Always return today's date in Eastern Time."""
+    return datetime.now(ET).strftime("%Y-%m-%d")
+
+def resolve_date(req):
+    """Get date from query param or fall back to ET today."""
+    d = req.args.get("date", "").strip()
+    if d and re.match(r'^\d{4}-\d{2}-\d{2}$', d):
+        return d
+    return et_date_str()
 
 def fg_pitcher(name):
     try:
@@ -251,6 +262,10 @@ def index():
 def deepdive(game_pk):
     return send_from_directory(".", "deepdive.html")
 
+@app.route("/deep-dive/<int:game_pk>")
+def deep_dive_alt(game_pk):
+    return send_from_directory(".", "deepdive.html")
+
 @app.route("/parlays")
 def parlays():
     return send_from_directory(".", "parlays.html")
@@ -268,7 +283,7 @@ def static_files(filename):
 @app.route("/api/games/today")
 def api_games_today():
     try:
-        date_str = datetime.now(ET).strftime("%Y-%m-%d")
+        date_str = resolve_date(request)
         r = requests.get(f"{MLB_API}/schedule",
             params={"sportId": 1, "date": date_str,
                     "hydrate": "team,venue,probablePitcher,status,linescore",
@@ -287,6 +302,45 @@ def api_games_today():
         return jsonify({"success": False, "error": str(ex)}), 500
 
 # ── API: Game Lineup ─────────────────────────────────────────────────────────
+
+@app.route("/api/lineup/<int:game_pk>")
+def api_lineup(game_pk):
+    """Return confirmed or expected lineup for both teams."""
+    try:
+        r = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=10)
+        r.raise_for_status()
+        box = r.json()
+        teams = box.get("teams", {})
+
+        def parse_side(side_data):
+            batting_order = side_data.get("battingOrder", [])
+            players = side_data.get("players", {})
+            confirmed = len(batting_order) >= 8
+            lineup = []
+            for pid in batting_order[:9]:
+                key = f"ID{pid}"
+                p = players.get(key, {})
+                person = p.get("person", {})
+                pos = p.get("position", {}).get("abbreviation", "")
+                lineup.append({"id": person.get("id", 0), "name": person.get("fullName", "?"), "position": pos})
+            return lineup, confirmed
+
+        away_lineup, away_conf = parse_side(teams.get("away", {}))
+        home_lineup, home_conf = parse_side(teams.get("home", {}))
+
+        return jsonify({
+            "success": True,
+            "gamePk": game_pk,
+            "away": away_lineup,
+            "awayConfirmed": away_conf,
+            "home": home_lineup,
+            "homeConfirmed": home_conf,
+        })
+    except Exception as ex:
+        print("[api_lineup]", traceback.format_exc())
+        return jsonify({"success": False, "error": str(ex), "away": [], "home": [], "awayConfirmed": False, "homeConfirmed": False}), 500
+
+# ── API: Game boxscore (legacy route used by deepdive) ───────────────────────
 
 @app.route("/api/game/<int:game_pk>")
 def api_game(game_pk):
@@ -336,7 +390,7 @@ def api_game(game_pk):
 @app.route("/api/pitchers/<int:game_pk>")
 def api_pitchers(game_pk):
     try:
-        date_str = datetime.now(ET).strftime("%Y-%m-%d")
+        date_str = resolve_date(request)
         r = requests.get(f"{MLB_API}/schedule",
             params={"sportId": 1, "date": date_str,
                     "hydrate": "probablePitcher,team",
@@ -383,13 +437,166 @@ def api_pitchers(game_pk):
         print("[api_pitchers]", traceback.format_exc())
         return jsonify({"success": False, "error": str(ex)}), 500
 
-# ── API: Monte Carlo Projections ─────────────────────────────────────────────
+# ── API: Teams Overview ───────────────────────────────────────────────────────
+
+@app.route("/api/teams/overview")
+def api_teams_overview():
+    """Return all 30 MLB teams with basic roster summary."""
+    try:
+        r = requests.get(f"{MLB_API}/teams",
+            params={"sportId": 1, "activeStatus": "Active",
+                    "hydrate": "roster(rosterType=active,hydrate=person(stats(type=season,group=hitting)))"},
+            timeout=15)
+        r.raise_for_status()
+        raw_teams = r.json().get("teams", [])
+        raw_teams.sort(key=lambda t: t.get("abbreviation", ""))
+
+        teams_out = []
+        for t in raw_teams:
+            tid = t.get("id", 0)
+            abbr = t.get("abbreviation", "")
+            name = t.get("name", "")
+            roster = t.get("roster", [])
+            players_out = []
+            for entry in roster:
+                person = entry.get("person", {})
+                pos_obj = entry.get("position", {})
+                pos = pos_obj.get("abbreviation", "?")
+                pid = person.get("id", 0)
+                pname = person.get("fullName", "?")
+                stats_list = person.get("stats", [])
+                hitting = {}
+                for sg in stats_list:
+                    if sg.get("group", {}).get("displayName") == "hitting":
+                        splits = sg.get("splits", [])
+                        if splits:
+                            hitting = splits[0].get("stat", {})
+                        break
+                is_pitcher = pos in ("P", "SP", "RP", "CL", "TWP")
+                if is_pitcher:
+                    label1, value1 = "POS", pos
+                    label2, value2 = "#", entry.get("jerseyNumber", "--")
+                    label3, value3 = "HAND", person.get("pitchHand", {}).get("code", "?")
+                else:
+                    label1, value1 = "AVG", hitting.get("avg", "--")
+                    label2, value2 = "HR", hitting.get("homeRuns", "--")
+                    label3, value3 = "OPS", hitting.get("ops", "--")
+                players_out.append({
+                    "id": pid,
+                    "name": pname,
+                    "pos": pos,
+                    "image": f"https://img.mlbstatic.com/mlb-photos/image/upload/d_people:generic:headshot:67:current.png/w_120,q_auto:best/v1/people/{pid}/headshot/67/current",
+                    "label1": label1, "value1": value1,
+                    "label2": label2, "value2": value2,
+                    "label3": label3, "value3": value3,
+                })
+            teams_out.append({
+                "id": tid,
+                "abbr": abbr,
+                "name": name,
+                "logo": f"https://www.mlbstatic.com/team-logos/{tid}.svg",
+                "players": players_out,
+            })
+
+        return jsonify({"success": True, "teams": teams_out})
+    except Exception as ex:
+        print("[api_teams_overview]", traceback.format_exc())
+        return jsonify({"success": False, "error": str(ex)}), 500
+
+# ── API: Monte Carlo Projections Board ───────────────────────────────────────
+
+@app.route("/api/projections/monte-carlo")
+def api_projections_monte_carlo():
+    """Run Monte Carlo simulations for all of today's games."""
+    try:
+        date_str = resolve_date(request)
+        r = requests.get(f"{MLB_API}/schedule",
+            params={"sportId": 1, "date": date_str,
+                    "hydrate": "team,venue,probablePitcher"},
+            timeout=10)
+        r.raise_for_status()
+        dates = r.json().get("dates", [])
+        games_raw = dates[0].get("games", []) if dates else []
+
+        SIMS = 10000
+        all_props = []
+        games_out = []
+
+        for g in games_raw:
+            gid = g.get("gamePk")
+            teams = g.get("teams", {})
+            away_t = teams.get("away", {}).get("team", {})
+            home_t = teams.get("home", {}).get("team", {})
+            venue = g.get("venue", {}).get("name", "")
+            pf = PARK_FACTORS.get(venue, 1.00)
+            away_abbr = away_t.get("abbreviation", "AWAY")
+            home_abbr = home_t.get("abbreviation", "HOME")
+            matchup = f"{away_abbr} @ {home_abbr}"
+
+            away_wins = 0
+            total_runs_list = []
+            for _ in range(SIMS):
+                a_runs = sum(max(0, int(random.gauss(0.5 * pf, 0.8))) for _ in range(9))
+                h_runs = sum(max(0, int(random.gauss(0.5 * pf, 0.8))) for _ in range(9))
+                if a_runs > h_runs: away_wins += 1
+                total_runs_list.append(a_runs + h_runs)
+
+            home_wins = SIMS - away_wins
+            avg_total = sum(total_runs_list) / SIMS
+            over_7  = sum(1 for t in total_runs_list if t > 7.5) / SIMS * 100
+            over_8  = sum(1 for t in total_runs_list if t > 8.5) / SIMS * 100
+            over_9  = sum(1 for t in total_runs_list if t > 9.5) / SIMS * 100
+
+            # Build synthetic prop projections from simulation results
+            top_props = [
+                {"player": away_abbr + " Team", "market": "team_total",
+                 "line": round(avg_total / 2, 1), "bookmaker": "Model",
+                 "price": -110,
+                 "edge": round((away_wins / SIMS) - 0.5, 3),
+                 "prob": round(away_wins / SIMS, 3)},
+                {"player": home_abbr + " Team", "market": "team_total",
+                 "line": round(avg_total / 2, 1), "bookmaker": "Model",
+                 "price": -110,
+                 "edge": round((home_wins / SIMS) - 0.5, 3),
+                 "prob": round(home_wins / SIMS, 3)},
+                {"player": f"{away_abbr} @ {home_abbr}", "market": "game_total_over",
+                 "line": round(avg_total, 1), "bookmaker": "Model",
+                 "price": -110,
+                 "edge": round((over_8 / 100) - 0.5, 3),
+                 "prob": round(over_8 / 100, 3)},
+            ]
+
+            all_props.extend(top_props)
+            games_out.append({
+                "gamePk": gid,
+                "matchup": matchup,
+                "awayWinPct": round(away_wins / SIMS * 100, 1),
+                "homeWinPct": round(home_wins / SIMS * 100, 1),
+                "avgTotal": round(avg_total, 2),
+                "over7Pct": round(over_7, 1),
+                "over8Pct": round(over_8, 1),
+                "over9Pct": round(over_9, 1),
+                "topProps": top_props,
+            })
+
+        all_props.sort(key=lambda p: abs(float(p.get("edge", 0))), reverse=True)
+
+        return jsonify({
+            "success": True,
+            "date": date_str,
+            "games": games_out,
+            "topProps": all_props[:20],
+        })
+    except Exception as ex:
+        print("[api_projections_monte_carlo]", traceback.format_exc())
+        return jsonify({"success": False, "error": str(ex)}), 500
+
+# ── API: Single game Monte Carlo (deep dive) ──────────────────────────────────
 
 @app.route("/api/monte-carlo/<int:game_pk>")
 def api_monte_carlo(game_pk):
     try:
-        import random
-        date_str = datetime.now(ET).strftime("%Y-%m-%d")
+        date_str = resolve_date(request)
         r = requests.get(f"{MLB_API}/schedule",
             params={"sportId": 1, "date": date_str, "gamePk": game_pk,
                     "hydrate": "team,venue,probablePitcher"}, timeout=10)
@@ -408,10 +615,8 @@ def api_monte_carlo(game_pk):
         total_runs_list = []
 
         for _ in range(sims):
-            away_runs = 0; home_runs = 0
-            for inning in range(9):
-                away_runs += max(0, int(random.gauss(0.5 * pf, 0.8)))
-                home_runs += max(0, int(random.gauss(0.5 * pf, 0.8)))
+            away_runs = sum(max(0, int(random.gauss(0.5 * pf, 0.8))) for _ in range(9))
+            home_runs = sum(max(0, int(random.gauss(0.5 * pf, 0.8))) for _ in range(9))
             if away_runs > home_runs: away_wins += 1
             total_runs_list.append(away_runs + home_runs)
 
@@ -577,7 +782,9 @@ def api_player_profile(player_id):
 
 @app.route("/health")
 def health():
-    return jsonify({"status": "ok", "time_et": datetime.now(ET).strftime("%Y-%m-%d %H:%M:%S ET")})
+    return jsonify({"status": "ok",
+                    "time_et": datetime.now(ET).strftime("%Y-%m-%d %H:%M:%S ET"),
+                    "date_et": et_date_str()})
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
