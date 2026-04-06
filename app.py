@@ -782,7 +782,83 @@ def api_player_splits(player_id, group):
         print("[api_player_splits]", traceback.format_exc())
         return jsonify({"success":False,"error":str(ex),"platoon":{},"recentGames":[]}), 500
 
+@app.route("/api/batting-order-matchups/<int:game_pk>")
+def api_batting_order_matchups(game_pk):
+    """
+    PropFinder-style batting order matchups.
+    For each lineup slot: AVG, SLG, ISO, OPS, xwOBA, EV, Brl%, wRC+,
+    platoon split vs opp pitcher hand.  ISO >= .200 = HOT ZONE (green in UI).
+    """
+    _maybe_refresh_fg()
+    _maybe_refresh_savant()
+    try:
+        date_str = current_et_date_str()
+        raw = fetch_schedule(date_str)
+        g = next((x for x in raw if x.get("gamePk") == game_pk), None)
+        if not g:
+            return jsonify(success=False, error="Game not found"), 404
 
+        box = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=10).json().get("teams", {})
+        away_lineup = get_batters_from_boxscore(box.get("away", {}), "away")
+        home_lineup = get_batters_from_boxscore(box.get("home", {}), "home")
+
+        if not away_lineup or not home_lineup:
+            return jsonify(success=False, error="Lineups not posted yet"), 400
+
+        away_team = g.get("teams", {}).get("away", {}).get("team", {})
+        home_team = g.get("teams", {}).get("home", {}).get("team", {})
+
+        away_p = g.get("teams", {}).get("away", {}).get("probablePitcher", {})
+        home_p = g.get("teams", {}).get("home", {}).get("probablePitcher", {})
+
+        # Get pitcher hand from player_profile (cached)
+        away_pitch_hand = player_profile(away_p.get("id")).get("throws", "R") if away_p.get("id") else "R"
+        home_pitch_hand = player_profile(home_p.get("id")).get("throws", "R") if home_p.get("id") else "R"
+
+        def process_lineup(lineup, opp_hand):
+            result = []
+            for b in sorted(lineup, key=lambda x: x.get("slot", 99)):
+                # Use Savant xBA/xSLG as primary, fallback to MLB avg/slg
+                avg  = _num(b.get("sv_xba")  or b.get("avg"),  0.245)
+                slg  = _num(b.get("sv_xslg") or b.get("slg"),  0.400)
+                iso  = round(slg - avg, 3)
+                # Platoon split vs opp hand
+                split_avg = _num(b.get("vslavg") if opp_hand == "L" else b.get("vsravg"), 0)
+                split_ops = _num(b.get("vslops") if opp_hand == "L" else b.get("vsrops"), 0)
+                result.append({
+                    "slot":      b.get("slot", 0),
+                    "name":      b.get("name", ""),
+                    "pos":       b.get("pos",  ""),
+                    "bats":      b.get("bats", "S"),
+                    "avg":       b.get("avg",  "---"),
+                    "slg":       b.get("slg",  "---"),
+                    "ops":       b.get("ops",  "---"),
+                    "iso":       iso,
+                    "xwoba":     b.get("sv_xwoba",   "---"),
+                    "ev":        b.get("sv_ev",       "---"),
+                    "brl_pct":   b.get("sv_brl_pct",  "---"),
+                    "wrc":       b.get("fg_wrc",       "---"),
+                    "split_avg": split_avg if split_avg > 0 else "---",
+                    "split_ops": split_ops if split_ops > 0 else "---",
+                    "is_hot":    iso >= 0.200,
+                })
+            return result
+
+        return jsonify(
+            success=True,
+            awayAbbr=away_team.get("abbreviation", "AWAY"),
+            homeAbbr=home_team.get("abbreviation", "HOME"),
+            awayPitcherName=away_p.get("fullName", "TBD"),
+            homePitcherName=home_p.get("fullName", "TBD"),
+            awayPitcherHand=away_pitch_hand,   # hand of the away SP (faces HOME lineup)
+            homePitcherHand=home_pitch_hand,   # hand of the home SP (faces AWAY lineup)
+            awayBatters=process_lineup(away_lineup, home_pitch_hand),
+            homeBatters=process_lineup(home_lineup, away_pitch_hand),
+        )
+
+    except Exception as ex:
+        print("[api_batting_order_matchups]", traceback.format_exc())
+        return jsonify(success=False, error=str(ex)), 500
 
 
 
