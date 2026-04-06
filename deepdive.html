@@ -363,21 +363,26 @@ function loadLineups(){
 }
 
 function renderHeader(){
-  var g=GD;
+  var g=GD||{};
   var ai=g.awayLogo?'<img src="'+g.awayLogo+'" alt="'+g.awayAbbr+'" width="52" height="52" style="object-fit:contain">'
-    :'<span style="font-family:Orbitron;color:var(--c)">'+g.awayAbbr+'</span>';
+    :'<span style="font-family:Orbitron;color:var(--c)">'+(g.awayAbbr||'AWAY')+'</span>';
   var hi=g.homeLogo?'<img src="'+g.homeLogo+'" alt="'+g.homeAbbr+'" width="52" height="52" style="object-fit:contain">'
-    :'<span style="font-family:Orbitron;color:var(--c)">'+g.homeAbbr+'</span>';
+    :'<span style="font-family:Orbitron;color:var(--c)">'+(g.homeAbbr||'HOME')+'</span>';
   var sc=g.status==='Live'?'bg2':'bc';
+  function lineupMini(arr){
+    if(!arr||!arr.length) return '<div style="color:var(--mu);font-size:.58rem">Lineup pending</div>';
+    return arr.slice(0,9).map(function(x){
+      return '<span style="display:inline-flex;gap:4px;align-items:center;padding:2px 6px;border:1px solid rgba(255,255,255,.07);border-radius:999px;font-size:.55rem;color:var(--mu)"><span style="color:var(--c);font-family:Orbitron">'+pv(x.slot,'?')+'</span><span>'+x.name.split(' ').slice(-1)[0]+'</span><span class="pos-tag" style="font-size:.48rem;padding:1px 4px">'+pv(x.pos,'?')+'</span></span>';
+    }).join(' ');
+  }
   document.getElementById('mhTeams').innerHTML=
-    '<div class="mhte"><div class="mhl">'+ai+'</div><div class="mha">'+g.awayAbbr+'</div><div class="mhfn">'+g.awayName+'</div></div>'
-    +'<div class="mhvs">VS</div>'
-    +'<div class="mhte"><div class="mhl">'+hi+'</div><div class="mha">'+g.homeAbbr+'</div><div class="mhfn">'+g.homeName+'</div></div>';
-  document.getElementById('mhMeta').innerHTML=
-    '<span class="bdg bc">'+g.gameTime+'</span>'
-    +'<span class="bdg '+sc+'">'+g.status.toUpperCase()+'</span>'
-    +'<span class="bdg bo">PARK '+g.parkFactor+'x</span>'
-    +(g.venue?'<span class="bdg bc">'+g.venue+'</span>':'');
+    '<div class="mhte"><div class="mhl">'+ai+'</div><div class="mha">'+(g.awayAbbr||'AWAY')+'</div><div class="mhv">@</div><div class="mhh">'+(g.homeAbbr||'HOME')+'</div><div class="mhr">'+hi+'</div></div>'
+    +'<div class="bad '+sc+'" style="margin-top:10px">'+(g.status||'Scheduled')+'</div>'
+    +'<div class="mhs">'+(g.gameTime||'TBD')+' • '+(g.venue||'')+'</div>'
+    +'<div style="margin-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:10px;text-align:left">'
+      +'<div style="background:rgba(0,0,0,.22);border:1px solid rgba(255,255,255,.05);border-radius:10px;padding:10px"><div style="font-family:Orbitron;font-size:.58rem;letter-spacing:1px;color:var(--c);margin-bottom:8px">'+(g.awayAbbr||'AWAY')+' STARTING LINEUP</div><div style="display:flex;flex-wrap:wrap;gap:6px">'+lineupMini(g.awayLineup)+'</div></div>'
+      +'<div style="background:rgba(0,0,0,.22);border:1px solid rgba(255,255,255,.05);border-radius:10px;padding:10px"><div style="font-family:Orbitron;font-size:.58rem;letter-spacing:1px;color:var(--m);margin-bottom:8px">'+(g.homeAbbr||'HOME')+' STARTING LINEUP</div><div style="display:flex;flex-wrap:wrap;gap:6px">'+lineupMini(g.homeLineup)+'</div></div>'
+    +'</div>';
 }
 function renderEdge(){
   var g=GD,col=g.edge>=8?'var(--g)':g.edge>=5?'var(--c)':'var(--mu)',conf=g.edge>=8?'HIGH':g.edge>=5?'MEDIUM':'LOW';
@@ -391,9 +396,13 @@ function renderEdge(){
   setTimeout(function(){var e=document.getElementById('cfill');if(e)e.style.width=e.getAttribute('data-w');},200);
 }
 function renderWx(){
-  var g=GD;
-  if(!g.temp||g.temp==='N/A'){document.getElementById('wxP').innerHTML='<p class="na">Weather data not yet available.</p>';return;}
-  if(g.temp==='DOME'){
+  var g=GD||{};
+  var temp = (g.temp!==undefined&&g.temp!==null)?g.temp:'N/A';
+  var wind = g.wind||'N/A';
+  var cond = g.condition||'N/A';
+  var rain = (g.rainChance!==undefined&&g.rainChance!==null)?g.rainChance:'N/A';
+  var isDome = !!g.dome || temp==='DOME';
+  if(isDome){
     document.getElementById('wxP').innerHTML=
       '<div class="wg"><div class="ws"><div class="wi">&#127968;</div><div class="wv" style="font-size:.74rem">DOME</div><div class="wl">VENUE</div></div>'
       +'<div class="ws"><div class="wi">&#9989;</div><div class="wv" style="font-size:.74rem">INDOOR</div><div class="wl">CONDITIONS</div></div>'
@@ -401,11 +410,16 @@ function renderWx(){
       +'<div class="wi2">&#127968; DOME / RETRACTABLE ROOF — Controlled indoor conditions. Weather adjustments suppressed.</div>';
     return;
   }
-  var tv=parseInt(g.temp)||70,rc=g.rainChance!=='N/A'&&g.rainChance!==0?g.rainChance+'%':'N/A';
+  if(temp==='N/A' && wind==='N/A' && cond==='N/A'){
+    document.getElementById('wxP').innerHTML='<p class="na">Weather data not yet available.</p>';
+    return;
+  }
+  var tv=parseInt(temp); if(isNaN(tv)) tv=70;
+  var rc=(rain!=='N/A'&&rain!==0&&rain!=='0')?(rain+'%'):'N/A';
   var imp=tv>80?'&#128293; HOT — Ball carries. Hitters favored.':tv<50?'&#129398; COLD — Ball dies. Pitchers favored.':'&#9989; NEUTRAL — Standard conditions.';
   document.getElementById('wxP').innerHTML=
-    '<div class="wg"><div class="ws"><div class="wi">'+wic(g.condition)+'</div><div class="wv">'+g.temp+'°F</div><div class="wl">TEMP</div></div>'
-    +'<div class="ws"><div class="wi">&#128168;</div><div class="wv" style="font-size:.78rem">'+(g.wind||'N/A')+'</div><div class="wl">WIND</div></div>'
+    '<div class="wg"><div class="ws"><div class="wi">'+wic(cond)+'</div><div class="wv">'+temp+'°F</div><div class="wl">TEMP</div></div>'
+    +'<div class="ws"><div class="wi">&#128168;</div><div class="wv" style="font-size:.78rem">'+wind+'</div><div class="wl">WIND</div></div>'
     +'<div class="ws"><div class="wi">&#127783;</div><div class="wv">'+rc+'</div><div class="wl">RAIN CHANCE</div></div></div>'
     +'<div class="wi2">'+imp+'</div>';
 }
@@ -584,8 +598,14 @@ function updateProj(){
   document.getElementById('projP').innerHTML='<div class="projg">'+left+right+'</div>';
 }
 
-function showTab(side){
-  document.querySelectorAll('.tb2').forEach(function(b,i){b.classList.toggle('ac',(i===0&&side==='away')||(i===1&&side==='home'));});
+function function showTab(side){
+  ACTIVE_TAB = side;
+  document.querySelectorAll('.tb2').forEach(function(b){
+    b.classList.toggle('ac', b.getAttribute('data-tab')===side);
+  });
+  if(side==='proj'){ renderProjectionHub(); return; }
+  if(side==='matrix'){ renderHitRateMatrix(); return; }
+  if(side==='batting-order'){ loadBattingOrderMatchups(); return; }
   var lu=side==='away'?AL:HL;
   if(!lu||!lu.length){document.getElementById('luP').innerHTML='<p class="na">Lineup not yet posted. Check back ~3h before first pitch.</p>';return;}
   var hasFg=lu.some(function(p){return p.fg_woba&&p.fg_woba!=='N/A';});
@@ -596,7 +616,7 @@ function showTab(side){
   if(hasSvX)hdr+='<th class="sv-h">xBA</th><th class="sv-h">xSLG</th><th class="sv-h">xwOBA</th>';
   if(hasSvSc)hdr+='<th class="sv-h">EV</th><th class="sv-h">HH%</th><th class="sv-h">Brl%</th>';
   hdr+='</tr>';
-  var rows=lu.map(function(p,i){
+  var rows=lu.map(function(p){
     var fc='',sc='';
     if(hasFg)fc='<td class="fg-c">'+pv(p.fg_pa,'---')+'</td><td class="fg-c">'+pv(p.fg_r,'---')+'</td>'
       +'<td class="fg-c">'+pv(p.fg_sb,'---')+'</td>'
@@ -609,10 +629,10 @@ function showTab(side){
     if(hasSvSc)sc+='<td class="sv-c '+evc(p.sv_ev)+'">'+pv(p.sv_ev,'---')+'</td>'
       +'<td class="sv-c '+hhc(p.sv_hh_pct)+'">'+pv(p.sv_hh_pct,'---')+'</td>'
       +'<td class="sv-c '+brlc(p.sv_brl_pct)+'">'+pv(p.sv_brl_pct,'---')+'</td>';
-    return '<tr><td class="on">'+(i+1)+'</td><td>'+p.name+'</td><td><span class="pos-tag">'+p.pos+'</span></td>'
+    return '<tr><td class="on">'+pv(p.slot,'?')+'</td><td>'+p.name+'</td><td><span class="pos-tag">'+pv(p.pos,'?')+'</span></td>'
       +'<td class="'+avc(p.avg)+'">'+pv(p.avg,'---')+'</td>'
       +'<td>'+pv(p.obp,'---')+'</td><td>'+pv(p.slg,'---')+'</td><td>'+pv(p.ops,'---')+'</td>'
-      +'<td>'+p.ab+'</td><td>'+p.hr+'</td><td>'+p.rbi+'</td>'+fc+sc+'</tr>';
+      +'<td>'+pv(p.ab,'0')+'</td><td>'+pv(p.hr,'0')+'</td><td>'+pv(p.rbi,'0')+'</td>'+fc+sc+'</tr>';
   }).join('');
   document.getElementById('luP').innerHTML=
     '<div style="overflow-x:auto"><table class="lu-table"><thead>'+hdr+'</thead><tbody>'+rows+'</tbody></table></div>'
@@ -621,6 +641,7 @@ function showTab(side){
       +(hasSvX||hasSvSc?'<span style="color:var(--sv)">&#127987;&#65039; Cyan = Baseball Savant (xStats/EV/HH%/Brl%)</span>':'')
       +'</div>':'');
 }
+
 
 loadGame();loadPitchers();loadLineups();
 
