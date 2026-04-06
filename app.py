@@ -44,7 +44,7 @@ STADIUM_COORDS = {
     32:   (43.02838,    -87.97099),     # American Family Field, Milwaukee (retractable)
     680:  (47.591333,   -122.33251),    # T-Mobile Park, Seattle (retractable)
     2392: (29.756967,   -95.355509),    # Daikin Park (Minute Maid), Houston (retractable)
-    2394: (42.3391151,  -83.048695),    # Comerica Park, Detroit (retractable)
+    2394: (42.3391151,  -83.048695),    # Comerica Park, Detroit
     2395: (37.778383,   -122.389448),   # Oracle Park, San Francisco
     2529: (38.57994,    -121.51246),    # Sutter Health Park, Sacramento
     2602: (39.097389,   -84.506611),    # Great American Ball Park, Cincinnati
@@ -346,7 +346,7 @@ def current_et_date_str():
 
 def fetch_schedule(date_str):
     url = (f"{MLB_API}/schedule?sportId=1&date={date_str}"
-           "&hydrate=team,probablePitcher,linescore,venue,weather")
+           "&hydrate=team,probablePitcher,linescore,venue(location),weather")
     r = requests.get(url, timeout=10); r.raise_for_status()
     dates = r.json().get("dates", [])
     return dates[0].get("games", []) if dates else []
@@ -362,11 +362,11 @@ def get_weather(lat, lon, game_hour=13, venue_id=None):
         return {"temp":"N/A","rain_chance":"N/A","wind_speed":"N/A","condition":"N/A"}
     try:
         r = requests.get(WX_API, params={
-            "latitude":lat,"longitude":lon,
-            "hourly":"temperature_2m,precipitation_probability,windspeed_10m,weathercode",
-            "temperature_unit":"fahrenheit","windspeed_unit":"mph",
-            "forecast_days":2,"timezone":"auto"
-        }, timeout=8)
+    "latitude": lat, "longitude": lon,
+    "hourly": "temperature_2m,precipitation_probability,windspeed_10m,winddirection_10m,weathercode",
+    "temperature_unit": "fahrenheit", "windspeed_unit": "mph",
+    "forecast_days": 2, "timezone": "America/New_York"
+      }, timeout=8)
         r.raise_for_status()
         h = r.json().get("hourly",{})
         idx = max(0, min(len(h.get("temperature_2m",[])) - 1, int(game_hour)))
@@ -379,6 +379,15 @@ def get_weather(lat, lon, game_hour=13, venue_id=None):
         precip  = h.get("precipitation_probability",[0]*48)
         wind    = h.get("windspeed_10m",[0]*48)
         wcodes  = h.get("weathercode",[0]*48)
+        wind_dirs = h.get("winddirection_10m", [])
+        wind_deg  = wind_dirs[idx] if idx < len(wind_dirs) else None
+        def _deg_to_compass(d):
+       if d is None: return "N/A"
+       dirs = ["N","NE","NE","E","E","SE","SE","S","S","SW","SW","W","W","NW","NW","N"]
+        return dirs[int((d + 11.25) / 22.5) % 16]
+       return {
+        "temp":        round(temps[idx]) if idx < len(temps) else "N/A",
+         "rain_
         wcode   = wcodes[idx] if idx < len(wcodes) else 0
         return {
             "temp":       round(temps[idx]) if idx < len(temps) else "N/A",
