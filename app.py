@@ -3340,6 +3340,36 @@ def api_lineup(game_pk):
 threading.Thread(target=_load_fg_data,      daemon=True).start()
 threading.Thread(target=_load_savant_data,  daemon=True).start()
 
+def _prewarm_today_lineups():
+    """Pre-cache MLB splits for every player in today's boxscores."""
+    import time
+    try:
+        raw = fetch_schedule(current_et_date_str())
+        for g in raw:
+            pk = g.get('gamePk')
+            try:
+                box = requests.get(
+                    f"{MLB_API}/game/{pk}/boxscore", timeout=8
+                ).json().get('teams', {})
+                for side in ('away', 'home'):
+                    for pid in box.get(side, {}).get('batters', []):
+                        player_profile(pid)          # caches bio
+                        hitter_split_profile(pid)    # caches platoon splits
+                        time.sleep(0.05)             # respect rate limits
+            except:
+                pass
+    except:
+        pass
+
+# Fire in background thread at startup
+threading.Thread(target=_prewarm_today_lineups, daemon=True).start()
+_maybe_refresh_fg()
+_maybe_refresh_savant()
+
+# Auto-warm FG + Savant on startup so data is fresh from first request
+_maybe_refresh_fg()
+_maybe_refresh_savant()
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
