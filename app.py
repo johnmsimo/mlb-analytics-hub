@@ -9,6 +9,10 @@ ET = ZoneInfo("America/New_York")
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
+datetime.now(ET).strftime("%Y-%m-%d")
+datetime.now(ET).strftime('%Y-%m-%d')
+datetime.now(ET).date()
+
 app = Flask(__name__)
 CORS(app)
 
