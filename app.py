@@ -97,7 +97,7 @@ def _load_fg_data():
     try:
         import pybaseball as pb
         pb.cache.enable()
-        df = pb.batting_stats(year, qual=1)
+        df = pb.batting_stats(year, qual=0)
         bat = {}
         for _, r in df.iterrows():
             k = str(r.get("Name","")).strip().lower()
@@ -122,7 +122,7 @@ def _load_fg_data():
         print("[FG] Batting failed:", ex)
     try:
         import pybaseball as pb
-        df = pb.pitching_stats(year, qual=1)
+        df = pb.pitching_stats(year, qual=0)
         pit = {}
         for _, r in df.iterrows():
             k = str(r.get("Name","")).strip().lower()
