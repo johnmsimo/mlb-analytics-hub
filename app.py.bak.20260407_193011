@@ -380,8 +380,6 @@ VENUE_UTC_OFFSET = {
 
 
 
-
-
 def _deg_to_compass(deg):
     if deg is None:
         return ""
