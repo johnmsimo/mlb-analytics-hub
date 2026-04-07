@@ -3055,7 +3055,8 @@ def api_teams_overview():
         def fetch_roster(t):
     tid = t.get('id')
     try:
-        rr = requests.get(f'{MLBAPI}/teams/{tid}/roster?rosterType=active', timeout=8)
+        rr = requests.get(f'{MLBAPI}/teams/{tid}/roster?
+        rosterType=active', timeout=8)
         roster = rr.json().get('roster', []) if rr.ok else []
     except Exception:
         roster = []
@@ -3065,7 +3066,6 @@ def api_teams_overview():
         pid = person.get('id')
         name = person.get('fullName', 'Unknown')
         pos = r.get('position', {}).get('abbreviation', '?')
-
         if pos == 'P':
             fgp = fg_pitcher(name) or {}
             svp = sv_pitcher(name) or {}
@@ -3074,11 +3074,13 @@ def api_teams_overview():
                 try:
                     mlbp = pitcher_stats_mlb(pid) or {}
                     k9 = float(mlbp.get('k9', 0) or 0)
-                    fgkpct = round(k9 / (k9 + 27), 3) if k9 > 0 else None
+                    fgkpct = round(k9 / (k9 + 27), 3) if k9 > 0 else
+        None
                 except Exception:
                     fgkpct = None
             statline = [
-                {'label': 'ERA', 'value': fgp.get('fgera') or svp.get('svxera') or ''},
+                {'label': 'ERA', 'value': fgp.get('fgera') or
+                 svp.get('svxera') or ''},
                 {'label': 'FIP', 'value': fgp.get('fgfip') or ''},
                 {'label': 'K%',  'value': fgkpct or ''},
             ]
@@ -3088,17 +3090,19 @@ def api_teams_overview():
             wrc = fgb.get('fgwrc') if fgb.get('fgwrc') else None
             if not wrc:
                 try:
-                    woba = float(fgb.get('fgwoba') or svb.get('svxwoba') or 0)
+                    woba = float(fgb.get('fgwoba') or svb.get('svxwoba') 
+                or 0)
                     if woba > 0:
                         wrc = round((woba - 0.320) / 0.047 * 100 + 100)
                 except Exception:
                     wrc = None
             statline = [
-                {'label': 'AVG',  'value': fgb.get('fgavg')  or svb.get('svxba')  or ''},
-                {'label': 'wOBA', 'value': fgb.get('fgwoba') or svb.get('svxwoba') or ''},
+                {'label': 'AVG',  'value': fgb.get('fgavg') or
+                 svb.get('svxba')  or ''},
+                {'label': 'wOBA', 'value': fgb.get('fgwoba') or
+                 svb.get('svxwoba') or ''},
                 {'label': 'wRC+', 'value': wrc or ''},
             ]
-
         players.append({
             'id': pid,
             'name': name,
@@ -3106,7 +3110,6 @@ def api_teams_overview():
             'image': TEAMHEADSHOTBASE.format(playerid=pid) if pid else '',
             'statline': statline,
         })
-
     return {
         'id': tid,
         'abbr': t.get('abbreviation', '?'),
