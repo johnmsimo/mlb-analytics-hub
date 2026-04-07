@@ -164,7 +164,7 @@ def _fuzzy_lookup(name, cache):
     if not name or not cache: return {}
     k = name.strip().lower()
     if k in cache: return cache[k]
-    m = difflib.get_close_matches(k, cache.keys(), n=1, cutoff=0.82)
+    m = difflib.get_close_matches(k, cache.keys(), n=1, cutoff=0.78)
     return cache[m[0]] if m else {}
 
 def fg_batter(name):
