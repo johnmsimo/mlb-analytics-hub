@@ -3053,67 +3053,67 @@ def api_teams_overview():
         # Fetch all 30 rosters concurrently using threads
         import concurrent.futures
         def fetch_roster(t):
-            tid = t.get('id')
-            try:
-                rr = requests.get(f"{MLB_API}/teams/{tid}/roster?rosterType=active", timeout=8)
-                roster = rr.json().get('roster', []) if rr.ok else []
-            except Exception:
-                roster = []
-            players = []
-            for r in roster[:40]:
-                person = r.get('person', {})
-                pid = person.get('id')
-                name = person.get('fullName', 'Unknown')
-                pos = (r.get('position', {}) or {}).get('abbreviation', '?')
-                # Use only cached in-memory data — no individual MLB API calls
-                if pos == ('P'):
-    fgp = fg_pitcher(name)
-    svp = sv_pitcher(name)
-    # Derive K% from k9 if FG K% is missing
-    fgkpct = fgp.get('fgkpct') if fgp.get('fgkpct') else None
-    if not fgkpct:
-        mlbp = pitcher_stats_mlb(pid)
-        k9 = mlbp.get('k9', 0) if mlbp else 0
-        try:
-            fgkpct = round(float(k9) / (float(k9) + 27), 3) if float(k9) > 0 else None
-        except:
-            fgkpct = None
-    statline = {
-        {'label': 'ERA',  'value': fgp.get('fgera')  or svp.get('svxera') or ''},
-        {'label': 'FIP',  'value': fgp.get('fgfip')  or ''},
-        {'label': 'K%',   'value': fgkpct or ''},
-        }
-                else:
-    fgb = fg_batter(name)
-    svb = sv_batter(name)
-    # wRC+ proxy if FG value is missing: (wOBA - lgwOBA) / wOBAscale * 100 + 100
-    wrc = fgb.get('fgwrc') if fgb.get('fgwrc') else None
-    if not wrc:
-        try:
-            woba = float(fgb.get('fgwoba') or svb.get('svxwoba') or 0)
-            if woba > 0:
-                wrc = round((woba - 0.320) / 0.047 * 100 + 100)
-        except:
-            wrc = None
-    statline = {
-        {'label': 'AVG',  'value': fgb.get('fgavg')  or svb.get('svxba')  or ''},
-        {'label': 'wOBA', 'value': fgb.get('fgwoba') or svb.get('svxwoba') or ''},
-        {'label': 'wRC+', 'value': wrc or ''},
-        }
-                players.append({
-                    'id': pid,
-                    'name': name,
-                    'pos': pos,
-                    'image': TEAM_HEADSHOT_BASE.format(player_id=pid) if pid else '',
-                    **stat_line,
-                })
-            return {
-                'id': tid,
-                'abbr': t.get('abbreviation', '?'),
-                'name': t.get('name', ''),
-                'logo': LOGO_BASE.format(team_id=tid),
-                'players': players,
-            }
+    tid = t.get('id')
+    try:
+        rr = requests.get(f'{MLBAPI}/teams/{tid}/roster?rosterType=active', timeout=8)
+        roster = rr.json().get('roster', []) if rr.ok else []
+    except Exception:
+        roster = []
+    players = []
+    for r in roster[:40]:
+        person = r.get('person', {})
+        pid = person.get('id')
+        name = person.get('fullName', 'Unknown')
+        pos = r.get('position', {}).get('abbreviation', '?')
+
+        if pos == 'P':
+            fgp = fg_pitcher(name) or {}
+            svp = sv_pitcher(name) or {}
+            fgkpct = fgp.get('fgkpct') if fgp.get('fgkpct') else None
+            if not fgkpct:
+                try:
+                    mlbp = pitcher_stats_mlb(pid) or {}
+                    k9 = float(mlbp.get('k9', 0) or 0)
+                    fgkpct = round(k9 / (k9 + 27), 3) if k9 > 0 else None
+                except Exception:
+                    fgkpct = None
+            statline = [
+                {'label': 'ERA', 'value': fgp.get('fgera') or svp.get('svxera') or ''},
+                {'label': 'FIP', 'value': fgp.get('fgfip') or ''},
+                {'label': 'K%',  'value': fgkpct or ''},
+            ]
+        else:
+            fgb = fg_batter(name) or {}
+            svb = sv_batter(name) or {}
+            wrc = fgb.get('fgwrc') if fgb.get('fgwrc') else None
+            if not wrc:
+                try:
+                    woba = float(fgb.get('fgwoba') or svb.get('svxwoba') or 0)
+                    if woba > 0:
+                        wrc = round((woba - 0.320) / 0.047 * 100 + 100)
+                except Exception:
+                    wrc = None
+            statline = [
+                {'label': 'AVG',  'value': fgb.get('fgavg')  or svb.get('svxba')  or ''},
+                {'label': 'wOBA', 'value': fgb.get('fgwoba') or svb.get('svxwoba') or ''},
+                {'label': 'wRC+', 'value': wrc or ''},
+            ]
+
+        players.append({
+            'id': pid,
+            'name': name,
+            'pos': pos,
+            'image': TEAMHEADSHOTBASE.format(playerid=pid) if pid else '',
+            'statline': statline,
+        })
+
+    return {
+        'id': tid,
+        'abbr': t.get('abbreviation', '?'),
+        'name': t.get('name', ''),
+        'logo': LOGOBASE.format(teamid=tid),
+        'players': players,
+    }
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
             results = list(ex.map(fetch_roster, sorted(teams_raw, key=lambda x: x.get('abbreviation', ''))))
         return jsonify({'success': True, 'teams': [r for r in results if r]})
