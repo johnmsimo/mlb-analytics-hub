@@ -1,6 +1,6 @@
 import os, threading, traceback, difflib, io, csv as csvmod, json, re
 import requests
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 try:
     from zoneinfo import ZoneInfo
 except ImportError:
@@ -382,8 +382,6 @@ VENUE_UTC_OFFSET = {
 
 
 
-
-
 def _deg_to_compass(deg):
     if deg is None:
         return ""
@@ -423,19 +421,16 @@ def get_weather(lat, lon, game_hour=13, venue_id=None):
         wcode   = wcodes[idx] if idx < len(wcodes) else 0
         wdeg    = wdir[idx]  if idx < len(wdir)   else 0
         compass = _deg_to_compass(wdeg)
-        wind_speed = round(wind[idx]) if idx < len(wind) else "N/A"
-        wind_str = f"{wind_speed} mph {compass}".strip()
         return {
             "temp":       round(temps[idx]) if idx < len(temps) else "N/A",
             "rain_chance":precip[idx] if idx < len(precip) else "N/A",
-            "wind_speed": wind_speed,
+            "wind_speed": round(wind[idx]) if idx < len(wind) else "N/A",
             "wind_dir":   compass,
-            "wind":       wind_str,
             "condition":  wcode_map.get(wcode, "Clear"),
         }
     except Exception as ex:
         print(f"[get_weather] lat={lat} lon={lon} hour={game_hour} venue={venue_id} err={ex}")
-        return {"temp":"N/A","rain_chance":"N/A","wind_speed":"N/A","wind_dir":"","wind":"N/A","condition":"N/A"}
+        return {"temp":"N/A","rain_chance":"N/A","wind_speed":"N/A","condition":"N/A"}
 
 def pitcher_stats_mlb(player_id):
     try:
@@ -518,19 +513,6 @@ def parse_game(g):
         except:
             game_hour_local = 13
         wx = get_weather(lat, lon, game_hour_local, venue_id=venue_id)
-        # Fallback: use MLB schedule weather when Open-Meteo fails or returns unavailable data.
-        if (wx.get("temp") in (None, "N/A") or wx.get("condition") in (None, "", "N/A")):
-            raw_weather = g.get("weather", {}) or {}
-            if raw_weather:
-                print(f"[weather_fallback] using MLB weather for gamePk={pk} venue={venue_id}")
-                wx = {
-                    "temp": raw_weather.get("temp", "N/A"),
-                    "condition": raw_weather.get("condition", "N/A"),
-                    "wind": raw_weather.get("wind", "N/A"),
-                    "wind_speed": raw_weather.get("wind", "N/A"),
-                    "wind_dir": "",
-                    "rain_chance": raw_weather.get("precipitationChance", "N/A"),
-                }
         gt   = g.get("gameDate","")
         try:
             dt_utc = datetime.fromisoformat(gt.replace("Z","+00:00"))
@@ -554,7 +536,7 @@ def parse_game(g):
             "awayPitcher": ap_n, "homePitcher": hp_n,
             "venue": ven.get("name",""), "gameTime": gt_fmt,
             "parkFactor": pf, "edge": edge, "barPct": bar,
-            "temp": wx.get("temp","N/A"), "wind": wx.get("wind", f"{wx.get('wind_speed','?')} mph {wx.get('wind_dir','')}").strip(),
+            "temp": wx.get("temp","N/A"), "wind": f"{wx.get('wind_speed','?')} mph {wx.get('wind_dir','')}".strip(),
             "condition": wx.get("condition",""), "rainChance": wx.get("rain_chance","N/A"),
             "weatherIcon": wi,
         }
@@ -609,77 +591,6 @@ def api_game_detail(game_pk):
     except Exception as ex:
         print("[api_game_detail]", traceback.format_exc())
         return jsonify({"success":False,"error":str(ex),"awayBatters":[],"homeBatters":[]}), 500
-
-@app.route("/api/game/livedata/<int:game_pk>")
-def api_game_livedata(game_pk):
-    try:
-        r = requests.get(
-            "https://statsapi.mlb.com/api/v1.1/game/{}/feed/live".format(game_pk),
-            timeout=10
-        )
-        r.raise_for_status()
-        data = r.json()
-        ls    = data.get("liveData", {}).get("linescore", {})
-        box   = data.get("liveData", {}).get("boxscore",  {})
-        gdata = data.get("gameData", {})
-        sd    = gdata.get("status", {}).get("detailedState", "")
-
-        inum  = ls.get("currentInning", 0)
-        ihalf = ls.get("inningHalf", "Top")
-        if any(x in sd for x in ["Middle", "Mid ", "Between"]):
-            ilbl = "MID {}".format(inum)
-        elif ihalf == "Bottom":
-            ilbl = "BOT {}".format(inum)
-        else:
-            ilbl = "TOP {}".format(inum)
-
-        ht = ls.get("teams", {}).get("home", {})
-        at = ls.get("teams", {}).get("away", {})
-        offense = ls.get("offense", {})
-        bases = {
-            "first":  bool(offense.get("first")),
-            "second": bool(offense.get("second")),
-            "third":  bool(offense.get("third")),
-        }
-        bid   = (offense.get("batter")  or {}).get("id")
-        bname = (offense.get("batter")  or {}).get("fullName", "")
-        od    = (offense.get("onDeck")  or {}).get("fullName", "")
-        ih    = (offense.get("inHole")  or {}).get("fullName", "")
-        pid2  = (ls.get("defense", {}).get("pitcher") or {}).get("id")
-        pname = (ls.get("defense", {}).get("pitcher") or {}).get("fullName", "")
-
-        pip = "x2014"; per = "x2014"; bab = 0; bah = 0; baops = "x2014"
-        for side in ("home", "away"):
-            pl = box.get("teams", {}).get(side, {}).get("players", {})
-            if pid2:
-                ps = pl.get("ID{}".format(pid2), {})
-                st = ps.get("stats", {}).get("pitching", {})
-                if st:
-                    pip = st.get("inningsPitched", pip)
-                    per = st.get("earnedRuns", per)
-                    bab = st.get("basesOnBalls", bab)
-                    bah = st.get("hits", bah)
-                    baops = st.get("hits", baops)
-        return jsonify({
-            "success": True,
-            "inningLabel": ilbl,
-            "outs": ls.get("outs", 0),
-            "balls": ls.get("balls", 0),
-            "strikes": ls.get("strikes", 0),
-            "awayRuns": at.get("runs", 0),
-            "homeRuns": ht.get("runs", 0),
-            "awayHits": at.get("hits", 0),
-            "homeHits": ht.get("hits", 0),
-            "awayErrors": at.get("errors", 0),
-            "homeErrors": ht.get("errors", 0),
-            "bases": bases,
-            "pitcher": {"name": pname, "ip": pip, "er": per},
-            "batter": {"name": bname, "ab": (box.get("teams", {}).get("home", {}).get("players", {}).get("ID{}".format(bid), {}) or {}).get("stats", {}).get("batting", {}).get("atBats", "—"), "h": (box.get("teams", {}).get("home", {}).get("players", {}).get("ID{}".format(bid), {}) or {}).get("stats", {}).get("batting", {}).get("hits", "—"), "ops": "—"},
-            "dueUp": [od, ih],
-        })
-    except Exception as ex:
-        print("[api_game_livedata]", traceback.format_exc())
-        return jsonify({"success": False, "error": str(ex)})
 
 @app.route("/api/pitchers/<int:game_pk>")
 def api_pitchers(game_pk):
@@ -796,19 +707,6 @@ def api_game_projection(game_pk):
         except Exception:
             proj_hour = 13
         wx = get_weather(lat, lon, proj_hour, venue_id=venue_id_wx)
-        # Fallback: use MLB schedule weather for projections when Open-Meteo is unavailable.
-        if (wx.get("temp") in (None, "N/A") or wx.get("condition") in (None, "", "N/A")):
-            raw_weather = gdata.get("weather", {}) or {}
-            if raw_weather:
-                print(f"[weather_fallback] using MLB weather for projection gamePk={game_pk} venue={venue_id_wx}")
-                wx = {
-                    "temp": raw_weather.get("temp", "N/A"),
-                    "condition": raw_weather.get("condition", "N/A"),
-                    "wind": raw_weather.get("wind", "N/A"),
-                    "wind_speed": raw_weather.get("wind", "N/A"),
-                    "wind_dir": "",
-                    "rain_chance": raw_weather.get("precipitationChance", raw_weather.get("precipChance", "N/A")),
-                }
         wx_adj = 0.0
         if not wx.get("dome"):
             try:
