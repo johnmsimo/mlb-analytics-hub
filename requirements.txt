@@ -4,4 +4,3 @@ requests>=2.31
 gunicorn>=21.2
 pybaseball>=2.2.7
 pandas>=2.0
-run: pip install --upgrade pip
