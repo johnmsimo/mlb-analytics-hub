@@ -3067,27 +3067,39 @@ def api_teams_overview():
                 pos = (r.get('position', {}) or {}).get('abbreviation', '?')
                 # Use only cached in-memory data — no individual MLB API calls
                 if pos == 'P':
-                    fgp = fg_pitcher(name)
-                    svp = sv_pitcher(name)
-                    stat_line = {
-                        'label1': 'ERA',
-                        'value1': fgp.get('fg_era') or svp.get('sv_xera') or '—',
-                        'label2': 'FIP',
-                        'value2': fgp.get('fg_fip') or '—',
-                        'label3': 'K%',
-                        'value3': fgp.get('fg_kpct') or svp.get('sv_k_pct') or '—',
-                    }
+    fgp = fg_pitcher(name)
+    svp = sv_pitcher(name)
+    # Derive K% from k9 if FG K% is missing
+    fgkpct = fgp.get('fgkpct') if fgp.get('fgkpct') else None
+    if not fgkpct:
+        mlbp = pitcher_stats_mlb(pid)
+        k9 = mlbp.get('k9', 0) if mlbp else 0
+        try:
+            fgkpct = round(float(k9) / (float(k9) + 27), 3) if float(k9) > 0 else None
+        except:
+            fgkpct = None
+    statline = {
+        {'label': 'ERA',  'value': fgp.get('fgera')  or svp.get('svxera') or ''},
+        {'label': 'FIP',  'value': fgp.get('fgfip')  or ''},
+        {'label': 'K%',   'value': fgkpct or ''},
+        }
                 else:
-                    fgb = fg_batter(name)
-                    svb = sv_batter(name)
-                    stat_line = {
-                        'label1': 'AVG',
-                        'value1': fgb.get('fg_avg') or svb.get('sv_xba') or '—',
-                        'label2': 'wOBA',
-                        'value2': fgb.get('fg_woba') or svb.get('sv_xwoba') or '—',
-                        'label3': 'wRC+',
-                        'value3': fgb.get('fg_wrc') or '—',
-                    }
+    fgb = fg_batter(name)
+    svb = sv_batter(name)
+    # wRC+ proxy if FG value is missing: (wOBA - lgwOBA) / wOBAscale * 100 + 100
+    wrc = fgb.get('fgwrc') if fgb.get('fgwrc') else None
+    if not wrc:
+        try:
+            woba = float(fgb.get('fgwoba') or svb.get('svxwoba') or 0)
+            if woba > 0:
+                wrc = round((woba - 0.320) / 0.047 * 100 + 100)
+        except:
+            wrc = None
+    statline = {
+        {'label': 'AVG',  'value': fgb.get('fgavg')  or svb.get('svxba')  or ''},
+        {'label': 'wOBA', 'value': fgb.get('fgwoba') or svb.get('svxwoba') or ''},
+        {'label': 'wRC+', 'value': wrc or ''},
+        }
                 players.append({
                     'id': pid,
                     'name': name,
