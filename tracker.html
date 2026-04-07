@@ -838,14 +838,32 @@ async function loadAttr(){
   $('attrPill').textContent=`Window ${w}d`;status('Attribution loaded');
 }
 async function captureAISlate(){
-  const dateStr=readDate();status('Capturing daily AI slate…');
-  const res=await api(`/api/capture-daily-slate/${dateStr}`);
-  if(res.success){
-    const summary=res.slate.summary||{};
-    $('slateStatus').innerHTML=`<strong>✓ Daily Slate Captured</strong><br>Games: ${summary.total_games||0} | Projections: ${summary.projections_captured||0} | Timestamp: ${ts(res.captured_at)}`;
-    status(`Captured ${summary.projections_captured||0} projections`);
-  } else {
-    $('slateStatus').innerHTML=`<strong style="color:var(--fg-warn)">✗ Capture Failed</strong><br>${safe(res.error||'Unknown error')}`;
+  const dateStr = readDate();
+  const btn = $('captureSlateBtn');
+  btn.disabled = true;
+  btn.textContent = 'Capturing…';
+  $('slateStatus').innerHTML = '<strong>Capturing daily slate...</strong> Please wait.';
+  status('Capturing daily AI slate…');
+  try {
+    const res = await api(`/api/capture-daily-slate/${dateStr}`);
+    if(res.success){
+      const summary = res.slate.summary || {};
+      const capturedAt = res.slate.timestamp || res.captured_at || '';
+      $('slateStatus').innerHTML =
+        `<strong>✓ Daily Slate Captured</strong><br>` +
+        `Games: ${summary.total_games||0} | Projections: ${summary.projections_captured||0}` +
+        (capturedAt ? `<br><span style="font-size:.75rem;color:var(--mut)">Captured at ${safe(capturedAt)}</span>` : '');
+      status(`Captured ${summary.projections_captured||0} projections for ${dateStr}`);
+    } else {
+      $('slateStatus').innerHTML = `<strong style="color:var(--fg-warn)">✗ Capture Failed</strong><br>${safe(res.error||'Unknown error')}`;
+      status('Daily slate capture failed');
+    }
+  } catch (err) {
+    $('slateStatus').innerHTML = `<strong style="color:var(--fg-warn)">✗ Capture Failed</strong><br>${safe(err.message||'Unknown error')}`;
+    status('Daily slate capture error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '📊 Capture Slate';
   }
 }
 async function getModelUpgradeSuggestions(){
