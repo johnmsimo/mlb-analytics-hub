@@ -3066,7 +3066,7 @@ def api_teams_overview():
                 name = person.get('fullName', 'Unknown')
                 pos = (r.get('position', {}) or {}).get('abbreviation', '?')
                 # Use only cached in-memory data — no individual MLB API calls
-                if pos == 'P':
+                if pos == ('P'):
     fgp = fg_pitcher(name)
     svp = sv_pitcher(name)
     # Derive K% from k9 if FG K% is missing
