@@ -270,6 +270,55 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .bom-vs-adv{background:rgba(0,230,118,.12);color:var(--g);border:1px solid rgba(0,230,118,.22)}
 .bom-vs-dis{background:rgba(244,67,54,.08);color:#f44336;border:1px solid rgba(244,67,54,.18)}
 @media(max-width:860px){.bom-wrap{grid-template-columns:1fr}}
+
+/* AI Box Score Projections */
+.ai-panel{background:rgba(0,0,0,.28);border:1px solid rgba(0,229,255,.05);border-radius:10px;padding:14px;margin-bottom:10px}
+.ai-header{font-family:'Orbitron',monospace;font-size:.7rem;color:var(--c);letter-spacing:2px;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.ai-badge{display:inline-block;padding:2px 8px;border-radius:6px;background:rgba(224,64,251,.1);color:var(--m);border:1px solid rgba(224,64,251,.2);font-size:.55rem;font-family:'Orbitron',monospace;letter-spacing:1px}
+.ai-matchup{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin:10px 0}
+.ai-score-card{background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.05);border-radius:8px;padding:12px;text-align:center}
+.ai-score-big{font-family:'Orbitron',monospace;font-size:1.8rem;font-weight:900;color:var(--c);line-height:1}
+.ai-score-label{font-size:.58rem;color:var(--mu);letter-spacing:1px;margin-top:5px}
+.ai-reasoning{background:rgba(0,229,255,.04);border-left:2px solid rgba(0,229,255,.3);border-radius:6px;padding:10px;margin:10px 0;font-size:.68rem;color:var(--t);line-height:1.5}
+.ai-factors{margin:10px 0;padding:10px;background:rgba(224,64,251,.04);border-radius:6px;border-left:2px solid rgba(224,64,251,.3)}
+.ai-factors-title{font-family:'Orbitron',monospace;font-size:.58rem;color:var(--m);letter-spacing:2px;margin-bottom:6px}
+.ai-factor-item{font-size:.65rem;color:var(--t);padding:4px 0;border-bottom:1px solid rgba(255,255,255,.04)}
+.ai-factor-item:last-child{border-bottom:none}
+.ai-confidence{display:inline-block;padding:4px 10px;border-radius:20px;font-size:.56rem;font-family:'Orbitron',monospace;letter-spacing:1px;margin-top:8px}
+.ai-conf-high{background:rgba(0,230,118,.12);color:var(--g);border:1px solid rgba(0,230,118,.25)}
+.ai-conf-med{background:rgba(255,152,0,.12);color:var(--o);border:1px solid rgba(255,152,0,.25)}
+.ai-conf-low{background:rgba(244,67,54,.08);color:#f44336;border:1px solid rgba(244,67,54,.18)}
+.ai-props{margin-top:12px;border-top:1px dashed rgba(255,255,255,.08);padding-top:12px}
+.ai-prop-item{background:rgba(0,0,0,.2);border:1px solid rgba(255,255,255,.04);border-radius:6px;padding:10px;margin-bottom:8px}
+.ai-prop-player{font-size:.7rem;font-weight:600;color:var(--c)}
+.ai-prop-detail{font-size:.62rem;color:var(--mu);margin-bottom:4px}
+.ai-prop-reasoning{font-size:.64rem;color:var(--t);line-height:1.4}
+
+/* Parlay Builder */
+.parlay-wrap{background:rgba(0,0,0,.28);border:1px solid rgba(0,229,255,.08);border-radius:10px;padding:14px;margin-top:10px}
+.parlay-header{font-family:'Orbitron',monospace;font-size:.7rem;color:var(--c);letter-spacing:2px;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.parlay-badge{display:inline-block;padding:2px 8px;border-radius:6px;background:rgba(0,229,255,.1);color:var(--c);border:1px solid rgba(0,229,255,.2);font-size:.55rem;font-family:'Orbitron',monospace;letter-spacing:1px}
+.parlay-leg{background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.04);border-radius:8px;padding:10px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+.parlay-leg-info{flex:1}
+.parlay-leg-title{font-size:.68rem;font-weight:600;color:var(--t)}
+.parlay-leg-sub{font-size:.62rem;color:var(--mu);margin-top:2px}
+.parlay-leg-remove{padding:4px 8px;border:1px solid rgba(244,67,54,.3);border-radius:6px;background:rgba(244,67,54,.08);color:#f44336;font-size:.58rem;font-family:'Orbitron',monospace;cursor:pointer;transition:all .2s}
+.parlay-leg-remove:hover{background:rgba(244,67,54,.15);border-color:rgba(244,67,54,.5)}
+.parlay-odds{background:rgba(0,229,255,.04);border-left:2px solid rgba(0,229,255,.3);border-radius:6px;padding:10px;margin:10px 0;display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+.parlay-odd-card{text-align:center}
+.parlay-odd-label{font-size:.58rem;color:var(--mu);letter-spacing:1px}
+.parlay-odd-value{font-family:'Orbitron',monospace;font-size:1.1rem;font-weight:700;color:var(--c);margin-top:4px}
+.parlay-add-selector{background:rgba(0,0,0,.2);border:1px dashed rgba(0,229,255,.2);border-radius:8px;padding:12px;margin-bottom:10px}
+.parlay-add-title{font-size:.64rem;color:var(--c);margin-bottom:8px;font-family:'Orbitron',monospace;letter-spacing:1px}
+.parlay-select{width:100%;background:#081220;border:1px solid rgba(0,229,255,.16);color:var(--t);padding:8px;border-radius:6px;font-size:.7rem;margin-bottom:6px;min-height:36px}
+.parlay-select:focus{outline:none;border-color:rgba(0,229,255,.4)}
+.parlay-actions{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.parlay-btn{flex:1;min-width:120px;padding:10px;border-radius:8px;border:1px solid rgba(0,229,255,.25);background:rgba(0,229,255,.08);color:var(--c);font-family:'Orbitron',monospace;font-size:.68rem;letter-spacing:1px;cursor:pointer;transition:all .2s}
+.parlay-btn:hover{background:rgba(0,229,255,.15);border-color:rgba(0,229,255,.4)}
+.parlay-btn.send{background:rgba(0,230,118,.12);border-color:rgba(0,230,118,.3);color:var(--g)}
+.parlay-btn.send:hover{background:rgba(0,230,118,.2);border-color:rgba(0,230,118,.5)}
+.parlay-btn:disabled{opacity:.45;pointer-events:none}
+.parlay-empty{text-align:center;color:var(--mu);font-size:.7rem;padding:16px;color:var(--faint)}
 </style>
 </head>
 <body>
@@ -924,6 +973,289 @@ loadLineups = function() {
 
 // Boot Phase 3
 loadGameProjection();
+
+// ── AI Box Score Projections ──────────────────────────────────────────────────
+var AI_DATA = null;
+
+function loadAIProjections() {
+  fetch('/api/ai-boxscore/' + GPK)
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      AI_DATA = d;
+      if(d.success && d.projections) {
+        renderAIPanel(d);
+      } else {
+        renderAIError(d.error || 'Unable to generate AI projections');
+      }
+    })
+    .catch(function(e) {
+      renderAIError('Error: ' + e.message);
+    });
+}
+
+function renderAIError(msg) {
+  var el = document.getElementById('aiPanel');
+  if(el) {
+    el.innerHTML = '<p class="na" style="padding: 16px 0">⚠️ ' + msg + '<br /><span style="font-size: .6rem; margin-top: 8px; display: block">Ensure OPENAI_API_KEY is set. Using statistical projections instead.</span></p>';
+  }
+}
+
+function renderAIPanel(d) {
+  var el = document.getElementById('aiPanel');
+  if(!el) return;
+  
+  var proj = d.projections || {};
+  var away = d.pitching_matchup.away_pitcher || {};
+  var home = d.pitching_matchup.home_pitcher || {};
+  var confClass = 'ai-conf-' + ((proj.confidence || 'LOW').toLowerCase());
+  
+  var weatherHtml = '<span style="font-size:.62rem;color:var(--mu)">🌡️ ' + (d.weather.temp || 'N/A') + '°F · ' + (d.weather.condition || '') + ' · ' + (d.weather.wind || '') + '</span>';
+  
+  var reasoningHtml = 
+    '<div class="ai-reasoning"><strong style="color:var(--c)">Away (' + d.matchup.split(' vs ')[0] + '):</strong> ' + (proj.away_reasoning || '') + '</div>' +
+    '<div class="ai-reasoning"><strong style="color:var(--c)">Home (' + d.matchup.split(' vs ')[1] + '):</strong> ' + (proj.home_reasoning || '') + '</div>';
+  
+  var factorsHtml = '';
+  if(proj.key_factors && proj.key_factors.length) {
+    factorsHtml = '<div class="ai-factors">' +
+      '<div class="ai-factors-title">⚡ KEY FACTORS</div>';
+    proj.key_factors.forEach(function(factor) {
+      factorsHtml += '<div class="ai-factor-item">• ' + factor + '</div>';
+    });
+    factorsHtml += '</div>';
+  }
+  
+  var sourceHtml = '';
+  if(proj.source) {
+    var sourceLabel = proj.source === 'local_fallback' ? 'Statistical fallback model' : 'AI model';
+    sourceHtml = '<div style="font-size:.64rem;color:var(--mu);margin-top:8px">' +
+      '<strong>Source:</strong> ' + sourceLabel + '</div>';
+    if(proj.fallback_reason) {
+      sourceHtml += '<div style="font-size:.62rem;color:var(--faint);margin-top:4px">' +
+        'Reason: ' + proj.fallback_reason + '</div>';
+    }
+  }
+  
+  var propsHtml = '';
+  if(proj.notable_props && proj.notable_props.length) {
+    propsHtml = '<div class="ai-props"><div style="font-family:Orbitron;font-size:.64rem;color:var(--c);letter-spacing:2px;margin-bottom:10px">🎯 NOTABLE PLAYER PROPS</div>';
+    proj.notable_props.forEach(function(prop) {
+      propsHtml += '<div class="ai-prop-item" style="cursor:pointer;transition:background .2s" onclick="addPropToParlay(\'' + (prop.player || '').replace(/'/g, "\\'") + '\', \'batter_hits\', ' + (prop.projection || 0) + ', ' + GPK + ', \'Over\')" onmouseover="this.style.background=\'rgba(0,229,255,.08)\'" onmouseout="this.style.background=\'rgba(0,0,0,.2)\'">' +
+        '<div class="ai-prop-player">' + prop.player + ' <span style="color:var(--c);font-size:.55rem">→ Add to Parlay</span></div>' +
+        '<div class="ai-prop-detail">' + (prop.prop || 'prop') + ' O/U ' + (prop.projection || '') + '</div>' +
+        '<div class="ai-prop-reasoning">' + (prop.reasoning || '') + '</div>' +
+        '</div>';
+    });
+    propsHtml += '</div>';
+  }
+  
+  var pitchingHtml = '<div style="font-size:.62rem;color:var(--mu);margin:10px 0">' +
+    '<strong>Away P:</strong> ' + (away.name || 'TBD') + ' (ERA: ' + (away.era || '—') + ', K/9: ' + (away.k9 || '—') + ') &nbsp;|&nbsp; ' +
+    '<strong>Home P:</strong> ' + (home.name || 'TBD') + ' (ERA: ' + (home.era || '—') + ', K/9: ' + (home.k9 || '—') + ')' +
+    '</div>';
+  
+  el.innerHTML = 
+    '<div class="ai-header">🤖 AI BOX SCORE PROJECTIONS <span class="ai-badge">EXPERIMENTAL</span></div>' +
+    weatherHtml +
+    '<div class="ai-matchup">' +
+      '<div class="ai-score-card">' +
+        '<div style="font-size:.62rem;color:var(--mu);letter-spacing:1px;margin-bottom:4px">AWAY RUNS</div>' +
+        '<div class="ai-score-big">' + (proj.away_runs || '—') + '</div>' +
+      '</div>' +
+      '<div class="ai-score-card">' +
+        '<div style="font-size:.62rem;color:var(--mu);letter-spacing:1px;margin-bottom:4px">TOTAL RUNS</div>' +
+        '<div class="ai-score-big" style="color:var(--o)">' + (proj.total_runs || '—') + '</div>' +
+        '<div class="ai-score-label">O/U Signal</div>' +
+      '</div>' +
+      '<div class="ai-score-card">' +
+        '<div style="font-size:.62rem;color:var(--mu);letter-spacing:1px;margin-bottom:4px">HOME RUNS</div>' +
+        '<div class="ai-score-big">' + (proj.home_runs || '—') + '</div>' +
+      '</div>' +
+    '</div>' +
+    pitchingHtml +
+    reasoningHtml +
+    factorsHtml +
+    sourceHtml +
+    '<span class="' + confClass + '"><strong>Confidence:</strong> ' + (proj.confidence || 'LOW') + '</span>' +
+    propsHtml;
+}
+
+// Ensure AI panel exists in DOM and load projections
+function ensureAIPanelExists() {
+  if(!document.getElementById('aiPanelWrap')) {
+    var wrap = document.createElement('div');
+    wrap.id = 'aiPanelWrap';
+    wrap.className = 'pnl fw pnl-src';
+    wrap.innerHTML = '<div id="aiPanel"><div class="spinner"></div></div>';
+    var dg = document.querySelector('.dg');
+    if(dg) {
+      // Insert after game projection panel
+      var gpPanel = document.querySelector('[id="gpContent"]');
+      if(gpPanel && gpPanel.closest('.pnl')) {
+        dg.insertBefore(wrap, gpPanel.closest('.pnl').nextSibling);
+      } else {
+        // Insert as second element if first panel not found
+        dg.insertBefore(wrap, dg.children[1] || null);
+      }
+    }
+  }
+}
+
+setTimeout(function() {
+  ensureAIPanelExists();
+  loadAIProjections();
+}, 2000);
+
+
+// ── Parlay Builder ────────────────────────────────────────────────────────────
+var PARLAY_STATE = {
+  selections: [],
+  odds: 0,
+  americanOdds: 100
+};
+
+function ensureParlayPanel() {
+  if(!document.getElementById('parlayPanelWrap')) {
+    var wrap = document.createElement('div');
+    wrap.id = 'parlayPanelWrap';
+    wrap.className = 'pnl fw pnl-src';
+    wrap.innerHTML = '<div id="parlayPanel"><div class="parlay-empty">👁️ Select props from AI panel to build your parlay</div></div>';
+    var dg = document.querySelector('.dg');
+    if(dg) dg.appendChild(wrap);
+  }
+  return document.getElementById('parlayPanel');
+}
+
+function addPropToParlay(playerName, market, projection, gamePk, side) {
+  var sel = {
+    game_pk: gamePk,
+    player: playerName,
+    market: market,
+    projection: projection,
+    side: side || 'Over'
+  };
+  PARLAY_STATE.selections.push(sel);
+  renderParlayPanel();
+}
+
+function removeParlayLeg(idx) {
+  PARLAY_STATE.selections.splice(idx, 1);
+  renderParlayPanel();
+}
+
+function clearParlay() {
+  PARLAY_STATE.selections = [];
+  PARLAY_STATE.odds = 0;
+  PARLAY_STATE.americanOdds = 100;
+  renderParlayPanel();
+}
+
+function calculateParlayOdds() {
+  if(!PARLAY_STATE.selections || !PARLAY_STATE.selections.length) {
+    PARLAY_STATE.odds = 0;
+    PARLAY_STATE.americanOdds = 100;
+    return;
+  }
+  var probProduct = 1.0;
+  PARLAY_STATE.selections.forEach(function(sel) {
+    var baseProb = 0.55;
+    if(sel.market === 'batter_hits' || sel.market === 'batter_home_runs' || sel.market === 'batter_rbis') {
+      baseProb = sel.projection >= 0.5 ? 0.55 : 0.45;
+    } else if(sel.market === 'pitcher_strikeouts') {
+      baseProb = sel.projection >= 6.5 ? 0.56 : 0.45;
+    }
+    probProduct *= baseProb;
+  });
+  PARLAY_STATE.odds = probProduct;
+  PARLAY_STATE.americanOdds = probProduct >= 0.5 
+    ? Math.round(-100 * probProduct / (1 - probProduct))
+    : Math.round(100 * (1 - probProduct) / probProduct);
+}
+
+function renderParlayPanel() {
+  var el = ensureParlayPanel();
+  calculateParlayOdds();
+  
+  if(!PARLAY_STATE.selections || !PARLAY_STATE.selections.length) {
+    el.innerHTML = '<div class="parlay-empty">👁️ Select props from AI panel to build your parlay</div>';
+    return;
+  }
+  
+  var legsHtml = PARLAY_STATE.selections.map(function(sel, idx) {
+    return '<div class="parlay-leg">' +
+      '<div class="parlay-leg-info">' +
+        '<div class="parlay-leg-title">' + sel.player + '</div>' +
+        '<div class="parlay-leg-sub">' + sel.market.replace('_', ' ').toUpperCase() + ' ' + sel.side + ' ' + sel.projection + '</div>' +
+      '</div>' +
+      '<button class="parlay-leg-remove" onclick="removeParlayLeg(' + idx + ')">✕</button>' +
+    '</div>';
+  }).join('');
+  
+  var oddsPercent = (PARLAY_STATE.odds * 100).toFixed(1);
+  
+  el.innerHTML = 
+    '<div class="parlay-header">🎰 PARLAY BUILDER <span class="parlay-badge">' + PARLAY_STATE.selections.length + ' LEGS</span></div>' +
+    legsHtml +
+    '<div class="parlay-odds">' +
+      '<div class="parlay-odd-card"><div class="parlay-odd-label">BREAK-EVEN</div><div class="parlay-odd-value">' + oddsPercent + '%</div></div>' +
+      '<div class="parlay-odd-card"><div class="parlay-odd-label">AMERICAN ODDS</div><div class="parlay-odd-value">' + (PARLAY_STATE.americanOdds > 0 ? '+' : '') + PARLAY_STATE.americanOdds + '</div></div>' +
+      '<div class="parlay-odd-card"><div class="parlay-odd-label">LEGS</div><div class="parlay-odd-value">' + PARLAY_STATE.selections.length + '</div></div>' +
+    '</div>' +
+    '<textarea class="parlay-select" id="parlayNotes" placeholder="Add notes (optional)..." style="height:60px;resize:vertical;margin-top:10px;font-family:Inter,sans-serif;line-height:1.4"></textarea>' +
+    '<div class="parlay-actions">' +
+      '<button class="parlay-btn" onclick="clearParlay()">Clear All</button>' +
+      '<button class="parlay-btn send" onclick="sendParlayToTracker()">Send to Tracker ✓</button>' +
+    '</div>';
+}
+
+function sendParlayToTracker() {
+  if(!PARLAY_STATE.selections || !PARLAY_STATE.selections.length) {
+    alert('Add selections to parlay first');
+    return;
+  }
+  
+  var notes = document.getElementById('parlayNotes').value || '';
+  var today = new Date().toISOString().split('T')[0];
+  
+  var payload = {
+    parlay: {
+      id: 'parlay_' + Date.now(),
+      selections: PARLAY_STATE.selections,
+      american_odds: PARLAY_STATE.americanOdds,
+      summary: {
+        leg_count: PARLAY_STATE.selections.length,
+        break_even_prob: PARLAY_STATE.odds
+      }
+    },
+    date: today,
+    notes: notes
+  };
+  
+  fetch('/api/parlay/send-to-tracker', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload)
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(d) {
+    if(d.success) {
+      alert('✓ Parlay sent to tracker for ' + today);
+      clearParlay();
+    } else {
+      alert('Error: ' + (d.error || 'Failed to send parlay'));
+    }
+  })
+  .catch(function(e) {
+    alert('Network error: ' + e.message);
+  });
+}
+
+// Initialize parlay panel on page load
+setTimeout(function() {
+  ensureParlayPanel();
+}, 500);
+
+
 
 
 

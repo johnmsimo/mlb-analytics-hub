@@ -3458,6 +3458,670 @@ def api_lineup(game_pk):
         return jsonify({'success': False, 'gamePk': game_pk, 'away': [], 'home': [], 'awayConfirmed': False, 'homeConfirmed': False, 'error': str(ex)})
 
 
+# ── Slate Capture & Parlays ───────────────────────────────────────────────────
+@app.route('/api/capture-daily-slate/<date_str>')
+def api_capture_daily_slate(date_str):
+    """Capture all AI projections for the day as a slate snapshot."""
+    try:
+        year = datetime.now().year
+        # Get all games for this date
+        raw = fetch_schedule(date_str)
+        if not raw:
+            return jsonify({'success': False, 'error': 'No games found for this date', 'slate': None})
+        
+        slate = {
+            'date': date_str,
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'games': [],
+            'summary': {'total_games': len(raw), 'projections_captured': 0}
+        }
+        
+        # Fetch AI projections for each game
+        for game in raw:
+            game_pk = game.get('gamePk')
+            if not game_pk:
+                continue
+            
+            try:
+                # Get AI projections
+                r = requests.get(f"http://localhost:5000/api/ai-boxscore/{game_pk}", timeout=5)
+                if r.status_code == 200:
+                    ai_data = r.json()
+                    if ai_data.get('success'):
+                        slate['games'].append({
+                            'gamePk': game_pk,
+                            'matchup': ai_data.get('matchup'),
+                            'away_team': game.get('teams', {}).get('away', {}).get('team', {}).get('name'),
+                            'home_team': game.get('teams', {}).get('home', {}).get('team', {}).get('name'),
+                            'projections': ai_data.get('projections'),
+                            'weather': ai_data.get('weather'),
+                            'venue': ai_data.get('venue'),
+                            'pitching': ai_data.get('pitching_matchup'),
+                            'captured_at': datetime.now(timezone.utc).isoformat()
+                        })
+                        slate['summary']['projections_captured'] += 1
+            except Exception as ex:
+                print(f"[capture_slate] Failed to get AI projections for game {game_pk}: {ex}")
+                continue
+        
+        # Store slate in data directory
+        slate_dir = os.path.join(DATA_DIR, 'slates')
+        os.makedirs(slate_dir, exist_ok=True)
+        slate_file = os.path.join(slate_dir, f"{date_str}_slate.json")
+        with open(slate_file, 'w') as f:
+            json.dump(slate, f, indent=2)
+        
+        return jsonify({
+            'success': True,
+            'slate': slate,
+            'saved_to': slate_file
+        })
+    except Exception as ex:
+        print(f"[capture_daily_slate] {traceback.format_exc()}")
+        return jsonify({'success': False, 'error': str(ex), 'slate': None}), 500
+
+
+@app.route('/api/parlay/build', methods=['POST'])
+def api_build_parlay():
+    """Build a parlay from selected game props."""
+    try:
+        req = request.get_json() or {}
+        selections = req.get('selections', [])  # List of {game_pk, player, market, projection, side}
+        
+        if not selections:
+            return jsonify({'success': False, 'error': 'No selections provided', 'parlay': None})
+        
+        parlay = {
+            'id': datetime.now().isoformat().replace(':', '').replace('.', ''),
+            'created_at': datetime.now(timezone.utc).isoformat(),
+            'selections': [],
+            'implied_odds': 1.0,
+            'american_odds': 100,
+            'summary': {'leg_count': 0, 'break_even_prob': 0.0}
+        }
+        
+        # Build each leg
+        prob_product = 1.0
+        for sel in selections:
+            game_pk = sel.get('game_pk')
+            player = sel.get('player')
+            market = sel.get('market')
+            projection = float(sel.get('projection', 0))
+            side = sel.get('side', 'Over')
+            
+            # Estimate win probability
+            if market in ('batter_hits', 'batter_home_runs', 'batter_rbis'):
+                # Simple heuristic: projection value → probability
+                base_prob = 0.55 if projection >= 0.5 else 0.45
+            elif market == 'pitcher_strikeouts':
+                base_prob = 0.56 if projection >= 6.5 else 0.45
+            else:
+                base_prob = 0.52
+            
+            parlay['selections'].append({
+                'game_pk': game_pk,
+                'player': player,
+                'market': market,
+                'projection': projection,
+                'side': side,
+                'win_probability': base_prob,
+                'american_odds': _prob_to_american(base_prob)
+            })
+            
+            prob_product *= base_prob
+        
+        # Calculate parlay odds
+        parlay['summary']['leg_count'] = len(parlay['selections'])
+        parlay['summary']['break_even_prob'] = round(prob_product, 4)
+        parlay['implied_odds'] = round(prob_product, 4)
+        parlay['american_odds'] = _prob_to_american(prob_product)
+        
+        return jsonify({
+            'success': True,
+            'parlay': parlay
+        })
+    except Exception as ex:
+        print(f"[build_parlay] {traceback.format_exc()}")
+        return jsonify({'success': False, 'error': str(ex), 'parlay': None}), 500
+
+
+@app.route('/api/parlay/send-to-tracker', methods=['POST'])
+def api_parlay_to_tracker():
+    """Send a parlay to the daily tracker."""
+    try:
+        req = request.get_json() or {}
+        parlay = req.get('parlay')
+        date_str = req.get('date', datetime.now().strftime('%Y-%m-%d'))
+        notes = req.get('notes', '')
+        
+        if not parlay:
+            return jsonify({'success': False, 'error': 'No parlay provided'})
+        
+        # Create tracker entries for this parlay
+        store = _tracker_store()
+        day_entries = store.get(date_str, {'entries': []}).get('entries', [])
+        
+        parlay_entry = {
+            'id': parlay.get('id'),
+            'date': date_str,
+            'type': 'parlay',
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'selections': parlay.get('selections', []),
+            'american_odds': parlay.get('american_odds'),
+            'break_even_prob': parlay.get('summary', {}).get('break_even_prob'),
+            'notes': notes,
+            'status': 'pending',
+            'grade': 'pending'
+        }
+        
+        day_entries.append(parlay_entry)
+        store[date_str] = {'entries': day_entries}
+        
+        # Save to file
+        with open(TRACKER_STORE, 'w') as f:
+            json.dump(store, f, indent=2)
+        
+        return jsonify({
+            'success': True,
+            'message': f'Parlay {parlay.get("id")} added to tracker for {date_str}',
+            'entry_id': parlay.get('id')
+        })
+    except Exception as ex:
+        print(f"[parlay_to_tracker] {traceback.format_exc()}")
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
+@app.route('/api/model-upgrade/suggestions/<date_str>')
+def api_model_upgrade_suggestions(date_str):
+    """Get model upgrade suggestions based on daily performance grades."""
+    try:
+        store = _tracker_store()
+        day = store.get(date_str, {})
+        entries = day.get('entries', [])
+        
+        # Analyze performance
+        graded = [e for e in entries if e.get('grade') in ('win', 'loss', 'push')]
+        if not graded:
+            return jsonify({
+                'success': True,
+                'date': date_str,
+                'suggestions': [],
+                'message': 'No graded entries yet for this date'
+            })
+        
+        wins = sum(1 for e in graded if e.get('grade') == 'win')
+        losses = sum(1 for e in graded if e.get('grade') == 'loss')
+        hit_rate = round(wins / max(1, wins + losses), 3)
+        
+        suggestions = []
+        
+        # Rule 1: High hit rate (>60%) → increase model confidence
+        if hit_rate >= 0.60:
+            suggestions.append({
+                'type': 'increase_confidence',
+                'title': 'Boost Model Confidence',
+                'description': f'Hit rate of {hit_rate*100:.1f}% suggests model is accurate. Increase confidence weighting.',
+                'impact': 'Higher conviction on similar projections',
+                'priority': 'high'
+            })
+        
+        # Rule 2: Low hit rate (<40%) → decrease model confidence
+        elif hit_rate < 0.40:
+            suggestions.append({
+                'type': 'decrease_confidence',
+                'title': 'Reduce Model Confidence',
+                'description': f'Hit rate of {hit_rate*100:.1f}% indicates model needs calibration. Reduce weight.',
+                'impact': 'Lower conviction, increase filtering threshold',
+                'priority': 'high'
+            })
+        
+        # Rule 3: Specific market underperformance
+        market_performance = {}
+        for e in graded:
+            if e.get('type') == 'parlay':
+                for sel in e.get('selections', []):
+                    mk = sel.get('market')
+                    market_performance.setdefault(mk, {'wins': 0, 'losses': 0})
+                    if e.get('grade') == 'win':
+                        market_performance[mk]['wins'] += 1
+                    else:
+                        market_performance[mk]['losses'] += 1
+        
+        for market, perf in market_performance.items():
+            total = perf['wins'] + perf['losses']
+            mk_hit_rate = perf['wins'] / max(1, total)
+            if mk_hit_rate < 0.35 and total >= 3:
+                suggestions.append({
+                    'type': 'market_adjustment',
+                    'title': f'Adjust {market}',
+                    'description': f'{market} has {mk_hit_rate*100:.1f}% hit rate across {total} bets.',
+                    'impact': f'Consider skipping or reducing {market} projections',
+                    'priority': 'medium'
+                })
+        
+        return jsonify({
+            'success': True,
+            'date': date_str,
+            'performance': {
+                'graded': len(graded),
+                'wins': wins,
+                'losses': losses,
+                'hit_rate': hit_rate
+            },
+            'suggestions': suggestions
+        })
+    except Exception as ex:
+        print(f"[model_upgrade_suggestions] {traceback.format_exc()}")
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
+def _prob_to_american(probability):
+    """Convert decimal probability to American odds."""
+    if probability <= 0 or probability >= 1:
+        return 0
+    if probability >= 0.5:
+        return round(-100 * probability / (1 - probability))
+    else:
+        return round(100 * (1 - probability) / probability)
+
+
+def _local_boxscore_projections(game_pk, context, away_bats, home_bats, ap_name, hp_name,
+                                ap_fg, hp_fg, ap_sv, hp_sv, ap_stats, hp_stats, pf, wx,
+                                away_t, home_t):
+    def parse_float(value, fallback=0.0):
+        try:
+            return float(value)
+        except Exception:
+            return fallback
+
+    def best_era(sv, fg, mlb):
+        for v in (sv.get('sv_xera'), fg.get('fg_era'), mlb.get('era')):
+            try:
+                f = float(v)
+                if 0 < f < 12:
+                    return f
+            except Exception:
+                pass
+        return 4.50
+
+    def best_fip(fg, fallback):
+        try:
+            f = float(fg.get('fg_fip', 0))
+            if 0 < f < 12:
+                return f
+        except Exception:
+            pass
+        return fallback
+
+    def lineup_xwoba(bats):
+        vals = []
+        for b in bats:
+            if not b:
+                continue
+            for key in ('sv_xwoba', 'fg_woba'):
+                try:
+                    f = parse_float(b.get(key, 0))
+                except Exception:
+                    f = 0.0
+                if 0.1 < f < 0.6:
+                    vals.append(f)
+                    break
+            else:
+                vals.append(0.320)
+        return round(sum(vals) / len(vals), 3) if vals else 0.320
+
+    away_pit_era = best_era(hp_sv, hp_fg, hp_stats)
+    home_pit_era = best_era(ap_sv, ap_fg, ap_stats)
+    away_pit_fip = best_fip(hp_fg, away_pit_era)
+    home_pit_fip = best_fip(ap_fg, home_pit_era)
+    away_xwoba = lineup_xwoba(away_bats)
+    home_xwoba = lineup_xwoba(home_bats)
+
+    away_blend = 0.6 * away_pit_era + 0.4 * away_pit_fip
+    home_blend = 0.6 * home_pit_era + 0.4 * home_pit_fip
+    away_runs = 4.50 * (4.50 / away_blend) * (away_xwoba / 0.320) * pf
+    home_runs = 4.50 * (4.50 / home_blend) * (home_xwoba / 0.320) * pf
+
+    wx_adj = 0.0
+    if not wx.get('dome'):
+        try:
+            temp = float(wx.get('temp', '70'))
+            if temp > 82:
+                wx_adj = 0.20
+            elif temp > 76:
+                wx_adj = 0.10
+            elif temp < 48:
+                wx_adj = -0.20
+            elif temp < 56:
+                wx_adj = -0.10
+        except Exception:
+            pass
+
+    away_runs = round(max(2.0, min(8.0, away_runs + wx_adj)), 1)
+    home_runs = round(max(2.0, min(8.0, home_runs + wx_adj)), 1)
+    total_runs = round(away_runs + home_runs, 1)
+
+    def build_reasoning(team_abbr, runs, xwoba, pitcher_name, opponent_name):
+        return (
+            f"{team_abbr} should score {runs} runs against {opponent_name} given the matchup, "
+            f"their lineup xwOBA of {xwoba:.3f}, and the current weather/park profile."
+        )
+
+    away_reasoning = build_reasoning(context['away_abbr'], away_runs, away_xwoba,
+                                     context['away_pitcher']['name'], context['home_pitcher']['name'])
+    home_reasoning = build_reasoning(context['home_abbr'], home_runs, home_xwoba,
+                                     context['home_pitcher']['name'], context['away_pitcher']['name'])
+
+    confidence = 'HIGH' if total_runs > 10 or total_runs < 7 else 'MEDIUM'
+    if not away_bats or not home_bats:
+        confidence = 'LOW'
+
+    def top_batter_props(bats, side):
+        scored = []
+        for b in bats:
+            name = b.get('name')
+            if not name:
+                continue
+            woba = parse_float(b.get('sv_xwoba') or b.get('fg_woba') or 0.320)
+            hr = parse_float(b.get('hr') or b.get('fg_hr') or 0)
+            avg = parse_float(b.get('avg') or b.get('fg_avg') or 0.240)
+            scored.append((woba, name, avg, hr))
+        return sorted(scored, key=lambda x: x[0], reverse=True)[:2]
+
+    props = []
+    for bats, side in ((away_bats, context['away_abbr']), (home_bats, context['home_abbr'])):
+        best = top_batter_props(bats, side)
+        if not best:
+            continue
+        name = best[0][1]
+        woba = best[0][0]
+        hr = best[0][3]
+        if hr > 0:
+            projection = round(min(0.42, 0.14 + woba * 0.25), 3)
+            prop_type = 'hr'
+            reasoning = f"{name} has strong contact and power metrics against this matchup."
+        else:
+            projection = round(min(0.76, max(0.32, woba * 2.0)), 3)
+            prop_type = 'hits'
+            reasoning = f"{name} profiles as a top contact bat with a good chance for multiple hits."
+        props.append({
+            'player': name,
+            'prop': prop_type,
+            'projection': projection,
+            'reasoning': reasoning
+        })
+
+    for pitcher_name, pitcher_data in ((ap_name, ap_fg), (hp_name, hp_fg)):
+        k9 = parse_float(pitcher_data.get('fg_k9') or pitcher_data.get('k9') or 6.0)
+        k_prob = round(min(0.76, max(0.40, k9 / 9 * 0.72 + 0.18)), 3)
+        props.append({
+            'player': pitcher_name,
+            'prop': 'k',
+            'projection': k_prob,
+            'reasoning': f"{pitcher_name} is likely to generate strikeouts based on his K/9 profile."
+        })
+
+    return {
+        'away_runs': int(round(away_runs)),
+        'home_runs': int(round(home_runs)),
+        'away_hits': int(round(max(6, min(15, away_runs * 1.8)))),
+        'home_hits': int(round(max(6, min(15, home_runs * 1.8)))),
+        'total_runs': int(round(total_runs)),
+        'away_reasoning': away_reasoning,
+        'home_reasoning': home_reasoning,
+        'key_factors': [
+            f"Pitching matchup: {context['away_pitcher']['name']} vs {context['home_pitcher']['name']}",
+            f"Lineup strength: {context['away_abbr']} xwOBA {away_xwoba}, {context['home_abbr']} xwOBA {home_xwoba}",
+            f"Weather/Park: {wx.get('temp', 'N/A')}°F, {wx.get('condition', 'N/A')} at PF {pf}"
+        ],
+        'confidence': confidence,
+        'notable_props': props[:3]
+    }
+
+
+@app.route('/api/ai-boxscore/<int:game_pk>')
+def api_ai_boxscore(game_pk):
+    """AI-powered box score projections using weather, player stats, and recent performance."""
+    try:
+        # Fetch game data
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        raw = fetch_schedule(date_str)
+        gdata = next((g for g in raw if g.get("gamePk") == game_pk), None)
+        if not gdata:
+            return jsonify({'success': False, 'error': 'Game not found', 'projections': None})
+        
+        # Team & weather info
+        away_t = gdata.get("teams",{}).get("away",{})
+        home_t = gdata.get("teams",{}).get("home",{})
+        away_name = away_t.get("team",{}).get("name","Unknown")
+        home_name = home_t.get("team",{}).get("name","Unknown")
+        away_abbr = away_t.get("team",{}).get("abbreviation","AWAY")
+        home_abbr = home_t.get("team",{}).get("abbreviation","HOME")
+        
+        # Weather
+        ven = gdata.get("venue", {})
+        venue_name = ven.get("name", "Unknown")
+        venue_id = ven.get("id")
+        vloc = ven.get("location", {}) or {}
+        coords = vloc.get("defaultCoordinates", {}) or {}
+        lat = coords.get("latitude")
+        lon = coords.get("longitude")
+        try:
+            dt_utc_wx = datetime.fromisoformat(gdata.get("gameDate","").replace("Z","+00:00"))
+            game_hour = dt_utc_wx.astimezone(ET).hour
+        except:
+            game_hour = 13
+        
+        wx = get_weather(lat, lon, game_hour, venue_id=venue_id)
+        if wx.get('temp') in (None, 'N/A'):
+            raw_weather = gdata.get('weather', {}) or {}
+            if raw_weather:
+                wx = {
+                    'temp': raw_weather.get('temp', 'N/A'),
+                    'condition': raw_weather.get('condition', 'N/A'),
+                    'wind': raw_weather.get('wind', 'N/A'),
+                }
+        
+        # Pitchers
+        ap = away_t.get("probablePitcher",{}); hp = home_t.get("probablePitcher",{})
+        ap_name = ap.get("fullName","TBD"); hp_name = hp.get("fullName","TBD")
+        ap_id = ap.get("id"); hp_id = hp.get("id")
+        
+        # Get pitcher stats
+        ap_stats = pitcher_stats_mlb(ap_id) if ap_id else {}
+        hp_stats = pitcher_stats_mlb(hp_id) if hp_id else {}
+        ap_fg = fg_pitcher(ap_name); hp_fg = fg_pitcher(hp_name)
+        ap_sv = sv_pitcher(ap_name); hp_sv = sv_pitcher(hp_name)
+        
+        # Get lineups
+        try:
+            r = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=10)
+            r.raise_for_status()
+            box = r.json().get("teams",{})
+            away_bats = get_batters_from_boxscore(box.get("away",{}), "away")
+            home_bats = get_batters_from_boxscore(box.get("home",{}), "home")
+        except:
+            away_bats = []; home_bats = []
+        
+        # Park factor
+        hid = home_t.get("team",{}).get("id")
+        pf = PARK_FACTORS.get(hid, 1.0)
+        
+        # Build context for AI
+        context = {
+            'away_team': away_name,
+            'away_abbr': away_abbr,
+            'home_team': home_name,
+            'home_abbr': home_abbr,
+            'weather': {
+                'temp': wx.get('temp', 'N/A'),
+                'condition': wx.get('condition', ''),
+                'wind': wx.get('wind', 'N/A'),
+            },
+            'venue': {
+                'name': venue_name,
+                'park_factor': pf,
+            },
+            'away_pitcher': {
+                'name': ap_name,
+                'era': ap_fg.get('fg_era') or ap_stats.get('era', 'N/A'),
+                'whip': ap_fg.get('fg_whip') or ap_stats.get('whip', 'N/A'),
+                'k9': ap_fg.get('fg_k9') or ap_stats.get('k9', 'N/A'),
+                'xera': ap_sv.get('sv_xera', 'N/A'),
+            },
+            'home_pitcher': {
+                'name': hp_name,
+                'era': hp_fg.get('fg_era') or hp_stats.get('era', 'N/A'),
+                'whip': hp_fg.get('fg_whip') or hp_stats.get('whip', 'N/A'),
+                'k9': hp_fg.get('fg_k9') or hp_stats.get('k9', 'N/A'),
+                'xera': hp_sv.get('sv_xera', 'N/A'),
+            },
+            'away_lineup': [
+                {
+                    'slot': b.get('slot'),
+                    'name': b.get('name'),
+                    'pos': b.get('pos'),
+                    'avg': b.get('avg'),
+                    'obp': b.get('obp'),
+                    'slg': b.get('slg'),
+                    'woba': b.get('fg_woba'),
+                    'xwoba': b.get('sv_xwoba'),
+                    'ev': b.get('sv_ev'),
+                    'hr': b.get('hr'),
+                }
+                for b in away_bats[:9]
+            ],
+            'home_lineup': [
+                {
+                    'slot': b.get('slot'),
+                    'name': b.get('name'),
+                    'pos': b.get('pos'),
+                    'avg': b.get('avg'),
+                    'obp': b.get('obp'),
+                    'slg': b.get('slg'),
+                    'woba': b.get('fg_woba'),
+                    'xwoba': b.get('sv_xwoba'),
+                    'ev': b.get('sv_ev'),
+                    'hr': b.get('hr'),
+                }
+                for b in home_bats[:9]
+            ],
+        }
+
+        ai_projections = None
+        openai_error = None
+        try:
+            from openai import OpenAI
+            api_key = os.environ.get('OPENAI_API_KEY')
+            if api_key:
+                prompt = f"""You are an expert MLB analyst. Based on the provided game data, generate detailed box score projections for both teams.
+
+GAME CONTEXT:
+- {context['away_team']} ({context['away_abbr']}) at {context['home_team']} ({context['home_abbr']})
+- Venue: {context['venue']['name']} (Park Factor: {context['venue']['park_factor']}x)
+- Weather: {context['weather']['temp']}°F, {context['weather']['condition']}, Wind: {context['weather']['wind']}
+
+PITCHING MATCHUP:
+Away Pitcher ({context['away_abbr']}): {context['away_pitcher']['name']}
+  - ERA: {context['away_pitcher']['era']} | WHIP: {context['away_pitcher']['whip']} | K/9: {context['away_pitcher']['k9']} | xERA: {context['away_pitcher']['xera']}
+
+Home Pitcher ({context['home_abbr']}): {context['home_pitcher']['name']}
+  - ERA: {context['home_pitcher']['era']} | WHIP: {context['home_pitcher']['whip']} | K/9: {context['home_pitcher']['k9']} | xERA: {context['home_pitcher']['xera']}
+
+AWAY LINEUP ({context['away_abbr']}):
+{chr(10).join(f"{b['slot']}. {b['name']} ({b['pos']}) - AVG: {b['avg']}, OBP: {b['obp']}, SLG: {b['slg']}, wOBA: {b['woba']}" for b in context['away_lineup'])}
+
+HOME LINEUP ({context['home_abbr']}):
+{chr(10).join(f"{b['slot']}. {b['name']} ({b['pos']}) - AVG: {b['avg']}, OBP: {b['obp']}, SLG: {b['slg']}, wOBA: {b['woba']}" for b in context['home_lineup'])}
+
+Provide your analysis in this exact JSON structure:
+{{
+  "away_runs": <integer projection>,
+  "home_runs": <integer projection>,
+  "away_hits": <integer projection>,
+  "home_hits": <integer projection>,
+  "total_runs": <integer projection>,
+  "away_reasoning": "<string explaining run projection factors for away team>",
+  "home_reasoning": "<string explaining run projection factors for home team>",
+  "key_factors": [
+    "<factor 1>",
+    "<factor 2>",
+    "<factor 3>"
+  ],
+  "confidence": "<HIGH|MEDIUM|LOW>",
+  "notable_props": [
+    {{
+      "player": "<player name>",
+      "prop": "<prop type: hits/hr/rbi/k>",
+      "projection": <float>,
+      "reasoning": "<why this player stands out>"
+    }}
+  ]
+}}
+
+Focus on recent performance trends, matchup splits, weather impact, and park factors."""
+                client = OpenAI(api_key=api_key)
+                response = client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are an expert MLB analyst providing detailed game and player projections based on comprehensive statistical analysis."
+                        },
+                        {
+                            "role": "user",
+                            "content": prompt
+                        }
+                    ],
+                    temperature=0.7,
+                    max_tokens=2000
+                )
+                response_text = response.choices[0].message.content
+                import json as json_lib
+                json_start = response_text.find('{')
+                json_end = response_text.rfind('}') + 1
+                if json_start >= 0 and json_end > json_start:
+                    json_str = response_text[json_start:json_end]
+                    ai_projections = json_lib.loads(json_str)
+                else:
+                    raise ValueError('Unable to parse OpenAI JSON')
+            else:
+                openai_error = 'OpenAI API key not configured'
+        except Exception as ex:
+            openai_error = str(ex)
+
+        if ai_projections is None:
+            ai_projections = _local_boxscore_projections(
+                game_pk, context, away_bats, home_bats, ap_name, hp_name,
+                ap_fg, hp_fg, ap_sv, hp_sv, ap_stats, hp_stats, pf, wx,
+                away_t, home_t
+            )
+            ai_projections['source'] = 'local_fallback'
+            ai_projections['fallback_reason'] = openai_error or 'OpenAI unavailable'
+        
+        return jsonify({
+            'success': True,
+            'gamePk': game_pk,
+            'matchup': f"{away_abbr} vs {home_abbr}",
+            'weather': context['weather'],
+            'venue': context['venue'],
+            'pitching_matchup': {
+                'away_pitcher': context['away_pitcher'],
+                'home_pitcher': context['home_pitcher']
+            },
+            'projections': ai_projections,
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+        })
+        
+    except Exception as ex:
+        print(f"[api_ai_boxscore] {game_pk}: {traceback.format_exc()}")
+        return jsonify({
+            'success': False,
+            'error': str(ex),
+            'projections': None
+        }), 500
+
+
 # Boot background loaders
 threading.Thread(target=_load_fg_data,      daemon=True).start()
 threading.Thread(target=_load_savant_data,  daemon=True).start()

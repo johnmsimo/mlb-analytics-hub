@@ -410,6 +410,29 @@ table.tbl{width:100%;border-collapse:collapse;font-size:.73rem}
         </div>
       </div>
 
+      <!-- Model upgrades + Slate capture -->
+      <div class="split" style="margin-bottom:14px">
+        <div class="panel pp">
+          <div class="ph">
+            <div><div class="kicker">Slate</div><div class="sec">Capture daily projections</div></div>
+            <button class="btn primary sm" id="captureSlateBtn">📊 Capture Slate</button>
+          </div>
+          <div style="font-size:.72rem;color:var(--mut);line-height:1.6;margin:10px 0">
+            <strong>Captures all AI projections for today's slate.</strong> Saves game matchups, weather, pitcher stats, and AI box score projections as a snapshot.
+          </div>
+          <div id="slateStatus" style="font-size:.64rem;color:var(--mut);padding:10px;background:rgba(255,255,255,.03);border-radius:8px;margin-top:10px">Ready to capture</div>
+        </div>
+        <div class="panel pp">
+          <div class="ph">
+            <div><div class="kicker">Model</div><div class="sec">Upgrade suggestions</div></div>
+            <button class="btn ghost sm" id="modelUpgradeBtn">🔧 Get Suggestions</button>
+          </div>
+          <div id="modelUpgrades" style="font-size:.64rem;color:var(--mut);">
+            <div style="line-height:1.6">Grade your bets first to receive model upgrade suggestions based on daily hit rates and market-specific performance.</div>
+          </div>
+        </div>
+      </div>
+
 <!-- Working board -->
       <div class="panel pp" style="margin-bottom:14px">
         <div class="ph">
@@ -814,11 +837,38 @@ async function loadAttr(){
   $('attrTierTbl').querySelector('tbody').innerHTML=(db.tierAudit||[]).length?(db.tierAudit||[]).map(atRow).join(''):'<tr><td colspan="6">No data.</td></tr>';
   $('attrPill').textContent=`Window ${w}d`;status('Attribution loaded');
 }
+async function captureAISlate(){
+  const dateStr=readDate();status('Capturing daily AI slate…');
+  const res=await api(`/api/capture-daily-slate/${dateStr}`);
+  if(res.success){
+    const summary=res.slate.summary||{};
+    $('slateStatus').innerHTML=`<strong>✓ Daily Slate Captured</strong><br>Games: ${summary.total_games||0} | Projections: ${summary.projections_captured||0} | Timestamp: ${ts(res.captured_at)}`;
+    status(`Captured ${summary.projections_captured||0} projections`);
+  } else {
+    $('slateStatus').innerHTML=`<strong style="color:var(--fg-warn)">✗ Capture Failed</strong><br>${safe(res.error||'Unknown error')}`;
+  }
+}
+async function getModelUpgradeSuggestions(){
+  const dateStr=readDate();status('Analyzing model performance…');
+  const res=await api(`/api/model-upgrade/suggestions/${dateStr}`);
+  if(res.suggestions&&res.suggestions.length){
+    const html=res.suggestions.map(s=>{
+      const priority=s.priority||'medium';
+      const priorityColor=priority==='high'?'var(--fg-warn)':priority==='low'?'var(--faint)':'var(--cyan)';
+      return `<div class="card" style="margin:8px 0"><div style="display:flex;justify-content:space-between;align-items:flex-start"><div><strong style="color:${priorityColor}">${safe(s.title||s.type)}</strong><div style="font-size:.85rem;color:var(--faint)">${safe(s.type)}</div></div><span style="font-size:.8rem;color:var(--faint)">${priority}</span></div><p style="margin:6px 0 0 0;font-size:.9rem">${safe(s.description||'')}</p><div style="margin-top:6px;padding:6px;background:rgba(0,229,255,.1);border-radius:4px;font-size:.85rem"><strong>Impact:</strong> ${safe(s.impact||'')}</div></div>`;
+    }).join('');
+    $('modelUpgrades').innerHTML=html;
+    status(`${res.suggestions.length} suggestions generated`);
+  } else {
+    $('modelUpgrades').innerHTML='<div class="card"><p style="color:var(--faint)">No model upgrades suggested for this date.</p></div>';
+    status('No upgrade suggestions');
+  }
+}
 function wire(){
   bindNav();
   $('trackDate').addEventListener('change',readDate);
   $('fMkt').addEventListener('change',renderEntries);$('fRes').addEventListener('change',renderEntries);$('fSort').addEventListener('change',renderEntries);
-  const pairs=[['reloadTopBtn',loadDay],['loadDayBtn',loadDay],['reloadDayBtn2',loadDay],['reloadGradeBtn',loadDay],['captureBtn',captureDay],['captureBtn2',captureDay],['closeBtn',captureClose],['closeBtn2',captureClose],['gradeBtn',gradeDay],['gradeBtn2',gradeDay],['saveAdjBtn',saveAdj],['loadSlipBtn',loadSlip],['loadCalBtn',loadCal],['applyCalBtn',applyCal],['loadValBtn',loadVal],['loadBRBtn',loadBR],['loadAttrBtn',loadAttr]];
+  const pairs=[['reloadTopBtn',loadDay],['loadDayBtn',loadDay],['reloadDayBtn2',loadDay],['reloadGradeBtn',loadDay],['captureBtn',captureDay],['captureBtn2',captureDay],['closeBtn',captureClose],['closeBtn2',captureClose],['gradeBtn',gradeDay],['gradeBtn2',gradeDay],['saveAdjBtn',saveAdj],['loadSlipBtn',loadSlip],['loadCalBtn',loadCal],['applyCalBtn',applyCal],['loadValBtn',loadVal],['loadBRBtn',loadBR],['loadAttrBtn',loadAttr],['captureSlateBtn',captureAISlate],['modelUpgradeBtn',getModelUpgradeSuggestions]];
   pairs.forEach(([id,fn])=>$(id).addEventListener('click',()=>fn().catch(e=>{status(e.message);console.error(e)})));
 }
 async function boot(){
