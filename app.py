@@ -3483,25 +3483,22 @@ def api_capture_daily_slate(date_str):
                 continue
             
             try:
-                # Get AI projections
-                r = requests.get(f"http://localhost:5000/api/ai-boxscore/{game_pk}", timeout=5)
-                if r.status_code == 200:
-                    ai_data = r.json()
-                    if ai_data.get('success'):
-                        slate['games'].append({
-                            'gamePk': game_pk,
-                            'matchup': ai_data.get('matchup'),
-                            'away_team': game.get('teams', {}).get('away', {}).get('team', {}).get('name'),
-                            'home_team': game.get('teams', {}).get('home', {}).get('team', {}).get('name'),
-                            'projections': ai_data.get('projections'),
-                            'weather': ai_data.get('weather'),
-                            'venue': ai_data.get('venue'),
-                            'pitching': ai_data.get('pitching_matchup'),
-                            'captured_at': datetime.now(timezone.utc).isoformat()
-                        })
-                        slate['summary']['projections_captured'] += 1
+                ai_data = _get_ai_boxscore_data(game_pk)
+                if ai_data.get('success'):
+                    slate['games'].append({
+                        'gamePk': game_pk,
+                        'matchup': ai_data.get('matchup'),
+                        'away_team': game.get('teams', {}).get('away', {}).get('team', {}).get('name'),
+                        'home_team': game.get('teams', {}).get('home', {}).get('team', {}).get('name'),
+                        'projections': ai_data.get('projections'),
+                        'weather': ai_data.get('weather'),
+                        'venue': ai_data.get('venue'),
+                        'pitching': ai_data.get('pitching_matchup'),
+                        'captured_at': datetime.now(timezone.utc).isoformat()
+                    })
+                    slate['summary']['projections_captured'] += 1
             except Exception as ex:
-                print(f"[capture_slate] Failed to get AI projections for game {game_pk}: {ex}")
+                print(f"[capture_slate] Failed to get AI projections for game {game_pk}: {traceback.format_exc()}")
                 continue
         
         # Store slate in data directory
@@ -3877,6 +3874,19 @@ def _local_boxscore_projections(game_pk, context, away_bats, home_bats, ap_name,
         'confidence': confidence,
         'notable_props': props[:3]
     }
+
+
+def _get_ai_boxscore_data(game_pk):
+    try:
+        result = api_ai_boxscore(game_pk)
+        if isinstance(result, tuple):
+            result = result[0]
+        if hasattr(result, 'get_json'):
+            return result.get_json()
+        return result
+    except Exception as ex:
+        print(f"[internal_ai_boxscore] {traceback.format_exc()}")
+        return {'success': False, 'error': str(ex), 'projections': None}
 
 
 @app.route('/api/ai-boxscore/<int:game_pk>')
