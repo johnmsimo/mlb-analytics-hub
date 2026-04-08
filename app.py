@@ -597,6 +597,8 @@ def api_games_today():
 
 @app.route("/api/game/<int:game_pk>")
 def api_game_detail(game_pk):
+    _maybe_refresh_fg()
+    _maybe_refresh_savant()
     try:
         r = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=10)
         r.raise_for_status()
@@ -683,6 +685,8 @@ def api_game_livedata(game_pk):
 
 @app.route("/api/pitchers/<int:game_pk>")
 def api_pitchers(game_pk):
+    _maybe_refresh_fg()
+    _maybe_refresh_savant()
     try:
         raw = fetch_schedule(datetime.now(ET).strftime("%Y-%m-%d"))
         for g in raw:
@@ -722,6 +726,8 @@ def e500(e): return jsonify({"error":str(e)}), 500
 # ── Phase 3 Routes ────────────────────────────────────────────────────────────
 @app.route("/api/game-projection/<int:game_pk>")
 def api_game_projection(game_pk):
+    _maybe_refresh_fg()
+    _maybe_refresh_savant()
     try:
         raw = fetch_schedule(datetime.now(ET).strftime("%Y-%m-%d"))
         gdata = next((g for g in raw if g.get("gamePk") == game_pk), None)
@@ -914,6 +920,8 @@ def _build_ai_lines(name, is_pitcher, season, fg, sv, logs):
 @app.route("/api/player/<int:player_id>")
 def api_player_profile(player_id):
     """Full player profile: identity + season stats + FG/Savant cache + game log + platoon + AI."""
+    _maybe_refresh_fg()
+    _maybe_refresh_savant()
     try:
         year = datetime.now().year
 
@@ -3311,6 +3319,8 @@ def api_teams_overview():
 def api_projections_monte_carlo():
     """Monte Carlo projection board. Uses Odds API props when key is configured,
     otherwise falls back to simulation-based projections from the existing sim engine."""
+    _maybe_refresh_fg()
+    _maybe_refresh_savant()
     try:
         date_str = datetime.now(ET).strftime('%Y-%m-%d')
         raw = fetch_schedule(date_str)
