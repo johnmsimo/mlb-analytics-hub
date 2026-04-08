@@ -587,7 +587,7 @@ def api_games_today():
     _maybe_refresh_fg()
     _maybe_refresh_savant()
     try:
-        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        date_str = datetime.now(ET).strftime("%Y-%m-%d")
         raw   = fetch_schedule(date_str)
         games = [g for g in [parse_game(x) for x in raw] if g]
         return jsonify({"success":True,"games":games,"count":len(games)})
@@ -684,7 +684,7 @@ def api_game_livedata(game_pk):
 @app.route("/api/pitchers/<int:game_pk>")
 def api_pitchers(game_pk):
     try:
-        raw = fetch_schedule(datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+        raw = fetch_schedule(datetime.now(ET).strftime("%Y-%m-%d"))
         for g in raw:
             if g.get("gamePk") == game_pk:
                 ap = g.get("teams",{}).get("away",{}).get("probablePitcher",{})
@@ -723,7 +723,7 @@ def e500(e): return jsonify({"error":str(e)}), 500
 @app.route("/api/game-projection/<int:game_pk>")
 def api_game_projection(game_pk):
     try:
-        raw = fetch_schedule(datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+        raw = fetch_schedule(datetime.now(ET).strftime("%Y-%m-%d"))
         gdata = next((g for g in raw if g.get("gamePk") == game_pk), None)
         if not gdata:
             return jsonify({"success": False, "error": "Game not found"})
@@ -1676,7 +1676,7 @@ def _summarize_pitcher(lines):
 @app.route('/api/simulate/<int:game_pk>')
 def api_simulate(game_pk):
     try:
-        raw = fetch_schedule(datetime.now(timezone.utc).strftime('%Y-%m-%d'))
+        raw = fetch_schedule(datetime.now(ET).strftime('%Y-%m-%d'))
         g = next((x for x in raw if x.get('gamePk') == game_pk), None)
         if not g:
             return jsonify({'success': False, 'error': 'Game not found'}), 404
@@ -1931,7 +1931,7 @@ def _parse_prop_markets(bookmakers, valid_names):
 @app.route('/api/market/<int:game_pk>')
 def api_market(game_pk):
     try:
-        raw = fetch_schedule(datetime.now(timezone.utc).strftime('%Y-%m-%d'))
+        raw = fetch_schedule(datetime.now(ET).strftime('%Y-%m-%d'))
         g = next((x for x in raw if x.get('gamePk') == game_pk), None)
         if not g:
             return jsonify({'success': False, 'error': 'Game not found'}), 404
@@ -3894,7 +3894,7 @@ def api_ai_boxscore(game_pk):
     """AI-powered box score projections using weather, player stats, and recent performance."""
     try:
         # Fetch game data
-        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        date_str = datetime.now(ET).strftime("%Y-%m-%d")
         raw = fetch_schedule(date_str)
         gdata = next((g for g in raw if g.get("gamePk") == game_pk), None)
         if not gdata:
