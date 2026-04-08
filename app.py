@@ -44,7 +44,7 @@ STADIUM_COORDS = {
     32:   (43.02838,    -87.97099),     # American Family Field, Milwaukee (retractable)
     680:  (47.591333,   -122.33251),    # T-Mobile Park, Seattle (retractable)
     2392: (29.756967,   -95.355509),    # Daikin Park (Minute Maid), Houston (retractable)
-    2394: (42.3391151,  -83.048695),    # Comerica Park, Detroit (retractable)
+    2394: (42.3391151,  -83.048695),    # Comerica Park, Detroit
     2395: (37.778383,   -122.389448),   # Oracle Park, San Francisco
     2529: (38.57994,    -121.51246),    # Sutter Health Park, Sacramento
     2602: (39.097389,   -84.506611),    # Great American Ball Park, Cincinnati
