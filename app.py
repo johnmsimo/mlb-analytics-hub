@@ -322,6 +322,220 @@ def _load_savant_data():
         _sv_load_date = datetime.now().date()
     print("[Savant] All caches ready")
 
+# ── Game-Log Cache ────────────────────────────────────────────────────────────
+_gamelog_cache      = {}
+_gamelog_cache_date = None
+_gamelog_lock       = threading.Lock()
+
+# Common prop types and lines (key, display label, [lines to calculate])
+PROP_DEFS = [
+    ("h",    "Hits",     [0.5, 1.5]),
+    ("tb",   "Tot Bases",[1.5, 2.5, 3.5]),
+    ("hrbi", "H+R+RBI",  [0.5, 1.5, 2.5]),
+    ("hr",   "HR",       [0.5]),
+    ("rbi",  "RBI",      [0.5, 1.5]),
+    ("r",    "Runs",     [0.5]),
+    ("k",    "Ks (P)",   [4.5, 5.5, 6.5]),   # pitcher strikeouts
+]
+
+def _fetch_batter_gamelog(player_id, year=None):
+    """Fetch and cache a batter's game-by-game hitting log for the season."""
+    if year is None:
+        year = datetime.now().year
+    cache_key = (player_id, year, "bat")
+    with _gamelog_lock:
+        today = datetime.now().date()
+        if cache_key in _gamelog_cache and _gamelog_cache_date == today:
+            return _gamelog_cache[cache_key]
+    try:
+        r = requests.get(
+            f"{MLB_API}/people/{player_id}/stats",
+            params={"stats": "gameLog", "group": "hitting", "season": year},
+            timeout=10
+        )
+        r.raise_for_status()
+        splits = r.json().get("stats", [{}])[0].get("splits", [])
+        logs = []
+        for sp in splits:
+            s   = sp.get("stat", {})
+            h   = int(s.get("hits",      0) or 0)
+            d   = int(s.get("doubles",   0) or 0)
+            t   = int(s.get("triples",   0) or 0)
+            hr  = int(s.get("homeRuns",  0) or 0)
+            rbi = int(s.get("rbi",       0) or 0)
+            r_  = int(s.get("runs",      0) or 0)
+            ab  = int(s.get("atBats",    0) or 0)
+            # totalBases may or may not be returned; fall back to manual calc
+            tb_raw = s.get("totalBases")
+            tb = int(tb_raw) if tb_raw is not None else (h + d + 2*t + 3*hr)
+            logs.append({
+                "date": sp.get("date", ""),
+                "opp":  sp.get("opponent", {}).get("abbreviation", ""),
+                "ab": ab, "h": h, "tb": tb,
+                "hr": hr, "rbi": rbi, "r": r_,
+                "hrbi": h + r_ + rbi,
+            })
+        with _gamelog_lock:
+            _gamelog_cache[cache_key]  = logs
+            _gamelog_cache_date        = datetime.now().date()
+        return logs
+    except Exception as ex:
+        print(f"[gamelog/bat] pid={player_id} err={ex}")
+        return []
+
+def _fetch_pitcher_gamelog(player_id, year=None):
+    """Fetch and cache a pitcher's game log (for K prop hit rates)."""
+    if year is None:
+        year = datetime.now().year
+    cache_key = (player_id, year, "pit")
+    with _gamelog_lock:
+        today = datetime.now().date()
+        if cache_key in _gamelog_cache and _gamelog_cache_date == today:
+            return _gamelog_cache[cache_key]
+    try:
+        r = requests.get(
+            f"{MLB_API}/people/{player_id}/stats",
+            params={"stats": "gameLog", "group": "pitching", "season": year},
+            timeout=10
+        )
+        r.raise_for_status()
+        splits = r.json().get("stats", [{}])[0].get("splits", [])
+        logs = []
+        for sp in splits:
+            s = sp.get("stat", {})
+            logs.append({
+                "date": sp.get("date", ""),
+                "opp":  sp.get("opponent", {}).get("abbreviation", ""),
+                "k":    int(s.get("strikeOuts", 0) or 0),
+                "ip":   float(s.get("inningsPitched", 0) or 0),
+                "er":   int(s.get("earnedRuns", 0) or 0),
+            })
+        with _gamelog_lock:
+            _gamelog_cache[cache_key]  = logs
+            _gamelog_cache_date        = datetime.now().date()
+        return logs
+    except Exception as ex:
+        print(f"[gamelog/pit] pid={player_id} err={ex}")
+        return []
+
+def _calc_hit_rates(logs, prop_key):
+    """
+    For a list of game-log dicts and a stat key, return hit-rate breakdowns
+    across L5 / L10 / L20 / Season for every standard line.
+    """
+    prop_map = {d[0]: d for d in PROP_DEFS}
+    lines = prop_map[prop_key][2] if prop_key in prop_map else [0.5]
+    out = {}
+    for line in lines:
+        out[str(line)] = {}
+        for label, window in [("L5", 5), ("L10", 10), ("L20", 20), ("season", None)]:
+            games = logs[-window:] if window else logs
+            if not games:
+                out[str(line)][label] = None
+                continue
+            n_hit = sum(1 for g in games if g.get(prop_key, 0) > line)
+            out[str(line)][label] = {
+                "pct":   round(n_hit / len(games) * 100),
+                "hits":  n_hit,
+                "games": len(games),
+            }
+    return out
+
+def _build_player_rates(player_id, is_pitcher=False):
+    """Build full hit-rate profile for one player (all prop types)."""
+    if is_pitcher:
+        logs = _fetch_pitcher_gamelog(player_id)
+        props_to_calc = ["k"]
+    else:
+        logs = _fetch_batter_gamelog(player_id)
+        props_to_calc = ["h", "tb", "hrbi", "hr", "rbi", "r"]
+    rates = {}
+    for pk in props_to_calc:
+        rates[pk] = _calc_hit_rates(logs, pk)
+    return {"games": len(logs), "rates": rates, "recentLogs": logs[-10:]}
+
+
+# ── API Routes ────────────────────────────────────────────────────────────────
+
+@app.route("/api/prop-hit-rates/<int:game_pk>")
+def api_prop_hit_rates(game_pk):
+    """
+    Return prop hit rates for every batter in both lineups for a given game.
+    Also returns K hit rates for both probable starters.
+    """
+    try:
+        # --- fetch lineups ---
+        r = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=10)
+        r.raise_for_status()
+        box   = r.json().get("teams", {})
+        result = {"away": [], "home": [], "pitchers": {}}
+
+        for side in ("away", "home"):
+            td      = box.get(side, {})
+            players = td.get("players", {})
+            batters = td.get("batters", [])
+            for pid in batters:
+                key  = f"ID{pid}"
+                p    = players.get(key, {})
+                name = p.get("person", {}).get("fullName", "")
+                slot = p.get("battingOrder", 0)
+                try:
+                    slot = int(str(slot)[0])
+                except:
+                    slot = 0
+                pos  = p.get("position", {}).get("abbreviation", "?")
+                data = _build_player_rates(pid, is_pitcher=False)
+                result[side].append({
+                    "id": pid, "name": name,
+                    "slot": slot, "pos": pos,
+                    **data
+                })
+            result[side].sort(key=lambda x: x["slot"])
+
+        # --- pitcher K rates from schedule ---
+        try:
+            date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            raw = fetch_schedule(date_str)
+            gdata = next((g for g in raw if g.get("gamePk") == game_pk), None)
+            if gdata:
+                for side_key in ("away", "home"):
+                    pp = gdata.get("teams", {}).get(side_key, {}).get("probablePitcher", {})
+                    if pp.get("id"):
+                        pdata = _build_player_rates(pp["id"], is_pitcher=True)
+                        result["pitchers"][side_key] = {
+                            "id":   pp["id"],
+                            "name": pp.get("fullName", "TBD"),
+                            **pdata
+                        }
+        except Exception as pex:
+            print(f"[prop-hit-rates/pitchers] {pex}")
+
+        return jsonify(success=True, gamePk=game_pk, **result)
+
+    except Exception as ex:
+        print("[api_prop_hit_rates]", traceback.format_exc())
+        return jsonify(success=False, error=str(ex)), 500
+
+
+@app.route("/api/player-prop-rates/<int:player_id>")
+def api_player_prop_rates(player_id):
+    """Single-player prop hit rates (batter). Used by deep dive player card."""
+    try:
+        data = _build_player_rates(player_id, is_pitcher=False)
+        return jsonify(success=True, playerId=player_id, **data)
+    except Exception as ex:
+        return jsonify(success=False, error=str(ex)), 500
+
+
+@app.route("/api/pitcher-prop-rates/<int:player_id>")
+def api_pitcher_prop_rates(player_id):
+    """Single-pitcher K prop hit rates. Used by deep dive pitcher card."""
+    try:
+        data = _build_player_rates(player_id, is_pitcher=True)
+        return jsonify(success=True, playerId=player_id, **data)
+    except Exception as ex:
+
+
 def _maybe_refresh_savant():
     with _sv_lock:
         loaded = _sv_loaded; date = _sv_load_date
