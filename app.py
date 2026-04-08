@@ -69,7 +69,6 @@ DOME_VENUES = {
     32,    # American Family Field (retractable)
     680,   # T-Mobile Park (retractable)
     2392,  # Daikin Park / Minute Maid (retractable)
-    2394,  # Comerica Park (retractable)
     4169,  # loanDepot park (retractable)
     5325,  # Globe Life Field (retractable)
     4321,  # Globe Life Field alt
