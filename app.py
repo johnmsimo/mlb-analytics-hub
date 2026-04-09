@@ -4028,86 +4028,32 @@ def api_ai_boxscore(game_pk):
         }
 
         ai_projections = None
-        openai_error = None
+        claude_error = None
         try:
-            from openai import OpenAI
-            api_key = os.environ.get('OPENAI_API_KEY')
+            import anthropic
+            api_key = os.environ.get('ANTHROPIC_API_KEY')
             if api_key:
-                prompt = f"""You are an expert MLB analyst. Based on the provided game data, generate detailed box score projections for both teams.
-
-GAME CONTEXT:
-- {context['away_team']} ({context['away_abbr']}) at {context['home_team']} ({context['home_abbr']})
-- Venue: {context['venue']['name']} (Park Factor: {context['venue']['park_factor']}x)
-- Weather: {context['weather']['temp']}°F, {context['weather']['condition']}, Wind: {context['weather']['wind']}
-
-PITCHING MATCHUP:
-Away Pitcher ({context['away_abbr']}): {context['away_pitcher']['name']}
-  - ERA: {context['away_pitcher']['era']} | WHIP: {context['away_pitcher']['whip']} | K/9: {context['away_pitcher']['k9']} | xERA: {context['away_pitcher']['xera']}
-
-Home Pitcher ({context['home_abbr']}): {context['home_pitcher']['name']}
-  - ERA: {context['home_pitcher']['era']} | WHIP: {context['home_pitcher']['whip']} | K/9: {context['home_pitcher']['k9']} | xERA: {context['home_pitcher']['xera']}
-
-AWAY LINEUP ({context['away_abbr']}):
-{chr(10).join(f"{b['slot']}. {b['name']} ({b['pos']}) - AVG: {b['avg']}, OBP: {b['obp']}, SLG: {b['slg']}, wOBA: {b['woba']}" for b in context['away_lineup'])}
-
-HOME LINEUP ({context['home_abbr']}):
-{chr(10).join(f"{b['slot']}. {b['name']} ({b['pos']}) - AVG: {b['avg']}, OBP: {b['obp']}, SLG: {b['slg']}, wOBA: {b['woba']}" for b in context['home_lineup'])}
-
-Provide your analysis in this exact JSON structure:
-{{
-  "away_runs": <integer projection>,
-  "home_runs": <integer projection>,
-  "away_hits": <integer projection>,
-  "home_hits": <integer projection>,
-  "total_runs": <integer projection>,
-  "away_reasoning": "<string explaining run projection factors for away team>",
-  "home_reasoning": "<string explaining run projection factors for home team>",
-  "key_factors": [
-    "<factor 1>",
-    "<factor 2>",
-    "<factor 3>"
-  ],
-  "confidence": "<HIGH|MEDIUM|LOW>",
-  "notable_props": [
-    {{
-      "player": "<player name>",
-      "prop": "<prop type: hits/hr/rbi/k>",
-      "projection": <float>,
-      "reasoning": "<why this player stands out>"
-    }}
-  ]
-}}
-
-Focus on recent performance trends, matchup splits, weather impact, and park factors."""
-                client = OpenAI(api_key=api_key)
-                response = client.chat.completions.create(
-                    model="gpt-4o",
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": "You are an expert MLB analyst providing detailed game and player projections based on comprehensive statistical analysis."
-                        },
-                        {
-                            "role": "user",
-                            "content": prompt
-                        }
-                    ],
+                client = anthropic.Anthropic(api_key=api_key)
+                response = client.messages.create(
+                    model="claude-sonnet-4-20250514",
+                    max_tokens=2000,
                     temperature=0.7,
-                    max_tokens=2000
+                    system="You are an elite expert MLB analyst with decades of experience providing detailed game and player projections based on comprehensive statistical analysis. Respond ONLY with valid JSON. No preamble, no markdown, no backticks — raw JSON only.",
+                    messages=[{"role": "user", "content": prompt}]
                 )
-                response_text = response.choices[0].message.content
+                response_text = response.content[0].text
                 import json as json_lib
-                json_start = response_text.find('{')
-                json_end = response_text.rfind('}') + 1
+                clean = response_text.strip().lstrip('```json').lstrip('```').rstrip('```').strip()
+                json_start = clean.find('{')
+                json_end = clean.rfind('}') + 1
                 if json_start >= 0 and json_end > json_start:
-                    json_str = response_text[json_start:json_end]
-                    ai_projections = json_lib.loads(json_str)
+                    ai_projections = json_lib.loads(clean[json_start:json_end])
                 else:
-                    raise ValueError('Unable to parse OpenAI JSON')
+                    raise ValueError('Unable to parse Claude JSON response')
             else:
-                openai_error = 'OpenAI API key not configured'
+                claude_error = 'ANTHROPIC_API_KEY not configured'
         except Exception as ex:
-            openai_error = str(ex)
+            claude_error = str(ex)
 
         if ai_projections is None:
             ai_projections = _local_boxscore_projections(
@@ -4116,7 +4062,7 @@ Focus on recent performance trends, matchup splits, weather impact, and park fac
                 away_t, home_t
             )
             ai_projections['source'] = 'local_fallback'
-            ai_projections['fallback_reason'] = openai_error or 'OpenAI unavailable'
+            ai_projections['fallback_reason'] = claude_error or 'Claude unavailable'
         
         return jsonify({
             'success': True,
