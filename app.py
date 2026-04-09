@@ -534,7 +534,8 @@ def api_pitcher_prop_rates(player_id):
         data = _build_player_rates(player_id, is_pitcher=True)
         return jsonify(success=True, playerId=player_id, **data)
     except Exception as ex:
-    print(ex)
+    return jsonify(success=False, 
+    error=str(ex)), 500
 
 def _maybe_refresh_savant():
     with _sv_lock:
