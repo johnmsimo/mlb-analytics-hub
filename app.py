@@ -1,5 +1,6 @@
 import os, threading, traceback, difflib, io, csv as csvmod, json, re
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 try:
     from zoneinfo import ZoneInfo
@@ -4560,6 +4561,479 @@ def api_tracker_entries():
     except Exception as ex:
         print(f"[api_tracker_entries] {traceback.format_exc()}")
         return jsonify({"success": False, "error": str(ex), "entries": []}), 500
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# ── League averages (2025 baseline) ──────────────────────────────────────────
+LG_K_PER_TEAM_PER_GAME  = 8.5   # strikeouts per team per game
+LG_BB_PER_TEAM_PER_GAME = 3.0
+LG_R_PER_TEAM_PER_GAME  = 4.5
+LG_TOTAL_K_PER_GAME     = 17.0  # both teams combined
+
+# ── Umpire cache ──────────────────────────────────────────────────────────────
+_ump_lock  = threading.Lock()
+_ump_cache = {}   # ump_id (int) → {"data": {...}, "date": date}
+
+# Common prop lines to score trends against
+BATTER_LINES = {
+    "hits":  [0.5, 1.5, 2.5],
+    "hr":    [0.5],
+    "tb":    [1.5, 2.5, 3.5],
+    "rbi":   [0.5, 1.5],
+}
+PITCHER_LINES = {
+    "k":   [3.5, 4.5, 5.5, 6.5, 7.5],
+    "bb":  [1.5, 2.5],
+}
+
+
+# ── Helper: fetch schedule with officials hydration ───────────────────────────
+def _fetch_schedule_with_officials(start_date, end_date):
+    """Returns all regular-season games in a date range with umpire data."""
+    try:
+        r = requests.get(f"{MLB_API}/schedule", params={
+            "sportId": 1,
+            "startDate": start_date,
+            "endDate": end_date,
+            "hydrate": "officials,linescore",
+            "gameType": "R",
+        }, timeout=20)
+        r.raise_for_status()
+        games = []
+        for d in r.json().get("dates", []):
+            games.extend(d.get("games", []))
+        return games
+    except Exception as ex:
+        print(f"[ump_schedule] {ex}")
+        return []
+
+
+def _get_hp_umpire(game):
+    """Extract home plate umpire from a game dict (needs officials hydration)."""
+    for off in game.get("officials", []):
+        if off.get("officialType") == "Home Plate":
+            return off.get("official", {})
+    return {}
+
+
+def _fetch_boxscore_ump_stats(game_pk):
+    """Fetch K/BB totals from a single boxscore."""
+    try:
+        r = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=8)
+        r.raise_for_status()
+        teams = r.json().get("teams", {})
+        total_k = 0; total_bb = 0; total_r = 0
+        for side in ("away", "home"):
+            t = teams.get(side, {})
+            ts = t.get("teamStats", {})
+            bat = ts.get("batting", {})
+            pit = ts.get("pitching", {})
+            total_k  += int(pit.get("strikeOuts", 0))
+            total_bb += int(pit.get("baseOnBalls", 0))
+            total_r  += int(bat.get("runs", 0))
+        return {"pk": game_pk, "k": total_k, "bb": total_bb, "r": total_r, "ok": True}
+    except Exception as ex:
+        return {"pk": game_pk, "ok": False, "error": str(ex)}
+
+
+def _build_ump_stats(ump_id, game_pks):
+    """
+    Given a list of gamePks where this umpire was HP, fetch boxscores concurrently
+    and compute K/BB/run averages + zone rating.
+    """
+    pks = game_pks[-20:]   # limit to last 20 for performance
+    results = []
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        futs = {ex.submit(_fetch_boxscore_ump_stats, pk): pk for pk in pks}
+        for fut in as_completed(futs):
+            res = fut.result()
+            if res.get("ok"):
+                results.append(res)
+
+    if not results:
+        return None
+
+    n          = len(results)
+    avg_k      = round(sum(r["k"] for r in results) / n, 1)
+    avg_bb     = round(sum(r["bb"] for r in results) / n, 1)
+    avg_r      = round(sum(r["r"] for r in results) / n, 1)
+
+    # Per-team averages
+    avg_k_per_team  = round(avg_k / 2, 1)
+    avg_bb_per_team = round(avg_bb / 2, 1)
+    avg_r_per_team  = round(avg_r / 2, 1)
+
+    # vs league average (delta)
+    k_vs_avg  = round(avg_k_per_team  - LG_K_PER_TEAM_PER_GAME,  1)
+    bb_vs_avg = round(avg_bb_per_team - LG_BB_PER_TEAM_PER_GAME, 1)
+    r_vs_avg  = round(avg_r_per_team  - LG_R_PER_TEAM_PER_GAME,  1)
+
+    # Zone rating: 0–100.  Higher = more pitcher-friendly (more K, fewer runs)
+    # Formula: 50 baseline + k bonus (up to +25) + run penalty (up to -25)
+    k_score  = min(25, max(-25, k_vs_avg  *  4.0))
+    r_score  = min(25, max(-25, r_vs_avg  * -3.0))
+    bb_score = min(10, max(-10, bb_vs_avg * -2.5))
+    zone_raw = 50 + k_score + r_score + bb_score
+    zone     = int(min(100, max(0, round(zone_raw))))
+
+    if zone >= 65:
+        tendency = "PITCHER FRIENDLY"
+        tendency_color = "var(--m)"
+    elif zone <= 35:
+        tendency = "HITTER FRIENDLY"
+        tendency_color = "var(--g)"
+    else:
+        tendency = "NEUTRAL ZONE"
+        tendency_color = "var(--mu)"
+
+    return {
+        "games_sampled":    n,
+        "avg_total_k":      avg_k,
+        "avg_k_per_team":   avg_k_per_team,
+        "avg_total_bb":     avg_bb,
+        "avg_bb_per_team":  avg_bb_per_team,
+        "avg_total_r":      avg_r,
+        "avg_r_per_team":   avg_r_per_team,
+        "k_vs_avg":         f"+{k_vs_avg}" if k_vs_avg >= 0 else str(k_vs_avg),
+        "bb_vs_avg":        f"+{bb_vs_avg}" if bb_vs_avg >= 0 else str(bb_vs_avg),
+        "r_vs_avg":         f"+{r_vs_avg}"  if r_vs_avg  >= 0 else str(r_vs_avg),
+        "zone_rating":      zone,
+        "tendency":         tendency,
+        "tendency_color":   tendency_color,
+    }
+
+
+def _load_ump_data(ump_id, ump_name):
+    """Full umpire history load — called once per ump per day, cached."""
+    today     = datetime.now(ET).date()
+    season    = today.year
+    start     = f"{season}-03-01"
+    end_dt    = today - timedelta(days=1)
+    end       = end_dt.strftime("%Y-%m-%d")
+
+    games = _fetch_schedule_with_officials(start, end)
+
+    # Filter games where this ump was HP
+    hp_pks = []
+    for g in games:
+        u = _get_hp_umpire(g)
+        if u.get("id") == ump_id:
+            hp_pks.append(g["gamePk"])
+
+    if not hp_pks:
+        return None
+
+    stats = _build_ump_stats(ump_id, hp_pks)
+    if stats:
+        stats["name"]     = ump_name
+        stats["id"]       = ump_id
+        stats["games_hp"] = len(hp_pks)
+    return stats
+
+
+def _get_cached_ump(ump_id, ump_name):
+    today = datetime.now(ET).date()
+    with _ump_lock:
+        cached = _ump_cache.get(ump_id)
+    if cached and cached.get("date") == today:
+        return cached["data"]
+    # Load in background — return None if not ready yet (caller handles gracefully)
+    def _loader():
+        data = _load_ump_data(ump_id, ump_name)
+        if data:
+            with _ump_lock:
+                _ump_cache[ump_id] = {"data": data, "date": today}
+        print(f"[ump_cache] loaded {ump_name} id={ump_id}: {data}")
+    threading.Thread(target=_loader, daemon=True).start()
+    return None
+
+
+# ── Route: Umpire data for a game ─────────────────────────────────────────────
+@app.route("/api/umpire/<int:game_pk>")
+def api_umpire(game_pk):
+    """
+    Returns home plate umpire assignment + historical K/BB/run tendencies.
+    On first call the cache is being built — returns loading=True so the
+    frontend can poll once more after 3 seconds.
+    """
+    try:
+        # Search today ± 1 day
+        for delta in (0, -1, 1):
+            date_str = (datetime.now(ET) + timedelta(days=delta)).strftime("%Y-%m-%d")
+            games = _fetch_schedule_with_officials(date_str, date_str)
+            gdata = next((g for g in games if g.get("gamePk") == game_pk), None)
+            if gdata:
+                break
+
+        if not gdata:
+            return jsonify({"success": False, "error": "Game not found"}), 404
+
+        ump = _get_hp_umpire(gdata)
+        if not ump or not ump.get("id"):
+            return jsonify({
+                "success": True,
+                "umpire": None,
+                "message": "Umpire assignment not yet posted",
+            })
+
+        ump_id   = ump["id"]
+        ump_name = ump.get("fullName", "Unknown")
+
+        # Try cache first — kick off load if needed
+        today = datetime.now(ET).date()
+        with _ump_lock:
+            cached = _ump_cache.get(ump_id)
+
+        if cached and cached.get("date") == today:
+            stats = cached["data"]
+            return jsonify({
+                "success": True,
+                "loading": False,
+                "umpire": {
+                    "id":       ump_id,
+                    "name":     ump_name,
+                    **stats,
+                },
+            })
+
+        # Not cached — start background load, return partial response
+        _get_cached_ump(ump_id, ump_name)
+        return jsonify({
+            "success": True,
+            "loading": True,
+            "umpire": {
+                "id":   ump_id,
+                "name": ump_name,
+                "zone_rating": None,
+                "tendency": "LOADING",
+                "games_sampled": 0,
+            },
+        })
+
+    except Exception as ex:
+        print(f"[api_umpire] {traceback.format_exc()}")
+        return jsonify({"success": False, "error": str(ex)}), 500
+
+
+# ── L5/L10 helpers ────────────────────────────────────────────────────────────
+def _fetch_batter_gamelog(player_id, season=None):
+    """Returns last 10 game log entries for a batter."""
+    if season is None:
+        season = datetime.now().year
+    try:
+        r = requests.get(
+            f"{MLB_API}/people/{player_id}/stats",
+            params={"stats": "gameLog", "season": season, "group": "hitting", "gameType": "R"},
+            timeout=8,
+        )
+        r.raise_for_status()
+        splits = r.json().get("stats", [{}])[0].get("splits", [])
+        out = []
+        for s in splits[-10:]:
+            st = s.get("stat", {})
+            out.append({
+                "date": s.get("date", ""),
+                "opp":  s.get("opponent", {}).get("abbreviation", ""),
+                "ab":   int(st.get("atBats", 0)),
+                "h":    int(st.get("hits", 0)),
+                "hr":   int(st.get("homeRuns", 0)),
+                "rbi":  int(st.get("rbi", 0)),
+                "bb":   int(st.get("baseOnBalls", 0)),
+                "tb":   int(st.get("totalBases", 0)),
+                "r":    int(st.get("runs", 0)),
+            })
+        return out
+    except Exception as ex:
+        print(f"[batter_gamelog] pid={player_id} {ex}")
+        return []
+
+
+def _fetch_pitcher_gamelog(player_id, season=None):
+    """Returns last 10 game log entries for a pitcher."""
+    if season is None:
+        season = datetime.now().year
+    try:
+        r = requests.get(
+            f"{MLB_API}/people/{player_id}/stats",
+            params={"stats": "gameLog", "season": season, "group": "pitching", "gameType": "R"},
+            timeout=8,
+        )
+        r.raise_for_status()
+        splits = r.json().get("stats", [{}])[0].get("splits", [])
+        out = []
+        for s in splits[-10:]:
+            st = s.get("stat", {})
+            ip_raw = st.get("inningsPitched", "0.0")
+            try:
+                whole, third = str(ip_raw).split(".")
+                ip_dec = int(whole) + int(third) / 3
+            except Exception:
+                ip_dec = _safe_f(ip_raw, 0)
+            out.append({
+                "date": s.get("date", ""),
+                "opp":  s.get("opponent", {}).get("abbreviation", ""),
+                "ip":   round(ip_dec, 2),
+                "k":    int(st.get("strikeOuts", 0)),
+                "bb":   int(st.get("baseOnBalls", 0)),
+                "h":    int(st.get("hits", 0)),
+                "er":   int(st.get("earnedRuns", 0)),
+            })
+        return out
+    except Exception as ex:
+        print(f"[pitcher_gamelog] pid={player_id} {ex}")
+        return []
+
+
+def _compute_over_rates(game_log, stat_key, lines):
+    """
+    For a list of game log dicts and a stat key (e.g. 'h', 'hr', 'k'),
+    compute over% for each line across L5 and L10.
+    Returns dict: { line (str) -> {"l5": {"over":n,"total":n,"pct":f}, "l10": {...}} }
+    """
+    vals = [g[stat_key] for g in game_log if stat_key in g]
+    result = {}
+    for line in lines:
+        l10_vals = vals[-10:]
+        l5_vals  = vals[-5:]
+        def _rate(vs):
+            over = sum(1 for v in vs if v > line)
+            return {"over": over, "total": len(vs), "pct": round(over / len(vs), 3) if vs else None}
+        result[str(line)] = {"l5": _rate(l5_vals), "l10": _rate(l10_vals)}
+    return result
+
+
+def _build_player_trends(player_id, is_pitcher):
+    """Build the full trend dict for one player."""
+    if is_pitcher:
+        log  = _fetch_pitcher_gamelog(player_id)
+        if not log:
+            return {"log": [], "over_rates": {}, "streak": None}
+        over_rates = {}
+        for stat, lines in PITCHER_LINES.items():
+            over_rates[stat] = _compute_over_rates(log, stat, lines)
+        # Streak: consecutive games over/under 4.5 Ks
+        streak = _compute_streak(log, "k", 4.5)
+    else:
+        log  = _fetch_batter_gamelog(player_id)
+        if not log:
+            return {"log": [], "over_rates": {}, "streak": None}
+        over_rates = {}
+        for stat, lines in BATTER_LINES.items():
+            stat_key = {"hits": "h", "hr": "hr", "tb": "tb", "rbi": "rbi"}[stat]
+            over_rates[stat] = _compute_over_rates(log, stat_key, lines)
+        streak = _compute_streak(log, "h", 0.5)
+
+    return {
+        "log":        log,
+        "over_rates": over_rates,
+        "streak":     streak,
+        "games":      len(log),
+    }
+
+
+def _compute_streak(log, stat_key, line):
+    """
+    Returns current consecutive over/under streak for the stat vs line.
+    e.g. {"direction": "over", "length": 5}
+    """
+    if not log:
+        return None
+    vals   = [g.get(stat_key, 0) for g in log]
+    if not vals:
+        return None
+    last_dir = "over" if vals[-1] > line else "under"
+    length   = 0
+    for v in reversed(vals):
+        d = "over" if v > line else "under"
+        if d == last_dir:
+            length += 1
+        else:
+            break
+    return {"direction": last_dir, "length": length}
+
+
+# ── Route: L5/L10 trends for all players in a game ───────────────────────────
+@app.route("/api/props/trends/<int:game_pk>")
+def api_props_trends(game_pk):
+    """
+    Returns L5/L10 over rates for every batter and both starting pitchers in a game.
+    Uses concurrent fetching to keep response time under ~4s.
+    """
+    try:
+        # Get lineups + pitchers
+        gdata, away_bats, home_bats, away_t, home_t, pitchers = _props_fetch_game(game_pk)
+        if not gdata:
+            return jsonify({"success": False, "error": "Game not found"}), 404
+
+        all_batters  = away_bats + home_bats
+        ap_info      = pitchers["ap"]
+        hp_info      = pitchers["hp"]
+
+        # Build task list: (player_id, is_pitcher, name)
+        tasks = []
+        for b in all_batters:
+            pid = b.get("id")
+            if pid:
+                tasks.append((int(pid), False, b.get("name", "")))
+        for pi in [ap_info, hp_info]:
+            pid = pi.get("id")
+            if pid:
+                tasks.append((int(pid), True, pi.get("fullName", "")))
+
+        results = {}
+        with ThreadPoolExecutor(max_workers=10) as ex:
+            fut_map = {
+                ex.submit(_build_player_trends, pid, is_pit): (pid, name)
+                for pid, is_pit, name in tasks
+            }
+            for fut in as_completed(fut_map):
+                pid, name = fut_map[fut]
+                try:
+                    data = fut.result()
+                    results[str(pid)] = {"name": name, **data}
+                except Exception as fe:
+                    results[str(pid)] = {"name": name, "error": str(fe)}
+
+        return jsonify({
+            "success":  True,
+            "gamePk":   game_pk,
+            "players":  results,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+
+    except Exception as ex:
+        print(f"[api_props_trends] {traceback.format_exc()}")
+        return jsonify({"success": False, "error": str(ex)}), 500
+
+
+# ── Route: Single player trends (used by deepdive player modal) ───────────────
+@app.route("/api/player/trends/<int:player_id>")
+def api_player_trends(player_id):
+    """
+    Returns L5/L10 trends for a single player.
+    Accepts ?type=batter|pitcher (default: auto-detect from MLB API).
+    """
+    try:
+        is_pitcher_param = request.args.get("type", "").lower()
+        if is_pitcher_param == "pitcher":
+            is_pitcher = True
+        elif is_pitcher_param == "batter":
+            is_pitcher = False
+        else:
+            # Auto-detect from MLB people endpoint
+            try:
+                r = requests.get(f"{MLB_API}/people/{player_id}", timeout=6)
+                r.raise_for_status()
+                pos = r.json().get("people", [{}])[0].get("primaryPosition", {}).get("code", "")
+                is_pitcher = pos == "1"
+            except Exception:
+                is_pitcher = False
+
+        data = _build_player_trends(player_id, is_pitcher)
+        return jsonify({"success": True, "player_id": player_id, **data})
+
+    except Exception as ex:
+        print(f"[api_player_trends] {traceback.format_exc()}")
 
 # Boot background loaders
 threading.Thread(target=_load_fg_data,      daemon=True).start()
