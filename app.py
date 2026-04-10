@@ -5113,6 +5113,409 @@ def api_player_trends(player_id):
     except Exception as ex:
         print(f"[api_player_trends] {traceback.format_exc()}")
 
+from concurrent.futures import ThreadPoolExecutor, as_completed as _as_completed
+
+
+# ── Helper: fetch team schedule for last N days ───────────────────────────────
+def _team_recent_games(team_id, n_days=3):
+    """Returns gamePks for a team's last n_days completed games."""
+    today    = datetime.now(ET).date()
+    start_dt = today - timedelta(days=n_days + 2)   # buffer for off-days
+    try:
+        r = requests.get(f"{MLB_API}/schedule", params={
+            "sportId": 1, "teamId": team_id,
+            "startDate": start_dt.strftime("%Y-%m-%d"),
+            "endDate":   (today - timedelta(days=1)).strftime("%Y-%m-%d"),
+            "gameType": "R",
+        }, timeout=10)
+        r.raise_for_status()
+        games = []
+        for d in r.json().get("dates", []):
+            for g in d.get("games", []):
+                status = g.get("status", {}).get("detailedState", "")
+                if "Final" in status or "Completed" in status:
+                    games.append({
+                        "gamePk":  g["gamePk"],
+                        "date":    d["date"],
+                        "teamId":  team_id,
+                    })
+        return sorted(games, key=lambda x: x["date"], reverse=True)[:n_days]
+    except Exception as ex:
+        print(f"[team_recent_games] team={team_id}: {ex}")
+        return []
+
+
+def _bullpen_from_boxscore(game_pk, team_id):
+    """
+    Returns list of relievers who appeared for team_id in game_pk:
+    {name, id, outs, pitches_est, date, days_ago}
+    """
+    try:
+        r = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=8)
+        r.raise_for_status()
+        box   = r.json().get("teams", {})
+        today = datetime.now(ET).date()
+
+        # Find team side
+        for side in ("home", "away"):
+            team_data = box.get(side, {})
+            if team_data.get("team", {}).get("id") == team_id:
+                players  = team_data.get("players", {})
+                pitchers = team_data.get("pitchers", [])
+                # First pitcher is the starter — skip
+                reliever_ids = pitchers[1:] if len(pitchers) > 1 else []
+                out = []
+                for pid in reliever_ids:
+                    pdata = players.get(f"ID{pid}", {})
+                    name  = pdata.get("person", {}).get("fullName", "")
+                    st    = pdata.get("stats", {}).get("pitching", {})
+                    ip_s  = st.get("inningsPitched", "0.0")
+                    try:
+                        whole, thirds = str(ip_s).split(".")
+                        outs = int(whole) * 3 + int(thirds)
+                    except Exception:
+                        outs = 0
+                    pitches_est = max(0, int(outs * 5.2))   # ~5.2 pitches per out
+                    out.append({
+                        "id":          pid,
+                        "name":        name,
+                        "outs":        outs,
+                        "pitches_est": pitches_est,
+                        "game_pk":     game_pk,
+                    })
+                return out
+    except Exception as ex:
+        print(f"[bullpen_boxscore] game={game_pk} team={team_id}: {ex}")
+    return []
+
+
+def _build_bullpen_fatigue(team_id, team_abbr, recent_games):
+    """
+    Aggregates reliever appearances over last 3 games into a fatigue report.
+    Returns dict with per-reliever status and team stress score (0–100).
+    """
+    today = datetime.now(ET).date()
+
+    # Collect appearances concurrently
+    appearances = {}   # reliever_id → {name, days_pitched: [0,1,2,...], pitches_by_day}
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        futs = {
+            ex.submit(_bullpen_from_boxscore, g["gamePk"], team_id): g
+            for g in recent_games
+        }
+        for fut in _as_completed(futs):
+            g       = futs[fut]
+            game_dt = datetime.strptime(g["date"], "%Y-%m-%d").date()
+            days_ago = (today - game_dt).days
+            try:
+                relievers = fut.result()
+                for rel in relievers:
+                    pid = rel["id"]
+                    if pid not in appearances:
+                        appearances[pid] = {
+                            "name":        rel["name"],
+                            "id":          pid,
+                            "days_pitched": [],
+                            "pitches":     [],
+                            "outs":        [],
+                        }
+                    appearances[pid]["days_pitched"].append(days_ago)
+                    appearances[pid]["pitches"].append(rel["pitches_est"])
+                    appearances[pid]["outs"].append(rel["outs"])
+            except Exception:
+                pass
+
+    # Build per-reliever status
+    relievers_out = []
+    total_stress  = 0.0
+
+    for pid, data in appearances.items():
+        if not data["name"]:
+            continue
+        days   = sorted(data["days_pitched"])
+        pitches_total = sum(data["pitches"])
+        outs_total    = sum(data["outs"])
+
+        # Rest days since last appearance
+        rest_days = days[0] if days else 3   # minimum days_ago
+
+        # Status classification
+        if rest_days == 1 and pitches_total >= 25:
+            status = "GASSED"; status_col = "#f44336"; stress_pts = 22
+        elif rest_days == 1 and pitches_total >= 10:
+            status = "TIRED";  status_col = "#ff9800"; stress_pts = 14
+        elif rest_days == 1:
+            status = "LIGHT";  status_col = "#ffd740"; stress_pts = 8
+        elif rest_days == 2 and pitches_total >= 40:
+            status = "TIRED";  status_col = "#ff9800"; stress_pts = 10
+        elif rest_days == 2:
+            status = "OK";     status_col = "#00b8d4"; stress_pts = 4
+        else:
+            status = "FRESH";  status_col = "#00e676"; stress_pts = 0
+
+        total_stress += stress_pts
+        # Back-to-back penalty
+        if len(days) >= 2 and days[0] == 1 and days[1] == 2:
+            total_stress += 8
+
+        relievers_out.append({
+            "name":          data["name"],
+            "id":            pid,
+            "appearances":   len(days),
+            "days_pitched":  days,
+            "pitches_total": pitches_total,
+            "outs_total":    outs_total,
+            "rest_days":     rest_days,
+            "status":        status,
+            "status_color":  status_col,
+        })
+
+    # Sort: most fatigued first
+    relievers_out.sort(key=lambda x: x["rest_days"])
+
+    # Team stress score 0–100
+    stress_score  = int(min(100, total_stress))
+    stress_label  = "HIGH" if stress_score >= 60 else "MODERATE" if stress_score >= 30 else "FRESH"
+    stress_color  = "#f44336" if stress_score >= 60 else "#ff9800" if stress_score >= 30 else "#00e676"
+
+    return {
+        "team_id":      team_id,
+        "team_abbr":    team_abbr,
+        "relievers":    relievers_out,
+        "stress_score": stress_score,
+        "stress_label": stress_label,
+        "stress_color": stress_color,
+        "games_sampled": len(recent_games),
+    }
+
+
+# ── Route: Bullpen Fatigue ────────────────────────────────────────────────────
+@app.route("/api/bullpen/fatigue/<int:game_pk>")
+def api_bullpen_fatigue(game_pk):
+    """
+    Returns bullpen fatigue status for both teams:
+    per-reliever rest/pitch counts + team stress score.
+    """
+    try:
+        # Find game
+        gdata = None
+        for delta in (0, -1, 1):
+            ds    = (datetime.now(ET) + timedelta(days=delta)).strftime("%Y-%m-%d")
+            raw   = fetch_schedule(ds)
+            gdata = next((g for g in raw if g.get("gamePk") == game_pk), None)
+            if gdata:
+                break
+        if not gdata:
+            return jsonify({"success": False, "error": "Game not found"}), 404
+
+        away_t    = gdata["teams"]["away"]["team"]
+        home_t    = gdata["teams"]["home"]["team"]
+        away_id   = away_t["id"];  away_abbr = away_t.get("abbreviation", "AWAY")
+        home_id   = home_t["id"];  home_abbr = home_t.get("abbreviation", "HOME")
+
+        # Fetch recent games for both teams concurrently
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            away_fut = ex.submit(_team_recent_games, away_id, 3)
+            home_fut = ex.submit(_team_recent_games, home_id, 3)
+            away_recent = away_fut.result()
+            home_recent = home_fut.result()
+
+        # Build fatigue reports concurrently
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            af = ex.submit(_build_bullpen_fatigue, away_id, away_abbr, away_recent)
+            hf = ex.submit(_build_bullpen_fatigue, home_id, home_abbr, home_recent)
+            away_fatigue = af.result()
+            home_fatigue = hf.result()
+
+        return jsonify({
+            "success":  True,
+            "gamePk":   game_pk,
+            "away":     away_fatigue,
+            "home":     home_fatigue,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+
+    except Exception as ex:
+        print(f"[api_bullpen_fatigue] {traceback.format_exc()}")
+        return jsonify({"success": False, "error": str(ex)}), 500
+
+
+# ── Route: First 5 Innings (F5) Model ────────────────────────────────────────
+@app.route("/api/f5/<int:game_pk>")
+def api_f5_model(game_pk):
+    """
+    Projects runs scored in the first 5 innings for each team.
+    Uses starter ERA/FIP/xERA + lineup xwOBA + park factor + weather.
+    """
+    try:
+        _maybe_refresh_fg()
+        _maybe_refresh_savant()
+
+        gdata = None
+        for delta in (0, -1, 1):
+            ds    = (datetime.now(ET) + timedelta(days=delta)).strftime("%Y-%m-%d")
+            raw   = fetch_schedule(ds)
+            gdata = next((g for g in raw if g.get("gamePk") == game_pk), None)
+            if gdata:
+                break
+        if not gdata:
+            return jsonify({"success": False, "error": "Game not found"}), 404
+
+        away_t  = gdata["teams"]["away"]
+        home_t  = gdata["teams"]["home"]
+        home_id = home_t["team"]["id"]
+        pf      = PARK_FACTORS.get(home_id, 1.0)
+
+        # Starters
+        ap_info = away_t.get("probablePitcher", {})
+        hp_info = home_t.get("probablePitcher", {})
+        ap_name = ap_info.get("fullName", "TBD")
+        hp_name = hp_info.get("fullName", "TBD")
+        ap_id   = ap_info.get("id");  hp_id = hp_info.get("id")
+
+        ap_fg = fg_pitcher(ap_name); hp_fg = fg_pitcher(hp_name)
+        ap_sv = sv_pitcher(ap_name); hp_sv = sv_pitcher(hp_name)
+        ap_st = pitcher_stats_mlb(ap_id) if ap_id else {}
+        hp_st = pitcher_stats_mlb(hp_id) if hp_id else {}
+
+        def best_era(sv, fg, mlb):
+            for v in [sv.get("sv_xera"), fg.get("fg_era"), mlb.get("era")]:
+                try:
+                    f = float(v)
+                    if 0 < f < 12: return f
+                except Exception:
+                    pass
+            return 4.20
+
+        def best_fip(fg, fallback):
+            try:
+                f = float(fg.get("fg_fip", 0))
+                if 0 < f < 12: return f
+            except Exception:
+                pass
+            return fallback
+
+        ap_era = best_era(ap_sv, ap_fg, ap_st)
+        hp_era = best_era(hp_sv, hp_fg, hp_st)
+        ap_fip = best_fip(ap_fg, ap_era)
+        hp_fip = best_fip(hp_fg, hp_era)
+
+        # Lineup quality from boxscore
+        try:
+            r = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=8)
+            r.raise_for_status()
+            box       = r.json().get("teams", {})
+            away_bats = get_batters_from_boxscore(box.get("away", {}), "away")
+            home_bats = get_batters_from_boxscore(box.get("home", {}), "home")
+        except Exception:
+            away_bats = []; home_bats = []
+
+        def lu_xwoba(bats):
+            vals = []
+            for b in bats:
+                for k in ["sv_xwoba", "fg_woba"]:
+                    try:
+                        f = float(b.get(k, 0))
+                        if 0.1 < f < 0.6:
+                            vals.append(f); break
+                    except Exception:
+                        pass
+                else:
+                    vals.append(0.320)
+            return round(sum(vals) / len(vals), 3) if vals else 0.320
+
+        away_xwoba = lu_xwoba(away_bats)
+        home_xwoba = lu_xwoba(home_bats)
+
+        # Weather
+        ven   = gdata.get("venue", {})
+        vid   = ven.get("id")
+        vloc  = (ven.get("location") or {})
+        coord = (vloc.get("defaultCoordinates") or {})
+        lat   = coord.get("latitude"); lon = coord.get("longitude")
+        try:
+            dt_utc = datetime.fromisoformat(gdata.get("gameDate", "").replace("Z", "+00:00"))
+            ghour  = dt_utc.astimezone(ET).hour
+        except Exception:
+            ghour  = 13
+        wx = get_weather(lat, lon, ghour, venue_id=vid)
+
+        # F5 uses only first 5 innings (5/9 of full-game projection)
+        # Blended ERA: 60% (xERA/ERA) + 40% FIP
+        # away team faces home pitcher (hp)
+        away_blend = 0.6 * hp_era + 0.4 * hp_fip
+        home_blend = 0.6 * ap_era + 0.4 * ap_fip
+
+        # Base runs model: 4.50 R/G avg, scaled to 5 innings (5/9)
+        f5_scale  = 5.0 / 9.0
+        # Park factor muted for F5 (less variance in 5 innings)
+        pf_f5     = 1.0 + (pf - 1.0) * 0.65
+
+        away_f5   = 4.50 * (4.20 / away_blend) * (away_xwoba / 0.320) * pf_f5 * f5_scale
+        home_f5   = 4.50 * (4.20 / home_blend) * (home_xwoba / 0.320) * pf_f5 * f5_scale
+
+        # Weather adj (muted for F5)
+        wx_adj = 0.0
+        if not wx.get("dome"):
+            try:
+                t = float(wx.get("temp", 70))
+                if t > 82:   wx_adj =  0.08
+                elif t > 76: wx_adj =  0.04
+                elif t < 48: wx_adj = -0.08
+                elif t < 56: wx_adj = -0.04
+            except Exception:
+                pass
+
+        away_f5 = round(max(0.8, away_f5 + wx_adj), 2)
+        home_f5 = round(max(0.8, home_f5 + wx_adj), 2)
+        total_f5 = round(away_f5 + home_f5, 2)
+
+        # Signal
+        if total_f5 >= 5.0:
+            signal = "LEAN OVER"; sig_col = "#00e676"
+        elif total_f5 >= 4.5:
+            signal = "SLIGHT OVER"; sig_col = "#76ff03"
+        elif total_f5 <= 3.2:
+            signal = "LEAN UNDER"; sig_col = "#f44336"
+        elif total_f5 <= 3.7:
+            signal = "SLIGHT UNDER"; sig_col = "#ff9800"
+        else:
+            signal = "NEUTRAL"; sig_col = "#6a8db0"
+
+        # F5 favorite
+        diff = home_f5 - away_f5
+        if abs(diff) > 0.25:
+            fav     = home_t["team"].get("abbreviation","HOME") if diff > 0 else away_t["team"].get("abbreviation","AWAY")
+            fav_col = "#00e5ff"
+        else:
+            fav = "EVEN"; fav_col = "#6a8db0"
+
+        return jsonify({
+            "success":      True,
+            "gamePk":       game_pk,
+            "awayAbbr":     away_t["team"].get("abbreviation","AWAY"),
+            "homeAbbr":     home_t["team"].get("abbreviation","HOME"),
+            "awayPitcher":  hp_name,   # home pitcher faces away batters
+            "homePitcher":  ap_name,
+            "awayF5":       away_f5,
+            "homeF5":       home_f5,
+            "totalF5":      total_f5,
+            "signal":       signal,
+            "signalColor":  sig_col,
+            "f5Favorite":   fav,
+            "favColor":     fav_col,
+            "awayEra":      round(hp_era, 2),
+            "homeEra":      round(ap_era, 2),
+            "awayXwoba":    away_xwoba,
+            "homeXwoba":    home_xwoba,
+            "parkFactor":   pf,
+            "wxAdj":        wx_adj,
+            "dome":         wx.get("dome", False),
+        })
+
+    except Exception as ex:
+        print(f"[api_f5_model] {traceback.format_exc()}")
+
 # Boot background loaders
 threading.Thread(target=_load_fg_data,      daemon=True).start()
 threading.Thread(target=_load_savant_data,  daemon=True).start()
