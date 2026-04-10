@@ -4323,7 +4323,7 @@ def _batter_hand_note(batter, pitcher_hand):
 
 # ── Batter projection engine (v2 — platoon-aware) ────────────────────────────
 def _project_batter(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_sv,
-                    park_factor, weather, pitcher_hand='R'):
+              park_factor, weather, pitcher_hand='R', home_team_id=None):
     """
     Returns per-prop projections for one batter.
     Uses platoon-blended avg/obp/slg/ops as base rates when split PA is available.
@@ -4386,43 +4386,46 @@ def _project_batter(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_sv,
     slot   = int(batter.get("slot") or 5)
     exp_pa = round(4.35 - (slot - 1) * 0.095, 2)
 
+"""
+    # ── Prop-specific park factors ────────────────────────────────────────────
+    # If home_team_id is available, use prop-specific PF from the split dicts.
+    # Falls back to the blended park_factor if team not in split dict.
+    if home_team_id:
+        pf_hits = get_prop_park_factor(home_team_id, 'hits')
+        pf_hr   = get_prop_park_factor(home_team_id, 'hr')
+        pf_tb   = get_prop_park_factor(home_team_id, 'tb')
+        pf_rbi  = park_factor   # blended — RBI is correlated to team context
+    else:
+        pf_hits = park_factor
+        pf_hr   = park_factor
+        pf_tb   = park_factor
+        pf_rbi  = park_factor
+
     # ── Projections ───────────────────────────────────────────────────────────
-    # Hits: platoon avg replaces season avg as base
-    hits_proj = round(max(0.05, avg * exp_pa * pit_mult * k_adj * park_factor * wx_mult), 3)
+    # Hits: platoon avg × prop-specific hits PF
+    hits_proj = round(max(0.05, avg * exp_pa * pit_mult * k_adj * pf_hits * wx_mult), 3)
 
-    # Total Bases: built from platoon slg
-    tb_proj   = round(max(0.08, slg * exp_pa * pit_mult * k_adj * park_factor * wx_mult), 3)
+    # Total Bases: built from platoon slg × TB-specific PF
+    tb_proj   = round(max(0.08, slg * exp_pa * pit_mult * k_adj * pf_tb * wx_mult), 3)
 
-    # HR: platoon-adjusted hr rate + barrel bonus + park + weather
-    hr_pf     = min(1.30, park_factor * 1.08)
+    # HR: platoon-adjusted hr rate × HR-specific PF (most park-sensitive prop)
+    # HR PF is elevated further (HRs are 2× as park-sensitive as overall runs)
+    hr_pf     = min(1.35, pf_hr * 1.05)   # HR extra-sensitive to park
     hr_proj   = round(max(0.005,
         hr_r_adj * exp_pa * hr_pf * (1.0 + (brl - 0.06) * 0.8) * wx_mult
     ), 4)
 
-    # RBI: correlated to hits+HR, slot bonus
+    # RBI: correlated to hits+HR, slot bonus — blended PF
     slot_rbi_bonus = max(0.8, 1.0 + (4 - abs(slot - 4)) * 0.03)
-    rbi_proj  = round(max(0.05, rbi_r * exp_pa * pit_mult * park_factor * slot_rbi_bonus), 3)
+    rbi_proj  = round(max(0.05, rbi_r * exp_pa * pit_mult * pf_rbi * slot_rbi_bonus), 3)
 
-    # Runs: lead-off slots score more
+    # Runs: lead-off slots score more — blended PF
     slot_r_bonus = max(0.8, 1.1 - abs(slot - 1.5) * 0.025)
     r_proj    = round(max(0.04, r_r * exp_pa * pit_mult * slot_r_bonus), 3)
 
     # H+R+RBI combo
     hrr_proj  = round(hits_proj + r_proj + rbi_proj, 3)
-
-    return {
-        "hits":        hits_proj,
-        "hr":          hr_proj,
-        "tb":          tb_proj,
-        "rbi":         rbi_proj,
-        "r":           r_proj,
-        "hrr":         hrr_proj,
-        "expected_pa": exp_pa,
-        # expose the blended rates so the frontend can show them
-        "split_avg":   round(avg, 3),
-        "split_ops":   round(ops, 3),
-        "platoon_note": _batter_hand_note(batter, pitcher_hand),
-    }
+"""
 
 
 # ── Pitcher projection engine (unchanged, platoon handled batter-side) ────────
@@ -4589,8 +4592,9 @@ def api_props_projections(game_pk):
                 bsv  = sv_batter(name)
                 proj = _project_batter(
                     b, opp_pname, opp_pfg, opp_psv, pf, wx,
-                    pitcher_hand=opp_hand   # ← platoon key
-                )
+                    pitcher_hand=opp_hand,
+                    home_team_id=home_id     # home_id is already in scope in api_props_projections
+                 )
                 result.append({
                     "name":         name,
                     "team":         b.get("team", ""),
