@@ -4553,7 +4553,13 @@ def api_props_projections(game_pk):
         home_abbr = home_t.get("team", {}).get("abbreviation", "HOME")
         home_id   = home_t.get("team", {}).get("id")
         pf        = PARK_FACTORS.get(home_id, 1.0)
-
+                    "park_factors": {
+                      "hits": get_prop_park_factor(home_id, 'hits'),
+                      "hr":   get_prop_park_factor(home_id, 'hr'),
+                      "tb":   get_prop_park_factor(home_id, 'tb'),
+                      "rbi":  PARK_FACTORS.get(home_id, 1.0),
+                     },
+        
         ap_info = pitchers["ap"]; hp_info = pitchers["hp"]
         ap_name = ap_info.get("fullName", "TBD")
         hp_name = hp_info.get("fullName", "TBD")
