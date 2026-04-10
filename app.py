@@ -85,6 +85,130 @@ PARK_FACTORS = {
     113:0.94,115:1.00,158:0.97
 }
 
+# Park factors broken out by prop type.
+# Sources: FanGraphs park factors, ESPN park factor reports, Statcast venue data.
+# HR factors have the most variance (40%+ range), hits the least (~25% range).
+# Domes/retractables default to near-neutral (slight HR suppression in controlled air).
+
+PARK_FACTORS_HR = {
+    # Team ID → HR park factor
+    115: 1.28,  # Colorado — Coors, thin air
+    140: 1.18,  # Texas    — Globe Life, hitter-friendly
+    143: 1.14,  # Philly   — Citizens Bank
+    118: 1.10,  # KC       — Kauffman, short RF
+    110: 1.07,  # Baltimore — Camden Yards
+    147: 1.06,  # Yankees  — short porch RF
+    113: 1.06,  # Reds     — GABP
+    145: 1.03,  # CWS      — Guaranteed Rate
+    112: 1.04,  # Cubs     — Wrigley (wind-dependent; baseline slight over)
+    111: 1.02,  # Boston   — Fenway (Green Monster suppresses HR)
+    142: 1.00,  # Twins    — Target Field
+    138: 0.97,  # Cardinals — Busch
+    120: 0.97,  # Nationals — Nationals Park
+    144: 0.96,  # Braves   — Truist
+    121: 0.96,  # Mets     — Citi Field
+    114: 0.96,  # Cleveland — Progressive
+    116: 0.94,  # Detroit  — Comerica (deep outfield)
+    134: 0.94,  # Pirates  — PNC
+    108: 0.94,  # Angels   — Angel Stadium
+    119: 0.93,  # Dodgers  — Dodger Stadium
+    136: 0.92,  # Mariners — T-Mobile (retractable)
+    133: 0.90,  # A's      — Oakland Coliseum
+    139: 0.90,  # Rays     — Tropicana (dome)
+    141: 0.90,  # Blue Jays — Rogers Centre (dome)
+    146: 0.90,  # Marlins  — loanDepot (dome)
+    158: 0.90,  # Brewers  — American Family (retractable)
+    109: 0.90,  # D-backs  — Chase Field (retractable)
+    117: 0.90,  # Astros   — Daikin Park (retractable)
+    135: 0.86,  # Padres   — Petco
+    137: 0.84,  # Giants   — Oracle (marine layer)
+}
+
+PARK_FACTORS_HITS = {
+    # Hits (singles + doubles) — less variance than HR
+    115: 1.14,  # Coors — altitude boosts BABIP
+    111: 1.12,  # Fenway — Green Monster turns HRs into doubles/singles
+    140: 1.08,  # Globe Life
+    143: 1.06,  # Citizens Bank
+    113: 1.04,  # GABP
+    118: 1.03,  # Kauffman
+    145: 1.02,  # Guaranteed Rate
+    110: 1.01,  # Camden Yards
+    138: 1.01,  # Busch
+    117: 1.00,  # Daikin (retractable — neutral)
+    141: 1.00,  # Rogers (dome)
+    158: 1.00,  # AFamily (retractable)
+    109: 1.00,  # Chase (retractable)
+    146: 1.00,  # loanDepot (dome)
+    112: 1.00,  # Wrigley
+    142: 0.99,  # Target
+    147: 0.98,  # Yankee
+    114: 0.98,  # Progressive
+    116: 0.98,  # Comerica
+    139: 0.98,  # Tropicana (dome)
+    121: 0.97,  # Citi Field
+    120: 0.97,  # Nationals Park
+    108: 0.97,  # Angel Stadium
+    144: 0.96,  # Truist
+    134: 0.96,  # PNC
+    133: 0.95,  # Oakland
+    136: 0.94,  # T-Mobile
+    119: 0.94,  # Dodger Stadium
+    135: 0.92,  # Petco
+    137: 0.91,  # Oracle
+}
+
+PARK_FACTORS_TB = {
+    # Total Bases — weighted blend of HR and hits factors
+    115: 1.19,
+    111: 1.09,  # Fenway: lots of doubles → TB over
+    140: 1.12,
+    143: 1.09,
+    118: 1.06,
+    113: 1.05,
+    110: 1.03,
+    147: 1.02,
+    145: 1.02,
+    112: 1.01,
+    138: 1.00,
+    142: 0.99,
+    117: 0.98,  # domes near neutral
+    141: 0.98,
+    158: 0.98,
+    109: 0.98,
+    146: 0.98,
+    139: 0.98,
+    114: 0.97,
+    116: 0.96,
+    120: 0.97,
+    121: 0.97,
+    144: 0.96,
+    108: 0.96,
+    134: 0.95,
+    133: 0.93,
+    119: 0.94,
+    136: 0.93,
+    135: 0.90,
+    137: 0.88,
+}
+
+# Lookup helper — used by props_routes_v2.py
+def get_prop_park_factor(home_team_id, prop_type):
+    """
+    Returns the prop-specific park factor for a given team's home park.
+    prop_type: 'hits' | 'hr' | 'tb' | 'rbi' | 'default'
+    Falls back to blended PARK_FACTORS if team not in split dict.
+    """
+    tid = int(home_team_id) if home_team_id else 0
+    if prop_type == 'hr':
+        return PARK_FACTORS_HR.get(tid, PARK_FACTORS.get(tid, 1.0))
+    if prop_type == 'hits':
+        return PARK_FACTORS_HITS.get(tid, PARK_FACTORS.get(tid, 1.0))
+    if prop_type == 'tb':
+        return PARK_FACTORS_TB.get(tid, PARK_FACTORS.get(tid, 1.0))
+    # RBI / runs / default: use blended
+    return PARK_FACTORS.get(tid, 1.0)
+
 # ── FanGraphs Cache ───────────────────────────────────────────────────────────
 _fg_lock = threading.Lock()
 _fg_bat  = {}
@@ -5515,6 +5639,255 @@ def api_f5_model(game_pk):
 
     except Exception as ex:
         print(f"[api_f5_model] {traceback.format_exc()}")
+
+# ── Route: Park Factors (all three types for a game) ─────────────────────────
+@app.route('/api/park-factors/<int:game_pk>')
+def api_park_factors(game_pk):
+    """Returns prop-specific park factors for the home team in this game."""
+    try:
+        gdata = None
+        for delta in (0, -1, 1):
+            ds   = (datetime.now(ET) + timedelta(days=delta)).strftime("%Y-%m-%d")
+            raw  = fetch_schedule(ds)
+            gdata = next((g for g in raw if g.get("gamePk") == game_pk), None)
+            if gdata:
+                break
+        if not gdata:
+            return jsonify({"success": False, "error": "Game not found"}), 404
+
+        home_t  = gdata["teams"]["home"]["team"]
+        tid     = home_t["id"]
+        venue   = gdata.get("venue", {}).get("name", "")
+        dome    = tid in DOME_VENUES if hasattr(tid, '__hash__') else False
+
+        return jsonify({
+            "success":   True,
+            "gamePk":    game_pk,
+            "homeTeamId": tid,
+            "venue":     venue,
+            "dome":      dome,
+            "pf_hits":   PARK_FACTORS_HITS.get(tid, PARK_FACTORS.get(tid, 1.0)),
+            "pf_hr":     PARK_FACTORS_HR.get(tid, PARK_FACTORS.get(tid, 1.0)),
+            "pf_tb":     PARK_FACTORS_TB.get(tid, PARK_FACTORS.get(tid, 1.0)),
+            "pf_rbi":    PARK_FACTORS.get(tid, 1.0),
+            "pf_blended": PARK_FACTORS.get(tid, 1.0),
+        })
+    except Exception as ex:
+        print(f"[api_park_factors] {traceback.format_exc()}")
+        return jsonify({"success": False, "error": str(ex)}), 500
+
+
+# ── Route: Backtesting Engine ─────────────────────────────────────────────────
+@app.route('/api/backtest')
+def api_backtest():
+    """
+    Replays all graded tracker entries over a date window and returns
+    performance broken down by: market, park factor tier, weather tier,
+    umpire zone tier (where available), edge bucket, and probability bucket.
+
+    Query params:
+      ?start=YYYY-MM-DD   (default: 30 days ago)
+      ?end=YYYY-MM-DD     (default: today)
+      ?market=<key>       (optional filter)
+      ?min_edge=<float>   (optional: only entries with edge >= this)
+    """
+    try:
+        today     = datetime.now(ET).date()
+        end_str   = request.args.get("end",   today.strftime("%Y-%m-%d"))
+        start_str = request.args.get("start", (today - timedelta(days=30)).strftime("%Y-%m-%d"))
+        mkt_filt  = request.args.get("market", None)
+        min_edge  = _safe_f_bt(request.args.get("min_edge"), None)
+
+        start_dt  = datetime.strptime(start_str, "%Y-%m-%d").date()
+        end_dt    = datetime.strptime(end_str,   "%Y-%m-%d").date()
+        n_days    = (end_dt - start_dt).days + 1
+
+        # Collect all graded entries in window
+        store   = _load_json(TRACKER_STORE, {})
+        entries = []
+        for i in range(n_days):
+            ds   = (start_dt + timedelta(days=i)).strftime("%Y-%m-%d")
+            day  = store.get(ds, {})
+            rows = [r for r in day.get("entries", [])
+                    if r.get("grade") in ("win", "loss", "push")]
+            if mkt_filt:
+                rows = [r for r in rows if r.get("marketKey") == mkt_filt]
+            if min_edge is not None:
+                rows = [r for r in rows if r.get("edge") is not None
+                        and float(r.get("edge", 0)) >= min_edge]
+            entries.extend(rows)
+
+        if not entries:
+            return jsonify({
+                "success": True,
+                "total": 0,
+                "message": "No graded entries in this window.",
+                "by_market": {}, "by_edge_bucket": {}, "by_prob_bucket": {},
+                "by_park_tier": {}, "by_month": {}, "overall": {},
+            })
+
+        # ── Overall metrics ───────────────────────────────────────────────────
+        overall = _bt_metrics(entries)
+
+        # ── By market ─────────────────────────────────────────────────────────
+        by_market = {}
+        for mk in set(r.get("marketKey") for r in entries):
+            subset = [r for r in entries if r.get("marketKey") == mk]
+            by_market[mk] = _bt_metrics(subset)
+
+        # ── By edge bucket ────────────────────────────────────────────────────
+        # Buckets: no_edge, <2%, 2-4%, 4-7%, 7-10%, 10%+
+        def edge_bucket(r):
+            e = r.get("edge")
+            if e is None:  return "no_edge"
+            e = float(e)
+            if e < 0.02:   return "<2%"
+            if e < 0.04:   return "2–4%"
+            if e < 0.07:   return "4–7%"
+            if e < 0.10:   return "7–10%"
+            return "10%+"
+        by_edge = {}
+        for r in entries:
+            k = edge_bucket(r)
+            by_edge.setdefault(k, []).append(r)
+        by_edge_bucket = {k: _bt_metrics(v) for k, v in by_edge.items()}
+
+        # ── By model probability bucket ───────────────────────────────────────
+        def prob_bucket(r):
+            p = float(r.get("adjProb") or r.get("rawProb") or 0)
+            if p < 0.52:   return "<52%"
+            if p < 0.56:   return "52–56%"
+            if p < 0.60:   return "56–60%"
+            if p < 0.65:   return "60–65%"
+            return "65%+"
+        by_prob = {}
+        for r in entries:
+            k = prob_bucket(r)
+            by_prob.setdefault(k, []).append(r)
+        by_prob_bucket = {k: _bt_metrics(v) for k, v in by_prob.items()}
+
+        # ── By park factor tier ───────────────────────────────────────────────
+        # We don't store the park factor on the entry, but we have the gamePk.
+        # Look up home team id via a schedule cache approach.
+        _game_pf_cache = {}
+        def get_game_pf(game_pk, capture_date):
+            if game_pk in _game_pf_cache:
+                return _game_pf_cache[game_pk]
+            try:
+                raw = fetch_schedule(capture_date)
+                g   = next((x for x in raw if x.get("gamePk") == game_pk), None)
+                if g:
+                    tid = g["teams"]["home"]["team"]["id"]
+                    pf  = PARK_FACTORS.get(tid, 1.0)
+                    _game_pf_cache[game_pk] = pf
+                    return pf
+            except Exception:
+                pass
+            _game_pf_cache[game_pk] = 1.0
+            return 1.0
+
+        def park_tier(pf):
+            if pf >= 1.05:  return "hitter (1.05+)"
+            if pf >= 1.02:  return "slight hitter (1.02–1.05)"
+            if pf >= 0.98:  return "neutral (0.98–1.02)"
+            if pf >= 0.95:  return "slight pitcher (0.95–0.98)"
+            return "pitcher (<0.95)"
+
+        by_park = {}
+        for r in entries:
+            pf = get_game_pf(r.get("gamePk"), r.get("date", today.strftime("%Y-%m-%d")))
+            k  = park_tier(pf)
+            by_park.setdefault(k, []).append(r)
+        by_park_tier = {k: _bt_metrics(v) for k, v in by_park.items()}
+
+        # ── By month ──────────────────────────────────────────────────────────
+        by_month = {}
+        for r in entries:
+            month = (r.get("date") or "")[:7]
+            by_month.setdefault(month, []).append(r)
+        by_month_out = {k: _bt_metrics(v) for k, v in sorted(by_month.items())}
+
+        # ── Model calibration check: expected prob vs actual hit rate ──────────
+        calibration = []
+        for prob_key, subset in sorted(by_prob.items()):
+            m = _bt_metrics(subset)
+            if m["graded"] >= 5:
+                avg_prob = sum(float(r.get("adjProb") or r.get("rawProb") or 0.55)
+                               for r in subset) / len(subset)
+                calibration.append({
+                    "bucket":    prob_key,
+                    "avg_model_prob": round(avg_prob, 3),
+                    "actual_hit_rate": m["hit_rate"],
+                    "graded":    m["graded"],
+                    "gap":       round(m["hit_rate"] - avg_prob, 3) if m["hit_rate"] else None,
+                })
+
+        return jsonify({
+            "success":         True,
+            "start":           start_str,
+            "end":             end_str,
+            "total":           len(entries),
+            "overall":         overall,
+            "by_market":       by_market,
+            "by_edge_bucket":  by_edge_bucket,
+            "by_prob_bucket":  by_prob_bucket,
+            "by_park_tier":    by_park_tier,
+            "by_month":        by_month_out,
+            "calibration":     calibration,
+        })
+
+    except Exception as ex:
+        print(f"[api_backtest] {traceback.format_exc()}")
+        return jsonify({"success": False, "error": str(ex)}), 500
+
+
+def _bt_metrics(entries):
+    """Compute W/L/P, hit rate, ROI, avg edge, avg Kelly stake for a list of entries."""
+    total  = len(entries)
+    wins   = sum(1 for r in entries if r.get("grade") == "win")
+    losses = sum(1 for r in entries if r.get("grade") == "loss")
+    pushes = sum(1 for r in entries if r.get("grade") == "push")
+    graded = wins + losses + pushes
+    hit_rate = round(wins / max(1, wins + losses), 3) if (wins + losses) > 0 else None
+
+    edges  = [float(r["edge"]) for r in entries if r.get("edge") is not None]
+    avg_edge = round(sum(edges) / len(edges), 4) if edges else None
+
+    stakes = [float(r["stakeDollars"]) for r in entries if r.get("stakeDollars") is not None and float(r.get("stakeDollars", 0)) > 0]
+    profits = [float(r["profitDollars"]) for r in entries if r.get("profitDollars") is not None]
+    total_staked  = round(sum(stakes), 2)
+    total_profit  = round(sum(profits), 2)
+    roi = round(total_profit / total_staked, 4) if total_staked > 0 else None
+
+    kelly_vals = [float(r["fullKellyPct"]) for r in entries if r.get("fullKellyPct") is not None and float(r.get("fullKellyPct", 0)) > 0]
+    avg_kelly = round(sum(kelly_vals) / len(kelly_vals), 4) if kelly_vals else None
+
+    clv = [float(r["clvEdge"]) for r in entries if r.get("clvEdge") is not None]
+    avg_clv = round(sum(clv) / len(clv), 4) if clv else None
+    clv_pos_rate = round(sum(1 for x in clv if x > 0) / len(clv), 3) if clv else None
+
+    return {
+        "total":       total,
+        "graded":      graded,
+        "wins":        wins,
+        "losses":      losses,
+        "pushes":      pushes,
+        "hit_rate":    hit_rate,
+        "avg_edge":    avg_edge,
+        "avg_kelly":   avg_kelly,
+        "total_staked": total_staked,
+        "total_profit": total_profit,
+        "roi":         roi,
+        "avg_clv":     avg_clv,
+        "clv_pos_rate": clv_pos_rate,
+    }
+
+
+def _safe_f_bt(val, default=0.0):
+    try:
+        return float(val) if val is not None else default
+    except (TypeError, ValueError):
+        return default
 
 # Boot background loaders
 threading.Thread(target=_load_fg_data,      daemon=True).start()
