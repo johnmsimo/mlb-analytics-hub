@@ -4092,13 +4092,13 @@ def api_ai_boxscore(game_pk):
             'projections': None
         }), 500
 
-# ── Shared helper: fetch game + lineup for props routes ──────────────────────
+# ── Shared helper: fetch game + lineup ───────────────────────────────────────
 def _props_fetch_game(game_pk):
-    """Fetch schedule entry + boxscore lineups for a given game_pk.
-    Searches today AND yesterday so the page works for completed games."""
+    """Fetch schedule entry + boxscore lineups. Searches today ± 1 day."""
+    gdata = None
     for delta in (0, -1, 1):
         date_str = (datetime.now(ET) + timedelta(days=delta)).strftime("%Y-%m-%d")
-        raw = fetch_schedule(date_str)
+        raw   = fetch_schedule(date_str)
         gdata = next((g for g in raw if g.get("gamePk") == game_pk), None)
         if gdata:
             break
@@ -4110,7 +4110,6 @@ def _props_fetch_game(game_pk):
     ap_info = away_t.get("probablePitcher", {})
     hp_info = home_t.get("probablePitcher", {})
 
-    # Lineups from boxscore
     away_bats, home_bats = [], []
     try:
         r = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=10)
@@ -4124,202 +4123,263 @@ def _props_fetch_game(game_pk):
     return gdata, away_bats, home_bats, away_t, home_t, {"ap": ap_info, "hp": hp_info}
 
 
-# ── Batter projection engine ──────────────────────────────────────────────────
-def _project_batter(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_sv, park_factor, weather):
+# ── Platoon blend helper ──────────────────────────────────────────────────────
+def _platoon_blend(batter, pitcher_hand, stat):
+    """
+    Returns a platoon-blended value for a given stat key ('avg', 'ops', 'slg', 'obp').
+    Blends split stat with season stat weighted by PA sample size:
+      >= 100 PA  → 80% split / 20% season
+      >= 50  PA  → 65% split / 35% season
+      >= 25  PA  → 45% split / 55% season
+      <  25  PA  → season only
+    Falls back gracefully when splits are missing.
+    pitcher_hand: 'L' or 'R' (or 'S' treated as 'R')
+    """
+    hand = (pitcher_hand or 'R').upper()
+    if hand not in ('L', 'R'):
+        hand = 'R'
+
+    split_key = f"vs_{'l' if hand == 'L' else 'r'}_{stat}"
+    split_val = _safe_f(batter.get(split_key), 0.0)
+
+    # Retrieve split PA — stored as vs_l_pa / vs_r_pa if present, else infer from ops
+    pa_key    = f"vs_{'l' if hand == 'L' else 'r'}_pa"
+    split_pa  = int(batter.get(pa_key, 0) or 0)
+
+    # Season value
+    season_map = {
+        'avg': batter.get('avg') or batter.get('fg_avg'),
+        'ops': batter.get('ops'),
+        'slg': batter.get('slg') or batter.get('fg_slg'),
+        'obp': batter.get('obp') or batter.get('fg_obp'),
+    }
+    season_val = _safe_f(season_map.get(stat), _STAT_DEFAULTS.get(stat, 0.0))
+
+    # No split data — return season
+    if split_val <= 0.0:
+        return season_val
+
+    # Blend weights by sample size
+    if split_pa >= 100:
+        w_split = 0.80
+    elif split_pa >= 50:
+        w_split = 0.65
+    elif split_pa >= 25:
+        w_split = 0.45
+    else:
+        w_split = 0.30   # small sample — lean season
+
+    w_season  = 1.0 - w_split
+    blended   = round(w_split * split_val + w_season * season_val, 4)
+    return blended
+
+
+# Stat defaults used as fallback when both split and season are missing
+_STAT_DEFAULTS = {
+    'avg': 0.245,
+    'obp': 0.315,
+    'slg': 0.390,
+    'ops': 0.705,
+}
+
+
+def _batter_hand_note(batter, pitcher_hand):
+    """
+    Returns a short string describing the platoon matchup, e.g. 'LHB vs RHP (+)'
+    Used for UI display on the projection card.
+    """
+    bat  = (batter.get('bats') or 'S').upper()
+    pit  = (pitcher_hand or 'R').upper()
+    if bat == 'S':
+        return f"SB vs {'RHP' if pit == 'R' else 'LHP'} (switch)"
+    favorable = (bat == 'L' and pit == 'R') or (bat == 'R' and pit == 'L')
+    direction = '+' if favorable else '−'
+    return f"{'LHB' if bat == 'L' else 'RHB'} vs {'RHP' if pit == 'R' else 'LHP'} ({direction})"
+
+
+# ── Batter projection engine (v2 — platoon-aware) ────────────────────────────
+def _project_batter(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_sv,
+                    park_factor, weather, pitcher_hand='R'):
     """
     Returns per-prop projections for one batter.
-    Inputs are the enriched batter dict (already has fg_ and sv_ keys merged in),
-    the opposing pitcher's FG + Savant dicts, park factor, and weather dict.
-    """
-    name  = batter.get("name", "")
-    fg    = fg_batter(name)
-    sv    = sv_batter(name)
-
-    # ── season rates ──────────────────────────────────────────────────────────
-    avg  = _safe_f(batter.get("avg")  or fg.get("fg_avg"),  0.245)
-    obp  = _safe_f(batter.get("obp")  or fg.get("fg_obp"),  0.315)
-    slg  = _safe_f(batter.get("slg")  or fg.get("fg_slg"),  0.390)
-    hr_r = _safe_f(fg.get("fg_hr"),   3)  / max(_safe_f(fg.get("fg_pa"), 200), 1)
-    rbi_r= _safe_f(fg.get("fg_rbi"),  12) / max(_safe_f(fg.get("fg_pa"), 200), 1)
-    r_r  = _safe_f(fg.get("fg_r"),    12) / max(_safe_f(fg.get("fg_pa"), 200), 1)
-    xwoba= _safe_f(sv.get("sv_xwoba") or fg.get("fg_woba"), 0.310)
-    brl  = _safe_f(sv.get("sv_brl_pct"), 6.0) / 100
-
-    # ── pitcher resistance multiplier ─────────────────────────────────────────
-    opp_era  = _safe_f(opp_pitcher_fg.get("fg_era")  or opp_pitcher_sv.get("sv_era_p"), 4.20)
-    opp_whip = _safe_f(opp_pitcher_fg.get("fg_whip"), 1.30)
-    opp_xera = _safe_f(opp_pitcher_sv.get("sv_xera"), opp_era)
-    opp_k9   = _safe_f(opp_pitcher_fg.get("fg_k9"),   8.5)
-    opp_kpct = _safe_f(opp_pitcher_fg.get("fg_kpct"), 0.22)
-
-    # Pitcher quality: better (lower) ERA/xERA → lower batter output
-    # Baseline is league-average pitcher (ERA 4.20)
-    lgavg_era = 4.20
-    pit_mult  = min(1.25, max(0.72, (opp_era + opp_xera) / 2 / lgavg_era))
-    # Also scale by pitcher K% vs batter K%
-    bat_kpct  = _safe_f(fg.get("fg_kpct") or sv.get("sv_k_pct"), 0.22)
-    k_adj     = 1.0 - max(0.0, (opp_kpct - bat_kpct) * 0.5)
-
-    # ── weather multiplier ────────────────────────────────────────────────────
-    temp      = weather.get("temp", 72)
-    wind_spd  = weather.get("wind_speed", 0)
-    dome      = weather.get("dome", False)
-    if dome:
-        wx_mult = 1.00
-    else:
-        temp_f   = _safe_f(temp, 72)
-        temp_adj = 1.0 + (temp_f - 72) * 0.003   # ~+1% per 3°F above 72
-        wind_adj = 1.0 + min(0.06, float(wind_spd) * 0.003)  # mild boost for wind
-        wx_mult  = round(temp_adj * wind_adj, 4)
-
-    # ── expected plate appearances ────────────────────────────────────────────
-    slot = int(batter.get("slot") or 5)
-    # Lineup slot PA expectation (9-inning game): slot 1 ≈ 4.3, slot 9 ≈ 3.5
-    slot_pa = round(4.35 - (slot - 1) * 0.095, 2)
-    exp_pa  = slot_pa
-
-    # ── raw projections ───────────────────────────────────────────────────────
-    # Hits: avg * PA * pitcher_mult * k_adj * park * weather
-    hits_base = avg * exp_pa * pit_mult * k_adj * park_factor * wx_mult
-    hits_proj = round(max(0.05, hits_base), 3)
-
-    # Total Bases: slg * PA * similar adjustments
-    tb_base = slg * exp_pa * pit_mult * k_adj * park_factor * wx_mult
-    tb_proj = round(max(0.08, tb_base), 3)
-
-    # HR: hr rate per PA * park (elevated) * barrel rate bonus * weather
-    hr_pf   = min(1.30, park_factor * 1.08)   # HR more park-sensitive
-    hr_base = hr_r * exp_pa * hr_pf * (1.0 + (brl - 0.06) * 0.8) * wx_mult
-    hr_proj = round(max(0.005, hr_base), 4)
-
-    # RBI: correlated to hits + HR, modulated by lineup slot (middle of order gets more)
-    slot_rbi_bonus = max(0.8, 1.0 + (4 - abs(slot - 4)) * 0.03)
-    rbi_proj = round(max(0.05, rbi_r * exp_pa * pit_mult * park_factor * slot_rbi_bonus), 3)
-
-    # R (runs scored): lead-off and 2-spot score most
-    slot_r_bonus = max(0.8, 1.1 - abs(slot - 1.5) * 0.025)
-    r_proj = round(max(0.04, r_r * exp_pa * pit_mult * slot_r_bonus), 3)
-
-    # H+R+RBI combo (hits + runs + rbi)
-    hrr_proj = round(hits_proj + r_proj + rbi_proj, 3)
-
-    return {
-        "hits":      hits_proj,
-        "hr":        hr_proj,
-        "tb":        tb_proj,
-        "rbi":       rbi_proj,
-        "r":         r_proj,
-        "hrr":       hrr_proj,
-        "expected_pa": slot_pa,
-    }
-
-
-# ── Pitcher projection engine ─────────────────────────────────────────────────
-def _project_pitcher(pitcher_name, pitcher_id, pitcher_fg, pitcher_sv, pitcher_stats,
-                     opp_batters, park_factor, weather):
-    """
-    Returns K / BB / IP projections for one pitcher.
-    """
-    fg  = pitcher_fg
-    sv  = pitcher_sv
-
-    # Base rates per 9 innings (default to league average if missing)
-    k9   = _safe_f(fg.get("fg_k9"),   8.5)
-    bb9  = _safe_f(fg.get("fg_bb9"),  3.0)
-    era  = _safe_f(fg.get("fg_era") or pitcher_stats.get("era"), 4.20)
-    whip = _safe_f(fg.get("fg_whip") or pitcher_stats.get("whip"), 1.30)
-    kpct = _safe_f(fg.get("fg_kpct") or sv.get("sv_k_pct"), 0.22)
-    bbpct= _safe_f(fg.get("fg_bbpct") or sv.get("sv_bb_pct"), 0.08)
-
-    # Expected IP: starter gets 5–6 IP on average; use ERA/WHIP to adjust
-    # Better pitchers (lower ERA) go deeper
-    base_ip = 5.3
-    ip_adj  = 1.0 + (4.20 - era) * 0.10   # +0.1 IP per run below 4.20 ERA
-    exp_ip  = round(min(8.0, max(3.5, base_ip + ip_adj)), 1)
-
-    # Expected batters faced: ~4.3 BF per inning
-    exp_bf = exp_ip * 4.3
-
-    # Opposing lineup quality: average wOBA of lineup weighted vs pitcher's xwoba-against
-    opp_wobas = []
-    opp_kpcts = []
-    for b in opp_batters[:9]:
-        b_fg = fg_batter(b.get("name", ""))
-        b_sv = sv_batter(b.get("name", ""))
-        w = _safe_f(b_fg.get("fg_woba") or b_sv.get("sv_xwoba"), 0.310)
-        k = _safe_f(b_fg.get("fg_kpct") or b_sv.get("sv_k_pct"), 0.22)
-        opp_wobas.append(w)
-        opp_kpcts.append(k)
-    avg_opp_woba = sum(opp_wobas) / len(opp_wobas) if opp_wobas else 0.310
-    avg_opp_kpct = sum(opp_kpcts) / len(opp_kpcts) if opp_kpcts else 0.22
-
-    # Weak lineup (low wOBA) → pitcher goes deeper, strikes out more
-    opp_quality = min(1.15, max(0.85, avg_opp_woba / 0.320))
-
-    # K projection: k9 * (ip/9) adjusted for opponent K-rate vs pitcher K-rate
-    k_opp_adj = 1.0 + (avg_opp_kpct - 0.22) * 0.4   # high-K lineup boosts K totals
-    k_proj = round(max(0.5, (k9 / 9) * exp_ip * k_opp_adj / opp_quality), 2)
-
-    # BB projection: bb9 * ip adjusted for opponent chase/discipline
-    bb_proj = round(max(0.1, (bb9 / 9) * exp_ip * opp_quality), 2)
-
-    # Weather: very hot → slightly fewer K (hitters' counts more patient)
-    dome = weather.get("dome", False)
-    if not dome:
-        temp_f = _safe_f(weather.get("temp"), 72)
-        if temp_f > 88:
-            k_proj = round(k_proj * 0.97, 2)
-
-    return {
-        "k":           k_proj,
-        "bb":          bb_proj,
-        "expected_ip": exp_ip,
-    }
-
-
-def _safe_f(val, default=0.0):
-    """Safely parse a float from a value that might be 'N/A', None, or a string."""
-    try:
-        v = float(val)
-        return v if not (v != v) else default  # NaN guard
-    except (TypeError, ValueError):
-        return default
-
-
-# ── Matchup scoring engine ────────────────────────────────────────────────────
-def _matchup_score(batter, pitcher_fg, pitcher_sv):
-    """
-    Returns a 0–100 matchup score for one batter vs one pitcher.
-    Broken into sub-scores: contact (25), power (25), OBP (25), statcast (25).
+    Uses platoon-blended avg/obp/slg/ops as base rates when split PA is available.
     """
     name = batter.get("name", "")
     fg   = fg_batter(name)
     sv   = sv_batter(name)
 
-    # Contact (25 pts): avg / xBA
-    avg  = _safe_f(batter.get("avg") or fg.get("fg_avg"), 0.245)
+    # ── Platoon-blended base rates ────────────────────────────────────────────
+    avg  = _platoon_blend(batter, pitcher_hand, 'avg')
+    obp  = _platoon_blend(batter, pitcher_hand, 'obp')
+    slg  = _platoon_blend(batter, pitcher_hand, 'slg')
+    ops  = _platoon_blend(batter, pitcher_hand, 'ops')
+
+    # Fallback chain for fg-only stats (not in splits)
+    fg_pa  = _safe_f(fg.get("fg_pa"),  200)
+    fg_hr  = _safe_f(fg.get("fg_hr"),  3)
+    fg_rbi = _safe_f(fg.get("fg_rbi"), 12)
+    fg_r   = _safe_f(fg.get("fg_r"),   12)
+    hr_r   = fg_hr  / max(fg_pa, 1)
+    rbi_r  = fg_rbi / max(fg_pa, 1)
+    r_r    = fg_r   / max(fg_pa, 1)
+
+    # Scale HR rate by platoon OPS ratio (strong platoon advantage boosts power)
+    season_ops  = _safe_f(batter.get('ops'), _STAT_DEFAULTS['ops'])
+    ops_ratio   = ops / max(season_ops, 0.400)            # ≈1.0 neutral, >1 platoon advantage
+    hr_r_adj    = hr_r * ops_ratio                        # HR scales with ops split
+
+    xwoba = _safe_f(sv.get("sv_xwoba") or fg.get("fg_woba"), 0.310)
+    brl   = _safe_f(sv.get("sv_brl_pct"), 6.0) / 100
+
+    # ── Pitcher resistance multiplier ─────────────────────────────────────────
+    opp_era  = _safe_f(opp_pitcher_fg.get("fg_era")  or opp_pitcher_sv.get("sv_era_p"), 4.20)
+    opp_xera = _safe_f(opp_pitcher_sv.get("sv_xera"), opp_era)
+    opp_kpct = _safe_f(opp_pitcher_fg.get("fg_kpct"), 0.22)
+    bat_kpct = _safe_f(fg.get("fg_kpct") or sv.get("sv_k_pct"), 0.22)
+
+    pit_mult = min(1.25, max(0.72, (opp_era + opp_xera) / 2 / 4.20))
+    k_adj    = 1.0 - max(0.0, (opp_kpct - bat_kpct) * 0.5)
+
+    # ── Platoon K-rate modifier ───────────────────────────────────────────────
+    # Platoon disadvantage → more K exposure
+    bat  = (batter.get('bats') or 'S').upper()
+    pit  = (pitcher_hand or 'R').upper()
+    if bat != 'S':
+        platoon_k_mod = 0.96 if ((bat == 'L' and pit == 'R') or (bat == 'R' and pit == 'L')) else 1.04
+    else:
+        platoon_k_mod = 1.0   # switch hitter, neutral
+    k_adj *= platoon_k_mod
+
+    # ── Weather multiplier ────────────────────────────────────────────────────
+    dome      = weather.get("dome", False)
+    wx_mult   = 1.0
+    if not dome:
+        temp_f   = _safe_f(weather.get("temp"), 72)
+        wind_spd = _safe_f(weather.get("wind_speed"), 0)
+        wx_mult  = 1.0 + (temp_f - 72) * 0.003 + min(0.06, float(wind_spd) * 0.003)
+
+    # ── Expected PA by slot ───────────────────────────────────────────────────
+    slot   = int(batter.get("slot") or 5)
+    exp_pa = round(4.35 - (slot - 1) * 0.095, 2)
+
+    # ── Projections ───────────────────────────────────────────────────────────
+    # Hits: platoon avg replaces season avg as base
+    hits_proj = round(max(0.05, avg * exp_pa * pit_mult * k_adj * park_factor * wx_mult), 3)
+
+    # Total Bases: built from platoon slg
+    tb_proj   = round(max(0.08, slg * exp_pa * pit_mult * k_adj * park_factor * wx_mult), 3)
+
+    # HR: platoon-adjusted hr rate + barrel bonus + park + weather
+    hr_pf     = min(1.30, park_factor * 1.08)
+    hr_proj   = round(max(0.005,
+        hr_r_adj * exp_pa * hr_pf * (1.0 + (brl - 0.06) * 0.8) * wx_mult
+    ), 4)
+
+    # RBI: correlated to hits+HR, slot bonus
+    slot_rbi_bonus = max(0.8, 1.0 + (4 - abs(slot - 4)) * 0.03)
+    rbi_proj  = round(max(0.05, rbi_r * exp_pa * pit_mult * park_factor * slot_rbi_bonus), 3)
+
+    # Runs: lead-off slots score more
+    slot_r_bonus = max(0.8, 1.1 - abs(slot - 1.5) * 0.025)
+    r_proj    = round(max(0.04, r_r * exp_pa * pit_mult * slot_r_bonus), 3)
+
+    # H+R+RBI combo
+    hrr_proj  = round(hits_proj + r_proj + rbi_proj, 3)
+
+    return {
+        "hits":        hits_proj,
+        "hr":          hr_proj,
+        "tb":          tb_proj,
+        "rbi":         rbi_proj,
+        "r":           r_proj,
+        "hrr":         hrr_proj,
+        "expected_pa": exp_pa,
+        # expose the blended rates so the frontend can show them
+        "split_avg":   round(avg, 3),
+        "split_ops":   round(ops, 3),
+        "platoon_note": _batter_hand_note(batter, pitcher_hand),
+    }
+
+
+# ── Pitcher projection engine (unchanged, platoon handled batter-side) ────────
+def _project_pitcher(pitcher_name, pitcher_id, pitcher_fg, pitcher_sv, pitcher_stats,
+                     opp_batters, park_factor, weather):
+    fg   = pitcher_fg
+    sv   = pitcher_sv
+    k9   = _safe_f(fg.get("fg_k9"),   8.5)
+    bb9  = _safe_f(fg.get("fg_bb9"),  3.0)
+    era  = _safe_f(fg.get("fg_era") or pitcher_stats.get("era"), 4.20)
+    kpct = _safe_f(fg.get("fg_kpct") or sv.get("sv_k_pct"), 0.22)
+
+    base_ip = 5.3
+    ip_adj  = 1.0 + (4.20 - era) * 0.10
+    exp_ip  = round(min(8.0, max(3.5, base_ip + ip_adj)), 1)
+
+    opp_wobas, opp_kpcts = [], []
+    for b in opp_batters[:9]:
+        b_fg = fg_batter(b.get("name", ""))
+        b_sv = sv_batter(b.get("name", ""))
+        opp_wobas.append(_safe_f(b_fg.get("fg_woba") or b_sv.get("sv_xwoba"), 0.310))
+        opp_kpcts.append(_safe_f(b_fg.get("fg_kpct") or b_sv.get("sv_k_pct"), 0.22))
+
+    avg_opp_woba = sum(opp_wobas) / len(opp_wobas) if opp_wobas else 0.310
+    avg_opp_kpct = sum(opp_kpcts) / len(opp_kpcts) if opp_kpcts else 0.22
+    opp_quality  = min(1.15, max(0.85, avg_opp_woba / 0.320))
+    k_opp_adj    = 1.0 + (avg_opp_kpct - 0.22) * 0.4
+    k_proj       = round(max(0.5, (k9 / 9) * exp_ip * k_opp_adj / opp_quality), 2)
+    bb_proj      = round(max(0.1, (bb9 / 9) * exp_ip * opp_quality), 2)
+
+    if not weather.get("dome", False):
+        temp_f = _safe_f(weather.get("temp"), 72)
+        if temp_f > 88:
+            k_proj = round(k_proj * 0.97, 2)
+
+    return {"k": k_proj, "bb": bb_proj, "expected_ip": exp_ip}
+
+
+def _safe_f(val, default=0.0):
+    try:
+        v = float(val)
+        return v if v == v else default   # NaN guard
+    except (TypeError, ValueError):
+        return default
+
+
+# ── Matchup scoring engine (v2 — platoon-aware) ───────────────────────────────
+def _matchup_score(batter, pitcher_fg, pitcher_sv, pitcher_hand='R'):
+    """
+    Returns a 0–100 matchup score broken into 4 sub-scores.
+    Uses platoon-blended contact/power metrics when split data is available.
+    """
+    name = batter.get("name", "")
+    fg   = fg_batter(name)
+    sv   = sv_batter(name)
+
+    # ── Contact (25 pts): platoon-blended avg + xBA ───────────────────────────
+    avg  = _platoon_blend(batter, pitcher_hand, 'avg')
     xba  = _safe_f(sv.get("sv_xba"), avg)
     con  = round(min(25, max(0, ((avg + xba) / 2 - 0.180) / (0.340 - 0.180) * 25)), 1)
 
-    # Power (25 pts): slg / xSLG / iso / barrel%
-    slg  = _safe_f(batter.get("slg") or fg.get("fg_slg"), 0.390)
+    # ── Power (25 pts): platoon-blended slg + xSLG + iso + barrel% ───────────
+    slg  = _platoon_blend(batter, pitcher_hand, 'slg')
     xslg = _safe_f(sv.get("sv_xslg"), slg)
     iso  = _safe_f(fg.get("fg_iso"), 0.145)
     brl  = _safe_f(sv.get("sv_brl_pct"), 6.0) / 100
-    pwr  = round(min(25, max(0, ((slg + xslg) / 2 - 0.290) / (0.600 - 0.290) * 22 + brl * 15 + iso * 10)), 1)
+    pwr  = round(min(25, max(0,
+        ((slg + xslg) / 2 - 0.290) / (0.600 - 0.290) * 22 + brl * 15 + iso * 10
+    )), 1)
 
-    # OBP (25 pts): obp / bb%
-    obp  = _safe_f(batter.get("obp") or fg.get("fg_obp"), 0.315)
-    bbpct= _safe_f(fg.get("fg_bbpct"), 0.08)
-    obp_s= round(min(25, max(0, (obp - 0.270) / (0.420 - 0.270) * 22 + bbpct * 10)), 1)
+    # ── OBP (25 pts): platoon-blended obp + BB% ───────────────────────────────
+    obp   = _platoon_blend(batter, pitcher_hand, 'obp')
+    bbpct = _safe_f(fg.get("fg_bbpct"), 0.08)
+    obp_s = round(min(25, max(0, (obp - 0.270) / (0.420 - 0.270) * 22 + bbpct * 10)), 1)
 
-    # Statcast (25 pts): EV / hard-hit% / xwOBA — adjusted for pitcher resistance
+    # ── Statcast (25 pts): EV / HH% / xwOBA — pitcher penalty ────────────────
     ev   = _safe_f(sv.get("sv_ev"), 87.0)
     hh   = _safe_f(sv.get("sv_hh_pct") or sv.get("sv_hhpct"), 33.0) / 100
     xwob = _safe_f(sv.get("sv_xwoba") or fg.get("fg_woba"), 0.310)
     opp_kpct = _safe_f(pitcher_fg.get("fg_kpct"), 0.22)
     opp_xera = _safe_f(pitcher_sv.get("sv_xera"), 4.20)
-    # Downgrade if facing an elite pitcher
     pit_pen  = max(0.0, (0.22 - opp_kpct) * 10 + (opp_xera - 4.20) * 1.5)
     stc  = round(min(25, max(0,
         (ev - 82) / (98 - 82) * 8 +
@@ -4328,27 +4388,32 @@ def _matchup_score(batter, pitcher_fg, pitcher_sv):
         pit_pen
     )), 1)
 
-    total = round(min(100, con + pwr + obp_s + stc), 1)
+    # ── Platoon bonus / penalty (up to ±4 pts) ────────────────────────────────
+    bat  = (batter.get('bats') or 'S').upper()
+    pit  = (pitcher_hand or 'R').upper()
+    if bat != 'S':
+        platoon_bonus = 3.0 if ((bat == 'L' and pit == 'R') or (bat == 'R' and pit == 'L')) else -3.0
+    else:
+        platoon_bonus = 1.5  # switch hitter slight edge
+
+    total = round(min(100, max(0, con + pwr + obp_s + stc + platoon_bonus)), 1)
     tier  = "A" if total >= 70 else "B" if total >= 55 else "C" if total >= 40 else "D"
 
     return {
-        "score":    total,
-        "tier":     tier,
-        "contact":  con,
-        "power":    round(pwr, 1),
-        "obp":      obp_s,
-        "statcast": stc,
+        "score":        total,
+        "tier":         tier,
+        "contact":      con,
+        "power":        round(pwr, 1),
+        "obp":          obp_s,
+        "statcast":     stc,
+        "platoon_bonus": platoon_bonus,
+        "platoon_note": _batter_hand_note(batter, pitcher_hand),
     }
 
 
 # ── Route: Prop projections ───────────────────────────────────────────────────
 @app.route('/api/props/projections/<int:game_pk>')
 def api_props_projections(game_pk):
-    """
-    Returns batter + pitcher prop projections for all markets:
-    Hits, HR, Total Bases, RBI, H+R+RBI (batters)
-    Strikeouts, Walks (pitchers)
-    """
     try:
         _maybe_refresh_fg()
         _maybe_refresh_savant()
@@ -4362,17 +4427,19 @@ def api_props_projections(game_pk):
         home_id   = home_t.get("team", {}).get("id")
         pf        = PARK_FACTORS.get(home_id, 1.0)
 
-        ap_info   = pitchers["ap"]
-        hp_info   = pitchers["hp"]
-        ap_name   = ap_info.get("fullName", "TBD")
-        hp_name   = hp_info.get("fullName", "TBD")
-        ap_id     = ap_info.get("id")
-        hp_id     = hp_info.get("id")
+        ap_info = pitchers["ap"]; hp_info = pitchers["hp"]
+        ap_name = ap_info.get("fullName", "TBD")
+        hp_name = hp_info.get("fullName", "TBD")
+        ap_id   = ap_info.get("id");  hp_id  = hp_info.get("id")
 
-        ap_fg = fg_pitcher(ap_name);   hp_fg = fg_pitcher(hp_name)
-        ap_sv = sv_pitcher(ap_name);   hp_sv = sv_pitcher(hp_name)
+        ap_fg = fg_pitcher(ap_name); hp_fg = fg_pitcher(hp_name)
+        ap_sv = sv_pitcher(ap_name); hp_sv = sv_pitcher(hp_name)
         ap_st = pitcher_stats_mlb(ap_id) if ap_id else {}
         hp_st = pitcher_stats_mlb(hp_id) if hp_id else {}
+
+        # ── Pitcher hands — the key new inputs ────────────────────────────────
+        ap_hand = (ap_st.get("pitchHand") or "R").upper()
+        hp_hand = (hp_st.get("pitchHand") or "R").upper()
 
         # Weather
         ven   = gdata.get("venue", {})
@@ -4388,41 +4455,53 @@ def api_props_projections(game_pk):
             ghour  = 13
         wx = get_weather(lat, lon, ghour, venue_id=vid)
 
-        # Build batter projections for both lineups
-        def enrich_batters(batters, opp_pitcher_fg, opp_pitcher_sv, opp_abbr, opp_pitcher_name):
-            result = []
+        # ── Build batter projections (now passes pitcher_hand) ─────────────────
+        def enrich_batters(batters, opp_pfg, opp_psv, opp_pst, opp_abbr, opp_pname):
+            opp_hand = (opp_pst.get("pitchHand") or "R").upper()
+            result   = []
             for b in batters[:9]:
                 name = b.get("name", "")
                 bfg  = fg_batter(name)
                 bsv  = sv_batter(name)
-                proj = _project_batter(b, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_sv, pf, wx)
+                proj = _project_batter(
+                    b, opp_pname, opp_pfg, opp_psv, pf, wx,
+                    pitcher_hand=opp_hand   # ← platoon key
+                )
                 result.append({
-                    "name":        name,
-                    "team":        b.get("team", ""),
-                    "pos":         b.get("pos", ""),
-                    "slot":        b.get("slot", 0),
-                    "opp_pitcher": opp_pitcher_name,
-                    "opp_era":     opp_pitcher_fg.get("fg_era") or opp_pitcher_sv.get("sv_era_p"),
-                    "opp_k9":      opp_pitcher_fg.get("fg_k9"),
-                    "avg":         b.get("avg") or bfg.get("fg_avg"),
-                    "obp":         b.get("obp") or bfg.get("fg_obp"),
-                    "slg":         b.get("slg") or bfg.get("fg_slg"),
-                    "fg_woba":     bfg.get("fg_woba"),
-                    "sv_xwoba":    bsv.get("sv_xwoba"),
-                    "sv_ev":       bsv.get("sv_ev"),
-                    "proj":        proj,
+                    "name":         name,
+                    "team":         b.get("team", ""),
+                    "pos":          b.get("pos", ""),
+                    "slot":         b.get("slot", 0),
+                    "id":           b.get("id"),
+                    "bats":         b.get("bats", ""),
+                    "opp_pitcher":  opp_pname,
+                    "opp_hand":     opp_hand,
+                    "opp_era":      opp_pfg.get("fg_era") or opp_psv.get("sv_era_p"),
+                    "opp_k9":       opp_pfg.get("fg_k9"),
+                    "avg":          b.get("avg") or bfg.get("fg_avg"),
+                    "obp":          b.get("obp") or bfg.get("fg_obp"),
+                    "slg":          b.get("slg") or bfg.get("fg_slg"),
+                    "fg_woba":      bfg.get("fg_woba"),
+                    "sv_xwoba":     bsv.get("sv_xwoba"),
+                    "sv_ev":        bsv.get("sv_ev"),
+                    # Expose platoon splits for UI
+                    "vs_l_avg":     b.get("vs_l_avg"),
+                    "vs_r_avg":     b.get("vs_r_avg"),
+                    "vs_l_ops":     b.get("vs_l_ops"),
+                    "vs_r_ops":     b.get("vs_r_ops"),
+                    "proj":         proj,
                 })
             return result
 
-        away_proj = enrich_batters(away_bats, hp_fg, hp_sv, home_abbr, hp_name)
-        home_proj = enrich_batters(home_bats, ap_fg, ap_sv, away_abbr, ap_name)
+        away_proj = enrich_batters(away_bats, hp_fg, hp_sv, hp_st, home_abbr, hp_name)
+        home_proj = enrich_batters(home_bats, ap_fg, ap_sv, ap_st, away_abbr, ap_name)
         all_batters = away_proj + home_proj
 
-        # Build pitcher projections
+        # ── Pitcher projections ────────────────────────────────────────────────
         pitchers_out = []
-        for pid, pname, pfg, psv, pst, opp_bats, pabbr in [
-            (ap_id, ap_name, ap_fg, ap_sv, ap_st, home_bats, away_abbr),
-            (hp_id, hp_name, hp_fg, hp_sv, hp_st, away_bats, home_abbr),
+        for pid, pname, pfg, psv, pst, opp_bats, pabbr, phand in [
+            (ap_id, ap_name, ap_fg, ap_sv, ap_st, home_bats, away_abbr, ap_hand),
+            (hp_id, hp_name, hp_fg, hp_sv, hp_st, away_bats, home_abbr, hp_hand),
         ]:
             if pname == "TBD":
                 continue
@@ -4430,7 +4509,9 @@ def api_props_projections(game_pk):
             pitchers_out.append({
                 "name":      pname,
                 "team":      pabbr,
+                "id":        pid,
                 "role":      "SP",
+                "pitchHand": phand,
                 "era":       pfg.get("fg_era") or psv.get("sv_era_p"),
                 "whip":      pfg.get("fg_whip"),
                 "fip":       pfg.get("fg_fip"),
@@ -4446,14 +4527,14 @@ def api_props_projections(game_pk):
             })
 
         return jsonify({
-            "success":  True,
-            "gamePk":   game_pk,
-            "matchup":  f"{away_abbr} @ {home_abbr}",
-            "batters":  all_batters,
-            "pitchers": pitchers_out,
-            "weather":  wx,
+            "success":     True,
+            "gamePk":      game_pk,
+            "matchup":     f"{away_abbr} @ {home_abbr}",
+            "batters":     all_batters,
+            "pitchers":    pitchers_out,
+            "weather":     wx,
             "park_factor": pf,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp":   datetime.now(timezone.utc).isoformat(),
         })
 
     except Exception as ex:
@@ -4461,13 +4542,9 @@ def api_props_projections(game_pk):
         return jsonify({"success": False, "error": str(ex)}), 500
 
 
-# ── Route: Matchup scores ─────────────────────────────────────────────────────
+# ── Route: Matchup scores (v2 — platoon-aware) ────────────────────────────────
 @app.route('/api/props/matchup-scores/<int:game_pk>')
 def api_props_matchup_scores(game_pk):
-    """
-    Returns a 0–100 matchup score for every batter in each lineup
-    vs the opposing starting pitcher.
-    """
     try:
         _maybe_refresh_fg()
         _maybe_refresh_savant()
@@ -4482,39 +4559,49 @@ def api_props_matchup_scores(game_pk):
         ap_info = pitchers["ap"]; hp_info = pitchers["hp"]
         ap_name = ap_info.get("fullName", "TBD")
         hp_name = hp_info.get("fullName", "TBD")
+        ap_id   = ap_info.get("id");  hp_id  = hp_info.get("id")
 
         ap_fg = fg_pitcher(ap_name); ap_sv = sv_pitcher(ap_name)
         hp_fg = fg_pitcher(hp_name); hp_sv = sv_pitcher(hp_name)
+        ap_st = pitcher_stats_mlb(ap_id) if ap_id else {}
+        hp_st = pitcher_stats_mlb(hp_id) if hp_id else {}
 
-        def score_lineup(batters, opp_pfg, opp_psv):
+        ap_hand = (ap_st.get("pitchHand") or "R").upper()
+        hp_hand = (hp_st.get("pitchHand") or "R").upper()
+
+        def score_lineup(batters, opp_pfg, opp_psv, opp_hand):
             out = []
             for b in batters[:9]:
-                sc = _matchup_score(b, opp_pfg, opp_psv)
+                sc = _matchup_score(b, opp_pfg, opp_psv, pitcher_hand=opp_hand)
                 out.append({
                     "name":  b.get("name", ""),
                     "pos":   b.get("pos", ""),
                     "slot":  b.get("slot", 0),
+                    "bats":  b.get("bats", ""),
                     "score": sc,
                 })
             return sorted(out, key=lambda x: x["slot"])
 
-        away_scores = score_lineup(away_bats, hp_fg, hp_sv)
-        home_scores = score_lineup(home_bats, ap_fg, ap_sv)
+        # home batters face away pitcher (ap_hand), away batters face home pitcher (hp_hand)
+        away_scores = score_lineup(away_bats, hp_fg, hp_sv, hp_hand)
+        home_scores = score_lineup(home_bats, ap_fg, ap_sv, ap_hand)
 
         return jsonify({
             "success": True,
             "gamePk":  game_pk,
             "away": {
-                "abbr":          away_abbr,
-                "pitcher_name":  hp_name,
-                "pitcher_era":   hp_fg.get("fg_era") or hp_sv.get("sv_era_p"),
-                "batters":       home_scores,  # home batters vs away pitcher
+                "abbr":         away_abbr,
+                "pitcher_name": hp_name,
+                "pitcher_hand": hp_hand,
+                "pitcher_era":  hp_fg.get("fg_era") or hp_sv.get("sv_era_p"),
+                "batters":      home_scores,
             },
             "home": {
-                "abbr":          home_abbr,
-                "pitcher_name":  ap_name,
-                "pitcher_era":   ap_fg.get("fg_era") or ap_sv.get("sv_era_p"),
-                "batters":       away_scores,  # away batters vs home pitcher
+                "abbr":         home_abbr,
+                "pitcher_name": ap_name,
+                "pitcher_hand": ap_hand,
+                "pitcher_era":  ap_fg.get("fg_era") or ap_sv.get("sv_era_p"),
+                "batters":      away_scores,
             },
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
@@ -4524,14 +4611,9 @@ def api_props_matchup_scores(game_pk):
         return jsonify({"success": False, "error": str(ex)}), 500
 
 
-# ── Route: Tracker entries for a date + optional game ────────────────────────
+# ── Route: Tracker entries for the value bets panel ───────────────────────────
 @app.route('/api/tracker/entries')
 def api_tracker_entries():
-    """
-    Returns raw tracker entries for the value bets panel.
-    Accepts ?date=YYYY-MM-DD and optional ?gamePk=<int>
-    Reads from TRACKER_STORE (daily_tracker.json) — same store the tracker page uses.
-    """
     try:
         date   = request.args.get("date", datetime.now(ET).strftime("%Y-%m-%d"))
         gamePk = request.args.get("gamePk")
@@ -4541,26 +4623,22 @@ def api_tracker_entries():
             with open(TRACKER_STORE) as f:
                 store = json.load(f)
 
-        day   = store.get(date, {})
+        day     = store.get(date, {})
         entries = day.get("entries", [])
 
         if gamePk:
             try:
-                pk_int = int(gamePk)
-                entries = [e for e in entries if e.get("gamePk") == pk_int or str(e.get("gamePk")) == str(pk_int)]
+                pk_int  = int(gamePk)
+                entries = [e for e in entries
+                           if e.get("gamePk") == pk_int or str(e.get("gamePk")) == str(pk_int)]
             except (ValueError, TypeError):
                 pass
 
-        return jsonify({
-            "success": True,
-            "date":    date,
-            "entries": entries,
-            "total":   len(entries),
-        })
+        return jsonify({"success": True, "date": date, "entries": entries, "total": len(entries)})
 
     except Exception as ex:
         print(f"[api_tracker_entries] {traceback.format_exc()}")
-        return jsonify({"success": False, "error": str(ex), "entries": []}), 500
+
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
