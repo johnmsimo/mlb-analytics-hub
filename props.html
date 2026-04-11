@@ -868,6 +868,239 @@ function renderValueTable(filter) {
     </tr>`;
   }).join('');
 }
+
+// ── Inject Kelly CSS ──────────────────────────────────────────────────────────
+(function injectKellyCSS() {
+  if (document.getElementById('kelly-css')) return;
+  var s = document.createElement('style');
+  s.id = 'kelly-css';
+  s.textContent = [
+    '.kelly-cell{font-family:"Orbitron",monospace;font-size:.68rem;font-weight:700}',
+    '.kelly-hi{color:#00e676}',    // >2% stake — high conviction
+    '.kelly-md{color:#00e5ff}',    // 1–2% stake
+    '.kelly-lo{color:#ff9800}',    // 0–1% stake
+    '.kelly-na{color:#6a8db0}',    // no kelly (no odds)
+    '.pf-chip{display:inline-flex;gap:5px;flex-wrap:wrap;margin-top:4px}',
+    '.pf-tag{font-size:.5rem;font-family:"Orbitron",monospace;padding:1px 6px;border-radius:4px;border:1px solid;letter-spacing:.8px}',
+    '.pf-over{background:rgba(255,152,0,.1);border-color:rgba(255,152,0,.3);color:#ff9800}',
+    '.pf-under{background:rgba(0,229,255,.08);border-color:rgba(0,229,255,.22);color:#00b8d4}',
+    '.pf-neutral{background:rgba(106,141,176,.06);border-color:rgba(106,141,176,.18);color:#6a8db0}',
+  ].join('\n');
+  document.head.appendChild(s);
+})();
+
+// ── Kelly math (mirrors backend _kelly_fraction) ──────────────────────────────
+function kellyFraction(prob, americanOdds) {
+  if (prob == null || americanOdds == null) return null;
+  const p = parseFloat(prob);
+  const o = parseFloat(americanOdds);
+  if (isNaN(p) || isNaN(o) || o === 0) return null;
+  const b = o > 0 ? o / 100 : 100 / Math.abs(o);
+  const q = 1 - p;
+  const frac = ((b * p) - q) / b;
+  return Math.max(0, frac);
+}
+
+function kellyStake(prob, odds, bankroll, fraction, maxBetPct) {
+  const fullKelly = kellyFraction(prob, odds);
+  if (fullKelly === null || fullKelly <= 0) return null;
+  const fr   = parseFloat(fraction) || 0.5;
+  const maxB = parseFloat(maxBetPct) || 0.03;
+  const br   = parseFloat(bankroll)  || 1000;
+  const pct  = Math.min(maxB, fullKelly * fr);
+  return { pct, dollars: Math.round(br * pct * 100) / 100, fullKelly };
+}
+
+// Fetch adjustments once and cache
+var _adjCache = null;
+async function getAdjustments() {
+  if (_adjCache) return _adjCache;
+  try {
+    const r = await fetch('/api/tracker/adjustments');
+    const d = await r.json();
+    _adjCache = d.adjustments || {};
+  } catch(e) { _adjCache = {}; }
+  return _adjCache;
+}
+
+// ── Override buildValueBets to add Kelly ──────────────────────────────────────
+var _origBuildValueBets = (typeof buildValueBets !== 'undefined') ? buildValueBets : null;
+
+async function buildValueBetsWithKelly(entries) {
+  // Run original logic first
+  const base = _origBuildValueBets ? _origBuildValueBets(entries) : entries;
+  const adj  = await getAdjustments();
+  const bankroll    = parseFloat(adj.bankroll    || 1000);
+  const fraction    = parseFloat(adj.kelly_fraction || 0.5);
+  const maxBetPct   = parseFloat(adj.max_bet_pct  || 0.03);
+
+  return base.map(b => {
+    // Use existing stakeDollars from tracker entry if already computed
+    if (b.stakeDollars != null && b.stakeDollars > 0) {
+      return {
+        ...b,
+        _kelly: { pct: b.stakePct, dollars: b.stakeDollars, fullKelly: b.fullKellyPct }
+      };
+    }
+    // Compute from edge + implied prob
+    if (b.edge != null && b.implProb != null && b.openOdds != null) {
+      // Convert implied prob to model prob: implProb + edge
+      const modelProb = Math.min(0.99, b.implProb + (b.edge || 0));
+      const kStake    = kellyStake(modelProb, b.openOdds, bankroll, fraction, maxBetPct);
+      return { ...b, _kelly: kStake };
+    }
+    return { ...b, _kelly: null };
+  });
+}
+
+// ── Override renderValueTable to show Kelly column ────────────────────────────
+var _origRenderValueTable = (typeof renderValueTable !== 'undefined') ? renderValueTable : null;
+
+function renderValueTableWithKelly(filter) {
+  // First call the original to render the table
+  if (_origRenderValueTable) _origRenderValueTable(filter);
+
+  // Now re-build with Kelly column if VAL_DATA is available
+  if (!VAL_DATA) return;
+
+  const all  = VAL_DATA;
+  let rows   = all;
+  if (filter === 'high')  rows = all.filter(b => (b.edge??-1) > 0.07);
+  else if (filter==='hits') rows = all.filter(b => (b.marketKey||'').includes('hit'));
+  else if (filter==='hr')   rows = all.filter(b => (b.marketKey||'').includes('home_run')||(b.marketKey||'').includes('homerun'));
+  else if (filter==='tb')   rows = all.filter(b => (b.marketKey||'').includes('total_base')||(b.marketKey||'').includes('totalbas'));
+  else if (filter==='k')    rows = all.filter(b => (b.marketKey||'').includes('strikeout'));
+  else if (filter==='rbi')  rows = all.filter(b => (b.marketKey||'').includes('rbi'));
+  else if (filter==='bb')   rows = all.filter(b => (b.marketKey||'').includes('walk'));
+
+  if (!rows.length) return;
+
+  // Update header to include Kelly column
+  const tbl = document.querySelector('.vtbl');
+  if (!tbl) return;
+  const hdr = tbl.querySelector('thead tr');
+  if (hdr && !hdr.querySelector('.kelly-hdr')) {
+    const th = document.createElement('th');
+    th.className = 'kelly-hdr';
+    th.textContent = 'KELLY STAKE';
+    hdr.appendChild(th);
+  }
+
+  // Get adjustments from cache (may be null first call — that's ok)
+  const adj      = _adjCache || {};
+  const bankroll = parseFloat(adj.bankroll    || 1000);
+  const fraction = parseFloat(adj.kelly_fraction || 0.5);
+  const maxBetPct= parseFloat(adj.max_bet_pct  || 0.03);
+
+  // Update each row with Kelly cell
+  const tbody = tbl.querySelector('tbody');
+  if (!tbody) return;
+  const trList = tbody.querySelectorAll('tr');
+  rows.forEach((b, i) => {
+    const tr = trList[i];
+    if (!tr) return;
+    if (tr.querySelector('.kelly-cell')) return; // already added
+    const td = document.createElement('td');
+    td.className = 'kelly-cell';
+
+    // Compute Kelly
+    let kd = null;
+    if (b.stakeDollars != null && b.stakeDollars > 0) {
+      kd = { dollars: b.stakeDollars, pct: b.stakePct, fullKelly: b.fullKellyPct };
+    } else if (b.edge != null && b.implProb != null && b.openOdds != null) {
+      const modelProb = Math.min(0.99, b.implProb + (b.edge || 0));
+      kd = kellyStake(modelProb, b.openOdds, bankroll, fraction, maxBetPct);
+    }
+
+    if (!kd || kd.dollars <= 0) {
+      td.className += ' kelly-na'; td.textContent = '—';
+    } else {
+      const cls = kd.pct >= 0.02 ? 'kelly-hi' : kd.pct >= 0.01 ? 'kelly-md' : 'kelly-lo';
+      td.className += ' ' + cls;
+      td.innerHTML = `$${kd.dollars.toFixed(2)}<br><span style="font-size:.5rem;color:var(--mu)">${(kd.pct*100).toFixed(1)}% BK · ${(kd.fullKelly*100).toFixed(1)}% FULL K</span>`;
+    }
+    tr.appendChild(td);
+  });
+}
+
+// ── Override renderValueTable and setVFilter ───────────────────────────────────
+if (typeof renderValueTable !== 'undefined') {
+  renderValueTable = renderValueTableWithKelly;
+}
+if (typeof setVFilter !== 'undefined') {
+  var _origSetVFilter = setVFilter;
+  setVFilter = function(btn, f) {
+    _origSetVFilter(btn, f);
+    // Pre-fetch adjustments silently
+    getAdjustments();
+  };
+}
+
+// Pre-fetch adjustments on load
+getAdjustments();
+
+// ── Park factor split display on batter cards ─────────────────────────────────
+// After projections load, show prop-specific PF chips if available
+var _origRenderBatters = (typeof renderBatters !== 'undefined') ? renderBatters : null;
+function renderBattersWithPF(batters, key) {
+  if (_origRenderBatters) _origRenderBatters(batters, key);
+  // Inject PF chips after cards render
+  setTimeout(function() {
+    document.querySelectorAll('.bcard').forEach(function(card, i) {
+      if (card.querySelector('.pf-chip')) return;
+      const batter = batters[i];
+      if (!batter || !batter.proj) return;
+      const proj = batter.proj;
+      if (!proj.pf_hits && !proj.pf_hr && !proj.pf_tb) return;
+      const div = document.createElement('div');
+      div.className = 'pf-chip';
+      div.innerHTML = pfTag('H', proj.pf_hits) + pfTag('HR', proj.pf_hr) + pfTag('TB', proj.pf_tb);
+      const foot = card.querySelector('.bcard-foot');
+      if (foot) foot.parentNode.insertBefore(div, foot);
+    });
+  }, 100);
+}
+function pfTag(label, val) {
+  if (!val) return '';
+  const n   = parseFloat(val);
+  const cls = n >= 1.04 ? 'pf-over' : n <= 0.96 ? 'pf-under' : 'pf-neutral';
+  const dir = n >= 1.04 ? '↑' : n <= 0.96 ? '↓' : '→';
+  return `<span class="pf-tag ${cls}">${label} ${dir}${n.toFixed(2)}</span>`;
+}
+if (typeof renderBatters !== 'undefined') {
+  // Note: renderBatters takes sorted batters so we wrap differently
+  // Just add PF chips via a post-render hook when PROJ_DATA changes
+  var _origLoadProjections = (typeof loadProjections !== 'undefined') ? loadProjections : null;
+  if (_origLoadProjections) {
+    loadProjections = async function() {
+      await _origLoadProjections();
+      if (PROJ_DATA && PROJ_DATA.batters) {
+        setTimeout(function() {
+          var cards = document.querySelectorAll('.bcard');
+          var batters = PROJ_DATA.batters || [];
+          // Sort by current SORT_KEY to match card order
+          var sorted = [...batters].sort(function(a, b) {
+            return SORT_KEY === 'slot'
+              ? (a.slot||9) - (b.slot||9)
+              : (b.proj?.[SORT_KEY]??0) - (a.proj?.[SORT_KEY]??0);
+          });
+          cards.forEach(function(card, i) {
+            if (card.querySelector('.pf-chip')) return;
+            var batter = sorted[i];
+            if (!batter || !batter.proj) return;
+            var proj = batter.proj;
+            if (!proj.pf_hits && !proj.pf_hr && !proj.pf_tb) return;
+            var div = document.createElement('div');
+            div.className = 'pf-chip';
+            div.innerHTML = pfTag('H', proj.pf_hits) + pfTag('HR', proj.pf_hr) + pfTag('TB', proj.pf_tb);
+            var foot = card.querySelector('.bcard-foot');
+            if (foot) foot.insertAdjacentElement('beforebegin', div);
+          });
+        }, 200);
+      }
+    };
+  }
+}
 </script>
 </body>
 </html>
