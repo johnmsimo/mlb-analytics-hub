@@ -4321,8 +4321,8 @@ def _batter_hand_note(batter, pitcher_hand):
     return f"{'LHB' if bat == 'L' else 'RHB'} vs {'RHP' if pit == 'R' else 'LHP'} ({direction})"
 
 
-# ── Batter projection engine (v2 — platoon-aware) ────────────────────────────
-def _project_batter(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_sv,
+# ── Batter projection engine (v3 — platoon-aware) ────────────────────────────
+def _project_batter_v3(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_sv,
               park_factor, weather, pitcher_hand='R', home_team_id=None):
     """
     Returns per-prop projections for one batter.
