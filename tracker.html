@@ -685,6 +685,320 @@ async function boot(){
   }catch(e){status(e.message);console.error(e)}
 }
 boot();
+// ── Inject Backtesting CSS ────────────────────────────────────────────────────
+(function injectBTCSS() {
+  if (document.getElementById('bt-css')) return;
+  var s = document.createElement('style');
+  s.id = 'bt-css';
+  s.textContent = [
+    '.bt-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px}',
+    '.bt-card{padding:12px;border-radius:12px;background:rgba(255,255,255,.03);border:1px solid var(--line)}',
+    '.bt-lbl{font-family:Orbitron,sans-serif;font-size:.5rem;letter-spacing:1.8px;color:var(--mut);margin-bottom:6px}',
+    '.bt-val{font-family:Orbitron,sans-serif;font-size:1rem;font-weight:700;color:var(--cyan)}',
+    '.bt-sub{font-size:.65rem;color:var(--mut);margin-top:3px}',
+    '.bt-section{margin-top:16px}',
+    '.bt-section-hd{font-family:Orbitron,sans-serif;font-size:.62rem;letter-spacing:2px;color:var(--cyan);margin-bottom:10px;text-transform:uppercase}',
+    '.bt-row-hd{display:grid;gap:8px;padding:6px 8px;font-family:Orbitron,sans-serif;font-size:.5rem;letter-spacing:1.5px;color:var(--mut);border-bottom:1px solid var(--line)}',
+    '.bt-row{display:grid;gap:8px;padding:8px 8px;font-size:.68rem;border-bottom:1px solid rgba(255,255,255,.04)}',
+    '.bt-row:hover{background:rgba(0,229,255,.03)}',
+    '.bt-mkt-row{grid-template-columns:1.4fr repeat(7,1fr)}',
+    '.bt-edge-row{grid-template-columns:1fr repeat(6,1fr)}',
+    '.bt-cal-row{grid-template-columns:1fr 1fr 1fr 1fr 1fr}',
+    '.bt-pos{color:#34d399;font-weight:700}',
+    '.bt-neg{color:#fb7185;font-weight:700}',
+    '.bt-neu{color:var(--mut)}',
+    '.bt-cal-bar{height:6px;background:rgba(255,255,255,.06);border-radius:3px;overflow:hidden;margin-top:4px}',
+    '.bt-cal-fill{height:100%;border-radius:3px;transition:width .8s ease}',
+    '@media(max-width:760px){.bt-grid{grid-template-columns:1fr 1fr}.bt-mkt-row{grid-template-columns:1fr 1fr 1fr 1fr}.bt-edge-row{grid-template-columns:1fr 1fr 1fr 1fr}.bt-cal-row{grid-template-columns:1fr 1fr 1fr}}',
+  ].join('\n');
+  document.head.appendChild(s);
+})();
+
+// ── Add Backtest button to the Stage 3 subtabs ────────────────────────────────
+(function addBacktestTab() {
+  // Wait for DOM
+  var check = setInterval(function() {
+    var stabs = document.querySelector('.stabs');
+    if (!stabs) return;
+    if (stabs.querySelector('[data-sub="backtest"]')) { clearInterval(check); return; }
+    var btn = document.createElement('button');
+    btn.className = 'stab';
+    btn.setAttribute('data-sub', 'backtest');
+    btn.textContent = '📊 Backtest';
+    btn.onclick = function() { switchToBacktest(); };
+    stabs.appendChild(btn);
+    // Add backtest view panel
+    var panel = document.querySelector('.stage#stage-review') ||
+                document.getElementById('stage-review');
+    if (panel) {
+      var mainPanel = panel.querySelector('.panel.pp');
+      if (mainPanel) {
+        var sview = document.createElement('div');
+        sview.className = 'sview';
+        sview.id = 'sub-backtest';
+        sview.innerHTML = buildBacktestHTML();
+        mainPanel.appendChild(sview);
+      }
+    }
+    clearInterval(check);
+  }, 300);
+})();
+
+function buildBacktestHTML() {
+  return `
+    <div class="cr" style="margin-bottom:12px;flex-wrap:wrap;gap:8px">
+      <div style="display:flex;align-items:center;gap:8px">
+        <label style="font-size:.62rem;color:var(--mut)">FROM</label>
+        <input class="finput" type="date" id="btStart" style="max-width:140px">
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <label style="font-size:.62rem;color:var(--mut)">TO</label>
+        <input class="finput" type="date" id="btEnd" style="max-width:140px">
+      </div>
+      <select class="finput" id="btMarket" style="max-width:180px">
+        <option value="">All Markets</option>
+        <option value="batter_hits">Hits</option>
+        <option value="batter_home_runs">Home Runs</option>
+        <option value="batter_total_bases">Total Bases</option>
+        <option value="batter_rbis">RBI</option>
+        <option value="pitcher_strikeouts">Pitcher Ks</option>
+        <option value="batter_runs_scored">Runs</option>
+      </select>
+      <select class="finput" id="btMinEdge" style="max-width:160px">
+        <option value="">No edge filter</option>
+        <option value="0.02">Edge ≥ 2%</option>
+        <option value="0.04">Edge ≥ 4%</option>
+        <option value="0.07">Edge ≥ 7%</option>
+      </select>
+      <button class="btn primary" id="runBtBtn">Run Backtest</button>
+      <span class="pill" id="btPill" style="margin-left:4px">Set date range and run</span>
+    </div>
+    <div id="btResults"><div class="notice">Set a date range and click Run Backtest to replay your model against graded results.</div></div>
+  `;
+}
+
+function switchToBacktest() {
+  // Deactivate all stabs/sviews
+  document.querySelectorAll('.stab').forEach(function(b) { b.classList.remove('active'); });
+  document.querySelectorAll('.sview').forEach(function(v) { v.classList.remove('active'); });
+  var btn = document.querySelector('[data-sub="backtest"]');
+  var view = document.getElementById('sub-backtest');
+  if (btn)  btn.classList.add('active');
+  if (view) view.classList.add('active');
+
+  // Set default date range if empty
+  var now   = new Date();
+  var start = new Date(now); start.setDate(start.getDate() - 30);
+  var startEl = document.getElementById('btStart');
+  var endEl   = document.getElementById('btEnd');
+  if (startEl && !startEl.value) startEl.value = start.toISOString().slice(0, 10);
+  if (endEl   && !endEl.value)   endEl.value   = now.toISOString().slice(0, 10);
+
+  // Wire button
+  var runBtn = document.getElementById('runBtBtn');
+  if (runBtn && !runBtn._wired) {
+    runBtn._wired = true;
+    runBtn.addEventListener('click', runBacktest);
+  }
+}
+
+async function runBacktest() {
+  var start    = document.getElementById('btStart')?.value;
+  var end      = document.getElementById('btEnd')?.value;
+  var market   = document.getElementById('btMarket')?.value;
+  var minEdge  = document.getElementById('btMinEdge')?.value;
+  var pill     = document.getElementById('btPill');
+  var results  = document.getElementById('btResults');
+  if (!start || !end) { if(pill) pill.textContent = 'Set both dates first'; return; }
+  if (pill) pill.textContent = 'Running…';
+  results.innerHTML = '<div class="spinner" style="width:32px;height:32px;border-width:3px;margin:20px auto"></div>';
+
+  try {
+    var url = `/api/backtest?start=${start}&end=${end}`;
+    if (market)  url += `&market=${market}`;
+    if (minEdge) url += `&min_edge=${minEdge}`;
+    var r = await fetch(url);
+    var d = await r.json();
+    if (!d.success) throw new Error(d.error || 'Backtest failed');
+    if (pill) pill.textContent = `${d.total} graded entries · ${start} → ${end}`;
+    results.innerHTML = renderBacktestResults(d);
+  } catch(e) {
+    results.innerHTML = `<div class="notice" style="color:var(--red)">Error: ${e.message}</div>`;
+    if (pill) pill.textContent = 'Error';
+  }
+}
+
+function btFmt(v, decimals, suffix) {
+  if (v == null) return '—';
+  var n = parseFloat(v);
+  return isNaN(n) ? '—' : n.toFixed(decimals || 0) + (suffix || '');
+}
+function btPct(v) { return btFmt(v, 1, '%') !== '—' ? btFmt(parseFloat(v)*100, 1, '%') : '—'; }
+function btMoney(v) {
+  if (v == null) return '—';
+  var n = parseFloat(v);
+  return isNaN(n) ? '—' : (n >= 0 ? '+' : '') + '$' + Math.abs(n).toFixed(2);
+}
+function btROI(v) {
+  if (v == null) return '<span class="bt-neu">—</span>';
+  var n = parseFloat(v) * 100;
+  var cls = n >= 3 ? 'bt-pos' : n < -3 ? 'bt-neg' : 'bt-neu';
+  return `<span class="${cls}">${(n >= 0 ? '+' : '') + n.toFixed(1)}%</span>`;
+}
+function btHR(v, graded) {
+  if (v == null || graded < 3) return '<span class="bt-neu">—</span>';
+  var n = parseFloat(v) * 100;
+  var cls = n >= 55 ? 'bt-pos' : n < 47 ? 'bt-neg' : 'bt-neu';
+  return `<span class="${cls}">${n.toFixed(1)}%</span>`;
+}
+
+const MKT_NAMES = {
+  batter_hits:'Hits', batter_home_runs:'Home Runs', batter_total_bases:'Total Bases',
+  batter_rbis:'RBI', pitcher_strikeouts:'Pitcher Ks', batter_runs_scored:'Runs',
+  batter_stolen_bases:'SB',
+};
+
+function renderBacktestResults(d) {
+  if (d.total === 0) return '<div class="notice">No graded entries found in this window. Capture and grade some slates first.</div>';
+
+  var o = d.overall;
+
+  // ── Overall summary ───────────────────────────────────────────────────────
+  var overallHtml = `
+    <div class="bt-grid">
+      <div class="bt-card"><div class="bt-lbl">GRADED</div><div class="bt-val">${o.graded}</div><div class="bt-sub">${o.wins}W · ${o.losses}L · ${o.pushes}P</div></div>
+      <div class="bt-card"><div class="bt-lbl">HIT RATE</div><div class="bt-val">${btHR(o.hit_rate, o.graded)}</div><div class="bt-sub">Target ≥55%</div></div>
+      <div class="bt-card"><div class="bt-lbl">ROI</div><div class="bt-val">${btROI(o.roi)}</div><div class="bt-sub">$${btFmt(o.total_staked, 2)} staked</div></div>
+      <div class="bt-card"><div class="bt-lbl">P/L $</div><div class="bt-val ${parseFloat(o.total_profit||0)>=0?'bt-pos':'bt-neg'}">${btMoney(o.total_profit)}</div><div class="bt-sub">Avg edge ${btPct(o.avg_edge)}</div></div>
+      <div class="bt-card"><div class="bt-lbl">AVG CLV</div><div class="bt-val">${btPct(o.avg_clv)}</div><div class="bt-sub">+CLV rate ${btPct(o.clv_pos_rate)}</div></div>
+      <div class="bt-card"><div class="bt-lbl">AVG KELLY</div><div class="bt-val">${btPct(o.avg_kelly)}</div><div class="bt-sub">Fractional Kelly</div></div>
+      <div class="bt-card"><div class="bt-lbl">DATE RANGE</div><div class="bt-val" style="font-size:.65rem">${d.start}</div><div class="bt-sub">→ ${d.end}</div></div>
+      <div class="bt-card"><div class="bt-lbl">TOTAL ENTRIES</div><div class="bt-val">${d.total}</div><div class="bt-sub">Incl. pending</div></div>
+    </div>`;
+
+  // ── By market ─────────────────────────────────────────────────────────────
+  var mktRows = Object.entries(d.by_market || {}).sort(function(a,b){
+    return (b[1].graded||0) - (a[1].graded||0);
+  }).map(function([mk, m]) {
+    return `<div class="bt-row bt-mkt-row">
+      <div>${MKT_NAMES[mk]||mk}</div>
+      <div>${m.graded||0}</div>
+      <div>${btHR(m.hit_rate, m.graded)}</div>
+      <div>${btROI(m.roi)}</div>
+      <div>${btMoney(m.total_profit)}</div>
+      <div>${btPct(m.avg_edge)}</div>
+      <div>${btPct(m.avg_clv)}</div>
+      <div>${btPct(m.avg_kelly)}</div>
+    </div>`;
+  }).join('');
+
+  var mktHtml = `
+    <div class="bt-section">
+      <div class="bt-section-hd">Performance by Market</div>
+      <div class="tw" style="overflow-x:auto">
+        <div class="bt-row-hd bt-mkt-row"><div>MARKET</div><div>GRADED</div><div>HIT%</div><div>ROI</div><div>P/L $</div><div>AVG EDGE</div><div>AVG CLV</div><div>AVG KELLY</div></div>
+        ${mktRows || '<div class="bt-row"><div style="color:var(--mut)">No market data</div></div>'}
+      </div>
+    </div>`;
+
+  // ── By edge bucket ────────────────────────────────────────────────────────
+  var edgeOrder = ['no_edge','<2%','2–4%','4–7%','7–10%','10%+'];
+  var edgeRows = edgeOrder.map(function(k) {
+    var m = d.by_edge_bucket[k];
+    if (!m) return '';
+    return `<div class="bt-row bt-edge-row">
+      <div style="font-family:Orbitron,sans-serif;font-size:.62rem">${k}</div>
+      <div>${m.graded||0}</div>
+      <div>${btHR(m.hit_rate, m.graded)}</div>
+      <div>${btROI(m.roi)}</div>
+      <div>${btMoney(m.total_profit)}</div>
+      <div>${btPct(m.avg_edge)}</div>
+    </div>`;
+  }).join('');
+
+  var edgeHtml = `
+    <div class="bt-section">
+      <div class="bt-section-hd">Performance by Edge Bucket</div>
+      <div class="tw">
+        <div class="bt-row-hd bt-edge-row"><div>EDGE BUCKET</div><div>GRADED</div><div>HIT%</div><div>ROI</div><div>P/L $</div><div>AVG EDGE</div></div>
+        ${edgeRows || '<div class="bt-row"><div style="color:var(--mut)">No data</div></div>'}
+      </div>
+    </div>`;
+
+  // ── By park tier ──────────────────────────────────────────────────────────
+  var parkRows = Object.entries(d.by_park_tier || {}).sort(function(a,b){
+    return (b[1].graded||0) - (a[1].graded||0);
+  }).map(function([k, m]) {
+    return `<div class="bt-row bt-edge-row">
+      <div style="font-size:.65rem">${k}</div>
+      <div>${m.graded||0}</div>
+      <div>${btHR(m.hit_rate, m.graded)}</div>
+      <div>${btROI(m.roi)}</div>
+      <div>${btMoney(m.total_profit)}</div>
+      <div>${btPct(m.avg_edge)}</div>
+    </div>`;
+  }).join('');
+
+  var parkHtml = `
+    <div class="bt-section">
+      <div class="bt-section-hd">Performance by Park Factor Tier</div>
+      <div class="tw">
+        <div class="bt-row-hd bt-edge-row"><div>PARK TIER</div><div>GRADED</div><div>HIT%</div><div>ROI</div><div>P/L $</div><div>AVG EDGE</div></div>
+        ${parkRows || '<div class="bt-row"><div style="color:var(--mut)">No data</div></div>'}
+      </div>
+    </div>`;
+
+  // ── Calibration: model prob vs actual hit rate ─────────────────────────────
+  var calRows = (d.calibration || []).map(function(c) {
+    var gap    = c.gap != null ? parseFloat(c.gap) * 100 : null;
+    var gapCls = gap != null ? (gap >= 2 ? 'bt-pos' : gap <= -3 ? 'bt-neg' : 'bt-neu') : 'bt-neu';
+    var barW   = c.actual_hit_rate != null ? (parseFloat(c.actual_hit_rate) * 100).toFixed(0) : 0;
+    var barCol = parseFloat(barW) >= 55 ? '#34d399' : parseFloat(barW) < 47 ? '#fb7185' : '#00e5ff';
+    return `<div class="bt-row bt-cal-row">
+      <div style="font-family:Orbitron,sans-serif;font-size:.62rem">${c.bucket}</div>
+      <div>${btPct(c.avg_model_prob)}</div>
+      <div>
+        <div>${btHR(c.actual_hit_rate, c.graded)}</div>
+        <div class="bt-cal-bar"><div class="bt-cal-fill" style="width:${barW}%;background:${barCol}"></div></div>
+      </div>
+      <div><span class="${gapCls}">${gap != null ? (gap >= 0 ? '+' : '') + gap.toFixed(1) + '%' : '—'}</span></div>
+      <div style="color:var(--mut)">${c.graded}</div>
+    </div>`;
+  }).join('');
+
+  var calHtml = calRows ? `
+    <div class="bt-section">
+      <div class="bt-section-hd">Model Calibration: Predicted vs Actual</div>
+      <div class="notice" style="margin-bottom:10px;font-size:.68rem">A well-calibrated model should show actual hit rate ≈ model probability in each bucket. Gap &gt; +3% = model underestimates. Gap &lt; -3% = model overestimates.</div>
+      <div class="tw">
+        <div class="bt-row-hd bt-cal-row"><div>PROB BUCKET</div><div>MODEL PROB</div><div>ACTUAL HIT%</div><div>GAP</div><div>GRADED</div></div>
+        ${calRows}
+      </div>
+    </div>` : '';
+
+  // ── Monthly trend ─────────────────────────────────────────────────────────
+  var monthRows = Object.entries(d.by_month || {}).map(function([month, m]) {
+    return `<div class="bt-row bt-edge-row">
+      <div style="font-family:Orbitron,sans-serif;font-size:.62rem">${month}</div>
+      <div>${m.graded||0}</div>
+      <div>${btHR(m.hit_rate, m.graded)}</div>
+      <div>${btROI(m.roi)}</div>
+      <div>${btMoney(m.total_profit)}</div>
+      <div>${btPct(m.avg_edge)}</div>
+    </div>`;
+  }).join('');
+
+  var monthHtml = monthRows ? `
+    <div class="bt-section">
+      <div class="bt-section-hd">Monthly Trend</div>
+      <div class="tw">
+        <div class="bt-row-hd bt-edge-row"><div>MONTH</div><div>GRADED</div><div>HIT%</div><div>ROI</div><div>P/L $</div><div>AVG EDGE</div></div>
+        ${monthRows}
+      </div>
+    </div>` : '';
+
+  return overallHtml + mktHtml + edgeHtml + parkHtml + calHtml + monthHtml;
+}  
 </script>
 </body>
 </html>
