@@ -250,6 +250,7 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
   </div>
 </div>
 <div class="dg">
+  <div class="pnl fw pnl-src"><div class="pt">&#129504; AI BEST BETS <span class="tag-sv">UNIFIED</span></div><div id="aiBestBetsP"><div class="spinner"></div></div></div>
   <!-- GAME PROJECTION PANEL -->
   <div class="pnl fw pnl-src"><div class="pt">&#127919; GAME PROJECTION &amp; O/U MODEL <span class="tag-sv">PROJ</span></div><div id="gpContent"><div class="spinner"></div></div></div>
   <div class="pnl"><div class="pt">&#127919; MODEL EDGE</div><div id="edgeP"><div class="spinner"></div></div></div>
@@ -319,6 +320,69 @@ function loadLineups(){
     if(d.success){AL=d.awayBatters||[];HL=d.homeBatters||[];}
     showTab('away');populateSels();
   }).catch(function(){document.getElementById('luP').innerHTML='<p class="na">Lineup not yet posted. Check back ~3h before first pitch.</p>';});
+}
+
+function impliedFromAmerican(price){
+  var p=parseFloat(price);
+  if(isNaN(p)) return null;
+  if(p>0) return 100/(p+100);
+  if(p<0) return Math.abs(p)/(Math.abs(p)+100);
+  return null;
+}
+function marketLabel(mk){
+  var map={batterhits:'Hits',battertotalbases:'Total Bases',batterhomeruns:'Home Runs',batterrbis:'RBIs',batterrunsscored:'Runs',batterstolenbases:'Stolen Bases',pitcherstrikeouts:'Pitcher Ks'};
+  return map[mk]||mk||'Market';
+}
+function bestBetReason(prop){
+  var mean=toF(prop.modelMean,0), edge=toF(prop.edge,0), prob=toF(prop.adjProb||prop.prob,0), line=toF(prop.line,0.5);
+  if(prop.marketKey==='pitcherstrikeouts') return prop.player+' has a modeled strikeout path of '+mean.toFixed(1)+' against this lineup, with win probability near '+(prob*100).toFixed(1)+'% and edge of '+(edge*100).toFixed(1)+'% over market.';
+  if(prop.marketKey==='batterhomeruns') return prop.player+' profiles as the strongest power spike on the board, with a home-run path supported by matchup context and an edge of '+(edge*100).toFixed(1)+'%.';
+  if(prop.marketKey==='battertotalbases') return prop.player+' carries the cleanest extra-base path here, projecting '+mean.toFixed(2)+' total bases against a line of '+line.toFixed(1)+'.';
+  return prop.player+' projects to clear '+line.toFixed(1)+' '+marketLabel(prop.marketKey).toLowerCase()+', with modeled probability at '+(prob*100).toFixed(1)+'% and edge of '+(edge*100).toFixed(1)+'%.';
+}
+function buildDeepDiveBestBets(){
+  var source=(window.__PROJ_RANK_CACHE&&window.__PROJ_RANK_CACHE.length)?window.__PROJ_RANK_CACHE.slice():[];
+  if(!source.length){
+    document.getElementById('aiBestBetsP').innerHTML='<div class="notice">AI best bets will populate when projection rankings are available for this game.</div>';
+    return;
+  }
+  var filtered=source.filter(function(x){ return x && x.player && x.marketKey && x.edge!=null; }).sort(function(a,b){ return toF(b.edge,0)-toF(a.edge,0); }).slice(0,3);
+  if(!filtered.length){
+    document.getElementById('aiBestBetsP').innerHTML='<div class="notice">No qualified AI best bets were found for this matchup yet.</div>';
+    return;
+  }
+  var avgEdge=filtered.reduce(function(s,x){return s+toF(x.edge,0);},0)/filtered.length;
+  var avgProb=filtered.reduce(function(s,x){return s+toF(x.adjProb||x.prob,0);},0)/filtered.length;
+  var top=filtered[0];
+  var thesis='The strongest AI opportunities for this game are concentrated in '+filtered.map(function(x){return marketLabel(x.marketKey);}).join(', ')+', led by '+top.player+'. This block is placed before the game projection panel so the betting recommendation is seen first, then supported by the full game environment underneath.';
+  document.getElementById('aiBestBetsP').innerHTML=''
+    + '<div class="bestbets-wrap">'
+    +   '<div class="bestbets-main">'
+    +     '<div class="bb-top"><div><div class="detail-title">AI BEST BETS</div><div class="detail-sub">Single cohesive betting read for this matchup.</div></div><span class="bb-tag">TOP 3 EDGES</span></div>'
+    +     '<div class="bb-kpi">'
+    +       '<div class="bb-card"><div class="bb-l">BEST EDGE</div><div class="bb-v">'+(toF(top.edge,0)*100).toFixed(1)+'%</div></div>'
+    +       '<div class="bb-card"><div class="bb-l">AVG WIN PROB</div><div class="bb-v">'+(avgProb*100).toFixed(1)+'%</div></div>'
+    +       '<div class="bb-card"><div class="bb-l">AVG EDGE</div><div class="bb-v">'+(avgEdge*100).toFixed(1)+'%</div></div>'
+    +     '</div>'
+    +     '<div class="bb-thesis">'+thesis+'</div>'
+    +     '<div class="bb-list">'+filtered.map(function(p,idx){
+    +       return '<div class="bb-item">'
+    +         + '<div class="bb-item-top"><div><div class="bb-name">#'+(idx+1)+' '+p.player+' — Over '+p.line+' '+marketLabel(p.marketKey)+'</div><div class="bb-sub">'+(p.team||'')+' · Model mean '+num(p.modelMean,2)+' · Price '+(p.marketPrice!=null?(p.marketPrice>0?'+':'')+p.marketPrice:'N/A')+'</div></div><div class="bb-edge">EDGE '+(toF(p.edge,0)*100).toFixed(1)+'%</div></div>'
+    +         + '<div class="bb-reason">'+bestBetReason(p)+'</div>'
+    +       + '</div>';
+    +     }).join('')+'</div>'
+    +   '</div>'
+    +   '<div class="bestbets-side">'
+    +     '<h4>BOARD SNAPSHOT</h4>'
+    +     '<div class="bb-stat"><span>Top play</span><span>'+top.player+'</span></div>'
+    +     '<div class="bb-stat"><span>Top market</span><span>'+marketLabel(top.marketKey)+'</span></div>'
+    +     '<div class="bb-stat"><span>Top line</span><span>Over '+top.line+'</span></div>'
+    +     '<div class="bb-stat"><span>Model probability</span><span>'+((toF(top.adjProb||top.prob,0))*100).toFixed(1)+'%</span></div>'
+    +     '<div class="bb-stat"><span>Implied probability</span><span>'+((impliedFromAmerican(top.marketPrice)||0)*100).toFixed(1)+'%</span></div>'
+    +     '<div class="bb-stat"><span>Model mean</span><span>'+num(top.modelMean,2)+'</span></div>'
+    +     '<div class="bb-stat"><span>Why this is first</span><span>Highest current edge</span></div>'
+    +   '</div>'
+    + '</div>';
 }
 
 function renderHeader(){
@@ -1648,7 +1712,8 @@ function renderProjectionHub(){
     + '<div class="proj-detail">'+renderProjectionDetail()+'</div>'
     + '</div>';
 }
-function selectProjection(i){ SELECTED_PROJ=i; if(ACTIVE_TAB==='proj') renderProjectionHub(); }
+function selectProjection(i){ SELECTED_PROJ=i; if(ACTIVE_TAB==='proj') renderProjectionHub();
+  try{ buildDeepDiveBestBets(); }catch(e){} }
 function jumpToProjection(name){
   if(!name) return;
   for(var i=0;i<PROJ_ROWS.length;i++) if(PROJ_ROWS[i].player===name){ SELECTED_PROJ=i; break; }
