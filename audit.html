@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MLB Analytics Hub — Model Audit</title>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0d0f14;--s1:#141720;--s2:#1a1e28;--s3:#1f2435;
+  --fg:#e8ecf4;--mu:#7a8299;--border:#2a2f42;
+  --g:#00e5a0;--r:#ff4d6d;--b:#4da6ff;--y:#ffd166;--o:#ff9a3c;
+  --accent:#4da6ff;
+}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--fg);min-height:100vh}
+nav{display:flex;align-items:center;justify-content:space-between;padding:10px 20px;background:var(--s1);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:200}
+.brand{display:flex;align-items:center;gap:10px}
+.brand-name{font-family:'Orbitron',monospace;font-size:.95rem;font-weight:900;letter-spacing:.12em;color:var(--accent)}
+.brand-sub{font-size:.62rem;color:var(--mu);letter-spacing:.06em;margin-top:2px}
+.nav-r{display:flex;align-items:center;gap:10px}
+.nav-btn{padding:5px 14px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.14);border-radius:20px;color:var(--fg);font-size:.72rem;font-weight:700;letter-spacing:.06em;text-decoration:none;cursor:pointer;transition:background .2s}
+.nav-btn:hover{background:rgba(255,255,255,.15)}
+.page{max-width:1200px;margin:0 auto;padding:24px 16px}
+h1.page-title{font-family:'Orbitron',monospace;font-size:1.1rem;font-weight:900;letter-spacing:.12em;color:var(--accent);margin-bottom:4px}
+.page-sub{font-size:.75rem;color:var(--mu);margin-bottom:24px;letter-spacing:.04em}
+
+/* KPI Row */
+.kpi-row{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:28px}
+.kpi{background:var(--s2);border:1px solid var(--border);border-radius:10px;padding:16px 14px;text-align:center}
+.kpi-label{font-size:.62rem;color:var(--mu);letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px}
+.kpi-val{font-family:'Orbitron',monospace;font-size:1.6rem;font-weight:900;line-height:1}
+.kpi-sub{font-size:.65rem;color:var(--mu);margin-top:4px}
+.kpi.green .kpi-val{color:var(--g)}
+.kpi.red .kpi-val{color:var(--r)}
+.kpi.blue .kpi-val{color:var(--b)}
+.kpi.yellow .kpi-val{color:var(--y)}
+.kpi.orange .kpi-val{color:var(--o)}
+
+/* Section */
+.section{background:var(--s2);border:1px solid var(--border);border-radius:10px;margin-bottom:20px;overflow:hidden}
+.section-hdr{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border);background:var(--s3)}
+.section-title{font-family:'Orbitron',monospace;font-size:.72rem;font-weight:700;letter-spacing:.1em;color:var(--accent)}
+.section-body{padding:16px}
+
+/* Table */
+table{width:100%;border-collapse:collapse;font-size:.78rem}
+th{text-align:left;padding:8px 10px;font-size:.62rem;font-weight:700;letter-spacing:.07em;color:var(--mu);text-transform:uppercase;border-bottom:1px solid var(--border);background:var(--s3)}
+td{padding:8px 10px;border-bottom:1px solid rgba(255,255,255,.04)}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:rgba(255,255,255,.03)}
+.badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:.6rem;font-weight:700;letter-spacing:.07em}
+.badge.win{background:rgba(0,229,160,.15);color:var(--g)}
+.badge.loss{background:rgba(255,77,109,.15);color:var(--r)}
+.badge.neutral{background:rgba(122,130,153,.15);color:var(--mu)}
+.pct-bar{display:flex;align-items:center;gap:8px}
+.bar-wrap{flex:1;height:6px;background:rgba(255,255,255,.07);border-radius:4px;overflow:hidden}
+.bar-fill{height:100%;border-radius:4px;transition:width .4s ease}
+.pct-num{font-size:.72rem;font-weight:700;min-width:36px;text-align:right}
+
+/* Market breakdown */
+.mkt-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}
+.mkt-card{background:var(--s3);border:1px solid var(--border);border-radius:8px;padding:12px}
+.mkt-name{font-size:.65rem;font-weight:700;letter-spacing:.07em;color:var(--mu);text-transform:uppercase;margin-bottom:8px}
+.mkt-stat{display:flex;justify-content:space-between;align-items:center;font-size:.75rem;margin-bottom:4px}
+
+/* Export button */
+.export-btn{padding:6px 16px;background:rgba(77,166,255,.15);border:1px solid rgba(77,166,255,.35);border-radius:6px;color:var(--b);font-size:.72rem;font-weight:700;letter-spacing:.06em;cursor:pointer;transition:background .2s;text-decoration:none}
+.export-btn:hover{background:rgba(77,166,255,.3)}
+
+/* Date selector */
+.date-row{display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap}
+.date-row label{font-size:.72rem;color:var(--mu);letter-spacing:.06em}
+#date-select{background:var(--s3);border:1px solid var(--border);border-radius:6px;color:var(--fg);font-size:.78rem;padding:5px 10px;font-family:'Inter',sans-serif}
+.refresh-btn{padding:5px 14px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.14);border-radius:6px;color:var(--fg);font-size:.72rem;cursor:pointer;letter-spacing:.04em}
+
+/* ROI chart */
+.roi-chart{display:flex;align-items:flex-end;gap:4px;height:80px;padding:8px 0}
+.roi-bar-wrap{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px}
+.roi-bar{width:100%;border-radius:3px 3px 0 0;min-height:2px;transition:height .4s}
+.roi-bar.pos{background:var(--g)}
+.roi-bar.neg{background:var(--r)}
+.roi-date{font-size:.52rem;color:var(--mu);text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* Loading state */
+.loading{text-align:center;padding:40px;color:var(--mu);font-size:.85rem;letter-spacing:.06em}
+.pulse{animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:.4}50%{opacity:1}}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="brand">
+    <div class="brand-text">
+      <div class="brand-name">MLB ANALYTICS HUB</div>
+      <div class="brand-sub">MODEL PERFORMANCE AUDIT</div>
+    </div>
+  </div>
+  <div class="nav-r">
+    <a href="/" class="nav-btn">🏠 DASHBOARD</a>
+    <a href="/tracker" class="nav-btn">📋 TRACKER</a>
+    <a href="/props" class="nav-btn">🎯 PROPS</a>
+  </div>
+</nav>
+
+<div class="page">
+  <h1 class="page-title">📊 MODEL AUDIT DASHBOARD</h1>
+  <p class="page-sub">30-DAY PERFORMANCE REVIEW — HIT RATE · ROI · EDGE CALIBRATION · MARKET BREAKDOWN</p>
+
+  <!-- KPI Row -->
+  <div id="kpi-row" class="kpi-row">
+    <div class="kpi loading pulse"><div class="kpi-label">Total Bets</div><div class="kpi-val">—</div></div>
+    <div class="kpi loading pulse"><div class="kpi-label">Hit Rate</div><div class="kpi-val">—</div></div>
+    <div class="kpi loading pulse"><div class="kpi-label">Total ROI</div><div class="kpi-val">—</div></div>
+    <div class="kpi loading pulse"><div class="kpi-label">Avg Edge</div><div class="kpi-val">—</div></div>
+    <div class="kpi loading pulse"><div class="kpi-label">Days Tracked</div><div class="kpi-val">—</div></div>
+  </div>
+
+  <!-- ROI Chart -->
+  <div class="section">
+    <div class="section-hdr">
+      <div class="section-title">📈 DAILY ROI TREND (LAST 30 DAYS)</div>
+    </div>
+    <div class="section-body">
+      <div id="roi-chart" class="roi-chart"><div class="loading pulse" style="width:100%">Loading chart…</div></div>
+    </div>
+  </div>
+
+  <!-- Market Breakdown -->
+  <div class="section">
+    <div class="section-hdr">
+      <div class="section-title">🎯 HIT RATE BY MARKET</div>
+    </div>
+    <div class="section-body">
+      <div id="market-grid" class="mkt-grid"><div class="loading pulse">Loading markets…</div></div>
+    </div>
+  </div>
+
+  <!-- Daily Log Table -->
+  <div class="section">
+    <div class="section-hdr">
+      <div class="section-title">📅 DAILY LOG</div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span id="export-date-label" style="font-size:.68rem;color:var(--mu)"></span>
+        <div class="date-row" style="margin:0">
+          <label>DATE:</label>
+          <input type="date" id="date-select">
+        </div>
+        <button class="export-btn" onclick="exportCSV()">⬇ EXPORT CSV</button>
+      </div>
+    </div>
+    <div class="section-body" style="padding:0">
+      <div id="daily-table"><div class="loading pulse" style="padding:32px;text-align:center">Loading daily data…</div></div>
+    </div>
+  </div>
+
+  <!-- Per-Day Entries (drill down) -->
+  <div class="section" id="day-detail-section" style="display:none">
+    <div class="section-hdr">
+      <div class="section-title" id="day-detail-title">DAY DETAIL</div>
+      <a href="/tracker" class="export-btn">Open Full Tracker →</a>
+    </div>
+    <div class="section-body" style="padding:0">
+      <div id="day-detail-table"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const fmt = (n, dec=1) => (typeof n==='number') ? n.toFixed(dec) : (n ?? '—');
+const pct = n => (typeof n==='number') ? (n*100).toFixed(1)+'%' : '—';
+const roiColor = v => v > 0 ? 'var(--g)' : v < 0 ? 'var(--r)' : 'var(--mu)';
+
+// ── Set default date to today ────────────────────────────────────────────────
+(function(){
+  const d = new Date();
+  const s = d.toISOString().split('T')[0];
+  document.getElementById('date-select').value = s;
+  document.getElementById('export-date-label').textContent = s;
+})();
+
+document.getElementById('date-select').addEventListener('change', function(){
+  document.getElementById('export-date-label').textContent = this.value;
+});
+
+// ── Export CSV ───────────────────────────────────────────────────────────────
+function exportCSV() {
+  const d = document.getElementById('date-select').value;
+  if (!d) { alert('Select a date first'); return; }
+  window.open('/api/tracker/export-csv/' + d, '_blank');
+}
+
+// ── Load Audit Summary ───────────────────────────────────────────────────────
+async function loadAudit() {
+  try {
+    const res  = await fetch('/api/audit/summary');
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Load failed');
+
+    const s   = data.summary;
+    const daily = data.daily || [];
+
+    // ── KPIs ────────────────────────────────────────────────────────────────
+    const hitPct = (s.hit_pct || 0) * 100;
+    const kpiHtml = `
+      <div class="kpi blue"><div class="kpi-label">Total Bets</div><div class="kpi-val">${s.total_bets ?? 0}</div><div class="kpi-sub">${s.days_tracked} days</div></div>
+      <div class="kpi ${hitPct >= 55 ? 'green' : hitPct >= 48 ? 'yellow' : 'red'}">
+        <div class="kpi-label">Hit Rate</div>
+        <div class="kpi-val">${hitPct.toFixed(1)}%</div>
+        <div class="kpi-sub">${s.correct} / ${s.total_bets} correct</div>
+      </div>
+      <div class="kpi ${s.roi > 0 ? 'green' : 'red'}">
+        <div class="kpi-label">Total ROI</div>
+        <div class="kpi-val">${s.roi > 0 ? '+' : ''}${fmt(s.roi, 2)}</div>
+        <div class="kpi-sub">units</div>
+      </div>
+      <div class="kpi orange">
+        <div class="kpi-label">Days Tracked</div>
+        <div class="kpi-val">${s.days_tracked}</div>
+        <div class="kpi-sub">last 30 days</div>
+      </div>`;
+    document.getElementById('kpi-row').innerHTML = kpiHtml;
+
+    // ── ROI Chart ───────────────────────────────────────────────────────────
+    if (daily.length) {
+      const maxAbs = Math.max(...daily.map(d => Math.abs(d.roi_sum)), 1);
+      const chartHtml = daily.slice().reverse().map(d => {
+        const h = Math.round((Math.abs(d.roi_sum) / maxAbs) * 64) + 4;
+        const cls = d.roi_sum >= 0 ? 'pos' : 'neg';
+        const lbl = d.date.slice(5); // MM-DD
+        return `<div class="roi-bar-wrap" title="${d.date}: ${d.roi_sum >= 0 ? '+' : ''}${d.roi_sum}u">
+          <div class="roi-bar ${cls}" style="height:${h}px"></div>
+          <div class="roi-date">${lbl}</div>
+        </div>`;
+      }).join('');
+      document.getElementById('roi-chart').innerHTML = chartHtml;
+    } else {
+      document.getElementById('roi-chart').innerHTML = '<div style="color:var(--mu);font-size:.75rem;padding:24px">No graded data yet. Capture and grade bets in the Tracker first.</div>';
+    }
+
+    // ── Market Breakdown ────────────────────────────────────────────────────
+    const allMarkets = {};
+    daily.forEach(d => {
+      Object.entries(d.by_market || {}).forEach(([mk, v]) => {
+        if (!allMarkets[mk]) allMarkets[mk] = {total:0, correct:0};
+        allMarkets[mk].total   += v.total;
+        allMarkets[mk].correct += v.correct;
+      });
+    });
+    const mktEntries = Object.entries(allMarkets).sort((a,b) => b[1].total - a[1].total);
+    if (mktEntries.length) {
+      const mktHtml = mktEntries.map(([mk, v]) => {
+        const hp = v.total ? (v.correct / v.total * 100) : 0;
+        const barColor = hp >= 55 ? 'var(--g)' : hp >= 48 ? 'var(--y)' : 'var(--r)';
+        const label = mk.replace(/_/g,' ').replace('batter ','').replace('pitcher ','SP ').toUpperCase();
+        return `<div class="mkt-card">
+          <div class="mkt-name">${label}</div>
+          <div class="pct-bar">
+            <div class="bar-wrap"><div class="bar-fill" style="width:${hp.toFixed(1)}%;background:${barColor}"></div></div>
+            <div class="pct-num" style="color:${barColor}">${hp.toFixed(1)}%</div>
+          </div>
+          <div class="mkt-stat"><span style="color:var(--mu)">Sample</span><span>${v.correct}/${v.total}</span></div>
+        </div>`;
+      }).join('');
+      document.getElementById('market-grid').innerHTML = mktHtml;
+    } else {
+      document.getElementById('market-grid').innerHTML = '<div style="color:var(--mu);font-size:.75rem">No market data yet.</div>';
+    }
+
+    // ── Daily Table ─────────────────────────────────────────────────────────
+    if (daily.length) {
+      const tableHtml = `<table>
+        <thead><tr>
+          <th>Date</th><th>Bets</th><th>Hit Rate</th><th>ROI</th><th>Avg Edge</th><th>Actions</th>
+        </tr></thead>
+        <tbody>
+        ${daily.map(d => {
+          const hp = (d.hit_pct * 100).toFixed(1);
+          const hpColor = d.hit_pct >= 0.55 ? 'var(--g)' : d.hit_pct >= 0.48 ? 'var(--y)' : 'var(--r)';
+          return `<tr>
+            <td style="font-weight:600">${d.date}</td>
+            <td>${d.total} <span style="color:var(--mu);font-size:.65rem">(${d.correct}✓)</span></td>
+            <td style="color:${hpColor};font-weight:700">${hp}%</td>
+            <td style="color:${roiColor(d.roi_sum)};font-weight:700">${d.roi_sum >= 0 ? '+' : ''}${d.roi_sum}u</td>
+            <td style="color:var(--mu)">${d.avg_edge > 0 ? '+' : ''}${fmt(d.avg_edge,2)}</td>
+            <td>
+              <a href="/api/tracker/export-csv/${d.date}" class="export-btn" style="font-size:.6rem;padding:3px 8px">⬇ CSV</a>
+              <button onclick="loadDayDetail('${d.date}')" class="export-btn" style="font-size:.6rem;padding:3px 8px;margin-left:4px">🔍 DETAIL</button>
+            </td>
+          </tr>`;
+        }).join('')}
+        </tbody></table>`;
+      document.getElementById('daily-table').innerHTML = tableHtml;
+    } else {
+      document.getElementById('daily-table').innerHTML = '<div style="padding:24px;color:var(--mu);font-size:.78rem">No graded data available. Go to <a href="/tracker" style="color:var(--b)">Tracker</a> to capture and grade bets.</div>';
+    }
+
+  } catch(err) {
+    document.getElementById('kpi-row').innerHTML = `<div style="color:var(--r);padding:16px;font-size:.78rem">Error loading audit data: ${err.message}</div>`;
+    console.error(err);
+  }
+}
+
+// ── Load Day Detail ──────────────────────────────────────────────────────────
+async function loadDayDetail(dateStr) {
+  document.getElementById('day-detail-title').textContent = 'DAY DETAIL — ' + dateStr;
+  document.getElementById('day-detail-section').style.display = 'block';
+  document.getElementById('day-detail-table').innerHTML = '<div class="loading pulse" style="padding:24px;text-align:center">Loading entries…</div>';
+  document.getElementById('day-detail-section').scrollIntoView({behavior:'smooth'});
+  try {
+    const res  = await fetch('/api/tracker/date/' + dateStr);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Load failed');
+    const entries = data.entries || [];
+    if (!entries.length) {
+      document.getElementById('day-detail-table').innerHTML = '<div style="padding:24px;color:var(--mu)">No entries for this date.</div>';
+      return;
+    }
+    const html = `<table>
+      <thead><tr>
+        <th>Player</th><th>Market</th><th>Line</th><th>Proj</th><th>Edge</th><th>Result</th><th>Correct</th>
+      </tr></thead>
+      <tbody>
+      ${entries.map(e => {
+        const correct = e.graded ? (e.correct ? '<span class="badge win">✓ WIN</span>' : '<span class="badge loss">✗ LOSS</span>') : '<span class="badge neutral">PENDING</span>';
+        const edgeColor = (e.edge > 0) ? 'var(--g)' : (e.edge < 0 ? 'var(--r)' : 'var(--mu)');
+        return `<tr>
+          <td style="font-weight:600">${e.player || '—'}</td>
+          <td style="color:var(--mu);font-size:.68rem">${(e.market||'').replace(/_/g,' ').toUpperCase()}</td>
+          <td>${e.line ?? '—'}</td>
+          <td style="color:var(--b);font-weight:700">${e.projection ?? '—'}</td>
+          <td style="color:${edgeColor};font-weight:700">${e.edge != null ? (e.edge > 0 ? '+' : '') + e.edge : '—'}</td>
+          <td style="font-size:.7rem">${e.result ?? '—'}</td>
+          <td>${correct}</td>
+        </tr>`;
+      }).join('')}
+      </tbody></table>`;
+    document.getElementById('day-detail-table').innerHTML = html;
+  } catch(err) {
+    document.getElementById('day-detail-table').innerHTML = `<div style="padding:24px;color:var(--r)">Error: ${err.message}</div>`;
+  }
+}
+
+// Load on page ready
+loadAudit();
+</script>
+</body>
+</html>
