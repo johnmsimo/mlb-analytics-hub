@@ -3166,5 +3166,286 @@ setTimeout(function() {
 
   
 </script>
+
+  <style>
+
+/* ── V2 MC PANEL ─────────────────────────────────────── */
+.v2-badge{display:inline-block;padding:2px 9px;border-radius:6px;background:rgba(0,230,118,.12);
+  color:var(--g);border:1px solid rgba(0,230,118,.28);font-size:.55rem;font-family:Orbitron,monospace;letter-spacing:1px;}
+.ou-curve-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-top:10px;}
+.ou-cell{background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.05);border-radius:6px;
+  padding:8px 4px;text-align:center;}
+.ou-line{font-family:Orbitron,monospace;font-size:.62rem;color:var(--mu);}
+.ou-over{font-size:.78rem;font-weight:700;font-family:Orbitron,monospace;}
+.ou-under{font-size:.6rem;color:var(--mu);margin-top:2px;}
+.v2-grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:10px;}
+.v2-grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px;}
+.v2-stat-card{background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.05);border-radius:10px;padding:12px;text-align:center;}
+.v2-val{font-family:Orbitron,monospace;font-size:1.05rem;font-weight:700;color:var(--c);}
+.v2-lbl{font-size:.56rem;color:var(--mu);letter-spacing:2px;margin-top:4px;}
+.v2-section-hdr{font-family:Orbitron,monospace;font-size:.64rem;color:var(--sv);letter-spacing:2px;
+  margin:14px 0 8px;border-bottom:1px solid rgba(0,184,212,.15);padding-bottom:5px;}
+.v2-prop-table{width:100%;border-collapse:collapse;font-size:.68rem;}
+.v2-prop-table th{font-size:.52rem;color:var(--mu);letter-spacing:2px;text-align:left;
+  padding:5px 5px;border-bottom:1px solid var(--b);font-family:Orbitron,monospace;white-space:nowrap;}
+.v2-prop-table td{padding:5px 5px;border-bottom:1px solid rgba(255,255,255,.04);white-space:nowrap;}
+.v2-prop-table tr:hover td{background:rgba(0,229,255,.03);}
+.v2-tier-row{display:grid;grid-template-columns:110px 1fr 1fr 1fr 1fr;gap:6px;
+  padding:6px 10px;border-bottom:1px solid rgba(255,255,255,.04);font-size:.67rem;align-items:center;}
+.v2-tier-hdr{font-size:.52rem;color:var(--mu);font-family:Orbitron,monospace;letter-spacing:1px;}
+.imp-odds-pos{color:var(--g);font-family:Orbitron,monospace;font-size:.72rem;}
+.imp-odds-neg{color:#f44336;font-family:Orbitron,monospace;font-size:.72rem;}
+.f5-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:8px 0;}
+@media(max-width:860px){.v2-grid4{grid-template-columns:1fr 1fr;}.ou-curve-grid{grid-template-columns:repeat(4,1fr);}}
+
+</style>
+<script>
+
+// ─────────────────────────────────────────────────────────────
+// MONTE CARLO V2 UI
+// Route: /api/simulate-v2/<game_pk>
+// Loads AFTER the existing Phase 6 sim panel in the DOM
+// ─────────────────────────────────────────────────────────────
+var SIMDATA_V2 = null;
+
+function pct2v(v){ var n=parseFloat(v); return isNaN(n)?'—':(n*100).toFixed(1)+'%'; }
+function fmt2v(v){ var n=parseFloat(v); return isNaN(n)?'—':n.toFixed(2); }
+function oiFmt(v){ var n=parseInt(v); if(isNaN(n))return '—'; return n>0?'+'+n:''+n; }
+function oiCol(n){ return n>0?'imp-odds-pos':'imp-odds-neg'; }
+
+function ensureV2Wrap(){
+  if(document.getElementById('simV2Wrap')) return;
+  var wrap = document.createElement('div');
+  wrap.id = 'simV2Wrap';
+  wrap.className = 'pnl fw pnl-src';
+  wrap.innerHTML =
+    '<div class="pt">&#9881; MONTE CARLO V2'+
+    ' <span class="v2-badge">10,000 SIMS</span>'+
+    ' <span class="tag-sv">L30 BLEND</span>'+
+    ' <span class="tag-fg">LI BULLPEN</span>'+
+    '</div>'+
+    '<div id="simV2Panel"><div class="spinner"></div></div>';
+  var dg = document.querySelector('.dg');
+  if(dg){
+    // insert after the Phase 6 simWrap
+    var old = document.getElementById('simWrap');
+    if(old) dg.insertBefore(wrap, old.nextSibling);
+    else dg.appendChild(wrap);
+  }
+}
+
+function loadSimulationV2(){
+  ensureV2Wrap();
+  fetch('/api/simulate-v2/'+GPK)
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      SIMDATA_V2 = d;
+      renderSimV2();
+    })
+    .catch(function(e){
+      var el = document.getElementById('simV2Panel');
+      if(el) el.innerHTML = '<p class="na">V2 Simulation unavailable: '+e.message+'</p>';
+    });
+}
+
+function renderSimV2(){
+  var el = document.getElementById('simV2Panel');
+  if(!el) return;
+  if(!SIMDATA_V2 || !SIMDATA_V2.success){
+    el.innerHTML = '<p class="na">V2 simulation data unavailable.</p>'; return;
+  }
+  var m = SIMDATA_V2.meta;
+  var t = SIMDATA_V2.team;
+  var ou = SIMDATA_V2.ouCurve || [];
+  var f5 = SIMDATA_V2.f5 || {};
+  var pp = SIMDATA_V2.playerProps || {};
+  var pit= SIMDATA_V2.pitcherProps || {};
+  var hd = SIMDATA_V2.handedness || {};
+  var sb = SIMDATA_V2.sampleBoxscore || {};
+
+  // — KPI row ——
+  var kpis =
+    '<div class="v2-grid4">'+
+    v2Card(m.awayAbbr+' '+fmt2v(t.awaymeanruns), 'MEAN AWAY RUNS')+
+    v2Card(m.homeAbbr+' '+fmt2v(t.homemeanruns), 'MEAN HOME RUNS')+
+    v2Card(fmt2v(t.meantotal), 'MEAN TOTAL')+
+    v2Card(m.sims.toLocaleString(), 'SIMULATIONS')+
+    '</div>'+
+    '<div class="v2-grid4" style="margin-top:8px;">'+
+    v2Card(pct2v(t.awaywinpct), m.awayAbbr+' WIN%')+
+    v2Card(pct2v(t.homewinpct), m.homeAbbr+' WIN%')+
+    v2Card(pct2v(t.p9plustotal), 'P(TOTAL>9)')+
+    v2Card(pct2v(t.p10plustotal),'P(TOTAL>10)')+
+    '</div>';
+
+  // — O/U curve ——
+  var ouHtml = '<div class="v2-section-hdr">&#8505; O/U PROBABILITY CURVE</div><div class="ou-curve-grid">';
+  ou.forEach(function(c){
+    var col = c.over>0.52?'var(--g)':c.over<0.48?'#f44336':'var(--c)';
+    ouHtml += '<div class="ou-cell">'+
+      '<div class="ou-line">'+c.line+'</div>'+
+      '<div class="ou-over" style="color:'+col+'">'+pct2v(c.over)+'</div>'+
+      '<div class="ou-under">'+pct2v(c.under)+'</div>'+
+      '</div>';
+  });
+  ouHtml += '</div>';
+
+  // — F5 ——
+  var f5ou = (f5.ouCurve||[]).map(function(c){
+    return '<span style="font-size:.7rem;color:var(--mu);">'+c.line+'</span> '+
+      '<span style="color:'+(c.over>0.52?'var(--g)':c.over<0.48?'#f44336':'var(--c)')+'">'+pct2v(c.over)+'</span> ';
+  }).join(' | ');
+  var f5Html =
+    '<div class="v2-section-hdr">FIRST 5 INNINGS</div>'+
+    '<div class="f5-grid">'+
+    v2Card(fmt2v(f5.awayMean),  m.awayAbbr+' F5 RUNS')+
+    v2Card(fmt2v(f5.homeMean),  m.homeAbbr+' F5 RUNS')+
+    v2Card(fmt2v(f5.totalMean), 'F5 TOTAL')+
+    '</div>'+
+    '<div style="font-size:.65rem;color:var(--mu);margin-top:4px;line-height:1.8;">'+f5ou+'</div>';
+
+  // — Batter props ——
+  var away = (pp.away||[]).slice();
+  var home = (pp.home||[]).slice();
+  away.forEach(function(x){ x._team=m.awayAbbr; x._oh=hd.homeStarterHand||'R'; });
+  home.forEach(function(x){ x._team=m.homeAbbr; x._oh=hd.awayStarterHand||'R'; });
+  var allB = away.concat(home);
+  allB.sort(function(a,b){ return (a._team+a.slot).localeCompare(b._team+b.slot); });
+
+  var propRows = allB.map(function(p){
+    var oi1h = oiFmt(p.imp_odds_1hit); var oi1r = oiFmt(p.imp_odds_1hr);
+    return '<tr>'+
+      '<td><span class="pos-tag">'+p._team+'</span></td>'+
+      '<td style="font-size:.7rem;">'+p.slot+'. '+p.name+'</td>'+
+      '<td><span class="pos-tag">'+p.pos+'</span></td>'+
+      '<td><span class="pos-tag">'+p.bats+'v'+p._oh+'</span></td>'+
+      '<td class="sv-c">'+fmt2v(p.meanhits)+'</td>'+
+      '<td class="sv-c">'+pct2v(p.p1plushit)+'</td>'+
+      '<td class="sv-c">'+pct2v(p.p2plushit)+'</td>'+
+      '<td class="sv-c">'+pct2v(p.p3plushit)+'</td>'+
+      '<td class="sv-c">'+fmt2v(p.meantb)+'</td>'+
+      '<td class="sv-c">'+pct2v(p.p2plustb)+'</td>'+
+      '<td class="sv-c">'+pct2v(p.p3plustb)+'</td>'+
+      '<td class="sv-c">'+pct2v(p.p1plushr)+'</td>'+
+      '<td class="sv-c">'+pct2v(p.p1plusrbi)+'</td>'+
+      '<td class="sv-c">'+pct2v(p.p1plusrun)+'</td>'+
+      '<td class="sv-c">'+pct2v(p.p1plussb)+'</td>'+
+      '<td class="sv-c">'+fmt2v(p.meanhbp)+'</td>'+
+      '<td class="sv-c">'+fmt2v(p.meangdp)+'</td>'+
+      '<td><span class="'+(p.imp_odds_1hit>0?'imp-odds-pos':'imp-odds-neg')+'">'+oi1h+'</span></td>'+
+      '<td><span class="'+(p.imp_odds_1hr>0?'imp-odds-pos':'imp-odds-neg')+'">'+oi1r+'</span></td>'+
+      '</tr>';
+  }).join('');
+
+  var propTable =
+    '<div class="v2-section-hdr">BATTER PROP DISTRIBUTIONS (10,000 SIMS)</div>'+
+    '<div style="overflow-x:auto;">'+
+    '<table class="v2-prop-table"><thead><tr>'+
+    '<th>TEAM</th><th>PLAYER</th><th>POS</th><th>B/P</th>'+
+    '<th class="sv-h">μ H</th><th class="sv-h">P1H</th><th class="sv-h">P2H</th><th class="sv-h">P3H</th>'+
+    '<th class="sv-h">μ TB</th><th class="sv-h">P2TB</th><th class="sv-h">P3TB</th>'+
+    '<th class="sv-h">PHR</th><th class="sv-h">PRBI</th><th class="sv-h">PRUN</th><th class="sv-h">PSB</th>'+
+    '<th class="sv-h">μHBP</th><th class="sv-h">μGDP</th>'+
+    '<th class="sv-h">F-ODDS H</th><th class="sv-h">F-ODDS HR</th>'+
+    '</tr></thead><tbody>'+propRows+'</tbody></table></div>';
+
+  // — Pitcher props ——
+  function pitBlock(ps, label){
+    if(!ps||!ps.name) return '';
+    return '<div class="v2-stat-card" style="text-align:left;padding:14px;">'+
+      '<div style="font-family:Orbitron,monospace;font-size:.64rem;color:var(--c);margin-bottom:8px;">'+label+' — '+ps.name+'</div>'+
+      '<table class="v2-prop-table"><tbody>'+
+      '<tr><td>Pitch Hand</td><td class="sv-c">'+(ps.pitchHand||'R')+'</td>'+
+          '<td>Mean Outs</td><td class="sv-c">'+fmt2v(ps.meanouts)+'</td></tr>'+
+      '<tr><td>P10/P50/P90 Outs</td><td colspan="3" class="sv-c">'+ps.p10outs+' / '+ps.p50outs+' / '+ps.p90outs+'</td></tr>'+
+      '<tr><td>Mean K</td><td class="sv-c">'+fmt2v(ps.meank)+'</td>'+
+          '<td>Mean ER</td><td class="sv-c">'+fmt2v(ps.meaner)+'</td></tr>'+
+      '<tr><td>P4+K / P5+K / P6+K / P7+K</td><td colspan="3" class="sv-c">'+
+        pct2v(ps.p4plusk)+' / '+pct2v(ps.p5plusk)+' / '+pct2v(ps.p6plusk)+' / '+pct2v(ps.p7plusk)+'</td></tr>'+
+      '<tr><td>P2+ER / P3+ER</td><td colspan="3" class="sv-c">'+pct2v(ps.p2pluser)+' / '+pct2v(ps.p3pluser)+'</td></tr>'+
+      '<tr><td>P15+ Outs / P18+ Outs</td><td colspan="3" class="sv-c">'+pct2v(ps.p15plusouts)+' / '+pct2v(ps.p18plusouts)+'</td></tr>'+
+      '</tbody></table></div>';
+  }
+
+  function tierBlock(tiers, abbr){
+    if(!tiers) return '';
+    var tnames=['closer','setup','middle'];
+    var labels=[abbr+' CL', abbr+' SU', abbr+' MID'];
+    var rows = tnames.map(function(k,i){
+      var t=tiers[k]; if(!t) return '';
+      return '<div class="v2-tier-row">'+
+        '<span style="font-family:Orbitron,monospace;font-size:.62rem;color:var(--c);">'+labels[i]+'</span>'+
+        '<span class="sv-c">ER '+fmt2v(t.meaner)+'</span>'+
+        '<span class="sv-c">K '+fmt2v(t.meank)+'</span>'+
+        '<span class="sv-c">P50 '+t.p50outs+'</span>'+
+        '<span class="sv-c">P2ER '+pct2v(t.p2pluser)+'</span>'+
+        '</div>';
+    }).join('');
+    return '<div style="margin-top:6px;background:rgba(0,0,0,.2);border:1px solid rgba(255,255,255,.05);border-radius:8px;">'+
+      '<div class="v2-tier-row v2-tier-hdr">'+
+        '<span>TIER</span><span>MEAN ER</span><span>MEAN K</span><span>P50 OUTS</span><span>P2+ER</span>'+
+      '</div>'+rows+'</div>';
+  }
+
+  var pitHtml =
+    '<div class="v2-section-hdr">PITCHER DISTRIBUTIONS</div>'+
+    '<div class="v2-grid2">'+
+    pitBlock(pit.awayStarter, 'AWAY STARTER')+
+    pitBlock(pit.homeStarter, 'HOME STARTER')+
+    '</div>'+
+    tierBlock(pit.awayBullpenTiers, m.awayAbbr)+
+    tierBlock(pit.homeBullpenTiers, m.homeAbbr);
+
+  // — Sample box score ——
+  function boxHtml(side, abbr, opSP){
+    var box = sb[side] || {};
+    var bats = (box.batters||[]).map(function(p){
+      return '<tr><td>'+p.slot+'</td><td>'+p.name+'</td><td><span class="pos-tag">'+p.pos+'</span></td>'+
+        '<td>'+p.ab+'</td><td>'+p.h+'</td><td>'+p.hr+'</td>'+
+        '<td>'+p.rbi+'</td><td>'+p.r+'</td><td>'+p.bb+'</td>'+
+        '<td>'+p.k+'</td><td>'+p.tb+'</td><td>'+(p.sb||0)+'</td>'+
+        '<td style="color:'+(p.hbp?'var(--o)':'var(--mu)')+'">'+p.hbp+'</td></tr>';
+    }).join('');
+    return '<div class="mc-box">'+
+      '<h4>'+abbr+' SAMPLE BOX</h4>'+
+      '<table class="mc-table"><thead><tr>'+
+      '<th></th><th>PLAYER</th><th>POS</th><th>AB</th><th>H</th><th>HR</th>'+
+      '<th>RBI</th><th>R</th><th>BB</th><th>K</th><th>TB</th><th>SB</th><th>HBP</th>'+
+      '</tr></thead><tbody>'+bats+'</tbody></table>'+
+      '<div class="mc-note"><strong style="color:var(--c)">Starter</strong> '+opSP+
+      '&nbsp;&nbsp; R '+box.runs+' H '+box.hits+'&nbsp;&nbsp; BB '+box.bb+'&nbsp;&nbsp; K '+box.k+'</div>'+
+      '</div>';
+  }
+
+  var boxSection =
+    '<div class="v2-section-hdr">SAMPLE BOX SCORE (SIM #1)</div>'+
+    '<div class="mc-box-wrap">'+
+    boxHtml('away', m.awayAbbr, sb.awaypitcher||'Opp SP')+
+    boxHtml('home', m.homeAbbr, sb.homepitcher||'Opp SP')+
+    '</div>';
+
+  // — L30 blend note ——
+  var note =
+    '<div class="mc-mini" style="margin-top:12px;">'+
+    '<strong style="color:var(--g)">V2 upgrades vs V1:</strong> '+
+    '10,000 sims &bull; 70/30 season/L30 stat blend &bull; pitch-count exit model (~95P) &bull; '+
+    'leverage-index bullpen deployment (Closer/Setup/Middle) &bull; '+
+    'HBP + GDP modeled per PA &bull; wind direction effect on HR rate &bull; weather-adjusted hit rate &bull; '+
+    'F5 sub-model &bull; O/U half-run curve &bull; implied fair-value odds per batter.'+
+    '</div>';
+
+  el.innerHTML = kpis + ouHtml + f5Html + propTable + pitHtml + boxSection + note;
+}
+
+function v2Card(val, lbl){
+  return '<div class="v2-stat-card"><div class="v2-val">'+val+'</div><div class="v2-lbl">'+lbl+'</div></div>';
+}
+
+// Boot — 4s delay so V1 sim goes first, then V2 fires
+setTimeout(function(){
+  ensureV2Wrap();
+  loadSimulationV2();
+}, 4000);
+
 </body>
 </html>
