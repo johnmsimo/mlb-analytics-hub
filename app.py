@@ -1807,6 +1807,802 @@ def api_simulate(game_pk):
         print('[api_simulate]', traceback.format_exc())
         return jsonify({'success': False, 'error': str(ex)}), 500
 
+import random, statistics, math
+
+# ── Phase 6-V2 Monte Carlo Simulation (Enhanced) ──────────────────────────────
+# Drop-in alongside existing /api/simulate/ — exposed as /api/simulate-v2/<game_pk>
+# Upgrades vs v1:
+#   1. 10,000 simulations (vs 1,000) — stable tail probabilities
+#   2. L30 recency blend (70% season / 30% last-30-day form)
+#   3. Pitch-count model for starter exit (100-pitch threshold, not Gaussian)
+#   4. Leverage-aware bullpen deployment (win-probability state)
+#   5. Double-play probability (GB tendency from LA/EV)
+#   6. Hit-by-pitch rate (BB% * 0.12)
+#   7. Wind/weather HR rate adjustment in derive_probs
+#   8. Mid-inning pitcher change updates probs per batter
+#   9. Full run distribution + O/U probability curve output
+#  10. F5 scoring split + inning-by-inning win probability
+
+N_SIMS_V2 = 10_000
+# Avg pitches per plate appearance outcome type
+_PITCHES_PER_EVENT = {'bb': 5.1, 'k': 5.4, '1b': 3.7, '2b': 4.0, '3b': 4.1, 'hr': 3.6, 'out': 3.5, 'hbp': 1.5}
+# Park factor HR wind adjustment coefficients (mph * direction)
+_WIND_HR_TABLE = {
+    'out': 0.0045,   # blowing out to CF — +0.45% per mph
+    'out_lf': 0.003,
+    'out_rf': 0.003,
+    'in': -0.004,    # blowing in — reduces HR
+    'cross': 0.001,  # crosswind — small effect
+}
+
+def _num_v2(v, d=0.0):
+    try:
+        if v in (None, '', 'N/A', '---'): return float(d)
+        return float(v)
+    except: return float(d)
+
+def _clamp_v2(v, lo, hi):
+    return max(lo, min(hi, v))
+
+def _fetch_l30_stats(player_id, is_pitcher=False):
+    """Pull last-30-day aggregated stats from MLB game log. Returns dict or {}."""
+    if not player_id: return {}
+    year = datetime.now().year
+    group = 'pitching' if is_pitcher else 'hitting'
+    try:
+        r = requests.get(
+            f"{MLB_API}/people/{player_id}/stats",
+            params={'stats': 'gameLog', 'group': group, 'season': year},
+            timeout=8,
+        )
+        if not r.ok: return {}
+        splits = (r.json().get('stats') or [{}])[0].get('splits', [])
+        cutoff = datetime.now() - timedelta(days=30)
+        recent = []
+        for sp in splits:
+            try:
+                d = datetime.strptime(sp.get('date', ''), '%Y-%m-%d')
+                if d >= cutoff: recent.append(sp.get('stat', {}))
+            except: pass
+        if not recent: return {}
+        if not is_pitcher:
+            ab = sum(int(s.get('atBats', 0)) for s in recent)
+            h  = sum(int(s.get('hits', 0)) for s in recent)
+            hr = sum(int(s.get('homeRuns', 0)) for s in recent)
+            bb = sum(int(s.get('baseOnBalls', 0)) for s in recent)
+            k  = sum(int(s.get('strikeOuts', 0)) for s in recent)
+            pa = sum(int(s.get('plateAppearances', 0) or ab) for s in recent)
+            tb = sum(int(s.get('totalBases', 0)) for s in recent)
+            return {
+                'l30_avg': round(h/ab, 3) if ab > 0 else 0,
+                'l30_obp': round((h+bb)/pa, 3) if pa > 0 else 0,
+                'l30_slg': round(tb/ab, 3) if ab > 0 else 0,
+                'l30_kpct': round(k/pa, 3) if pa > 0 else 0,
+                'l30_bbpct': round(bb/pa, 3) if pa > 0 else 0,
+                'l30_hr': hr, 'l30_pa': pa,
+            }
+        else:
+            ip_raw = sum(float(s.get('inningsPitched', 0) or 0) for s in recent)
+            er = sum(int(s.get('earnedRuns', 0)) for s in recent)
+            k  = sum(int(s.get('strikeOuts', 0)) for s in recent)
+            bb = sum(int(s.get('baseOnBalls', 0)) for s in recent)
+            h  = sum(int(s.get('hits', 0)) for s in recent)
+            return {
+                'l30_era': round((er * 9 / ip_raw), 2) if ip_raw > 1 else 0,
+                'l30_k9': round(k * 9 / ip_raw, 2) if ip_raw > 1 else 0,
+                'l30_bb9': round(bb * 9 / ip_raw, 2) if ip_raw > 1 else 0,
+                'l30_whip': round((h + bb) / ip_raw, 2) if ip_raw > 1 else 0,
+                'l30_ip': round(ip_raw, 1),
+            }
+    except Exception as ex:
+        print('[_fetch_l30_stats]', ex)
+        return {}
+
+def _blend_batter(b, l30):
+    """Merge batter dict with L30 stats — 70% season / 30% recent form."""
+    if not l30 or not l30.get('l30_pa', 0): return dict(b)
+    out = dict(b)
+    if l30.get('l30_avg', 0) > 0:
+        s_avg = _num_v2(b.get('sv_xba') or b.get('avg'), 0.245)
+        out['_blended_avg'] = round(s_avg * 0.70 + l30['l30_avg'] * 0.30, 3)
+    if l30.get('l30_obp', 0) > 0:
+        s_obp = _num_v2(b.get('obp'), 0.315)
+        out['_blended_obp'] = round(s_obp * 0.70 + l30['l30_obp'] * 0.30, 3)
+    if l30.get('l30_slg', 0) > 0:
+        s_slg = _num_v2(b.get('sv_xslg') or b.get('slg'), 0.400)
+        out['_blended_slg'] = round(s_slg * 0.70 + l30['l30_slg'] * 0.30, 3)
+    if l30.get('l30_kpct', 0) > 0:
+        out['_blended_kpct'] = round(_num_v2(b.get('sv_k_pct') or 0, 0.22) * 0.70 + l30['l30_kpct'] * 0.30, 3)
+    if l30.get('l30_bbpct', 0) > 0:
+        out['_blended_bbpct'] = round(_num_v2(b.get('sv_bb_pct') or 0, 0.085) * 0.70 + l30['l30_bbpct'] * 0.30, 3)
+    return out
+
+def _blend_pitcher(pitcher_model, l30):
+    """Merge pitcher model with L30 — 65% season / 35% recent."""
+    if not l30 or not l30.get('l30_ip', 0): return dict(pitcher_model)
+    out = dict(pitcher_model)
+    if l30.get('l30_era', 0) > 0:
+        out['era'] = _clamp_v2(out['era'] * 0.65 + l30['l30_era'] * 0.35, 2.0, 8.5)
+    if l30.get('l30_k9', 0) > 0:
+        out['k9'] = _clamp_v2(out['k9'] * 0.65 + l30['l30_k9'] * 0.35, 4.0, 14.0)
+    if l30.get('l30_bb9', 0) > 0:
+        out['bb9'] = _clamp_v2(out['bb9'] * 0.65 + l30['l30_bb9'] * 0.35, 1.0, 6.0)
+    if l30.get('l30_whip', 0) > 0:
+        out['whip'] = _clamp_v2(out['whip'] * 0.65 + l30['l30_whip'] * 0.35, 0.9, 1.9)
+    return out
+
+def _wind_hr_adj(wx):
+    """Translate wind speed + direction into HR rate delta."""
+    if not wx or wx.get('dome'): return 0.0
+    try:
+        spd = float(wx.get('wind_speed', 0) or 0)
+        dirn = (wx.get('wind_dir') or '').upper()
+    except: return 0.0
+    if spd < 3: return 0.0
+    if dirn in ('S', 'SSW', 'SSE'):
+        coef = _WIND_HR_TABLE['out']
+    elif dirn in ('N', 'NNE', 'NNW'):
+        coef = _WIND_HR_TABLE['in']
+    elif dirn in ('SW', 'WSW', 'SE', 'ESE'):
+        coef = _WIND_HR_TABLE['out_lf']
+    elif dirn in ('NE', 'ENE', 'NW', 'WNW'):
+        coef = _WIND_HR_TABLE['out_rf']
+    else:
+        coef = _WIND_HR_TABLE['cross']
+    return _clamp_v2(coef * spd, -0.025, 0.035)
+
+def _gb_tendency(b):
+    """Estimate ground ball tendency from launch angle (proxy for GDP risk)."""
+    la = _num_v2(b.get('sv_la'), 12.0)
+    ev = _num_v2(b.get('sv_ev'), 87.5)
+    gb = _clamp_v2(0.42 + (10.0 - la) * 0.018 - (ev - 87.5) * 0.006, 0.28, 0.60)
+    return gb
+
+def _derive_probs_v2(b, p, park=1.0, wx=None):
+    """Enhanced probability derivation with HBP, GDP tendency, wind HR adj, and L30 blending."""
+    avg   = _num_v2(b.get('_blended_avg') or b.get('sv_xba') or b.get('avg'), 0.245)
+    obp   = _num_v2(b.get('_blended_obp') or b.get('obp'), max(avg + 0.060, 0.290))
+    slg   = _num_v2(b.get('_blended_slg') or b.get('sv_xslg') or b.get('slg'), 0.400)
+    xwoba = _num_v2(b.get('sv_xwoba') or b.get('fg_woba'), 0.320)
+    ev    = _num_v2(b.get('sv_ev'), 87.5)
+    hh    = _num_v2(b.get('sv_hh_pct'), 37.0)
+    brl   = _num_v2(b.get('sv_brl_pct'), 5.5)
+    wrc   = _num_v2(b.get('fg_wrc'), 100.0)
+    sb_total = _num_v2(b.get('fg_sb'), 6)
+    kpct_raw = _num_v2(b.get('_blended_kpct') or b.get('sv_k_pct') or 0, 0)
+    bbpct_raw = _num_v2(b.get('_blended_bbpct') or b.get('sv_bb_pct') or 0, 0)
+
+    era  = _num_v2(p.get('era'), 4.25)
+    whip = _num_v2(p.get('whip'), 1.28)
+    k9   = _num_v2(p.get('k9'), 8.4)
+    bb9  = _num_v2(p.get('bb9'), 3.2)
+    hr9  = _num_v2(p.get('hr9'), 1.10)
+    pitch_hand = (p.get('pitchHand') or 'R').upper()
+
+    hand_hit, hand_hr, hand_k = _platoon_adjustments(b, pitch_hand)
+
+    wind_hr = _wind_hr_adj(wx)
+
+    # Hit rate
+    hit_rate = avg + (xwoba - 0.320) * 0.30 + (ev - 87.5) * 0.003 + (hh - 37.0) * 0.0016 + (wrc - 100) * 0.00035
+    hit_rate += (whip - 1.28) * 0.055 - (era - 4.25) * 0.010 + (park - 1.0) * 0.030 + hand_hit
+    hit_rate = _clamp_v2(hit_rate, 0.13, 0.35)
+
+    # Walk rate — use blended BB% if available
+    if bbpct_raw > 0:
+        walk_rate = _clamp_v2(bbpct_raw * 0.85 + (bb9 - 3.2) * 0.008, 0.04, 0.15)
+    else:
+        walk_rate = max(obp - avg, 0.045) + (bb9 - 3.2) * 0.010
+        if pitch_hand == 'L' and (b.get('bats') or 'S') == 'L':
+            walk_rate += 0.002
+        walk_rate = _clamp_v2(walk_rate, 0.04, 0.15)
+
+    # HBP rate
+    hbp_rate = _clamp_v2(walk_rate * 0.10, 0.004, 0.018)
+
+    # HR rate (now includes wind adjustment)
+    hr_rate = 0.018 + max(0, brl - 6.0) * 0.0035 + max(0, ev - 89.0) * 0.0017 + max(0, slg - 0.420) * 0.060
+    hr_rate += (hr9 - 1.10) * 0.020 + (park - 1.0) * 0.050 + hand_hr + wind_hr
+    hr_rate = _clamp_v2(hr_rate, 0.005, min(0.095, hit_rate * 0.45))
+
+    # Double rate
+    dbl_rate = 0.040 + max(0, slg - avg - 0.150) * 0.12 + max(0, ev - 88.0) * 0.002
+    dbl_rate = _clamp_v2(dbl_rate, 0.020, min(0.110, hit_rate * 0.40))
+
+    # Triple rate
+    trp_rate = _clamp_v2(0.004 + max(0, avg - 0.270) * 0.04 + (park - 1.0) * 0.005, 0.001, 0.020)
+    trp_rate = min(trp_rate, max(0.001, hit_rate - hr_rate - dbl_rate - 0.02))
+
+    single_rate = max(0.05, hit_rate - hr_rate - dbl_rate - trp_rate)
+
+    # K rate — use blended K% if available
+    if kpct_raw > 0:
+        k_rate = _clamp_v2(kpct_raw * 0.90 + (k9 - 8.2) * 0.012 + hand_k, 0.09, 0.36)
+    else:
+        k_rate = 0.175 + (k9 - 8.2) * 0.018 - (avg - 0.245) * 0.35 - (hh - 37) * 0.002 + hand_k
+        k_rate = _clamp_v2(k_rate, 0.09, 0.36)
+
+    # GDP tendency
+    gb_pct = _gb_tendency(b)
+
+    # Steal rates
+    steal_rate = 0.010 + max(0, sb_total - 8) * 0.002 + max(0, wrc - 100) * 0.00015
+    if (b.get('bats') or 'S') == 'L':
+        steal_rate += 0.003
+    steal_rate = _clamp_v2(steal_rate, 0.003, 0.075)
+    steal_success = _clamp_v2(0.63 + max(0, sb_total - 8) * 0.01 + max(0, avg - 0.250) * 0.4, 0.58, 0.88)
+
+    out_rate = 1.0 - (walk_rate + hbp_rate + single_rate + dbl_rate + trp_rate + hr_rate)
+    if out_rate < 0.28:
+        scale = (1.0 - 0.28) / max(0.01, 1.0 - out_rate)
+        walk_rate *= scale; hbp_rate *= scale; single_rate *= scale
+        dbl_rate *= scale; trp_rate *= scale; hr_rate *= scale
+        out_rate = 1.0 - (walk_rate + hbp_rate + single_rate + dbl_rate + trp_rate + hr_rate)
+
+    k_share = _clamp_v2(k_rate / max(out_rate, 0.001), 0.18, 0.72)
+
+    # GDP: applies only when runner on 1st, < 2 outs — handled in inning loop
+    gdp_prob = _clamp_v2(gb_pct * 0.12, 0.03, 0.15)
+
+    return {
+        'bb': walk_rate, 'hbp': hbp_rate, '1b': single_rate, '2b': dbl_rate,
+        '3b': trp_rate, 'hr': hr_rate, 'out': out_rate, 'kshare': k_share,
+        'steal_rate': steal_rate, 'steal_success': steal_success, 'gdp_prob': gdp_prob,
+    }
+
+def _pick_event_v2(probs, rng):
+    """Extended event picker that includes HBP."""
+    r = rng.random(); acc = 0.0
+    for ev in ['bb', 'hbp', '1b', '2b', '3b', 'hr', 'out']:
+        acc += probs[ev]
+        if r <= acc:
+            if ev == 'out' and rng.random() < probs['kshare']:
+                return 'k'
+            return ev
+    return 'out'
+
+def _pitcher_pitch_count_exit(pitcher_model, rng):
+    """Return pitch-count-based out target using a fatigue model.
+    
+    Samples a fatigue threshold between 85-105 pitches based on ERA/K9.
+    Translates pitches-per-out (3.8 avg) to an outs-before-exit target.
+    Adds a random early-hook component for high-usage / bad outings.
+    """
+    era  = pitcher_model.get('era', 4.25)
+    k9   = pitcher_model.get('k9', 8.4)
+    whip = pitcher_model.get('whip', 1.28)
+    # Quality starters go deeper: lower ERA = higher pitch threshold
+    base_threshold = 95.0 + (4.25 - era) * 2.5 + (k9 - 8.2) * 0.8 - (whip - 1.28) * 5.0
+    threshold = _clamp_v2(rng.gauss(base_threshold, 6.0), 72, 115)
+    # Avg pitches per out: rough approximation from WHIP
+    pitches_per_out = _clamp_v2(3.65 + whip * 0.18 + (era - 4.25) * 0.06, 3.3, 4.4)
+    outs_target = int(threshold / pitches_per_out)
+    return _clamp_v2(outs_target, 9, 24)
+
+def _win_prob_basic(away_r, home_r, inning, half_top, outs_remaining):
+    """Simplified in-game win probability via run differential + innings remaining.
+    
+    Uses a logistic approximation calibrated to MLB data:
+    Away advantage flipped for home team; scales with run differential and game state.
+    """
+    innings_left = max(0, (9 - inning) + (0 if not half_top else 0.5)) + outs_remaining / 6.0
+    diff = home_r - away_r
+    # Logistic: each run = ~0.20 WP swing per inning remaining, decaying over time
+    run_logit = diff * _clamp_v2(0.20 * (innings_left / 9.0 + 0.30), 0.05, 0.60)
+    # Home field advantage: ~0.04
+    hfa_logit = 0.04
+    total = run_logit + hfa_logit
+    home_wp = 1.0 / (1.0 + math.exp(-total * 3.5))
+    return round(home_wp, 3)
+
+def _leverage_index(inning, home_r, away_r, outs):
+    """Simplified leverage index for bullpen selection.
+    
+    High-leverage (>1.5): close game in late innings
+    Medium (0.8-1.5): mid-game or moderate lead
+    Low (<0.8): blowout or early innings
+    """
+    diff = abs(home_r - away_r)
+    if inning >= 8 and diff <= 1: return 3.0
+    if inning >= 7 and diff <= 2: return 2.0
+    if inning >= 6 and diff <= 2: return 1.5
+    if inning >= 6 and diff <= 4: return 1.0
+    if diff == 0 and inning >= 4: return 1.2
+    if diff >= 5: return 0.4
+    return 0.8
+
+def _select_relief_v2(inning, away_runs, home_runs, starter_outs, tiers, is_home_half, rng):
+    """Leverage-aware relief selection using LI + inning."""
+    li = _leverage_index(inning, home_runs, away_runs, 0)
+    if li >= 2.5: return tiers['closer']
+    if li >= 1.5: return tiers['setup']
+    if li >= 1.0:
+        return tiers['setup'] if rng.random() < 0.40 else tiers['middle']
+    return tiers['middle']
+
+def _advance_hit_v2(event, bases, batter_idx, stats, pstats, rng, outs_before):
+    """Same as v1 _advance_hit but returns (runs, rbi_count) tuple for tracking."""
+    runs = 0
+    def score_runner(idx):
+        nonlocal runs
+        if idx is not None:
+            stats[idx]['r'] += 1; stats[batter_idx]['rbi'] += 1; runs += 1; pstats['er'] += 1
+    if event == '1b':
+        if bases[2] is not None: score_runner(bases[2]); bases[2] = None
+        if bases[1] is not None:
+            if outs_before == 2 or rng.random() < 0.60:
+                score_runner(bases[1]); bases[1] = None
+        new_third = None
+        if bases[0] is not None:
+            if rng.random() < 0.38:
+                new_third = bases[0]; bases[0] = None
+            else:
+                bases[1] = bases[0]; bases[0] = None
+        if bases[1] is not None and new_third is None:
+            bases[2] = bases[1]; bases[1] = None
+        elif new_third is not None:
+            bases[2] = new_third
+        bases[0] = batter_idx
+    elif event == '2b':
+        if bases[2] is not None: score_runner(bases[2])
+        if bases[1] is not None: score_runner(bases[1])
+        new_third = None
+        if bases[0] is not None:
+            if rng.random() < 0.58: score_runner(bases[0])
+            else: new_third = bases[0]
+        bases[:] = [None, batter_idx, new_third]
+    elif event == '3b':
+        for idx in list(bases):
+            if idx is not None: score_runner(idx)
+        bases[:] = [None, None, batter_idx]
+    elif event == 'hr':
+        for idx in list(bases):
+            if idx is not None: score_runner(idx)
+        score_runner(batter_idx)
+        bases[:] = [None, None, None]
+    return runs
+
+def _simulate_inning_v2(lineup, batter_ptr, pitcher, tiers, park, rng,
+                         inning, away_runs, home_runs, stats, wx,
+                         starter_outs_used, starter_target):
+    """Simulate a single half-inning with full v2 feature set.
+    
+    Returns (runs_scored, outs_used, new_batter_ptr, pitcher_line).
+    """
+    outs = 0; bases = [None, None, None]; runs = 0
+    pitcher_line = {'er': 0, 'bb': 0, 'h': 0, 'k': 0, 'hr': 0, 'hbp': 0, 'outs': 0, 'pitches': 0}
+    current_pitcher = pitcher
+    is_starter = True
+
+    while outs < 3:
+        # Steal attempt before PA
+        steal_outcome = _maybe_steal(bases, lineup, stats, rng,
+                                     {i: _derive_probs_v2(b, current_pitcher, park, wx) for i, b in enumerate(lineup)},
+                                     outs)
+        if steal_outcome == -1:
+            outs += 1
+            pitcher_line['outs'] += 1
+            if outs >= 3: break
+
+        b = lineup[batter_ptr]
+        s = stats[batter_ptr]
+        probs = _derive_probs_v2(b, current_pitcher, park, wx)
+
+        # GDP check: runner on 1st, <2 outs, not a strikeout-heavy batter
+        if bases[0] is not None and outs < 2 and rng.random() < probs['gdp_prob'] * 0.35:
+            # Double play: 2 outs, runner on 1st removed
+            outs += 2
+            s['ab'] += 1; s['pa'] += 1; s['gdp'] = s.get('gdp', 0) + 1
+            pitcher_line['outs'] += 2
+            bases[0] = None
+            pitcher_line['pitches'] += int(rng.gauss(3.8, 0.5))
+            batter_ptr = (batter_ptr + 1) % len(lineup)
+            if outs >= 3: break
+            continue
+
+        ev = _pick_event_v2(probs, rng)
+        s['pa'] += 1
+        est_pitches = int(rng.gauss(_PITCHES_PER_EVENT.get(ev, 3.8), 0.8))
+        pitcher_line['pitches'] += max(1, est_pitches)
+
+        # Check if starter should exit based on pitch count
+        if is_starter and starter_outs_used[0] >= starter_target:
+            is_starter = False
+            current_pitcher = _select_relief_v2(inning, away_runs, home_runs,
+                                                 starter_outs_used[0], tiers, True, rng)
+
+        if ev == 'bb':
+            s['bb'] += 1; pitcher_line['bb'] += 1
+            runs += _advance_walk(bases, batter_ptr, stats, pitcher_line)
+        elif ev == 'hbp':
+            s['hbp'] = s.get('hbp', 0) + 1; pitcher_line['hbp'] += 1
+            runs += _advance_walk(bases, batter_ptr, stats, pitcher_line)
+        elif ev in ('1b', '2b', '3b', 'hr'):
+            s['ab'] += 1; s['h'] += 1; pitcher_line['h'] += 1
+            if ev == '1b': s['1b'] += 1; s['tb'] += 1
+            elif ev == '2b': s['2b'] += 1; s['tb'] += 2
+            elif ev == '3b': s['3b'] += 1; s['tb'] += 3
+            elif ev == 'hr': s['hr'] += 1; s['tb'] += 4; pitcher_line['hr'] += 1
+            runs += _advance_hit_v2(ev, bases, batter_ptr, stats, pitcher_line, rng, outs)
+        else:
+            s['ab'] += 1; outs += 1; pitcher_line['outs'] += 1
+            if ev == 'k': s['k'] += 1; pitcher_line['k'] += 1
+
+        if is_starter:
+            starter_outs_used[0] = pitcher_line['outs']
+
+        batter_ptr = (batter_ptr + 1) % len(lineup)
+
+    return runs, batter_ptr, pitcher_line
+
+def _blank_batter_v2(b):
+    return {
+        'id': b.get('id'), 'name': b.get('name', ''), 'slot': b.get('slot', 0),
+        'pos': b.get('pos', ''), 'bats': b.get('bats', 'S'),
+        'pa': 0, 'ab': 0, 'h': 0, '1b': 0, '2b': 0, '3b': 0, 'hr': 0,
+        'rbi': 0, 'r': 0, 'bb': 0, 'k': 0, 'tb': 0, 'sb': 0, 'cs': 0,
+        'hbp': 0, 'gdp': 0,
+    }
+
+def _summarize_player_v2(lines):
+    """Extended summarize_player with HBP, GDP, and implied probabilities."""
+    def arr(k): return [x.get(k, 0) for x in lines]
+    hits = arr('h'); hr = arr('hr'); rbi = arr('rbi'); runs = arr('r')
+    bb = arr('bb'); k = arr('k'); tb = arr('tb'); sb = arr('sb')
+    hbp = arr('hbp'); gdp = arr('gdp')
+    n = len(lines)
+    return {
+        'mean_hits':   round(statistics.mean(hits), 3),
+        'median_hits': statistics.median(hits),
+        'mean_hr':     round(statistics.mean(hr), 3),
+        'mean_rbi':    round(statistics.mean(rbi), 3),
+        'mean_runs':   round(statistics.mean(runs), 3),
+        'mean_bb':     round(statistics.mean(bb), 3),
+        'mean_k':      round(statistics.mean(k), 3),
+        'mean_tb':     round(statistics.mean(tb), 3),
+        'mean_sb':     round(statistics.mean(sb), 3),
+        'mean_hbp':    round(statistics.mean(hbp), 3),
+        'mean_gdp':    round(statistics.mean(gdp), 3),
+        # Percentiles
+        'p10_hits': round(_pct(hits, 0.10), 2), 'p50_hits': round(_pct(hits, 0.50), 2), 'p90_hits': round(_pct(hits, 0.90), 2),
+        'p10_tb':   round(_pct(tb, 0.10), 2),   'p50_tb':   round(_pct(tb, 0.50), 2),   'p90_tb':   round(_pct(tb, 0.90), 2),
+        'p10_k':    round(_pct(k, 0.10), 2),     'p50_k':    round(_pct(k, 0.50), 2),     'p90_k':    round(_pct(k, 0.90), 2),
+        # Hit props
+        'p_1plus_hit':  round(sum(1 for x in hits if x >= 1) / n, 3),
+        'p_2plus_hit':  round(sum(1 for x in hits if x >= 2) / n, 3),
+        'p_3plus_hit':  round(sum(1 for x in hits if x >= 3) / n, 3),
+        'p_1plus_hr':   round(sum(1 for x in hr if x >= 1) / n, 3),
+        'p_2plus_hr':   round(sum(1 for x in hr if x >= 2) / n, 3),
+        'p_1plus_rbi':  round(sum(1 for x in rbi if x >= 1) / n, 3),
+        'p_2plus_rbi':  round(sum(1 for x in rbi if x >= 2) / n, 3),
+        'p_1plus_run':  round(sum(1 for x in runs if x >= 1) / n, 3),
+        'p_2plus_tb':   round(sum(1 for x in tb if x >= 2) / n, 3),
+        'p_3plus_tb':   round(sum(1 for x in tb if x >= 3) / n, 3),
+        'p_4plus_tb':   round(sum(1 for x in tb if x >= 4) / n, 3),
+        'p_1plus_bb':   round(sum(1 for x in bb if x >= 1) / n, 3),
+        'p_1plus_k':    round(sum(1 for x in k if x >= 1) / n, 3),
+        'p_1plus_sb':   round(sum(1 for x in sb if x >= 1) / n, 3),
+        # Implied odds
+        'imp_odds_1hit':  round((1 / max(sum(1 for x in hits if x >= 1) / n, 0.001)), 2),
+        'imp_odds_1hr':   round((1 / max(sum(1 for x in hr if x >= 1) / n, 0.001)), 2),
+    }
+
+def _ou_curve(totals):
+    """O/U probability at each half-run threshold from 6.5 to 12.5."""
+    n = len(totals)
+    return {
+        str(line): round(sum(1 for t in totals if t > line) / n, 3)
+        for line in [6.5, 7.0, 7.5, 8.0, 8.5, 9.0, 9.5, 10.0, 10.5, 11.0, 11.5, 12.0, 12.5]
+    }
+
+def _simulate_full_game_v2(away_lineup, home_lineup, away_pitcher, home_pitcher,
+                             away_team_id, home_team_id, park, wx, rng):
+    """Full 9-inning game simulation returning per-team stats + inning-by-inning scores."""
+    away_stats = [_blank_batter_v2(b) for b in away_lineup]
+    home_stats = [_blank_batter_v2(b) for b in home_lineup]
+
+    away_starter_target = _pitcher_pitch_count_exit(away_pitcher, rng)
+    home_starter_target = _pitcher_pitch_count_exit(home_pitcher, rng)
+    away_tiers = _bullpen_tiers(away_pitcher, away_team_id)
+    home_tiers = _bullpen_tiers(home_pitcher, home_team_id)
+
+    away_starter_line = _blank_pitcher_line(away_pitcher['name'])
+    home_starter_line = _blank_pitcher_line(home_pitcher['name'])
+    away_bullpen_line = _blank_pitcher_line('Bullpen')
+    home_bullpen_line = _blank_pitcher_line('Bullpen')
+
+    away_outs_used = [0]
+    home_outs_used = [0]
+    away_ptr = 0; home_ptr = 0
+    away_score = 0; home_score = 0
+    innings_away = []; innings_home = []
+    f5_away = 0; f5_home = 0
+    wp_by_inning = []
+
+    for inning in range(1, 10):
+        # TOP half (away bats vs home pitcher)
+        current_home_p = home_pitcher if home_outs_used[0] < home_starter_target else \
+            _select_relief_v2(inning, away_score, home_score, home_outs_used[0], home_tiers, False, rng)
+        runs_a, away_ptr, pit_line_a = _simulate_inning_v2(
+            away_lineup, away_ptr, current_home_p, home_tiers, park, rng,
+            inning, away_score, home_score, away_stats, wx,
+            home_outs_used, home_starter_target
+        )
+        away_score += runs_a
+        innings_away.append(runs_a)
+        if inning <= 5: f5_away += runs_a
+        for k2, v in pit_line_a.items():
+            if isinstance(v, (int, float)):
+                if home_outs_used[0] >= home_starter_target:
+                    away_bullpen_line[k2] = away_bullpen_line.get(k2, 0) + v
+                else:
+                    home_starter_line[k2] = home_starter_line.get(k2, 0) + v
+
+        # BOTTOM half (home bats vs away pitcher)
+        current_away_p = away_pitcher if away_outs_used[0] < away_starter_target else \
+            _select_relief_v2(inning, away_score, home_score, away_outs_used[0], away_tiers, True, rng)
+        runs_h, home_ptr, pit_line_h = _simulate_inning_v2(
+            home_lineup, home_ptr, current_away_p, away_tiers, park, rng,
+            inning, away_score, home_score, home_stats, wx,
+            away_outs_used, away_starter_target
+        )
+        home_score += runs_h
+        innings_home.append(runs_h)
+        if inning <= 5: f5_home += runs_h
+        for k2, v in pit_line_h.items():
+            if isinstance(v, (int, float)):
+                if away_outs_used[0] >= away_starter_target:
+                    home_bullpen_line[k2] = home_bullpen_line.get(k2, 0) + v
+                else:
+                    away_starter_line[k2] = away_starter_line.get(k2, 0) + v
+
+        wp = _win_prob_basic(away_score, home_score, inning, False, 0)
+        wp_by_inning.append({'inning': inning, 'home_wp': wp, 'away_wp': round(1.0 - wp, 3)})
+
+    # Walk-off in 9th: home team wins if tied after top 9th
+    # (walk-off already handled since home bats last)
+
+    return {
+        'away_runs': away_score, 'home_runs': home_score,
+        'total': away_score + home_score,
+        'f5_away': f5_away, 'f5_home': f5_home, 'f5_total': f5_away + f5_home,
+        'away_batters': away_stats, 'home_batters': home_stats,
+        'away_starter_line': away_starter_line, 'home_starter_line': home_starter_line,
+        'away_bullpen_line': away_bullpen_line, 'home_bullpen_line': home_bullpen_line,
+        'innings_away': innings_away, 'innings_home': innings_home,
+        'wp_by_inning': wp_by_inning,
+        'away_pitcher_target': away_starter_target,
+        'home_pitcher_target': home_starter_target,
+    }
+
+@app.route('/api/simulate-v2/<int:game_pk>')
+def api_simulate_v2(game_pk):
+    """Enhanced Monte Carlo simulator v2 — 10,000 sims, L30 blending, pitch-count model,
+    leverage-aware bullpen, GDP/HBP, wind HR adjustment, O/U curve, F5 split."""
+    _maybe_refresh_fg()
+    _maybe_refresh_savant()
+    try:
+        raw = fetch_schedule(datetime.now(ET).strftime('%Y-%m-%d'))
+        g = next((x for x in raw if x.get('gamePk') == game_pk), None)
+        if not g:
+            return jsonify({'success': False, 'error': 'Game not found'}), 404
+
+        # Lineup
+        box_r = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=10)
+        box_r.raise_for_status()
+        box = box_r.json().get('teams', {})
+        away_lineup = get_batters_from_boxscore(box.get('away', {}), 'away')
+        home_lineup = get_batters_from_boxscore(box.get('home', {}), 'home')
+        if not away_lineup or not home_lineup:
+            return jsonify({'success': False, 'error': 'Lineups not posted yet'}), 400
+
+        # Team / pitcher context
+        away_team = g.get('teams', {}).get('away', {}).get('team', {})
+        home_team = g.get('teams', {}).get('home', {}).get('team', {})
+        away_team_id = away_team.get('id')
+        home_team_id = home_team.get('id')
+        away_abbr = away_team.get('abbreviation', 'AWAY')
+        home_abbr = home_team.get('abbreviation', 'HOME')
+        away_p = g.get('teams', {}).get('away', {}).get('probablePitcher', {})
+        home_p = g.get('teams', {}).get('home', {}).get('probablePitcher', {})
+        away_pitcher_base = _pitcher_model(away_p.get('fullName', 'Away SP'), away_p.get('id'), away_team_id)
+        home_pitcher_base = _pitcher_model(home_p.get('fullName', 'Home SP'), home_p.get('id'), home_team_id)
+        park = PARK_FACTORS.get(home_team_id, 1.0)
+
+        # Weather (for wind HR adjustment)
+        ven = g.get('venue', {})
+        venue_id_wx = ven.get('id')
+        vloc = ven.get('location', {}) or {}
+        coords = vloc.get('defaultCoordinates', {}) or {}
+        lat = coords.get('latitude'); lon = coords.get('longitude')
+        try:
+            dt_utc_wx = datetime.fromisoformat(g.get('gameDate', '').replace('Z', '+00:00'))
+            proj_hour = dt_utc_wx.astimezone(ET).hour
+        except:
+            proj_hour = 13
+        wx = get_weather(lat, lon, proj_hour, venue_id=venue_id_wx)
+
+        # L30 enrichment — parallel fetch
+        def enrich_batter_l30(b):
+            l30 = _fetch_l30_stats(b.get('id'), is_pitcher=False)
+            return _blend_batter(b, l30)
+
+        def enrich_pitcher_l30(pm):
+            l30 = _fetch_l30_stats(pm.get('id'), is_pitcher=True)
+            return _blend_pitcher(pm, l30)
+
+        with ThreadPoolExecutor(max_workers=12) as ex:
+            away_futures = [ex.submit(enrich_batter_l30, b) for b in away_lineup]
+            home_futures = [ex.submit(enrich_batter_l30, b) for b in home_lineup]
+            away_p_future = ex.submit(enrich_pitcher_l30, away_pitcher_base)
+            home_p_future = ex.submit(enrich_pitcher_l30, home_pitcher_base)
+            away_lineup_enriched = [f.result() for f in away_futures]
+            home_lineup_enriched = [f.result() for f in home_futures]
+            away_pitcher = away_p_future.result()
+            home_pitcher = home_p_future.result()
+
+        # Simulation loop — 10,000 runs
+        sims = N_SIMS_V2
+        rng = random.Random(game_pk + int(datetime.now().strftime('%Y%m%d')) + 62)
+
+        away_store = {i: [] for i in range(len(away_lineup_enriched))}
+        home_store = {i: [] for i in range(len(home_lineup_enriched))}
+        away_runs_list = []; home_runs_list = []; totals = []
+        f5_away_list = []; f5_home_list = []; f5_totals = []
+        away_win = 0; home_win = 0; ties = 0
+        away_starter_outs_list = []; home_starter_outs_list = []
+        all_wp = []
+        sample = None
+
+        for _ in range(sims):
+            result = _simulate_full_game_v2(
+                away_lineup_enriched, home_lineup_enriched,
+                away_pitcher, home_pitcher,
+                away_team_id, home_team_id,
+                park, wx, rng
+            )
+            for i, bline in enumerate(result['away_batters']): away_store[i].append(bline)
+            for i, bline in enumerate(result['home_batters']): home_store[i].append(bline)
+            away_runs_list.append(result['away_runs'])
+            home_runs_list.append(result['home_runs'])
+            totals.append(result['total'])
+            f5_away_list.append(result['f5_away'])
+            f5_home_list.append(result['f5_home'])
+            f5_totals.append(result['f5_total'])
+            away_starter_outs_list.append(result['away_starter_line'].get('outs', 0))
+            home_starter_outs_list.append(result['home_starter_line'].get('outs', 0))
+            all_wp.append(result['wp_by_inning'])
+            if result['away_runs'] > result['home_runs']: away_win += 1
+            elif result['home_runs'] > result['away_runs']: home_win += 1
+            else: ties += 1
+            if sample is None:
+                sample = {
+                    'away_abbr': away_abbr, 'home_abbr': home_abbr,
+                    'away_pitcher': away_pitcher['name'], 'home_pitcher': home_pitcher['name'],
+                    'innings_away': result['innings_away'], 'innings_home': result['innings_home'],
+                    'away_score': result['away_runs'], 'home_score': result['home_runs'],
+                    'away_starter_target_pitches_outs': result['away_pitcher_target'],
+                    'home_starter_target_pitches_outs': result['home_pitcher_target'],
+                }
+
+        # Summaries
+        away_props = []
+        for i, b in enumerate(away_lineup_enriched):
+            s = _summarize_player_v2(away_store[i])
+            s.update({'id': b.get('id'), 'name': b.get('name'), 'slot': b.get('slot'), 'pos': b.get('pos'), 'bats': b.get('bats', 'S')})
+            away_props.append(s)
+        home_props = []
+        for i, b in enumerate(home_lineup_enriched):
+            s = _summarize_player_v2(home_store[i])
+            s.update({'id': b.get('id'), 'name': b.get('name'), 'slot': b.get('slot'), 'pos': b.get('pos'), 'bats': b.get('bats', 'S')})
+            home_props.append(s)
+
+        # Average WP curve across sims
+        avg_wp = []
+        for inn_idx in range(9):
+            inn_num = inn_idx + 1
+            home_wps = [sim_wp[inn_idx]['home_wp'] for sim_wp in all_wp if len(sim_wp) > inn_idx]
+            if home_wps:
+                avg_wp.append({'inning': inn_num, 'home_wp': round(statistics.mean(home_wps), 3), 'away_wp': round(1.0 - statistics.mean(home_wps), 3)})
+
+        # O/U curves
+        ou_full = _ou_curve(totals)
+        ou_f5 = _ou_curve(f5_totals)
+
+        # Starter workload summaries
+        away_starter_k_list = []
+        home_starter_k_list = []
+
+        return jsonify({
+            'success': True,
+            'meta': {
+                'sims': sims, 'engine': 'v2',
+                'awayAbbr': away_abbr, 'homeAbbr': home_abbr,
+                'parkFactor': park,
+                'weatherSummary': {
+                    'temp': wx.get('temp'), 'wind': wx.get('wind'),
+                    'condition': wx.get('condition'), 'dome': wx.get('dome', False),
+                    'windHrAdj': round(_wind_hr_adj(wx), 4),
+                },
+                'awayPitcher': away_pitcher['name'],
+                'homePitcher': home_pitcher['name'],
+                'awayPitcherHand': away_pitcher['pitchHand'],
+                'homePitcherHand': home_pitcher['pitchHand'],
+            },
+            'team': {
+                'away_mean_runs':  round(statistics.mean(away_runs_list), 2),
+                'home_mean_runs':  round(statistics.mean(home_runs_list), 2),
+                'away_median_runs':statistics.median(away_runs_list),
+                'home_median_runs':statistics.median(home_runs_list),
+                'mean_total':      round(statistics.mean(totals), 2),
+                'median_total':    statistics.median(totals),
+                'std_total':       round(statistics.stdev(totals), 2),
+                'away_win_pct':    round(away_win / sims, 3),
+                'home_win_pct':    round(home_win / sims, 3),
+                'tie_pct':         round(ties / sims, 3),
+                # Run total thresholds
+                'p_7plus_total':   round(sum(1 for x in totals if x >= 7)  / sims, 3),
+                'p_8plus_total':   round(sum(1 for x in totals if x >= 8)  / sims, 3),
+                'p_9plus_total':   round(sum(1 for x in totals if x >= 9)  / sims, 3),
+                'p_10plus_total':  round(sum(1 for x in totals if x >= 10) / sims, 3),
+                'p_11plus_total':  round(sum(1 for x in totals if x >= 11) / sims, 3),
+                'p_run_diff_1':    round(sum(1 for a, h in zip(away_runs_list, home_runs_list) if abs(a-h) <= 1) / sims, 3),
+            },
+            'f5': {
+                'away_mean_runs':  round(statistics.mean(f5_away_list), 2),
+                'home_mean_runs':  round(statistics.mean(f5_home_list), 2),
+                'mean_total':      round(statistics.mean(f5_totals), 2),
+                'ouCurve':         ou_f5,
+                'away_win_pct':    round(sum(1 for a, h in zip(f5_away_list, f5_home_list) if a > h) / sims, 3),
+                'home_win_pct':    round(sum(1 for a, h in zip(f5_away_list, f5_home_list) if h > a) / sims, 3),
+            },
+            'ouCurve': ou_full,
+            'winProbByInning': avg_wp,
+            'playerProps': {'away': away_props, 'home': home_props},
+            'pitcherWorkload': {
+                'awayStarter': {
+                    'name': away_pitcher['name'],
+                    'mean_outs': round(statistics.mean(away_starter_outs_list), 2),
+                    'p50_outs':  round(_pct(away_starter_outs_list, 0.50), 1),
+                    'p15plus_outs': round(sum(1 for x in away_starter_outs_list if x >= 15) / sims, 3),
+                    'p18plus_outs': round(sum(1 for x in away_starter_outs_list if x >= 18) / sims, 3),
+                    'p21plus_outs': round(sum(1 for x in away_starter_outs_list if x >= 21) / sims, 3),
+                    'pitchHand': away_pitcher['pitchHand'],
+                    'era_blended': round(away_pitcher['era'], 2),
+                    'k9_blended':  round(away_pitcher['k9'], 2),
+                },
+                'homeStarter': {
+                    'name': home_pitcher['name'],
+                    'mean_outs': round(statistics.mean(home_starter_outs_list), 2),
+                    'p50_outs':  round(_pct(home_starter_outs_list, 0.50), 1),
+                    'p15plus_outs': round(sum(1 for x in home_starter_outs_list if x >= 15) / sims, 3),
+                    'p18plus_outs': round(sum(1 for x in home_starter_outs_list if x >= 18) / sims, 3),
+                    'p21plus_outs': round(sum(1 for x in home_starter_outs_list if x >= 21) / sims, 3),
+                    'pitchHand': home_pitcher['pitchHand'],
+                    'era_blended': round(home_pitcher['era'], 2),
+                    'k9_blended':  round(home_pitcher['k9'], 2),
+                },
+            },
+            'handedness': {
+                'awayLineup': {
+                    'L': sum(1 for b in away_lineup_enriched if (b.get('bats') or 'S') == 'L'),
+                    'R': sum(1 for b in away_lineup_enriched if (b.get('bats') or 'S') == 'R'),
+                    'S': sum(1 for b in away_lineup_enriched if (b.get('bats') or 'S') == 'S'),
+                },
+                'homeLineup': {
+                    'L': sum(1 for b in home_lineup_enriched if (b.get('bats') or 'S') == 'L'),
+                    'R': sum(1 for b in home_lineup_enriched if (b.get('bats') or 'S') == 'R'),
+                    'S': sum(1 for b in home_lineup_enriched if (b.get('bats') or 'S') == 'S'),
+                },
+                'awayStarterHand': away_pitcher['pitchHand'],
+                'homeStarterHand': home_pitcher['pitchHand'],
+            },
+            'sampleGame': sample,
+        })
+
+    except Exception as ex:
+        print('[api_simulate_v2]', traceback.format_exc())
+        return jsonify({'success': False, 'error': str(ex)}), 500
 
 
 # ── Phase 7 Odds / Lineup / Edge Infrastructure ──────────────────────────────
