@@ -744,7 +744,152 @@ def predict_hits():
     prediction = hits_model.predict(df)[0]
     return jsonify({"predicted_hits": round(float(prediction), 2)})
 
+@app.route("/api/predict/daily/<int:player_id>/<int:game_pk>")
+def predict_daily_props(player_id, game_pk):
+    import math
 
+    try:
+        # --- 1. Get player season stats from MLB API ---
+        year = datetime.now().year
+        r = requests.get(
+            f"{MLBAPI}people/{player_id}/stats",
+            params={"stats": "season", "group": "hitting", "season": year},
+            timeout=8
+        )
+        r.raise_for_status()
+        splits = r.json().get("stats", [{}])[0].get("splits", [])
+        if not splits:
+            return jsonify(success=False, error="No stats found"), 404
+
+        s = splits[0].get("stat", {})
+        pa   = int(s.get("plateAppearances", 0))
+        ab   = int(s.get("atBats", 1))
+        h    = int(s.get("hits", 0))
+        hr   = int(s.get("homeRuns", 0))
+        so   = int(s.get("strikeOuts", 0))
+        bb   = int(s.get("baseOnBalls", 0))
+        sf   = int(s.get("sacFlies", 0))
+        tb   = int(s.get("totalBases", 0))
+        obp  = float(s.get("obp", 0) or 0)
+        denom = ab - so - hr + sf
+        babip = round((h - hr) / denom, 3) if denom > 0 else 0.300
+        season_features = {
+            "k_rate":  round(so / pa, 3) if pa > 0 else 0,
+            "bb_rate": round(bb / pa, 3) if pa > 0 else 0,
+            "babip":   babip,
+            "slg":     round(tb / ab, 3) if ab > 0 else 0,
+            "obp":     obp,
+            "hr_rate": round(hr / pa, 3) if pa > 0 else 0
+        }
+        season_avg = round(h / ab, 3) if ab > 0 else 0.245
+        games_played = int(s.get("gamesPlayed", 148))
+
+        # --- 2. Season model base (per game) ---
+        df_input = pd.DataFrame([season_features]).reindex(
+            columns=hits_features, fill_value=0
+        )
+        season_hits = float(hits_model.predict(df_input)[0])
+        base_per_game = season_hits / max(games_played, 100)
+
+        # --- 3. Rolling last-7 adjustment ---
+        lr = requests.get(
+            f"{MLBAPI}people/{player_id}/stats",
+            params={"stats": "gameLog", "group": "hitting", "season": year},
+            timeout=8
+        )
+        lr.raise_for_status()
+        all_games = lr.json().get("stats", [{}])[0].get("splits", [])
+        last7 = all_games[-7:] if len(all_games) >= 7 else all_games
+        l7_ab = sum(int(g.get("stat", {}).get("atBats", 0)) for g in last7)
+        l7_h  = sum(int(g.get("stat", {}).get("hits", 0)) for g in last7)
+        l7_avg = round(l7_h / l7_ab, 3) if l7_ab > 0 else season_avg
+        rolling_adj = (l7_avg - season_avg) * 0.35
+
+        # --- 4. Opponent pitcher adjustment ---
+        raw = fetch_schedule(datetime.now(ET).strftime("%Y-%m-%d"))
+        game = next((g for g in raw if g.get("gamePk") == game_pk), None)
+        opp_era = 4.50
+        opp_pitcher_name = "Unknown"
+        park_factor = 1.0
+        pitcher_hand = "R"
+
+        if game:
+            teams = game.get("teams", {})
+            away_ids = [p.get("id") for p in
+                        [teams.get("away", {}).get("batting", [])]]
+            # Find which side the player is on
+            away_roster_url = f"{MLBAPI}game/{game_pk}/boxscore"
+            br = requests.get(away_roster_url, timeout=8)
+            br.raise_for_status()
+            box = br.json().get("teams", {})
+            on_away = str(player_id) in str(box.get("away", {}).get("batters", []))
+            opp_side = "home" if on_away else "away"
+            opp_pitcher = teams.get(opp_side, {}).get("probablePitcher", {})
+            opp_pitcher_name = opp_pitcher.get("fullName", "Unknown")
+            opp_pid = opp_pitcher.get("id")
+            if opp_pid:
+                mlb_stats = pitcher_stats_mlb(opp_pid)
+                fg_stats  = fg_pitcher(opp_pitcher_name)
+                sv_stats  = sv_pitcher(opp_pitcher_name)
+                era_vals  = [
+                    sv_stats.get("sv_xera"),
+                    fg_stats.get("fg_era"),
+                    mlb_stats.get("era") if mlb_stats else None
+                ]
+                for v in era_vals:
+                    try:
+                        f = float(v)
+                        if 0 < f < 12:
+                            opp_era = f
+                            break
+                    except (TypeError, ValueError):
+                        pass
+                pitcher_hand = (
+                    mlb_stats.get("pitchHand") if mlb_stats
+                    else player_profile(opp_pid).get("throws", "R")
+                )
+            home_team_id = teams.get("home", {}).get("team", {}).get("id")
+            park_factor = PARK_FACTORS.get(home_team_id, 1.0)
+
+        pitcher_adj = (4.50 - opp_era) * 0.018
+
+        # --- 5. Park factor adjustment ---
+        park_adj = (park_factor - 1.0) * 0.04
+
+        # --- 6. Expected hits today (lambda for Poisson) ---
+        lam = max(0.05, base_per_game + rolling_adj + pitcher_adj + park_adj)
+
+        # --- 7. Poisson probabilities ---
+        p0    = math.exp(-lam)
+        p1    = lam * math.exp(-lam)
+        p0_5  = round(1 - p0, 4)          # P(1+ hits)
+        p1_5  = round(1 - p0 - p1, 4)     # P(2+ hits)
+        p2_5  = round(1 - p0 - p1 - (lam**2 / 2) * math.exp(-lam), 4)
+
+        return jsonify(
+            success        = True,
+            player_id      = player_id,
+            game_pk        = game_pk,
+            opp_pitcher    = opp_pitcher_name,
+            opp_era        = round(opp_era, 2),
+            pitcher_hand   = pitcher_hand,
+            park_factor    = park_factor,
+            season_avg     = season_avg,
+            last7_avg      = l7_avg,
+            expected_hits  = round(lam, 3),
+            p_over_0_5     = p0_5,
+            p_over_1_5     = p1_5,
+            p_over_2_5     = p2_5,
+            base_per_game  = round(base_per_game, 3),
+            rolling_adj    = round(rolling_adj, 3),
+            pitcher_adj    = round(pitcher_adj, 3),
+            park_adj       = round(park_adj, 3)
+        )
+
+    except Exception as ex:
+        print("predict_daily_props", traceback.format_exc())
+        return jsonify(success=False, error=str(ex)), 500
+    
 @app.errorhandler(404)
 def e404(e): return jsonify({"error":"Not found"}), 404
 @app.errorhandler(500)
