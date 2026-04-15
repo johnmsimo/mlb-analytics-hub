@@ -15,8 +15,6 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
-hits_model = joblib.load("models/hits_model.pkl")
-hits_features = joblib.load("models/hits_model_features.pkl")
 _HERE = os.path.dirname(os.path.abspath(__file__))
 DASHBOARD_HTML = open(os.path.join(_HERE, 'dashboard.html')).read()
 DEEP_DIVE_HTML = open(os.path.join(_HERE, 'deepdive.html')).read()
@@ -28,6 +26,8 @@ TRACKER_STORE = os.path.join(DATA_DIR, 'daily_tracker.json')
 ADJUST_STORE = os.path.join(DATA_DIR, 'model_adjustments.json')
 CAL_HISTORY_STORE = os.path.join(DATA_DIR, 'calibration_history.json')
 VALUE_HISTORY_STORE = os.path.join(DATA_DIR, 'value_history.json')
+hits_model = joblib.load("models/hits_model.pkl")
+hits_features = joblib.load("models/hits_model_features.pkl")
 
 MLB_API   = "https://statsapi.mlb.com/api/v1"
 WX_API    = "https://api.open-meteo.com/v1/forecast"
@@ -570,13 +570,6 @@ def parse_game(g):
 @app.route("/")
 def dashboard():
     return DASHBOARD_HTML
-
-@app.route("/api/predict/hits", methods=["POST"])
-def predict_hits():
-    data = request.get_json()
-    df = pd.DataFrame([data]).reindex(columns=hits_features, fill_value=0)
-    prediction = hits_model.predict(df)[0]
-    return jsonify({"predicted_hits": round(float(prediction), 2)})
     
 @app.route("/deep-dive/<int:game_pk>")
 def deep_dive(game_pk):
