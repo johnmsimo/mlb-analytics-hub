@@ -1,3 +1,5 @@
+import joblib
+import pandas as pd
 import os, threading, traceback, difflib, io, csv as csvmod, json, re
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -13,6 +15,8 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
+hits_model = joblib.load("models/hits_model.pkl")
+hits_features = joblib.load("models/hits_model_features.pkl")
 _HERE = os.path.dirname(os.path.abspath(__file__))
 DASHBOARD_HTML = open(os.path.join(_HERE, 'dashboard.html')).read()
 DEEP_DIVE_HTML = open(os.path.join(_HERE, 'deepdive.html')).read()
@@ -567,6 +571,13 @@ def parse_game(g):
 def dashboard():
     return DASHBOARD_HTML
 
+@app.route("/api/predict/hits", methods=["POST"])
+def predict_hits():
+    data = request.get_json()
+    df = pd.DataFrame([data]).reindex(columns=hits_features, fill_value=0)
+    prediction = hits_model.predict(df)[0]
+    return jsonify({"predicted_hits": round(float(prediction), 2)})
+    
 @app.route("/deep-dive/<int:game_pk>")
 def deep_dive(game_pk):
     return DEEP_DIVE_HTML
