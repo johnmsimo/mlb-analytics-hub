@@ -5748,24 +5748,6 @@ def api_lineup_status(game_pk):
             "snapshotAge": age_min,
             "snapshotTs":  baseline["ts"],
         })
-
-@app.route("/api/predict/test")
-def predict_test():
-    test_input = {
-        "k_rate": 0.22, "bb_rate": 0.09,
-        "babip": 0.310, "slg": 0.480,
-        "obp": 0.370, "hr_rate": 0.045
-    }
-    df = pd.DataFrame([test_input]).reindex(columns=hits_features, fill_value=0)
-    result = hits_model.predict(df)[0]
-    return jsonify({"predicted_hits": round(float(result), 2), "model_working": True})
-
-@app.route("/api/predict/hits", methods=["POST"])
-def predict_hits():
-    data = request.get_json()
-    df = pd.DataFrame([data]).reindex(columns=hits_features, fill_value=0)
-    prediction = hits_model.predict(df)[0]
-    return jsonify({"predicted_hits": round(float(prediction), 2)})
     
     except Exception as ex:
         print(f"[api_lineup_status] {traceback.format_exc()}")
