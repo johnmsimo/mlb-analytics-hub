@@ -1585,9 +1585,28 @@ def _derive_probs(b, p, park=1.0):
 
     hand_hit, hand_hr, hand_k = _platoon_adjustments(b, pitch_hand)
 
+        # ML model pre-calculation (uses variables already defined above)
+        try:
+            _ml_feat = {
+                "k_rate":  clamp(0.175 + (k9 - 8.2)*0.018, 0.09, 0.36),
+                "bb_rate": clamp(bb9 / 36.0, 0.04, 0.15),
+                "babip":   avg,
+                "slg":     slg,
+                "obp":     obp,
+                "hr_rate": clamp(brl * 0.0028, 0.005, 0.095)
+            }
+            _df_ml = pd.DataFrame([_ml_feat]).reindex(columns=hits_features, fill_value=0)
+            _ml_hitrate = clamp(float(hits_model.predict(_df_ml)[0]) / 562.0, 0.13, 0.35)
+        except Exception:
+            _ml_hitrate = None
+    
     hit_rate = avg + (xwoba - 0.320) * 0.30 + (ev - 87.5) * 0.003 + (hh - 37.0) * 0.0016 + (wrc - 100) * 0.00035
     hit_rate += (whip - 1.28) * 0.055 - (era - 4.25) * 0.010 + (park - 1.0) * 0.030 + hand_hit
     hit_rate = _clamp(hit_rate, 0.13, 0.35)
+
+        # Blend stat model (65%) with ML model (35%)
+        if _ml_hitrate is not None:
+            hitrate = clamp(0.65 * hitrate + 0.35 * _ml_hitrate, 0.13, 0.35)
 
     walk_rate = max(obp - avg, 0.045) + (bb9 - 3.2) * 0.010
     if pitch_hand == 'L' and (b.get('bats') or 'S') == 'L':
