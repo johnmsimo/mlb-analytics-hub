@@ -726,6 +726,25 @@ def api_pitchers(game_pk):
         print("[api_pitchers]", traceback.format_exc())
         return jsonify({"success":False,"error":str(ex),"awayPitcher":{},"homePitcher":{}}), 500
 
+@app.route("/api/predict/test")
+def predict_test():
+    test_input = {
+        "k_rate": 0.22, "bb_rate": 0.09,
+        "babip": 0.310, "slg": 0.480,
+        "obp": 0.370, "hr_rate": 0.045
+    }
+    df = pd.DataFrame([test_input]).reindex(columns=hits_features, fill_value=0)
+    result = hits_model.predict(df)[0]
+    return jsonify({"predicted_hits": round(float(result), 2), "model_working": True})
+
+@app.route("/api/predict/hits", methods=["POST"])
+def predict_hits():
+    data = request.get_json()
+    df = pd.DataFrame([data]).reindex(columns=hits_features, fill_value=0)
+    prediction = hits_model.predict(df)[0]
+    return jsonify({"predicted_hits": round(float(prediction), 2)})
+
+
 @app.errorhandler(404)
 def e404(e): return jsonify({"error":"Not found"}), 404
 @app.errorhandler(500)
