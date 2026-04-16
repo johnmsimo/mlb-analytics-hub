@@ -196,7 +196,8 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 const PITCH_NAMES = {ff:'4-Seam FB',si:'Sinker',fc:'Cutter',st:'Sweeper',sl:'Slider',cu:'Curveball',ch:'Changeup',fs:'Splitter',kn:'Knuckleball',sv:'Slurve',kc:'KC Curve',fp:'Forkball'};
 
 let GAMES=[], PD=null, LOGS={};
-let FG_READY=false, LAST_PK=null;
+// FIX: added LAST_GAME_IDX to reliably track which game was last analyzed
+let FG_READY=false, LAST_PK=null, LAST_GAME_IDX=null;
 let POLL=null, RETRY_COUNT=0;
 
 const $=id=>document.getElementById(id);
@@ -222,7 +223,7 @@ async function checkCache(){
       $('cachePulse').className='pulse done';
       $('cacheBannerMsg').textContent=`✓ FANGRAPHS LOADED — ${fgPit} PITCHERS READY`;
       if(POLL){clearInterval(POLL);POLL=null;}
-      // Auto-refresh cards with full stats
+      // FIX: auto-refresh cards only if a prior analysis was done (LAST_PK set)
       if(LAST_PK!==null) await analyze(true);
     } else {
       $('cacheLabel').textContent=`⟳ FG: ${fgPit} PITCHERS (LOADING…)`;
@@ -237,7 +238,7 @@ async function checkCache(){
 // ── BOOT ────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded',async()=>{
   await checkCache();
-  if(!FG_READY) POLL=setInterval(checkCache,8000); // poll every 8s
+  if(!FG_READY) POLL=setInterval(checkCache,8000);
   await loadGames();
 });
 
@@ -262,18 +263,28 @@ function onGameChange(){
                `<option value="home">${g.homeAbbr} – ${g.homePitcher||'TBD'}</option>`;
 }
 
+// FIX: manualRefresh always forces a full re-analyze regardless of FG_READY state
 function manualRefresh(){
-  if(LAST_PK!==null) analyze(true);
   checkCache();
+  if(LAST_PK!==null) analyze(true);
 }
 
 // ── ANALYZE ─────────────────────────────────────────────────────────────
 async function analyze(silent=false){
-  const gIdx=$('gameSelect').value;
+  // FIX: in silent (auto-refresh) mode, reuse LAST_GAME_IDX so we always
+  // refresh the correct game even if the user changed the dropdown selection
+  const gIdx=(silent&&LAST_GAME_IDX!==null)
+    ? String(LAST_GAME_IDX)
+    : $('gameSelect').value;
+
   if(gIdx===''&&!silent){return;}
-  const g=GAMES[parseInt(gIdx||0)];
+  const idx=parseInt(gIdx||0);
+  const g=GAMES[idx];
   if(!g) return;
+
+  // FIX: store both LAST_PK and LAST_GAME_IDX every time we analyze
   LAST_PK=g.gamePk;
+  LAST_GAME_IDX=idx;
 
   if(!silent){
     $('placeholder').style.display='none';
@@ -373,7 +384,6 @@ function buildKpiRow(s){
 
 // ── STATS PANE ────────────────────────────────────────────────────────────
 function buildStatsPane(s,log){
-  // MLB API — always available
   const era  = s.era   || '---';
   const whip = s.whip  || '---';
   const k9   = s.k9    || '---';
@@ -383,7 +393,6 @@ function buildStatsPane(s,log){
   const loss = s.losses!== undefined ? s.losses : '---';
   const gs   = s.gs    !== undefined ? s.gs     : '---';
 
-  // FanGraphs — may be empty on first load
   const fip   = s.fg_fip;
   const xfip  = s.fg_xfip;
   const kpct  = s.fg_kpct;
@@ -397,14 +406,12 @@ function buildStatsPane(s,log){
   const fgGs  = s.fg_gs;
   const fgIp  = s.fg_ip;
 
-  // Savant
   const xera  = s.sv_xera;
   const xwoba = s.sv_xwoba_p;
 
   const hasFG = hasStat(fip);
   const hasSV = hasStat(xera);
 
-  // xERA vs ERA delta
   let xdiffRow='';
   if(hasFG&&hasSV){
     const baseEra=parseFloat(fgEra||era);
