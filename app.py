@@ -92,6 +92,7 @@ _fg_bat  = {}
 _fg_pit  = {}
 _fg_loaded    = False
 _fg_load_date = None
+_fg_loading   = False   # guard — prevents multiple concurrent loads
 
 def _load_fg_data():
     global _fg_bat, _fg_pit, _fg_loaded, _fg_load_date
