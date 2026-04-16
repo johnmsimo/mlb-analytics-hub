@@ -191,6 +191,7 @@ _sv_arsenal_pct  = {}
 _sv_arsenal_velo = {}
 _sv_loaded    = False
 _sv_load_date = None
+_sv_loading   = False   # guard — prevents multiple concurrent loads
 
 PITCH_ORDER  = ["ff","si","fc","st","sl","cu","ch","fs","kn","sv"]
 PITCH_LABELS = {
