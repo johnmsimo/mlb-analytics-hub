@@ -95,7 +95,7 @@ _fg_load_date = None
 _fg_loading   = False   # guard — prevents multiple concurrent loads
 
 def _load_fg_data():
-    global _fg_bat, _fg_pit, _fg_loaded, _fg_load_date
+    global _fg_bat, _fg_pit, _fg_loaded, _fg_load_date, _fg_loading
     year = datetime.now().year
     try:
         import pybaseball as pb
@@ -158,13 +158,24 @@ def _load_fg_data():
     except Exception as ex:
         print("[FG] Pitching failed:", ex)
     with _fg_lock:
-        _fg_loaded    = True
-        _fg_load_date = datetime.now().date()
+        _fg_loading = False                          # always release the guard
+        if len(_fg_pit) > 0 or len(_fg_bat) > 0:   # only mark loaded if we got data
+            _fg_loaded    = True
+            _fg_load_date = datetime.now().date()
+        # if both failed, _fg_loaded stays False so _maybe_refresh_fg will retry
 
 def _maybe_refresh_fg():
+    global _fg_loading
+    should_start = False
     with _fg_lock:
-        loaded = _fg_loaded; date = _fg_load_date
-    if not loaded or date != datetime.now().date():
+        if not _fg_loading and (
+            not _fg_loaded or
+            _fg_load_date != datetime.now().date() or
+            (len(_fg_pit) == 0)          # retry if cache is empty (pybaseball failed)
+        ):
+            _fg_loading = True
+            should_start = True
+    if should_start:
         threading.Thread(target=_load_fg_data, daemon=True).start()
 
 def _fuzzy_lookup(name, cache):
@@ -218,7 +229,7 @@ def _fetch_sv_csv(url):
 
 def _load_savant_data():
     global _sv_pit_xstats, _sv_bat_xstats, _sv_bat_statcast
-    global _sv_arsenal_pct, _sv_arsenal_velo, _sv_loaded, _sv_load_date
+    global _sv_arsenal_pct, _sv_arsenal_velo, _sv_loaded, _sv_load_date, _sv_loading
     y = datetime.now().year
     BASE = "https://baseballsavant.mlb.com"
 
@@ -323,14 +334,24 @@ def _load_savant_data():
         print("[Savant] Arsenal velo failed:", ex)
 
     with _sv_lock:
-        _sv_loaded    = True
-        _sv_load_date = datetime.now().date()
+        _sv_loading = False
+        if len(_sv_pit_xstats) > 0 or len(_sv_bat_xstats) > 0:
+            _sv_loaded    = True
+            _sv_load_date = datetime.now().date()
     print("[Savant] All caches ready")
 
 def _maybe_refresh_savant():
+    global _sv_loading
+    should_start = False
     with _sv_lock:
-        loaded = _sv_loaded; date = _sv_load_date
-    if not loaded or date != datetime.now().date():
+        if not _sv_loading and (
+            not _sv_loaded or
+            _sv_load_date != datetime.now().date() or
+            (len(_sv_pit_xstats) == 0)
+        ):
+            _sv_loading = True
+            should_start = True
+    if should_start:
         threading.Thread(target=_load_savant_data, daemon=True).start()
 
 def sv_pitcher(name):
