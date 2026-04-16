@@ -574,6 +574,10 @@ def deep_dive(game_pk):
 @app.route('/props')
 def props_page():
     return PROPS_HTML
+    
+@app.route('/pitcher-deep-dive')
+def pitcher_deep_dive():
+    return open('templates/pitcher_deepdive.html').read()
 
 @app.route("/api/status")
 def api_status():
