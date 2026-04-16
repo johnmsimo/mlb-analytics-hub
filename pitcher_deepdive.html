@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pitcher Deep Dive – MLB Analytics Hub</title>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#050a18;--card:#0a1628;--b:rgba(0,229,255,.18);--t:#e0f0ff;--mu:#6a8db0;--c:#00e5ff;--g:#00e676;--o:#ff9800;--m:#e040fb;--fg:#fa6400;--sv:#00b8d4;--r:#f44336;--warn:#ffd740}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--t);min-height:100vh}
+body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,229,255,.012) 2px,rgba(0,229,255,.012) 4px);pointer-events:none;z-index:9999}
+
+/* NAV */
+nav{display:flex;align-items:center;justify-content:space-between;padding:14px 32px;background:rgba(5,10,24,.95);backdrop-filter:blur(16px);border-bottom:1px solid var(--b);position:sticky;top:0;z-index:100}
+.logo{font-family:'Orbitron',monospace;font-size:1.1rem;font-weight:900;color:var(--c);letter-spacing:2px}
+.nav-r{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.back{padding:7px 16px;background:rgba(0,229,255,.07);border:1px solid rgba(0,229,255,.22);border-radius:8px;color:var(--c);font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:2px;cursor:pointer;text-decoration:none;transition:all .2s}
+.back:hover{background:rgba(0,229,255,.14)}
+
+/* SRCBAR */
+.srcbar{background:linear-gradient(90deg,rgba(250,100,0,.06),rgba(0,184,212,.04),rgba(0,229,255,.03));border-bottom:1px solid rgba(255,255,255,.07);padding:7px 32px;font-size:.62rem;letter-spacing:2px;font-family:'Orbitron',monospace;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.fgtag{padding:2px 9px;border-radius:10px;background:rgba(250,100,0,.14);color:var(--fg);border:1px solid rgba(250,100,0,.28)}
+.svtag{padding:2px 9px;border-radius:10px;background:rgba(0,184,212,.12);color:var(--sv);border:1px solid rgba(0,184,212,.28)}
+.mlbtag{padding:2px 9px;border-radius:10px;background:rgba(0,229,255,.08);color:var(--c);border:1px solid rgba(0,229,255,.22)}
+
+/* CACHE STATUS BANNER */
+.cache-banner{display:none;align-items:center;gap:10px;padding:8px 32px;background:rgba(255,152,0,.08);border-bottom:1px solid rgba(255,152,0,.3);font-family:'Orbitron',monospace;font-size:.62rem;color:var(--o);letter-spacing:1.5px}
+.cache-banner.visible{display:flex}
+.cache-dot{width:8px;height:8px;border-radius:50%;background:var(--o);animation:blink 1s ease-in-out infinite}
+@keyframes blink{0%,100%{opacity:.3}50%{opacity:1}}
+
+/* SELECTOR BAR */
+.selbar{display:flex;align-items:center;gap:12px;padding:14px 32px;background:var(--card);border-bottom:1px solid var(--b);flex-wrap:wrap}
+.sel-lbl{font-family:'Orbitron',monospace;font-size:.6rem;color:var(--mu);letter-spacing:2px;white-space:nowrap}
+.sel-input{background:#060e1d;border:1px solid rgba(0,229,255,.2);border-radius:8px;color:var(--t);padding:8px 12px;font-size:.78rem;min-width:220px;flex:1}
+.sel-input:focus{outline:none;border-color:var(--c)}
+.analyze-btn{padding:9px 22px;background:linear-gradient(90deg,rgba(0,229,255,.18),rgba(224,64,251,.12));border:1px solid rgba(0,229,255,.35);border-radius:8px;color:var(--c);font-family:'Orbitron',monospace;font-size:.68rem;letter-spacing:2px;cursor:pointer;transition:all .2s;white-space:nowrap}
+.analyze-btn:hover{background:linear-gradient(90deg,rgba(0,229,255,.3),rgba(224,64,251,.2));border-color:var(--c)}
+
+/* MAIN */
+.main{padding:20px 32px;max-width:1400px;margin:0 auto}
+.cards-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+
+/* PITCHER CARD */
+.pc{background:var(--card);border:1px solid var(--b);border-radius:14px;overflow:hidden;position:relative}
+.pc::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--fg),var(--sv))}
+.pc-head{display:flex;align-items:center;gap:14px;padding:16px 18px 12px}
+.pc-logo{width:48px;height:48px;object-fit:contain}
+.pc-logo-placeholder{width:48px;height:48px;border-radius:50%;background:rgba(0,229,255,.08);border:1px solid rgba(0,229,255,.2);display:flex;align-items:center;justify-content:center;font-family:'Orbitron',monospace;font-size:.65rem;color:var(--c)}
+.pc-name{font-family:'Orbitron',monospace;font-size:.9rem;font-weight:700;color:var(--t);letter-spacing:.5px}
+.pc-meta{font-size:.65rem;color:var(--mu);margin-top:3px;letter-spacing:1px}
+.pc-hand{margin-left:auto;padding:4px 10px;border-radius:999px;font-family:'Orbitron',monospace;font-size:.6rem;letter-spacing:1px}
+.hand-R{background:rgba(0,229,255,.08);border:1px solid rgba(0,229,255,.3);color:var(--c)}
+.hand-L{background:rgba(224,64,251,.08);border:1px solid rgba(224,64,251,.3);color:var(--m)}
+
+/* KPI ROW */
+.kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:0 18px 14px}
+.kpi{background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.05);border-radius:10px;padding:10px 8px;text-align:center}
+.kpi-val{font-family:'Orbitron',monospace;font-size:1.1rem;font-weight:700;color:var(--c)}
+.kpi-val.kv-good{color:var(--g)} .kpi-val.kv-warn{color:var(--o)} .kpi-val.kv-bad{color:var(--r)} .kpi-val.kv-cyan{color:var(--sv)}
+.kpi-lbl{font-size:.52rem;color:var(--mu);letter-spacing:1.5px;font-family:'Orbitron',monospace;margin-top:4px}
+
+/* TABS */
+.pc-tabs{display:flex;border-bottom:1px solid var(--b);padding:0 18px}
+.pc-tab{padding:9px 14px;font-family:'Orbitron',monospace;font-size:.6rem;letter-spacing:1.5px;color:var(--mu);cursor:pointer;border-bottom:2px solid transparent;transition:all .15s;white-space:nowrap}
+.pc-tab.active{color:var(--c);border-bottom-color:var(--c)}
+.pc-tab:hover{color:var(--t)}
+
+/* PANES */
+.pc-pane{display:none;padding:16px 18px}
+.pc-pane.active{display:block}
+
+/* STATS TABLE */
+.stab{width:100%;border-collapse:collapse;font-size:.74rem}
+.stab th{font-size:.54rem;color:var(--mu);letter-spacing:2px;text-align:left;padding:5px 6px;border-bottom:1px solid var(--b);font-family:'Orbitron',monospace}
+.stab td{padding:6px 6px;border-bottom:1px solid rgba(255,255,255,.04)}
+.stab tr:last-child td{border-bottom:none}
+.stab td:last-child{text-align:right;font-family:'Orbitron',monospace;font-size:.76rem;font-weight:600}
+.div-row{background:rgba(250,100,0,.06);border-top:1px solid rgba(250,100,0,.2);padding:5px 6px;font-family:'Orbitron',monospace;font-size:.55rem;color:var(--fg);letter-spacing:2px;display:flex;align-items:center;gap:6px;margin:4px 0}
+.div-sv{background:rgba(0,184,212,.06);border-top:1px solid rgba(0,184,212,.18)}
+.div-sv .tag-sv{font-size:.5rem;padding:1px 6px;border-radius:8px;background:rgba(0,184,212,.12);color:var(--sv);border:1px solid rgba(0,184,212,.25)}
+.tag-fg{font-size:.5rem;padding:1px 6px;border-radius:8px;background:rgba(250,100,0,.12);color:var(--fg);border:1px solid rgba(250,100,0,.22)}
+.c-g{color:var(--g)} .c-o{color:var(--o)} .c-r{color:var(--r)} .c-c{color:var(--c)}
+
+/* RECORD ROW */
+.rec-row{font-size:.65rem;color:var(--mu);margin-bottom:10px;padding:0 2px}
+
+/* XERA DIFF */
+.xdiff-pos{color:var(--r);font-size:.68rem} .xdiff-neg{color:var(--g);font-size:.68rem} .xdiff-neu{color:var(--mu);font-size:.68rem}
+
+/* PROJECTION PANE */
+.proj-kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}
+.proj-kpi{background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:12px 8px;text-align:center}
+.proj-kpi-val{font-family:'Orbitron',monospace;font-size:1.4rem;font-weight:900;color:var(--c)}
+.proj-kpi-val.pv-k{color:var(--m)} .proj-kpi-val.pv-bb{color:var(--o)} .proj-kpi-val.pv-ip{color:var(--c)}
+.proj-kpi-lbl{font-size:.52rem;color:var(--mu);letter-spacing:2px;font-family:'Orbitron',monospace;margin-top:5px}
+.signal-badge{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:8px;font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:1px;margin-bottom:12px}
+.sig-qs{background:rgba(0,230,118,.1);border:1px solid rgba(0,230,118,.3);color:var(--g)}
+.sig-risky{background:rgba(244,67,54,.08);border:1px solid rgba(244,67,54,.3);color:var(--r)}
+.sig-avg{background:rgba(106,141,176,.08);border:1px solid rgba(106,141,176,.2);color:var(--mu)}
+.kprop-table{width:100%;border-collapse:collapse;margin-top:10px}
+.kprop-table th{font-size:.54rem;color:var(--mu);letter-spacing:2px;padding:5px 6px;border-bottom:1px solid var(--b);font-family:'Orbitron',monospace;text-align:center}
+.kprop-table td{padding:6px;text-align:center;border-bottom:1px solid rgba(255,255,255,.04);font-family:'Orbitron',monospace;font-size:.72rem}
+.kprop-table tr:last-child td{border-bottom:none}
+.pct-hot{color:var(--g);font-weight:700} .pct-warm{color:var(--o)} .pct-cold{color:var(--r)} .pct-neu{color:var(--mu)}
+.proj-note{margin-top:10px;font-size:.62rem;color:var(--mu);line-height:1.6;border-top:1px dashed rgba(255,255,255,.07);padding-top:8px}
+
+/* GAME LOG PANE */
+.gl-table{width:100%;border-collapse:collapse;font-size:.68rem}
+.gl-table th{font-size:.52rem;color:var(--mu);letter-spacing:1.5px;padding:5px 4px;border-bottom:1px solid var(--b);font-family:'Orbitron',monospace;text-align:center}
+.gl-table th:first-child{text-align:left}
+.gl-table td{padding:6px 4px;border-bottom:1px solid rgba(255,255,255,.04);text-align:center;font-family:'Orbitron',monospace}
+.gl-table td:first-child{text-align:left;color:var(--mu);font-family:'Inter',sans-serif}
+.gl-table tr:last-child td{border-bottom:none}
+.gl-pills{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.gl-pill{padding:4px 10px;border-radius:6px;font-family:'Orbitron',monospace;font-size:.6rem;letter-spacing:1px}
+.pill-k{background:rgba(224,64,251,.1);border:1px solid rgba(224,64,251,.3);color:var(--m)}
+.pill-er{background:rgba(244,67,54,.08);border:1px solid rgba(244,67,54,.25);color:var(--r)}
+.pill-ip{background:rgba(0,229,255,.08);border:1px solid rgba(0,229,255,.2);color:var(--c)}
+.hc-badge{display:inline-block;padding:3px 10px;border-radius:8px;font-family:'Orbitron',monospace;font-size:.6rem;letter-spacing:1px;margin-bottom:10px}
+.hc-hot{background:rgba(0,230,118,.12);border:1px solid rgba(0,230,118,.3);color:var(--g)}
+.hc-cold{background:rgba(244,67,54,.08);border:1px solid rgba(244,67,54,.3);color:var(--r)}
+.hc-avg{background:rgba(106,141,176,.08);border:1px solid rgba(106,141,176,.2);color:var(--mu)}
+
+/* ARSENAL PANE */
+.ars-row{display:grid;grid-template-columns:110px 1fr 58px 64px;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.04)}
+.ars-row:last-child{border-bottom:none}
+.ars-name{font-size:.72rem;color:var(--t);font-weight:600}
+.ars-bw{height:8px;background:rgba(255,255,255,.06);border-radius:4px;overflow:hidden}
+.ars-b{height:100%;border-radius:4px;background:linear-gradient(90deg,var(--sv),var(--c));transition:width 1.2s cubic-bezier(.16,1,.3,1)}
+.ars-pct{font-family:'Orbitron',monospace;font-size:.7rem;color:var(--sv);text-align:right}
+.ars-vel{font-size:.68rem;color:var(--mu);text-align:right}
+.ars-head{background:rgba(0,184,212,.08);padding:8px 10px;font-family:'Orbitron',monospace;font-size:.58rem;color:var(--sv);letter-spacing:2px;border-radius:8px 8px 0 0;margin-bottom:6px;display:flex;align-items:center;gap:6px}
+.scout-note{margin-top:12px;font-size:.66rem;color:var(--mu);line-height:1.7;background:rgba(0,184,212,.04);border:1px solid rgba(0,184,212,.1);border-radius:8px;padding:10px 12px}
+
+/* LOADING / EMPTY */
+.spinner{width:32px;height:32px;border:2px solid rgba(0,229,255,.1);border-top-color:var(--c);border-radius:50%;animation:spin 1s linear infinite;margin:20px auto}
+@keyframes spin{to{transform:rotate(360deg)}}
+.empty{padding:32px;text-align:center;color:var(--mu);font-family:'Orbitron',monospace;font-size:.7rem;letter-spacing:2px;line-height:1.8}
+.na{color:var(--mu);font-size:.76rem;padding:16px 0;text-align:center;line-height:1.6}
+.err{color:var(--r);font-size:.72rem;padding:12px;text-align:center}
+
+/* PLACEHOLDER STATE */
+.placeholder{padding:60px 20px;text-align:center;color:var(--mu);font-family:'Orbitron',monospace;font-size:.75rem;letter-spacing:3px;line-height:2}
+.placeholder-icon{font-size:2.5rem;margin-bottom:12px;opacity:.3}
+
+footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6rem;color:var(--mu);letter-spacing:2px;font-family:'Orbitron',monospace;margin-top:24px}
+
+@media(max-width:900px){
+  .cards-grid{grid-template-columns:1fr}
+  nav{padding:12px 16px}
+  .selbar{padding:12px 16px}
+  .main{padding:14px 16px}
+  .kpi-row{grid-template-columns:repeat(2,1fr)}
+}
+</style>
+</head>
+<body>
+<nav>
+  <div>
+    <div class="logo">⚾ PITCHER DEEP DIVE</div>
+    <div style="font-size:.6rem;color:var(--mu);letter-spacing:1px;margin-top:2px">MLB Analytics Hub</div>
+  </div>
+  <div class="nav-r">
+    <a class="back" href="/">DASHBOARD</a>
+    <a class="back" href="/props">PROPS</a>
+    <a class="back" href="/tracker" style="color:var(--o);border-color:rgba(255,152,0,.3)">TRACKER</a>
+  </div>
+</nav>
+
+<div class="srcbar">
+  POWERED BY
+  <span class="fgtag">FANGRAPHS</span>
+  <span class="svtag">STATCAST</span>
+  <span class="mlbtag">MLB STATS API</span>
+  <span style="color:var(--mu);margin-left:auto;font-size:.58rem" id="cacheStatus">CHECKING CACHE…</span>
+</div>
+
+<!-- Cache loading warning -->
+<div class="cache-banner" id="cacheBanner">
+  <div class="cache-dot"></div>
+  <span>FANGRAPHS / SAVANT CACHE LOADING — ADVANCED STATS WILL APPEAR WHEN READY. AUTO-REFRESHING…</span>
+</div>
+
+<!-- SELECTOR -->
+<div class="selbar">
+  <span class="sel-lbl">GAME</span>
+  <select class="sel-input" id="gameSelect" onchange="onGameChange()">
+    <option value="">Loading games…</option>
+  </select>
+  <span class="sel-lbl">PITCHER</span>
+  <select class="sel-input" id="pitcherSelect">
+    <option value="">Select game first</option>
+  </select>
+  <button class="analyze-btn" onclick="analyze()">ANALYZE ▶</button>
+</div>
+
+<div class="main">
+  <div id="placeholder" class="placeholder">
+    <div class="placeholder-icon">⚾</div>
+    SELECT A GAME AND PITCHER ABOVE<br>THEN CLICK ANALYZE
+  </div>
+  <div id="cardsGrid" class="cards-grid" style="display:none"></div>
+</div>
+
+<footer>MLB ANALYTICS HUB · PITCHER DEEP DIVE · FG + STATCAST + MLB STATS API · FOR ENTERTAINMENT PURPOSES ONLY</footer>
+
+<script>
+const PITCH_NAMES = {
+  ff:'4-Seam FB', si:'Sinker', fc:'Cutter', st:'Sweeper',
+  sl:'Slider', cu:'Curveball', ch:'Changeup', fs:'Splitter',
+  kn:'Knuckleball', sv:'Slurve', kc:'KC Curve', fp:'Forkball'
+};
+
+let GAMES = [];
+let PD = null;
+let LOGS = {};
+let CACHE_READY = false;
+let CACHE_POLL = null;
+let LAST_PK = null;
+let LAST_PIT_IDX = null;
+
+// ── HELPERS ──────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const nd = v => (v !== undefined && v !== null && v !== 'NA' && v !== 'N/A' && v !== '' && v !== '?' && v !== 0 && v !== '0.00' && v !== '0') ? v : '---';
+const f1 = v => { const n = parseFloat(v); return isNaN(n) ? '---' : n.toFixed(1); };
+const f2 = v => { const n = parseFloat(v); return isNaN(n) ? '---' : n.toFixed(2); };
+const f3 = v => { const n = parseFloat(v); return isNaN(n) ? '---' : n.toFixed(3); };
+const fP = v => { const n = parseFloat(v); return isNaN(n) ? '---' : (n * 100).toFixed(1) + '%'; };
+const eraColor = v => { const n = parseFloat(v); if (isNaN(n)) return ''; return n < 3.20 ? 'c-g' : n > 4.80 ? 'c-r' : n > 4.00 ? 'c-o' : ''; };
+const fipColor = v => { const n = parseFloat(v); if (isNaN(n)) return ''; return n < 3.20 ? 'c-g' : n > 4.50 ? 'c-r' : n > 3.80 ? 'c-o' : ''; };
+const kColor   = v => { const n = parseFloat(v); if (isNaN(n)) return ''; return n > 10 ? 'c-g' : n > 8 ? 'c-c' : n < 6 ? 'c-r' : ''; };
+
+// ── CACHE STATUS CHECK ────────────────────────────────────────────────────
+async function checkCache() {
+  try {
+    const r = await fetch('/api/status');
+    const d = await r.json();
+    const fgReady = d.fangraphs?.pitchers > 0;
+    const svReady = d.savant?.arsenals > 0;
+    CACHE_READY = fgReady && svReady;
+
+    if (CACHE_READY) {
+      $('cacheStatus').textContent = `FG: ${d.fangraphs.pitchers} PITCHERS · SV: ${d.savant.arsenals} ARSENALS`;
+      $('cacheStatus').style.color = 'var(--g)';
+      $('cacheBanner').classList.remove('visible');
+      if (CACHE_POLL) { clearInterval(CACHE_POLL); CACHE_POLL = null; }
+      // Auto-refresh cards if already analyzed
+      if (LAST_PK !== null) analyze(true);
+    } else {
+      const parts = [];
+      if (!fgReady) parts.push(`FG: LOADING (${d.fangraphs?.pitchers || 0} pitchers)`);
+      if (!svReady) parts.push(`SV: LOADING (${d.savant?.arsenals || 0} arsenals)`);
+      $('cacheStatus').textContent = parts.join(' · ');
+      $('cacheStatus').style.color = 'var(--o)';
+      $('cacheBanner').classList.add('visible');
+    }
+  } catch(e) {
+    $('cacheStatus').textContent = 'STATUS UNAVAILABLE';
+  }
+}
+
+// ── BOOT ─────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', async () => {
+  checkCache();
+  CACHE_POLL = setInterval(checkCache, 15000);
+  await loadGames();
+});
+
+// ── LOAD GAMES ───────────────────────────────────────────────────────────
+async function loadGames() {
+  try {
+    const r = await fetch('/api/games/today');
+    const d = await r.json();
+    GAMES = d.games || [];
+    const sel = $('gameSelect');
+    if (!GAMES.length) {
+      sel.innerHTML = '<option value="">No games today</option>';
+      return;
+    }
+    sel.innerHTML = '<option value="">— Select a game —</option>' +
+      GAMES.map((g, i) => `<option value="${i}">${g.awayAbbr} @ ${g.homeAbbr} – ${g.gameTime || g.time || ''}</option>`).join('');
+  } catch(e) {
+    $('gameSelect').innerHTML = '<option value="">Error loading games</option>';
+  }
+}
+
+function onGameChange() {
+  const idx = $('gameSelect').value;
+  const pitSel = $('pitcherSelect');
+  if (idx === '') {
+    pitSel.innerHTML = '<option value="">Select game first</option>';
+    return;
+  }
+  const g = GAMES[parseInt(idx)];
+  pitSel.innerHTML = `<option value="away">${g.awayAbbr} – ${g.awayPitcher || 'TBD'}</option>` +
+                     `<option value="home">${g.homeAbbr} – ${g.homePitcher || 'TBD'}</option>`;
+}
+
+// ── ANALYZE ──────────────────────────────────────────────────────────────
+async function analyze(silent = false) {
+  const gIdx = $('gameSelect').value;
+  const pitSide = $('pitcherSelect').value;
+  if (gIdx === '' || !pitSide) return;
+
+  const g = GAMES[parseInt(gIdx)];
+  LAST_PK = g.gamePk;
+  LAST_PIT_IDX = gIdx;
+
+  if (!silent) {
+    $('placeholder').style.display = 'none';
+    $('cardsGrid').style.display = 'grid';
+    $('cardsGrid').innerHTML = '<div class="pc"><div class="spinner"></div></div><div class="pc"><div class="spinner"></div></div>';
+  }
+
+  try {
+    // Fetch pitcher stats
+    const r = await fetch(`/api/pitchers/${g.gamePk}`);
+    PD = await r.json();
+
+    // Fetch game logs for both pitchers
+    if (PD.awayPitcher?.id) {
+      try {
+        const lr = await fetch(`/api/player-splits/${PD.awayPitcher.id}/pitching`);
+        const ld = await lr.json();
+        LOGS[PD.awayPitcher.id] = ld.recentGames || [];
+      } catch(e) { LOGS[PD.awayPitcher.id] = []; }
+    }
+    if (PD.homePitcher?.id) {
+      try {
+        const lr = await fetch(`/api/player-splits/${PD.homePitcher.id}/pitching`);
+        const ld = await lr.json();
+        LOGS[PD.homePitcher.id] = ld.recentGames || [];
+      } catch(e) { LOGS[PD.homePitcher.id] = []; }
+    }
+
+    const awayCard = buildCard(PD.awayPitcher, g.awayAbbr, g.homeAbbr);
+    const homeCard = buildCard(PD.homePitcher, g.homeAbbr, g.awayAbbr);
+    $('cardsGrid').style.display = 'grid';
+    $('cardsGrid').innerHTML = awayCard + homeCard;
+    $('placeholder').style.display = 'none';
+
+    // Animate arsenal bars
+    setTimeout(() => {
+      document.querySelectorAll('.ars-b').forEach(b => {
+        b.style.width = b.dataset.w + '%';
+      });
+    }, 100);
+
+  } catch(e) {
+    $('cardsGrid').innerHTML = `<div class="pc" style="grid-column:1/-1"><div class="err">Error loading pitcher data: ${e.message}</div></div>`;
+  }
+}
+
+// ── BUILD CARD ────────────────────────────────────────────────────────────
+function buildCard(pit, teamAbbr, oppAbbr) {
+  if (!pit || !pit.name) return `<div class="pc"><div class="empty">NO PITCHER DATA</div></div>`;
+  const s = pit.stats || {};
+  const log = LOGS[pit.id] || [];
+  const hand = pit.stats?.throws || (pit.name.includes('(L)') ? 'L' : 'R');
+
+  const logoUrl = pit.id ? `https://img.mlbstatic.com/mlb-photos/image/upload/d_people:generic:headshot:67:current.png/w_60,q_auto:best/v1/people/${pit.id}/headshot/67/current` : '';
+
+  return `
+  <div class="pc">
+    <div class="pc-head">
+      ${logoUrl ? `<img class="pc-logo" src="${logoUrl}" alt="${pit.name}" onerror="this.style.display='none'">` : ''}
+      <div>
+        <div class="pc-name">${pit.name}</div>
+        <div class="pc-meta">${teamAbbr} &nbsp;·&nbsp; ${s.throws || (s.fg_era ? 'SP' : 'SP')}</div>
+      </div>
+      <div class="pc-hand hand-${s.throws || 'R'}">${s.throws || 'R'}HP</div>
+    </div>
+
+    ${buildKpiRow(s)}
+
+    <div class="pc-tabs">
+      <div class="pc-tab active" onclick="switchTab(this,'${pit.id}-stats')">STATS</div>
+      <div class="pc-tab" onclick="switchTab(this,'${pit.id}-proj')">PROJECTION</div>
+      <div class="pc-tab" onclick="switchTab(this,'${pit.id}-log')">GAME LOG</div>
+      <div class="pc-tab" onclick="switchTab(this,'${pit.id}-ars')">ARSENAL</div>
+    </div>
+
+    <div id="${pit.id}-stats" class="pc-pane active">${buildStatsPane(s, log)}</div>
+    <div id="${pit.id}-proj"  class="pc-pane">${buildProjPane(s, log, oppAbbr)}</div>
+    <div id="${pit.id}-log"   class="pc-pane">${buildLogPane(log)}</div>
+    <div id="${pit.id}-ars"   class="pc-pane">${buildArsenalPane(s)}</div>
+  </div>`;
+}
+
+function switchTab(el, paneId) {
+  const card = el.closest('.pc');
+  card.querySelectorAll('.pc-tab').forEach(t => t.classList.remove('active'));
+  card.querySelectorAll('.pc-pane').forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+  const pane = document.getElementById(paneId);
+  if (pane) {
+    pane.classList.add('active');
+    // Re-animate arsenal bars when switching to arsenal tab
+    setTimeout(() => {
+      pane.querySelectorAll('.ars-b').forEach(b => { b.style.width = b.dataset.w + '%'; });
+    }, 50);
+  }
+}
+
+// ── KPI ROW ───────────────────────────────────────────────────────────────
+function buildKpiRow(s) {
+  // Use fg values first, fall back to MLB API values
+  const era  = s.fg_era  || s.era;
+  const whip = s.fg_whip || s.whip;
+  const k9   = s.fg_k9   || s.k9;
+  const ip   = s.fg_ip   || s.ip;
+
+  return `<div class="kpi-row">
+    <div class="kpi"><div class="kpi-val ${eraColor(era)}">${nd(era)}</div><div class="kpi-lbl">ERA</div></div>
+    <div class="kpi"><div class="kpi-val">${nd(whip)}</div><div class="kpi-lbl">WHIP</div></div>
+    <div class="kpi"><div class="kpi-val ${kColor(k9)}">${nd(k9)}</div><div class="kpi-lbl">K/9</div></div>
+    <div class="kpi"><div class="kpi-val kv-cyan">${nd(ip)}</div><div class="kpi-lbl">IP</div></div>
+  </div>`;
+}
+
+// ── STATS PANE ────────────────────────────────────────────────────────────
+function buildStatsPane(s, log) {
+  // MLB API fields (always available)
+  const era   = s.era   || '---';
+  const whip  = s.whip  || '---';
+  const k9    = s.k9    || '---';
+  const bb9   = s.bb9   || '---';
+  const ip    = s.ip    || '---';
+  const wins  = s.wins  !== undefined ? s.wins  : (s.fg_w  || '---');
+  const loss  = s.losses!== undefined ? s.losses: (s.fg_l  || '---');
+  const gs    = s.gs    !== undefined ? s.gs    : (s.fg_gs  || '---');
+
+  // FanGraphs fields
+  const fgEra  = s.fg_era;
+  const fip    = s.fg_fip;
+  const xfip   = s.fg_xfip;
+  const kpct   = s.fg_kpct;
+  const bbpct  = s.fg_bbpct;
+  const babip  = s.fg_babip;
+  const lob    = s.fg_lob;
+  const war    = s.fg_war;
+  const fgIp   = s.fg_ip;
+  const fgGs   = s.fg_gs;
+  const fgW    = s.fg_w;
+  const fgL    = s.fg_l;
+
+  // Savant fields
+  const xera   = s.sv_xera;
+  const xwobap = s.sv_xwoba_p;
+
+  const hasFG  = fip && parseFloat(fip) > 0;
+  const hasSV  = xera && parseFloat(xera) > 0;
+
+  // xERA vs ERA diff
+  let xdiffHtml = '';
+  if (hasSV && (fgEra || era)) {
+    const eraVal  = parseFloat(fgEra || era);
+    const xeraVal = parseFloat(xera);
+    if (!isNaN(eraVal) && !isNaN(xeraVal)) {
+      const diff = (xeraVal - eraVal).toFixed(2);
+      const cls  = parseFloat(diff) > 0.30 ? 'xdiff-pos' : parseFloat(diff) < -0.30 ? 'xdiff-neg' : 'xdiff-neu';
+      const note = parseFloat(diff) > 0.30 ? '▲ regression risk' : parseFloat(diff) < -0.30 ? '▼ positive regression' : 'aligned';
+      xdiffHtml = `<tr><td style="color:var(--mu)">xERA vs ERA</td><td class="${cls}">${diff > 0 ? '+' : ''}${diff} (${note})</td></tr>`;
+    }
+  }
+
+  const fgNotice = !hasFG ? `<div style="font-size:.6rem;color:var(--o);padding:6px 2px;font-family:'Orbitron',monospace;letter-spacing:1px">⟳ FG CACHE LOADING — CHECK BACK IN ~60s</div>` : '';
+  const svNotice = !hasSV ? `<div style="font-size:.6rem;color:var(--sv);opacity:.6;padding:4px 2px;font-family:'Orbitron',monospace;letter-spacing:1px">⟳ SAVANT CACHE LOADING</div>` : '';
+
+  return `
+    <div class="rec-row">${fgW !== undefined ? fgW : wins}W – ${fgL !== undefined ? fgL : loss}L &nbsp;·&nbsp; ${fgGs !== undefined ? fgGs : gs} GS &nbsp;·&nbsp; ${fgIp || ip} IP</div>
+
+    <!-- MLB API STATS (always available) -->
+    <table class="stab">
+      <tr><th>STAT</th><th style="text-align:right">VALUE</th></tr>
+      <tr><td>ERA</td><td class="${eraColor(era)}">${nd(era)}</td></tr>
+      <tr><td>WHIP</td><td>${nd(whip)}</td></tr>
+      <tr><td>K/9</td><td class="${kColor(k9)}">${nd(k9)}</td></tr>
+      <tr><td>BB/9</td><td>${nd(bb9)}</td></tr>
+    </table>
+
+    <!-- FANGRAPHS -->
+    <div class="div-row"><span class="tag-fg">FG</span> FANGRAPHS ADVANCED</div>
+    ${fgNotice}
+    <table class="stab">
+      <tr><td>FIP</td><td class="${fipColor(fip)}">${nd(fip)}</td></tr>
+      <tr><td>xFIP</td><td class="${fipColor(xfip)}">${nd(xfip)}</td></tr>
+      <tr><td>K%</td><td class="${kpct && parseFloat(kpct)>0.27 ? 'c-g' : kpct && parseFloat(kpct)<0.18 ? 'c-r' : ''}">${kpct ? fP(kpct) : '---'}</td></tr>
+      <tr><td>BB%</td><td>${bbpct ? fP(bbpct) : '---'}</td></tr>
+      <tr><td>BABIP</td><td>${nd(babip)}</td></tr>
+      <tr><td>LOB%</td><td>${lob ? fP(lob) : '---'}</td></tr>
+      <tr><td>WAR</td><td>${nd(war)}</td></tr>
+    </table>
+
+    <!-- SAVANT -->
+    <div class="div-row div-sv"><span class="tag-sv">SV</span> BASEBALL SAVANT</div>
+    ${svNotice}
+    <table class="stab">
+      <tr><td>xERA</td><td class="${eraColor(xera)}">${nd(xera)}</td></tr>
+      ${xdiffHtml}
+      <tr><td>xwOBA vs</td><td>${nd(xwobap)}</td></tr>
+    </table>
+
+    <div style="display:flex;gap:14px;margin-top:10px;font-size:.6rem">
+      <span style="color:var(--fg)">● FanGraphs</span>
+      <span style="color:var(--sv)">● Savant</span>
+    </div>`;
+}
+
+// ── PROJECTION PANE ───────────────────────────────────────────────────────
+function buildProjPane(s, log, oppAbbr) {
+  const era  = parseFloat(s.sv_xera || s.fg_era || s.era) || 4.20;
+  const fip  = parseFloat(s.fg_fip)  || era;
+  const k9   = parseFloat(s.fg_k9 || s.k9) || 8.0;
+  const kpct = parseFloat(s.fg_kpct) || (k9 / 36);
+  const whip = parseFloat(s.fg_whip || s.whip) || 1.30;
+
+  // L5 averages
+  const l5 = log.slice(-5);
+  const l5ip = l5.length ? l5.reduce((a,g) => a + (parseFloat(g.ip)||0), 0) / l5.length : 5.5;
+  const l5k  = l5.length ? l5.reduce((a,g) => a + (g.k||0), 0) / l5.length : 5.0;
+  const l5er = l5.length ? l5.reduce((a,g) => a + (g.er||0), 0) / l5.length : 2.5;
+
+  // Season avg IP from fg
+  const seasonIP = parseFloat(s.fg_ip || s.ip) || 0;
+  const seasonGS = parseFloat(s.fg_gs || s.gs) || 1;
+  const avgIP = seasonGS > 0 ? (seasonIP / seasonGS) : 5.5;
+
+  // Blended projections (60% season, 40% L5)
+  const blendIP = l5.length >= 3 ? (0.6 * avgIP + 0.4 * l5ip).toFixed(1) : avgIP.toFixed(1);
+  const blendK  = l5.length >= 3 ? (0.6 * (k9 * avgIP / 9) + 0.4 * l5k).toFixed(1) : (k9 * avgIP / 9).toFixed(1);
+  const blendER = l5.length >= 3 ? (0.6 * (era * avgIP / 9) + 0.4 * l5er).toFixed(1) : (era * avgIP / 9).toFixed(1);
+
+  const kProj = parseFloat(blendK);
+
+  // Signal badge
+  const qs = parseFloat(blendIP) >= 6 && parseFloat(blendER) <= 3;
+  const risky = parseFloat(blendER) > 4 || parseFloat(blendIP) < 4.5;
+  const sigCls = qs ? 'sig-qs' : risky ? 'sig-risky' : 'sig-avg';
+  const sigTxt = qs ? '✓ QUALITY START LIKELY' : risky ? '⚠ RISKY OUTING' : '~ AVERAGE OUTING';
+
+  // K prop bands using Poisson
+  const lines = [3.5, 4.5, 5.5, 6.5, 7.5, 8.5];
+  const kRows = lines.map(line => {
+    const overPct = poissonOver(kProj, line);
+    const cls = overPct >= 65 ? 'pct-hot' : overPct >= 50 ? 'pct-warm' : overPct < 35 ? 'pct-cold' : 'pct-neu';
+    const rec = overPct >= 60 ? '▲ OVER' : overPct <= 40 ? '▼ UNDER' : '—';
+    return `<tr>
+      <td>K ${line}</td>
+      <td class="${cls}">${overPct}%</td>
+      <td>${(100 - overPct)}%</td>
+      <td style="color:${overPct>=60?'var(--g)':overPct<=40?'var(--r)':'var(--mu)'}">${rec}</td>
+    </tr>`;
+  }).join('');
+
+  return `
+    <div class="proj-kpis">
+      <div class="proj-kpi"><div class="proj-kpi-val pv-ip">${blendIP}</div><div class="proj-kpi-lbl">PROJ IP</div></div>
+      <div class="proj-kpi"><div class="proj-kpi-val pv-k">${blendK}</div><div class="proj-kpi-lbl">PROJ K</div></div>
+      <div class="proj-kpi"><div class="proj-kpi-val pv-bb">${blendER}</div><div class="proj-kpi-lbl">PROJ ER</div></div>
+    </div>
+    <div class="signal-badge ${sigCls}">${sigTxt}</div>
+    <div style="font-family:'Orbitron',monospace;font-size:.58rem;color:var(--mu);letter-spacing:2px;margin-bottom:6px">K PROP LINES vs ${oppAbbr}</div>
+    <table class="kprop-table">
+      <tr><th>LINE</th><th>OVER %</th><th>UNDER %</th><th>SIGNAL</th></tr>
+      ${kRows}
+    </table>
+    <div class="proj-note">
+      Model: 60% season / 40% L5 blend &nbsp;·&nbsp;
+      xERA ${nd(s.sv_xera)} &nbsp;·&nbsp; FIP ${nd(s.fg_fip)} &nbsp;·&nbsp; K/9 ${nd(s.fg_k9 || s.k9)}
+      <br>Poisson distribution used for K prop hit rates.
+    </div>`;
+}
+
+function poissonOver(mu, line) {
+  if (mu <= 0) return 50;
+  let cumProb = 0;
+  const k = Math.floor(line);
+  for (let i = 0; i <= k; i++) cumProb += poissonPMF(mu, i);
+  return Math.round((1 - cumProb) * 100);
+}
+function poissonPMF(mu, k) {
+  let logP = -mu + k * Math.log(mu);
+  for (let i = 1; i <= k; i++) logP -= Math.log(i);
+  return Math.exp(logP);
+}
+
+// ── GAME LOG PANE ─────────────────────────────────────────────────────────
+function buildLogPane(log) {
+  if (!log.length) return `<div class="na">No game log available yet.<br>Check back once season games have been played.</div>`;
+
+  const l5 = log.slice(-5);
+  const l5k  = l5.reduce((a,g) => a+(g.k||0), 0);
+  const l5er = l5.reduce((a,g) => a+(g.er||0), 0);
+  const l5ip = l5.reduce((a,g) => a+(parseFloat(g.ip)||0), 0).toFixed(1);
+  const isHot  = l5er <= 4 && l5.length >= 2;
+  const isCold = l5er >= 9 && l5.length >= 2;
+  const badgeCls = isHot ? 'hc-hot' : isCold ? 'hc-cold' : 'hc-avg';
+  const badgeTxt = isHot ? '🔥 HOT – L5 DEALING' : isCold ? '🥶 COLD – L5 STRUGGLING' : '〜 AVERAGE FORM';
+
+  const rows = log.slice(-10).reverse().map(g => {
+    const erCls = (g.er||0) <= 1 ? 'c-g' : (g.er||0) >= 4 ? 'c-r' : '';
+    const kCls  = (g.k||0)  >= 7 ? 'c-g' : (g.k||0)  <= 3 ? 'c-r' : '';
+    return `<tr>
+      <td>${g.date ? g.date.slice(5) : '---'} ${g.opp ? `<span style="color:var(--mu)">vs ${g.opp}</span>` : ''}</td>
+      <td>${g.ip || '---'}</td>
+      <td>${g.h !== undefined ? g.h : '---'}</td>
+      <td class="${erCls}">${g.er !== undefined ? g.er : '---'}</td>
+      <td class="${kCls}">${g.k !== undefined ? g.k : '---'}</td>
+      <td>${g.bb !== undefined ? g.bb : '---'}</td>
+    </tr>`;
+  }).join('');
+
+  return `
+    <div class="hc-badge ${badgeCls}">${badgeTxt}</div>
+    <div class="gl-pills">
+      <div class="gl-pill pill-ip">L5 IP: ${l5ip}</div>
+      <div class="gl-pill pill-k">L5 K: ${l5k}</div>
+      <div class="gl-pill pill-er">L5 ER: ${l5er}</div>
+    </div>
+    <table class="gl-table">
+      <tr><th>DATE</th><th>IP</th><th>H</th><th>ER</th><th>K</th><th>BB</th></tr>
+      ${rows}
+    </table>`;
+}
+
+// ── ARSENAL PANE ──────────────────────────────────────────────────────────
+function buildArsenalPane(s) {
+  const pct  = s.sv_arsenal_pct  || {};
+  const velo = s.sv_arsenal_velo || {};
+  const keys = Object.keys(pct).filter(k => pct[k] > 0).sort((a,b) => pct[b]-pct[a]);
+
+  if (!keys.length) {
+    const isLoading = !CACHE_READY;
+    return `<div class="na">
+      ${isLoading
+        ? '⟳ SAVANT ARSENAL CACHE LOADING…<br><span style="font-size:.62rem;color:var(--mu)">Will auto-refresh when ready (~60s after deploy)</span>'
+        : 'No arsenal data available for this pitcher.'}
+    </div>`;
+  }
+
+  const rows = keys.map(k => {
+    const pctVal = pct[k] || 0;
+    const velVal = velo[k] ? velo[k].toFixed(1) + ' mph' : '---';
+    const name   = PITCH_NAMES[k] || k.toUpperCase();
+    return `<div class="ars-row">
+      <div class="ars-name">${name}</div>
+      <div class="ars-bw"><div class="ars-b" data-w="${Math.min(100,pctVal)}" style="width:0%"></div></div>
+      <div class="ars-pct">${pctVal.toFixed(1)}%</div>
+      <div class="ars-vel">${velVal}</div>
+    </div>`;
+  }).join('');
+
+  // Scout note
+  const primary = keys[0];
+  const primaryName = PITCH_NAMES[primary] || primary.toUpperCase();
+  const kpct = parseFloat(s.fg_kpct) || 0;
+  let note = `Primary pitch: <strong style="color:var(--c)">${primaryName}</strong> at ${pct[primary]?.toFixed(1)}% usage`;
+  if (velo[primary]) note += ` (${velo[primary].toFixed(1)} mph)`;
+  note += '. ';
+  if (keys.length > 1) note += `Also features ${keys.slice(1,3).map(k => PITCH_NAMES[k]||k).join(' and ')}. `;
+  if (kpct > 0.27) note += `<strong style="color:var(--g)">Elite K rate (${fP(kpct)})</strong> — target strikeout props. `;
+  else if (kpct > 0.22) note += `Above-avg K rate (${fP(kpct)}). `;
+  else if (kpct > 0 && kpct < 0.18) note += `<strong style="color:var(--r)">Below-avg K rate (${fP(kpct)})</strong> — fade K overs. `;
+
+  return `
+    <div class="ars-head"><span class="tag-sv" style="font-size:.5rem;padding:1px 6px;border-radius:8px;background:rgba(0,184,212,.12);color:var(--sv);border:1px solid rgba(0,184,212,.25)">SV</span> PITCH ARSENAL</div>
+    <div style="display:grid;grid-template-columns:110px 1fr 58px 64px;gap:8px;padding:4px 0 8px;font-family:'Orbitron',monospace;font-size:.52rem;color:var(--mu);letter-spacing:1px">
+      <span>PITCH</span><span>USAGE</span><span style="text-align:right">PCT</span><span style="text-align:right">VELO</span>
+    </div>
+    ${rows}
+    <div class="scout-note">${note}</div>`;
+}
+</script>
+</body>
+</html>
