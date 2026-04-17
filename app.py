@@ -893,6 +893,7 @@ def api_pitchers(game_pk):
     except Exception as ex:
         print("[api_pitchers]", traceback.format_exc())
         return jsonify({"success":False,"error":str(ex),"awayPitcher":{},"homePitcher":{}}), 500
+
 @app.route('/api/debug/fg/<path:name>')
 def api_debug_fg(name):
     with _fg_lock:
