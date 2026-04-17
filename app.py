@@ -86,84 +86,232 @@ PARK_FACTORS = {
     113:0.94,115:1.00,158:0.97
 }
 
-# ── FanGraphs Cache ───────────────────────────────────────────────────────────
-_fg_lock = threading.Lock()
-_fg_bat  = {}
-_fg_pit  = {}
+# ── FanGraphs Cache (MLB-API derived — FanGraphs blocks Render IPs 403) ───────
+_fg_lock      = threading.Lock()
+_fg_bat       = {}
+_fg_pit       = {}
 _fg_loaded    = False
+_fg_loading   = False
 _fg_load_date = None
 
-def _load_fg_data():
-    global _fg_bat, _fg_pit, _fg_loaded, _fg_load_date
+_FIP_CONSTANT = 3.10
+
+def _safe(v, d=0.0):
+    try:
+        f = float(v or 0)
+        return f if f == f else d
+    except Exception:
+        return d
+
+def _ip_to_float(ip_str):
+    try:
+        s = str(ip_str or '0')
+        if '.' in s:
+            whole, thirds = s.split('.')
+            return int(whole) + int(thirds) / 3
+        return float(s)
+    except Exception:
+        return 0.0
+
+def _calc_fip(k, bb, hr, ip, hbp=0):
+    if ip <= 0: return None
+    return round(((13 * hr) + (3 * (bb + hbp)) - (2 * k)) / ip + _FIP_CONSTANT, 2)
+
+def _calc_xfip(k, bb, fb, ip, hbp=0, lg_hr_fb=0.125):
+    if ip <= 0 or fb <= 0: return None
+    return round(((13 * fb * lg_hr_fb) + (3 * (bb + hbp)) - (2 * k)) / ip + _FIP_CONSTANT, 2)
+
+def _calc_pct(num, denom):
+    if denom <= 0: return None
+    return round(num / denom, 4)
+
+def _calc_babip_p(h, hr, k, bf):
+    denom = bf - k - hr
+    if denom <= 0: return None
+    return round(max(0.0, (h - hr) / denom), 3)
+
+def _calc_lob(h, bb, hbp, r, hr):
+    num   = h + bb + hbp - r
+    denom = h + bb + hbp - 1.4 * hr
+    if denom <= 0: return None
+    return round(max(0.0, min(1.0, num / denom)), 3)
+
+def _mlb_pitcher_derived(player_id):
+    if not player_id: return {}
     year = datetime.now().year
     try:
-        import pybaseball as pb
-        pb.cache.enable()
-        df = pb.batting_stats(year, qual=0)
-        bat = {}
-        for _, r in df.iterrows():
-            k = str(r.get("Name","")).strip().lower()
-            if k:
-                bat[k] = {
-                    "fg_avg":  round(float(r.get("AVG")   or 0), 3),
-                    "fg_obp":  round(float(r.get("OBP")   or 0), 3),
-                    "fg_slg":  round(float(r.get("SLG")   or 0), 3),
-                    "fg_ops":  round(float(r.get("OPS")   or 0), 3),
-                    "fg_woba": round(float(r.get("wOBA")  or 0), 3),
-                    "fg_wrc":  int(r.get("wRC+") or 0),
-                    "fg_pa":   int(r.get("PA")   or 0),
-                    "fg_r":    int(r.get("R")    or 0),
-                    "fg_hr":   int(r.get("HR")   or 0),
-                    "fg_rbi":  int(r.get("RBI")  or 0),
-                    "fg_sb":   int(r.get("SB")   or 0),
-                    "fg_war":  round(float(r.get("WAR")   or 0), 1),
-                    "fg_babip":round(float(r.get("BABIP")  or 0), 3),
-                    "fg_bbpct":round(float(r.get("BB%")    or 0), 3),
-                    "fg_kpct": round(float(r.get("K%")     or 0), 3),
-                    "fg_iso":  round(float(r.get("ISO")    or 0), 3),
-                }
-        with _fg_lock: _fg_bat = bat
-        print(f"[FG] Batting: {len(bat)}")
+        r = requests.get(
+            f"{MLB_API}/people/{player_id}/stats",
+            params={"stats": "season", "group": "pitching", "season": year},
+            timeout=10,
+        )
+        r.raise_for_status()
+        splits = r.json().get("stats", [{}])[0].get("splits", [])
+        if not splits: return {}
+        s = splits[0].get("stat", {})
+        ip    = _ip_to_float(s.get("inningsPitched", 0))
+        k     = int(_safe(s.get("strikeOuts",   0)))
+        bb    = int(_safe(s.get("baseOnBalls",  0)))
+        hr    = int(_safe(s.get("homeRuns",     0)))
+        h     = int(_safe(s.get("hits",         0)))
+        hbp   = int(_safe(s.get("hitByPitch",   0)))
+        r_all = int(_safe(s.get("runs",         0)))
+        bf    = int(_safe(s.get("battersFaced", 0)))
+        gs    = int(_safe(s.get("gamesStarted", 0)))
+        g     = int(_safe(s.get("gamesPlayed",  0)))
+        w     = int(_safe(s.get("wins",         0)))
+        l     = int(_safe(s.get("losses",       0)))
+        fip   = _calc_fip(k, bb, hr, ip, hbp)
+        fb_est = round(hr / 0.10) if hr > 0 else 0
+        xfip  = _calc_xfip(k, bb, fb_est, ip, hbp) if fb_est else fip
+        k9    = round(_safe(s.get("strikeoutsPer9Inn", k * 9 / max(ip, 1))), 2)
+        bb9   = round(_safe(s.get("walksPer9Inn",      bb * 9 / max(ip, 1))), 2)
+        hr9   = round(_safe(s.get("homeRunsPer9",      hr * 9 / max(ip, 1))), 2)
+        era   = s.get("era",  None)
+        whip  = s.get("whip", None)
+        result = {
+            "fg_era":   round(_safe(era),  2) if era  else None,
+            "fg_whip":  round(_safe(whip), 2) if whip else None,
+            "fg_fip":   fip,
+            "fg_xfip":  xfip,
+            "fg_k9":    k9,
+            "fg_bb9":   bb9,
+            "fg_hr9":   hr9,
+            "fg_kpct":  _calc_pct(k, bf),
+            "fg_bbpct": _calc_pct(bb, bf),
+            "fg_babip": _calc_babip_p(h, hr, k, bf),
+            "fg_lob":   _calc_lob(h, bb, hbp, r_all, hr),
+            "fg_ip":    round(ip, 1),
+            "fg_gs":    gs,
+            "fg_g":     g,
+            "fg_w":     w,
+            "fg_l":     l,
+        }
+        return {k2: v for k2, v in result.items() if v is not None}
     except Exception as ex:
-        print("[FG] Batting failed:", ex)
+        print(f"[FG-pit-derived] pid={player_id}: {ex}")
+        return {}
+
+def _mlb_batter_derived(player_id):
+    if not player_id: return {}
+    year = datetime.now().year
     try:
-        import pybaseball as pb
-        df = pb.pitching_stats(year, qual=0)
-        pit = {}
-        for _, r in df.iterrows():
-            k = str(r.get("Name","")).strip().lower()
-            if k:
-                pit[k] = {
-                    "fg_era":  round(float(r.get("ERA")  or 0),2),
-                    "fg_fip":  round(float(r.get("FIP")  or 0),2),
-                    "fg_xfip": round(float(r.get("xFIP") or 0),2),
-                    "fg_whip": round(float(r.get("WHIP") or 0),2),
-                    "fg_k9":   round(float(r.get("K/9")  or 0),2),
-                    "fg_bb9":  round(float(r.get("BB/9") or 0),2),
-                    "fg_hr9":  round(float(r.get("HR/9") or 0),2),
-                    "fg_kpct": round(float(r.get("K%")   or 0),3),
-                    "fg_bbpct":round(float(r.get("BB%")  or 0),3),
-                    "fg_babip":round(float(r.get("BABIP") or 0),3),
-                    "fg_lob":  round(float(r.get("LOB%") or 0),3),
-                    "fg_war":  round(float(r.get("WAR")  or 0),1),
-                    "fg_ip":   round(float(r.get("IP")   or 0),1),
-                    "fg_g":    int(r.get("G")  or 0),
-                    "fg_gs":   int(r.get("GS") or 0),
-                    "fg_w":    int(r.get("W")  or 0),
-                    "fg_l":    int(r.get("L")  or 0),
-                }
-        with _fg_lock: _fg_pit = pit
-        print(f"[FG] Pitching: {len(pit)}")
+        r = requests.get(
+            f"{MLB_API}/people/{player_id}/stats",
+            params={"stats": "season", "group": "hitting", "season": year},
+            timeout=10,
+        )
+        r.raise_for_status()
+        splits = r.json().get("stats", [{}])[0].get("splits", [])
+        if not splits: return {}
+        s    = splits[0].get("stat", {})
+        ab   = int(_safe(s.get("atBats",        0)))
+        h    = int(_safe(s.get("hits",           0)))
+        dbl  = int(_safe(s.get("doubles",        0)))
+        trp  = int(_safe(s.get("triples",        0)))
+        hr   = int(_safe(s.get("homeRuns",       0)))
+        bb   = int(_safe(s.get("baseOnBalls",    0)))
+        hbp  = int(_safe(s.get("hitByPitch",     0)))
+        sf   = int(_safe(s.get("sacFlies",       0)))
+        k    = int(_safe(s.get("strikeOuts",     0)))
+        pa   = int(_safe(s.get("plateAppearances", ab + bb + hbp + sf)))
+        r_s  = int(_safe(s.get("runs",           0)))
+        rbi  = int(_safe(s.get("rbi",            0)))
+        sb   = int(_safe(s.get("stolenBases",    0)))
+        single = max(0, h - dbl - trp - hr)
+        woba_num = 0.69*bb + 0.72*hbp + 0.89*single + 1.27*dbl + 1.62*trp + 2.10*hr
+        woba = round(woba_num / pa, 3) if pa > 0 else None
+        wrc_plus = round(((woba - 0.310) / 1.157 + 0.119) / 0.119 * 100) if woba else None
+        babip_denom = ab - k - hr + sf
+        babip = round((h - hr) / babip_denom, 3) if babip_denom > 0 else None
+        slg_raw = _safe(s.get("sluggingPct"))
+        avg_raw = _safe(s.get("avg"))
+        iso = round(slg_raw - avg_raw, 3) if slg_raw and avg_raw else None
+        result = {
+            "fg_avg":   round(avg_raw, 3) if avg_raw else None,
+            "fg_obp":   round(_safe(s.get("obp")), 3),
+            "fg_slg":   round(slg_raw, 3) if slg_raw else None,
+            "fg_ops":   round(_safe(s.get("ops")), 3),
+            "fg_woba":  woba,
+            "fg_wrc":   wrc_plus,
+            "fg_pa":    pa,
+            "fg_r":     r_s,
+            "fg_hr":    hr,
+            "fg_rbi":   rbi,
+            "fg_sb":    sb,
+            "fg_babip": babip,
+            "fg_bbpct": _calc_pct(bb, pa),
+            "fg_kpct":  _calc_pct(k, pa),
+            "fg_iso":   iso,
+        }
+        return {k2: v for k2, v in result.items() if v is not None}
     except Exception as ex:
-        print("[FG] Pitching failed:", ex)
+        print(f"[FG-bat-derived] pid={player_id}: {ex}")
+        return {}
+
+def _load_fg_data():
+    global _fg_bat, _fg_pit, _fg_loaded, _fg_load_date, _fg_loading
+    print("[FG] Starting MLB-API-derived load…")
+    year = datetime.now().year
+    pit = {}
+    bat = {}
+    try:
+        r = requests.get(
+            f"{MLB_API}/sports/1/players",
+            params={"season": year, "gameType": "R"},
+            timeout=20,
+        )
+        r.raise_for_status()
+        players = r.json().get("people", [])
+        print(f"[FG] {len(players)} active players found")
+        pit_players = [p for p in players if p.get("primaryPosition", {}).get("code") == "1"]
+        bat_players = [p for p in players if p.get("primaryPosition", {}).get("code") != "1"]
+
+        def _fetch_pit(p):
+            pid  = p.get("id")
+            name = (p.get("fullName") or "").strip().lower()
+            if not pid or not name: return None, None
+            return name, _mlb_pitcher_derived(pid)
+
+        def _fetch_bat(p):
+            pid  = p.get("id")
+            name = (p.get("fullName") or "").strip().lower()
+            if not pid or not name: return None, None
+            return name, _mlb_batter_derived(pid)
+
+        with ThreadPoolExecutor(max_workers=20) as ex:
+            for name, stats in ex.map(_fetch_pit, pit_players):
+                if name and stats: pit[name] = stats
+
+        with ThreadPoolExecutor(max_workers=20) as ex:
+            for name, stats in ex.map(_fetch_bat, bat_players):
+                if name and stats: bat[name] = stats
+
+        print(f"[FG] Done — {len(pit)} pitchers / {len(bat)} batters")
+    except Exception as ex:
+        print(f"[FG] Roster load failed: {ex}")
+
     with _fg_lock:
-        _fg_loaded    = True
-        _fg_load_date = datetime.now().date()
+        if pit: _fg_pit = pit
+        if bat: _fg_bat = bat
+        _fg_loading = False
+        if len(_fg_pit) > 0 or len(_fg_bat) > 0:
+            _fg_loaded    = True
+            _fg_load_date = datetime.now().date()
+    print(f"[FG] Cache ready — {len(_fg_pit)} P / {len(_fg_bat)} B")
 
 def _maybe_refresh_fg():
+    global _fg_loading
+    should_start = False
     with _fg_lock:
-        loaded = _fg_loaded; date = _fg_load_date
-    if not loaded or date != datetime.now().date():
+        if not _fg_loading and (
+            not _fg_loaded
+            or _fg_load_date != datetime.now().date()
+            or len(_fg_pit) == 0
+        ):
+            _fg_loading  = True
+            should_start = True
+    if should_start:
         threading.Thread(target=_load_fg_data, daemon=True).start()
 
 def _fuzzy_lookup(name, cache):
@@ -171,7 +319,14 @@ def _fuzzy_lookup(name, cache):
     k = name.strip().lower()
     if k in cache: return cache[k]
     m = difflib.get_close_matches(k, cache.keys(), n=1, cutoff=0.78)
-    return cache[m[0]] if m else {}
+    if m: return cache[m[0]]
+    m = difflib.get_close_matches(k, cache.keys(), n=1, cutoff=0.70)
+    if m: return cache[m[0]]
+    last = k.split()[-1] if k else ''
+    if len(last) >= 4:
+        candidates = [ck for ck in cache.keys() if ck.split()[-1] == last]
+        if len(candidates) == 1: return cache[candidates[0]]
+    return {}
 
 def fg_batter(name):
     with _fg_lock: c = dict(_fg_bat)
@@ -190,6 +345,7 @@ _sv_arsenal_pct  = {}
 _sv_arsenal_velo = {}
 _sv_loaded    = False
 _sv_load_date = None
+_sv_loading   = False
 
 PITCH_ORDER  = ["ff","si","fc","st","sl","cu","ch","fs","kn","sv"]
 PITCH_LABELS = {
@@ -321,14 +477,22 @@ def _load_savant_data():
         print("[Savant] Arsenal velo failed:", ex)
 
     with _sv_lock:
+        _sv_loading   = False
         _sv_loaded    = True
         _sv_load_date = datetime.now().date()
-    print("[Savant] All caches ready")
 
 def _maybe_refresh_savant():
+    global _sv_loading
+    should_start = False
     with _sv_lock:
-        loaded = _sv_loaded; date = _sv_load_date
-    if not loaded or date != datetime.now().date():
+        if not _sv_loading and (
+            not _sv_loaded
+            or _sv_load_date != datetime.now().date()
+            or len(_sv_pit_xstats) == 0
+        ):
+            _sv_loading  = True
+            should_start = True
+    if should_start:
         threading.Thread(target=_load_savant_data, daemon=True).start()
 
 def sv_pitcher(name):
@@ -597,7 +761,7 @@ def api_games_today():
     _maybe_refresh_fg()
     _maybe_refresh_savant()
     try:
-        date_str = datetime.now(ET).strftime("%Y-%m-%d")
+        date_str = request.args.get('date') or datetime.now(ET).strftime("%Y-%m-%d")
         raw   = fetch_schedule(date_str)
         games = [g for g in [parse_game(x) for x in raw] if g]
         return jsonify({"success":True,"games":games,"count":len(games)})
@@ -708,14 +872,17 @@ def api_pitchers(game_pk):
                 def build_pitcher_stats(name, pid):
                     mlb = pitcher_stats_mlb(pid) if pid else {}
                     fg  = fg_pitcher(name)
+                    # On-demand fallback: derive from MLB API if cache miss
+                    if not fg and pid:
+                        fg = _mlb_pitcher_derived(pid)
                     sv  = sv_pitcher(name)
                     s   = dict(mlb)
                     s.update(fg)
-                    for k,v in sv.items():
-                        if k not in ("sv_arsenal_pct","sv_arsenal_velo"):
+                    for k, v in sv.items():
+                        if k not in ("sv_arsenal_pct", "sv_arsenal_velo"):
                             s[k] = v
-                    s["sv_arsenal_pct"]  = sv.get("sv_arsenal_pct",{})
-                    s["sv_arsenal_velo"] = sv.get("sv_arsenal_velo",{})
+                    s["sv_arsenal_pct"]  = sv.get("sv_arsenal_pct",  {})
+                    s["sv_arsenal_velo"] = sv.get("sv_arsenal_velo", {})
                     return s
                 return jsonify({
                     "success": True,
@@ -726,7 +893,25 @@ def api_pitchers(game_pk):
     except Exception as ex:
         print("[api_pitchers]", traceback.format_exc())
         return jsonify({"success":False,"error":str(ex),"awayPitcher":{},"homePitcher":{}}), 500
-
+@app.route('/api/debug/fg/<path:name>')
+def api_debug_fg(name):
+    with _fg_lock:
+        pit = dict(_fg_pit)
+        bat = dict(_fg_bat)
+    k = name.strip().lower()
+    pit_fuzzy = difflib.get_close_matches(k, pit.keys(), n=5, cutoff=0.60)
+    return jsonify({
+        'query':           name,
+        'fg_loaded':       _fg_loaded,
+        'fg_load_date':    str(_fg_load_date),
+        'pit_cache_size':  len(pit),
+        'bat_cache_size':  len(bat),
+        'pit_exact':       pit.get(k),
+        'bat_exact':       bat.get(k),
+        'pit_fuzzy':       {fk: pit[fk] for fk in pit_fuzzy},
+        'sample_pit_keys': list(pit.keys())[:20],
+    })
+    
 @app.errorhandler(404)
 def e404(e): return jsonify({"error":"Not found"}), 404
 @app.errorhandler(500)
@@ -976,6 +1161,8 @@ def api_player_profile(player_id):
 
         # 2. Cached FG + Savant — zero extra HTTP calls
         fgr = (fg_pitcher(name) if is_pitcher else fg_batter(name)) or {}
+        if not fgr:
+            fgr = (_mlb_pitcher_derived(player_id) if is_pitcher else _mlb_batter_derived(player_id)) or {}
         svr = (sv_pitcher(name) if is_pitcher else sv_batter(name)) or {}
         # Strip underscores: fg_avg→fgavg, sv_hh_pct→svhhpct, sv_arsenal_pct→svarsenalpct
         fg_out = {k.replace("_", ""): v for k, v in fgr.items()}
