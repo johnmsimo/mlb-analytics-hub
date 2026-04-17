@@ -1336,7 +1336,27 @@ def api_player_profile(player_id):
         traceback.print_exc()
         return jsonify({"success": False, "error": str(ex)}), 500
 
-
+@app.route('/api/debug/fg/<path:name>')
+def api_debug_fg(name):
+    with _fg_lock:
+        pit = dict(_fg_pit)
+        bat = dict(_fg_bat)
+    k = name.strip().lower()
+    pit_fuzzy = difflib.get_close_matches(k, pit.keys(), n=5, cutoff=0.60)
+    bat_fuzzy = difflib.get_close_matches(k, bat.keys(), n=5, cutoff=0.60)
+    return jsonify({
+        'query':            name,
+        'fg_loaded':        _fg_loaded,
+        'fg_load_date':     str(_fg_load_date),
+        'pit_cache_size':   len(pit),
+        'bat_cache_size':   len(bat),
+        'pit_exact':        pit.get(k),
+        'bat_exact':        bat.get(k),
+        'pit_fuzzy':        {fk: pit[fk] for fk in pit_fuzzy},
+        'bat_fuzzy':        {fk: bat[fk] for fk in bat_fuzzy},
+        'sample_pit_keys':  list(pit.keys())[:20],
+    })
+    
 @app.route("/api/player-splits/<int:player_id>/<string:group>")
 def api_player_splits(player_id, group):
     try:
