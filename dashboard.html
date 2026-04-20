@@ -717,12 +717,14 @@ function renderBBPicks(){
     const statsRow=document.getElementById('bbStatsRow');
     if(statsRow){
       statsRow.style.display='flex';
-      statsRow.innerHTML=`<div class="bb-stat"><div class="bb-stat-v">${runsA.toFixed(1)}</div><div class="bb-stat-l">${tA} PROJ RUNS</div></div>`
-        +`<div class="bb-stat"><div class="bb-stat-v">${runsB.toFixed(1)}</div><div class="bb-stat-l">${tB} PROJ RUNS</div></div>`
-        +`<div class="bb-stat"><div class="bb-stat-v">${totalRuns.toFixed(1)}</div><div class="bb-stat-l">COMBINED RUNS</div></div>`
-        +`<div class="bb-stat"><div class="bb-stat-v" style="color:${compA>compB?'#00e676':'#ef9a9a'}">${(compA*100).toFixed(1)}%</div><div class="bb-stat-l">${tA} COMPOSITE</div></div>`
-        +`<div class="bb-stat"><div class="bb-stat-v" style="color:${compB>compA?'#00e676':'#ef9a9a'}">${(compB*100).toFixed(1)}%</div><div class="bb-stat-l">${tB} COMPOSITE</div></div>`
-        +`<div class="bb-stat"><div class="bb-stat-v">${pf.toFixed(2)}</div><div class="bb-stat-l">PARK FACTOR</div></div>`;
+      const colA=compA>compB?'#00e676':'#ef9a9a';
+      const colB=compB>compA?'#00e676':'#ef9a9a';
+      statsRow.innerHTML='<div class="bb-stat"><div class="bb-stat-v">'+runsA.toFixed(1)+'</div><div class="bb-stat-l">'+tA+' PROJ RUNS</div></div>'
+        +'<div class="bb-stat"><div class="bb-stat-v">'+runsB.toFixed(1)+'</div><div class="bb-stat-l">'+tB+' PROJ RUNS</div></div>'
+        +'<div class="bb-stat"><div class="bb-stat-v">'+totalRuns.toFixed(1)+'</div><div class="bb-stat-l">COMBINED RUNS</div></div>'
+        +'<div class="bb-stat"><div class="bb-stat-v" style="color:'+colA+'">'+(compA*100).toFixed(1)+'%</div><div class="bb-stat-l">'+tA+' COMPOSITE</div></div>'
+        +'<div class="bb-stat"><div class="bb-stat-v" style="color:'+colB+'">'+(compB*100).toFixed(1)+'%</div><div class="bb-stat-l">'+tB+' COMPOSITE</div></div>'
+        +'<div class="bb-stat"><div class="bb-stat-v">'+pf.toFixed(2)+'</div><div class="bb-stat-l">PARK FACTOR</div></div>';
     }
 
     // MONEYLINE
@@ -793,19 +795,27 @@ function renderBBPicks(){
   el.innerHTML=filtered.map((p,i)=>{
     const cc=BB_CAT_COLORS[p.cat]||'var(--c)';
     const cf=confColor[p.conf]||'var(--mu)';
-    const dirPill=p.dir?`<span style="font-size:.5rem;padding:2px 8px;border-radius:999px;font-family:Orbitron,monospace;font-weight:700;background:${p.dir==='OVER'?'rgba(0,200,100,.15)':'rgba(255,100,100,.13)'};color:${p.dir==='OVER'?'#00e676':'#ef9a9a'};border:1px solid ${p.dir==='OVER'?'rgba(0,200,100,.3)':'rgba(255,100,100,.28)'}">${p.dir}</span>`:'';
+    const overBg=p.dir==='OVER'?'rgba(0,200,100,.15)':'rgba(255,100,100,.13)';
+    const overCol=p.dir==='OVER'?'#00e676':'#ef9a9a';
+    const overBdr=p.dir==='OVER'?'rgba(0,200,100,.3)':'rgba(255,100,100,.28)';
+    const dirPill=p.dir
+      ?'<span style="font-size:.5rem;padding:2px 8px;border-radius:999px;font-family:Orbitron,monospace;font-weight:700;background:'+overBg+';color:'+overCol+';border:1px solid '+overBdr+'">'+p.dir+'</span>'
+      :'';
+    const lineSpan=p.line!=null?'<span class="bb-proj-vs">vs line&nbsp;'+p.line+'</span>':'';
+    const edgeSpan=p.edge!=null?'<span class="bb-edge" style="color:'+cf+'">edge +'+p.edge.toFixed(2)+'</span>':'';
     const projRow=p.projVal!=null
-      ?`<div class="bb-proj-row"><span class="bb-proj-lbl">PROJ</span><span class="bb-proj-val" style="color:${cc}">${p.projVal.toFixed(2)}</span>${p.line!=null?`<span class="bb-proj-vs">vs line&nbsp;${p.line}</span>`:''}${dirPill}<span class="bb-edge" style="color:${cf}">${p.edge!=null?'edge +'+p.edge.toFixed(2):''}</span></div>`
-      :`<div style="height:4px"></div>`;
-    return `<div class="bb-card bb-${p.type.toLowerCase()}">
-      <div class="bb-card-top">
-        <div class="bb-cat-tag" style="background:${cc}18;color:${cc};border-color:${cc}40">${p.cat}</div>
-        <div class="bb-pick" style="color:${cc}">${i<3?rankEmoji[i]+' ':''}${p.pick}</div>
-        <div class="bb-conf" style="color:${cf}">${confStars[p.conf]}<span class="bb-conf-lbl">${p.conf}</span></div>
-      </div>
-      ${projRow}
-      <div class="bb-reason">${p.reason}</div>
-    </div>`;
+      ?'<div class="bb-proj-row"><span class="bb-proj-lbl">PROJ</span><span class="bb-proj-val" style="color:'+cc+'">'+p.projVal.toFixed(2)+'</span>'+lineSpan+dirPill+edgeSpan+'</div>'
+      :'<div style="height:4px"></div>';
+    const rankBadge=i<3?rankEmoji[i]+' ':'';
+    return '<div class="bb-card bb-'+p.type.toLowerCase()+'">'
+      +'<div class="bb-card-top">'
+      +'<div class="bb-cat-tag" style="background:'+cc+'18;color:'+cc+';border-color:'+cc+'40">'+p.cat+'</div>'
+      +'<div class="bb-pick" style="color:'+cc+'">'+rankBadge+p.pick+'</div>'
+      +'<div class="bb-conf" style="color:'+cf+'">'+confStars[p.conf]+'<span class="bb-conf-lbl">'+p.conf+'</span></div>'
+      +'</div>'
+      +projRow
+      +'<div class="bb-reason">'+p.reason+'</div>'
+      +'</div>';
   }).join('');
 }
 
