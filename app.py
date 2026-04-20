@@ -1,4 +1,4 @@
-import os, threading, traceback, difflib, io, csv as csvmod, json, re
+import os, threading, traceback, difflib, io, csv as csvmod, json, re, time
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
@@ -2391,7 +2391,57 @@ def _platoon_adjustments(b, pitch_hand):
     return hit_adj, hr_adj, k_adj
 
 
-def _derive_probs(b, p, park=1.0):
+# ── BAT X for Simulation ──────────────────────────────────────────────────────
+# Lightweight wrapper: computes per-batter composite + component adjustments
+# **once** before the simulation loop (not every PA) and returns a multiplier dict
+# that _derive_probs_batx() applies to PA outcome probabilities.
+def _batx_for_sim(batter, opp_pitcher, park, weather):
+    """
+    Returns a dict with:
+      composite   float  overall multiplier (e.g. 1.08 = 8% above neutral)
+      hit_mult    float  hit probability multiplier
+      hr_mult     float  HR probability multiplier
+      walk_mult   float  walk probability multiplier
+      k_mult      float  strikeout probability multiplier
+    All clamped conservatively so no single batter swings MC by more than ±25%.
+    """
+    try:
+        opp_fg = fg_pitcher(opp_pitcher.get('name', ''))
+        opp_sv = sv_pitcher(opp_pitcher.get('name', ''))
+        pitcher_hand = (opp_pitcher.get('pitchHand') or 'R').upper()
+        proj = _project_batter_batx(
+            batter, opp_pitcher.get('name', ''), opp_fg, opp_sv,
+            park, weather or {}, pitcher_hand=pitcher_hand
+        )
+        adj = proj.get('adjustments', {})
+        comp = _clamp(proj.get('composite', 1.0), 0.70, 1.30)
+
+        # Contact quality → hit rate
+        contact  = adj.get('contact',    0.0)
+        power    = adj.get('power',       0.0)
+        disc     = adj.get('discipline',  0.0)
+        platoon  = adj.get('platoon',     0.0)
+        form     = adj.get('form',        0.0)
+        bvp      = adj.get('bvp',         0.0)
+        pitcher  = adj.get('pitcher',     0.0)
+
+        hit_boost  = _clamp(1.0 + contact*3.5 + platoon*2.0 + form*2.5 + bvp*2.0 + pitcher*1.5, 0.75, 1.25)
+        hr_boost   = _clamp(1.0 + power*4.0   + platoon*1.5 + form*2.0 + bvp*1.5,               0.60, 1.40)
+        walk_boost = _clamp(1.0 + disc*4.0    + platoon*1.0,                                     0.75, 1.25)
+        k_boost    = _clamp(1.0 - disc*3.0    - contact*2.0 - form*1.5,                          0.78, 1.22)
+
+        return {
+            'composite': comp,
+            'hit_mult':  hit_boost,
+            'hr_mult':   hr_boost,
+            'walk_mult': walk_boost,
+            'k_mult':    k_boost,
+        }
+    except Exception:
+        return {'composite': 1.0, 'hit_mult': 1.0, 'hr_mult': 1.0, 'walk_mult': 1.0, 'k_mult': 1.0}
+
+
+def _derive_probs(b, p, park=1.0, batx=None):
     avg = _num(b.get('sv_xba'), _num(b.get('avg'), 0.245))
     obp = _num(b.get('obp'), max(avg + 0.060, 0.290))
     slg = _num(b.get('sv_xslg'), _num(b.get('slg'), 0.400))
@@ -2446,6 +2496,29 @@ def _derive_probs(b, p, park=1.0):
         walk_rate *= scale; single_rate *= scale; dbl_rate *= scale; trp_rate *= scale; hr_rate *= scale
         out_rate = 1.0 - (walk_rate + single_rate + dbl_rate + trp_rate + hr_rate)
     k_share = _clamp(k_rate / max(out_rate, 0.001), 0.18, 0.72)
+
+    # ── BAT X Integration ─────────────────────────────────────────────────────
+    # Apply matchup-aware multipliers computed once per batter from the BAT X engine.
+    # This makes every simulated PA reflect platoon, park, form, BvP, and pitcher
+    # resistance instead of only season averages.
+    if batx:
+        hit_m  = batx.get('hit_mult',  1.0)
+        hr_m   = batx.get('hr_mult',   1.0)
+        walk_m = batx.get('walk_mult', 1.0)
+        k_m    = batx.get('k_mult',    1.0)
+        # Scale hit types preserving internal ratios
+        new_single = _clamp(single_rate * hit_m, 0.03, 0.30)
+        new_dbl    = _clamp(dbl_rate    * hit_m, 0.01, 0.12)
+        new_trp    = _clamp(trp_rate    * hit_m, 0.001, 0.022)
+        new_hr     = _clamp(hr_rate     * hr_m,  0.003, 0.10)
+        new_bb     = _clamp(walk_rate   * walk_m, 0.04, 0.16)
+        new_out    = max(0.28, 1.0 - (new_single + new_dbl + new_trp + new_hr + new_bb))
+        new_k_share = _clamp(k_share * k_m, 0.18, 0.75)
+        return {
+            'bb': new_bb, '1b': new_single, '2b': new_dbl, '3b': new_trp, 'hr': new_hr,
+            'out': new_out, 'kshare': new_k_share, 'steal_rate': steal_rate, 'steal_success': steal_success
+        }
+
     return {
         'bb': walk_rate, '1b': single_rate, '2b': dbl_rate, '3b': trp_rate, 'hr': hr_rate,
         'out': out_rate, 'kshare': k_share, 'steal_rate': steal_rate, 'steal_success': steal_success
@@ -2567,16 +2640,23 @@ def _select_relief_tier(inning, runs_allowed, starter_outs, tiers):
     return tiers['middle']
 
 
-def _simulate_offense(lineup, opp_starter, opp_team_id, park, rng):
+def _simulate_offense(lineup, opp_starter, opp_team_id, park, rng, batx_map=None):
+    """
+    batx_map: dict {batter_index: batx_dict} pre-computed by _batx_for_sim().
+    When provided, BAT X multipliers are applied to _derive_probs() output for
+    every PA, making each simulated at-bat matchup-aware (platoon, form, BvP, etc).
+    """
     stats = [_blank_batter_line(b) for b in lineup]
     starter_line = _blank_pitcher_line(opp_starter['name'])
     tiers = _bullpen_tiers(opp_starter, opp_team_id)
     relief_lines = {'Closer': _blank_pitcher_line('Closer'), 'Setup': _blank_pitcher_line('Setup'), 'Middle': _blank_pitcher_line('Middle')}
     starter_target = _starter_outs_target(opp_starter, rng)
     runs = 0; batter_ptr = 0
+    # Pre-compute probs against starter with BAT X; relief uses same BAT X but fresh probs
     probs_cache = {}
     for i, b in enumerate(lineup):
-        probs_cache[i] = _derive_probs(b, opp_starter, park)
+        bx = batx_map.get(i) if batx_map else None
+        probs_cache[i] = _derive_probs(b, opp_starter, park, batx=bx)
     for inning in range(1, 10):
         outs = 0
         bases = [None, None, None]
@@ -2600,7 +2680,8 @@ def _simulate_offense(lineup, opp_starter, opp_team_id, park, rng):
             else:
                 pm = _select_relief_tier(inning, runs, starter_line['outs'], tiers)
                 pl = relief_lines[pm['name']]
-            probs = _derive_probs(b, pm, park)
+            bx = batx_map.get(batter_ptr) if batx_map else None
+            probs = _derive_probs(b, pm, park, batx=bx)
             probs_cache[batter_ptr] = probs
             ev = _pick_event(probs, rng)
             s['pa'] += 1
@@ -2706,7 +2787,31 @@ def api_simulate(game_pk):
         home_pitcher = _pitcher_model(home_p.get('fullName', 'Home SP'), home_p.get('id'), home_team_id)
         park = PARK_FACTORS.get(home_team_id, 1.0)
 
-        sims = 5000
+        # ── Fetch weather for BAT X integration ──────────────────────────────
+        ven      = g.get('venue', {})
+        venue_id = ven.get('id')
+        vloc     = ven.get('location', {}) or {}
+        coords   = vloc.get('defaultCoordinates', {}) or {}
+        lat      = coords.get('latitude')
+        lon      = coords.get('longitude')
+        try:
+            from datetime import timedelta
+            dt_utc    = datetime.fromisoformat(g.get('gameDate', '').replace('Z', '+00:00'))
+            utc_off   = VENUE_UTC_OFFSET.get(venue_id, -5)
+            ghour     = (dt_utc + timedelta(hours=utc_off)).hour
+        except Exception:
+            ghour = 13
+        try:
+            wx = get_weather(lat, lon, ghour, venue_id=venue_id)
+        except Exception:
+            wx = {}
+
+        # ── Pre-compute BAT X multipliers per batter (once, not per sim) ─────
+        # away batters face home_pitcher; home batters face away_pitcher
+        away_batx_map = {i: _batx_for_sim(b, home_pitcher, park, wx) for i, b in enumerate(away_lineup)}
+        home_batx_map = {i: _batx_for_sim(b, away_pitcher, park, wx) for i, b in enumerate(home_lineup)}
+
+        sims = 1500
         rng = random.Random(game_pk + int(datetime.now().strftime('%Y%m%d')) + 6)
 
         away_store = {i: [] for i in range(len(away_lineup))}
@@ -2720,8 +2825,8 @@ def api_simulate(game_pk):
         sample = None
 
         for sim in range(sims):
-            away_off = _simulate_offense(away_lineup, home_pitcher, home_team_id, park, rng)
-            home_off = _simulate_offense(home_lineup, away_pitcher, away_team_id, park, rng)
+            away_off = _simulate_offense(away_lineup, home_pitcher, home_team_id, park, rng, batx_map=away_batx_map)
+            home_off = _simulate_offense(home_lineup, away_pitcher, away_team_id, park, rng, batx_map=home_batx_map)
             if sample is None:
                 sample = {
                     'away': away_off, 'home': home_off,
@@ -2744,10 +2849,22 @@ def api_simulate(game_pk):
 
         away_props = []
         for i, b in enumerate(away_lineup):
-            s = _summarize_player(away_store[i]); s.update({'id': b.get('id'), 'name': b.get('name'), 'slot': b.get('slot'), 'pos': b.get('pos'), 'bats': b.get('bats', 'S')}); away_props.append(s)
+            s = _summarize_player(away_store[i])
+            s.update({'id': b.get('id'), 'name': b.get('name'), 'slot': b.get('slot'), 'pos': b.get('pos'), 'bats': b.get('bats', 'S')})
+            bx = away_batx_map.get(i, {})
+            s['batx_composite'] = round(bx.get('composite', 1.0), 4)
+            s['batx_hit_mult']  = round(bx.get('hit_mult',  1.0), 4)
+            s['batx_hr_mult']   = round(bx.get('hr_mult',   1.0), 4)
+            away_props.append(s)
         home_props = []
         for i, b in enumerate(home_lineup):
-            s = _summarize_player(home_store[i]); s.update({'id': b.get('id'), 'name': b.get('name'), 'slot': b.get('slot'), 'pos': b.get('pos'), 'bats': b.get('bats', 'S')}); home_props.append(s)
+            s = _summarize_player(home_store[i])
+            s.update({'id': b.get('id'), 'name': b.get('name'), 'slot': b.get('slot'), 'pos': b.get('pos'), 'bats': b.get('bats', 'S')})
+            bx = home_batx_map.get(i, {})
+            s['batx_composite'] = round(bx.get('composite', 1.0), 4)
+            s['batx_hit_mult']  = round(bx.get('hit_mult',  1.0), 4)
+            s['batx_hr_mult']   = round(bx.get('hr_mult',   1.0), 4)
+            home_props.append(s)
 
         away_pitch_summary = _summarize_pitcher(away_starter_lines)
         away_pitch_summary.update({'name': away_pitcher['name'], 'pitchHand': away_pitcher['pitchHand']})
@@ -2807,6 +2924,15 @@ def api_simulate(game_pk):
 ODDS_API_KEY = (os.getenv('ODDS_API_KEY') or '').strip()
 ODDS_REGION = (os.getenv('ODDS_REGION') or 'us').strip()
 
+# ── Odds API cache — prevents burning credits on every request ────────────────
+# Events list: cache 30 min (rarely changes mid-day)
+# Per-game odds: cache 15 min (lines move but not every second)
+# Prop markets: cache 20 min (props are slow to move)
+_ODDS_EVENTS_CACHE: dict = {}          # {'data': [...], 'ts': float}
+_ODDS_GAME_CACHE:  dict = {}           # {event_id: {'featured': [...], 'props': [...], 'ts': float}}
+_ODDS_EVENTS_TTL  = 30 * 60           # 30 minutes
+_ODDS_GAME_TTL    = 15 * 60           # 15 minutes
+
 
 def _norm_name(s):
     return re.sub(r'[^a-z0-9]+', '', (s or '').lower())
@@ -2828,13 +2954,20 @@ def _find_odds_event(away_name, home_name):
     if not ODDS_API_KEY:
         return None, []
     try:
-        r = requests.get(
-            'https://api.the-odds-api.com/v4/sports/baseball_mlb/events',
-            params={'apiKey': ODDS_API_KEY, 'dateFormat': 'iso'},
-            timeout=12,
-        )
-        r.raise_for_status()
-        events = r.json() or []
+        now = time.time()
+        if _ODDS_EVENTS_CACHE.get('ts') and (now - _ODDS_EVENTS_CACHE['ts']) < _ODDS_EVENTS_TTL:
+            events = _ODDS_EVENTS_CACHE['data']
+        else:
+            r = requests.get(
+                'https://api.the-odds-api.com/v4/sports/baseball_mlb/events',
+                params={'apiKey': ODDS_API_KEY, 'dateFormat': 'iso'},
+                timeout=12,
+            )
+            r.raise_for_status()
+            events = r.json() or []
+            _ODDS_EVENTS_CACHE['data'] = events
+            _ODDS_EVENTS_CACHE['ts']   = now
+            print(f'[Odds] Refreshed events list ({len(events)}). Remaining: {r.headers.get("x-requests-remaining","?")}')
         na = _norm_name(away_name)
         nh = _norm_name(home_name)
         for ev in events:
@@ -2893,6 +3026,11 @@ def _best_total(bookmakers):
 def _load_event_odds(event_id, featured_only=False):
     if not ODDS_API_KEY or not event_id:
         return []
+    now = time.time()
+    cache_key = 'featured' if featured_only else 'props'
+    cached = _ODDS_GAME_CACHE.get(event_id)
+    if cached and (now - cached.get('ts', 0)) < _ODDS_GAME_TTL and cache_key in cached:
+        return cached[cache_key]
     markets = 'h2h,totals' if featured_only else 'batter_hits,batter_total_bases,batter_home_runs,batter_rbis,batter_runs_scored,batter_stolen_bases,pitcher_strikeouts'
     try:
         r = requests.get(
@@ -2901,9 +3039,14 @@ def _load_event_odds(event_id, featured_only=False):
             timeout=15,
         )
         r.raise_for_status()
-        return r.json().get('bookmakers', []) or []
+        result = r.json().get('bookmakers', []) or []
+        print(f'[Odds] Fetched {cache_key} odds for {event_id}. Remaining: {r.headers.get("x-requests-remaining","?")}')
+        entry = _ODDS_GAME_CACHE.setdefault(event_id, {'ts': now})
+        entry[cache_key] = result
+        entry['ts'] = now
+        return result
     except:
-        return []
+        return (cached or {}).get(cache_key, [])
 
 
 def _parse_prop_markets(bookmakers, valid_names):
