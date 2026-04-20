@@ -625,6 +625,7 @@ syncDateUI();load();loadTeams();loadMC();setInterval(function(){load(selectedGam
       <button class="pm-tab"     data-panel="splits">L/R SPLITS</button>
       <button class="pm-tab"     data-panel="arsenal">ARSENAL</button>
       <button class="pm-tab"     data-panel="ai">&#x1F916; AI SCOUT</button>
+      <button class="pm-tab"     data-panel="form">&#x1F4C8; FORM</button>
     </div>
     <div class="pm-body">
       <div id="pmLoading" class="pm-spin-wrap">
@@ -637,6 +638,7 @@ syncDateUI();load();loadTeams();loadMC();setInterval(function(){load(selectedGam
         <div id="pm-splits"   class="pm-pnl"></div>
         <div id="pm-arsenal"  class="pm-pnl"></div>
         <div id="pm-ai"       class="pm-pnl"></div>
+        <div id="pm-form"     class="pm-pnl"></div>
       </div>
     </div>
   </div>
@@ -692,7 +694,7 @@ syncDateUI();load();loadTeams();loadMC();setInterval(function(){load(selectedGam
     document.querySelectorAll('.pm-tab').forEach(function(t,i){t.classList.toggle('on',i===0);});
     document.querySelectorAll('.pm-pnl').forEach(function(p,i){p.classList.toggle('on',i===0);});
 
-    fetch('/api/player/'+pid)
+    fetch('/api/player/'+pid+'?includeForm=1')
       .then(function(r){return r.json();})
       .then(function(d){
         if(!d.success) throw new Error(d.error||'Load failed');
@@ -705,6 +707,7 @@ syncDateUI();load();loadTeams();loadMC();setInterval(function(){load(selectedGam
         buildSplits(d);
         buildArsenal(d);
         buildAI(d);
+        buildForm(d);
       })
       .catch(function(e){
         document.getElementById('pmLoading').innerHTML='<div style="color:#ff5252;font-family:Orbitron;font-size:.68rem;letter-spacing:2px;text-align:center">ERROR: '+e.message+'</div>';
@@ -822,6 +825,63 @@ syncDateUI();load();loadTeams();loadMC();setInterval(function(){load(selectedGam
       h+='</div>';
     }
     document.getElementById('pm-arsenal').innerHTML=h;
+  }
+
+  // ── FORM ────────────────────────────────────────────────────────────────────
+  function buildForm(d){
+    var f = d.form;
+    var el = document.getElementById('pm-form');
+    if(!f){
+      el.innerHTML = '<div style="text-align:center;padding:40px;color:var(--mu);font-family:Orbitron;font-size:.62rem;letter-spacing:2px">NO RECENT GAME LOG DATA</div>';
+      return;
+    }
+    var isPit = f.kind === 'pitcher';
+    var flagColors = {
+      hot:'#00e676', dealing:'#00e676',
+      warm:'#76ff03', chilly:'#ff9800',
+      cold:'#f44336', struggling:'#f44336',
+      neutral:'#6a8db0'
+    };
+    var flagEmoji = {
+      hot:'🔥', warm:'🌡️', neutral:'➖', chilly:'🌤️', cold:'❄️',
+      dealing:'🔥', struggling:'🥶'
+    };
+    var trendArrow = {improving:'▲', stable:'▬', declining:'▼'};
+    var trendColor = {improving:'#00e676', stable:'#6a8db0', declining:'#f44336'};
+    var fc = flagColors[f.flag] || '#6a8db0';
+
+    var h = '<div class="pm-sh">RECENT FORM</div>';
+    h += '<div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap">'
+       + '<span style="padding:5px 12px;border-radius:6px;border:1px solid '+fc+'40;background:'+fc+'12;color:'+fc+';font-family:Orbitron;font-size:.65rem;letter-spacing:1.5px;font-weight:700">'
+       +   (flagEmoji[f.flag]||'') + ' ' + (f.flag||'').toUpperCase()
+       + '</span>'
+       + '<span style="color:'+trendColor[f.trend]+';font-family:Orbitron;font-size:.62rem;letter-spacing:1.5px">'
+       +   trendArrow[f.trend] + ' ' + (f.trend||'').toUpperCase()
+       + '</span>'
+       + '<span style="color:var(--mu);font-size:.6rem">' + (f.flag_note||'') + '</span>'
+       + '</div>';
+
+    // Three-column window grid
+    var cols = isPit ? [['L3',f.l3],['L5',f.l5],['L10',f.l10]]
+                     : [['L7',f.l7],['L14',f.l14],['L30',f.l30]];
+    h += '<div class="sp-grid">';
+    cols.forEach(function(c){
+      var label = c[0], w = c[1];
+      if(!w){ h += '<div class="sp-card"><div class="sp-hd">'+label+'</div><div style="color:var(--mu);font-size:.62rem;text-align:center;padding:16px">No data</div></div>'; return; }
+      var rows;
+      if(isPit){
+        rows = [['G',w.games],['IP',w.ip],['ERA',w.era],['WHIP',w.whip],['K/9',w.k9],['BB/9',w.bb9],['QS',w.qs+'/'+w.games]];
+      } else {
+        rows = [['G',w.games],['AVG',w.avg],['OBP',w.obp],['SLG',w.slg],['OPS',w.ops],['ISO',w.iso],['HR',w.hr],['K%',(w.kpct*100).toFixed(1)+'%']];
+      }
+      h += '<div class="sp-card"><div class="sp-hd">'+label+'</div>';
+      rows.forEach(function(r){
+        h += '<div class="sp-row"><span class="sp-l">'+r[0]+'</span><span class="sp-v">'+r[1]+'</span></div>';
+      });
+      h += '</div>';
+    });
+    h += '</div>';
+    el.innerHTML = h;
   }
 
   // ── AI SCOUT ──────────────────────────────────────────────────────────────

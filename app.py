@@ -95,7 +95,7 @@ PARK_FACTORS = {
     145:1.03,116:1.00,158:0.97,142:1.00,147:0.97,143:1.03,140:1.05,
     146:0.95,121:0.97,136:0.93,138:1.02,141:0.98,139:0.99,108:0.96,
     117:0.97,135:0.98,120:0.98,134:0.97,119:0.95,118:1.02,114:1.01,
-    113:0.94,115:1.00,158:0.97
+    113:0.94,115:1.00
 }
 
 # ── FanGraphs Cache ───────────────────────────────────────────────────────────
@@ -1379,6 +1379,98 @@ def api_game_projection(game_pk):
         return jsonify({"success":False,"error":str(ex)}), 500
 
 
+def _compute_form(logs, is_pitcher):
+    """Compute rolling form windows from game log entries (newest-last order)."""
+    def _hitter_window(games):
+        if not games:
+            return None
+        ab = h = hr = bb = k = tb = 0
+        pa = 0
+        for g in games:
+            ab += g.get("ab", 0)
+            h  += g.get("h", 0)
+            hr += g.get("hr", 0)
+            bb += g.get("bb", 0)
+            k  += g.get("k", 0)
+            tb += g.get("tb", 0)
+            pa += g.get("ab", 0) + g.get("bb", 0)
+        avg  = round(h / ab, 3) if ab else None
+        obp  = round((h + bb) / pa, 3) if pa else None
+        slg  = round(tb / ab, 3) if ab else None
+        ops  = round((obp or 0) + (slg or 0), 3) if (obp and slg) else None
+        iso  = round((slg or 0) - (avg or 0), 3) if (slg and avg) else None
+        kpct = round(k / pa, 4) if pa else None
+        return {
+            "games": len(games), "ab": ab, "hr": hr,
+            "avg":  f".{int(round((avg or 0)*1000)):03d}" if avg is not None else "---",
+            "obp":  f".{int(round((obp or 0)*1000)):03d}" if obp is not None else "---",
+            "slg":  f".{int(round((slg or 0)*1000)):03d}" if slg is not None else "---",
+            "ops":  f".{int(round((ops or 0)*1000)):03d}" if ops is not None else "---",
+            "iso":  f".{int(round((iso or 0)*1000)):03d}" if iso is not None else "---",
+            "kpct": round(kpct, 4) if kpct is not None else None,
+        }
+
+    def _pitcher_window(games):
+        if not games:
+            return None
+        ip_total = 0.0; er = 0; pk = 0; bb = 0; qs = 0
+        for g in games:
+            ip_val = float(g.get("ip", 0) or 0)
+            ip_total += ip_val
+            er  += g.get("er", 0)
+            pk  += g.get("k", 0)
+            bb  += g.get("bb", 0)
+            if ip_val >= 6 and g.get("er", 0) <= 3:
+                qs += 1
+        era  = round(er / ip_total * 9, 2) if ip_total else None
+        k9   = round(pk / ip_total * 9, 2) if ip_total else None
+        bb9  = round(bb / ip_total * 9, 2) if ip_total else None
+        whip = None  # hits not stored in current game log schema
+        return {
+            "games": len(games), "ip": round(ip_total, 1), "qs": qs,
+            "era":  era, "whip": whip, "k9": k9, "bb9": bb9,
+        }
+
+    recent = list(reversed(logs))  # newest first
+    if not is_pitcher:
+        l7  = _hitter_window(recent[:7])
+        l14 = _hitter_window(recent[:14])
+        l30 = _hitter_window(recent[:30])
+        # Flag based on L7 OPS / AVG
+        flag = "neutral"; flag_note = ""; trend = "stable"
+        if l7:
+            avg7 = float(l7["avg"].replace(".", "0.")) if l7["avg"] != "---" else None
+            if avg7 is not None:
+                if avg7 >= 0.350:   flag = "hot";     flag_note = f"Batting {l7['avg']} over last 7 games"
+                elif avg7 >= 0.280: flag = "warm";    flag_note = f"Solid {l7['avg']} over last 7 games"
+                elif avg7 < 0.150:  flag = "cold";    flag_note = f"Struggling at {l7['avg']} over last 7 games"
+                elif avg7 < 0.210:  flag = "chilly";  flag_note = f"Below average {l7['avg']} over last 7 games"
+            if l14:
+                avg14 = float(l14["avg"].replace(".", "0.")) if l14["avg"] != "---" else None
+                if avg7 is not None and avg14 is not None:
+                    if avg7 > avg14 + 0.040:   trend = "improving"
+                    elif avg7 < avg14 - 0.040: trend = "declining"
+        return {"kind": "hitter", "flag": flag, "flag_note": flag_note, "trend": trend,
+                "l7": l7, "l14": l14, "l30": l30}
+    else:
+        l3  = _pitcher_window(recent[:3])
+        l5  = _pitcher_window(recent[:5])
+        l10 = _pitcher_window(recent[:10])
+        flag = "neutral"; flag_note = ""; trend = "stable"
+        if l3 and l3["era"] is not None:
+            era3 = l3["era"]
+            if era3 < 2.0:   flag = "dealing";     flag_note = f"{era3:.2f} ERA over last 3 starts"
+            elif era3 < 3.5: flag = "hot";         flag_note = f"{era3:.2f} ERA over last 3 starts"
+            elif era3 < 4.5: flag = "neutral";     flag_note = f"{era3:.2f} ERA over last 3 starts"
+            elif era3 < 6.0: flag = "chilly";      flag_note = f"{era3:.2f} ERA over last 3 starts"
+            else:            flag = "struggling";  flag_note = f"{era3:.2f} ERA over last 3 starts"
+            if l5 and l5["era"] is not None:
+                if era3 < l5["era"] - 0.75:    trend = "improving"
+                elif era3 > l5["era"] + 0.75:  trend = "declining"
+        return {"kind": "pitcher", "flag": flag, "flag_note": flag_note, "trend": trend,
+                "l3": l3, "l5": l5, "l10": l10}
+
+
 def _build_ai_lines(name, is_pitcher, season, fg, sv, logs):
     """Generate 3-5 plain-text AI scouting sentences from cached + live stats."""
     lines = []
@@ -1449,6 +1541,7 @@ def api_player_profile(player_id):
     """Full player profile: identity + season stats + FG/Savant cache + game log + platoon + AI."""
     _maybe_refresh_fg()
     _maybe_refresh_savant()
+    include_form = request.args.get("includeForm") == "1"
     try:
         year = datetime.now().year
 
@@ -1508,7 +1601,7 @@ def api_player_profile(player_id):
                 timeout=8
             )
             if lr.ok:
-                for sp in (lr.json().get("stats", [{}])[0].get("splits", []))[-10:]:
+                for sp in (lr.json().get("stats", [{}])[0].get("splits", []))[-30 if include_form else -10:]:
                     s   = sp.get("stat", {})
                     opp = (sp.get("opponent") or {}).get("abbreviation", "?")
                     dt  = sp.get("date", "")[:10]
@@ -1557,27 +1650,8 @@ def api_player_profile(player_id):
         # 5. AI Scout lines
         ai_lines = _build_ai_lines(name, is_pitcher, season, fgr, svr, game_logs)
 
-        return jsonify({
-            "success":   True,
-            "id":        player_id,
-            "name":      name,
-            "pos":       pos_code,
-            "team":      team_abbr,
-            "isPitcher": is_pitcher,
-            "throws":    throws,
-            "bats":      bats_side,
-            "season":    season,
-            "fg":        fg_out,
-            "sv":        sv_out,
-            "gameLogs":  game_logs,
-            "platoon":   platoon,
-            "aiLines":   ai_lines,
-        })
-        
-        # 6. Recent form (Phase 1)  — opt-in via ?includeForm=1
-        form = None
-        if (request.args.get("includeForm") == "1") or (request.args.get("include") == "form"):
-            form = player_recent_form(player_id, is_pitcher=is_pitcher)
+        # 6. Form (only when requested)
+        form = _compute_form(game_logs, is_pitcher) if include_form else None
 
         return jsonify({
             "success":   True,
@@ -4689,6 +4763,19 @@ def api_ai_boxscore(game_pk):
             api_key = os.environ.get('ANTHROPIC_API_KEY')
             if api_key:
                 client = anthropic.Anthropic(api_key=api_key)
+                prompt = (
+                    f"Game: {context['away_team']} ({context['away_pitcher']['name']}, ERA {context['away_pitcher']['era']}) "
+                    f"at {context['home_team']} ({context['home_pitcher']['name']}, ERA {context['home_pitcher']['era']}).\n"
+                    f"Venue: {context['venue']['name']} (park factor {context['venue']['park_factor']}).\n"
+                    f"Weather: {context['weather']['temp']}°F, {context['weather']['condition']}, wind {context['weather']['wind']}.\n"
+                    f"Away lineup xwOBA top 3: " +
+                    ", ".join(f"{b['name']} {b.get('xwoba','N/A')}" for b in context['away_lineup'][:3]) + ".\n"
+                    f"Home lineup xwOBA top 3: " +
+                    ", ".join(f"{b['name']} {b.get('xwoba','N/A')}" for b in context['home_lineup'][:3]) + ".\n"
+                    "Return JSON with keys: away_runs (int), home_runs (int), away_hits (int), home_hits (int), "
+                    "total_runs (int), away_reasoning (str), home_reasoning (str), key_factors (list of str), "
+                    "confidence (HIGH|MEDIUM|LOW), notable_props (list of {player, prop, projection, reasoning})."
+                )
                 response = client.messages.create(
                     model="claude-sonnet-4-20250514",
                     max_tokens=2000,
@@ -5405,6 +5492,7 @@ def api_tracker_entries():
 
     except Exception as ex:
         print(f"[api_tracker_entries] {traceback.format_exc()}")
+        return jsonify({"success": False, "error": str(ex)}), 500
 
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -5879,6 +5967,7 @@ def api_player_trends(player_id):
 
     except Exception as ex:
         print(f"[api_player_trends] {traceback.format_exc()}")
+        return jsonify({"success": False, "error": str(ex)}), 500
 
 from concurrent.futures import ThreadPoolExecutor, as_completed as _as_completed
 
@@ -6282,6 +6371,7 @@ def api_f5_model(game_pk):
 
     except Exception as ex:
         print(f"[api_f5_model] {traceback.format_exc()}")
+        return jsonify({"success": False, "error": str(ex)}), 500
 
 # ── Lineup snapshot cache (for change detection) ─────────────────────────────
 # Stores the first confirmed lineup seen per gamePk so later polls can diff it
@@ -6557,7 +6647,7 @@ def api_breakout_candidates():
                     "xwoba": round(xwoba, 3),
                     "woba": round(woba, 3),
                     "hh": round(hh, 1),
-                    "maxev": float(sc.get("sv_maxev") or 110),
+                    "maxev": float(sc.get("sv_max_ev") or 110),
                     "kpct": round(kpct, 1),
                     "kpctPrior": round(kpct_prior, 1),
                     "babip": round(babip, 3),
