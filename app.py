@@ -16,7 +16,6 @@ CORS(app)
 _HERE = os.path.dirname(os.path.abspath(__file__))
 DASHBOARD_HTML = open(os.path.join(_HERE, 'dashboard.html')).read()
 DEEP_DIVE_HTML = open(os.path.join(_HERE, 'deepdive.html')).read()
-TRACKER_HTML = open(os.path.join(_HERE, 'tracker.html')).read()
 PROPS_HTML = open(os.path.join(_HERE, 'props.html')).read()
 # Pitcher Analysis page — linked from dashboard header as /pitcher-deep-dive.
 try:
@@ -3142,23 +3141,6 @@ def api_market(game_pk):
 
 
 
-# ── Phase 10 Daily Projection Tracker ─────────────────────────────────────────
-
-def _load_json(path, default):
-    try:
-        if os.path.exists(path):
-            with open(path, 'r') as f:
-                return json.load(f)
-    except:
-        pass
-    return default
-
-
-def _save_json(path, obj):
-    with open(path, 'w') as f:
-        json.dump(obj, f, indent=2)
-
-
 def _append_calibration_history(event_type, adjustments, meta=None):
     meta = meta or {}
     hist = _load_json(CAL_HISTORY_STORE, [])
@@ -3437,10 +3419,6 @@ def _tracker_summary(entries):
         elif x.get('grade') == 'push': by_market[mk]['pushes'] += 1
     return {'picks': total, 'graded': len(graded), 'wins': wins, 'losses': losses, 'pushes': pushes, 'hit_rate': hit_rate, 'by_market': by_market}
 
-
-@app.route('/tracker')
-def tracker_page():
-    return TRACKER_HTML
 
 
 @app.route('/api/tracker/adjustments', methods=['GET', 'POST'])
