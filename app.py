@@ -1587,9 +1587,9 @@ def api_player_profile(player_id):
         # 2. Cached FG + Savant — zero extra HTTP calls
         fgr = (fg_pitcher(name) if is_pitcher else fg_batter(name)) or {}
         svr = (sv_pitcher(name) if is_pitcher else sv_batter(name)) or {}
-        # Strip underscores: fg_avg→fgavg, sv_hh_pct→svhhpct, sv_arsenal_pct→svarsenalpct
-        fg_out = {k.replace("_", ""): v for k, v in fgr.items()}
-        sv_out = {k.replace("_", ""): v for k, v in svr.items()}
+        # Keep original keys (e.g. fg_avg, sv_arsenal_pct) so JS can access them directly
+        fg_out = dict(fgr)
+        sv_out = dict(svr)
 
         # 3. Game log — last 10 games
         group     = "pitching" if is_pitcher else "hitting"

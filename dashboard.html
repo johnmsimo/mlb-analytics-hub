@@ -157,8 +157,9 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
 .pm-meta{font-size:.7rem;color:var(--mu);margin-top:4px}
 .pm-x{position:absolute;top:14px;right:16px;background:none;border:none;color:var(--mu);font-size:1.5rem;cursor:pointer;line-height:1;padding:4px 8px}
 .pm-x:hover{color:var(--c)}
-.pm-tabs{display:flex;border-bottom:1px solid rgba(0,229,255,.1);padding:0 20px;overflow-x:auto}
-.pm-tab{padding:10px 14px;background:none;border:none;border-bottom:2px solid transparent;color:var(--mu);font-family:Orbitron,monospace;font-size:.58rem;letter-spacing:1.5px;cursor:pointer;white-space:nowrap;transition:color .15s}
+.pm-tabs{display:flex;border-bottom:1px solid rgba(0,229,255,.1);padding:0 14px;overflow-x:auto;scrollbar-width:none}
+.pm-tabs::-webkit-scrollbar{display:none}
+.pm-tab{padding:10px 10px;background:none;border:none;border-bottom:2px solid transparent;color:var(--mu);font-family:Orbitron,monospace;font-size:.58rem;letter-spacing:1px;cursor:pointer;white-space:nowrap;transition:color .15s}
 .pm-tab.on{color:var(--c);border-bottom-color:var(--c)}
 .pm-body{padding:20px 24px;min-height:260px}
 .pm-pnl{display:none}.pm-pnl.on{display:block}
@@ -622,9 +623,9 @@ syncDateUI();load();loadTeams();loadMC();setInterval(function(){load(selectedGam
     <div class="pm-tabs">
       <button class="pm-tab on"  data-panel="overview">OVERVIEW</button>
       <button class="pm-tab"     data-panel="gamelog">GAME LOG</button>
-      <button class="pm-tab"     data-panel="splits">L/R SPLITS</button>
+      <button class="pm-tab"     data-panel="splits">SPLITS</button>
       <button class="pm-tab"     data-panel="arsenal">ARSENAL</button>
-      <button class="pm-tab"     data-panel="ai">&#x1F916; AI SCOUT</button>
+      <button class="pm-tab"     data-panel="ai">&#x1F916; AI</button>
       <button class="pm-tab"     data-panel="form">&#x1F4C8; FORM</button>
     </div>
     <div class="pm-body">
@@ -872,7 +873,7 @@ syncDateUI();load();loadTeams();loadMC();setInterval(function(){load(selectedGam
       if(isPit){
         rows = [['G',w.games],['IP',w.ip],['ERA',w.era],['WHIP',w.whip],['K/9',w.k9],['BB/9',w.bb9],['QS',w.qs+'/'+w.games]];
       } else {
-        rows = [['G',w.games],['AVG',w.avg],['OBP',w.obp],['SLG',w.slg],['OPS',w.ops],['ISO',w.iso],['HR',w.hr],['K%',(w.kpct*100).toFixed(1)+'%']];
+        rows = [['G',w.games],['AVG',w.avg],['OBP',w.obp],['SLG',w.slg],['OPS',w.ops],['ISO',w.iso],['HR',w.hr],['K%',w.kpct!=null?(w.kpct*100).toFixed(1)+'%':'---']];
       }
       h += '<div class="sp-card"><div class="sp-hd">'+label+'</div>';
       rows.forEach(function(r){
