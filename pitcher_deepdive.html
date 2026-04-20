@@ -531,6 +531,34 @@ function buildProjPane(s,log,oppAbbr){
   const risky=parseFloat(blendER)>4||parseFloat(blendIP)<4.5;
   const sigCls=qs?'sig-qs':risky?'sig-risky':'sig-avg';
   const sigTxt=qs?'✓ QUALITY START LIKELY':risky?'⚠ RISKY OUTING':'~ AVERAGE OUTING';
+
+  // ── PITCH X O/U pills ──────────────────────────────────────────────────
+  const ouLines=[3.5,4.5,5.5,6.5];
+  const ouPills=ouLines.map(line=>{
+    const o=poissonOver(kProj,line);
+    const edge=kProj-line;
+    const dir=edge>=0?'OVER':'UNDER';
+    const col=dir==='OVER'?'#4caf50':'#f44336';
+    const bg =dir==='OVER'?'rgba(76,175,80,.1)':'rgba(244,67,54,.08)';
+    const bor=dir==='OVER'?'rgba(76,175,80,.3)':'rgba(244,67,54,.25)';
+    return`<span style="display:inline-block;padding:4px 9px;border-radius:6px;font-family:Orbitron,monospace;font-size:.54rem;letter-spacing:.8px;border:1px solid ${bor};background:${bg};color:${col};margin-right:5px;margin-bottom:5px">K ${line} <strong>${dir}</strong> <span style="opacity:.65;font-size:.48rem">${(edge>=0?'+':'')+edge.toFixed(2)}</span> <span style="opacity:.5;font-size:.46rem">${o}%</span></span>`;
+  }).join('');
+
+  // ── Reasoning ──────────────────────────────────────────────────────────
+  const l5kTotal=l5.reduce((a,g)=>a+(g.k||0),0);
+  const l5erTotal=l5.reduce((a,g)=>a+(g.er||0),0);
+  const formFlag = l5.length>=3
+    ? (l5erTotal/(l5.length) < era*avgIP/9*0.75 ? 'dealing'
+      : l5erTotal/(l5.length) > era*avgIP/9*1.35 ? 'struggling' : 'neutral')
+    : 'neutral';
+  const formStr = formFlag==='dealing'    ? '✓ Dealing lately — ERA trending down, K rate elevated'
+                : formFlag==='struggling' ? '⚠ ERA trending up recently — strikeout volume may dip'
+                :                          'Form neutral — projecting close to season K baseline';
+  const kRateStr = kpct>=0.27 ? `Elite K rate (${fP(kpct)}) — target overs`
+                 : kpct>=0.22 ? `Above-avg K rate (${fP(kpct)})`
+                 : kpct>0     ? `Below-avg K rate (${fP(kpct)}) — lean unders`
+                 : '';
+
   const lines=[3.5,4.5,5.5,6.5,7.5,8.5];
   const kRows=lines.map(line=>{
     const o=poissonOver(kProj,line);
@@ -539,13 +567,18 @@ function buildProjPane(s,log,oppAbbr){
     return`<tr><td>K ${line}</td><td class="${cls}">${o}%</td><td>${100-o}%</td><td style="color:${o>=60?'var(--g)':o<=40?'var(--r)':'var(--mu)'}">${rec}</td></tr>`;
   }).join('');
   return`
+    <div style="font-family:'Orbitron',monospace;font-size:.6rem;letter-spacing:2px;color:var(--mu);margin-bottom:10px">PITCH X ENGINE</div>
     <div class="proj-kpis">
       <div class="proj-kpi"><div class="proj-kpi-val pv-ip">${blendIP}</div><div class="proj-kpi-lbl">PROJ IP</div></div>
       <div class="proj-kpi"><div class="proj-kpi-val pv-k">${blendK}</div><div class="proj-kpi-lbl">PROJ K</div></div>
       <div class="proj-kpi"><div class="proj-kpi-val pv-er">${blendER}</div><div class="proj-kpi-lbl">PROJ ER</div></div>
     </div>
     <div class="sig-badge ${sigCls}">${sigTxt}</div>
-    <div style="font-family:'Orbitron',monospace;font-size:.58rem;color:var(--mu);letter-spacing:2px;margin-bottom:6px">K PROP LINES vs ${oppAbbr}</div>
+    <div style="margin:10px 0 6px;font-family:'Orbitron',monospace;font-size:.55rem;letter-spacing:1.5px;color:var(--mu)">K OVER/UNDER PICKS</div>
+    <div style="margin-bottom:10px">${ouPills}</div>
+    <div style="font-size:.62rem;color:var(--mu);margin-bottom:4px">${formStr}</div>
+    ${kRateStr?`<div style="font-size:.62rem;color:var(--mu);margin-bottom:10px">${kRateStr}</div>`:''}
+    <div style="font-family:'Orbitron',monospace;font-size:.58rem;color:var(--mu);letter-spacing:2px;margin-bottom:6px">FULL K LINE TABLE vs ${oppAbbr}</div>
     <table class="kprop-table">
       <tr><th>LINE</th><th>OVER %</th><th>UNDER %</th><th>SIGNAL</th></tr>
       ${kRows}
