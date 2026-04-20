@@ -1573,6 +1573,30 @@ def api_player_profile(player_id):
             "platoon":   platoon,
             "aiLines":   ai_lines,
         })
+        
+        # 6. Recent form (Phase 1)  — opt-in via ?includeForm=1
+        form = None
+        if (request.args.get("includeForm") == "1") or (request.args.get("include") == "form"):
+            form = player_recent_form(player_id, is_pitcher=is_pitcher)
+
+        return jsonify({
+            "success":   True,
+            "id":        player_id,
+            "name":      name,
+            "pos":       pos_code,
+            "team":      team_abbr,
+            "isPitcher": is_pitcher,
+            "throws":    throws,
+            "bats":      bats_side,
+            "season":    season,
+            "fg":        fg_out,
+            "sv":        sv_out,
+            "gameLogs":  game_logs,
+            "platoon":   platoon,
+            "aiLines":   ai_lines,
+            "form":      form,
+        })
+        
     except Exception as ex:
         traceback.print_exc()
         return jsonify({"success": False, "error": str(ex)}), 500
