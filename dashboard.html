@@ -749,12 +749,13 @@ function renderBBPicks(){
           +pfNote+'. '+(wxNote||'')+'.'});
     }
 
-    // SPREAD (Run Line)
-    if(runDiff>=0.4){
-      const spConf=runDiff>=1.8?'STRONG':'LEAN';
-      picks.push({cat:'SPREAD',type:'GAME',name:favTeam,pick:favTeam+' -1.5 RUN LINE',projVal:runDiff,line:1.5,edge:Math.abs(runDiff-1.5),dir:runDiff>=1.5?'COVER':'',
-        conf:spConf,score:runDiff*1.0,
-        reason:'Projected run differential: '+favTeam+' +'+runDiff.toFixed(1)+' runs ('+runsA.toFixed(1)+' vs '+runsB.toFixed(1)+'). '
+    // SPREAD (Run Line) — runDiff is lineup-sum delta (typically 0.1–0.8 range)
+    if(runDiff>=0.1){
+      const spConf=runDiff>=0.5?'STRONG':runDiff>=0.25?'LEAN':'LEAN';
+      const coverLbl=runDiff>=0.4?'COVER':'LEAN COVER';
+      picks.push({cat:'SPREAD',type:'GAME',name:favTeam,pick:favTeam+' -1.5 RUN LINE',projVal:runDiff,line:1.5,edge:runDiff,dir:coverLbl,
+        conf:spConf,score:runDiff*2.5,
+        reason:'Projected run differential: '+favTeam+' +'+runDiff.toFixed(2)+' runs ('+tA+' '+runsA.toFixed(2)+' vs '+tB+' '+runsB.toFixed(2)+'). '
           +'Offensive composite gap: '+(Math.abs(compA-compB)*100).toFixed(1)+'%. '
           +(spNote?spNote+'. ':'')+pfNote+'. '+(wxNote||'')+'.'});
     }
