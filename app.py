@@ -4999,6 +4999,362 @@ def _pitcher_recent_form(pitcher_id, n_starts=5):
         return {}
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# PHASE 1 — UNIFIED RECENT FORM ENGINE
+# L7 / L14 / L30 rolling for hitters, L3 / L5 / L10 for pitchers.
+# ═════════════════════════════════════════════════════════════════════════════
+
+_form_lock  = threading.Lock()
+_form_cache = {}   # (pid, date_str, is_pitcher) → dict
+
+# Windows (game-count, not day-count)
+HITTER_WINDOWS  = {"l7": 7, "l14": 14, "l30": 30}
+PITCHER_WINDOWS = {"l3": 3, "l5":  5,  "l10": 10}
+
+# Hot/cold thresholds
+_HITTER_HOT_OPS     = 0.900
+_HITTER_HOT_L14_OPS = 0.800
+_HITTER_WARM_OPS    = 0.800
+_HITTER_COLD_OPS    = 0.550
+_HITTER_CHILLY_OPS  = 0.620
+_HITTER_MIN_AB      = 10
+
+_PITCHER_DEALING_ERA    = 2.50
+_PITCHER_STRUGGLING_ERA = 5.50
+_PITCHER_MIN_IP_FLAG    = 6.0
+
+# Trend thresholds
+_HITTER_TREND_DELTA   = 0.080
+_PITCHER_TREND_DELTA  = 0.75
+
+
+def _parse_ip(raw):
+    """Convert MLB's '6.2' (=6 and 2/3 IP) to a decimal float."""
+    try:
+        s = str(raw)
+        if "." in s:
+            whole, thirds = s.split(".", 1)
+            return int(whole or 0) + int(thirds or 0) / 3.0
+        return float(s)
+    except Exception:
+        return _safe_f(raw, 0.0)
+
+
+def _form_window_hitter(games):
+    """
+    Aggregate N game logs into a rolling stat block.
+    games: list of dicts with keys ab, h, hr, rbi, bb, k, tb, r
+    Returns None if AB < 1.
+    """
+    if not games:
+        return None
+    ab  = sum(int(_safe_f(g.get("ab"),  0)) for g in games)
+    h   = sum(int(_safe_f(g.get("h"),   0)) for g in games)
+    hr  = sum(int(_safe_f(g.get("hr"),  0)) for g in games)
+    rbi = sum(int(_safe_f(g.get("rbi"), 0)) for g in games)
+    bb  = sum(int(_safe_f(g.get("bb"),  0)) for g in games)
+    k   = sum(int(_safe_f(g.get("k"),   0)) for g in games)
+    tb  = sum(int(_safe_f(g.get("tb"),  0)) for g in games)
+    r   = sum(int(_safe_f(g.get("r"),   0)) for g in games)
+    pa  = ab + bb
+
+    if ab < 1:
+        return None
+
+    avg   = round(h / ab, 3)
+    slg   = round(tb / ab, 3)
+    obp   = round((h + bb) / pa, 3) if pa > 0 else avg
+    ops   = round(obp + slg, 3)
+    iso   = round(slg - avg, 3)
+    kpct  = round(k  / pa, 3) if pa > 0 else 0.0
+    bbpct = round(bb / pa, 3) if pa > 0 else 0.0
+
+    return {
+        "games":  len(games),
+        "ab":  ab, "pa":  pa, "h":  h, "hr": hr, "rbi": rbi,
+        "bb":  bb, "k":   k,  "tb": tb, "r":  r,
+        "avg":  avg, "obp": obp, "slg": slg, "ops": ops, "iso": iso,
+        "kpct": kpct, "bbpct": bbpct,
+    }
+
+
+def _form_window_pitcher(games):
+    """
+    Aggregate N pitcher appearances into a rolling stat block.
+    Excludes entries with IP < 0.1.
+    """
+    if not games:
+        return None
+    total_ip = total_er = total_k = total_bb = total_h = 0.0
+    qs = valid = 0
+    for g in games:
+        ip = _parse_ip(g.get("ip", 0))
+        if ip < 0.1:
+            continue
+        er = _safe_f(g.get("er"), 0)
+        k  = _safe_f(g.get("k"),  0)
+        bb = _safe_f(g.get("bb"), 0)
+        h  = _safe_f(g.get("h"),  0)
+        total_ip += ip
+        total_er += er
+        total_k  += k
+        total_bb += bb
+        total_h  += h
+        if ip >= 6.0 and er <= 3:
+            qs += 1
+        valid += 1
+
+    if valid == 0 or total_ip < 1.0:
+        return None
+
+    era  = round((total_er / total_ip) * 9, 2)
+    k9   = round((total_k  / total_ip) * 9, 2)
+    bb9  = round((total_bb / total_ip) * 9, 2)
+    whip = round((total_h + total_bb) / total_ip, 3)
+
+    return {
+        "games":   valid,
+        "ip":      round(total_ip, 1),
+        "er":      int(total_er),
+        "k":       int(total_k),
+        "bb":      int(total_bb),
+        "h":       int(total_h),
+        "era":     era,
+        "k9":      k9,
+        "bb9":     bb9,
+        "whip":    whip,
+        "qs":      qs,
+        "qs_rate": round(qs / valid, 3),
+    }
+
+
+def _hitter_form_flag(l7, l14):
+    """Hot / warm / neutral / cold / chilly — classifies a hitter's rolling form."""
+    if not l7 or l7["ab"] < _HITTER_MIN_AB:
+        return "neutral", "Insufficient sample"
+    l7_ops  = l7["ops"]
+    l14_ops = l14["ops"] if l14 else l7_ops
+
+    if l7_ops >= _HITTER_HOT_OPS and l14_ops >= _HITTER_HOT_L14_OPS:
+        return "hot",  f"L7 OPS {l7_ops:.3f} · L14 {l14_ops:.3f}"
+    if l7_ops <= _HITTER_COLD_OPS and l7["ab"] >= 12:
+        return "cold", f"L7 OPS {l7_ops:.3f} · {l7['h']}-for-{l7['ab']}"
+    if l7_ops >= _HITTER_WARM_OPS:
+        return "warm", f"L7 OPS {l7_ops:.3f}"
+    if l7_ops <= _HITTER_CHILLY_OPS:
+        return "chilly", f"L7 OPS {l7_ops:.3f}"
+    return "neutral", f"L7 OPS {l7_ops:.3f}"
+
+
+def _pitcher_form_flag(l3, l5):
+    """Dealing / struggling / neutral — mirrors existing pitcher badge thresholds."""
+    if not l3 or l3["ip"] < _PITCHER_MIN_IP_FLAG:
+        return "neutral", "Insufficient sample"
+    era_recent = l3["era"]
+    if era_recent <= _PITCHER_DEALING_ERA and l3["ip"] >= 10.0:
+        return "dealing",    f"L3 ERA {era_recent}"
+    if era_recent >= _PITCHER_STRUGGLING_ERA:
+        return "struggling", f"L3 ERA {era_recent}"
+    return "neutral", f"L3 ERA {era_recent}"
+
+
+def _trend_direction(recent_val, baseline_val, invert=False, threshold=0.080):
+    """
+    recent vs baseline comparison for trend arrow.
+      invert=False (hitter OPS):  higher is better → positive delta = improving
+      invert=True  (pitcher ERA): lower is better  → negative delta = improving
+    """
+    if recent_val is None or baseline_val is None:
+        return "stable"
+    delta = recent_val - baseline_val
+    if invert:
+        if delta <= -threshold: return "improving"
+        if delta >=  threshold: return "declining"
+    else:
+        if delta >=  threshold: return "improving"
+        if delta <= -threshold: return "declining"
+    return "stable"
+
+
+def _build_hitter_form(player_id):
+    """Fetch 30-game log and build L7 / L14 / L30 windows + flag + trend."""
+    try:
+        yr = datetime.now(ET).year
+        r = requests.get(
+            f"{MLB_API}/people/{player_id}/stats",
+            params={"stats": "gameLog", "season": yr,
+                    "group": "hitting", "gameType": "R"},
+            timeout=8,
+        )
+        r.raise_for_status()
+        splits = r.json().get("stats", [{}])[0].get("splits", [])
+    except Exception as ex:
+        print(f"[form-hit] pid={player_id}: {ex}")
+        return None
+
+    games = []
+    for sp in splits[-30:]:
+        st = sp.get("stat", {})
+        games.append({
+            "date": sp.get("date", ""),
+            "opp":  (sp.get("opponent") or {}).get("abbreviation", ""),
+            "ab":  int(_safe_f(st.get("atBats"),       0)),
+            "h":   int(_safe_f(st.get("hits"),         0)),
+            "hr":  int(_safe_f(st.get("homeRuns"),     0)),
+            "rbi": int(_safe_f(st.get("rbi"),          0)),
+            "bb":  int(_safe_f(st.get("baseOnBalls"),  0)),
+            "k":   int(_safe_f(st.get("strikeOuts"),   0)),
+            "tb":  int(_safe_f(st.get("totalBases"),   0)),
+            "r":   int(_safe_f(st.get("runs"),         0)),
+        })
+
+    if not games:
+        return None
+
+    l7  = _form_window_hitter(games[-HITTER_WINDOWS["l7"]:])
+    l14 = _form_window_hitter(games[-HITTER_WINDOWS["l14"]:])
+    l30 = _form_window_hitter(games[-HITTER_WINDOWS["l30"]:])
+
+    flag, note = _hitter_form_flag(l7, l14)
+    trend = _trend_direction(
+        l7["ops"]  if l7  else None,
+        l30["ops"] if l30 else None,
+        invert=False, threshold=_HITTER_TREND_DELTA,
+    )
+
+    return {
+        "kind":      "batter",
+        "l7":        l7,
+        "l14":       l14,
+        "l30":       l30,
+        "flag":      flag,
+        "flag_note": note,
+        "trend":     trend,
+        "log":       games[-15:],
+    }
+
+
+def _build_pitcher_form(player_id):
+    """Fetch 10-appearance log and build L3 / L5 / L10 windows + flag + trend."""
+    try:
+        yr = datetime.now(ET).year
+        r = requests.get(
+            f"{MLB_API}/people/{player_id}/stats",
+            params={"stats": "gameLog", "season": yr,
+                    "group": "pitching", "gameType": "R"},
+            timeout=8,
+        )
+        r.raise_for_status()
+        splits = r.json().get("stats", [{}])[0].get("splits", [])
+    except Exception as ex:
+        print(f"[form-pit] pid={player_id}: {ex}")
+        return None
+
+    games = []
+    for sp in splits[-10:]:
+        st = sp.get("stat", {})
+        games.append({
+            "date": sp.get("date", ""),
+            "opp":  (sp.get("opponent") or {}).get("abbreviation", ""),
+            "ip":   st.get("inningsPitched", "0.0"),
+            "h":    int(_safe_f(st.get("hits"),         0)),
+            "er":   int(_safe_f(st.get("earnedRuns"),   0)),
+            "k":    int(_safe_f(st.get("strikeOuts"),   0)),
+            "bb":   int(_safe_f(st.get("baseOnBalls"),  0)),
+        })
+
+    if not games:
+        return None
+
+    l3  = _form_window_pitcher(games[-PITCHER_WINDOWS["l3"]:])
+    l5  = _form_window_pitcher(games[-PITCHER_WINDOWS["l5"]:])
+    l10 = _form_window_pitcher(games[-PITCHER_WINDOWS["l10"]:])
+
+    flag, note = _pitcher_form_flag(l3, l5)
+    trend = _trend_direction(
+        l3["era"]  if l3  else None,
+        l10["era"] if l10 else None,
+        invert=True, threshold=_PITCHER_TREND_DELTA,
+    )
+
+    return {
+        "kind":      "pitcher",
+        "l3":        l3,
+        "l5":        l5,
+        "l10":       l10,
+        "flag":      flag,
+        "flag_note": note,
+        "trend":     trend,
+        "log":       games[-10:],
+    }
+
+
+def player_recent_form(player_id, is_pitcher=False):
+    """
+    Public entry point — returns cached form data or builds it.
+    Thread-safe; one build per (player_id, date, kind).
+    """
+    if not player_id:
+        return None
+    today = datetime.now(ET).strftime("%Y-%m-%d")
+    key   = (int(player_id), today, bool(is_pitcher))
+
+    with _form_lock:
+        cached = _form_cache.get(key)
+    if cached is not None:
+        return cached
+
+    data = _build_pitcher_form(player_id) if is_pitcher else _build_hitter_form(player_id)
+
+    with _form_lock:
+        _form_cache[key] = data
+        stale = [k for k in _form_cache if k[1] != today]
+        for k in stale:
+            _form_cache.pop(k, None)
+    return data
+
+
+# ── Route: Unified player form ───────────────────────────────────────────────
+@app.route("/api/player/form/<int:player_id>")
+def api_player_form(player_id):
+    """
+    Unified L7/L14/L30 recent form for hitters, L3/L5/L10 for pitchers.
+    Accepts ?type=batter|pitcher (default: auto-detect from primary position).
+    """
+    try:
+        t = (request.args.get("type") or "").lower()
+        if t == "pitcher":
+            is_pitcher = True
+        elif t == "batter":
+            is_pitcher = False
+        else:
+            try:
+                r = requests.get(f"{MLB_API}/people/{player_id}", timeout=6)
+                r.raise_for_status()
+                pos = ((r.json().get("people", [{}])[0]
+                        .get("primaryPosition") or {}).get("code", ""))
+                is_pitcher = (pos == "1")
+            except Exception:
+                is_pitcher = False
+
+        data = player_recent_form(player_id, is_pitcher=is_pitcher)
+        if data is None:
+            return jsonify({
+                "success":   True,
+                "player_id": player_id,
+                "form":      None,
+                "message":   "No recent game log data available",
+            })
+        return jsonify({
+            "success":   True,
+            "player_id": player_id,
+            "form":      data,
+        })
+    except Exception as ex:
+        print(f"[api_player_form] {traceback.format_exc()}")
+        return jsonify({"success": False, "error": str(ex)}), 500
+
+
 # ── Pitcher projection engine (v2 — recent form weighted) ────────────────────
 def _project_pitcher(pitcher_name, pitcher_id, pitcher_fg, pitcher_sv, pitcher_stats,
                      opp_batters, park_factor, weather):
