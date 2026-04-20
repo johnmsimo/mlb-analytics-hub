@@ -1403,6 +1403,7 @@ setTimeout(function() { ensureParlayPanel(); }, 500);
 
 // ── Phase 4 Monte Carlo Simulation UI ────────────────────────────────────────
 var SIM_DATA = null;
+var PROPS_DATA = null;
 
 function pct(v){
   var n = parseFloat(v); if(isNaN(n)) return '---'; return (n*100).toFixed(1)+'%';
@@ -1420,6 +1421,22 @@ function ensureSimWrap(){
     if(projPanel && projPanel.closest('.pnl')) dg.insertBefore(wrap, projPanel.closest('.pnl'));
     else dg.appendChild(wrap);
   }
+}
+
+function loadPropsProjections(){
+  fetch('/api/props/projections/' + GPK)
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(d && d.success){ PROPS_DATA = d; if(ACTIVE_TAB==='proj') renderProjectionHub(); }
+    })
+    .catch(function(){}); // silent — BAT X panel will show placeholder
+}
+
+function lookupBatX(playerName){
+  if(!PROPS_DATA) return null;
+  var teams = (PROPS_DATA.away||[]).concat(PROPS_DATA.home||[]);
+  for(var i=0;i<teams.length;i++){ if(teams[i].name===playerName) return teams[i]; }
+  return null;
 }
 
 function loadSimulation(){
@@ -1536,6 +1553,7 @@ renderPropPanel = function(){
 
 // Trigger simulation after lineups/pitchers have had time to load
 setTimeout(loadSimulation, 1800);
+setTimeout(loadPropsProjections, 2500);
 
 
 
@@ -2066,6 +2084,39 @@ function renderProjectionDetail(){
         + '<div class="statline"><span>EV / HH% / Barrel%</span><span>'+(lp?pv(lp.sv_ev,'N/A')+' / '+pv(lp.sv_hh_pct,'N/A')+' / '+pv(lp.sv_brl_pct,'N/A'):'N/A')+'</span></div>'
       + '</div>'
       + '</div>';
+  }
+  // ── BAT X ENGINE PANEL ────────────────────────────────────────────────────
+  if(r.kind==='hitter'){
+    var bx = lookupBatX(r.player);
+    var bp = bx ? bx.proj : null;
+    var adj = bp ? bp.adjustments : null;
+    function compBar(val){
+      var pct = Math.round(Math.min(Math.abs(val)*400, 100));
+      var col = val>=0 ? 'rgba(0,229,255,.7)' : 'rgba(255,80,80,.7)';
+      var sign = val>=0 ? '+' : '';
+      return '<span style="display:inline-block;width:'+pct+'px;max-width:80px;height:6px;border-radius:3px;background:'+col+';vertical-align:middle;margin:0 6px"></span><span style="font-size:.65rem;color:'+(val>=0?'var(--c)':'#ff7070')+'">'+(sign+(val*100).toFixed(1))+'%</span>';
+    }
+    var batxHtml = '';
+    if(!PROPS_DATA){
+      batxHtml = '<p class="na" style="font-size:.65rem">BAT X data loading…</p>';
+    } else if(!bp){
+      batxHtml = '<p class="na" style="font-size:.65rem">BAT X projection not found for '+r.player+'.</p>';
+    } else {
+      var components = ['contact','power','discipline','platoon','park','weather','pitcher','form','bvp'];
+      var compLabels = {contact:'Contact',power:'Power',discipline:'Discipline',platoon:'Platoon',park:'Park',weather:'Weather',pitcher:'Pitcher',form:'Form (L7)',bvp:'BvP'};
+      batxHtml = '<div class="statline" style="margin-bottom:10px"><span style="font-size:.7rem">Composite multiplier</span><span style="font-size:.85rem;color:var(--c);font-family:Orbitron,monospace">'+(bp.composite>=1?'+':'')+((bp.composite-1)*100).toFixed(1)+'% &nbsp;<span style="font-size:.65rem;color:var(--mu)">( ×'+bp.composite.toFixed(3)+' )</span></span></div>'
+        + '<div style="display:grid;grid-template-columns:90px 1fr;gap:4px 8px;align-items:center">';
+      components.forEach(function(k){
+        if(!adj || adj[k]==null) return;
+        batxHtml += '<span style="font-size:.64rem;color:var(--mu);letter-spacing:1px">'+compLabels[k]+'</span>'
+          + '<span>'+compBar(adj[k])+'</span>';
+      });
+      batxHtml += '</div>';
+      if(adj && adj.form_note && adj.form_note !== 'no data')
+        batxHtml += '<div style="margin-top:7px;font-size:.61rem;color:var(--mu)">Form: '+adj.form_note+(adj.bvp_note&&adj.bvp_note!=='no data'?' &nbsp;|&nbsp; BvP: '+adj.bvp_note:'')+'</div>';
+      batxHtml += '<div style="margin-top:8px;font-size:.62rem;color:var(--mu)">Proj: H '+fmt2(bp.hits)+' &nbsp;TB '+fmt2(bp.tb)+' &nbsp;HR '+fmt2(bp.hr)+' &nbsp;RBI '+fmt2(bp.rbi)+' &nbsp;R '+fmt2(bp.r)+' &nbsp;|&nbsp; '+bp.platoon_note+'</div>';
+    }
+    detail += '<div class="mini-grid"><div class="mini-card fw" style="grid-column:1/-1"><h5>BAT X ENGINE</h5>'+batxHtml+'</div></div>';
   }
   detail += '<div class="reason-box"><div class="reason-head">AI ANALYSIS REASONING</div><div class="reason-list">'+reasons+'</div></div>'
     + '<div class="proj-blurb">AI summary: '+(r.reasons&&r.reasons.length?r.reasons.join(' '):'No additional reasoning available.')+'</div>';
