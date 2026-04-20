@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Gameside Prop View</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0a0e14;--surf:#0f141c;--surf2:#141b26;--surf3:#1a2332;
+  --bord:rgba(0,229,255,.14);--bord2:rgba(255,255,255,.06);
+  --text:#e6eef7;--mu:#7a8a9e;--fa:#3d4a5e;
+  --c:#00e5ff;--g:#00e676;--o:#ff9100;--r:#ff3d5a;--p:#c77dff;--y:#ffd84a;
+  --font-d:'Orbitron',monospace;--font-b:'Inter',sans-serif;--font-m:'JetBrains Mono',monospace;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{min-height:100dvh;font-family:var(--font-b);font-size:14px;color:var(--text);background:var(--bg);line-height:1.5;-webkit-font-smoothing:antialiased}
+body::before{content:"";position:fixed;inset:0;background:radial-gradient(ellipse at top,rgba(0,229,255,.05),transparent 60%);pointer-events:none;z-index:0}
+.wrap{position:relative;z-index:1;max-width:820px;margin:0 auto;padding:18px 14px 60px}
+.nav{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+.btn-nav{color:var(--c);text-decoration:none;font-family:var(--font-d);font-size:10px;letter-spacing:1.5px;padding:8px 14px;border:1px solid var(--bord);border-radius:8px;background:var(--surf);cursor:pointer}
+.btn-nav:hover{background:var(--surf2)}
+.btn-nav[disabled]{opacity:.5;cursor:wait}
+.live-bar{background:rgba(0,230,118,.08);border:1px solid rgba(0,230,118,.25);border-radius:8px;padding:7px 12px;margin-bottom:10px;font-family:var(--font-m);font-size:11px;color:var(--g);display:none;align-items:center;gap:10px}
+.live-bar.on{display:flex}
+.live-dot{width:8px;height:8px;border-radius:50%;background:var(--g);box-shadow:0 0 8px var(--g);animation:blink 1.2s ease-in-out infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+
+.gh{background:var(--surf);border:1px solid var(--bord);border-radius:12px;padding:14px;margin-bottom:12px}
+.gh-title{display:flex;align-items:center;gap:10px;font-family:var(--font-d);font-size:16px;font-weight:700;margin-bottom:10px;flex-wrap:wrap}
+.gh-logo{width:26px;height:26px;object-fit:contain}
+.live-tag{padding:2px 10px;background:rgba(0,230,118,.15);border:1px solid rgba(0,230,118,.4);border-radius:999px;font-family:var(--font-d);font-size:9px;color:var(--g);letter-spacing:1.5px}
+.gh-meta{display:flex;gap:10px;flex-wrap:wrap;font-family:var(--font-m);font-size:11px;color:var(--mu);padding:8px 10px;background:rgba(0,0,0,.25);border-radius:8px;margin-bottom:10px}
+.wx-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}
+.wx-chip{background:rgba(0,229,255,.06);border:1px solid rgba(0,229,255,.18);border-radius:999px;padding:4px 10px;font-size:11px;color:var(--text);font-family:var(--font-m)}
+
+.res{display:grid;grid-template-columns:100px 1fr;gap:12px;border-radius:10px;padding:12px;margin-top:8px}
+.res.sup{background:rgba(255,61,90,.06);border:1px solid rgba(255,61,90,.25)}
+.res.bst{background:rgba(0,230,118,.06);border:1px solid rgba(0,230,118,.28)}
+.res.neu{background:rgba(0,229,255,.05);border:1px solid rgba(0,229,255,.2)}
+.res-num{font-family:var(--font-d);font-size:40px;font-weight:700;line-height:1;text-align:center}
+.res.sup .res-num{color:var(--r)} .res.bst .res-num{color:var(--g)} .res.neu .res-num{color:var(--c)}
+.res-100{font-family:var(--font-m);font-size:10px;color:var(--mu);text-align:center;margin-top:2px}
+.res-tag{font-family:var(--font-d);font-size:8px;letter-spacing:1.5px;text-align:center;margin-top:4px}
+.res.sup .res-tag{color:var(--r)} .res.bst .res-tag{color:var(--g)} .res.neu .res-tag{color:var(--c)}
+.rr{display:flex;justify-content:space-between;font-family:var(--font-m);font-size:11px;padding:2px 0}
+.rr .dlt{font-weight:700}
+.res-foot{font-size:11px;color:var(--mu);font-style:italic;margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,.06);line-height:1.4}
+
+.sdiv{font-family:var(--font-d);font-size:11px;letter-spacing:1.5px;color:var(--mu);margin:16px 0 8px;padding-bottom:4px;border-bottom:1px solid var(--bord2)}
+.pc{background:var(--surf);border:1px solid var(--bord);border-radius:12px;padding:14px;margin-bottom:10px}
+.pc-hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:6px}
+.pc-name{font-family:var(--font-d);font-size:15px;font-weight:700;color:var(--text)}
+.pc-hand{padding:2px 9px;border-radius:999px;font-family:var(--font-m);font-size:10px;font-weight:700}
+.pc-hand.R{background:rgba(0,229,255,.12);color:var(--c);border:1px solid rgba(0,229,255,.3)}
+.pc-hand.L{background:rgba(199,125,255,.12);color:var(--p);border:1px solid rgba(199,125,255,.3)}
+.stat6{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin-bottom:10px}
+.sc{background:var(--surf2);border:1px solid var(--bord2);border-radius:8px;padding:8px 4px;text-align:center}
+.sv{font-family:var(--font-m);font-size:14px;font-weight:700;color:var(--g)}
+.sl{font-family:var(--font-d);font-size:9px;color:var(--mu);letter-spacing:1px;margin-top:2px}
+.sv.warn{color:var(--o)} .sv.bad{color:var(--r)} .sv.muted{color:var(--mu)}
+.ptch{display:flex;gap:8px;align-items:center;font-family:var(--font-m);font-size:11px;color:var(--mu);padding:3px 0}
+.pn{color:var(--text);font-weight:600}
+.pp{color:var(--mu)}
+.pv{color:var(--c);font-weight:700}
+.l15{display:flex;gap:10px;flex-wrap:wrap;background:rgba(0,230,118,.04);border:1px solid rgba(0,230,118,.15);border-radius:8px;padding:7px 10px;font-family:var(--font-m);font-size:11px;margin-top:8px}
+.l15-lbl{color:var(--g);font-weight:700;font-family:var(--font-d);font-size:10px;letter-spacing:1px}
+.lk{color:var(--mu);font-size:10px}
+.lv{color:var(--text);font-weight:700}
+
+.bp{display:grid;grid-template-columns:28px 1fr auto;gap:10px;align-items:center;background:var(--surf);border:1px solid var(--bord2);border-radius:10px;padding:10px 12px;margin-bottom:6px}
+.bp-logo{width:24px;height:24px;object-fit:contain;opacity:.8}
+.bp-info{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.bp-name{font-weight:600;color:var(--text);font-size:13px}
+.bp-star{color:var(--y)}
+.pf-tag{padding:2px 8px;border-radius:4px;font-family:var(--font-m);font-size:10px;font-weight:700}
+.pf-tag.hot{background:rgba(0,230,118,.12);color:var(--g);border:1px solid rgba(0,230,118,.3)}
+.pf-tag.warm{background:rgba(255,145,0,.12);color:var(--o);border:1px solid rgba(255,145,0,.3)}
+.pf-tag.cold{background:rgba(122,138,158,.12);color:var(--mu);border:1px solid rgba(122,138,158,.3)}
+.bh-tag{padding:2px 7px;border-radius:4px;font-family:var(--font-m);font-size:9px;font-weight:700}
+.bh-tag.R{background:rgba(0,229,255,.1);color:var(--c);border:1px solid rgba(0,229,255,.3)}
+.bh-tag.L{background:rgba(199,125,255,.1);color:var(--p);border:1px solid rgba(199,125,255,.3)}
+.bh-tag.S{background:rgba(255,216,74,.1);color:var(--y);border:1px solid rgba(255,216,74,.3)}
+.bp-line{color:var(--mu);font-size:11px;font-family:var(--font-m)}
+.bp-odds{text-align:right}
+.bp-o{font-family:var(--font-m);font-size:13px;font-weight:700;color:var(--g)}
+.bp-bk{font-size:10px;color:var(--mu);font-family:var(--font-m)}
+.bp-why{grid-column:1/-1;margin-top:6px;padding-top:6px;border-top:1px dashed var(--bord2);font-size:11px;color:var(--mu);line-height:1.5}
+.bp-why b{color:var(--text)}
+
+.tph{font-family:var(--font-d);font-size:11px;letter-spacing:1.5px;color:var(--y);margin:18px 0 8px}
+.tpg{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px}
+.tpc{background:var(--surf);border:1px solid var(--bord);border-radius:10px;padding:10px 12px}
+.tpr{display:inline-block;width:20px;height:20px;line-height:20px;text-align:center;background:var(--surf3);border-radius:50%;font-family:var(--font-d);font-size:10px;color:var(--text);margin-right:6px;font-weight:700}
+.tpr.g{background:var(--y);color:#000}
+.tpn{font-weight:700;color:var(--text);font-size:13px}
+.tpm{font-family:var(--font-m);font-size:10px;color:var(--mu);margin-top:4px}
+.tpods{font-family:var(--font-m);font-size:11px;color:var(--g);font-weight:700;margin-top:4px}
+
+.na{background:var(--surf);border:1px dashed var(--bord2);border-radius:10px;padding:18px;text-align:center;color:var(--mu);font-family:var(--font-m);font-size:12px;letter-spacing:1px;margin-bottom:10px}
+.err{background:rgba(255,61,90,.08);border:1px solid rgba(255,61,90,.3);color:var(--r);padding:14px;border-radius:10px;font-family:var(--font-m);font-size:12px}
+.loading{text-align:center;padding:40px 20px;color:var(--mu);font-family:var(--font-m);font-size:11px;letter-spacing:2px}
+.spin{display:inline-block;width:20px;height:20px;border:2px solid var(--bord);border-top-color:var(--c);border-radius:50%;animation:spin 1s linear infinite;margin-right:8px;vertical-align:middle}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+@media(max-width:600px){
+  .stat6{grid-template-columns:repeat(3,1fr)}
+  .res{grid-template-columns:80px 1fr}
+  .res-num{font-size:32px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="nav">
+  <a class="btn-nav" href="/">← DASHBOARD</a>
+  <a class="btn-nav" id="ddLink" href="#">⚡ FULL DEEP DIVE</a>
+  <button class="btn-nav" id="refreshBtn" onclick="manualRefresh()" style="border-color:rgba(0,230,118,.3);color:#00e676">↻ REFRESH</button>
+</nav>
+<div id="liveBar" class="live-bar">
+  <span class="live-dot"></span>
+  <span id="liveBarText">LIVE — auto-refreshing every 90s</span>
+  <span id="liveCountdown" style="margin-left:auto;color:var(--mu)"></span>
+</div>
+<div id="root"><div class="loading"><span class="spin"></span>LOADING GAME DATA...</div></div>
+</div>
+
+<script>
+const GPK = (location.pathname.split('/').filter(Boolean)).pop();
+document.getElementById('ddLink').href = '/deep-dive/' + GPK;
+
+// ── Null-safe numeric parse ──────────────────────────────────────────────
+function num(v, dflt) {
+  if (v === null || v === undefined || v === 'N/A' || v === '' || v === '.---') return (dflt===undefined?null:dflt);
+  const f = parseFloat(v);
+  return isFinite(f) ? f : (dflt===undefined?null:dflt);
+}
+function fmt(v, digits, suffix) {
+  const n = num(v);
+  if (n === null) return '—';
+  return n.toFixed(digits||2) + (suffix||'');
+}
+function fmtPct(v) {
+  const n = num(v);
+  if (n === null) return '—';
+  const pct = n > 1 ? n : n * 100;
+  return pct.toFixed(1) + '%';
+}
+function fmtAvg(v) {
+  const n = num(v);
+  if (n === null) return '—';
+  return n.toFixed(3).replace(/^0/,'');
+}
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// ── Run Environment ─────────────────────────────────────────────────────
+function windImpact(dir, mph) {
+  if (!dir || !mph) return {pts:0, note:'', favors:''};
+  const d = String(dir).toLowerCase();
+  const m = num(mph,0);
+  if (m < 6) return {pts:0, note:'Calm wind', favors:''};
+  if (d.indexOf('out')>=0 || d.indexOf('rf')>=0 || d.indexOf('cf')>=0 || d.indexOf('lf')>=0) {
+    return {pts: Math.min(15, Math.round(m*0.8)), note:`Wind out ${m} MPH — aids fly balls`, favors:'hitters'};
+  }
+  if (d.indexOf('in')>=0) {
+    return {pts: -Math.min(15, Math.round(m*0.8)), note:`Wind in ${m} MPH — knocks down fly balls`, favors:'pitchers'};
+  }
+  return {pts:0, note:`Crosswind ${m} MPH`, favors:''};
+}
+function tempImpact(t) {
+  const n = num(t);
+  if (n === null) return {pts:0, note:''};
+  if (n >= 85) return {pts:4, note:`Warm ${Math.round(n)}°F`};
+  if (n >= 75) return {pts:2, note:`Mild ${Math.round(n)}°F`};
+  if (n <= 50) return {pts:-5, note:`Cold ${Math.round(n)}°F`};
+  if (n <= 60) return {pts:-2, note:`Chilly ${Math.round(n)}°F`};
+  return {pts:0, note:''};
+}
+function runEnv(gd) {
+  const pf = num(gd.parkFactor || gd.park_factor, 1.0);
+  const base = Math.round(40 + (pf - 1.0) * 100);
+  const windDir = gd.wind_dir || (gd.wind || '').match(/([NSEW]+|IN|OUT)/i) ? (gd.wind||'').toString() : '';
+  const windMph = num((gd.wind||'').toString().replace(/[^\d.]/g,''));
+  const w = windImpact(windDir, windMph);
+  const t = tempImpact(gd.temp);
+  const precip = num(gd.rain_chance || gd.rainChance, 0);
+  const pPts = precip > 60 ? 4 : precip > 30 ? 2 : 0;
+  const total = Math.max(0, Math.min(100, base + w.pts + t.pts + pPts));
+  return {total, base, w, t, pPts, precip, windDir, windMph, pf};
+}
+
+// ── Bulletproof PF score (handles N/A, null, "" everywhere) ─────────────
+function pfScore(b, pStats) {
+  const xw   = num(b.sv_xwoba, num(b.fg_xwoba, num(b.fg_woba, 0.320)));
+  const iso  = num(b.fg_iso, 0.150);
+  let brlRaw = num(b.sv_brl_pct, 6);
+  if (brlRaw !== null && brlRaw <= 1) brlRaw *= 100;
+  const brl  = brlRaw === null ? 6 : brlRaw;
+  const ev   = num(b.sv_ev, 87);
+  let hhRaw  = num(b.sv_hh_pct, 35);
+  if (hhRaw !== null && hhRaw <= 1) hhRaw *= 100;
+  const hh   = hhRaw === null ? 35 : hhRaw;
+  const xera = num(pStats && (pStats.sv_xera || pStats.fg_xfip || pStats.fg_fip || pStats.fg_era || pStats.era), 4.20);
+  let s = 50;
+  s += (xw - 0.320) * 120;
+  s += (iso - 0.150) * 80;
+  s += (brl - 6) * 1.2;
+  s += (ev - 87) * 1.5;
+  s += (hh - 35) * 0.4;
+  s += (xera - 4.20) * 4;
+  return Math.max(20, Math.min(92, Math.round(s * 10) / 10));
+}
+function pfCls(pf) { return pf >= 56 ? 'hot' : pf >= 48 ? 'warm' : 'cold'; }
+
+// Per-batter narrative
+function whyNote(b, pStats) {
+  const bits = [];
+  const xw = num(b.sv_xwoba);
+  const iso = num(b.fg_iso);
+  let brl = num(b.sv_brl_pct); if (brl!==null && brl<=1) brl*=100;
+  let hh  = num(b.sv_hh_pct); if (hh!==null && hh<=1) hh*=100;
+  const ev = num(b.sv_ev);
+  const woba = num(b.fg_woba);
+  if (xw !== null && xw >= 0.370) bits.push(`elite <b>xwOBA ${xw.toFixed(3)}</b>`);
+  else if (woba !== null && woba >= 0.360) bits.push(`strong <b>wOBA ${woba.toFixed(3)}</b>`);
+  else if (xw !== null && xw < 0.290) bits.push(`weak <b>xwOBA ${xw.toFixed(3)}</b>`);
+  if (iso !== null && iso >= 0.220) bits.push(`elite power (<b>ISO ${iso.toFixed(3)}</b>)`);
+  else if (iso !== null && iso >= 0.180) bits.push(`above-avg power (ISO ${iso.toFixed(3)})`);
+  if (brl !== null && brl >= 12) bits.push(`high <b>Barrel% ${brl.toFixed(1)}%</b>`);
+  if (ev !== null && ev >= 92) bits.push(`hard contact (<b>EV ${ev.toFixed(1)} mph</b>)`);
+  if (hh !== null && hh >= 45) bits.push(`HH% ${hh.toFixed(1)}%`);
+  const oppxera = num(pStats && (pStats.sv_xera || pStats.fg_xfip || pStats.fg_era));
+  if (oppxera !== null && oppxera >= 4.8) bits.push(`vs weak arm (<b>xERA ${oppxera.toFixed(2)}</b>)`);
+  else if (oppxera !== null && oppxera <= 3.2) bits.push(`vs tough arm (xERA ${oppxera.toFixed(2)})`);
+  if (!bits.length) return 'Limited 2026 sample — baseline projection.';
+  return bits.slice(0,4).join(' · ') + '.';
+}
+
+// ── Pitcher card with live-grade color coding ───────────────────────────
+const PITCH_LABELS = {ff:'Four-seam FB',si:'Sinker',fc:'Cutter',st:'Sweeper',sl:'Slider',cu:'Curveball',ch:'Changeup',fs:'Splitter',kn:'Knuckleball',sv:'Slurve',fa:'Fastball'};
+
+function renderPitcher(p) {
+  if (!p || !p.name || p.name === 'TBD') return '<div class="na">PITCHER TBD</div>';
+  const s = p.stats || {};
+  const hand = (s.pitchHand || s.pitch_hand || 'R').toString().toUpperCase().charAt(0) || 'R';
+
+  // ERA: green <3.50, orange 3.50-4.50, red >4.50
+  const era = num(s.era || s.fg_era);
+  const eraCls = era === null ? 'muted' : era < 3.50 ? '' : era < 4.50 ? 'warn' : 'bad';
+  const xera = num(s.sv_xera || s.fg_xfip);
+  const xeraCls = xera === null ? 'muted' : xera < 3.50 ? '' : xera < 4.50 ? 'warn' : 'bad';
+  const hr9 = num(s.hr9 || s.fg_hr9);
+  const hr9Cls = hr9 === null ? 'muted' : hr9 < 1.0 ? '' : hr9 < 1.4 ? 'warn' : 'bad';
+  let brl = num(s.sv_brl_pct); if (brl!==null && brl<=1) brl*=100;
+  const brlCls = brl === null ? 'muted' : brl < 7 ? '' : brl < 10 ? 'warn' : 'bad';
+  let hh = num(s.sv_hh_pct); if (hh!==null && hh<=1) hh*=100;
+  const hhCls = hh === null ? 'muted' : hh < 36 ? '' : hh < 42 ? 'warn' : 'bad';
+  const ip = num(s.ip);
+
+  const ars = s.sv_arsenal_pct || {};
+  const velo = s.sv_arsenal_velo || {};
+  const top = Object.entries(ars).filter(([k,v])=>num(v)!==null && num(v)>0).sort((a,b)=>num(b[1])-num(a[1])).slice(0,3);
+
+  const k9 = num(s.k9 || s.fg_k9);
+  const bb9 = num(s.bb9 || s.fg_bb9);
+  const whip = num(s.whip || s.fg_whip);
+  const fip = num(s.fg_fip);
+
+  return `
+    <div class="pc">
+      <div class="pc-hd">
+        <span class="pc-name">${esc(p.name)}</span>
+        <span class="pc-hand ${hand}">${hand}HP</span>
+      </div>
+      <div class="stat6">
+        <div class="sc"><div class="sv ${eraCls}">${era===null?'—':era.toFixed(2)}</div><div class="sl">ERA</div></div>
+        <div class="sc"><div class="sv ${xeraCls}">${xera===null?'—':xera.toFixed(2)}</div><div class="sl">xERA</div></div>
+        <div class="sc"><div class="sv ${hr9Cls}">${hr9===null?'—':hr9.toFixed(2)}</div><div class="sl">HR/9</div></div>
+        <div class="sc"><div class="sv ${brlCls}">${brl===null?'—':brl.toFixed(1)+'%'}</div><div class="sl">BRL%</div></div>
+        <div class="sc"><div class="sv ${hhCls}">${hh===null?'—':hh.toFixed(1)+'%'}</div><div class="sl">HH%</div></div>
+        <div class="sc"><div class="sv muted">${ip===null?'—':ip.toFixed(1)}</div><div class="sl">IP</div></div>
+      </div>
+      ${top.length?top.map(([k,v])=>`<div class="ptch"><span class="pn">• ${PITCH_LABELS[k]||k.toUpperCase()}</span><span class="pp">(${num(v).toFixed(1)}%)</span>${velo[k]?`<span>velo <span class="pv">${num(velo[k]).toFixed(1)}</span> mph</span>`:''}</div>`).join(''):''}
+      <div class="l15">
+        <span class="l15-lbl">SEASON</span>
+        <span><span class="lk">K/9</span> <span class="lv">${k9===null?'—':k9.toFixed(2)}</span></span>
+        <span><span class="lk">BB/9</span> <span class="lv">${bb9===null?'—':bb9.toFixed(2)}</span></span>
+        <span><span class="lk">WHIP</span> <span class="lv">${whip===null?'—':whip.toFixed(2)}</span></span>
+        <span><span class="lk">FIP</span> <span class="lv">${fip===null?'—':fip.toFixed(2)}</span></span>
+      </div>
+    </div>`;
+}
+
+// ── Batter row with real insight ────────────────────────────────────────
+function renderBatter(b, pStats, teamLogo) {
+  const pf = pfScore(b, pStats);
+  const hand = (b.bats || b.fg_bats || 'R').toString().toUpperCase().charAt(0) || 'R';
+  const star = pf >= 58 ? '<span class="bp-star">⭐</span>' : '';
+  // Odds from PF: only show if we actually have signal
+  const hasSignal = num(b.sv_xwoba)!==null || num(b.fg_woba)!==null || num(b.fg_iso)!==null;
+  const odds = hasSignal ? ('+' + Math.round(Math.max(250, 2500 - pf * 28))) : '—';
+  const book = !hasSignal ? '—' : pf>57?'DraftKings':pf>50?'FanDuel':'Kalshi';
+  const why = whyNote(b, pStats);
+
+  return `
+    <div class="bp">
+      <img class="bp-logo" src="${teamLogo||''}" alt="" loading="lazy" width="24" height="24" onerror="this.style.visibility='hidden'">
+      <div class="bp-info">
+        <span class="bp-name">${esc(b.name||b.fullName||'—')} ${star}</span>
+        <span class="pf-tag ${pfCls(pf)}">PF ${pf.toFixed(1)}</span>
+        <span class="bh-tag ${hand}">${hand}HB</span>
+        <span class="bp-line">o0.5 HR</span>
+      </div>
+      <div class="bp-odds">
+        <div class="bp-o">${odds}</div>
+        <div class="bp-bk">@ ${book}</div>
+      </div>
+      <div class="bp-why">${why}</div>
+    </div>`;
+}
+
+function renderRunEnv(re, gd) {
+  const cls = re.total < 45 ? 'sup' : re.total > 65 ? 'bst' : 'neu';
+  const lbl = re.total < 45 ? 'SUPPRESSED' : re.total > 65 ? 'BOOSTED' : 'NEUTRAL';
+  return `
+    <div class="res ${cls}">
+      <div>
+        <div class="res-num">${re.total}</div>
+        <div class="res-100">/ 100</div>
+        <div class="res-tag">${lbl}</div>
+      </div>
+      <div>
+        <div class="rr"><span>Base (PF ${re.pf.toFixed(2)})</span><span class="dlt">${re.base} pts</span></div>
+        ${re.t.note ? `<div class="rr"><span>🌡️ ${re.t.note}</span><span class="dlt">${re.t.pts>=0?'+':''}${re.t.pts} pts</span></div>` : ''}
+        ${re.w.note ? `<div class="rr"><span>💨 ${re.w.note}</span><span class="dlt">${re.w.pts>=0?'+':''}${re.w.pts} pts</span></div>` : ''}
+        <div class="rr"><span>💧 Precip (${re.precip}%)</span><span class="dlt">${re.pPts>=0?'+':''}${re.pPts} pts</span></div>
+        ${re.w.favors ? `<div class="res-foot">${re.w.note} — favors ${re.w.favors}.</div>` : ''}
+      </div>
+    </div>`;
+}
+
+// ── Live auto-refresh ──────────────────────────────────────────────────
+let _isLive = false, _countdown = 90, _countdownInt = null;
+function startLive() {
+  if (_countdownInt) return;
+  document.getElementById('liveBar').classList.add('on');
+  _countdown = 90; tickCd();
+  _countdownInt = setInterval(()=>{
+    _countdown--; tickCd();
+    if (_countdown <= 0) { _countdown = 90; load(true); }
+  }, 1000);
+}
+function stopLive() {
+  if (_countdownInt) { clearInterval(_countdownInt); _countdownInt = null; }
+  document.getElementById('liveBar').classList.remove('on');
+}
+function tickCd() {
+  const el = document.getElementById('liveCountdown');
+  if (el) el.textContent = 'next in ' + _countdown + 's';
+}
+function manualRefresh() {
+  _countdown = 90;
+  const btn = document.getElementById('refreshBtn');
+  btn.disabled = true; btn.textContent = '↻ LOADING...';
+  load(true).finally(()=>setTimeout(()=>{ btn.disabled=false; btn.textContent='↻ REFRESH'; },700));
+}
+
+// ── Main loader ────────────────────────────────────────────────────────
+async function load(silent) {
+  if (!GPK || isNaN(parseInt(GPK))) {
+    document.getElementById('root').innerHTML = '<div class="err">No game ID in URL. Open this view from the dashboard card.</div>';
+    return;
+  }
+  try {
+    const [gd, pp, bd] = await Promise.all([
+      fetch('/api/game-projection/' + GPK).then(r=>r.json()).catch(()=>({})),
+      fetch('/api/pitchers/' + GPK).then(r=>r.json()).catch(()=>({})),
+      fetch('/api/game/' + GPK).then(r=>r.json()).catch(()=>({})),
+    ]);
+
+    const awayP = pp.awayPitcher || {};
+    const homeP = pp.homePitcher || {};
+    const awayBats = ((bd.awayBatters)||[]).filter(b=>b.name||b.fullName);
+    const homeBats = ((bd.homeBatters)||[]).filter(b=>b.name||b.fullName);
+
+    const isLive = (gd.status === 'Live' || gd.status === 'In Progress');
+    if (isLive && !_isLive) { _isLive = true; startLive(); }
+    else if (!isLive && _isLive) { _isLive = false; stopLive(); }
+
+    const awayAbbr = gd.awayAbbr || 'AWAY';
+    const homeAbbr = gd.homeAbbr || 'HOME';
+    const awayLogo = gd.awayLogo || '';
+    const homeLogo = gd.homeLogo || '';
+    const re = runEnv(gd);
+
+    if (isLive) {
+      document.getElementById('liveBarText').textContent = `LIVE · ${awayAbbr} @ ${homeAbbr} — auto-refreshing every 90s`;
+    }
+
+    let html = '';
+    html += `<div class="gh">
+      <div class="gh-title">
+        ${awayLogo?`<img class="gh-logo" src="${awayLogo}" alt="${awayAbbr}" loading="lazy" width="26" height="26">`:''}
+        <span>${awayAbbr} @ ${homeAbbr}</span>
+        ${homeLogo?`<img class="gh-logo" src="${homeLogo}" alt="${homeAbbr}" loading="lazy" width="26" height="26">`:''}
+        ${isLive?'<span class="live-tag">⬤ LIVE</span>':''}
+      </div>
+      <div class="gh-meta">
+        ${gd.venue?`<span>📍 ${esc(gd.venue)}</span>`:''}
+        ${gd.gameTime||gd.time?`<span>🕐 ${esc(gd.gameTime||gd.time)}</span>`:''}
+        ${gd.total?`<span>O/U ${gd.total}</span>`:''}
+        ${gd.edge?`<span>EDGE ${gd.edge}%</span>`:''}
+      </div>
+      <div class="wx-row">
+        ${gd.condition?`<span class="wx-chip">⛅ ${esc(gd.condition)}</span>`:''}
+        ${gd.temp?`<span class="wx-chip">🌡️ ${esc(gd.temp)}°F</span>`:''}
+        ${gd.rain_chance!=null||gd.rainChance!=null?`<span class="wx-chip">💧 ${gd.rain_chance||gd.rainChance}%</span>`:''}
+        ${gd.wind?`<span class="wx-chip">💨 ${esc(gd.wind)}</span>`:''}
+      </div>
+      ${renderRunEnv(re, gd)}
+    </div>`;
+
+    // SIDE 1: HOME bats vs AWAY pitcher
+    const awayPName = awayP.name && awayP.name !== 'TBD' ? awayP.name : (gd.awayPitcher && gd.awayPitcher !== 'TBD' ? gd.awayPitcher : 'Away Pitcher TBD');
+    html += `<div class="sdiv">SIDE 1 · ${homeAbbr} BATTERS VS ${awayPName.toUpperCase()}</div>`;
+    html += renderPitcher(awayP.name ? awayP : {name:awayPName, stats:{}});
+    if (homeBats.length) {
+      const sorted = [...homeBats].sort((a,b)=>pfScore(b,awayP.stats||{})-pfScore(a,awayP.stats||{}));
+      sorted.slice(0,3).forEach(b=>{ html += renderBatter(b, awayP.stats||{}, homeLogo); });
+    } else {
+      html += '<div class="na">LINEUP NOT YET POSTED — check back ~1hr before first pitch</div>';
+    }
+
+    // SIDE 2: AWAY bats vs HOME pitcher
+    const homePName = homeP.name && homeP.name !== 'TBD' ? homeP.name : (gd.homePitcher && gd.homePitcher !== 'TBD' ? gd.homePitcher : 'Home Pitcher TBD');
+    html += `<div class="sdiv">SIDE 2 · ${awayAbbr} BATTERS VS ${homePName.toUpperCase()}</div>`;
+    html += renderPitcher(homeP.name ? homeP : {name:homePName, stats:{}});
+    if (awayBats.length) {
+      const sorted = [...awayBats].sort((a,b)=>pfScore(b,homeP.stats||{})-pfScore(a,homeP.stats||{}));
+      sorted.slice(0,3).forEach(b=>{ html += renderBatter(b, homeP.stats||{}, awayLogo); });
+    } else {
+      html += '<div class="na">LINEUP NOT YET POSTED — check back ~1hr before first pitch</div>';
+    }
+
+    // TOP PICKS
+    const allPicks = [
+      ...homeBats.map(b=>({...b, _logo:homeLogo, _pStats:awayP.stats||{}, _pf:pfScore(b,awayP.stats||{})})),
+      ...awayBats.map(b=>({...b, _logo:awayLogo, _pStats:homeP.stats||{}, _pf:pfScore(b,homeP.stats||{})})),
+    ].sort((a,b)=>b._pf-a._pf).slice(0,3);
+
+    if (allPicks.length) {
+      html += '<div class="tph">⚡ TOP PICKS</div><div class="tpg">';
+      allPicks.forEach((b,i)=>{
+        const hand = (b.bats||b.fg_bats||'R').toString().toUpperCase().charAt(0);
+        const hasSignal = num(b.sv_xwoba)!==null || num(b.fg_woba)!==null || num(b.fg_iso)!==null;
+        const odds = hasSignal ? ('+' + Math.round(Math.max(250, 2500 - b._pf * 28))) : '—';
+        const book = !hasSignal ? 'N/A' : b._pf>57?'DraftKings':b._pf>50?'FanDuel':'Kalshi';
+        html += `<div class="tpc">
+          <div><span class="tpr ${i===0?'g':''}">${i+1}</span><span class="tpn">${esc(b.name||b.fullName||'—')}${i===0?' ⭐':''}</span></div>
+          <div class="tpm">${hand}HB · PF ${b._pf.toFixed(1)}</div>
+          <div class="tpods">${odds} @ ${book}</div>
+        </div>`;
+      });
+      html += '</div>';
+    }
+
+    document.getElementById('root').innerHTML = html;
+  } catch(e) {
+    if (!silent) {
+      document.getElementById('root').innerHTML = `<div class="err">Error loading game data: ${esc(e.message||e)}</div>`;
+    }
+  }
+}
+
+load();
+</script>
+</body>
+</html>
