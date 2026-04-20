@@ -252,6 +252,15 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
 .bb-stats-row{display:flex;gap:20px;flex-wrap:wrap;padding:10px 14px;background:rgba(0,229,255,.03);border:1px solid rgba(0,229,255,.09);border-radius:10px;margin-bottom:14px}
 .bb-stat{text-align:center}.bb-stat-v{font-family:Orbitron,monospace;font-size:1.1rem;font-weight:700;color:var(--c)}.bb-stat-l{font-size:.5rem;color:var(--mu);letter-spacing:1.5px;margin-top:2px}
 .bb-ov{color:#00e676}.bb-un{color:#ef9a9a}
+.bb-ratings-group{margin-bottom:20px}
+.bb-ratings-hd{display:flex;align-items:center;gap:12px;margin-bottom:10px;padding:8px 14px;border-radius:10px;font-family:Orbitron,monospace;font-size:.64rem;letter-spacing:2px;font-weight:700}
+.bb-ratings-hd.elite{background:rgba(0,230,118,.08);border:1px solid rgba(0,230,118,.22);color:#00e676}
+.bb-ratings-hd.strong{background:rgba(0,229,255,.07);border:1px solid rgba(0,229,255,.2);color:var(--c)}
+.bb-ratings-hd.lean{background:rgba(255,152,0,.06);border:1px solid rgba(255,152,0,.2);color:#ff9800}
+.bb-ratings-hd .rh-count{font-family:'Inter',sans-serif;font-size:.62rem;opacity:.7;letter-spacing:0;font-weight:400}
+.bb-ratings-full{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px}
+@media(max-width:700px){.bb-ratings-full{grid-template-columns:1fr}}
+.bb-cat-btn[data-cat="RATINGS"].active{background:rgba(255,215,0,.1);border-color:rgba(255,215,0,.35);color:#ffd54f}
 
 </style>
 </head>
@@ -315,6 +324,8 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
         <button class="bb-cat-btn" data-cat="SPREAD" onclick="setBBCat('SPREAD',this)">📏 SPREAD</button>
         <button class="bb-cat-btn" data-cat="TOTALS" onclick="setBBCat('TOTALS',this)">🎯 TOTALS</button>
         <button class="bb-cat-btn" data-cat="F5" onclick="setBBCat('F5',this)">5️⃣ FIRST 5</button>
+        <span style="width:1px;background:rgba(255,255,255,.1);margin:0 4px;align-self:stretch"></span>
+        <button class="bb-cat-btn" data-cat="RATINGS" onclick="setBBCat('RATINGS',this)" style="border-color:rgba(255,215,0,.3);color:#ffd54f">🏆 RATINGS</button>
       </div>
       <div class="bb-picks-grid" id="bbPicksInner"></div>
     </div>
@@ -779,7 +790,7 @@ function renderBBPicks(){
   }
 
   // ── Filter + Sort ─────────────────────────────────────
-  const filtered=BB_CAT==='ALL'?picks:picks.filter(p=>p.cat===BB_CAT);
+  const filtered=BB_CAT==='ALL'||BB_CAT==='RATINGS'?picks:picks.filter(p=>p.cat===BB_CAT);
   filtered.sort((a,b)=>{
     const rank={ELITE:0,STRONG:1,LEAN:2};
     return rank[a.conf]-rank[b.conf]||b.score-a.score;
@@ -787,26 +798,24 @@ function renderBBPicks(){
 
   if(!filtered.length){ el.innerHTML='<div class="bb-loading">NO PICKS FOR "'+BB_CAT+'" — TRY ANOTHER CATEGORY</div>'; return; }
 
-  // ── Render cards ─────────────────────────────────────
+  // ── Shared card builder ───────────────────────────────
   const confStars={ELITE:'⭐⭐⭐⭐⭐',STRONG:'⭐⭐⭐⭐',LEAN:'⭐⭐⭐'};
   const confColor={ELITE:'#00e676',STRONG:'var(--c)',LEAN:'#ff9800'};
   const rankEmoji=['🥇','🥈','🥉'];
 
-  el.innerHTML=filtered.map((p,i)=>{
+  function mkPickCard(p,i,showRank){
     const cc=BB_CAT_COLORS[p.cat]||'var(--c)';
     const cf=confColor[p.conf]||'var(--mu)';
     const overBg=p.dir==='OVER'?'rgba(0,200,100,.15)':'rgba(255,100,100,.13)';
     const overCol=p.dir==='OVER'?'#00e676':'#ef9a9a';
     const overBdr=p.dir==='OVER'?'rgba(0,200,100,.3)':'rgba(255,100,100,.28)';
-    const dirPill=p.dir
-      ?'<span style="font-size:.5rem;padding:2px 8px;border-radius:999px;font-family:Orbitron,monospace;font-weight:700;background:'+overBg+';color:'+overCol+';border:1px solid '+overBdr+'">'+p.dir+'</span>'
-      :'';
+    const dirPill=p.dir?'<span style="font-size:.5rem;padding:2px 8px;border-radius:999px;font-family:Orbitron,monospace;font-weight:700;background:'+overBg+';color:'+overCol+';border:1px solid '+overBdr+'">'+p.dir+'</span>':'';
     const lineSpan=p.line!=null?'<span class="bb-proj-vs">vs line&nbsp;'+p.line+'</span>':'';
     const edgeSpan=p.edge!=null?'<span class="bb-edge" style="color:'+cf+'">edge +'+p.edge.toFixed(2)+'</span>':'';
     const projRow=p.projVal!=null
       ?'<div class="bb-proj-row"><span class="bb-proj-lbl">PROJ</span><span class="bb-proj-val" style="color:'+cc+'">'+p.projVal.toFixed(2)+'</span>'+lineSpan+dirPill+edgeSpan+'</div>'
       :'<div style="height:4px"></div>';
-    const rankBadge=i<3?rankEmoji[i]+' ':'';
+    const rankBadge=showRank&&i<3?rankEmoji[i]+' ':'';
     return '<div class="bb-card bb-'+p.type.toLowerCase()+'">'
       +'<div class="bb-card-top">'
       +'<div class="bb-cat-tag" style="background:'+cc+'18;color:'+cc+';border-color:'+cc+'40">'+p.cat+'</div>'
@@ -816,7 +825,31 @@ function renderBBPicks(){
       +projRow
       +'<div class="bb-reason">'+p.reason+'</div>'
       +'</div>';
-  }).join('');
+  }
+
+  // ── RATINGS MODE — grouped by confidence tier ─────────
+  if(BB_CAT==='RATINGS'){
+    const groups={ELITE:[],STRONG:[],LEAN:[]};
+    filtered.forEach(p=>{ if(groups[p.conf]) groups[p.conf].push(p); });
+    const tierLabel={ELITE:'🏆 ELITE PLAYS',STRONG:'💪 STRONG PLAYS',LEAN:'📊 LEAN PLAYS'};
+    const tierClass={ELITE:'elite',STRONG:'strong',LEAN:'lean'};
+    let html='';
+    ['ELITE','STRONG','LEAN'].forEach(tier=>{
+      const g=groups[tier]; if(!g.length) return;
+      html+='<div class="bb-ratings-group">'
+        +'<div class="bb-ratings-hd '+tierClass[tier]+'">'+tierLabel[tier]
+        +'<span class="rh-count">'+g.length+' pick'+(g.length!==1?'s':'')+'</span></div>'
+        +'<div class="bb-ratings-full">'+g.map((p,i)=>mkPickCard(p,i,tier==='ELITE')).join('')+'</div>'
+        +'</div>';
+    });
+    el.className='';
+    el.innerHTML=html||'<div class="bb-loading">NO RATED PICKS AVAILABLE</div>';
+    return;
+  }
+
+  // ── Standard grid render ──────────────────────────────
+  el.className='bb-picks-grid';
+  el.innerHTML=filtered.map((p,i)=>mkPickCard(p,i,true)).join('');
 }
 
 function etTodayStr(){const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());const y=parts.find(p=>p.type==='year').value,m=parts.find(p=>p.type==='month').value,d=parts.find(p=>p.type==='day').value;return y+'-'+m+'-'+d}
