@@ -140,7 +140,7 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .th-hdr .tag{padding:2px 8px;border-radius:6px;background:rgba(244,67,54,.15);border:1px solid rgba(244,67,54,.3);font-size:.54rem}
 .th-opp{margin-left:auto;color:var(--mu);font-size:.56rem}
 .th-list{display:flex;flex-direction:column;gap:8px}
-.th-row{display:grid;grid-template-columns:44px 1fr auto;gap:10px;align-items:center;padding:10px;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.06);border-radius:10px;transition:all .2s}
+.th-row{display:grid;grid-template-columns:44px 1fr auto;grid-template-rows:auto auto;gap:8px 10px;align-items:start;padding:10px;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.06);border-radius:10px;transition:all .2s}
 .th-row:hover{border-color:rgba(244,67,54,.28);background:rgba(244,67,54,.04)}
 .th-av{width:44px;height:44px;border-radius:50%;background:rgba(0,229,255,.06);border:1px solid rgba(0,229,255,.2);object-fit:cover;object-position:top center}
 .th-info{display:flex;flex-direction:column;gap:3px;min-width:0}
@@ -410,7 +410,7 @@ function batxOUPills(proj, adj){
   const topPos=keys.filter(k=>adj[k]>0.005).slice(0,2);
   const topNeg=keys.filter(k=>adj[k]<-0.005).slice(0,1);
   const parts=[];
-  if(topPos.length) parts.push('boosted by '+topPos.map(k=>COMP_LABELS[k]).join(' & '));
+  if(topPos.length) parts.push('Boosted by '+topPos.map(k=>COMP_LABELS[k]).join(' & '));
   if(topNeg.length) parts.push('limited by '+topNeg.map(k=>COMP_LABELS[k]).join(' & '));
   const reasoning=parts.join('; ');
   const lines=[
@@ -425,16 +425,20 @@ function batxOUPills(proj, adj){
     const col=dir==='OVER'?'#4caf50':'#f44336';
     const bg=dir==='OVER'?'rgba(76,175,80,.1)':'rgba(244,67,54,.08)';
     const bor=dir==='OVER'?'rgba(76,175,80,.3)':'rgba(244,67,54,.25)';
-    return`<span style="display:inline-block;padding:2px 6px;border-radius:5px;font-family:Orbitron,monospace;font-size:.48rem;letter-spacing:.6px;border:1px solid ${bor};background:${bg};color:${col};margin-right:3px;margin-bottom:3px">${def.label} <strong>${dir}</strong> <span style="opacity:.6;font-size:.42rem">${(edge>=0?'+':'')+edge.toFixed(2)}</span></span>`;
+    return`<span style="padding:3px 8px;border-radius:5px;font-family:Orbitron,monospace;font-size:.5rem;letter-spacing:.6px;border:1px solid ${bor};background:${bg};color:${col};white-space:nowrap">${def.label} <strong>${dir}</strong> <span style="opacity:.6;font-size:.44rem">${(edge>=0?'+':'')+edge.toFixed(2)}</span></span>`;
   }).filter(Boolean).join('');
   if(!pills) return '';
   const comp=proj.composite;
   const compColor=comp>=1.05?'#4caf50':comp<=0.95?'#f44336':'var(--c)';
   const compSign=comp>=1?'+':'';
-  return `<div style="margin-top:8px;padding:7px 9px;background:rgba(0,229,255,.03);border:1px solid rgba(0,229,255,.1);border-radius:8px">`
-    +`<div style="font-family:Orbitron,monospace;font-size:.5rem;letter-spacing:1.5px;color:var(--mu);margin-bottom:5px">BAT X &nbsp;<span style="color:${compColor}">${compSign}${((comp-1)*100).toFixed(1)}%</span></div>`
-    +`<div>${pills}</div>`
-    +(reasoning?`<div style="font-size:.54rem;color:var(--mu);margin-top:4px;opacity:.75">${reasoning}</div>`:'')
+  return `<div style="grid-column:1/-1;padding:8px 10px;background:rgba(0,229,255,.03);border:1px solid rgba(0,229,255,.1);border-radius:8px;display:flex;flex-direction:column;gap:6px">`
+    +`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">`
+    +`<span style="font-family:Orbitron,monospace;font-size:.5rem;letter-spacing:1.5px;color:var(--mu)">BAT X</span>`
+    +`<span style="font-family:Orbitron,monospace;font-size:.56rem;color:${compColor};font-weight:700">${compSign}${((comp-1)*100).toFixed(1)}%</span>`
+    +`<span style="font-size:.52rem;color:var(--mu);opacity:.6">×${comp.toFixed(3)} composite</span>`
+    +'</div>'
+    +`<div style="display:flex;flex-wrap:wrap;gap:5px">${pills}</div>`
+    +(reasoning?`<div style="font-size:.56rem;color:var(--mu);line-height:1.5">${reasoning}</div>`:'')
     +'</div>';
 }
 
@@ -774,7 +778,7 @@ function buildThreatsPane(pitcherId){
         <div class="th-proj-cell"><div class="v ${probCls(b.hrProb)}">${(b.hrProb*100).toFixed(0)}%</div><div class="lbl">HR</div></div>
         <div class="th-proj-cell"><div class="v ${probCls(b.rbiProb)}">${(b.rbiProb*100).toFixed(0)}%</div><div class="lbl">1+ RBI</div></div>
       </div>
-      ${ (() => { const bx=lookupBatX(b.name); return bx ? batxOUPills(bx.proj, bx.proj?.adjustments) : (PROPS_DATA ? '' : '<div style="font-size:.52rem;color:var(--mu);margin-top:6px;opacity:.6">BAT X loading…</div>'); })() }
+      ${ (() => { const bx=lookupBatX(b.name); return bx ? batxOUPills(bx.proj, bx.proj?.adjustments) : (PROPS_DATA ? '' : '<div style="grid-column:1/-1;font-size:.52rem;color:var(--mu);opacity:.6">BAT X loading…</div>'); })() }
     </div>`;
   }).join('');
 
