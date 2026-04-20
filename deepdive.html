@@ -294,6 +294,33 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .ai-prop-detail{font-size:.62rem;color:var(--mu);margin-bottom:4px}
 .ai-prop-reasoning{font-size:.64rem;color:var(--t);line-height:1.4}
 
+/* Parlay Rec Panel */
+.pr-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:4px}
+@media(max-width:680px){.pr-grid{grid-template-columns:1fr}}
+.pr-section-hd{font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:2px;color:var(--c);margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.pr-card{background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:12px 14px}
+.pr-card.stars{border-color:rgba(255,215,0,.2);background:rgba(255,215,0,.03)}
+.pr-card.parlay{border-color:rgba(0,229,255,.15);background:rgba(0,229,255,.03)}
+.pr-bet{display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.05)}
+.pr-bet:last-child{border-bottom:none;padding-bottom:0}
+.pr-bet-rank{font-family:'Orbitron',monospace;font-size:.85rem;min-width:24px;text-align:center}
+.pr-bet-body{flex:1;min-width:0}
+.pr-bet-title{font-size:.7rem;font-weight:600;color:var(--t);margin-bottom:2px}
+.pr-bet-pick{font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:.8px}
+.pr-bet-reason{font-size:.58rem;color:var(--mu);margin-top:3px;line-height:1.4}
+.pr-conf{display:inline-block;padding:2px 7px;border-radius:4px;font-family:'Orbitron',monospace;font-size:.5rem;letter-spacing:1px;flex-shrink:0;align-self:flex-start;margin-top:2px}
+.pr-conf.elite{background:rgba(76,175,80,.12);border:1px solid rgba(76,175,80,.3);color:#4caf50}
+.pr-conf.strong{background:rgba(0,229,255,.1);border:1px solid rgba(0,229,255,.25);color:var(--c)}
+.pr-conf.lean{background:rgba(255,152,0,.08);border:1px solid rgba(255,152,0,.2);color:#ff9800}
+.pr-leg{display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.05)}
+.pr-leg:last-child{border-bottom:none;padding-bottom:0}
+.pr-leg-cat{font-family:'Orbitron',monospace;font-size:.5rem;letter-spacing:1.5px;color:var(--mu);min-width:44px}
+.pr-leg-pick{font-size:.66rem;font-weight:600;color:var(--t);flex:1}
+.pr-leg-pill{padding:2px 8px;border-radius:4px;font-family:'Orbitron',monospace;font-size:.5rem;letter-spacing:.8px}
+.pr-leg-pill.over{background:rgba(76,175,80,.1);border:1px solid rgba(76,175,80,.25);color:#4caf50}
+.pr-leg-pill.under{background:rgba(244,67,54,.08);border:1px solid rgba(244,67,54,.2);color:#f44336}
+.pr-empty{padding:20px;text-align:center;font-size:.7rem;color:var(--mu);font-family:'Orbitron',monospace;letter-spacing:1px}
+
 /* Parlay Builder */
 .parlay-wrap{background:rgba(0,0,0,.28);border:1px solid rgba(0,229,255,.08);border-radius:10px;padding:14px;margin-top:10px}
 .parlay-header{font-family:'Orbitron',monospace;font-size:.7rem;color:var(--c);letter-spacing:2px;margin-bottom:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
@@ -349,6 +376,7 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 <div class="dg">
   <!-- GAME PROJECTION PANEL -->
   <div class="pnl fw pnl-src"><div class="pt">&#127919; GAME PROJECTION &amp; O/U MODEL <span class="tag-sv">PROJ</span></div><div id="gpContent"><div class="spinner"></div></div></div>
+  <div class="pnl fw pnl-src" id="parlayRecWrap"><div class="pt">&#11088; TOP PICKS &amp; PARLAY RECOMMENDATION <span class="tag-sv">BAT X</span></div><div id="parlayRecPanel"><div class="spinner"></div></div></div>
   <div class="pnl"><div class="pt">&#127919; MODEL EDGE</div><div id="edgeP"><div class="spinner"></div></div></div>
   <div class="pnl"><div class="pt">&#127780; WEATHER</div><div id="wxP"><div class="spinner"></div></div></div>
   <div class="pnl fw pnl-src">
@@ -1471,9 +1499,137 @@ function loadPropsProjections(){
         if(ACTIVE_TAB==='proj') renderProjectionHub();
         // Refresh pitcher cards so PITCH X panels populate
         if(PD && PD.success) renderPitchers();
+        buildParlayRec();
       }
     })
     .catch(function(){}); // silent — BAT X panel will show placeholder
+}
+
+function buildParlayRec(){
+  var el = document.getElementById('parlayRecPanel');
+  if(!el) return;
+  if(!PROPS_DATA || !PROPS_DATA.success){ el.innerHTML='<div class="pr-empty">BAT X data loading…</div>'; return; }
+
+  var batters = PROPS_DATA.batters || [];
+  var pitchers = PROPS_DATA.pitchers || [];
+  var COMP_LABELS={contact:'contact quality',power:'raw power',discipline:'plate discipline',platoon:'platoon edge',park:'park factor',weather:'weather',pitcher:'pitcher matchup',form:'recent form',bvp:'BvP history'};
+
+  // ── Score every bet candidate ─────────────────────────────
+  var candidates = [];
+
+  batters.forEach(function(b){
+    var p = b.proj; if(!p) return;
+    var adj = p.adjustments || {};
+    var comp = p.composite || 1;
+    // Top adj keys
+    var adjKeys = Object.keys(adj).filter(function(k){return COMP_LABELS[k]&&adj[k]!=null;});
+    adjKeys.sort(function(a,b){return Math.abs(adj[b])-Math.abs(adj[a]);});
+    var topBoost = adjKeys.filter(function(k){return adj[k]>0.01;}).slice(0,2).map(function(k){return COMP_LABELS[k];});
+    var topDrag  = adjKeys.filter(function(k){return adj[k]<-0.01;}).slice(0,1).map(function(k){return COMP_LABELS[k];});
+
+    function reason(){
+      var parts=[];
+      if(topBoost.length) parts.push('lifted by '+topBoost.join(' & '));
+      if(topDrag.length) parts.push('tempered by '+topDrag.join(', '));
+      return parts.join('; ')+(p.platoon_note?'. '+p.platoon_note:'');
+    }
+
+    // H 0.5 OVER
+    if(p.hits!=null){ var edge=p.hits-0.5; if(edge>0) candidates.push({cat:'HITS',name:b.name,pick:'H OVER 0.5',edge:edge,conf:edge>0.35?'elite':edge>0.2?'strong':'lean',reason:reason(),score:edge*comp}); }
+    // H 1.5 OVER
+    if(p.hits!=null){ var edge=p.hits-1.5; if(edge>0) candidates.push({cat:'HITS',name:b.name,pick:'H OVER 1.5',edge:edge,conf:edge>0.2?'elite':edge>0.1?'strong':'lean',reason:reason(),score:edge*comp*0.9}); }
+    // TB 1.5 OVER
+    if(p.tb!=null){ var edge=p.tb-1.5; if(edge>0.1) candidates.push({cat:'BASES',name:b.name,pick:'TB OVER 1.5',edge:edge,conf:edge>0.5?'elite':edge>0.25?'strong':'lean',reason:reason(),score:edge*comp*0.85}); }
+    // TB 2.5 OVER
+    if(p.tb!=null){ var edge=p.tb-2.5; if(edge>0) candidates.push({cat:'BASES',name:b.name,pick:'TB OVER 2.5',edge:edge,conf:edge>0.3?'elite':edge>0.15?'strong':'lean',reason:reason(),score:edge*comp*0.8}); }
+    // HR 0.5 OVER
+    if(p.hr!=null){ var edge=p.hr-0.5; if(edge>0) candidates.push({cat:'HR',name:b.name,pick:'HR OVER 0.5',edge:edge,conf:edge>0.15?'elite':edge>0.05?'strong':'lean',reason:reason(),score:edge*comp*1.2}); }
+    // RBI 0.5 OVER
+    if(p.rbi!=null){ var edge=p.rbi-0.5; if(edge>0) candidates.push({cat:'RBI',name:b.name,pick:'RBI OVER 0.5',edge:edge,conf:edge>0.3?'elite':edge>0.15?'strong':'lean',reason:reason(),score:edge*comp*0.75}); }
+  });
+
+  // Pitcher K picks
+  pitchers.forEach(function(pt){
+    var pr = pt.proj; if(!pr) return;
+    var kProj = pr.k;
+    if(kProj==null) return;
+    [3.5,4.5,5.5,6.5].forEach(function(line){
+      var edge=kProj-line;
+      if(edge>0.1) candidates.push({cat:'K',name:pt.name,pick:'K OVER '+line,edge:edge,conf:edge>1.0?'elite':edge>0.5?'strong':'lean',reason:pr.form_flag?'Recent form: '+pr.form_flag:'K proj '+kProj.toFixed(1)+' (blended ERA '+Number(pr.era_blended||pr.era_season||0).toFixed(2)+')',score:edge*0.9});
+      else if(edge<-0.1) candidates.push({cat:'K',name:pt.name,pick:'K UNDER '+line,edge:Math.abs(edge),conf:Math.abs(edge)>1.0?'elite':Math.abs(edge)>0.5?'strong':'lean',reason:pr.form_flag?'Struggling: '+pr.form_flag:'K proj '+kProj.toFixed(1),score:Math.abs(edge)*0.9});
+    });
+  });
+
+  // Sort by score desc
+  candidates.sort(function(a,b){return b.score-a.score;});
+
+  // ── Top 3 five-star bets (elite/strong only, deduplicated by player) ──────
+  var starPicks = [];
+  var seenNames = {};
+  candidates.forEach(function(c){
+    if(starPicks.length>=3) return;
+    if(c.conf==='lean') return;
+    var key = c.name+'|'+c.cat;
+    if(seenNames[key]) return;
+    seenNames[key]=true;
+    starPicks.push(c);
+  });
+  // fallback: fill with leans if not enough
+  if(starPicks.length<3){
+    candidates.forEach(function(c){
+      if(starPicks.length>=3) return;
+      var key=c.name+'|'+c.cat;
+      if(seenNames[key]) return;
+      seenNames[key]=true;
+      starPicks.push(c);
+    });
+  }
+
+  // ── Parlay legs: best HITS + best BASES + best K + best HR ─────────────────
+  var parlayLegs = [];
+  var cats = ['HITS','BASES','K','HR'];
+  cats.forEach(function(cat){
+    var best = candidates.find(function(c){return c.cat===cat;});
+    if(best) parlayLegs.push(best);
+  });
+
+  var confStars = {elite:'⭐⭐⭐⭐⭐',strong:'⭐⭐⭐⭐',lean:'⭐⭐⭐'};
+  var rankEmoji = ['🥇','🥈','🥉'];
+
+  // ── Build HTML ──────────────────────────────────────────────────────────────
+  var starsHtml = starPicks.length ? starPicks.map(function(c,i){
+    return '<div class="pr-bet">'
+      +'<div class="pr-bet-rank">'+rankEmoji[i]+'</div>'
+      +'<div class="pr-bet-body">'
+        +'<div class="pr-bet-title">'+c.name+'</div>'
+        +'<div class="pr-bet-pick" style="color:'+(c.cat==='K'?'#ce93d8':c.cat==='HR'?'#f48fb1':c.cat==='BASES'?'#80cbc4':'var(--c)')+'">'+c.pick+' &nbsp;<span style="font-size:.48rem;opacity:.65">edge +'+c.edge.toFixed(2)+'</span></div>'
+        +(c.reason?'<div class="pr-bet-reason">'+c.reason+'</div>':'')
+      +'</div>'
+      +'<div class="pr-conf '+c.conf+'">'+confStars[c.conf]+'</div>'
+    +'</div>';
+  }).join('') : '<div class="pr-empty">No high-confidence picks found</div>';
+
+  var parlayHtml = parlayLegs.length ? parlayLegs.map(function(leg){
+    var isOver = leg.pick.indexOf('OVER')>=0;
+    var catColor = leg.cat==='K'?'#ce93d8':leg.cat==='HR'?'#f48fb1':leg.cat==='BASES'?'#80cbc4':'var(--c)';
+    return '<div class="pr-leg">'
+      +'<div class="pr-leg-cat" style="color:'+catColor+'">'+leg.cat+'</div>'
+      +'<div class="pr-leg-pick">'+leg.name+' — '+leg.pick+'</div>'
+      +'<div class="pr-leg-pill '+(isOver?'over':'under')+'">'+(isOver?'OVER':'UNDER')+'</div>'
+    +'</div>';
+  }).join('') : '<div class="pr-empty">Loading…</div>';
+
+  el.innerHTML = '<div class="pr-grid">'
+    +'<div class="pr-card stars">'
+      +'<div class="pr-section-hd">⭐ TOP 3 FIVE-STAR BETS</div>'
+      +starsHtml
+    +'</div>'
+    +'<div class="pr-card parlay">'
+      +'<div class="pr-section-hd">🎰 PARLAY RECOMMENDATION <span style="font-size:.52rem;font-family:sans-serif;opacity:.6;letter-spacing:0">'+(parlayLegs.length)+'-LEG</span></div>'
+      +parlayHtml
+      +(parlayLegs.length>=2?'<div style="margin-top:12px;padding:10px;background:rgba(0,0,0,.2);border-radius:8px;font-size:.6rem;color:var(--mu);line-height:1.6">💡 <strong style="color:var(--t)">Parlay tip:</strong> Correlated legs (same team\'s hitters + opposing K under) increase risk. Consider splitting into singles for value.</div>':'')
+    +'</div>'
+  +'</div>';
 }
 
 function lookupBatX(playerName){
