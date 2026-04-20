@@ -1439,6 +1439,13 @@ function lookupBatX(playerName){
   return null;
 }
 
+function lookupPitchX(playerName){
+  if(!PROPS_DATA) return null;
+  var pitchers = PROPS_DATA.pitchers || [];
+  for(var i=0;i<pitchers.length;i++){ if(pitchers[i].name===playerName) return pitchers[i]; }
+  return null;
+}
+
 function loadSimulation(){
   ensureSimWrap();
   var panel = document.getElementById('simPanel');
@@ -2115,8 +2122,82 @@ function renderProjectionDetail(){
       if(adj && adj.form_note && adj.form_note !== 'no data')
         batxHtml += '<div style="margin-top:7px;font-size:.61rem;color:var(--mu)">Form: '+adj.form_note+(adj.bvp_note&&adj.bvp_note!=='no data'?' &nbsp;|&nbsp; BvP: '+adj.bvp_note:'')+'</div>';
       batxHtml += '<div style="margin-top:8px;font-size:.62rem;color:var(--mu)">Proj: H '+fmt2(bp.hits)+' &nbsp;TB '+fmt2(bp.tb)+' &nbsp;HR '+fmt2(bp.hr)+' &nbsp;RBI '+fmt2(bp.rbi)+' &nbsp;R '+fmt2(bp.r)+' &nbsp;|&nbsp; '+bp.platoon_note+'</div>';
+      // ── O/U picks ────────────────────────────────────────────────────────
+      var ouLines = [
+        {stat:'hits',line:0.5,label:'H 0.5'},{stat:'hits',line:1.5,label:'H 1.5'},
+        {stat:'tb',  line:1.5,label:'TB 1.5'},{stat:'tb',  line:2.5,label:'TB 2.5'},
+        {stat:'hr',  line:0.5,label:'HR 0.5'},{stat:'rbi', line:0.5,label:'RBI 0.5'},
+        {stat:'hrr', line:2.5,label:'HRR 2.5'}
+      ];
+      var ouPills = ouLines.map(function(def){
+        var proj = bp[def.stat]; if(proj==null) return '';
+        var edge = proj - def.line;
+        var dir = edge>=0?'OVER':'UNDER';
+        var col = edge>=0?'#4caf50':'#f44336';
+        var bg  = edge>=0?'rgba(76,175,80,.1)':'rgba(244,67,54,.08)';
+        var bor = edge>=0?'rgba(76,175,80,.3)':'rgba(244,67,54,.25)';
+        return '<span style="display:inline-block;padding:3px 7px;border-radius:5px;font-family:Orbitron,monospace;font-size:.52rem;letter-spacing:.8px;border:1px solid '+bor+';background:'+bg+';color:'+col+';margin-right:4px;margin-bottom:4px">'+def.label+' <strong>'+dir+'</strong> <span style="opacity:.6;font-size:.46rem">'+(edge>=0?'+':'')+edge.toFixed(2)+'</span></span>';
+      }).join('');
+      // Reasoning from top components
+      var sortedKeys = ['contact','power','discipline','platoon','pitcher','form','bvp','park','weather']
+        .filter(function(k){ return adj[k]!=null; })
+        .sort(function(a,b){ return Math.abs(adj[b])-Math.abs(adj[a]); });
+      var topPos2 = sortedKeys.filter(function(k){ return adj[k]>0.005; }).slice(0,2);
+      var topNeg2 = sortedKeys.filter(function(k){ return adj[k]<-0.005; }).slice(0,1);
+      var compLbls2 = {contact:'contact quality',power:'raw power',discipline:'plate discipline',platoon:'platoon edge',park:'park factor',weather:'weather',pitcher:'pitcher matchup',form:'recent form',bvp:'BvP history'};
+      var reasonParts2 = [];
+      if(topPos2.length) reasonParts2.push('boosted by '+topPos2.map(function(k){return compLbls2[k];}).join(' & '));
+      if(topNeg2.length) reasonParts2.push('limited by '+topNeg2.map(function(k){return compLbls2[k];}).join(' & '));
+      if(ouPills) batxHtml += '<div style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,.06)"><div style="font-family:Orbitron,monospace;font-size:.55rem;letter-spacing:1.5px;color:var(--mu);margin-bottom:6px">O/U PICKS</div><div style="display:flex;flex-wrap:wrap">'+ouPills+'</div>'+(reasonParts2.length?'<div style="font-size:.58rem;color:var(--mu);margin-top:4px;opacity:.8">'+reasonParts2.join('; ')+'</div>':'')+'</div>';
     }
     detail += '<div class="mini-grid"><div class="mini-card fw" style="grid-column:1/-1"><h5>BAT X ENGINE</h5>'+batxHtml+'</div></div>';
+  }
+  // ── PITCH X ENGINE PANEL ──────────────────────────────────────────────────
+  if(r.kind==='pitcher'){
+    var px = lookupPitchX(r.player);
+    var pp = px ? px.proj : null;
+    var pitchxHtml = '';
+    if(!PROPS_DATA){
+      pitchxHtml = '<p class="na" style="font-size:.65rem">PITCH X data loading…</p>';
+    } else if(!pp){
+      pitchxHtml = '<p class="na" style="font-size:.65rem">PITCH X projection not found for '+r.player+'.</p>';
+    } else {
+      var kProj = pp.k || 0;
+      var ipProj = pp.expected_ip || '?';
+      var eraB   = pp.era_blended || pp.era_season || '?';
+      var flag   = pp.form_flag || 'neutral';
+      // K O/U pills
+      var kLines = [3.5, 4.5, 5.5, 6.5];
+      var kPills = kLines.map(function(line){
+        var edge = kProj - line;
+        var dir  = edge >= 0 ? 'OVER' : 'UNDER';
+        var col  = edge >= 0 ? '#4caf50' : '#f44336';
+        var bg   = edge >= 0 ? 'rgba(76,175,80,.1)' : 'rgba(244,67,54,.08)';
+        var bor  = edge >= 0 ? 'rgba(76,175,80,.3)'  : 'rgba(244,67,54,.25)';
+        return '<span style="display:inline-block;padding:3px 7px;border-radius:5px;font-family:Orbitron,monospace;font-size:.52rem;letter-spacing:.8px;border:1px solid '+bor+';background:'+bg+';color:'+col+';margin-right:4px;margin-bottom:4px">K '+line+' <strong>'+dir+'</strong> <span style="opacity:.6;font-size:.46rem">'+(edge>=0?'+':'')+edge.toFixed(2)+'</span></span>';
+      }).join('');
+      // Form reasoning
+      var flagStr = flag==='struggling' ? '⚠ ERA trending up recently — strikeout volume may dip' :
+                   flag==='dealing'    ? '✓ Dealing lately — ERA trending down, K rate elevated' :
+                                         'Form neutral — projecting close to season K baseline';
+      var eraNote = (pp.era_recent && pp.era_season)
+        ? 'Blended ERA '+eraB+' (season '+pp.era_season+' · recent '+pp.era_recent+')'
+        : 'ERA '+eraB;
+      pitchxHtml  = '<div class="statline" style="margin-bottom:10px">'
+        + '<span style="font-size:.7rem">Proj K</span>'
+        + '<span style="font-size:.85rem;color:var(--c);font-family:Orbitron,monospace">'+fmt2(kProj)+'</span>'
+        + '</div>'
+        + '<div class="statline" style="margin-bottom:10px">'
+        + '<span style="font-size:.7rem">Exp IP / Blended ERA</span>'
+        + '<span style="font-size:.75rem;color:var(--c)">'+ipProj+' IP &nbsp;/ '+eraB+' ERA</span>'
+        + '</div>'
+        + '<div style="margin-bottom:8px"><div style="font-family:Orbitron,monospace;font-size:.55rem;letter-spacing:1.5px;color:var(--mu);margin-bottom:6px">K OVER/UNDER</div>'
+        + '<div style="display:flex;flex-wrap:wrap">'+kPills+'</div></div>'
+        + '<div style="font-size:.61rem;color:var(--mu);margin-top:4px">'+flagStr+'</div>'
+        + '<div style="font-size:.6rem;color:var(--mu);margin-top:3px">'+eraNote+'</div>'
+        + (pp.recent_k != null ? '<div style="font-size:.6rem;color:var(--mu);margin-top:3px">Recent: '+pp.recent_k+' K / '+pp.recent_ip+' IP / '+pp.recent_er+' ER over last '+pp.recent_starts+' starts</div>' : '');
+    }
+    detail += '<div class="mini-grid"><div class="mini-card fw" style="grid-column:1/-1"><h5>PITCH X ENGINE</h5>'+pitchxHtml+'</div></div>';
   }
   detail += '<div class="reason-box"><div class="reason-head">AI ANALYSIS REASONING</div><div class="reason-list">'+reasons+'</div></div>'
     + '<div class="proj-blurb">AI summary: '+(r.reasons&&r.reasons.length?r.reasons.join(' '):'No additional reasoning available.')+'</div>';

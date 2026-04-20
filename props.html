@@ -189,11 +189,13 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .streak-badge{padding:3px 9px;border-radius:6px;font-family:'Orbitron',monospace;font-size:.55rem;letter-spacing:1px;font-weight:700}
 .streak-over{background:rgba(0,230,118,.12);border:1px solid rgba(0,230,118,.35);color:var(--g)}
 .streak-under{background:rgba(244,67,54,.1);border:1px solid rgba(244,67,54,.3);color:var(--r)}
-/* ── BAT X panel ── */
+/* ── BAT X / PITCH X panel ── */
 .batx-panel{margin-top:10px;padding:10px 12px;background:rgba(0,229,255,.03);border:1px solid rgba(0,229,255,.1);border-radius:9px}
 .batx-hd{font-family:'Orbitron',monospace;font-size:.58rem;letter-spacing:1.5px;color:var(--mu);margin-bottom:7px}
 .batx-grid{display:grid;grid-template-columns:60px 1fr;gap:3px 6px;align-items:center;margin-bottom:4px}
 .batx-note{font-size:.56rem;color:var(--mu);margin-top:5px;opacity:.7}
+.batx-ou-row{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
+.batx-ou-pill{display:inline-block;padding:3px 8px;border-radius:5px;font-family:'Orbitron',monospace;font-size:.52rem;letter-spacing:.8px;border:1px solid;cursor:default}
 /* ── Pitcher trend section ── */
 .pp-trends{margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.06)}
 .pp-trend-hd{font-family:'Orbitron',monospace;font-size:.58rem;color:var(--mu);letter-spacing:2px;margin-bottom:8px}
@@ -771,6 +773,43 @@ function batxCompBar(val) {
   return `<span style="display:inline-block;width:${pct}px;max-width:70px;height:5px;border-radius:3px;background:${col};vertical-align:middle;margin:0 5px"></span><span style="font-size:.6rem;color:${val>=0?'var(--c)':'#ff7070'}">${sign+(val*100).toFixed(1)}%</span>`;
 }
 
+function batxOUPicks(p, adj) {
+  if (!p || !adj) return '';
+  const COMP_LABELS = {contact:'contact quality',power:'raw power',discipline:'plate discipline',platoon:'platoon edge',park:'park factor',weather:'weather',pitcher:'pitcher matchup',form:'recent form',bvp:'BvP history'};
+  // Build reasoning from top movers
+  const keys = Object.keys(adj).filter(k => COMP_LABELS[k] && adj[k] != null);
+  keys.sort((a,b) => Math.abs(adj[b]) - Math.abs(adj[a]));
+  const topPos = keys.filter(k => adj[k] >  0.005).slice(0,2);
+  const topNeg = keys.filter(k => adj[k] < -0.005).slice(0,1);
+  const parts = [];
+  if (topPos.length) parts.push('boosted by ' + topPos.map(k=>COMP_LABELS[k]).join(' & '));
+  if (topNeg.length) parts.push('limited by '  + topNeg.map(k=>COMP_LABELS[k]).join(' & '));
+  const reasoning = parts.join('; ');
+  // Standard lines
+  const lines = [
+    {stat:'hits', line:0.5, label:'H 0.5'},
+    {stat:'hits', line:1.5, label:'H 1.5'},
+    {stat:'tb',   line:1.5, label:'TB 1.5'},
+    {stat:'tb',   line:2.5, label:'TB 2.5'},
+    {stat:'hr',   line:0.5, label:'HR 0.5'},
+    {stat:'rbi',  line:0.5, label:'RBI 0.5'},
+    {stat:'hrr',  line:2.5, label:'HRR 2.5'},
+  ];
+  const pills = lines.map(def => {
+    const proj = p[def.stat];
+    if (proj == null) return '';
+    const edge = proj - def.line;
+    const dir = edge >= 0 ? 'OVER' : 'UNDER';
+    const col = dir === 'OVER' ? 'var(--g)' : 'var(--r)';
+    const bg  = dir === 'OVER' ? 'rgba(0,230,118,.1)' : 'rgba(244,67,54,.08)';
+    const bor = dir === 'OVER' ? 'rgba(0,230,118,.3)' : 'rgba(244,67,54,.25)';
+    const edgeStr = (edge >= 0 ? '+' : '') + edge.toFixed(2);
+    return `<span class="batx-ou-pill" style="border-color:${bor};background:${bg};color:${col}">${def.label} <strong>${dir}</strong> <span style="opacity:.6;font-size:.48rem">${edgeStr}</span></span>`;
+  }).filter(Boolean).join('');
+  return `<div class="batx-ou-row">${pills}</div>`
+    + (reasoning ? `<div class="batx-note" style="margin-top:4px">${reasoning}</div>` : '');
+}
+
 function batterCard(b) {
   const p    = b.proj || {};
   const adj  = p.adjustments || null;
@@ -788,10 +827,12 @@ function batterCard(b) {
     const rows = components.map(k => adj[k] != null
       ? `<span style="font-size:.58rem;color:var(--mu);letter-spacing:.8px">${compLabels[k]}</span><span>${batxCompBar(adj[k])}</span>`
       : '').filter(Boolean).join('');
+    const ouHtml = batxOUPicks(p, adj);
     batxHtml = `<div class="batx-panel">
       <div class="batx-hd">BAT X &nbsp;<span style="font-family:Orbitron,monospace;font-size:.72rem;color:${compColor}">${compSign}${((comp-1)*100).toFixed(1)}% <span style="font-size:.58rem;color:var(--mu)">×${comp?.toFixed(3)}</span></span></div>
       <div class="batx-grid">${rows}</div>
       ${adj.form_note && adj.form_note !== 'no data' ? `<div class="batx-note">Form: ${adj.form_note}${adj.bvp_note && adj.bvp_note !== 'no data' ? ' · BvP: '+adj.bvp_note : ''}</div>` : ''}
+      ${ouHtml}
     </div>`;
   }
 
@@ -822,6 +863,37 @@ function batterCard(b) {
 function renderPitchers(pitchers) {
   if (!pitchers.length) { gel('pitcherGrid').innerHTML = noData('NO PITCHER DATA AVAILABLE'); return; }
   gel('pitcherGrid').innerHTML = pitchers.map(pitcherPanel).join('');
+}
+
+function pitchXPanel(p, pr) {
+  // PITCH X — K over/under picks with reasoning
+  if (!pr || !pr.k) return '';
+  const kProj = pr.k;
+  const lines = [3.5, 4.5, 5.5, 6.5];
+  const pills = lines.map(line => {
+    const edge = kProj - line;
+    const dir  = edge >= 0 ? 'OVER' : 'UNDER';
+    const col  = dir === 'OVER' ? 'var(--g)' : 'var(--r)';
+    const bg   = dir === 'OVER' ? 'rgba(0,230,118,.1)' : 'rgba(244,67,54,.08)';
+    const bor  = dir === 'OVER' ? 'rgba(0,230,118,.3)'  : 'rgba(244,67,54,.25)';
+    const edgeStr = (edge >= 0 ? '+' : '') + edge.toFixed(2);
+    return `<span class="batx-ou-pill" style="border-color:${bor};background:${bg};color:${col}">K ${line} <strong>${dir}</strong> <span style="opacity:.6;font-size:.48rem">${edgeStr}</span></span>`;
+  }).join('');
+  // Reasoning
+  const flag  = pr.form_flag || 'neutral';
+  const flagTxt = flag === 'struggling' ? 'pitcher trending up in ERA recently'
+                : flag === 'dealing'    ? 'pitcher dealing — ERA trending down'
+                : 'form trending neutral';
+  const ip    = pr.expected_ip || '?';
+  const era_b = pr.era_blended || pr.era_season || '?';
+  const opp_k = p.opp_k_pct != null ? (p.opp_k_pct * 100).toFixed(1) + '% opp K%' : null;
+  const parts = [`${flagTxt}`, `${ip} IP projected at ${era_b} blended ERA`];
+  if (opp_k) parts.push(opp_k);
+  return `<div class="batx-panel" style="margin-top:12px">
+    <div class="batx-hd">PITCH X &nbsp;<span style="font-family:Orbitron,monospace;font-size:.7rem;color:var(--c)">${kProj} proj K</span></div>
+    <div class="batx-ou-row">${pills}</div>
+    <div class="batx-note" style="margin-top:4px">${parts.join(' · ')}</div>
+  </div>`;
 }
 
 function pitcherPanel(p) {
@@ -871,6 +943,7 @@ function pitcherPanel(p) {
       Opp K%: <span>${p.opp_k_pct?(p.opp_k_pct*100).toFixed(1)+'%':'—'}</span>
       &nbsp;·&nbsp; Opp wOBA: <span>${p.opp_woba?Number(p.opp_woba).toFixed(3):'—'}</span>
     </div>
+    ${pitchXPanel(p, pr)}
     ${trnd}
   </div>`;
 }
