@@ -175,6 +175,30 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .placeholder{padding:60px 20px;text-align:center;color:var(--mu);font-family:'Orbitron',monospace;font-size:.75rem;letter-spacing:3px;line-height:2.5}
 footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6rem;color:var(--mu);letter-spacing:2px;font-family:'Orbitron',monospace;margin-top:24px}
 @media(max-width:900px){.cards-grid{grid-template-columns:1fr}nav,selbar,.srcbar,.main{padding-left:16px;padding-right:16px}.kpi-row{grid-template-columns:repeat(2,1fr)}}
+/* Picks Panel */
+.pd-picks-wrap{max-width:960px;margin:0 auto 20px;padding:0 20px}
+.pd-pr-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:700px){.pd-pr-grid{grid-template-columns:1fr}}
+.pd-pr-card{background:var(--card);border:1px solid var(--b);border-radius:12px;padding:14px 16px}
+.pd-pr-card.stars{border-color:rgba(0,229,255,.25)}
+.pd-pr-card.parlay{border-color:rgba(255,215,0,.2)}
+.pd-pr-sec-hd{font-family:'Orbitron',monospace;font-size:.58rem;letter-spacing:2px;color:var(--mu);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--b)}
+.pd-pr-bet{display:flex;align-items:flex-start;gap:10px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.04)}
+.pd-pr-bet:last-child{border-bottom:none}
+.pd-pr-rank{font-size:.9rem;min-width:22px}
+.pd-pr-body{flex:1;min-width:0}
+.pd-pr-title{font-family:'Orbitron',monospace;font-size:.58rem;font-weight:700;letter-spacing:1.5px;margin-bottom:3px}
+.pd-pr-pick{font-size:.62rem;color:var(--t);font-weight:600;margin-bottom:2px}
+.pd-pr-reason{font-size:.52rem;color:var(--mu);line-height:1.5}
+.pd-pr-conf{font-size:.7rem;white-space:nowrap}
+.pd-pr-leg{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.04)}
+.pd-pr-leg:last-of-type{border-bottom:none}
+.pd-pr-leg-cat{font-family:'Orbitron',monospace;font-size:.54rem;font-weight:700;min-width:38px}
+.pd-pr-leg-pick{flex:1;font-size:.58rem;color:var(--t)}
+.pd-pr-leg-pill{font-size:.48rem;font-family:'Orbitron',monospace;letter-spacing:1px;padding:2px 7px;border-radius:99px;font-weight:700}
+.pd-pr-leg-pill.over{background:rgba(0,200,100,.18);color:#00e676;border:1px solid rgba(0,200,100,.3)}
+.pd-pr-leg-pill.under{background:rgba(255,100,100,.15);color:#ef9a9a;border:1px solid rgba(255,100,100,.25)}
+.pd-pr-empty{font-size:.6rem;color:var(--mu);padding:10px 0;text-align:center;font-family:'Orbitron',monospace;letter-spacing:1.5px}
 </style>
 </head>
 <body>
@@ -217,6 +241,9 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
   <button class="analyze-btn" id="analyzeBtn" onclick="analyze()">ANALYZE ▶</button>
 </div>
 
+<div class="pd-picks-wrap" id="pdPicksWrap" style="display:none">
+  <div id="pdPicksPanel"></div>
+</div>
 <div class="main">
   <div id="placeholder" class="placeholder">⚾<br>SELECT A GAME AND PITCHER<br>THEN CLICK ANALYZE</div>
   <div id="cardsGrid" class="cards-grid" style="display:none"></div>
@@ -362,7 +389,7 @@ async function analyze(silent=false){
     // Load BAT X projections for threat pane integration
     fetch(`/api/props/projections/${g.gamePk}`)
       .then(r=>r.json())
-      .then(d=>{ if(d&&d.success){ PROPS_DATA=d; rebuildThreats(); } })
+      .then(d=>{ if(d&&d.success){ PROPS_DATA=d; rebuildThreats(); buildPdPicksPanel(); } })
       .catch(()=>{});
 
   }catch(e){
@@ -380,6 +407,115 @@ function switchTab(el,paneId){
     pane.classList.add('active');
     setTimeout(()=>{pane.querySelectorAll('.ars-b').forEach(b=>{b.style.width=b.dataset.w+'%';});},60);
   }
+}
+
+function buildPdPicksPanel() {
+  const wrap = document.getElementById('pdPicksWrap');
+  const el   = document.getElementById('pdPicksPanel');
+  if (!wrap || !el || !PROPS_DATA || !PROPS_DATA.success) return;
+  wrap.style.display = '';
+
+  const batters  = PROPS_DATA.batters  || [];
+  const pitchers = PROPS_DATA.pitchers || [];
+  const COMP_LABELS = {contact:'contact quality',power:'raw power',discipline:'plate discipline',platoon:'platoon edge',park:'park factor',weather:'weather',pitcher:'pitcher matchup',form:'recent form',bvp:'BvP history'};
+  const candidates = [];
+
+  batters.forEach(b => {
+    const p = b.proj; if (!p) return;
+    const adj  = p.adjustments || {};
+    const comp = p.composite   || 1;
+    const adjKeys = Object.keys(adj).filter(k => COMP_LABELS[k] && adj[k] != null)
+                          .sort((a,z) => Math.abs(adj[z]) - Math.abs(adj[a]));
+    const topBoost = adjKeys.filter(k => adj[k] >  0.01).slice(0,2).map(k => COMP_LABELS[k]);
+    const topDrag  = adjKeys.filter(k => adj[k] < -0.01).slice(0,1).map(k => COMP_LABELS[k]);
+    const reason = () => {
+      const parts = [];
+      if (topBoost.length) parts.push('lifted by ' + topBoost.join(' & '));
+      if (topDrag.length)  parts.push('tempered by ' + topDrag.join(', '));
+      return parts.join('; ') + (p.platoon_note ? '. ' + p.platoon_note : '');
+    };
+    const push = (cat, pick, edge, baseConf, w) => {
+      candidates.push({cat, name:b.name, pick, edge, conf:baseConf, reason:reason(), score:edge*comp*w});
+    };
+    if (p.hits != null) {
+      const e05 = p.hits - 0.5; if (e05 > 0) push('HITS', 'H OVER 0.5',  e05, e05>0.35?'elite':e05>0.2?'strong':'lean', 1.0);
+      const e15 = p.hits - 1.5; if (e15 > 0) push('HITS', 'H OVER 1.5',  e15, e15>0.2?'elite':e15>0.1?'strong':'lean', 0.9);
+    }
+    if (p.tb != null) {
+      const et15 = p.tb - 1.5; if (et15 > 0.1) push('BASES','TB OVER 1.5', et15, et15>0.5?'elite':et15>0.25?'strong':'lean', 0.85);
+      const et25 = p.tb - 2.5; if (et25 > 0)   push('BASES','TB OVER 2.5', et25, et25>0.3?'elite':et25>0.15?'strong':'lean', 0.80);
+    }
+    if (p.hr  != null) { const e = p.hr  - 0.5; if (e > 0) push('HR',  'HR OVER 0.5',  e, e>0.15?'elite':e>0.05?'strong':'lean', 1.2); }
+    if (p.rbi != null) { const e = p.rbi - 0.5; if (e > 0) push('RBI', 'RBI OVER 0.5', e, e>0.3?'elite':e>0.15?'strong':'lean', 0.75); }
+  });
+
+  pitchers.forEach(pt => {
+    const pr = pt.proj; if (!pr || pr.k == null) return;
+    [3.5, 4.5, 5.5, 6.5].forEach(line => {
+      const edge = pr.k - line; const eAbs = Math.abs(edge); if (eAbs < 0.1) return;
+      const dir = edge >= 0 ? 'OVER' : 'UNDER';
+      candidates.push({cat:'K', name:pt.name, pick:`K ${dir} ${line}`, edge:eAbs,
+        conf: eAbs>1.0?'elite':eAbs>0.5?'strong':'lean',
+        reason: (pr.form_flag ? 'Form: '+pr.form_flag+'. ' : '') + 'K proj '+pr.k.toFixed(1),
+        score: eAbs * 0.9});
+    });
+  });
+
+  candidates.sort((a,b) => b.score - a.score);
+
+  const starPicks = []; const seen = {};
+  const sorted2 = [...candidates].sort((a,b) => {
+    const rank = {elite:0,strong:1,lean:2};
+    return rank[a.conf] - rank[b.conf] || b.score - a.score;
+  });
+  sorted2.forEach(c => {
+    if (starPicks.length >= 3) return;
+    const key = c.name + '|' + c.cat; if (seen[key]) return;
+    seen[key] = true; starPicks.push(c);
+  });
+
+  const parlayLegs = [];
+  ['HITS','BASES','K','HR'].forEach(cat => {
+    const best = candidates.find(c => c.cat === cat);
+    if (best) parlayLegs.push(best);
+  });
+
+  const confStars = {elite:'⭐⭐⭐⭐⭐', strong:'⭐⭐⭐⭐', lean:'⭐⭐⭐'};
+  const rankEmoji = ['🥇','🥈','🥉'];
+  const catColor  = c => c==='K'?'#ce93d8':c==='HR'?'#f48fb1':c==='BASES'?'#80cbc4':'var(--c)';
+
+  const starsHtml = starPicks.length
+    ? starPicks.map((c,i) => `<div class="pd-pr-bet">
+        <div class="pd-pr-rank">${rankEmoji[i]}</div>
+        <div class="pd-pr-body">
+          <div class="pd-pr-title" style="color:${catColor(c.cat)}">${c.name}</div>
+          <div class="pd-pr-pick">${c.pick} <span style="font-size:.46rem;opacity:.6">edge +${c.edge.toFixed(2)}</span></div>
+          ${c.reason ? `<div class="pd-pr-reason">${c.reason}</div>` : ''}
+        </div>
+        <div class="pd-pr-conf ${c.conf}">${confStars[c.conf]}</div>
+      </div>`).join('')
+    : '<div class="pd-pr-empty">No picks found</div>';
+
+  const parlayHtml = parlayLegs.length
+    ? parlayLegs.map(leg => {
+        const isOver = leg.pick.includes('OVER');
+        return `<div class="pd-pr-leg">
+          <div class="pd-pr-leg-cat" style="color:${catColor(leg.cat)}">${leg.cat}</div>
+          <div class="pd-pr-leg-pick">${leg.name} — ${leg.pick}</div>
+          <div class="pd-pr-leg-pill ${isOver?'over':'under'}">${isOver?'OVER':'UNDER'}</div>
+        </div>`;
+      }).join('')
+    : '<div class="pd-pr-empty">—</div>';
+
+  el.innerHTML = `<div class="pd-pr-grid">
+    <div class="pd-pr-card stars">
+      <div class="pd-pr-sec-hd">⭐ TOP 3 FIVE-STAR BETS</div>${starsHtml}
+    </div>
+    <div class="pd-pr-card parlay">
+      <div class="pd-pr-sec-hd">🎰 PARLAY RECOMMENDATION <span style="font-size:.48rem;font-family:sans-serif;opacity:.6;letter-spacing:0">${parlayLegs.length}-LEG</span></div>
+      ${parlayHtml}
+    </div>
+  </div>`;
 }
 
 // Re-render all open threats panes once PROPS_DATA arrives

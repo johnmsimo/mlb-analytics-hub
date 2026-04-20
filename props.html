@@ -196,6 +196,34 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .batx-note{font-size:.56rem;color:var(--mu);margin-top:5px;opacity:.7}
 .batx-ou-row{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
 .batx-ou-pill{display:inline-block;padding:3px 8px;border-radius:5px;font-family:'Orbitron',monospace;font-size:.52rem;letter-spacing:.8px;border:1px solid;cursor:default}
+/* ── Dual-engine picks panel ── */
+.props-picks-wrap{margin-bottom:18px;background:rgba(0,0,0,.25);border:1px solid rgba(0,229,255,.1);border-radius:12px;padding:14px 16px}
+.props-picks-hd{font-family:'Orbitron',monospace;font-size:.68rem;letter-spacing:2px;color:var(--c);margin-bottom:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.props-pr-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:700px){.props-pr-grid{grid-template-columns:1fr}}
+.props-pr-card{background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:12px 14px}
+.props-pr-card.stars{border-color:rgba(255,215,0,.18);background:rgba(255,215,0,.02)}
+.props-pr-card.parlay{border-color:rgba(0,229,255,.15);background:rgba(0,229,255,.02)}
+.props-pr-sec-hd{font-family:'Orbitron',monospace;font-size:.6rem;letter-spacing:2px;color:var(--c);margin-bottom:10px}
+.props-pr-bet{display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.05)}
+.props-pr-bet:last-child{border-bottom:none;padding-bottom:0}
+.props-pr-rank{font-family:'Orbitron',monospace;font-size:.9rem;min-width:24px;text-align:center}
+.props-pr-body{flex:1;min-width:0}
+.props-pr-title{font-size:.68rem;font-weight:600;margin-bottom:2px}
+.props-pr-pick{font-family:'Orbitron',monospace;font-size:.6rem;letter-spacing:.8px}
+.props-pr-reason{font-size:.56rem;color:var(--mu);margin-top:3px;line-height:1.4}
+.props-pr-conf{display:inline-block;padding:2px 7px;border-radius:4px;font-family:'Orbitron',monospace;font-size:.48rem;letter-spacing:1px;flex-shrink:0;align-self:flex-start;margin-top:2px}
+.props-pr-conf.elite{background:rgba(76,175,80,.12);border:1px solid rgba(76,175,80,.3);color:#4caf50}
+.props-pr-conf.strong{background:rgba(0,229,255,.1);border:1px solid rgba(0,229,255,.25);color:var(--c)}
+.props-pr-conf.lean{background:rgba(255,152,0,.08);border:1px solid rgba(255,152,0,.2);color:#ff9800}
+.props-pr-leg{display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.05)}
+.props-pr-leg:last-child{border-bottom:none;padding-bottom:0}
+.props-pr-leg-cat{font-family:'Orbitron',monospace;font-size:.48rem;letter-spacing:1.5px;color:var(--mu);min-width:44px}
+.props-pr-leg-pick{font-size:.64rem;font-weight:600;flex:1}
+.props-pr-leg-pill{padding:2px 8px;border-radius:4px;font-family:'Orbitron',monospace;font-size:.48rem;letter-spacing:.8px}
+.props-pr-leg-pill.over{background:rgba(76,175,80,.1);border:1px solid rgba(76,175,80,.25);color:#4caf50}
+.props-pr-leg-pill.under{background:rgba(244,67,54,.08);border:1px solid rgba(244,67,54,.2);color:#f44336}
+.props-pr-empty{padding:16px;text-align:center;font-size:.68rem;color:var(--mu);font-family:'Orbitron',monospace;letter-spacing:1px}
 /* ── Pitcher trend section ── */
 .pp-trends{margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.06)}
 .pp-trend-hd{font-family:'Orbitron',monospace;font-size:.58rem;color:var(--mu);letter-spacing:2px;margin-bottom:8px}
@@ -275,6 +303,10 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 
     <!-- ── PROJECTIONS ── -->
     <div class="tabpanel active" id="tab-projections">
+      <div class="props-picks-wrap" id="propsPicksWrap" style="display:none">
+        <div class="props-picks-hd">⭐ TOP PICKS &amp; PARLAY RECOMMENDATION <span style="font-size:.5rem;font-family:sans-serif;opacity:.6;letter-spacing:0">BAT X ENGINE</span></div>
+        <div id="propsPicksPanel"><div class="props-pr-empty">Loading projections…</div></div>
+      </div>
       <div class="subtabs">
         <button class="stab active" id="stab-batters" onclick="switchSub('batters')">BATTERS</button>
         <button class="stab" id="stab-pitchers" onclick="switchSub('pitchers')">PITCHERS</button>
@@ -744,10 +776,130 @@ async function loadProjections() {
 function renderProj(d) {
   renderBatters(d.batters || [], SORT_KEY);
   renderPitchers(d.pitchers || []);
+  buildPropsPicksPanel(d);
   // Re-apply any known lineup status badges
   if (CUR_GAME && LINEUP_STATUS[CUR_GAME]?.hasChanges) {
     applyLineupStatusToCards(LINEUP_STATUS[CUR_GAME]);
   }
+}
+
+function buildPropsPicksPanel(d) {
+  const wrap = document.getElementById('propsPicksWrap');
+  const el   = document.getElementById('propsPicksPanel');
+  if (!wrap || !el) return;
+  const batters  = d.batters  || [];
+  const pitchers = d.pitchers || [];
+  if (!batters.length && !pitchers.length) return;
+  wrap.style.display = '';
+
+  const COMP_LABELS = {contact:'contact quality',power:'raw power',discipline:'plate discipline',platoon:'platoon edge',park:'park factor',weather:'weather',pitcher:'pitcher matchup',form:'recent form',bvp:'BvP history'};
+  const candidates = [];
+
+  batters.forEach(b => {
+    const p = b.proj; if (!p) return;
+    const adj  = p.adjustments || {};
+    const comp = p.composite   || 1;
+    const adjKeys = Object.keys(adj).filter(k => COMP_LABELS[k] && adj[k] != null)
+                          .sort((a,b) => Math.abs(adj[b]) - Math.abs(adj[a]));
+    const topBoost = adjKeys.filter(k => adj[k] >  0.01).slice(0,2).map(k => COMP_LABELS[k]);
+    const topDrag  = adjKeys.filter(k => adj[k] < -0.01).slice(0,1).map(k => COMP_LABELS[k]);
+    const reason = () => {
+      const parts = [];
+      if (topBoost.length) parts.push('lifted by ' + topBoost.join(' & '));
+      if (topDrag.length)  parts.push('tempered by ' + topDrag.join(', '));
+      return parts.join('; ') + (p.platoon_note ? '. ' + p.platoon_note : '');
+    };
+    const push = (cat, pick, edge, baseConf, w) => {
+      candidates.push({cat, name:b.name, pick, edge, conf:baseConf, reason:reason(), score:edge*comp*w});
+    };
+    if (p.hits != null) {
+      const e05 = p.hits - 0.5; if (e05 > 0) push('HITS', 'H OVER 0.5',  e05, e05>0.35?'elite':e05>0.2?'strong':'lean', 1.0);
+      const e15 = p.hits - 1.5; if (e15 > 0) push('HITS', 'H OVER 1.5',  e15, e15>0.2?'elite':e15>0.1?'strong':'lean', 0.9);
+    }
+    if (p.tb != null) {
+      const et15 = p.tb - 1.5; if (et15 > 0.1) push('BASES','TB OVER 1.5', et15, et15>0.5?'elite':et15>0.25?'strong':'lean', 0.85);
+      const et25 = p.tb - 2.5; if (et25 > 0)   push('BASES','TB OVER 2.5', et25, et25>0.3?'elite':et25>0.15?'strong':'lean', 0.80);
+    }
+    if (p.hr  != null) { const e = p.hr  - 0.5; if (e > 0) push('HR',  'HR OVER 0.5',  e, e>0.15?'elite':e>0.05?'strong':'lean', 1.2); }
+    if (p.rbi != null) { const e = p.rbi - 0.5; if (e > 0) push('RBI', 'RBI OVER 0.5', e, e>0.3?'elite':e>0.15?'strong':'lean', 0.75); }
+  });
+
+  pitchers.forEach(pt => {
+    const pr = pt.proj; if (!pr || pr.k == null) return;
+    [3.5, 4.5, 5.5, 6.5].forEach(line => {
+      const edge = pr.k - line; const eAbs = Math.abs(edge); if (eAbs < 0.1) return;
+      const dir = edge >= 0 ? 'OVER' : 'UNDER';
+      candidates.push({cat:'K', name:pt.name, pick:`K ${dir} ${line}`, edge:eAbs,
+        conf: eAbs>1.0?'elite':eAbs>0.5?'strong':'lean',
+        reason: (pr.form_flag ? 'Form: '+pr.form_flag+'. ' : '') + 'K proj '+pr.k.toFixed(1),
+        score: eAbs * 0.9});
+    });
+  });
+
+  candidates.sort((a,b) => b.score - a.score);
+
+  // Top 3 (elite/strong first, fallback to lean)
+  const starPicks = []; const seen = {};
+  const sorted2 = [...candidates].sort((a,b) => {
+    const rank = {elite:0,strong:1,lean:2};
+    return rank[a.conf] - rank[b.conf] || b.score - a.score;
+  });
+  sorted2.forEach(c => {
+    if (starPicks.length >= 3) return;
+    if (c.conf === 'lean' && starPicks.length > 0 && starPicks.every(s => s.conf !== 'lean') === false) return;
+    const key = c.name + '|' + c.cat; if (seen[key]) return;
+    seen[key] = true; starPicks.push(c);
+  });
+  if (starPicks.length < 3) sorted2.forEach(c => {
+    if (starPicks.length >= 3) return;
+    const key = c.name + '|' + c.cat; if (seen[key]) return;
+    seen[key] = true; starPicks.push(c);
+  });
+
+  // Parlay legs
+  const parlayLegs = [];
+  ['HITS','BASES','K','HR'].forEach(cat => {
+    const best = candidates.find(c => c.cat === cat);
+    if (best) parlayLegs.push(best);
+  });
+
+  const confStars = {elite:'⭐⭐⭐⭐⭐', strong:'⭐⭐⭐⭐', lean:'⭐⭐⭐'};
+  const rankEmoji = ['🥇','🥈','🥉'];
+  const catColor  = c => c==='K'?'#ce93d8':c==='HR'?'#f48fb1':c==='BASES'?'#80cbc4':'var(--c)';
+
+  const starsHtml = starPicks.length
+    ? starPicks.map((c,i) => `<div class="props-pr-bet">
+        <div class="props-pr-rank">${rankEmoji[i]}</div>
+        <div class="props-pr-body">
+          <div class="props-pr-title" style="color:${catColor(c.cat)}">${c.name}</div>
+          <div class="props-pr-pick">${c.pick} <span style="font-size:.46rem;opacity:.6">edge +${c.edge.toFixed(2)}</span></div>
+          ${c.reason ? `<div class="props-pr-reason">${c.reason}</div>` : ''}
+        </div>
+        <div class="props-pr-conf ${c.conf}">${confStars[c.conf]}</div>
+      </div>`).join('')
+    : '<div class="props-pr-empty">No picks found</div>';
+
+  const parlayHtml = parlayLegs.length
+    ? parlayLegs.map(leg => {
+        const isOver = leg.pick.includes('OVER');
+        return `<div class="props-pr-leg">
+          <div class="props-pr-leg-cat" style="color:${catColor(leg.cat)}">${leg.cat}</div>
+          <div class="props-pr-leg-pick">${leg.name} — ${leg.pick}</div>
+          <div class="props-pr-leg-pill ${isOver?'over':'under'}">${isOver?'OVER':'UNDER'}</div>
+        </div>`;
+      }).join('')
+    : '<div class="props-pr-empty">—</div>';
+
+  el.innerHTML = `<div class="props-pr-grid">
+    <div class="props-pr-card stars">
+      <div class="props-pr-sec-hd">⭐ TOP 3 FIVE-STAR BETS</div>${starsHtml}
+    </div>
+    <div class="props-pr-card parlay">
+      <div class="props-pr-sec-hd">🎰 PARLAY RECOMMENDATION <span style="font-size:.48rem;font-family:sans-serif;opacity:.6;letter-spacing:0">${parlayLegs.length}-LEG</span></div>
+      ${parlayHtml}
+      ${parlayLegs.length >= 2 ? `<div style="margin-top:10px;padding:8px 10px;background:rgba(0,0,0,.2);border-radius:8px;font-size:.58rem;color:var(--mu);line-height:1.5">💡 <strong style="color:var(--t)">Tip:</strong> Legs marked here are BAT X projections. Open a game deep dive for Monte Carlo cross-validation.</div>` : ''}
+    </div>
+  </div>`;
 }
 
 function sortBatters(btn, key) {
