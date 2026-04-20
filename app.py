@@ -6029,7 +6029,7 @@ def api_props_projections(game_pk):
         wx = get_weather(lat, lon, ghour, venue_id=vid)
 
         # ── Build batter projections (now passes pitcher_hand) ─────────────────
-        def enrich_batters(batters, opp_pfg, opp_psv, opp_pst, opp_abbr, opp_pname, opp_pid):
+        def enrich_batters(batters, opp_pfg, opp_psv, opp_pst, opp_abbr, opp_pname, opp_pid, own_abbr=''):
             opp_hand = (opp_pst.get("pitchHand") or "R").upper()
             result   = []
             for b in batters[:9]:
@@ -6046,7 +6046,7 @@ def api_props_projections(game_pk):
                 )
                 result.append({
                     "name":         name,
-                    "team":         b.get("team", ""),
+                    "team":         own_abbr or b.get("team", ""),
                     "pos":          b.get("pos", ""),
                     "slot":         b.get("slot", 0),
                     "id":           b.get("id"),
@@ -6070,8 +6070,8 @@ def api_props_projections(game_pk):
                 })
             return result
 
-        away_proj = enrich_batters(away_bats, hp_fg, hp_sv, hp_st, home_abbr, hp_name, hp_id)
-        home_proj = enrich_batters(home_bats, ap_fg, ap_sv, ap_st, away_abbr, ap_name, ap_id)
+        away_proj = enrich_batters(away_bats, hp_fg, hp_sv, hp_st, home_abbr, hp_name, hp_id, own_abbr=away_abbr)
+        home_proj = enrich_batters(home_bats, ap_fg, ap_sv, ap_st, away_abbr, ap_name, ap_id, own_abbr=home_abbr)
         all_batters = away_proj + home_proj
 
         # ── Pitcher projections ────────────────────────────────────────────────
