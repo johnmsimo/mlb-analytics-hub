@@ -236,7 +236,7 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
   <a href="/pitcher-deep-dive" style="padding:7px 16px;background:rgba(250,100,0,.07);border:1px solid rgba(250,100,0,.28);border-radius:8px;color:#fa6400;font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:2px;text-decoration:none">⚾ PITCHER ANALYSIS</a>
   <button class="tabbtn active" onclick="switchView('gamesView',this)">TODAY'S GAMES</button>
   <button class="tabbtn" onclick="switchView('teamsView',this)">TEAMS</button>
-  <button class="tabbtn" onclick="switchView('mcView',this)">MONTE CARLO PROJECTIONS</button>
+
 </div>
 <div class="main">
   <div id="gamesView" class="view active">
@@ -251,16 +251,7 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
       <div id="teamWrap"><div class="sw"><div class="sp"></div><div class="st">LOADING TEAM DATA...</div></div></div>
     </div>
   </div>
-  <div id="mcView" class="view">
-    <div class="panel">
-      <div class="sh">MONTE CARLO PROJECTION BOARD</div>
-      <div class="mc-toolbar" style="justify-content:space-between">
-        <span class="pillish" id="mcStatus">Loading…</span>
-        <button onclick="loadMC(true)" style="padding:6px 16px;border:1px solid rgba(0,229,255,.3);border-radius:999px;background:rgba(0,229,255,.08);color:var(--c);font-family:Orbitron,monospace;font-size:.6rem;letter-spacing:1px;cursor:pointer">↻ REFRESH</button>
-      </div>
-      <div id="mcWrap"><div class="sw"><div class="sp"></div><div class="st">LOADING PROJECTIONS...</div></div></div>
-    </div>
-  </div>
+
 </div>
 <footer><div class="footstack"><div>MLB ANALYTICS HUB &nbsp;|&nbsp; DATA: MLB API &middot; FANGRAPHS &middot; BASEBALL SAVANT &middot; OPEN-METEO</div><div><span class="fgtag">FG</span> FANGRAPHS: wOBA &middot; wRC+ &middot; FIP &middot; xFIP &middot; WAR &nbsp;|&nbsp; <span class="svtag">SV</span> BASEBALL SAVANT: xERA &middot; xBA &middot; xSLG &middot; xwOBA &middot; EV &middot; HH% &middot; Barrel% &middot; Pitch Arsenal</div><div>FOR ENTERTAINMENT PURPOSES ONLY</div></div></footer>
 <script>
@@ -484,23 +475,6 @@ function _mcPoll(){
     .then(function(d){if(d&&d.success){MC_DATA=d;renderMC(d);}})
     .catch(function(){});
 }
-function loadMC(forceRefresh){
-  var wrap=document.getElementById('mcWrap'),st=document.getElementById('mcStatus');
-  _MFG='all';_MFM='all';_MFR='all';
-  if(_MC_POLL){clearInterval(_MC_POLL);_MC_POLL=null;}
-  if(wrap)wrap.innerHTML='<div class="sw"><div class="sp"></div><div class="st">LOADING PROJECTIONS...</div></div>';
-  if(st)st.textContent='Loading…';
-  var url='/api/projections/monte-carlo'+(forceRefresh?'?refresh=1':'');
-  fetch(url)
-    .then(function(r){if(!r.ok)throw new Error('Server '+r.status);return r.json();})
-    .then(function(d){if(!d.success)throw new Error(d.error||'API error');MC_DATA=d;renderMC(d);})
-    .catch(function(e){
-      if(st)st.textContent='Error: '+e.message;
-      if(wrap)wrap.innerHTML='<div class="ng"><h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px">LOAD FAILED</h3>'
-        +'<p style="color:var(--mu);font-size:.75rem;margin-top:8px">'+_mcEsc(e.message)+'</p>'
-        +'<button onclick="loadMC()" style="margin-top:14px;padding:8px 18px;border:1px solid rgba(0,229,255,.3);border-radius:999px;background:rgba(0,229,255,.08);color:var(--c);font-family:Orbitron,monospace;font-size:.6rem;letter-spacing:1px;cursor:pointer">↻ RETRY</button></div>';
-    });
-}
 
 function etTodayStr(){const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());const y=parts.find(p=>p.type==='year').value,m=parts.find(p=>p.type==='month').value,d=parts.find(p=>p.type==='day').value;return y+'-'+m+'-'+d}
 function fmtDateLabel(v){try{const dt=new Date(v+'T12:00:00');return dt.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',year:'numeric'})}catch(e){return v}}
@@ -512,7 +486,7 @@ document.getElementById('gamesDateInput').addEventListener('change',function(e){
 document.getElementById('prevDateBtn').addEventListener('click',function(){shiftGamesDate(-1)});
 document.getElementById('nextDateBtn').addEventListener('click',function(){shiftGamesDate(1)});
 document.getElementById('todayDateBtn').addEventListener('click',function(){selectedGamesDate=etTodayStr();syncDateUI();load(selectedGamesDate)});
-syncDateUI();load();loadTeams();loadMC();setInterval(function(){load(selectedGamesDate)},60000);
+syncDateUI();load();loadTeams();setInterval(function(){load(selectedGamesDate)},60000);
 </script>
 <!-- LIVE GAMEPLAY PATCH -->
 <style>
