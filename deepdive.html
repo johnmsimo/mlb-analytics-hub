@@ -541,7 +541,44 @@ function renderPitcherCard(p,lbl){
   }else{rows='<tr><td colspan="2" class="na" style="font-size:.68rem">No season stats yet</td></tr>';}
   return '<div class="pc"><h4>'+(p.name||'TBD')+'</h4><div class="pct">'+lbl+'</div>'
     +'<table class="stab"><thead><tr><th>STAT</th><th>VALUE</th></tr></thead><tbody>'+rows+'</tbody></table>'
-    +buildArsenal(s.sv_arsenal_pct,s.sv_arsenal_velo)+'</div>';
+    +buildArsenal(s.sv_arsenal_pct,s.sv_arsenal_velo)
+    +buildPitchX(p.name)+'</div>';
+}
+
+function buildPitchX(pitcherName){
+  var px = lookupPitchX(pitcherName);
+  if(!px || !px.proj) return '';
+  var pp = px.proj;
+  var kProj = pp.k || 0;
+  var ipProj = pp.expected_ip || '?';
+  var eraB   = pp.era_blended || pp.era_season || '?';
+  var flag   = pp.form_flag || 'neutral';
+  var flagStr = flag==='struggling' ? '⚠ ERA trending up recently — strikeout volume may dip'
+              : flag==='dealing'    ? '✓ Dealing lately — ERA trending down, K rate elevated'
+              :                       'Form neutral — projecting close to season K baseline';
+  var kLines = [3.5, 4.5, 5.5, 6.5];
+  var pills = kLines.map(function(line){
+    var edge = kProj - line;
+    var dir  = edge >= 0 ? 'OVER' : 'UNDER';
+    var col  = edge >= 0 ? '#4caf50' : '#f44336';
+    var bg   = edge >= 0 ? 'rgba(76,175,80,.1)' : 'rgba(244,67,54,.08)';
+    var bor  = edge >= 0 ? 'rgba(76,175,80,.3)' : 'rgba(244,67,54,.25)';
+    return '<span style="display:inline-block;padding:3px 7px;border-radius:5px;font-family:Orbitron,monospace;font-size:.52rem;letter-spacing:.8px;border:1px solid '+bor+';background:'+bg+';color:'+col+';margin-right:4px;margin-bottom:4px">K '+line+' <strong>'+dir+'</strong> <span style="opacity:.6;font-size:.46rem">'+(edge>=0?'+':'')+edge.toFixed(2)+'</span></span>';
+  }).join('');
+  var eraNote = (pp.era_recent && pp.era_season)
+    ? 'Blended ERA '+eraB+' (season '+pp.era_season+' · recent '+pp.era_recent+')'
+    : 'ERA '+eraB;
+  var recentNote = (pp.recent_k != null)
+    ? 'Recent: '+pp.recent_k+' K / '+pp.recent_ip+' IP / '+pp.recent_er+' ER over last '+pp.recent_starts+' starts'
+    : '';
+  return '<div style="margin-top:14px;padding:10px 12px;background:rgba(0,229,255,.03);border:1px solid rgba(0,229,255,.12);border-radius:9px">'
+    +'<div style="font-family:Orbitron,monospace;font-size:.58rem;letter-spacing:1.5px;color:var(--mu);margin-bottom:8px">PITCH X ENGINE</div>'
+    +'<div style="margin-bottom:6px;font-size:.68rem">Proj <strong style="color:var(--c);font-family:Orbitron,monospace">'+fmt2(kProj)+' K</strong> &nbsp;&middot;&nbsp; '+ipProj+' IP &nbsp;&middot;&nbsp; '+eraB+' ERA</div>'
+    +'<div style="margin-bottom:6px">'+pills+'</div>'
+    +'<div style="font-size:.6rem;color:var(--mu);margin-bottom:3px">'+flagStr+'</div>'
+    +'<div style="font-size:.59rem;color:var(--mu);margin-bottom:2px">'+eraNote+'</div>'
+    +(recentNote ? '<div style="font-size:.58rem;color:var(--mu)">'+recentNote+'</div>' : '')
+    +'</div>';
 }
 function renderPitchers(){
   if(!PD||!PD.success){document.getElementById('pitP').innerHTML='<p class="na">Pitcher stats unavailable.</p>';return;}
@@ -637,7 +674,9 @@ function updateProj(){
       +(hasFgP?'<div class="pr-row"><span class="prk" style="color:var(--fg)">FIP / xFIP</span><span class="prv" style="color:var(--fg)">'+fp.toFixed(2)+' / '+toF((p.stats||{}).fg_xfip,fp).toFixed(2)+'</span></div>':'')
       +'<div class="pr-row"><span class="prk" style="color:var(--sv)">Opp. xwOBA</span><span class="prv" style="color:var(--sv)">'+lXwoba.toFixed(3)+'</span></div>'
       +'<div class="pr-row"><span class="prk" style="color:var(--sv)">Opp. EV / HH%</span><span class="prv" style="color:var(--sv)">'+lEv.toFixed(1)+' / '+lHh.toFixed(1)+'%</span></div>'
-      +'<div class="proj-note">Pitcher inputs: xERA + FIP/xFIP vs opp lineup xwOBA+EV+HH%</div></div>';
+      +'<div class="proj-note">Pitcher inputs: xERA + FIP/xFIP vs opp lineup xwOBA+EV+HH%</div>'
+      +buildPitchX(p.name)
+      +'</div>';
   }
   document.getElementById('projP').innerHTML='<div class="projg">'+left+right+'</div>';
 }
@@ -1427,7 +1466,12 @@ function loadPropsProjections(){
   fetch('/api/props/projections/' + GPK)
     .then(function(r){ return r.json(); })
     .then(function(d){
-      if(d && d.success){ PROPS_DATA = d; if(ACTIVE_TAB==='proj') renderProjectionHub(); }
+      if(d && d.success){
+        PROPS_DATA = d;
+        if(ACTIVE_TAB==='proj') renderProjectionHub();
+        // Refresh pitcher cards so PITCH X panels populate
+        if(PD && PD.success) renderPitchers();
+      }
     })
     .catch(function(){}); // silent — BAT X panel will show placeholder
 }
