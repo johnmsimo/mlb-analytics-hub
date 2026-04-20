@@ -5292,6 +5292,21 @@ _STAT_DEFAULTS = {
     'ops': 0.705,
 }
 
+# ── BAT X component weights (calibration hook) ────────────────────────────────
+# Sum of weights defines relative contribution to composite multiplier.
+# Increase/decrease individual weights to calibrate vs historical results.
+BATX_WEIGHTS = {
+    "contact":    0.28,   # platoon-blended AVG + xBA
+    "power":      0.18,   # ISO, barrel%, EV, xSLG
+    "discipline": 0.12,   # BB%, K%, xwOBA
+    "platoon":    0.10,   # hand matchup edge
+    "park":       0.07,   # park factor
+    "weather":    0.05,   # temp/wind
+    "pitcher":    0.12,   # FIP/xERA/K% resistance + recent form
+    "form":       0.05,   # Phase 1: L7 wOBA edge vs league
+    "bvp":        0.03,   # Phase 1: BvP shrunk wOBA × reliability
+}
+
 
 def _batter_hand_note(batter, pitcher_hand):
     """
@@ -5408,6 +5423,215 @@ def _project_batter(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_sv,
         "split_avg":   round(avg, 3),
         "split_ops":   round(ops, 3),
         "platoon_note": _batter_hand_note(batter, pitcher_hand),
+    }
+
+
+# ── BAT X projection engine (v3) ──────────────────────────────────────────────
+_LEAGUE_WOBA    = 0.320
+_LEAGUE_BB_PCT  = 0.083
+_LEAGUE_K_PCT   = 0.220
+_LEAGUE_EV      = 88.5
+_LEAGUE_BRL_PCT = 0.063   # 6.3 %
+
+def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_sv,
+                          park_factor, weather, pitcher_hand='R',
+                          form=None, bvp=None):
+    """
+    BAT X-style projection engine with named component weights (BATX_WEIGHTS).
+    Signature is backwards-compatible with _project_batter; adds optional
+    form / bvp kwargs (Phase 1 dicts) and an 'adjustments' key in the return dict.
+
+    All per-component raw contributions are stored in `adjustments` for calibration.
+    """
+    W = BATX_WEIGHTS  # shorthand
+
+    name = batter.get("name", "")
+    fg   = fg_batter(name)
+    sv   = sv_batter(name)
+
+    # ── Slot / PA ─────────────────────────────────────────────────────────────
+    slot   = int(batter.get("slot") or 5)
+    exp_pa = round(4.35 - (slot - 1) * 0.095, 2)
+
+    # ── Platoon-blended base rates ────────────────────────────────────────────
+    avg  = _platoon_blend(batter, pitcher_hand, 'avg')
+    obp  = _platoon_blend(batter, pitcher_hand, 'obp')
+    slg  = _platoon_blend(batter, pitcher_hand, 'slg')
+    ops  = _platoon_blend(batter, pitcher_hand, 'ops')
+
+    season_avg = _safe_f(batter.get('avg') or fg.get('fg_avg'), _STAT_DEFAULTS['avg'])
+    season_ops = _safe_f(batter.get('ops'), _STAT_DEFAULTS['ops'])
+
+    # ── Raw stats ─────────────────────────────────────────────────────────────
+    fg_pa   = _safe_f(fg.get("fg_pa"),  200)
+    fg_hr   = _safe_f(fg.get("fg_hr"),  3)
+    fg_rbi  = _safe_f(fg.get("fg_rbi"), 12)
+    fg_r    = _safe_f(fg.get("fg_r"),   12)
+    fg_iso  = _safe_f(fg.get("fg_iso"), 0.145)
+    fg_bbp  = _safe_f(fg.get("fg_bbpct"), _LEAGUE_BB_PCT)
+    fg_kp   = _safe_f(fg.get("fg_kpct"),  _LEAGUE_K_PCT)
+    fg_woba = _safe_f(fg.get("fg_woba"), _LEAGUE_WOBA)
+    fg_wrc  = _safe_f(fg.get("fg_wrc"),  100)
+
+    sv_xba   = _safe_f(sv.get("sv_xba"),    season_avg)
+    sv_xslg  = _safe_f(sv.get("sv_xslg"),   slg)
+    sv_xwoba = _safe_f(sv.get("sv_xwoba") or fg.get("fg_woba"), _LEAGUE_WOBA)
+    sv_ev    = _safe_f(sv.get("sv_ev"),      _LEAGUE_EV)
+    sv_brl   = _safe_f(sv.get("sv_brl_pct"), _LEAGUE_BRL_PCT * 100) / 100   # → fraction
+    sv_hh    = _safe_f(sv.get("sv_hh_pct"),  35.0) / 100                     # → fraction
+
+    hr_r  = fg_hr  / max(fg_pa, 1)
+    rbi_r = fg_rbi / max(fg_pa, 1)
+    r_r   = fg_r   / max(fg_pa, 1)
+
+    # ── COMPONENT 1: Contact ──────────────────────────────────────────────────
+    # Blend platoon AVG (80%) with xBA (20%); PA-confidence shrink vs league
+    #   if <100 PA in platoon split, _platoon_blend already applies its own shrink.
+    pa_conf    = min(1.0, fg_pa / 400)            # 0→1 as PA grows to 400
+    avg_blend  = avg * 0.80 + sv_xba * 0.20
+    contact_raw = avg_blend / _STAT_DEFAULTS['avg']   # ratio vs neutral baseline
+    contact_raw = 1.0 + (contact_raw - 1.0) * (0.5 + 0.5 * pa_conf)  # shrink toward 1
+    contact_contrib = (contact_raw - 1.0) * W["contact"]
+
+    # ── COMPONENT 2: Power ────────────────────────────────────────────────────
+    # ISO edge, barrel edge, EV edge, xSLG edge — combine with weights
+    iso_edge  = (fg_iso - 0.145) / 0.145              # delta vs league-avg ISO
+    brl_edge  = (sv_brl - _LEAGUE_BRL_PCT) / _LEAGUE_BRL_PCT
+    ev_edge   = (sv_ev  - _LEAGUE_EV) / _LEAGUE_EV
+    xslg_edge = (sv_xslg - _STAT_DEFAULTS['slg']) / _STAT_DEFAULTS['slg']
+    power_raw = iso_edge * 0.35 + brl_edge * 0.35 + ev_edge * 0.15 + xslg_edge * 0.15
+    power_contrib = power_raw * W["power"]
+
+    # ── COMPONENT 3: Discipline ───────────────────────────────────────────────
+    # Positive: high BB%, low K%, high xwOBA
+    bb_edge   = (fg_bbp - _LEAGUE_BB_PCT) / _LEAGUE_BB_PCT
+    k_edge    = (_LEAGUE_K_PCT - fg_kp)   / _LEAGUE_K_PCT   # lower K → positive
+    woba_edge = (sv_xwoba - _LEAGUE_WOBA) / _LEAGUE_WOBA
+    disc_raw  = bb_edge * 0.30 + k_edge * 0.40 + woba_edge * 0.30
+    disc_contrib = disc_raw * W["discipline"]
+
+    # ── COMPONENT 4: Platoon ──────────────────────────────────────────────────
+    bat = (batter.get('bats') or 'S').upper()
+    pit = (pitcher_hand or 'R').upper()
+    if bat == 'S':
+        platoon_edge = 0.0
+    elif (bat == 'L' and pit == 'R') or (bat == 'R' and pit == 'L'):
+        platoon_edge = +0.05   # favorable platoon advantage
+    else:
+        platoon_edge = -0.05   # unfavorable
+    platoon_contrib = platoon_edge * W["platoon"]
+
+    # ── COMPONENT 5: Park ─────────────────────────────────────────────────────
+    park_edge    = (park_factor - 1.0)
+    park_contrib = park_edge * W["park"]
+
+    # ── COMPONENT 6: Weather ──────────────────────────────────────────────────
+    dome     = weather.get("dome", False)
+    temp_f   = _safe_f(weather.get("temp"), 72) if not dome else 72
+    wind_spd = _safe_f(weather.get("wind_speed"), 0) if not dome else 0
+    wx_raw   = (temp_f - 72) * 0.003 + min(0.06, float(wind_spd) * 0.003)
+    wx_mult  = 1.0 + wx_raw                   # hard multiplier used in final stats
+    wx_edge  = wx_raw
+    wx_contrib = wx_edge * W["weather"]
+
+    # ── COMPONENT 7: Pitcher resistance ──────────────────────────────────────
+    opp_era  = _safe_f(opp_pitcher_fg.get("fg_era")  or opp_pitcher_sv.get("sv_era_p"), 4.20)
+    opp_xera = _safe_f(opp_pitcher_sv.get("sv_xera"), opp_era)
+    opp_fip  = _safe_f(opp_pitcher_fg.get("fg_fip"),  opp_era)
+    opp_kpct = _safe_f(opp_pitcher_fg.get("fg_kpct"), _LEAGUE_K_PCT)
+    bat_kpct = fg_kp
+
+    season_pit_ratio = (opp_fip + opp_xera) / 2 / 4.20   # >1 = easy pitcher
+    pit_mult  = _clamp(season_pit_ratio, 0.72, 1.28)
+    k_adj     = 1.0 - _clamp((opp_kpct - bat_kpct) * 0.5, -0.15, 0.15)
+    # Platoon K modifier: disadvantage means more Ks
+    if bat != 'S':
+        plat_k = 0.97 if ((bat == 'L' and pit == 'R') or (bat == 'R' and pit == 'L')) else 1.03
+    else:
+        plat_k = 1.0
+    k_adj *= plat_k
+
+    pitcher_edge = (pit_mult * k_adj) - 1.0
+    pitcher_contrib = pitcher_edge * W["pitcher"]
+
+    # ── COMPONENT 8: Recent form (Phase 1) ───────────────────────────────────
+    form_edge   = 0.0
+    form_label  = "no data"
+    if form and isinstance(form, dict):
+        l7 = form.get("l7") or {}
+        rw = l7.get("raw_woba") if l7 else None
+        if rw is not None:
+            form_edge  = _clamp((rw - _LEAGUE_WOBA) / _LEAGUE_WOBA, -0.25, 0.25)
+            form_label = f"L7 wOBA {rw:.3f}"
+    form_contrib = form_edge * W["form"]
+
+    # ── COMPONENT 9: BvP (Phase 1) ───────────────────────────────────────────
+    bvp_edge    = 0.0
+    bvp_label   = "no data"
+    if bvp and isinstance(bvp, dict) and bvp.get("success"):
+        reliability = _safe_f(bvp.get("reliability"), 0.0)
+        we          = _safe_f(bvp.get("woba_edge"),    0.0)
+        bvp_edge    = _clamp(we * reliability, -0.20, 0.20)
+        bvp_label   = f"woba_edge {we:.3f} × rel {reliability:.2f}"
+    bvp_contrib  = bvp_edge * W["bvp"]
+
+    # ── Composite multiplier ─────────────────────────────────────────────────
+    # Sum contributions; each is a %-point delta weighted by its component weight.
+    delta = (contact_contrib + power_contrib + disc_contrib + platoon_contrib
+             + park_contrib + wx_contrib + pitcher_contrib
+             + form_contrib + bvp_contrib)
+    composite = _clamp(1.0 + delta, 0.55, 1.55)
+
+    # ── Projections ──────────────────────────────────────────────────────────
+    # Use wx_mult separately to preserve existing weather logic; pit_mult/k_adj 
+    # are already baked into pitcher_contrib → composite.
+    # Keep legacy structure: hits, tb, hr, rbi, r, hrr
+
+    ops_ratio = ops / max(season_ops, 0.400)
+    hr_r_adj  = hr_r * ops_ratio * _clamp(brl_edge + 1.0, 0.70, 1.40)
+
+    hits_proj = round(max(0.05, avg_blend * exp_pa * composite * wx_mult), 3)
+    tb_proj   = round(max(0.08, slg       * exp_pa * composite * wx_mult), 3)
+
+    hr_pf   = _clamp(park_factor * 1.08, 0.80, 1.35)
+    hr_proj = round(max(0.005,
+        hr_r_adj * exp_pa * hr_pf * (1.0 + (sv_brl - _LEAGUE_BRL_PCT) * 0.8) * wx_mult
+    ), 4)
+
+    slot_rbi_bonus = max(0.8, 1.0 + (4 - abs(slot - 4)) * 0.03)
+    rbi_proj = round(max(0.05, rbi_r * exp_pa * composite * slot_rbi_bonus), 3)
+
+    slot_r_bonus = max(0.8, 1.1 - abs(slot - 1.5) * 0.025)
+    r_proj   = round(max(0.04, r_r * exp_pa * composite * slot_r_bonus), 3)
+
+    hrr_proj = round(hits_proj + r_proj + rbi_proj, 3)
+
+    return {
+        "hits":        hits_proj,
+        "hr":          hr_proj,
+        "tb":          tb_proj,
+        "rbi":         rbi_proj,
+        "r":           r_proj,
+        "hrr":         hrr_proj,
+        "expected_pa": exp_pa,
+        "split_avg":   round(avg_blend, 3),
+        "split_ops":   round(ops, 3),
+        "platoon_note": _batter_hand_note(batter, pitcher_hand),
+        # BAT X diagnostics
+        "composite":   round(composite, 4),
+        "adjustments": {
+            "contact":    round(contact_contrib,  4),
+            "power":      round(power_contrib,     4),
+            "discipline": round(disc_contrib,      4),
+            "platoon":    round(platoon_contrib,   4),
+            "park":       round(park_contrib,      4),
+            "weather":    round(wx_contrib,        4),
+            "pitcher":    round(pitcher_contrib,   4),
+            "form":       round(form_contrib,      4),
+            "bvp":        round(bvp_contrib,       4),
+            "form_note":  form_label,
+            "bvp_note":   bvp_label,
+        },
     }
 
 
@@ -5684,16 +5908,20 @@ def api_props_projections(game_pk):
         wx = get_weather(lat, lon, ghour, venue_id=vid)
 
         # ── Build batter projections (now passes pitcher_hand) ─────────────────
-        def enrich_batters(batters, opp_pfg, opp_psv, opp_pst, opp_abbr, opp_pname):
+        def enrich_batters(batters, opp_pfg, opp_psv, opp_pst, opp_abbr, opp_pname, opp_pid):
             opp_hand = (opp_pst.get("pitchHand") or "R").upper()
             result   = []
             for b in batters[:9]:
                 name = b.get("name", "")
                 bfg  = fg_batter(name)
                 bsv  = sv_batter(name)
-                proj = _project_batter(
+                bid  = b.get("id")
+                form = _fetch_rolling_form(bid, False) if bid else None
+                bvp  = _fetch_bvp(bid, opp_pid)      if (bid and opp_pid) else None
+                proj = _project_batter_batx(
                     b, opp_pname, opp_pfg, opp_psv, pf, wx,
-                    pitcher_hand=opp_hand   # ← platoon key
+                    pitcher_hand=opp_hand,
+                    form=form, bvp=bvp,
                 )
                 result.append({
                     "name":         name,
@@ -5721,8 +5949,8 @@ def api_props_projections(game_pk):
                 })
             return result
 
-        away_proj = enrich_batters(away_bats, hp_fg, hp_sv, hp_st, home_abbr, hp_name)
-        home_proj = enrich_batters(home_bats, ap_fg, ap_sv, ap_st, away_abbr, ap_name)
+        away_proj = enrich_batters(away_bats, hp_fg, hp_sv, hp_st, home_abbr, hp_name, hp_id)
+        home_proj = enrich_batters(home_bats, ap_fg, ap_sv, ap_st, away_abbr, ap_name, ap_id)
         all_batters = away_proj + home_proj
 
         # ── Pitcher projections ────────────────────────────────────────────────
