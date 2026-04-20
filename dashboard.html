@@ -871,9 +871,30 @@ syncDateUI();load();loadTeams();loadMC();setInterval(function(){load(selectedGam
       if(!w){ h += '<div class="sp-card"><div class="sp-hd">'+label+'</div><div style="color:var(--mu);font-size:.62rem;text-align:center;padding:16px">No data</div></div>'; return; }
       var rows;
       if(isPit){
-        rows = [['G',w.games],['IP',w.ip],['ERA',w.era],['WHIP',w.whip],['K/9',w.k9],['BB/9',w.bb9],['QS',w.qs+'/'+w.games]];
+        rows = [
+          ['G',    w.games],
+          ['IP',   w.ip],
+          ['ERA',  w.era  != null ? w.era.toFixed(2) : '---'],
+          ['WHIP', w.whip != null ? w.whip.toFixed(3) : '---'],
+          ['K/9',  w.k9   != null ? w.k9.toFixed(2)  : '---'],
+          ['BB/9', w.bb9  != null ? w.bb9.toFixed(2)  : '---'],
+          ['K%',   w.kpct  != null ? (w.kpct*100).toFixed(1)+'%' : '---'],
+          ['BB%',  w.bbpct != null ? (w.bbpct*100).toFixed(1)+'%' : '---'],
+          ['QS',   w.qs+'/'+w.games],
+        ];
       } else {
-        rows = [['G',w.games],['AVG',w.avg],['OBP',w.obp],['SLG',w.slg],['OPS',w.ops],['ISO',w.iso],['HR',w.hr],['K%',w.kpct!=null?(w.kpct*100).toFixed(1)+'%':'---']];
+        rows = [
+          ['G',     w.games],
+          ['AVG',   w.avg],
+          ['OBP',   w.obp],
+          ['SLG',   w.slg],
+          ['wOBA',  w.woba],
+          ['xwOBA', w.xwoba],
+          ['ISO',   w.iso],
+          ['HR',    w.hr],
+          ['K%',    w.kpct  != null ? (w.kpct*100).toFixed(1)+'%'  : '---'],
+          ['BB%',   w.bbpct != null ? (w.bbpct*100).toFixed(1)+'%' : '---'],
+        ];
       }
       h += '<div class="sp-card"><div class="sp-hd">'+label+'</div>';
       rows.forEach(function(r){

@@ -1650,8 +1650,8 @@ def api_player_profile(player_id):
         # 5. AI Scout lines
         ai_lines = _build_ai_lines(name, is_pitcher, season, fgr, svr, game_logs)
 
-        # 6. Form (only when requested)
-        form = _compute_form(game_logs, is_pitcher) if include_form else None
+        # 6. Form — use the richer _fetch_rolling_form (cached, wOBA-based) when requested
+        form = _fetch_rolling_form(player_id, is_pitcher) if include_form else None
 
         return jsonify({
             "success":   True,
@@ -1674,6 +1674,29 @@ def api_player_profile(player_id):
     except Exception as ex:
         traceback.print_exc()
         return jsonify({"success": False, "error": str(ex)}), 500
+
+
+@app.route("/api/bvp/<int:batter_id>/<int:pitcher_id>")
+def api_bvp(batter_id, pitcher_id):
+    """Batter-vs-Pitcher career H2H with Bayesian shrinkage."""
+    result = _fetch_bvp(batter_id, pitcher_id)
+    return jsonify(result)
+
+
+@app.route("/api/player/form/<int:player_id>")
+def api_player_form(player_id):
+    """
+    Rolling form for a single player — daily cached.
+    Query params:
+      is_pitcher=1  (default 0)
+    Returns same shape as the 'form' key in /api/player/<id>?includeForm=1.
+    """
+    is_pitcher = request.args.get("is_pitcher") == "1"
+    result = _fetch_rolling_form(player_id, is_pitcher)
+    if result is None:
+        return jsonify({"success": False, "error": "Form data unavailable"}), 404
+    return jsonify({"success": True, **result})
+
 
 
 @app.route("/api/player-splits/<int:player_id>/<string:group>")
@@ -1767,6 +1790,357 @@ BULLPEN_BASE = {"era":4.05, "whip":1.28, "k9":8.6, "bb9":3.2, "hr9":1.10}
 _bio_cache = {}
 _hit_split_cache = {}
 _team_pitch_cache = {}
+
+# ── Rolling Form Cache (daily per player) ─────────────────────────────────────
+_form_cache: dict = {}          # {player_id: (date, form_dict)}
+_form_lock  = threading.Lock()
+
+# ── BvP (Batter-vs-Pitcher) Cache ────────────────────────────────────────────
+_bvp_cache: dict = {}           # {(batter_id, pitcher_id): (date, bvp_dict)}
+_bvp_lock  = threading.Lock()
+
+# League averages used for Bayesian shrinkage
+_LEAGUE_WOBA  = 0.320
+_LEAGUE_BABIP = 0.295
+_LEAGUE_KPCT  = 0.225
+_LEAGUE_BBPCT = 0.082
+# wOBA weights (2024 calibrated)
+_WOBA_WEIGHTS = {"bb": 0.696, "hbp": 0.726, "single": 0.888,
+                 "double": 1.258, "triple": 1.599, "hr": 2.054}
+# Shrinkage priors (PA equivalent)
+_SHRINK_PA_FORM = 100   # form windows: shrink hard early-season samples
+_SHRINK_PA_BVP  = 200   # BvP: even harder, tiny samples
+
+
+def _woba_from_counts(bb, hbp, singles, doubles, triples, hr, pa):
+    """Compute wOBA from raw counting stats."""
+    if pa <= 0:
+        return None
+    w = _WOBA_WEIGHTS
+    num = w["bb"]*bb + w["hbp"]*hbp + w["single"]*singles + w["double"]*doubles + w["triple"]*triples + w["hr"]*hr
+    return round(num / pa, 3)
+
+
+def _shrink(observed, n_obs, league_mean, prior_n):
+    """Bayesian shrink: blend observed rate with league mean weighted by sample size."""
+    if n_obs <= 0:
+        return league_mean
+    return round((observed * n_obs + league_mean * prior_n) / (n_obs + prior_n), 4)
+
+
+def _parse_ip(ip_val):
+    """Parse '6.1' style IP (where .1 = 1 out) to decimal innings."""
+    try:
+        f = float(ip_val or 0)
+        whole = int(f)
+        part  = round(f - whole, 1)
+        return whole + part / 0.3   # convert .1→1/3, .2→2/3
+    except:
+        return 0.0
+
+
+def _fetch_game_log_raw(player_id, group, n=30):
+    """Fetch the last *n* game log entries from MLB Stats API. Returns list of stat dicts."""
+    year = datetime.now().year
+    try:
+        r = requests.get(
+            f"{MLB_API}/people/{player_id}/stats",
+            params={"stats": "gameLog", "group": group, "season": year},
+            timeout=10,
+        )
+        if not r.ok:
+            return []
+        splits = (r.json().get("stats") or [{}])[0].get("splits", [])
+        return splits[-n:]
+    except Exception:
+        return []
+
+
+def _fetch_rolling_form(player_id, is_pitcher):
+    """
+    Compute L7/L14/L30 rolling form for a player. Daily-cached per player_id.
+    For hitters: returns wOBA (shrunk), xwOBA (from Savant cache), K%, BB%,
+                 AVG, OBP, SLG, ISO, flag, trend.
+    For pitchers: same as existing _compute_form, harmonised.
+    """
+    today = datetime.now().date()
+    with _form_lock:
+        cached = _form_cache.get(player_id)
+        if cached and cached[0] == today:
+            return cached[1]
+
+    try:
+        if not is_pitcher:
+            splits = _fetch_game_log_raw(player_id, "hitting", 30)
+            # Build raw per-game rows newest-first
+            rows = []
+            for sp in reversed(splits):
+                s = sp.get("stat", {})
+                ab  = int(s.get("atBats", 0) or 0)
+                h   = int(s.get("hits", 0) or 0)
+                bb  = int(s.get("baseOnBalls", 0) or 0)
+                hbp = int(s.get("hitByPitch", 0) or 0)
+                hr  = int(s.get("homeRuns", 0) or 0)
+                dbl = int(s.get("doubles", 0) or 0)
+                tpl = int(s.get("triples", 0) or 0)
+                tb  = int(s.get("totalBases", 0) or 0)
+                sf  = int(s.get("sacFlies", 0) or 0)
+                so  = int(s.get("strikeOuts", 0) or 0)
+                singles = max(0, h - dbl - tpl - hr)
+                pa  = ab + bb + hbp + sf
+                rows.append({"ab": ab, "h": h, "bb": bb, "hbp": hbp, "hr": hr,
+                              "dbl": dbl, "tpl": tpl, "tb": tb, "sf": sf,
+                              "so": so, "singles": singles, "pa": pa})
+
+            # Pull Savant xwOBA for season-level anchor
+            player_name = ""
+            try:
+                pr = requests.get(f"{MLB_API}/people/{player_id}", timeout=6)
+                player_name = (pr.json().get("people") or [{}])[0].get("fullName", "")
+            except Exception:
+                pass
+            sv = sv_batter(player_name) if player_name else {}
+            sv_xwoba = _num(sv.get("sv_xwoba"), 0)
+
+            def _window(n):
+                g = rows[:n]
+                if not g:
+                    return None
+                ab  = sum(x["ab"]  for x in g)
+                h   = sum(x["h"]   for x in g)
+                bb  = sum(x["bb"]  for x in g)
+                hbp = sum(x["hbp"] for x in g)
+                hr  = sum(x["hr"]  for x in g)
+                dbl = sum(x["dbl"] for x in g)
+                tpl = sum(x["tpl"] for x in g)
+                tb  = sum(x["tb"]  for x in g)
+                sf  = sum(x["sf"]  for x in g)
+                so  = sum(x["so"]  for x in g)
+                singles = sum(x["singles"] for x in g)
+                pa  = sum(x["pa"]  for x in g)
+                avg  = round(h / ab, 3) if ab else None
+                obp  = round((h + bb + hbp) / pa, 3) if pa else None
+                slg  = round(tb / ab, 3) if ab else None
+                ops  = round((obp or 0) + (slg or 0), 3) if (obp and slg) else None
+                iso  = round(max(0, (slg or 0) - (avg or 0)), 3) if slg and avg else None
+                raw_woba = _woba_from_counts(bb, hbp, singles, dbl, tpl, hr, pa)
+                # Shrink wOBA towards league mean
+                shrunk_woba = _shrink(raw_woba or _LEAGUE_WOBA, pa,
+                                      _LEAGUE_WOBA, _SHRINK_PA_FORM)
+                kpct  = round(so / pa, 4) if pa else None
+                bbpct = round(bb / pa, 4) if pa else None
+                # xwOBA: blend seasonal Savant number (best proxy we have per-game)
+                xwoba = sv_xwoba if sv_xwoba else shrunk_woba
+
+                def fmt3(v):
+                    if v is None: return "---"
+                    s = int(round(v * 1000))
+                    return f".{s:03d}"
+
+                return {
+                    "games": len(g), "pa": pa, "ab": ab, "hr": hr,
+                    "avg":   fmt3(avg),
+                    "obp":   fmt3(obp),
+                    "slg":   fmt3(slg),
+                    "ops":   fmt3(ops),
+                    "iso":   fmt3(iso),
+                    "woba":  fmt3(shrunk_woba),
+                    "xwoba": fmt3(xwoba),
+                    "kpct":  round(kpct, 4) if kpct is not None else None,
+                    "bbpct": round(bbpct, 4) if bbpct is not None else None,
+                    "raw_woba": round(raw_woba, 3) if raw_woba else None,
+                }
+
+            l7  = _window(7)
+            l14 = _window(14)
+            l30 = _window(30)
+
+            # Flag / trend from L7 wOBA (more stable than AVG)
+            flag = "neutral"; flag_note = ""; trend = "stable"
+            if l7 and l7["raw_woba"] is not None:
+                w7 = l7["raw_woba"]
+                if l7["pa"] >= 20:
+                    if w7 >= 0.380:   flag = "hot";     flag_note = f"Elite wOBA {l7['woba']} over last 7 games"
+                    elif w7 >= 0.340: flag = "warm";    flag_note = f"Solid wOBA {l7['woba']} over last 7 games"
+                    elif w7 < 0.270:  flag = "cold";    flag_note = f"Struggling — wOBA {l7['woba']} over last 7 games"
+                    elif w7 < 0.310:  flag = "chilly";  flag_note = f"Below avg wOBA {l7['woba']} over last 7 games"
+                if l14 and l14["raw_woba"] is not None and l14["pa"] >= 30:
+                    w14 = l14["raw_woba"]
+                    if w7 > w14 + 0.035:   trend = "improving"
+                    elif w7 < w14 - 0.035: trend = "declining"
+
+            result = {"kind": "hitter", "flag": flag, "flag_note": flag_note, "trend": trend,
+                      "l7": l7, "l14": l14, "l30": l30}
+        else:
+            # Pitcher: same logic as before but harmonised
+            splits = _fetch_game_log_raw(player_id, "pitching", 10)
+            rows = []
+            for sp in reversed(splits):
+                s = sp.get("stat", {})
+                rows.append({
+                    "ip":  _parse_ip(s.get("inningsPitched", 0)),
+                    "er":  int(s.get("earnedRuns", 0) or 0),
+                    "k":   int(s.get("strikeOuts", 0) or 0),
+                    "bb":  int(s.get("baseOnBalls", 0) or 0),
+                    "h":   int(s.get("hits", 0) or 0),
+                    "hr":  int(s.get("homeRuns", 0) or 0),
+                    "bf":  int(s.get("battersFaced", 0) or 0),
+                })
+
+            def _pit_window(n):
+                g = rows[:n]
+                if not g: return None
+                ip = sum(x["ip"] for x in g)
+                er = sum(x["er"] for x in g)
+                k  = sum(x["k"]  for x in g)
+                bb = sum(x["bb"] for x in g)
+                h  = sum(x["h"]  for x in g)
+                hr = sum(x["hr"] for x in g)
+                bf = sum(x["bf"] for x in g)
+                qs = sum(1 for x in g if x["ip"] >= 6 and x["er"] <= 3)
+                era  = round(er  / ip * 9, 2) if ip else None
+                k9   = round(k   / ip * 9, 2) if ip else None
+                bb9  = round(bb  / ip * 9, 2) if ip else None
+                whip = round((h + bb) / ip, 3) if ip else None
+                kpct  = round(k  / bf, 4) if bf else None
+                bbpct = round(bb / bf, 4) if bf else None
+                return {
+                    "games": len(g), "ip": round(ip, 1), "qs": qs,
+                    "era": era, "k9": k9, "bb9": bb9, "whip": whip,
+                    "kpct": kpct, "bbpct": bbpct,
+                }
+
+            l3  = _pit_window(3)
+            l5  = _pit_window(5)
+            l10 = _pit_window(10)
+            flag = "neutral"; flag_note = ""; trend = "stable"
+            if l3 and l3["era"] is not None:
+                era3 = l3["era"]
+                if era3 < 2.0:   flag = "dealing";    flag_note = f"{era3:.2f} ERA over last 3 starts"
+                elif era3 < 3.5: flag = "hot";        flag_note = f"{era3:.2f} ERA over last 3 starts"
+                elif era3 < 4.5: flag = "neutral";    flag_note = f"{era3:.2f} ERA over last 3 starts"
+                elif era3 < 6.0: flag = "chilly";     flag_note = f"{era3:.2f} ERA over last 3 starts"
+                else:            flag = "struggling"; flag_note = f"{era3:.2f} ERA over last 3 starts"
+                if l5 and l5["era"] is not None:
+                    if era3 < l5["era"] - 0.75:   trend = "improving"
+                    elif era3 > l5["era"] + 0.75: trend = "declining"
+            result = {"kind": "pitcher", "flag": flag, "flag_note": flag_note, "trend": trend,
+                      "l3": l3, "l5": l5, "l10": l10}
+
+    except Exception as ex:
+        print(f"[form] player {player_id}:", ex)
+        result = None
+
+    with _form_lock:
+        _form_cache[player_id] = (today, result)
+    return result
+
+
+def _fetch_bvp(batter_id, pitcher_id):
+    """
+    Fetch career batter-vs-pitcher splits from the MLB Stats API.
+    Returns Bayesian-shrunk rates + raw counts so the caller can decide
+    how much weight to apply.
+    """
+    today = datetime.now().date()
+    key = (batter_id, pitcher_id)
+    with _bvp_lock:
+        cached = _bvp_cache.get(key)
+        if cached and cached[0] == today:
+            return cached[1]
+
+    result = {"success": False, "pa": 0, "note": "No H2H data"}
+    try:
+        r = requests.get(
+            f"{MLB_API}/people/{batter_id}/stats",
+            params={
+                "stats": "vsPlayer",
+                "group": "hitting",
+                "opposingPlayerId": pitcher_id,
+                "sportId": 1,
+            },
+            timeout=10,
+        )
+        r.raise_for_status()
+        splits = (r.json().get("stats") or [{}])[0].get("splits", [])
+        if not splits:
+            result = {"success": True, "pa": 0, "note": "No career H2H on record", "shrunk": {}}
+        else:
+            s   = splits[0].get("stat", {})
+            ab  = int(s.get("atBats", 0) or 0)
+            h   = int(s.get("hits", 0) or 0)
+            bb  = int(s.get("baseOnBalls", 0) or 0)
+            hbp = int(s.get("hitByPitch", 0) or 0)
+            hr  = int(s.get("homeRuns", 0) or 0)
+            dbl = int(s.get("doubles", 0) or 0)
+            tpl = int(s.get("triples", 0) or 0)
+            so  = int(s.get("strikeOuts", 0) or 0)
+            sf  = int(s.get("sacFlies", 0) or 0)
+            tb  = int(s.get("totalBases", 0) or 0)
+            singles = max(0, h - dbl - tpl - hr)
+            pa  = ab + bb + hbp + sf
+
+            raw_avg  = round(h / ab, 3) if ab else 0.0
+            raw_obp  = round((h + bb + hbp) / pa, 3) if pa else 0.0
+            raw_slg  = round(tb / ab, 3) if ab else 0.0
+            raw_woba = _woba_from_counts(bb, hbp, singles, dbl, tpl, hr, pa) or _LEAGUE_WOBA
+            raw_kpct = round(so / pa, 4) if pa else _LEAGUE_KPCT
+            raw_bbpct= round(bb / pa, 4) if pa else _LEAGUE_BBPCT
+
+            # Bayesian shrinkage — with < 5 PA the estimate is nearly pure league avg
+            shrunk_woba  = _shrink(raw_woba,  pa, _LEAGUE_WOBA,  _SHRINK_PA_BVP)
+            shrunk_avg   = _shrink(raw_avg,   ab, 0.250,         _SHRINK_PA_BVP)
+            shrunk_kpct  = _shrink(raw_kpct,  pa, _LEAGUE_KPCT,  _SHRINK_PA_BVP)
+            shrunk_bbpct = _shrink(raw_bbpct, pa, _LEAGUE_BBPCT, _SHRINK_PA_BVP)
+
+            # Reliability score 0-1 (saturates at 50 PA)
+            reliability = round(min(1.0, pa / 50.0), 3)
+
+            # Edge signal: how much does Bayesian wOBA deviate from league?
+            woba_edge = round(shrunk_woba - _LEAGUE_WOBA, 4)
+            if pa == 0:
+                note = "No career H2H; league average assumed."
+            elif pa < 10:
+                note = f"Only {pa} PA — very low confidence. Heavily shrunk to league avg."
+            elif pa < 30:
+                note = f"{pa} PA career H2H — moderate sample."
+            else:
+                note = f"{pa} PA career H2H — usable sample."
+
+            result = {
+                "success":    True,
+                "pa":         pa,
+                "ab":         ab,
+                "h":          h,
+                "hr":         hr,
+                "bb":         bb,
+                "so":         so,
+                "raw": {
+                    "avg":   raw_avg,
+                    "obp":   raw_obp,
+                    "slg":   raw_slg,
+                    "woba":  raw_woba,
+                    "kpct":  raw_kpct,
+                    "bbpct": raw_bbpct,
+                },
+                "shrunk": {
+                    "woba":  shrunk_woba,
+                    "avg":   shrunk_avg,
+                    "kpct":  shrunk_kpct,
+                    "bbpct": shrunk_bbpct,
+                },
+                "reliability": reliability,
+                "woba_edge":   woba_edge,
+                "note":        note,
+            }
+    except Exception as ex:
+        print(f"[bvp] {batter_id} vs {pitcher_id}:", ex)
+        result = {"success": False, "error": str(ex)}
+
+    with _bvp_lock:
+        _bvp_cache[key] = (today, result)
+    return result
+
 
 
 def _num(v, d=0.0):
