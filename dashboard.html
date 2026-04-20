@@ -717,10 +717,19 @@ function renderBBPicks(){
     const runsA=bA.reduce((s,b)=>s+(b.proj?.r||0),0);
     const runsB=bB.reduce((s,b)=>s+(b.proj?.r||0),0);
     const totalRuns=runsA+runsB, runDiff=Math.abs(runsA-runsB);
-    const favTeam=runsA>=runsB?tA:tB, dogTeam=runsA>=runsB?tB:tA;
+    const favTeam=runsA>=runsB?tA:tB;
     const pitA=pitchers.find(p=>p.team===tA), pitB=pitchers.find(p=>p.team===tB);
     const pDesc=(pt,lbl)=>!pt?'':lbl+' SP: '+pt.name+(pt.era?' (ERA '+parseFloat(pt.era).toFixed(2)+(pt.fip?', FIP '+parseFloat(pt.fip).toFixed(2):'')+')':'');
     const spNote=[pDesc(pitA,tA),pDesc(pitB,tB)].filter(Boolean).join('. ');
+
+    // Odds-API game lines (injected by backend — no extra fetch)
+    const gl=BB_DATA.game_lines||{};
+    const ml=gl.moneyline||{};
+    const tot=gl.total||null;
+    const sp=gl.spread||{};
+    const awayFull=gl.awayFull||BB_DATA.awayFull||tA;
+    const homeFull=gl.homeFull||BB_DATA.homeFull||tB;
+    const hasOdds=!!(ml.away||ml.home||tot||sp.away||sp.home);
 
     // Update stats row
     const statsRow=document.getElementById('bbStatsRow');
@@ -728,61 +737,113 @@ function renderBBPicks(){
       statsRow.style.display='flex';
       const colA=compA>compB?'#00e676':'#ef9a9a';
       const colB=compB>compA?'#00e676':'#ef9a9a';
-      statsRow.innerHTML='<div class="bb-stat"><div class="bb-stat-v">'+runsA.toFixed(1)+'</div><div class="bb-stat-l">'+tA+' PROJ RUNS</div></div>'
-        +'<div class="bb-stat"><div class="bb-stat-v">'+runsB.toFixed(1)+'</div><div class="bb-stat-l">'+tB+' PROJ RUNS</div></div>'
-        +'<div class="bb-stat"><div class="bb-stat-v">'+totalRuns.toFixed(1)+'</div><div class="bb-stat-l">COMBINED RUNS</div></div>'
+      const mlA=ml.away?.price!=null?'<br><span style="font-size:.7em;color:#ffd54f">ML '+ml.away.price+'</span>':'';
+      const mlB=ml.home?.price!=null?'<br><span style="font-size:.7em;color:#ffd54f">ML '+ml.home.price+'</span>':'';
+      statsRow.innerHTML='<div class="bb-stat"><div class="bb-stat-v">'+runsA.toFixed(2)+mlA+'</div><div class="bb-stat-l">'+tA+' PROJ RUNS</div></div>'
+        +'<div class="bb-stat"><div class="bb-stat-v">'+runsB.toFixed(2)+mlB+'</div><div class="bb-stat-l">'+tB+' PROJ RUNS</div></div>'
+        +'<div class="bb-stat"><div class="bb-stat-v">'+(tot?tot.line+' ('+tot.over_price+'/'+tot.under_price+')':totalRuns.toFixed(2))+'</div><div class="bb-stat-l">'+(tot?'MARKET O/U':'COMBINED RUNS')+'</div></div>'
         +'<div class="bb-stat"><div class="bb-stat-v" style="color:'+colA+'">'+(compA*100).toFixed(1)+'%</div><div class="bb-stat-l">'+tA+' COMPOSITE</div></div>'
         +'<div class="bb-stat"><div class="bb-stat-v" style="color:'+colB+'">'+(compB*100).toFixed(1)+'%</div><div class="bb-stat-l">'+tB+' COMPOSITE</div></div>'
         +'<div class="bb-stat"><div class="bb-stat-v">'+pf.toFixed(2)+'</div><div class="bb-stat-l">PARK FACTOR</div></div>';
     }
 
-    // MONEYLINE
-    const mlEdge=Math.abs(compA-compB);
-    if(mlEdge>0.01){
-      const mlConf=mlEdge>0.1?'STRONG':mlEdge>0.04?'LEAN':'LEAN';
-      const favRuns=Math.max(runsA,runsB), dogRuns=Math.min(runsA,runsB);
-      picks.push({cat:'MONEYLINE',type:'GAME',name:favTeam,pick:favTeam+' MONEYLINE',projVal:null,line:null,edge:mlEdge,dir:'',
-        conf:mlConf,score:mlEdge*3,
-        reason:'BAT X offensive composite: '+tA+' '+( compA*100).toFixed(1)+'% vs '+tB+' '+(compB*100).toFixed(1)+'%. '
-          +'Projected runs: '+tA+' '+runsA.toFixed(1)+' – '+tB+' '+runsB.toFixed(1)+'. '
-          +(spNote?spNote+'. ':'')
-          +pfNote+'. '+(wxNote||'')+'.'});
-    }
-
-    // SPREAD (Run Line) — runDiff is lineup-sum delta (typically 0.1–0.8 range)
-    if(runDiff>=0.1){
-      const spConf=runDiff>=0.5?'STRONG':runDiff>=0.25?'LEAN':'LEAN';
-      const coverLbl=runDiff>=0.4?'COVER':'LEAN COVER';
-      picks.push({cat:'SPREAD',type:'GAME',name:favTeam,pick:favTeam+' -1.5 RUN LINE',projVal:runDiff,line:1.5,edge:runDiff,dir:coverLbl,
-        conf:spConf,score:runDiff*2.5,
-        reason:'Projected run differential: '+favTeam+' +'+runDiff.toFixed(2)+' runs ('+tA+' '+runsA.toFixed(2)+' vs '+tB+' '+runsB.toFixed(2)+'). '
-          +'Offensive composite gap: '+(Math.abs(compA-compB)*100).toFixed(1)+'%. '
+    // ── MONEYLINE ─────────────────────────────────────────
+    if(hasOdds && (ml.away||ml.home)){
+      // Use model composite to pick side vs market implied
+      const awayImp=ml.away?.implied||0.5, homeImp=ml.home?.implied||0.5;
+      const awayEdge=compA-awayImp, homeEdge=compB-homeImp;
+      const [mlSide, mlEdge, mlPrice, mlImp, mlAbbr] =
+        awayEdge>=homeEdge
+          ? [awayFull, awayEdge, ml.away?.price, awayImp, tA]
+          : [homeFull, homeEdge, ml.home?.price, homeImp, tB];
+      const mlConf=mlEdge>0.06?'STRONG':mlEdge>0.02?'LEAN':'LEAN';
+      picks.push({cat:'MONEYLINE',type:'GAME',name:mlAbbr,pick:mlAbbr+' ML ('+mlPrice+')',projVal:null,line:null,edge:Math.max(0,mlEdge),dir:'',
+        conf:mlConf,score:Math.max(0,mlEdge)*5,
+        reason:'Model composite: '+tA+' '+(compA*100).toFixed(1)+'% vs '+tB+' '+(compB*100).toFixed(1)+'%. '
+          +'Market implied: '+mlAbbr+' '+(mlImp*100).toFixed(1)+'% @ '+mlPrice+'. '
+          +'Model edge: '+(mlEdge*100).toFixed(1)+'%. '
           +(spNote?spNote+'. ':'')+pfNote+'. '+(wxNote||'')+'.'});
+    } else {
+      // Fallback: run-diff composite edge
+      const mlEdge=Math.abs(compA-compB);
+      if(mlEdge>0.01){
+        const mlConf=mlEdge>0.1?'STRONG':'LEAN';
+        picks.push({cat:'MONEYLINE',type:'GAME',name:favTeam,pick:favTeam+' MONEYLINE',projVal:null,line:null,edge:mlEdge,dir:'',
+          conf:mlConf,score:mlEdge*3,
+          reason:'BAT X composite: '+tA+' '+(compA*100).toFixed(1)+'% vs '+tB+' '+(compB*100).toFixed(1)+'%. '
+            +'Projected runs: '+tA+' '+runsA.toFixed(2)+' – '+tB+' '+runsB.toFixed(2)+'. '
+            +(spNote?spNote+'. ':'')+pfNote+'. '+(wxNote||'')+'.'});
+      }
     }
 
-    // TOTALS (O/U)
-    const totLine=8.5;
-    const totEdge=Math.abs(totalRuns-totLine), totDir=totalRuns>=totLine?'OVER':'UNDER';
-    if(totEdge>0.2){
-      picks.push({cat:'TOTALS',type:'GAME',name:'O/U',pick:'TOTAL '+totDir+' '+totLine,projVal:totalRuns,line:totLine,edge:totEdge,dir:totDir,
-        conf:totEdge>1.2?'STRONG':'LEAN',score:totEdge*1.1,
-        reason:'Projected combined runs: '+totalRuns.toFixed(1)+' ('+tA+' '+runsA.toFixed(1)+' + '+tB+' '+runsB.toFixed(1)+'). '
+    // ── SPREAD (Run Line) ─────────────────────────────────
+    if(hasOdds && (sp.away||sp.home)){
+      // Compare model run diff vs spread line
+      const awayPt=sp.away?.point??-1.5, homePt=sp.home?.point??1.5;
+      // Fav covers -1.5 if model runDiff > 1.5
+      const favIsFavTeam=runsA>=runsB;
+      const favPt=favIsFavTeam?(sp.away?.point??-1.5):(sp.home?.point??-1.5);
+      const favPrice=favIsFavTeam?(sp.away?.price):(sp.home?.price);
+      const favImp=favIsFavTeam?(sp.away?.implied||0.5):(sp.home?.implied||0.5);
+      const favAbbr=favTeam;
+      // Model probability of covering: use composite edge scaled to run diff
+      const modelCoverProb=Math.min(0.85,Math.max(0.15,0.5+runDiff*0.6));
+      const spEdge=modelCoverProb-favImp;
+      const spConf=spEdge>0.06?'STRONG':spEdge>0.02?'LEAN':'LEAN';
+      picks.push({cat:'SPREAD',type:'GAME',name:favAbbr,pick:favAbbr+' '+favPt+' RL ('+favPrice+')',projVal:runDiff,line:Math.abs(favPt),edge:Math.max(0,spEdge),dir:'COVER',
+        conf:spConf,score:Math.max(0,spEdge)*4,
+        reason:'Run line: '+favAbbr+' '+favPt+' @ '+favPrice+'. '
+          +'Model run differential: '+runDiff.toFixed(2)+' ('+tA+' '+runsA.toFixed(2)+' vs '+tB+' '+runsB.toFixed(2)+'). '
+          +'Model cover prob: '+(modelCoverProb*100).toFixed(1)+'% vs market implied '+(favImp*100).toFixed(1)+'%. '
           +(spNote?spNote+'. ':'')+pfNote+'. '+(wxNote||'')+'.'});
+    } else {
+      // Fallback: run-diff only
+      if(runDiff>=0.1){
+        const spConf=runDiff>=0.5?'STRONG':'LEAN';
+        picks.push({cat:'SPREAD',type:'GAME',name:favTeam,pick:favTeam+' -1.5 RUN LINE',projVal:runDiff,line:1.5,edge:runDiff,dir:'COVER',
+          conf:spConf,score:runDiff*2.5,
+          reason:'Projected run differential: '+favTeam+' +'+runDiff.toFixed(2)+'. '
+            +(spNote?spNote+'. ':'')+pfNote+'. '+(wxNote||'')+'.'});
+      }
     }
 
-    // FIRST 5 (F5)
+    // ── TOTALS (O/U) ──────────────────────────────────────
+    if(hasOdds && tot){
+      const totLine=parseFloat(tot.line);
+      const overImp=tot.over_implied||0.5, underImp=tot.under_implied||0.5;
+      const modelDir=totalRuns>=totLine?'OVER':'UNDER';
+      const modelImp=modelDir==='OVER'?overImp:underImp;
+      const modelEdge=(modelDir==='OVER'?(0.5+Math.min(0.35,(totalRuns-totLine)*0.12))
+                                        :(0.5+Math.min(0.35,(totLine-totalRuns)*0.12)))-modelImp;
+      const totPrice=modelDir==='OVER'?tot.over_price:tot.under_price;
+      const totConf=modelEdge>0.06?'STRONG':modelEdge>0.02?'LEAN':'LEAN';
+      picks.push({cat:'TOTALS',type:'GAME',name:'O/U',pick:'TOTAL '+modelDir+' '+totLine+' ('+totPrice+')',projVal:totalRuns,line:totLine,edge:Math.max(0,modelEdge),dir:modelDir,
+        conf:totConf,score:Math.max(0,modelEdge)*4,
+        reason:'Market O/U: '+totLine+' ('+modelDir+' @ '+totPrice+'). '
+          +'Model combined runs: '+totalRuns.toFixed(2)+' ('+tA+' '+runsA.toFixed(2)+' + '+tB+' '+runsB.toFixed(2)+'). '
+          +'Model edge: '+(modelEdge*100).toFixed(1)+'%. '
+          +(spNote?spNote+'. ':'')+pfNote+'. '+(wxNote||'')+'.'});
+    } else {
+      const totLine=8.5;
+      const totEdge=Math.abs(totalRuns-totLine), totDir=totalRuns>=totLine?'OVER':'UNDER';
+      if(totEdge>0.2){
+        picks.push({cat:'TOTALS',type:'GAME',name:'O/U',pick:'TOTAL '+totDir+' '+totLine,projVal:totalRuns,line:totLine,edge:totEdge,dir:totDir,
+          conf:totEdge>1.2?'STRONG':'LEAN',score:totEdge*1.1,
+          reason:'Projected combined runs: '+totalRuns.toFixed(2)+'. '+(spNote?spNote+'. ':'')+pfNote+'. '+(wxNote||'')+'.'});
+      }
+    }
+
+    // ── FIRST 5 (F5) ──────────────────────────────────────
     if(pitA&&pitB){
       const f5A=runsA*0.54, f5B=runsB*0.54;
       const f5Total=f5A+f5B, f5Line=4.5;
       const f5Edge=Math.abs(f5Total-f5Line), f5Dir=f5Total>=f5Line?'OVER':'UNDER';
-      if(f5Edge>0.15){
-        const xeraA=pitA.xera?'xERA '+parseFloat(pitA.xera).toFixed(2):'';
-        const xeraB=pitB.xera?'xERA '+parseFloat(pitB.xera).toFixed(2):'';
+      if(f5Edge>0.05){
         picks.push({cat:'F5',type:'GAME',name:'F5',pick:'F5 TOTAL '+f5Dir+' '+f5Line,projVal:f5Total,line:f5Line,edge:f5Edge,dir:f5Dir,
-          conf:f5Edge>0.9?'STRONG':'LEAN',score:f5Edge*0.95,
-          reason:'First-5 proj: '+f5Total.toFixed(1)+' runs ('+tA+' '+f5A.toFixed(1)+' + '+tB+' '+f5B.toFixed(1)+'). '
-            +tA+' SP: '+pitA.name+' ERA '+(pitA.era?parseFloat(pitA.era).toFixed(2):'—')+(xeraA?' ('+xeraA+')':'')+'. '
-            +tB+' SP: '+pitB.name+' ERA '+(pitB.era?parseFloat(pitB.era).toFixed(2):'—')+(xeraB?' ('+xeraB+')':'')+'.'
+          conf:f5Edge>0.3?'STRONG':'LEAN',score:f5Edge*2,
+          reason:'First-5 proj: '+f5Total.toFixed(2)+' runs ('+tA+' '+f5A.toFixed(2)+' + '+tB+' '+f5B.toFixed(2)+'). '
+            +tA+' SP: '+pitA.name+' ERA '+(pitA.era?parseFloat(pitA.era).toFixed(2):'—')+'. '
+            +tB+' SP: '+pitB.name+' ERA '+(pitB.era?parseFloat(pitB.era).toFixed(2):'—')+'.'
             +' '+(wxNote||'')+'.'});
       }
     }

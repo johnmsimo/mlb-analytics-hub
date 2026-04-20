@@ -3022,6 +3022,28 @@ def _best_total(bookmakers):
     return best
 
 
+def _best_spread(bookmakers, away_name, home_name):
+    """Return best run-line (spreads market) for each side."""
+    best = {'away': None, 'home': None}
+    for bk in bookmakers or []:
+        for m in bk.get('markets', []) or []:
+            if m.get('key') != 'spreads':
+                continue
+            for o in m.get('outcomes', []) or []:
+                nm = o.get('name', '')
+                point = o.get('point')  # e.g. -1.5 or +1.5
+                price = o.get('price')
+                item = {'bookmaker': bk.get('title'), 'price': price, 'point': point,
+                        'implied': _american_to_implied(price)}
+                if nm == away_name:
+                    if best['away'] is None or abs(float(price or 0)) < abs(float(best['away']['price'] or 0)):
+                        best['away'] = item
+                elif nm == home_name:
+                    if best['home'] is None or abs(float(price or 0)) < abs(float(best['home']['price'] or 0)):
+                        best['home'] = item
+    return best
+
+
 def _load_event_odds(event_id, featured_only=False):
     if not ODDS_API_KEY or not event_id:
         return []
@@ -3030,7 +3052,7 @@ def _load_event_odds(event_id, featured_only=False):
     cached = _ODDS_GAME_CACHE.get(event_id)
     if cached and (now - cached.get('ts', 0)) < _ODDS_GAME_TTL and cache_key in cached:
         return cached[cache_key]
-    markets = 'h2h,totals' if featured_only else 'batter_hits,batter_total_bases,batter_home_runs,batter_rbis,batter_runs_scored,batter_stolen_bases,pitcher_strikeouts'
+    markets = 'h2h,spreads,totals' if featured_only else 'batter_hits,batter_total_bases,batter_home_runs,batter_rbis,batter_runs_scored,batter_stolen_bases,pitcher_strikeouts'
     try:
         r = requests.get(
             f'https://api.the-odds-api.com/v4/sports/baseball_mlb/events/{event_id}/odds',
@@ -6103,14 +6125,35 @@ def api_props_projections(game_pk):
                 "proj":      proj,
             })
 
+        # ── Fetch game lines from Odds API (uses cache — no extra credits) ────
+        away_full = away_t.get("team", {}).get("name", "")
+        home_full = home_t.get("team", {}).get("name", "")
+        event, _ = _find_odds_event(away_full, home_full)
+        game_lines = {}
+        if event:
+            featured = _load_event_odds(event.get('id'), featured_only=True)
+            game_lines = {
+                'moneyline': _best_moneyline(featured, away_full, home_full),
+                'total':     _best_total(featured),
+                'spread':    _best_spread(featured, away_full, home_full),
+                'awayFull':  away_full,
+                'homeFull':  home_full,
+                'eventId':   event.get('id'),
+            }
+
         return jsonify({
             "success":     True,
             "gamePk":      game_pk,
             "matchup":     f"{away_abbr} @ {home_abbr}",
+            "awayAbbr":    away_abbr,
+            "homeAbbr":    home_abbr,
+            "awayFull":    away_full,
+            "homeFull":    home_full,
             "batters":     all_batters,
             "pitchers":    pitchers_out,
             "weather":     wx,
             "park_factor": pf,
+            "game_lines":  game_lines,
             "timestamp":   datetime.now(timezone.utc).isoformat(),
         })
 
