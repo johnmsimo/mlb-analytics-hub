@@ -227,7 +227,7 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 <script>
 const PITCH_NAMES = {ff:'4-Seam FB',si:'Sinker',fc:'Cutter',st:'Sweeper',sl:'Slider',cu:'Curveball',ch:'Changeup',fs:'Splitter',kn:'Knuckleball',sv:'Slurve',kc:'KC Curve',fp:'Forkball'};
 
-let GAMES=[], PD=null, LOGS={}, MATCHUPS={};
+let GAMES=[], PD=null, LOGS={}, MATCHUPS={}, PROPS_DATA=null;
 // FIX: added LAST_GAME_IDX to reliably track which game was last analyzed
 let FG_READY=false, LAST_PK=null, LAST_GAME_IDX=null;
 let POLL=null, RETRY_COUNT=0;
@@ -359,6 +359,12 @@ async function analyze(silent=false){
       document.querySelectorAll('.ars-b').forEach(b=>{b.style.width=b.dataset.w+'%';});
     },120);
 
+    // Load BAT X projections for threat pane integration
+    fetch(`/api/props/projections/${g.gamePk}`)
+      .then(r=>r.json())
+      .then(d=>{ if(d&&d.success){ PROPS_DATA=d; rebuildThreats(); } })
+      .catch(()=>{});
+
   }catch(e){
     if(!silent) $('cardsGrid').innerHTML=`<div class="pc" style="grid-column:1/-1"><div class="empty">Error: ${e.message}</div></div>`;
   }
@@ -374,6 +380,62 @@ function switchTab(el,paneId){
     pane.classList.add('active');
     setTimeout(()=>{pane.querySelectorAll('.ars-b').forEach(b=>{b.style.width=b.dataset.w+'%';});},60);
   }
+}
+
+// Re-render all open threats panes once PROPS_DATA arrives
+function rebuildThreats(){
+  if(!PD||!PD.success) return;
+  for(const pit of [PD.awayPitcher, PD.homePitcher]){
+    if(!pit?.id) continue;
+    const paneId = `${pit.id}-threats`;
+    const pane = document.getElementById(paneId);
+    if(!pane) continue;
+    const side = MATCHUPS[pit.id];
+    if(!side) continue;
+    pane.innerHTML = buildThreatsPane(pit.id);
+  }
+}
+
+function lookupBatX(playerName){
+  if(!PROPS_DATA) return null;
+  const batters = PROPS_DATA.batters || [];
+  return batters.find(b=>b.name===playerName) || null;
+}
+
+function batxOUPills(proj, adj){
+  if(!proj || !adj) return '';
+  const COMP_LABELS={contact:'contact quality',power:'raw power',discipline:'plate discipline',platoon:'platoon edge',park:'park factor',weather:'weather',pitcher:'pitcher matchup',form:'recent form',bvp:'BvP history'};
+  const keys=Object.keys(adj).filter(k=>COMP_LABELS[k]&&adj[k]!=null);
+  keys.sort((a,b)=>Math.abs(adj[b])-Math.abs(adj[a]));
+  const topPos=keys.filter(k=>adj[k]>0.005).slice(0,2);
+  const topNeg=keys.filter(k=>adj[k]<-0.005).slice(0,1);
+  const parts=[];
+  if(topPos.length) parts.push('boosted by '+topPos.map(k=>COMP_LABELS[k]).join(' & '));
+  if(topNeg.length) parts.push('limited by '+topNeg.map(k=>COMP_LABELS[k]).join(' & '));
+  const reasoning=parts.join('; ');
+  const lines=[
+    {stat:'hits',line:0.5,label:'H 0.5'},{stat:'hits',line:1.5,label:'H 1.5'},
+    {stat:'tb',line:1.5,label:'TB 1.5'},{stat:'tb',line:2.5,label:'TB 2.5'},
+    {stat:'hr',line:0.5,label:'HR 0.5'},{stat:'rbi',line:0.5,label:'RBI 0.5'},
+  ];
+  const pills=lines.map(def=>{
+    const p=proj[def.stat]; if(p==null) return '';
+    const edge=p-def.line;
+    const dir=edge>=0?'OVER':'UNDER';
+    const col=dir==='OVER'?'#4caf50':'#f44336';
+    const bg=dir==='OVER'?'rgba(76,175,80,.1)':'rgba(244,67,54,.08)';
+    const bor=dir==='OVER'?'rgba(76,175,80,.3)':'rgba(244,67,54,.25)';
+    return`<span style="display:inline-block;padding:2px 6px;border-radius:5px;font-family:Orbitron,monospace;font-size:.48rem;letter-spacing:.6px;border:1px solid ${bor};background:${bg};color:${col};margin-right:3px;margin-bottom:3px">${def.label} <strong>${dir}</strong> <span style="opacity:.6;font-size:.42rem">${(edge>=0?'+':'')+edge.toFixed(2)}</span></span>`;
+  }).filter(Boolean).join('');
+  if(!pills) return '';
+  const comp=proj.composite;
+  const compColor=comp>=1.05?'#4caf50':comp<=0.95?'#f44336':'var(--c)';
+  const compSign=comp>=1?'+':'';
+  return `<div style="margin-top:8px;padding:7px 9px;background:rgba(0,229,255,.03);border:1px solid rgba(0,229,255,.1);border-radius:8px">`
+    +`<div style="font-family:Orbitron,monospace;font-size:.5rem;letter-spacing:1.5px;color:var(--mu);margin-bottom:5px">BAT X &nbsp;<span style="color:${compColor}">${compSign}${((comp-1)*100).toFixed(1)}%</span></div>`
+    +`<div>${pills}</div>`
+    +(reasoning?`<div style="font-size:.54rem;color:var(--mu);margin-top:4px;opacity:.75">${reasoning}</div>`:'')
+    +'</div>';
 }
 
 // ── BUILD CARD ───────────────────────────────────────────────────────────
@@ -712,6 +774,7 @@ function buildThreatsPane(pitcherId){
         <div class="th-proj-cell"><div class="v ${probCls(b.hrProb)}">${(b.hrProb*100).toFixed(0)}%</div><div class="lbl">HR</div></div>
         <div class="th-proj-cell"><div class="v ${probCls(b.rbiProb)}">${(b.rbiProb*100).toFixed(0)}%</div><div class="lbl">1+ RBI</div></div>
       </div>
+      ${ (() => { const bx=lookupBatX(b.name); return bx ? batxOUPills(bx.proj, bx.proj?.adjustments) : (PROPS_DATA ? '' : '<div style="font-size:.52rem;color:var(--mu);margin-top:6px;opacity:.6">BAT X loading…</div>'); })() }
     </div>`;
   }).join('');
 
