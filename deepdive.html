@@ -1434,8 +1434,8 @@ function loadPropsProjections(){
 
 function lookupBatX(playerName){
   if(!PROPS_DATA) return null;
-  var teams = (PROPS_DATA.away||[]).concat(PROPS_DATA.home||[]);
-  for(var i=0;i<teams.length;i++){ if(teams[i].name===playerName) return teams[i]; }
+  var batters = PROPS_DATA.batters || (PROPS_DATA.away||[]).concat(PROPS_DATA.home||[]);
+  for(var i=0;i<batters.length;i++){ if(batters[i].name===playerName) return batters[i]; }
   return null;
 }
 
