@@ -247,6 +247,24 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .props-pr-leg-pill.over{background:rgba(76,175,80,.1);border:1px solid rgba(76,175,80,.25);color:#4caf50}
 .props-pr-leg-pill.under{background:rgba(244,67,54,.08);border:1px solid rgba(244,67,54,.2);color:#f44336}
 .props-pr-empty{padding:16px;text-align:center;font-size:.68rem;color:var(--mu);font-family:'Orbitron',monospace;letter-spacing:1px}
+/* ── Power Filter Bar ── */
+.pfbar{margin-bottom:14px}
+.pfbar-toggle{display:inline-flex;align-items:center;gap:7px;padding:6px 14px;border-radius:8px;border:1px solid rgba(0,229,255,.2);background:rgba(0,229,255,.04);color:var(--c);font-family:'Orbitron',monospace;font-size:.6rem;letter-spacing:1.5px;cursor:pointer;transition:all .2s}
+.pfbar-toggle:hover{border-color:rgba(0,229,255,.4);background:rgba(0,229,255,.1)}
+.pfbar-toggle.has-active{border-color:rgba(0,229,255,.5);background:rgba(0,229,255,.12);box-shadow:0 0 12px rgba(0,229,255,.12)}
+.pfbar-count{padding:1px 7px;border-radius:999px;background:var(--c);color:var(--bg);font-size:.55rem;font-weight:700}
+.pfbar-wrap{margin-top:10px;padding:12px 14px;background:rgba(0,0,0,.25);border:1px solid rgba(0,229,255,.1);border-radius:12px;display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start}
+.pfbar-group{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
+.pfbar-grp-lbl{font-family:'Orbitron',monospace;font-size:.5rem;color:var(--mu);letter-spacing:1.5px;white-space:nowrap;padding-right:2px}
+.pfbar-sep{width:1px;height:24px;background:rgba(255,255,255,.08);align-self:center}
+.pfchip{padding:4px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.03);color:var(--mu);font-family:'Orbitron',monospace;font-size:.56rem;letter-spacing:.8px;cursor:pointer;transition:all .15s;white-space:nowrap}
+.pfchip:hover{border-color:rgba(0,229,255,.3);color:var(--t)}
+.pfchip.on{border-color:rgba(0,229,255,.5);background:rgba(0,229,255,.14);color:var(--c)}
+.pfchip.on-g{border-color:rgba(0,230,118,.45);background:rgba(0,230,118,.1);color:var(--g)}
+.pfchip.on-m{border-color:rgba(224,64,251,.4);background:rgba(224,64,251,.08);color:var(--m)}
+.pfchip.on-o{border-color:rgba(255,152,0,.4);background:rgba(255,152,0,.08);color:var(--o)}
+.pfchip-clear{border-color:rgba(244,67,54,.3)!important;color:var(--r)!important}
+.pfchip-clear:hover{border-color:var(--r)!important;background:rgba(244,67,54,.1)!important}
 /* ── Pitcher trend section ── */
 .pp-trends{margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.06)}
 .pp-trend-hd{font-family:'Orbitron',monospace;font-size:.58rem;color:var(--mu);letter-spacing:2px;margin-bottom:8px}
@@ -351,6 +369,46 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
           <button class="sort-btn" onclick="sortBatters(this,'hrr')">H+R+RBI</button>
           <button class="sort-btn" onclick="sortBatters(this,'slot')">SLOT ORDER</button>
         </div>
+        <!-- ── Power Filter Bar ── -->
+        <div class="pfbar" id="pfBar">
+          <button class="pfbar-toggle" id="pfToggleBtn" onclick="togglePFBar()">⚡ FILTERS <span class="pfbar-count" id="pfCount" style="display:none">0</span></button>
+          <div class="pfbar-wrap" id="pfBarWrap" style="display:none">
+            <div class="pfbar-group">
+              <span class="pfbar-grp-lbl">PITCHER</span>
+              <button class="pfchip" id="pfc-vsL" onclick="togglePFChip('vsL','on-m')">vs LHP</button>
+              <button class="pfchip" id="pfc-vsR" onclick="togglePFChip('vsR','on')">vs RHP</button>
+            </div>
+            <div class="pfbar-sep"></div>
+            <div class="pfbar-group">
+              <span class="pfbar-grp-lbl">SIDE</span>
+              <button class="pfchip" id="pfc-home" onclick="togglePFChip('home','on-g')">HOME</button>
+              <button class="pfchip" id="pfc-away" onclick="togglePFChip('away','on')">AWAY</button>
+            </div>
+            <div class="pfbar-sep"></div>
+            <div class="pfbar-group">
+              <span class="pfbar-grp-lbl">SLOT</span>
+              <button class="pfchip" id="pfc-s1" onclick="togglePFChip('s1','on-g')">1–3</button>
+              <button class="pfchip" id="pfc-s4" onclick="togglePFChip('s4','on')">4–6</button>
+              <button class="pfchip" id="pfc-s7" onclick="togglePFChip('s7','on-o')">7–9</button>
+            </div>
+            <div class="pfbar-sep"></div>
+            <div class="pfbar-group">
+              <span class="pfbar-grp-lbl">PARK</span>
+              <button class="pfchip" id="pfc-hpark" onclick="togglePFChip('hpark','on-g')">HITTER ↑</button>
+              <button class="pfchip" id="pfc-npark" onclick="togglePFChip('npark','on')">NEUTRAL</button>
+              <button class="pfchip" id="pfc-ppark" onclick="togglePFChip('ppark','on-m')">PITCHER ↓</button>
+            </div>
+            <div class="pfbar-sep"></div>
+            <div class="pfbar-group">
+              <span class="pfbar-grp-lbl">WIND</span>
+              <button class="pfchip" id="pfc-wout" onclick="togglePFChip('wout','on-g')">WIND OUT 🟢</button>
+              <button class="pfchip" id="pfc-win" onclick="togglePFChip('win','on-m')">WIND IN 🔴</button>
+              <button class="pfchip" id="pfc-wcalm" onclick="togglePFChip('wcalm','on')">CALM</button>
+            </div>
+            <div class="pfbar-sep"></div>
+            <button class="pfchip pfchip-clear" onclick="clearPFFilters()">✕ CLEAR</button>
+          </div>
+        </div>
         <div class="batter-grid" id="batterGrid"></div>
       </div>
       <div id="sub-pitchers" style="display:none">
@@ -423,6 +481,9 @@ const noData   = msg => `<div style="color:var(--mu);padding:32px;text-align:cen
 // ── State ─────────────────────────────────────────────────────────────────────
 let CUR_DATE      = '';
 let CUR_GAME      = null;
+let CUR_HOME      = '';
+let CUR_AWAY      = '';
+let PF_FILTERS    = new Set();
 let PROJ_DATA     = null;
 let MTCH_DATA     = null;
 let VAL_DATA      = null;
@@ -525,8 +586,10 @@ async function selectGame(pk, awayAbbr, homeAbbr) {
   if (UMP_POLL)    { clearTimeout(UMP_POLL);   UMP_POLL = null; }
   if (LINEUP_POLL) { clearInterval(LINEUP_POLL); LINEUP_POLL = null; }
   CUR_GAME = pk;
+  CUR_AWAY = awayAbbr; CUR_HOME = homeAbbr;
   PROJ_DATA = MTCH_DATA = VAL_DATA = null;
   TREND_DATA = {}; UMP_DATA = null; LINEUP_STATUS = {};
+  clearPFFilters(true); // reset filters silently on new game
   // Hide any stale alert
   const bar = gel('lineupAlertBar');
   if (bar) bar.classList.remove('visible');
@@ -733,7 +796,7 @@ async function loadTrends(pk) {
     TREND_DATA = d.players || {};
     // Re-render cards if projections already loaded
     if (PROJ_DATA) {
-      renderBatters(PROJ_DATA.batters || [], SORT_KEY);
+      applyPFFilters();
       renderPitchers(PROJ_DATA.pitchers || []);
     }
   } catch(e) {
@@ -830,7 +893,7 @@ async function loadProjections() {
 }
 
 function renderProj(d) {
-  renderBatters(d.batters || [], SORT_KEY);
+  applyPFFilters();
   renderPitchers(d.pitchers || []);
   buildPropsPicksPanel(d);
   // Re-apply any known lineup status badges
@@ -962,7 +1025,102 @@ function sortBatters(btn, key) {
   SORT_KEY = key;
   document.querySelectorAll('.sort-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
-  if (PROJ_DATA) renderBatters(PROJ_DATA.batters || [], key);
+  if (PROJ_DATA) applyPFFilters();
+}
+
+// ── Power Filter Bar ─────────────────────────────────────────────────────────
+function togglePFBar() {
+  const wrap = gel('pfBarWrap');
+  const open = wrap.style.display !== 'none';
+  wrap.style.display = open ? 'none' : '';
+}
+
+const _PF_COLOR = {
+  vsL:'on-m', vsR:'on', home:'on-g', away:'on',
+  s1:'on-g', s4:'on', s7:'on-o',
+  hpark:'on-g', npark:'on', ppark:'on-m',
+  wout:'on-g', win:'on-m', wcalm:'on'
+};
+
+function togglePFChip(key, colorCls) {
+  if (PF_FILTERS.has(key)) PF_FILTERS.delete(key);
+  else PF_FILTERS.add(key);
+  updatePFChipUI();
+  applyPFFilters();
+}
+
+function clearPFFilters(silent) {
+  PF_FILTERS.clear();
+  updatePFChipUI();
+  if (!silent && PROJ_DATA) applyPFFilters();
+}
+
+function updatePFChipUI() {
+  const n = PF_FILTERS.size;
+  const btn  = gel('pfToggleBtn');
+  const cnt  = gel('pfCount');
+  if (btn)  btn.classList.toggle('has-active', n > 0);
+  if (cnt)  { cnt.textContent = n; cnt.style.display = n > 0 ? '' : 'none'; }
+  PF_FILTERS.forEach(key => {
+    const el = gel(`pfc-${key}`);
+    if (el) el.className = `pfchip ${_PF_COLOR[key] || 'on'}`;
+  });
+  // remove active class from unchecked chips
+  ['vsL','vsR','home','away','s1','s4','s7','hpark','npark','ppark','wout','win','wcalm'].forEach(k => {
+    if (!PF_FILTERS.has(k)) {
+      const el = gel(`pfc-${k}`);
+      if (el) el.className = 'pfchip';
+    }
+  });
+}
+
+function applyPFFilters() {
+  if (!PROJ_DATA) return;
+  let batters = [...(PROJ_DATA.batters || [])];
+
+  // Pitcher hand (OR within group)
+  if (PF_FILTERS.has('vsL') || PF_FILTERS.has('vsR')) {
+    batters = batters.filter(b =>
+      (PF_FILTERS.has('vsL') && (b.opp_hand||'').toUpperCase() === 'L') ||
+      (PF_FILTERS.has('vsR') && (b.opp_hand||'').toUpperCase() === 'R')
+    );
+  }
+  // Home / Away (OR within group)
+  if (PF_FILTERS.has('home') || PF_FILTERS.has('away')) {
+    batters = batters.filter(b =>
+      (PF_FILTERS.has('home') && b.team === CUR_HOME) ||
+      (PF_FILTERS.has('away') && b.team === CUR_AWAY)
+    );
+  }
+  // Batting slot (OR within group)
+  if (PF_FILTERS.has('s1') || PF_FILTERS.has('s4') || PF_FILTERS.has('s7')) {
+    batters = batters.filter(b => {
+      const s = b.slot || 9;
+      return (PF_FILTERS.has('s1') && s <= 3) ||
+             (PF_FILTERS.has('s4') && s >= 4 && s <= 6) ||
+             (PF_FILTERS.has('s7') && s >= 7);
+    });
+  }
+  // Park factor — use pf_hits from BAT X projections (OR within group)
+  if (PF_FILTERS.has('hpark') || PF_FILTERS.has('npark') || PF_FILTERS.has('ppark')) {
+    batters = batters.filter(b => {
+      const pf = parseFloat(b.proj?.pf_hits || 1.0);
+      return (PF_FILTERS.has('hpark') && pf >= 1.04) ||
+             (PF_FILTERS.has('ppark') && pf <= 0.96) ||
+             (PF_FILTERS.has('npark') && pf > 0.96 && pf < 1.04);
+    });
+  }
+  // Wind — via BAT X weather adjustment (OR within group)
+  if (PF_FILTERS.has('wout') || PF_FILTERS.has('win') || PF_FILTERS.has('wcalm')) {
+    batters = batters.filter(b => {
+      const wx = parseFloat(b.proj?.adjustments?.weather || 0);
+      return (PF_FILTERS.has('wout')  && wx >  0.01) ||
+             (PF_FILTERS.has('win')   && wx < -0.01) ||
+             (PF_FILTERS.has('wcalm') && Math.abs(wx) <= 0.01);
+    });
+  }
+
+  renderBatters(batters, SORT_KEY);
 }
 
 function renderBatters(batters, key) {
@@ -1262,9 +1420,9 @@ async function loadValueBets() {
     const r = await fetch(`/api/tracker/entries?date=${CUR_DATE}&gamePk=${CUR_GAME}`);
     const d = await r.json();
     VAL_DATA = buildValueBets(d.entries || []);
-    // Re-render batter cards so hub badges appear (PLAYER_HUB_MAP is now populated)
+    // Re-render batter cards so hub/ev badges appear (maps now populated)
     if (PROJ_DATA && gel('batterGrid') && gel('batterGrid').children.length > 0) {
-      renderBatters(PROJ_DATA.batters || [], SORT_KEY);
+      applyPFFilters();
     }
     renderValueTable(VAL_FILT);
   } catch(e) {
