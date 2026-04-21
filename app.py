@@ -41,6 +41,28 @@ ADJUST_STORE = os.path.join(DATA_DIR, 'model_adjustments.json')
 CAL_HISTORY_STORE = os.path.join(DATA_DIR, 'calibration_history.json')
 VALUE_HISTORY_STORE = os.path.join(DATA_DIR, 'value_history.json')
 
+
+def _load_json(path, default):
+    try:
+        if not os.path.exists(path):
+            return default
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+
+def _save_json(path, payload):
+    try:
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(payload, f, indent=2)
+        return True
+    except Exception:
+        return False
+
 MLB_API   = "https://statsapi.mlb.com/api/v1"
 WX_API    = "https://api.open-meteo.com/v1/forecast"
 
@@ -3191,6 +3213,8 @@ def _history_in_window(end_date_str, window_days):
     hist = _load_json(CAL_HISTORY_STORE, [])
     out = []
     for row in hist:
+        if not isinstance(row, dict):
+            continue
         ts = (row.get('timestamp') or '')[:10]
         if ts in dates:
             out.append(row)
@@ -3202,7 +3226,8 @@ def _daily_series(end_date_str, window_days, market_key=None):
     dates = list(reversed(_dates_in_window(end_date_str, window_days)))
     series = []
     for ds in dates:
-        rows = list((store.get(ds) or {}).get('entries', []) or [])
+        day = _normalize_tracker_day(store.get(ds))
+        rows = list(day.get('entries', []) or [])
         if market_key:
             rows = [r for r in rows if r.get('marketKey') == market_key]
         active = [r for r in rows if r.get('grade') in ('win', 'loss')]
@@ -3484,7 +3509,7 @@ def api_tracker_adjustments():
 @app.route('/api/tracker/date/<date_str>')
 def api_tracker_date(date_str):
     store = _load_json(TRACKER_STORE, {})
-    day = store.get(date_str, {'entries': [], 'capturedAt': None, 'gradedAt': None})
+    day = _normalize_tracker_day(store.get(date_str))
     day['entries'] = _recalc_tracker_entries(day.get('entries', []))
     return jsonify({'success': True, 'date': date_str, 'adjustments': _get_adjustments(), 'capturedAt': day.get('capturedAt'), 'gradedAt': day.get('gradedAt'), 'closingCapturedAt': day.get('closingCapturedAt'), 'entries': day.get('entries', []), 'summary': _tracker_summary(day.get('entries', []))})
 
@@ -3509,9 +3534,10 @@ def api_tracker_capture(date_str):
 @app.route('/api/tracker/grade/<date_str>', methods=['POST'])
 def api_tracker_grade(date_str):
     store = _load_json(TRACKER_STORE, {})
-    day = store.get(date_str)
-    if not day:
+    raw_day = store.get(date_str)
+    if raw_day is None:
         return jsonify({'success': False, 'error': 'No captured tracker data for this date'}), 404
+    day = _normalize_tracker_day(raw_day)
     sched = fetch_schedule(date_str)
     games = {g.get('gamePk'): g for g in sched}
     for row in day.get('entries', []):
@@ -3565,6 +3591,35 @@ def _tracker_store():
     return _load_json(TRACKER_STORE, {})
 
 
+def _coerce_tracker_entries(entries):
+    if not isinstance(entries, list):
+        return []
+    return [row for row in entries if isinstance(row, dict)]
+
+
+def _normalize_tracker_day(day_payload):
+    if isinstance(day_payload, dict):
+        return {
+            'capturedAt': day_payload.get('capturedAt'),
+            'gradedAt': day_payload.get('gradedAt'),
+            'closingCapturedAt': day_payload.get('closingCapturedAt'),
+            'entries': _coerce_tracker_entries(day_payload.get('entries', [])),
+        }
+    if isinstance(day_payload, list):
+        return {
+            'capturedAt': None,
+            'gradedAt': None,
+            'closingCapturedAt': None,
+            'entries': _coerce_tracker_entries(day_payload),
+        }
+    return {
+        'capturedAt': None,
+        'gradedAt': None,
+        'closingCapturedAt': None,
+        'entries': [],
+    }
+
+
 def _dates_in_window(end_date_str, window_days):
     try:
         end_dt = datetime.strptime(end_date_str, '%Y-%m-%d').date()
@@ -3579,7 +3634,7 @@ def _collect_window_entries(end_date_str, window_days):
     rows = []
     for ds, payload in store.items():
         if ds in dates:
-            rows.extend(payload.get('entries', []))
+            rows.extend(_normalize_tracker_day(payload).get('entries', []))
     return rows
 
 
@@ -3805,9 +3860,10 @@ def _tracker_summary(entries):
 @app.route('/api/tracker/close/<date_str>', methods=['POST'])
 def api_tracker_close(date_str):
     store = _tracker_store()
-    day = store.get(date_str)
-    if not day:
+    raw_day = store.get(date_str)
+    if raw_day is None:
         return jsonify({'success': False, 'error': 'No captured tracker data for this date'}), 404
+    day = _normalize_tracker_day(raw_day)
     entries = day.get('entries', [])
     by_game = {}
     for row in entries:
@@ -4103,7 +4159,7 @@ def _portfolio_plan(entries, adjustments):
 @app.route('/api/tracker/portfolio/<date_str>')
 def api_tracker_portfolio(date_str):
     store = _tracker_store()
-    day = store.get(date_str, {'entries': []})
+    day = _normalize_tracker_day(store.get(date_str))
     entries = _recalc_tracker_entries(day.get('entries', []))
     adjustments = _get_adjustments()
     return jsonify({
@@ -4204,7 +4260,7 @@ def _build_bet_slip(entries, adjustments):
 @app.route('/api/tracker/betslip/<date_str>')
 def api_tracker_betslip(date_str):
     store = _tracker_store()
-    day = store.get(date_str, {'entries': []})
+    day = _normalize_tracker_day(store.get(date_str))
     entries = _recalc_tracker_entries(day.get('entries', []))
     adjustments = _get_adjustments()
     return jsonify({
@@ -4254,7 +4310,7 @@ def _bankroll_curve_dashboard(end_date_str, window_days):
     card_audit = {k: _audit_bucket_init() for k in ['core', 'flex', 'all_singles']}
 
     for ds in dates:
-        day = store.get(ds, {'entries': []})
+        day = _normalize_tracker_day(store.get(ds))
         entries = _recalc_tracker_entries(day.get('entries', []))
         slip = _build_bet_slip(entries, adjustments)
         singles = slip.get('singles', [])
@@ -4358,7 +4414,7 @@ def _attribution_dashboard(end_date_str, window_days):
     daily = []
 
     for ds in dates:
-        day = store.get(ds, {'entries': []})
+        day = _normalize_tracker_day(store.get(ds))
         entries = _recalc_tracker_entries(day.get('entries', []))
         slip = _build_bet_slip(entries, adjustments)
         singles = slip.get('singles', [])
@@ -6265,7 +6321,7 @@ def api_tracker_entries():
             with open(TRACKER_STORE) as f:
                 store = json.load(f)
 
-        day     = store.get(date, {})
+        day     = _normalize_tracker_day(store.get(date))
         entries = day.get("entries", [])
 
         if gamePk:
