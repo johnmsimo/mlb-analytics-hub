@@ -120,6 +120,16 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .tabbtn{padding:10px 16px;border:1px solid rgba(0,229,255,.18);border-radius:999px;background:rgba(255,255,255,.03);color:var(--mu);font-family:Orbitron,monospace;font-size:.68rem;letter-spacing:1.6px;cursor:pointer}
 .tabbtn.active{background:linear-gradient(90deg,rgba(0,229,255,.15),rgba(224,64,251,.12));color:var(--c);border-color:rgba(0,229,255,.35)}
 .view{display:none}.view.active{display:block}
+.nrfi-wrap{background:linear-gradient(180deg,rgba(10,16,28,.96),rgba(11,19,33,.96));border:1px solid rgba(0,229,255,.12);border-radius:20px;padding:16px}
+.nrfi-top{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.nrfi-sub{font-size:.66rem;color:var(--mu)}
+.nrfi-table{width:100%;border-collapse:collapse}
+.nrfi-table th,.nrfi-table td{padding:8px 6px;border-bottom:1px solid rgba(255,255,255,.05);font-size:.7rem;text-align:left}
+.nrfi-table th{color:var(--mu);font-family:Orbitron,monospace;font-size:.58rem;letter-spacing:1px}
+.nrfi-pos{color:#00e676;font-family:Orbitron,monospace}
+.nrfi-neg{color:#f44336;font-family:Orbitron,monospace}
+.nrfi-save{padding:4px 8px;border-radius:6px;border:1px solid rgba(0,229,255,.22);background:rgba(0,229,255,.06);color:var(--c);font-family:Orbitron,monospace;font-size:.56rem;cursor:pointer}
+.nrfi-save.saved{background:rgba(0,230,118,.1);border-color:rgba(0,230,118,.3);color:#00e676;cursor:default}
 .panel{background:linear-gradient(180deg,rgba(10,16,28,.96),rgba(11,19,33,.96));border:1px solid rgba(0,229,255,.12);border-radius:20px;padding:18px;box-shadow:0 18px 50px rgba(0,0,0,.25)}
 .team-toolbar,.mc-toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px}.select{background:#0d1423;border:1px solid var(--b);border-radius:10px;padding:10px 12px;color:var(--c);font-family:Orbitron,monospace;font-size:.72rem}
 .team-head{display:flex;align-items:center;gap:12px;margin-bottom:14px}.team-head img.team-logo{width:56px;height:56px;object-fit:contain}.team-name{font-family:Orbitron,monospace;color:var(--c);font-size:1rem;letter-spacing:1.4px}.team-meta{font-size:.74rem;color:var(--mu)}
@@ -309,6 +319,7 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
   <a href="/pitcher-deep-dive" style="padding:7px 16px;background:rgba(250,100,0,.07);border:1px solid rgba(250,100,0,.28);border-radius:8px;color:#fa6400;font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:2px;text-decoration:none">⚾ PITCHER ANALYSIS</a>
   <button class="tabbtn active" onclick="switchView('gamesView',this)">TODAY'S GAMES</button>
   <button class="tabbtn" onclick="switchView('teamsView',this)">TEAMS</button>
+  <button class="tabbtn" onclick="switchView('nrfiView',this);initNRFI()">NRFI</button>
   <button class="tabbtn" onclick="switchView('bestBetsView',this);initBestBets()">🎯 BEST BETS</button>
 
 </div>
@@ -323,6 +334,26 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
       <div class="sh">TEAM TABS</div>
       <div class="team-toolbar"><select id="teamSelect" class="select"></select><span class="pillish" id="teamStatus">Loading teams…</span></div>
       <div id="teamWrap"><div class="sw"><div class="sp"></div><div class="st">LOADING TEAM DATA...</div></div></div>
+    </div>
+  </div>
+
+  <div id="nrfiView" class="view">
+    <div class="sh">NRFI / YRFI BOARD</div>
+    <div class="nrfi-wrap">
+      <div class="nrfi-top">
+        <div class="nrfi-sub" id="nrfiMeta">Loading first-inning probabilities…</div>
+        <button class="tabbtn" style="padding:7px 12px" onclick="loadNRFIBoard(window.__lastGames||[])">REFRESH</button>
+      </div>
+      <div style="overflow-x:auto">
+        <table class="nrfi-table">
+          <thead>
+            <tr>
+              <th>GAME</th><th>AWAY SP</th><th>HOME SP</th><th>NRFI PROB</th><th>NRFI EDGE</th><th>BOOK PRICE</th><th>💾</th>
+            </tr>
+          </thead>
+          <tbody id="nrfiBody"><tr><td colspan="7" class="nrfi-sub">Loading…</td></tr></tbody>
+        </table>
+      </div>
     </div>
   </div>
 
@@ -1023,9 +1054,54 @@ function renderBBPicks(){
 function etTodayStr(){const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());const y=parts.find(p=>p.type==='year').value,m=parts.find(p=>p.type==='month').value,d=parts.find(p=>p.type==='day').value;return y+'-'+m+'-'+d}
 function fmtDateLabel(v){try{const dt=new Date(v+'T12:00:00');return dt.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',year:'numeric'})}catch(e){return v}}
 let selectedGamesDate=etTodayStr();
+let NRFI_ROWS=[];
+let NRFI_LAST_DATE='';
 function syncDateUI(){var inp=document.getElementById('gamesDateInput'),lbl=document.getElementById('gamesDateLabel'),todayBtn=document.getElementById('todayDateBtn');if(inp) inp.value=selectedGamesDate;if(lbl) lbl.textContent=fmtDateLabel(selectedGamesDate);if(todayBtn) todayBtn.classList.toggle('active',selectedGamesDate===etTodayStr())}
 function shiftGamesDate(days){var dt=new Date(selectedGamesDate+'T12:00:00');dt.setDate(dt.getDate()+days);selectedGamesDate=dt.toISOString().slice(0,10);syncDateUI();load(selectedGamesDate)}
-function load(dateStr){if(dateStr) selectedGamesDate=dateStr;syncDateUI();fetch('/api/games/today?date='+encodeURIComponent(selectedGamesDate)).then(function(r){return r.json()}).then(function(d){if(!d.success)throw new Error(d.error||'API error');var gs=d.games;document.getElementById('sg').textContent=gs.length||0;document.getElementById('sl').textContent=gs.filter(function(g){return g.status==='Live'}).length;var edges=gs.map(function(g){return g.edge});document.getElementById('se').textContent=edges.length?(edges.reduce(function(a,b){return a+b},0)/edges.length).toFixed(1):'--';document.getElementById('sh').textContent=gs.filter(function(g){return g.edge>=8}).length;if(!gs.length){document.getElementById('gc').innerHTML='<div class="ng"><h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px">NO GAMES FOR '+fmtDateLabel(selectedGamesDate).toUpperCase()+'</h3></div>';return}document.getElementById('gc').innerHTML='<div class="grid">'+gs.map(mkCard).join('')+'</div>';setTimeout(function(){document.querySelectorAll('.fill').forEach(function(e){e.style.width=e.getAttribute('data-w')+'%'})},150);if(window.initLiveCards)initLiveCards(gs);}).catch(function(e){document.getElementById('gc').innerHTML='<div class="sw"><div style="background:rgba(224,64,251,.08);border:1px solid rgba(224,64,251,.3);border-radius:12px;padding:24px 32px;text-align:center"><h3 style="color:var(--m);font-family:Orbitron;margin-bottom:8px">CONNECTION ERROR</h3><p style="color:var(--mu);font-size:.82rem">'+e.message+'</p></div></div>'})}
+function load(dateStr){if(dateStr) selectedGamesDate=dateStr;syncDateUI();fetch('/api/games/today?date='+encodeURIComponent(selectedGamesDate)).then(function(r){return r.json()}).then(function(d){if(!d.success)throw new Error(d.error||'API error');var gs=d.games||[];window.__lastGames=gs;document.getElementById('sg').textContent=gs.length||0;document.getElementById('sl').textContent=gs.filter(function(g){return g.status==='Live'}).length;var edges=gs.map(function(g){return g.edge});document.getElementById('se').textContent=edges.length?(edges.reduce(function(a,b){return a+b},0)/edges.length).toFixed(1):'--';document.getElementById('sh').textContent=gs.filter(function(g){return g.edge>=8}).length;if(!gs.length){document.getElementById('gc').innerHTML='<div class="ng"><h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px">NO GAMES FOR '+fmtDateLabel(selectedGamesDate).toUpperCase()+'</h3></div>';}else{document.getElementById('gc').innerHTML='<div class="grid">'+gs.map(mkCard).join('')+'</div>';setTimeout(function(){document.querySelectorAll('.fill').forEach(function(e){e.style.width=e.getAttribute('data-w')+'%'})},150);if(window.initLiveCards)initLiveCards(gs);}if(document.getElementById('nrfiView').classList.contains('active')) loadNRFIBoard(gs);}).catch(function(e){document.getElementById('gc').innerHTML='<div class="sw"><div style="background:rgba(224,64,251,.08);border:1px solid rgba(224,64,251,.3);border-radius:12px;padding:24px 32px;text-align:center"><h3 style="color:var(--m);font-family:Orbitron;margin-bottom:8px">CONNECTION ERROR</h3><p style="color:var(--mu);font-size:.82rem">'+e.message+'</p></div></div>'})}
+function initNRFI(){ if(NRFI_LAST_DATE===selectedGamesDate && NRFI_ROWS.length) return; loadNRFIBoard(window.__lastGames||[]); }
+function loadNRFIBoard(games){
+  var meta=document.getElementById('nrfiMeta'), body=document.getElementById('nrfiBody');
+  if(!meta||!body) return;
+  var gs=games||[];
+  if(!gs.length){ body.innerHTML='<tr><td colspan="7" class="nrfi-sub">No games available for this date.</td></tr>'; meta.textContent='0 games'; return; }
+  meta.textContent='Computing first-inning probabilities for '+gs.length+' games…';
+  Promise.all(gs.map(function(g){return fetch('/api/nrfi/'+g.gamePk).then(function(r){return r.json();}).catch(function(){return {success:false};});}))
+    .then(function(rows){
+      NRFI_ROWS = rows.filter(function(r){return r&&r.success;}).sort(function(a,b){return (b.nrfi_prob||0)-(a.nrfi_prob||0);});
+      NRFI_LAST_DATE=selectedGamesDate;
+      if(!NRFI_ROWS.length){ body.innerHTML='<tr><td colspan="7" class="nrfi-sub">NRFI model unavailable for today.</td></tr>'; meta.textContent='No NRFI rows available'; return; }
+      body.innerHTML=NRFI_ROWS.map(function(r,idx){
+        var edge=(r.nrfi_edge==null)?'—':((r.nrfi_edge>=0?'+':'')+(r.nrfi_edge*100).toFixed(1)+'%');
+        var edgeCls=(r.nrfi_edge||0)>=0?'nrfi-pos':'nrfi-neg';
+        var price=(r.book_price!=null?r.book_price:'—')+(r.bookmaker?(' @ '+r.bookmaker):'');
+        return '<tr>'
+          +'<td><strong>'+r.game+'</strong></td>'
+          +'<td>'+r.away_sp+'</td>'
+          +'<td>'+r.home_sp+'</td>'
+          +'<td class="nrfi-pos">'+(r.nrfi_prob*100).toFixed(1)+'%</td>'
+          +'<td class="'+edgeCls+'">'+edge+'</td>'
+          +'<td>'+price+'</td>'
+          +'<td><button class="nrfi-save" id="nrfiSave-'+idx+'" onclick="saveNrfiPick('+idx+',this)">Save</button></td>'
+          +'</tr>';
+      }).join('');
+      meta.textContent=NRFI_ROWS.length+' games sorted by NRFI probability';
+    })
+    .catch(function(e){ body.innerHTML='<tr><td colspan="7" class="nrfi-sub">NRFI load failed: '+e.message+'</td></tr>'; meta.textContent='NRFI unavailable'; });
+}
+function saveNrfiPick(idx,btn){
+  var r=NRFI_ROWS[idx]; if(!r) return;
+  fetch('/api/tracker/pick',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      gamePk:r.gamePk,team:r.home,player:r.game,marketKey:'nrfi',line:0.5,recommendedSide:'Under',
+      adjProb:r.nrfi_prob,edge:(r.nrfi_edge==null?0:r.nrfi_edge),marketImplied:r.market_nrfi_implied,
+      openingPrice:r.book_price,openingBookmaker:r.bookmaker,source:'nrfi_board',reason:(r.key_factors||[]).join(' · ')
+    })
+  }).then(function(x){return x.json();}).then(function(d){
+    if(d&&d.success){ btn.classList.add('saved'); btn.textContent='Saved'; }
+  }).catch(function(){});
+}
 document.getElementById('gamesDateInput').addEventListener('change',function(e){selectedGamesDate=e.target.value||etTodayStr();syncDateUI();load(selectedGamesDate)});
 document.getElementById('prevDateBtn').addEventListener('click',function(){shiftGamesDate(-1)});
 document.getElementById('nextDateBtn').addEventListener('click',function(){shiftGamesDate(1)});

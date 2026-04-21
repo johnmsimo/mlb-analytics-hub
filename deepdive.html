@@ -379,6 +379,16 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
   .sgp-row{grid-template-columns:1fr 1fr;gap:6px;padding:10px 0}
   .sgp-row .sgp-legs{grid-column:1 / -1}
 }
+
+/* NRFI / YRFI card */
+.nrfi-card{margin-top:12px;background:rgba(0,229,255,.03);border:1px solid rgba(0,229,255,.15);border-radius:10px;padding:12px}
+.nrfi-hd{font-family:'Orbitron',monospace;font-size:.6rem;letter-spacing:2px;color:var(--c);margin-bottom:10px}
+.nrfi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.nrfi-stat{background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.06);border-radius:8px;padding:8px}
+.nrfi-l{font-size:.52rem;color:var(--mu);letter-spacing:1px}
+.nrfi-v{font-family:'Orbitron',monospace;font-size:.86rem;color:var(--sv);margin-top:3px}
+.nrfi-factors{margin-top:9px;font-size:.58rem;color:var(--mu);line-height:1.5}
+@media(max-width:760px){.nrfi-grid{grid-template-columns:1fr 1fr}}
 /* Save Pick button */
 .trk-save{padding:4px 8px;border-radius:6px;border:1px solid rgba(0,229,255,.25);background:rgba(0,229,255,.06);color:var(--c);font-family:'Orbitron',monospace;font-size:.52rem;letter-spacing:.7px;cursor:pointer;white-space:nowrap;transition:all .2s}
 .trk-save:hover{border-color:rgba(0,229,255,.45);background:rgba(0,229,255,.14)}
@@ -1779,6 +1789,7 @@ setTimeout(function() { ensureParlayPanel(); }, 500);
 // ── Phase 4 Monte Carlo Simulation UI ────────────────────────────────────────
 var SIM_DATA = null;
 var PROPS_DATA = null;
+var NRFI_DATA = null;
 
 function pct(v){
   var n = parseFloat(v); if(isNaN(n)) return '---'; return (n*100).toFixed(1)+'%';
@@ -1974,6 +1985,57 @@ function loadSimulation(){
       if(el) el.innerHTML = '<p class="na">Simulation unavailable: '+e.message+'</p>'
         +'<button onclick="loadSimulation()" style="margin-top:10px;padding:6px 16px;border:1px solid rgba(0,229,255,.3);border-radius:999px;background:rgba(0,229,255,.08);color:var(--c);font-family:Orbitron,monospace;font-size:.62rem;letter-spacing:1px;cursor:pointer">&#8635; RETRY</button>';
     });
+}
+
+function ensureNrfiWrap(){
+  if(document.getElementById('nrfiWrap')) return;
+  var wrap = document.createElement('div');
+  wrap.id = 'nrfiWrap';
+  wrap.className = 'pnl fw pnl-src';
+  wrap.innerHTML = '<div class="pt">&#127919; NRFI / YRFI BOARD <span class="tag-sv">I1 MODEL</span></div><div id="nrfiPanel"><div class="spinner"></div></div>';
+  var dg = document.querySelector('.dg');
+  if(!dg) return;
+  var sim = document.getElementById('simWrap');
+  if(sim && sim.parentNode === dg) dg.insertBefore(wrap, sim.nextSibling);
+  else dg.appendChild(wrap);
+}
+
+function loadNrfiDeepDive(){
+  ensureNrfiWrap();
+  var panel = document.getElementById('nrfiPanel');
+  if(panel) panel.innerHTML = '<div class="spinner"></div>';
+  fetch('/api/nrfi/' + GPK)
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      NRFI_DATA = d;
+      renderNrfiDeepDive();
+    })
+    .catch(function(e){
+      var el = document.getElementById('nrfiPanel');
+      if(el) el.innerHTML = '<p class="na">NRFI model unavailable: '+e.message+'</p>';
+    });
+}
+
+function renderNrfiDeepDive(){
+  var el = document.getElementById('nrfiPanel');
+  if(!el) return;
+  if(!NRFI_DATA || !NRFI_DATA.success){ el.innerHTML = '<p class="na">NRFI model unavailable.</p>'; return; }
+  var n = NRFI_DATA;
+  var edge = (n.nrfi_edge==null)?'—':((n.nrfi_edge>=0?'+':'') + (n.nrfi_edge*100).toFixed(1) + '%');
+  var edgeColor = (n.nrfi_edge||0) >= 0 ? '#00e676' : '#f44336';
+  var price = (n.book_price!=null ? n.book_price : '—') + (n.bookmaker ? (' @ ' + n.bookmaker) : '');
+  var fx = (n.key_factors || []).map(function(f){ return '&#8226; ' + f; }).join('<br>');
+  el.innerHTML = ''
+    + '<div class="nrfi-card">'
+    + '<div class="nrfi-hd">'+n.game+' · '+n.away_sp+' vs '+n.home_sp+'</div>'
+    + '<div class="nrfi-grid">'
+    + '<div class="nrfi-stat"><div class="nrfi-l">NRFI PROB</div><div class="nrfi-v" style="color:#00e676">'+(n.nrfi_prob*100).toFixed(1)+'%</div></div>'
+    + '<div class="nrfi-stat"><div class="nrfi-l">YRFI PROB</div><div class="nrfi-v" style="color:#ff9800">'+(n.yrfi_prob*100).toFixed(1)+'%</div></div>'
+    + '<div class="nrfi-stat"><div class="nrfi-l">NRFI EDGE</div><div class="nrfi-v" style="color:'+edgeColor+'">'+edge+'</div></div>'
+    + '<div class="nrfi-stat"><div class="nrfi-l">BOOK PRICE</div><div class="nrfi-v" style="font-size:.7rem">'+price+'</div></div>'
+    + '</div>'
+    + '<div class="nrfi-factors">'+fx+'</div>'
+    + '</div>';
 }
 
 function renderSampleBox(teamKey, abbr, spName){
@@ -2285,6 +2347,7 @@ renderPropPanel = function(){
     + '<div class="legend"><span style="color:var(--sv)">&#127922; Phase 6 prop panel adds percentiles and stolen-base probability on top of the matchup-aware simulation.</span></div>';
 };
 setTimeout(function(){ if(SIM_DATA && SIM_DATA.success){ renderSimulation(); renderPropPanel(); } else { loadSimulation(); } }, 3200);
+setTimeout(loadNrfiDeepDive, 2400);
 
 
 

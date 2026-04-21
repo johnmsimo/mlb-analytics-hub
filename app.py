@@ -4095,6 +4095,246 @@ def _find_best_available_price(market_props, player, mk, line, side='over'):
     return best_price, best_book
 
 
+def _american_price_score(price):
+    try:
+        p = float(price)
+        return p if p > 0 else (1000 + p)
+    except Exception:
+        return -999999
+
+
+def _extract_first_inning_era(pitcher_id):
+    if not pitcher_id:
+        return 4.50
+    try:
+        year = datetime.now().year
+        r = requests.get(
+            f"{MLB_API}/people/{pitcher_id}/stats",
+            params={"stats": "byInning", "group": "pitching", "season": year},
+            timeout=8,
+        )
+        r.raise_for_status()
+        splits = (r.json().get('stats') or [{}])[0].get('splits', []) or []
+        for sp in splits:
+            label = (sp.get('split', {}).get('description') or sp.get('split', {}).get('value') or '').lower()
+            if '1st' not in label and 'first' not in label and label not in ('1', 'inning 1'):
+                continue
+            stat = sp.get('stat', {}) or {}
+            era = _num(stat.get('era'), None)
+            if era is not None and era > 0:
+                return _clamp(era, 1.20, 12.00)
+            ip = _num(stat.get('inningsPitched'), 0.0)
+            er = _num(stat.get('earnedRuns'), 0.0)
+            if ip > 0:
+                return _clamp((er / ip) * 9.0, 1.20, 12.00)
+    except Exception:
+        pass
+    season = pitcher_stats_mlb(pitcher_id) or {}
+    return _clamp(_num(season.get('era'), 4.50), 1.20, 12.00)
+
+
+def _leadoff_handedness_adj(leadoff, opp_pitch_hand):
+    if not leadoff:
+        return 1.0, {}
+    split = hitter_split_profile(leadoff.get('id')) or {}
+    code = 'vl' if str(opp_pitch_hand or 'R').upper() == 'L' else 'vr'
+    prof = split.get(code) or split.get('vr') or split.get('vl') or {}
+    obp = _clamp(_num(prof.get('obp'), 0.320), 0.240, 0.450)
+    avg = _clamp(_num(prof.get('avg'), 0.250), 0.170, 0.360)
+    pa = int(prof.get('pa') or 0)
+    quality = (0.62 * obp) + (0.38 * avg)
+    adj = _clamp(0.84 + ((quality - 0.300) * 2.30), 0.78, 1.28)
+    if pa and pa < 40:
+        adj = 1.0 + ((adj - 1.0) * 0.55)
+    return adj, {'obp': round(obp, 3), 'avg': round(avg, 3), 'pa': pa}
+
+
+def _nrfi_market_snapshot(away_name, home_name):
+    if not ODDS_API_KEY:
+        return {}
+    event, _ = _find_odds_event(away_name, home_name)
+    if not event:
+        return {}
+    event_id = event.get('id')
+    if not event_id:
+        return {}
+    try:
+        r = requests.get(
+            f'https://api.the-odds-api.com/v4/sports/baseball_mlb/events/{event_id}/odds',
+            params={
+                'apiKey': ODDS_API_KEY,
+                'regions': ODDS_REGION,
+                'markets': 'h2h_1st_1_innings',
+                'oddsFormat': 'american',
+                'dateFormat': 'iso',
+            },
+            timeout=12,
+        )
+        r.raise_for_status()
+        books = r.json().get('bookmakers', []) or []
+    except Exception:
+        return {}
+
+    nrfi_prices = []
+    yrfi_prices = []
+    for bk in books:
+        title = bk.get('title')
+        for m in bk.get('markets', []) or []:
+            mkey = (m.get('key') or '').lower()
+            if '1st' not in mkey and 'first' not in mkey:
+                continue
+            for o in m.get('outcomes', []) or []:
+                name = (o.get('name') or '').strip().lower()
+                price = o.get('price')
+                implied = _american_to_implied(price)
+                if implied is None:
+                    continue
+                rec = {'price': price, 'implied': implied, 'book': title}
+                if name in ('nrfi', 'no', 'no run first inning', 'no runs first inning', 'no runs in first inning'):
+                    nrfi_prices.append(rec)
+                elif name in ('yrfi', 'yes', 'run first inning', 'run in first inning', 'yes run first inning'):
+                    yrfi_prices.append(rec)
+
+    out = {}
+    if nrfi_prices:
+        out['nrfi_implied'] = round(sum(x['implied'] for x in nrfi_prices) / len(nrfi_prices), 4)
+        best_nrfi = max(nrfi_prices, key=lambda x: _american_price_score(x['price']))
+        out['nrfi_price'] = best_nrfi['price']
+        out['nrfi_book'] = best_nrfi['book']
+    if yrfi_prices:
+        out['yrfi_implied'] = round(sum(x['implied'] for x in yrfi_prices) / len(yrfi_prices), 4)
+    return out
+
+
+def _compute_nrfi(game_pk):
+    sched = fetch_schedule(datetime.now(ET).strftime('%Y-%m-%d'))
+    g = next((x for x in sched if x.get('gamePk') == game_pk), None)
+    if not g:
+        return {'success': False, 'error': 'Game not found'}
+
+    away_team = g.get('teams', {}).get('away', {}).get('team', {})
+    home_team = g.get('teams', {}).get('home', {}).get('team', {})
+    away_name = away_team.get('name', 'Away')
+    home_name = home_team.get('name', 'Home')
+    away_abbr = away_team.get('abbreviation', 'AWY')
+    home_abbr = home_team.get('abbreviation', 'HME')
+
+    away_p = g.get('teams', {}).get('away', {}).get('probablePitcher', {}) or {}
+    home_p = g.get('teams', {}).get('home', {}).get('probablePitcher', {}) or {}
+    away_pid = away_p.get('id')
+    home_pid = home_p.get('id')
+    away_sp_name = away_p.get('fullName', 'Away SP')
+    home_sp_name = home_p.get('fullName', 'Home SP')
+
+    away_sp_hand = player_profile(away_pid).get('throws', 'R')
+    home_sp_hand = player_profile(home_pid).get('throws', 'R')
+    away_i1_era = _extract_first_inning_era(away_pid)
+    home_i1_era = _extract_first_inning_era(home_pid)
+
+    park = PARK_FACTORS.get(home_team.get('id'), 1.0)
+
+    venue = g.get('venue', {}) or {}
+    venue_id = venue.get('id')
+    vloc = (venue.get('location') or {})
+    coords = vloc.get('defaultCoordinates', {}) or {}
+    lat = coords.get('latitude')
+    lon = coords.get('longitude')
+    try:
+        dt_utc = datetime.fromisoformat(g.get('gameDate', '').replace('Z', '+00:00'))
+        utc_off = VENUE_UTC_OFFSET.get(venue_id, -5)
+        ghour = (dt_utc + timedelta(hours=utc_off)).hour
+    except Exception:
+        ghour = 13
+    wx = get_weather(lat, lon, ghour, venue_id=venue_id)
+
+    box = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=10).json().get('teams', {})
+    away_lineup = get_batters_from_boxscore(box.get('away', {}), 'away')
+    home_lineup = get_batters_from_boxscore(box.get('home', {}), 'home')
+    away_leadoff = next((b for b in away_lineup if int(b.get('slot') or 0) == 1), (away_lineup[0] if away_lineup else {}))
+    home_leadoff = next((b for b in home_lineup if int(b.get('slot') or 0) == 1), (home_lineup[0] if home_lineup else {}))
+
+    away_hand_adj, away_split = _leadoff_handedness_adj(away_leadoff, home_sp_hand)
+    home_hand_adj, home_split = _leadoff_handedness_adj(home_leadoff, away_sp_hand)
+
+    temp = _num(wx.get('temp'), 72)
+    wind = _num(wx.get('wind_speed'), 7)
+    weather_mult = 1.0
+    weather_mult += _clamp((temp - 72.0) * 0.0025, -0.05, 0.08)
+    weather_mult += _clamp((wind - 8.0) * 0.0030, -0.03, 0.06)
+    weather_mult = _clamp(weather_mult, 0.90, 1.14)
+
+    away_score_rate_i1 = _clamp((home_i1_era / 9.0) * park * away_hand_adj * weather_mult, 0.03, 0.62)
+    home_score_rate_i1 = _clamp((away_i1_era / 9.0) * park * home_hand_adj * weather_mult, 0.03, 0.62)
+
+    nrfi_prob = _clamp((1.0 - away_score_rate_i1) * (1.0 - home_score_rate_i1), 0.03, 0.97)
+    yrfi_prob = round(1.0 - nrfi_prob, 4)
+
+    odds = _nrfi_market_snapshot(away_name, home_name)
+    market_nrfi_implied = odds.get('nrfi_implied')
+    nrfi_edge = None if market_nrfi_implied is None else round(nrfi_prob - market_nrfi_implied, 4)
+
+    factors = []
+    if home_i1_era <= 3.35 or away_i1_era <= 3.35:
+        factors.append('Ace on mound suppresses early offense')
+    if home_i1_era >= 5.10 or away_i1_era >= 5.10:
+        factors.append('Volatile first-inning starter profile')
+    if away_hand_adj <= 0.93:
+        factors.append('Weak away leadoff split versus starter hand')
+    if home_hand_adj <= 0.93:
+        factors.append('Weak home leadoff split versus starter hand')
+    if weather_mult <= 0.96:
+        factors.append('Run environment dampened by weather')
+    if weather_mult >= 1.06:
+        factors.append('Weather boosts first-inning scoring risk')
+    if park <= 0.97:
+        factors.append('Pitcher-friendly park factor')
+    elif park >= 1.03:
+        factors.append('Hitter-friendly park factor')
+    if not factors:
+        factors.append('Balanced setup with neutral first-inning profile')
+
+    return {
+        'success': True,
+        'gamePk': game_pk,
+        'game': f"{away_abbr} @ {home_abbr}",
+        'away': away_abbr,
+        'home': home_abbr,
+        'away_sp': away_sp_name,
+        'home_sp': home_sp_name,
+        'away_sp_i1_era': round(away_i1_era, 2),
+        'home_sp_i1_era': round(home_i1_era, 2),
+        'away_leadoff': away_leadoff.get('name', 'TBD'),
+        'home_leadoff': home_leadoff.get('name', 'TBD'),
+        'away_score_rate_i1': round(away_score_rate_i1, 4),
+        'home_score_rate_i1': round(home_score_rate_i1, 4),
+        'nrfi_prob': round(nrfi_prob, 4),
+        'yrfi_prob': yrfi_prob,
+        'market_nrfi_implied': market_nrfi_implied,
+        'nrfi_edge': nrfi_edge,
+        'book_price': odds.get('nrfi_price'),
+        'bookmaker': odds.get('nrfi_book'),
+        'park_factor': round(park, 3),
+        'weather': wx,
+        'leadoff_context': {
+            'away': away_split,
+            'home': home_split,
+        },
+        'key_factors': factors[:4],
+    }
+
+
+@app.route('/api/nrfi/<int:game_pk>')
+def api_nrfi(game_pk):
+    try:
+        out = _compute_nrfi(game_pk)
+        if not out.get('success'):
+            return jsonify(out), 404
+        return jsonify(out)
+    except Exception as ex:
+        print('[api_nrfi]', traceback.format_exc())
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
 
 @app.route('/api/market/<int:game_pk>')
 def api_market(game_pk):
@@ -4248,6 +4488,8 @@ def _default_adjustments():
             'batter_runs_scored': 1.00,
             'batter_stolen_bases': 1.00,
             'pitcher_strikeouts': 1.00,
+            'nrfi': 1.00,
+            'yrfi': 1.00,
         }
     }
 
@@ -4299,6 +4541,19 @@ def _grade_over(actual, line):
     if float(actual) < float(line):
         return 'loss'
     return 'push'
+
+
+def _grade_side(actual, line, side='Over'):
+    if actual is None:
+        return 'pending'
+    side_l = str(side or 'Over').lower()
+    if side_l == 'under':
+        if float(actual) < float(line):
+            return 'win'
+        if float(actual) > float(line):
+            return 'loss'
+        return 'push'
+    return _grade_over(actual, line)
 
 
 def _hub_rating(adj_prob, edge, l10_over_rate=0.5):
@@ -4840,6 +5095,17 @@ def api_tracker_grade(date_str):
         if 'final' not in status:
             continue
         try:
+            mk = row.get('marketKey')
+            if mk in ('nrfi', 'yrfi'):
+                inns = (g.get('linescore') or {}).get('innings') or []
+                first = inns[0] if inns else {}
+                a1 = int((((first.get('away') or {}).get('runs')) or 0))
+                h1 = int((((first.get('home') or {}).get('runs')) or 0))
+                actual = a1 + h1
+                row['actual'] = actual
+                row['grade'] = _grade_side(actual, row.get('line', 0.5), row.get('recommendedSide') or 'Over')
+                row['status'] = 'graded'
+                continue
             box = requests.get(f"{MLB_API}/game/{gpk}/boxscore", timeout=10).json().get('teams', {})
             players = {}
             for side in ['away', 'home']:
@@ -4854,7 +5120,7 @@ def api_tracker_grade(date_str):
                         pobj = v; break
             actual = _tracker_stat_from_boxscore(pobj, row.get('marketKey'))
             row['actual'] = actual
-            row['grade'] = _grade_over(actual, row.get('line'))
+            row['grade'] = _grade_side(actual, row.get('line'), row.get('recommendedSide') or 'Over')
             row['status'] = 'graded'
         except Exception:
             print('[tracker_grade_row]', traceback.format_exc())
@@ -4875,6 +5141,8 @@ CALIBRATION_TARGETS = {
     'batter_runs_scored': 0.53,
     'batter_stolen_bases': 0.52,
     'pitcher_strikeouts': 0.55,
+    'nrfi': 0.53,
+    'yrfi': 0.50,
 }
 
 
@@ -5046,6 +5314,8 @@ def api_tracker_model_record():
         'batter_rbis': 'rbi',
         'batter_runs_scored': 'runs',
         'pitcher_strikeouts': 'pitcher_strikeouts',
+        'nrfi': 'nrfi',
+        'yrfi': 'yrfi',
         'parlay': 'parlay',
     }
     by_mkt = {}
@@ -5071,6 +5341,8 @@ def api_tracker_model_record():
         'batter_rbis': record.get('rbi', {}).get('hit_rate', 0.0),
         'batter_runs_scored': record.get('runs', {}).get('hit_rate', 0.0),
         'parlay': record.get('parlay', {}).get('hit_rate', 0.0),
+        'nrfi': record.get('nrfi', {}).get('hit_rate', 0.0),
+        'yrfi': record.get('yrfi', {}).get('hit_rate', 0.0),
     }
 
     # Back-compat alias for prior frontend key.

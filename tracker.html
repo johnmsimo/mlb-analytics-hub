@@ -387,6 +387,8 @@ details[open] summary::before{transform:rotate(90deg)}
           <div class="mult-row"><label>Runs</label><input id="m_batter_runs_scored" type="number" step="0.01" value="1.00"></div>
           <div class="mult-row"><label>Stolen Bases</label><input id="m_batter_stolen_bases" type="number" step="0.01" value="1.00"></div>
           <div class="mult-row"><label>Strikeouts</label><input id="m_pitcher_strikeouts" type="number" step="0.01" value="1.00"></div>
+          <div class="mult-row"><label>NRFI</label><input id="m_nrfi" type="number" step="0.01" value="1.00"></div>
+          <div class="mult-row"><label>YRFI</label><input id="m_yrfi" type="number" step="0.01" value="1.00"></div>
         </div>
       </details>
     </div>
@@ -588,7 +590,7 @@ const MARKET_LABELS = {
   batter_hits:'Hits', batter_total_bases:'Total Bases',
   batter_home_runs:'Home Runs', batter_rbis:'RBIs',
   batter_runs_scored:'Runs', batter_stolen_bases:'Stolen Bases',
-  pitcher_strikeouts:'Strikeouts'
+  pitcher_strikeouts:'Strikeouts', nrfi:'NRFI', yrfi:'YRFI'
 };
 
 const st = {
@@ -975,6 +977,8 @@ async function loadModelRecord() {
       ['hits', 'Hits'],
       ['hr', 'HR'],
       ['pitcher_strikeouts', 'Ks'],
+      ['nrfi', 'NRFI'],
+      ['yrfi', 'YRFI'],
       ['tb', 'TB'],
       ['rbi', 'RBI'],
       ['runs', 'Runs'],
@@ -1019,7 +1023,7 @@ function setAdj(adj) {
 function collectAdj() {
   const mm = {};
   ['batter_hits','batter_total_bases','batter_home_runs','batter_rbis',
-   'batter_runs_scored','batter_stolen_bases','pitcher_strikeouts'].forEach(mk=>{
+   'batter_runs_scored','batter_stolen_bases','pitcher_strikeouts','nrfi','yrfi'].forEach(mk=>{
     const el=$(`m_${mk}`); if(el) mm[mk]=parseFloat(el.value)||1.0;
   });
   return {
