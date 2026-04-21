@@ -282,6 +282,7 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
 </div>
 <div class="topnav">
  <a href="/props" style="padding:7px 16px;background:rgba(0,229,255,.07);border:1px solid rgba(0,229,255,.22);border-radius:8px;color:var(--c);font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:2px;text-decoration:none">PROPS</a>
+ <a href="/tracker" style="padding:7px 16px;background:rgba(0,230,118,.09);border:1px solid rgba(0,230,118,.3);border-radius:8px;color:#00e676;font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:2px;text-decoration:none">TRACKER</a>
   <a href="/pitcher-deep-dive" style="padding:7px 16px;background:rgba(250,100,0,.07);border:1px solid rgba(250,100,0,.28);border-radius:8px;color:#fa6400;font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:2px;text-decoration:none">⚾ PITCHER ANALYSIS</a>
   <button class="tabbtn active" onclick="switchView('gamesView',this)">TODAY'S GAMES</button>
   <button class="tabbtn" onclick="switchView('teamsView',this)">TEAMS</button>
@@ -1015,8 +1016,9 @@ syncDateUI();load();loadTeams();setInterval(function(){load(selectedGamesDate)},
   };
 })();
 </script>
-<a class="tracker-fab" href="/props" target="_blank" rel="noopener noreferrer" style="position:fixed;right:16px;bottom:16px;z-index:99;background:linear-gradient(90deg,#1a0a3d,#2d0e6b);border:1px solid rgba(0,229,255,.24);color:#eaf6ff;padding:12px 14px;border-radius:999px;font-family:Orbitron,sans-serif;font-size:.62rem;letter-spacing:1.5px;text-decoration:none;box-shadow:0 12px 30px rgba(0,0,0,.35)">PROP PROJECTIONS</a>
-<a class="tracker-fab" href="/breakout-detector" target="_blank" rel="noopener noreferrer" style="position:fixed;right:16px;bottom:68px;z-index:99;background:linear-gradient(90deg,#003322,#005c3a);border:1px solid rgba(0,229,255,.24);color:#eaf6ff;padding:12px 14px;border-radius:999px;font-family:Orbitron,sans-serif;font-size:.62rem;letter-spacing:1.5px;text-decoration:none;box-shadow:0 12px 30px rgba(0,0,0,.35)">🔥 BREAKOUT</a>
+<a class="tracker-fab" href="/tracker" target="_blank" rel="noopener noreferrer" style="position:fixed;right:16px;bottom:16px;z-index:99;background:linear-gradient(90deg,#003b2b,#00754f);border:1px solid rgba(0,230,118,.3);color:#eaf6ff;padding:12px 14px;border-radius:999px;font-family:Orbitron,sans-serif;font-size:.62rem;letter-spacing:1.5px;text-decoration:none;box-shadow:0 12px 30px rgba(0,0,0,.35)">📋 BET TRACKER</a>
+<a class="tracker-fab" href="/props" target="_blank" rel="noopener noreferrer" style="position:fixed;right:16px;bottom:68px;z-index:99;background:linear-gradient(90deg,#1a0a3d,#2d0e6b);border:1px solid rgba(0,229,255,.24);color:#eaf6ff;padding:12px 14px;border-radius:999px;font-family:Orbitron,sans-serif;font-size:.62rem;letter-spacing:1.5px;text-decoration:none;box-shadow:0 12px 30px rgba(0,0,0,.35)">PROP PROJECTIONS</a>
+<a class="tracker-fab" href="/breakout-detector" target="_blank" rel="noopener noreferrer" style="position:fixed;right:16px;bottom:120px;z-index:99;background:linear-gradient(90deg,#003322,#005c3a);border:1px solid rgba(0,229,255,.24);color:#eaf6ff;padding:12px 14px;border-radius:999px;font-family:Orbitron,sans-serif;font-size:.62rem;letter-spacing:1.5px;text-decoration:none;box-shadow:0 12px 30px rgba(0,0,0,.35)">🔥 BREAKOUT</a>
 
 <!-- ── Player Profile Modal ──────────────────────────── -->
 <div id="playerModal">
