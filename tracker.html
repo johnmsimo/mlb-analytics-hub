@@ -1,0 +1,1291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MLB Analytics Hub · Tracker</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+:root{
+  --bg:#0d1117;--bg2:#111827;--bg3:#1c2333;--bg4:#243044;
+  --line:#1e2d40;--line2:#253348;
+  --c:#00e5ff;--c2:#0097a7;
+  --g:#00e676;--g2:#00c853;
+  --r:#f44336;--r2:#d32f2f;
+  --o:#ff9800;--y:#ffd740;
+  --m:#b388ff;--m2:#7c4dff;
+  --mu:#6a8db0;--faint:#2a3a50;--txt:#d0e4f7;
+  --elite:#00e676;--strong:#00b8d4;--mod:#ffd740;--low:#6a8db0;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--txt);font-family:'Inter',system-ui,sans-serif;font-size:14px;line-height:1.5;min-height:100vh}
+a{color:var(--c);text-decoration:none}
+button{cursor:pointer;font-family:inherit;font-size:13px}
+input,select{font-family:inherit;font-size:13px;background:var(--bg3);border:1px solid var(--line2);color:var(--txt);border-radius:8px;padding:6px 10px;outline:none}
+input:focus,select:focus{border-color:var(--c)}
+
+/* ── Layout ── */
+.wrap{max-width:1600px;margin:0 auto;padding:14px 18px}
+
+/* ── Topbar ── */
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:12px}
+.brand-logo{width:46px;height:46px;border-radius:10px}
+.brand-title{font-size:1.05rem;font-weight:700;letter-spacing:.03em;color:var(--c)}
+.brand-sub{font-size:.7rem;color:var(--mu);margin-top:2px}
+.top-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+
+/* ── Buttons ── */
+.btn{padding:7px 14px;border-radius:8px;border:1px solid var(--line2);background:var(--bg3);color:var(--txt);transition:all .15s;white-space:nowrap}
+.btn:hover{border-color:var(--c);color:var(--c)}
+.btn.primary{background:var(--c2);border-color:var(--c);color:#fff}
+.btn.primary:hover{background:var(--c);color:var(--bg)}
+.btn.green{background:rgba(0,230,118,.12);border-color:var(--g);color:var(--g)}
+.btn.green:hover{background:var(--g);color:var(--bg)}
+.btn.gold{background:rgba(255,215,64,.1);border-color:var(--y);color:var(--y)}
+.btn.gold:hover{background:var(--y);color:var(--bg)}
+.btn.red{background:rgba(244,67,54,.1);border-color:var(--r);color:var(--r)}
+.btn.sm{padding:5px 10px;font-size:.72rem}
+
+/* ── Status pill ── */
+.pill{padding:4px 11px;border-radius:20px;font-size:.68rem;letter-spacing:.04em;background:rgba(0,229,255,.08);border:1px solid rgba(0,229,255,.2);color:var(--c);display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--g);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+
+/* ── Hero stats ── */
+.hero{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:14px}
+.hstat{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:12px 14px;text-align:center}
+.hstat-v{font-size:1.45rem;font-weight:700;color:var(--c);line-height:1}
+.hstat-l{font-size:.63rem;color:var(--mu);letter-spacing:.05em;margin-top:4px;text-transform:uppercase}
+.hstat.green .hstat-v{color:var(--g)}
+.hstat.red .hstat-v{color:var(--r)}
+.hstat.gold .hstat-v{color:var(--y)}
+
+/* ── Track record banner ── */
+.trec{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:11px 16px;margin-bottom:14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.trec-label{font-size:.63rem;color:var(--mu);letter-spacing:.06em;text-transform:uppercase;white-space:nowrap}
+.trec-pills{display:flex;gap:6px;flex-wrap:wrap}
+.trec-pill{padding:3px 9px;border-radius:8px;font-size:.67rem;font-weight:600;border:1px solid}
+.trec-pill.good{background:rgba(0,230,118,.1);border-color:var(--g);color:var(--g)}
+.trec-pill.warn{background:rgba(255,152,0,.1);border-color:var(--o);color:var(--o)}
+.trec-pill.na{background:rgba(106,141,176,.1);border-color:var(--mu);color:var(--mu)}
+.trec-note{font-size:.65rem;color:var(--faint);margin-left:auto}
+
+/* ── Control row ── */
+.ctrl{display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+.ctrl-sep{width:1px;height:20px;background:var(--line2);margin:0 4px}
+
+/* ── Main grid ── */
+.main-grid{display:grid;grid-template-columns:1fr 380px;gap:14px;align-items:start;margin-bottom:16px}
+
+/* ── Panel ── */
+.panel{background:var(--bg2);border:1px solid var(--line);border-radius:14px;padding:16px}
+.panel-hd{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+.panel-title{font-size:.75rem;font-weight:700;letter-spacing:.07em;color:var(--c);text-transform:uppercase}
+.panel-sub{font-size:.68rem;color:var(--mu)}
+
+/* ── Filter chips ── */
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+.chip{padding:4px 10px;border-radius:8px;border:1px solid var(--line2);background:var(--bg3);font-size:.67rem;cursor:pointer;color:var(--mu);transition:all .12s}
+.chip.on{background:rgba(0,229,255,.12);border-color:var(--c);color:var(--c)}
+.chip.on-g{background:rgba(0,230,118,.12);border-color:var(--g);color:var(--g)}
+.chip.on-r{background:rgba(244,67,54,.1);border-color:var(--r);color:var(--r)}
+
+/* ── Table ── */
+.tw{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{width:100%;border-collapse:collapse;font-size:.71rem}
+th{padding:7px 8px;text-align:left;color:var(--mu);font-weight:600;letter-spacing:.04em;font-size:.62rem;border-bottom:1px solid var(--line2);white-space:nowrap;text-transform:uppercase;background:var(--bg3)}
+td{padding:7px 8px;border-bottom:1px solid var(--line);white-space:nowrap;vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:rgba(0,229,255,.03)}
+.row-win td{background:rgba(0,230,118,.04)}
+.row-loss td{background:rgba(244,67,54,.04)}
+.row-push td{background:rgba(255,215,64,.03)}
+
+/* ── HUB RATING badge ── */
+.hub{display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:6px;font-size:.62rem;font-weight:700;border:1px solid}
+.hub-elite{background:rgba(0,230,118,.12);border-color:var(--elite);color:var(--elite)}
+.hub-strong{background:rgba(0,184,212,.12);border-color:var(--strong);color:var(--strong)}
+.hub-mod{background:rgba(255,215,64,.1);border-color:var(--mod);color:var(--mod)}
+.hub-low{background:rgba(106,141,176,.08);border-color:var(--mu);color:var(--mu)}
+
+/* ── EV badge ── */
+.ev-pos{color:var(--g);font-weight:600}
+.ev-neg{color:var(--r)}
+
+/* ── Grade badge ── */
+.grade{display:inline-block;padding:2px 7px;border-radius:6px;font-size:.62rem;font-weight:700;letter-spacing:.04em}
+.grade-win{background:rgba(0,230,118,.15);color:var(--g)}
+.grade-loss{background:rgba(244,67,54,.12);color:var(--r)}
+.grade-push{background:rgba(255,215,64,.1);color:var(--y)}
+.grade-pending{background:rgba(0,229,255,.08);color:var(--c)}
+
+/* ── Tier badge ── */
+.tier{display:inline-block;padding:2px 6px;border-radius:5px;font-size:.6rem;font-weight:700}
+.tier-A{background:rgba(0,230,118,.15);color:var(--g)}
+.tier-B{background:rgba(0,184,212,.12);color:var(--strong)}
+.tier-C{background:rgba(255,215,64,.1);color:var(--y)}
+.tier-D{background:rgba(106,141,176,.08);color:var(--mu)}
+
+/* ── Market tag ── */
+.mk{display:inline-block;padding:2px 6px;border-radius:5px;font-size:.6rem;font-weight:600;background:rgba(179,136,255,.1);color:var(--m);border:1px solid rgba(179,136,255,.2)}
+.mk-k{background:rgba(255,152,0,.1);color:var(--o);border-color:rgba(255,152,0,.2)}
+
+/* ── Bet slip ── */
+.slip-tabs{display:flex;gap:4px;margin-bottom:10px}
+.slip-tab{padding:5px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--bg3);font-size:.68rem;cursor:pointer;color:var(--mu)}
+.slip-tab.on{background:rgba(0,229,255,.1);border-color:var(--c);color:var(--c)}
+.slip-view{display:none}
+.slip-view.on{display:block}
+
+/* ── Pick card ── */
+.pcard{border:1px solid var(--line2);border-radius:10px;padding:10px 12px;margin-bottom:8px;background:var(--bg3);transition:border-color .15s}
+.pcard:hover{border-color:var(--c2)}
+.pcard.win{border-left:3px solid var(--g)}
+.pcard.loss{border-left:3px solid var(--r)}
+.pcard.push{border-left:3px solid var(--y)}
+.pcard.pending{border-left:3px solid var(--c2)}
+.pcard-top{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:6px}
+.pcard-name{font-weight:600;font-size:.78rem;color:var(--txt)}
+.pcard-meta{font-size:.65rem;color:var(--mu);margin-top:1px}
+.pcard-badges{display:flex;gap:4px;flex-wrap:wrap;align-items:center}
+.pcard-stats{display:flex;gap:12px;font-size:.67rem;color:var(--mu);flex-wrap:wrap}
+.pcard-stat span{color:var(--txt);font-weight:500}
+.pcard-reason{font-size:.63rem;color:var(--faint);margin-top:5px;line-height:1.4;border-top:1px solid var(--line);padding-top:5px}
+
+/* ── Parlay card ── */
+.parlay-card{background:var(--bg3);border:1px solid rgba(179,136,255,.25);border-radius:10px;padding:10px 12px;margin-bottom:8px}
+.parlay-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.parlay-name{font-size:.73rem;font-weight:600;color:var(--m)}
+.parlay-legs{font-size:.65rem;color:var(--mu)}
+
+/* ── Settings ── */
+.settings-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.field{display:flex;flex-direction:column;gap:4px}
+.field label{font-size:.63rem;color:var(--mu);letter-spacing:.04em;text-transform:uppercase}
+.field input,.field select{padding:5px 8px;font-size:.72rem}
+.mult-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px}
+.mult-row{display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:.67rem}
+.mult-row label{color:var(--mu)}
+.mult-row input{width:64px;text-align:right;padding:4px 6px}
+details{margin-top:10px}
+details summary{cursor:pointer;font-size:.7rem;color:var(--mu);padding:6px 0;list-style:none;display:flex;align-items:center;gap:6px;letter-spacing:.04em;text-transform:uppercase}
+details summary::before{content:'▶';font-size:.55rem;transition:transform .15s}
+details[open] summary::before{transform:rotate(90deg)}
+
+/* ── Performance tabs ── */
+.perf{background:var(--bg2);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
+.perf-tabs{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:14px}
+.ptab{padding:6px 14px;border-radius:8px;border:1px solid var(--line2);background:var(--bg3);font-size:.7rem;cursor:pointer;color:var(--mu)}
+.ptab.on{background:rgba(0,229,255,.1);border-color:var(--c);color:var(--c);font-weight:600}
+.pview{display:none}
+.pview.on{display:block}
+
+/* ── Charts ── */
+.chart-wrap{height:240px;position:relative;margin-bottom:10px}
+
+/* ── Summary cards ── */
+.scards{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px}
+.scard{background:var(--bg3);border:1px solid var(--line2);border-radius:10px;padding:10px 12px;text-align:center}
+.scard-v{font-size:1.1rem;font-weight:700;color:var(--c)}
+.scard-l{font-size:.6rem;color:var(--mu);letter-spacing:.04em;text-transform:uppercase;margin-top:3px}
+
+/* ── Grid helpers ── */
+.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.three{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+
+/* ── Notice ── */
+.notice{padding:10px 13px;border-radius:10px;border:1px solid rgba(0,229,255,.12);background:rgba(0,229,255,.04);color:var(--mu);font-size:.72rem;line-height:1.5}
+
+/* ── Empty state ── */
+.empty{text-align:center;padding:32px 16px;color:var(--faint);font-size:.78rem}
+
+/* ── Responsive ── */
+@media(max-width:1200px){.main-grid{grid-template-columns:1fr}}
+@media(max-width:960px){.hero{grid-template-columns:repeat(3,1fr)}.scards{grid-template-columns:repeat(2,1fr)}.two,.three{grid-template-columns:1fr}.settings-grid{grid-template-columns:1fr}}
+@media(max-width:640px){.hero{grid-template-columns:repeat(2,1fr)}.ctrl{gap:5px}.top-actions{gap:5px}.btn{padding:6px 10px;font-size:.68rem}}
+.footer{text-align:center;color:var(--faint);font-size:.65rem;padding:16px 0 6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<!-- ── TOPBAR ─────────────────────────────────────────────────────────── -->
+<header class="topbar">
+  <div class="brand">
+    <img class="brand-logo" src="/static/logo.png" alt="MLB Analytics Hub">
+    <div>
+      <div class="brand-title">MLB ANALYTICS HUB</div>
+      <div class="brand-sub">Bet Tracker — capture · grade · analyse · repeat</div>
+    </div>
+  </div>
+  <div class="top-actions">
+    <span class="pill"><span class="dot"></span><span id="statusTxt">Ready</span></span>
+    <a class="btn" href="/" target="_blank" rel="noopener">Dashboard</a>
+    <a class="btn" href="/props" target="_blank" rel="noopener">Props</a>
+    <button class="btn" id="reloadBtn">↺ Reload</button>
+  </div>
+</header>
+
+<!-- ── CONTROL ROW ────────────────────────────────────────────────────── -->
+<div class="ctrl">
+  <input type="date" id="trackDate" style="max-width:150px" aria-label="Slate date">
+  <button class="btn primary" id="loadDayBtn">Load Day</button>
+  <button class="btn" id="captureBtn">⚡ Capture Slate</button>
+  <div class="ctrl-sep"></div>
+  <button class="btn gold" id="closeBtn">📥 Capture Closing</button>
+  <button class="btn green" id="gradeBtn">✓ Grade Results</button>
+  <div class="ctrl-sep"></div>
+  <button class="btn sm" id="slipBtn">📋 Build Slip</button>
+  <span class="pill" id="datePill" style="margin-left:auto">No day loaded</span>
+</div>
+
+<!-- ── HERO STATS ─────────────────────────────────────────────────────── -->
+<div class="hero">
+  <div class="hstat"><div class="hstat-v" id="hPicks">0</div><div class="hstat-l">Picks</div></div>
+  <div class="hstat"><div class="hstat-v" id="hGraded">0</div><div class="hstat-l">Graded</div></div>
+  <div class="hstat green"><div class="hstat-v" id="hHitRate">—</div><div class="hstat-l">Hit Rate</div></div>
+  <div class="hstat gold"><div class="hstat-v" id="hProfit">$0</div><div class="hstat-l">P/L $</div></div>
+  <div class="hstat"><div class="hstat-v" id="hRisk">$0</div><div class="hstat-l">At Risk</div></div>
+  <div class="hstat"><div class="hstat-v" id="hBankroll">—</div><div class="hstat-l">Bankroll</div></div>
+</div>
+
+<!-- ── MODEL TRACK RECORD BANNER ─────────────────────────────────────── -->
+<div class="trec" id="trecBanner">
+  <span class="trec-label">📊 Model Record · 30d</span>
+  <div class="trec-pills" id="trecPills"><span class="trec-pill na">Loading…</span></div>
+  <span class="trec-note" id="trecNote"></span>
+</div>
+
+<!-- ── MAIN GRID ──────────────────────────────────────────────────────── -->
+<div class="main-grid">
+
+  <!-- LEFT: Working Board -->
+  <div>
+    <div class="panel">
+      <div class="panel-hd">
+        <div>
+          <div class="panel-title">Working Board</div>
+          <div class="panel-sub" id="boardSub">Tracked projections for the day</div>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          <select id="fMkt" class="btn sm" style="min-width:130px" aria-label="Filter market"><option value="">All Markets</option></select>
+          <select id="fRes" class="btn sm" style="min-width:120px" aria-label="Filter result">
+            <option value="">All Results</option>
+            <option value="pending">Pending</option>
+            <option value="win">Win</option>
+            <option value="loss">Loss</option>
+            <option value="push">Push</option>
+          </select>
+          <select id="fTier" class="btn sm" style="min-width:100px" aria-label="Filter tier">
+            <option value="">All Tiers</option>
+            <option value="A">Tier A</option>
+            <option value="B">Tier B</option>
+            <option value="C">Tier C</option>
+            <option value="D">Tier D</option>
+          </select>
+          <select id="fSort" class="btn sm" style="min-width:130px" aria-label="Sort">
+            <option value="score">Sort: Score</option>
+            <option value="edge">Sort: Edge</option>
+            <option value="adjProb">Sort: Adj Prob</option>
+            <option value="hub">Sort: HUB Rating</option>
+            <option value="ev">Sort: EV%</option>
+            <option value="profit">Sort: P/L $</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Filter chips -->
+      <div class="chips" id="evChips">
+        <span class="chip" id="evOnlyChip" onclick="toggleEvOnly()">⚡ +EV Only</span>
+        <span class="chip" id="pendingChip" onclick="togglePending()">⏳ Pending Only</span>
+        <span class="chip" id="coreChip" onclick="toggleCore()">⭐ Core Only (A/B)</span>
+      </div>
+
+      <div class="tw">
+        <table id="boardTbl">
+          <thead>
+            <tr>
+              <th>Player</th><th>Team</th><th>Market</th><th>Line</th>
+              <th>HUB</th><th>EV%</th><th>Prob</th><th>Edge</th>
+              <th>Mean</th><th>Open</th><th>Close</th><th>CLV</th>
+              <th>Stake $</th><th>Actual</th><th>Result</th><th>Tier</th><th>P/L $</th>
+            </tr>
+          </thead>
+          <tbody id="boardBody"><tr><td colspan="17" class="empty">Load a day to see entries.</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Market summary -->
+    <div class="panel" style="margin-top:14px">
+      <div class="panel-hd">
+        <div class="panel-title">Market Breakdown</div>
+        <span class="panel-sub" id="mktSub"></span>
+      </div>
+      <div class="tw">
+        <table id="mktTbl">
+          <thead><tr><th>Market</th><th>Picks</th><th>Graded</th><th>Wins</th><th>Losses</th><th>Push</th><th>Hit Rate</th><th>Units</th><th>P/L $</th></tr></thead>
+          <tbody id="mktBody"><tr><td colspan="9" class="empty">No data.</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: Bet Slip + Settings -->
+  <div>
+    <div class="panel" style="margin-bottom:14px">
+      <div class="panel-hd">
+        <div class="panel-title">Bet Slip</div>
+        <span class="pill" id="slipPill">Awaiting build</span>
+      </div>
+
+      <div class="slip-tabs">
+        <button class="slip-tab on" data-sv="core" onclick="switchSlip(this)">⭐ Core</button>
+        <button class="slip-tab" data-sv="flex" onclick="switchSlip(this)">💡 Flex</button>
+        <button class="slip-tab" data-sv="parlay" onclick="switchSlip(this)">🎰 Parlays</button>
+        <button class="slip-tab" data-sv="all" onclick="switchSlip(this)">All</button>
+      </div>
+
+      <!-- Slip summary -->
+      <div style="display:flex;gap:10px;margin-bottom:10px;flex-wrap:wrap">
+        <div class="scard" style="flex:1;min-width:70px"><div class="scard-v" id="slipBets">0</div><div class="scard-l">Bets</div></div>
+        <div class="scard" style="flex:1;min-width:70px"><div class="scard-v" id="slipRisk" style="color:var(--y)">$0</div><div class="scard-l">At Risk</div></div>
+        <div class="scard" style="flex:1;min-width:70px"><div class="scard-v" id="slipAvgEdge">—</div><div class="scard-l">Avg Edge</div></div>
+      </div>
+
+      <div class="slip-view on" id="sv-core"><div id="coreCards"><div class="empty">Build slip to see core picks.</div></div></div>
+      <div class="slip-view" id="sv-flex"><div id="flexCards"><div class="empty">Build slip to see flex picks.</div></div></div>
+      <div class="slip-view" id="sv-parlay"><div id="parlayCards"><div class="empty">Build slip to see parlay ideas.</div></div></div>
+      <div class="slip-view" id="sv-all"><div id="allCards"><div class="empty">Build slip to see all picks.</div></div></div>
+    </div>
+
+    <!-- Settings -->
+    <div class="panel">
+      <div class="panel-hd">
+        <div class="panel-title">Settings</div>
+        <button class="btn green sm" id="saveAdjBtn">Save</button>
+      </div>
+      <div class="settings-grid">
+        <div class="field"><label>Bankroll ($)</label><input id="fBankroll" type="number" step="1" placeholder="1000"></div>
+        <div class="field"><label>Kelly Fraction</label><input id="fKelly" type="number" step="0.01" placeholder="0.50"></div>
+        <div class="field"><label>Unit Size %</label><input id="fUnit" type="number" step="0.001" placeholder="0.01"></div>
+        <div class="field"><label>Max Bet %</label><input id="fMaxBet" type="number" step="0.001" placeholder="0.03"></div>
+        <div class="field"><label>Max Daily Risk %</label><input id="fMaxDay" type="number" step="0.001" placeholder="0.12"></div>
+        <div class="field"><label>Captured / Game</label><input id="fCap" type="number" step="1" placeholder="14"></div>
+        <div class="field"><label>Edge Threshold</label><input id="fEdge" type="number" step="0.01" placeholder="0.03"></div>
+        <div class="field"><label>Prob Threshold</label><input id="fProb" type="number" step="0.01" placeholder="0.58"></div>
+      </div>
+
+      <details>
+        <summary>Market Multipliers</summary>
+        <div class="mult-grid" id="multGrid">
+          <div class="mult-row"><label>Hits</label><input id="m_batter_hits" type="number" step="0.01" value="1.00"></div>
+          <div class="mult-row"><label>Total Bases</label><input id="m_batter_total_bases" type="number" step="0.01" value="1.00"></div>
+          <div class="mult-row"><label>Home Runs</label><input id="m_batter_home_runs" type="number" step="0.01" value="1.00"></div>
+          <div class="mult-row"><label>RBI</label><input id="m_batter_rbis" type="number" step="0.01" value="1.00"></div>
+          <div class="mult-row"><label>Runs</label><input id="m_batter_runs_scored" type="number" step="0.01" value="1.00"></div>
+          <div class="mult-row"><label>Stolen Bases</label><input id="m_batter_stolen_bases" type="number" step="0.01" value="1.00"></div>
+          <div class="mult-row"><label>Strikeouts</label><input id="m_pitcher_strikeouts" type="number" step="0.01" value="1.00"></div>
+        </div>
+      </details>
+    </div>
+  </div>
+</div>
+
+<!-- ── PERFORMANCE SECTION ────────────────────────────────────────────── -->
+<div class="perf">
+  <div class="panel-hd" style="margin-bottom:0">
+    <div class="panel-title">Performance Analytics</div>
+    <div class="perf-tabs">
+      <button class="ptab on" data-pv="calibration" onclick="switchPerf(this)">Calibration</button>
+      <button class="ptab" data-pv="value" onclick="switchPerf(this)">Value / CLV</button>
+      <button class="ptab" data-pv="bankroll" onclick="switchPerf(this)">Bankroll</button>
+      <button class="ptab" data-pv="attribution" onclick="switchPerf(this)">Attribution</button>
+      <button class="ptab" data-pv="backtest" onclick="switchPerf(this)">📊 Backtest</button>
+    </div>
+  </div>
+
+  <!-- ── CALIBRATION ── -->
+  <div class="pview on" id="pv-calibration">
+    <div style="display:flex;gap:8px;align-items:center;margin:14px 0 10px;flex-wrap:wrap">
+      <select id="calWindow" style="max-width:140px"><option value="7">Last 7 days</option><option value="14" selected>Last 14 days</option><option value="30">Last 30 days</option></select>
+      <button class="btn sm" id="loadCalBtn">Load</button>
+      <button class="btn sm green" id="applyCalBtn">Apply Suggestions</button>
+      <span class="pill" id="calPill">Awaiting data</span>
+    </div>
+    <div class="scards" style="grid-template-columns:repeat(4,1fr)">
+      <div class="scard"><div class="scard-v" id="calTracked">—</div><div class="scard-l">Tracked</div></div>
+      <div class="scard"><div class="scard-v" id="calGraded">—</div><div class="scard-l">Graded</div></div>
+      <div class="scard"><div class="scard-v" id="calHR">—</div><div class="scard-l">Hit Rate</div></div>
+      <div class="scard"><div class="scard-v" id="calEdge">—</div><div class="scard-l">Avg Edge</div></div>
+    </div>
+    <div class="two" style="margin-bottom:12px">
+      <div class="panel" style="padding:12px">
+        <div class="panel-sub" style="margin-bottom:8px">Overall Hit Rate Trend</div>
+        <div class="chart-wrap"><canvas id="calTrendChart"></canvas></div>
+      </div>
+      <div class="panel" style="padding:12px">
+        <div class="panel-sub" style="margin-bottom:8px">Multiplier History</div>
+        <div class="chart-wrap"><canvas id="multHistChart"></canvas></div>
+      </div>
+    </div>
+    <div class="tw">
+      <table id="calTbl">
+        <thead><tr><th>Apply</th><th>Market</th><th>Graded</th><th>Hit Rate</th><th>Target</th><th>Current Mult</th><th>Suggested Mult</th><th>Action</th></tr></thead>
+        <tbody id="calBody"><tr><td colspan="8" class="empty">Load calibration data.</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── VALUE / CLV ── -->
+  <div class="pview" id="pv-value">
+    <div style="display:flex;gap:8px;align-items:center;margin:14px 0 10px;flex-wrap:wrap">
+      <select id="valWindow" style="max-width:140px"><option value="7">Last 7 days</option><option value="14" selected>Last 14 days</option><option value="30">Last 30 days</option></select>
+      <button class="btn sm" id="loadValBtn">Load</button>
+      <span class="pill" id="valPill">Awaiting data</span>
+    </div>
+    <div class="scards">
+      <div class="scard"><div class="scard-v" id="vUnits">—</div><div class="scard-l">Units</div></div>
+      <div class="scard"><div class="scard-v" id="vROI">—</div><div class="scard-l">ROI</div></div>
+      <div class="scard"><div class="scard-v" id="vAvgCLV">—</div><div class="scard-l">Avg CLV</div></div>
+      <div class="scard"><div class="scard-v" id="vCLVRate">—</div><div class="scard-l">+CLV Rate</div></div>
+    </div>
+    <div class="two" style="margin-bottom:12px">
+      <div class="panel" style="padding:12px">
+        <div class="panel-sub" style="margin-bottom:8px">Daily Units / ROI</div>
+        <div class="chart-wrap"><canvas id="roiChart"></canvas></div>
+      </div>
+      <div class="panel" style="padding:12px">
+        <div class="panel-sub" style="margin-bottom:8px">Top CLV Performers</div>
+        <div class="tw">
+          <table id="clvTbl">
+            <thead><tr><th>Player</th><th>Market</th><th>Open</th><th>Close</th><th>CLV</th><th>P/L $</th></tr></thead>
+            <tbody id="clvBody"><tr><td colspan="6" class="empty">No CLV data.</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── BANKROLL ── -->
+  <div class="pview" id="pv-bankroll">
+    <div style="display:flex;gap:8px;align-items:center;margin:14px 0 10px;flex-wrap:wrap">
+      <select id="brWindow" style="max-width:140px"><option value="7">Last 7 days</option><option value="14" selected>Last 14 days</option><option value="30">Last 30 days</option></select>
+      <button class="btn sm" id="loadBRBtn">Load</button>
+      <span class="pill" id="brPill">Awaiting data</span>
+    </div>
+    <div class="scards">
+      <div class="scard"><div class="scard-v" id="brStart">—</div><div class="scard-l">Start</div></div>
+      <div class="scard"><div class="scard-v" id="brEnd">—</div><div class="scard-l">End</div></div>
+      <div class="scard"><div class="scard-v" id="brProfit" style="color:var(--g)">—</div><div class="scard-l">Total P/L</div></div>
+      <div class="scard"><div class="scard-v" id="brDays">—</div><div class="scard-l">Active Days</div></div>
+    </div>
+    <div class="panel" style="padding:12px;margin-bottom:12px">
+      <div class="panel-sub" style="margin-bottom:8px">Bankroll Curve</div>
+      <div class="chart-wrap" style="height:200px"><canvas id="brChart"></canvas></div>
+    </div>
+    <div class="two">
+      <div class="panel" style="padding:12px">
+        <div class="panel-sub" style="margin-bottom:8px">Tier Audit</div>
+        <div class="tw">
+          <table id="tierTbl">
+            <thead><tr><th>Tier</th><th>Bets</th><th>Win</th><th>Loss</th><th>Hit Rate</th><th>Risk $</th><th>Profit $</th><th>ROI</th></tr></thead>
+            <tbody id="tierBody"><tr><td colspan="8" class="empty">No tier data.</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="panel" style="padding:12px">
+        <div class="panel-sub" style="margin-bottom:8px">Card Audit</div>
+        <div class="tw">
+          <table id="cardTbl">
+            <thead><tr><th>Bucket</th><th>Bets</th><th>Hit Rate</th><th>Risk $</th><th>Profit $</th><th>ROI</th></tr></thead>
+            <tbody id="cardBody"><tr><td colspan="6" class="empty">No card data.</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── ATTRIBUTION ── -->
+  <div class="pview" id="pv-attribution">
+    <div style="display:flex;gap:8px;align-items:center;margin:14px 0 10px;flex-wrap:wrap">
+      <select id="attrWindow" style="max-width:140px"><option value="7">Last 7 days</option><option value="14" selected>Last 14 days</option><option value="30">Last 30 days</option></select>
+      <button class="btn sm" id="loadAttrBtn">Load</button>
+      <span class="pill" id="attrPill">Awaiting data</span>
+    </div>
+    <div class="two" style="margin-bottom:12px">
+      <div class="panel" style="padding:12px">
+        <div class="panel-sub" style="margin-bottom:8px">By Market</div>
+        <div class="tw">
+          <table id="attrMktTbl">
+            <thead><tr><th>Market</th><th>Bets</th><th>Win</th><th>Loss</th><th>Hit Rate</th><th>Risk $</th><th>Profit $</th><th>ROI</th><th>Avg CLV</th></tr></thead>
+            <tbody id="attrMktBody"><tr><td colspan="9" class="empty">No data.</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="panel" style="padding:12px">
+        <div class="panel-sub" style="margin-bottom:8px">By Confidence Tier</div>
+        <div class="tw">
+          <table id="attrTierTbl">
+            <thead><tr><th>Tier</th><th>Bets</th><th>Win</th><th>Loss</th><th>Hit Rate</th><th>Profit $</th><th>ROI</th></tr></thead>
+            <tbody id="attrTierBody"><tr><td colspan="7" class="empty">No data.</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="panel" style="padding:12px">
+      <div class="panel-sub" style="margin-bottom:8px">Daily Breakdown</div>
+      <div class="tw">
+        <table id="attrDailyTbl">
+          <thead><tr><th>Date</th><th>Bets</th><th>Graded</th><th>Win</th><th>Loss</th><th>Hit Rate</th><th>Risk $</th><th>Profit $</th><th>ROI</th><th>Avg CLV</th></tr></thead>
+          <tbody id="attrDailyBody"><tr><td colspan="10" class="empty">No data.</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── BACKTEST ── -->
+  <div class="pview" id="pv-backtest">
+    <div style="display:flex;gap:8px;align-items:center;margin:14px 0 10px;flex-wrap:wrap">
+      <label style="font-size:.7rem;color:var(--mu)">From</label>
+      <input type="date" id="btStart" style="max-width:145px">
+      <label style="font-size:.7rem;color:var(--mu)">To</label>
+      <input type="date" id="btEnd" style="max-width:145px">
+      <button class="btn sm primary" id="runBtBtn">Run Backtest</button>
+      <span class="pill" id="btPill">Set date range</span>
+    </div>
+    <div class="notice" id="btNotice">Select a FROM and TO date range then click Run Backtest. Results will show overall performance across all markets in that window.</div>
+    <div id="btResults" style="display:none">
+      <div class="scards" style="margin-top:12px">
+        <div class="scard"><div class="scard-v" id="btBets">—</div><div class="scard-l">Total Bets</div></div>
+        <div class="scard"><div class="scard-v" id="btHR">—</div><div class="scard-l">Hit Rate</div></div>
+        <div class="scard"><div class="scard-v" id="btProfit" style="color:var(--g)">—</div><div class="scard-l">Total Profit $</div></div>
+        <div class="scard"><div class="scard-v" id="btROI">—</div><div class="scard-l">ROI</div></div>
+      </div>
+      <div class="panel" style="padding:12px;margin-top:12px">
+        <div class="tw">
+          <table id="btTbl">
+            <thead><tr><th>Date</th><th>Picks</th><th>Wins</th><th>Losses</th><th>Hit Rate</th><th>Units</th><th>Profit $</th><th>ROI</th></tr></thead>
+            <tbody id="btBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="footer">MLB ANALYTICS HUB · Tracker · For entertainment purposes only</div>
+</div><!-- /wrap -->
+
+<script>
+// ═══════════════════════════════════════════════════════════════════════
+// MLB ANALYTICS HUB — TRACKER v2
+// Connects to all existing /api/tracker/* backend routes
+// ═══════════════════════════════════════════════════════════════════════
+
+const MARKET_LABELS = {
+  batter_hits:'Hits', batter_total_bases:'Total Bases',
+  batter_home_runs:'Home Runs', batter_rbis:'RBIs',
+  batter_runs_scored:'Runs', batter_stolen_bases:'Stolen Bases',
+  pitcher_strikeouts:'Strikeouts'
+};
+
+const st = {
+  day: null,
+  slip: null,
+  charts: {},
+  filters: { mkt:'', res:'', tier:'' },
+  flags: { evOnly:false, pendingOnly:false, coreOnly:false },
+  calMarkets: new Set(),
+};
+
+// ── Utilities ────────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const safe = (v, fb='—') => (v==null||v===''||v===undefined) ? fb : String(v);
+const num  = (v, d=2, fb='—') => { const n=parseFloat(v); return isNaN(n)?fb:n.toFixed(d); };
+const pct  = (v, d=1, fb='—') => { const n=parseFloat(v); return isNaN(n)?fb:(n*100).toFixed(d)+'%'; };
+const money= v => { const n=parseFloat(v); if(isNaN(n)) return '—'; return (n>=0?'$'+n.toFixed(2):'-$'+Math.abs(n).toFixed(2)); };
+const ts   = v => v ? new Date(v).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) : '—';
+
+function today() {
+  return new Date().toLocaleDateString('en-US',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'})
+    .split('/').reverse().join('-').replace(/(\d{4})-(\d{2})-(\d{2})/,'$1-$2-$3');
+}
+// Fix: "MM/DD/YYYY" → "YYYY-MM-DD"
+function etToday() {
+  const d = new Date().toLocaleDateString('en-US',{timeZone:'America/New_York'});
+  const [m,dy,y] = d.split('/');
+  return `${y}-${m.padStart(2,'0')}-${dy.padStart(2,'0')}`;
+}
+
+function readDate() { return $('trackDate').value || etToday(); }
+
+function status(msg, isErr=false) {
+  $('statusTxt').textContent = msg;
+  $('statusTxt').style.color = isErr ? 'var(--r)' : '';
+}
+
+async function api(url, opts={}) {
+  const r = await fetch(url, {headers:{'Content-Type':'application/json'}, ...opts});
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+  return r.json();
+}
+
+// ── HUB RATING ───────────────────────────────────────────────────────────────
+function hubRating(adjProb, edge) {
+  const probBase  = (adjProb||0) * 60;
+  const edgeBonus = Math.min((edge||0) * 100, 20);
+  const raw = probBase + edgeBonus;
+  return Math.max(0, Math.min(100, Math.round(raw)));
+}
+function hubBadge(rating) {
+  let cls, lbl;
+  if (rating >= 85) { cls='hub-elite'; lbl='ELITE'; }
+  else if (rating >= 70) { cls='hub-strong'; lbl='STRONG'; }
+  else if (rating >= 55) { cls='hub-mod'; lbl='MOD'; }
+  else { cls='hub-low'; lbl='LOW'; }
+  return `<span class="hub ${cls}">${rating} ${lbl}</span>`;
+}
+
+// ── EV% ──────────────────────────────────────────────────────────────────────
+function evPercent(adjProb, marketImplied) {
+  if (!adjProb || !marketImplied || marketImplied<=0 || marketImplied>=1) return null;
+  return adjProb / marketImplied - 1;
+}
+function evHtml(adjProb, marketImplied) {
+  const ev = evPercent(adjProb, marketImplied);
+  if (ev === null) return '<span style="color:var(--mu)">—</span>';
+  const cls = ev >= 0 ? 'ev-pos' : 'ev-neg';
+  return `<span class="${cls}">${ev>=0?'+':''}${(ev*100).toFixed(1)}%</span>`;
+}
+
+// ── Market label helpers ──────────────────────────────────────────────────────
+function mkLabel(k) { return MARKET_LABELS[k] || k; }
+function mkTag(k) {
+  const isPitcher = k==='pitcher_strikeouts';
+  return `<span class="mk${isPitcher?' mk-k':''}">${mkLabel(k)}</span>`;
+}
+
+// ── Grade / tier badges ───────────────────────────────────────────────────────
+function gradeBadge(g) {
+  const cls = {win:'grade-win',loss:'grade-loss',push:'grade-push',pending:'grade-pending'}[g]||'grade-pending';
+  return `<span class="grade ${cls}">${(g||'pending').toUpperCase()}</span>`;
+}
+function tierBadge(t) {
+  return `<span class="tier tier-${t||'D'}">${t||'D'}</span>`;
+}
+
+// ── CLV color ─────────────────────────────────────────────────────────────────
+function clvHtml(v) {
+  if (v==null) return '—';
+  const n = parseFloat(v);
+  const col = n < 0 ? 'var(--g)' : n > 0 ? 'var(--r)' : 'var(--mu)';
+  return `<span style="color:${col}">${n<0?'':'+'}${(n*100).toFixed(1)}%</span>`;
+}
+
+// ── Load / render day ─────────────────────────────────────────────────────────
+async function loadDay() {
+  const date = readDate();
+  status('Loading…');
+  try {
+    const d = await api(`/api/tracker/date/${date}`);
+    st.day = d;
+    renderSummary(d);
+    renderMarketTable(d);
+    populateMktFilter(d.entries||[]);
+    renderBoard();
+    $('datePill').textContent = d.capturedAt ? `Loaded ${ts(d.capturedAt)}` : 'No capture for this date';
+    status('Day loaded');
+    loadModelRecord();
+  } catch(e) { status(e.message, true); }
+}
+
+async function captureDay() {
+  const date = readDate();
+  status('Capturing slate…');
+  try {
+    const d = await api(`/api/tracker/capture/${date}`, {method:'POST'});
+    st.day = d;
+    renderSummary(d);
+    renderMarketTable(d);
+    populateMktFilter(d.entries||[]);
+    renderBoard();
+    $('datePill').textContent = `${d.entries?.length||0} entries captured`;
+    status('Captured');
+    try { await loadSlip(); } catch{}
+  } catch(e) { status(e.message, true); }
+}
+
+async function captureClose() {
+  const date = readDate();
+  status('Capturing closing lines…');
+  try {
+    const d = await api(`/api/tracker/close/${date}`, {method:'POST'});
+    st.day = d;
+    renderSummary(d);
+    renderBoard();
+    status(`Closing captured · ${ts(d.closingCapturedAt||'')}`);
+  } catch(e) { status(e.message, true); }
+}
+
+async function gradeDay() {
+  const date = readDate();
+  status('Grading…');
+  try {
+    const d = await api(`/api/tracker/grade/${date}`, {method:'POST'});
+    st.day = d;
+    renderSummary(d);
+    renderMarketTable(d);
+    renderBoard();
+    status(`Graded ${ts(d.gradedAt||'')}`);
+  } catch(e) { status(e.message, true); }
+}
+
+// ── Hero summary ──────────────────────────────────────────────────────────────
+function renderSummary(d) {
+  const s = d.summary || {};
+  const bk = s.bankroll || {};
+  const vs = s.value || {};
+  $('hPicks').textContent    = s.picks || 0;
+  $('hGraded').textContent   = s.graded || 0;
+  $('hHitRate').textContent  = s.hit_rate!=null ? pct(s.hit_rate) : '—';
+  const profit = parseFloat(vs.dollars||0);
+  $('hProfit').textContent   = money(profit);
+  $('hProfit').style.color   = profit>0?'var(--g)':profit<0?'var(--r)':'var(--txt)';
+  $('hRisk').textContent     = money(bk.planned_stake||0);
+  $('hBankroll').textContent = money(bk.live_bankroll||bk.starting_bankroll||0);
+}
+
+// ── Market breakdown table ────────────────────────────────────────────────────
+function renderMarketTable(d) {
+  const bm = (d.summary||{}).by_market || {};
+  const rows = Object.entries(bm).map(([mk, v]) => {
+    const graded = (v.wins||0)+(v.losses||0)+(v.pushes||0);
+    const hr = graded ? (v.wins||0)/graded : null;
+    return `<tr>
+      <td>${mkTag(mk)}</td>
+      <td>${v.picks||0}</td>
+      <td>${graded}</td>
+      <td style="color:var(--g)">${v.wins||0}</td>
+      <td style="color:var(--r)">${v.losses||0}</td>
+      <td style="color:var(--y)">${v.pushes||0}</td>
+      <td>${hr!=null?pct(hr):'—'}</td>
+      <td style="color:${(v.units||0)>=0?'var(--g)':'var(--r)'}">${num(v.units||0,2)}</td>
+      <td style="color:${(v.dollars||0)>=0?'var(--g)':'var(--r)'}">${money(v.dollars||0)}</td>
+    </tr>`;
+  });
+  $('mktBody').innerHTML = rows.length ? rows.join('') : '<tr><td colspan="9" class="empty">No market data.</td></tr>';
+  $('mktSub').textContent = rows.length ? `${rows.length} markets` : '';
+}
+
+// ── Populate market filter ────────────────────────────────────────────────────
+function populateMktFilter(entries) {
+  const mks = [...new Set(entries.map(e=>e.marketKey).filter(Boolean))];
+  const sel = $('fMkt');
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">All Markets</option>';
+  mks.forEach(mk => {
+    const o = document.createElement('option');
+    o.value = mk; o.textContent = mkLabel(mk);
+    sel.appendChild(o);
+  });
+  if (mks.includes(cur)) sel.value = cur;
+}
+
+// ── Working board ─────────────────────────────────────────────────────────────
+function renderBoard() {
+  const entries = (st.day||{}).entries || [];
+  const mkt = $('fMkt').value;
+  const res = $('fRes').value;
+  const tier= $('fTier').value;
+  const srt = $('fSort').value;
+  const {evOnly, pendingOnly, coreOnly} = st.flags;
+
+  let rows = entries.filter(r => {
+    if (mkt && r.marketKey !== mkt) return false;
+    if (res && (r.grade||'pending') !== res) return false;
+    if (tier && r.confidenceTier !== tier) return false;
+    if (evOnly) {
+      const ev = evPercent(r.adjProb, r.marketImplied);
+      if (ev === null || ev <= 0) return false;
+    }
+    if (pendingOnly && (r.grade||'pending') !== 'pending') return false;
+    if (coreOnly && !['A','B'].includes(r.confidenceTier||'D')) return false;
+    return true;
+  });
+
+  // Sort
+  rows.sort((a,b) => {
+    if (srt === 'edge')   return (parseFloat(b.edge)||0) - (parseFloat(a.edge)||0);
+    if (srt === 'adjProb')return (parseFloat(b.adjProb)||0) - (parseFloat(a.adjProb)||0);
+    if (srt === 'hub')    return hubRating(b.adjProb,b.edge) - hubRating(a.adjProb,a.edge);
+    if (srt === 'ev')     return (evPercent(b.adjProb,b.marketImplied)||0) - (evPercent(a.adjProb,a.marketImplied)||0);
+    if (srt === 'profit') return (parseFloat(b.profitDollars)||0) - (parseFloat(a.profitDollars)||0);
+    return (parseFloat(b.score)||0) - (parseFloat(a.score)||0); // default: score
+  });
+
+  $('boardSub').textContent = `${rows.length} of ${entries.length} entries`;
+
+  if (!rows.length) {
+    $('boardBody').innerHTML = '<tr><td colspan="17" class="empty">No entries match current filters.</td></tr>';
+    return;
+  }
+
+  $('boardBody').innerHTML = rows.map(r => {
+    const grade = r.grade || 'pending';
+    const hub   = hubRating(r.adjProb, r.edge);
+    const ev    = evPercent(r.adjProb, r.marketImplied);
+    const profit= parseFloat(r.profitDollars||0);
+    const clv   = r.clvEdge != null ? parseFloat(r.clvEdge) : null;
+    const rowCls= {win:'row-win',loss:'row-loss',push:'row-push',pending:''}[grade]||'';
+    const profitCol = profit>0?'var(--g)':profit<0?'var(--r)':'var(--mu)';
+    return `<tr class="${rowCls}">
+      <td><strong>${safe(r.player)}</strong></td>
+      <td>${safe(r.team)}</td>
+      <td>${mkTag(r.marketKey)}</td>
+      <td>${safe(r.line)}</td>
+      <td>${hubBadge(hub)}</td>
+      <td>${evHtml(r.adjProb, r.marketImplied)}</td>
+      <td>${pct(r.adjProb)}</td>
+      <td>${r.edge!=null?pct(r.edge):'—'}</td>
+      <td>${num(r.modelMean,2)}</td>
+      <td>${r.openingPrice!=null?r.openingPrice:'—'}</td>
+      <td>${r.closingPrice!=null?r.closingPrice:'—'}</td>
+      <td>${clvHtml(r.clvEdge)}</td>
+      <td>${money(r.stakeDollars||0)}</td>
+      <td>${r.actual!=null?r.actual:'—'}</td>
+      <td>${gradeBadge(grade)}</td>
+      <td>${tierBadge(r.confidenceTier)}</td>
+      <td style="color:${profitCol};font-weight:600">${grade==='pending'?'—':money(profit)}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ── Bet Slip ──────────────────────────────────────────────────────────────────
+async function loadSlip() {
+  const date = readDate();
+  status('Building slip…');
+  try {
+    const d = await api(`/api/tracker/betslip/${date}`);
+    st.slip = d.betslip;
+    renderSlip(d.betslip);
+    status('Slip loaded');
+  } catch(e) { status(e.message, true); }
+}
+
+function renderSlip(slip) {
+  if (!slip) return;
+  const s = slip.summary || {};
+  $('slipBets').textContent    = s.recommended_bets || 0;
+  $('slipRisk').textContent    = money(s.total_risk||0);
+  $('slipAvgEdge').textContent = s.avg_edge!=null ? pct(s.avg_edge) : '—';
+  $('slipPill').textContent    = `${s.core_bets||0} core · ${s.flex_bets||0} flex`;
+
+  const singles = slip.singles || [];
+  const core    = slip.core    || [];
+  const flex    = slip.flex    || [];
+  const parlays = slip.parlays || [];
+
+  $('coreCards').innerHTML  = renderPickCards(core)  || '<div class="empty">No core picks.</div>';
+  $('flexCards').innerHTML  = renderPickCards(flex)  || '<div class="empty">No flex picks.</div>';
+  $('allCards').innerHTML   = renderPickCards(singles)|| '<div class="empty">No picks.</div>';
+  $('parlayCards').innerHTML= renderParlayCards(parlays) || '<div class="empty">No parlay ideas.</div>';
+}
+
+function renderPickCards(picks) {
+  if (!picks||!picks.length) return '';
+  return picks.map(r => {
+    const grade  = r.grade || 'pending';
+    const hub    = hubRating(r.adjProb, r.edge);
+    const ev     = evPercent(r.adjProb, r.marketImplied);
+    const evStr  = ev!=null ? `<span class="${ev>=0?'ev-pos':'ev-neg'}">${ev>=0?'+':''}${(ev*100).toFixed(1)}% EV</span>` : '';
+    const profit = parseFloat(r.profitDollars||0);
+    return `<div class="pcard ${grade}">
+      <div class="pcard-top">
+        <div>
+          <div class="pcard-name">${safe(r.player)}</div>
+          <div class="pcard-meta">${safe(r.team)} · ${mkLabel(r.marketKey)} Over ${safe(r.line)}</div>
+        </div>
+        <div class="pcard-badges">
+          ${hubBadge(hub)}
+          ${tierBadge(r.confidenceTier)}
+          ${gradeBadge(grade)}
+        </div>
+      </div>
+      <div class="pcard-stats">
+        <div>Prob <span>${pct(r.adjProb)}</span></div>
+        <div>Edge <span>${r.edge!=null?pct(r.edge):'—'}</span></div>
+        <div>Stake <span>${money(r.stakeDollars||0)}</span></div>
+        ${evStr?`<div>${evStr}</div>`:''}
+        ${grade!=='pending'?`<div>P/L <span style="color:${profit>=0?'var(--g)':'var(--r)'}">${money(profit)}</span></div>`:''}
+      </div>
+      ${r.reason?`<div class="pcard-reason">${safe(r.reason)}</div>`:''}
+    </div>`;
+  }).join('');
+}
+
+function renderParlayCards(parlays) {
+  if (!parlays||!parlays.length) return '';
+  return parlays.map(p => {
+    const legs = (p.legs||[]).map(l=>`${safe(l.player)} ${mkLabel(l.marketKey)}`).join(' · ');
+    return `<div class="parlay-card">
+      <div class="parlay-head">
+        <span class="parlay-name">${safe(p.name,'Parlay')}</span>
+        <span style="font-size:.67rem;color:var(--mu)">${(p.legs||[]).length} legs · Risk ${money(p.proxy_risk||0)}</span>
+      </div>
+      <div class="parlay-legs" style="margin-bottom:5px">${legs}</div>
+      <div style="display:flex;gap:10px;font-size:.65rem;color:var(--mu)">
+        <span>Avg Edge <strong style="color:var(--txt)">${pct(p.avg_edge)}</strong></span>
+        <span>Avg Prob <strong style="color:var(--txt)">${pct(p.avg_prob)}</strong></span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ── Model Track Record Banner ─────────────────────────────────────────────────
+async function loadModelRecord() {
+  const date = readDate();
+  try {
+    const d = await api(`/api/tracker/calibration/${date}?window=30`);
+    const markets = d.markets || [];
+    if (!markets.length) { $('trecPills').innerHTML='<span class="trec-pill na">No data yet</span>'; return; }
+    $('trecPills').innerHTML = markets.map(m => {
+      const hr = parseFloat(m.hitrate||0);
+      const lbl = `${mkLabel(m.marketKey)} ${pct(hr)}`;
+      const cls = hr>=0.58?'good':hr>=0.50?'warn':'na';
+      return `<span class="trec-pill ${cls}" title="${m.graded||0} graded">${lbl}</span>`;
+    }).join('');
+    const total = markets.reduce((a,m)=>a+(m.graded||0),0);
+    $('trecNote').textContent = `${total} graded bets · 30d`;
+  } catch { $('trecPills').innerHTML='<span class="trec-pill na">Unavailable</span>'; }
+}
+
+// ── Adjustments ───────────────────────────────────────────────────────────────
+function setAdj(adj) {
+  if (!adj) return;
+  $('fBankroll').value = adj.bankroll||1000;
+  $('fKelly').value    = adj.kelly_fraction||0.50;
+  $('fUnit').value     = adj.unit_size_pct||0.01;
+  $('fMaxBet').value   = adj.max_bet_pct||0.03;
+  $('fMaxDay').value   = adj.max_daily_risk_pct||0.12;
+  $('fCap').value      = adj.captured_per_game||14;
+  $('fEdge').value     = adj.best_edge_threshold||0.03;
+  $('fProb').value     = adj.best_prob_threshold||0.58;
+  const mm = adj.market_multipliers||{};
+  Object.keys(mm).forEach(mk => { const el=$(`m_${mk}`); if(el) el.value=mm[mk]; });
+}
+
+function collectAdj() {
+  const mm = {};
+  ['batter_hits','batter_total_bases','batter_home_runs','batter_rbis',
+   'batter_runs_scored','batter_stolen_bases','pitcher_strikeouts'].forEach(mk=>{
+    const el=$(`m_${mk}`); if(el) mm[mk]=parseFloat(el.value)||1.0;
+  });
+  return {
+    bankroll:             parseFloat($('fBankroll').value)||1000,
+    kelly_fraction:       parseFloat($('fKelly').value)||0.50,
+    unit_size_pct:        parseFloat($('fUnit').value)||0.01,
+    max_bet_pct:          parseFloat($('fMaxBet').value)||0.03,
+    max_daily_risk_pct:   parseFloat($('fMaxDay').value)||0.12,
+    captured_per_game:    parseInt($('fCap').value)||14,
+    best_edge_threshold:  parseFloat($('fEdge').value)||0.03,
+    best_prob_threshold:  parseFloat($('fProb').value)||0.58,
+    market_multipliers: mm,
+  };
+}
+
+async function loadAdj() {
+  try { const d=await api('/api/tracker/adjustments'); setAdj(d.adjustments); } catch{}
+}
+
+async function saveAdj() {
+  status('Saving settings…');
+  try {
+    const d=await api('/api/tracker/adjustments',{method:'POST',body:JSON.stringify(collectAdj())});
+    setAdj(d.adjustments);
+    status('Settings saved');
+  } catch(e){ status(e.message,true); }
+}
+
+// ── Chart utilities ───────────────────────────────────────────────────────────
+const CHART_DEFAULTS = {
+  responsive:true, maintainAspectRatio:false,
+  plugins:{legend:{labels:{color:'#6a8db0',font:{family:'Inter',size:10}}}},
+  scales:{
+    x:{ticks:{color:'#6a8db0',maxRotation:30,font:{size:10}},grid:{color:'rgba(255,255,255,.04)'}},
+    y:{ticks:{color:'#6a8db0',font:{size:10}},grid:{color:'rgba(255,255,255,.04)'}}
+  }
+};
+function destroyChart(id){if(st.charts[id]){st.charts[id].destroy();st.charts[id]=null}}
+function lineChart(id,labels,data,label,color){
+  destroyChart(id); const el=$(id); if(!el) return;
+  st.charts[id]=new Chart(el.getContext('2d'),{type:'line',data:{labels,datasets:[{label,data,borderColor:color,backgroundColor:color+'22',tension:.28,fill:true,pointRadius:3,pointBackgroundColor:color}]},options:CHART_DEFAULTS});
+}
+function barChart(id,labels,data,label,colors){
+  destroyChart(id); const el=$(id); if(!el) return;
+  st.charts[id]=new Chart(el.getContext('2d'),{type:'bar',data:{labels,datasets:[{label,data,backgroundColor:Array.isArray(colors)?colors:data.map(v=>v>=0?'rgba(0,230,118,.55)':'rgba(244,67,54,.55)')}]},options:CHART_DEFAULTS});
+}
+
+// ── Calibration ───────────────────────────────────────────────────────────────
+async function loadCal() {
+  const date=readDate(), w=+$('calWindow').value||14;
+  status('Loading calibration…');
+  try {
+    const d=await api(`/api/tracker/calibration/${date}?window=${w}`);
+    const s=d.summary||{};
+    $('calTracked').textContent=s.tracked||0;
+    $('calGraded').textContent =s.graded||0;
+    $('calHR').textContent     =s.hitrate!=null?pct(s.hitrate):'—';
+    $('calEdge').textContent   =s.avgedge!=null?pct(s.avgedge):'—';
+    const rows=d.markets||[];
+    st.calMarkets=new Set(rows.filter(r=>r.action!=='hold').map(r=>r.marketKey));
+    $('calBody').innerHTML=rows.length?rows.map(r=>`<tr>
+      <td><input type="checkbox" class="cal-cb" data-mk="${r.marketKey}" ${st.calMarkets.has(r.marketKey)?'checked':''}></td>
+      <td>${mkTag(r.marketKey)}</td><td>${r.graded||0}</td>
+      <td>${pct(r.hitrate||0)}</td><td>${pct(r.targetrate||0)}</td>
+      <td>${num(r.currentmultiplier,3)}</td><td style="color:var(--c)">${num(r.suggestedmultiplier,3)}</td>
+      <td><span class="grade grade-${r.action==='increase'?'win':r.action==='decrease'?'loss':'pending'}">${(r.action||'hold').toUpperCase()}</span></td>
+    </tr>`).join(''):'<tr><td colspan="8" class="empty">No calibration rows.</td></tr>';
+    document.querySelectorAll('.cal-cb').forEach(el=>el.addEventListener('change',e=>{
+      const mk=e.target.dataset.mk; e.target.checked?st.calMarkets.add(mk):st.calMarkets.delete(mk);
+    }));
+    $('calPill').textContent=`${rows.length} markets · ${w}d`;
+    // Charts
+    try {
+      const td=await api(`/api/tracker/calibration/dashboard/${date}?window=${w}`);
+      const overall=td.overallSeries||[];
+      lineChart('calTrendChart',overall.map(x=>x.date),overall.map(x=>(parseFloat(x.hitrate||0)*100)),'Hit Rate %','#00e5ff');
+      const fmk=(td.availableMarkets||[])[0];
+      const hist=(td.multiplierHistory||{})[fmk]||[];
+      lineChart('multHistChart',hist.map(x=>ts(x.timestamp)),hist.map(x=>parseFloat(x.multiplier||0)),'Multiplier','#b388ff');
+    } catch{}
+    status('Calibration loaded');
+  } catch(e){status(e.message,true);}
+}
+
+async function applyCal() {
+  if (!st.calMarkets.size){status('No markets selected',true);return;}
+  status('Applying calibration…');
+  try {
+    const d=await api('/api/tracker/calibration/apply',{method:'POST',body:JSON.stringify({apply_markets:[...st.calMarkets]})});
+    setAdj(d.adjustments);
+    status(`Applied ${st.calMarkets.size} market(s)`);
+  } catch(e){status(e.message,true);}
+}
+
+// ── Value / CLV ───────────────────────────────────────────────────────────────
+async function loadVal() {
+  const date=readDate(), w=+$('valWindow').value||14;
+  status('Loading value data…');
+  try {
+    const d=await api(`/api/tracker/value/dashboard/${date}?window=${w}`);
+    const s=d.summary||{};
+    $('vUnits').textContent   =num(s.units,2);
+    $('vROI').textContent     =s.roi!=null?pct(s.roi):'—';
+    $('vAvgCLV').textContent  =s.avg_clv!=null?pct(s.avg_clv):'—';
+    $('vCLVRate').textContent =s.clv_positive_rate!=null?pct(s.clv_positive_rate):'—';
+    $('valPill').textContent=`${w}d window · ${s.graded_with_clv||0} with CLV`;
+    const series=d.series||[];
+    lineChart('roiChart',series.map(x=>x.date),series.map(x=>parseFloat(x.roi||0)*100),'ROI %','#00e676');
+    const topClv=(d.top_clv||[]).slice(0,8);
+    $('clvBody').innerHTML=topClv.length?topClv.map(r=>`<tr>
+      <td>${safe(r.player)}</td><td>${mkTag(r.marketKey)}</td>
+      <td>${r.openingPrice!=null?r.openingPrice:'—'}</td>
+      <td>${r.closingPrice!=null?r.closingPrice:'—'}</td>
+      <td>${clvHtml(r.clvEdge)}</td>
+      <td style="color:${(r.profitDollars||0)>=0?'var(--g)':'var(--r)'}">${money(r.profitDollars||0)}</td>
+    </tr>`).join(''):'<tr><td colspan="6" class="empty">No CLV data.</td></tr>';
+    status('Value data loaded');
+  } catch(e){status(e.message,true);}
+}
+
+// ── Bankroll ──────────────────────────────────────────────────────────────────
+async function loadBR() {
+  const date=readDate(), w=+$('brWindow').value||14;
+  status('Loading bankroll data…');
+  try {
+    const d=await api(`/api/tracker/bankroll/dashboard/${date}?window=${w}`);
+    const s=d.dashboard?.summary||{};
+    $('brStart').textContent =money(s.start_bankroll||0);
+    $('brEnd').textContent   =money(s.end_bankroll||0);
+    const p=parseFloat(s.total_profit||0);
+    $('brProfit').textContent=money(p);
+    $('brProfit').style.color=p>=0?'var(--g)':'var(--r)';
+    $('brDays').textContent  =s.active_days||0;
+    $('brPill').textContent  =`${w}d window`;
+    const curve=d.dashboard?.curve||[];
+    lineChart('brChart',curve.map(x=>x.date),curve.map(x=>parseFloat(x.bankroll||0)),'Bankroll $','#00e5ff');
+    const tierRows=d.dashboard?.tierAudit||[];
+    $('tierBody').innerHTML=tierRows.length?tierRows.map(r=>`<tr>
+      <td>${tierBadge(r.bucket)}</td><td>${r.bets||0}</td>
+      <td style="color:var(--g)">${r.wins||0}</td><td style="color:var(--r)">${r.losses||0}</td>
+      <td>${pct(r.hit_rate||0)}</td><td>${money(r.risk||0)}</td>
+      <td style="color:${(r.profit||0)>=0?'var(--g)':'var(--r)'}">${money(r.profit||0)}</td>
+      <td>${pct(r.roi||0)}</td>
+    </tr>`).join(''):'<tr><td colspan="8" class="empty">No tier data.</td></tr>';
+    const cardRows=d.dashboard?.cardAudit||[];
+    $('cardBody').innerHTML=cardRows.length?cardRows.map(r=>`<tr>
+      <td><strong>${safe(r.bucket)}</strong></td><td>${r.bets||0}</td>
+      <td>${pct(r.hit_rate||0)}</td><td>${money(r.risk||0)}</td>
+      <td style="color:${(r.profit||0)>=0?'var(--g)':'var(--r)'}">${money(r.profit||0)}</td>
+      <td>${pct(r.roi||0)}</td>
+    </tr>`).join(''):'<tr><td colspan="6" class="empty">No card data.</td></tr>';
+    status('Bankroll data loaded');
+  } catch(e){status(e.message,true);}
+}
+
+// ── Attribution ───────────────────────────────────────────────────────────────
+async function loadAttr() {
+  const date=readDate(), w=+$('attrWindow').value||14;
+  status('Loading attribution…');
+  try {
+    const d=await api(`/api/tracker/attribution/dashboard/${date}?window=${w}`);
+    const dash=d.dashboard||{};
+    $('attrPill').textContent=`${w}d window`;
+    const mktRows=dash.by_market||[];
+    $('attrMktBody').innerHTML=mktRows.length?mktRows.map(r=>`<tr>
+      <td>${mkTag(r.market||r.marketKey)}</td><td>${r.bets||0}</td>
+      <td style="color:var(--g)">${r.wins||0}</td><td style="color:var(--r)">${r.losses||0}</td>
+      <td>${r.hit_rate!=null?pct(r.hit_rate):'—'}</td>
+      <td>${money(r.risk||0)}</td>
+      <td style="color:${(r.profit||0)>=0?'var(--g)':'var(--r)'}">${money(r.profit||0)}</td>
+      <td>${r.roi!=null?pct(r.roi):'—'}</td>
+      <td>${r.avg_clv!=null?pct(r.avg_clv):'—'}</td>
+    </tr>`).join(''):'<tr><td colspan="9" class="empty">No market attribution data.</td></tr>';
+    const tierRows=dash.by_tier||[];
+    $('attrTierBody').innerHTML=tierRows.length?tierRows.map(r=>`<tr>
+      <td>${tierBadge(r.tier||r.bucket)}</td><td>${r.bets||0}</td>
+      <td style="color:var(--g)">${r.wins||0}</td><td style="color:var(--r)">${r.losses||0}</td>
+      <td>${r.hit_rate!=null?pct(r.hit_rate):'—'}</td>
+      <td style="color:${(r.profit||0)>=0?'var(--g)':'var(--r)'}">${money(r.profit||0)}</td>
+      <td>${r.roi!=null?pct(r.roi):'—'}</td>
+    </tr>`).join(''):'<tr><td colspan="7" class="empty">No tier attribution data.</td></tr>';
+    const daily=dash.daily||[];
+    $('attrDailyBody').innerHTML=daily.length?daily.map(r=>`<tr>
+      <td>${r.date||'—'}</td><td>${r.bets||0}</td><td>${r.graded||0}</td>
+      <td style="color:var(--g)">${r.wins||0}</td><td style="color:var(--r)">${r.losses||0}</td>
+      <td>${r.hit_rate!=null?pct(r.hit_rate):'—'}</td>
+      <td>${money(r.risk||0)}</td>
+      <td style="color:${(r.profit||0)>=0?'var(--g)':'var(--r)'}">${money(r.profit||0)}</td>
+      <td>${r.roi!=null?pct(r.roi):'—'}</td>
+      <td>${r.avg_clv!=null?pct(r.avg_clv):'—'}</td>
+    </tr>`).join(''):'<tr><td colspan="10" class="empty">No daily data.</td></tr>';
+    status('Attribution loaded');
+  } catch(e){status(e.message,true);}
+}
+
+// ── Backtest ──────────────────────────────────────────────────────────────────
+async function runBacktest() {
+  const start=$('btStart').value, end=$('btEnd').value;
+  if (!start||!end){status('Set FROM and TO dates',true);return;}
+  $('btPill').textContent='Running…';
+  $('btResults').style.display='none';
+  $('btNotice').style.display='none';
+  status('Running backtest…');
+  try {
+    // Use attribution dashboard over the window as a backtest proxy
+    const days = Math.ceil((new Date(end)-new Date(start))/(1000*86400))+1;
+    const d = await api(`/api/tracker/attribution/dashboard/${end}?window=${days}`);
+    const dash=d.dashboard||{};
+    const daily=dash.daily||[];
+    const totalBets=daily.reduce((a,r)=>a+(r.graded||0),0);
+    const totalWins=daily.reduce((a,r)=>a+(r.wins||0),0);
+    const totalProfit=daily.reduce((a,r)=>a+(parseFloat(r.profit||0)),0);
+    const totalRisk=daily.reduce((a,r)=>a+(parseFloat(r.risk||0)),0);
+    const hitRate=totalBets?(totalWins/totalBets):null;
+    const roi=totalRisk>0?(totalProfit/totalRisk):null;
+    $('btBets').textContent  =totalBets;
+    $('btHR').textContent    =hitRate!=null?pct(hitRate):'—';
+    const pp=totalProfit;
+    $('btProfit').textContent=money(pp);
+    $('btProfit').style.color=pp>=0?'var(--g)':'var(--r)';
+    $('btROI').textContent   =roi!=null?pct(roi):'—';
+    $('btBody').innerHTML=daily.map(r=>`<tr>
+      <td>${r.date}</td><td>${r.bets||0}</td>
+      <td style="color:var(--g)">${r.wins||0}</td><td style="color:var(--r)">${r.losses||0}</td>
+      <td>${r.hit_rate!=null?pct(r.hit_rate):'—'}</td>
+      <td>${num(r.units||0,2)}</td>
+      <td style="color:${(r.profit||0)>=0?'var(--g)':'var(--r)'}">${money(r.profit||0)}</td>
+      <td>${r.roi!=null?pct(r.roi):'—'}</td>
+    </tr>`).join('');
+    $('btResults').style.display='block';
+    $('btPill').textContent=`${start} → ${end} · ${days}d`;
+    status('Backtest complete');
+  } catch(e){$('btNotice').style.display='block';$('btPill').textContent='Error';status(e.message,true);}
+}
+
+// ── Tab / view switching ──────────────────────────────────────────────────────
+function switchSlip(btn) {
+  document.querySelectorAll('.slip-tab').forEach(b=>b.classList.remove('on'));
+  document.querySelectorAll('.slip-view').forEach(v=>v.classList.remove('on'));
+  btn.classList.add('on');
+  const sv=$(`sv-${btn.dataset.sv}`);
+  if(sv) sv.classList.add('on');
+}
+
+function switchPerf(btn) {
+  document.querySelectorAll('.ptab').forEach(b=>b.classList.remove('on'));
+  document.querySelectorAll('.pview').forEach(v=>v.classList.remove('on'));
+  btn.classList.add('on');
+  const pv=$(`pv-${btn.dataset.pv}`);
+  if(pv) pv.classList.add('on');
+}
+
+// ── Filter toggles ────────────────────────────────────────────────────────────
+function toggleEvOnly() {
+  st.flags.evOnly=!st.flags.evOnly;
+  $('evOnlyChip').classList.toggle('on-g',st.flags.evOnly);
+  renderBoard();
+}
+function togglePending() {
+  st.flags.pendingOnly=!st.flags.pendingOnly;
+  $('pendingChip').classList.toggle('on',st.flags.pendingOnly);
+  renderBoard();
+}
+function toggleCore() {
+  st.flags.coreOnly=!st.flags.coreOnly;
+  $('coreChip').classList.toggle('on',st.flags.coreOnly);
+  renderBoard();
+}
+
+// ── Wire events ───────────────────────────────────────────────────────────────
+function wire() {
+  const pairs = [
+    ['loadDayBtn', loadDay], ['reloadBtn', loadDay],
+    ['captureBtn', captureDay], ['closeBtn', captureClose], ['gradeBtn', gradeDay],
+    ['slipBtn', loadSlip], ['saveAdjBtn', saveAdj],
+    ['loadCalBtn', loadCal], ['applyCalBtn', applyCal],
+    ['loadValBtn', loadVal], ['loadBRBtn', loadBR],
+    ['loadAttrBtn', loadAttr], ['runBtBtn', runBacktest],
+  ];
+  pairs.forEach(([id,fn])=>{
+    const el=$(id); if(el) el.addEventListener('click',()=>fn().catch(e=>{status(e.message,true);console.error(e)}));
+  });
+  ['fMkt','fRes','fTier','fSort'].forEach(id=>$(id)?.addEventListener('change',renderBoard));
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+async function boot() {
+  $('trackDate').value = etToday();
+
+  // Backtest default range (last 30 days)
+  const now=new Date(), d30=new Date(now);
+  d30.setDate(d30.getDate()-30);
+  const fmt=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  if($('btStart')) $('btStart').value=fmt(d30);
+  if($('btEnd'))   $('btEnd').value=fmt(now);
+
+  wire();
+
+  try { await loadAdj(); } catch{}
+  try { await loadDay(); } catch(e){status(e.message,true);}
+  try { await Promise.allSettled([loadSlip()]); } catch{}
+
+  status('Tracker ready');
+}
+
+boot();
+</script>
+</body>
+</html>
