@@ -477,6 +477,13 @@ _sv_loaded    = False
 _sv_load_date = None
 _sv_loading   = False
 
+# ── Injury Cache (MLB transactions) ─────────────────────────────────────────
+_injury_lock = threading.Lock()
+_injury_cache = {}
+_injury_last_refresh = None
+_injury_loading = False
+_injury_worker_started = False
+
 PITCH_ORDER  = ["ff","si","fc","st","sl","cu","ch","fs","kn","sv"]
 PITCH_LABELS = {
     "ff":"4-Seam","si":"Sinker","fc":"Cutter","st":"Sweeper",
@@ -662,6 +669,137 @@ def _pct_rank(values, value):
         return None
     below_or_equal = sum(1 for n in nums if n <= v)
     return max(0, min(100, int(round((below_or_equal / len(nums)) * 100))))
+
+
+def _injury_status_from_text(txt):
+    s = (txt or "").lower()
+    if "60-day" in s and "injured list" in s:
+        return "IL_60"
+    if ("10-day" in s or "15-day" in s or "7-day" in s) and "injured list" in s:
+        return "IL_10"
+    if "day-to-day" in s:
+        return "DTD"
+    if "game-time" in s or "game time" in s or "questionable" in s:
+        return "GTD"
+    return None
+
+
+def _fetch_injury_status(force=False):
+    """Refresh injury cache from MLB transactions endpoint."""
+    global _injury_last_refresh, _injury_loading
+    now = datetime.now(ET)
+
+    with _injury_lock:
+        if _injury_loading:
+            return
+        if not force and _injury_last_refresh and (now - _injury_last_refresh).total_seconds() < 3600:
+            return
+        _injury_loading = True
+
+    try:
+        date_str = now.strftime("%Y-%m-%d")
+        team_abbr_by_id = {}
+        try:
+            for g in fetch_schedule(date_str) or []:
+                away = (((g.get("teams") or {}).get("away") or {}).get("team") or {})
+                home = (((g.get("teams") or {}).get("home") or {}).get("team") or {})
+                if away.get("id"):
+                    team_abbr_by_id[away.get("id")] = away.get("abbreviation", "?")
+                if home.get("id"):
+                    team_abbr_by_id[home.get("id")] = home.get("abbreviation", "?")
+        except Exception:
+            team_abbr_by_id = {}
+
+        r = requests.get(
+            f"{MLB_API}/transactions",
+            params={"sportId": 1, "startDate": date_str, "endDate": date_str},
+            timeout=12,
+        )
+        r.raise_for_status()
+        txs = r.json().get("transactions", []) or []
+
+        fresh = {}
+        for tx in txs:
+            person = tx.get("person") or tx.get("player") or {}
+            pid = person.get("id")
+            if not pid:
+                continue
+            name = person.get("fullName") or tx.get("playerName") or "Unknown"
+            to_team = tx.get("toTeam") or tx.get("team") or {}
+            team_id = to_team.get("id")
+            if not team_id:
+                team_id = (tx.get("fromTeam") or {}).get("id")
+            desc = tx.get("description") or tx.get("note") or tx.get("typeDesc") or ""
+            type_desc = tx.get("typeDesc") or ""
+            type_code = tx.get("typeCode") or ""
+            combined = " | ".join([str(type_desc), str(type_code), str(desc)])
+            status = _injury_status_from_text(combined)
+            if not status:
+                continue
+
+            fresh[int(pid)] = {
+                "playerId": int(pid),
+                "name": name,
+                "teamId": team_id,
+                "team": team_abbr_by_id.get(team_id, "?"),
+                "status": status,
+                "type": type_desc or type_code or status,
+                "date": tx.get("date") or date_str,
+                "description": desc or type_desc or status,
+                "updatedAt": now.isoformat(),
+            }
+
+        with _injury_lock:
+            _injury_cache.clear()
+            _injury_cache.update(fresh)
+            _injury_last_refresh = now
+    except Exception as ex:
+        print(f"[_fetch_injury_status] {ex}")
+    finally:
+        with _injury_lock:
+            _injury_loading = False
+
+
+def _start_injury_worker():
+    """Start background injury refresh worker once per process."""
+    global _injury_worker_started
+    with _injury_lock:
+        if _injury_worker_started:
+            return
+        _injury_worker_started = True
+
+    def _runner():
+        while True:
+            try:
+                _fetch_injury_status(force=True)
+            except Exception as ex:
+                print(f"[_injury_worker] {ex}")
+            time.sleep(3600)
+
+    threading.Thread(target=_runner, daemon=True).start()
+
+
+def _get_player_injury(player_id):
+    try:
+        pid = int(player_id)
+    except Exception:
+        return None
+    with _injury_lock:
+        return dict(_injury_cache.get(pid)) if pid in _injury_cache else None
+
+
+def _top_team_injury(team_id):
+    """Return one key injury alert row for team (IL/GTD/DTD)."""
+    if not team_id:
+        return None
+    sev = {"IL_60": 4, "IL_10": 3, "GTD": 2, "DTD": 1}
+    with _injury_lock:
+        rows = [v for v in _injury_cache.values() if v.get("teamId") == team_id]
+    if not rows:
+        return None
+    rows.sort(key=lambda x: sev.get(x.get("status"), 0), reverse=True)
+    return rows[0]
+
 
 # ── MLB API Helpers ───────────────────────────────────────────────────────────
 def fetch_schedule(date_str):
@@ -869,6 +1007,21 @@ def parse_game(g):
         bar  = min(100, int(edge * 9))
         wc   = (wx.get("condition","") or "").lower()
         wi   = "🌧" if "rain" in wc else ("⛅" if "cloud" in wc else "☀")
+
+        injury_alert = None
+        try:
+            away_inj = _top_team_injury(aid)
+            home_inj = _top_team_injury(hid)
+            cand = [x for x in (away_inj, home_inj) if x]
+            if cand:
+                rank = {"IL_60": 4, "IL_10": 3, "GTD": 2, "DTD": 1}
+                cand.sort(key=lambda x: rank.get(x.get("status"), 0), reverse=True)
+                c = cand[0]
+                detail = c.get("description") or c.get("status")
+                injury_alert = f"{c.get('name')} — {c.get('status').replace('_', '-')} ({detail})"
+        except Exception:
+            injury_alert = None
+
         return {
             "gamePk": pk, "status": st,
             "awayAbbr": at.get("abbreviation","?"), "awayName": at.get("name",""),
@@ -882,6 +1035,7 @@ def parse_game(g):
             "temp": wx.get("temp","N/A"), "wind": wx.get("wind", f"{wx.get('wind_speed','?')} mph {wx.get('wind_dir','')}").strip(),
             "condition": wx.get("condition",""), "rainChance": wx.get("rain_chance","N/A"),
             "weatherIcon": wi,
+            "injuryAlert": injury_alert,
         }
     except Exception as ex:
         print("[parse_game]", ex); return None
@@ -925,6 +1079,7 @@ def api_status():
 def api_games_today():
     _maybe_refresh_fg()
     _maybe_refresh_savant()
+    _fetch_injury_status(force=False)
     try:
         date_str = datetime.now(ET).strftime("%Y-%m-%d")
         raw   = fetch_schedule(date_str)
@@ -7295,6 +7450,7 @@ def api_props_projections(game_pk):
     try:
         _maybe_refresh_fg()
         _maybe_refresh_savant()
+        _fetch_injury_status(force=False)
 
         gdata, away_bats, home_bats, away_t, home_t, pitchers = _props_fetch_game(game_pk)
         if not gdata:
@@ -7372,6 +7528,7 @@ def api_props_projections(game_pk):
                 bvp  = _fetch_bvp(bid, opp_pid)      if (bid and opp_pid) else None
                 pitch_adv = _pitch_type_advantage(bid, opp_pid, batter_name=name, pitcher_name=opp_pname) if (bid and opp_pid) else {"status": "neutral", "note": "Neutral matchup"}
                 bvp_grade = _compute_bvp_grade(bvp) if bvp else 'D'
+                injury = _get_player_injury(bid) if bid else None
                 proj = _project_batter_batx(
                     b, opp_pname, opp_pfg, opp_psv, pf, wx,
                     pitcher_hand=opp_hand,
@@ -7415,6 +7572,9 @@ def api_props_projections(game_pk):
                     "sv_brl_pct_rank": _pct_rank(brl_values, brl),
                     "lineupConfirmed": bool(lineup_confirmed),
                     "lineupStatus": "confirmed" if lineup_confirmed else "pending",
+                    "injuryStatus": (injury or {}).get("status"),
+                    "injuryType": (injury or {}).get("type"),
+                    "injuryDescription": (injury or {}).get("description"),
                     "filterTags": {
                         "vsHand": opp_hand,
                         "homeAway": "home" if (own_abbr == home_abbr) else "away",
@@ -7436,6 +7596,18 @@ def api_props_projections(game_pk):
         home_proj = enrich_batters(home_bats, ap_fg, ap_sv, ap_st, away_abbr, ap_name, ap_id, own_abbr=home_abbr, lineup_confirmed=home_confirmed)
         all_batters = away_proj + home_proj
 
+        injury_summary_rows = []
+        for bb in all_batters:
+            st = (bb.get("injuryStatus") or "").upper()
+            if not st:
+                continue
+            injury_summary_rows.append({
+                "name": bb.get("name"),
+                "team": bb.get("team"),
+                "status": st,
+                "description": bb.get("injuryDescription") or bb.get("injuryType") or st,
+            })
+
         # ── Pitcher projections ────────────────────────────────────────────────
         pitchers_out = []
         for pid, pname, pfg, psv, pst, opp_bats, pabbr, phand in [
@@ -7444,6 +7616,7 @@ def api_props_projections(game_pk):
         ]:
             if pname == "TBD":
                 continue
+            pinj = _get_player_injury(pid) if pid else None
             proj = _project_pitcher(pname, pid, pfg, psv, pst, opp_bats, pf, wx)
             pitchers_out.append({
                 "name":      pname,
@@ -7462,7 +7635,20 @@ def api_props_projections(game_pk):
                 "opp_woba":  sum(_safe_f(fg_batter(b.get("name","")).get("fg_woba") or
                                          sv_batter(b.get("name","")).get("sv_xwoba"), 0.310)
                                  for b in opp_bats[:9]) / max(len(opp_bats[:9]), 1),
+                "injuryStatus": (pinj or {}).get("status"),
+                "injuryDescription": (pinj or {}).get("description"),
                 "proj":      proj,
+            })
+
+        for pp in pitchers_out:
+            st = (pp.get("injuryStatus") or "").upper()
+            if not st:
+                continue
+            injury_summary_rows.append({
+                "name": pp.get("name"),
+                "team": pp.get("team"),
+                "status": st,
+                "description": pp.get("injuryDescription") or st,
             })
 
         # ── Fetch game lines from Odds API (uses cache — no extra credits) ────
@@ -7497,6 +7683,10 @@ def api_props_projections(game_pk):
                 "awayConfirmed": away_confirmed,
                 "homeConfirmed": home_confirmed,
                 "overallConfirmed": bool(away_confirmed and home_confirmed),
+            },
+            "injury_summary": {
+                "count": len(injury_summary_rows),
+                "players": injury_summary_rows[:10],
             },
             "game_lines":  game_lines,
             "timestamp":   datetime.now(timezone.utc).isoformat(),
@@ -8935,6 +9125,8 @@ def api_breakout_candidates():
         print(f"[api_breakout_candidates] {traceback.format_exc()}")
         return jsonify({"success": False, "error": str(ex), "players": []}), 500
 
+# Start hourly injury refresh worker once routes/helpers are loaded.
+_start_injury_worker()
 
 
 if __name__ == "__main__":

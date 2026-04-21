@@ -209,6 +209,15 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .pta-fav{background:rgba(0,230,118,.1);border-color:rgba(0,230,118,.35);color:var(--g)}
 .pta-neu{background:rgba(106,141,176,.08);border-color:rgba(106,141,176,.25);color:var(--mu)}
 .pta-unf{background:rgba(244,67,54,.08);border-color:rgba(244,67,54,.28);color:var(--r)}
+.injury-banner{display:none;align-items:flex-start;gap:10px;padding:10px 12px;border-radius:10px;margin:0 0 12px;background:rgba(255,152,0,.08);border:1px solid rgba(255,152,0,.28)}
+.injury-banner.show{display:flex}
+.injury-title{font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:1px;color:#ffb74d;font-weight:700}
+.injury-detail{font-size:.68rem;color:var(--t);line-height:1.5}
+.inj-pill{display:inline-block;padding:2px 7px;border-radius:999px;border:1px solid;font-family:'Orbitron',monospace;font-size:.54rem;letter-spacing:.6px;font-weight:700}
+.inj-il{background:rgba(244,67,54,.08);border-color:rgba(244,67,54,.3);color:#ef9a9a}
+.inj-gtd{background:rgba(255,152,0,.1);border-color:rgba(255,152,0,.35);color:#ffb74d}
+.inj-dtd{background:rgba(255,193,7,.1);border-color:rgba(255,193,7,.3);color:#ffd54f}
+.verify-status{margin-top:7px;padding:5px 8px;border-radius:8px;background:rgba(255,152,0,.08);border:1px solid rgba(255,152,0,.28);color:#ffcc80;font-family:'Orbitron',monospace;font-size:.53rem;letter-spacing:.8px;display:inline-block}
 /* ── +EV Only toggle ── */
 .vfilter-ev{background:rgba(0,230,118,.06);border-color:rgba(0,230,118,.2);color:var(--g)}
 .vfilter-ev.active{background:rgba(0,230,118,.18);border-color:rgba(0,230,118,.5);color:var(--g)}
@@ -373,6 +382,14 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
       <span class="lineup-age" id="lineupAlertAge"></span>
     </div>
 
+    <div class="injury-banner" id="injuryBanner">
+      <span style="font-size:1.1rem">🏥</span>
+      <div>
+        <div class="injury-title">INJURY REPORT</div>
+        <div class="injury-detail" id="injuryBannerDetail">No active alerts.</div>
+      </div>
+    </div>
+
     <div class="tabs">
       <button class="tab active" data-tab="projections" onclick="switchTab('projections')">🎯 PROJECTIONS</button>
       <button class="tab" data-tab="matchup" onclick="switchTab('matchup')">⚔️ MATCHUP SCORES</button>
@@ -440,6 +457,7 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
               <span class="pfbar-grp-lbl">LINEUP</span>
               <button class="pfchip" id="pfc-lconf" onclick="togglePFChip('lconf','on-g')">CONFIRMED</button>
               <button class="pfchip" id="pfc-lpend" onclick="togglePFChip('lpend','on-o')">PENDING</button>
+              <button class="pfchip" id="pfc-hideil" onclick="togglePFChip('hideil','on-o')">HIDE IL</button>
             </div>
             <div class="pfbar-sep"></div>
             <button class="pfchip pfchip-clear" onclick="clearPFFilters()">✕ CLEAR</button>
@@ -994,6 +1012,7 @@ async function loadProjections() {
 }
 
 function renderProj(d) {
+  renderInjuryBanner(d);
   applyPFFilters();
   renderPitchers(d.pitchers || []);
   buildPropsPicksPanel(d);
@@ -1141,7 +1160,7 @@ const _PF_COLOR = {
   s1:'on-g', s4:'on', s7:'on-o',
   hpark:'on-g', npark:'on', ppark:'on-m',
   wout:'on-g', win:'on-m', wcalm:'on',
-  lconf:'on-g', lpend:'on-o'
+  lconf:'on-g', lpend:'on-o', hideil:'on-o'
 };
 
 function togglePFChip(key, colorCls) {
@@ -1153,6 +1172,7 @@ function togglePFChip(key, colorCls) {
 
 function clearPFFilters(silent) {
   PF_FILTERS.clear();
+  PF_FILTERS.add('hideil');
   updatePFChipUI();
   if (!silent && PROJ_DATA) applyPFFilters();
 }
@@ -1168,7 +1188,7 @@ function updatePFChipUI() {
     if (el) el.className = `pfchip ${_PF_COLOR[key] || 'on'}`;
   });
   // remove active class from unchecked chips
-  ['vsL','vsR','home','away','s1','s4','s7','hpark','npark','ppark','wout','win','wcalm','lconf','lpend'].forEach(k => {
+  ['vsL','vsR','home','away','s1','s4','s7','hpark','npark','ppark','wout','win','wcalm','lconf','lpend','hideil'].forEach(k => {
     if (!PF_FILTERS.has(k)) {
       const el = gel(`pfc-${k}`);
       if (el) el.className = 'pfchip';
@@ -1239,6 +1259,14 @@ function applyPFFilters() {
       const confirmed = b.lineupConfirmed === true || b.filterTags?.lineup === 'confirmed';
       return (PF_FILTERS.has('lconf') && confirmed) ||
              (PF_FILTERS.has('lpend') && !confirmed);
+    });
+  }
+
+  // Hide IL players (default ON).
+  if (PF_FILTERS.has('hideil')) {
+    batters = batters.filter(b => {
+      const st = String(b.injuryStatus || '').toUpperCase();
+      return !(st === 'IL_10' || st === 'IL_60');
     });
   }
 
@@ -1392,6 +1420,8 @@ function batterCard(b) {
   const bKey = best ? pickKey(best) : null;
   const bSaved = bKey && TRACKED_KEYS.has(bKey);
   const hrPanel = p.hr != null ? hrProfilePanel(b, p) : '';
+  const injBadge = injuryBadgeHtml(b.injuryStatus, b.injuryDescription);
+  const verify = verifyStatusHtml(b.injuryStatus);
 
   // BAT X composite section
   let batxHtml = '';
@@ -1415,7 +1445,7 @@ function batterCard(b) {
 
   return `<div class="bcard">
     <div class="bcard-top">
-      <div><div class="bcard-name">${b.name||'—'}</div><div class="bcard-meta">${b.pos||''} · ${b.team||''}</div></div>
+      <div><div class="bcard-name">${b.name||'—'} ${injBadge}</div><div class="bcard-meta">${b.pos||''} · ${b.team||''}</div>${verify}</div>
       <div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:4px">
         <div class="bcard-slot">${b.slot||'?'}</div>
         ${hub != null ? hubBadge(hub) : ''}
@@ -1636,6 +1666,36 @@ function pitchAdvBadgeHtml(status, note) {
   const txt = s === 'favorable' ? 'FAVORABLE PITCH TYPE' : (s === 'unfavorable' ? 'UNFAVORABLE PITCH TYPE' : 'NEUTRAL PITCH TYPE');
   const tip = (note || 'Neutral matchup').replace(/"/g, '&quot;');
   return `<span class="pta-badge ${cls}" title="${tip}">${txt}</span>`;
+}
+
+function injuryBadgeHtml(status, description) {
+  const st = String(status || '').toUpperCase();
+  if (!st) return '';
+  const tip = String(description || st).replace(/"/g, '&quot;');
+  if (st === 'IL_10' || st === 'IL_60') return `<span class="inj-pill inj-il" title="${tip}">🏥 ${st.replace('_','-')}</span>`;
+  if (st === 'GTD') return `<span class="inj-pill inj-gtd" title="${tip}">⚠️ GTD</span>`;
+  if (st === 'DTD') return `<span class="inj-pill inj-dtd" title="${tip}">⚠️ DTD</span>`;
+  return '';
+}
+
+function verifyStatusHtml(status) {
+  const st = String(status || '').toUpperCase();
+  if (st !== 'GTD' && st !== 'DTD') return '';
+  return '<div class="verify-status">VERIFY STATUS</div>';
+}
+
+function renderInjuryBanner(d) {
+  const banner = gel('injuryBanner');
+  const detail = gel('injuryBannerDetail');
+  if (!banner || !detail) return;
+  const rows = (d && d.injury_summary && d.injury_summary.players) ? d.injury_summary.players : [];
+  if (!rows.length) {
+    banner.classList.remove('show');
+    detail.textContent = 'No active alerts.';
+    return;
+  }
+  detail.textContent = rows.slice(0, 4).map(r => `${r.name} (${r.team}) — ${String(r.status||'').replace('_','-')}`).join(' · ');
+  banner.classList.add('show');
 }
 
 // ── Value bets ────────────────────────────────────────────────────────────────

@@ -84,6 +84,7 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .card-lineup .cl-loading{font-size:.68rem;color:var(--mu);font-style:italic}
 .lineup-section{display:none;margin-top:8px;border-top:1px solid rgba(255,255,255,.06);padding-top:8px}
 .lineup-section.open{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.inj-alert{margin-top:10px;padding:8px 10px;border-radius:10px;background:rgba(244,67,54,.08);border:1px solid rgba(244,67,54,.28);font-size:.64rem;color:#ffcdd2;line-height:1.45}
 .lu-col{display:flex;flex-direction:column;gap:3px}
 .lu-head{font-family:Orbitron,sans-serif;font-size:.58rem;letter-spacing:1.5px;color:var(--mu);margin-bottom:3px}
 .lu-row{font-size:.68rem;color:var(--c);display:flex;gap:5px;align-items:center}
@@ -376,6 +377,7 @@ function mkCard(g){
     ?'<div class="wr"><span>&#127968;</span><span class="val" style="color:var(--cyan);font-size:.7rem;letter-spacing:1px">DOME — INDOOR</span></div>'
     :g.temp&&g.temp!='N/A'
     ?'<div class="wr"><span>'+wicon(g.condition)+'</span><span class="val">'+g.temp+'&deg;F</span><span> | </span><span class="val">'+g.wind+'</span>'+rT+'</div>':'';
+  var inj=g.injuryAlert?'<div class="inj-alert">🏥 INJURY ALERT: '+g.injuryAlert+'</div>':'';
   return '<div class="card" onclick="if(event.target.closest(\'a,button,.lineup-toggle,.lineup-section,.qp-strip\'))return;location.href=\'/deep-dive/'+g.gamePk+'\'">'
     +'<div class="ct"><div style="display:flex;gap:6px;align-items:center"><span class="badge '+bc+'">'+bl+'</span>'+seriesBadge(g.seriesGame,g.seriesTotal)+'</div><span class="ctime">'+g.gameTime+(g.doubleHeader?'<span style="background:rgba(255,152,0,.12);color:#ff9800;border:1px solid rgba(255,152,0,.35);border-radius:4px;font-size:.62rem;letter-spacing:1.5px;padding:2px 6px;margin-left:5px;font-family:Orbitron,monospace;font-weight:700">DH·G'+(g.gameNumber||1)+'</span>':'')+'</span></div>'
     +'<div class="mu"><div class="tb"><div class="tlw">'+aL+'</div><div class="ta">'+g.awayAbbr+'</div></div>'
@@ -389,6 +391,7 @@ function mkCard(g){
     +'<div class="eb"><div class="ebl"><span>MODEL EDGE</span><strong>'+g.edge+'%</strong></div>'
     +'<div class="bar"><div class="fill" style="width:0%" data-w="'+g.barPct+'%"></div></div></div>'
     +'<div class="vn">'+g.venue+'</div>'
+    +inj
     +'<button class="lineup-toggle" onclick="toggleLineup(event,'+g.gamePk+')">&#9776; SHOW LINEUP</button>'
     +'<div class="lineup-section" id="lu-'+g.gamePk+'">'
       +'<div class="card-lineup" id="cl-'+g.gamePk+'"><div class="cl-loading">Lineup loading…</div></div>'
