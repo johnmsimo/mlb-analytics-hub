@@ -3641,6 +3641,8 @@ def api_tracker_capture(date_str):
         msg = None
         if timed_out:
             msg = f'Partial capture: {captured_games}/{len(sched)} games processed in time budget.'
+        elif not entries:
+            msg = f'Capture completed for {captured_games}/{len(sched)} games but produced 0 entries.'
         return jsonify({
             'success': True,
             'date': date_str,

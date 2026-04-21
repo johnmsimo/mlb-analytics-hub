@@ -725,8 +725,13 @@ async function captureDay() {
     renderBoard();
     const gameMsg = (d.capturedGames!=null && d.totalGames!=null) ? ` · ${d.capturedGames}/${d.totalGames} games` : '';
     $('datePill').textContent = `${d.entries?.length||0} entries captured${gameMsg}`;
-    status(d.message || 'Captured');
-    try { await loadSlip(); } catch{}
+    try { await loadSlip(true); } catch{}
+    const n = d.entries?.length || 0;
+    if (n === 0) {
+      status(d.message || 'Capture completed, but produced 0 entries', true);
+    } else {
+      status(d.message || `Captured ${n} entries${gameMsg}`);
+    }
   } catch(e) { status(e.message, true); }
 }
 
@@ -738,7 +743,9 @@ async function captureClose() {
     st.day = d;
     renderSummary(d);
     renderBoard();
-    status(`Closing captured · ${ts(d.closingCapturedAt||'')}`);
+    const upd = d.updated || 0;
+    $('datePill').textContent = upd > 0 ? `Closing captured · ${upd} updated` : 'Closing captured · 0 updated';
+    status(upd > 0 ? `Closing captured · ${upd} entries updated at ${ts(d.closingCapturedAt||'')}` : 'Closing captured, but no entries were updated', upd === 0);
   } catch(e) { status(e.message, true); }
 }
 
@@ -876,14 +883,14 @@ function renderBoard() {
 }
 
 // ── Bet Slip ──────────────────────────────────────────────────────────────────
-async function loadSlip() {
+async function loadSlip(silent=false) {
   const date = readDate();
-  status('Building slip…');
+  if (!silent) status('Building slip…');
   try {
     const d = await api(`/api/tracker/betslip/${date}`);
     st.slip = d.betslip;
     renderSlip(d.betslip);
-    status('Slip loaded');
+    if (!silent) status('Slip loaded');
   } catch(e) { status(e.message, true); }
 }
 
