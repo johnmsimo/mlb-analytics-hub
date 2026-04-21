@@ -91,6 +91,21 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .lu-pos{min-width:22px;color:var(--cyan);font-family:Orbitron,sans-serif;font-size:.58rem}
 .lu-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:110px}
 .lu-pending{font-size:.68rem;color:var(--mu);padding:6px 0;font-style:italic}
+.qp-strip{display:none;margin-top:8px;border-top:1px solid rgba(0,229,255,.1);padding-top:8px}
+.qp-strip.open{display:block}
+.qp-row{display:flex;align-items:center;gap:8px;padding:5px 2px;border-bottom:1px solid rgba(255,255,255,.04);font-size:.68rem;flex-wrap:wrap}
+.qp-row:last-child{border-bottom:none}
+.qp-name{flex:1;color:var(--t);font-weight:600;min-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.qp-mkt{font-family:Orbitron,monospace;font-size:.56rem;color:var(--mu);letter-spacing:.8px;white-space:nowrap}
+.qp-hub{font-family:Orbitron,monospace;font-size:.6rem;font-weight:700;padding:2px 6px;border-radius:5px;white-space:nowrap}
+.qp-hub.elite{background:rgba(0,230,118,.15);color:#00e676;border:1px solid rgba(0,230,118,.3)}
+.qp-hub.strong{background:rgba(0,229,255,.12);color:var(--c);border:1px solid rgba(0,229,255,.25)}
+.qp-hub.mod{background:rgba(255,152,0,.1);color:#ff9800;border:1px solid rgba(255,152,0,.2)}
+.qp-hub.low{background:rgba(106,141,176,.06);color:var(--mu);border:1px solid rgba(106,141,176,.15)}
+.qp-save{background:none;border:1px solid rgba(0,229,255,.2);border-radius:6px;color:var(--mu);font-size:.6rem;padding:3px 7px;cursor:pointer;transition:all .15s;font-family:Orbitron,monospace;letter-spacing:.4px;white-space:nowrap}
+.qp-save:hover{background:rgba(0,229,255,.08);color:var(--c);border-color:rgba(0,229,255,.4)}
+.qp-save.saved{background:rgba(0,230,118,.1);color:#00e676;border-color:rgba(0,230,118,.3);cursor:default}
+.qp-loading{text-align:center;padding:8px 4px;font-family:Orbitron,monospace;font-size:.58rem;color:var(--mu);letter-spacing:2px}
 
 
 .topnav{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:16px 0 0}
@@ -348,7 +363,7 @@ function mkCard(g){
     ?'<div class="wr"><span>&#127968;</span><span class="val" style="color:var(--cyan);font-size:.7rem;letter-spacing:1px">DOME — INDOOR</span></div>'
     :g.temp&&g.temp!='N/A'
     ?'<div class="wr"><span>'+wicon(g.condition)+'</span><span class="val">'+g.temp+'&deg;F</span><span> | </span><span class="val">'+g.wind+'</span>'+rT+'</div>':'';
-  return '<div class="card" onclick="if(event.target.closest(\'a,button,.lineup-toggle,.lineup-section\'))return;location.href=\'/deep-dive/'+g.gamePk+'\'">'
+  return '<div class="card" onclick="if(event.target.closest(\'a,button,.lineup-toggle,.lineup-section,.qp-strip\'))return;location.href=\'/deep-dive/'+g.gamePk+'\'">'
     +'<div class="ct"><span class="badge '+bc+'">'+bl+'</span><span class="ctime">'+g.gameTime+(g.doubleHeader?'<span style="background:rgba(255,152,0,.12);color:#ff9800;border:1px solid rgba(255,152,0,.35);border-radius:4px;font-size:.62rem;letter-spacing:1.5px;padding:2px 6px;margin-left:5px;font-family:Orbitron,monospace;font-weight:700">DH·G'+(g.gameNumber||1)+'</span>':'')+'</span></div>'
     +'<div class="mu"><div class="tb"><div class="tlw">'+aL+'</div><div class="ta">'+g.awayAbbr+'</div></div>'
     +'<div class="vs">VS</div>'
@@ -368,6 +383,10 @@ function mkCard(g){
     +'</div>'
     +'<div class="ap">&#9889; DEEP DIVE ANALYSIS</div>'
     +'<a href="/gameside-deepdive/'+g.gamePk+'" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" style="display:block;margin-top:6px;padding:7px;background:rgba(0,230,118,.07);border:1px solid rgba(0,230,118,.22);border-radius:8px;text-align:center;font-family:Orbitron,monospace;font-size:.58rem;letter-spacing:1.5px;color:#00e676;cursor:pointer;text-decoration:none">&#127919; GAMESIDE VIEW</a>'
+    +'<button class="lineup-toggle" style="margin-top:6px;background:rgba(0,229,255,.03)" onclick="toggleQuickProps(event,'+g.gamePk+')">&#9889; QUICK PROPS</button>'
+    +'<div class="qp-strip" id="qp-'+g.gamePk+'">'
+      +'<div class="qp-loading" id="qpl-'+g.gamePk+'">Loading top props…</div>'
+    +'</div>'
     +'</div>';
 }
 
@@ -429,6 +448,73 @@ function renderCardLineup(pk, d){
   }
   var headText=(d.awayConfirmed&&d.homeConfirmed)?'CONFIRMED LINEUPS':'PROJECTED LINEUPS';
   el.innerHTML='<div class="cl-head">'+headText+'</div><div class="cl-grid">'+preview(d.away,'AWAY')+preview(d.home,'HOME')+'</div>';
+}
+
+var QP_DATA={};
+function toggleQuickProps(e,pk){
+  e.stopPropagation();
+  var strip=document.getElementById('qp-'+pk);
+  var btn=e.currentTarget;
+  if(!strip)return;
+  var open=strip.classList.toggle('open');
+  btn.textContent=open?'✕ HIDE PROPS':'⚡ QUICK PROPS';
+  if(!open)return;
+  if(QP_DATA[pk]){renderQuickProps(pk,QP_DATA[pk]);return;}
+  strip.innerHTML='<div class="qp-loading">Loading top props…</div>';
+  fetch('/api/props/quick/'+pk)
+    .then(function(r){return r.json();})
+    .then(function(d){QP_DATA[pk]=d;renderQuickProps(pk,d);})
+    .catch(function(){
+      var s=document.getElementById('qp-'+pk);
+      if(s)s.innerHTML='<div class="qp-loading">Props unavailable</div>';
+    });
+}
+function renderQuickProps(pk,d){
+  var strip=document.getElementById('qp-'+pk);
+  if(!strip)return;
+  var picks=(d&&d.picks)||[];
+  if(!picks.length){strip.innerHTML='<div class="qp-loading">No standout props found</div>';return;}
+  var mktLabels={hits:'Hits',hr:'HR',tb:'Tot.Bases',rbi:'RBIs'};
+  var tracked=JSON.parse(localStorage.getItem('tracked_ids')||'[]');
+  strip.innerHTML=picks.map(function(p,i){
+    var pct=Math.round((p.l10_pct||0)*100);
+    var cls=pct>=80?'elite':pct>=70?'strong':pct>=60?'mod':'low';
+    var mkt=(mktLabels[p.market]||p.market)+' O'+p.line;
+    var key=p.playerId+':'+p.market+':'+p.line;
+    var saved=tracked.indexOf(key)>=0;
+    var bid='qpsave-'+pk+'-'+i;
+    return '<div class="qp-row">'
+      +'<span class="qp-name">'+p.player+'</span>'
+      +'<span class="qp-mkt">'+mkt+'</span>'
+      +'<span class="qp-hub '+cls+'">L10 '+pct+'%</span>'
+      +'<button class="qp-save'+(saved?' saved':'')
+      +'" id="'+bid+'" onclick="qpSave(event,'+JSON.stringify(p)+',\''+bid+'\')">'
+      +(saved?'✓ Saved':'💾')+'</button>'
+      +'</div>';
+  }).join('');
+}
+function qpSave(e,pick,btnId){
+  e.stopPropagation();
+  var btn=document.getElementById(btnId);
+  if(btn&&btn.classList.contains('saved'))return;
+  var payload={
+    player:pick.player,playerId:pick.playerId,team:pick.team,
+    marketKey:pick.marketKey||('batter_'+pick.market),
+    line:pick.line,recommendedSide:'Over',source:'dashboard',
+    adjProb:pick.l10_pct||0.5,hubRating:pick.hub_score||0
+  };
+  fetch('/api/tracker/pick',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(d.success&&btn){
+        btn.classList.add('saved');btn.textContent='✓ Saved';
+        var key=pick.playerId+':'+pick.market+':'+pick.line;
+        var ids=JSON.parse(localStorage.getItem('tracked_ids')||'[]');
+        if(ids.indexOf(key)<0)ids.push(key);
+        localStorage.setItem('tracked_ids',JSON.stringify(ids));
+      }
+    })
+    .catch(function(){if(btn)btn.textContent='Err';});
 }
 
 let TEAM_DATA={teams:[]}, MC_DATA={games:[],topProps:[]};
