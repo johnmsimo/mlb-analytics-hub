@@ -3359,9 +3359,9 @@ def _projection_reason_short(player, market_key, adj_prob, edge, opp_name=''):
     return f"{player} rates well for {lbl}; model probability {adj_prob:.1%}."
 
 
-def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None):
+def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched=None):
     adjustments = adjustments or _get_adjustments()
-    raw = fetch_schedule(capture_date)
+    raw = _sched if _sched is not None else fetch_schedule(capture_date)
     g = next((x for x in raw if x.get('gamePk') == game_pk), None)
     if not g:
         return []
@@ -3524,19 +3524,23 @@ def api_tracker_date(date_str):
 
 @app.route('/api/tracker/capture/<date_str>', methods=['POST'])
 def api_tracker_capture(date_str):
-    adjustments = _get_adjustments()
-    sched = fetch_schedule(date_str)
-    entries = []
-    for g in sched:
-        try:
-            entries.extend(_build_tracker_rows_for_game(g.get('gamePk'), date_str, adjustments))
-        except Exception:
-            print('[tracker_capture_game]', traceback.format_exc())
-    store = _load_json(TRACKER_STORE, {})
-    entries = _recalc_tracker_entries(entries)
-    store[date_str] = {'capturedAt': datetime.now().isoformat(), 'gradedAt': None, 'closingCapturedAt': None, 'entries': entries}
-    _save_json(TRACKER_STORE, store)
-    return jsonify({'success': True, 'date': date_str, 'entries': entries, 'summary': _tracker_summary(entries), 'capturedAt': store[date_str]['capturedAt']})
+    try:
+        adjustments = _get_adjustments()
+        sched = fetch_schedule(date_str)
+        entries = []
+        for g in sched:
+            try:
+                entries.extend(_build_tracker_rows_for_game(g.get('gamePk'), date_str, adjustments, _sched=sched))
+            except Exception:
+                print('[tracker_capture_game]', traceback.format_exc())
+        store = _load_json(TRACKER_STORE, {})
+        entries = _recalc_tracker_entries(entries)
+        store[date_str] = {'capturedAt': datetime.now().isoformat(), 'gradedAt': None, 'closingCapturedAt': None, 'entries': entries}
+        _save_json(TRACKER_STORE, store)
+        return jsonify({'success': True, 'date': date_str, 'entries': entries, 'summary': _tracker_summary(entries), 'capturedAt': store[date_str]['capturedAt']})
+    except Exception:
+        print('[tracker_capture]', traceback.format_exc())
+        return jsonify({'success': False, 'error': 'Capture failed — check server logs'}), 500
 
 
 @app.route('/api/tracker/grade/<date_str>', methods=['POST'])
