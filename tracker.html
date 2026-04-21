@@ -732,6 +732,9 @@ async function captureDay() {
     } else {
       status(d.message || `Captured ${n} entries${gameMsg}`);
     }
+    if (d.backgroundStarted) {
+      setTimeout(() => { loadDay().catch(() => {}); }, 12000);
+    }
   } catch(e) { status(e.message, true); }
 }
 

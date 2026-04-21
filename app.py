@@ -3578,6 +3578,58 @@ def _tracker_summary(entries):
     return {'picks': total, 'graded': len(graded), 'wins': wins, 'losses': losses, 'pushes': pushes, 'hit_rate': hit_rate, 'by_market': by_market}
 
 
+_TRACKER_CAPTURE_LOCK = threading.Lock()
+_TRACKER_CAPTURE_JOBS = {}
+
+
+def _tracker_row_key(row):
+    return (
+        row.get('date'),
+        row.get('gamePk'),
+        row.get('player'),
+        row.get('marketKey'),
+        float(row.get('line') or 0),
+    )
+
+
+def _merge_tracker_entries(existing_rows, new_rows):
+    out = {}
+    for r in (existing_rows or []):
+        if isinstance(r, dict):
+            out[_tracker_row_key(r)] = r
+    for r in (new_rows or []):
+        if isinstance(r, dict):
+            out[_tracker_row_key(r)] = r
+    rows = list(out.values())
+    rows.sort(key=lambda x: x.get('score', 0), reverse=True)
+    return rows
+
+
+def _tracker_capture_continue_bg(date_str, remaining_games, sched, adjustments, include_odds):
+    try:
+        bg_rows = []
+        for g in remaining_games:
+            gpk = g.get('gamePk')
+            try:
+                bg_rows.extend(_build_tracker_rows_for_game(gpk, date_str, adjustments, _sched=sched, include_odds=include_odds))
+            except Exception:
+                print(f'[tracker_capture_bg_game {gpk}]', traceback.format_exc())
+        if not bg_rows:
+            return
+        store = _load_json(TRACKER_STORE, {})
+        day = _normalize_tracker_day(store.get(date_str))
+        merged = _merge_tracker_entries(day.get('entries', []), _recalc_tracker_entries(bg_rows))
+        day['entries'] = merged
+        day['capturedAt'] = datetime.now().isoformat()
+        store[date_str] = day
+        _save_json(TRACKER_STORE, store)
+    except Exception:
+        print('[tracker_capture_bg]', traceback.format_exc())
+    finally:
+        with _TRACKER_CAPTURE_LOCK:
+            _TRACKER_CAPTURE_JOBS.pop(date_str, None)
+
+
 
 @app.route('/api/tracker/adjustments', methods=['GET', 'POST'])
 def api_tracker_adjustments():
@@ -3633,14 +3685,31 @@ def api_tracker_capture(date_str):
                 print(f'[tracker_capture_game {gpk}]', traceback.format_exc())
 
         store = _load_json(TRACKER_STORE, {})
-        entries = _recalc_tracker_entries(all_entries)
+        day = _normalize_tracker_day(store.get(date_str))
+        entries = _merge_tracker_entries(day.get('entries', []), _recalc_tracker_entries(all_entries))
         entries.sort(key=lambda x: x.get('score', 0), reverse=True)
         store[date_str] = {'capturedAt': datetime.now().isoformat(), 'gradedAt': None, 'closingCapturedAt': None, 'entries': entries}
         _save_json(TRACKER_STORE, store)
         timed_out = captured_games < len(sched)
+        remaining_games = sched[captured_games:] if timed_out else []
+        background_started = False
+        if remaining_games and str(os.getenv('TRACKER_CAPTURE_BACKGROUND', '1')).strip().lower() in ('1', 'true', 'yes'):
+            with _TRACKER_CAPTURE_LOCK:
+                if date_str not in _TRACKER_CAPTURE_JOBS:
+                    t = threading.Thread(
+                        target=_tracker_capture_continue_bg,
+                        args=(date_str, remaining_games, sched, adjustments, include_odds),
+                        daemon=True,
+                    )
+                    _TRACKER_CAPTURE_JOBS[date_str] = {'startedAt': datetime.now().isoformat(), 'remaining': len(remaining_games)}
+                    t.start()
+                    background_started = True
         msg = None
         if timed_out:
-            msg = f'Partial capture: {captured_games}/{len(sched)} games processed in time budget.'
+            if background_started:
+                msg = f'Partial capture: {captured_games}/{len(sched)} games processed. Continuing {len(remaining_games)} game(s) in background.'
+            else:
+                msg = f'Partial capture: {captured_games}/{len(sched)} games processed in time budget.'
         elif not entries:
             msg = f'Capture completed for {captured_games}/{len(sched)} games but produced 0 entries.'
         return jsonify({
@@ -3652,6 +3721,8 @@ def api_tracker_capture(date_str):
             'capturedGames': captured_games,
             'totalGames': len(sched),
             'timedOut': timed_out,
+            'backgroundStarted': background_started,
+            'remainingGames': len(remaining_games),
             'failedGames': failed_games,
             'message': msg,
         })
