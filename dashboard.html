@@ -487,8 +487,8 @@ function renderQuickProps(pk,d){
   var mktLabels={hits:'Hits',hr:'HR',tb:'Tot.Bases',rbi:'RBIs'};
   var tracked=JSON.parse(localStorage.getItem('tracked_ids')||'[]');
   strip.innerHTML=picks.map(function(p,i){
-    var pct=Math.round((p.l10_pct||0)*100);
-    var cls=pct>=80?'elite':pct>=70?'strong':pct>=60?'mod':'low';
+     var hubRating=Math.round(p.hubRating||0);
+     var cls=hubRating>=85?'elite':hubRating>=70?'strong':hubRating>=55?'mod':'low';
     var mkt=(mktLabels[p.market]||p.market)+' O'+p.line;
     var key=p.playerId+':'+p.market+':'+p.line;
     var saved=tracked.indexOf(key)>=0;
@@ -496,7 +496,7 @@ function renderQuickProps(pk,d){
     return '<div class="qp-row">'
       +'<span class="qp-name">'+p.player+'</span>'
       +'<span class="qp-mkt">'+mkt+'</span>'
-      +'<span class="qp-hub '+cls+'">L10 '+pct+'%</span>'
+       +'<span class="qp-hub '+cls+'">HUB '+hubRating+'</span>'
       +'<button class="qp-save'+(saved?' saved':'')
       +'" id="'+bid+'" onclick="qpSave(event,'+JSON.stringify(p)+',\''+bid+'\')">'
       +(saved?'✓ Saved':'💾')+'</button>'

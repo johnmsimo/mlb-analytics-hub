@@ -669,7 +669,7 @@ function evHtml(adjProb, marketImplied) {
   const ev = evPercent(adjProb, marketImplied);
   if (ev === null) return '<span style="color:var(--mu)">—</span>';
   const cls = ev >= 0 ? 'ev-pos' : 'ev-neg';
-  return `<span class="${cls}">${ev>=0?'+':''}${(ev*100).toFixed(1)}%</span>`;
+  return `<span class="${cls}">${ev>=0?'+':''}${(ev*100).toFixed(1)}% EV</span>`;
 }
 
 // ── Market label helpers ──────────────────────────────────────────────────────

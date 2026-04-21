@@ -1482,7 +1482,7 @@ function evHtml(evPct) {
   const pct = +evPct;
   const cls = pct >= 0 ? 'ev-pos' : 'ev-neg';
   const sign = pct >= 0 ? '+' : '';
-  return `<span class="ev-badge ${cls}">${sign}${(pct * 100).toFixed(1)}%</span>`;
+  return `<span class="ev-badge ${cls}">${sign}${(pct * 100).toFixed(1)}% EV</span>`;
 }
 
 // ── Value bets ────────────────────────────────────────────────────────────────
