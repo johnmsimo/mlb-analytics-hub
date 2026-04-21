@@ -3688,6 +3688,34 @@ def api_tracker_calibration(date_str):
     })
 
 
+@app.route('/api/tracker/model-record')
+def api_tracker_model_record():
+    today = datetime.now(ET).strftime('%Y-%m-%d')
+    entries = _collect_window_entries(today, 30)
+    graded  = [e for e in entries if e.get('grade') in ('win', 'loss')]
+    _MK_MAP = {
+        'batter_hits': 'hits', 'batter_home_runs': 'hr',
+        'batter_total_bases': 'tb', 'batter_rbis': 'rbi',
+        'batter_runs_scored': 'runs', 'batter_stolen_bases': 'sb',
+        'pitcher_strikeouts': 'k', 'parlay': 'parlay',
+    }
+    by_mkt = {}
+    for e in graded:
+        mk  = e.get('marketKey', '')
+        key = _MK_MAP.get(mk, mk)
+        by_mkt.setdefault(key, {'wins': 0, 'losses': 0})
+        if e.get('grade') == 'win':  by_mkt[key]['wins']   += 1
+        else:                         by_mkt[key]['losses'] += 1
+    record = {}
+    for key, v in by_mkt.items():
+        total = v['wins'] + v['losses']
+        record[key] = {'wins': v['wins'], 'losses': v['losses'],
+                       'graded': total,
+                       'hit_rate': round(v['wins'] / total, 3) if total else 0.0}
+    return jsonify({'success': True, 'record': record, 'window': 30,
+                    'total_graded': len(graded)})
+
+
 @app.route('/api/tracker/calibration/apply', methods=['POST'])
 def api_tracker_calibration_apply():
     payload = request.get_json(silent=True) or {}
