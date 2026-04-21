@@ -3560,6 +3560,76 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
     return rows[:keep]
 
 
+def _build_tracker_rows_quick(game_obj, capture_date, adjustments=None):
+    """Fast fallback when full simulation fails. Uses confirmed lineups only."""
+    adjustments = adjustments or _get_adjustments()
+    g = game_obj or {}
+    away_team = g.get('teams', {}).get('away', {}).get('team', {})
+    home_team = g.get('teams', {}).get('home', {}).get('team', {})
+    away_abbr = away_team.get('abbreviation', 'AWAY')
+    home_abbr = home_team.get('abbreviation', 'HOME')
+    game_pk = g.get('gamePk')
+
+    lineups = (g.get('lineups') or {})
+    away_hitters = lineups.get('awayBatters') or []
+    home_hitters = lineups.get('homeBatters') or []
+    rows = []
+
+    def _emit(hitters, team_abbr):
+        for i, p in enumerate(hitters[:9], start=1):
+            name = (p.get('fullName') or p.get('name') or '').strip()
+            pid = p.get('id') or p.get('playerId')
+            if not name:
+                continue
+            # Conservative heuristic probabilities by lineup slot.
+            base_hit = max(0.45, min(0.63, 0.58 - (i - 1) * 0.015))
+            base_tb2 = max(0.23, min(0.42, 0.36 - (i - 1) * 0.012))
+            for mk, line, raw_prob in [
+                ('batter_hits', 0.5, base_hit),
+                ('batter_total_bases', 1.5, base_tb2),
+            ]:
+                adj_prob = _clamp01(raw_prob * _market_mult(mk, adjustments))
+                rows.append({
+                    'date': capture_date,
+                    'gamePk': game_pk,
+                    'team': team_abbr,
+                    'player': name,
+                    'playerId': pid,
+                    'marketKey': mk,
+                    'line': line,
+                    'recommendedSide': 'Over',
+                    'rawProb': round(raw_prob, 4),
+                    'adjProb': round(adj_prob, 4),
+                    'modelMean': None,
+                    'edge': None,
+                    'bookmaker': None,
+                    'marketPrice': None,
+                    'marketImplied': None,
+                    'score': round(adj_prob, 4),
+                    'hubRating': _hub_rating(adj_prob, 0),
+                    'evPct': None,
+                    'opp': '',
+                    'reason': f'Fallback capture from confirmed lineup slot {i}.',
+                    'status': 'pending',
+                    'actual': None,
+                    'grade': 'pending',
+                    'openingPrice': None,
+                    'openingImplied': None,
+                    'closingPrice': None,
+                    'closingImplied': None,
+                    'closingBookmaker': None,
+                    'closingCapturedAt': None,
+                    'clvEdge': None,
+                    'profitUnits': None,
+                })
+
+    _emit(away_hitters, away_abbr)
+    _emit(home_hitters, home_abbr)
+    rows.sort(key=lambda x: x.get('score', 0), reverse=True)
+    keep = int((adjustments or {}).get('captured_per_game', 14) or 14)
+    return rows[:keep]
+
+
 def _tracker_summary(entries):
     total = len(entries)
     graded = [x for x in entries if x.get('grade') in ('win', 'loss', 'push')]
@@ -3669,6 +3739,7 @@ def api_tracker_capture(date_str):
         deadline = time.time() + max(8.0, min(55.0, budget_sec))
         all_entries = []
         captured_games = 0
+        recovered_games = 0
         failed_games = []
         include_odds = str(os.getenv('TRACKER_CAPTURE_INCLUDE_ODDS', '0')).strip().lower() in ('1', 'true', 'yes')
 
@@ -3680,9 +3751,15 @@ def api_tracker_capture(date_str):
                 rows = _build_tracker_rows_for_game(gpk, date_str, adjustments, _sched=sched, include_odds=include_odds)
                 all_entries.extend(rows)
                 captured_games += 1
-            except Exception:
-                failed_games.append(gpk)
+            except Exception as ex:
                 print(f'[tracker_capture_game {gpk}]', traceback.format_exc())
+                try:
+                    rows = _build_tracker_rows_quick(g, date_str, adjustments)
+                    all_entries.extend(rows)
+                    captured_games += 1
+                    recovered_games += 1
+                except Exception:
+                    failed_games.append({'gamePk': gpk, 'error': str(ex)[:140]})
 
         store = _load_json(TRACKER_STORE, {})
         day = _normalize_tracker_day(store.get(date_str))
@@ -3712,6 +3789,9 @@ def api_tracker_capture(date_str):
                 msg = f'Partial capture: {captured_games}/{len(sched)} games processed in time budget.'
         elif not entries:
             msg = f'Capture completed for {captured_games}/{len(sched)} games but produced 0 entries.'
+        if recovered_games:
+            extra = f' Recovered {recovered_games} game(s) via fallback capture.'
+            msg = (msg or 'Captured.') + extra
         return jsonify({
             'success': True,
             'date': date_str,
@@ -3723,6 +3803,7 @@ def api_tracker_capture(date_str):
             'timedOut': timed_out,
             'backgroundStarted': background_started,
             'remainingGames': len(remaining_games),
+            'recoveredGames': recovered_games,
             'failedGames': failed_games,
             'message': msg,
         })
