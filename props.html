@@ -195,6 +195,14 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .hub-strong{background:rgba(0,184,212,.12);border-color:var(--strong);color:var(--strong)}
 .hub-mod{background:rgba(255,215,64,.1);border-color:var(--mod);color:var(--mod)}
 .hub-low{background:rgba(106,141,176,.08);border-color:var(--mu);color:var(--mu)}
+/* ── EV% badge ── */
+.ev-badge{display:inline-block;padding:2px 7px;border-radius:5px;font-family:'Orbitron',monospace;font-size:.6rem;font-weight:700;border:1px solid}
+.ev-pos{background:rgba(0,230,118,.1);border-color:rgba(0,230,118,.3);color:var(--g)}
+.ev-neg{background:rgba(244,67,54,.08);border-color:rgba(244,67,54,.25);color:var(--r)}
+.ev-na{color:var(--mu)}
+/* ── +EV Only toggle ── */
+.vfilter-ev{background:rgba(0,230,118,.06);border-color:rgba(0,230,118,.2);color:var(--g)}
+.vfilter-ev.active{background:rgba(0,230,118,.18);border-color:rgba(0,230,118,.5);color:var(--g)}
 /* ── BAT X / PITCH X panel ── */
 .batx-panel{margin-top:10px;padding:10px 12px;background:rgba(0,229,255,.03);border:1px solid rgba(0,229,255,.1);border-radius:9px}
 .batx-hd{font-family:'Orbitron',monospace;font-size:.58rem;letter-spacing:1.5px;color:var(--mu);margin-bottom:7px}
@@ -350,6 +358,7 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
       <div class="vcontrols">
         <span style="font-family:'Orbitron',monospace;font-size:.58rem;color:var(--mu);letter-spacing:2px">FILTER:</span>
         <button class="vfilter active" onclick="setVFilter(this,'all')">ALL</button>
+        <button class="vfilter vfilter-ev" onclick="setVFilter(this,'ev')">+EV ONLY</button>
         <button class="vfilter" onclick="setVFilter(this,'high')">HIGH EDGE (&gt;7%)</button>
         <button class="vfilter" onclick="setVFilter(this,'hits')">HITS</button>
         <button class="vfilter" onclick="setVFilter(this,'hr')">HOME RUNS</button>
@@ -369,7 +378,7 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
           <thead><tr>
             <th>PLAYER</th><th>TEAM</th><th>MARKET</th>
             <th>BOOK LINE</th><th>PROJECTION</th><th>EDGE</th>
-            <th>IMPL PROB</th><th>HUB</th><th>ODDS</th>
+            <th>IMPL PROB</th><th>EV%</th><th>HUB</th><th>ODDS</th>
           </tr></thead>
           <tbody id="valueTbody"></tbody>
         </table>
@@ -974,6 +983,7 @@ function batterCard(b) {
   const pid  = b.id;
   const trnd = trendPillsForBatter(pid);
   const hub  = PLAYER_HUB_MAP[(b.name||'').toLowerCase()];
+  const ev   = PLAYER_EV_MAP[(b.name||'').toLowerCase()];
 
   // BAT X composite section
   let batxHtml = '';
@@ -1001,6 +1011,7 @@ function batterCard(b) {
       <div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:4px">
         <div class="bcard-slot">${b.slot||'?'}</div>
         ${hub != null ? hubBadge(hub) : ''}
+        ${ev  != null ? evHtml(ev)    : ''}
       </div>
     </div>
     <div class="bcard-vs">vs ${b.opp_pitcher||'—'} (${b.opp_hand||'?'}HP) · ERA ${nd(b.opp_era)} · K/9 ${nd(b.opp_k9)}</div>
@@ -1169,8 +1180,9 @@ function matchupCol(title, pitcherName, era, batters, pitcherHand) {
   </div>`;
 }
 
-// ── HUB RATING helpers ────────────────────────────────────────────────────────
+// ── HUB RATING + EV% helpers ─────────────────────────────────────────────────
 let PLAYER_HUB_MAP = {};
+let PLAYER_EV_MAP  = {};
 
 function computeHubRating(adjProb, edge) {
   const edgeBonus = Math.min((edge || 0) * 100, 20);
@@ -1189,14 +1201,22 @@ function hubBadge(rating) {
   return `<span class="hub ${cls}">${rating} ${lbl}</span>`;
 }
 
+function evHtml(evPct) {
+  if (evPct == null) return '<span class="ev-na">—</span>';
+  const pct = +evPct;
+  const cls = pct >= 0 ? 'ev-pos' : 'ev-neg';
+  const sign = pct >= 0 ? '+' : '';
+  return `<span class="ev-badge ${cls}">${sign}${(pct * 100).toFixed(1)}%</span>`;
+}
+
 // ── Value bets ────────────────────────────────────────────────────────────────
 async function loadValueBets() {
   if (!PROJ_DATA) {
-    gel('valueTbody').innerHTML = `<tr><td colspan="9"><div class="no-tracker">LOADING PROJECTIONS FIRST…</div></td></tr>`;
+    gel('valueTbody').innerHTML = `<tr><td colspan="10"><div class="no-tracker">LOADING PROJECTIONS FIRST…</div></td></tr>`;
     await loadProjections();
     if (!PROJ_DATA) return;
   }
-  gel('valueTbody').innerHTML = `<tr><td colspan="9">${loadHTML('CROSS-REFERENCING TRACKER ENTRIES…')}</td></tr>`;
+  gel('valueTbody').innerHTML = `<tr><td colspan="10">${loadHTML('CROSS-REFERENCING TRACKER ENTRIES…')}</td></tr>`;
   try {
     const r = await fetch(`/api/tracker/entries?date=${CUR_DATE}&gamePk=${CUR_GAME}`);
     const d = await r.json();
@@ -1207,7 +1227,7 @@ async function loadValueBets() {
     }
     renderValueTable(VAL_FILT);
   } catch(e) {
-    gel('valueTbody').innerHTML = `<tr><td colspan="9"><div class="no-tracker" style="color:var(--r)">ERROR: ${e.message}</div></td></tr>`;
+    gel('valueTbody').innerHTML = `<tr><td colspan="10"><div class="no-tracker" style="color:var(--r)">ERROR: ${e.message}</div></td></tr>`;
   }
 }
 
@@ -1233,12 +1253,16 @@ function buildValueBets(entries) {
     return {...e, proj, projField, edge, implProb, tier};
   }).sort((a,b) => (b.edge??-999)-(a.edge??-999));
 
-  // Build player→best-hub-rating lookup for batter card badges
+  // Build player lookup maps for batter card badges
   PLAYER_HUB_MAP = {};
+  PLAYER_EV_MAP  = {};
   result.forEach(b => {
     const n = (b.player||'').toLowerCase();
     const h = b.hubRating != null ? b.hubRating : computeHubRating(b.adjProb, b.edge);
     if (PLAYER_HUB_MAP[n] == null || h > PLAYER_HUB_MAP[n]) PLAYER_HUB_MAP[n] = h;
+    // Store best (highest) EV% per player for the batter card badge
+    const ev = b.evPct;
+    if (ev != null && (PLAYER_EV_MAP[n] == null || ev > PLAYER_EV_MAP[n])) PLAYER_EV_MAP[n] = ev;
   });
 
   return result;
@@ -1254,7 +1278,8 @@ function setVFilter(btn, f) {
 function renderValueTable(filter) {
   const all  = VAL_DATA || [];
   let rows   = all;
-  if (filter==='high') rows = all.filter(b => (b.edge??-1)>0.07);
+  if (filter==='ev')   rows = all.filter(b => (b.evPct ?? -1) > 0);
+  else if (filter==='high') rows = all.filter(b => (b.edge??-1)>0.07);
   else if (filter==='hits') rows = all.filter(b => (b.marketKey||'').includes('hit'));
   else if (filter==='hr')   rows = all.filter(b => (b.marketKey||'').includes('home_run')||(b.marketKey||'').includes('homerun'));
   else if (filter==='tb')   rows = all.filter(b => (b.marketKey||'').includes('total_base')||(b.marketKey||'').includes('totalbas'));
@@ -1272,7 +1297,7 @@ function renderValueTable(filter) {
   gel('vbTop').textContent   = topE !== null ? '+'+(topE*100).toFixed(1)+'%' : '—';
 
   if (!rows.length) {
-    gel('valueTbody').innerHTML = `<tr><td colspan="9"><div class="no-tracker">${
+    gel('valueTbody').innerHTML = `<tr><td colspan="10"><div class="no-tracker">${
       all.length===0 ? 'NO TRACKER ENTRIES FOR THIS GAME\nCAPTURE PROPS IN THE DAILY TRACKER FIRST' : 'NO ENTRIES MATCH THIS FILTER'
     }</div></td></tr>`;
     return;
@@ -1293,6 +1318,7 @@ function renderValueTable(filter) {
       <td class="projv">${projStr}</td>
       <td class="${edgeCls}">${edgeStr}</td>
       <td style="color:var(--mu)">${(b.implProb*100).toFixed(1)}%</td>
+      <td>${evHtml(b.evPct)}</td>
       <td>${hubBadge(b.hubRating != null ? b.hubRating : computeHubRating(b.adjProb, b.edge))}</td>
       <td style="color:var(--mu)">${b.openOdds??'—'}</td>
     </tr>`;
