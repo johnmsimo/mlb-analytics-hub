@@ -459,10 +459,18 @@ function renderHeader(){
     '<div class="mhte"><div class="mhl">'+ai+'</div><div class="mha">'+g.awayAbbr+'</div><div class="mhfn">'+g.awayName+'</div></div>'
     +'<div class="mhvs">VS</div>'
     +'<div class="mhte"><div class="mhl">'+hi+'</div><div class="mha">'+g.homeAbbr+'</div><div class="mhfn">'+g.homeName+'</div></div>';
+  var sg=g.seriesGame, st=g.seriesTotal;
+  var seriesMeta='';
+  if(sg&&st&&st>1){
+    if(sg==1) seriesMeta='<span class="bdg bc">SERIES OPENER</span>';
+    else if(sg==st) seriesMeta='<span class="bdg bo">SERIES FINALE &middot; G'+sg+'</span>';
+    else seriesMeta='<span class="bdg bc">G'+sg+' OF '+st+'</span>';
+  }
   document.getElementById('mhMeta').innerHTML=
     '<span class="bdg bc">'+g.gameTime+'</span>'
     +'<span class="bdg '+sc+'">'+g.status.toUpperCase()+'</span>'
     +'<span class="bdg bo">PARK '+g.parkFactor+'x</span>'
+    +seriesMeta
     +(g.venue?'<span class="bdg bc">'+g.venue+'</span>':'');
 }
 function renderEdge(){

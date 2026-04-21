@@ -835,10 +835,17 @@ def parse_game(g):
             gt_fmt = dt_et.strftime("%-I:%M %p ET")
         except: gt_fmt = "TBD"
         pf   = PARK_FACTORS.get(hid, 1.0)
+        series_game  = int(g.get("seriesGameNumber") or 1)
+        series_total = int(g.get("gamesInSeries")    or 3)
         ap_n = ap.get("fullName","TBD"); hp_n = hp.get("fullName","TBD")
         fgap = fg_pitcher(ap_n); fghp = fg_pitcher(hp_n)
         era_a = float(fgap.get("fg_era") or 4.50); era_h = float(fghp.get("fg_era") or 4.50)
         edge = round(abs(era_a - era_h) * 2 + (pf - 1.0) * 10, 1)
+        # Series context modifier: opener likely has ace, finale has back-end arms
+        if series_game == 1:
+            edge = round(edge + 0.2, 1)
+        elif series_total > 1 and series_game == series_total:
+            edge = round(max(0.0, edge - 0.3), 1)
         bar  = min(100, int(edge * 9))
         wc   = (wx.get("condition","") or "").lower()
         wi   = "🌧" if "rain" in wc else ("⛅" if "cloud" in wc else "☀")
@@ -851,6 +858,7 @@ def parse_game(g):
             "awayPitcher": ap_n, "homePitcher": hp_n,
             "venue": ven.get("name",""), "gameTime": gt_fmt,
             "parkFactor": pf, "edge": edge, "barPct": bar,
+            "seriesGame": series_game, "seriesTotal": series_total,
             "temp": wx.get("temp","N/A"), "wind": wx.get("wind", f"{wx.get('wind_speed','?')} mph {wx.get('wind_dir','')}").strip(),
             "condition": wx.get("condition",""), "rainChance": wx.get("rain_chance","N/A"),
             "weatherIcon": wi,
@@ -6866,6 +6874,82 @@ def api_props_trends(game_pk):
 
     except Exception as ex:
         print(f"[api_props_trends] {traceback.format_exc()}")
+        return jsonify({"success": False, "error": str(ex)}), 500
+
+
+# ── Route: Quick props for dashboard inline strip ─────────────────────────────
+@app.route("/api/props/quick/<int:game_pk>")
+def api_props_quick(game_pk):
+    """
+    Returns top 3 batter prop edges for a game card inline strip.
+    Uses L10 over rates — lightweight, no Odds API calls needed.
+    """
+    try:
+        gdata, away_bats, home_bats, away_t, home_t, pitchers = _props_fetch_game(game_pk)
+        if not gdata:
+            return jsonify({"success": False, "error": "Game not found"}), 404
+
+        away_abbr = away_t.get("team", {}).get("abbreviation", "AWAY")
+        home_abbr = home_t.get("team", {}).get("abbreviation", "HOME")
+
+        tagged = [(b, away_abbr) for b in away_bats[:6]] + [(b, home_abbr) for b in home_bats[:6]]
+
+        MARKET_CONFIG = [
+            ("hits", "hits", "Hits",        [("0.5", "batter_hits"),   ("1.5", "batter_hits")]),
+            ("hr",   "hr",   "Home Runs",   [("0.5", "batter_home_runs")]),
+            ("tb",   "tb",   "Total Bases", [("1.5", "batter_total_bases"), ("2.5", "batter_total_bases")]),
+            ("rbi",  "rbi",  "RBIs",        [("0.5", "batter_rbis"),   ("1.5", "batter_rbis")]),
+        ]
+
+        def _score_batter(batter, team):
+            pid  = batter.get("id")
+            name = batter.get("name", "")
+            if not pid:
+                return []
+            trends = _build_player_trends(int(pid), False)
+            rates  = trends.get("over_rates", {})
+            best   = {}
+            for market, mkey, mlabel, line_pairs in MARKET_CONFIG:
+                for line_str, market_key in line_pairs:
+                    l10  = rates.get(mkey, {}).get(line_str, {}).get("l10", {})
+                    pct  = l10.get("pct")
+                    tot  = l10.get("total", 0)
+                    if pct is None or tot < 5 or pct < 0.60:
+                        continue
+                    if market not in best or pct > best[market]["l10_pct"]:
+                        hub = max(0, min(100, round(pct * 100)))
+                        best[market] = {
+                            "player":      name,
+                            "playerId":    pid,
+                            "team":        team,
+                            "market":      mkey,
+                            "marketKey":   market_key,
+                            "marketLabel": mlabel,
+                            "line":        float(line_str),
+                            "l10_pct":     round(pct, 3),
+                            "l10_total":   tot,
+                            "hub_score":   hub,
+                        }
+            return list(best.values())
+
+        all_picks = []
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            futs = {ex.submit(_score_batter, b, t): (b, t) for b, t in tagged}
+            for fut in as_completed(futs):
+                try:
+                    all_picks.extend(fut.result())
+                except Exception:
+                    pass
+
+        all_picks.sort(key=lambda x: x["l10_pct"], reverse=True)
+        return jsonify({
+            "success": True,
+            "gamePk":  game_pk,
+            "picks":   all_picks[:3],
+        })
+
+    except Exception as ex:
+        print(f"[api_props_quick] {traceback.format_exc()}")
         return jsonify({"success": False, "error": str(ex)}), 500
 
 
