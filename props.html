@@ -200,6 +200,15 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .ev-pos{background:rgba(0,230,118,.1);border-color:rgba(0,230,118,.3);color:var(--g)}
 .ev-neg{background:rgba(244,67,54,.08);border-color:rgba(244,67,54,.25);color:var(--r)}
 .ev-na{color:var(--mu)}
+.bvp-badge{display:inline-block;padding:2px 7px;border-radius:5px;font-family:'Orbitron',monospace;font-size:.58rem;font-weight:700;border:1px solid;cursor:help}
+.bvp-a{background:rgba(0,230,118,.1);border-color:rgba(0,230,118,.35);color:var(--g)}
+.bvp-b{background:rgba(0,229,255,.1);border-color:rgba(0,229,255,.32);color:var(--c)}
+.bvp-c{background:rgba(255,152,0,.1);border-color:rgba(255,152,0,.32);color:var(--o)}
+.bvp-d{background:rgba(244,67,54,.08);border-color:rgba(244,67,54,.28);color:var(--r)}
+.pta-badge{display:inline-block;padding:3px 8px;border-radius:6px;font-family:'Orbitron',monospace;font-size:.54rem;letter-spacing:.8px;border:1px solid;cursor:help;margin-bottom:8px}
+.pta-fav{background:rgba(0,230,118,.1);border-color:rgba(0,230,118,.35);color:var(--g)}
+.pta-neu{background:rgba(106,141,176,.08);border-color:rgba(106,141,176,.25);color:var(--mu)}
+.pta-unf{background:rgba(244,67,54,.08);border-color:rgba(244,67,54,.28);color:var(--r)}
 /* ── +EV Only toggle ── */
 .vfilter-ev{background:rgba(0,230,118,.06);border-color:rgba(0,230,118,.2);color:var(--g)}
 .vfilter-ev.active{background:rgba(0,230,118,.18);border-color:rgba(0,230,118,.5);color:var(--g)}
@@ -1411,10 +1420,12 @@ function batterCard(b) {
         <div class="bcard-slot">${b.slot||'?'}</div>
         ${hub != null ? hubBadge(hub) : ''}
         ${ev  != null ? evHtml(ev)    : ''}
+        ${bvpBadgeHtml(b.bvpGrade, b.bvpTooltip)}
         ${best ? `<button class="save-btn${bSaved?' saved':''}" data-key="${(bKey||'').replace(/"/g,'&quot;')}" onclick="savePickFromCard('${(b.name||'').replace(/'/g,"\\'")}')"><span>${bSaved?'✓ SAVED':'＋ SAVE'}</span></button>` : ''}
       </div>
     </div>
     <div class="bcard-vs">vs ${b.opp_pitcher||'—'} (${b.opp_hand||'?'}HP) · ERA ${nd(b.opp_era)} · K/9 ${nd(b.opp_k9)}</div>
+    ${pitchAdvBadgeHtml(b.pitchTypeAdvantage, b.pitchTypeAdvantageNote)}
     ${b.proj?.platoon_note ? `<div class="platoon-badge platoon-${platoonCls(b.proj.platoon_note)}">${b.proj.platoon_note} · split avg ${b.proj.split_avg??'—'} · ops ${b.proj.split_ops??'—'}</div>` : ''}
     <div class="proj-grid">
       <div class="pcell"><div class="plbl">HITS</div><div class="pval">${f2(p.hits)}</div></div>
@@ -1610,6 +1621,21 @@ function evHtml(evPct) {
   const cls = pct >= 0 ? 'ev-pos' : 'ev-neg';
   const sign = pct >= 0 ? '+' : '';
   return `<span class="ev-badge ${cls}">${sign}${(pct * 100).toFixed(1)}% EV</span>`;
+}
+
+function bvpBadgeHtml(grade, tooltip) {
+  const g = String(grade || 'D').toUpperCase();
+  const cls = (g === 'A+' || g === 'A') ? 'bvp-a' : (g === 'B' ? 'bvp-b' : (g === 'C' ? 'bvp-c' : 'bvp-d'));
+  const tip = (tooltip || 'Limited BvP sample').replace(/"/g, '&quot;');
+  return `<span class="bvp-badge ${cls}" title="${tip}">${g} BvP</span>`;
+}
+
+function pitchAdvBadgeHtml(status, note) {
+  const s = String(status || 'neutral').toLowerCase();
+  const cls = s === 'favorable' ? 'pta-fav' : (s === 'unfavorable' ? 'pta-unf' : 'pta-neu');
+  const txt = s === 'favorable' ? 'FAVORABLE PITCH TYPE' : (s === 'unfavorable' ? 'UNFAVORABLE PITCH TYPE' : 'NEUTRAL PITCH TYPE');
+  const tip = (note || 'Neutral matchup').replace(/"/g, '&quot;');
+  return `<span class="pta-badge ${cls}" title="${tip}">${txt}</span>`;
 }
 
 // ── Value bets ────────────────────────────────────────────────────────────────

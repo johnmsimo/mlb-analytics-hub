@@ -1256,33 +1256,133 @@ syncDateUI();load();loadTeams();setInterval(function(){load(selectedGamesDate)},
   // ── GAME LOG ──────────────────────────────────────────────────────────────
   function buildGamelog(d){
     var logs=d.gameLogs||[];
-    if(!logs.length){document.getElementById('pm-gamelog').innerHTML='<div style="text-align:center;padding:40px;color:var(--mu);font-family:Orbitron;font-size:.62rem;letter-spacing:2px">NO GAME LOG DATA AVAILABLE YET</div>';return;}
-    var h='<div class="pm-sh">LAST '+logs.length+' GAMES</div><div style="overflow-x:auto"><table class="pm-tbl"><thead><tr>';
-    if(!d.isPitcher){
-      h+='<th>DATE</th><th>OPP</th><th>AB</th><th>H</th><th>HR</th><th>RBI</th><th>K</th><th>BB</th><th>TB</th><th>AVG</th>';
-    } else {
-      h+='<th>DATE</th><th>OPP</th><th>IP</th><th>H</th><th>ER</th><th>K</th><th>BB</th><th>ERA</th>';
-    }
-    h+='</tr></thead><tbody>';
-    logs.slice().reverse().forEach(function(g){
-      h+='<tr>';
-      if(!d.isPitcher){
+    var el=document.getElementById('pm-gamelog');
+    if(!el) return;
+
+    function renderAllHitterTable(rows){
+      var out='<div class="pm-sh">LAST '+rows.length+' GAMES</div><div style="overflow-x:auto"><table class="pm-tbl"><thead><tr>'
+        +'<th>DATE</th><th>OPP</th><th>AB</th><th>H</th><th>HR</th><th>RBI</th><th>K</th><th>BB</th><th>TB</th><th>AVG</th>'
+        +'</tr></thead><tbody>';
+      rows.slice().reverse().forEach(function(g){
         var hiH=g.h>=3,loH=g.h===0&&g.ab>=3,hiHR=g.hr>=2,hiK=g.k>=3;
-        h+='<td>'+g.date+'</td><td style="color:var(--c);font-weight:700">'+g.opp+'</td>';
-        h+='<td>'+g.ab+'</td><td class="'+(hiH?'pm-hi':loH?'pm-lo':'')+'">'+g.h+'</td>';
-        h+='<td class="'+(hiHR?'pm-hi':'')+'">'+g.hr+'</td><td>'+g.rbi+'</td>';
-        h+='<td class="'+(hiK?'pm-lo':'')+'">'+g.k+'</td><td>'+g.bb+'</td><td>'+g.tb+'</td><td>'+g.avg+'</td>';
-      } else {
+        out+='<tr>'
+          +'<td>'+g.date+'</td><td style="color:var(--c);font-weight:700">'+g.opp+'</td>'
+          +'<td>'+g.ab+'</td><td class="'+(hiH?'pm-hi':loH?'pm-lo':'')+'">'+g.h+'</td>'
+          +'<td class="'+(hiHR?'pm-hi':'')+'">'+g.hr+'</td><td>'+g.rbi+'</td>'
+          +'<td class="'+(hiK?'pm-lo':'')+'">'+g.k+'</td><td>'+g.bb+'</td><td>'+g.tb+'</td><td>'+g.avg+'</td>'
+          +'</tr>';
+      });
+      out+='</tbody></table></div>';
+      return out;
+    }
+
+    function renderPitcherTable(rows){
+      var out='<div class="pm-sh">LAST '+rows.length+' GAMES</div><div style="overflow-x:auto"><table class="pm-tbl"><thead><tr>'
+        +'<th>DATE</th><th>OPP</th><th>IP</th><th>H</th><th>ER</th><th>K</th><th>BB</th><th>ERA</th>'
+        +'</tr></thead><tbody>';
+      rows.slice().reverse().forEach(function(g){
         var hiK=g.k>=7,hiER=g.er>=4,goodIP=parseFloat(g.ip||0)>=6;
-        h+='<td>'+g.date+'</td><td style="color:var(--c);font-weight:700">'+g.opp+'</td>';
-        h+='<td class="'+(goodIP?'pm-hi':'')+'">'+g.ip+'</td><td>'+g.h+'</td>';
-        h+='<td class="'+(hiER?'pm-lo':'')+'">'+g.er+'</td><td class="'+(hiK?'pm-hi':'')+'">'+g.k+'</td>';
-        h+='<td>'+g.bb+'</td><td>'+g.era+'</td>';
+        out+='<tr>'
+          +'<td>'+g.date+'</td><td style="color:var(--c);font-weight:700">'+g.opp+'</td>'
+          +'<td class="'+(goodIP?'pm-hi':'')+'">'+g.ip+'</td><td>'+g.h+'</td>'
+          +'<td class="'+(hiER?'pm-lo':'')+'">'+g.er+'</td><td class="'+(hiK?'pm-hi':'')+'">'+g.k+'</td>'
+          +'<td>'+g.bb+'</td><td>'+g.era+'</td>'
+          +'</tr>';
+      });
+      out+='</tbody></table></div>';
+      return out;
+    }
+
+    if(d.isPitcher){
+      if(!logs.length){el.innerHTML='<div style="text-align:center;padding:40px;color:var(--mu);font-family:Orbitron;font-size:.62rem;letter-spacing:2px">NO GAME LOG DATA AVAILABLE YET</div>';return;}
+      el.innerHTML=renderPitcherTable(logs);
+      return;
+    }
+
+    if(!logs.length){el.innerHTML='<div style="text-align:center;padding:40px;color:var(--mu);font-family:Orbitron;font-size:.62rem;letter-spacing:2px">NO GAME LOG DATA AVAILABLE YET</div>';return;}
+
+    var opp=d.oppPitcher||{};
+    var canBvp=!!opp.id;
+    var allHtml=renderAllHitterTable(logs);
+
+    if(!canBvp){
+      el.innerHTML=allHtml+'<div style="margin-top:10px;color:var(--mu);font-size:.62rem">Opponent pitcher context unavailable for today.</div>';
+      return;
+    }
+
+    var controls=''
+      +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px">'
+      +  '<button id="pmgl-all" style="padding:6px 10px;border-radius:999px;border:1px solid rgba(0,229,255,.35);background:rgba(0,229,255,.12);color:var(--c);font-family:Orbitron,monospace;font-size:.56rem;letter-spacing:1px;cursor:pointer">ALL GAMES</button>'
+      +  '<button id="pmgl-bvp" style="padding:6px 10px;border-radius:999px;border:1px solid rgba(224,64,251,.28);background:rgba(224,64,251,.08);color:var(--m);font-family:Orbitron,monospace;font-size:.56rem;letter-spacing:1px;cursor:pointer">VS THIS PITCHER</button>'
+      +  '<span style="font-size:.58rem;color:var(--mu)">'+(opp.name||'Pitcher')+'</span>'
+      +'</div>';
+
+    el.innerHTML=controls+'<div id="pmgl-summary"></div><div id="pmgl-inner">'+allHtml+'</div>';
+
+    function setBtnMode(mode){
+      var a=document.getElementById('pmgl-all'),b=document.getElementById('pmgl-bvp');
+      if(!a||!b) return;
+      if(mode==='all'){
+        a.style.background='rgba(0,229,255,.12)';a.style.borderColor='rgba(0,229,255,.35)';a.style.color='var(--c)';
+        b.style.background='rgba(224,64,251,.08)';b.style.borderColor='rgba(224,64,251,.28)';b.style.color='var(--m)';
+      }else{
+        b.style.background='rgba(224,64,251,.16)';b.style.borderColor='rgba(224,64,251,.45)';b.style.color='#ffb7ff';
+        a.style.background='rgba(0,229,255,.06)';a.style.borderColor='rgba(0,229,255,.18)';a.style.color='var(--mu)';
       }
-      h+='</tr>';
+    }
+
+    function renderBvpTable(payload){
+      var rows=(payload&&payload.games)||[];
+      var h='<div class="pm-sh">VS. '+(payload.pitcherName||opp.name||'PITCHER')+' — LAST '+rows.length+' MATCHUPS</div>';
+      if(payload && payload.summary){
+        h+='<div style="margin:0 0 10px;padding:8px 10px;background:rgba(0,229,255,.05);border:1px solid rgba(0,229,255,.15);border-radius:8px;font-size:.66rem;color:var(--t)">'+payload.summary+'</div>';
+      }
+      if(!rows.length){
+        h+='<div style="text-align:center;padding:28px;color:var(--mu);font-family:Orbitron;font-size:.58rem;letter-spacing:2px">NO RECENT MATCHUP GAMES FOUND</div>';
+        return h;
+      }
+      h+='<div style="overflow-x:auto"><table class="pm-tbl"><thead><tr><th>DATE</th><th>SCORE</th><th>AB</th><th>H</th><th>HR</th><th>RBI</th><th>K</th><th>BB</th><th>RESULT</th></tr></thead><tbody>';
+      rows.forEach(function(g){
+        var hiH=g.h>=3,hiHR=g.hr>=1,hiK=g.k>=2;
+        h+='<tr>'
+          +'<td>'+nd(g.date)+'</td><td>'+nd(g.score)+'</td>'
+          +'<td>'+nd(g.ab)+'</td><td class="'+(hiH?'pm-hi':'')+'">'+nd(g.h)+'</td>'
+          +'<td class="'+(hiHR?'pm-hi':'')+'">'+nd(g.hr)+'</td><td>'+nd(g.rbi)+'</td>'
+          +'<td class="'+(hiK?'pm-lo':'')+'">'+nd(g.k)+'</td><td>'+nd(g.bb)+'</td>'
+          +'<td>'+nd(g.result)+'</td>'
+          +'</tr>';
+      });
+      h+='</tbody></table></div>';
+      return h;
+    }
+
+    document.getElementById('pmgl-all').addEventListener('click',function(){
+      setBtnMode('all');
+      document.getElementById('pmgl-summary').innerHTML='';
+      document.getElementById('pmgl-inner').innerHTML=allHtml;
     });
-    h+='</tbody></table></div>';
-    document.getElementById('pm-gamelog').innerHTML=h;
+
+    document.getElementById('pmgl-bvp').addEventListener('click',function(){
+      setBtnMode('bvp');
+      var inner=document.getElementById('pmgl-inner');
+      if(inner) inner.innerHTML='<div style="text-align:center;padding:24px;color:var(--mu);font-family:Orbitron;font-size:.58rem;letter-spacing:2px">LOADING MATCHUP GAMES…</div>';
+      var cacheKey=String(d.id)+'|'+String(opp.id);
+      window.__PM_BVP_CACHE=window.__PM_BVP_CACHE||{};
+      if(window.__PM_BVP_CACHE[cacheKey]){
+        if(inner) inner.innerHTML=renderBvpTable(window.__PM_BVP_CACHE[cacheKey]);
+        return;
+      }
+      fetch('/api/player/'+d.id+'/bvp/'+opp.id)
+        .then(function(r){return r.json();})
+        .then(function(payload){
+          if(!payload.success) throw new Error(payload.error||'Failed to load matchup games');
+          window.__PM_BVP_CACHE[cacheKey]=payload;
+          if(inner) inner.innerHTML=renderBvpTable(payload);
+        })
+        .catch(function(e){
+          if(inner) inner.innerHTML='<div style="text-align:center;padding:24px;color:#ff6b6b;font-family:Orbitron;font-size:.58rem;letter-spacing:1px">'+e.message+'</div>';
+        });
+    });
   }
 
   // ── L/R SPLITS ────────────────────────────────────────────────────────────

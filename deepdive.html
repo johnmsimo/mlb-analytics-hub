@@ -269,6 +269,10 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .bom-vs-tag{display:inline-block;padding:2px 7px;border-radius:8px;font-size:.55rem;font-family:'Orbitron',monospace;letter-spacing:1px}
 .bom-vs-adv{background:rgba(0,230,118,.12);color:var(--g);border:1px solid rgba(0,230,118,.22)}
 .bom-vs-dis{background:rgba(244,67,54,.08);color:#f44336;border:1px solid rgba(244,67,54,.18)}
+.bom-pt-tag{display:inline-block;padding:2px 7px;border-radius:8px;font-size:.53rem;font-family:'Orbitron',monospace;letter-spacing:.8px;cursor:help;border:1px solid}
+.bom-pt-fav{background:rgba(0,230,118,.12);color:var(--g);border-color:rgba(0,230,118,.24)}
+.bom-pt-neu{background:rgba(106,141,176,.08);color:var(--mu);border-color:rgba(106,141,176,.2)}
+.bom-pt-unf{background:rgba(244,67,54,.08);color:#f44336;border-color:rgba(244,67,54,.2)}
 @media(max-width:860px){.bom-wrap{grid-template-columns:1fr}}
 
 /* AI Box Score Projections */
@@ -626,9 +630,9 @@ function renderHeader(){
   var sg=g.seriesGame, st=g.seriesTotal;
   var seriesMeta='';
   if(sg&&st&&st>1){
-    if(sg==1) seriesMeta='<span class="bdg bc">SERIES OPENER</span>';
-    else if(sg==st) seriesMeta='<span class="bdg bo">SERIES FINALE &middot; G'+sg+'</span>';
-    else seriesMeta='<span class="bdg bc">G'+sg+' OF '+st+'</span>';
+    if(sg==1) seriesMeta='<span class="bdg bc">G1 OF '+st+' &middot; SERIES OPENER</span>';
+    else if(sg==st) seriesMeta='<span class="bdg bo">G'+sg+' OF '+st+' &middot; SERIES FINALE</span>';
+    else seriesMeta='<span class="bdg bc">G'+sg+' OF '+st+' &middot; MID-SERIES</span>';
   }
   document.getElementById('mhMeta').innerHTML=
     '<span class="bdg bc">'+g.gameTime+'</span>'
@@ -3131,6 +3135,14 @@ function bomSplitTag(splitAvg, baseAvg) {
   return '';
 }
 
+function bomPitchTypeTag(status, note) {
+  var s = String(status || 'neutral').toLowerCase();
+  var cls = s === 'favorable' ? 'bom-pt-fav' : (s === 'unfavorable' ? 'bom-pt-unf' : 'bom-pt-neu');
+  var txt = s === 'favorable' ? 'FAVORABLE' : (s === 'unfavorable' ? 'UNFAVORABLE' : 'NEUTRAL');
+  var tip = (note || 'Neutral matchup').replace(/"/g, '&quot;');
+  return '<span class="bom-pt-tag ' + cls + '" title="' + tip + '">' + txt + '</span>';
+}
+
 function buildBomSide(batters, teamAbbr, oppPitcherName, oppPitcherHand) {
   if(!batters || !batters.length) {
     return '<p class="na" style="padding:12px">Lineup not yet available.</p>';
@@ -3150,6 +3162,7 @@ function buildBomSide(batters, teamAbbr, oppPitcherName, oppPitcherHand) {
       + '<td class="sv-c">' + (b.xwoba !== '---' && b.xwoba ? b.xwoba : '---') + '</td>'
       + '<td class="sv-c">' + (b.ev   !== '---' && b.ev   ? b.ev   : '---') + '</td>'
       + '<td class="sv-c">' + (b.brl_pct !== '---' && b.brl_pct ? b.brl_pct + '%' : '---') + '</td>'
+        + '<td>' + bomPitchTypeTag(b.pitch_type_advantage, b.pitch_type_note) + '</td>'
       + '<td>' + (b.split_avg > 0 ? b.split_avg : '---') + tag + '</td>'
       + '</tr>';
   }).join('');
@@ -3161,6 +3174,7 @@ function buildBomSide(batters, teamAbbr, oppPitcherName, oppPitcherHand) {
     + '<div style="overflow-x:auto"><table class="bom-table">'
     + '<thead><tr><th>#</th><th>PLAYER</th><th>POS</th><th>AVG</th><th>SLG</th><th>ISO</th><th>OPS</th>'
     + '<th class="sv-h">xwOBA</th><th class="sv-h">EV</th><th class="sv-h">BRL%</th>'
+    + '<th>PITCH TYPE</th>'
     + '<th>vs' + oppPitcherHand + 'AVG</th>'
     + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
 }
@@ -3189,6 +3203,8 @@ function renderBattingOrderMatchups(d) {
     + '<span class="bom-iso-hot" style="padding:2px 8px">ISO ≥.200 HOT ZONE (PropFinder Green)</span>'
     + '<span class="bom-iso-warm" style="padding:2px 8px">ISO .150–.199 WATCH</span>'
     + '<span style="color:var(--sv)">xwOBA/EV/BRL% = Statcast</span>'
+    + '<span class="bom-pt-tag bom-pt-fav">FAVORABLE pitch type edge</span>'
+    + '<span class="bom-pt-tag bom-pt-unf">UNFAVORABLE pitch type edge</span>'
     + '<span class="bom-vs-tag bom-vs-adv">+ADV = vs&shy;Split AVG ≥ season AVG by .025+</span>'
     + '</div>';
 }

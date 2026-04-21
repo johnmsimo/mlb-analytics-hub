@@ -1616,7 +1616,9 @@ def api_player_profile(player_id):
 
         name       = p.get("fullName", "Unknown")
         pos_code   = p.get("primaryPosition", {}).get("abbreviation", "?")
-        team_abbr  = (p.get("currentTeam") or {}).get("abbreviation", "?")
+        team_obj   = (p.get("currentTeam") or {})
+        team_abbr  = team_obj.get("abbreviation", "?")
+        team_id    = team_obj.get("id")
         throws     = (p.get("pitchHand")   or {}).get("code", "?")
         bats_side  = (p.get("batSide")     or {}).get("code", "?")
         is_pitcher = pos_code in ("P", "SP", "RP", "CP")
@@ -1710,6 +1712,33 @@ def api_player_profile(player_id):
         # 6. Form — use the richer _fetch_rolling_form (cached, wOBA-based) when requested
         form = _fetch_rolling_form(player_id, is_pitcher) if include_form else None
 
+        opp_pitcher = None
+        try:
+            today_raw = fetch_schedule(datetime.now(ET).strftime("%Y-%m-%d"))
+            for g in today_raw or []:
+                teams = g.get("teams", {})
+                away = teams.get("away", {})
+                home = teams.get("home", {})
+                away_id = (away.get("team") or {}).get("id")
+                home_id = (home.get("team") or {}).get("id")
+                if team_id not in (away_id, home_id):
+                    continue
+                if team_id == away_id:
+                    opp = home
+                else:
+                    opp = away
+                opp_team = opp.get("team", {})
+                opp_pp = opp.get("probablePitcher") or {}
+                opp_pitcher = {
+                    "id": opp_pp.get("id"),
+                    "name": opp_pp.get("fullName", "TBD"),
+                    "team": opp_team.get("abbreviation", "?"),
+                    "gamePk": g.get("gamePk"),
+                }
+                break
+        except Exception:
+            opp_pitcher = None
+
         return jsonify({
             "success":   True,
             "id":        player_id,
@@ -1726,6 +1755,7 @@ def api_player_profile(player_id):
             "platoon":   platoon,
             "aiLines":   ai_lines,
             "form":      form,
+            "oppPitcher": opp_pitcher,
         })
         
     except Exception as ex:
@@ -1758,6 +1788,126 @@ def api_bvp(batter_id, pitcher_id):
         "sample_note": result.get("sample_note") or result.get("note") or "",
         "tooltip": result.get("tooltip") or "",
     })
+
+
+@app.route("/api/player/<int:player_id>/bvp/<int:pitcher_id>")
+def api_player_bvp_games(player_id, pitcher_id):
+    """Opponent-specific game logs: summary + latest matchup games."""
+    try:
+        bvp = _fetch_bvp(player_id, pitcher_id)
+        if not bvp or not bvp.get("success"):
+            return jsonify({"success": False, "error": "No BvP data available"}), 404
+
+        year = datetime.now().year
+        games = []
+        score_cache = {}
+
+        def _score_for_game(game_pk, batter_team_id=None):
+            if not game_pk:
+                return "—", ""
+            if game_pk in score_cache:
+                return score_cache[game_pk]
+            score_txt = "—"
+            result = ""
+            try:
+                br = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=8)
+                if br.ok:
+                    bj = br.json()
+                    t = bj.get("teams", {})
+                    away = t.get("away", {})
+                    home = t.get("home", {})
+                    away_runs = int((((away.get("teamStats") or {}).get("batting") or {}).get("runs") or 0))
+                    home_runs = int((((home.get("teamStats") or {}).get("batting") or {}).get("runs") or 0))
+                    away_id = ((away.get("team") or {}).get("id"))
+                    home_id = ((home.get("team") or {}).get("id"))
+                    if batter_team_id and batter_team_id == away_id:
+                        score_txt = f"{away_runs}-{home_runs}"
+                        result = "W" if away_runs > home_runs else ("L" if away_runs < home_runs else "T")
+                    elif batter_team_id and batter_team_id == home_id:
+                        score_txt = f"{home_runs}-{away_runs}"
+                        result = "W" if home_runs > away_runs else ("L" if home_runs < away_runs else "T")
+                    else:
+                        score_txt = f"{away_runs}-{home_runs}"
+            except Exception:
+                pass
+            score_cache[game_pk] = (score_txt, result)
+            return score_cache[game_pk]
+
+        # Try direct opposingPlayerId game-log filter across recent seasons.
+        for yr in [year, year - 1, year - 2]:
+            if len(games) >= 5:
+                break
+            try:
+                gr = requests.get(
+                    f"{MLB_API}/people/{player_id}/stats",
+                    params={
+                        "stats": "gameLog",
+                        "group": "hitting",
+                        "season": yr,
+                        "opposingPlayerId": pitcher_id,
+                        "sportId": 1,
+                    },
+                    timeout=10,
+                )
+                if not gr.ok:
+                    continue
+                splits = (gr.json().get("stats") or [{}])[0].get("splits", [])
+                for sp in reversed(splits):
+                    if len(games) >= 5:
+                        break
+                    st = sp.get("stat", {})
+                    gm = sp.get("game") or {}
+                    game_pk = gm.get("gamePk")
+                    team_id = ((sp.get("team") or {}).get("id"))
+                    score_txt, result = _score_for_game(game_pk, batter_team_id=team_id)
+                    games.append({
+                        "date": (sp.get("date") or "")[:10],
+                        "score": score_txt,
+                        "ab": int(st.get("atBats", 0) or 0),
+                        "h": int(st.get("hits", 0) or 0),
+                        "hr": int(st.get("homeRuns", 0) or 0),
+                        "rbi": int(st.get("rbi", 0) or 0),
+                        "k": int(st.get("strikeOuts", 0) or 0),
+                        "bb": int(st.get("baseOnBalls", 0) or 0),
+                        "result": result,
+                    })
+            except Exception:
+                continue
+
+        # Ensure latest first.
+        games = sorted(games, key=lambda x: x.get("date", ""), reverse=True)[:5]
+
+        pitcher_name = "Pitcher"
+        try:
+            pr = requests.get(f"{MLB_API}/people/{pitcher_id}", timeout=6)
+            if pr.ok:
+                pitcher_name = ((pr.json().get("people") or [{}])[0].get("fullName") or "Pitcher")
+        except Exception:
+            pass
+
+        ab = bvp.get("ab", 0) or 0
+        avg = bvp.get("avg")
+        hr = bvp.get("hr", 0) or 0
+        ops = bvp.get("ops")
+        summary_line = f"vs. {pitcher_name}: {ab} AB | {avg if avg is not None else '---'} AVG | {hr} HR | {ops if ops is not None else '---'} OPS"
+
+        return jsonify({
+            "success": True,
+            "playerId": player_id,
+            "pitcherId": pitcher_id,
+            "pitcherName": pitcher_name,
+            "grade": bvp.get("grade", "D"),
+            "ops": bvp.get("ops"),
+            "avg": bvp.get("avg"),
+            "hr": bvp.get("hr", 0),
+            "pa": bvp.get("pa", 0),
+            "sample_note": bvp.get("sample_note") or bvp.get("note") or "",
+            "summary": summary_line,
+            "games": games,
+        })
+    except Exception as ex:
+        print(f"[api_player_bvp_games] {traceback.format_exc()}")
+        return jsonify({"success": False, "error": str(ex)}), 500
 
 
 @app.route("/api/player/form/<int:player_id>")
