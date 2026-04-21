@@ -3138,6 +3138,31 @@ def _parse_prop_markets(bookmakers, valid_names):
     return out
 
 
+def _find_best_available_price(market_props, player, mk, line, side='over'):
+    """
+    Phase 3: Find best available price across all books for a given prop.
+    Returns: (best_price, best_bookmaker) or (None, None) if no match found.
+    """
+    candidates = [
+        (float(item.get(f'{side}_price', -999) or -999), item.get('bookmaker'))
+        for item in market_props
+        if item.get('player') == player and item.get('market_key') == mk and float(item.get('line', 0)) == float(line)
+        and item.get(f'{side}_price') is not None
+    ]
+    
+    if not candidates:
+        return None, None
+    
+    if side == 'over':
+        # For positive prices, higher is better; for negative, closer to 0 is better
+        best_price, best_book = max(candidates, key=lambda x: x[0] if x[0] > 0 else (1000 + x[0]))
+    else:
+        best_price, best_book = max(candidates, key=lambda x: x[0] if x[0] > 0 else (1000 + x[0]))
+    
+    return best_price, best_book
+
+
+
 @app.route('/api/market/<int:game_pk>')
 def api_market(game_pk):
     try:
@@ -3527,11 +3552,15 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                 hub = _hub_rating(adj_prob, edge or 0)
                 mi = market.get('over_implied') if market else None
                 ev_pct = round(adj_prob / mi - 1, 4) if mi and mi > 0 else None
+                # Phase 3: Find best available price
+                best_avail_price, best_avail_book = _find_best_available_price(market_props, p.get('name'), mk, line, 'over')
                 temp_row = {
                     'date': capture_date, 'gamePk': game_pk, 'team': team_abbr, 'player': p.get('name'), 'playerId': p.get('id'), 'marketKey': mk, 'line': line, 'recommendedSide': 'Over',
                     'rawProb': round(raw_prob, 4), 'adjProb': round(adj_prob, 4), 'modelMean': round(float(p.get(mean_field, 0) or 0), 3), 'edge': round(edge, 4) if edge is not None else None,
                     'bookmaker': market.get('bookmaker') if market else None, 'marketPrice': market.get('over_price') if market else None, 'marketImplied': market.get('over_implied') if market else None,
-                    'score': round(score, 4), 'hubRating': hub, 'evPct': ev_pct, 'opp': opp_name, 'reason': _projection_reason_short(p.get('name'), mk, adj_prob, edge, opp_name), 'status': 'pending', 'actual': None, 'grade': 'pending', 'openingPrice': market.get('over_price') if market else None, 'openingImplied': market.get('over_implied') if market else None, 'closingPrice': None, 'closingImplied': None, 'closingBookmaker': None, 'closingCapturedAt': None, 'clvEdge': None, 'profitUnits': None, 'profitDollars': None
+                    'bestAvailablePrice': best_avail_price, 'bestAvailableBook': best_avail_book,
+                    'score': round(score, 4), 'hubRating': hub, 'evPct': ev_pct, 'opp': opp_name, 'reason': _projection_reason_short(p.get('name'), mk, adj_prob, edge, opp_name), 'status': 'pending', 'actual': None, 'grade': 'pending', 'openingPrice': market.get('over_price') if market else None, 'openingImplied': market.get('over_implied') if market else None, 'closingPrice': None, 'closingImplied': None, 'closingBookmaker': None, 'closingCapturedAt': None, 'clvEdge': None, 'profitUnits': None, 'profitDollars': None,
+                    'parlayId': None, 'parlayLeg': None
                 }
                 # Phase 1: Add schema fields
                 temp_row['id'] = str(uuid4())
@@ -3563,11 +3592,15 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
             hub = _hub_rating(adj_prob, edge or 0)
             mi = market.get('over_implied') if market else None
             ev_pct = round(adj_prob / mi - 1, 4) if mi and mi > 0 else None
+            # Phase 3: Find best available price
+            best_avail_price, best_avail_book = _find_best_available_price(market_props, sp.get('name'), 'pitcher_strikeouts', line, 'over')
             temp_row = {
                 'date': capture_date, 'gamePk': game_pk, 'team': team_abbr, 'player': sp.get('name'), 'playerId': sp.get('id'), 'marketKey': 'pitcher_strikeouts', 'line': line, 'recommendedSide': 'Over',
                 'rawProb': round(raw_prob, 4), 'adjProb': round(adj_prob, 4), 'modelMean': round(float(sp.get('mean_k', 0) or 0), 3), 'edge': round(edge, 4) if edge is not None else None,
                 'bookmaker': market.get('bookmaker') if market else None, 'marketPrice': market.get('over_price') if market else None, 'marketImplied': market.get('over_implied') if market else None,
-                'score': round(score, 4), 'hubRating': hub, 'evPct': ev_pct, 'opp': '', 'reason': _projection_reason_short(sp.get('name'), 'pitcher_strikeouts', adj_prob, edge), 'status': 'pending', 'actual': None, 'grade': 'pending', 'openingPrice': market.get('over_price') if market else None, 'openingImplied': market.get('over_implied') if market else None, 'closingPrice': None, 'closingImplied': None, 'closingBookmaker': None, 'closingCapturedAt': None, 'clvEdge': None, 'profitUnits': None, 'profitDollars': None
+                'bestAvailablePrice': best_avail_price, 'bestAvailableBook': best_avail_book,
+                'score': round(score, 4), 'hubRating': hub, 'evPct': ev_pct, 'opp': '', 'reason': _projection_reason_short(sp.get('name'), 'pitcher_strikeouts', adj_prob, edge), 'status': 'pending', 'actual': None, 'grade': 'pending', 'openingPrice': market.get('over_price') if market else None, 'openingImplied': market.get('over_implied') if market else None, 'closingPrice': None, 'closingImplied': None, 'closingBookmaker': None, 'closingCapturedAt': None, 'clvEdge': None, 'profitUnits': None, 'profitDollars': None,
+                'parlayId': None, 'parlayLeg': None
             }
             # Phase 1: Add schema fields
             temp_row['id'] = str(uuid4())
@@ -3634,6 +3667,8 @@ def _build_tracker_rows_quick(game_obj, capture_date, adjustments=None):
                     'bookmaker': None,
                     'marketPrice': None,
                     'marketImplied': None,
+                    'bestAvailablePrice': None,
+                    'bestAvailableBook': None,
                     'score': round(adj_prob, 4),
                     'hubRating': _hub_rating(adj_prob, 0),
                     'evPct': None,
@@ -3651,6 +3686,8 @@ def _build_tracker_rows_quick(game_obj, capture_date, adjustments=None):
                     'clvEdge': None,
                     'profitUnits': None,
                     'profitDollars': None,
+                    'parlayId': None,
+                    'parlayLeg': None,
                 }
                 # Phase 1: Add schema fields
                 row_data['id'] = str(uuid4())
