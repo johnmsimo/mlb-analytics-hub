@@ -3539,6 +3539,13 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                 temp_row['source'] = 'props_board'
                 stake_profile = _stake_profile(temp_row, adjustments)
                 temp_row['stakeDollars'] = stake_profile.get('stake_dollars')
+                # Phase 2: Add tier and BvP grade
+                temp_row['confidenceTier'] = _confidence_tier(temp_row)
+                if home_pitcher and home_pitcher.get('id'):
+                    bvp_data = _fetch_bvp(p.get('id'), home_pitcher.get('id'))
+                    temp_row['bvpGrade'] = _compute_bvp_grade(bvp_data)
+                else:
+                    temp_row['bvpGrade'] = None
                 rows.append(temp_row)
 
     process_hitters(away_props, away_abbr, home_pitcher.get('name'))
@@ -3568,6 +3575,13 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
             temp_row['source'] = 'props_board'
             stake_profile = _stake_profile(temp_row, adjustments)
             temp_row['stakeDollars'] = stake_profile.get('stake_dollars')
+            # Phase 2: Add tier and BvP grade
+            temp_row['confidenceTier'] = _confidence_tier(temp_row)
+            if away_pitcher and away_pitcher.get('id'):
+                bvp_data = _fetch_bvp(sp.get('id'), away_pitcher.get('id'))
+                temp_row['bvpGrade'] = _compute_bvp_grade(bvp_data)
+            else:
+                temp_row['bvpGrade'] = None
             rows.append(temp_row)
 
     rows.sort(key=lambda x: x.get('score', 0), reverse=True)
@@ -3644,6 +3658,9 @@ def _build_tracker_rows_quick(game_obj, capture_date, adjustments=None):
                 row_data['source'] = 'props_board'
                 stake_profile = _stake_profile(row_data, adjustments)
                 row_data['stakeDollars'] = stake_profile.get('stake_dollars')
+                # Phase 2: Add tier and BvP grade (fallback capture)
+                row_data['confidenceTier'] = _confidence_tier(row_data)
+                row_data['bvpGrade'] = None  # No pitcher data in quick capture
                 rows.append(row_data)
 
     _emit(away_hitters, away_abbr)
@@ -4643,6 +4660,43 @@ def api_tracker_portfolio(date_str):
         'portfolio': _portfolio_plan(entries, adjustments),
     })
 
+
+
+# ── Phase 2: Batter vs Pitcher Grade ────────────────────────────────────────
+
+def _compute_bvp_grade(bvp_data):
+    """
+    Grade batter vs pitcher matchup based on _fetch_bvp() data.
+    Returns: 'A+', 'A', 'B', 'C', 'D' or None if insufficient data.
+    
+    Grade logic:
+    - A+: woba_edge >= 0.040 AND reliability >= 0.7
+    - A:  woba_edge >= 0.030 AND reliability >= 0.6
+    - B:  woba_edge >= 0.015 AND reliability >= 0.4
+    - C:  woba_edge >= 0.005 AND reliability >= 0.2
+    - D:  woba_edge < 0.005 OR poor reliability
+    """
+    if not bvp_data or not bvp_data.get('success'):
+        return None
+    
+    pa = bvp_data.get('pa', 0)
+    if pa < 3:  # Too little data
+        return None
+    
+    shrunk = bvp_data.get('shrunk', {})
+    reliability = bvp_data.get('reliability', 0)
+    woba_edge = shrunk.get('woba_edge', 0)
+    
+    if woba_edge >= 0.040 and reliability >= 0.7:
+        return 'A+'
+    elif woba_edge >= 0.030 and reliability >= 0.6:
+        return 'A'
+    elif woba_edge >= 0.015 and reliability >= 0.4:
+        return 'B'
+    elif woba_edge >= 0.005 and reliability >= 0.2:
+        return 'C'
+    else:
+        return 'D'
 
 
 # ── Phase 17 Bet Slip Builder + Final Card Output ─────────────────────────────
