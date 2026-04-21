@@ -723,8 +723,9 @@ async function captureDay() {
     renderMarketTable(d);
     populateMktFilter(d.entries||[]);
     renderBoard();
-    $('datePill').textContent = `${d.entries?.length||0} entries captured`;
-    status('Captured');
+    const gameMsg = (d.capturedGames!=null && d.totalGames!=null) ? ` · ${d.capturedGames}/${d.totalGames} games` : '';
+    $('datePill').textContent = `${d.entries?.length||0} entries captured${gameMsg}`;
+    status(d.message || 'Captured');
     try { await loadSlip(); } catch{}
   } catch(e) { status(e.message, true); }
 }

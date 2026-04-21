@@ -3359,7 +3359,7 @@ def _projection_reason_short(player, market_key, adj_prob, edge, opp_name=''):
     return f"{player} rates well for {lbl}; model probability {adj_prob:.1%}."
 
 
-def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched=None):
+def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched=None, include_odds=False):
     adjustments = adjustments or _get_adjustments()
     raw = _sched if _sched is not None else fetch_schedule(capture_date)
     g = next((x for x in raw if x.get('gamePk') == game_pk), None)
@@ -3463,7 +3463,7 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
     away_pitcher = _pitcher_model(away_p.get('fullName', 'Away SP'), away_p.get('id'), away_team_id)
     home_pitcher = _pitcher_model(home_p.get('fullName', 'Home SP'), home_p.get('id'), home_team_id)
 
-    sims = int(os.getenv('TRACKER_SIMS', '1200') or 1200)
+    sims = int(os.getenv('TRACKER_SIMS', '700') or 700)
     sims = max(300, min(5000, sims))
     rng = random.Random(game_pk + int(capture_date.replace('-', '')) + 10)
     away_store = {i: [] for i in range(len(away_lineup))}
@@ -3487,12 +3487,14 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
     away_sp = _summarize_pitcher(away_starter_lines); away_sp.update({'name': away_pitcher['name'], 'id': away_pitcher.get('id'), 'pitchHand': away_pitcher['pitchHand']})
     home_sp = _summarize_pitcher(home_starter_lines); home_sp.update({'name': home_pitcher['name'], 'id': home_pitcher.get('id'), 'pitchHand': home_pitcher['pitchHand']})
 
-    event, _ = _find_odds_event(away_team.get('name', ''), home_team.get('name', ''))
-    props_books = _load_event_odds(event.get('id') if event else None, featured_only=False) if event else []
-    valid_names = set([x.get('name') for x in away_lineup + home_lineup if x.get('name')])
-    if away_pitcher.get('name'): valid_names.add(away_pitcher.get('name'))
-    if home_pitcher.get('name'): valid_names.add(home_pitcher.get('name'))
-    market_props = _parse_prop_markets(props_books, valid_names)
+    market_props = []
+    if include_odds:
+        event, _ = _find_odds_event(away_team.get('name', ''), home_team.get('name', ''))
+        props_books = _load_event_odds(event.get('id') if event else None, featured_only=False) if event else []
+        valid_names = set([x.get('name') for x in away_lineup + home_lineup if x.get('name')])
+        if away_pitcher.get('name'): valid_names.add(away_pitcher.get('name'))
+        if home_pitcher.get('name'): valid_names.add(home_pitcher.get('name'))
+        market_props = _parse_prop_markets(props_books, valid_names)
 
     def find_market(player, mk, line):
         for item in market_props:
@@ -3609,29 +3611,48 @@ def api_tracker_capture(date_str):
         if not sched:
             return jsonify({'success': False, 'error': f'No games found for {date_str}'}), 404
 
+        # Keep request under edge/proxy timeout by enforcing a hard budget.
+        # Capture Closing can fetch lines after this returns.
+        budget_sec = float(os.getenv('TRACKER_CAPTURE_BUDGET_SEC', '22') or 22)
+        deadline = time.time() + max(8.0, min(55.0, budget_sec))
         all_entries = []
-        lock = __import__('threading').Lock()
+        captured_games = 0
+        failed_games = []
+        include_odds = str(os.getenv('TRACKER_CAPTURE_INCLUDE_ODDS', '0')).strip().lower() in ('1', 'true', 'yes')
 
-        def _capture_one(g):
+        for g in sched:
+            if time.time() >= deadline:
+                break
             gpk = g.get('gamePk')
             try:
-                rows = _build_tracker_rows_for_game(gpk, date_str, adjustments, _sched=sched)
-                with lock:
-                    all_entries.extend(rows)
+                rows = _build_tracker_rows_for_game(gpk, date_str, adjustments, _sched=sched, include_odds=include_odds)
+                all_entries.extend(rows)
+                captured_games += 1
             except Exception:
+                failed_games.append(gpk)
                 print(f'[tracker_capture_game {gpk}]', traceback.format_exc())
-
-        max_workers = int(os.getenv('TRACKER_CAPTURE_WORKERS', '3') or 3)
-        max_workers = max(1, min(8, max_workers))
-        with ThreadPoolExecutor(max_workers=max_workers) as ex:
-            list(ex.map(_capture_one, sched))
 
         store = _load_json(TRACKER_STORE, {})
         entries = _recalc_tracker_entries(all_entries)
         entries.sort(key=lambda x: x.get('score', 0), reverse=True)
         store[date_str] = {'capturedAt': datetime.now().isoformat(), 'gradedAt': None, 'closingCapturedAt': None, 'entries': entries}
         _save_json(TRACKER_STORE, store)
-        return jsonify({'success': True, 'date': date_str, 'entries': entries, 'summary': _tracker_summary(entries), 'capturedAt': store[date_str]['capturedAt']})
+        timed_out = captured_games < len(sched)
+        msg = None
+        if timed_out:
+            msg = f'Partial capture: {captured_games}/{len(sched)} games processed in time budget.'
+        return jsonify({
+            'success': True,
+            'date': date_str,
+            'entries': entries,
+            'summary': _tracker_summary(entries),
+            'capturedAt': store[date_str]['capturedAt'],
+            'capturedGames': captured_games,
+            'totalGames': len(sched),
+            'timedOut': timed_out,
+            'failedGames': failed_games,
+            'message': msg,
+        })
     except Exception:
         print('[tracker_capture]', traceback.format_exc())
         return jsonify({'success': False, 'error': 'Capture failed — check server logs'}), 500
