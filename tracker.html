@@ -606,7 +606,14 @@ const safe = (v, fb='—') => (v==null||v===''||v===undefined) ? fb : String(v);
 const num  = (v, d=2, fb='—') => { const n=parseFloat(v); return isNaN(n)?fb:n.toFixed(d); };
 const pct  = (v, d=1, fb='—') => { const n=parseFloat(v); return isNaN(n)?fb:(n*100).toFixed(d)+'%'; };
 const money= v => { const n=parseFloat(v); if(isNaN(n)) return '—'; return (n>=0?'$'+n.toFixed(2):'-$'+Math.abs(n).toFixed(2)); };
-const ts   = v => v ? new Date(v).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) : '—';
+const ts   = v => {
+  if (!v) return '—';
+  const s = String(v).trim();
+  // Backend often returns naive ISO timestamps (no zone). Treat them as UTC.
+  const iso = /([zZ]|[+\-]\d{2}:?\d{2})$/.test(s) ? s : `${s}Z`;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+};
 
 function today() {
   return new Date().toLocaleDateString('en-US',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'})
