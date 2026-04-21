@@ -2,6 +2,7 @@ import os, threading, traceback, difflib, io, csv as csvmod, json, re, time, uui
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
+from uuid import uuid4
 try:
     from zoneinfo import ZoneInfo
 except ImportError:
@@ -3526,12 +3527,19 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                 hub = _hub_rating(adj_prob, edge or 0)
                 mi = market.get('over_implied') if market else None
                 ev_pct = round(adj_prob / mi - 1, 4) if mi and mi > 0 else None
-                rows.append({
+                temp_row = {
                     'date': capture_date, 'gamePk': game_pk, 'team': team_abbr, 'player': p.get('name'), 'playerId': p.get('id'), 'marketKey': mk, 'line': line, 'recommendedSide': 'Over',
                     'rawProb': round(raw_prob, 4), 'adjProb': round(adj_prob, 4), 'modelMean': round(float(p.get(mean_field, 0) or 0), 3), 'edge': round(edge, 4) if edge is not None else None,
                     'bookmaker': market.get('bookmaker') if market else None, 'marketPrice': market.get('over_price') if market else None, 'marketImplied': market.get('over_implied') if market else None,
-                    'score': round(score, 4), 'hubRating': hub, 'evPct': ev_pct, 'opp': opp_name, 'reason': _projection_reason_short(p.get('name'), mk, adj_prob, edge, opp_name), 'status': 'pending', 'actual': None, 'grade': 'pending', 'openingPrice': market.get('over_price') if market else None, 'openingImplied': market.get('over_implied') if market else None, 'closingPrice': None, 'closingImplied': None, 'closingBookmaker': None, 'closingCapturedAt': None, 'clvEdge': None, 'profitUnits': None
-                })
+                    'score': round(score, 4), 'hubRating': hub, 'evPct': ev_pct, 'opp': opp_name, 'reason': _projection_reason_short(p.get('name'), mk, adj_prob, edge, opp_name), 'status': 'pending', 'actual': None, 'grade': 'pending', 'openingPrice': market.get('over_price') if market else None, 'openingImplied': market.get('over_implied') if market else None, 'closingPrice': None, 'closingImplied': None, 'closingBookmaker': None, 'closingCapturedAt': None, 'clvEdge': None, 'profitUnits': None, 'profitDollars': None
+                }
+                # Phase 1: Add schema fields
+                temp_row['id'] = str(uuid4())
+                temp_row['savedAt'] = datetime.now(ET).isoformat()
+                temp_row['source'] = 'props_board'
+                stake_profile = _stake_profile(temp_row, adjustments)
+                temp_row['stakeDollars'] = stake_profile.get('stake_dollars')
+                rows.append(temp_row)
 
     process_hitters(away_props, away_abbr, home_pitcher.get('name'))
     process_hitters(home_props, home_abbr, away_pitcher.get('name'))
@@ -3548,12 +3556,19 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
             hub = _hub_rating(adj_prob, edge or 0)
             mi = market.get('over_implied') if market else None
             ev_pct = round(adj_prob / mi - 1, 4) if mi and mi > 0 else None
-            rows.append({
+            temp_row = {
                 'date': capture_date, 'gamePk': game_pk, 'team': team_abbr, 'player': sp.get('name'), 'playerId': sp.get('id'), 'marketKey': 'pitcher_strikeouts', 'line': line, 'recommendedSide': 'Over',
                 'rawProb': round(raw_prob, 4), 'adjProb': round(adj_prob, 4), 'modelMean': round(float(sp.get('mean_k', 0) or 0), 3), 'edge': round(edge, 4) if edge is not None else None,
                 'bookmaker': market.get('bookmaker') if market else None, 'marketPrice': market.get('over_price') if market else None, 'marketImplied': market.get('over_implied') if market else None,
-                'score': round(score, 4), 'hubRating': hub, 'evPct': ev_pct, 'opp': '', 'reason': _projection_reason_short(sp.get('name'), 'pitcher_strikeouts', adj_prob, edge), 'status': 'pending', 'actual': None, 'grade': 'pending', 'openingPrice': market.get('over_price') if market else None, 'openingImplied': market.get('over_implied') if market else None, 'closingPrice': None, 'closingImplied': None, 'closingBookmaker': None, 'closingCapturedAt': None, 'clvEdge': None, 'profitUnits': None
-            })
+                'score': round(score, 4), 'hubRating': hub, 'evPct': ev_pct, 'opp': '', 'reason': _projection_reason_short(sp.get('name'), 'pitcher_strikeouts', adj_prob, edge), 'status': 'pending', 'actual': None, 'grade': 'pending', 'openingPrice': market.get('over_price') if market else None, 'openingImplied': market.get('over_implied') if market else None, 'closingPrice': None, 'closingImplied': None, 'closingBookmaker': None, 'closingCapturedAt': None, 'clvEdge': None, 'profitUnits': None, 'profitDollars': None
+            }
+            # Phase 1: Add schema fields
+            temp_row['id'] = str(uuid4())
+            temp_row['savedAt'] = datetime.now(ET).isoformat()
+            temp_row['source'] = 'props_board'
+            stake_profile = _stake_profile(temp_row, adjustments)
+            temp_row['stakeDollars'] = stake_profile.get('stake_dollars')
+            rows.append(temp_row)
 
     rows.sort(key=lambda x: x.get('score', 0), reverse=True)
     keep = int((adjustments or {}).get('captured_per_game', 14) or 14)
@@ -3589,7 +3604,7 @@ def _build_tracker_rows_quick(game_obj, capture_date, adjustments=None):
                 ('batter_total_bases', 1.5, base_tb2),
             ]:
                 adj_prob = _clamp01(raw_prob * _market_mult(mk, adjustments))
-                rows.append({
+                row_data = {
                     'date': capture_date,
                     'gamePk': game_pk,
                     'team': team_abbr,
@@ -3621,7 +3636,15 @@ def _build_tracker_rows_quick(game_obj, capture_date, adjustments=None):
                     'closingCapturedAt': None,
                     'clvEdge': None,
                     'profitUnits': None,
-                })
+                    'profitDollars': None,
+                }
+                # Phase 1: Add schema fields
+                row_data['id'] = str(uuid4())
+                row_data['savedAt'] = datetime.now(ET).isoformat()
+                row_data['source'] = 'props_board'
+                stake_profile = _stake_profile(row_data, adjustments)
+                row_data['stakeDollars'] = stake_profile.get('stake_dollars')
+                rows.append(row_data)
 
     _emit(away_hitters, away_abbr)
     _emit(home_hitters, home_abbr)
@@ -4317,6 +4340,7 @@ def api_tracker_close(date_str):
                 row['actual'] = actual
                 row['grade'] = _grade_over(actual, row.get('line'))
                 row['status'] = 'graded'
+                row['gradedAt'] = datetime.now(ET).isoformat()
 
             _recalc_tracker_entry(row)
             local_updated += 1
@@ -4398,6 +4422,22 @@ def _recalc_tracker_entry(row):
         row['closingImplied'] = _american_to_implied(row.get('closingPrice'))
     if row.get('openingImplied') is not None and row.get('closingImplied') is not None:
         row['clvEdge'] = round(float(row['closingImplied']) - float(row['openingImplied']), 4)
+    # Phase 1: Compute profitDollars from stakeDollars + grade
+    if row.get('stakeDollars') is not None and row.get('grade') in ('win', 'loss', 'push'):
+        stake = float(row.get('stakeDollars', 0))
+        grade = row.get('grade')
+        if grade == 'win':
+            closing_price = row.get('closingPrice')
+            if closing_price is not None:
+                if closing_price > 0:
+                    profit_dollars = round(stake * (closing_price / 100.0), 2)
+                else:
+                    profit_dollars = round(stake / abs(closing_price / 100.0), 2)
+                row['profitDollars'] = profit_dollars
+        elif grade == 'loss':
+            row['profitDollars'] = -stake
+        elif grade == 'push':
+            row['profitDollars'] = 0.0
     else:
         row['clvEdge'] = None
 
