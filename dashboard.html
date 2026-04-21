@@ -360,9 +360,9 @@ setInterval(tick,1000);tick();
 function wicon(c){var s=(c||'').toLowerCase();if(s.indexOf('rain')>=0||s.indexOf('shower')>=0)return'&#127783;';if(s.indexOf('thunder')>=0)return'&#9928;';if(s.indexOf('cloud')>=0)return'&#9925;';if(s.indexOf('fog')>=0)return'&#127787;';if(s.indexOf('snow')>=0)return'&#10052;';if(s.indexOf('clear')>=0||s.indexOf('sun')>=0)return'&#9728;';return'&#127780;';}
 function seriesBadge(sg,st){
   if(!sg||!st||st<=1)return'';
-  if(sg==1)return'<span class="series-bdg sb-opener">OPENER</span>';
-  if(sg==st)return'<span class="series-bdg sb-finale">FINALE G'+sg+'</span>';
-  return'<span class="series-bdg sb-mid">G'+sg+'/'+st+'</span>';
+  if(sg==1)return'<span class="series-bdg sb-opener">G1 OF '+st+' · OPENER</span>';
+  if(sg==st)return'<span class="series-bdg sb-finale">G'+sg+' OF '+st+' · FINALE</span>';
+  return'<span class="series-bdg sb-mid">G'+sg+' OF '+st+' · MID-SERIES</span>';
 }
 function mkCard(g){
   var bc=g.status==='Live'?'bl':g.status==='Final'?'bf':'bs';
