@@ -203,6 +203,15 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 /* ── +EV Only toggle ── */
 .vfilter-ev{background:rgba(0,230,118,.06);border-color:rgba(0,230,118,.2);color:var(--g)}
 .vfilter-ev.active{background:rgba(0,230,118,.18);border-color:rgba(0,230,118,.5);color:var(--g)}
+/* ── Model Track Record banner ── */
+.trec-bar{padding:7px 32px;background:rgba(0,229,255,.025);border-bottom:1px solid rgba(255,255,255,.05);display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.trec-bar-lbl{font-family:'Orbitron',monospace;font-size:.54rem;color:var(--mu);letter-spacing:2px;white-space:nowrap}
+.trec-bar-pills{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.trec-bar-pill{font-family:'Orbitron',monospace;font-size:.63rem;font-weight:700;letter-spacing:.5px}
+.trec-bar-pill.good{color:var(--g)}
+.trec-bar-pill.warn{color:var(--o)}
+.trec-bar-pill.low{color:var(--r)}
+.trec-bar-note{font-size:.56rem;color:var(--mu);margin-left:auto;font-family:'Orbitron',monospace;letter-spacing:1px}
 /* ── BAT X / PITCH X panel ── */
 .batx-panel{margin-top:10px;padding:10px 12px;background:rgba(0,229,255,.03);border:1px solid rgba(0,229,255,.1);border-radius:9px}
 .batx-hd{font-family:'Orbitron',monospace;font-size:.58rem;letter-spacing:1.5px;color:var(--mu);margin-bottom:7px}
@@ -265,6 +274,13 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
   <span class="svtag">STATCAST</span>
   <span class="mlbtag">MLB STATS API</span>
   <span style="color:var(--mu);margin-left:auto;font-size:.58rem" id="lastUpdate"></span>
+</div>
+
+<!-- ── Model Track Record Banner ── -->
+<div class="trec-bar" id="trecBar" style="display:none">
+  <span class="trec-bar-lbl">📊 MODEL HIT RATE · LAST 30 DAYS</span>
+  <div class="trec-bar-pills" id="trecBarPills"></div>
+  <span class="trec-bar-note" id="trecBarNote"></span>
 </div>
 
 <div class="game-selector">
@@ -439,7 +455,32 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('dateInput').value = today;
   CUR_DATE = today;
   loadGames();
+  loadModelRecordBanner();
 });
+
+// ── Model Track Record Banner ─────────────────────────────────────────────────
+async function loadModelRecordBanner() {
+  const MKT_NAMES = {hits:'HITS', hr:'HR', k:'Ks', tb:'TB', rbi:'RBI', runs:'RUNS', parlay:'PARLAY'};
+  try {
+    const r = await fetch('/api/tracker/model-record');
+    const d = await r.json();
+    if (!d.success || !d.record) return;
+    const pills = Object.entries(d.record)
+      .filter(([, v]) => v.graded >= 5)
+      .sort((a, b) => b[1].graded - a[1].graded)
+      .map(([k, v]) => {
+        const pct  = Math.round(v.hit_rate * 100);
+        const icon = pct >= 58 ? '✅' : pct >= 50 ? '⚠️' : '❌';
+        const cls  = pct >= 58 ? 'good' : pct >= 50 ? 'warn' : 'low';
+        const lbl  = MKT_NAMES[k] || k.toUpperCase();
+        return `<span class="trec-bar-pill ${cls}">${lbl} ${pct}% ${icon}</span>`;
+      });
+    if (!pills.length) return;
+    gel('trecBarPills').innerHTML = pills.join('');
+    if (d.total_graded) gel('trecBarNote').textContent = `${d.total_graded} GRADED · 30d`;
+    gel('trecBar').style.display = '';
+  } catch(e) {}
+}
 
 function etToday() {
   const p = new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());
