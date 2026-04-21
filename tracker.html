@@ -627,8 +627,13 @@ function status(msg, isErr=false) {
 }
 
 async function api(url, opts={}) {
-  const r = await fetch(url, {headers:{'Content-Type':'application/json'}, ...opts});
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+  const headers = opts.body ? {'Content-Type':'application/json'} : {};
+  const r = await fetch(url, {headers, ...opts});
+  if (!r.ok) {
+    let errMsg = `${r.status} ${r.statusText}`;
+    try { const j = await r.json(); if(j.error) errMsg = j.error; } catch{}
+    throw new Error(errMsg);
+  }
   return r.json();
 }
 
@@ -1260,14 +1265,19 @@ function wire() {
     ['loadAttrBtn', loadAttr], ['runBtBtn', runBacktest],
   ];
   pairs.forEach(([id,fn])=>{
-    const el=$(id); if(el) el.addEventListener('click',()=>fn().catch(e=>{status(e.message,true);console.error(e)}));
+    const el=$(id); if(el) el.addEventListener('click',()=>{
+      try {
+        const p = fn();
+        if (p && typeof p.catch === 'function') p.catch(e=>{status(e.message||String(e),true);console.error(id,e);});
+      } catch(e) { status(e.message||String(e),true); console.error(id,e); }
+    });
   });
   ['fMkt','fRes','fTier','fSort'].forEach(id=>$(id)?.addEventListener('change',renderBoard));
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 async function boot() {
-  $('trackDate').value = etToday();
+  try { $('trackDate').value = etToday(); } catch(e){ console.error('etToday',e); }
 
   // Backtest default range (last 30 days)
   const now=new Date(), d30=new Date(now);
@@ -1286,6 +1296,9 @@ async function boot() {
 }
 
 boot();
-</script>
+
+// Global error fallback — surfaces any JS crash in the status bar
+window.addEventListener('error', e => { try { status('JS Error: '+e.message, true); } catch{} console.error(e); });
+window.addEventListener('unhandledrejection', e => { try { status('Error: '+(e.reason?.message||e.reason), true); } catch{} console.error(e); });</script>
 </body>
 </html>
