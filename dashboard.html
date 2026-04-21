@@ -108,6 +108,10 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .qp-loading{text-align:center;padding:8px 4px;font-family:Orbitron,monospace;font-size:.58rem;color:var(--mu);letter-spacing:2px}
 
 
+.series-bdg{font-family:Orbitron,monospace;font-size:.52rem;letter-spacing:1.5px;padding:2px 7px;border-radius:10px;font-weight:700}
+.sb-opener{background:rgba(0,229,255,.1);color:var(--c);border:1px solid rgba(0,229,255,.25)}
+.sb-finale{background:rgba(255,152,0,.12);color:#ff9800;border:1px solid rgba(255,152,0,.3)}
+.sb-mid{background:rgba(106,141,176,.07);color:var(--mu);border:1px solid rgba(106,141,176,.18)}
 .topnav{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:16px 0 0}
 .tabbtn{padding:10px 16px;border:1px solid rgba(0,229,255,.18);border-radius:999px;background:rgba(255,255,255,.03);color:var(--mu);font-family:Orbitron,monospace;font-size:.68rem;letter-spacing:1.6px;cursor:pointer}
 .tabbtn.active{background:linear-gradient(90deg,rgba(0,229,255,.15),rgba(224,64,251,.12));color:var(--c);border-color:rgba(0,229,255,.35)}
@@ -351,6 +355,12 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
 function tick(){var n=new Date(),h=n.getHours(),m=n.getMinutes(),s=n.getSeconds(),h12=(h%12||12),ap=h>=12?'PM':'AM';document.getElementById('clk').textContent=('0'+h12).slice(-2)+':'+('0'+m).slice(-2)+':'+('0'+s).slice(-2)+' '+ap;document.getElementById('dt').textContent=n.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'}).toUpperCase();}
 setInterval(tick,1000);tick();
 function wicon(c){var s=(c||'').toLowerCase();if(s.indexOf('rain')>=0||s.indexOf('shower')>=0)return'&#127783;';if(s.indexOf('thunder')>=0)return'&#9928;';if(s.indexOf('cloud')>=0)return'&#9925;';if(s.indexOf('fog')>=0)return'&#127787;';if(s.indexOf('snow')>=0)return'&#10052;';if(s.indexOf('clear')>=0||s.indexOf('sun')>=0)return'&#9728;';return'&#127780;';}
+function seriesBadge(sg,st){
+  if(!sg||!st||st<=1)return'';
+  if(sg==1)return'<span class="series-bdg sb-opener">OPENER</span>';
+  if(sg==st)return'<span class="series-bdg sb-finale">FINALE G'+sg+'</span>';
+  return'<span class="series-bdg sb-mid">G'+sg+'/'+st+'</span>';
+}
 function mkCard(g){
   var bc=g.status==='Live'?'bl':g.status==='Final'?'bf':'bs';
   var bl=g.status==='Live'?'&#9679; LIVE':g.status==='Final'?'FINAL':'SCHEDULED';
@@ -364,7 +374,7 @@ function mkCard(g){
     :g.temp&&g.temp!='N/A'
     ?'<div class="wr"><span>'+wicon(g.condition)+'</span><span class="val">'+g.temp+'&deg;F</span><span> | </span><span class="val">'+g.wind+'</span>'+rT+'</div>':'';
   return '<div class="card" onclick="if(event.target.closest(\'a,button,.lineup-toggle,.lineup-section,.qp-strip\'))return;location.href=\'/deep-dive/'+g.gamePk+'\'">'
-    +'<div class="ct"><span class="badge '+bc+'">'+bl+'</span><span class="ctime">'+g.gameTime+(g.doubleHeader?'<span style="background:rgba(255,152,0,.12);color:#ff9800;border:1px solid rgba(255,152,0,.35);border-radius:4px;font-size:.62rem;letter-spacing:1.5px;padding:2px 6px;margin-left:5px;font-family:Orbitron,monospace;font-weight:700">DH·G'+(g.gameNumber||1)+'</span>':'')+'</span></div>'
+    +'<div class="ct"><div style="display:flex;gap:6px;align-items:center"><span class="badge '+bc+'">'+bl+'</span>'+seriesBadge(g.seriesGame,g.seriesTotal)+'</div><span class="ctime">'+g.gameTime+(g.doubleHeader?'<span style="background:rgba(255,152,0,.12);color:#ff9800;border:1px solid rgba(255,152,0,.35);border-radius:4px;font-size:.62rem;letter-spacing:1.5px;padding:2px 6px;margin-left:5px;font-family:Orbitron,monospace;font-weight:700">DH·G'+(g.gameNumber||1)+'</span>':'')+'</span></div>'
     +'<div class="mu"><div class="tb"><div class="tlw">'+aL+'</div><div class="ta">'+g.awayAbbr+'</div></div>'
     +'<div class="vs">VS</div>'
     +'<div class="tb"><div class="tlw">'+hL+'</div><div class="ta">'+g.homeAbbr+'</div></div></div>'

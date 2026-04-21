@@ -835,10 +835,17 @@ def parse_game(g):
             gt_fmt = dt_et.strftime("%-I:%M %p ET")
         except: gt_fmt = "TBD"
         pf   = PARK_FACTORS.get(hid, 1.0)
+        series_game  = int(g.get("seriesGameNumber") or 1)
+        series_total = int(g.get("gamesInSeries")    or 3)
         ap_n = ap.get("fullName","TBD"); hp_n = hp.get("fullName","TBD")
         fgap = fg_pitcher(ap_n); fghp = fg_pitcher(hp_n)
         era_a = float(fgap.get("fg_era") or 4.50); era_h = float(fghp.get("fg_era") or 4.50)
         edge = round(abs(era_a - era_h) * 2 + (pf - 1.0) * 10, 1)
+        # Series context modifier: opener likely has ace, finale has back-end arms
+        if series_game == 1:
+            edge = round(edge + 0.2, 1)
+        elif series_total > 1 and series_game == series_total:
+            edge = round(max(0.0, edge - 0.3), 1)
         bar  = min(100, int(edge * 9))
         wc   = (wx.get("condition","") or "").lower()
         wi   = "🌧" if "rain" in wc else ("⛅" if "cloud" in wc else "☀")
@@ -851,6 +858,7 @@ def parse_game(g):
             "awayPitcher": ap_n, "homePitcher": hp_n,
             "venue": ven.get("name",""), "gameTime": gt_fmt,
             "parkFactor": pf, "edge": edge, "barPct": bar,
+            "seriesGame": series_game, "seriesTotal": series_total,
             "temp": wx.get("temp","N/A"), "wind": wx.get("wind", f"{wx.get('wind_speed','?')} mph {wx.get('wind_dir','')}").strip(),
             "condition": wx.get("condition",""), "rainChance": wx.get("rain_chance","N/A"),
             "weatherIcon": wi,
