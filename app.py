@@ -3309,6 +3309,14 @@ def _grade_over(actual, line):
     return 'push'
 
 
+def _hub_rating(adj_prob, edge, l10_over_rate=0.5):
+    trend_bonus = (l10_over_rate - 0.5) * 20
+    edge_bonus  = min((edge or 0) * 100, 20)
+    prob_base   = (adj_prob or 0) * 60
+    raw = prob_base + edge_bonus + trend_bonus
+    return max(0, min(100, round(raw)))
+
+
 def _projection_reason_short(player, market_key, adj_prob, edge, opp_name=''):
     lbl = market_key.replace('batter_', '').replace('pitcher_', '').replace('_', ' ')
     if edge is not None:
@@ -3401,11 +3409,12 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None):
                 market = find_market(p.get('name'), mk, line)
                 edge = (adj_prob - market.get('over_implied')) if market and market.get('over_implied') is not None else None
                 score = (edge * 100.0 if edge is not None else 0) + adj_prob
+                hub = _hub_rating(adj_prob, edge or 0)
                 rows.append({
                     'date': capture_date, 'gamePk': game_pk, 'team': team_abbr, 'player': p.get('name'), 'playerId': p.get('id'), 'marketKey': mk, 'line': line, 'recommendedSide': 'Over',
                     'rawProb': round(raw_prob, 4), 'adjProb': round(adj_prob, 4), 'modelMean': round(float(p.get(mean_field, 0) or 0), 3), 'edge': round(edge, 4) if edge is not None else None,
                     'bookmaker': market.get('bookmaker') if market else None, 'marketPrice': market.get('over_price') if market else None, 'marketImplied': market.get('over_implied') if market else None,
-                    'score': round(score, 4), 'opp': opp_name, 'reason': _projection_reason_short(p.get('name'), mk, adj_prob, edge, opp_name), 'status': 'pending', 'actual': None, 'grade': 'pending', 'openingPrice': market.get('over_price') if market else None, 'openingImplied': market.get('over_implied') if market else None, 'closingPrice': None, 'closingImplied': None, 'closingBookmaker': None, 'closingCapturedAt': None, 'clvEdge': None, 'profitUnits': None
+                    'score': round(score, 4), 'hubRating': hub, 'opp': opp_name, 'reason': _projection_reason_short(p.get('name'), mk, adj_prob, edge, opp_name), 'status': 'pending', 'actual': None, 'grade': 'pending', 'openingPrice': market.get('over_price') if market else None, 'openingImplied': market.get('over_implied') if market else None, 'closingPrice': None, 'closingImplied': None, 'closingBookmaker': None, 'closingCapturedAt': None, 'clvEdge': None, 'profitUnits': None
                 })
 
     process_hitters(away_props, away_abbr, home_pitcher.get('name'))
@@ -3420,11 +3429,12 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None):
             market = find_market(sp.get('name'), 'pitcher_strikeouts', line)
             edge = (adj_prob - market.get('over_implied')) if market and market.get('over_implied') is not None else None
             score = (edge * 100.0 if edge is not None else 0) + adj_prob
+            hub = _hub_rating(adj_prob, edge or 0)
             rows.append({
                 'date': capture_date, 'gamePk': game_pk, 'team': team_abbr, 'player': sp.get('name'), 'playerId': sp.get('id'), 'marketKey': 'pitcher_strikeouts', 'line': line, 'recommendedSide': 'Over',
                 'rawProb': round(raw_prob, 4), 'adjProb': round(adj_prob, 4), 'modelMean': round(float(sp.get('mean_k', 0) or 0), 3), 'edge': round(edge, 4) if edge is not None else None,
                 'bookmaker': market.get('bookmaker') if market else None, 'marketPrice': market.get('over_price') if market else None, 'marketImplied': market.get('over_implied') if market else None,
-                'score': round(score, 4), 'opp': '', 'reason': _projection_reason_short(sp.get('name'), 'pitcher_strikeouts', adj_prob, edge), 'status': 'pending', 'actual': None, 'grade': 'pending', 'openingPrice': market.get('over_price') if market else None, 'openingImplied': market.get('over_implied') if market else None, 'closingPrice': None, 'closingImplied': None, 'closingBookmaker': None, 'closingCapturedAt': None, 'clvEdge': None, 'profitUnits': None
+                'score': round(score, 4), 'hubRating': hub, 'opp': '', 'reason': _projection_reason_short(sp.get('name'), 'pitcher_strikeouts', adj_prob, edge), 'status': 'pending', 'actual': None, 'grade': 'pending', 'openingPrice': market.get('over_price') if market else None, 'openingImplied': market.get('over_implied') if market else None, 'closingPrice': None, 'closingImplied': None, 'closingBookmaker': None, 'closingCapturedAt': None, 'clvEdge': None, 'profitUnits': None
             })
 
     rows.sort(key=lambda x: x.get('score', 0), reverse=True)
