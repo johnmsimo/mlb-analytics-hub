@@ -4107,10 +4107,13 @@ def api_tracker_model_record():
     entries = _collect_window_entries(today, 30)
     graded  = [e for e in entries if e.get('grade') in ('win', 'loss')]
     _MK_MAP = {
-        'batter_hits': 'hits', 'batter_home_runs': 'hr',
-        'batter_total_bases': 'tb', 'batter_rbis': 'rbi',
-        'batter_runs_scored': 'runs', 'batter_stolen_bases': 'sb',
-        'pitcher_strikeouts': 'k', 'parlay': 'parlay',
+        'batter_hits': 'hits',
+        'batter_home_runs': 'hr',
+        'batter_total_bases': 'tb',
+        'batter_rbis': 'rbi',
+        'batter_runs_scored': 'runs',
+        'pitcher_strikeouts': 'pitcher_strikeouts',
+        'parlay': 'parlay',
     }
     by_mkt = {}
     for e in graded:
@@ -4125,8 +4128,29 @@ def api_tracker_model_record():
         record[key] = {'wins': v['wins'], 'losses': v['losses'],
                        'graded': total,
                        'hit_rate': round(v['wins'] / total, 3) if total else 0.0}
-    return jsonify({'success': True, 'record': record, 'window': 30,
-                    'total_graded': len(graded)})
+
+    # Flat summary fields for UI consumers that only need hit rates.
+    summary = {
+        'hits': record.get('hits', {}).get('hit_rate', 0.0),
+        'hr': record.get('hr', {}).get('hit_rate', 0.0),
+        'pitcher_strikeouts': record.get('pitcher_strikeouts', {}).get('hit_rate', 0.0),
+        'batter_total_bases': record.get('tb', {}).get('hit_rate', 0.0),
+        'batter_rbis': record.get('rbi', {}).get('hit_rate', 0.0),
+        'batter_runs_scored': record.get('runs', {}).get('hit_rate', 0.0),
+        'parlay': record.get('parlay', {}).get('hit_rate', 0.0),
+    }
+
+    # Back-compat alias for prior frontend key.
+    if 'pitcher_strikeouts' in record and 'k' not in record:
+        record['k'] = record['pitcher_strikeouts']
+
+    return jsonify({
+        'success': True,
+        'record': record,
+        'summary': summary,
+        'window': 30,
+        'total_graded': len(graded),
+    })
 
 
 @app.route('/api/tracker/pick', methods=['POST'])

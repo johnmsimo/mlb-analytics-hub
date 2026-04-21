@@ -533,7 +533,7 @@ async function loadModelRecordBanner() {
     const d = await r.json();
     if (!d.success || !d.record) return;
     const pills = Object.entries(d.record)
-      .filter(([, v]) => v.graded >= 5)
+      .filter(([, v]) => v.graded >= 1)
       .sort((a, b) => b[1].graded - a[1].graded)
       .map(([k, v]) => {
         const pct  = Math.round(v.hit_rate * 100);

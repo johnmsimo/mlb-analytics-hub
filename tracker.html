@@ -968,19 +968,36 @@ function renderParlayCards(parlays) {
 
 // ── Model Track Record Banner ─────────────────────────────────────────────────
 async function loadModelRecord() {
-  const date = readDate();
   try {
-    const d = await api(`/api/tracker/calibration/${date}?window=30`);
-    const markets = d.markets || [];
-    if (!markets.length) { $('trecPills').innerHTML='<span class="trec-pill na">No data yet</span>'; return; }
-    $('trecPills').innerHTML = markets.map(m => {
-      const hr = parseFloat(m.hitrate||0);
-      const lbl = `${mkLabel(m.marketKey)} ${pct(hr)}`;
-      const cls = hr>=0.58?'good':hr>=0.50?'warn':'na';
-      return `<span class="trec-pill ${cls}" title="${m.graded||0} graded">${lbl}</span>`;
-    }).join('');
-    const total = markets.reduce((a,m)=>a+(m.graded||0),0);
-    $('trecNote').textContent = `${total} graded bets · 30d`;
+    const d = await api('/api/tracker/model-record');
+    const rec = d.record || {};
+    const order = [
+      ['hits', 'Hits'],
+      ['hr', 'HR'],
+      ['pitcher_strikeouts', 'Ks'],
+      ['tb', 'TB'],
+      ['rbi', 'RBI'],
+      ['runs', 'Runs'],
+      ['parlay', 'Parlay'],
+    ];
+
+    const pills = order
+      .filter(([k]) => rec[k] && (rec[k].graded || 0) > 0)
+      .map(([k, label]) => {
+        const hr = parseFloat(rec[k].hit_rate || 0);
+        const graded = rec[k].graded || 0;
+        const cls = hr >= 0.58 ? 'good' : hr >= 0.50 ? 'warn' : 'na';
+        return `<span class="trec-pill ${cls}" title="${graded} graded">${label} ${pct(hr)}</span>`;
+      });
+
+    if (!pills.length) {
+      $('trecPills').innerHTML = '<span class="trec-pill na">No data yet</span>';
+      $('trecNote').textContent = '0 graded bets · 30d';
+      return;
+    }
+
+    $('trecPills').innerHTML = pills.join('');
+    $('trecNote').textContent = `${d.total_graded || 0} graded bets · 30d`;
   } catch { $('trecPills').innerHTML='<span class="trec-pill na">Unavailable</span>'; }
 }
 
