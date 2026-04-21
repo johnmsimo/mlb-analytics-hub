@@ -7423,6 +7423,72 @@ def _compute_streak(log, stat_key, line):
     return {"direction": last_dir, "length": length}
 
 
+def _compute_dashboard_quick_props(game_pk, limit=3):
+    """Compute top quick-prop picks for a game card strip."""
+    gdata, away_bats, home_bats, away_t, home_t, _pitchers = _props_fetch_game(game_pk)
+    if not gdata:
+        return None, []
+
+    away_abbr = away_t.get("team", {}).get("abbreviation", "AWAY")
+    home_abbr = home_t.get("team", {}).get("abbreviation", "HOME")
+
+    tagged = [(b, away_abbr) for b in away_bats[:6]] + [(b, home_abbr) for b in home_bats[:6]]
+
+    market_config = [
+        ("hits", "hits", "Hits", [("0.5", "batter_hits"), ("1.5", "batter_hits")]),
+        ("hr", "hr", "Home Runs", [("0.5", "batter_home_runs")]),
+        ("tb", "tb", "Total Bases", [("1.5", "batter_total_bases"), ("2.5", "batter_total_bases")]),
+        ("rbi", "rbi", "RBIs", [("0.5", "batter_rbis"), ("1.5", "batter_rbis")]),
+    ]
+
+    def _score_batter(batter, team):
+        pid = batter.get("id")
+        name = batter.get("name", "")
+        if not pid:
+            return []
+        trends = _build_player_trends(int(pid), False)
+        rates = trends.get("over_rates", {})
+        best = {}
+
+        for market, mkey, mlabel, line_pairs in market_config:
+            for line_str, market_key in line_pairs:
+                l10 = rates.get(mkey, {}).get(line_str, {}).get("l10", {})
+                pct = l10.get("pct")
+                tot = l10.get("total", 0)
+                if pct is None or tot < 5 or pct < 0.60:
+                    continue
+                if market not in best or pct > best[market]["l10_pct"]:
+                    edge = pct - 0.5
+                    hub = _hub_rating(pct, edge, pct)
+                    best[market] = {
+                        "player": name,
+                        "playerId": pid,
+                        "team": team,
+                        "market": mkey,
+                        "marketKey": market_key,
+                        "marketLabel": mlabel,
+                        "line": float(line_str),
+                        "l10_pct": round(pct, 3),
+                        "l10_total": tot,
+                        "hubRating": hub,
+                        "evPct": round(edge * 100, 1),
+                    }
+
+        return list(best.values())
+
+    all_picks = []
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        futs = {ex.submit(_score_batter, b, t): (b, t) for b, t in tagged}
+        for fut in as_completed(futs):
+            try:
+                all_picks.extend(fut.result())
+            except Exception:
+                pass
+
+    all_picks.sort(key=lambda x: x.get("l10_pct", 0), reverse=True)
+    return gdata, all_picks[:limit]
+
+
 # ── Route: L5/L10 trends for all players in a game ───────────────────────────
 @app.route("/api/props/trends/<int:game_pk>")
 def api_props_trends(game_pk):
@@ -7465,10 +7531,13 @@ def api_props_trends(game_pk):
                 except Exception as fe:
                     results[str(pid)] = {"name": name, "error": str(fe)}
 
+        _gdata2, quick_props = _compute_dashboard_quick_props(game_pk, limit=3)
+
         return jsonify({
             "success":  True,
             "gamePk":   game_pk,
             "players":  results,
+            "quickProps": quick_props,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
 
@@ -7485,67 +7554,13 @@ def api_props_quick(game_pk):
     Uses L10 over rates — lightweight, no Odds API calls needed.
     """
     try:
-        gdata, away_bats, home_bats, away_t, home_t, pitchers = _props_fetch_game(game_pk)
+        gdata, picks = _compute_dashboard_quick_props(game_pk, limit=3)
         if not gdata:
             return jsonify({"success": False, "error": "Game not found"}), 404
-
-        away_abbr = away_t.get("team", {}).get("abbreviation", "AWAY")
-        home_abbr = home_t.get("team", {}).get("abbreviation", "HOME")
-
-        tagged = [(b, away_abbr) for b in away_bats[:6]] + [(b, home_abbr) for b in home_bats[:6]]
-
-        MARKET_CONFIG = [
-            ("hits", "hits", "Hits",        [("0.5", "batter_hits"),   ("1.5", "batter_hits")]),
-            ("hr",   "hr",   "Home Runs",   [("0.5", "batter_home_runs")]),
-            ("tb",   "tb",   "Total Bases", [("1.5", "batter_total_bases"), ("2.5", "batter_total_bases")]),
-            ("rbi",  "rbi",  "RBIs",        [("0.5", "batter_rbis"),   ("1.5", "batter_rbis")]),
-        ]
-
-        def _score_batter(batter, team):
-            pid  = batter.get("id")
-            name = batter.get("name", "")
-            if not pid:
-                return []
-            trends = _build_player_trends(int(pid), False)
-            rates  = trends.get("over_rates", {})
-            best   = {}
-            for market, mkey, mlabel, line_pairs in MARKET_CONFIG:
-                for line_str, market_key in line_pairs:
-                    l10  = rates.get(mkey, {}).get(line_str, {}).get("l10", {})
-                    pct  = l10.get("pct")
-                    tot  = l10.get("total", 0)
-                    if pct is None or tot < 5 or pct < 0.60:
-                        continue
-                    if market not in best or pct > best[market]["l10_pct"]:
-                        hub = max(0, min(100, round(pct * 100)))
-                        best[market] = {
-                            "player":      name,
-                            "playerId":    pid,
-                            "team":        team,
-                            "market":      mkey,
-                            "marketKey":   market_key,
-                            "marketLabel": mlabel,
-                            "line":        float(line_str),
-                            "l10_pct":     round(pct, 3),
-                            "l10_total":   tot,
-                            "hub_score":   hub,
-                        }
-            return list(best.values())
-
-        all_picks = []
-        with ThreadPoolExecutor(max_workers=8) as ex:
-            futs = {ex.submit(_score_batter, b, t): (b, t) for b, t in tagged}
-            for fut in as_completed(futs):
-                try:
-                    all_picks.extend(fut.result())
-                except Exception:
-                    pass
-
-        all_picks.sort(key=lambda x: x["l10_pct"], reverse=True)
         return jsonify({
             "success": True,
             "gamePk":  game_pk,
-            "picks":   all_picks[:3],
+            "picks":   picks,
         })
 
     except Exception as ex:

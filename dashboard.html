@@ -97,6 +97,9 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .qp-row:last-child{border-bottom:none}
 .qp-name{flex:1;color:var(--t);font-weight:600;min-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .qp-mkt{font-family:Orbitron,monospace;font-size:.56rem;color:var(--mu);letter-spacing:.8px;white-space:nowrap}
+.qp-ev{font-family:Orbitron,monospace;font-size:.58rem;font-weight:700;white-space:nowrap}
+.qp-ev.pos{color:#00e676}
+.qp-ev.neg{color:#ef5350}
 .qp-hub{font-family:Orbitron,monospace;font-size:.6rem;font-weight:700;padding:2px 6px;border-radius:5px;white-space:nowrap}
 .qp-hub.elite{background:rgba(0,230,118,.15);color:#00e676;border:1px solid rgba(0,230,118,.3)}
 .qp-hub.strong{background:rgba(0,229,255,.12);color:var(--c);border:1px solid rgba(0,229,255,.25)}
@@ -471,7 +474,7 @@ function toggleQuickProps(e,pk){
   if(!open)return;
   if(QP_DATA[pk]){renderQuickProps(pk,QP_DATA[pk]);return;}
   strip.innerHTML='<div class="qp-loading">Loading top props…</div>';
-  fetch('/api/props/quick/'+pk)
+  fetch('/api/props/trends/'+pk)
     .then(function(r){return r.json();})
     .then(function(d){QP_DATA[pk]=d;renderQuickProps(pk,d);})
     .catch(function(){
@@ -482,21 +485,25 @@ function toggleQuickProps(e,pk){
 function renderQuickProps(pk,d){
   var strip=document.getElementById('qp-'+pk);
   if(!strip)return;
-  var picks=(d&&d.picks)||[];
+  var picks=(d&&d.quickProps)||[];
+  if(!picks.length && d && d.picks) picks=d.picks;
   if(!picks.length){strip.innerHTML='<div class="qp-loading">No standout props found</div>';return;}
   var mktLabels={hits:'Hits',hr:'HR',tb:'Tot.Bases',rbi:'RBIs'};
   var tracked=JSON.parse(localStorage.getItem('tracked_ids')||'[]');
   strip.innerHTML=picks.map(function(p,i){
-     var hubRating=Math.round(p.hubRating||0);
-     var cls=hubRating>=85?'elite':hubRating>=70?'strong':hubRating>=55?'mod':'low';
-    var mkt=(mktLabels[p.market]||p.market)+' O'+p.line;
+    var hubRating=Math.round(p.hubRating||p.hub_score||0);
+    var cls=hubRating>=85?'elite':hubRating>=70?'strong':hubRating>=55?'mod':'low';
+    var mkt=((p.marketLabel||mktLabels[p.market]||p.market)||'Prop')+' O'+p.line;
+    var ev=parseFloat(p.evPct||0);
+    var evTxt=(ev>=0?'+':'')+ev.toFixed(1)+'% EV';
     var key=p.playerId+':'+p.market+':'+p.line;
     var saved=tracked.indexOf(key)>=0;
     var bid='qpsave-'+pk+'-'+i;
     return '<div class="qp-row">'
       +'<span class="qp-name">'+p.player+'</span>'
       +'<span class="qp-mkt">'+mkt+'</span>'
-       +'<span class="qp-hub '+cls+'">HUB '+hubRating+'</span>'
+      +'<span class="qp-hub '+cls+'">HUB '+hubRating+'</span>'
+      +'<span class="qp-ev '+(ev>=0?'pos':'neg')+'">'+evTxt+'</span>'
       +'<button class="qp-save'+(saved?' saved':'')
       +'" id="'+bid+'" onclick="qpSave(event,'+JSON.stringify(p)+',\''+bid+'\')">'
       +(saved?'✓ Saved':'💾')+'</button>'
@@ -511,7 +518,8 @@ function qpSave(e,pick,btnId){
     player:pick.player,playerId:pick.playerId,team:pick.team,
     marketKey:pick.marketKey||('batter_'+pick.market),
     line:pick.line,recommendedSide:'Over',source:'dashboard',
-    adjProb:pick.l10_pct||0.5,hubRating:pick.hub_score||0
+    adjProb:pick.l10_pct||0.5,hubRating:pick.hubRating||pick.hub_score||0,
+    evPct:(pick.evPct!=null?pick.evPct/100:null)
   };
   fetch('/api/tracker/pick',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
     .then(function(r){return r.json();})
