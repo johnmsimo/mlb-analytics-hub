@@ -1880,6 +1880,7 @@ _bvp_lock  = threading.Lock()
 _pitch_adv_cache: dict = {}            # {(batter_id, pitcher_id): (date, adv_dict)}
 _batter_pitch_perf_cache: dict = {}    # {batter_id: (date, perf_dict)}
 _pitch_adv_lock = threading.Lock()
+_PITCH_ADV_USE_PYBASEBALL = os.getenv("PITCH_ADV_USE_PYBASEBALL", "0") == "1"
 
 # League averages used for Bayesian shrinkage
 _LEAGUE_WOBA  = 0.320
@@ -2308,6 +2309,14 @@ def _batter_pitch_profile(batter_id):
             return cached[1]
 
     profile = None
+
+    # Stability guard: pybaseball Statcast pulls are expensive and can timeout
+    # request handlers under load. Enable only when explicitly requested.
+    if not _PITCH_ADV_USE_PYBASEBALL:
+        with _pitch_adv_lock:
+            _batter_pitch_perf_cache[batter_id] = (today, None)
+        return None
+
     try:
         import pybaseball as pb
         start_dt = f"{datetime.now().year}-03-01"
@@ -2375,6 +2384,21 @@ def _pitch_type_advantage(batter_id, pitcher_id, batter_name='', pitcher_name=''
             overall_avg = _safe_f((prof or {}).get("overall_avg"), None)
             pitch_avg = _safe_f(((prof or {}).get("by_pitch") or {}).get(pt_code), None)
 
+            # Fast fallback when pitch-type Statcast isn't available:
+            # proxy by handedness split vs pitcher's throwing hand.
+            proxy_note = None
+            if pitch_avg is None:
+                phand = (player_profile(int(pitcher_id)).get("throws") or "R").upper()
+                splits = hitter_split_profile(int(batter_id)) or {}
+                skey = "vl" if phand == "L" else "vr"
+                split_avg = _safe_f((splits.get(skey) or {}).get("avg"), None)
+                if overall_avg is None:
+                    fgb = fg_batter(batter_name or "") if batter_name else {}
+                    overall_avg = _safe_f(fgb.get("fg_avg"), None)
+                if split_avg is not None:
+                    pitch_avg = split_avg
+                    proxy_note = "(proxy: handedness split)"
+
             if pitch_avg is None:
                 status = "neutral"
                 note = "Neutral matchup"
@@ -2390,6 +2414,8 @@ def _pitch_type_advantage(batter_id, pitcher_id, batter_name='', pitcher_name=''
                 else:
                     status = "neutral"
                     note = "Neutral matchup"
+                if proxy_note and note != "Neutral matchup":
+                    note = f"{note} {proxy_note}"
 
             out = {
                 "status": status,
@@ -2413,10 +2439,10 @@ def _pitch_type_advantage(batter_id, pitcher_id, batter_name='', pitcher_name=''
 def _num(v, d=0.0):
     try:
         if v in (None, "", "N/A", "---"):
-            return float(d)
+            return d if d is None else float(d)
         return float(v)
     except:
-        return float(d)
+        return d if d is None else float(d)
 
 
 def _clamp(v, lo, hi):
