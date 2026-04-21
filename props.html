@@ -265,6 +265,11 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .pfchip.on-o{border-color:rgba(255,152,0,.4);background:rgba(255,152,0,.08);color:var(--o)}
 .pfchip-clear{border-color:rgba(244,67,54,.3)!important;color:var(--r)!important}
 .pfchip-clear:hover{border-color:var(--r)!important;background:rgba(244,67,54,.1)!important}
+/* ── Save Pick button ── */
+.save-btn{padding:4px 10px;border-radius:6px;border:1px solid rgba(0,229,255,.25);background:rgba(0,229,255,.06);color:var(--c);font-family:'Orbitron',monospace;font-size:.52rem;letter-spacing:.8px;cursor:pointer;transition:all .2s;white-space:nowrap}
+.save-btn:hover{border-color:rgba(0,229,255,.5);background:rgba(0,229,255,.15)}
+.save-btn.saved{border-color:rgba(0,230,118,.45);background:rgba(0,230,118,.1);color:var(--g);cursor:default}
+.save-btn.saving{opacity:.5;cursor:wait}
 /* ── Pitcher trend section ── */
 .pp-trends{margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.06)}
 .pp-trend-hd{font-family:'Orbitron',monospace;font-size:.58rem;color:var(--mu);letter-spacing:2px;margin-bottom:8px}
@@ -452,7 +457,7 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
           <thead><tr>
             <th>PLAYER</th><th>TEAM</th><th>MARKET</th>
             <th>BOOK LINE</th><th>PROJECTION</th><th>EDGE</th>
-            <th>IMPL PROB</th><th>EV%</th><th>HUB</th><th>ODDS</th>
+            <th>IMPL PROB</th><th>EV%</th><th>HUB</th><th>ODDS</th><th>SAVE</th>
           </tr></thead>
           <tbody id="valueTbody"></tbody>
         </table>
@@ -515,6 +520,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const today = etToday();
   document.getElementById('dateInput').value = today;
   CUR_DATE = today;
+  loadTrackedKeys();
   loadGames();
   loadModelRecordBanner();
 });
@@ -546,6 +552,70 @@ async function loadModelRecordBanner() {
 function etToday() {
   const p = new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());
   return p.find(x=>x.type==='year').value+'-'+p.find(x=>x.type==='month').value+'-'+p.find(x=>x.type==='day').value;
+}
+
+// ── Save Pick ─────────────────────────────────────────────────────────────────
+const LS_KEY = 'hub_tracked_keys';
+
+function loadTrackedKeys() {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    TRACKED_KEYS = raw ? new Set(JSON.parse(raw)) : new Set();
+  } catch(e) { TRACKED_KEYS = new Set(); }
+}
+
+function persistTrackedKeys() {
+  try { localStorage.setItem(LS_KEY, JSON.stringify([...TRACKED_KEYS])); } catch(e) {}
+}
+
+function pickKey(entry) {
+  return `${(entry.player||'').toLowerCase()}|${entry.marketKey||''}|${entry.line??''}`;
+}
+
+function markSaveButton(key, state) {
+  document.querySelectorAll(`.save-btn[data-key="${CSS.escape(key)}"]`).forEach(btn => {
+    btn.classList.remove('saving','saved');
+    if (state === 'saved') { btn.classList.add('saved'); btn.textContent = '✓ SAVED'; }
+    else if (state === 'saving') { btn.classList.add('saving'); btn.textContent = '…'; }
+    else { btn.textContent = '＋ SAVE'; }
+  });
+}
+
+async function savePickDirect(entry) {
+  const key = pickKey(entry);
+  if (TRACKED_KEYS.has(key)) return;
+  markSaveButton(key, 'saving');
+  try {
+    const r = await fetch('/api/tracker/pick', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({...entry, date: CUR_DATE})
+    });
+    const d = await r.json();
+    if (d.success) {
+      TRACKED_KEYS.add(key);
+      persistTrackedKeys();
+      markSaveButton(key, 'saved');
+    } else {
+      markSaveButton(key, null);
+      alert('Save failed: ' + (d.error || 'unknown error'));
+    }
+  } catch(e) {
+    markSaveButton(key, null);
+    alert('Save failed: ' + e.message);
+  }
+}
+
+function savePickFromVB(idx) {
+  const entry = (VAL_DATA || [])[idx];
+  if (!entry) return;
+  savePickDirect(entry);
+}
+
+function savePickFromCard(playerName) {
+  const best = PLAYER_BEST_PROP[(playerName||'').toLowerCase()];
+  if (!best) return;
+  savePickDirect(best);
 }
 
 // ── Games ─────────────────────────────────────────────────────────────────────
@@ -1181,8 +1251,12 @@ function batterCard(b) {
   const adj  = p.adjustments || null;
   const pid  = b.id;
   const trnd = trendPillsForBatter(pid);
-  const hub  = PLAYER_HUB_MAP[(b.name||'').toLowerCase()];
-  const ev   = PLAYER_EV_MAP[(b.name||'').toLowerCase()];
+  const nKey = (b.name||'').toLowerCase();
+  const hub  = PLAYER_HUB_MAP[nKey];
+  const ev   = PLAYER_EV_MAP[nKey];
+  const best = PLAYER_BEST_PROP[nKey];
+  const bKey = best ? pickKey(best) : null;
+  const bSaved = bKey && TRACKED_KEYS.has(bKey);
 
   // BAT X composite section
   let batxHtml = '';
@@ -1211,6 +1285,7 @@ function batterCard(b) {
         <div class="bcard-slot">${b.slot||'?'}</div>
         ${hub != null ? hubBadge(hub) : ''}
         ${ev  != null ? evHtml(ev)    : ''}
+        ${best ? `<button class="save-btn${bSaved?' saved':''}" data-key="${(bKey||'').replace(/"/g,'&quot;')}" onclick="savePickFromCard('${(b.name||'').replace(/'/g,"\\'")}')"><span>${bSaved?'✓ SAVED':'＋ SAVE'}</span></button>` : ''}
       </div>
     </div>
     <div class="bcard-vs">vs ${b.opp_pitcher||'—'} (${b.opp_hand||'?'}HP) · ERA ${nd(b.opp_era)} · K/9 ${nd(b.opp_k9)}</div>
@@ -1380,8 +1455,10 @@ function matchupCol(title, pitcherName, era, batters, pitcherHand) {
 }
 
 // ── HUB RATING + EV% helpers ─────────────────────────────────────────────────
-let PLAYER_HUB_MAP = {};
-let PLAYER_EV_MAP  = {};
+let PLAYER_HUB_MAP  = {};
+let PLAYER_EV_MAP   = {};
+let TRACKED_KEYS    = new Set();
+let PLAYER_BEST_PROP = {};
 
 function computeHubRating(adjProb, edge) {
   const edgeBonus = Math.min((edge || 0) * 100, 20);
@@ -1411,11 +1488,11 @@ function evHtml(evPct) {
 // ── Value bets ────────────────────────────────────────────────────────────────
 async function loadValueBets() {
   if (!PROJ_DATA) {
-    gel('valueTbody').innerHTML = `<tr><td colspan="10"><div class="no-tracker">LOADING PROJECTIONS FIRST…</div></td></tr>`;
+    gel('valueTbody').innerHTML = `<tr><td colspan="11"><div class="no-tracker">LOADING PROJECTIONS FIRST…</div></td></tr>`;
     await loadProjections();
     if (!PROJ_DATA) return;
   }
-  gel('valueTbody').innerHTML = `<tr><td colspan="10">${loadHTML('CROSS-REFERENCING TRACKER ENTRIES…')}</td></tr>`;
+  gel('valueTbody').innerHTML = `<tr><td colspan="11">${loadHTML('CROSS-REFERENCING TRACKER ENTRIES…')}</td></tr>`;
   try {
     const r = await fetch(`/api/tracker/entries?date=${CUR_DATE}&gamePk=${CUR_GAME}`);
     const d = await r.json();
@@ -1426,7 +1503,7 @@ async function loadValueBets() {
     }
     renderValueTable(VAL_FILT);
   } catch(e) {
-    gel('valueTbody').innerHTML = `<tr><td colspan="10"><div class="no-tracker" style="color:var(--r)">ERROR: ${e.message}</div></td></tr>`;
+    gel('valueTbody').innerHTML = `<tr><td colspan="11"><div class="no-tracker" style="color:var(--r)">ERROR: ${e.message}</div></td></tr>`;
   }
 }
 
@@ -1453,15 +1530,20 @@ function buildValueBets(entries) {
   }).sort((a,b) => (b.edge??-999)-(a.edge??-999));
 
   // Build player lookup maps for batter card badges
-  PLAYER_HUB_MAP = {};
-  PLAYER_EV_MAP  = {};
-  result.forEach(b => {
+  PLAYER_HUB_MAP   = {};
+  PLAYER_EV_MAP    = {};
+  PLAYER_BEST_PROP = {};
+  result.forEach((b, idx) => {
     const n = (b.player||'').toLowerCase();
     const h = b.hubRating != null ? b.hubRating : computeHubRating(b.adjProb, b.edge);
     if (PLAYER_HUB_MAP[n] == null || h > PLAYER_HUB_MAP[n]) PLAYER_HUB_MAP[n] = h;
     // Store best (highest) EV% per player for the batter card badge
     const ev = b.evPct;
     if (ev != null && (PLAYER_EV_MAP[n] == null || ev > PLAYER_EV_MAP[n])) PLAYER_EV_MAP[n] = ev;
+    // Store best prop entry (by edge) for save button on batter card
+    if (b.edge != null && (PLAYER_BEST_PROP[n] == null || b.edge > PLAYER_BEST_PROP[n].edge)) {
+      PLAYER_BEST_PROP[n] = {...b, _idx: idx};
+    }
   });
 
   return result;
@@ -1496,7 +1578,7 @@ function renderValueTable(filter) {
   gel('vbTop').textContent   = topE !== null ? '+'+(topE*100).toFixed(1)+'%' : '—';
 
   if (!rows.length) {
-    gel('valueTbody').innerHTML = `<tr><td colspan="10"><div class="no-tracker">${
+    gel('valueTbody').innerHTML = `<tr><td colspan="11"><div class="no-tracker">${
       all.length===0 ? 'NO TRACKER ENTRIES FOR THIS GAME\nCAPTURE PROPS IN THE DAILY TRACKER FIRST' : 'NO ENTRIES MATCH THIS FILTER'
     }</div></td></tr>`;
     return;
@@ -1508,7 +1590,10 @@ function renderValueTable(filter) {
     const projStr = b.proj!==null
       ? Number(b.proj).toFixed((b.marketKey||'').includes('home_run')||b.marketKey==='player_home_runs'?3:2)
       : '—';
-    const lbl = MKT_LABELS[b.marketKey] || b.marketKey || '—';
+    const lbl     = MKT_LABELS[b.marketKey] || b.marketKey || '—';
+    const idx     = all.indexOf(b);
+    const key     = pickKey(b);
+    const isSaved = TRACKED_KEYS.has(key);
     return `<tr class="${b.edge>0.07?'hi-edge':''}">
       <td style="font-weight:700">${b.player||'—'}</td>
       <td style="color:var(--mu)">${b.team||'—'}</td>
@@ -1520,6 +1605,7 @@ function renderValueTable(filter) {
       <td>${evHtml(b.evPct)}</td>
       <td>${hubBadge(b.hubRating != null ? b.hubRating : computeHubRating(b.adjProb, b.edge))}</td>
       <td style="color:var(--mu)">${b.openOdds??'—'}</td>
+      <td><button class="save-btn${isSaved?' saved':''}" data-key="${key.replace(/"/g,'&quot;')}" onclick="savePickFromVB(${idx})">${isSaved?'✓ SAVED':'＋ SAVE'}</button></td>
     </tr>`;
   }).join('');
 }
