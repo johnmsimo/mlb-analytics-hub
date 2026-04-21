@@ -647,7 +647,7 @@ def sv_batter(name):
 # ── MLB API Helpers ───────────────────────────────────────────────────────────
 def fetch_schedule(date_str):
     url = (f"{MLB_API}/schedule?sportId=1&date={date_str}"
-           "&hydrate=team,probablePitcher,linescore,venue(location),weather")
+        "&hydrate=team,probablePitcher,lineups,linescore,venue(location),weather")
     r = requests.get(url, timeout=10); r.raise_for_status()
     dates = r.json().get("dates", [])
     return dates[0].get("games", []) if dates else []
@@ -3382,16 +3382,10 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
     except Exception:
         pass
 
-    # ── Pre-game fallback: scheduled lineups hydration ───────────────────────
+    # ── Pre-game fallback: scheduled lineups from already hydrated schedule ──
     if not away_lineup or not home_lineup:
         try:
-            lr = requests.get(
-                f"{MLB_API}/schedule?sportId=1&gamePk={game_pk}&hydrate=lineups",
-                timeout=10
-            ).json()
-            lr_dates = lr.get('dates', [])
-            lr_game = next((x for d in lr_dates for x in d.get('games', []) if x.get('gamePk') == game_pk), None)
-            lineups = (lr_game or {}).get('lineups') or {}
+            lineups = (g.get('lineups') or {})
 
             def _parse_scheduled_lineup(hitters):
                 out = []
@@ -3469,7 +3463,8 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
     away_pitcher = _pitcher_model(away_p.get('fullName', 'Away SP'), away_p.get('id'), away_team_id)
     home_pitcher = _pitcher_model(home_p.get('fullName', 'Home SP'), home_p.get('id'), home_team_id)
 
-    sims = 5000
+    sims = int(os.getenv('TRACKER_SIMS', '1200') or 1200)
+    sims = max(300, min(5000, sims))
     rng = random.Random(game_pk + int(capture_date.replace('-', '')) + 10)
     away_store = {i: [] for i in range(len(away_lineup))}
     home_store = {i: [] for i in range(len(home_lineup))}
@@ -3626,7 +3621,9 @@ def api_tracker_capture(date_str):
             except Exception:
                 print(f'[tracker_capture_game {gpk}]', traceback.format_exc())
 
-        with ThreadPoolExecutor(max_workers=6) as ex:
+        max_workers = int(os.getenv('TRACKER_CAPTURE_WORKERS', '3') or 3)
+        max_workers = max(1, min(8, max_workers))
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
             list(ex.map(_capture_one, sched))
 
         store = _load_json(TRACKER_STORE, {})
