@@ -4064,6 +4064,20 @@ def _recalc_tracker_entry(row):
     if row.get('openingPrice') is None and row.get('marketPrice') is not None:
         row['openingPrice'] = row.get('marketPrice')
     row['openingImplied'] = _american_to_implied(row.get('openingPrice'))
+    if row.get('marketImplied') is None and row.get('marketPrice') is not None:
+        row['marketImplied'] = _american_to_implied(row.get('marketPrice'))
+    if row.get('edge') is None and row.get('adjProb') is not None and row.get('marketImplied') is not None:
+        try:
+            row['edge'] = round(float(row.get('adjProb')) - float(row.get('marketImplied')), 4)
+        except Exception:
+            row['edge'] = None
+    if row.get('evPct') is None and row.get('adjProb') is not None and row.get('marketImplied') not in (None, 0):
+        try:
+            mi = float(row.get('marketImplied'))
+            if mi > 0:
+                row['evPct'] = round(float(row.get('adjProb')) / mi - 1, 4)
+        except Exception:
+            row['evPct'] = None
     if row.get('closingPrice') is not None:
         row['closingImplied'] = _american_to_implied(row.get('closingPrice'))
     if row.get('openingImplied') is not None and row.get('closingImplied') is not None:
@@ -4164,6 +4178,8 @@ def api_tracker_close(date_str):
         g = games.get(gpk)
         if not g:
             return
+        game_status = ((g.get('status') or {}).get('detailedState') or '').lower()
+        is_final = 'final' in game_status
         away_name = g.get('teams', {}).get('away', {}).get('team', {}).get('name', '')
         home_name = g.get('teams', {}).get('home', {}).get('team', {}).get('name', '')
         event, _ = _find_odds_event(away_name, home_name)
@@ -4177,6 +4193,14 @@ def api_tracker_close(date_str):
         props = _parse_prop_markets(books, valid_names)
         now_ts = datetime.now().isoformat()
         local_updated = 0
+        players = {}
+        if is_final:
+            try:
+                box = requests.get(f"{MLB_API}/game/{gpk}/boxscore", timeout=10).json().get('teams', {})
+                for side in ['away', 'home']:
+                    players.update((box.get(side) or {}).get('players', {}))
+            except Exception:
+                players = {}
         for row in rows:
             m = next((x for x in props if x.get('player') == row.get('player') and x.get('market_key') == row.get('marketKey') and float(x.get('line', 0)) == float(row.get('line', 0))), None)
             if not m:
@@ -4184,6 +4208,33 @@ def api_tracker_close(date_str):
             row['closingPrice'] = m.get('over_price')
             row['closingBookmaker'] = m.get('bookmaker')
             row['closingCapturedAt'] = now_ts
+            # If capture ran in fast mode without odds, backfill opening/market now.
+            if row.get('marketPrice') is None:
+                row['marketPrice'] = m.get('over_price')
+            if row.get('bookmaker') is None:
+                row['bookmaker'] = m.get('bookmaker')
+            if row.get('marketImplied') is None:
+                row['marketImplied'] = m.get('over_implied')
+            if row.get('openingPrice') is None:
+                row['openingPrice'] = m.get('over_price')
+            if row.get('openingImplied') is None:
+                row['openingImplied'] = m.get('over_implied')
+
+            if is_final and row.get('grade') == 'pending':
+                pobj = None
+                pid = row.get('playerId')
+                if pid:
+                    pobj = players.get(f'ID{pid}')
+                if not pobj:
+                    for v in players.values():
+                        if (v.get('person', {}).get('fullName') or '').lower() == (row.get('player') or '').lower():
+                            pobj = v
+                            break
+                actual = _tracker_stat_from_boxscore(pobj, row.get('marketKey'))
+                row['actual'] = actual
+                row['grade'] = _grade_over(actual, row.get('line'))
+                row['status'] = 'graded'
+
             _recalc_tracker_entry(row)
             local_updated += 1
         with lock:
