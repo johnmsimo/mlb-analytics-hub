@@ -3410,11 +3410,13 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None):
                 edge = (adj_prob - market.get('over_implied')) if market and market.get('over_implied') is not None else None
                 score = (edge * 100.0 if edge is not None else 0) + adj_prob
                 hub = _hub_rating(adj_prob, edge or 0)
+                mi = market.get('over_implied') if market else None
+                ev_pct = round(adj_prob / mi - 1, 4) if mi and mi > 0 else None
                 rows.append({
                     'date': capture_date, 'gamePk': game_pk, 'team': team_abbr, 'player': p.get('name'), 'playerId': p.get('id'), 'marketKey': mk, 'line': line, 'recommendedSide': 'Over',
                     'rawProb': round(raw_prob, 4), 'adjProb': round(adj_prob, 4), 'modelMean': round(float(p.get(mean_field, 0) or 0), 3), 'edge': round(edge, 4) if edge is not None else None,
                     'bookmaker': market.get('bookmaker') if market else None, 'marketPrice': market.get('over_price') if market else None, 'marketImplied': market.get('over_implied') if market else None,
-                    'score': round(score, 4), 'hubRating': hub, 'opp': opp_name, 'reason': _projection_reason_short(p.get('name'), mk, adj_prob, edge, opp_name), 'status': 'pending', 'actual': None, 'grade': 'pending', 'openingPrice': market.get('over_price') if market else None, 'openingImplied': market.get('over_implied') if market else None, 'closingPrice': None, 'closingImplied': None, 'closingBookmaker': None, 'closingCapturedAt': None, 'clvEdge': None, 'profitUnits': None
+                    'score': round(score, 4), 'hubRating': hub, 'evPct': ev_pct, 'opp': opp_name, 'reason': _projection_reason_short(p.get('name'), mk, adj_prob, edge, opp_name), 'status': 'pending', 'actual': None, 'grade': 'pending', 'openingPrice': market.get('over_price') if market else None, 'openingImplied': market.get('over_implied') if market else None, 'closingPrice': None, 'closingImplied': None, 'closingBookmaker': None, 'closingCapturedAt': None, 'clvEdge': None, 'profitUnits': None
                 })
 
     process_hitters(away_props, away_abbr, home_pitcher.get('name'))
@@ -3430,11 +3432,13 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None):
             edge = (adj_prob - market.get('over_implied')) if market and market.get('over_implied') is not None else None
             score = (edge * 100.0 if edge is not None else 0) + adj_prob
             hub = _hub_rating(adj_prob, edge or 0)
+            mi = market.get('over_implied') if market else None
+            ev_pct = round(adj_prob / mi - 1, 4) if mi and mi > 0 else None
             rows.append({
                 'date': capture_date, 'gamePk': game_pk, 'team': team_abbr, 'player': sp.get('name'), 'playerId': sp.get('id'), 'marketKey': 'pitcher_strikeouts', 'line': line, 'recommendedSide': 'Over',
                 'rawProb': round(raw_prob, 4), 'adjProb': round(adj_prob, 4), 'modelMean': round(float(sp.get('mean_k', 0) or 0), 3), 'edge': round(edge, 4) if edge is not None else None,
                 'bookmaker': market.get('bookmaker') if market else None, 'marketPrice': market.get('over_price') if market else None, 'marketImplied': market.get('over_implied') if market else None,
-                'score': round(score, 4), 'hubRating': hub, 'opp': '', 'reason': _projection_reason_short(sp.get('name'), 'pitcher_strikeouts', adj_prob, edge), 'status': 'pending', 'actual': None, 'grade': 'pending', 'openingPrice': market.get('over_price') if market else None, 'openingImplied': market.get('over_implied') if market else None, 'closingPrice': None, 'closingImplied': None, 'closingBookmaker': None, 'closingCapturedAt': None, 'clvEdge': None, 'profitUnits': None
+                'score': round(score, 4), 'hubRating': hub, 'evPct': ev_pct, 'opp': '', 'reason': _projection_reason_short(sp.get('name'), 'pitcher_strikeouts', adj_prob, edge), 'status': 'pending', 'actual': None, 'grade': 'pending', 'openingPrice': market.get('over_price') if market else None, 'openingImplied': market.get('over_implied') if market else None, 'closingPrice': None, 'closingImplied': None, 'closingBookmaker': None, 'closingCapturedAt': None, 'clvEdge': None, 'profitUnits': None
             })
 
     rows.sort(key=lambda x: x.get('score', 0), reverse=True)
