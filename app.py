@@ -4066,20 +4066,25 @@ def _recalc_tracker_entry(row):
     row['openingImplied'] = _american_to_implied(row.get('openingPrice'))
     if row.get('marketImplied') is None and row.get('marketPrice') is not None:
         row['marketImplied'] = _american_to_implied(row.get('marketPrice'))
-    if row.get('edge') is None and row.get('adjProb') is not None and row.get('marketImplied') is not None:
+    implied_for_edge = row.get('marketImplied')
+    if implied_for_edge is None:
+        implied_for_edge = row.get('openingImplied')
+    if row.get('closingPrice') is not None:
+        row['closingImplied'] = _american_to_implied(row.get('closingPrice'))
+        if implied_for_edge is None:
+            implied_for_edge = row.get('closingImplied')
+    if row.get('edge') is None and row.get('adjProb') is not None and implied_for_edge is not None:
         try:
-            row['edge'] = round(float(row.get('adjProb')) - float(row.get('marketImplied')), 4)
+            row['edge'] = round(float(row.get('adjProb')) - float(implied_for_edge), 4)
         except Exception:
             row['edge'] = None
-    if row.get('evPct') is None and row.get('adjProb') is not None and row.get('marketImplied') not in (None, 0):
+    if row.get('evPct') is None and row.get('adjProb') is not None and implied_for_edge not in (None, 0):
         try:
-            mi = float(row.get('marketImplied'))
+            mi = float(implied_for_edge)
             if mi > 0:
                 row['evPct'] = round(float(row.get('adjProb')) / mi - 1, 4)
         except Exception:
             row['evPct'] = None
-    if row.get('closingPrice') is not None:
-        row['closingImplied'] = _american_to_implied(row.get('closingPrice'))
     if row.get('openingImplied') is not None and row.get('closingImplied') is not None:
         row['clvEdge'] = round(float(row['closingImplied']) - float(row['openingImplied']), 4)
     else:
@@ -4209,12 +4214,9 @@ def api_tracker_close(date_str):
             row['closingBookmaker'] = m.get('bookmaker')
             row['closingCapturedAt'] = now_ts
             # If capture ran in fast mode without odds, backfill opening/market now.
-            if row.get('marketPrice') is None:
-                row['marketPrice'] = m.get('over_price')
-            if row.get('bookmaker') is None:
-                row['bookmaker'] = m.get('bookmaker')
-            if row.get('marketImplied') is None:
-                row['marketImplied'] = m.get('over_implied')
+            row['marketPrice'] = m.get('over_price')
+            row['bookmaker'] = m.get('bookmaker')
+            row['marketImplied'] = m.get('over_implied')
             if row.get('openingPrice') is None:
                 row['openingPrice'] = m.get('over_price')
             if row.get('openingImplied') is None:
