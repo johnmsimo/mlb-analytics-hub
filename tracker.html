@@ -1036,15 +1036,15 @@ async function loadCal() {
     const s=d.summary||{};
     $('calTracked').textContent=s.tracked||0;
     $('calGraded').textContent =s.graded||0;
-    $('calHR').textContent     =s.hitrate!=null?pct(s.hitrate):'—';
-    $('calEdge').textContent   =s.avgedge!=null?pct(s.avgedge):'—';
+    $('calHR').textContent     =s.hit_rate!=null?pct(s.hit_rate):'—';
+    $('calEdge').textContent   =s.avg_edge!=null?pct(s.avg_edge):'—';
     const rows=d.markets||[];
     st.calMarkets=new Set(rows.filter(r=>r.action!=='hold').map(r=>r.marketKey));
     $('calBody').innerHTML=rows.length?rows.map(r=>`<tr>
       <td><input type="checkbox" class="cal-cb" data-mk="${r.marketKey}" ${st.calMarkets.has(r.marketKey)?'checked':''}></td>
       <td>${mkTag(r.marketKey)}</td><td>${r.graded||0}</td>
-      <td>${pct(r.hitrate||0)}</td><td>${pct(r.targetrate||0)}</td>
-      <td>${num(r.currentmultiplier,3)}</td><td style="color:var(--c)">${num(r.suggestedmultiplier,3)}</td>
+      <td>${pct(r.hit_rate||0)}</td><td>${pct(r.target_rate||0)}</td>
+      <td>${num(r.current_multiplier,3)}</td><td style="color:var(--c)">${num(r.suggested_multiplier,3)}</td>
       <td><span class="grade grade-${r.action==='increase'?'win':r.action==='decrease'?'loss':'pending'}">${(r.action||'hold').toUpperCase()}</span></td>
     </tr>`).join(''):'<tr><td colspan="8" class="empty">No calibration rows.</td></tr>';
     document.querySelectorAll('.cal-cb').forEach(el=>el.addEventListener('change',e=>{
@@ -1068,7 +1068,7 @@ async function applyCal() {
   if (!st.calMarkets.size){status('No markets selected',true);return;}
   status('Applying calibration…');
   try {
-    const d=await api('/api/tracker/calibration/apply',{method:'POST',body:JSON.stringify({apply_markets:[...st.calMarkets]})});
+    const d=await api('/api/tracker/calibration/apply',{method:'POST',body:JSON.stringify({markets:[...st.calMarkets]})});
     setAdj(d.adjustments);
     status(`Applied ${st.calMarkets.size} market(s)`);
   } catch(e){status(e.message,true);}
@@ -1080,15 +1080,15 @@ async function loadVal() {
   status('Loading value data…');
   try {
     const d=await api(`/api/tracker/value/dashboard/${date}?window=${w}`);
-    const s=d.summary||{};
+    const s=d.windowSummary||{};
     $('vUnits').textContent   =num(s.units,2);
     $('vROI').textContent     =s.roi!=null?pct(s.roi):'—';
     $('vAvgCLV').textContent  =s.avg_clv!=null?pct(s.avg_clv):'—';
     $('vCLVRate').textContent =s.clv_positive_rate!=null?pct(s.clv_positive_rate):'—';
     $('valPill').textContent=`${w}d window · ${s.graded_with_clv||0} with CLV`;
-    const series=d.series||[];
+    const series=d.overallSeries||[];
     lineChart('roiChart',series.map(x=>x.date),series.map(x=>parseFloat(x.roi||0)*100),'ROI %','#00e676');
-    const topClv=(d.top_clv||[]).slice(0,8);
+    const topClv=(d.topCLV||[]).slice(0,8);
     $('clvBody').innerHTML=topClv.length?topClv.map(r=>`<tr>
       <td>${safe(r.player)}</td><td>${mkTag(r.marketKey)}</td>
       <td>${r.openingPrice!=null?r.openingPrice:'—'}</td>
@@ -1143,9 +1143,9 @@ async function loadAttr() {
     const d=await api(`/api/tracker/attribution/dashboard/${date}?window=${w}`);
     const dash=d.dashboard||{};
     $('attrPill').textContent=`${w}d window`;
-    const mktRows=dash.by_market||[];
+    const mktRows=dash.marketAudit||[];
     $('attrMktBody').innerHTML=mktRows.length?mktRows.map(r=>`<tr>
-      <td>${mkTag(r.market||r.marketKey)}</td><td>${r.bets||0}</td>
+      <td>${mkTag(r.bucket||r.market||r.marketKey)}</td><td>${r.bets||0}</td>
       <td style="color:var(--g)">${r.wins||0}</td><td style="color:var(--r)">${r.losses||0}</td>
       <td>${r.hit_rate!=null?pct(r.hit_rate):'—'}</td>
       <td>${money(r.risk||0)}</td>
@@ -1153,9 +1153,9 @@ async function loadAttr() {
       <td>${r.roi!=null?pct(r.roi):'—'}</td>
       <td>${r.avg_clv!=null?pct(r.avg_clv):'—'}</td>
     </tr>`).join(''):'<tr><td colspan="9" class="empty">No market attribution data.</td></tr>';
-    const tierRows=dash.by_tier||[];
+    const tierRows=dash.tierAudit||[];
     $('attrTierBody').innerHTML=tierRows.length?tierRows.map(r=>`<tr>
-      <td>${tierBadge(r.tier||r.bucket)}</td><td>${r.bets||0}</td>
+      <td>${tierBadge(r.bucket||r.tier)}</td><td>${r.bets||0}</td>
       <td style="color:var(--g)">${r.wins||0}</td><td style="color:var(--r)">${r.losses||0}</td>
       <td>${r.hit_rate!=null?pct(r.hit_rate):'—'}</td>
       <td style="color:${(r.profit||0)>=0?'var(--g)':'var(--r)'}">${money(r.profit||0)}</td>
