@@ -1735,9 +1735,29 @@ def api_player_profile(player_id):
 
 @app.route("/api/bvp/<int:batter_id>/<int:pitcher_id>")
 def api_bvp(batter_id, pitcher_id):
-    """Batter-vs-Pitcher career H2H with Bayesian shrinkage."""
+    """Batter-vs-Pitcher grade and sample detail for props surfaces."""
     result = _fetch_bvp(batter_id, pitcher_id)
-    return jsonify(result)
+    if not result or not result.get("success"):
+        return jsonify({
+            "success": False,
+            "grade": "D",
+            "ops": None,
+            "avg": None,
+            "hr": 0,
+            "pa": 0,
+            "sample_note": "No BvP data available",
+        })
+    return jsonify({
+        "success": True,
+        "grade": result.get("grade", "D"),
+        "ops": result.get("ops"),
+        "avg": result.get("avg"),
+        "hr": result.get("hr", 0),
+        "pa": result.get("pa", 0),
+        "ops_ratio": result.get("ops_ratio"),
+        "sample_note": result.get("sample_note") or result.get("note") or "",
+        "tooltip": result.get("tooltip") or "",
+    })
 
 
 @app.route("/api/player/form/<int:player_id>")
@@ -1855,6 +1875,11 @@ _form_lock  = threading.Lock()
 # ── BvP (Batter-vs-Pitcher) Cache ────────────────────────────────────────────
 _bvp_cache: dict = {}           # {(batter_id, pitcher_id): (date, bvp_dict)}
 _bvp_lock  = threading.Lock()
+
+# ── Pitch-Type Advantage Cache (daily) ───────────────────────────────────────
+_pitch_adv_cache: dict = {}            # {(batter_id, pitcher_id): (date, adv_dict)}
+_batter_pitch_perf_cache: dict = {}    # {batter_id: (date, perf_dict)}
+_pitch_adv_lock = threading.Lock()
 
 # League averages used for Bayesian shrinkage
 _LEAGUE_WOBA  = 0.320
@@ -2121,7 +2146,22 @@ def _fetch_bvp(batter_id, pitcher_id):
         r.raise_for_status()
         splits = (r.json().get("stats") or [{}])[0].get("splits", [])
         if not splits:
-            result = {"success": True, "pa": 0, "note": "No career H2H on record", "shrunk": {}}
+            result = {
+                "success": True,
+                "pa": 0,
+                "ab": 0,
+                "h": 0,
+                "hr": 0,
+                "avg": None,
+                "ops": None,
+                "season_ops": None,
+                "ops_ratio": None,
+                "grade": "D",
+                "sample_note": "No career H2H on record",
+                "note": "No career H2H on record",
+                "tooltip": "No career BvP sample",
+                "shrunk": {},
+            }
         else:
             s   = splits[0].get("stat", {})
             ab  = int(s.get("atBats", 0) or 0)
@@ -2140,9 +2180,29 @@ def _fetch_bvp(batter_id, pitcher_id):
             raw_avg  = round(h / ab, 3) if ab else 0.0
             raw_obp  = round((h + bb + hbp) / pa, 3) if pa else 0.0
             raw_slg  = round(tb / ab, 3) if ab else 0.0
+            raw_ops  = round(raw_obp + raw_slg, 3) if pa and ab else None
             raw_woba = _woba_from_counts(bb, hbp, singles, dbl, tpl, hr, pa) or _LEAGUE_WOBA
             raw_kpct = round(so / pa, 4) if pa else _LEAGUE_KPCT
             raw_bbpct= round(bb / pa, 4) if pa else _LEAGUE_BBPCT
+
+            season_ops = None
+            try:
+                year = datetime.now().year
+                rs = requests.get(
+                    f"{MLB_API}/people/{batter_id}/stats",
+                    params={"stats": "season", "group": "hitting", "season": year, "sportId": 1},
+                    timeout=8,
+                )
+                if rs.ok:
+                    sp = (rs.json().get("stats") or [{}])[0].get("splits", [])
+                    if sp:
+                        season_ops = _safe_f((sp[0].get("stat") or {}).get("ops"), None)
+            except Exception:
+                season_ops = None
+
+            ops_ratio = None
+            if raw_ops is not None and season_ops is not None and season_ops > 0:
+                ops_ratio = round(raw_ops / season_ops, 3)
 
             # Bayesian shrinkage — with < 5 PA the estimate is nearly pure league avg
             shrunk_woba  = _shrink(raw_woba,  pa, _LEAGUE_WOBA,  _SHRINK_PA_BVP)
@@ -2158,38 +2218,51 @@ def _fetch_bvp(batter_id, pitcher_id):
             if pa == 0:
                 note = "No career H2H; league average assumed."
             elif pa < 10:
-                note = f"Only {pa} PA — very low confidence. Heavily shrunk to league avg."
-            elif pa < 30:
+                note = f"Only {pa} PA — insufficient sample."
+            elif pa < 20:
                 note = f"{pa} PA career H2H — moderate sample."
             else:
-                note = f"{pa} PA career H2H — usable sample."
+                note = f"{pa} PA career H2H — strong sample."
 
-            result = {
-                "success":    True,
-                "pa":         pa,
-                "ab":         ab,
-                "h":          h,
-                "hr":         hr,
-                "bb":         bb,
-                "so":         so,
+            temp = {
+                "success": True,
+                "pa": pa,
+                "ab": ab,
+                "h": h,
+                "hr": hr,
+                "bb": bb,
+                "so": so,
+                "avg": raw_avg,
+                "ops": raw_ops,
+                "season_ops": season_ops,
+                "ops_ratio": ops_ratio,
+                "sample_note": note,
                 "raw": {
-                    "avg":   raw_avg,
-                    "obp":   raw_obp,
-                    "slg":   raw_slg,
-                    "woba":  raw_woba,
-                    "kpct":  raw_kpct,
+                    "avg": raw_avg,
+                    "obp": raw_obp,
+                    "slg": raw_slg,
+                    "ops": raw_ops,
+                    "woba": raw_woba,
+                    "kpct": raw_kpct,
                     "bbpct": raw_bbpct,
                 },
                 "shrunk": {
-                    "woba":  shrunk_woba,
-                    "avg":   shrunk_avg,
-                    "kpct":  shrunk_kpct,
+                    "woba": shrunk_woba,
+                    "avg": shrunk_avg,
+                    "kpct": shrunk_kpct,
                     "bbpct": shrunk_bbpct,
                 },
                 "reliability": reliability,
-                "woba_edge":   woba_edge,
-                "note":        note,
+                "woba_edge": woba_edge,
+                "note": note,
             }
+            grade = _compute_bvp_grade(temp)
+            temp["grade"] = grade
+            avg_txt = f"{raw_avg:.3f}" if raw_avg else ".000"
+            ops_txt = f"{raw_ops:.3f}" if raw_ops is not None else "N/A"
+            temp["tooltip"] = f"{h}-for-{ab} ({avg_txt}) vs this pitcher | {hr} HR | {ops_txt} OPS"
+
+            result = temp
     except Exception as ex:
         print(f"[bvp] {batter_id} vs {pitcher_id}:", ex)
         result = {"success": False, "error": str(ex)}
@@ -2197,6 +2270,143 @@ def _fetch_bvp(batter_id, pitcher_id):
     with _bvp_lock:
         _bvp_cache[key] = (today, result)
     return result
+
+
+def _pitch_avg_from_events(events):
+    """Compute batting AVG from statcast event strings."""
+    if not events:
+        return None
+    ab_excluded = {
+        "walk", "intent_walk", "hit_by_pitch", "sac_bunt", "sac_fly",
+        "catcher_interf", "sac_fly_double_play", "sac_bunt_double_play",
+    }
+    hit_events = {"single", "double", "triple", "home_run"}
+    ab = 0
+    hits = 0
+    for ev in events:
+        if not ev:
+            continue
+        e = str(ev).strip().lower()
+        if not e or e in ab_excluded:
+            continue
+        ab += 1
+        if e in hit_events:
+            hits += 1
+    if ab <= 0:
+        return None
+    return round(hits / ab, 3)
+
+
+def _batter_pitch_profile(batter_id):
+    """Build per-batter AVG by pitch type from current-season Statcast."""
+    if not batter_id:
+        return None
+    today = datetime.now().date()
+    with _pitch_adv_lock:
+        cached = _batter_pitch_perf_cache.get(batter_id)
+        if cached and cached[0] == today:
+            return cached[1]
+
+    profile = None
+    try:
+        import pybaseball as pb
+        start_dt = f"{datetime.now().year}-03-01"
+        end_dt = datetime.now().strftime("%Y-%m-%d")
+        df = pb.statcast_batter(start_dt=start_dt, end_dt=end_dt, player_id=int(batter_id))
+        if df is not None and len(df) > 0 and "events" in df.columns:
+            events_all = [x for x in df["events"].tolist() if x is not None]
+            overall_avg = _pitch_avg_from_events(events_all)
+            by_pitch = {}
+            if "pitch_type" in df.columns:
+                for pt in sorted(set([str(x).upper() for x in df["pitch_type"].tolist() if x])):
+                    sub = df[df["pitch_type"].astype(str).str.upper() == pt]
+                    if len(sub) <= 0:
+                        continue
+                    p_avg = _pitch_avg_from_events([x for x in sub["events"].tolist() if x is not None])
+                    if p_avg is not None:
+                        by_pitch[pt] = p_avg
+            profile = {
+                "overall_avg": overall_avg,
+                "by_pitch": by_pitch,
+                "sample": int(len(df)),
+            }
+    except Exception as ex:
+        print(f"[pitch_adv:batter_profile] {batter_id}: {ex}")
+        profile = None
+
+    with _pitch_adv_lock:
+        _batter_pitch_perf_cache[batter_id] = (today, profile)
+    return profile
+
+
+def _pitch_type_advantage(batter_id, pitcher_id, batter_name='', pitcher_name=''):
+    """Classify batter performance vs pitcher's primary pitch type."""
+    if not batter_id or not pitcher_id:
+        return {"status": "neutral", "note": "Neutral matchup"}
+
+    today = datetime.now().date()
+    key = (int(batter_id), int(pitcher_id))
+    with _pitch_adv_lock:
+        cached = _pitch_adv_cache.get(key)
+        if cached and cached[0] == today:
+            return cached[1]
+
+    out = {"status": "neutral", "note": "Neutral matchup"}
+    try:
+        p_name = (pitcher_name or '').strip()
+        if not p_name:
+            try:
+                rp = requests.get(f"{MLB_API}/people/{pitcher_id}", timeout=8)
+                if rp.ok:
+                    p_name = ((rp.json().get("people") or [{}])[0].get("fullName") or "").strip()
+            except Exception:
+                p_name = ''
+
+        svp = sv_pitcher(p_name) if p_name else {}
+        arsenal = (svp.get("sv_arsenal_pct") or {}) if isinstance(svp, dict) else {}
+        if not arsenal:
+            out = {"status": "neutral", "note": "Neutral matchup"}
+        else:
+            primary_pitch, usage = max(arsenal.items(), key=lambda kv: _safe_f(kv[1], 0.0))
+            pt_code = str(primary_pitch or '').upper()
+            pt_label = PITCH_LABELS.get(str(primary_pitch or '').lower(), pt_code or 'pitch')
+
+            prof = _batter_pitch_profile(int(batter_id))
+            overall_avg = _safe_f((prof or {}).get("overall_avg"), None)
+            pitch_avg = _safe_f(((prof or {}).get("by_pitch") or {}).get(pt_code), None)
+
+            if pitch_avg is None:
+                status = "neutral"
+                note = "Neutral matchup"
+            else:
+                crush = (pitch_avg >= 0.280) or (overall_avg is not None and pitch_avg >= overall_avg + 0.030)
+                struggle = (pitch_avg <= 0.200) or (overall_avg is not None and pitch_avg <= overall_avg - 0.030)
+                if crush:
+                    status = "favorable"
+                    note = f"Crushes {pt_label.lower()}s ({pitch_avg:.3f}) — pitcher throws {_safe_f(usage, 0):.0f}% {pt_label.lower()}s"
+                elif struggle:
+                    status = "unfavorable"
+                    note = f"Struggles vs {pt_label.lower()}s ({pitch_avg:.3f}) — pitcher throws {_safe_f(usage, 0):.0f}% {pt_label.lower()}s"
+                else:
+                    status = "neutral"
+                    note = "Neutral matchup"
+
+            out = {
+                "status": status,
+                "note": note,
+                "primary_pitch": pt_code,
+                "primary_pitch_label": pt_label,
+                "usage_pct": round(_safe_f(usage, 0.0), 1),
+                "pitch_avg": pitch_avg,
+                "overall_avg": overall_avg,
+            }
+    except Exception as ex:
+        print(f"[pitch_adv] {batter_id} vs {pitcher_id}: {ex}")
+        out = {"status": "neutral", "note": "Neutral matchup"}
+
+    with _pitch_adv_lock:
+        _pitch_adv_cache[key] = (today, out)
+    return out
 
 
 
@@ -4746,37 +4956,26 @@ def api_tracker_portfolio(date_str):
 
 def _compute_bvp_grade(bvp_data):
     """
-    Grade batter vs pitcher matchup based on _fetch_bvp() data.
-    Returns: 'A+', 'A', 'B', 'C', 'D' or None if insufficient data.
-    
-    Grade logic:
-    - A+: woba_edge >= 0.040 AND reliability >= 0.7
-    - A:  woba_edge >= 0.030 AND reliability >= 0.6
-    - B:  woba_edge >= 0.015 AND reliability >= 0.4
-    - C:  woba_edge >= 0.005 AND reliability >= 0.2
-    - D:  woba_edge < 0.005 OR poor reliability
+    Grade batter vs pitcher matchup based on Sprint 2.1 rules.
+    Uses OPS ratio vs batter season OPS with PA thresholds.
     """
     if not bvp_data or not bvp_data.get('success'):
-        return None
-    
-    pa = bvp_data.get('pa', 0)
-    if pa < 3:  # Too little data
-        return None
-    
-    shrunk = bvp_data.get('shrunk', {})
-    reliability = bvp_data.get('reliability', 0)
-    woba_edge = shrunk.get('woba_edge', 0)
-    
-    if woba_edge >= 0.040 and reliability >= 0.7:
-        return 'A+'
-    elif woba_edge >= 0.030 and reliability >= 0.6:
-        return 'A'
-    elif woba_edge >= 0.015 and reliability >= 0.4:
-        return 'B'
-    elif woba_edge >= 0.005 and reliability >= 0.2:
-        return 'C'
-    else:
         return 'D'
+
+    pa = bvp_data.get('pa', 0)
+    ratio = bvp_data.get('ops_ratio')
+    if ratio is None:
+        return 'D'
+
+    if ratio >= 1.40 and pa >= 20:
+        return 'A+'
+    if ratio >= 1.20 and pa >= 15:
+        return 'A'
+    if ratio >= 1.05 and pa >= 10:
+        return 'B'
+    if ratio >= 0.85:
+        return 'C'
+    return 'D'
 
 
 # ── Phase 17 Bet Slip Builder + Final Card Output ─────────────────────────────
@@ -6808,6 +7007,8 @@ def api_props_projections(game_pk):
                 bid  = b.get("id")
                 form = _fetch_rolling_form(bid, False) if bid else None
                 bvp  = _fetch_bvp(bid, opp_pid)      if (bid and opp_pid) else None
+                pitch_adv = _pitch_type_advantage(bid, opp_pid, batter_name=name, pitcher_name=opp_pname) if (bid and opp_pid) else {"status": "neutral", "note": "Neutral matchup"}
+                bvp_grade = _compute_bvp_grade(bvp) if bvp else 'D'
                 proj = _project_batter_batx(
                     b, opp_pname, opp_pfg, opp_psv, pf, wx,
                     pitcher_hand=opp_hand,
@@ -6834,6 +7035,15 @@ def api_props_projections(game_pk):
                     "slg":          b.get("slg") or bfg.get("fg_slg"),
                     "fg_woba":      bfg.get("fg_woba"),
                     "sv_xwoba":     bsv.get("sv_xwoba"),
+                    "bvpGrade":     bvp_grade,
+                    "bvpTooltip":   (bvp or {}).get("tooltip") if isinstance(bvp, dict) else "",
+                    "bvpPA":        (bvp or {}).get("pa") if isinstance(bvp, dict) else 0,
+                    "bvpOPS":       (bvp or {}).get("ops") if isinstance(bvp, dict) else None,
+                    "pitchTypeAdvantage": (pitch_adv or {}).get("status", "neutral"),
+                    "pitchTypeAdvantageNote": (pitch_adv or {}).get("note", "Neutral matchup"),
+                    "pitchTypePrimary": (pitch_adv or {}).get("primary_pitch"),
+                    "pitchTypePrimaryLabel": (pitch_adv or {}).get("primary_pitch_label"),
+                    "pitchTypeUsagePct": (pitch_adv or {}).get("usage_pct"),
                     "sv_ev":        ev,
                     "sv_hh_pct":    hh,
                     "sv_brl_pct":   brl,
@@ -6931,6 +7141,70 @@ def api_props_projections(game_pk):
 
     except Exception as ex:
         print(f"[api_props_projections] {traceback.format_exc()}")
+        return jsonify({"success": False, "error": str(ex)}), 500
+
+
+@app.route('/api/batting-order-matchups/<int:game_pk>')
+def api_batting_order_matchups(game_pk):
+    """Batting-order matchup rows for deep-dive tab, including pitch-type edge."""
+    _maybe_refresh_fg()
+    _maybe_refresh_savant()
+    try:
+        gdata, away_bats, home_bats, away_t, home_t, pitchers = _props_fetch_game(game_pk)
+        if not gdata:
+            return jsonify({"success": False, "error": "Game not found"}), 404
+
+        ap_info = pitchers.get("ap", {})
+        hp_info = pitchers.get("hp", {})
+        ap_name = ap_info.get("fullName", "TBD")
+        hp_name = hp_info.get("fullName", "TBD")
+        ap_hand = (ap_info.get("pitchHand") or "R").upper()
+        hp_hand = (hp_info.get("pitchHand") or "R").upper()
+        ap_id = ap_info.get("id")
+        hp_id = hp_info.get("id")
+
+        away_abbr = away_t.get("team", {}).get("abbreviation", "AWAY")
+        home_abbr = home_t.get("team", {}).get("abbreviation", "HOME")
+
+        def _row(b, opp_pid, opp_name, opp_hand):
+            nm = b.get("name", "")
+            fgb = fg_batter(nm)
+            svb = sv_batter(nm)
+            split_avg = b.get("vs_l_avg") if opp_hand == "L" else b.get("vs_r_avg")
+            pitch_adv = _pitch_type_advantage(b.get("id"), opp_pid, batter_name=nm, pitcher_name=opp_name) if (b.get("id") and opp_pid) else {"status": "neutral", "note": "Neutral matchup"}
+            return {
+                "slot": b.get("slot"),
+                "name": nm,
+                "pos": b.get("pos"),
+                "avg": b.get("avg") or fgb.get("fg_avg") or "---",
+                "slg": b.get("slg") or fgb.get("fg_slg") or "---",
+                "iso": fgb.get("fg_iso") or "---",
+                "ops": b.get("ops") or fgb.get("fg_ops") or "---",
+                "xwoba": svb.get("sv_xwoba") or "---",
+                "ev": svb.get("sv_ev") or "---",
+                "brl_pct": svb.get("sv_brl_pct") or "---",
+                "split_avg": split_avg if split_avg not in (None, "N/A", "") else 0,
+                "pitch_type_advantage": (pitch_adv or {}).get("status", "neutral"),
+                "pitch_type_note": (pitch_adv or {}).get("note", "Neutral matchup"),
+            }
+
+        away_rows = [_row(b, hp_id, hp_name, hp_hand) for b in away_bats[:9]]
+        home_rows = [_row(b, ap_id, ap_name, ap_hand) for b in home_bats[:9]]
+
+        return jsonify({
+            "success": True,
+            "gamePk": game_pk,
+            "awayAbbr": away_abbr,
+            "homeAbbr": home_abbr,
+            "awayPitcherName": hp_name,
+            "awayPitcherHand": hp_hand,
+            "homePitcherName": ap_name,
+            "homePitcherHand": ap_hand,
+            "awayBatters": away_rows,
+            "homeBatters": home_rows,
+        })
+    except Exception as ex:
+        print(f"[api_batting_order_matchups] {traceback.format_exc()}")
         return jsonify({"success": False, "error": str(ex)}), 500
 
 
