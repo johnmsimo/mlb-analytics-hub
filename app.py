@@ -1307,6 +1307,105 @@ def e404(e): return jsonify({"error":"Not found"}), 404
 def e500(e): return jsonify({"error":str(e)}), 500
 
 
+def _extract_wind_mph(wind_value):
+    """Best-effort wind speed parse from strings like '14 mph NW'."""
+    try:
+        if isinstance(wind_value, (int, float)):
+            return float(wind_value)
+        m = re.search(r"(-?\d+(?:\.\d+)?)", str(wind_value or ""))
+        return float(m.group(1)) if m else None
+    except Exception:
+        return None
+
+
+def _fallback_matchup_insights(gdata, away_abbr, home_abbr, total_runs, run_env, favorite,
+                               away_pitcher_name, home_pitcher_name,
+                               away_pitcher_era, home_pitcher_era,
+                               weather_payload):
+    """Deterministic storyline fallback when Claude is unavailable."""
+    notes = []
+
+    sg = gdata.get("seriesGame")
+    st = gdata.get("seriesTotal")
+    if sg and st and st > 1:
+        if sg == 1:
+            notes.append(f"Series opener (Game 1 of {st}) often brings fresh high-leverage arms in late innings.")
+        elif sg == st:
+            notes.append(f"Series finale (Game {sg} of {st}) can increase lineup variance as teams manage bullpen usage.")
+        else:
+            notes.append(f"Mid-series spot (Game {sg} of {st}) favors stable baseline assumptions over one-off volatility.")
+
+    if run_env == "HIGH":
+        notes.append(f"Model run environment is HIGH with projected total {total_runs} — offense-friendly game script.")
+    elif run_env == "LOW":
+        notes.append(f"Model run environment is LOW with projected total {total_runs} — pitcher-friendly lean.")
+
+    wind_txt = weather_payload.get("wind") if isinstance(weather_payload, dict) else "N/A"
+    wind_mph = _extract_wind_mph(wind_txt)
+    if wind_mph is not None and wind_mph >= 12:
+        notes.append(f"Wind is notable ({wind_txt}); ball-flight variance is elevated for extra-base outcomes.")
+
+    if away_pitcher_name != "TBD" and away_pitcher_era <= 3.3:
+        notes.append(f"{away_pitcher_name} brings strong run prevention indicators (ERA {away_pitcher_era:.2f}) vs {home_abbr} lineup.")
+    if home_pitcher_name != "TBD" and home_pitcher_era <= 3.3:
+        notes.append(f"{home_pitcher_name} brings strong run prevention indicators (ERA {home_pitcher_era:.2f}) vs {away_abbr} lineup.")
+
+    if favorite and favorite != "EVEN":
+        notes.append(f"Model favorite is {favorite}; stack direction is stronger when that edge aligns with confirmed lineup quality.")
+
+    if len(notes) < 3:
+        notes.append("Focus on lineup confirmation near lock; late scratches can materially shift prop baselines.")
+    if len(notes) < 3:
+        notes.append("Target props where market line lags model mean by at least a half-step for cleaner edge capture.")
+
+    return notes[:5]
+
+
+def _claude_matchup_insights(context_payload):
+    """Generate 3-5 plain-language matchup bullets via Claude."""
+    try:
+        import anthropic
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            return None, "ANTHROPIC_API_KEY not configured"
+
+        client = anthropic.Anthropic(api_key=api_key)
+        prompt = (
+            "Generate 3 to 5 concise MLB matchup storyline bullets for today's game. "
+            "Use only the provided context. Prioritize actionable prop-betting context. "
+            "Output JSON only with key matchup_insights as an array of strings.\n\n"
+            f"Context JSON:\n{json.dumps(context_payload, ensure_ascii=True)}"
+        )
+
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=500,
+            temperature=0.4,
+            system=(
+                "You are an expert MLB betting analyst. "
+                "Respond with raw JSON only, no markdown, no backticks."
+            ),
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+        txt = (response.content[0].text or "").strip()
+        clean = txt.lstrip("```json").lstrip("```").rstrip("```").strip()
+        j0 = clean.find("{")
+        j1 = clean.rfind("}") + 1
+        if j0 < 0 or j1 <= j0:
+            return None, "Unable to parse Claude storyline JSON"
+        payload = json.loads(clean[j0:j1])
+        items = payload.get("matchup_insights") if isinstance(payload, dict) else None
+        if not isinstance(items, list):
+            return None, "Claude response missing matchup_insights[]"
+        out = [str(x).strip() for x in items if str(x).strip()]
+        if not out:
+            return None, "Claude storyline list empty"
+        return out[:5], None
+    except Exception as ex:
+        return None, str(ex)
+
+
 # ── Phase 3 Routes ────────────────────────────────────────────────────────────
 @app.route("/api/game-projection/<int:game_pk>")
 def api_game_projection(game_pk):
@@ -1419,6 +1518,92 @@ def api_game_projection(game_pk):
             fav = ht_abbr if home_runs > away_runs else at_abbr
         else:
             fav = "EVEN"
+
+        # Build lightweight BvP context from top lineup spots when available.
+        bvp_highlights = []
+        try:
+            def _bvp_lineup_highlights(lineup, opp_pitcher_id, opp_pitcher_name):
+                rows = []
+                if not opp_pitcher_id:
+                    return rows
+                for b in (lineup or [])[:6]:
+                    bid = b.get("id")
+                    if not bid:
+                        continue
+                    bp = _fetch_bvp(bid, opp_pitcher_id)
+                    if not bp or not bp.get("success"):
+                        continue
+                    pa = int(bp.get("pa", 0) or 0)
+                    avg = bp.get("avg")
+                    hr = int(bp.get("hr", 0) or 0)
+                    if pa < 6 or avg is None:
+                        continue
+                    rows.append(
+                        f"{b.get('name','Hitter')} vs {opp_pitcher_name}: {pa} PA, AVG {avg:.3f}, HR {hr}"
+                    )
+                    if len(rows) >= 2:
+                        break
+                return rows
+
+            bvp_highlights.extend(_bvp_lineup_highlights(away_bats, hp.get("id"), hp_n))
+            bvp_highlights.extend(_bvp_lineup_highlights(home_bats, ap.get("id"), ap_n))
+        except Exception:
+            bvp_highlights = []
+
+        story_context = {
+            "game_pk": game_pk,
+            "away_team": at_abbr,
+            "home_team": ht_abbr,
+            "favorite": fav,
+            "projected_total_runs": total,
+            "run_environment": run_env,
+            "weather": {
+                "temp": wx.get("temp", "N/A"),
+                "condition": wx.get("condition", "N/A"),
+                "wind": wx.get("wind", "N/A"),
+                "wind_dir": wx.get("wind_dir", ""),
+            },
+            "series": {
+                "game": gdata.get("seriesGame"),
+                "total": gdata.get("seriesTotal"),
+            },
+            "umpire_tendency": "Unknown",
+            "pitcher_form": {
+                "away_pitcher": {
+                    "name": ap_n,
+                    "era": round(home_pit_era, 2),
+                    "fip": round(home_pit_fip, 2),
+                },
+                "home_pitcher": {
+                    "name": hp_n,
+                    "era": round(away_pit_era, 2),
+                    "fip": round(away_pit_fip, 2),
+                },
+            },
+            "bvp_highlights": bvp_highlights,
+            "lineup_xwoba": {
+                "away": away_xwoba,
+                "home": home_xwoba,
+            },
+        }
+
+        matchup_insights, storyline_source = _claude_matchup_insights(story_context)
+        if not matchup_insights:
+            matchup_insights = _fallback_matchup_insights(
+                gdata,
+                at_abbr,
+                ht_abbr,
+                total,
+                run_env,
+                fav,
+                ap_n,
+                hp_n,
+                home_pit_era,
+                away_pit_era,
+                wx,
+            )
+            storyline_source = f"fallback: {storyline_source or 'claude unavailable'}"
+
         return jsonify({
             "success": True,
             "awayAbbr": at_abbr, "homeAbbr": ht_abbr,
@@ -1430,6 +1615,8 @@ def api_game_projection(game_pk):
             "awayPitcherFip": round(away_pit_fip,2),
             "homePitcherFip": round(home_pit_fip,2),
             "parkFactor": pf, "wxAdj": wx_adj,
+            "matchup_insights": matchup_insights[:5],
+            "storylineSource": storyline_source,
         })
     except Exception as ex:
         print("[api_game_projection]", traceback.format_exc())

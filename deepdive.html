@@ -134,6 +134,10 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .ou-big{text-align:center;padding:14px 0;border:1px solid rgba(0,229,255,.15);border-radius:10px;margin-bottom:14px;background:rgba(0,0,0,.2)}
 .ou-val{font-family:'Orbitron',monospace;font-size:2rem;font-weight:900}
 .ou-lbl{font-size:.6rem;color:var(--mu);letter-spacing:3px;margin-top:3px}
+.story-wrap{border-left:4px solid rgba(0,229,255,.55);padding:10px 12px;background:linear-gradient(135deg,rgba(0,229,255,.06),rgba(0,0,0,.2));border-radius:10px}
+.story-pill{display:flex;align-items:flex-start;gap:8px;padding:8px 10px;margin:7px 0;background:rgba(0,0,0,.28);border:1px solid rgba(0,229,255,.14);border-radius:999px;font-size:.7rem;line-height:1.45;color:var(--t)}
+.story-icon{font-size:.78rem;line-height:1;opacity:.95}
+.story-note{margin-top:8px;font-size:.58rem;color:var(--mu);letter-spacing:1px}
 /* Prop intel */
 .prop-sig{font-size:.63rem;font-family:'Orbitron',monospace;white-space:nowrap;font-weight:700}
 .prop-over{color:#00e676}.prop-lover{color:#76ff03}
@@ -385,6 +389,7 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 <div class="dg">
   <!-- GAME PROJECTION PANEL -->
   <div class="pnl fw pnl-src"><div class="pt">&#127919; GAME PROJECTION &amp; O/U MODEL <span class="tag-sv">PROJ</span></div><div id="gpContent"><div class="spinner"></div></div></div>
+  <div class="pnl fw pnl-src"><div class="pt">&#128203; KEY STORYLINES <span class="tag-sv">CLAUDE</span></div><div id="storylineContent"><div class="spinner"></div></div></div>
   <div class="pnl fw pnl-src" id="parlayRecWrap"><div class="pt">&#11088; TOP PICKS &amp; PARLAY RECOMMENDATION <span class="tag-sv">BAT X</span></div><div id="parlayRecPanel"><div class="spinner"></div></div></div>
   <div class="pnl"><div class="pt">&#127919; MODEL EDGE</div><div id="edgeP"><div class="spinner"></div></div></div>
   <div class="pnl"><div class="pt">&#127780; WEATHER</div><div id="wxP"><div class="spinner"></div></div></div>
@@ -937,12 +942,15 @@ function loadGameProjection() {
   }).catch(function(e){
     var el = document.getElementById('gpContent');
     if(el) el.innerHTML = '<p class="na">Game projection unavailable: '+e.message+'</p>';
+    var sEl = document.getElementById('storylineContent');
+    if(sEl) sEl.innerHTML = '<p class="na">Storylines unavailable: '+e.message+'</p>';
   });
 }
 
 function renderGameProjection(d) {
   if(!d || !d.success){
     document.getElementById('gpContent').innerHTML = '<p class="na">Projection data unavailable.</p>';
+    renderStorylines(null);
     return;
   }
   var ouVal = d.total;
@@ -974,6 +982,27 @@ function renderGameProjection(d) {
     '<div class="proj-note" style="margin-top:10px">Model: 60% xERA + 40% FIP vs lineup avg xwOBA \xd7 park factor. '
       + d.awayAbbr+' opp ERA: '+d.awayPitcherEra+' / FIP: '+d.awayPitcherFip
       + ' \xa0|\xa0 '+d.homeAbbr+' opp ERA: '+d.homePitcherEra+' / FIP: '+d.homePitcherFip+'</div>';
+
+  renderStorylines(d);
+}
+
+function renderStorylines(d){
+  var el = document.getElementById('storylineContent');
+  if(!el) return;
+  var items = (d && d.matchup_insights && d.matchup_insights.length) ? d.matchup_insights : [];
+  if(!items.length){
+    el.innerHTML = '<p class="na">No matchup storylines available yet.</p>';
+    return;
+  }
+  var html = '<div class="story-wrap">';
+  items.slice(0,5).forEach(function(t){
+    html += '<div class="story-pill"><span class="story-icon">&#128161;</span><span>'+String(t)+'</span></div>';
+  });
+  if(d && d.storylineSource){
+    html += '<div class="story-note">SOURCE: '+String(d.storylineSource).toUpperCase()+'</div>';
+  }
+  html += '</div>';
+  el.innerHTML = html;
 }
 
   
