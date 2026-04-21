@@ -1,4 +1,4 @@
-import os, threading, traceback, difflib, io, csv as csvmod, json, re, time
+import os, threading, traceback, difflib, io, csv as csvmod, json, re, time, uuid
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
@@ -3769,6 +3769,64 @@ def api_tracker_model_record():
                        'hit_rate': round(v['wins'] / total, 3) if total else 0.0}
     return jsonify({'success': True, 'record': record, 'window': 30,
                     'total_graded': len(graded)})
+
+
+@app.route('/api/tracker/pick', methods=['POST'])
+def api_tracker_pick():
+    entry = request.get_json(silent=True) or {}
+    if not entry.get('player') or not entry.get('marketKey'):
+        return jsonify({'success': False, 'error': 'Missing player or marketKey'}), 400
+
+    today = datetime.now(ET).strftime('%Y-%m-%d')
+    entry['date']   = today
+    entry['source'] = entry.get('source') or 'props_board'
+
+    if not entry.get('id'):
+        entry['id'] = str(uuid.uuid4())
+
+    # Recompute badge fields in case frontend omitted them
+    adj_prob = float(entry.get('adjProb') or 0)
+    edge_val = float(entry.get('edge') or 0)
+    if entry.get('hubRating') is None:
+        entry['hubRating'] = _hub_rating(adj_prob, edge_val)
+    mi = float(entry.get('marketImplied') or 0)
+    if entry.get('evPct') is None and mi > 0:
+        entry['evPct'] = round(adj_prob / mi - 1, 4)
+
+    # Ensure grading fields exist
+    for k, v in [('status','pending'),('grade','pending'),('actual',None),
+                 ('gradedAt',None),('closingPrice',None),('clvEdge',None),('profitUnits',None)]:
+        entry.setdefault(k, v)
+
+    store = _load_json(TRACKER_STORE, {})
+    day   = store.setdefault(today, {'capturedAt': None, 'gradedAt': None,
+                                      'closingCapturedAt': None, 'entries': []})
+
+    # Deduplicate on player + marketKey + line
+    for ex in day.get('entries', []):
+        if (ex.get('player') == entry.get('player') and
+                ex.get('marketKey') == entry.get('marketKey') and
+                str(ex.get('line', '')) == str(entry.get('line', ''))):
+            return jsonify({'success': True, 'id': ex.get('id'), 'duplicate': True})
+
+    day['entries'].append(entry)
+    if not day.get('capturedAt'):
+        day['capturedAt'] = datetime.now().isoformat()
+    _save_json(TRACKER_STORE, store)
+    return jsonify({'success': True, 'id': entry['id'], 'duplicate': False})
+
+
+@app.route('/api/tracker/pick/<pick_id>', methods=['DELETE'])
+def api_tracker_pick_delete(pick_id):
+    today = datetime.now(ET).strftime('%Y-%m-%d')
+    store = _load_json(TRACKER_STORE, {})
+    day   = store.get(today, {})
+    before = len(day.get('entries', []))
+    day['entries'] = [e for e in day.get('entries', []) if e.get('id') != pick_id]
+    if len(day.get('entries', [])) < before:
+        _save_json(TRACKER_STORE, store)
+        return jsonify({'success': True})
+    return jsonify({'success': False, 'error': 'Pick not found'}), 404
 
 
 @app.route('/api/tracker/calibration/apply', methods=['POST'])
