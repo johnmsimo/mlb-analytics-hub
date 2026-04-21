@@ -7,7 +7,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-:root{--c:#00e5ff;--m:#e040fb;--g:#00e676;--o:#ff9800;--r:#f44336;--bg:#050a18;--card:#0a1628;--b:rgba(0,229,255,.18);--t:#e0f0ff;--mu:#6a8db0;--fg:#fa6400;--sv:#00b8d4}
+:root{--c:#00e5ff;--m:#e040fb;--g:#00e676;--o:#ff9800;--r:#f44336;--bg:#050a18;--card:#0a1628;--b:rgba(0,229,255,.18);--t:#e0f0ff;--mu:#6a8db0;--fg:#fa6400;--sv:#00b8d4;--elite:#00e676;--strong:#00b8d4;--mod:#ffd740}
 body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--t);min-height:100vh}
 body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,229,255,.012) 2px,rgba(0,229,255,.012) 4px);pointer-events:none;z-index:9999}
 nav{display:flex;align-items:center;justify-content:space-between;padding:14px 32px;background:rgba(5,10,24,.95);backdrop-filter:blur(16px);border-bottom:1px solid var(--b);position:sticky;top:0;z-index:100;flex-wrap:wrap;gap:10px}
@@ -189,6 +189,12 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .streak-badge{padding:3px 9px;border-radius:6px;font-family:'Orbitron',monospace;font-size:.55rem;letter-spacing:1px;font-weight:700}
 .streak-over{background:rgba(0,230,118,.12);border:1px solid rgba(0,230,118,.35);color:var(--g)}
 .streak-under{background:rgba(244,67,54,.1);border:1px solid rgba(244,67,54,.3);color:var(--r)}
+/* ── HUB RATING badge ── */
+.hub{display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:6px;font-family:'Orbitron',monospace;font-size:.6rem;font-weight:700;border:1px solid}
+.hub-elite{background:rgba(0,230,118,.12);border-color:var(--elite);color:var(--elite)}
+.hub-strong{background:rgba(0,184,212,.12);border-color:var(--strong);color:var(--strong)}
+.hub-mod{background:rgba(255,215,64,.1);border-color:var(--mod);color:var(--mod)}
+.hub-low{background:rgba(106,141,176,.08);border-color:var(--mu);color:var(--mu)}
 /* ── BAT X / PITCH X panel ── */
 .batx-panel{margin-top:10px;padding:10px 12px;background:rgba(0,229,255,.03);border:1px solid rgba(0,229,255,.1);border-radius:9px}
 .batx-hd{font-family:'Orbitron',monospace;font-size:.58rem;letter-spacing:1.5px;color:var(--mu);margin-bottom:7px}
@@ -363,7 +369,7 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
           <thead><tr>
             <th>PLAYER</th><th>TEAM</th><th>MARKET</th>
             <th>BOOK LINE</th><th>PROJECTION</th><th>EDGE</th>
-            <th>IMPL PROB</th><th>TIER</th><th>ODDS</th>
+            <th>IMPL PROB</th><th>HUB</th><th>ODDS</th>
           </tr></thead>
           <tbody id="valueTbody"></tbody>
         </table>
@@ -967,6 +973,7 @@ function batterCard(b) {
   const adj  = p.adjustments || null;
   const pid  = b.id;
   const trnd = trendPillsForBatter(pid);
+  const hub  = PLAYER_HUB_MAP[(b.name||'').toLowerCase()];
 
   // BAT X composite section
   let batxHtml = '';
@@ -991,7 +998,10 @@ function batterCard(b) {
   return `<div class="bcard">
     <div class="bcard-top">
       <div><div class="bcard-name">${b.name||'—'}</div><div class="bcard-meta">${b.pos||''} · ${b.team||''}</div></div>
-      <div class="bcard-slot">${b.slot||'?'}</div>
+      <div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:4px">
+        <div class="bcard-slot">${b.slot||'?'}</div>
+        ${hub != null ? hubBadge(hub) : ''}
+      </div>
     </div>
     <div class="bcard-vs">vs ${b.opp_pitcher||'—'} (${b.opp_hand||'?'}HP) · ERA ${nd(b.opp_era)} · K/9 ${nd(b.opp_k9)}</div>
     ${b.proj?.platoon_note ? `<div class="platoon-badge platoon-${platoonCls(b.proj.platoon_note)}">${b.proj.platoon_note} · split avg ${b.proj.split_avg??'—'} · ops ${b.proj.split_ops??'—'}</div>` : ''}
@@ -1159,6 +1169,26 @@ function matchupCol(title, pitcherName, era, batters, pitcherHand) {
   </div>`;
 }
 
+// ── HUB RATING helpers ────────────────────────────────────────────────────────
+let PLAYER_HUB_MAP = {};
+
+function computeHubRating(adjProb, edge) {
+  const edgeBonus = Math.min((edge || 0) * 100, 20);
+  const probBase  = (adjProb || 0) * 60;
+  return Math.max(0, Math.min(100, Math.round(probBase + edgeBonus)));
+}
+
+function hubBadge(rating) {
+  if (rating == null || isNaN(+rating)) return '<span style="color:var(--mu)">—</span>';
+  rating = +rating;
+  let cls, lbl;
+  if      (rating >= 85) { cls = 'hub-elite';  lbl = 'ELITE';  }
+  else if (rating >= 70) { cls = 'hub-strong'; lbl = 'STRONG'; }
+  else if (rating >= 55) { cls = 'hub-mod';    lbl = 'MOD';    }
+  else                   { cls = 'hub-low';    lbl = 'LOW';    }
+  return `<span class="hub ${cls}">${rating} ${lbl}</span>`;
+}
+
 // ── Value bets ────────────────────────────────────────────────────────────────
 async function loadValueBets() {
   if (!PROJ_DATA) {
@@ -1171,6 +1201,10 @@ async function loadValueBets() {
     const r = await fetch(`/api/tracker/entries?date=${CUR_DATE}&gamePk=${CUR_GAME}`);
     const d = await r.json();
     VAL_DATA = buildValueBets(d.entries || []);
+    // Re-render batter cards so hub badges appear (PLAYER_HUB_MAP is now populated)
+    if (PROJ_DATA && gel('batterGrid') && gel('batterGrid').children.length > 0) {
+      renderBatters(PROJ_DATA.batters || [], SORT_KEY);
+    }
     renderValueTable(VAL_FILT);
   } catch(e) {
     gel('valueTbody').innerHTML = `<tr><td colspan="9"><div class="no-tracker" style="color:var(--r)">ERROR: ${e.message}</div></td></tr>`;
@@ -1185,7 +1219,7 @@ function buildValueBets(entries) {
   (PROJ_DATA?.pitchers || []).forEach(p => {
     lookup[(p.name||'').toLowerCase()] = {type:'pitcher', ...p.proj};
   });
-  return entries.map(e => {
+  const result = entries.map(e => {
     const key      = (e.player||'').toLowerCase();
     const mkey     = e.marketKey || '';
     const projField= MKT_PROJ[mkey] || MKT_PROJ[mkey.replace(/_/g,'')] || null;
@@ -1198,6 +1232,16 @@ function buildValueBets(entries) {
     const tier     = edge===null ? '—' : edge>0.10 ? 'A' : edge>0.06 ? 'B' : edge>0.02 ? 'C' : edge>=-0.02 ? 'D' : '✗';
     return {...e, proj, projField, edge, implProb, tier};
   }).sort((a,b) => (b.edge??-999)-(a.edge??-999));
+
+  // Build player→best-hub-rating lookup for batter card badges
+  PLAYER_HUB_MAP = {};
+  result.forEach(b => {
+    const n = (b.player||'').toLowerCase();
+    const h = b.hubRating != null ? b.hubRating : computeHubRating(b.adjProb, b.edge);
+    if (PLAYER_HUB_MAP[n] == null || h > PLAYER_HUB_MAP[n]) PLAYER_HUB_MAP[n] = h;
+  });
+
+  return result;
 }
 
 function setVFilter(btn, f) {
@@ -1249,7 +1293,7 @@ function renderValueTable(filter) {
       <td class="projv">${projStr}</td>
       <td class="${edgeCls}">${edgeStr}</td>
       <td style="color:var(--mu)">${(b.implProb*100).toFixed(1)}%</td>
-      <td><span class="tbadge t${b.tier}">${b.tier}</span></td>
+      <td>${hubBadge(b.hubRating != null ? b.hubRating : computeHubRating(b.adjProb, b.edge))}</td>
       <td style="color:var(--mu)">${b.openOdds??'—'}</td>
     </tr>`;
   }).join('');
