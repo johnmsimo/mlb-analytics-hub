@@ -355,6 +355,11 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .parlay-btn.send:hover{background:rgba(0,230,118,.2);border-color:rgba(0,230,118,.5)}
 .parlay-btn:disabled{opacity:.45;pointer-events:none}
 .parlay-empty{text-align:center;color:var(--mu);font-size:.7rem;padding:16px}
+/* Save Pick button */
+.trk-save{padding:4px 8px;border-radius:6px;border:1px solid rgba(0,229,255,.25);background:rgba(0,229,255,.06);color:var(--c);font-family:'Orbitron',monospace;font-size:.52rem;letter-spacing:.7px;cursor:pointer;white-space:nowrap;transition:all .2s}
+.trk-save:hover{border-color:rgba(0,229,255,.45);background:rgba(0,229,255,.14)}
+.trk-save.saved{border-color:rgba(0,230,118,.45);background:rgba(0,230,118,.1);color:var(--g)}
+.trk-save.saving{opacity:.55;cursor:wait}
 </style>
 </head>
 <body>
@@ -416,6 +421,10 @@ var GPK=parseInt(window.location.pathname.split('/').pop());
 var GD=null,PD=null,AL=[],HL=[];
 var PL={ff:"4-Seam",si:"Sinker",fc:"Cutter",st:"Sweeper",sl:"Slider",cu:"Curveball",ch:"Changeup",fs:"Splitter",kn:"Knuckleball",sv:"Slurve"};
 var PO=["ff","si","fc","st","sl","cu","ch","fs","kn","sv"];
+var TRACK_LS_KEY='hub_tracked_keys';
+var TRACKED_KEYS=new Set();
+var TRACK_SAVING={};
+var AI_PROP_CACHE=[];
 
 function wic(c){var s=(c||'').toLowerCase();if(s.indexOf('rain')>=0||s.indexOf('shower')>=0)return'&#127783;';if(s.indexOf('thunder')>=0)return'&#9928;';if(s.indexOf('cloud')>=0)return'&#9925;';if(s.indexOf('clear')>=0||s.indexOf('sun')>=0)return'&#9728;';return'&#127780;';}
 function ecol(v,t){var n=parseFloat(v);if(isNaN(n))return t||'';return n<3?'c-g':n<4.5?'c-c':n<5.5?'c-m':'c-b';}
@@ -428,6 +437,161 @@ function brlc(v){var n=parseFloat(v);if(isNaN(n))return'';return n>=10?'av-g':n>
 function pv(v,fb){return(v!==undefined&&v!==null&&v!=='N/A'&&v!=='')?v:fb;}
 function fmtP(v){var n=parseFloat(v);return isNaN(n)?'N/A':(n*100).toFixed(1)+'%';}
 function toF(v,d){var n=parseFloat(v);return isNaN(n)?d:n;}
+
+function loadTrackedKeys(){
+  try{var raw=localStorage.getItem(TRACK_LS_KEY);TRACKED_KEYS=raw?new Set(JSON.parse(raw)):new Set();}
+  catch(e){TRACKED_KEYS=new Set();}
+}
+function persistTrackedKeys(){
+  try{localStorage.setItem(TRACK_LS_KEY,JSON.stringify(Array.from(TRACKED_KEYS)));}catch(e){}
+}
+function trackerKey(player, marketKey, line){
+  return String((player||'').toLowerCase())+'|'+String(marketKey||'')+'|'+String(line==null?'':line);
+}
+function projRowKey(r){ return trackerKey(r.player, r.marketKey, r.line); }
+function lookupPlayerIdForRow(r){
+  if(r.kind==='hitter'){
+    if(r.lineup && r.lineup.id) return r.lineup.id;
+    var bx=lookupBatX(r.player); if(bx && bx.id) return bx.id;
+  }else if(r.kind==='pitcher'){
+    var px=lookupPitchX(r.player); if(px && px.id) return px.id;
+  }
+  return null;
+}
+function trackerEntryFromProjection(r){
+  var mk=r.market||{};
+  return {
+    gamePk:GPK,
+    team:r.team,
+    player:r.player,
+    playerId:lookupPlayerIdForRow(r),
+    marketKey:r.marketKey,
+    line:r.line,
+    recommendedSide:'Over',
+    rawProb:r.prob,
+    adjProb:r.prob,
+    modelMean:r.mean,
+    edge:r.edge,
+    bookmaker:mk.bookmaker||null,
+    marketPrice:(mk.over_price!=null?mk.over_price:null),
+    marketImplied:(mk.over_implied!=null?mk.over_implied:null),
+    openingPrice:(mk.over_price!=null?mk.over_price:null),
+    openingImplied:(mk.over_implied!=null?mk.over_implied:null),
+    reason:(r.reasons&&r.reasons[0])?r.reasons[0]:'Saved from deep dive projections',
+    source:'props_board'
+  };
+}
+function saveProjectionPick(idx, ev){
+  if(ev){ev.stopPropagation();}
+  var r=(PROJ_ROWS||[])[idx];
+  if(!r) return;
+  var key=projRowKey(r);
+  if(TRACKED_KEYS.has(key) || TRACK_SAVING[key]) return;
+  TRACK_SAVING[key]=1;
+  renderProjectionHub();
+  fetch('/api/tracker/pick',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(trackerEntryFromProjection(r))
+  }).then(function(res){return res.json();})
+    .then(function(d){
+      if(d && d.success){
+        TRACKED_KEYS.add(key);
+        persistTrackedKeys();
+      }else{
+        alert('Save failed: '+((d&&d.error)||'unknown error'));
+      }
+    })
+    .catch(function(e){alert('Save failed: '+e.message);})
+    .finally(function(){delete TRACK_SAVING[key];renderProjectionHub();});
+}
+
+function inferAIMarketKey(propText){
+  var t=String(propText||'').toLowerCase();
+  if(t.indexOf('total base')>=0 || t.indexOf(' tb')>=0 || t.indexOf('tb ')===0) return 'batter_total_bases';
+  if(t.indexOf('home run')>=0 || t.indexOf('homerun')>=0 || t.indexOf(' hr')>=0 || t.indexOf('hr ')===0) return 'batter_home_runs';
+  if(t.indexOf('rbi')>=0) return 'batter_rbis';
+  if(t.indexOf('stolen')>=0 || t.indexOf(' sb')>=0 || t.indexOf('sb ')===0) return 'batter_stolen_bases';
+  if(t.indexOf('strikeout')>=0 || t.indexOf(' k')>=0 || t.indexOf('k ')===0) return (t.indexOf('pitcher')>=0 ? 'pitcher_strikeouts' : 'batter_strikeouts');
+  if(t.indexOf('runs')>=0) return 'batter_runs_scored';
+  return 'batter_hits';
+}
+
+function inferAILine(propText, projection){
+  var t=String(propText||'');
+  var m=t.match(/([0-9]+(?:\.[0-9]+)?)/);
+  if(m){
+    var x=parseFloat(m[1]);
+    if(!isNaN(x)) return x;
+  }
+  var p=parseFloat(projection);
+  if(!isNaN(p) && p>0) return Math.round((Math.max(0.5, p) * 2))/2;
+  return 0.5;
+}
+
+function inferAISide(propText){
+  var t=String(propText||'').toLowerCase();
+  return t.indexOf('under')>=0 ? 'Under' : 'Over';
+}
+
+function aiTrackerEntry(prop){
+  var mk=inferAIMarketKey(prop && prop.prop);
+  var line=inferAILine(prop && prop.prop, prop && prop.projection);
+  var side=inferAISide(prop && prop.prop);
+  return {
+    gamePk:GPK,
+    team:'',
+    player:prop && prop.player,
+    playerId:null,
+    marketKey:mk,
+    line:line,
+    recommendedSide:side,
+    rawProb:null,
+    adjProb:null,
+    modelMean:(prop && prop.projection!=null)?prop.projection:null,
+    edge:null,
+    bookmaker:null,
+    marketPrice:null,
+    marketImplied:null,
+    openingPrice:null,
+    openingImplied:null,
+    reason:(prop && prop.reasoning) || 'Saved from deep dive AI notable props',
+    source:'props_board'
+  };
+}
+
+function addAIPickToParlay(idx){
+  var prop=AI_PROP_CACHE[idx];
+  if(!prop) return;
+  var entry=aiTrackerEntry(prop);
+  addPropToParlay(prop.player || '', entry.marketKey || 'batter_hits', entry.line || 0.5, GPK, entry.recommendedSide || 'Over', entry.team || '');
+}
+
+function saveAIPick(idx, ev){
+  if(ev){ev.stopPropagation();}
+  var prop=AI_PROP_CACHE[idx];
+  if(!prop) return;
+  var entry=aiTrackerEntry(prop);
+  var key=trackerKey(entry.player, entry.marketKey, entry.line);
+  if(TRACKED_KEYS.has(key) || TRACK_SAVING[key]) return;
+  TRACK_SAVING[key]=1;
+  renderAIPanel(AI_DATA);
+  fetch('/api/tracker/pick',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(entry)
+  }).then(function(res){return res.json();})
+    .then(function(d){
+      if(d && d.success){
+        TRACKED_KEYS.add(key);
+        persistTrackedKeys();
+      }else{
+        alert('Save failed: '+((d&&d.error)||'unknown error'));
+      }
+    })
+    .catch(function(e){alert('Save failed: '+e.message);})
+    .finally(function(){delete TRACK_SAVING[key];renderAIPanel(AI_DATA);});
+}
 
 function loadGame(){
   fetch('/api/games/today').then(function(r){return r.json();}).then(function(d){
@@ -755,6 +919,7 @@ function showTab(side){
       +'</div>':'');
 }
 
+loadTrackedKeys();
 loadGame();loadPitchers();loadLineups();
 
 // ── Phase 3 ───────────────────────────────────────────────────────────────────
@@ -1088,6 +1253,7 @@ function renderAIError(msg) {
 function renderAIPanel(d) {
   var el = document.getElementById('aiPanel');
   if(!el) return;
+  AI_PROP_CACHE = [];
   
   var proj = d.projections || {};
   var away = d.pitching_matchup.away_pitcher || {};
@@ -1123,12 +1289,22 @@ function renderAIPanel(d) {
   
   var propsHtml = '';
   if(proj.notable_props && proj.notable_props.length) {
+    AI_PROP_CACHE = proj.notable_props.slice();
     propsHtml = '<div class="ai-props"><div style="font-family:Orbitron;font-size:.64rem;color:var(--c);letter-spacing:2px;margin-bottom:10px">🎯 NOTABLE PLAYER PROPS</div>';
-    proj.notable_props.forEach(function(prop) {
-      propsHtml += '<div class="ai-prop-item" style="cursor:pointer;transition:background .2s" onclick="addPropToParlay(\'' + (prop.player || '').replace(/'/g, "\\'") + '\', \'batter_hits\', ' + (prop.projection || 0) + ', ' + GPK + ', \'Over\')" onmouseover="this.style.background=\'rgba(0,229,255,.08)\'" onmouseout="this.style.background=\'rgba(0,0,0,.2)\'">' +
-        '<div class="ai-prop-player">' + prop.player + ' <span style="color:var(--c);font-size:.55rem">→ Add to Parlay</span></div>' +
+    proj.notable_props.forEach(function(prop, idx) {
+      var entry = aiTrackerEntry(prop);
+      var key = trackerKey(entry.player, entry.marketKey, entry.line);
+      var saving = !!TRACK_SAVING[key];
+      var saved = TRACKED_KEYS.has(key);
+      var saveTxt = saving ? '...' : (saved ? '✓ Saved' : '💾 Save Pick');
+      propsHtml += '<div class="ai-prop-item" style="transition:background .2s" onmouseover="this.style.background=\'rgba(0,229,255,.08)\'" onmouseout="this.style.background=\'rgba(0,0,0,.2)\'">' +
+        '<div class="ai-prop-player">' + (prop.player || 'Player') + '</div>' +
         '<div class="ai-prop-detail">' + (prop.prop || 'prop') + ' O/U ' + (prop.projection || '') + '</div>' +
         '<div class="ai-prop-reasoning">' + (prop.reasoning || '') + '</div>' +
+        '<div style="display:flex;gap:8px;margin-top:8px">' +
+          '<button class="trk-save'+(saved?' saved':'')+(saving?' saving':'')+'" onclick="saveAIPick('+idx+',event)">'+saveTxt+'</button>' +
+          '<button class="trk-save" onclick="addAIPickToParlay('+idx+')">＋ Add To Parlay</button>' +
+        '</div>' +
         '</div>';
     });
     propsHtml += '</div>';
@@ -2256,8 +2432,13 @@ function buildProjectionRows(){
 }
 function projectionRowHtml(r, idx){
   var reason = (r.reasons&&r.reasons[0]) ? r.reasons[0] : '';
+  var key = projRowKey(r);
+  var saving = !!TRACK_SAVING[key];
+  var saved = TRACKED_KEYS.has(key);
+  var btnCls = 'trk-save'+(saved?' saved':'')+(saving?' saving':'');
+  var btnTxt = saving ? '...' : (saved ? '✓ Saved' : '💾 Save Pick');
   return '<tr class="'+(SELECTED_PROJ===idx?'sel':'')+'" onclick="selectProjection('+idx+')">'
-    + '<td>'+r.rank+'</td><td><span class="pos-tag">'+r.team+'</span></td><td>'+r.player+'</td><td>'+marketLabel(r.marketKey,r.line)+'</td><td>'+pct2(r.prob)+'</td><td>'+(r.edge!=null?'<span class="'+(r.edge>=0.03?'edge-pos':'edge-neu')+'">'+pct2(r.edge)+'</span>':'<span class="edge-na">N/A</span>')+'</td><td>'+confidenceTag(r.edge!=null?r.edge:r.prob)+'</td><td style="max-width:340px;white-space:normal">'+reason+'</td></tr>';
+    + '<td>'+r.rank+'</td><td><span class="pos-tag">'+r.team+'</span></td><td>'+r.player+'</td><td>'+marketLabel(r.marketKey,r.line)+'</td><td>'+pct2(r.prob)+'</td><td>'+(r.edge!=null?'<span class="'+(r.edge>=0.03?'edge-pos':'edge-neu')+'">'+pct2(r.edge)+'</span>':'<span class="edge-na">N/A</span>')+'</td><td>'+confidenceTag(r.edge!=null?r.edge:r.prob)+'</td><td style="max-width:340px;white-space:normal">'+reason+'</td><td><button class="'+btnCls+'" onclick="saveProjectionPick('+idx+',event)">'+btnTxt+'</button></td></tr>';
 }
 function renderProjectionDetail(){
   if(SELECTED_PROJ==null || !PROJ_ROWS[SELECTED_PROJ]) return '<p class="na">Select a ranked projection to open the player and matchup dive.</p>';
@@ -2426,7 +2607,7 @@ function renderProjectionHub(){
     + '<div class="proj-hub">'
     + '<div class="proj-list">'
       + '<div class="proj-tools"><select id="projPlayerPick" onchange="jumpToProjection(this.value)"><option value="">Jump to player...</option>'+playerSel+'</select><span class="mini">Ranked from best to worst by model edge when live odds exist, otherwise by pure simulation confidence.</span></div>'
-      + '<table class="proj-rank"><thead><tr><th>#</th><th>TEAM</th><th>PLAYER</th><th>PROP</th><th>MODEL</th><th>EDGE</th><th>GRADE</th><th>AI THESIS</th></tr></thead><tbody>'+rows+'</tbody></table>'
+      + '<table class="proj-rank"><thead><tr><th>#</th><th>TEAM</th><th>PLAYER</th><th>PROP</th><th>MODEL</th><th>EDGE</th><th>GRADE</th><th>AI THESIS</th><th>SAVE</th></tr></thead><tbody>'+rows+'</tbody></table>'
     + '</div>'
     + '<div class="proj-detail">'+renderProjectionDetail()+'</div>'
     + '</div>';

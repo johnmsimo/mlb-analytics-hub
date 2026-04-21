@@ -645,6 +645,24 @@ def sv_batter(name):
     r.update(_fuzzy_lookup(name, sc))
     return r
 
+
+def _pct_rank(values, value):
+    """Return percentile rank (0-100) of value against a numeric list."""
+    try:
+        v = float(value)
+    except Exception:
+        return None
+    nums = []
+    for x in values or []:
+        try:
+            nums.append(float(x))
+        except Exception:
+            continue
+    if not nums:
+        return None
+    below_or_equal = sum(1 for n in nums if n <= v)
+    return max(0, min(100, int(round((below_or_equal / len(nums)) * 100))))
+
 # ── MLB API Helpers ───────────────────────────────────────────────────────────
 def fetch_schedule(date_str):
     url = (f"{MLB_API}/schedule?sportId=1&date={date_str}"
@@ -771,6 +789,7 @@ def get_batters_from_boxscore(team_data, side):
         svb = sv_batter(name)
         out.append({
             "slot": slot, "id": pid, "name": name, "pos": pos,
+            "lineup_status": "confirmed",
             "avg":  ss.get("avg",  fgb.get("fg_avg",".---")),
             "obp":  ss.get("obp",  fgb.get("fg_obp",".---")),
             "slg":  ss.get("slg",  fgb.get("fg_slg",".---")),
@@ -6040,6 +6059,41 @@ def _props_fetch_game(game_pk):
     except Exception as ex:
         print(f"[props] boxscore error: {ex}")
 
+    # Pre-game fallback: hydrate scheduled lineups from schedule payload.
+    if not away_bats or not home_bats:
+        lineups = (gdata.get("lineups") or {})
+
+        def _parse_sched(hitters):
+            out = []
+            for i, p in enumerate(hitters or [], start=1):
+                name = (p.get("fullName") or p.get("name") or "").strip()
+                pid  = p.get("id") or p.get("playerId")
+                pos  = (p.get("primaryPosition") or {}).get("abbreviation", "?")
+                if not name:
+                    continue
+                fgb = fg_batter(name)
+                svb = sv_batter(name)
+                out.append({
+                    "slot": i, "id": pid, "name": name, "pos": pos,
+                    "lineup_status": "pending",
+                    "avg": fgb.get("fg_avg", ".---"), "obp": fgb.get("fg_obp", ".---"),
+                    "slg": fgb.get("fg_slg", ".---"), "ops": fgb.get("fg_ops", ".---"),
+                    "ab": 0, "hits": 0, "hr": 0, "rbi": 0,
+                    "fg_pa": fgb.get("fg_pa", "N/A"), "fg_r": fgb.get("fg_r", "N/A"),
+                    "fg_sb": fgb.get("fg_sb", "N/A"), "fg_woba": fgb.get("fg_woba", "N/A"),
+                    "fg_wrc": fgb.get("fg_wrc", "N/A"), "fg_war": fgb.get("fg_war", "N/A"),
+                    "sv_xba": svb.get("sv_xba", "N/A"), "sv_xslg": svb.get("sv_xslg", "N/A"),
+                    "sv_xwoba": svb.get("sv_xwoba", "N/A"), "sv_ev": svb.get("sv_ev", "N/A"),
+                    "sv_hh_pct": svb.get("sv_hh_pct", "N/A"), "sv_brl_pct": svb.get("sv_brl_pct", "N/A"),
+                    "sv_la": svb.get("sv_la", "N/A"),
+                })
+            return out
+
+        if not away_bats:
+            away_bats = _parse_sched(lineups.get("awayBatters") or [])
+        if not home_bats:
+            home_bats = _parse_sched(lineups.get("homeBatters") or [])
+
     return gdata, away_bats, home_bats, away_t, home_t, {"ap": ap_info, "hp": hp_info}
 
 
@@ -6703,6 +6757,26 @@ def api_props_projections(game_pk):
         ap_hand = (ap_st.get("pitchHand") or "R").upper()
         hp_hand = (hp_st.get("pitchHand") or "R").upper()
 
+        # Build league-wide Statcast distributions for percentile ranks.
+        with _sv_lock:
+            statcast_cache = dict(_sv_bat_statcast)
+        ev_values = []
+        hh_values = []
+        brl_values = []
+        for row in statcast_cache.values():
+            try:
+                ev_values.append(float(row.get('sv_ev')))
+            except Exception:
+                pass
+            try:
+                hh_values.append(float(row.get('sv_hh_pct')))
+            except Exception:
+                pass
+            try:
+                brl_values.append(float(row.get('sv_brl_pct')))
+            except Exception:
+                pass
+
         # Weather
         ven   = gdata.get("venue", {})
         vid   = ven.get("id")
@@ -6718,13 +6792,19 @@ def api_props_projections(game_pk):
         wx = get_weather(lat, lon, ghour, venue_id=vid)
 
         # ── Build batter projections (now passes pitcher_hand) ─────────────────
-        def enrich_batters(batters, opp_pfg, opp_psv, opp_pst, opp_abbr, opp_pname, opp_pid, own_abbr=''):
+        away_confirmed = len(away_bats) >= 9 and all((b.get("lineup_status") or "confirmed") == "confirmed" for b in away_bats[:9])
+        home_confirmed = len(home_bats) >= 9 and all((b.get("lineup_status") or "confirmed") == "confirmed" for b in home_bats[:9])
+
+        def enrich_batters(batters, opp_pfg, opp_psv, opp_pst, opp_abbr, opp_pname, opp_pid, own_abbr='', lineup_confirmed=False):
             opp_hand = (opp_pst.get("pitchHand") or "R").upper()
             result   = []
             for b in batters[:9]:
                 name = b.get("name", "")
                 bfg  = fg_batter(name)
                 bsv  = sv_batter(name)
+                brl  = bsv.get("sv_brl_pct")
+                hh   = bsv.get("sv_hh_pct")
+                ev   = bsv.get("sv_ev")
                 bid  = b.get("id")
                 form = _fetch_rolling_form(bid, False) if bid else None
                 bvp  = _fetch_bvp(bid, opp_pid)      if (bid and opp_pid) else None
@@ -6733,11 +6813,16 @@ def api_props_projections(game_pk):
                     pitcher_hand=opp_hand,
                     form=form, bvp=bvp,
                 )
+                slot = int(b.get("slot") or 9)
+                wx_adj = _safe_f((proj.get("adjustments") or {}).get("weather"), 0.0)
+                wind_bucket = "out" if wx_adj > 0.01 else ("in" if wx_adj < -0.01 else "calm")
+                park_bucket = "hitter" if pf >= 1.04 else ("pitcher" if pf <= 0.96 else "neutral")
+                slot_bucket = "1-3" if slot <= 3 else ("4-6" if slot <= 6 else "7-9")
                 result.append({
                     "name":         name,
                     "team":         own_abbr or b.get("team", ""),
                     "pos":          b.get("pos", ""),
-                    "slot":         b.get("slot", 0),
+                    "slot":         slot,
                     "id":           b.get("id"),
                     "bats":         b.get("bats", ""),
                     "opp_pitcher":  opp_pname,
@@ -6749,7 +6834,22 @@ def api_props_projections(game_pk):
                     "slg":          b.get("slg") or bfg.get("fg_slg"),
                     "fg_woba":      bfg.get("fg_woba"),
                     "sv_xwoba":     bsv.get("sv_xwoba"),
-                    "sv_ev":        bsv.get("sv_ev"),
+                    "sv_ev":        ev,
+                    "sv_hh_pct":    hh,
+                    "sv_brl_pct":   brl,
+                    "sv_ev_pct_rank": _pct_rank(ev_values, ev),
+                    "sv_hh_pct_rank": _pct_rank(hh_values, hh),
+                    "sv_brl_pct_rank": _pct_rank(brl_values, brl),
+                    "lineupConfirmed": bool(lineup_confirmed),
+                    "lineupStatus": "confirmed" if lineup_confirmed else "pending",
+                    "filterTags": {
+                        "vsHand": opp_hand,
+                        "homeAway": "home" if (own_abbr == home_abbr) else "away",
+                        "windBucket": wind_bucket,
+                        "parkBucket": park_bucket,
+                        "slotBucket": slot_bucket,
+                        "lineup": "confirmed" if lineup_confirmed else "pending",
+                    },
                     # Expose platoon splits for UI
                     "vs_l_avg":     b.get("vs_l_avg"),
                     "vs_r_avg":     b.get("vs_r_avg"),
@@ -6759,8 +6859,8 @@ def api_props_projections(game_pk):
                 })
             return result
 
-        away_proj = enrich_batters(away_bats, hp_fg, hp_sv, hp_st, home_abbr, hp_name, hp_id, own_abbr=away_abbr)
-        home_proj = enrich_batters(home_bats, ap_fg, ap_sv, ap_st, away_abbr, ap_name, ap_id, own_abbr=home_abbr)
+        away_proj = enrich_batters(away_bats, hp_fg, hp_sv, hp_st, home_abbr, hp_name, hp_id, own_abbr=away_abbr, lineup_confirmed=away_confirmed)
+        home_proj = enrich_batters(home_bats, ap_fg, ap_sv, ap_st, away_abbr, ap_name, ap_id, own_abbr=home_abbr, lineup_confirmed=home_confirmed)
         all_batters = away_proj + home_proj
 
         # ── Pitcher projections ────────────────────────────────────────────────
@@ -6820,6 +6920,11 @@ def api_props_projections(game_pk):
             "pitchers":    pitchers_out,
             "weather":     wx,
             "park_factor": pf,
+            "lineup": {
+                "awayConfirmed": away_confirmed,
+                "homeConfirmed": home_confirmed,
+                "overallConfirmed": bool(away_confirmed and home_confirmed),
+            },
             "game_lines":  game_lines,
             "timestamp":   datetime.now(timezone.utc).isoformat(),
         })
