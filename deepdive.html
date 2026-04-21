@@ -363,6 +363,22 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .parlay-btn.send:hover{background:rgba(0,230,118,.2);border-color:rgba(0,230,118,.5)}
 .parlay-btn:disabled{opacity:.45;pointer-events:none}
 .parlay-empty{text-align:center;color:var(--mu);font-size:.7rem;padding:16px}
+
+/* Monte Carlo SGP Builder */
+.sgp-wrap{margin-top:12px;background:rgba(0,229,255,.03);border:1px solid rgba(0,229,255,.14);border-radius:10px;padding:12px}
+.sgp-hd{font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:2px;color:var(--c);margin-bottom:10px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.sgp-sub{font-size:.52rem;color:var(--mu);letter-spacing:.8px}
+.sgp-row{display:grid;grid-template-columns:1.5fr .6fr .55fr .65fr auto;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.05)}
+.sgp-row:last-child{border-bottom:none;padding-bottom:2px}
+.sgp-legs{font-size:.62rem;color:var(--t);line-height:1.35}
+.sgp-stat{font-family:'Orbitron',monospace;font-size:.58rem;color:var(--sv)}
+.sgp-btn{padding:5px 9px;border-radius:6px;border:1px solid rgba(0,229,255,.24);background:rgba(0,229,255,.08);color:var(--c);font-family:'Orbitron',monospace;font-size:.52rem;letter-spacing:.8px;cursor:pointer}
+.sgp-btn:hover{background:rgba(0,229,255,.15);border-color:rgba(0,229,255,.38)}
+.sgp-warning{margin-top:8px;padding:7px 9px;border-radius:8px;border:1px solid rgba(255,152,0,.2);background:rgba(255,152,0,.07);font-size:.56rem;color:#ffb74d}
+@media(max-width:860px){
+  .sgp-row{grid-template-columns:1fr 1fr;gap:6px;padding:10px 0}
+  .sgp-row .sgp-legs{grid-column:1 / -1}
+}
 /* Save Pick button */
 .trk-save{padding:4px 8px;border-radius:6px;border:1px solid rgba(0,229,255,.25);background:rgba(0,229,255,.06);color:var(--c);font-family:'Orbitron',monospace;font-size:.52rem;letter-spacing:.7px;cursor:pointer;white-space:nowrap;transition:all .2s}
 .trk-save:hover{border-color:rgba(0,229,255,.45);background:rgba(0,229,255,.14)}
@@ -1403,6 +1419,74 @@ setTimeout(function() {
 
 // ── Parlay Builder + Correlation Matrix ───────────────────────────────────────
 var PARLAY_STATE = { selections: [], odds: 0, americanOdds: 100 };
+var SIM_CORR_LOOKUP = {};
+var SIM_TOP_SGP = [];
+
+function _normName(s){ return (s || '').toString().trim().toLowerCase(); }
+function _normMarket(m){ return (m || '').toString().trim().toLowerCase(); }
+function _simCorrKey(playerA, marketA, playerB, marketB){
+  var left = _normName(playerA) + '|' + _normMarket(marketA);
+  var right = _normName(playerB) + '|' + _normMarket(marketB);
+  return [left, right].sort().join('::');
+}
+function _buildSimCorrLookup(correlations){
+  SIM_CORR_LOOKUP = {};
+  (correlations || []).forEach(function(c){
+    if(!c) return;
+    var k = _simCorrKey(c.playerA, c.marketA, c.playerB, c.marketB);
+    SIM_CORR_LOOKUP[k] = c;
+  });
+}
+function _lookupSimCorrelation(selA, selB){
+  var k = _simCorrKey(selA.player, selA.market, selB.player, selB.market);
+  return SIM_CORR_LOOKUP[k] || null;
+}
+function _corrUiStrength(r){
+  if(r >= 0.55) return { label:'STRONG +', cls:'corr-sp' };
+  if(r >= 0.25) return { label:'CORRELATED', cls:'corr-mp' };
+  if(r <= -0.45) return { label:'STRONG -', cls:'corr-sn' };
+  if(r <= -0.20) return { label:'NEGATIVE', cls:'corr-mn' };
+  return { label:'NEUTRAL', cls:'corr-nu' };
+}
+function renderSgpBuilderSection(){
+  SIM_TOP_SGP = (SIM_DATA && SIM_DATA.top_sgp_combos) ? SIM_DATA.top_sgp_combos.slice(0,5) : [];
+  if(!SIM_TOP_SGP.length){
+    return '<div class="sgp-wrap"><div class="sgp-hd">&#128279; SGP BUILDER</div><div class="parlay-empty">No correlated combo suggestions yet.</div></div>';
+  }
+  var rows = SIM_TOP_SGP.map(function(c, idx){
+    var style = _corrUiStrength(parseFloat(c.r || 0));
+    var legs = (c.legs || []).join(' + ');
+    var ev = (typeof c.combined_ev_pct === 'number') ? c.combined_ev_pct.toFixed(2) + '%' : '---';
+    return '<div class="sgp-row">'
+      + '<div class="sgp-legs">' + legs + '</div>'
+      + '<div class="sgp-stat">P: ' + pct(c.combined_prob || 0) + '</div>'
+      + '<div class="sgp-stat"><span class="corr-badge ' + style.cls + '">' + style.label + '</span></div>'
+      + '<div class="sgp-stat">EV: ' + ev + '</div>'
+      + '<button class="sgp-btn" onclick="addSgpCombo(' + idx + ')">Add to Parlay</button>'
+      + '</div>';
+  }).join('');
+  var negCount = (SIM_DATA.correlations || []).filter(function(c){ return c && c.r <= -0.3; }).length;
+  return '<div class="sgp-wrap">'
+    + '<div class="sgp-hd">&#128279; SGP BUILDER <span class="sgp-sub">Top Monte Carlo correlated pairs</span></div>'
+    + rows
+    + '<div class="sgp-warning">Negative-correlation flags detected: ' + negCount + '. Avoid forcing conflicting legs into one SGP.</div>'
+    + '</div>';
+}
+function addSgpCombo(idx){
+  var combo = SIM_TOP_SGP[idx];
+  if(!combo || !combo.legs_meta || !combo.legs_meta.length){ return; }
+  combo.legs_meta.forEach(function(leg){
+    PARLAY_STATE.selections.push({
+      game_pk: GPK,
+      player: leg.player || '',
+      market: leg.market || 'batter_hits',
+      projection: leg.line != null ? leg.line : 0.5,
+      side: leg.side || 'Over',
+      team: leg.team || '',
+    });
+  });
+  renderParlayPanel();
+}
 
 // ── Correlation engine ────────────────────────────────────────────────────────
 // Returns a coefficient from -1.0 to +1.0 between two parlay legs.
@@ -1475,29 +1559,36 @@ function getCorrelation(selA, selB) {
   var r = 0;
   var context = '';
 
-  if (pA === pB && pA !== '') {
-    // Same player
-    var key = _corrKey(mA, mB);
-    r = CORR_SAME_PLAYER[key] !== undefined ? CORR_SAME_PLAYER[key] : 0.10;
-    context = 'SAME PLAYER';
-  } else if (tA && tB && tA === tB) {
-    // Same team, different players
-    var key2 = _corrKey(mA, mB);
-    r = CORR_SAME_TEAM[key2] !== undefined ? CORR_SAME_TEAM[key2] : 0.22;
-    context = 'SAME TEAM';
+  var simCorr = _lookupSimCorrelation(selA, selB);
+  if (simCorr && typeof simCorr.r === 'number') {
+    r = simCorr.r;
+    context = 'MC SIM';
   } else {
-    // Opposing sides — check pitcher K vs batter props
-    var isPitcherA = mA === 'sp_k';
-    var isPitcherB = mB === 'sp_k';
-    if (isPitcherA || isPitcherB) {
-      var pitMkt = isPitcherA ? mA : mB;
-      var batMkt = isPitcherA ? mB : mA;
-      var key3 = _corrKey(pitMkt, batMkt);
-      r = CORR_OPP_PITCHER_BATTER[key3] !== undefined ? CORR_OPP_PITCHER_BATTER[key3] : 0;
-      context = 'OPP MATCHUP';
+
+    if (pA === pB && pA !== '') {
+      // Same player
+      var key = _corrKey(mA, mB);
+      r = CORR_SAME_PLAYER[key] !== undefined ? CORR_SAME_PLAYER[key] : 0.10;
+      context = 'SAME PLAYER';
+    } else if (tA && tB && tA === tB) {
+      // Same team, different players
+      var key2 = _corrKey(mA, mB);
+      r = CORR_SAME_TEAM[key2] !== undefined ? CORR_SAME_TEAM[key2] : 0.22;
+      context = 'SAME TEAM';
     } else {
-      r = 0.05;
-      context = 'INDEPENDENT';
+      // Opposing sides — check pitcher K vs batter props
+      var isPitcherA = mA === 'sp_k';
+      var isPitcherB = mB === 'sp_k';
+      if (isPitcherA || isPitcherB) {
+        var pitMkt = isPitcherA ? mA : mB;
+        var batMkt = isPitcherA ? mB : mA;
+        var key3 = _corrKey(pitMkt, batMkt);
+        r = CORR_OPP_PITCHER_BATTER[key3] !== undefined ? CORR_OPP_PITCHER_BATTER[key3] : 0;
+        context = 'OPP MATCHUP';
+      } else {
+        r = 0.05;
+        context = 'INDEPENDENT';
+      }
     }
   }
 
@@ -1872,6 +1963,7 @@ function loadSimulation(){
     .then(function(d){
       if(!d.success) throw new Error(d.error || 'Simulation failed');
       SIM_DATA = d;
+      _buildSimCorrLookup(d.correlations || []);
       var badge = document.querySelector('#simWrap .tag-sv');
       if(badge && d.meta && d.meta.sims) badge.textContent = Number(d.meta.sims).toLocaleString() + ' RUNS';
       renderSimulation();
@@ -2132,6 +2224,7 @@ function renderSimulation(){
       + '</tbody></table></div>'
     + '</div>'
     + '<div class="mc-mini">Phase 6 adds percentile outputs, stolen-base simulation, and bullpen tier usage by game state on top of the handedness-aware Monte Carlo engine.</div>'
+    + renderSgpBuilderSection()
     + '<div class="mc-box-wrap">'
     + renderSampleBox('away', m.awayAbbr, sp.home_pitcher || 'Opp SP')
     + renderSampleBox('home', m.homeAbbr, sp.away_pitcher || 'Opp SP')

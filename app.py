@@ -3546,6 +3546,58 @@ def _summarize_pitcher(lines):
     }
 
 
+def _pearson_corr(xs, ys):
+    if not xs or not ys or len(xs) != len(ys):
+        return 0.0
+    n = len(xs)
+    if n < 2:
+        return 0.0
+    mx = sum(xs) / n
+    my = sum(ys) / n
+    num = 0.0
+    dx2 = 0.0
+    dy2 = 0.0
+    for x, y in zip(xs, ys):
+        dx = x - mx
+        dy = y - my
+        num += dx * dy
+        dx2 += dx * dx
+        dy2 += dy * dy
+    den = (dx2 * dy2) ** 0.5
+    if den <= 1e-12:
+        return 0.0
+    return max(-1.0, min(1.0, num / den))
+
+
+def _corr_strength_label(r):
+    if r >= 0.55:
+        return 'STRONG+'
+    if r >= 0.25:
+        return 'CORRELATED'
+    if r <= -0.45:
+        return 'STRONG-'
+    if r <= -0.20:
+        return 'NEGATIVE'
+    return 'NEUTRAL'
+
+
+def _corr_warning(row_a, row_b, r):
+    if r > -0.25:
+        return None
+    mk_a = row_a.get('market')
+    mk_b = row_b.get('market')
+    if (
+        mk_a == 'pitcher_strikeouts' and mk_b in {'batter_hits', 'batter_total_bases', 'batter_runs', 'batter_rbis'}
+    ) or (
+        mk_b == 'pitcher_strikeouts' and mk_a in {'batter_hits', 'batter_total_bases', 'batter_runs', 'batter_rbis'}
+    ):
+        if row_a.get('team') and row_b.get('team') and row_a.get('team') != row_b.get('team'):
+            return 'High K game suppresses opposing contact outcomes'
+    if r <= -0.45:
+        return 'Strong negative relationship can reduce same-game parlay hit rate'
+    return 'Negative correlation warning for combined legs'
+
+
 @app.route('/api/simulate/<int:game_pk>')
 def api_simulate(game_pk):
     try:
@@ -3670,6 +3722,138 @@ def api_simulate(game_pk):
         home_r = sum(1 for b in home_lineup if (b.get('bats') or 'S') == 'R')
         home_s = sum(1 for b in home_lineup if (b.get('bats') or 'S') == 'S')
 
+        # Phase 2.6: expose Monte Carlo correlation matrix + top SGP combos.
+        market_vectors = []
+
+        def _event_meta(market):
+            if market == 'batter_hits':
+                return {'line': 0.5, 'side': 'Over', 'short': 'H'}
+            if market == 'batter_home_runs':
+                return {'line': 0.5, 'side': 'Over', 'short': 'HR'}
+            if market == 'batter_total_bases':
+                return {'line': 1.5, 'side': 'Over', 'short': 'TB'}
+            if market == 'batter_rbis':
+                return {'line': 0.5, 'side': 'Over', 'short': 'RBI'}
+            if market == 'batter_runs':
+                return {'line': 0.5, 'side': 'Over', 'short': 'R'}
+            if market == 'pitcher_strikeouts':
+                return {'line': 4.5, 'side': 'Over', 'short': 'K'}
+            return {'line': 0.5, 'side': 'Over', 'short': 'PROP'}
+
+        def _add_batter_market_vectors(lineup, store, team_abbr):
+            batter_markets = {
+                'batter_hits': ('h', 1),
+                'batter_home_runs': ('hr', 1),
+                'batter_total_bases': ('tb', 2),
+                'batter_rbis': ('rbi', 1),
+                'batter_runs': ('r', 1),
+            }
+            for idx, batter in enumerate(lineup):
+                lines = store.get(idx, [])
+                if not lines:
+                    continue
+                for market, (stat_key, event_floor) in batter_markets.items():
+                    values = [x.get(stat_key, 0) for x in lines]
+                    if not values:
+                        continue
+                    meta = _event_meta(market)
+                    event_prob = sum(1 for x in values if x >= event_floor) / len(values)
+                    market_vectors.append({
+                        'player': batter.get('name', ''),
+                        'team': team_abbr,
+                        'market': market,
+                        'values': values,
+                        'event_floor': event_floor,
+                        'event_prob': round(event_prob, 4),
+                        'line': meta['line'],
+                        'side': meta['side'],
+                        'leg_label': f"{batter.get('name', '')} {meta['short']}",
+                    })
+
+        _add_batter_market_vectors(away_lineup, away_store, away_abbr)
+        _add_batter_market_vectors(home_lineup, home_store, home_abbr)
+
+        for p_name, p_team, p_lines in (
+            (away_pitcher['name'], away_abbr, away_starter_lines),
+            (home_pitcher['name'], home_abbr, home_starter_lines),
+        ):
+            values = [x.get('k', 0) for x in p_lines]
+            if values:
+                meta = _event_meta('pitcher_strikeouts')
+                floor = 5
+                market_vectors.append({
+                    'player': p_name,
+                    'team': p_team,
+                    'market': 'pitcher_strikeouts',
+                    'values': values,
+                    'event_floor': floor,
+                    'event_prob': round(sum(1 for x in values if x >= floor) / len(values), 4),
+                    'line': meta['line'],
+                    'side': meta['side'],
+                    'leg_label': f"{p_name} {meta['short']}",
+                })
+
+        correlations = []
+        combo_candidates = []
+        for i in range(len(market_vectors)):
+            row_a = market_vectors[i]
+            for j in range(i + 1, len(market_vectors)):
+                row_b = market_vectors[j]
+                r = _pearson_corr(row_a['values'], row_b['values'])
+                if abs(r) < 0.10:
+                    continue
+                strength = _corr_strength_label(r)
+                warning = _corr_warning(row_a, row_b, r)
+                corr_item = {
+                    'playerA': row_a['player'],
+                    'marketA': row_a['market'],
+                    'teamA': row_a['team'],
+                    'playerB': row_b['player'],
+                    'marketB': row_b['market'],
+                    'teamB': row_b['team'],
+                    'r': round(r, 3),
+                    'strength': strength,
+                }
+                if warning:
+                    corr_item['warning'] = warning
+                correlations.append(corr_item)
+
+                if r > 0:
+                    event_a = [1 if x >= row_a['event_floor'] else 0 for x in row_a['values']]
+                    event_b = [1 if x >= row_b['event_floor'] else 0 for x in row_b['values']]
+                    joint_hits = sum(1 for a, b in zip(event_a, event_b) if a and b)
+                    combined_prob = joint_hits / sims
+                    indep_prob = row_a['event_prob'] * row_b['event_prob']
+                    combo_candidates.append({
+                        'legs': [row_a['leg_label'], row_b['leg_label']],
+                        'legs_meta': [
+                            {
+                                'player': row_a['player'],
+                                'market': row_a['market'],
+                                'line': row_a['line'],
+                                'side': row_a['side'],
+                                'team': row_a['team'],
+                            },
+                            {
+                                'player': row_b['player'],
+                                'market': row_b['market'],
+                                'line': row_b['line'],
+                                'side': row_b['side'],
+                                'team': row_b['team'],
+                            },
+                        ],
+                        'combined_prob': round(combined_prob, 3),
+                        'r': round(r, 3),
+                        'strength': strength,
+                        'combined_ev_pct': round((combined_prob - indep_prob) * 100, 2),
+                        'score': (combined_prob * 0.65) + (r * 0.35),
+                    })
+
+        correlations = sorted(correlations, key=lambda x: abs(x['r']), reverse=True)[:240]
+        top_sgp_combos = sorted(combo_candidates, key=lambda x: x['score'], reverse=True)[:5]
+        for c in top_sgp_combos:
+            c.pop('score', None)
+
         return jsonify({
             'success': True,
             'meta': {'sims': sims, 'awayAbbr': away_abbr, 'homeAbbr': home_abbr, 'parkFactor': park},
@@ -3697,6 +3881,8 @@ def api_simulate(game_pk):
                 'awayBullpen': away_bullpen_summary, 'homeBullpen': home_bullpen_summary,
                 'awayBullpenTiers': away_tiers, 'homeBullpenTiers': home_tiers,
             },
+            'correlations': correlations,
+            'top_sgp_combos': top_sgp_combos,
             'sampleBoxscore': sample,
         })
     except Exception as ex:
