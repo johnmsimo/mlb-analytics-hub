@@ -3366,18 +3366,102 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
     if not g:
         return []
 
-    box = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=10).json().get('teams', {})
-    away_lineup = get_batters_from_boxscore(box.get('away', {}), 'away')
-    home_lineup = get_batters_from_boxscore(box.get('home', {}), 'home')
-    if not away_lineup or not home_lineup:
-        return []
-
     away_team = g.get('teams', {}).get('away', {}).get('team', {})
     home_team = g.get('teams', {}).get('home', {}).get('team', {})
     away_team_id = away_team.get('id')
     home_team_id = home_team.get('id')
     away_abbr = away_team.get('abbreviation', 'AWAY')
     home_abbr = home_team.get('abbreviation', 'HOME')
+
+    # ── Try boxscore lineups first (works once game has started) ─────────────
+    away_lineup, home_lineup = [], []
+    try:
+        box = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=10).json().get('teams', {})
+        away_lineup = get_batters_from_boxscore(box.get('away', {}), 'away')
+        home_lineup = get_batters_from_boxscore(box.get('home', {}), 'home')
+    except Exception:
+        pass
+
+    # ── Pre-game fallback: scheduled lineups hydration ───────────────────────
+    if not away_lineup or not home_lineup:
+        try:
+            lr = requests.get(
+                f"{MLB_API}/schedule?sportId=1&gamePk={game_pk}&hydrate=lineups",
+                timeout=10
+            ).json()
+            lr_dates = lr.get('dates', [])
+            lr_game = next((x for d in lr_dates for x in d.get('games', []) if x.get('gamePk') == game_pk), None)
+            lineups = (lr_game or {}).get('lineups') or {}
+
+            def _parse_scheduled_lineup(hitters):
+                out = []
+                for i, p in enumerate(hitters or [], start=1):
+                    name = (p.get('fullName') or p.get('name') or '').strip()
+                    pid  = p.get('id') or p.get('playerId')
+                    pos  = (p.get('primaryPosition') or {}).get('abbreviation', '?')
+                    if not name:
+                        continue
+                    fgb = fg_batter(name); svb = sv_batter(name)
+                    out.append({'slot': i, 'id': pid, 'name': name, 'pos': pos, 'bats': 'S',
+                                'fg_pa': fgb.get('fg_pa','N/A'), 'fg_r': fgb.get('fg_r','N/A'),
+                                'fg_sb': fgb.get('fg_sb','N/A'), 'fg_woba': fgb.get('fg_woba','N/A'),
+                                'fg_wrc': fgb.get('fg_wrc','N/A'), 'fg_war': fgb.get('fg_war','N/A'),
+                                'sv_xba': svb.get('sv_xba','N/A'), 'sv_xslg': svb.get('sv_xslg','N/A'),
+                                'sv_xwoba': svb.get('sv_xwoba','N/A'), 'sv_ev': svb.get('sv_ev','N/A'),
+                                'sv_hh_pct': svb.get('sv_hh_pct','N/A'), 'sv_brl_pct': svb.get('sv_brl_pct','N/A'),
+                                'sv_la': svb.get('sv_la','N/A'),
+                                'avg': fgb.get('fg_avg','.---'), 'obp': fgb.get('fg_obp','.---'),
+                                'slg': fgb.get('fg_slg','.---'), 'ops': fgb.get('fg_ops','.---'),
+                                'ab': 0, 'hits': 0, 'hr': 0, 'rbi': 0})
+                return out
+
+            if not away_lineup:
+                away_lineup = _parse_scheduled_lineup(lineups.get('awayBatters', []))
+            if not home_lineup:
+                home_lineup = _parse_scheduled_lineup(lineups.get('homeBatters', []))
+        except Exception:
+            pass
+
+    # ── Last resort: active roster (top 9 position players) ─────────────────
+    def _roster_lineup(team_id):
+        try:
+            r = requests.get(f"{MLB_API}/teams/{team_id}/roster?rosterType=active", timeout=8)
+            r.raise_for_status()
+            out = []
+            for entry in (r.json().get('roster') or []):
+                pos = ((entry.get('position') or {}).get('abbreviation') or '?')
+                if pos in ('P', 'SP', 'RP', 'CP'):
+                    continue
+                name = ((entry.get('person') or {}).get('fullName') or '').strip()
+                pid  = ((entry.get('person') or {}).get('id'))
+                if not name:
+                    continue
+                fgb = fg_batter(name); svb = sv_batter(name)
+                out.append({'slot': len(out)+1, 'id': pid, 'name': name, 'pos': pos, 'bats': 'S',
+                            'fg_pa': fgb.get('fg_pa','N/A'), 'fg_r': fgb.get('fg_r','N/A'),
+                            'fg_sb': fgb.get('fg_sb','N/A'), 'fg_woba': fgb.get('fg_woba','N/A'),
+                            'fg_wrc': fgb.get('fg_wrc','N/A'), 'fg_war': fgb.get('fg_war','N/A'),
+                            'sv_xba': svb.get('sv_xba','N/A'), 'sv_xslg': svb.get('sv_xslg','N/A'),
+                            'sv_xwoba': svb.get('sv_xwoba','N/A'), 'sv_ev': svb.get('sv_ev','N/A'),
+                            'sv_hh_pct': svb.get('sv_hh_pct','N/A'), 'sv_brl_pct': svb.get('sv_brl_pct','N/A'),
+                            'sv_la': svb.get('sv_la','N/A'),
+                            'avg': fgb.get('fg_avg','.---'), 'obp': fgb.get('fg_obp','.---'),
+                            'slg': fgb.get('fg_slg','.---'), 'ops': fgb.get('fg_ops','.---'),
+                            'ab': 0, 'hits': 0, 'hr': 0, 'rbi': 0})
+                if len(out) >= 9:
+                    break
+            return out
+        except Exception:
+            return []
+
+    if not away_lineup:
+        away_lineup = _roster_lineup(away_team_id)
+    if not home_lineup:
+        home_lineup = _roster_lineup(home_team_id)
+
+    if not away_lineup or not home_lineup:
+        return []
+
     park = PARK_FACTORS.get(home_team_id, 1.0)
 
     away_p = g.get('teams', {}).get('away', {}).get('probablePitcher', {})
@@ -3527,14 +3611,27 @@ def api_tracker_capture(date_str):
     try:
         adjustments = _get_adjustments()
         sched = fetch_schedule(date_str)
-        entries = []
-        for g in sched:
+        if not sched:
+            return jsonify({'success': False, 'error': f'No games found for {date_str}'}), 404
+
+        all_entries = []
+        lock = __import__('threading').Lock()
+
+        def _capture_one(g):
+            gpk = g.get('gamePk')
             try:
-                entries.extend(_build_tracker_rows_for_game(g.get('gamePk'), date_str, adjustments, _sched=sched))
+                rows = _build_tracker_rows_for_game(gpk, date_str, adjustments, _sched=sched)
+                with lock:
+                    all_entries.extend(rows)
             except Exception:
-                print('[tracker_capture_game]', traceback.format_exc())
+                print(f'[tracker_capture_game {gpk}]', traceback.format_exc())
+
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            list(ex.map(_capture_one, sched))
+
         store = _load_json(TRACKER_STORE, {})
-        entries = _recalc_tracker_entries(entries)
+        entries = _recalc_tracker_entries(all_entries)
+        entries.sort(key=lambda x: x.get('score', 0), reverse=True)
         store[date_str] = {'capturedAt': datetime.now().isoformat(), 'gradedAt': None, 'closingCapturedAt': None, 'entries': entries}
         _save_json(TRACKER_STORE, store)
         return jsonify({'success': True, 'date': date_str, 'entries': entries, 'summary': _tracker_summary(entries), 'capturedAt': store[date_str]['capturedAt']})
@@ -3968,33 +4065,47 @@ def api_tracker_close(date_str):
         by_game.setdefault(row.get('gamePk'), []).append(row)
     sched = fetch_schedule(date_str)
     games = {g.get('gamePk'): g for g in sched}
-    updated = 0
-    for gpk, rows in by_game.items():
+    lock = __import__('threading').Lock()
+    updated_count = [0]
+
+    def _close_one(gpk_rows):
+        gpk, rows = gpk_rows
         g = games.get(gpk)
         if not g:
-            continue
+            return
         away_name = g.get('teams', {}).get('away', {}).get('team', {}).get('name', '')
         home_name = g.get('teams', {}).get('home', {}).get('team', {}).get('name', '')
         event, _ = _find_odds_event(away_name, home_name)
         if not event:
-            continue
-        books = _load_event_odds(event.get('id'), featured_only=False)
-        valid_names = set([r.get('player') for r in rows if r.get('player')])
+            return
+        try:
+            books = _load_event_odds(event.get('id'), featured_only=False)
+        except Exception:
+            return
+        valid_names = set(r.get('player') for r in rows if r.get('player'))
         props = _parse_prop_markets(books, valid_names)
+        now_ts = datetime.now().isoformat()
+        local_updated = 0
         for row in rows:
-            m = next((x for x in props if x.get('player') == row.get('player') and x.get('market_key') == row.get('marketKey') and float(x.get('line')) == float(row.get('line'))), None)
+            m = next((x for x in props if x.get('player') == row.get('player') and x.get('market_key') == row.get('marketKey') and float(x.get('line', 0)) == float(row.get('line', 0))), None)
             if not m:
                 continue
             row['closingPrice'] = m.get('over_price')
             row['closingBookmaker'] = m.get('bookmaker')
-            row['closingCapturedAt'] = datetime.now().isoformat()
+            row['closingCapturedAt'] = now_ts
             _recalc_tracker_entry(row)
-            updated += 1
+            local_updated += 1
+        with lock:
+            updated_count[0] += local_updated
+
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        list(ex.map(_close_one, by_game.items()))
+
     day['entries'] = _recalc_tracker_entries(entries)
     day['closingCapturedAt'] = datetime.now().isoformat()
     store[date_str] = day
     _save_json(TRACKER_STORE, store)
-    return jsonify({'success': True, 'date': date_str, 'updated': updated, 'entries': day.get('entries', []), 'summary': _tracker_summary(day.get('entries', [])), 'closingCapturedAt': day.get('closingCapturedAt')})
+    return jsonify({'success': True, 'date': date_str, 'updated': updated_count[0], 'entries': day.get('entries', []), 'summary': _tracker_summary(day.get('entries', [])), 'closingCapturedAt': day.get('closingCapturedAt')})
 
 
 @app.route('/api/tracker/value/dashboard/<date_str>')
