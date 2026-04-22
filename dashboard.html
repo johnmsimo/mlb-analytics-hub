@@ -67,7 +67,7 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.65rem;color:var(--mu);letter-spacing:2px;font-family:'Orbitron',monospace;margin-top:20px}
 @media(max-width:768px){nav{padding:12px 16px}.logo{font-size:1.05rem}.strip{padding:14px 16px}.main{padding:16px}.srcbar{padding:7px 16px}}
 
-.brand{display:flex;align-items:center;gap:14px}.brand img{width:52px;height:52px;object-fit:contain;filter:drop-shadow(0 0 10px rgba(0,229,255,.22))}.brand-text{display:flex;flex-direction:column;gap:2px}.brand-name{font-family:Orbitron,sans-serif;font-weight:800;letter-spacing:1.5px;color:var(--cyan)}.brand-sub{font-size:.72rem;color:var(--mut)}@media(max-width:700px){.brand img{width:42px;height:42px}.brand-sub{display:none}}
+.brand{display:flex;align-items:center;gap:14px}.brand img{width:52px;height:52px;object-fit:contain;border-radius:50%;background:transparent;filter:drop-shadow(0 0 10px rgba(0,229,255,.22))}.brand-text{display:flex;flex-direction:column;gap:2px}.brand-name{font-family:Orbitron,sans-serif;font-weight:800;letter-spacing:1.5px;color:var(--cyan)}.brand-sub{font-size:.72rem;color:var(--mut)}@media(max-width:700px){.brand img{width:42px;height:42px}.brand-sub{display:none}}
 
 
 .lineup-toggle{width:100%;background:none;border:1px solid rgba(0,229,255,.18);border-radius:8px;color:var(--c);font-family:Orbitron,sans-serif;font-size:.6rem;letter-spacing:1.5px;padding:6px 10px;cursor:pointer;margin-top:8px;transition:background .2s}
@@ -311,7 +311,7 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
 </head>
 <body>
 <nav>
-  <div class="brand"><img src="/static/logo.png" alt="MLB Analytics Hub logo"><div class="brand-text"><div class="brand-name">MLB ANALYTICS HUB</div><div class="brand-sub">Predictive MLB prop intelligence</div></div></div>
+  <div class="brand"><img src="/static/logo.svg" alt="MLB Analytics Hub logo"><div class="brand-text"><div class="brand-name">MLB ANALYTICS HUB</div><div class="brand-sub">Predictive MLB prop intelligence</div></div></div>
   <div class="nav-r">
     <div id="dt" style="font-size:.72rem;color:var(--mu);font-family:'Orbitron',monospace"></div>
     <div id="clk"></div>
@@ -465,7 +465,6 @@ function mkCard(g){
     +(isFinal?'':('<button class="lineup-toggle" onclick="toggleLineup(event,'+g.gamePk+')">&#9776; SHOW LINEUP</button>'
     +'<div class="lineup-section" id="lu-'+g.gamePk+'">'
       +'<div class="card-lineup" id="cl-'+g.gamePk+'"><div class="cl-loading">Lineup loading…</div></div>'
-      +'<div class="lu-content" id="lu-content-'+g.gamePk+'"><div class="lu-pending">Loading lineup…</div></div>'
     +'</div>'))
     +'<a href="/gameside-deepdive/'+g.gamePk+'" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" style="display:block;margin-top:6px;padding:7px;background:rgba(0,230,118,.07);border:1px solid rgba(0,230,118,.22);border-radius:8px;text-align:center;font-family:Orbitron,monospace;font-size:.58rem;letter-spacing:1.5px;color:#00e676;cursor:pointer;text-decoration:none">&#127919; GAMESIDE VIEW</a>'
     +(isFinal?'':('<button class="lineup-toggle" style="margin-top:6px;background:rgba(0,229,255,.03)" onclick="toggleQuickProps(event,'+g.gamePk+')">&#9889; QUICK PROPS</button>'
@@ -485,19 +484,15 @@ function toggleLineup(e, pk){
   btn.textContent=open?'\u2715 HIDE LINEUP':'\u2261 SHOW LINEUP';
   if(open){
     if(LINEUPS[pk]){
-      renderLineup(pk, LINEUPS[pk]);
       renderCardLineup(pk, LINEUPS[pk]);
       return;
     }
     fetch('/api/lineup/'+pk).then(function(r){return r.json();}).then(function(d){
       LINEUPS[pk]=d;
-      renderLineup(pk, d);
       renderCardLineup(pk, d);
     }).catch(function(){
-      var content=document.getElementById('lu-content-'+pk);
-      if(content) content.innerHTML='<div class="lu-pending">Lineup unavailable</div>';
       var card=document.getElementById('cl-'+pk);
-      if(card) card.innerHTML='<div class="cl-pending">Lineup preview unavailable</div>';
+      if(card) card.innerHTML='<div class="cl-pending">Lineup unavailable</div>';
     });
   }
 }
