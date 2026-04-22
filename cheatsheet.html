@@ -33,6 +33,7 @@
     .line{font-size:.8rem;color:var(--mu);margin:3px 0}
     .empty{padding:22px;text-align:center;color:var(--mu)}
     a.toplink{color:var(--c);text-decoration:none}
+    .actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
   </style>
 </head>
 <body>
@@ -42,10 +43,12 @@
         <div class="brand">MLB ANALYTICS HUB - CHEATSHEETS</div>
         <div class="sub" id="statusText">Loading today's cheatsheets...</div>
       </div>
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <div class="actions">
         <a class="toplink" href="/">Dashboard</a>
         <a class="toplink" href="/props">Props</a>
         <a class="toplink" href="/tracker">Tracker</a>
+        <button class="btn" id="csvBtn" onclick="exportTracker('csv')">Export CSV</button>
+        <button class="btn" id="pdfBtn" onclick="exportTracker('pdf')">Export PDF</button>
         <button class="btn" id="refreshBtn" onclick="loadData(true)">Refresh</button>
       </div>
     </div>
@@ -102,6 +105,17 @@
 
     function pct(v){ return (v==null || isNaN(v)) ? '-' : (Number(v)*100).toFixed(1)+'%'; }
     function num(v,d=2){ return (v==null || isNaN(v)) ? '-' : Number(v).toFixed(d); }
+
+    function etToday(){
+      const d = new Date().toLocaleDateString('en-US', {timeZone:'America/New_York'});
+      const [m, dy, y] = d.split('/');
+      return `${y}-${m.padStart(2,'0')}-${dy.padStart(2,'0')}`;
+    }
+
+    function exportTracker(format){
+      const fmt = (format || 'csv').toLowerCase();
+      window.location.href = '/api/tracker/export/' + etToday() + '?format=' + fmt;
+    }
 
     function l10Class(v){
       const n = Number(v||0);

@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MLB Analytics Hub - Consistency Sheets</title>
+  <style>
+    :root{
+      --bg:#08121f;
+      --panel:#0f1d31;
+      --panel2:#11233a;
+      --panel3:#162a44;
+      --line:#203654;
+      --text:#dbe8fb;
+      --muted:#8ca3c4;
+      --cyan:#4ddcff;
+      --green:#00d47a;
+      --yellow:#ffcc4d;
+      --red:#ff6b6b;
+      --blue:#7ec8ff;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:radial-gradient(circle at top left, rgba(77,220,255,.14), transparent 28%),linear-gradient(180deg,#07101a 0%,#08121f 100%);color:var(--text);font-family:Segoe UI,Arial,sans-serif}
+    a{color:var(--cyan);text-decoration:none}
+    button,input,select{font:inherit}
+    .wrap{max-width:1480px;margin:0 auto;padding:20px}
+    .top{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;margin-bottom:16px}
+    .brand{font-size:1.35rem;font-weight:800;letter-spacing:.08em}
+    .sub{margin-top:4px;color:var(--muted);font-size:.92rem;max-width:820px}
+    .actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    .toplink{padding:8px 12px;border:1px solid rgba(77,220,255,.18);border-radius:999px;background:rgba(255,255,255,.02)}
+    .btn{border:1px solid rgba(77,220,255,.35);background:rgba(77,220,255,.08);color:var(--cyan);padding:9px 13px;border-radius:10px;cursor:pointer}
+    .btn:disabled{opacity:.6;cursor:not-allowed}
+    .hero{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px}
+    .stat{background:linear-gradient(180deg,var(--panel2),var(--panel));border:1px solid var(--line);border-radius:16px;padding:14px 16px}
+    .stat-v{font-size:1.45rem;font-weight:800;color:var(--cyan)}
+    .stat-l{margin-top:5px;font-size:.72rem;letter-spacing:.08em;color:var(--muted);text-transform:uppercase}
+    .panel{background:linear-gradient(180deg,var(--panel2),var(--panel));border:1px solid var(--line);border-radius:18px;padding:16px}
+    .toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+    .tabs{display:flex;gap:8px;flex-wrap:wrap}
+    .tab{border:1px solid var(--line);background:rgba(255,255,255,.03);color:var(--muted);padding:9px 13px;border-radius:999px;cursor:pointer;transition:.15s}
+    .tab.on{color:#08121f;background:var(--cyan);border-color:var(--cyan);font-weight:700}
+    .filters{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    .filters select{background:var(--panel3);border:1px solid var(--line);color:var(--text);border-radius:10px;padding:9px 12px;min-width:150px}
+    .meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+    .pill{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;border:1px solid rgba(77,220,255,.22);background:rgba(77,220,255,.08);font-size:.76rem;color:var(--cyan)}
+    .table-wrap{overflow:auto;border:1px solid var(--line);border-radius:14px}
+    table{width:100%;border-collapse:collapse;min-width:1080px}
+    th,td{padding:11px 12px;border-bottom:1px solid rgba(255,255,255,.05);text-align:left;white-space:nowrap}
+    th{font-size:.7rem;letter-spacing:.08em;color:var(--muted);text-transform:uppercase;background:rgba(0,0,0,.16)}
+    tr:hover td{background:rgba(77,220,255,.03)}
+    .player{font-weight:700}
+    .small{font-size:.8rem;color:var(--muted)}
+    .rate{display:inline-flex;align-items:center;justify-content:center;min-width:84px;padding:6px 8px;border-radius:10px;font-size:.78rem;font-weight:700;border:1px solid}
+    .rate.good{background:rgba(0,212,122,.13);border-color:rgba(0,212,122,.4);color:var(--green)}
+    .rate.warn{background:rgba(255,204,77,.12);border-color:rgba(255,204,77,.38);color:var(--yellow)}
+    .rate.bad{background:rgba(255,107,107,.12);border-color:rgba(255,107,107,.35);color:var(--red)}
+    .rate.na{background:rgba(126,200,255,.08);border-color:rgba(126,200,255,.22);color:var(--blue)}
+    .hub{display:inline-block;padding:4px 8px;border-radius:8px;border:1px solid rgba(77,220,255,.22);background:rgba(77,220,255,.08);color:var(--cyan);font-weight:700;font-size:.76rem}
+    .ev.pos{color:var(--green);font-weight:700}
+    .ev.neg{color:var(--red);font-weight:700}
+    .empty{padding:34px 18px;text-align:center;color:var(--muted)}
+    @media (max-width:980px){
+      .hero{grid-template-columns:repeat(2,minmax(0,1fr))}
+    }
+    @media (max-width:640px){
+      .wrap{padding:14px}
+      .hero{grid-template-columns:1fr}
+      .filters{width:100%}
+      .filters select{width:100%;min-width:0}
+      .actions{width:100%}
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div>
+        <div class="brand">MLB ANALYTICS HUB - CONSISTENCY SHEETS</div>
+        <div class="sub" id="statusText">Loading today's over-rate sheets across hits, total bases, RBIs, runs, steals, and strikeouts.</div>
+      </div>
+      <div class="actions">
+        <a class="toplink" href="/">Dashboard</a>
+        <a class="toplink" href="/props">Props</a>
+        <a class="toplink" href="/cheatsheets">Cheatsheets</a>
+        <a class="toplink" href="/tracker">Tracker</a>
+        <button class="btn" id="refreshBtn" onclick="loadData(true)">Refresh</button>
+      </div>
+    </div>
+
+    <div class="hero">
+      <div class="stat">
+        <div class="stat-v" id="sheetCount">0</div>
+        <div class="stat-l">Markets</div>
+      </div>
+      <div class="stat">
+        <div class="stat-v" id="rowCount">0</div>
+        <div class="stat-l">Visible Rows</div>
+      </div>
+      <div class="stat">
+        <div class="stat-v" id="gameCount">0</div>
+        <div class="stat-l">Games</div>
+      </div>
+      <div class="stat">
+        <div class="stat-v" id="teamCount">0</div>
+        <div class="stat-l">Teams</div>
+      </div>
+    </div>
+
+    <section class="panel">
+      <div class="toolbar">
+        <div class="tabs" id="marketTabs"></div>
+        <div class="filters">
+          <select id="gameFilter" onchange="renderActiveMarket()"></select>
+          <select id="teamFilter" onchange="renderActiveMarket()"></select>
+          <select id="slotFilter" onchange="renderActiveMarket()"></select>
+        </div>
+      </div>
+      <div class="meta" id="sheetMeta"></div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Player</th>
+              <th>Team</th>
+              <th>Opp</th>
+              <th>Game</th>
+              <th>Slot</th>
+              <th>Line</th>
+              <th>L5 Over%</th>
+              <th>L10 Over%</th>
+              <th>L20 Over%</th>
+              <th>Season%</th>
+              <th>Sample</th>
+              <th>Hub</th>
+              <th>EV</th>
+            </tr>
+          </thead>
+          <tbody id="sheetBody"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    let DATA = null;
+    let ACTIVE_MARKET = null;
+
+    function etToday(){
+      const d = new Date().toLocaleDateString('en-US', { timeZone: 'America/New_York' });
+      const [m, day, y] = d.split('/');
+      return `${y}-${m.padStart(2,'0')}-${day.padStart(2,'0')}`;
+    }
+
+    function formatPct(summary){
+      if(!summary || summary.pct == null) return 'No data';
+      return `${Math.round(Number(summary.pct) * 100)}%`;
+    }
+
+    function rateClass(summary){
+      if(!summary || summary.pct == null) return 'na';
+      const pct = Number(summary.pct);
+      if(pct > 0.7) return 'good';
+      if(pct >= 0.5) return 'warn';
+      return 'bad';
+    }
+
+    function rateMarkup(summary){
+      const label = summary && summary.pct != null
+        ? `${summary.over}/${summary.total} · ${formatPct(summary)}`
+        : 'No data';
+      return `<span class="rate ${rateClass(summary)}">${label}</span>`;
+    }
+
+    function num(value, digits=1){
+      if(value == null || value === '' || Number.isNaN(Number(value))) return '-';
+      return Number(value).toFixed(digits);
+    }
+
+    function setOptions(selectId, items, allLabel){
+      const select = document.getElementById(selectId);
+      const current = select.value;
+      const options = [`<option value="">${allLabel}</option>`].concat(items.map(item => {
+        if(typeof item === 'object') return `<option value="${item.value}">${item.label}</option>`;
+        return `<option value="${item}">${item}</option>`;
+      }));
+      select.innerHTML = options.join('');
+      if([...select.options].some(opt => opt.value === current)) select.value = current;
+    }
+
+    function buildTabs(markets){
+      const wrap = document.getElementById('marketTabs');
+      wrap.innerHTML = (markets || []).map(m => {
+        const active = m.marketKey === ACTIVE_MARKET ? ' on' : '';
+        return `<button class="tab${active}" onclick="setMarket('${m.marketKey}')">${m.marketLabel}</button>`;
+      }).join('');
+    }
+
+    function setMarket(marketKey){
+      ACTIVE_MARKET = marketKey;
+      buildTabs(DATA ? DATA.markets : []);
+      renderActiveMarket();
+    }
+
+    function activeSheet(){
+      if(!DATA || !Array.isArray(DATA.markets)) return null;
+      return DATA.markets.find(m => m.marketKey === ACTIVE_MARKET) || DATA.markets[0] || null;
+    }
+
+    function filteredRows(rows){
+      const gamePk = document.getElementById('gameFilter').value;
+      const team = document.getElementById('teamFilter').value;
+      const slot = document.getElementById('slotFilter').value;
+      return (rows || []).filter(row => {
+        if(gamePk && String(row.gamePk) !== String(gamePk)) return false;
+        if(team && String(row.team || '') !== team) return false;
+        if(slot && String(row.slot || '') !== String(slot)) return false;
+        return true;
+      });
+    }
+
+    function renderActiveMarket(){
+      const body = document.getElementById('sheetBody');
+      const meta = document.getElementById('sheetMeta');
+      const sheet = activeSheet();
+      const rows = filteredRows(sheet ? sheet.rows : []);
+      document.getElementById('sheetCount').textContent = DATA && DATA.markets ? DATA.markets.length : 0;
+      document.getElementById('rowCount').textContent = rows.length;
+      document.getElementById('gameCount').textContent = DATA && DATA.games ? DATA.games.length : 0;
+      document.getElementById('teamCount').textContent = DATA && DATA.teams ? DATA.teams.length : 0;
+
+      if(!sheet){
+        meta.innerHTML = '';
+        body.innerHTML = '<tr><td colspan="13" class="empty">No consistency sheets are available.</td></tr>';
+        return;
+      }
+
+      meta.innerHTML = [
+        `<span class="pill">Market: ${sheet.marketLabel}</span>`,
+        `<span class="pill">Rows: ${rows.length}</span>`,
+        `<span class="pill">Date: ${DATA.date || etToday()}</span>`,
+        `<span class="pill">Cache Age: ${DATA.cacheAgeSec || 0}s</span>`
+      ].join('');
+
+      if(!rows.length){
+        body.innerHTML = '<tr><td colspan="13" class="empty">No rows match the current filters.</td></tr>';
+        return;
+      }
+
+      body.innerHTML = rows.map(row => {
+        const ev = Number(row.evPct || 0);
+        const evClass = ev >= 0 ? 'pos' : 'neg';
+        return '<tr>' +
+          `<td><div class="player">${row.player || '-'}</div><div class="small">ID ${row.playerId || '-'}</div></td>` +
+          `<td>${row.team || '-'}</td>` +
+          `<td>${row.opp || '-'}</td>` +
+          `<td>${row.gameLabel || '-'}</td>` +
+          `<td>${row.slot == null ? '-' : row.slot}</td>` +
+          `<td>${num(row.line, 1)}</td>` +
+          `<td>${rateMarkup(row.l5)}</td>` +
+          `<td>${rateMarkup(row.l10)}</td>` +
+          `<td>${rateMarkup(row.l20)}</td>` +
+          `<td>${rateMarkup(row.season)}</td>` +
+          `<td>${row.sampleSize || 0}</td>` +
+          `<td><span class="hub">${row.hubRating == null ? '-' : num(row.hubRating, 0)}</span></td>` +
+          `<td class="ev ${evClass}">${num(ev, 1)}%</td>` +
+        '</tr>';
+      }).join('');
+    }
+
+    async function loadData(force){
+      const btn = document.getElementById('refreshBtn');
+      const status = document.getElementById('statusText');
+      btn.disabled = true;
+      status.textContent = 'Loading consistency sheets...';
+      try{
+        const query = force ? '?refresh=1' : '';
+        const res = await fetch('/api/consistency/today' + query);
+        const data = await res.json();
+        if(!data.success) throw new Error(data.error || 'Failed to load consistency sheets');
+        DATA = data;
+        ACTIVE_MARKET = ACTIVE_MARKET || ((data.markets || []).find(m => (m.rows || []).length)?.marketKey) || ((data.markets || [])[0] || {}).marketKey;
+        setOptions('gameFilter', (data.games || []).map(g => ({ value: String(g.gamePk), label: g.label })), 'All Games');
+        setOptions('teamFilter', data.teams || [], 'All Teams');
+        setOptions('slotFilter', (data.slots || []).map(s => ({ value: String(s), label: `Slot ${s}` })), 'All Slots');
+        buildTabs(data.markets || []);
+        renderActiveMarket();
+        status.textContent = `Updated ${data.generatedAt || 'now'} | ${data.cached ? 'cached' : 'fresh'} payload for ${data.date || etToday()}`;
+      }catch(err){
+        document.getElementById('sheetBody').innerHTML = `<tr><td colspan="13" class="empty">${err.message}</td></tr>`;
+        document.getElementById('sheetMeta').innerHTML = '';
+        status.textContent = 'Error: ' + err.message;
+      }finally{
+        btn.disabled = false;
+      }
+    }
+
+    loadData(false);
+  </script>
+</body>
+</html>

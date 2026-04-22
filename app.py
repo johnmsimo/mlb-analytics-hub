@@ -1,4 +1,4 @@
-import os, threading, traceback, difflib, io, csv as csvmod, json, re, time, uuid
+import os, threading, traceback, difflib, io, csv as csvmod, json, re, time, uuid, unicodedata
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
@@ -8,7 +8,7 @@ try:
 except ImportError:
     from backports.zoneinfo import ZoneInfo
 ET = ZoneInfo("America/New_York")
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, Response
 from flask_cors import CORS
 
 app = Flask(__name__)
@@ -32,6 +32,7 @@ DEEP_DIVE_HTML = _read_html_or_fallback('deepdive.html')
 PROPS_HTML = _read_html_or_fallback('props.html')
 CHEATSHEET_HTML = _read_html_or_fallback('cheatsheet.html')
 TRACKER_HTML = _read_html_or_fallback('tracker.html')
+CONSISTENCY_HTML = _read_html_or_fallback('consistency.html')
 # Pitcher Analysis page - linked from dashboard header as /pitcher-deep-dive.
 PITCHER_DEEP_DIVE_HTML = _read_html_or_fallback('pitcher_deepdive.html')
 GAMESIDE_DEEPDIVE_HTML = _read_html_or_fallback('gameside_deepdive.html')
@@ -42,6 +43,8 @@ TRACKER_STORE = os.path.join(DATA_DIR, 'daily_tracker.json')
 ADJUST_STORE = os.path.join(DATA_DIR, 'model_adjustments.json')
 CAL_HISTORY_STORE = os.path.join(DATA_DIR, 'calibration_history.json')
 VALUE_HISTORY_STORE = os.path.join(DATA_DIR, 'value_history.json')
+_PROPS_SCAN_CACHE = {}
+_CONSISTENCY_CACHE = {}
 
 
 def _load_json(path, default):
@@ -125,98 +128,19 @@ PARK_FACTORS = {
     113:0.94,115:1.00
 }
 
-# ── FanGraphs Cache ───────────────────────────────────────────────────────────
 _fg_lock = threading.Lock()
-_fg_bat  = {}
-_fg_pit  = {}
-_fg_loaded    = False
+_fg_bat = {}
+_fg_pit = {}
+_fg_loaded = False
 _fg_load_date = None
-_fg_loading   = False
+_fg_loading = False
+
 
 def _load_fg_data():
-    """Load FanGraphs batting & pitching stats via pybaseball.
-
-    FanGraphs frequently returns 403 from leaders-legacy.aspx — if that
-    happens we DO NOT crash, we simply leave the FG cache empty and let
-    `sv_pitcher`/`sv_batter`/MLB-API-derived fallbacks fill the gap.
-    """
-    global _fg_bat, _fg_pit, _fg_loaded, _fg_load_date
-    year = datetime.now().year
-    fg_failed = False
-    try:
-        import pybaseball as pb
-        # Enable on-disk cache so consecutive boots don't re-hit FanGraphs.
-        try: pb.cache.enable()
-        except Exception: pass
-        df = pb.batting_stats(year, qual=0)
-        bat = {}
-        for _, r in df.iterrows():
-            k = str(r.get("Name","")).strip().lower()
-            if k:
-                bat[k] = {
-                    "fg_avg":  round(float(r.get("AVG")   or 0), 3),
-                    "fg_obp":  round(float(r.get("OBP")   or 0), 3),
-                    "fg_slg":  round(float(r.get("SLG")   or 0), 3),
-                    "fg_ops":  round(float(r.get("OPS")   or 0), 3),
-                    "fg_woba": round(float(r.get("wOBA")  or 0), 3),
-                    "fg_wrc":  int(r.get("wRC+") or 0),
-                    "fg_pa":   int(r.get("PA")   or 0),
-                    "fg_r":    int(r.get("R")    or 0),
-                    "fg_hr":   int(r.get("HR")   or 0),
-                    "fg_rbi":  int(r.get("RBI")  or 0),
-                    "fg_sb":   int(r.get("SB")   or 0),
-                    "fg_war":  round(float(r.get("WAR")   or 0), 1),
-                    "fg_babip":round(float(r.get("BABIP")  or 0), 3),
-                    "fg_bbpct":round(float(r.get("BB%")    or 0), 3),
-                    "fg_kpct": round(float(r.get("K%")     or 0), 3),
-                    "fg_iso":  round(float(r.get("ISO")    or 0), 3),
-                }
-        with _fg_lock: _fg_bat = bat
-        print(f"[FG] Batting: {len(bat)}")
-    except Exception as ex:
-        fg_failed = True
-        print("[FG] Batting failed:", ex)
-    try:
-        import pybaseball as pb
-        df = pb.pitching_stats(year, qual=0)
-        pit = {}
-        for _, r in df.iterrows():
-            k = str(r.get("Name","")).strip().lower()
-            if k:
-                pit[k] = {
-                    "fg_era":  round(float(r.get("ERA")  or 0),2),
-                    "fg_fip":  round(float(r.get("FIP")  or 0),2),
-                    "fg_xfip": round(float(r.get("xFIP") or 0),2),
-                    "fg_whip": round(float(r.get("WHIP") or 0),2),
-                    "fg_k9":   round(float(r.get("K/9")  or 0),2),
-                    "fg_bb9":  round(float(r.get("BB/9") or 0),2),
-                    "fg_hr9":  round(float(r.get("HR/9") or 0),2),
-                    "fg_kpct": round(float(r.get("K%")   or 0),3),
-                    "fg_bbpct":round(float(r.get("BB%")  or 0),3),
-                    "fg_babip":round(float(r.get("BABIP") or 0),3),
-                    "fg_lob":  round(float(r.get("LOB%") or 0),3),
-                    "fg_war":  round(float(r.get("WAR")  or 0),1),
-                    "fg_ip":   round(float(r.get("IP")   or 0),1),
-                    "fg_g":    int(r.get("G")  or 0),
-                    "fg_gs":   int(r.get("GS") or 0),
-                    "fg_w":    int(r.get("W")  or 0),
-                    "fg_l":    int(r.get("L")  or 0),
-                }
-        with _fg_lock: _fg_pit = pit
-        print(f"[FG] Pitching: {len(pit)}")
-    except Exception as ex:
-        fg_failed = True
-        print("[FG] Pitching failed:", ex)
-    # FanGraphs 403? Derive an approximate FG-compatible cache from the MLB
-    # Stats API so the rest of the app (which fuzzy-looks-up by lowercase
-    # name) keeps working with non-empty stats.
-    if fg_failed:
-        try:
-            _load_fg_data_from_mlb_api()
-        except Exception as ex:
-            print("[FG-derived] fallback failed:", ex)
+    global _fg_loaded, _fg_load_date
+    _load_fg_data_from_mlb_api()
     with _fg_lock:
-        _fg_loaded    = True
+        _fg_loaded = True
         _fg_load_date = datetime.now().date()
 
 
@@ -1081,6 +1005,10 @@ def cheatsheets_page():
 @app.route('/tracker')
 def tracker_page():
     return TRACKER_HTML
+
+@app.route('/consistency')
+def consistency_page():
+    return CONSISTENCY_HTML
 
 @app.route('/pitcher-deep-dive')
 @app.route('/pitcher-deep-dive/<int:pitcher_id>')
@@ -5446,7 +5374,7 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                 mi = market_implied
                 ev_pct = round(adj_prob / mi - 1, 4) if mi and mi > 0 else None
                 temp_row = {
-                    'date': capture_date, 'gamePk': game_pk, 'team': team_abbr, 'player': p.get('name'), 'playerId': p.get('id'), 'marketKey': mk, 'line': line, 'recommendedSide': 'Over',
+                    'date': capture_date, 'gamePk': game_pk, 'team': team_abbr, 'player': p.get('name'), 'playerId': p.get('id'), 'slot': p.get('slot'), 'marketKey': mk, 'line': line, 'recommendedSide': 'Over',
                     'rawProb': round(raw_prob, 4), 'adjProb': round(adj_prob, 4), 'modelMean': round(float(p.get(mean_field, 0) or 0), 3), 'edge': round(edge, 4) if edge is not None else None,
                     'bookmaker': msum.get('market_bookmaker'), 'marketPrice': msum.get('best_over_price'), 'marketImplied': market_implied,
                     'bestAvailablePrice': msum.get('best_over_price'), 'bestAvailableBook': msum.get('best_over_book'),
@@ -5996,6 +5924,409 @@ def _overall_window_summary(entries):
     }
 
 
+def _tracker_side_label(row):
+    side = row.get('recommendedSide') or row.get('side')
+    if side:
+        return side
+    market = str(row.get('marketKey') or '').lower()
+    if market in ('nrfi', 'yrfi'):
+        return market.upper()
+    return 'Over'
+
+
+def _tracker_live_summary(entries, adjustments=None):
+    adjustments = adjustments or _get_adjustments()
+    summary = _tracker_summary(entries)
+    graded = [x for x in entries if x.get('grade') in ('win', 'loss', 'push')]
+    active = [x for x in graded if x.get('grade') in ('win', 'loss')]
+    pending = [x for x in entries if (x.get('grade') or 'pending') == 'pending']
+    planned_stake = round(sum(float(x.get('stakeDollars') or 0) for x in entries), 2)
+    pending_risk = round(sum(float(x.get('stakeDollars') or 0) for x in pending), 2)
+    profit_dollars = round(sum(float(x.get('profitDollars') or 0) for x in graded), 2)
+    profit_units = round(sum(float(x.get('profitUnits') or 0) for x in graded), 3)
+    clv_rows = [x for x in graded if x.get('clvEdge') is not None]
+    positive_clv = [x for x in clv_rows if float(x.get('clvEdge') or 0) < 0]
+    avg_clv = round(sum(float(x.get('clvEdge') or 0) for x in clv_rows) / max(1, len(clv_rows)), 4) if clv_rows else None
+    live_bankroll = round(float(adjustments.get('bankroll') or 0) + profit_dollars, 2)
+    summary['pending'] = len(pending)
+    summary['units'] = profit_units
+    summary['at_risk'] = pending_risk
+    summary['avg_clv'] = avg_clv
+    summary['clv_positive_rate'] = round(len(positive_clv) / max(1, len(clv_rows)), 4) if clv_rows else None
+    summary['bankroll'] = {
+        'starting_bankroll': float(adjustments.get('bankroll') or 0),
+        'live_bankroll': live_bankroll,
+        'planned_stake': planned_stake,
+        'pending_risk': pending_risk,
+    }
+    summary['value'] = {
+        'dollars': profit_dollars,
+        'units': profit_units,
+        'avg_clv': avg_clv,
+        'clv_positive_rate': summary['clv_positive_rate'],
+        'graded_with_clv': len(clv_rows),
+    }
+    summary['snapshot'] = {
+        'picks': summary.get('picks', 0),
+        'graded': summary.get('graded', 0),
+        'pending': len(pending),
+        'hit_rate': summary.get('hit_rate', 0.0),
+        'units': profit_units,
+        'profit_dollars': profit_dollars,
+        'at_risk': pending_risk,
+        'bankroll': live_bankroll,
+        'clv_rate': summary['clv_positive_rate'],
+        'avg_clv': avg_clv,
+    }
+    if active:
+        summary['avg_edge'] = round(sum(float(x.get('edge') or 0) for x in active) / len(active), 4)
+    return summary
+
+
+def _tracker_find_pick(store, pick_id, date_hint=None):
+    dates = []
+    if date_hint:
+        dates.append(date_hint)
+    dates.extend([ds for ds in store.keys() if ds not in dates])
+    for ds in dates:
+        payload = _normalize_tracker_day(store.get(ds))
+        entries = payload.get('entries', [])
+        for idx, row in enumerate(entries):
+            if row.get('id') == pick_id:
+                return ds, payload, entries, idx, row
+    return None, None, None, None, None
+
+
+def _tracker_pick_payload(row):
+    out = dict(row)
+    out['sideLabel'] = _tracker_side_label(row)
+    return out
+
+
+def _tracker_today_payload(date_str=None):
+    date_str = date_str or datetime.now(ET).strftime('%Y-%m-%d')
+    store = _tracker_store()
+    day = _normalize_tracker_day(store.get(date_str))
+    entries = [_tracker_pick_payload(x) for x in day.get('entries', [])]
+    entries.sort(key=lambda x: ((x.get('grade') or 'pending') != 'pending', -(float(x.get('hubRating') or 0)), -(float(x.get('edge') or 0))))
+    adjustments = _get_adjustments()
+    return {
+        'success': True,
+        'date': date_str,
+        'capturedAt': day.get('capturedAt'),
+        'gradedAt': day.get('gradedAt'),
+        'closingCapturedAt': day.get('closingCapturedAt'),
+        'entries': entries,
+        'summary': _tracker_live_summary(entries, adjustments),
+        'settings': adjustments,
+    }
+
+
+def _tracker_performance_payload(date_str=None, window_days=30):
+    date_str = date_str or datetime.now(ET).strftime('%Y-%m-%d')
+    window_days = max(1, int(window_days or 30))
+    entries = _collect_window_entries(date_str, window_days)
+    adjustments = _get_adjustments()
+    calibration = _market_calibration(entries, adjustments)
+    overall_series = _daily_series(date_str, window_days, None)
+    available_markets = sorted({row.get('marketKey') for row in entries if row.get('marketKey')})
+    value_rows = [row for row in entries if row.get('grade') in ('win', 'loss', 'push')]
+    clv_rows = [row for row in value_rows if row.get('clvEdge') is not None]
+    top_clv = sorted(clv_rows, key=lambda x: float(x.get('clvEdge') or 0))[:10]
+    daily = []
+    for ds in reversed(_dates_in_window(date_str, window_days)):
+        rows = _normalize_tracker_day(_tracker_store().get(ds)).get('entries', [])
+        graded = [r for r in rows if r.get('grade') in ('win', 'loss', 'push')]
+        active = [r for r in graded if r.get('grade') in ('win', 'loss')]
+        wins = sum(1 for r in active if r.get('grade') == 'win')
+        losses = sum(1 for r in active if r.get('grade') == 'loss')
+        risk = round(sum(float(r.get('stakeDollars') or 0) for r in graded), 2)
+        profit = round(sum(float(r.get('profitDollars') or 0) for r in graded), 2)
+        units = round(sum(float(r.get('profitUnits') or 0) for r in graded), 3)
+        clv_day = [r for r in graded if r.get('clvEdge') is not None]
+        daily.append({
+            'date': ds,
+            'bets': len(rows),
+            'graded': len(graded),
+            'wins': wins,
+            'losses': losses,
+            'hit_rate': round(wins / max(1, wins + losses), 4) if active else None,
+            'risk': risk,
+            'profit': profit,
+            'units': units,
+            'roi': round(profit / risk, 4) if risk > 0 else None,
+            'avg_clv': round(sum(float(r.get('clvEdge') or 0) for r in clv_day) / len(clv_day), 4) if clv_day else None,
+        })
+    return {
+        'success': True,
+        'date': date_str,
+        'window': window_days,
+        'summary': _tracker_live_summary(entries, adjustments),
+        'overallSeries': overall_series,
+        'availableMarkets': available_markets,
+        'multiplierHistory': {mk: _multiplier_history(date_str, window_days, mk) for mk in available_markets},
+        'calibration': calibration,
+        'topCLV': top_clv,
+        'daily': daily,
+    }
+
+
+def _tracker_export_rows(date_str):
+    store = _tracker_store()
+    day = _normalize_tracker_day(store.get(date_str))
+    rows = [dict(row) for row in day.get('entries', [])]
+    rows.sort(key=lambda x: ((x.get('savedAt') or ''), (x.get('player') or ''), (x.get('marketKey') or '')))
+    return day, rows
+
+
+def _tracker_export_csv_text(date_str):
+    day, rows = _tracker_export_rows(date_str)
+    fields = [
+        'id', 'date', 'savedAt', 'source', 'player', 'playerId', 'gamePk', 'team', 'opp',
+        'marketKey', 'line', 'recommendedSide', 'rawProb', 'adjProb', 'modelMean', 'edge',
+        'evPct', 'hubRating', 'bvpGrade', 'pitchTypeAdvantage', 'nrfiProb', 'bookmaker',
+        'marketPrice', 'marketImplied', 'bestAvailablePrice', 'bestAvailableBook', 'openingPrice',
+        'openingImplied', 'parlayId', 'parlayLeg', 'stakeDollars', 'kellyFraction',
+        'confidenceTier', 'status', 'actual', 'grade', 'gradedAt', 'closingPrice',
+        'closingImplied', 'closingBookmaker', 'closingCapturedAt', 'clvEdge', 'profitDollars',
+        'profitUnits', 'reason'
+    ]
+    output = io.StringIO()
+    writer = csvmod.DictWriter(output, fieldnames=fields, extrasaction='ignore')
+    writer.writeheader()
+    for row in rows:
+        cleaned = dict(row)
+        if isinstance(cleaned.get('matchupStorylines'), list):
+            cleaned['matchupStorylines'] = ' | '.join(str(x) for x in cleaned.get('matchupStorylines') or [])
+        if isinstance(cleaned.get('legs'), list):
+            cleaned['legs'] = json.dumps(cleaned.get('legs'))
+        writer.writerow(cleaned)
+    return day, output.getvalue()
+
+
+def _pdf_escape(value):
+    return str(value).replace('\\', '\\\\').replace('(', '\\(').replace(')', '\\)')
+
+
+def _pdf_wrap_lines(lines, width=96):
+    wrapped = []
+    for raw in lines:
+        text = str(raw or '')
+        if not text:
+            wrapped.append('')
+            continue
+        while len(text) > width:
+            cut = text.rfind(' ', 0, width + 1)
+            if cut < width * 0.55:
+                cut = width
+            wrapped.append(text[:cut].rstrip())
+            text = text[cut:].lstrip()
+        wrapped.append(text)
+    return wrapped
+
+
+def _simple_pdf_bytes(lines):
+    wrapped = _pdf_wrap_lines(lines)
+    lines_per_page = 44
+    page_chunks = [wrapped[i:i + lines_per_page] for i in range(0, len(wrapped), lines_per_page)] or [[]]
+
+    objects = []
+    page_object_ids = []
+    content_object_ids = []
+    next_obj_id = 1
+
+    catalog_id = next_obj_id; next_obj_id += 1
+    pages_id = next_obj_id; next_obj_id += 1
+
+    for _chunk in page_chunks:
+        page_object_ids.append(next_obj_id)
+        next_obj_id += 1
+        content_object_ids.append(next_obj_id)
+        next_obj_id += 1
+
+    font_id = next_obj_id
+
+    objects.append((catalog_id, f'<< /Type /Catalog /Pages {pages_id} 0 R >>'.encode('latin-1')))
+    kids = ' '.join(f'{pid} 0 R' for pid in page_object_ids)
+    objects.append((pages_id, f'<< /Type /Pages /Kids [{kids}] /Count {len(page_object_ids)} >>'.encode('latin-1')))
+
+    for page_id, content_id, chunk_index, chunk in zip(page_object_ids, content_object_ids, range(len(page_chunks)), page_chunks):
+        content_lines = ['BT', '/F1 14 Tf', '50 760 Td']
+        if not chunk:
+            content_lines.append('(No data) Tj')
+        else:
+            first = True
+            for line in chunk:
+                safe_line = _pdf_escape(line)[:140]
+                if first:
+                    content_lines.append(f'({safe_line}) Tj')
+                    first = False
+                else:
+                    content_lines.append('0 -15 Td')
+                    content_lines.append(f'({safe_line}) Tj')
+        content_lines.extend(['0 -24 Td', f'(Page {chunk_index + 1} of {len(page_chunks)}) Tj', 'ET'])
+        stream = ('\n'.join(content_lines)).encode('latin-1', 'replace')
+        page_body = f'<< /Type /Page /Parent {pages_id} 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 {font_id} 0 R >> >> /Contents {content_id} 0 R >>'.encode('latin-1')
+        content_body = b'<< /Length ' + str(len(stream)).encode('ascii') + b' >>\nstream\n' + stream + b'\nendstream'
+        objects.append((page_id, page_body))
+        objects.append((content_id, content_body))
+
+    objects.append((font_id, b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'))
+    objects.sort(key=lambda x: x[0])
+
+    pdf = bytearray(b'%PDF-1.4\n')
+    offsets = {0: 0}
+    for obj_id, body in objects:
+        offsets[obj_id] = len(pdf)
+        pdf.extend(f'{obj_id} 0 obj\n'.encode('ascii'))
+        pdf.extend(body)
+        pdf.extend(b'\nendobj\n')
+    xref_start = len(pdf)
+    pdf.extend(f'xref\n0 {font_id + 1}\n'.encode('ascii'))
+    pdf.extend(b'0000000000 65535 f \n')
+    for obj_id in range(1, font_id + 1):
+        off = offsets.get(obj_id, 0)
+        pdf.extend(f'{off:010d} 00000 n \n'.encode('ascii'))
+    pdf.extend(f'trailer\n<< /Size {font_id + 1} /Root {catalog_id} 0 R >>\nstartxref\n{xref_start}\n%%EOF'.encode('ascii'))
+    return bytes(pdf)
+
+
+def _tracker_export_pdf_bytes(date_str):
+    day, rows = _tracker_export_rows(date_str)
+    summary = _tracker_live_summary(rows, _get_adjustments())
+    active = [row for row in rows if row.get('grade') in ('win', 'loss')]
+    lines = [
+        'MLB Analytics Hub - Tracker Summary Card',
+        f'Date: {date_str}',
+        f'Saved picks: {summary.get("picks", 0)} | Graded: {summary.get("graded", 0)} | Pending: {summary.get("pending", 0)}',
+        f'Hit rate: {round((summary.get("hit_rate") or 0) * 100, 1)}% | Profit: ${summary.get("value", {}).get("dollars", 0):.2f} | Units: {summary.get("value", {}).get("units", 0):.2f}',
+        f'At risk: ${summary.get("snapshot", {}).get("at_risk", 0):.2f} | Bankroll: ${summary.get("snapshot", {}).get("bankroll", 0):.2f}',
+        f'Captured at: {day.get("capturedAt") or "-"}',
+        ' ',
+        'Top tracked picks:'
+    ]
+    top_rows = sorted(rows, key=lambda x: (-(float(x.get('hubRating') or 0)), -(float(x.get('edge') or 0))))[:28]
+    if not top_rows:
+        lines.append('No tracked picks for this day.')
+    else:
+        for row in top_rows:
+            grade = (row.get('grade') or 'pending').upper()
+            side = row.get('recommendedSide') or row.get('side') or 'Over'
+            profit = row.get('profitDollars')
+            profit_text = '-' if profit is None else f'${float(profit):.2f}'
+            lines.append(f'{row.get("player") or "-"} | {row.get("marketKey") or "-"} {side} {row.get("line") if row.get("line") is not None else "-"} | HUB {row.get("hubRating") or 0} | {grade} | {profit_text}')
+    if active:
+        lines.extend([' ', 'Best graded edges:'])
+        for row in sorted(active, key=lambda x: -(float(x.get('edge') or 0)))[:6]:
+            lines.append(f'{row.get("player") or "-"} | {row.get("marketKey") or "-"} | edge {round((float(row.get("edge") or 0) * 100), 1)}% | grade {(row.get("grade") or "pending").upper()}')
+    subtitle = f'Tracker summary card for {date_str} · {summary.get("picks", 0)} tracked picks'
+    return _simple_pdf_bytes(lines, title='MLB Analytics Hub - Tracker Summary Card', subtitle=subtitle)
+
+
+def _props_scan_today_payload(date_str, refresh=False):
+    ttl = 20 * 60
+    now = time.time()
+    cached = _PROPS_SCAN_CACHE.get(date_str)
+    if cached and not refresh and (now - cached.get('ts', 0) < ttl):
+        payload = dict(cached.get('payload') or {})
+        payload['cacheAgeSec'] = int(now - cached.get('ts', 0))
+        payload['cached'] = True
+        return payload
+
+    _maybe_refresh_fg()
+    _maybe_refresh_savant()
+    _fetch_injury_status(force=False)
+
+    adjustments = _get_adjustments()
+    raw_games = fetch_schedule(date_str)
+    parsed_games = [parse_game(g) for g in raw_games]
+    batters = []
+    pitchers = []
+    flat_props = []
+    injury_rows = []
+
+    for game in raw_games:
+        game_pk = game.get('gamePk')
+        if not game_pk:
+            continue
+        try:
+            proj_resp = api_props_projections(int(game_pk))
+            status_code = 200
+            if isinstance(proj_resp, tuple):
+                proj_resp, status_code = proj_resp
+            proj_payload = proj_resp.get_json(silent=True) if hasattr(proj_resp, 'get_json') else None
+            if status_code != 200 or not proj_payload or not proj_payload.get('success'):
+                continue
+
+            tracker_rows = _build_tracker_rows_for_game(int(game_pk), date_str, adjustments, _sched=raw_games, include_odds=True) or []
+            best_by_player = {}
+            for row in tracker_rows:
+                player_key = (row.get('player') or '').lower()
+                if not player_key:
+                    continue
+                current = best_by_player.get(player_key)
+                if current is None or float(row.get('hubRating') or 0) > float(current.get('hubRating') or 0):
+                    best_by_player[player_key] = row
+
+            for batter in proj_payload.get('batters', []):
+                player_key = (batter.get('name') or '').lower()
+                best = best_by_player.get(player_key)
+                item = dict(batter)
+                item['gamePk'] = int(game_pk)
+                item['matchup'] = proj_payload.get('matchup')
+                item['awayAbbr'] = proj_payload.get('awayAbbr')
+                item['homeAbbr'] = proj_payload.get('homeAbbr')
+                item['scanHubRating'] = best.get('hubRating') if best else None
+                item['scanEvPct'] = best.get('evPct') if best else None
+                item['scanBestProp'] = best
+                batters.append(item)
+
+            for pitcher in proj_payload.get('pitchers', []):
+                item = dict(pitcher)
+                item['gamePk'] = int(game_pk)
+                item['matchup'] = proj_payload.get('matchup')
+                item['awayAbbr'] = proj_payload.get('awayAbbr')
+                item['homeAbbr'] = proj_payload.get('homeAbbr')
+                pitchers.append(item)
+
+            for row in tracker_rows:
+                item = dict(row)
+                item['matchup'] = proj_payload.get('matchup')
+                item['awayAbbr'] = proj_payload.get('awayAbbr')
+                item['homeAbbr'] = proj_payload.get('homeAbbr')
+                flat_props.append(item)
+
+            for row in (proj_payload.get('injury_summary') or {}).get('players', []):
+                injury_rows.append(dict(row))
+        except Exception:
+            print(f'[api_props_scan_today game {game_pk}] {traceback.format_exc()}')
+
+    flat_props.sort(key=lambda x: (-(float(x.get('hubRating') or 0)), -(float(x.get('edge') or 0)), -(float(x.get('adjProb') or 0))))
+    batters.sort(key=lambda x: (-(float(x.get('scanHubRating') or 0)), -(float(((x.get('proj') or {}).get('hits') or 0)))))
+    pitchers.sort(key=lambda x: (-(float((((x.get('proj') or {}).get('k')) or 0))), x.get('name') or ''))
+
+    payload = {
+        'success': True,
+        'date': date_str,
+        'games': parsed_games,
+        'gameCount': len(parsed_games),
+        'props': flat_props,
+        'batters': batters,
+        'pitchers': pitchers,
+        'injury_summary': {
+            'count': len(injury_rows),
+            'players': injury_rows[:20],
+        },
+        'matchup': f'FULL SLATE · {len(parsed_games)} GAMES',
+        'scanMode': True,
+        'generatedAt': datetime.now(timezone.utc).isoformat(),
+        'cacheAgeSec': 0,
+        'cached': False,
+    }
+    _PROPS_SCAN_CACHE[date_str] = {'ts': now, 'payload': payload}
+    return payload
+
+
 @app.route('/api/tracker/calibration/dashboard/<date_str>')
 def api_tracker_calibration_dashboard(date_str):
     window = int(request.args.get('window', 14) or 14)
@@ -6090,15 +6421,83 @@ def api_tracker_model_record():
     })
 
 
+@app.route('/api/tracker/export/<date_str>')
+def api_tracker_export(date_str):
+    fmt = (request.args.get('format') or 'csv').strip().lower()
+    if fmt not in ('csv', 'pdf'):
+        return jsonify({'success': False, 'error': 'format must be csv or pdf'}), 400
+
+    if fmt == 'csv':
+        _, csv_text = _tracker_export_csv_text(date_str)
+        return Response(
+            csv_text,
+            mimetype='text/csv',
+            headers={'Content-Disposition': f'attachment; filename=tracker-{date_str}.csv'}
+        )
+
+    pdf_bytes = _tracker_export_pdf_bytes(date_str)
+    return Response(
+        pdf_bytes,
+        mimetype='application/pdf',
+        headers={'Content-Disposition': f'attachment; filename=tracker-summary-{date_str}.pdf'}
+    )
+
+
+@app.route('/api/consistency/today')
+def api_consistency_today():
+    date_str = request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
+    refresh = str(request.args.get('refresh') or '').strip().lower() in ('1', 'true', 'yes')
+    try:
+        return jsonify(_consistency_payload(date_str, refresh=refresh))
+    except Exception as ex:
+        print(f'[api_consistency_today] {traceback.format_exc()}')
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
+@app.route('/api/tracker/today')
+def api_tracker_today():
+    date_str = request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
+    return jsonify(_tracker_today_payload(date_str))
+
+
+@app.route('/api/tracker/performance')
+def api_tracker_performance():
+    date_str = request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
+    window = int(request.args.get('window', 30) or 30)
+    return jsonify(_tracker_performance_payload(date_str, window))
+
+
+@app.route('/api/tracker/settings', methods=['GET', 'POST'])
+def api_tracker_settings():
+    if request.method == 'GET':
+        return jsonify({'success': True, 'settings': _get_adjustments()})
+
+    payload = request.get_json(silent=True) or {}
+    current = _get_adjustments()
+    for key in [
+        'bankroll', 'kelly_fraction', 'unit_size_pct', 'max_bet_pct', 'max_daily_risk_pct',
+        'max_team_exposure_pct', 'max_market_exposure_pct', 'max_game_exposure_pct',
+        'captured_per_game', 'best_edge_threshold', 'best_prob_threshold'
+    ]:
+        if key in payload:
+            current[key] = payload.get(key)
+    if isinstance(payload.get('market_multipliers'), dict):
+        current['market_multipliers'].update(payload.get('market_multipliers') or {})
+    _save_json(ADJUST_STORE, current)
+    return jsonify({'success': True, 'settings': current})
+
+
 @app.route('/api/tracker/pick', methods=['POST'])
 def api_tracker_pick():
     entry = request.get_json(silent=True) or {}
     if not entry.get('player') or not entry.get('marketKey'):
         return jsonify({'success': False, 'error': 'Missing player or marketKey'}), 400
 
-    today = datetime.now(ET).strftime('%Y-%m-%d')
+    today = entry.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
     entry['date']   = today
     entry['source'] = entry.get('source') or 'props_board'
+    entry.setdefault('savedAt', datetime.now(ET).isoformat())
+    entry.setdefault('recommendedSide', entry.get('recommendedSide') or _tracker_side_label(entry))
 
     if not entry.get('id'):
         entry['id'] = str(uuid.uuid4())
@@ -6112,9 +6511,15 @@ def api_tracker_pick():
     if entry.get('evPct') is None and mi > 0:
         entry['evPct'] = round(adj_prob / mi - 1, 4)
 
+    if entry.get('confidenceTier') is None:
+        entry['confidenceTier'] = _confidence_tier(entry)
+    if entry.get('stakeDollars') is None:
+        entry['stakeDollars'] = (_stake_profile(entry, _get_adjustments()) or {}).get('stake_dollars')
+
     # Ensure grading fields exist
     for k, v in [('status','pending'),('grade','pending'),('actual',None),
-                 ('gradedAt',None),('closingPrice',None),('clvEdge',None),('profitUnits',None)]:
+                 ('gradedAt',None),('closingPrice',None),('closingBookmaker', None), ('closingCapturedAt', None),
+                 ('clvEdge',None),('profitUnits',None), ('profitDollars', None), ('parlayId', None), ('parlayLeg', None)]:
         entry.setdefault(k, v)
 
     store = _load_json(TRACKER_STORE, {})
@@ -6132,20 +6537,124 @@ def api_tracker_pick():
     if not day.get('capturedAt'):
         day['capturedAt'] = datetime.now().isoformat()
     _save_json(TRACKER_STORE, store)
-    return jsonify({'success': True, 'id': entry['id'], 'duplicate': False})
+    return jsonify({'success': True, 'id': entry['id'], 'duplicate': False, 'entry': _tracker_pick_payload(entry), 'today': _tracker_today_payload(today)})
+
+
+@app.route('/api/tracker/pick/<pick_id>', methods=['PATCH'])
+def api_tracker_pick_patch(pick_id):
+    payload = request.get_json(silent=True) or {}
+    date_hint = payload.get('date') or request.args.get('date')
+    store = _load_json(TRACKER_STORE, {})
+    date_str, day, entries, idx, row = _tracker_find_pick(store, pick_id, date_hint)
+    if row is None:
+        return jsonify({'success': False, 'error': 'Pick not found'}), 404
+
+    editable = {
+        'stakeDollars', 'actual', 'grade', 'status', 'closingPrice', 'closingBookmaker',
+        'closingCapturedAt', 'clvEdge', 'profitUnits', 'profitDollars', 'reason',
+        'bookmaker', 'bestAvailablePrice', 'bestAvailableBook', 'recommendedSide', 'confidenceTier'
+    }
+    for key in editable:
+        if key in payload:
+            row[key] = payload.get(key)
+
+    grade = row.get('grade') or 'pending'
+    row['status'] = 'pending' if grade == 'pending' else row.get('status') or 'graded'
+    if grade in ('win', 'loss', 'push') and not row.get('gradedAt'):
+        row['gradedAt'] = datetime.now(ET).isoformat()
+
+    entries[idx] = row
+    day['entries'] = entries
+    store[date_str] = day
+    _save_json(TRACKER_STORE, store)
+    return jsonify({'success': True, 'entry': _tracker_pick_payload(row), 'today': _tracker_today_payload(date_str)})
 
 
 @app.route('/api/tracker/pick/<pick_id>', methods=['DELETE'])
 def api_tracker_pick_delete(pick_id):
-    today = datetime.now(ET).strftime('%Y-%m-%d')
+    today = request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
     store = _load_json(TRACKER_STORE, {})
-    day   = store.get(today, {})
-    before = len(day.get('entries', []))
-    day['entries'] = [e for e in day.get('entries', []) if e.get('id') != pick_id]
-    if len(day.get('entries', [])) < before:
+    date_str, day, entries, idx, row = _tracker_find_pick(store, pick_id, today)
+    if row is not None:
+        day['entries'] = [e for e in entries if e.get('id') != pick_id]
+        store[date_str] = day
         _save_json(TRACKER_STORE, store)
-        return jsonify({'success': True})
+        return jsonify({'success': True, 'today': _tracker_today_payload(date_str)})
     return jsonify({'success': False, 'error': 'Pick not found'}), 404
+
+
+@app.route('/api/tracker/parlay', methods=['POST'])
+def api_tracker_parlay():
+    payload = request.get_json(silent=True) or {}
+    legs = payload.get('legs') or []
+    if not isinstance(legs, list) or len(legs) < 2:
+        return jsonify({'success': False, 'error': 'At least two legs are required'}), 400
+
+    today = payload.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
+    parlay_id = payload.get('parlayId') or str(uuid.uuid4())
+    combined_prob = 1.0
+    combined_ev = 0.0
+    for leg in legs:
+        try:
+            combined_prob *= float(leg.get('adjProb') or 0)
+            combined_ev += float(leg.get('evPct') or 0)
+        except Exception:
+            pass
+
+    entry = {
+        'id': parlay_id,
+        'date': today,
+        'savedAt': datetime.now(ET).isoformat(),
+        'source': payload.get('source') or 'tracker',
+        'player': payload.get('name') or f"{len(legs)}-Leg Parlay",
+        'playerId': None,
+        'gamePk': None,
+        'team': payload.get('team') or 'MULTI',
+        'opp': payload.get('opp') or 'MULTI',
+        'marketKey': 'parlay',
+        'line': len(legs),
+        'recommendedSide': 'Parlay',
+        'rawProb': combined_prob,
+        'adjProb': combined_prob,
+        'modelMean': None,
+        'edge': payload.get('edge') or combined_ev,
+        'evPct': payload.get('evPct') or combined_ev,
+        'hubRating': payload.get('hubRating') or _hub_rating(combined_prob, payload.get('edge') or combined_ev),
+        'bookmaker': payload.get('bookmaker'),
+        'marketPrice': payload.get('marketPrice'),
+        'marketImplied': payload.get('marketImplied'),
+        'bestAvailablePrice': payload.get('bestAvailablePrice'),
+        'bestAvailableBook': payload.get('bestAvailableBook'),
+        'openingPrice': payload.get('openingPrice'),
+        'openingImplied': payload.get('openingImplied'),
+        'stakeDollars': payload.get('stakeDollars') or 0,
+        'kellyFraction': payload.get('kellyFraction') or _get_adjustments().get('kelly_fraction'),
+        'confidenceTier': payload.get('confidenceTier') or 'B',
+        'status': 'pending',
+        'actual': None,
+        'grade': 'pending',
+        'gradedAt': None,
+        'closingPrice': None,
+        'closingImplied': None,
+        'closingBookmaker': None,
+        'closingCapturedAt': None,
+        'clvEdge': None,
+        'profitDollars': None,
+        'profitUnits': None,
+        'reason': payload.get('reason') or 'Saved from parlay builder',
+        'matchupStorylines': payload.get('matchupStorylines') or [],
+        'legs': legs,
+        'parlayId': parlay_id,
+        'parlayLeg': None,
+    }
+    store = _load_json(TRACKER_STORE, {})
+    day = store.setdefault(today, {'capturedAt': None, 'gradedAt': None, 'closingCapturedAt': None, 'entries': []})
+    day['entries'].append(entry)
+    if not day.get('capturedAt'):
+        day['capturedAt'] = datetime.now(ET).isoformat()
+    store[today] = day
+    _save_json(TRACKER_STORE, store)
+    return jsonify({'success': True, 'id': parlay_id, 'entry': entry, 'today': _tracker_today_payload(today)})
 
 
 @app.route('/api/tracker/calibration/apply', methods=['POST'])
@@ -9331,6 +9840,17 @@ def api_props_projections(game_pk):
         return jsonify({"success": False, "error": str(ex)}), 500
 
 
+@app.route('/api/props/scan/today')
+def api_props_scan_today():
+    date_str = request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
+    refresh = str(request.args.get('refresh') or '').strip().lower() in ('1', 'true', 'yes')
+    try:
+        return jsonify(_props_scan_today_payload(date_str, refresh=refresh))
+    except Exception as ex:
+        print(f"[api_props_scan_today] {traceback.format_exc()}")
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
 @app.route('/api/props/line-shopping/<int:game_pk>')
 def api_props_line_shopping(game_pk):
     """Return line-shopping view grouped by player/market with all sportsbook lines."""
@@ -9811,8 +10331,8 @@ def api_umpire(game_pk):
 
 
 # ── L5/L10 helpers ────────────────────────────────────────────────────────────
-def _fetch_batter_gamelog(player_id, season=None):
-    """Returns last 10 game log entries for a batter."""
+def _fetch_batter_gamelog(player_id, season=None, limit=10):
+    """Returns recent game log entries for a batter, newest-last order."""
     if season is None:
         season = datetime.now().year
     try:
@@ -9824,7 +10344,8 @@ def _fetch_batter_gamelog(player_id, season=None):
         r.raise_for_status()
         splits = r.json().get("stats", [{}])[0].get("splits", [])
         out = []
-        for s in splits[-10:]:
+        chosen = splits if limit is None else splits[-int(limit):]
+        for s in chosen:
             st = s.get("stat", {})
             out.append({
                 "date": s.get("date", ""),
@@ -9836,6 +10357,7 @@ def _fetch_batter_gamelog(player_id, season=None):
                 "bb":   int(st.get("baseOnBalls", 0)),
                 "tb":   int(st.get("totalBases", 0)),
                 "r":    int(st.get("runs", 0)),
+                "sb":   int(st.get("stolenBases", 0)),
             })
         return out
     except Exception as ex:
@@ -9843,8 +10365,8 @@ def _fetch_batter_gamelog(player_id, season=None):
         return []
 
 
-def _fetch_pitcher_gamelog(player_id, season=None):
-    """Returns last 10 game log entries for a pitcher."""
+def _fetch_pitcher_gamelog(player_id, season=None, limit=10):
+    """Returns recent game log entries for a pitcher, newest-last order."""
     if season is None:
         season = datetime.now().year
     try:
@@ -9856,7 +10378,8 @@ def _fetch_pitcher_gamelog(player_id, season=None):
         r.raise_for_status()
         splits = r.json().get("stats", [{}])[0].get("splits", [])
         out = []
-        for s in splits[-10:]:
+        chosen = splits if limit is None else splits[-int(limit):]
+        for s in chosen:
             st = s.get("stat", {})
             ip_raw = st.get("inningsPitched", "0.0")
             try:
@@ -9895,6 +10418,163 @@ def _compute_over_rates(game_log, stat_key, lines):
             return {"over": over, "total": len(vs), "pct": round(over / len(vs), 3) if vs else None}
         result[str(line)] = {"l5": _rate(l5_vals), "l10": _rate(l10_vals)}
     return result
+
+
+def _consistency_stat_value(row, market_key):
+    if market_key == 'batter_hits':
+        return int(row.get('h', 0) or 0)
+    if market_key == 'batter_total_bases':
+        return int(row.get('tb', 0) or 0)
+    if market_key == 'batter_home_runs':
+        return int(row.get('hr', 0) or 0)
+    if market_key == 'batter_rbis':
+        return int(row.get('rbi', 0) or 0)
+    if market_key == 'batter_runs_scored':
+        return int(row.get('r', 0) or 0)
+    if market_key == 'batter_hits_runs_rbis':
+        return int(row.get('h', 0) or 0) + int(row.get('r', 0) or 0) + int(row.get('rbi', 0) or 0)
+    if market_key == 'batter_stolen_bases':
+        return int(row.get('sb', 0) or 0)
+    if market_key == 'pitcher_strikeouts':
+        return int(row.get('k', 0) or 0)
+    return None
+
+
+def _consistency_window_summary(values, line, limit=None):
+    sample = values if limit is None else values[-int(limit):]
+    sample = [v for v in sample if v is not None]
+    total = len(sample)
+    if total == 0:
+        return {'over': 0, 'total': 0, 'pct': None}
+    over = sum(1 for v in sample if float(v) > float(line))
+    return {'over': over, 'total': total, 'pct': round(over / total, 3)}
+
+
+def _consistency_payload(date_str, refresh=False):
+    ttl = 20 * 60
+    now = time.time()
+    cached = _CONSISTENCY_CACHE.get(date_str)
+    if cached and not refresh and (now - cached.get('ts', 0) < ttl):
+        payload = dict(cached.get('payload') or {})
+        payload['cacheAgeSec'] = int(now - cached.get('ts', 0))
+        payload['cached'] = True
+        return payload
+
+    raw_games = fetch_schedule(date_str)
+    parsed_games = [parse_game(g) for g in raw_games]
+    parsed_games = [g for g in parsed_games if g]
+    game_meta = {g.get('gamePk'): g for g in parsed_games}
+    adjustments = _get_adjustments()
+    rows = []
+    for game in raw_games:
+        game_pk = game.get('gamePk')
+        if not game_pk:
+            continue
+        try:
+            rows.extend(_build_tracker_rows_for_game(int(game_pk), date_str, adjustments, _sched=raw_games, include_odds=False) or [])
+        except Exception:
+            print(f'[consistency_rows {game_pk}] {traceback.format_exc()}')
+
+    supported_markets = {
+        'batter_hits', 'batter_total_bases', 'batter_home_runs', 'batter_rbis',
+        'batter_runs_scored', 'batter_hits_runs_rbis', 'batter_stolen_bases', 'pitcher_strikeouts'
+    }
+    deduped = {}
+    for row in rows:
+        market_key = row.get('marketKey')
+        if market_key not in supported_markets:
+            continue
+        key = (row.get('playerId'), market_key, float(row.get('line') or 0))
+        current = deduped.get(key)
+        if current is None or float(row.get('hubRating') or 0) > float(current.get('hubRating') or 0):
+            deduped[key] = dict(row)
+    base_rows = list(deduped.values())
+
+    player_tasks = {}
+    for row in base_rows:
+        player_id = row.get('playerId')
+        if not player_id:
+            continue
+        player_tasks[player_id] = (row.get('marketKey') == 'pitcher_strikeouts')
+
+    logs_by_player = {}
+    with ThreadPoolExecutor(max_workers=12) as ex:
+        fut_map = {}
+        for player_id, is_pitcher in player_tasks.items():
+            if is_pitcher:
+                fut_map[ex.submit(_fetch_pitcher_gamelog, int(player_id), None, None)] = player_id
+            else:
+                fut_map[ex.submit(_fetch_batter_gamelog, int(player_id), None, None)] = player_id
+        for fut in as_completed(fut_map):
+            player_id = fut_map[fut]
+            try:
+                logs_by_player[player_id] = fut.result() or []
+            except Exception:
+                logs_by_player[player_id] = []
+
+    market_labels = {
+        'batter_hits': 'Hits', 'batter_total_bases': 'Total Bases', 'batter_home_runs': 'Home Runs',
+        'batter_rbis': 'RBIs', 'batter_runs_scored': 'Runs', 'batter_hits_runs_rbis': 'H+R+RBI',
+        'batter_stolen_bases': 'Stolen Bases', 'pitcher_strikeouts': 'Pitcher Strikeouts'
+    }
+    sheets = {mk: {'marketKey': mk, 'marketLabel': label, 'rows': []} for mk, label in market_labels.items()}
+    teams = set()
+    slots = set()
+    game_filters = []
+    for g in parsed_games:
+        game_filters.append({'gamePk': g.get('gamePk'), 'label': f"{g.get('awayAbbr')} @ {g.get('homeAbbr')}"})
+
+    for row in base_rows:
+        player_id = row.get('playerId')
+        market_key = row.get('marketKey')
+        logs = logs_by_player.get(player_id, [])
+        values = [_consistency_stat_value(log_row, market_key) for log_row in logs]
+        values = [v for v in values if v is not None]
+        game = game_meta.get(row.get('gamePk')) or {}
+        slot = row.get('slot')
+        teams.add(row.get('team') or '')
+        if slot is not None:
+            slots.add(int(slot))
+        sheet_row = {
+            'player': row.get('player'),
+            'playerId': player_id,
+            'team': row.get('team'),
+            'opp': row.get('opp') or ((game.get('homeAbbr') if row.get('team') == game.get('awayAbbr') else game.get('awayAbbr')) if game else ''),
+            'slot': slot,
+            'gamePk': row.get('gamePk'),
+            'gameLabel': f"{game.get('awayAbbr')} @ {game.get('homeAbbr')}" if game else '',
+            'line': row.get('line'),
+            'hubRating': row.get('hubRating'),
+            'evPct': row.get('evPct'),
+            'l5': _consistency_window_summary(values, row.get('line'), 5),
+            'l10': _consistency_window_summary(values, row.get('line'), 10),
+            'l20': _consistency_window_summary(values, row.get('line'), 20),
+            'season': _consistency_window_summary(values, row.get('line'), None),
+            'sampleSize': len(values),
+        }
+        sheets[market_key]['rows'].append(sheet_row)
+
+    for market_key, sheet in sheets.items():
+        sheet['rows'].sort(key=lambda x: (
+            -(x.get('l10', {}).get('pct') if x.get('l10', {}).get('pct') is not None else -1),
+            -(x.get('l5', {}).get('pct') if x.get('l5', {}).get('pct') is not None else -1),
+            -(float(x.get('hubRating') or 0)),
+            x.get('player') or ''
+        ))
+
+    payload = {
+        'success': True,
+        'date': date_str,
+        'generatedAt': datetime.now(timezone.utc).isoformat(),
+        'cached': False,
+        'cacheAgeSec': 0,
+        'games': game_filters,
+        'teams': sorted(t for t in teams if t),
+        'slots': sorted(slots),
+        'markets': list(sheets.values()),
+    }
+    _CONSISTENCY_CACHE[date_str] = {'ts': now, 'payload': payload}
+    return payload
 
 
 def _build_player_trends(player_id, is_pitcher):
@@ -10054,7 +10734,6 @@ def api_props_trends(game_pk):
                     results[str(pid)] = {"name": name, **data}
                 except Exception as fe:
                     results[str(pid)] = {"name": name, "error": str(fe)}
-
         _gdata2, quick_props = _compute_dashboard_quick_props(game_pk, limit=3)
 
         return jsonify({

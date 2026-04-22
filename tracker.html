@@ -152,6 +152,26 @@ tr:hover td{background:rgba(0,229,255,.03)}
 .pcard-stats{display:flex;gap:12px;font-size:.67rem;color:var(--mu);flex-wrap:wrap}
 .pcard-stat span{color:var(--txt);font-weight:500}
 .pcard-reason{font-size:.63rem;color:var(--faint);margin-top:5px;line-height:1.4;border-top:1px solid var(--line);padding-top:5px}
+.action-row{display:flex;gap:6px;flex-wrap:wrap}
+.mini-btn{padding:4px 8px;border-radius:7px;border:1px solid var(--line2);background:var(--bg3);color:var(--mu);font-size:.62rem}
+.mini-btn:hover{border-color:var(--c);color:var(--c)}
+.mini-btn.on{background:rgba(179,136,255,.12);border-color:var(--m);color:var(--m)}
+.mini-btn.danger:hover{border-color:var(--r);color:var(--r)}
+.stake-input,.actual-input,.grade-select{width:84px;padding:4px 6px;font-size:.68rem}
+.builder-metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px}
+.builder-legs{display:flex;flex-direction:column;gap:8px;margin-bottom:10px}
+.builder-leg{border:1px solid var(--line2);border-radius:10px;padding:9px 10px;background:var(--bg3)}
+.builder-leg-top{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}
+.builder-suggest{margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}
+.builder-suggest-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(3,8,20,.82);backdrop-filter:blur(4px);z-index:4000}
+.modal.show{display:flex}
+.modal-card{width:min(720px,94vw);max-height:86vh;overflow:auto;background:var(--bg2);border:1px solid var(--line2);border-radius:16px;padding:16px}
+.modal-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px}
+.modal-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.modal-grid .field textarea{min-height:82px;resize:vertical;background:var(--bg3);border:1px solid var(--line2);color:var(--txt);border-radius:8px;padding:8px 10px}
+.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
+.export-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 
 /* ── Parlay card ── */
 .parlay-card{background:var(--bg3);border:1px solid rgba(179,136,255,.25);border-radius:10px;padding:10px 12px;margin-bottom:8px}
@@ -202,7 +222,7 @@ details[open] summary::before{transform:rotate(90deg)}
 
 /* ── Responsive ── */
 @media(max-width:1200px){.main-grid{grid-template-columns:1fr}}
-@media(max-width:960px){.hero{grid-template-columns:repeat(3,1fr)}.scards{grid-template-columns:repeat(2,1fr)}.two,.three{grid-template-columns:1fr}.settings-grid{grid-template-columns:1fr}}
+@media(max-width:960px){.hero{grid-template-columns:repeat(3,1fr)}.scards{grid-template-columns:repeat(2,1fr)}.two,.three,.builder-metrics,.modal-grid{grid-template-columns:1fr}.settings-grid{grid-template-columns:1fr}}
 @media(max-width:640px){.hero{grid-template-columns:repeat(2,1fr)}.ctrl{gap:5px}.top-actions{gap:5px}.btn{padding:6px 10px;font-size:.68rem}}
 .footer{text-align:center;color:var(--faint);font-size:.65rem;padding:16px 0 6px}
 </style>
@@ -216,7 +236,7 @@ details[open] summary::before{transform:rotate(90deg)}
     <img class="brand-logo" src="/static/logo.png" alt="MLB Analytics Hub">
     <div>
       <div class="brand-title">MLB ANALYTICS HUB</div>
-      <div class="brand-sub">Bet Tracker — capture · grade · analyse · repeat</div>
+      <div class="brand-sub">Live tracker — picks flow in from research, settings persist, performance stays live</div>
     </div>
   </div>
   <div class="top-actions">
@@ -230,14 +250,13 @@ details[open] summary::before{transform:rotate(90deg)}
 <!-- ── CONTROL ROW ────────────────────────────────────────────────────── -->
 <div class="ctrl">
   <input type="date" id="trackDate" style="max-width:150px" aria-label="Slate date">
-  <button class="btn primary" id="loadDayBtn">Load Day</button>
-  <button class="btn" id="captureBtn">⚡ Capture Slate</button>
+  <button class="btn primary" id="loadDayBtn">Refresh Live Day</button>
+  <button class="btn" id="manualPickBtn">＋ Add Manual Pick</button>
   <div class="ctrl-sep"></div>
-  <button class="btn gold" id="closeBtn">📥 Capture Closing</button>
-  <button class="btn green" id="gradeBtn">✓ Grade Results</button>
-  <div class="ctrl-sep"></div>
-  <button class="btn sm" id="slipBtn">📋 Build Slip</button>
-  <span class="pill" id="datePill" style="margin-left:auto">No day loaded</span>
+  <button class="btn gold" id="syncPerfBtn">📊 Sync Performance</button>
+  <button class="btn sm" id="exportCsvBtn">⬇ CSV</button>
+  <button class="btn sm" id="exportPdfBtn">⬇ PDF</button>
+  <span class="pill" id="datePill" style="margin-left:auto">Awaiting live day</span>
 </div>
 
 <!-- ── HERO STATS ─────────────────────────────────────────────────────── -->
@@ -260,13 +279,13 @@ details[open] summary::before{transform:rotate(90deg)}
 <!-- ── MAIN GRID ──────────────────────────────────────────────────────── -->
 <div class="main-grid">
 
-  <!-- LEFT: Working Board -->
+  <!-- LEFT: Today's Picks -->
   <div>
     <div class="panel">
       <div class="panel-hd">
         <div>
-          <div class="panel-title">Working Board</div>
-          <div class="panel-sub" id="boardSub">Tracked projections for the day</div>
+          <div class="panel-title">Today's Picks</div>
+          <div class="panel-sub" id="boardSub">Live tracked picks saved from props, cheatsheets, and manual adds</div>
         </div>
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
           <select id="fMkt" class="btn sm" style="min-width:130px" aria-label="Filter market"><option value="">All Markets</option></select>
@@ -306,13 +325,13 @@ details[open] summary::before{transform:rotate(90deg)}
         <table id="boardTbl">
           <thead>
             <tr>
-              <th>Player</th><th>Team</th><th>Market</th><th>Line</th>
+              <th>Player</th><th>Team</th><th>Market</th><th>Side</th><th>Line</th>
               <th>HUB</th><th>EV%</th><th>Prob</th><th>Edge</th>
               <th>Mean</th><th>Price Shop</th><th>Close</th><th>CLV</th>
-              <th>Stake $</th><th>Actual</th><th>Result</th><th>Tier</th><th>P/L $</th>
+              <th>Stake $</th><th>Actual</th><th>Result</th><th>Tier</th><th>P/L $</th><th>Actions</th>
             </tr>
           </thead>
-          <tbody id="boardBody"><tr><td colspan="17" class="empty">Load a day to see entries.</td></tr></tbody>
+          <tbody id="boardBody"><tr><td colspan="19" class="empty">Refresh the live day to see picks.</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -332,32 +351,29 @@ details[open] summary::before{transform:rotate(90deg)}
     </div>
   </div>
 
-  <!-- RIGHT: Bet Slip + Settings -->
+  <!-- RIGHT: Parlay Builder + Settings -->
   <div>
     <div class="panel" style="margin-bottom:14px">
       <div class="panel-hd">
-        <div class="panel-title">Bet Slip</div>
-        <span class="pill" id="slipPill">Awaiting build</span>
+        <div class="panel-title">Parlay Builder</div>
+        <span class="pill" id="slipPill">0 legs selected</span>
       </div>
-
-      <div class="slip-tabs">
-        <button class="slip-tab on" data-sv="core" onclick="switchSlip(this)">⭐ Core</button>
-        <button class="slip-tab" data-sv="flex" onclick="switchSlip(this)">💡 Flex</button>
-        <button class="slip-tab" data-sv="parlay" onclick="switchSlip(this)">🎰 Parlays</button>
-        <button class="slip-tab" data-sv="all" onclick="switchSlip(this)">All</button>
+      <div class="builder-metrics">
+        <div class="scard"><div class="scard-v" id="slipBets">0</div><div class="scard-l">Legs</div></div>
+        <div class="scard"><div class="scard-v" id="slipRisk" style="color:var(--y)">$0</div><div class="scard-l">Stake</div></div>
+        <div class="scard"><div class="scard-v" id="slipAvgEdge">—</div><div class="scard-l">Combined EV</div></div>
+        <div class="scard"><div class="scard-v" id="parlayHealth">—</div><div class="scard-l">Health</div></div>
       </div>
-
-      <!-- Slip summary -->
-      <div style="display:flex;gap:10px;margin-bottom:10px;flex-wrap:wrap">
-        <div class="scard" style="flex:1;min-width:70px"><div class="scard-v" id="slipBets">0</div><div class="scard-l">Bets</div></div>
-        <div class="scard" style="flex:1;min-width:70px"><div class="scard-v" id="slipRisk" style="color:var(--y)">$0</div><div class="scard-l">At Risk</div></div>
-        <div class="scard" style="flex:1;min-width:70px"><div class="scard-v" id="slipAvgEdge">—</div><div class="scard-l">Avg Edge</div></div>
+      <div class="notice" style="margin-bottom:10px">Add picks from the table into the builder. Correlation health rewards market diversity and penalizes stacking the same player or market.</div>
+      <div class="builder-legs" id="parlayCards"><div class="empty">Add at least two picks to build a parlay.</div></div>
+      <div class="builder-suggest">
+        <div class="panel-sub">Suggested add</div>
+        <div class="builder-suggest-list" id="parlaySuggest"><span class="trec-pill na">No suggestions yet</span></div>
       </div>
-
-      <div class="slip-view on" id="sv-core"><div id="coreCards"><div class="empty">Build slip to see core picks.</div></div></div>
-      <div class="slip-view" id="sv-flex"><div id="flexCards"><div class="empty">Build slip to see flex picks.</div></div></div>
-      <div class="slip-view" id="sv-parlay"><div id="parlayCards"><div class="empty">Build slip to see parlay ideas.</div></div></div>
-      <div class="slip-view" id="sv-all"><div id="allCards"><div class="empty">Build slip to see all picks.</div></div></div>
+      <div class="modal-actions" style="margin-top:10px">
+        <button class="btn" id="clearParlayBtn">Clear</button>
+        <button class="btn primary" id="saveParlayBtn">Save Parlay</button>
+      </div>
     </div>
 
     <!-- Settings -->
@@ -556,6 +572,8 @@ details[open] summary::before{transform:rotate(90deg)}
       <label style="font-size:.7rem;color:var(--mu)">To</label>
       <input type="date" id="btEnd" style="max-width:145px">
       <button class="btn sm primary" id="runBtBtn">Run Backtest</button>
+      <button class="btn sm" id="btExportCsvBtn">Export Day CSV</button>
+      <button class="btn sm" id="btExportPdfBtn">Export Summary PDF</button>
       <span class="pill" id="btPill">Set date range</span>
     </div>
     <div class="notice" id="btNotice">Select a FROM and TO date range then click Run Backtest. Results will show overall performance across all markets in that window.</div>
@@ -581,6 +599,39 @@ details[open] summary::before{transform:rotate(90deg)}
 <div class="footer">MLB ANALYTICS HUB · Tracker · For entertainment purposes only</div>
 </div><!-- /wrap -->
 
+<div class="modal" id="manualPickModal" onclick="closeManualPick(event)">
+  <div class="modal-card" onclick="event.stopPropagation()">
+    <div class="modal-head">
+      <div>
+        <div class="panel-title">Add Manual Pick</div>
+        <div class="panel-sub">Use this for books or markets you found outside the research board.</div>
+      </div>
+      <button class="btn sm" onclick="closeManualPick()">Close</button>
+    </div>
+    <div class="modal-grid">
+      <div class="field"><label>Player</label><input id="mpPlayer" type="text" placeholder="Aaron Judge"></div>
+      <div class="field"><label>Team</label><input id="mpTeam" type="text" placeholder="NYY"></div>
+      <div class="field"><label>Opponent</label><input id="mpOpp" type="text" placeholder="BOS"></div>
+      <div class="field"><label>Market</label><select id="mpMarket"><option value="batter_hits">Hits</option><option value="batter_total_bases">Total Bases</option><option value="batter_home_runs">Home Runs</option><option value="batter_rbis">RBI</option><option value="batter_runs_scored">Runs</option><option value="batter_hits_runs_rbis">H+R+RBI</option><option value="batter_stolen_bases">Stolen Bases</option><option value="pitcher_strikeouts">Pitcher Strikeouts</option><option value="nrfi">NRFI</option><option value="yrfi">YRFI</option></select></div>
+      <div class="field"><label>Line</label><input id="mpLine" type="number" step="0.01" placeholder="0.5"></div>
+      <div class="field"><label>Side</label><select id="mpSide"><option value="Over">Over</option><option value="Under">Under</option><option value="NRFI">NRFI</option><option value="YRFI">YRFI</option></select></div>
+      <div class="field"><label>Adj Prob</label><input id="mpProb" type="number" step="0.001" placeholder="0.64"></div>
+      <div class="field"><label>Edge</label><input id="mpEdge" type="number" step="0.001" placeholder="0.06"></div>
+      <div class="field"><label>Model Mean</label><input id="mpMean" type="number" step="0.01" placeholder="1.12"></div>
+      <div class="field"><label>Bookmaker</label><input id="mpBook" type="text" placeholder="DraftKings"></div>
+      <div class="field"><label>Market Price</label><input id="mpPrice" type="number" step="1" placeholder="-165"></div>
+      <div class="field"><label>Best Available Price</label><input id="mpBestPrice" type="number" step="1" placeholder="-155"></div>
+      <div class="field"><label>Best Book</label><input id="mpBestBook" type="text" placeholder="ESPN Bet"></div>
+      <div class="field"><label>Stake $</label><input id="mpStake" type="number" step="0.01" placeholder="25"></div>
+      <div class="field" style="grid-column:1 / -1"><label>Reason</label><textarea id="mpReason" placeholder="Why this pick belongs in the tracker"></textarea></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeManualPick()">Cancel</button>
+      <button class="btn primary" id="saveManualPickBtn">Save Manual Pick</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ═══════════════════════════════════════════════════════════════════════
 // MLB ANALYTICS HUB — TRACKER v2
@@ -597,6 +648,7 @@ const MARKET_LABELS = {
 const st = {
   day: null,
   slip: null,
+  parlay: [],
   charts: {},
   filters: { mkt:'', res:'', tier:'' },
   flags: { evOnly:false, pendingOnly:false, coreOnly:false },
@@ -718,13 +770,14 @@ async function loadDay() {
   const date = readDate();
   status('Loading…');
   try {
-    const d = await api(`/api/tracker/date/${date}`);
+    const d = await api(`/api/tracker/today?date=${date}`);
     st.day = d;
     renderSummary(d);
     renderMarketTable(d);
     populateMktFilter(d.entries||[]);
     renderBoard();
-    $('datePill').textContent = d.capturedAt ? `Loaded ${ts(d.capturedAt)}` : 'No capture for this date';
+    renderParlayBuilder();
+    $('datePill').textContent = d.capturedAt ? `Live ${date} · synced ${ts(d.capturedAt)}` : `Live ${date} · no saved picks yet`;
     status('Day loaded');
     loadModelRecord();
   } catch(e) { status(e.message, true); }
@@ -868,7 +921,7 @@ function renderBoard() {
   $('boardSub').textContent = `${rows.length} of ${entries.length} entries`;
 
   if (!rows.length) {
-    $('boardBody').innerHTML = '<tr><td colspan="17" class="empty">No entries match current filters.</td></tr>';
+    $('boardBody').innerHTML = '<tr><td colspan="19" class="empty">No entries match current filters.</td></tr>';
     return;
   }
 
@@ -880,10 +933,12 @@ function renderBoard() {
     const clv   = r.clvEdge != null ? parseFloat(r.clvEdge) : null;
     const rowCls= {win:'row-win',loss:'row-loss',push:'row-push',pending:''}[grade]||'';
     const profitCol = profit>0?'var(--g)':profit<0?'var(--r)':'var(--mu)';
+    const inParlay = st.parlay.includes(r.id);
     return `<tr class="${rowCls}">
       <td><strong>${safe(r.player)}</strong></td>
       <td>${safe(r.team)}</td>
       <td>${mkTag(r.marketKey)}</td>
+      <td>${safe(r.sideLabel || r.recommendedSide || 'Over')}</td>
       <td>${safe(r.line)}</td>
       <td>${hubBadge(hub)}</td>
       <td>${evHtml(r.adjProb, r.marketImplied)}</td>
@@ -893,13 +948,94 @@ function renderBoard() {
       <td>${priceShopHtml(r)}</td>
       <td>${r.closingPrice!=null?r.closingPrice:'—'}</td>
       <td>${clvHtml(r.clvEdge)}</td>
-      <td>${money(r.stakeDollars||0)}</td>
-      <td>${r.actual!=null?r.actual:'—'}</td>
-      <td>${gradeBadge(grade)}</td>
+      <td><input class="stake-input" type="number" step="0.01" value="${num(r.stakeDollars||0,2,'0.00')}" onchange="updatePickField('${r.id}','stakeDollars',this.value)"></td>
+      <td><input class="actual-input" type="number" step="0.01" value="${r.actual!=null?r.actual:''}" placeholder="—" onchange="updatePickField('${r.id}','actual',this.value)"></td>
+      <td><select class="grade-select" onchange="updatePickField('${r.id}','grade',this.value)"><option value="pending" ${grade==='pending'?'selected':''}>Pending</option><option value="win" ${grade==='win'?'selected':''}>Win</option><option value="loss" ${grade==='loss'?'selected':''}>Loss</option><option value="push" ${grade==='push'?'selected':''}>Push</option></select></td>
       <td>${tierBadge(r.confidenceTier)}</td>
       <td style="color:${profitCol};font-weight:600">${grade==='pending'?'—':money(profit)}</td>
+      <td><div class="action-row"><button class="mini-btn ${inParlay?'on':''}" onclick="toggleParlay('${r.id}')">${inParlay?'Remove Parlay':'Add Parlay'}</button><button class="mini-btn danger" onclick="removePick('${r.id}')">Remove</button></div></td>
     </tr>`;
   }).join('');
+}
+
+function parlayRows() {
+  const rows = (st.day?.entries || []).filter(r => st.parlay.includes(r.id));
+  rows.sort((a,b) => st.parlay.indexOf(a.id) - st.parlay.indexOf(b.id));
+  return rows;
+}
+
+function parlayHealth(rows) {
+  if (!rows.length) return null;
+  let score = 100;
+  const markets = {};
+  const players = {};
+  rows.forEach(r => {
+    markets[r.marketKey] = (markets[r.marketKey] || 0) + 1;
+    players[r.player] = (players[r.player] || 0) + 1;
+  });
+  Object.values(markets).forEach(v => { if (v > 1) score -= (v - 1) * 12; });
+  Object.values(players).forEach(v => { if (v > 1) score -= (v - 1) * 18; });
+  return Math.max(0, Math.min(100, score));
+}
+
+function renderParlayBuilder() {
+  const rows = parlayRows();
+  const totalStake = rows.reduce((sum, r) => sum + (parseFloat(r.stakeDollars) || 0), 0);
+  const combinedProb = rows.reduce((prod, r) => prod * Math.max(0, parseFloat(r.adjProb) || 0), rows.length ? 1 : 0);
+  const combinedEv = rows.reduce((sum, r) => sum + (parseFloat(r.evPct) || evPercent(r.adjProb, r.marketImplied) || 0), 0);
+  const health = parlayHealth(rows);
+  $('slipBets').textContent = rows.length;
+  $('slipRisk').textContent = money(totalStake);
+  $('slipAvgEdge').textContent = rows.length ? pct(combinedEv) : '—';
+  $('parlayHealth').textContent = health == null ? '—' : `${health}`;
+  $('slipPill').textContent = rows.length ? `${rows.length} legs · ${pct(combinedProb || 0)}` : '0 legs selected';
+  $('parlayCards').innerHTML = rows.length ? rows.map(r => `<div class="builder-leg"><div class="builder-leg-top"><div><div class="pcard-name">${safe(r.player)}</div><div class="pcard-meta">${mkLabel(r.marketKey)} ${safe(r.sideLabel || r.recommendedSide)} ${safe(r.line)} · ${safe(r.team)} vs ${safe(r.opp)}</div></div><button class="mini-btn danger" onclick="toggleParlay('${r.id}')">Remove</button></div><div class="pcard-stats"><div>Prob <span>${pct(r.adjProb)}</span></div><div>EV <span>${evHtml(r.adjProb, r.marketImplied)}</span></div><div>Stake <span>${money(r.stakeDollars||0)}</span></div></div></div>`).join('') : '<div class="empty">Add at least two picks to build a parlay.</div>';
+
+  const suggestions = ((st.day?.entries || []).filter(r => !st.parlay.includes(r.id) && ['A','B'].includes(r.confidenceTier || 'D')).sort((a,b) => (parseFloat(b.edge)||0) - (parseFloat(a.edge)||0))).slice(0,4);
+  $('parlaySuggest').innerHTML = suggestions.length ? suggestions.map(r => `<button class="mini-btn" onclick="toggleParlay('${r.id}')">${safe(r.player)} · ${mkLabel(r.marketKey)} · ${pct(r.adjProb)}</button>`).join('') : '<span class="trec-pill na">No suggestions yet</span>';
+}
+
+function toggleParlay(pickId) {
+  if (st.parlay.includes(pickId)) st.parlay = st.parlay.filter(id => id !== pickId);
+  else st.parlay = [...st.parlay, pickId];
+  renderBoard();
+  renderParlayBuilder();
+}
+
+async function removePick(pickId) {
+  const date = readDate();
+  status('Removing pick…');
+  try {
+    const d = await api(`/api/tracker/pick/${pickId}?date=${date}`, {method:'DELETE'});
+    st.day = d.today;
+    st.parlay = st.parlay.filter(id => id !== pickId);
+    renderSummary(st.day);
+    renderMarketTable(st.day);
+    populateMktFilter(st.day.entries||[]);
+    renderBoard();
+    renderParlayBuilder();
+    status('Pick removed');
+  } catch (e) { status(e.message, true); }
+}
+
+async function updatePickField(pickId, key, rawValue) {
+  const date = readDate();
+  const payload = {date};
+  if (key === 'stakeDollars' || key === 'actual') {
+    payload[key] = rawValue === '' ? null : Number(rawValue);
+  } else {
+    payload[key] = rawValue;
+  }
+  try {
+    const d = await api(`/api/tracker/pick/${pickId}`, {method:'PATCH', body:JSON.stringify(payload)});
+    st.day = d.today;
+    renderSummary(st.day);
+    renderMarketTable(st.day);
+    populateMktFilter(st.day.entries||[]);
+    renderBoard();
+    renderParlayBuilder();
+    status('Pick updated');
+  } catch (e) { status(e.message, true); }
 }
 
 // ── Bet Slip ──────────────────────────────────────────────────────────────────
@@ -1058,16 +1194,107 @@ function collectAdj() {
 }
 
 async function loadAdj() {
-  try { const d=await api('/api/tracker/adjustments'); setAdj(d.adjustments); } catch{}
+  try { const d=await api('/api/tracker/settings'); setAdj(d.settings); } catch{}
 }
 
 async function saveAdj() {
   status('Saving settings…');
   try {
-    const d=await api('/api/tracker/adjustments',{method:'POST',body:JSON.stringify(collectAdj())});
-    setAdj(d.adjustments);
+    const d=await api('/api/tracker/settings',{method:'POST',body:JSON.stringify(collectAdj())});
+    setAdj(d.settings);
     status('Settings saved');
   } catch(e){ status(e.message,true); }
+}
+
+function openManualPick() {
+  $('manualPickModal')?.classList.add('show');
+}
+
+function closeManualPick(ev) {
+  if (ev && ev.target && ev.currentTarget && ev.target !== ev.currentTarget) return;
+  $('manualPickModal')?.classList.remove('show');
+}
+
+async function saveManualPick() {
+  const payload = {
+    date: readDate(),
+    source: 'manual',
+    player: $('mpPlayer').value.trim(),
+    team: $('mpTeam').value.trim(),
+    opp: $('mpOpp').value.trim(),
+    marketKey: $('mpMarket').value,
+    line: $('mpLine').value === '' ? null : Number($('mpLine').value),
+    recommendedSide: $('mpSide').value,
+    adjProb: $('mpProb').value === '' ? null : Number($('mpProb').value),
+    edge: $('mpEdge').value === '' ? null : Number($('mpEdge').value),
+    modelMean: $('mpMean').value === '' ? null : Number($('mpMean').value),
+    bookmaker: $('mpBook').value.trim(),
+    marketPrice: $('mpPrice').value === '' ? null : Number($('mpPrice').value),
+    bestAvailablePrice: $('mpBestPrice').value === '' ? null : Number($('mpBestPrice').value),
+    bestAvailableBook: $('mpBestBook').value.trim(),
+    stakeDollars: $('mpStake').value === '' ? 0 : Number($('mpStake').value),
+    reason: $('mpReason').value.trim(),
+  };
+  if (!payload.player || !payload.marketKey) {
+    status('Player and market are required', true);
+    return;
+  }
+  status('Saving manual pick…');
+  try {
+    const d = await api('/api/tracker/pick', {method:'POST', body:JSON.stringify(payload)});
+    st.day = d.today;
+    populateMktFilter(st.day.entries||[]);
+    renderSummary(st.day);
+    renderMarketTable(st.day);
+    renderBoard();
+    renderParlayBuilder();
+    closeManualPick();
+    status(d.duplicate ? 'Manual pick already tracked' : 'Manual pick saved');
+  } catch (e) { status(e.message, true); }
+}
+
+async function saveParlay() {
+  const rows = parlayRows();
+  if (rows.length < 2) {
+    status('Select at least two picks', true);
+    return;
+  }
+  status('Saving parlay…');
+  const payload = {
+    date: readDate(),
+    name: `${rows.length}-Leg Parlay`,
+    legs: rows.map((r, idx) => ({id:r.id, player:r.player, marketKey:r.marketKey, line:r.line, adjProb:r.adjProb, evPct:r.evPct ?? evPercent(r.adjProb, r.marketImplied), parlayLeg: idx + 1})),
+    stakeDollars: rows.reduce((sum, r) => sum + (parseFloat(r.stakeDollars) || 0), 0),
+    edge: rows.reduce((sum, r) => sum + (parseFloat(r.edge) || 0), 0) / rows.length,
+    evPct: rows.reduce((sum, r) => sum + (parseFloat(r.evPct) || evPercent(r.adjProb, r.marketImplied) || 0), 0),
+    reason: 'Saved from Sprint 4.1 parlay builder',
+  };
+  try {
+    const d = await api('/api/tracker/parlay', {method:'POST', body:JSON.stringify(payload)});
+    st.day = d.today;
+    st.parlay = [];
+    populateMktFilter(st.day.entries||[]);
+    renderSummary(st.day);
+    renderMarketTable(st.day);
+    renderBoard();
+    renderParlayBuilder();
+    status('Parlay saved');
+  } catch (e) { status(e.message, true); }
+}
+
+async function syncPerformance() {
+  status('Syncing performance…');
+  try {
+    await Promise.allSettled([loadModelRecord(), loadCal(), loadVal(), loadBR(), loadAttr()]);
+    status('Performance synced');
+  } catch (e) { status(e.message, true); }
+}
+
+function exportTracker(format) {
+  const date = readDate();
+  const fmt = (format || 'csv').toLowerCase();
+  status(`Preparing ${fmt.toUpperCase()} export…`);
+  window.location.href = `/api/tracker/export/${date}?format=${fmt}`;
 }
 
 // ── Chart utilities ───────────────────────────────────────────────────────────
@@ -1315,8 +1542,10 @@ function toggleCore() {
 function wire() {
   const pairs = [
     ['loadDayBtn', loadDay], ['reloadBtn', loadDay],
-    ['captureBtn', captureDay], ['closeBtn', captureClose], ['gradeBtn', gradeDay],
-    ['slipBtn', loadSlip], ['saveAdjBtn', saveAdj],
+    ['manualPickBtn', openManualPick], ['syncPerfBtn', syncPerformance],
+    ['exportCsvBtn', ()=>exportTracker('csv')], ['exportPdfBtn', ()=>exportTracker('pdf')],
+    ['btExportCsvBtn', ()=>exportTracker('csv')], ['btExportPdfBtn', ()=>exportTracker('pdf')],
+    ['saveManualPickBtn', saveManualPick], ['clearParlayBtn', ()=>{st.parlay=[]; renderBoard(); renderParlayBuilder();}], ['saveParlayBtn', saveParlay], ['saveAdjBtn', saveAdj],
     ['loadCalBtn', loadCal], ['applyCalBtn', applyCal],
     ['loadValBtn', loadVal], ['loadBRBtn', loadBR],
     ['loadAttrBtn', loadAttr], ['runBtBtn', runBacktest],
@@ -1347,7 +1576,7 @@ async function boot() {
 
   try { await loadAdj(); } catch{}
   try { await loadDay(); } catch(e){status(e.message,true);}
-  try { await Promise.allSettled([loadSlip()]); } catch{}
+  try { await Promise.allSettled([loadModelRecord(), loadCal(), loadVal(), loadBR(), loadAttr()]); } catch{}
 
   status('Tracker ready');
 }

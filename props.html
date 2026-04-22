@@ -388,6 +388,7 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
     <div class="date-row">
       <input type="date" class="dinput" id="dateInput">
       <button class="load-btn" onclick="loadGames()">LOAD</button>
+      <button class="load-btn" onclick="loadFullScan()">🔍 FULL SCAN</button>
     </div>
     <a class="back" href="/">← DASHBOARD</a>
   </div>
@@ -643,6 +644,7 @@ let CUR_DATE      = '';
 let CUR_GAME      = null;
 let CUR_HOME      = '';
 let CUR_AWAY      = '';
+let FULL_SCAN_MODE = false;
 let PF_FILTERS    = new Set();
 let PROJ_DATA     = null;
 let MTCH_DATA     = null;
@@ -654,8 +656,7 @@ let LINEUP_POLL   = null;  // setInterval handle for lineup polling
 let LINEUP_STATUS = {};    // gamePk → {changes, away, home} — last known status
 let SORT_KEY      = 'hits';
 let VAL_FILT      = 'all';
-let LINE_SHOP_DATA = null;
-let LINE_SHOP_GAME = null;
+let LINE_SHOP_CACHE = {};
 let SPRAY_CHART_DATA = {};  // keyed by player_id
 let SPRAY_CHART_FILTERS = {}; // keyed by player_id, stores active filter state
 let ZONE_CHART_DATA = {};  // keyed by player_id
@@ -774,7 +775,10 @@ function savePickFromVB(idx) {
 }
 
 function savePickFromCard(playerName) {
-  const best = PLAYER_BEST_PROP[(playerName||'').toLowerCase()];
+  let best = PLAYER_BEST_PROP[(playerName||'').toLowerCase()];
+  if (!best && PROJ_DATA?.batters) {
+    best = PROJ_DATA.batters.find(b => (b.name||'').toLowerCase() === (playerName||'').toLowerCase())?.scanBestProp;
+  }
   if (!best) return;
   savePickDirect(best);
 }
@@ -784,9 +788,9 @@ async function loadGames() {
   const date = document.getElementById('dateInput').value;
   if (!date) return;
   CUR_DATE = date;
+  FULL_SCAN_MODE = false;
   PROJ_DATA = MTCH_DATA = VAL_DATA = null;
-  LINE_SHOP_DATA = null;
-  LINE_SHOP_GAME = null;
+  LINE_SHOP_CACHE = {};
   SPRAY_CHART_DATA = {};
   SPRAY_CHART_FILTERS = {};
   ZONE_CHART_DATA = {};
@@ -801,6 +805,62 @@ async function loadGames() {
     renderChips(d.games || []);
   } catch(e) {
     chips(`<div style="color:var(--r);font-family:Orbitron,monospace;font-size:.68rem;padding:10px">ERROR: ${e.message}</div>`);
+  }
+}
+
+async function loadFullScan() {
+  const date = document.getElementById('dateInput').value;
+  if (!date) return;
+  if (UMP_POLL) { clearTimeout(UMP_POLL); UMP_POLL = null; }
+  if (LINEUP_POLL) { clearInterval(LINEUP_POLL); LINEUP_POLL = null; }
+  CUR_DATE = date;
+  CUR_GAME = null;
+  CUR_HOME = '';
+  CUR_AWAY = '';
+  FULL_SCAN_MODE = true;
+  PROJ_DATA = MTCH_DATA = null;
+  LINE_SHOP_CACHE = {};
+  SPRAY_CHART_DATA = {};
+  SPRAY_CHART_FILTERS = {};
+  ZONE_CHART_DATA = {};
+  ZONE_CHART_VIEW = {};
+  TREND_DATA = {};
+  UMP_DATA = null;
+  LINEUP_STATUS = {};
+  clearPFFilters(true);
+  document.querySelectorAll('.gchip').forEach(c => c.classList.remove('active'));
+  hide('noGame'); show('mainContent');
+  gel('matchHeader').innerHTML = `FULL SLATE · ${date}`;
+  gel('lastUpdate').textContent = 'RUNNING FULL SCAN…';
+  gel('batterGrid').innerHTML = loadHTML('SCANNING ALL GAMES…');
+  gel('pitcherGrid').innerHTML = '';
+  gel('propsPicksPanel').innerHTML = loadHTML('RANKING TOP SLATE PICKS…');
+  try {
+    const r = await fetch(`/api/props/scan/today?date=${encodeURIComponent(date)}`);
+    const d = await r.json();
+    if (!d.success) throw new Error(d.error || 'Full scan unavailable');
+    PROJ_DATA = d;
+    VAL_DATA = d.props || [];
+    PLAYER_HUB_MAP = {};
+    PLAYER_EV_MAP = {};
+    PLAYER_BEST_PROP = {};
+    VAL_DATA.forEach((row, idx) => {
+      const n = (row.player || '').toLowerCase();
+      const hub = row.hubRating != null ? row.hubRating : computeHubRating(row.adjProb, row.edge);
+      if (PLAYER_HUB_MAP[n] == null || hub > PLAYER_HUB_MAP[n]) PLAYER_HUB_MAP[n] = hub;
+      if (row.evPct != null && (PLAYER_EV_MAP[n] == null || row.evPct > PLAYER_EV_MAP[n])) PLAYER_EV_MAP[n] = row.evPct;
+      if (row.edge != null && (PLAYER_BEST_PROP[n] == null || row.edge > PLAYER_BEST_PROP[n].edge)) {
+        PLAYER_BEST_PROP[n] = {...row, _idx: idx};
+      }
+    });
+    SORT_KEY = 'scanHub';
+    renderProj(d);
+    gel('matchHeader').innerHTML = `${d.matchup || 'FULL SLATE'} · ${d.gameCount || 0} GAMES · ${(d.props || []).length || 0} PROPS`;
+    gel('lastUpdate').textContent = `FULL SCAN ${d.cached ? 'CACHED' : 'BUILT'} · ${new Date().toLocaleTimeString()}`;
+    gel('umpBanner').classList.remove('visible');
+    gel('lineupAlertBar').classList.remove('visible');
+  } catch(e) {
+    gel('batterGrid').innerHTML = errHTML(e.message);
   }
 }
 
@@ -824,9 +884,9 @@ async function selectGame(pk, awayAbbr, homeAbbr) {
   if (LINEUP_POLL) { clearInterval(LINEUP_POLL); LINEUP_POLL = null; }
   CUR_GAME = pk;
   CUR_AWAY = awayAbbr; CUR_HOME = homeAbbr;
+  FULL_SCAN_MODE = false;
   PROJ_DATA = MTCH_DATA = VAL_DATA = null;
-  LINE_SHOP_DATA = null;
-  LINE_SHOP_GAME = null;
+  LINE_SHOP_CACHE = {};
   SPRAY_CHART_DATA = {};
   SPRAY_CHART_FILTERS = {};
   ZONE_CHART_DATA = {};
@@ -921,6 +981,15 @@ function applyLineupStatusToCards(d) {
 }
 
 async function loadTab(tab) {
+  if (FULL_SCAN_MODE) {
+    if (tab === 'projections') {
+      if (PROJ_DATA) renderProj(PROJ_DATA);
+      return;
+    }
+    if (tab === 'matchup') gel('matchupCols').innerHTML = errHTML('FULL SCAN IS PROJECTIONS-ONLY. SELECT A SPECIFIC GAME FOR MATCHUP SCORES.');
+    if (tab === 'value') gel('valueTbody').innerHTML = `<tr><td colspan="11"><div class="no-tracker">FULL SCAN USES THE PROJECTIONS BOARD. SELECT A SPECIFIC GAME FOR TRACKER CROSS-REFERENCE.</div></td></tr>`;
+    return;
+  }
   if (!CUR_GAME) return;
   if (tab === 'projections') await loadProjections();
   else if (tab === 'matchup') await loadMatchup();
@@ -931,7 +1000,7 @@ async function loadTab(tab) {
 async function switchTab(name) {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab===name));
   document.querySelectorAll('.tabpanel').forEach(p => p.classList.toggle('active', p.id===`tab-${name}`));
-  if (CUR_GAME) await loadTab(name);
+  if (CUR_GAME || FULL_SCAN_MODE) await loadTab(name);
 }
 
 function switchSub(name) {
@@ -1399,9 +1468,13 @@ function applyPFFilters() {
 
 function renderBatters(batters, key) {
   if (!batters.length) { gel('batterGrid').innerHTML = noData('NO BATTER DATA AVAILABLE'); return; }
-  const sorted = [...batters].sort((a,b) =>
-    key === 'slot' ? (a.slot||9)-(b.slot||9) : (b.proj?.[key]??0)-(a.proj?.[key]??0)
-  );
+  const sorted = [...batters].sort((a,b) => {
+    if (key === 'slot') return (a.slot||9)-(b.slot||9);
+    if (key === 'scanHub') {
+      return (b.scanHubRating ?? PLAYER_HUB_MAP[(b.name||'').toLowerCase()] ?? 0) - (a.scanHubRating ?? PLAYER_HUB_MAP[(a.name||'').toLowerCase()] ?? 0);
+    }
+    return (b.proj?.[key]??0)-(a.proj?.[key]??0);
+  });
   gel('batterGrid').innerHTML = sorted.map(batterCard).join('');
 }
 
@@ -1542,14 +1615,14 @@ function toggleHRProfile(btn) {
   btn.lastElementChild.textContent = opening ? 'HIDE ▴' : 'SHOW ▾';
 }
 
-async function loadLineShoppingData() {
-  if (!CUR_GAME) return null;
-  if (LINE_SHOP_DATA && LINE_SHOP_GAME === CUR_GAME) return LINE_SHOP_DATA;
-  const r = await fetch(`/api/props/line-shopping/${CUR_GAME}`);
+async function loadLineShoppingData(gamePk) {
+  const targetGame = gamePk || CUR_GAME;
+  if (!targetGame) return null;
+  if (LINE_SHOP_CACHE[targetGame]) return LINE_SHOP_CACHE[targetGame];
+  const r = await fetch(`/api/props/line-shopping/${targetGame}`);
   const d = await r.json();
   if (!d || !d.success) throw new Error((d && d.error) || 'Line shopping unavailable');
-  LINE_SHOP_DATA = d;
-  LINE_SHOP_GAME = CUR_GAME;
+  LINE_SHOP_CACHE[targetGame] = d;
   return d;
 }
 
@@ -1587,7 +1660,7 @@ function _modelHint(playerName, marketKey) {
   return `Model over prob ${p} · EV ${ev} · line ${r.line ?? '—'}`;
 }
 
-async function openLineShop(playerName) {
+async function openLineShop(playerName, gamePk) {
   if (!playerName) return;
   const modal = gel('lineShopModal');
   const title = gel('lineShopTitle');
@@ -1599,7 +1672,7 @@ async function openLineShop(playerName) {
   body.innerHTML = loadHTML('LOADING BOOK PRICES…');
 
   try {
-    const data = await loadLineShoppingData();
+    const data = await loadLineShoppingData(gamePk);
     const groups = (data.groups || []).filter(g => (g.player || '').toLowerCase() === playerName.toLowerCase());
     if (!groups.length) {
       body.innerHTML = '<div class="ls-empty">No sportsbook prices available for this player right now.</div>';
@@ -1955,9 +2028,9 @@ function batterCard(b) {
   const pid  = b.id;
   const trnd = trendPillsForBatter(pid);
   const nKey = (b.name||'').toLowerCase();
-  const hub  = PLAYER_HUB_MAP[nKey];
-  const ev   = PLAYER_EV_MAP[nKey];
-  const best = PLAYER_BEST_PROP[nKey];
+  const hub  = PLAYER_HUB_MAP[nKey] ?? b.scanHubRating;
+  const ev   = PLAYER_EV_MAP[nKey] ?? b.scanEvPct;
+  const best = PLAYER_BEST_PROP[nKey] || b.scanBestProp;
   const bKey = best ? pickKey(best) : null;
   const bSaved = bKey && TRACKED_KEYS.has(bKey);
   const hrPanel = p.hr != null ? hrProfilePanel(b, p) : '';
@@ -2010,7 +2083,7 @@ function batterCard(b) {
       <div class="fstat"><div class="fstat-lbl">EV</div><div class="fstat-val">${b.sv_ev ? Number(b.sv_ev).toFixed(1) : '—'}</div></div>
       <div class="fstat"><div class="fstat-lbl">EXP PA</div><div class="fstat-val">${p.expected_pa ?? '—'}</div></div>
     </div>
-    <button class="ls-btn" onclick="openLineShop('${(b.name||'').replace(/'/g,"\\'")}')"><span>📚 LINE SHOPPING</span><span>OPEN ▸</span></button>
+    <button class="ls-btn" onclick="openLineShop('${(b.name||'').replace(/'/g,"\\'")}', ${b.gamePk || 'null'})"><span>📚 LINE SHOPPING</span><span>OPEN ▸</span></button>
     <button class="ls-btn" onclick="openSprayChart(${pid}, '${(b.name||'').replace(/'/g,"\\'")}')"><span>🗺️ SPRAY CHART</span><span>OPEN ▸</span></button>
     <button class="ls-btn" onclick="openZoneChart(${pid}, '${(b.name||'').replace(/'/g,"\\'")}')"><span>⚾ STRIKE ZONE</span><span>OPEN ▸</span></button>
     ${hrPanel}
