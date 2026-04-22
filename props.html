@@ -304,6 +304,28 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .hr-score.good{border-color:rgba(0,230,118,.35);background:rgba(0,230,118,.1);color:var(--g)}
 .hr-score.ok{border-color:rgba(255,152,0,.32);background:rgba(255,152,0,.1);color:var(--o)}
 .hr-score.low{border-color:rgba(106,141,176,.3);background:rgba(106,141,176,.09);color:var(--mu)}
+
+/* ── Line Shopping ── */
+.ls-btn{margin-top:8px;width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 10px;border-radius:8px;border:1px solid rgba(0,229,255,.24);background:rgba(0,229,255,.06);color:var(--c);font-family:'Orbitron',monospace;font-size:.56rem;letter-spacing:1px;cursor:pointer;transition:all .2s}
+.ls-btn:hover{border-color:rgba(0,229,255,.45);background:rgba(0,229,255,.12)}
+.ls-modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:3000;background:rgba(2,6,16,.82);backdrop-filter:blur(4px)}
+.ls-modal.show{display:flex}
+.ls-card{width:min(980px,94vw);max-height:84vh;overflow:auto;background:var(--card);border:1px solid var(--b);border-radius:14px;padding:14px;box-shadow:0 16px 44px rgba(0,0,0,.45)}
+.ls-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+.ls-title{font-family:'Orbitron',monospace;font-size:.74rem;letter-spacing:2px;color:var(--c)}
+.ls-close{padding:6px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.04);color:var(--mu);font-family:'Orbitron',monospace;font-size:.56rem;letter-spacing:1px;cursor:pointer}
+.ls-close:hover{border-color:rgba(0,229,255,.3);color:var(--c)}
+.ls-market{margin:10px 0 14px;padding:10px;background:rgba(0,0,0,.22);border:1px solid rgba(255,255,255,.06);border-radius:10px}
+.ls-market-h{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
+.ls-market-lbl{font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:1.4px;color:var(--t)}
+.ls-meta{font-size:.55rem;color:var(--mu);font-family:'Orbitron',monospace;letter-spacing:1px}
+.ls-table{width:100%;border-collapse:collapse}
+.ls-table th{font-size:.5rem;color:var(--mu);letter-spacing:1.4px;text-align:left;padding:5px;border-bottom:1px solid var(--b);font-family:'Orbitron',monospace}
+.ls-table td{font-size:.66rem;padding:6px 5px;border-bottom:1px solid rgba(255,255,255,.05)}
+.ls-pill{display:inline-block;padding:2px 6px;border-radius:999px;font-family:'Orbitron',monospace;font-size:.48rem;letter-spacing:.8px}
+.ls-best{background:rgba(0,230,118,.1);border:1px solid rgba(0,230,118,.3);color:var(--g)}
+.ls-model{margin-top:8px;font-size:.58rem;color:var(--mu);line-height:1.5}
+.ls-empty{padding:18px;text-align:center;color:var(--mu);font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:1.3px}
 /* ── Pitcher trend section ── */
 .pp-trends{margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.06)}
 .pp-trend-hd{font-family:'Orbitron',monospace;font-size:.58rem;color:var(--mu);letter-spacing:2px;margin-bottom:8px}
@@ -515,6 +537,16 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
   </div>
 </div>
 
+<div class="ls-modal" id="lineShopModal" onclick="closeLineShop(event)">
+  <div class="ls-card" onclick="event.stopPropagation()">
+    <div class="ls-head">
+      <div class="ls-title" id="lineShopTitle">LINE SHOPPING</div>
+      <button class="ls-close" onclick="closeLineShop()">CLOSE</button>
+    </div>
+    <div id="lineShopBody" class="ls-empty">Select a player card to view book-by-book prices.</div>
+  </div>
+</div>
+
 <footer>MLB ANALYTICS HUB · PROP PROJECTIONS · FG / STATCAST / MLB STATS API · FOR ENTERTAINMENT PURPOSES ONLY</footer>
 
 <script>
@@ -548,6 +580,8 @@ let LINEUP_POLL   = null;  // setInterval handle for lineup polling
 let LINEUP_STATUS = {};    // gamePk → {changes, away, home} — last known status
 let SORT_KEY      = 'hits';
 let VAL_FILT      = 'all';
+let LINE_SHOP_DATA = null;
+let LINE_SHOP_GAME = null;
 
 const MKT_LABELS = {
   player_hits:'Hits', player_home_runs:'Home Runs', player_total_bases:'Total Bases',
@@ -673,6 +707,8 @@ async function loadGames() {
   if (!date) return;
   CUR_DATE = date;
   PROJ_DATA = MTCH_DATA = VAL_DATA = null;
+  LINE_SHOP_DATA = null;
+  LINE_SHOP_GAME = null;
   TREND_DATA = {}; UMP_DATA = null;
   CUR_GAME = null;
   hide('mainContent'); show('noGame');
@@ -707,6 +743,8 @@ async function selectGame(pk, awayAbbr, homeAbbr) {
   CUR_GAME = pk;
   CUR_AWAY = awayAbbr; CUR_HOME = homeAbbr;
   PROJ_DATA = MTCH_DATA = VAL_DATA = null;
+  LINE_SHOP_DATA = null;
+  LINE_SHOP_GAME = null;
   TREND_DATA = {}; UMP_DATA = null; LINEUP_STATUS = {};
   clearPFFilters(true); // reset filters silently on new game
   // Hide any stale alert
@@ -1354,19 +1392,24 @@ function hrProfilePanel(b, p) {
   const brl = b?.sv_brl_pct != null ? Number(b.sv_brl_pct) : null;
   const hh  = b?.sv_hh_pct  != null ? Number(b.sv_hh_pct)  : null;
   const ev  = b?.sv_ev      != null ? Number(b.sv_ev)      : null;
-  if (brl == null && hh == null && ev == null) return '';
+  const pullAir = b?.pull_pct_air != null ? Number(b.pull_pct_air) : null;
+  if (brl == null && hh == null && ev == null && pullAir == null) return '';
 
   const brlRank = b?.sv_brl_pct_rank != null ? Number(b.sv_brl_pct_rank) : fallbackRankFromValue(brl, 0, 25);
   const hhRank  = b?.sv_hh_pct_rank  != null ? Number(b.sv_hh_pct_rank)  : fallbackRankFromValue(hh, 15, 60);
   const evRank  = b?.sv_ev_pct_rank  != null ? Number(b.sv_ev_pct_rank)  : fallbackRankFromValue(ev, 82, 98);
+  const pullRank = b?.pull_pct_air_rank != null ? Number(b.pull_pct_air_rank) : fallbackRankFromValue(pullAir, 20, 60);
 
   const parkFactor = Number(PROJ_DATA?.park_factor ?? 1.0);
   const windSpeed  = Number(PROJ_DATA?.weather?.wind_speed ?? 0) || 0;
   const windOut    = hrWindOutFlag(p);
-  const base       = brlRank * 0.30 + hhRank * 0.25 + evRank * 0.20;
+  const base       = brlRank * 0.27 + hhRank * 0.22 + evRank * 0.19 + pullRank * 0.17;
   const parkMod    = (parkFactor - 1.0) * 50;
   const windMod    = windOut === true ? (windSpeed * 1.5) : (windOut === false ? (-windSpeed * 0.8) : 0);
-  const score      = Math.round(clamp(base + parkMod + windMod, 0, 100));
+  const pullParkMod = (pullAir != null && parkFactor > 1.0)
+    ? (Math.max(0, pullAir - 35) * (parkFactor - 1.0) * 1.35)
+    : 0;
+  const score      = Math.round(clamp(base + parkMod + windMod + pullParkMod, 0, 100));
 
   const scoreCls = score >= 75 ? 'good' : score >= 55 ? 'ok' : 'low';
   const windTxt  = windOut === true ? `Wind ${windSpeed || 0} mph OUT` : windOut === false ? `Wind ${windSpeed || 0} mph IN` : `Wind ${windSpeed || 0} mph`;
@@ -1389,6 +1432,11 @@ function hrProfilePanel(b, p) {
         <div class="hr-bar"><div class="hr-fill" style="width:${clamp(evRank,0,100)}%"></div></div>
         <div class="hr-val">${ev != null ? ev.toFixed(1) : '—'} mph (${topPctLabel(evRank)})</div>
       </div>
+      <div class="hr-row">
+        <div class="hr-lbl">Pull% In Air</div>
+        <div class="hr-bar"><div class="hr-fill" style="width:${clamp(pullRank,0,100)}%"></div></div>
+        <div class="hr-val">${pullAir != null ? pullAir.toFixed(1)+'%' : '—'} (${topPctLabel(pullRank)})</div>
+      </div>
       <div class="hr-meta">
         <span class="hr-meta-pill">${parkTxt}</span>
         <span class="hr-meta-pill">${windTxt}</span>
@@ -1406,6 +1454,111 @@ function toggleHRProfile(btn) {
   const opening = panel.style.display === 'none' || panel.style.display === '';
   panel.style.display = opening ? 'block' : 'none';
   btn.lastElementChild.textContent = opening ? 'HIDE ▴' : 'SHOW ▾';
+}
+
+async function loadLineShoppingData() {
+  if (!CUR_GAME) return null;
+  if (LINE_SHOP_DATA && LINE_SHOP_GAME === CUR_GAME) return LINE_SHOP_DATA;
+  const r = await fetch(`/api/props/line-shopping/${CUR_GAME}`);
+  const d = await r.json();
+  if (!d || !d.success) throw new Error((d && d.error) || 'Line shopping unavailable');
+  LINE_SHOP_DATA = d;
+  LINE_SHOP_GAME = CUR_GAME;
+  return d;
+}
+
+function _lsMarketOrder(mk) {
+  const o = {
+    batter_hits: 1,
+    batter_total_bases: 2,
+    batter_home_runs: 3,
+    batter_rbis: 4,
+    batter_runs_scored: 5,
+    batter_hits_runs_rbis: 6,
+    batter_stolen_bases: 7,
+    batter_strikeouts: 8,
+    pitcher_strikeouts: 9,
+    pitcher_walks: 10,
+  };
+  return o[mk] || 99;
+}
+
+function _fmtOdds(v) {
+  if (v == null || Number.isNaN(Number(v))) return '—';
+  const n = Number(v);
+  return n > 0 ? `+${n}` : `${n}`;
+}
+
+function _modelHint(playerName, marketKey) {
+  const rows = (VAL_DATA || []).filter(x =>
+    (x.player || '').toLowerCase() === (playerName || '').toLowerCase() &&
+    String(x.marketKey || '').toLowerCase() === String(marketKey || '').toLowerCase()
+  ).sort((a, b) => (b.hubRating || 0) - (a.hubRating || 0));
+  if (!rows.length) return '';
+  const r = rows[0];
+  const p = r.adjProb != null ? `${(Number(r.adjProb) * 100).toFixed(1)}%` : '—';
+  const ev = r.evPct != null ? `${(Number(r.evPct) * 100).toFixed(1)}%` : '—';
+  return `Model over prob ${p} · EV ${ev} · line ${r.line ?? '—'}`;
+}
+
+async function openLineShop(playerName) {
+  if (!playerName) return;
+  const modal = gel('lineShopModal');
+  const title = gel('lineShopTitle');
+  const body = gel('lineShopBody');
+  if (!modal || !title || !body) return;
+
+  modal.classList.add('show');
+  title.textContent = `${playerName} · LINE SHOPPING`;
+  body.innerHTML = loadHTML('LOADING BOOK PRICES…');
+
+  try {
+    const data = await loadLineShoppingData();
+    const groups = (data.groups || []).filter(g => (g.player || '').toLowerCase() === playerName.toLowerCase());
+    if (!groups.length) {
+      body.innerHTML = '<div class="ls-empty">No sportsbook prices available for this player right now.</div>';
+      return;
+    }
+
+    groups.sort((a, b) => _lsMarketOrder(a.market_key) - _lsMarketOrder(b.market_key));
+    body.innerHTML = groups.map(g => {
+      const lr = Array.isArray(g.line_range) ? `Line ${g.line_range[0]}-${g.line_range[1]}` : 'Line —';
+      const meta = `${lr} · ${g.book_count || 0} books${g.line_varies ? ' · varies' : ''}`;
+      const rows = (g.books || []).map(b => {
+        const book = b.bookmaker || '—';
+        const line = b.line != null ? b.line : '—';
+        const over = _fmtOdds(b.over_price);
+        const under = _fmtOdds(b.under_price);
+        return `<tr>
+          <td>${book}</td>
+          <td>${line}</td>
+          <td>${over} ${b.is_best_over ? '<span class="ls-pill ls-best">BEST O</span>' : ''}</td>
+          <td>${under} ${b.is_best_under ? '<span class="ls-pill ls-best">BEST U</span>' : ''}</td>
+        </tr>`;
+      }).join('');
+      const modelHint = _modelHint(playerName, g.market_key);
+      return `<div class="ls-market">
+        <div class="ls-market-h">
+          <div class="ls-market-lbl">${g.market_label || g.market_key}</div>
+          <div class="ls-meta">${meta}</div>
+        </div>
+        <table class="ls-table">
+          <thead><tr><th>BOOK</th><th>LINE</th><th>OVER</th><th>UNDER</th></tr></thead>
+          <tbody>${rows || '<tr><td colspan="4">No rows</td></tr>'}</tbody>
+        </table>
+        ${modelHint ? `<div class="ls-model">${modelHint}</div>` : ''}
+      </div>`;
+    }).join('');
+  } catch (e) {
+    body.innerHTML = `<div class="ls-empty" style="color:var(--r)">Error: ${e.message}</div>`;
+  }
+}
+
+function closeLineShop(ev) {
+  if (ev && ev.target && ev.currentTarget && ev.target !== ev.currentTarget) return;
+  const modal = gel('lineShopModal');
+  if (!modal) return;
+  modal.classList.remove('show');
 }
 
 function batterCard(b) {
@@ -1469,6 +1622,7 @@ function batterCard(b) {
       <div class="fstat"><div class="fstat-lbl">EV</div><div class="fstat-val">${b.sv_ev ? Number(b.sv_ev).toFixed(1) : '—'}</div></div>
       <div class="fstat"><div class="fstat-lbl">EXP PA</div><div class="fstat-val">${p.expected_pa ?? '—'}</div></div>
     </div>
+    <button class="ls-btn" onclick="openLineShop('${(b.name||'').replace(/'/g,"\\'")}')"><span>📚 LINE SHOPPING</span><span>OPEN ▸</span></button>
     ${hrPanel}
     ${batxHtml}
     ${trnd}

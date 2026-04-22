@@ -19,6 +19,10 @@ DASHBOARD_HTML = open(os.path.join(_HERE, 'dashboard.html')).read()
 DEEP_DIVE_HTML = open(os.path.join(_HERE, 'deepdive.html')).read()
 PROPS_HTML = open(os.path.join(_HERE, 'props.html')).read()
 try:
+    CHEATSHEET_HTML = open(os.path.join(_HERE, 'cheatsheet.html')).read()
+except FileNotFoundError:
+    CHEATSHEET_HTML = "<h1>cheatsheet.html missing from project root</h1>"
+try:
     TRACKER_HTML = open(os.path.join(_HERE, 'tracker.html')).read()
 except FileNotFoundError:
     TRACKER_HTML = "<h1>tracker.html missing from project root</h1>"
@@ -565,6 +569,7 @@ def _load_savant_data():
                 "sv_ev":     _sv_f(row.get("avg_hit_speed")),
                 "sv_hh_pct": _sv_f(row.get("ev95percent")),
                 "sv_brl_pct":_sv_f(row.get("brl_percent")),
+                "pull_pct_air": _sv_f(row.get("pull_percent")),
                 "sv_brl_pa": _sv_f(row.get("brl_pa")),
                 "sv_la":     _sv_f(row.get("avg_hit_angle")),
                 "sv_ss_pct": _sv_f(row.get("anglesweetspotpercent")),
@@ -945,6 +950,7 @@ def get_batters_from_boxscore(team_data, side):
             "sv_ev":     svb.get("sv_ev","N/A"),
             "sv_hh_pct": svb.get("sv_hh_pct","N/A"),
             "sv_brl_pct":svb.get("sv_brl_pct","N/A"),
+            "pull_pct_air": svb.get("pull_pct_air","N/A"),
             "sv_la":     svb.get("sv_la","N/A"),
         })
     return out
@@ -1052,6 +1058,10 @@ def deep_dive(game_pk):
 @app.route('/props')
 def props_page():
     return PROPS_HTML
+
+@app.route('/cheatsheets')
+def cheatsheets_page():
+    return CHEATSHEET_HTML
 
 @app.route('/tracker')
 def tracker_page():
@@ -1203,8 +1213,18 @@ def api_pitchers(game_pk):
                     return s
                 return jsonify({
                     "success": True,
-                    "awayPitcher": {"id":ap.get("id"),"name":an,"stats":build_pitcher_stats(an,ap.get("id"))},
-                    "homePitcher": {"id":hp.get("id"),"name":hn,"stats":build_pitcher_stats(hn,hp.get("id"))},
+                    "awayPitcher": {
+                        "id": ap.get("id"),
+                        "name": an,
+                        "stats": build_pitcher_stats(an, ap.get("id")),
+                        "vulnerability": _pitcher_prop_vulnerability(ap.get("id"), game_pk),
+                    },
+                    "homePitcher": {
+                        "id": hp.get("id"),
+                        "name": hn,
+                        "stats": build_pitcher_stats(hn, hp.get("id")),
+                        "vulnerability": _pitcher_prop_vulnerability(hp.get("id"), game_pk),
+                    },
                 })
         return jsonify({"success":False,"error":"Game not found","awayPitcher":{},"homePitcher":{}})
     except Exception as ex:
@@ -1320,6 +1340,169 @@ def _project_batter_vs_pitcher(batter_stats, pitcher_stats):
     }
 
 
+def _pitcher_prop_vulnerability_from_inputs(p_stats, opposing_lineup, park_factor=1.0):
+    """Build Sprint 3.2 pitcher prop vulnerability profile from pitcher+opponent context."""
+    def _f(v, d=0.0):
+        try:
+            f = float(v)
+            return f if f == f else d
+        except Exception:
+            return d
+
+    bats = []
+    for b in opposing_lineup or []:
+        pos = (b.get("pos") or "").upper()
+        if pos in ("P", "SP", "RP", "CP"):
+            continue
+        bats.append(b)
+
+    park = _f(park_factor, 1.0)
+    park = max(0.90, min(1.20, park))
+
+    avg_values = []
+    hh_values = []
+    for b in bats:
+        avg_values.append(_f(b.get("fg_avg") or b.get("avg"), 0.245))
+        hh_values.append(_f(b.get("sv_hh_pct"), 37.0))
+
+    opp_avg = sum(avg_values) / len(avg_values) if avg_values else 0.245
+    opp_hh = sum(hh_values) / len(hh_values) if hh_values else 37.0
+
+    whip = _f(p_stats.get("fg_whip") or p_stats.get("whip"), 1.25)
+    era = _f(p_stats.get("fg_era") or p_stats.get("era"), 4.20)
+    hr9 = _f(p_stats.get("fg_hr9") or p_stats.get("hr9"), 1.10)
+    kpct = _f(p_stats.get("fg_kpct") or p_stats.get("sv_k_pct"), 0.22)
+    if kpct > 1:
+        kpct = kpct / 100.0
+    xwoba_allowed = _f(p_stats.get("sv_xwoba_p"), 0.315)
+
+    avg_contact_adj = 1.0 + ((whip - 1.25) * 0.22) + ((era - 4.20) * 0.06)
+    est_avg_allowed = max(0.180, min(0.340, opp_avg * avg_contact_adj))
+    hits_v = est_avg_allowed * park
+
+    xwoba_hh_proxy = 35.0 + max(-4.0, min(7.0, (xwoba_allowed - 0.315) * 120.0))
+    hh_allowed = max(28.0, min(49.0, (opp_hh * 0.5) + (xwoba_hh_proxy * 0.5)))
+
+    hits_exploitable = hits_v >= 0.275
+    hr_exploitable = hr9 > 1.10
+    tb_exploitable = hh_allowed > 40.0
+    k_fade_hits = kpct > 0.28
+
+    return {
+        "hits_vulnerability": {
+            "value": round(hits_v, 3),
+            "threshold": 0.275,
+            "signal": "EXPLOITABLE" if hits_exploitable else "NEUTRAL",
+            "badge": "HITS ↑ EXPLOITABLE" if hits_exploitable else "HITS ↑ NEUTRAL",
+            "exploitable": hits_exploitable,
+            "context": "opp_avg * park_factor",
+        },
+        "hr_vulnerability": {
+            "value": round(hr9, 2),
+            "threshold": 1.10,
+            "signal": "EXPLOITABLE" if hr_exploitable else "NEUTRAL",
+            "badge": "HR ↑ EXPLOITABLE" if hr_exploitable else "HR ↑ NEUTRAL",
+            "exploitable": hr_exploitable,
+            "context": "hr_allowed_per_9",
+        },
+        "k_vulnerability": {
+            "value": round(kpct, 3),
+            "threshold": 0.28,
+            "signal": "FADE BATTER HITS" if k_fade_hits else "HITS FRIENDLY",
+            "badge": "K ↓ FADE HITS" if k_fade_hits else "K ↓ HITS OK",
+            "exploitable": not k_fade_hits,
+            "context": "pitcher_k_rate",
+        },
+        "tb_vulnerability": {
+            "value": round(hh_allowed, 1),
+            "threshold": 40.0,
+            "signal": "EXPLOITABLE TB UPSIDE" if tb_exploitable else "NEUTRAL",
+            "badge": "TB ↑ UP" if tb_exploitable else "TB ↑ NEUTRAL",
+            "exploitable": tb_exploitable,
+            "context": "hard_hit_pct_allowed_proxy",
+        },
+    }
+
+
+def _pitcher_prop_vulnerability(pitcher_id, game_pk):
+    """Compute Sprint 3.2 prop vulnerability profile for a starter in a specific game."""
+    if not pitcher_id or not game_pk:
+        return {}
+
+    try:
+        raw = fetch_schedule(datetime.now(ET).strftime("%Y-%m-%d"))
+        game = next((g for g in raw if g.get("gamePk") == game_pk), None)
+        if not game:
+            return {}
+
+        away_team = game.get("teams", {}).get("away", {})
+        home_team = game.get("teams", {}).get("home", {})
+        ap = away_team.get("probablePitcher", {}) or {}
+        hp = home_team.get("probablePitcher", {}) or {}
+
+        is_away_pitcher = ap.get("id") == pitcher_id
+        chosen_pitcher = ap if is_away_pitcher else hp
+        opp_team = home_team if is_away_pitcher else away_team
+
+        p_name = chosen_pitcher.get("fullName", "")
+        p_stats = {}
+        if pitcher_id:
+            p_stats = dict(pitcher_stats_mlb(pitcher_id) or {})
+        p_stats.update(fg_pitcher(p_name) or {})
+        p_sv = sv_pitcher(p_name) or {}
+        for k, v in p_sv.items():
+            if k not in ("sv_arsenal_pct", "sv_arsenal_velo"):
+                p_stats[k] = v
+
+        try:
+            box = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=8).json().get("teams", {})
+            away_lineup = get_batters_from_boxscore(box.get("away", {}), "away")
+            home_lineup = get_batters_from_boxscore(box.get("home", {}), "home")
+        except Exception:
+            away_lineup, home_lineup = [], []
+
+        def _roster_fallback(team_id):
+            try:
+                rr = requests.get(f"{MLB_API}/teams/{team_id}/roster?rosterType=active", timeout=6)
+                roster = rr.json().get("roster", []) if rr.ok else []
+                out = []
+                for r in roster:
+                    pos = (r.get("position") or {}).get("abbreviation", "?")
+                    if pos == "P":
+                        continue
+                    person = r.get("person", {}) or {}
+                    name = person.get("fullName", "")
+                    if not name:
+                        continue
+                    fgb = fg_batter(name) or {}
+                    svb = sv_batter(name) or {}
+                    out.append({
+                        "id": person.get("id"),
+                        "name": name,
+                        "pos": pos,
+                        "slot": 0,
+                        **fgb,
+                        **svb,
+                    })
+                return out[:20]
+            except Exception:
+                return []
+
+        if not away_lineup:
+            away_lineup = _roster_fallback(away_team.get("team", {}).get("id"))
+        if not home_lineup:
+            home_lineup = _roster_fallback(home_team.get("team", {}).get("id"))
+
+        opposing_lineup = home_lineup if is_away_pitcher else away_lineup
+        park_factor = game.get("parkFactor") or game.get("park_factor") or 1.0
+        out = _pitcher_prop_vulnerability_from_inputs(p_stats, opposing_lineup, park_factor)
+        out["opponent"] = opp_team.get("team", {}).get("abbreviation", "")
+        out["park_factor"] = park_factor
+        return out
+    except Exception:
+        return {}
+
+
 @app.route("/api/pitcher-matchup/<int:game_pk>")
 def api_pitcher_matchup(game_pk):
     """For a given game, return each probable starter PLUS the top batters
@@ -1429,6 +1612,12 @@ def api_pitcher_matchup(game_pk):
                     **proj,
                 })
             threats.sort(key=lambda x: x["score"], reverse=True)
+            vulnerability = _pitcher_prop_vulnerability_from_inputs(
+                p_stats,
+                opposing_lineup,
+                game.get("parkFactor") or game.get("park_factor") or 1.0,
+            )
+
             return {
                 "pitcher": {
                     "id":    pitcher_id,
@@ -1438,6 +1627,8 @@ def api_pitcher_matchup(game_pk):
                 "opponent":   opp_team,
                 "threats":    threats[:9],     # top-9 most dangerous bats
                 "lineupSize": len(opposing_lineup),
+                "vulnerability": vulnerability,
+                "propVulnerability": vulnerability,
             }
 
         away_pack = _build_side(an, ap.get("id"), home_lineup, home_team.get("team", {}).get("abbreviation", ""))
@@ -4284,6 +4475,95 @@ def _market_price_summary(market_props, player, mk, line):
     }
 
 
+def _group_line_shopping(market_props):
+    """Group raw prop prices by player+market with all book lines preserved."""
+    label_map = {
+        'batter_hits': 'Hits',
+        'batter_home_runs': 'Home Runs',
+        'batter_total_bases': 'Total Bases',
+        'batter_rbis': 'RBI',
+        'batter_runs_scored': 'Runs',
+        'batter_hits_runs_rbis': 'H+R+RBI',
+        'batter_stolen_bases': 'Stolen Bases',
+        'pitcher_strikeouts': 'Pitcher Strikeouts',
+        'pitcher_walks': 'Pitcher Walks',
+        'batter_strikeouts': 'Batter Strikeouts',
+    }
+
+    grouped = {}
+    for item in market_props or []:
+        player = item.get('player')
+        mk = item.get('market_key')
+        if not player or not mk:
+            continue
+        key = (player, mk)
+        line_val = item.get('line')
+        try:
+            line_val = float(line_val)
+        except Exception:
+            line_val = None
+        row = {
+            'bookmaker': item.get('bookmaker'),
+            'line': round(line_val, 2) if isinstance(line_val, float) else None,
+            'over_price': item.get('over_price'),
+            'under_price': item.get('under_price'),
+            'over_implied': item.get('over_implied'),
+            'under_implied': item.get('under_implied'),
+        }
+        grouped.setdefault(key, []).append(row)
+
+    out = []
+    for (player, mk), books in grouped.items():
+        best_over = None
+        best_under = None
+        line_vals = []
+        uniq_books = set()
+        for b in books:
+            if b.get('bookmaker'):
+                uniq_books.add(b.get('bookmaker'))
+            if b.get('line') is not None:
+                line_vals.append(float(b.get('line')))
+            op = b.get('over_price')
+            up = b.get('under_price')
+            if op is not None and (best_over is None or _american_price_score(op) > _american_price_score(best_over)):
+                best_over = op
+            if up is not None and (best_under is None or _american_price_score(up) > _american_price_score(best_under)):
+                best_under = up
+
+        line_range = None
+        if line_vals:
+            line_range = [round(min(line_vals), 2), round(max(line_vals), 2)]
+
+        normalized_books = []
+        for b in books:
+            is_best_over = b.get('over_price') is not None and best_over is not None and b.get('over_price') == best_over
+            is_best_under = b.get('under_price') is not None and best_under is not None and b.get('under_price') == best_under
+            normalized_books.append({
+                **b,
+                'is_best_over': is_best_over,
+                'is_best_under': is_best_under,
+            })
+
+        out.append({
+            'player': player,
+            'market_key': mk,
+            'market_label': label_map.get(mk, mk),
+            'best_over_price': best_over,
+            'best_under_price': best_under,
+            'line_range': line_range,
+            'book_count': len(uniq_books),
+            'line_varies': bool(line_range and line_range[0] != line_range[1]),
+            'books': normalized_books,
+        })
+
+    out.sort(key=lambda x: (x.get('player', ''), x.get('market_key', '')))
+    by_player = {}
+    for g in out:
+        by_player.setdefault(g['player'], []).append(g)
+
+    return {'groups': out, 'by_player': by_player}
+
+
 def _american_price_score(price):
     try:
         p = float(price)
@@ -6563,6 +6843,314 @@ def api_teams_pitching_rankings():
         return jsonify({'success': False, 'error': str(ex), 'rankings': []}), 500
 
 
+# ── Cheatsheet cache (Sprint 3.1) ───────────────────────────────────────────
+_cheatsheet_cache_lock = threading.Lock()
+_cheatsheet_cache = {'data': None, 'ts': 0.0, 'signature': None, 'date': None}
+_cheatsheet_refreshing = False
+_CHEATSHEET_TTL = 30 * 60
+
+
+def _cheatsheet_signature(schedule_rows):
+    parts = []
+    for g in sorted(schedule_rows or [], key=lambda x: x.get('gamePk', 0)):
+        lineups = g.get('lineups') or {}
+        away = [((p.get('fullName') or p.get('name') or '').strip()) for p in (lineups.get('awayBatters') or [])[:9]]
+        home = [((p.get('fullName') or p.get('name') or '').strip()) for p in (lineups.get('homeBatters') or [])[:9]]
+        parts.append(f"{g.get('gamePk')}|{','.join(away)}|{','.join(home)}")
+    return '||'.join(parts)
+
+
+def _l10_hit_pct_for_player(player_id, memo):
+    if not player_id:
+        return None
+    if player_id in memo:
+        return memo[player_id]
+    try:
+        t = _build_player_trends(int(player_id), False)
+        pct = ((t.get('over_rates') or {}).get('hits', {}).get('0.5', {}).get('l10', {}) or {}).get('pct')
+        memo[player_id] = pct
+        return pct
+    except Exception:
+        memo[player_id] = None
+        return None
+
+
+def _compute_cheatsheets_today(date_str):
+    sched = fetch_schedule(date_str)
+    if not sched:
+        return {
+            'success': True,
+            'date': date_str,
+            'hitsBoard': {'rows': []},
+            'battingOrderMatchups': {'rows': []},
+            'pitcherWeakspots': {'cards': []},
+            'generatedAt': datetime.now(timezone.utc).isoformat(),
+            'signature': '',
+            'games': 0,
+        }
+
+    l10_memo = {}
+    hits_rows = []
+    matchup_rows = []
+    weakspot_cards = []
+
+    def _bvp_points(grade):
+        g = str(grade or 'D').upper()
+        return {'A+': 1.0, 'A': 0.9, 'B': 0.75, 'C': 0.55, 'D': 0.35}.get(g, 0.45)
+
+    def _pitch_adv_points(status):
+        s = str(status or 'neutral').lower()
+        return {'favorable': 0.85, 'neutral': 0.50, 'unfavorable': 0.20}.get(s, 0.50)
+
+    def _process_game(g):
+        local_hits = []
+        local_matchups = []
+        local_weakspots = []
+        gpk = g.get('gamePk')
+        try:
+            gdata, away_bats, home_bats, away_t, home_t, pitchers = _props_fetch_game(gpk)
+            if not gdata:
+                return local_hits, local_matchups, local_weakspots
+
+            away_team = away_t.get('team', {})
+            home_team = home_t.get('team', {})
+            away_abbr = away_team.get('abbreviation', 'AWAY')
+            home_abbr = home_team.get('abbreviation', 'HOME')
+            away_tid = away_team.get('id')
+            home_tid = home_team.get('id')
+            matchup = f"{away_abbr} @ {home_abbr}"
+            park = PARK_FACTORS.get(home_tid, 1.0)
+
+            ap = pitchers.get('ap') or {}
+            hp = pitchers.get('hp') or {}
+            ap_name = ap.get('fullName', 'TBD')
+            hp_name = hp.get('fullName', 'TBD')
+            ap_id = ap.get('id')
+            hp_id = hp.get('id')
+
+            ap_fg = fg_pitcher(ap_name)
+            hp_fg = fg_pitcher(hp_name)
+            ap_sv = sv_pitcher(ap_name)
+            hp_sv = sv_pitcher(hp_name)
+            ap_st = pitcher_stats_mlb(ap_id) if ap_id else {}
+            hp_st = pitcher_stats_mlb(hp_id) if hp_id else {}
+            ap_hand = (ap_st.get('pitchHand') or 'R').upper()
+            hp_hand = (hp_st.get('pitchHand') or 'R').upper()
+
+            def _side_rows(batters, team_abbr, opp_name, opp_id, opp_hand, opp_fg, opp_sv):
+                rows = []
+                for b in (batters or [])[:9]:
+                    name = b.get('name', '')
+                    pid = b.get('id')
+                    if not name:
+                        continue
+                    score = _matchup_score(b, opp_fg, opp_sv, pitcher_hand=opp_hand)
+                    l10_pct = _l10_hit_pct_for_player(pid, l10_memo)
+                    bvp_data = _fetch_bvp(pid, opp_id) if (pid and opp_id) else None
+                    bvp_grade = _compute_bvp_grade(bvp_data)
+                    pitch_adv = _pitch_type_advantage(pid, opp_id, batter_name=name, pitcher_name=opp_name) if (pid and opp_id) else {'status': 'neutral'}
+                    split_ops = _platoon_blend(b, opp_hand, 'ops')
+                    split_score = max(0.0, min(1.0, (split_ops - 0.550) / 0.350))
+                    park_score = max(0.0, min(1.0, (park - 0.90) / 0.25))
+                    l10_score = l10_pct if l10_pct is not None else 0.50
+                    comp = (
+                        _bvp_points(bvp_grade) * 0.30
+                        + l10_score * 0.25
+                        + split_score * 0.20
+                        + park_score * 0.15
+                        + _pitch_adv_points((pitch_adv or {}).get('status')) * 0.10
+                    )
+                    comp_pct = round(comp * 100.0, 1)
+                    model_prob = max(0.01, min(0.99, (score.get('score', 50) / 100.0)))
+                    edge = model_prob - 0.50
+                    hub = _hub_rating(model_prob, edge, l10_score)
+                    ev_pct = round(edge * 100.0, 1)
+
+                    rows.append({
+                        'gamePk': gpk,
+                        'matchup': matchup,
+                        'player': name,
+                        'playerId': pid,
+                        'team': team_abbr,
+                        'slot': b.get('slot'),
+                        'marketKey': 'batter_hits',
+                        'line': 0.5,
+                        'vsHand': opp_hand,
+                        'oppPitcher': opp_name,
+                        'l10Pct': l10_pct,
+                        'bvpGrade': bvp_grade,
+                        'hubRating': hub,
+                        'evPct': ev_pct,
+                        'matchupScore': score.get('score'),
+                        'composite': comp_pct,
+                    })
+                return rows
+
+            away_rows = _side_rows(away_bats, away_abbr, hp_name, hp_id, hp_hand, hp_fg, hp_sv)
+            home_rows = _side_rows(home_bats, home_abbr, ap_name, ap_id, ap_hand, ap_fg, ap_sv)
+            local_hits.extend(away_rows)
+            local_hits.extend(home_rows)
+
+            ranked = sorted(away_rows + home_rows, key=lambda x: (x.get('composite') or 0), reverse=True)
+            for i, row in enumerate(ranked, start=1):
+                local_matchups.append({
+                    'gamePk': row.get('gamePk'),
+                    'matchup': row.get('matchup'),
+                    'rank': i,
+                    'player': row.get('player'),
+                    'team': row.get('team'),
+                    'slot': row.get('slot'),
+                    'matchupScore': row.get('composite'),
+                    'bvpGrade': row.get('bvpGrade'),
+                    'l10Pct': row.get('l10Pct'),
+                    'hubRating': row.get('hubRating'),
+                })
+
+            def _weakspot_card(p_name, p_id, p_team, opp_bats, p_fg, p_sv, p_hand):
+                if not p_name or p_name == 'TBD':
+                    return None
+                opp_scores = []
+                for b in (opp_bats or [])[:9]:
+                    sc = _matchup_score(b, p_fg, p_sv, pitcher_hand=p_hand)
+                    opp_scores.append({'slot': b.get('slot', 0), 'score': sc.get('score', 50)})
+                opp_scores.sort(key=lambda x: x.get('score', 0), reverse=True)
+                top_slots = sorted([x.get('slot') for x in opp_scores[:3] if x.get('slot')])
+                weak_slots = ', '.join(str(x) for x in top_slots) if top_slots else 'n/a'
+
+                with _sv_lock:
+                    arsenal = dict(_sv_arsenal_pct.get(p_id, {}) or {})
+                primary_pitch, primary_pct = ('Unknown', 0)
+                if arsenal:
+                    primary_pitch, primary_pct = max(arsenal.items(), key=lambda kv: kv[1])
+                pitch_label = PITCH_LABELS.get(primary_pitch, primary_pitch)
+                pitch_vuln = f"{pitch_label} ({round(float(primary_pct or 0), 1)}% usage)"
+
+                recent = _pitcher_recent_form(p_id) if p_id else {}
+                season_era = _safe_f((pitcher_stats_mlb(p_id) or {}).get('era'), 4.20) if p_id else 4.20
+                recent_era = _safe_f(recent.get('era_recent'), season_era)
+                if recent and recent_era <= max(2.70, season_era - 0.4):
+                    form_label = f"DEALING ({recent_era:.2f} ERA last {recent.get('n_starts', 0)} starts)"
+                elif recent and recent_era >= min(6.50, season_era + 0.5):
+                    form_label = f"STRUGGLING ({recent_era:.2f} ERA last {recent.get('n_starts', 0)} starts)"
+                else:
+                    form_label = f"STABLE ({recent_era:.2f} ERA recent)"
+
+                avg_top_score = sum(x.get('score', 50) for x in opp_scores[:4]) / max(1, len(opp_scores[:4]))
+                if avg_top_score >= 62:
+                    rec = 'Target top-order hits/TB overs'
+                elif avg_top_score <= 44:
+                    rec = 'Consider fading opposing batter overs'
+                else:
+                    rec = 'Play selectively by lineup slot and price'
+
+                return {
+                    'pitcherName': p_name,
+                    'pitcherId': p_id,
+                    'team': p_team,
+                    'weakSlots': weak_slots,
+                    'pitchVulnerability': pitch_vuln,
+                    'formLabel': form_label,
+                    'recommendation': rec,
+                    'matchup': matchup,
+                }
+
+            c1 = _weakspot_card(ap_name, ap_id, away_abbr, home_bats, ap_fg, ap_sv, ap_hand)
+            c2 = _weakspot_card(hp_name, hp_id, home_abbr, away_bats, hp_fg, hp_sv, hp_hand)
+            if c1:
+                local_weakspots.append(c1)
+            if c2:
+                local_weakspots.append(c2)
+
+        except Exception:
+            print(f"[cheatsheet_game {gpk}]", traceback.format_exc())
+        return local_hits, local_matchups, local_weakspots
+
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        futs = [ex.submit(_process_game, g) for g in sched]
+        for fut in as_completed(futs):
+            h, m, w = fut.result()
+            hits_rows.extend(h)
+            matchup_rows.extend(m)
+            weakspot_cards.extend(w)
+
+    hits_rows.sort(key=lambda x: (x.get('hubRating') or 0, x.get('matchupScore') or 0), reverse=True)
+    matchup_rows.sort(key=lambda x: (x.get('matchup'), x.get('rank')))
+    weakspot_cards.sort(key=lambda x: (x.get('matchup', ''), x.get('team', '')))
+
+    return {
+        'success': True,
+        'date': date_str,
+        'hitsBoard': {'rows': hits_rows[:450]},
+        'battingOrderMatchups': {'rows': matchup_rows[:450]},
+        'pitcherWeakspots': {'cards': weakspot_cards},
+        'generatedAt': datetime.now(timezone.utc).isoformat(),
+        'signature': _cheatsheet_signature(sched),
+        'games': len(sched),
+    }
+
+
+def _get_cheatsheets_today(force=False):
+    today = datetime.now(ET).strftime('%Y-%m-%d')
+    sched = fetch_schedule(today)
+    signature = _cheatsheet_signature(sched)
+    now = time.time()
+
+    with _cheatsheet_cache_lock:
+        cached = _cheatsheet_cache.get('data')
+        ts = float(_cheatsheet_cache.get('ts') or 0)
+        cdate = _cheatsheet_cache.get('date')
+        csig = _cheatsheet_cache.get('signature')
+
+    if (not force) and cached and cdate == today and csig == signature and (now - ts) < _CHEATSHEET_TTL:
+        out = dict(cached)
+        out['cacheAgeSec'] = int(now - ts)
+        out['cached'] = True
+        return out
+
+    fresh = _compute_cheatsheets_today(today)
+    with _cheatsheet_cache_lock:
+        _cheatsheet_cache['data'] = fresh
+        _cheatsheet_cache['ts'] = now
+        _cheatsheet_cache['date'] = today
+        _cheatsheet_cache['signature'] = fresh.get('signature')
+    out = dict(fresh)
+    out['cacheAgeSec'] = 0
+    out['cached'] = False
+    return out
+
+
+def _trigger_cheatsheet_refresh_async(reason='manual'):
+    global _cheatsheet_refreshing
+    with _cheatsheet_cache_lock:
+        if _cheatsheet_refreshing:
+            return
+        _cheatsheet_refreshing = True
+
+    def _runner():
+        global _cheatsheet_refreshing
+        try:
+            _get_cheatsheets_today(force=True)
+            print(f"[cheatsheets] refreshed ({reason})")
+        except Exception:
+            print('[cheatsheets] refresh failed', traceback.format_exc())
+        finally:
+            with _cheatsheet_cache_lock:
+                _cheatsheet_refreshing = False
+
+    threading.Thread(target=_runner, daemon=True).start()
+
+
+@app.route('/api/cheatsheets/today')
+def api_cheatsheets_today():
+    try:
+        force = request.args.get('refresh') == '1'
+        payload = _get_cheatsheets_today(force=force)
+        return jsonify(payload)
+    except Exception as ex:
+        print('[api_cheatsheets_today]', traceback.format_exc())
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
 # ── Monte Carlo background cache ──────────────────────────────────────────────
 _mc_cache_lock  = threading.Lock()
 _mc_cache_data  = None
@@ -7743,6 +8331,7 @@ def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_s
     sv_ev    = _safe_f(sv.get("sv_ev"),      _LEAGUE_EV)
     sv_brl   = _safe_f(sv.get("sv_brl_pct"), _LEAGUE_BRL_PCT * 100) / 100   # → fraction
     sv_hh    = _safe_f(sv.get("sv_hh_pct"),  35.0) / 100                     # → fraction
+    pull_air = _safe_f(sv.get("pull_pct_air"), 35.0) / 100
 
     hr_r  = fg_hr  / max(fg_pa, 1)
     rbi_r = fg_rbi / max(fg_pa, 1)
@@ -7762,8 +8351,9 @@ def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_s
     iso_edge  = (fg_iso - 0.145) / 0.145              # delta vs league-avg ISO
     brl_edge  = (sv_brl - _LEAGUE_BRL_PCT) / _LEAGUE_BRL_PCT
     ev_edge   = (sv_ev  - _LEAGUE_EV) / _LEAGUE_EV
+    pull_edge = (pull_air - 0.35) / 0.35
     xslg_edge = (sv_xslg - _STAT_DEFAULTS['slg']) / _STAT_DEFAULTS['slg']
-    power_raw = iso_edge * 0.35 + brl_edge * 0.35 + ev_edge * 0.15 + xslg_edge * 0.15
+    power_raw = iso_edge * 0.30 + brl_edge * 0.30 + ev_edge * 0.15 + xslg_edge * 0.15 + pull_edge * 0.10
     power_contrib = power_raw * W["power"]
 
     # ── COMPONENT 3: Discipline ───────────────────────────────────────────────
@@ -7858,8 +8448,10 @@ def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_s
     tb_proj   = round(max(0.08, slg       * exp_pa * composite * wx_mult), 3)
 
     hr_pf   = _clamp(park_factor * 1.08, 0.80, 1.35)
+    pull_park_boost = 1.0 + (max(0.0, pull_edge) * max(0.0, park_factor - 1.0) * 1.25)
+    pull_park_boost = _clamp(pull_park_boost, 0.95, 1.25)
     hr_proj = round(max(0.005,
-        hr_r_adj * exp_pa * hr_pf * (1.0 + (sv_brl - _LEAGUE_BRL_PCT) * 0.8) * wx_mult
+        hr_r_adj * exp_pa * hr_pf * (1.0 + (sv_brl - _LEAGUE_BRL_PCT) * 0.8) * pull_park_boost * wx_mult
     ), 4)
 
     slot_rbi_bonus = max(0.8, 1.0 + (4 - abs(slot - 4)) * 0.03)
@@ -7886,6 +8478,7 @@ def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_s
         "adjustments": {
             "contact":    round(contact_contrib,  4),
             "power":      round(power_contrib,     4),
+            "pull_air":   round(pull_edge * 0.10 * W["power"], 4),
             "discipline": round(disc_contrib,      4),
             "platoon":    round(platoon_contrib,   4),
             "park":       round(park_contrib,      4),
@@ -8164,6 +8757,7 @@ def api_props_projections(game_pk):
         ev_values = []
         hh_values = []
         brl_values = []
+        pull_values = []
         for row in statcast_cache.values():
             try:
                 ev_values.append(float(row.get('sv_ev')))
@@ -8175,6 +8769,10 @@ def api_props_projections(game_pk):
                 pass
             try:
                 brl_values.append(float(row.get('sv_brl_pct')))
+            except Exception:
+                pass
+            try:
+                pull_values.append(float(row.get('pull_pct_air')))
             except Exception:
                 pass
 
@@ -8206,6 +8804,7 @@ def api_props_projections(game_pk):
                 brl  = bsv.get("sv_brl_pct")
                 hh   = bsv.get("sv_hh_pct")
                 ev   = bsv.get("sv_ev")
+                pull = bsv.get("pull_pct_air")
                 bid  = b.get("id")
                 form = _fetch_rolling_form(bid, False) if bid else None
                 bvp  = _fetch_bvp(bid, opp_pid)      if (bid and opp_pid) else None
@@ -8250,9 +8849,11 @@ def api_props_projections(game_pk):
                     "sv_ev":        ev,
                     "sv_hh_pct":    hh,
                     "sv_brl_pct":   brl,
+                    "pull_pct_air": pull,
                     "sv_ev_pct_rank": _pct_rank(ev_values, ev),
                     "sv_hh_pct_rank": _pct_rank(hh_values, hh),
                     "sv_brl_pct_rank": _pct_rank(brl_values, brl),
+                    "pull_pct_air_rank": _pct_rank(pull_values, pull),
                     "lineupConfirmed": bool(lineup_confirmed),
                     "lineupStatus": "confirmed" if lineup_confirmed else "pending",
                     "injuryStatus": (injury or {}).get("status"),
@@ -8377,6 +8978,58 @@ def api_props_projections(game_pk):
 
     except Exception as ex:
         print(f"[api_props_projections] {traceback.format_exc()}")
+        return jsonify({"success": False, "error": str(ex)}), 500
+
+
+@app.route('/api/props/line-shopping/<int:game_pk>')
+def api_props_line_shopping(game_pk):
+    """Return line-shopping view grouped by player/market with all sportsbook lines."""
+    try:
+        _maybe_refresh_fg()
+        _maybe_refresh_savant()
+
+        gdata, away_bats, home_bats, away_t, home_t, pitchers = _props_fetch_game(game_pk)
+        if not gdata:
+            return jsonify({"success": False, "error": "Game not found"}), 404
+
+        away_team_name = (away_t.get('team', {}) or {}).get('name', '')
+        home_team_name = (home_t.get('team', {}) or {}).get('name', '')
+
+        event, _ = _find_odds_event(away_team_name, home_team_name)
+        if not event:
+            return jsonify({
+                "success": True,
+                "gamePk": game_pk,
+                "eventId": None,
+                "groups": [],
+                "players": {},
+                "count": 0,
+            })
+
+        props_books = _load_event_odds(event.get('id'), featured_only=False) or []
+
+        valid_names = set([x.get('name') for x in (away_bats + home_bats) if x.get('name')])
+        ap = (pitchers or {}).get('ap', {}) or {}
+        hp = (pitchers or {}).get('hp', {}) or {}
+        if ap.get('fullName'):
+            valid_names.add(ap.get('fullName'))
+        if hp.get('fullName'):
+            valid_names.add(hp.get('fullName'))
+
+        market_props = _parse_prop_markets(props_books, valid_names)
+        grouped = _group_line_shopping(market_props)
+
+        return jsonify({
+            "success": True,
+            "gamePk": game_pk,
+            "eventId": event.get('id'),
+            "groups": grouped.get('groups', []),
+            "players": grouped.get('by_player', {}),
+            "count": len(grouped.get('groups', [])),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as ex:
+        print(f"[api_props_line_shopping] {traceback.format_exc()}")
         return jsonify({"success": False, "error": str(ex)}), 500
 
 
@@ -9565,6 +10218,7 @@ def api_lineup_status(game_pk):
                 _lineup_snapshots[game_pk] = {
                     "away": away_snap, "home": home_snap, "ts": now_ts
                 }
+                _trigger_cheatsheet_refresh_async(reason='lineup_confirmed_first_seen')
             return jsonify({
                 "success":     True,
                 "gamePk":      game_pk,
@@ -9620,6 +10274,9 @@ def api_lineup_status(game_pk):
         # Update snapshot if lineup is now confirmed and was not before
         if confirmed and len(baseline["away"]) < 9:
             _lineup_snapshots[game_pk] = {"away": away_snap, "home": home_snap, "ts": now_ts}
+            _trigger_cheatsheet_refresh_async(reason='lineup_confirmed_upgrade')
+        elif confirmed and len(all_changes) > 0:
+            _trigger_cheatsheet_refresh_async(reason='lineup_change_detected')
 
         return jsonify({
             "success":     True,

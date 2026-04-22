@@ -66,6 +66,21 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .divfg td{color:var(--fg) !important;font-size:.58rem;letter-spacing:2px;padding:5px 6px}
 .divsv{background:rgba(0,184,212,.04);border-top:1px solid rgba(0,184,212,.14)}
 .divsv td{color:var(--sv) !important;font-size:.58rem;letter-spacing:2px;padding:5px 6px}
+
+/* Sprint 3.2 pitcher vulnerability */
+.vsec{margin-top:12px;border:1px solid rgba(0,229,255,.15);border-radius:9px;background:rgba(0,0,0,.22)}
+.vsec summary{cursor:pointer;list-style:none;padding:8px 10px;font-family:'Orbitron',monospace;font-size:.56rem;letter-spacing:1.6px;color:var(--c);display:flex;align-items:center;justify-content:space-between}
+.vsec summary::-webkit-details-marker{display:none}
+.vsec-badges{display:grid;grid-template-columns:1fr 1fr;gap:7px;padding:0 10px 10px}
+.vsec-pill{background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.07);border-radius:8px;padding:7px}
+.vsec-top{display:flex;justify-content:space-between;gap:6px;align-items:center}
+.vsec-key{font-family:'Orbitron',monospace;font-size:.5rem;letter-spacing:1.2px;color:var(--mu)}
+.vsec-sig{font-family:'Orbitron',monospace;font-size:.5rem;letter-spacing:1px;font-weight:700}
+.vsec-sig.good{color:var(--g)}
+.vsec-sig.bad{color:#ff6b6b}
+.vsec-sig.neutral{color:var(--mu)}
+.vsec-metric{font-family:'Orbitron',monospace;font-size:.62rem;margin-top:4px}
+.vsec-note{padding:0 10px 10px;font-size:.58rem;color:var(--mu);line-height:1.5}
 /* arsenal */
 .aw{margin-top:14px;border:1px solid rgba(0,184,212,.16);border-radius:10px;overflow:hidden}
 .ah{background:rgba(0,184,212,.08);padding:8px 12px;font-family:'Orbitron',monospace;font-size:.58rem;color:var(--sv);letter-spacing:3px;display:flex;align-items:center;gap:7px}
@@ -123,6 +138,7 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .sk{font-size:.68rem;color:var(--mu)}.sv2{font-size:.74rem;font-weight:600;font-family:'Orbitron',monospace}
 .legend{margin-top:8px;font-size:.6rem;letter-spacing:1px;display:flex;gap:14px;flex-wrap:wrap}
 @media(max-width:860px){.dg{grid-template-columns:1fr;padding:14px 16px}.fw{grid-column:1}.pg{grid-template-columns:1fr}.selg{grid-template-columns:1fr}.projg{grid-template-columns:1fr}.ar{grid-template-columns:80px 1fr 58px 60px}nav{padding:12px 16px}.mh{padding:16px}.srcbar{padding:7px 16px}}
+@media(max-width:860px){.vsec-badges{grid-template-columns:1fr}}
 
 /* Phase 3 */
 .gp-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:14px}
@@ -458,6 +474,7 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 <script>
 var GPK=parseInt(window.location.pathname.split('/').pop());
 var GD=null,PD=null,AL=[],HL=[];
+var PMD=null;
 var PL={ff:"4-Seam",si:"Sinker",fc:"Cutter",st:"Sweeper",sl:"Slider",cu:"Curveball",ch:"Changeup",fs:"Splitter",kn:"Knuckleball",sv:"Slurve"};
 var PO=["ff","si","fc","st","sl","cu","ch","fs","kn","sv"];
 var TRACK_LS_KEY='hub_tracked_keys';
@@ -641,7 +658,21 @@ function loadGame(){
   }).catch(function(e){document.getElementById('mhTeams').innerHTML='<p style="color:var(--m);font-family:Orbitron;font-size:.85rem">'+e.message+'</p>';});
 }
 function loadPitchers(){
-  fetch('/api/pitchers/'+GPK).then(function(r){return r.json();}).then(function(d){PD=d;renderPitchers();populateSels();})
+  fetch('/api/pitchers/'+GPK).then(function(r){return r.json();}).then(function(d){
+    PD=d;renderPitchers();populateSels();
+    fetch('/api/pitcher-matchup/'+GPK).then(function(r){return r.json();}).then(function(md){
+      PMD = md;
+      if(md && md.success && PD && PD.success){
+        if(PD.awayPitcher && md.awaySide && md.awaySide.vulnerability){
+          PD.awayPitcher.vulnerability = md.awaySide.vulnerability;
+        }
+        if(PD.homePitcher && md.homeSide && md.homeSide.vulnerability){
+          PD.homePitcher.vulnerability = md.homeSide.vulnerability;
+        }
+        renderPitchers();
+      }
+    }).catch(function(){});
+  })
     .catch(function(){document.getElementById('pitP').innerHTML='<p class="na">Pitcher data unavailable</p>';});
 }
 function loadLineups(){
@@ -742,6 +773,48 @@ function buildArsenal(pct,velo){
   return '<div class="aw"><div class="ah"><span class="tag-sv">SV</span> PITCH ARSENAL</div>'+rows+'</div>';
 }
 
+function buildPitcherVulnerabilitySection(p){
+  var v = (p && p.vulnerability) ? p.vulnerability : null;
+  if(!v) return '';
+
+  function cls(sig){
+    var s=(sig||'').toUpperCase();
+    if(s.indexOf('FADE')>=0) return 'bad';
+    if(s.indexOf('EXPLOITABLE')>=0 || s.indexOf('UPSIDE')>=0 || s.indexOf('HITS FRIENDLY')>=0) return 'good';
+    return 'neutral';
+  }
+  function fmtRaw(x,d){
+    var n=parseFloat(x);
+    if(isNaN(n)) return '—';
+    return n.toFixed(d||3);
+  }
+  function fmtPct(x){
+    var n=parseFloat(x);
+    if(isNaN(n)) return '—';
+    return (n<=1 ? (n*100).toFixed(1) : n.toFixed(1)) + '%';
+  }
+  function pill(key,label,fmt){
+    var d=v[key]; if(!d) return '';
+    return '<div class="vsec-pill">'
+      +'<div class="vsec-top"><span class="vsec-key">'+label+'</span><span class="vsec-sig '+cls(d.signal)+'">'+(d.signal||'NEUTRAL')+'</span></div>'
+      +'<div class="vsec-metric">'+fmt(d.value)+' · th '+(d.threshold!=null?d.threshold:'—')+'</div>'
+      +'</div>';
+  }
+
+  var badges = ''
+    + pill('hits_vulnerability','HITS',function(x){return fmtRaw(x,3);})
+    + pill('hr_vulnerability','HR',function(x){return fmtRaw(x,2)+'/9';})
+    + pill('k_vulnerability','BATTER K ENV',fmtPct)
+    + pill('tb_vulnerability','TOTAL BASES',fmtPct);
+
+  if(!badges) return '';
+  return '<details class="vsec">'
+    + '<summary><span>PROP VULNERABILITY</span><span>▼</span></summary>'
+    + '<div class="vsec-badges">'+badges+'</div>'
+    + '<div class="vsec-note">Sprint 3.2: quick read on where opposing batter props are most attackable against this starter.</div>'
+    + '</details>';
+}
+
 function renderPitcherCard(p,lbl){
   var s=p.stats||{};
   var hasFg=s.fg_fip&&s.fg_fip!=='N/A';
@@ -781,6 +854,7 @@ function renderPitcherCard(p,lbl){
   return '<div class="pc"><h4>'+(p.name||'TBD')+'</h4><div class="pct">'+lbl+'</div>'
     +'<table class="stab"><thead><tr><th>STAT</th><th>VALUE</th></tr></thead><tbody>'+rows+'</tbody></table>'
     +buildArsenal(s.sv_arsenal_pct,s.sv_arsenal_velo)
+    +buildPitcherVulnerabilitySection(p)
     +buildPitchX(p.name)+'</div>';
 }
 

@@ -167,6 +167,23 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .th-proj-cell .v.md{color:var(--o)}
 .th-proj-cell .lbl{font-size:.48rem;color:var(--mu);letter-spacing:1.5px;margin-top:2px}
 
+/* PROP VULNERABILITY */
+.vuln-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.vuln-badge{background:rgba(0,0,0,.32);border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:9px 10px}
+.vuln-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+.vuln-name{font-family:'Orbitron',monospace;font-size:.54rem;letter-spacing:1.3px;color:var(--mu)}
+.vuln-signal{font-family:'Orbitron',monospace;font-size:.52rem;letter-spacing:1.2px;font-weight:700}
+.vuln-signal.good{color:var(--g)}
+.vuln-signal.bad{color:var(--r)}
+.vuln-signal.neutral{color:var(--mu)}
+.vuln-metric{font-family:'Orbitron',monospace;font-size:.65rem;color:var(--t)}
+.vuln-note{margin-top:10px;font-size:.58rem;color:var(--mu);line-height:1.6}
+.vuln-board{margin-top:16px;background:var(--card);border:1px solid var(--b);border-radius:12px;padding:14px}
+.vuln-board-h{font-family:'Orbitron',monospace;font-size:.63rem;letter-spacing:2px;color:var(--c);margin-bottom:10px}
+.vuln-board-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.vuln-board-card{background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.07);border-radius:10px;padding:10px}
+.vuln-board-title{font-family:'Orbitron',monospace;font-size:.58rem;letter-spacing:1.5px;color:var(--t);margin-bottom:8px}
+
 /* MISC */
 .spinner{width:32px;height:32px;border:2px solid rgba(0,229,255,.1);border-top-color:var(--c);border-radius:50%;animation:spin 1s linear infinite;margin:40px auto}
 @keyframes spin{to{transform:rotate(360deg)}}
@@ -175,6 +192,7 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .placeholder{padding:60px 20px;text-align:center;color:var(--mu);font-family:'Orbitron',monospace;font-size:.75rem;letter-spacing:3px;line-height:2.5}
 footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6rem;color:var(--mu);letter-spacing:2px;font-family:'Orbitron',monospace;margin-top:24px}
 @media(max-width:900px){.cards-grid{grid-template-columns:1fr}nav,selbar,.srcbar,.main{padding-left:16px;padding-right:16px}.kpi-row{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:900px){.vuln-grid{grid-template-columns:1fr}.vuln-board-grid{grid-template-columns:1fr}}
 /* Picks Panel */
 .pd-picks-wrap{max-width:960px;margin:0 auto 20px;padding:0 20px}
 .pd-pr-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
@@ -247,6 +265,7 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 <div class="main">
   <div id="placeholder" class="placeholder">⚾<br>SELECT A GAME AND PITCHER<br>THEN CLICK ANALYZE</div>
   <div id="cardsGrid" class="cards-grid" style="display:none"></div>
+  <div id="vulnerabilityBoard" class="vuln-board" style="display:none"></div>
 </div>
 
 <footer>MLB ANALYTICS HUB · PITCHER DEEP DIVE · FG + STATCAST + MLB STATS API · FOR ENTERTAINMENT PURPOSES ONLY</footer>
@@ -380,6 +399,7 @@ async function analyze(silent=false){
     $('cardsGrid').style.display='grid';
     $('cardsGrid').innerHTML=away+home;
     $('placeholder').style.display='none';
+    renderVulnerabilityBoard(g);
 
     // Animate arsenal bars
     setTimeout(()=>{
@@ -394,6 +414,7 @@ async function analyze(silent=false){
 
   }catch(e){
     if(!silent) $('cardsGrid').innerHTML=`<div class="pc" style="grid-column:1/-1"><div class="empty">Error: ${e.message}</div></div>`;
+    $('vulnerabilityBoard').style.display='none';
   }
 }
 
@@ -602,16 +623,86 @@ function buildCard(pit,teamAbbr,oppAbbr){
     <div class="pc-tabs">
       <div class="pc-tab active" onclick="switchTab(this,'${pit.id}-stats')">STATS</div>
       <div class="pc-tab" onclick="switchTab(this,'${pit.id}-threats')">THREATS</div>
+      <div class="pc-tab" onclick="switchTab(this,'${pit.id}-vuln')">VULN</div>
       <div class="pc-tab" onclick="switchTab(this,'${pit.id}-proj')">PROJECTION</div>
       <div class="pc-tab" onclick="switchTab(this,'${pit.id}-log')">GAME LOG</div>
       <div class="pc-tab" onclick="switchTab(this,'${pit.id}-ars')">ARSENAL</div>
     </div>
     <div id="${pit.id}-stats"   class="pc-pane active">${buildStatsPane(s,log)}</div>
     <div id="${pit.id}-threats" class="pc-pane">${buildThreatsPane(pit.id)}</div>
+    <div id="${pit.id}-vuln"    class="pc-pane">${buildVulnPane(pit.id)}</div>
     <div id="${pit.id}-proj"    class="pc-pane">${buildProjPane(s,log,oppAbbr)}</div>
     <div id="${pit.id}-log"     class="pc-pane">${buildLogPane(log)}</div>
     <div id="${pit.id}-ars"     class="pc-pane">${buildArsenalPane(s)}</div>
   </div>`;
+}
+
+function getPitcherVulnerability(pitcherId){
+  const side = MATCHUPS[pitcherId];
+  if(side && side.vulnerability) return side.vulnerability;
+  if(PD && PD.success){
+    if(PD.awayPitcher && PD.awayPitcher.id===pitcherId) return PD.awayPitcher.vulnerability || null;
+    if(PD.homePitcher && PD.homePitcher.id===pitcherId) return PD.homePitcher.vulnerability || null;
+  }
+  return null;
+}
+
+function buildVulnBadge(title, data, metricFmt){
+  if(!data) return '';
+  const sig = (data.signal || 'NEUTRAL').toUpperCase();
+  const isBad = sig.indexOf('FADE')>=0;
+  const isGood = !isBad && (sig.indexOf('EXPLOITABLE')>=0 || sig.indexOf('UPSIDE')>=0 || sig.indexOf('HITS FRIENDLY')>=0);
+  const cls = isGood ? 'good' : isBad ? 'bad' : 'neutral';
+  return `<div class="vuln-badge">
+    <div class="vuln-head">
+      <span class="vuln-name">${title}</span>
+      <span class="vuln-signal ${cls}">${sig}</span>
+    </div>
+    <div class="vuln-metric">${metricFmt(data.value)} · th ${data.threshold}</div>
+  </div>`;
+}
+
+function buildVulnPane(pitcherId){
+  const v = getPitcherVulnerability(pitcherId);
+  if(!v){
+    return `<div class="na">VULNERABILITY PROFILE LOADING…</div>`;
+  }
+  const pct = n => {
+    const x = parseFloat(n);
+    if(isNaN(x)) return '—';
+    return (x<=1 ? (x*100).toFixed(1) : x.toFixed(1)) + '%';
+  };
+  const raw = n => {
+    const x = parseFloat(n);
+    return isNaN(x) ? '—' : x.toFixed(3);
+  };
+  return `<div class="vuln-grid">
+    ${buildVulnBadge('HITS', v.hits_vulnerability, raw)}
+    ${buildVulnBadge('HR', v.hr_vulnerability, n => { const x=parseFloat(n); return isNaN(x)?'—':x.toFixed(2)+'/9'; })}
+    ${buildVulnBadge('BATTER K ENV', v.k_vulnerability, pct)}
+    ${buildVulnBadge('TOTAL BASES', v.tb_vulnerability, pct)}
+  </div>
+  <div class="vuln-note">Sprint 3.2 profile blends opponent contact quality, pitcher run prevention and strikeout environment to show where batter props are most or least attackable.</div>`;
+}
+
+function renderVulnerabilityBoard(game){
+  const board = $('vulnerabilityBoard');
+  if(!board || !PD || !PD.success){
+    if(board) board.style.display='none';
+    return;
+  }
+  const cards = [
+    {pit: PD.awayPitcher, team: game?.awayAbbr || 'AWAY'},
+    {pit: PD.homePitcher, team: game?.homeAbbr || 'HOME'}
+  ].filter(x => x.pit && x.pit.id)
+   .map(x => `<div class="vuln-board-card"><div class="vuln-board-title">${x.team} · ${x.pit.name}</div>${buildVulnPane(x.pit.id)}</div>`)
+   .join('');
+  if(!cards){
+    board.style.display='none';
+    return;
+  }
+  board.style.display='block';
+  board.innerHTML = `<div class="vuln-board-h">PROP VULNERABILITY BOARD</div><div class="vuln-board-grid">${cards}</div>`;
 }
 
 // ── KPI ROW ──────────────────────────────────────────────────────────────

@@ -631,7 +631,12 @@ API:      GET /api/cheatsheets/today
 
 Three MLB cheatsheets auto-computed every morning:
 
-CHEATSHEET A: HITS BOARD
+CHEATSHEET A: HITS BOARDcd /workspaces/mlb-analytics-hub
+git status --short
+git add -A
+git commit -m "Commit all current unstaged changes"
+git rev-parse --short HEAD
+git --no-pager show --stat --oneline -1
   Columns: Player | Team | Batting Slot | Matchup | vs Hand | L10% | BvP | HUB | EV% | 💾
   Sorted by: HUB RATING desc
   Filter chips: by game, by market, by batting slot, vs LHP/RHP
