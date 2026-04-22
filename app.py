@@ -4364,9 +4364,10 @@ def api_simulate(game_pk):
 # ── Phase 7 Odds / Lineup / Edge Infrastructure ──────────────────────────────
 ODDS_API_KEY = (os.getenv('ODDS_API_KEY') or '').strip()
 ODDS_REGION = (os.getenv('ODDS_REGION') or 'us').strip()
+ODDS_CACHE_STORE = os.path.join(DATA_DIR, 'odds_cache.json')
 
 
-def _odds_ttl_seconds(env_key, default_seconds, min_seconds=30, max_seconds=6 * 60 * 60):
+def _odds_ttl_seconds(env_key, default_seconds, min_seconds=30, max_seconds=24 * 60 * 60):
     """Read a TTL (seconds) from env with sane bounds and fallback."""
     raw = os.getenv(env_key)
     if raw is None or str(raw).strip() == '':
@@ -4385,11 +4386,55 @@ _ODDS_GAME_CACHE:  dict = {}           # {event_id: {'all': [...], 'ts': float}}
 _ODDS_EVENTS_TTL  = _odds_ttl_seconds('ODDS_EVENTS_TTL_SEC', 30 * 60)
 _ODDS_GAME_TTL    = _odds_ttl_seconds('ODDS_GAME_TTL_SEC', 15 * 60)
 _ODDS_NRFI_TTL    = _odds_ttl_seconds('ODDS_NRFI_TTL_SEC', 5 * 60)
+_ODDS_DAILY_CACHE = str(os.getenv('ODDS_DAILY_CACHE', '1')).strip().lower() in ('1', 'true', 'yes')
+_ODDS_CACHE_LOCK = threading.Lock()
 _ODDS_ALL_MARKETS = (
     'h2h,spreads,totals,h2h_1st_1_innings,'
     'batter_hits,batter_total_bases,batter_home_runs,batter_rbis,'
     'batter_runs_scored,batter_stolen_bases,batter_hits_runs_rbis,pitcher_strikeouts'
 )
+
+
+def _odds_today_key():
+    return datetime.now(ET).strftime('%Y-%m-%d')
+
+
+def _odds_cache_entry_fresh(entry, data_key, ttl_sec):
+    if not isinstance(entry, dict) or data_key not in entry:
+        return False
+    if _ODDS_DAILY_CACHE and entry.get('cache_date') == _odds_today_key():
+        return True
+    try:
+        return (time.time() - float(entry.get('ts') or 0.0)) < float(ttl_sec)
+    except Exception:
+        return False
+
+
+def _persist_odds_caches():
+    payload = {
+        'date': _odds_today_key(),
+        'events': _ODDS_EVENTS_CACHE,
+        'games': _ODDS_GAME_CACHE,
+        'savedAt': datetime.now(timezone.utc).isoformat(),
+    }
+    _save_json(ODDS_CACHE_STORE, payload)
+
+
+def _restore_odds_caches():
+    payload = _load_json(ODDS_CACHE_STORE, {})
+    if not isinstance(payload, dict):
+        return
+    if payload.get('date') != _odds_today_key():
+        return
+    events = payload.get('events') or {}
+    games = payload.get('games') or {}
+    if isinstance(events, dict):
+        _ODDS_EVENTS_CACHE.update(events)
+    if isinstance(games, dict):
+        _ODDS_GAME_CACHE.update(games)
+
+
+_restore_odds_caches()
 
 
 def _norm_name(s):
@@ -4412,10 +4457,11 @@ def _find_odds_event(away_name, home_name):
     if not ODDS_API_KEY:
         return None, []
     try:
-        now = time.time()
-        if _ODDS_EVENTS_CACHE.get('ts') and (now - _ODDS_EVENTS_CACHE['ts']) < _ODDS_EVENTS_TTL:
-            events = _ODDS_EVENTS_CACHE['data']
-        else:
+        with _ODDS_CACHE_LOCK:
+            use_cached = _odds_cache_entry_fresh(_ODDS_EVENTS_CACHE, 'data', _ODDS_EVENTS_TTL)
+            events = (_ODDS_EVENTS_CACHE.get('data') or []) if use_cached else None
+        if events is None:
+            now = time.time()
             r = requests.get(
                 'https://api.the-odds-api.com/v4/sports/baseball_mlb/events',
                 params={'apiKey': ODDS_API_KEY, 'dateFormat': 'iso'},
@@ -4423,8 +4469,11 @@ def _find_odds_event(away_name, home_name):
             )
             r.raise_for_status()
             events = r.json() or []
-            _ODDS_EVENTS_CACHE['data'] = events
-            _ODDS_EVENTS_CACHE['ts']   = now
+            with _ODDS_CACHE_LOCK:
+                _ODDS_EVENTS_CACHE['data'] = events
+                _ODDS_EVENTS_CACHE['ts'] = now
+                _ODDS_EVENTS_CACHE['cache_date'] = _odds_today_key()
+                _persist_odds_caches()
             print(f'[Odds] Refreshed events list ({len(events)}). Remaining: {r.headers.get("x-requests-remaining","?")}')
         na = _norm_name(away_name)
         nh = _norm_name(home_name)
@@ -4506,11 +4555,12 @@ def _best_spread(bookmakers, away_name, home_name):
 def _load_event_odds(event_id, featured_only=False):
     if not ODDS_API_KEY or not event_id:
         return []
-    now = time.time()
-    cached = _ODDS_GAME_CACHE.get(event_id)
-    if cached and (now - cached.get('ts', 0)) < _ODDS_GAME_TTL and 'all' in cached:
-        return cached.get('all') or []
+    with _ODDS_CACHE_LOCK:
+        cached = _ODDS_GAME_CACHE.get(event_id)
+        if _odds_cache_entry_fresh(cached, 'all', _ODDS_GAME_TTL):
+            return (cached or {}).get('all') or []
     try:
+        now = time.time()
         r = requests.get(
             f'https://api.the-odds-api.com/v4/sports/baseball_mlb/events/{event_id}/odds',
             params={
@@ -4525,9 +4575,12 @@ def _load_event_odds(event_id, featured_only=False):
         r.raise_for_status()
         result = r.json().get('bookmakers', []) or []
         print(f'[Odds] Fetched unified odds for {event_id}. Remaining: {r.headers.get("x-requests-remaining","?")}')
-        entry = _ODDS_GAME_CACHE.setdefault(event_id, {'ts': now})
-        entry['all'] = result
-        entry['ts'] = now
+        with _ODDS_CACHE_LOCK:
+            entry = _ODDS_GAME_CACHE.setdefault(event_id, {'ts': now})
+            entry['all'] = result
+            entry['ts'] = now
+            entry['cache_date'] = _odds_today_key()
+            _persist_odds_caches()
         return result
     except:
         return (cached or {}).get('all', [])
@@ -4552,6 +4605,167 @@ def _load_event_market_odds(event_id, markets, cache_key, ttl_sec):
         b['markets'] = mkts
         filtered.append(b)
     return filtered
+
+
+def _refresh_odds_events_cache():
+    if not ODDS_API_KEY:
+        return []
+    now = time.time()
+    r = requests.get(
+        'https://api.the-odds-api.com/v4/sports/baseball_mlb/events',
+        params={'apiKey': ODDS_API_KEY, 'dateFormat': 'iso'},
+        timeout=12,
+    )
+    r.raise_for_status()
+    events = r.json() or []
+    with _ODDS_CACHE_LOCK:
+        _ODDS_EVENTS_CACHE['data'] = events
+        _ODDS_EVENTS_CACHE['ts'] = now
+        _ODDS_EVENTS_CACHE['cache_date'] = _odds_today_key()
+        _persist_odds_caches()
+    print(f'[Odds] Force-refreshed events list ({len(events)}). Remaining: {r.headers.get("x-requests-remaining","?")}')
+    return events
+
+
+def _odds_cache_status_payload():
+    now = time.time()
+    with _ODDS_CACHE_LOCK:
+        events_cached = int(len(_ODDS_EVENTS_CACHE.get('data') or []))
+        events_ts = float(_ODDS_EVENTS_CACHE.get('ts') or 0.0)
+        events_date = _ODDS_EVENTS_CACHE.get('cache_date')
+        game_entries = _ODDS_GAME_CACHE
+        game_cached = int(len(game_entries or {}))
+        game_rows = []
+        for eid, ent in (game_entries or {}).items():
+            if not isinstance(ent, dict):
+                continue
+            game_rows.append({
+                'eventId': eid,
+                'bookmakers': len(ent.get('all') or []),
+                'cacheDate': ent.get('cache_date'),
+                'ageSec': round(max(0.0, now - float(ent.get('ts') or 0.0)), 1),
+            })
+        game_rows.sort(key=lambda x: x.get('ageSec', 0.0))
+
+    file_exists = os.path.exists(ODDS_CACHE_STORE)
+    file_meta = {
+        'exists': file_exists,
+        'path': ODDS_CACHE_STORE,
+        'sizeBytes': os.path.getsize(ODDS_CACHE_STORE) if file_exists else 0,
+        'modifiedAt': datetime.fromtimestamp(os.path.getmtime(ODDS_CACHE_STORE), tz=timezone.utc).isoformat() if file_exists else None,
+    }
+    return {
+        'success': True,
+        'keyConfigured': bool(ODDS_API_KEY),
+        'dailyCacheEnabled': _ODDS_DAILY_CACHE,
+        'todayET': _odds_today_key(),
+        'ttl': {
+            'eventsSec': _ODDS_EVENTS_TTL,
+            'gameSec': _ODDS_GAME_TTL,
+            'nrfiSec': _ODDS_NRFI_TTL,
+        },
+        'eventsCache': {
+            'count': events_cached,
+            'cacheDate': events_date,
+            'ageSec': round(max(0.0, now - events_ts), 1) if events_ts else None,
+        },
+        'gameCache': {
+            'count': game_cached,
+            'entries': game_rows[:30],
+        },
+        'file': file_meta,
+    }
+
+
+def _clear_odds_caches_locked():
+    _ODDS_EVENTS_CACHE.clear()
+    _ODDS_GAME_CACHE.clear()
+    _persist_odds_caches()
+
+
+@app.route('/api/odds/cache/status')
+def api_odds_cache_status():
+    try:
+        return jsonify(_odds_cache_status_payload())
+    except Exception as ex:
+        print(f'[api_odds_cache_status] {traceback.format_exc()}')
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
+@app.route('/api/odds/cache/refresh', methods=['POST'])
+def api_odds_cache_refresh():
+    payload = request.get_json(silent=True) or {}
+    mode = str(payload.get('mode') or request.args.get('mode') or 'events').strip().lower()
+    date_str = str(payload.get('date') or request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')).strip()
+    event_id = payload.get('eventId') or request.args.get('eventId')
+    game_pk = payload.get('gamePk') or request.args.get('gamePk')
+    clear_first = str(payload.get('clearFirst', request.args.get('clearFirst', '1'))).strip().lower() in ('1', 'true', 'yes')
+
+    if not ODDS_API_KEY:
+        return jsonify({'success': False, 'error': 'ODDS_API_KEY is not configured'}), 400
+
+    try:
+        with _ODDS_CACHE_LOCK:
+            if clear_first:
+                _clear_odds_caches_locked()
+
+        events = _refresh_odds_events_cache()
+        result = {
+            'success': True,
+            'mode': mode,
+            'date': date_str,
+            'eventsRefreshed': len(events),
+            'prefetchedEventIds': [],
+            'prefetchedCount': 0,
+            'clearFirst': clear_first,
+        }
+
+        if mode in ('today', 'all'):
+            sched = fetch_schedule(date_str)
+            event_map = {
+                (_norm_name(ev.get('away_team')), _norm_name(ev.get('home_team'))): ev
+                for ev in events
+            }
+            seen = set()
+            for g in sched or []:
+                away_name = (((g.get('teams') or {}).get('away') or {}).get('team') or {}).get('name')
+                home_name = (((g.get('teams') or {}).get('home') or {}).get('team') or {}).get('name')
+                ev = event_map.get((_norm_name(away_name), _norm_name(home_name)))
+                if not ev:
+                    continue
+                eid = ev.get('id')
+                if not eid or eid in seen:
+                    continue
+                seen.add(eid)
+                _load_event_odds(eid)
+                result['prefetchedEventIds'].append(eid)
+            result['prefetchedCount'] = len(result['prefetchedEventIds'])
+        elif mode in ('event', 'single'):
+            target_event_id = event_id
+            if not target_event_id and game_pk:
+                try:
+                    gpk = int(game_pk)
+                except Exception:
+                    return jsonify({'success': False, 'error': 'gamePk must be an integer'}), 400
+                sched = fetch_schedule(date_str)
+                g = next((x for x in (sched or []) if x.get('gamePk') == gpk), None)
+                if not g:
+                    return jsonify({'success': False, 'error': f'gamePk {gpk} not found for {date_str}'}), 404
+                away_name = (((g.get('teams') or {}).get('away') or {}).get('team') or {}).get('name')
+                home_name = (((g.get('teams') or {}).get('home') or {}).get('team') or {}).get('name')
+                ev, _ = _find_odds_event(away_name, home_name)
+                target_event_id = (ev or {}).get('id') if ev else None
+            if not target_event_id:
+                return jsonify({'success': False, 'error': 'event mode requires eventId or gamePk'}), 400
+            _load_event_odds(target_event_id)
+            result['prefetchedEventIds'] = [target_event_id]
+            result['prefetchedCount'] = 1
+
+        result['status'] = _odds_cache_status_payload()
+        return jsonify(result)
+    except Exception as ex:
+        print(f'[api_odds_cache_refresh] {traceback.format_exc()}')
+        return jsonify({'success': False, 'error': str(ex)}), 500
 
 
 def _parse_prop_markets(bookmakers, valid_names):
