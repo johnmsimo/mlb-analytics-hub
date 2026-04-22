@@ -1002,7 +1002,16 @@ def deep_dive(game_pk):
 
 @app.route('/props')
 def props_page():
-    return PROPS_HTML
+    html = _read_html_or_fallback('props.html')
+    return Response(
+        html,
+        mimetype='text/html',
+        headers={
+            'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+            'Pragma': 'no-cache',
+            'Expires': '0',
+        },
+    )
 
 @app.route('/cheatsheets')
 def cheatsheets_page():
