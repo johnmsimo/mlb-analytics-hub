@@ -491,6 +491,9 @@ _injury_worker_started = False
 # ── Spray Chart Cache (batted ball data) ────────────────────────────────────
 _spray_cache = {}  # keyed by player_id, stores list of batted balls with coordinates
 
+# ── Strike Zone Chart Cache (zone metrics) ──────────────────────────────────
+_zonechart_cache = {}  # keyed by player_id, stores 9-zone metrics
+
 PITCH_ORDER  = ["ff","si","fc","st","sl","cu","ch","fs","kn","sv"]
 PITCH_LABELS = {
     "ff":"4-Seam","si":"Sinker","fc":"Cutter","st":"Sweeper",
@@ -2619,7 +2622,140 @@ def api_player_spray(player_id):
         return jsonify({"success": False, "error": str(ex), "data": []}), 500
 
 
+@app.route("/api/player/<int:player_id>/zonechart")
+def api_player_zonechart(player_id):
+    """Strike zone chart: 3×3 zone metrics for pitcher or batter."""
+    try:
+        # Check cache first
+        if player_id in _zonechart_cache:
+            return jsonify({"success": True, "data": _zonechart_cache[player_id]})
 
+        # Fetch player name for pybaseball lookup
+        pr = requests.get(f"{MLB_API}/people/{player_id}", timeout=10)
+        pr.raise_for_status()
+        people = pr.json().get("people", [])
+        if not people:
+            return jsonify({"success": False, "error": "Player not found"}), 404
+        
+        player_name = people[0].get("fullName", "Unknown")
+        is_pitcher = (people[0].get("primaryPosition", {}).get("abbreviation", "") or "?") in ("P", "SP", "RP", "CP")
+        
+        # Fetch zone data from pybaseball
+        import pybaseball as pb
+        year = datetime.now().year
+        
+        zone_data = [None] * 9  # Initialize 9 zones (0-8)
+        
+        if is_pitcher:
+            # For pitchers: use statcast_pitcher
+            sc = pb.statcast_pitcher(player_name, year)
+            if sc is None or sc.empty:
+                _zonechart_cache[player_id] = zone_data
+                return jsonify({"success": True, "data": zone_data})
+            
+            # Map plate_x, plate_z to 9 zones (standard MLB strike zone grid)
+            # Zones: 0=top-left, 1=top-center, 2=top-right, 3=mid-left, 4=heart, 5=mid-right, 6=bot-left, 7=bot-center, 8=bot-right
+            for zone_id in range(9):
+                zone_data[zone_id] = _compute_zone_metrics_pitcher(sc, zone_id, is_pitcher=True)
+        else:
+            # For batters: use statcast_batter to find pitches faced
+            sc = pb.statcast_batter(player_name, year)
+            if sc is None or sc.empty:
+                _zonechart_cache[player_id] = zone_data
+                return jsonify({"success": True, "data": zone_data})
+            
+            for zone_id in range(9):
+                zone_data[zone_id] = _compute_zone_metrics_pitcher(sc, zone_id, is_pitcher=False)
+        
+        # Cache the result
+        _zonechart_cache[player_id] = zone_data
+        return jsonify({"success": True, "data": zone_data})
+    
+    except Exception as ex:
+        print(f"[api_player_zonechart] {player_id}: {traceback.format_exc()}")
+        return jsonify({"success": False, "error": str(ex), "data": [None]*9}), 500
+
+
+def _compute_zone_metrics_pitcher(sc, zone_id, is_pitcher=True):
+    """Compute metrics for a single zone from statcast data."""
+    if sc is None or sc.empty:
+        return {
+            "zone_id": zone_id,
+            "pitch_pct": 0,
+            "swing_rate": 0,
+            "whiff_rate": 0,
+            "ba": 0,
+            "slg": 0,
+        }
+    
+    # Map zone_id to plate coordinates (MLB standard: 17" wide × 30" tall strike zone)
+    # Zones: top(z > .76), middle(.41 < z < .76), bottom(z < .41)
+    # Left(x < -8.5), center(-8.5 < x < 8.5), right(x > 8.5)
+    zone_bounds = {
+        0: {"x": (-17, -8.5), "z": (0.76, 3.5)},    # Top-left
+        1: {"x": (-8.5, 8.5), "z": (0.76, 3.5)},    # Top-center
+        2: {"x": (8.5, 17), "z": (0.76, 3.5)},      # Top-right
+        3: {"x": (-17, -8.5), "z": (0.41, 0.76)},   # Mid-left
+        4: {"x": (-8.5, 8.5), "z": (0.41, 0.76)},   # Heart
+        5: {"x": (8.5, 17), "z": (0.41, 0.76)},     # Mid-right
+        6: {"x": (-17, -8.5), "z": (-0.5, 0.41)},   # Bot-left
+        7: {"x": (-8.5, 8.5), "z": (-0.5, 0.41)},   # Bot-center
+        8: {"x": (8.5, 17), "z": (-0.5, 0.41)},     # Bot-right
+    }
+    
+    bounds = zone_bounds.get(zone_id, {})
+    x_range = bounds.get("x", (-17, 17))
+    z_range = bounds.get("z", (-0.5, 3.5))
+    
+    # Filter pitches in this zone
+    zone_pitches = sc[
+        (sc['plate_x'] >= x_range[0]) & (sc['plate_x'] <= x_range[1]) &
+        (sc['plate_z'] >= z_range[0]) & (sc['plate_z'] <= z_range[1])
+    ]
+    
+    if len(zone_pitches) == 0:
+        return {
+            "zone_id": zone_id,
+            "pitch_pct": 0,
+            "swing_rate": 0,
+            "whiff_rate": 0,
+            "ba": 0,
+            "slg": 0,
+        }
+    
+    total_pitches = len(sc)
+    zone_pitch_count = len(zone_pitches)
+    pitch_pct = round(zone_pitch_count / total_pitches * 100, 1) if total_pitches > 0 else 0
+    
+    # Swing rate: % of pitches with a swing
+    swings = len(zone_pitches[zone_pitches['description'].str.contains('swinging', case=False, na=False)])
+    swing_rate = round(swings / zone_pitch_count * 100, 1) if zone_pitch_count > 0 else 0
+    
+    # Whiff rate: % of swings that missed
+    whiffs = len(zone_pitches[zone_pitches['description'].str.contains('swinging strike', case=False, na=False)])
+    whiff_rate = round(whiffs / swings * 100, 1) if swings > 0 else 0
+    
+    # BA & SLG: only for batted balls
+    hit_results = ['Single', 'Double', 'Triple', 'Home Run']
+    hits = len(zone_pitches[zone_pitches['result'].isin(hit_results)])
+    home_runs = len(zone_pitches[zone_pitches['result'] == 'Home Run'])
+    doubles = len(zone_pitches[zone_pitches['result'] == 'Double'])
+    triples = len(zone_pitches[zone_pitches['result'] == 'Triple'])
+    singles = hits - home_runs - doubles - triples
+    
+    batted_balls = len(zone_pitches[zone_pitches['type'] == 'X'])
+    ba = round(hits / batted_balls, 3) if batted_balls > 0 else 0
+    total_bases = singles + (doubles * 2) + (triples * 3) + (home_runs * 4)
+    slg = round(total_bases / batted_balls, 3) if batted_balls > 0 else 0
+    
+    return {
+        "zone_id": zone_id,
+        "pitch_pct": pitch_pct,
+        "swing_rate": swing_rate,
+        "whiff_rate": whiff_rate,
+        "ba": ba,
+        "slg": slg,
+    }
 
 
 # ── Phase 6 Monte Carlo Simulation ────────────────────────────────────────────

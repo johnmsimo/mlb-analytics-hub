@@ -348,6 +348,30 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .sc-legend-item{display:flex;align-items:center;gap:4px}
 .sc-legend-dot{width:12px;height:12px;border-radius:50%}
 .sc-empty{padding:24px;text-align:center;color:var(--mu);font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:1.3px}
+/* ── Strike Zone Chart ── */
+.zc-modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:3000;background:rgba(2,6,16,.82);backdrop-filter:blur(4px)}
+.zc-modal.show{display:flex}
+.zc-card{width:min(700px,94vw);max-height:88vh;overflow:auto;background:var(--card);border:1px solid var(--b);border-radius:14px;padding:14px;box-shadow:0 16px 44px rgba(0,0,0,.45)}
+.zc-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+.zc-title{font-family:'Orbitron',monospace;font-size:.74rem;letter-spacing:2px;color:var(--c)}
+.zc-close{padding:6px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.04);color:var(--mu);font-family:'Orbitron',monospace;font-size:.56rem;letter-spacing:1px;cursor:pointer}
+.zc-close:hover{border-color:rgba(0,229,255,.3);color:var(--c)}
+.zc-controls{display:flex;gap:8px;margin-bottom:12px;padding:10px;background:rgba(0,0,0,.2);border-radius:10px;justify-content:center}
+.zc-toggle{padding:6px 14px;border-radius:6px;border:1px solid rgba(0,229,255,.2);background:rgba(0,229,255,.06);color:var(--mu);font-family:'Orbitron',monospace;font-size:.56rem;letter-spacing:.8px;cursor:pointer;transition:all .15s}
+.zc-toggle.active{background:rgba(0,229,255,.18);border-color:rgba(0,229,255,.45);color:var(--c)}
+.zc-toggle:hover{border-color:rgba(0,229,255,.35)}
+.zc-container{width:100%;display:flex;justify-content:center;margin:12px 0}
+.zc-grid{width:100%;max-width:450px;aspect-ratio:1}
+.zc-zone{position:relative;display:flex;align-items:center;justify-content:center;border:1px solid rgba(0,229,255,.22);transition:all .2s;cursor:pointer;font-size:.58rem;font-weight:600;font-family:'Orbitron',monospace;color:var(--t)}
+.zc-zone:hover{border-color:rgba(0,229,255,.45);transform:scale(1.02)}
+.zc-zone-label{position:absolute;top:2px;right:4px;font-size:.5rem;color:rgba(255,255,255,.4)}
+.zc-zone-value{text-align:center;line-height:1.3}
+.zc-legend{display:flex;gap:12px;justify-content:center;margin:12px 0;flex-wrap:wrap;font-size:.58rem;font-family:'Orbitron',monospace}
+.zc-legend-item{display:flex;align-items:center;gap:4px}
+.zc-legend-swatch{width:24px;height:24px;border-radius:4px}
+.zc-stats-table{width:100%;margin-top:10px;border-collapse:collapse;font-size:.58rem}
+.zc-stats-table th{background:rgba(0,0,0,.2);padding:6px;text-align:left;color:var(--mu);letter-spacing:1px;font-family:'Orbitron',monospace}
+.zc-stats-table td{padding:5px;border-bottom:1px solid rgba(0,229,255,.1);color:var(--t)}
 /* ── Pitcher trend section ── */
 .pp-trends{margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.06)}
 .pp-trend-hd{font-family:'Orbitron',monospace;font-size:.58rem;color:var(--mu);letter-spacing:2px;margin-bottom:8px}
@@ -583,6 +607,20 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
   </div>
 </div>
 
+<div class="zc-modal" id="zoneChartModal" onclick="closeZoneChart(event)">
+  <div class="zc-card" onclick="event.stopPropagation()">
+    <div class="zc-head">
+      <div class="zc-title" id="zoneChartTitle">⚾ STRIKE ZONE</div>
+      <button class="zc-close" onclick="closeZoneChart()">CLOSE</button>
+    </div>
+    <div class="zc-controls" id="zoneChartControls"></div>
+    <div class="zc-container" id="zoneChartContainer"></div>
+    <div class="zc-legend" id="zoneChartLegend"></div>
+    <table class="zc-stats-table" id="zoneChartStats"><thead><tr><th>Zone</th><th>Pitches</th><th>Swing</th><th>Whiff</th><th>BA</th><th>SLG</th></tr></thead><tbody id="zoneChartTableBody"></tbody></table>
+    <div id="zoneChartBody" class="sc-empty">Loading zone chart data...</div>
+  </div>
+</div>
+
 <footer>MLB ANALYTICS HUB · PROP PROJECTIONS · FG / STATCAST / MLB STATS API · FOR ENTERTAINMENT PURPOSES ONLY</footer>
 
 <script>
@@ -620,6 +658,8 @@ let LINE_SHOP_DATA = null;
 let LINE_SHOP_GAME = null;
 let SPRAY_CHART_DATA = {};  // keyed by player_id
 let SPRAY_CHART_FILTERS = {}; // keyed by player_id, stores active filter state
+let ZONE_CHART_DATA = {};  // keyed by player_id
+let ZONE_CHART_VIEW = {};  // keyed by player_id, stores 'pitcher' or 'batter' view
 
 const MKT_LABELS = {
   player_hits:'Hits', player_home_runs:'Home Runs', player_total_bases:'Total Bases',
@@ -749,6 +789,8 @@ async function loadGames() {
   LINE_SHOP_GAME = null;
   SPRAY_CHART_DATA = {};
   SPRAY_CHART_FILTERS = {};
+  ZONE_CHART_DATA = {};
+  ZONE_CHART_VIEW = {};
   TREND_DATA = {}; UMP_DATA = null;
   CUR_GAME = null;
   hide('mainContent'); show('noGame');
@@ -787,6 +829,8 @@ async function selectGame(pk, awayAbbr, homeAbbr) {
   LINE_SHOP_GAME = null;
   SPRAY_CHART_DATA = {};
   SPRAY_CHART_FILTERS = {};
+  ZONE_CHART_DATA = {};
+  ZONE_CHART_VIEW = {};
   TREND_DATA = {}; UMP_DATA = null; LINEUP_STATUS = {};
   clearPFFilters(true); // reset filters silently on new game
   // Hide any stale alert
@@ -1747,6 +1791,164 @@ function createSprayChartLegend() {
 
 let LAST_SPRAY_STATS = null;
 
+async function loadZoneChartData(playerId) {
+  if (ZONE_CHART_DATA[playerId]) return ZONE_CHART_DATA[playerId];
+  try {
+    const r = await fetch(`/api/player/${playerId}/zonechart`);
+    const d = await r.json();
+    if (!d.success || !d.data) {
+      ZONE_CHART_DATA[playerId] = [null] * 9;
+      return [];
+    }
+    ZONE_CHART_DATA[playerId] = d.data;
+    ZONE_CHART_VIEW[playerId] = 'pitcher';  // default to pitcher view
+    return d.data;
+  } catch (e) {
+    console.error('[loadZoneChartData]', e);
+    ZONE_CHART_DATA[playerId] = [null] * 9;
+    return [];
+  }
+}
+
+async function openZoneChart(playerId, playerName) {
+  const modal = gel('zoneChartModal');
+  const title = gel('zoneChartTitle');
+  const body = gel('zoneChartBody');
+  if (!modal || !title || !body) return;
+  title.textContent = `⚾ STRIKE ZONE · ${playerName}`;
+  body.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  const data = await loadZoneChartData(playerId);
+  if (!data || data.filter(z => z).length === 0) {
+    body.innerHTML = noData('No zone chart data available for this player.');
+    modal.classList.add('show');
+    return;
+  }
+  updateZoneChartDisplay(playerId);
+  modal.classList.add('show');
+}
+
+function closeZoneChart(ev) {
+  if (ev && ev.target && ev.currentTarget && ev.target !== ev.currentTarget) return;
+  const modal = gel('zoneChartModal');
+  if (!modal) return;
+  modal.classList.remove('show');
+}
+
+function createZoneChartControls(playerId) {
+  const view = ZONE_CHART_VIEW[playerId] || 'pitcher';
+  const ctlCont = gel('zoneChartControls');
+  if (!ctlCont) return;
+  ctlCont.innerHTML = `
+    <button class="zc-toggle${view === 'pitcher' ? ' active' : ''}" onclick="toggleZoneView(${playerId}, 'pitcher')">Pitcher View</button>
+    <button class="zc-toggle${view === 'batter' ? ' active' : ''}" onclick="toggleZoneView(${playerId}, 'batter')">Batter View</button>
+  `;
+}
+
+function toggleZoneView(playerId, newView) {
+  ZONE_CHART_VIEW[playerId] = newView;
+  updateZoneChartDisplay(playerId);
+}
+
+function updateZoneChartDisplay(playerId) {
+  const data = ZONE_CHART_DATA[playerId] || [];
+  if (!data.length) return;
+  createZoneChartControls(playerId);
+  const view = ZONE_CHART_VIEW[playerId] || 'pitcher';
+  const gridHtml = createZoneChartGrid(data, view);
+  const container = gel('zoneChartContainer');
+  if (container) container.innerHTML = gridHtml;
+  createZoneChartLegend(view);
+  createZoneChartTable(data, view);
+  gel('zoneChartBody').innerHTML = '';
+}
+
+function createZoneChartGrid(data, view) {
+  if (!data || data.length === 0) return '';
+  const w = 450, h = 450;
+  const cellW = w / 3, cellH = h / 3;
+  const zoneLabels = ['Top-L', 'Top-C', 'Top-R', 'Mid-L', 'Heart', 'Mid-R', 'Bot-L', 'Bot-C', 'Bot-R'];
+  
+  let svg = `<svg viewBox="0 0 ${w} ${h}" class="zc-grid">`;
+  svg += `<defs><style>.zc-cell{cursor:pointer;transition:all .2s} .zc-cell:hover{stroke:rgba(0,229,255,.6);stroke-width:2}</style></defs>`;
+  
+  data.forEach((zone, idx) => {
+    const col = idx % 3;
+    const row = Math.floor(idx / 3);
+    const x = col * cellW;
+    const y = row * cellH;
+    
+    if (!zone) {
+      svg += `<rect class="zc-cell" x="${x}" y="${y}" width="${cellW}" height="${cellH}" fill="rgba(100,100,100,.2)" stroke="rgba(0,229,255,.15)" stroke-width="1" title="No data"/>`;
+      svg += `<text x="${x + cellW/2}" y="${y + cellH/2}" text-anchor="middle" dominant-baseline="middle" font-size="12" fill="rgba(200,200,200,.3)">—</text>`;
+      return;
+    }
+    
+    // Determine color based on view and thresholds
+    let color = 'rgba(128,128,128,.15)';  // grey (neutral)
+    let tooltip = '';
+    
+    if (view === 'pitcher') {
+      // Red if whiff > 35%, else grey
+      if (zone.whiff_rate > 35) {
+        color = 'rgba(244, 67, 54, .25)'; // red
+        tooltip = `Whiff: ${zone.whiff_rate.toFixed(1)}%`;
+      } else {
+        color = 'rgba(128,128,128,.15)';
+      }
+    } else {
+      // Green if BA > .300, else grey
+      if (zone.ba > 0.300) {
+        color = 'rgba(0, 230, 118, .25)'; // green
+        tooltip = `BA: ${zone.ba.toFixed(3)}`;
+      } else {
+        color = 'rgba(128,128,128,.15)';
+      }
+    }
+    
+    svg += `<rect class="zc-cell" x="${x}" y="${y}" width="${cellW}" height="${cellH}" fill="${color}" stroke="rgba(0,229,255,.15)" stroke-width="1" title="${tooltip}"/>`;
+    
+    // Zone label
+    svg += `<text x="${x + 8}" y="${y + 10}" font-size="10" fill="rgba(255,255,255,.35)" font-family="Orbitron,monospace">${zoneLabels[idx]}</text>`;
+    
+    // Metrics display
+    const line1 = view === 'pitcher' ? `Whiff: ${zone.whiff_rate.toFixed(0)}%` : `BA: ${zone.ba.toFixed(3)}`;
+    const line2 = view === 'pitcher' ? `Swing: ${zone.swing_rate.toFixed(0)}%` : `SLG: ${zone.slg.toFixed(3)}`;
+    svg += `<text x="${x + cellW/2}" y="${y + cellH/2 - 6}" text-anchor="middle" font-size="11" fill="rgba(224,240,255,.7)" font-family="Orbitron,monospace" font-weight="600">${line1}</text>`;
+    svg += `<text x="${x + cellW/2}" y="${y + cellH/2 + 8}" text-anchor="middle" font-size="11" fill="rgba(224,240,255,.6)" font-family="Orbitron,monospace">${line2}</text>`;
+  });
+  
+  svg += '</svg>';
+  return svg;
+}
+
+function createZoneChartLegend(view) {
+  const legend = gel('zoneChartLegend');
+  if (!legend) return;
+  if (view === 'pitcher') {
+    legend.innerHTML = `
+      <div class="zc-legend-item"><div class="zc-legend-swatch" style="background:rgba(244,67,54,.4)"></div><span>Whiff >35%</span></div>
+      <div class="zc-legend-item"><div class="zc-legend-swatch" style="background:rgba(128,128,128,.2)"></div><span>Neutral</span></div>
+    `;
+  } else {
+    legend.innerHTML = `
+      <div class="zc-legend-item"><div class="zc-legend-swatch" style="background:rgba(0,230,118,.4)"></div><span>BA >.300</span></div>
+      <div class="zc-legend-item"><div class="zc-legend-swatch" style="background:rgba(128,128,128,.2)"></div><span>Neutral</span></div>
+    `;
+  }
+}
+
+function createZoneChartTable(data, view) {
+  const tbody = gel('zoneChartTableBody');
+  if (!tbody || !data) return;
+  const zoneNames = ['Top-L', 'Top-C', 'Top-R', 'Mid-L', 'Heart', 'Mid-R', 'Bot-L', 'Bot-C', 'Bot-R'];
+  tbody.innerHTML = data.map((zone, idx) => {
+    if (!zone) return '';
+    const col = view === 'pitcher' ? `<td>${zone.whiff_rate.toFixed(0)}%</td><td>${zone.swing_rate.toFixed(0)}%</td>` 
+                                    : `<td>${zone.ba.toFixed(3)}</td><td>${zone.slg.toFixed(3)}</td>`;
+    return `<tr><td>${zoneNames[idx]}</td><td>${zone.pitch_pct.toFixed(1)}%</td>${col}</tr>`;
+  }).join('');
+}
+
 function batterCard(b) {
   const p    = b.proj || {};
   const adj  = p.adjustments || null;
@@ -1810,6 +2012,7 @@ function batterCard(b) {
     </div>
     <button class="ls-btn" onclick="openLineShop('${(b.name||'').replace(/'/g,"\\'")}')"><span>📚 LINE SHOPPING</span><span>OPEN ▸</span></button>
     <button class="ls-btn" onclick="openSprayChart(${pid}, '${(b.name||'').replace(/'/g,"\\'")}')"><span>🗺️ SPRAY CHART</span><span>OPEN ▸</span></button>
+    <button class="ls-btn" onclick="openZoneChart(${pid}, '${(b.name||'').replace(/'/g,"\\'")}')"><span>⚾ STRIKE ZONE</span><span>OPEN ▸</span></button>
     ${hrPanel}
     ${batxHtml}
     ${trnd}
