@@ -3895,14 +3895,31 @@ def api_simulate(game_pk):
 ODDS_API_KEY = (os.getenv('ODDS_API_KEY') or '').strip()
 ODDS_REGION = (os.getenv('ODDS_REGION') or 'us').strip()
 
+
+def _odds_ttl_seconds(env_key, default_seconds, min_seconds=30, max_seconds=6 * 60 * 60):
+    """Read a TTL (seconds) from env with sane bounds and fallback."""
+    raw = os.getenv(env_key)
+    if raw is None or str(raw).strip() == '':
+        return int(default_seconds)
+    try:
+        ttl = int(float(raw))
+    except Exception:
+        return int(default_seconds)
+    return max(int(min_seconds), min(int(max_seconds), ttl))
+
 # ── Odds API cache — prevents burning credits on every request ────────────────
 # Events list: cache 30 min (rarely changes mid-day)
-# Per-game odds: cache 15 min (lines move but not every second)
-# Prop markets: cache 20 min (props are slow to move)
+# Per-game odds snapshot: cache 15 min (single fetch reused everywhere)
 _ODDS_EVENTS_CACHE: dict = {}          # {'data': [...], 'ts': float}
-_ODDS_GAME_CACHE:  dict = {}           # {event_id: {'featured': [...], 'props': [...], 'ts': float}}
-_ODDS_EVENTS_TTL  = 30 * 60           # 30 minutes
-_ODDS_GAME_TTL    = 15 * 60           # 15 minutes
+_ODDS_GAME_CACHE:  dict = {}           # {event_id: {'all': [...], 'ts': float}}
+_ODDS_EVENTS_TTL  = _odds_ttl_seconds('ODDS_EVENTS_TTL_SEC', 30 * 60)
+_ODDS_GAME_TTL    = _odds_ttl_seconds('ODDS_GAME_TTL_SEC', 15 * 60)
+_ODDS_NRFI_TTL    = _odds_ttl_seconds('ODDS_NRFI_TTL_SEC', 5 * 60)
+_ODDS_ALL_MARKETS = (
+    'h2h,spreads,totals,h2h_1st_1_innings,'
+    'batter_hits,batter_total_bases,batter_home_runs,batter_rbis,'
+    'batter_runs_scored,batter_stolen_bases,pitcher_strikeouts'
+)
 
 
 def _norm_name(s):
@@ -4020,26 +4037,51 @@ def _load_event_odds(event_id, featured_only=False):
     if not ODDS_API_KEY or not event_id:
         return []
     now = time.time()
-    cache_key = 'featured' if featured_only else 'props'
     cached = _ODDS_GAME_CACHE.get(event_id)
-    if cached and (now - cached.get('ts', 0)) < _ODDS_GAME_TTL and cache_key in cached:
-        return cached[cache_key]
-    markets = 'h2h,spreads,totals' if featured_only else 'batter_hits,batter_total_bases,batter_home_runs,batter_rbis,batter_runs_scored,batter_stolen_bases,pitcher_strikeouts'
+    if cached and (now - cached.get('ts', 0)) < _ODDS_GAME_TTL and 'all' in cached:
+        return cached.get('all') or []
     try:
         r = requests.get(
             f'https://api.the-odds-api.com/v4/sports/baseball_mlb/events/{event_id}/odds',
-            params={'apiKey': ODDS_API_KEY, 'regions': ODDS_REGION, 'markets': markets, 'oddsFormat': 'american', 'dateFormat': 'iso'},
+            params={
+                'apiKey': ODDS_API_KEY,
+                'regions': ODDS_REGION,
+                'markets': _ODDS_ALL_MARKETS,
+                'oddsFormat': 'american',
+                'dateFormat': 'iso',
+            },
             timeout=15,
         )
         r.raise_for_status()
         result = r.json().get('bookmakers', []) or []
-        print(f'[Odds] Fetched {cache_key} odds for {event_id}. Remaining: {r.headers.get("x-requests-remaining","?")}')
+        print(f'[Odds] Fetched unified odds for {event_id}. Remaining: {r.headers.get("x-requests-remaining","?")}')
         entry = _ODDS_GAME_CACHE.setdefault(event_id, {'ts': now})
-        entry[cache_key] = result
+        entry['all'] = result
         entry['ts'] = now
         return result
     except:
-        return (cached or {}).get(cache_key, [])
+        return (cached or {}).get('all', [])
+
+
+def _load_event_market_odds(event_id, markets, cache_key, ttl_sec):
+    # Keep signature for compatibility; serve subset from unified per-event cache.
+    if not ODDS_API_KEY or not event_id or not markets:
+        return []
+    books = _load_event_odds(event_id)
+    if not books:
+        return []
+    wanted = {m.strip() for m in str(markets).split(',') if m.strip()}
+    if not wanted:
+        return books
+    filtered = []
+    for bk in books:
+        mkts = [m for m in (bk.get('markets') or []) if (m.get('key') or '') in wanted]
+        if not mkts:
+            continue
+        b = dict(bk)
+        b['markets'] = mkts
+        filtered.append(b)
+    return filtered
 
 
 def _parse_prop_markets(bookmakers, valid_names):
@@ -4158,21 +4200,13 @@ def _nrfi_market_snapshot(away_name, home_name):
     event_id = event.get('id')
     if not event_id:
         return {}
-    try:
-        r = requests.get(
-            f'https://api.the-odds-api.com/v4/sports/baseball_mlb/events/{event_id}/odds',
-            params={
-                'apiKey': ODDS_API_KEY,
-                'regions': ODDS_REGION,
-                'markets': 'h2h_1st_1_innings',
-                'oddsFormat': 'american',
-                'dateFormat': 'iso',
-            },
-            timeout=12,
-        )
-        r.raise_for_status()
-        books = r.json().get('bookmakers', []) or []
-    except Exception:
+    books = _load_event_market_odds(
+        event_id,
+        markets='h2h_1st_1_innings',
+        cache_key='nrfi',
+        ttl_sec=_ODDS_NRFI_TTL,
+    )
+    if not books:
         return {}
 
     nrfi_prices = []

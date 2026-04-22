@@ -19,6 +19,13 @@ services:
         sync: false
       - key: ODDS_REGION
         value: us
+      # Odds API cache TTLs (seconds) to reduce credit burn on refresh.
+      - key: ODDS_EVENTS_TTL_SEC
+        value: "21600"
+      - key: ODDS_GAME_TTL_SEC
+        value: "86400"
+      - key: ODDS_NRFI_TTL_SEC
+        value: "300"
       # Tells pybaseball NOT to hammer FanGraphs on every boot (we cache locally)
       - key: PYBASEBALL_CACHE
         value: "1"
