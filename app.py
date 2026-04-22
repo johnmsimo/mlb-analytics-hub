@@ -3036,6 +3036,78 @@ def team_pitching_context(team_id):
     return out
 
 
+def _rank_staff_badge(composite_rank):
+    r = int(composite_rank or 0)
+    if r and r <= 5:
+        return {'rank': r, 'label': 'Top 5 Staff', 'tone': 'top5', 'icon': '🔴'}
+    if r and r >= 21:
+        return {'rank': r, 'label': 'Bottom 10 Staff', 'tone': 'bottom10', 'icon': '🟢'}
+    return {'rank': r or None, 'label': 'Mid-Pack', 'tone': 'mid', 'icon': '⚪'}
+
+
+_team_pitch_rank_cache = {'data': None, 'byId': {}, 'ts': 0.0}
+_team_pitch_rank_lock = threading.Lock()
+_TEAM_PITCH_RANK_TTL = 30 * 60
+
+
+def _get_team_pitching_rankings(force=False):
+    now = time.time()
+    with _team_pitch_rank_lock:
+        cached = _team_pitch_rank_cache.get('data')
+        cached_by_id = _team_pitch_rank_cache.get('byId') or {}
+        ts = float(_team_pitch_rank_cache.get('ts') or 0)
+    if (not force) and cached and (now - ts) < _TEAM_PITCH_RANK_TTL:
+        return cached, cached_by_id
+
+    teams_resp = requests.get(f"{MLB_API}/teams?sportId=1&activeStatus=Y", timeout=12)
+    teams_resp.raise_for_status()
+    teams_raw = [t for t in (teams_resp.json().get('teams') or []) if (t.get('sport') or {}).get('id') == 1]
+
+    rows = []
+    for t in teams_raw:
+        tid = t.get('id')
+        if not tid:
+            continue
+        ctx = team_pitching_context(tid)
+        rows.append({
+            'teamId': tid,
+            'abbr': t.get('abbreviation', '?'),
+            'name': t.get('name', ''),
+            'era': round(float(ctx.get('era') or 0), 2),
+            'whip': round(float(ctx.get('whip') or 0), 3),
+            'k9': round(float(ctx.get('k9') or 0), 2),
+            'hr9': round(float(ctx.get('hr9') or 0), 2),
+        })
+
+    if not rows:
+        return [], {}
+
+    era_rank = {r['teamId']: i + 1 for i, r in enumerate(sorted(rows, key=lambda x: x.get('era', 99)))}
+    whip_rank = {r['teamId']: i + 1 for i, r in enumerate(sorted(rows, key=lambda x: x.get('whip', 99)))}
+    k9_rank = {r['teamId']: i + 1 for i, r in enumerate(sorted(rows, key=lambda x: x.get('k9', -1), reverse=True))}
+    hr9_rank = {r['teamId']: i + 1 for i, r in enumerate(sorted(rows, key=lambda x: x.get('hr9', 99)))}
+
+    for r in rows:
+        tid = r['teamId']
+        r['era_rank'] = era_rank.get(tid)
+        r['whip_rank'] = whip_rank.get(tid)
+        r['k9_rank'] = k9_rank.get(tid)
+        r['hr9_rank'] = hr9_rank.get(tid)
+        composite = (r['era_rank'] + r['whip_rank'] + r['k9_rank'] + r['hr9_rank']) / 4.0
+        r['composite_score'] = round(composite, 2)
+
+    rows.sort(key=lambda x: (x.get('composite_score', 99), x.get('era_rank', 99), x.get('abbr', '')))
+    for i, r in enumerate(rows, start=1):
+        r['composite_rank'] = i
+
+    by_id = {r['teamId']: r for r in rows}
+    with _team_pitch_rank_lock:
+        _team_pitch_rank_cache['data'] = rows
+        _team_pitch_rank_cache['byId'] = by_id
+        _team_pitch_rank_cache['ts'] = now
+    return rows, by_id
+
+
 def pitcher_stats_mlb(player_id):
     try:
         r = requests.get(f"{MLB_API}/people/{player_id}/stats?stats=season&group=pitching&season={datetime.now().year}", timeout=8)
@@ -3505,11 +3577,13 @@ def _simulate_offense(lineup, opp_starter, opp_team_id, park, rng, batx_map=None
 def _summarize_player(lines):
     def arr(k): return [x[k] for x in lines]
     hits = arr('h'); hr = arr('hr'); rbi = arr('rbi'); runs = arr('r'); bb = arr('bb'); k = arr('k'); tb = arr('tb'); sb = arr('sb')
+    hrr = [(x.get('h', 0) + x.get('r', 0) + x.get('rbi', 0)) for x in lines]
     return {
         'mean_hits': round(statistics.mean(hits), 3), 'median_hits': statistics.median(hits),
         'mean_hr': round(statistics.mean(hr), 3), 'mean_rbi': round(statistics.mean(rbi), 3),
         'mean_runs': round(statistics.mean(runs), 3), 'mean_bb': round(statistics.mean(bb), 3),
         'mean_k': round(statistics.mean(k), 3), 'mean_tb': round(statistics.mean(tb), 3), 'mean_sb': round(statistics.mean(sb), 3),
+        'mean_hrr': round(statistics.mean(hrr), 3),
         'p10_hits': round(_pct(hits, 0.10), 2), 'p50_hits': round(_pct(hits, 0.50), 2), 'p90_hits': round(_pct(hits, 0.90), 2),
         'p10_tb': round(_pct(tb, 0.10), 2), 'p50_tb': round(_pct(tb, 0.50), 2), 'p90_tb': round(_pct(tb, 0.90), 2),
         'p10_k': round(_pct(k, 0.10), 2), 'p50_k': round(_pct(k, 0.50), 2), 'p90_k': round(_pct(k, 0.90), 2),
@@ -3522,6 +3596,9 @@ def _summarize_player(lines):
         'p_1plus_bb': round(sum(1 for x in bb if x >= 1) / len(bb), 3),
         'p_1plus_k': round(sum(1 for x in k if x >= 1) / len(k), 3),
         'p_1plus_sb': round(sum(1 for x in sb if x >= 1) / len(sb), 3),
+        'p_2plus_hrr': round(sum(1 for x in hrr if x >= 2) / len(hrr), 3),
+        'p_3plus_hrr': round(sum(1 for x in hrr if x >= 3) / len(hrr), 3),
+        'p_4plus_hrr': round(sum(1 for x in hrr if x >= 4) / len(hrr), 3),
     }
 
 
@@ -3736,6 +3813,8 @@ def api_simulate(game_pk):
                 return {'line': 0.5, 'side': 'Over', 'short': 'RBI'}
             if market == 'batter_runs':
                 return {'line': 0.5, 'side': 'Over', 'short': 'R'}
+            if market == 'batter_hits_runs_rbis':
+                return {'line': 1.5, 'side': 'Over', 'short': 'H+R+RBI'}
             if market == 'pitcher_strikeouts':
                 return {'line': 4.5, 'side': 'Over', 'short': 'K'}
             return {'line': 0.5, 'side': 'Over', 'short': 'PROP'}
@@ -3747,13 +3826,17 @@ def api_simulate(game_pk):
                 'batter_total_bases': ('tb', 2),
                 'batter_rbis': ('rbi', 1),
                 'batter_runs': ('r', 1),
+                'batter_hits_runs_rbis': (lambda x: (x.get('h', 0) + x.get('r', 0) + x.get('rbi', 0)), 2),
             }
             for idx, batter in enumerate(lineup):
                 lines = store.get(idx, [])
                 if not lines:
                     continue
-                for market, (stat_key, event_floor) in batter_markets.items():
-                    values = [x.get(stat_key, 0) for x in lines]
+                for market, (stat_source, event_floor) in batter_markets.items():
+                    if callable(stat_source):
+                        values = [stat_source(x) for x in lines]
+                    else:
+                        values = [x.get(stat_source, 0) for x in lines]
                     if not values:
                         continue
                     meta = _event_meta(market)
@@ -3918,7 +4001,7 @@ _ODDS_NRFI_TTL    = _odds_ttl_seconds('ODDS_NRFI_TTL_SEC', 5 * 60)
 _ODDS_ALL_MARKETS = (
     'h2h,spreads,totals,h2h_1st_1_innings,'
     'batter_hits,batter_total_bases,batter_home_runs,batter_rbis,'
-    'batter_runs_scored,batter_stolen_bases,pitcher_strikeouts'
+    'batter_runs_scored,batter_stolen_bases,batter_hits_runs_rbis,pitcher_strikeouts'
 )
 
 
@@ -4135,6 +4218,70 @@ def _find_best_available_price(market_props, player, mk, line, side='over'):
         best_price, best_book = max(candidates, key=lambda x: x[0] if x[0] > 0 else (1000 + x[0]))
     
     return best_price, best_book
+
+
+def _market_price_summary(market_props, player, mk, line):
+    """Return cross-book pricing summary for a player market at a target line."""
+    all_items = [
+        item for item in (market_props or [])
+        if item.get('player') == player and item.get('market_key') == mk
+    ]
+    same_line = [
+        item for item in all_items
+        if float(item.get('line', 0) or 0) == float(line)
+    ]
+
+    if not all_items:
+        return {
+            'best_over_price': None,
+            'best_over_book': None,
+            'best_under_price': None,
+            'best_under_book': None,
+            'line_range': None,
+            'book_count': 0,
+            'market_implied': None,
+            'market_bookmaker': None,
+            'line_varies': False,
+        }
+
+    def _best_side(items, side_key):
+        candidates = []
+        for it in items:
+            px = it.get(side_key)
+            if px is None:
+                continue
+            candidates.append((px, it.get('bookmaker')))
+        if not candidates:
+            return None, None
+        best_px, best_book = max(candidates, key=lambda x: _american_price_score(x[0]))
+        return best_px, best_book
+
+    best_over_price, best_over_book = _best_side(same_line, 'over_price')
+    best_under_price, best_under_book = _best_side(same_line, 'under_price')
+
+    line_vals = []
+    for it in all_items:
+        try:
+            line_vals.append(float(it.get('line')))
+        except Exception:
+            continue
+    line_range = None
+    if line_vals:
+        line_range = [round(min(line_vals), 2), round(max(line_vals), 2)]
+
+    books = {it.get('bookmaker') for it in all_items if it.get('bookmaker')}
+
+    return {
+        'best_over_price': best_over_price,
+        'best_over_book': best_over_book,
+        'best_under_price': best_under_price,
+        'best_under_book': best_under_book,
+        'line_range': line_range,
+        'book_count': len(books),
+        'market_implied': _american_to_implied(best_over_price),
+        'market_bookmaker': best_over_book,
+        'line_varies': bool(line_range and line_range[0] != line_range[1]),
+    }
 
 
 def _american_price_score(price):
@@ -4520,6 +4667,7 @@ def _default_adjustments():
             'batter_home_runs': 1.00,
             'batter_rbis': 1.00,
             'batter_runs_scored': 1.00,
+            'batter_hits_runs_rbis': 1.00,
             'batter_stolen_bases': 1.00,
             'pitcher_strikeouts': 1.00,
             'nrfi': 1.00,
@@ -4562,6 +4710,7 @@ def _tracker_stat_from_boxscore(player_obj, market_key):
         'batter_home_runs': hr,
         'batter_rbis': int(b.get('rbi', 0) or 0),
         'batter_runs_scored': int(b.get('runs', 0) or 0),
+        'batter_hits_runs_rbis': hits + int(b.get('runs', 0) or 0) + int(b.get('rbi', 0) or 0),
         'batter_stolen_bases': int(b.get('stolenBases', 0) or 0),
     }
     return mapping.get(market_key)
@@ -4758,6 +4907,9 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
         ('batter_home_runs', 0.5, 'p_1plus_hr', 'mean_hr'),
         ('batter_rbis', 0.5, 'p_1plus_rbi', 'mean_rbi'),
         ('batter_runs_scored', 0.5, 'p_1plus_run', 'mean_runs'),
+        ('batter_hits_runs_rbis', 1.5, 'p_2plus_hrr', 'mean_hrr'),
+        ('batter_hits_runs_rbis', 2.5, 'p_3plus_hrr', 'mean_hrr'),
+        ('batter_hits_runs_rbis', 3.5, 'p_4plus_hrr', 'mean_hrr'),
         ('batter_stolen_bases', 0.5, 'p_1plus_sb', 'mean_sb'),
     ]
 
@@ -4769,19 +4921,25 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                     continue
                 adj_prob = _clamp01(raw_prob * _market_mult(mk, adjustments))
                 market = find_market(p.get('name'), mk, line)
-                edge = (adj_prob - market.get('over_implied')) if market and market.get('over_implied') is not None else None
+                msum = _market_price_summary(market_props, p.get('name'), mk, line)
+                market_implied = msum.get('market_implied')
+                edge = (adj_prob - market_implied) if market_implied is not None else None
                 score = (edge * 100.0 if edge is not None else 0) + adj_prob
                 hub = _hub_rating(adj_prob, edge or 0)
-                mi = market.get('over_implied') if market else None
+                mi = market_implied
                 ev_pct = round(adj_prob / mi - 1, 4) if mi and mi > 0 else None
-                # Phase 3: Find best available price
-                best_avail_price, best_avail_book = _find_best_available_price(market_props, p.get('name'), mk, line, 'over')
                 temp_row = {
                     'date': capture_date, 'gamePk': game_pk, 'team': team_abbr, 'player': p.get('name'), 'playerId': p.get('id'), 'marketKey': mk, 'line': line, 'recommendedSide': 'Over',
                     'rawProb': round(raw_prob, 4), 'adjProb': round(adj_prob, 4), 'modelMean': round(float(p.get(mean_field, 0) or 0), 3), 'edge': round(edge, 4) if edge is not None else None,
-                    'bookmaker': market.get('bookmaker') if market else None, 'marketPrice': market.get('over_price') if market else None, 'marketImplied': market.get('over_implied') if market else None,
-                    'bestAvailablePrice': best_avail_price, 'bestAvailableBook': best_avail_book,
-                    'score': round(score, 4), 'hubRating': hub, 'evPct': ev_pct, 'opp': opp_name, 'reason': _projection_reason_short(p.get('name'), mk, adj_prob, edge, opp_name), 'status': 'pending', 'actual': None, 'grade': 'pending', 'openingPrice': market.get('over_price') if market else None, 'openingImplied': market.get('over_implied') if market else None, 'closingPrice': None, 'closingImplied': None, 'closingBookmaker': None, 'closingCapturedAt': None, 'clvEdge': None, 'profitUnits': None, 'profitDollars': None,
+                    'bookmaker': msum.get('market_bookmaker'), 'marketPrice': msum.get('best_over_price'), 'marketImplied': market_implied,
+                    'bestAvailablePrice': msum.get('best_over_price'), 'bestAvailableBook': msum.get('best_over_book'),
+                    'bestOverPrice': msum.get('best_over_price'), 'bestOverBook': msum.get('best_over_book'),
+                    'bestUnderPrice': msum.get('best_under_price'), 'bestUnderBook': msum.get('best_under_book'),
+                    'lineRange': msum.get('line_range'), 'bookCount': msum.get('book_count'), 'lineVaries': msum.get('line_varies'),
+                    'best_over_price': msum.get('best_over_price'), 'best_over_book': msum.get('best_over_book'),
+                    'best_under_price': msum.get('best_under_price'), 'best_under_book': msum.get('best_under_book'),
+                    'line_range': msum.get('line_range'), 'book_count': msum.get('book_count'), 'line_varies': msum.get('line_varies'),
+                    'score': round(score, 4), 'hubRating': hub, 'evPct': ev_pct, 'opp': opp_name, 'reason': _projection_reason_short(p.get('name'), mk, adj_prob, edge, opp_name), 'status': 'pending', 'actual': None, 'grade': 'pending', 'openingPrice': msum.get('best_over_price'), 'openingImplied': market_implied, 'closingPrice': None, 'closingImplied': None, 'closingBookmaker': None, 'closingCapturedAt': None, 'clvEdge': None, 'profitUnits': None, 'profitDollars': None,
                     'parlayId': None, 'parlayLeg': None
                 }
                 # Phase 1: Add schema fields
@@ -4809,19 +4967,25 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                 continue
             adj_prob = _clamp01(raw_prob * _market_mult('pitcher_strikeouts', adjustments))
             market = find_market(sp.get('name'), 'pitcher_strikeouts', line)
-            edge = (adj_prob - market.get('over_implied')) if market and market.get('over_implied') is not None else None
+            msum = _market_price_summary(market_props, sp.get('name'), 'pitcher_strikeouts', line)
+            market_implied = msum.get('market_implied')
+            edge = (adj_prob - market_implied) if market_implied is not None else None
             score = (edge * 100.0 if edge is not None else 0) + adj_prob
             hub = _hub_rating(adj_prob, edge or 0)
-            mi = market.get('over_implied') if market else None
+            mi = market_implied
             ev_pct = round(adj_prob / mi - 1, 4) if mi and mi > 0 else None
-            # Phase 3: Find best available price
-            best_avail_price, best_avail_book = _find_best_available_price(market_props, sp.get('name'), 'pitcher_strikeouts', line, 'over')
             temp_row = {
                 'date': capture_date, 'gamePk': game_pk, 'team': team_abbr, 'player': sp.get('name'), 'playerId': sp.get('id'), 'marketKey': 'pitcher_strikeouts', 'line': line, 'recommendedSide': 'Over',
                 'rawProb': round(raw_prob, 4), 'adjProb': round(adj_prob, 4), 'modelMean': round(float(sp.get('mean_k', 0) or 0), 3), 'edge': round(edge, 4) if edge is not None else None,
-                'bookmaker': market.get('bookmaker') if market else None, 'marketPrice': market.get('over_price') if market else None, 'marketImplied': market.get('over_implied') if market else None,
-                'bestAvailablePrice': best_avail_price, 'bestAvailableBook': best_avail_book,
-                'score': round(score, 4), 'hubRating': hub, 'evPct': ev_pct, 'opp': '', 'reason': _projection_reason_short(sp.get('name'), 'pitcher_strikeouts', adj_prob, edge), 'status': 'pending', 'actual': None, 'grade': 'pending', 'openingPrice': market.get('over_price') if market else None, 'openingImplied': market.get('over_implied') if market else None, 'closingPrice': None, 'closingImplied': None, 'closingBookmaker': None, 'closingCapturedAt': None, 'clvEdge': None, 'profitUnits': None, 'profitDollars': None,
+                'bookmaker': msum.get('market_bookmaker'), 'marketPrice': msum.get('best_over_price'), 'marketImplied': market_implied,
+                'bestAvailablePrice': msum.get('best_over_price'), 'bestAvailableBook': msum.get('best_over_book'),
+                'bestOverPrice': msum.get('best_over_price'), 'bestOverBook': msum.get('best_over_book'),
+                'bestUnderPrice': msum.get('best_under_price'), 'bestUnderBook': msum.get('best_under_book'),
+                'lineRange': msum.get('line_range'), 'bookCount': msum.get('book_count'), 'lineVaries': msum.get('line_varies'),
+                'best_over_price': msum.get('best_over_price'), 'best_over_book': msum.get('best_over_book'),
+                'best_under_price': msum.get('best_under_price'), 'best_under_book': msum.get('best_under_book'),
+                'line_range': msum.get('line_range'), 'book_count': msum.get('book_count'), 'line_varies': msum.get('line_varies'),
+                'score': round(score, 4), 'hubRating': hub, 'evPct': ev_pct, 'opp': '', 'reason': _projection_reason_short(sp.get('name'), 'pitcher_strikeouts', adj_prob, edge), 'status': 'pending', 'actual': None, 'grade': 'pending', 'openingPrice': msum.get('best_over_price'), 'openingImplied': market_implied, 'closingPrice': None, 'closingImplied': None, 'closingBookmaker': None, 'closingCapturedAt': None, 'clvEdge': None, 'profitUnits': None, 'profitDollars': None,
                 'parlayId': None, 'parlayLeg': None
             }
             # Phase 1: Add schema fields
@@ -4891,6 +5055,20 @@ def _build_tracker_rows_quick(game_obj, capture_date, adjustments=None):
                     'marketImplied': None,
                     'bestAvailablePrice': None,
                     'bestAvailableBook': None,
+                    'bestOverPrice': None,
+                    'bestOverBook': None,
+                    'bestUnderPrice': None,
+                    'bestUnderBook': None,
+                    'lineRange': None,
+                    'bookCount': 0,
+                    'lineVaries': False,
+                    'best_over_price': None,
+                    'best_over_book': None,
+                    'best_under_price': None,
+                    'best_under_book': None,
+                    'line_range': None,
+                    'book_count': 0,
+                    'line_varies': False,
                     'score': round(adj_prob, 4),
                     'hubRating': _hub_rating(adj_prob, 0),
                     'evPct': None,
@@ -5173,6 +5351,7 @@ CALIBRATION_TARGETS = {
     'batter_home_runs': 0.52,
     'batter_rbis': 0.53,
     'batter_runs_scored': 0.53,
+    'batter_hits_runs_rbis': 0.54,
     'batter_stolen_bases': 0.52,
     'pitcher_strikeouts': 0.55,
     'nrfi': 0.53,
@@ -5347,6 +5526,7 @@ def api_tracker_model_record():
         'batter_total_bases': 'tb',
         'batter_rbis': 'rbi',
         'batter_runs_scored': 'runs',
+        'batter_hits_runs_rbis': 'hrr',
         'pitcher_strikeouts': 'pitcher_strikeouts',
         'nrfi': 'nrfi',
         'yrfi': 'yrfi',
@@ -5374,6 +5554,7 @@ def api_tracker_model_record():
         'batter_total_bases': record.get('tb', {}).get('hit_rate', 0.0),
         'batter_rbis': record.get('rbi', {}).get('hit_rate', 0.0),
         'batter_runs_scored': record.get('runs', {}).get('hit_rate', 0.0),
+        'batter_hits_runs_rbis': record.get('hrr', {}).get('hit_rate', 0.0),
         'parlay': record.get('parlay', {}).get('hit_rate', 0.0),
         'nrfi': record.get('nrfi', {}).get('hit_rate', 0.0),
         'yrfi': record.get('yrfi', {}).get('hit_rate', 0.0),
@@ -6370,6 +6551,16 @@ def api_teams_overview():
         if cached:
             return jsonify(cached)
         return jsonify({'success': False, 'error': str(ex), 'teams': []}), 500
+
+
+@app.route('/api/teams/pitching-rankings')
+def api_teams_pitching_rankings():
+    try:
+        rows, _ = _get_team_pitching_rankings(force=False)
+        return jsonify({'success': True, 'rankings': rows, 'count': len(rows), 'updatedAt': datetime.now(timezone.utc).isoformat()})
+    except Exception as ex:
+        print('[api_teams_pitching_rankings]', traceback.format_exc())
+        return jsonify({'success': False, 'error': str(ex), 'rankings': []}), 500
 
 
 # ── Monte Carlo background cache ──────────────────────────────────────────────
@@ -8210,6 +8401,15 @@ def api_batting_order_matchups(game_pk):
 
         away_abbr = away_t.get("team", {}).get("abbreviation", "AWAY")
         home_abbr = home_t.get("team", {}).get("abbreviation", "HOME")
+        away_tid = away_t.get("team", {}).get("id")
+        home_tid = home_t.get("team", {}).get("id")
+
+        try:
+            _, ranks_by_id = _get_team_pitching_rankings(force=False)
+        except Exception:
+            ranks_by_id = {}
+        away_staff = ranks_by_id.get(away_tid) or {}
+        home_staff = ranks_by_id.get(home_tid) or {}
 
         def _row(b, opp_pid, opp_name, opp_hand):
             nm = b.get("name", "")
@@ -8241,6 +8441,8 @@ def api_batting_order_matchups(game_pk):
             "gamePk": game_pk,
             "awayAbbr": away_abbr,
             "homeAbbr": home_abbr,
+            "awayStaffBadge": _rank_staff_badge(away_staff.get('composite_rank')),
+            "homeStaffBadge": _rank_staff_badge(home_staff.get('composite_rank')),
             "awayPitcherName": hp_name,
             "awayPitcherHand": hp_hand,
             "homePitcherName": ap_name,

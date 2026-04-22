@@ -308,7 +308,7 @@ details[open] summary::before{transform:rotate(90deg)}
             <tr>
               <th>Player</th><th>Team</th><th>Market</th><th>Line</th>
               <th>HUB</th><th>EV%</th><th>Prob</th><th>Edge</th>
-              <th>Mean</th><th>Open</th><th>Close</th><th>CLV</th>
+              <th>Mean</th><th>Price Shop</th><th>Close</th><th>CLV</th>
               <th>Stake $</th><th>Actual</th><th>Result</th><th>Tier</th><th>P/L $</th>
             </tr>
           </thead>
@@ -385,6 +385,7 @@ details[open] summary::before{transform:rotate(90deg)}
           <div class="mult-row"><label>Home Runs</label><input id="m_batter_home_runs" type="number" step="0.01" value="1.00"></div>
           <div class="mult-row"><label>RBI</label><input id="m_batter_rbis" type="number" step="0.01" value="1.00"></div>
           <div class="mult-row"><label>Runs</label><input id="m_batter_runs_scored" type="number" step="0.01" value="1.00"></div>
+          <div class="mult-row"><label>H+R+RBI</label><input id="m_batter_hits_runs_rbis" type="number" step="0.01" value="1.00"></div>
           <div class="mult-row"><label>Stolen Bases</label><input id="m_batter_stolen_bases" type="number" step="0.01" value="1.00"></div>
           <div class="mult-row"><label>Strikeouts</label><input id="m_pitcher_strikeouts" type="number" step="0.01" value="1.00"></div>
           <div class="mult-row"><label>NRFI</label><input id="m_nrfi" type="number" step="0.01" value="1.00"></div>
@@ -589,7 +590,7 @@ details[open] summary::before{transform:rotate(90deg)}
 const MARKET_LABELS = {
   batter_hits:'Hits', batter_total_bases:'Total Bases',
   batter_home_runs:'Home Runs', batter_rbis:'RBIs',
-  batter_runs_scored:'Runs', batter_stolen_bases:'Stolen Bases',
+  batter_runs_scored:'Runs', batter_hits_runs_rbis:'H+R+RBI', batter_stolen_bases:'Stolen Bases',
   pitcher_strikeouts:'Strikeouts', nrfi:'NRFI', yrfi:'YRFI'
 };
 
@@ -679,6 +680,20 @@ function mkLabel(k) { return MARKET_LABELS[k] || k; }
 function mkTag(k) {
   const isPitcher = k==='pitcher_strikeouts';
   return `<span class="mk${isPitcher?' mk-k':''}">${mkLabel(k)}</span>`;
+}
+function priceShopHtml(r) {
+  const overPx = r.bestOverPrice ?? r.best_over_price ?? r.bestAvailablePrice ?? r.openingPrice ?? r.marketPrice;
+  const overBk = r.bestOverBook ?? r.best_over_book ?? r.bestAvailableBook ?? r.bookmaker;
+  const underPx = r.bestUnderPrice ?? r.best_under_price;
+  const underBk = r.bestUnderBook ?? r.best_under_book;
+  const lr = Array.isArray(r.lineRange) ? r.lineRange : (Array.isArray(r.line_range) ? r.line_range : null);
+  const varies = !!(r.lineVaries ?? r.line_varies);
+  const books = r.bookCount ?? r.book_count ?? 0;
+  return `<div style="line-height:1.3">
+    <div>${overPx!=null?overPx:'—'} ${overBk?`@ ${safe(overBk)}`:''}</div>
+    <div style="font-size:.58rem;color:var(--mu)">U ${underPx!=null?underPx:'—'} ${underBk?`@ ${safe(underBk)}`:''}</div>
+    <div style="font-size:.56rem;color:${varies?'#ff9800':'var(--mu)'}">${lr?`${lr[0]}–${lr[1]}`:'—'} · ${books} books${varies?' · varies':''}</div>
+  </div>`;
 }
 
 // ── Grade / tier badges ───────────────────────────────────────────────────────
@@ -875,7 +890,7 @@ function renderBoard() {
       <td>${pct(r.adjProb)}</td>
       <td>${r.edge!=null?pct(r.edge):'—'}</td>
       <td>${num(r.modelMean,2)}</td>
-      <td>${r.openingPrice!=null?r.openingPrice:'—'}</td>
+      <td>${priceShopHtml(r)}</td>
       <td>${r.closingPrice!=null?r.closingPrice:'—'}</td>
       <td>${clvHtml(r.clvEdge)}</td>
       <td>${money(r.stakeDollars||0)}</td>
@@ -942,6 +957,8 @@ function renderPickCards(picks) {
         <div>Prob <span>${pct(r.adjProb)}</span></div>
         <div>Edge <span>${r.edge!=null?pct(r.edge):'—'}</span></div>
         <div>Stake <span>${money(r.stakeDollars||0)}</span></div>
+        <div>Best O <span>${(r.bestOverPrice ?? r.best_over_price ?? r.bestAvailablePrice ?? r.openingPrice ?? '—')}${(r.bestOverBook ?? r.best_over_book ?? r.bestAvailableBook ?? r.bookmaker) ? ' @ '+safe(r.bestOverBook ?? r.best_over_book ?? r.bestAvailableBook ?? r.bookmaker) : ''}</span></div>
+        <div>Best U <span>${(r.bestUnderPrice ?? r.best_under_price)!=null?(r.bestUnderPrice ?? r.best_under_price):'—'}${(r.bestUnderBook ?? r.best_under_book) ? ' @ '+safe(r.bestUnderBook ?? r.best_under_book) : ''}</span></div>
         ${evStr?`<div>${evStr}</div>`:''}
         ${grade!=='pending'?`<div>P/L <span style="color:${profit>=0?'var(--g)':'var(--r)'}">${money(profit)}</span></div>`:''}
       </div>
@@ -981,6 +998,7 @@ async function loadModelRecord() {
       ['yrfi', 'YRFI'],
       ['tb', 'TB'],
       ['rbi', 'RBI'],
+      ['hrr', 'H+R+RBI'],
       ['runs', 'Runs'],
       ['parlay', 'Parlay'],
     ];
@@ -1023,7 +1041,7 @@ function setAdj(adj) {
 function collectAdj() {
   const mm = {};
   ['batter_hits','batter_total_bases','batter_home_runs','batter_rbis',
-   'batter_runs_scored','batter_stolen_bases','pitcher_strikeouts','nrfi','yrfi'].forEach(mk=>{
+   'batter_runs_scored','batter_hits_runs_rbis','batter_stolen_bases','pitcher_strikeouts','nrfi','yrfi'].forEach(mk=>{
     const el=$(`m_${mk}`); if(el) mm[mk]=parseFloat(el.value)||1.0;
   });
   return {

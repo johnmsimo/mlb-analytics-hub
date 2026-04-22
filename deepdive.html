@@ -267,6 +267,10 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .bom-table td{padding:6px 6px;border-bottom:1px solid rgba(255,255,255,.04);white-space:nowrap}
 .bom-table td:not(:first-child):not(:nth-child(2)):not(:nth-child(3)){text-align:center}
 .bom-table tr:hover td{background:rgba(0,229,255,.03)}
+.bom-staff-tag{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;font-family:'Orbitron',monospace;font-size:.54rem;letter-spacing:1px;border:1px solid transparent}
+.bom-staff-top5{background:rgba(244,67,54,.14);border-color:rgba(244,67,54,.35);color:#ff8a80}
+.bom-staff-bottom10{background:rgba(0,230,118,.14);border-color:rgba(0,230,118,.35);color:#00e676}
+.bom-staff-mid{background:rgba(158,158,158,.14);border-color:rgba(158,158,158,.35);color:#cfd8dc}
 .bom-iso-hot{background:rgba(0,230,118,.22);color:#00e676;font-weight:700;border-radius:3px;padding:1px 5px}
 .bom-iso-warm{background:rgba(255,152,0,.16);color:#ff9800;font-weight:600;border-radius:3px;padding:1px 5px}
 .bom-iso-cold{color:var(--mu);padding:1px 5px}
@@ -3328,7 +3332,17 @@ function bomPitchTypeTag(status, note) {
   return '<span class="bom-pt-tag ' + cls + '" title="' + tip + '">' + txt + '</span>';
 }
 
-function buildBomSide(batters, teamAbbr, oppPitcherName, oppPitcherHand) {
+function bomStaffBadge(badge) {
+  var b = badge || {};
+  var tone = String(b.tone || 'mid').toLowerCase();
+  var cls = tone === 'top5' ? 'bom-staff-top5' : (tone === 'bottom10' ? 'bom-staff-bottom10' : 'bom-staff-mid');
+  var label = b.label || 'Mid-Pack';
+  var icon = b.icon || '⚪';
+  var rankTxt = b.rank ? (' #' + b.rank) : '';
+  return '<span class="bom-staff-tag ' + cls + '">' + icon + ' ' + label + rankTxt + '</span>';
+}
+
+function buildBomSide(batters, teamAbbr, oppPitcherName, oppPitcherHand, oppStaffBadge) {
   if(!batters || !batters.length) {
     return '<p class="na" style="padding:12px">Lineup not yet available.</p>';
   }
@@ -3353,7 +3367,7 @@ function buildBomSide(batters, teamAbbr, oppPitcherName, oppPitcherHand) {
   }).join('');
 
   return '<div class="bom-side-hdr">'
-    + '<span style="font-size:.68rem">vs <strong style="color:var(--c)">' + oppPitcherName + '</strong> (' + oppPitcherHand + 'HP)</span>'
+    + '<span style="font-size:.68rem">vs <strong style="color:var(--c)">' + oppPitcherName + '</strong> (' + oppPitcherHand + 'HP) ' + bomStaffBadge(oppStaffBadge) + '</span>'
     + '<span style="font-size:.58rem;color:var(--mu)">ISO ≥.200 = 🟢 HOT ZONE</span>'
     + '</div>'
     + '<div style="overflow-x:auto"><table class="bom-table">'
@@ -3380,9 +3394,9 @@ function renderBattingOrderMatchups(d) {
 
   box.innerHTML = '<div class="bom-wrap">'
     + '<div class="bom-side">' + awayHdr
-      + buildBomSide(d.awayBatters, d.awayAbbr, d.homePitcherName, d.homePitcherHand) + '</div>'
+      + buildBomSide(d.awayBatters, d.awayAbbr, d.homePitcherName, d.homePitcherHand, d.homeStaffBadge) + '</div>'
     + '<div class="bom-side">' + homeHdr
-      + buildBomSide(d.homeBatters, d.homeAbbr, d.awayPitcherName, d.awayPitcherHand) + '</div>'
+      + buildBomSide(d.homeBatters, d.homeAbbr, d.awayPitcherName, d.awayPitcherHand, d.awayStaffBadge) + '</div>'
     + '</div>'
     + '<div class="legend" style="margin-top:9px">'
     + '<span class="bom-iso-hot" style="padding:2px 8px">ISO ≥.200 HOT ZONE (PropFinder Green)</span>'

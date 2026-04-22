@@ -506,7 +506,7 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
           <thead><tr>
             <th>PLAYER</th><th>TEAM</th><th>MARKET</th>
             <th>BOOK LINE</th><th>PROJECTION</th><th>EDGE</th>
-            <th>IMPL PROB</th><th>EV%</th><th>HUB</th><th>ODDS</th><th>SAVE</th>
+            <th>IMPL PROB</th><th>EV%</th><th>HUB</th><th>BEST PRICE</th><th>SAVE</th>
           </tr></thead>
           <tbody id="valueTbody"></tbody>
         </table>
@@ -551,17 +551,17 @@ let VAL_FILT      = 'all';
 
 const MKT_LABELS = {
   player_hits:'Hits', player_home_runs:'Home Runs', player_total_bases:'Total Bases',
-  player_rbi:'RBI', player_hrr:'H+R+RBI', pitcher_strikeouts:'Strikeouts (P)',
+  player_rbi:'RBI', player_hrr:'H+R+RBI', batter_hits_runs_rbis:'H+R+RBI', pitcher_strikeouts:'Strikeouts (P)',
   batter_strikeouts:'Strikeouts (B)', pitcher_walks:'Walks',
   batterhits:'Hits', batterhomeruns:'Home Runs', battertotalbases:'Total Bases',
-  batterrbis:'RBI', pitcherstrikeouts:'Strikeouts (P)', pitcherwalks:'Walks',
+  batterrbis:'RBI', batterhitsrunsrbis:'H+R+RBI', pitcherstrikeouts:'Strikeouts (P)', pitcherwalks:'Walks',
 };
 const MKT_PROJ = {
   player_hits:'hits', player_home_runs:'hr', player_total_bases:'tb',
-  player_rbi:'rbi', player_hrr:'hrr', pitcher_strikeouts:'k',
+  player_rbi:'rbi', player_hrr:'hrr', batter_hits_runs_rbis:'hrr', pitcher_strikeouts:'k',
   pitcher_walks:'bb', batter_strikeouts:null,
   batterhits:'hits', batterhomeruns:'hr', battertotalbases:'tb',
-  batterrbis:'rbi', pitcherstrikeouts:'k', pitcherwalks:'bb',
+  batterrbis:'rbi', batterhitsrunsrbis:'hrr', pitcherstrikeouts:'k', pitcherwalks:'bb',
 };
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
@@ -576,7 +576,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // ── Model Track Record Banner ─────────────────────────────────────────────────
 async function loadModelRecordBanner() {
-  const MKT_NAMES = {hits:'HITS', hr:'HR', k:'Ks', tb:'TB', rbi:'RBI', runs:'RUNS', parlay:'PARLAY'};
+  const MKT_NAMES = {hits:'HITS', hr:'HR', hrr:'H+R+RBI', k:'Ks', tb:'TB', rbi:'RBI', runs:'RUNS', parlay:'PARLAY'};
   try {
     const r = await fetch('/api/tracker/model-record');
     const d = await r.json();
@@ -1735,11 +1735,14 @@ function buildValueBets(entries) {
     const pdata    = lookup[key] || null;
     const proj     = (pdata && projField) ? (pdata[projField] ?? null) : null;
     const line     = parseFloat(e.line || 0);
-    const odds     = parseFloat(e.openOdds || -110);
-    const implProb = odds < 0 ? Math.abs(odds)/(Math.abs(odds)+100) : 100/(odds+100);
+    const oddsRaw  = e.openOdds ?? e.openingPrice ?? e.bestOverPrice ?? e.marketPrice ?? e.bestAvailablePrice;
+    const odds     = parseFloat(oddsRaw);
+    const implProb = (e.marketImplied != null)
+      ? parseFloat(e.marketImplied)
+      : (!isNaN(odds) ? (odds < 0 ? Math.abs(odds)/(Math.abs(odds)+100) : 100/(odds+100)) : null);
     const edge     = (proj !== null && line > 0) ? (proj - line) / line : null;
     const tier     = edge===null ? '—' : edge>0.10 ? 'A' : edge>0.06 ? 'B' : edge>0.02 ? 'C' : edge>=-0.02 ? 'D' : '✗';
-    return {...e, proj, projField, edge, implProb, tier};
+    return {...e, proj, projField, edge, implProb, tier, openOdds: isNaN(odds) ? null : odds};
   }).sort((a,b) => (b.edge??-999)-(a.edge??-999));
 
   // Build player lookup maps for batter card badges
@@ -1807,6 +1810,21 @@ function renderValueTable(filter) {
     const idx     = all.indexOf(b);
     const key     = pickKey(b);
     const isSaved = TRACKED_KEYS.has(key);
+    const overPx  = b.bestOverPrice ?? b.best_over_price ?? b.bestAvailablePrice ?? b.openingPrice ?? b.marketPrice;
+    const overBk  = b.bestOverBook  ?? b.best_over_book  ?? b.bestAvailableBook  ?? b.bookmaker;
+    const underPx = b.bestUnderPrice ?? b.best_under_price;
+    const underBk = b.bestUnderBook ?? b.best_under_book;
+    const lr      = Array.isArray(b.lineRange) ? b.lineRange : (Array.isArray(b.line_range) ? b.line_range : null);
+    const vary    = !!(b.lineVaries ?? b.line_varies);
+    const books   = b.bookCount ?? b.book_count ?? 0;
+    const oddsCell = `
+      <div style="line-height:1.35">
+        <div style="color:var(--c)">Best O: ${overPx!=null?overPx:'—'} ${overBk?`@ ${overBk}`:''}</div>
+        <div style="color:var(--mu)">Best U: ${underPx!=null?underPx:'—'} ${underBk?`@ ${underBk}`:''}</div>
+        <div style="font-size:.58rem;color:${vary?'#ff9800':'var(--mu)'}">
+          ${lr?`Line ${lr[0]}–${lr[1]}`:'Line —'} · ${books||0} books${vary?' · varies':''}
+        </div>
+      </div>`;
     return `<tr class="${b.edge>0.07?'hi-edge':''}">
       <td style="font-weight:700">${b.player||'—'}</td>
       <td style="color:var(--mu)">${b.team||'—'}</td>
@@ -1814,10 +1832,10 @@ function renderValueTable(filter) {
       <td style="color:var(--mu)">${b.line??'—'}</td>
       <td class="projv">${projStr}</td>
       <td class="${edgeCls}">${edgeStr}</td>
-      <td style="color:var(--mu)">${(b.implProb*100).toFixed(1)}%</td>
+      <td style="color:var(--mu)">${b.implProb!=null?(b.implProb*100).toFixed(1)+'%':'—'}</td>
       <td>${evHtml(b.evPct)}</td>
       <td>${hubBadge(b.hubRating != null ? b.hubRating : computeHubRating(b.adjProb, b.edge))}</td>
-      <td style="color:var(--mu)">${b.openOdds??'—'}</td>
+      <td>${oddsCell}</td>
       <td><button class="save-btn${isSaved?' saved':''}" data-key="${key.replace(/"/g,'&quot;')}" onclick="savePickFromVB(${idx})">${isSaved?'✓ SAVED':'＋ SAVE'}</button></td>
     </tr>`;
   }).join('');

@@ -134,6 +134,7 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .team-toolbar,.mc-toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px}.select{background:#0d1423;border:1px solid var(--b);border-radius:10px;padding:10px 12px;color:var(--c);font-family:Orbitron,monospace;font-size:.72rem}
 .team-head{display:flex;align-items:center;gap:12px;margin-bottom:14px}.team-head img.team-logo{width:56px;height:56px;object-fit:contain}.team-name{font-family:Orbitron,monospace;color:var(--c);font-size:1rem;letter-spacing:1.4px}.team-meta{font-size:.74rem;color:var(--mu)}
 .roster-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}.player-card{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:14px;padding:12px}.player-top{display:flex;align-items:center;gap:10px}.player-photo{width:54px;height:54px;border-radius:12px;object-fit:cover;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.06)}.player-name{font-weight:700;color:var(--c)}.player-pos{font-family:Orbitron,monospace;font-size:.62rem;color:var(--cyan);letter-spacing:1px;margin-bottom:4px}.stat-row{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:10px}.stat{background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.08);border-radius:10px;padding:8px}.stat-l{font-size:.56rem;color:var(--mu);font-family:Orbitron,monospace;letter-spacing:1px}.stat-v{font-size:.78rem;color:var(--c);margin-top:4px}
+.rank-wrap{margin-bottom:14px;padding:10px;border:1px solid rgba(0,229,255,.12);border-radius:12px;background:rgba(0,0,0,.2)}.rank-title{font-family:Orbitron,monospace;font-size:.62rem;letter-spacing:1.4px;color:var(--mu);margin-bottom:8px}.rank-table{width:100%;border-collapse:collapse}.rank-table th,.rank-table td{padding:7px 6px;border-bottom:1px solid rgba(255,255,255,.05);font-size:.66rem;text-align:left}.rank-table th{font-family:Orbitron,monospace;font-size:.52rem;letter-spacing:1px;color:var(--mu)}.rank-table td.num{text-align:center;font-family:Orbitron,monospace}.rank-row-top td{background:rgba(0,230,118,.08)}.rank-row-mid td{background:rgba(255,193,7,.05)}.rank-row-bot td{background:rgba(244,67,54,.08)}
 .mc-card{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:14px;padding:12px;margin-bottom:12px}.mc-top{display:flex;justify-content:space-between;gap:8px;align-items:center}.mc-match{font-family:Orbitron,monospace;color:var(--c);letter-spacing:1px}.mc-mini{font-size:.72rem;color:var(--mu);margin-top:6px}.prop-table{width:100%;border-collapse:collapse;margin-top:8px}.prop-table th,.prop-table td{padding:8px 6px;border-bottom:1px solid rgba(255,255,255,.05);font-size:.72rem;text-align:left}.prop-table th{color:var(--mu);font-family:Orbitron,monospace;font-size:.62rem;letter-spacing:1px}.pillish{display:inline-flex;padding:4px 8px;border-radius:999px;background:rgba(0,229,255,.08);border:1px solid rgba(0,229,255,.14);color:var(--cyan);font-family:Orbitron,monospace;font-size:.6rem;letter-spacing:1px}
 /* MC Projection Board */
 #mcView .mc-board{display:flex;flex-direction:column;gap:14px}
@@ -333,6 +334,7 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
     <div class="panel">
       <div class="sh">TEAM TABS</div>
       <div class="team-toolbar"><select id="teamSelect" class="select"></select><span class="pillish" id="teamStatus">Loading teams…</span></div>
+      <div id="teamPitchRankWrap" class="rank-wrap"><div class="sw"><div class="sp"></div><div class="st">LOADING PITCHING RANKINGS...</div></div></div>
       <div id="teamWrap"><div class="sw"><div class="sp"></div><div class="st">LOADING TEAM DATA...</div></div></div>
     </div>
   </div>
@@ -569,9 +571,31 @@ function qpSave(e,pick,btnId){
     .catch(function(){if(btn)btn.textContent='Err';});
 }
 
-let TEAM_DATA={teams:[]}, MC_DATA={games:[],topProps:[]};
+let TEAM_DATA={teams:[]}, TEAM_PITCH_RANK={rankings:[]}, MC_DATA={games:[],topProps:[]};
 function switchView(id, btn){ document.querySelectorAll('.view').forEach(v=>v.classList.remove('active')); document.getElementById(id).classList.add('active'); document.querySelectorAll('.tabbtn').forEach(b=>b.classList.remove('active')); if(btn) btn.classList.add('active'); }
 function numOrDash(v){ return (v===undefined||v===null||v==='') ? '—' : v; }
+function renderTeamPitchingRankings(rankings){
+  const wrap=document.getElementById('teamPitchRankWrap');
+  if(!wrap) return;
+  const rows=(rankings||[]);
+  if(!rows.length){ wrap.innerHTML='<div class="ng"><h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px">NO PITCHING RANKS</h3></div>'; return; }
+  const body=rows.map(function(r){
+    const rank=Number(r.composite_rank||99);
+    const cls=rank<=10?'rank-row-top':(rank>=21?'rank-row-bot':'rank-row-mid');
+    return '<tr class="'+cls+'">'
+      +'<td class="num">'+rank+'</td>'
+      +'<td>'+r.abbr+'</td>'
+      +'<td class="num">'+numOrDash(r.era_rank)+'</td>'
+      +'<td class="num">'+numOrDash(r.whip_rank)+'</td>'
+      +'<td class="num">'+numOrDash(r.k9_rank)+'</td>'
+      +'<td class="num">'+numOrDash(r.hr9_rank)+'</td>'
+      +'<td class="num">'+numOrDash(r.composite_score)+'</td>'
+      +'</tr>';
+  }).join('');
+  wrap.innerHTML='<div class="rank-title">TEAM PITCHING RANKINGS · ERA | WHIP | K/9 | HR/9 (COMPOSITE)</div>'
+    +'<div style="overflow-x:auto"><table class="rank-table"><thead><tr><th>#</th><th>TEAM</th><th>ERA</th><th>WHIP</th><th>K/9</th><th>HR/9</th><th>COMP</th></tr></thead><tbody>'
+    +body+'</tbody></table></div>';
+}
 function renderTeam(team){
   const wrap=document.getElementById('teamWrap');
   if(!team){ wrap.innerHTML='<div class="ng"><h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px">NO TEAM DATA</h3></div>'; return; }
@@ -579,6 +603,13 @@ function renderTeam(team){
     +'<div class="roster-grid">'+(team.players||[]).map(function(p){return '<div class="player-card" style="cursor:pointer" data-pid="'+p.id+'"><div class="player-top"><img class="player-photo" src="'+(p.image||'')+'" alt="'+p.name+'" loading="lazy" width="54" height="54"><div><div class="player-pos">'+(p.pos||'?')+'</div><div class="player-name">'+(p.name||'?')+'</div></div></div><div class="stat-row"><div class="stat"><div class="stat-l">'+p.label1+'</div><div class="stat-v">'+numOrDash(p.value1)+'</div></div><div class="stat"><div class="stat-l">'+p.label2+'</div><div class="stat-v">'+numOrDash(p.value2)+'</div></div><div class="stat"><div class="stat-l">'+p.label3+'</div><div class="stat-v">'+numOrDash(p.value3)+'</div></div></div></div>';}).join('')+'</div>';
 }
 function loadTeams(){
+  fetch('/api/teams/pitching-rankings').then(r=>r.json()).then(function(d){
+    if(d.success){ TEAM_PITCH_RANK=d; renderTeamPitchingRankings(d.rankings||[]); }
+    else throw new Error(d.error||'Pitching rankings unavailable');
+  }).catch(function(e){
+    const wrap=document.getElementById('teamPitchRankWrap');
+    if(wrap) wrap.innerHTML='<div class="ng"><h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px">'+e.message.toUpperCase()+'</h3></div>';
+  });
   fetch('/api/teams/overview').then(r=>r.json()).then(function(d){
     if(!d.success) throw new Error(d.error||'Team load failed');
     TEAM_DATA=d;
