@@ -488,6 +488,9 @@ _injury_last_refresh = None
 _injury_loading = False
 _injury_worker_started = False
 
+# ── Spray Chart Cache (batted ball data) ────────────────────────────────────
+_spray_cache = {}  # keyed by player_id, stores list of batted balls with coordinates
+
 PITCH_ORDER  = ["ff","si","fc","st","sl","cu","ch","fs","kn","sv"]
 PITCH_LABELS = {
     "ff":"4-Seam","si":"Sinker","fc":"Cutter","st":"Sweeper",
@@ -2538,6 +2541,82 @@ def api_player_splits(player_id, group):
     except Exception as ex:
         print("[api_player_splits]", traceback.format_exc())
         return jsonify({"success":False,"error":str(ex),"platoon":{},"recentGames":[]}), 500
+
+
+@app.route("/api/player/<int:player_id>/spray")
+def api_player_spray(player_id):
+    """Spray chart: current season batted ball positions for a batter."""
+    try:
+        # Check cache first
+        if player_id in _spray_cache:
+            return jsonify({"success": True, "data": _spray_cache[player_id]})
+
+        # Fetch player name for pybaseball lookup
+        pr = requests.get(f"{MLB_API}/people/{player_id}", timeout=10)
+        pr.raise_for_status()
+        people = pr.json().get("people", [])
+        if not people:
+            return jsonify({"success": False, "error": "Player not found"}), 404
+        
+        player_name = people[0].get("fullName", "Unknown")
+        
+        # Fetch spray chart data from pybaseball
+        import pybaseball as pb
+        year = datetime.now().year
+        sc = pb.statcast_batter(player_name, year)
+        
+        if sc is None or sc.empty:
+            _spray_cache[player_id] = []
+            return jsonify({"success": True, "data": []})
+        
+        # Extract batted ball data with key fields
+        spray_data = []
+        for idx, row in sc.iterrows():
+            # Skip if no hit coordinates
+            if not (isinstance(row.get('hc_x'), (int, float)) and isinstance(row.get('hc_y'), (int, float))):
+                continue
+            if not isinstance(row.get('hit_distance', 0), (int, float)):
+                continue
+            
+            result = row.get('result', '')
+            outcome = row.get('type', 'X')
+            ev = row.get('launch_speed')
+            la = row.get('launch_angle')
+            game_type = row.get('home_team') if row.get('inning_topbot') == 'Bot' else row.get('away_team')
+            
+            # Determine outcome category
+            if result in ('Single', 'Double', 'Triple'):
+                outcome_cat = 'hit'
+            elif result == 'Home Run':
+                outcome_cat = 'hr'
+            elif result in ('Field Out', 'Strikeout - Bunted In Play', 'Strikeout - In Play', 'Sac Fly', 'Force Out'):
+                outcome_cat = 'out'
+            else:
+                outcome_cat = 'out'
+            
+            spray_data.append({
+                'hc_x': round(float(row['hc_x']), 2),
+                'hc_y': round(float(row['hc_y']), 2),
+                'hit_distance': float(row.get('hit_distance', 0)),
+                'launch_angle': float(la) if isinstance(la, (int, float)) else None,
+                'exit_velocity': float(ev) if isinstance(ev, (int, float)) else None,
+                'pitch_type': row.get('pitch_type', 'UNK'),
+                'result': result,
+                'outcome': outcome_cat,
+                'date': str(row.get('game_date', '')),
+                'home_team': row.get('home_team', ''),
+                'away_team': row.get('away_team', ''),
+                'is_home_game': row.get('inning_topbot') == 'Bot',
+                'pitcher_hand': row.get('pitcher', {}).get('hand', '?') if isinstance(row.get('pitcher'), dict) else '?',
+            })
+        
+        # Cache the result
+        _spray_cache[player_id] = spray_data
+        return jsonify({"success": True, "data": spray_data})
+    
+    except Exception as ex:
+        print(f"[api_player_spray] {player_id}: {traceback.format_exc()}")
+        return jsonify({"success": False, "error": str(ex), "data": []}), 500
 
 
 

@@ -326,6 +326,28 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .ls-best{background:rgba(0,230,118,.1);border:1px solid rgba(0,230,118,.3);color:var(--g)}
 .ls-model{margin-top:8px;font-size:.58rem;color:var(--mu);line-height:1.5}
 .ls-empty{padding:18px;text-align:center;color:var(--mu);font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:1.3px}
+/* ── Spray Chart ── */
+.sc-modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:3000;background:rgba(2,6,16,.82);backdrop-filter:blur(4px)}
+.sc-modal.show{display:flex}
+.sc-card{width:min(900px,94vw);max-height:88vh;overflow:auto;background:var(--card);border:1px solid var(--b);border-radius:14px;padding:14px;box-shadow:0 16px 44px rgba(0,0,0,.45)}
+.sc-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+.sc-title{font-family:'Orbitron',monospace;font-size:.74rem;letter-spacing:2px;color:var(--c)}
+.sc-close{padding:6px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.04);color:var(--mu);font-family:'Orbitron',monospace;font-size:.56rem;letter-spacing:1px;cursor:pointer}
+.sc-close:hover{border-color:rgba(0,229,255,.3);color:var(--c)}
+.sc-filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;padding:10px;background:rgba(0,0,0,.2);border-radius:10px}
+.sc-chip{padding:5px 12px;border-radius:999px;border:1px solid rgba(0,229,255,.2);background:rgba(0,229,255,.06);color:var(--mu);font-family:'Orbitron',monospace;font-size:.56rem;letter-spacing:.8px;cursor:pointer;transition:all .15s}
+.sc-chip.active{background:rgba(0,229,255,.18);border-color:rgba(0,229,255,.45);color:var(--c)}
+.sc-chip:hover{border-color:rgba(0,229,255,.35)}
+.sc-field-container{width:100%;display:flex;justify-content:center;margin:12px 0}
+.sc-field{width:100%;max-width:500px}
+.sc-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:12px;padding:10px;background:rgba(0,0,0,.2);border-radius:10px}
+.sc-stat{text-align:center;padding:8px}
+.sc-stat-lbl{font-size:.5rem;color:var(--mu);letter-spacing:1px;font-family:'Orbitron',monospace}
+.sc-stat-val{font-size:.75rem;color:var(--t);font-weight:600;margin-top:3px}
+.sc-legend{display:flex;gap:12px;justify-content:center;margin:10px 0;flex-wrap:wrap;font-size:.58rem;font-family:'Orbitron',monospace}
+.sc-legend-item{display:flex;align-items:center;gap:4px}
+.sc-legend-dot{width:12px;height:12px;border-radius:50%}
+.sc-empty{padding:24px;text-align:center;color:var(--mu);font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:1.3px}
 /* ── Pitcher trend section ── */
 .pp-trends{margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.06)}
 .pp-trend-hd{font-family:'Orbitron',monospace;font-size:.58rem;color:var(--mu);letter-spacing:2px;margin-bottom:8px}
@@ -547,6 +569,20 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
   </div>
 </div>
 
+<div class="sc-modal" id="sprayChartModal" onclick="closeSprayChart(event)">
+  <div class="sc-card" onclick="event.stopPropagation()">
+    <div class="sc-head">
+      <div class="sc-title" id="sprayChartTitle">🗺️ SPRAY CHART</div>
+      <button class="sc-close" onclick="closeSprayChart()">CLOSE</button>
+    </div>
+    <div class="sc-filters" id="sprayChartFilters"></div>
+    <div class="sc-field-container" id="sprayChartFieldContainer"></div>
+    <div class="sc-legend" id="sprayChartLegend"></div>
+    <div class="sc-stats" id="sprayChartStats"></div>
+    <div id="sprayChartBody" class="sc-empty">Loading spray chart data...</div>
+  </div>
+</div>
+
 <footer>MLB ANALYTICS HUB · PROP PROJECTIONS · FG / STATCAST / MLB STATS API · FOR ENTERTAINMENT PURPOSES ONLY</footer>
 
 <script>
@@ -582,6 +618,8 @@ let SORT_KEY      = 'hits';
 let VAL_FILT      = 'all';
 let LINE_SHOP_DATA = null;
 let LINE_SHOP_GAME = null;
+let SPRAY_CHART_DATA = {};  // keyed by player_id
+let SPRAY_CHART_FILTERS = {}; // keyed by player_id, stores active filter state
 
 const MKT_LABELS = {
   player_hits:'Hits', player_home_runs:'Home Runs', player_total_bases:'Total Bases',
@@ -709,6 +747,8 @@ async function loadGames() {
   PROJ_DATA = MTCH_DATA = VAL_DATA = null;
   LINE_SHOP_DATA = null;
   LINE_SHOP_GAME = null;
+  SPRAY_CHART_DATA = {};
+  SPRAY_CHART_FILTERS = {};
   TREND_DATA = {}; UMP_DATA = null;
   CUR_GAME = null;
   hide('mainContent'); show('noGame');
@@ -745,6 +785,8 @@ async function selectGame(pk, awayAbbr, homeAbbr) {
   PROJ_DATA = MTCH_DATA = VAL_DATA = null;
   LINE_SHOP_DATA = null;
   LINE_SHOP_GAME = null;
+  SPRAY_CHART_DATA = {};
+  SPRAY_CHART_FILTERS = {};
   TREND_DATA = {}; UMP_DATA = null; LINEUP_STATUS = {};
   clearPFFilters(true); // reset filters silently on new game
   // Hide any stale alert
@@ -1561,6 +1603,150 @@ function closeLineShop(ev) {
   modal.classList.remove('show');
 }
 
+async function loadSprayChartData(playerId) {
+  if (SPRAY_CHART_DATA[playerId]) return SPRAY_CHART_DATA[playerId];
+  try {
+    const r = await fetch(`/api/player/${playerId}/spray`);
+    const d = await r.json();
+    if (!d.success || !d.data) {
+      SPRAY_CHART_DATA[playerId] = [];
+      return [];
+    }
+    SPRAY_CHART_DATA[playerId] = d.data;
+    SPRAY_CHART_FILTERS[playerId] = { all: true, hits: false, lhp: false, rhp: false, home: false, away: false };
+    return d.data;
+  } catch (e) {
+    console.error('[loadSprayChartData]', e);
+    SPRAY_CHART_DATA[playerId] = [];
+    return [];
+  }
+}
+
+async function openSprayChart(playerId, playerName) {
+  const modal = gel('sprayChartModal');
+  const title = gel('sprayChartTitle');
+  const body = gel('sprayChartBody');
+  if (!modal || !title || !body) return;
+  title.textContent = `🗺️ SPRAY CHART · ${playerName}`;
+  body.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  const data = await loadSprayChartData(playerId);
+  if (!data || data.length === 0) {
+    body.innerHTML = noData('No spray chart data available for this player.');
+    modal.classList.add('show');
+    return;
+  }
+  updateSprayChartDisplay(playerId);
+  modal.classList.add('show');
+}
+
+function closeSprayChart(ev) {
+  if (ev && ev.target && ev.currentTarget && ev.target !== ev.currentTarget) return;
+  const modal = gel('sprayChartModal');
+  if (!modal) return;
+  modal.classList.remove('show');
+}
+
+function createSprayChartFilters(playerId) {
+  const filters = SPRAY_CHART_FILTERS[playerId] || { all: true };
+  const fltCont = gel('sprayChartFilters');
+  if (!fltCont) return;
+  const filterLabels = { all: 'All', hits: 'Hits Only', lhp: 'vs LHP', rhp: 'vs RHP', home: 'Home', away: 'Away' };
+  fltCont.innerHTML = Object.keys(filterLabels).map(k => `
+    <button class="sc-chip${filters[k] ? ' active' : ''}" onclick="toggleSprayFilter(${playerId}, '${k}')">${filterLabels[k]}</button>
+  `).join('');
+}
+
+function toggleSprayFilter(playerId, filterKey) {
+  if (!SPRAY_CHART_FILTERS[playerId]) SPRAY_CHART_FILTERS[playerId] = { all: true };
+  if (filterKey === 'all') {
+    SPRAY_CHART_FILTERS[playerId] = { all: true, hits: false, lhp: false, rhp: false, home: false, away: false };
+  } else {
+    SPRAY_CHART_FILTERS[playerId]['all'] = false;
+    SPRAY_CHART_FILTERS[playerId][filterKey] = !SPRAY_CHART_FILTERS[playerId][filterKey];
+  }
+  updateSprayChartDisplay(playerId);
+}
+
+function updateSprayChartDisplay(playerId) {
+  const data = SPRAY_CHART_DATA[playerId] || [];
+  if (!data.length) return;
+  const filters = SPRAY_CHART_FILTERS[playerId] || { all: true };
+  createSprayChartFilters(playerId);
+  const filtered = filterSprayData(data, filters);
+  const fieldHtml = createSprayChartField(filtered);
+  const container = gel('sprayChartFieldContainer');
+  if (container) container.innerHTML = fieldHtml;
+  createSprayChartStats(filtered);
+  createSprayChartLegend();
+  gel('sprayChartBody').innerHTML = '';
+}
+
+function filterSprayData(data, filters) {
+  if (!data) return [];
+  if (filters.all) return data;
+  return data.filter(b => {
+    let pass = true;
+    if (filters.hits && b.outcome !== 'hit' && b.outcome !== 'hr') pass = false;
+    if (filters.lhp && b.pitcher_hand !== 'L') pass = false;
+    if (filters.rhp && b.pitcher_hand !== 'R') pass = false;
+    if (filters.home && !b.is_home_game) pass = false;
+    if (filters.away && b.is_home_game) pass = false;
+    return pass;
+  });
+}
+
+function createSprayChartField(data) {
+  const w = 400, h = 400;
+  const cx = w / 2, cy = h / 2;
+  const scale = 1.2;
+  let svg = `<svg viewBox="0 0 ${w} ${h}" class="sc-field"><defs><style>.sc-dot{cursor:pointer;transition:all .2s}</style></defs>`;
+  svg += `<rect width="${w}" height="${h}" fill="rgba(0,0,0,.1)" stroke="rgba(0,229,255,.18)" stroke-width="2"/>`;
+  svg += `<line x1="${cx}" y1="${cy-120}" x2="${cx}" y2="${cy+120}" stroke="rgba(0,229,255,.18)" stroke-width="1" opacity=".3"/>`;
+  svg += `<line x1="${cx-120}" y1="${cy}" x2="${cx+120}" y2="${cy}" stroke="rgba(0,229,255,.18)" stroke-width="1" opacity=".3"/>`;
+  svg += `<circle cx="${cx}" cy="${cy}" r="40" fill="none" stroke="#00e5ff" stroke-width="2" opacity=".2"/>`;
+  svg += `<circle cx="${cx}" cy="${cy}" r="60" fill="none" stroke="rgba(0,229,255,.18)" stroke-width="1" opacity=".15"/>`;
+  let statsByOutcome = { hit: 0, hr: 0, out: 0 };\n  data.forEach(b => {
+    if (!b.hc_x || !b.hc_y) return;
+    let x = cx + (b.hc_x - 127) * scale;
+    let y = cy - (b.hc_y - 127) * scale;
+    let r = Math.min(12, 4 + (b.exit_velocity || 80) / 20);
+    let color = b.outcome === 'hr' ? '#e040fb' : b.outcome === 'hit' ? '#00e676' : '#f44336';
+    svg += `<circle class="sc-dot" cx="${x}" cy="${y}" r="${r}" fill="${color}" opacity=".6" stroke="rgba(255,255,255,.2)" stroke-width="1" title="${b.result || 'Batted Ball'}: ${b.exit_velocity ? Math.round(b.exit_velocity) : '?'}mph"/>`;
+    if (b.outcome in statsByOutcome) statsByOutcome[b.outcome]++;
+  });
+  svg += '</svg>';
+  return svg;
+}
+
+function createSprayChartStats(data) {
+  const stats = gel('sprayChartStats');
+  if (!stats || !data.length) return;
+  const hits = data.filter(b => b.outcome === 'hit').length;
+  const hrs = data.filter(b => b.outcome === 'hr').length;
+  const outs = data.filter(b => b.outcome === 'out').length;
+  const avg = data.filter(b => b.outcome === 'hit' || b.outcome === 'hr').length / (data.length || 1);
+  const avg_ev = data.filter(b => b.exit_velocity).reduce((s, b) => s + b.exit_velocity, 0) / (data.filter(b => b.exit_velocity).length || 1);
+  stats.innerHTML = `
+    <div class="sc-stat"><div class="sc-stat-lbl">HITS</div><div class="sc-stat-val">${hits}</div></div>
+    <div class="sc-stat"><div class="sc-stat-lbl">HRs</div><div class="sc-stat-val">${hrs}</div></div>
+    <div class="sc-stat"><div class="sc-stat-lbl">OUTS</div><div class="sc-stat-val">${outs}</div></div>
+    <div class="sc-stat"><div class="sc-stat-lbl">BA</div><div class="sc-stat-val">${((avg)*100).toFixed(0)}%</div></div>
+    <div class="sc-stat"><div class="sc-stat-lbl">AVG EV</div><div class="sc-stat-val">${avg_ev?.toFixed(0) || '?'}mph</div></div>
+  `;
+}
+
+function createSprayChartLegend() {
+  const legend = gel('sprayChartLegend');
+  if (!legend) return;
+  legend.innerHTML = `
+    <div class="sc-legend-item"><div class="sc-legend-dot" style="background:var(--g)"></div><span>Hit</span></div>
+    <div class="sc-legend-item"><div class="sc-legend-dot" style="background:var(--m)"></div><span>Home Run</span></div>
+    <div class="sc-legend-item"><div class="sc-legend-dot" style="background:var(--r)"></div><span>Out</span></div>
+  `;
+}
+
+let LAST_SPRAY_STATS = null;
+
 function batterCard(b) {
   const p    = b.proj || {};
   const adj  = p.adjustments || null;
@@ -1623,6 +1809,7 @@ function batterCard(b) {
       <div class="fstat"><div class="fstat-lbl">EXP PA</div><div class="fstat-val">${p.expected_pa ?? '—'}</div></div>
     </div>
     <button class="ls-btn" onclick="openLineShop('${(b.name||'').replace(/'/g,"\\'")}')"><span>📚 LINE SHOPPING</span><span>OPEN ▸</span></button>
+    <button class="ls-btn" onclick="openSprayChart(${pid}, '${(b.name||'').replace(/'/g,"\\'")}')"><span>🗺️ SPRAY CHART</span><span>OPEN ▸</span></button>
     ${hrPanel}
     ${batxHtml}
     ${trnd}
