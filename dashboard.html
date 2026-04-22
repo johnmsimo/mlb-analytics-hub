@@ -406,10 +406,10 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
         <table class="nrfi-table">
           <thead>
             <tr>
-              <th>GAME</th><th>AWAY SP</th><th>HOME SP</th><th>NRFI PROB</th><th>NRFI EDGE</th><th>BOOK PRICE</th><th>💾</th>
+              <th>GAME</th><th>AWAY SP</th><th>HOME SP</th><th>NRFI PROB</th><th>NRFI EDGE</th><th>YRFI PROB</th><th>YRFI EDGE</th><th>BOOK PRICE</th><th>💾</th>
             </tr>
           </thead>
-          <tbody id="nrfiBody"><tr><td colspan="7" class="nrfi-sub">Loading…</td></tr></tbody>
+          <tbody id="nrfiBody"><tr><td colspan="9" class="nrfi-sub">Loading…</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -1177,39 +1177,53 @@ function loadNRFIBoard(games){
   var meta=document.getElementById('nrfiMeta'), body=document.getElementById('nrfiBody');
   if(!meta||!body) return;
   var gs=games||[];
-  if(!gs.length){ body.innerHTML='<tr><td colspan="7" class="nrfi-sub">No games available for this date.</td></tr>'; meta.textContent='0 games'; return; }
+  if(!gs.length){ body.innerHTML='<tr><td colspan="9" class="nrfi-sub">No games available for this date.</td></tr>'; meta.textContent='0 games'; return; }
   meta.textContent='Computing first-inning probabilities for '+gs.length+' games…';
   Promise.all(gs.map(function(g){return fetch('/api/nrfi/'+g.gamePk).then(function(r){return r.json();}).catch(function(){return {success:false};});}))
     .then(function(rows){
       NRFI_ROWS = rows.filter(function(r){return r&&r.success;}).sort(function(a,b){return (b.nrfi_prob||0)-(a.nrfi_prob||0);});
       NRFI_LAST_DATE=selectedGamesDate;
-      if(!NRFI_ROWS.length){ body.innerHTML='<tr><td colspan="7" class="nrfi-sub">NRFI model unavailable for today.</td></tr>'; meta.textContent='No NRFI rows available'; return; }
+      if(!NRFI_ROWS.length){ body.innerHTML='<tr><td colspan="9" class="nrfi-sub">NRFI model unavailable for today.</td></tr>'; meta.textContent='No NRFI rows available'; return; }
       body.innerHTML=NRFI_ROWS.map(function(r,idx){
-        var edge=(r.nrfi_edge==null)?'—':((r.nrfi_edge>=0?'+':'')+(r.nrfi_edge*100).toFixed(1)+'%');
-        var edgeCls=(r.nrfi_edge||0)>=0?'nrfi-pos':'nrfi-neg';
-        var price=(r.book_price!=null?r.book_price:'—')+(r.bookmaker?(' @ '+r.bookmaker):'');
+        var nrfiEdge=(r.nrfi_edge==null)?'—':((r.nrfi_edge>=0?'+':'')+(r.nrfi_edge*100).toFixed(1)+'%');
+        var nrfiEdgeCls=(r.nrfi_edge||0)>=0?'nrfi-pos':'nrfi-neg';
+        var yrfiEdge=(r.yrfi_edge==null)?'—':((r.yrfi_edge>=0?'+':'')+(r.yrfi_edge*100).toFixed(1)+'%');
+        var yrfiEdgeCls=(r.yrfi_edge||0)>=0?'nrfi-pos':'nrfi-neg';
+        var nrfiPrice=(r.book_price!=null?r.book_price:'—')+(r.bookmaker?(' @ '+r.bookmaker):'');
+        var yrfiPrice=(r.yrfi_book_price!=null?r.yrfi_book_price:'—')+(r.yrfi_bookmaker?(' @ '+r.yrfi_bookmaker):'');
+        var price='U: '+nrfiPrice+'<br><span class="nrfi-sub">O: '+yrfiPrice+'</span>';
         return '<tr>'
           +'<td><strong>'+r.game+'</strong></td>'
           +'<td>'+r.away_sp+'</td>'
           +'<td>'+r.home_sp+'</td>'
           +'<td class="nrfi-pos">'+(r.nrfi_prob*100).toFixed(1)+'%</td>'
-          +'<td class="'+edgeCls+'">'+edge+'</td>'
+          +'<td class="'+nrfiEdgeCls+'">'+nrfiEdge+'</td>'
+          +'<td class="nrfi-pos">'+(r.yrfi_prob*100).toFixed(1)+'%</td>'
+          +'<td class="'+yrfiEdgeCls+'">'+yrfiEdge+'</td>'
           +'<td>'+price+'</td>'
-          +'<td><button class="nrfi-save" id="nrfiSave-'+idx+'" onclick="saveNrfiPick('+idx+',this)">Save</button></td>'
+          +'<td><button class="nrfi-save" id="nrfiSaveU-'+idx+'" onclick="saveNrfiPick('+idx+',\'nrfi\',this)">Save U</button> <button class="nrfi-save" id="nrfiSaveO-'+idx+'" onclick="saveNrfiPick('+idx+',\'yrfi\',this)">Save O</button></td>'
           +'</tr>';
       }).join('');
-      meta.textContent=NRFI_ROWS.length+' games sorted by NRFI probability';
+      meta.textContent=NRFI_ROWS.length+' games with NRFI/YRFI probabilities';
     })
-    .catch(function(e){ body.innerHTML='<tr><td colspan="7" class="nrfi-sub">NRFI load failed: '+e.message+'</td></tr>'; meta.textContent='NRFI unavailable'; });
+    .catch(function(e){ body.innerHTML='<tr><td colspan="9" class="nrfi-sub">NRFI load failed: '+e.message+'</td></tr>'; meta.textContent='NRFI unavailable'; });
 }
-function saveNrfiPick(idx,btn){
+function saveNrfiPick(idx,side,btn){
   var r=NRFI_ROWS[idx]; if(!r) return;
+  var isNrfi=(side||'nrfi')==='nrfi';
+  var marketKey=isNrfi?'nrfi':'yrfi';
+  var recSide=isNrfi?'Under':'Over';
+  var adjProb=isNrfi?r.nrfi_prob:r.yrfi_prob;
+  var edge=isNrfi?r.nrfi_edge:r.yrfi_edge;
+  var marketImplied=isNrfi?r.market_nrfi_implied:r.market_yrfi_implied;
+  var openPrice=isNrfi?r.book_price:r.yrfi_book_price;
+  var openBook=isNrfi?r.bookmaker:r.yrfi_bookmaker;
   fetch('/api/tracker/pick',{
     method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({
-      gamePk:r.gamePk,team:r.home,player:r.game,marketKey:'nrfi',line:0.5,recommendedSide:'Under',
-      adjProb:r.nrfi_prob,edge:(r.nrfi_edge==null?0:r.nrfi_edge),marketImplied:r.market_nrfi_implied,
-      openingPrice:r.book_price,openingBookmaker:r.bookmaker,source:'nrfi_board',reason:(r.key_factors||[]).join(' · ')
+      gamePk:r.gamePk,team:r.home,player:r.game,marketKey:marketKey,line:0.5,recommendedSide:recSide,
+      adjProb:adjProb,edge:(edge==null?0:edge),marketImplied:marketImplied,
+      openingPrice:openPrice,openingBookmaker:openBook,source:'nrfi_board',reason:(r.key_factors||[]).join(' · ')
     })
   }).then(function(x){return x.json();}).then(function(d){
     if(d&&d.success){ btn.classList.add('saved'); btn.textContent='Saved'; }

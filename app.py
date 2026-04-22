@@ -409,6 +409,12 @@ _injury_last_refresh = None
 _injury_loading = False
 _injury_worker_started = False
 
+# ── NRFI Cache (same-day, lineup-sensitive) ─────────────────────────────────
+_nrfi_cache = {}
+
+# ── Per-game correlation cache (same-day, lineup-sensitive) ────────────────
+_correlation_cache = {}
+
 # ── Spray Chart Cache (batted ball data) ────────────────────────────────────
 _spray_cache = {}  # keyed by player_id, stores {'date': YYYY-MM-DD, 'data': [...]} 
 
@@ -4031,6 +4037,14 @@ def _corr_warning(row_a, row_b, r):
     return 'Negative correlation warning for combined legs'
 
 
+def _game_lineup_signature(game_obj, away_lineup, home_lineup):
+    away_pitcher = ((game_obj or {}).get('teams', {}).get('away', {}).get('probablePitcher', {}) or {}).get('fullName', '')
+    home_pitcher = ((game_obj or {}).get('teams', {}).get('home', {}).get('probablePitcher', {}) or {}).get('fullName', '')
+    away_names = ','.join((p.get('name') or p.get('fullName') or '').strip() for p in (away_lineup or [])[:9])
+    home_names = ','.join((p.get('name') or p.get('fullName') or '').strip() for p in (home_lineup or [])[:9])
+    return f"{away_pitcher}|{home_pitcher}|{away_names}|{home_names}"
+
+
 @app.route('/api/simulate/<int:game_pk>')
 def api_simulate(game_pk):
     try:
@@ -4043,6 +4057,18 @@ def api_simulate(game_pk):
         home_lineup = get_batters_from_boxscore(box.get('home', {}), 'home')
         if not away_lineup or not home_lineup:
             return jsonify({'success': False, 'error': 'Lineups not posted yet'}), 400
+        try:
+            requested_sims = int(request.args.get('sims', 5000) or 5000)
+        except Exception:
+            requested_sims = 5000
+        sims = max(500, min(5000, requested_sims))
+        today = datetime.now(ET).strftime('%Y-%m-%d')
+        lineup_signature = _game_lineup_signature(g, away_lineup, home_lineup)
+        cache_signature = f"{lineup_signature}|sims:{sims}"
+        refresh = request.args.get('refresh') == '1'
+        cached = _correlation_cache.get(game_pk)
+        if cached and not refresh and cached.get('date') == today and cached.get('signature') == cache_signature:
+            return jsonify(cached.get('payload') or {'success': False, 'error': 'Cached simulation payload missing'})
 
         away_team = g.get('teams', {}).get('away', {}).get('team', {})
         home_team = g.get('teams', {}).get('home', {}).get('team', {})
@@ -4081,7 +4107,6 @@ def api_simulate(game_pk):
         away_batx_map = {i: _batx_for_sim(b, home_pitcher, park, wx) for i, b in enumerate(away_lineup)}
         home_batx_map = {i: _batx_for_sim(b, away_pitcher, park, wx) for i, b in enumerate(home_lineup)}
 
-        sims = 1500
         rng = random.Random(game_pk + int(datetime.now().strftime('%Y%m%d')) + 6)
 
         away_store = {i: [] for i in range(len(away_lineup))}
@@ -4293,7 +4318,7 @@ def api_simulate(game_pk):
         for c in top_sgp_combos:
             c.pop('score', None)
 
-        return jsonify({
+        payload = {
             'success': True,
             'meta': {'sims': sims, 'awayAbbr': away_abbr, 'homeAbbr': home_abbr, 'parkFactor': park},
             'team': {
@@ -4323,7 +4348,13 @@ def api_simulate(game_pk):
             'correlations': correlations,
             'top_sgp_combos': top_sgp_combos,
             'sampleBoxscore': sample,
-        })
+        }
+        _correlation_cache[game_pk] = {
+            'date': today,
+            'signature': cache_signature,
+            'payload': payload,
+        }
+        return jsonify(payload)
     except Exception as ex:
         print('[api_simulate]', traceback.format_exc())
         return jsonify({'success': False, 'error': str(ex)}), 500
@@ -4829,6 +4860,9 @@ def _nrfi_market_snapshot(away_name, home_name):
         out['nrfi_book'] = best_nrfi['book']
     if yrfi_prices:
         out['yrfi_implied'] = round(sum(x['implied'] for x in yrfi_prices) / len(yrfi_prices), 4)
+        best_yrfi = max(yrfi_prices, key=lambda x: _american_price_score(x['price']))
+        out['yrfi_price'] = best_yrfi['price']
+        out['yrfi_book'] = best_yrfi['book']
     return out
 
 
@@ -4876,6 +4910,11 @@ def _compute_nrfi(game_pk):
     box = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=10).json().get('teams', {})
     away_lineup = get_batters_from_boxscore(box.get('away', {}), 'away')
     home_lineup = get_batters_from_boxscore(box.get('home', {}), 'home')
+    today = datetime.now(ET).strftime('%Y-%m-%d')
+    lineup_signature = _game_lineup_signature(g, away_lineup, home_lineup)
+    cached = _nrfi_cache.get(game_pk)
+    if cached and cached.get('date') == today and cached.get('signature') == lineup_signature:
+        return dict(cached.get('payload') or {'success': False, 'error': 'Cached NRFI payload missing'})
     away_leadoff = next((b for b in away_lineup if int(b.get('slot') or 0) == 1), (away_lineup[0] if away_lineup else {}))
     home_leadoff = next((b for b in home_lineup if int(b.get('slot') or 0) == 1), (home_lineup[0] if home_lineup else {}))
 
@@ -4897,7 +4936,9 @@ def _compute_nrfi(game_pk):
 
     odds = _nrfi_market_snapshot(away_name, home_name)
     market_nrfi_implied = odds.get('nrfi_implied')
+    market_yrfi_implied = odds.get('yrfi_implied')
     nrfi_edge = None if market_nrfi_implied is None else round(nrfi_prob - market_nrfi_implied, 4)
+    yrfi_edge = None if market_yrfi_implied is None else round(yrfi_prob - market_yrfi_implied, 4)
 
     factors = []
     if home_i1_era <= 3.35 or away_i1_era <= 3.35:
@@ -4919,7 +4960,7 @@ def _compute_nrfi(game_pk):
     if not factors:
         factors.append('Balanced setup with neutral first-inning profile')
 
-    return {
+    payload = {
         'success': True,
         'gamePk': game_pk,
         'game': f"{away_abbr} @ {home_abbr}",
@@ -4936,9 +4977,13 @@ def _compute_nrfi(game_pk):
         'nrfi_prob': round(nrfi_prob, 4),
         'yrfi_prob': yrfi_prob,
         'market_nrfi_implied': market_nrfi_implied,
+        'market_yrfi_implied': market_yrfi_implied,
         'nrfi_edge': nrfi_edge,
+        'yrfi_edge': yrfi_edge,
         'book_price': odds.get('nrfi_price'),
         'bookmaker': odds.get('nrfi_book'),
+        'yrfi_book_price': odds.get('yrfi_price'),
+        'yrfi_bookmaker': odds.get('yrfi_book'),
         'park_factor': round(park, 3),
         'weather': wx,
         'leadoff_context': {
@@ -4947,6 +4992,12 @@ def _compute_nrfi(game_pk):
         },
         'key_factors': factors[:4],
     }
+    _nrfi_cache[game_pk] = {
+        'date': today,
+        'signature': lineup_signature,
+        'payload': payload,
+    }
+    return payload
 
 
 @app.route('/api/nrfi/<int:game_pk>')
@@ -5572,6 +5623,8 @@ def _tracker_summary(entries):
 
 _TRACKER_CAPTURE_LOCK = threading.Lock()
 _TRACKER_CAPTURE_JOBS = {}
+_TRACKER_AUTO_SYNC_LOCK = threading.Lock()
+_TRACKER_AUTO_SYNC_STARTED = False
 
 
 def _tracker_row_key(row):
@@ -5620,6 +5673,49 @@ def _tracker_capture_continue_bg(date_str, remaining_games, sched, adjustments, 
     finally:
         with _TRACKER_CAPTURE_LOCK:
             _TRACKER_CAPTURE_JOBS.pop(date_str, None)
+
+
+def _tracker_auto_sync_once():
+    store = _tracker_store()
+    if not store:
+        return
+    today = datetime.now(ET).strftime('%Y-%m-%d')
+    for ds in sorted(store.keys(), reverse=True):
+        if ds > today:
+            continue
+        day = _normalize_tracker_day(store.get(ds))
+        pending = [r for r in day.get('entries', []) if r.get('grade') == 'pending']
+        if not pending:
+            continue
+        try:
+            with app.test_request_context(f'/api/tracker/close/{ds}', method='POST'):
+                api_tracker_close(ds)
+            with app.test_request_context(f'/api/tracker/grade/{ds}', method='POST'):
+                api_tracker_grade(ds)
+        except Exception:
+            print(f'[tracker_auto_sync_once {ds}] {traceback.format_exc()}')
+
+
+def _start_tracker_auto_sync_worker():
+    global _TRACKER_AUTO_SYNC_STARTED
+    if str(os.getenv('TRACKER_AUTO_SYNC_ENABLED', '1')).strip().lower() not in ('1', 'true', 'yes'):
+        return
+    with _TRACKER_AUTO_SYNC_LOCK:
+        if _TRACKER_AUTO_SYNC_STARTED:
+            return
+        _TRACKER_AUTO_SYNC_STARTED = True
+
+    interval_min = max(5, int(os.getenv('TRACKER_AUTO_SYNC_MINUTES', '15') or 15))
+
+    def _runner():
+        while True:
+            try:
+                _tracker_auto_sync_once()
+            except Exception:
+                print(f'[tracker_auto_sync] {traceback.format_exc()}')
+            time.sleep(interval_min * 60)
+
+    threading.Thread(target=_runner, daemon=True).start()
 
 
 
@@ -6071,6 +6167,162 @@ def _tracker_performance_payload(date_str=None, window_days=30):
     }
 
 
+def _tracker_backtest_payload(start_date, end_date, sims=2000):
+    start_dt = datetime.strptime(start_date, '%Y-%m-%d').date()
+    end_dt = datetime.strptime(end_date, '%Y-%m-%d').date()
+    if end_dt < start_dt:
+        start_dt, end_dt = end_dt, start_dt
+
+    sims = max(250, min(10000, int(sims or 2000)))
+    store = _tracker_store()
+    daily = []
+    cur = start_dt
+    total_bets = 0.0
+    total_wins = 0.0
+    total_profit = 0.0
+    total_risk = 0.0
+    total_units = 0.0
+
+    def _row_prob(row):
+        try:
+            p = float(row.get('adjProb') or row.get('rawProb') or 0)
+            return _clamp(p, 0.01, 0.99)
+        except Exception:
+            return None
+
+    def _row_stake(row):
+        try:
+            s = float(row.get('stakeDollars') or 0)
+            return max(0.0, s)
+        except Exception:
+            return 0.0
+
+    def _row_win_units(row):
+        pu = _profit_units_from_american(row.get('openingPrice'))
+        if pu is None:
+            pu = _profit_units_from_american(row.get('marketPrice'))
+        if pu is None:
+            pu = _profit_units_from_american(row.get('bestAvailablePrice'))
+        if pu is None:
+            try:
+                mi = float(row.get('marketImplied') or row.get('openingImplied') or 0)
+                if mi > 0:
+                    pu = max(0.0, (1.0 / mi) - 1.0)
+            except Exception:
+                pu = None
+        return float(pu if pu is not None else 1.0)
+
+    # Seed by selected window so repeated runs are stable.
+    seed = int(start_dt.strftime('%Y%m%d')) * 100000000 + int(end_dt.strftime('%Y%m%d'))
+    rng = random.Random(seed)
+
+    while cur <= end_dt:
+        ds = cur.strftime('%Y-%m-%d')
+        rows = _normalize_tracker_day(store.get(ds)).get('entries', [])
+        modeled = []
+        for row in rows:
+            if row.get('marketKey') == 'parlay':
+                continue
+            p = _row_prob(row)
+            if p is None:
+                continue
+            stake = _row_stake(row)
+            if stake <= 0:
+                continue
+            modeled.append({
+                'p': p,
+                'stake': stake,
+                'win_units': _row_win_units(row),
+            })
+
+        if not modeled:
+            daily.append({
+                'date': ds,
+                'bets': 0,
+                'graded': 0,
+                'wins': 0,
+                'losses': 0,
+                'hit_rate': None,
+                'units': 0.0,
+                'profit': 0.0,
+                'risk': 0.0,
+                'roi': None,
+            })
+            cur += timedelta(days=1)
+            continue
+
+        risk = sum(m['stake'] for m in modeled)
+        sim_wins = 0.0
+        sim_losses = 0.0
+        sim_units = 0.0
+        sim_profit = 0.0
+        for _ in range(sims):
+            wins_i = 0
+            losses_i = 0
+            units_i = 0.0
+            profit_i = 0.0
+            for m in modeled:
+                if rng.random() <= m['p']:
+                    wins_i += 1
+                    units_i += m['win_units']
+                    profit_i += m['stake'] * m['win_units']
+                else:
+                    losses_i += 1
+                    units_i -= 1.0
+                    profit_i -= m['stake']
+            sim_wins += wins_i
+            sim_losses += losses_i
+            sim_units += units_i
+            sim_profit += profit_i
+
+        wins = sim_wins / sims
+        losses = sim_losses / sims
+        units = sim_units / sims
+        profit = sim_profit / sims
+        hit_rate = wins / max(1.0, (wins + losses))
+        roi = (profit / risk) if risk > 0 else None
+
+        total_bets += len(modeled)
+        total_wins += wins
+        total_profit += profit
+        total_risk += risk
+        total_units += units
+
+        daily.append({
+            'date': ds,
+            'bets': len(modeled),
+            'graded': len(modeled),
+            'wins': round(wins, 2),
+            'losses': round(losses, 2),
+            'hit_rate': round(hit_rate, 4) if hit_rate is not None else None,
+            'units': round(units, 3),
+            'profit': round(profit, 2),
+            'risk': round(risk, 2),
+            'roi': round(roi, 4) if roi is not None else None,
+        })
+        cur += timedelta(days=1)
+
+    summary = {
+        'bets': int(round(total_bets)),
+        'wins': round(total_wins, 2),
+        'hit_rate': round(total_wins / max(1.0, total_bets), 4) if total_bets else None,
+        'profit': round(total_profit, 2),
+        'risk': round(total_risk, 2),
+        'units': round(total_units, 3),
+        'roi': round(total_profit / total_risk, 4) if total_risk > 0 else None,
+    }
+    return {
+        'success': True,
+        'start': start_dt.strftime('%Y-%m-%d'),
+        'end': end_dt.strftime('%Y-%m-%d'),
+        'days': (end_dt - start_dt).days + 1,
+        'mode': 'historical_resimulation',
+        'sims': sims,
+        'summary': summary,
+        'daily': daily,
+    }
+
+
 def _tracker_export_rows(date_str):
     store = _tracker_store()
     day = _normalize_tracker_day(store.get(date_str))
@@ -6465,6 +6717,22 @@ def api_tracker_performance():
     date_str = request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
     window = int(request.args.get('window', 30) or 30)
     return jsonify(_tracker_performance_payload(date_str, window))
+
+
+@app.route('/api/tracker/backtest')
+def api_tracker_backtest():
+    start = (request.args.get('start') or '').strip()
+    end = (request.args.get('end') or '').strip()
+    sims = request.args.get('sims', 2000)
+    if not start or not end:
+        return jsonify({'success': False, 'error': 'start and end are required (YYYY-MM-DD)'}), 400
+    try:
+        return jsonify(_tracker_backtest_payload(start, end, sims=sims))
+    except ValueError:
+        return jsonify({'success': False, 'error': 'Invalid date format. Use YYYY-MM-DD.'}), 400
+    except Exception as ex:
+        print(f'[api_tracker_backtest] {traceback.format_exc()}')
+        return jsonify({'success': False, 'error': str(ex)}), 500
 
 
 @app.route('/api/tracker/settings', methods=['GET', 'POST'])
@@ -11507,6 +11775,7 @@ def api_breakout_candidates():
 
 # Start hourly injury refresh worker once routes/helpers are loaded.
 _start_injury_worker()
+_start_tracker_auto_sync_worker()
 
 
 if __name__ == "__main__":

@@ -160,7 +160,9 @@ tr:hover td{background:rgba(0,229,255,.03)}
 .stake-input,.actual-input,.grade-select{width:84px;padding:4px 6px;font-size:.68rem}
 .builder-metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px}
 .builder-legs{display:flex;flex-direction:column;gap:8px;margin-bottom:10px}
+.builder-legs.drag-over{border:1px dashed rgba(0,229,255,.5);border-radius:10px;background:rgba(0,229,255,.06);padding:8px}
 .builder-leg{border:1px solid var(--line2);border-radius:10px;padding:9px 10px;background:var(--bg3)}
+.dragging-row{opacity:.45}
 .builder-leg-top{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}
 .builder-suggest{margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}
 .builder-suggest-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
@@ -364,7 +366,7 @@ details[open] summary::before{transform:rotate(90deg)}
         <div class="scard"><div class="scard-v" id="slipAvgEdge">—</div><div class="scard-l">Combined EV</div></div>
         <div class="scard"><div class="scard-v" id="parlayHealth">—</div><div class="scard-l">Health</div></div>
       </div>
-      <div class="notice" style="margin-bottom:10px">Add picks from the table into the builder. Correlation health rewards market diversity and penalizes stacking the same player or market.</div>
+      <div class="notice" style="margin-bottom:10px">Drag picks from the table into this builder (or use Add Parlay). Correlation health rewards market diversity and penalizes stacking the same player or market.</div>
       <div class="builder-legs" id="parlayCards"><div class="empty">Add at least two picks to build a parlay.</div></div>
       <div class="builder-suggest">
         <div class="panel-sub">Suggested add</div>
@@ -922,6 +924,7 @@ function renderBoard() {
 
   if (!rows.length) {
     $('boardBody').innerHTML = '<tr><td colspan="19" class="empty">No entries match current filters.</td></tr>';
+    setupParlayDnD();
     return;
   }
 
@@ -934,7 +937,8 @@ function renderBoard() {
     const rowCls= {win:'row-win',loss:'row-loss',push:'row-push',pending:''}[grade]||'';
     const profitCol = profit>0?'var(--g)':profit<0?'var(--r)':'var(--mu)';
     const inParlay = st.parlay.includes(r.id);
-    return `<tr class="${rowCls}">
+    const canDrag = r.marketKey !== 'parlay';
+    return `<tr class="${rowCls}" data-pick-id="${safe(r.id,'')}" draggable="${canDrag ? 'true' : 'false'}">
       <td><strong>${safe(r.player)}</strong></td>
       <td>${safe(r.team)}</td>
       <td>${mkTag(r.marketKey)}</td>
@@ -956,6 +960,48 @@ function renderBoard() {
       <td><div class="action-row"><button class="mini-btn ${inParlay?'on':''}" onclick="toggleParlay('${r.id}')">${inParlay?'Remove Parlay':'Add Parlay'}</button><button class="mini-btn danger" onclick="removePick('${r.id}')">Remove</button></div></td>
     </tr>`;
   }).join('');
+  setupParlayDnD();
+}
+
+function setupParlayDnD() {
+  const body = $('boardBody');
+  const zone = $('parlayCards');
+  if (!body || !zone) return;
+
+  body.querySelectorAll('tr[data-pick-id][draggable="true"]').forEach(tr => {
+    if (tr.dataset.dndBound === '1') return;
+    tr.dataset.dndBound = '1';
+    tr.addEventListener('dragstart', ev => {
+      const pickId = tr.getAttribute('data-pick-id');
+      if (!pickId) return;
+      ev.dataTransfer.setData('text/plain', pickId);
+      ev.dataTransfer.effectAllowed = 'copy';
+      tr.classList.add('dragging-row');
+    });
+    tr.addEventListener('dragend', () => tr.classList.remove('dragging-row'));
+  });
+
+  if (zone.dataset.dropBound === '1') return;
+  zone.dataset.dropBound = '1';
+
+  zone.addEventListener('dragover', ev => {
+    ev.preventDefault();
+    ev.dataTransfer.dropEffect = 'copy';
+    zone.classList.add('drag-over');
+  });
+  zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+  zone.addEventListener('drop', ev => {
+    ev.preventDefault();
+    zone.classList.remove('drag-over');
+    const pickId = ev.dataTransfer.getData('text/plain');
+    if (!pickId) return;
+    if (!st.parlay.includes(pickId)) {
+      st.parlay = [...st.parlay, pickId];
+      renderBoard();
+      renderParlayBuilder();
+      status('Added leg via drag-and-drop');
+    }
+  });
 }
 
 function parlayRows() {
@@ -1473,23 +1519,15 @@ async function runBacktest() {
   $('btNotice').style.display='none';
   status('Running backtest…');
   try {
-    // Use attribution dashboard over the window as a backtest proxy
-    const days = Math.ceil((new Date(end)-new Date(start))/(1000*86400))+1;
-    const d = await api(`/api/tracker/attribution/dashboard/${end}?window=${days}`);
-    const dash=d.dashboard||{};
-    const daily=dash.daily||[];
-    const totalBets=daily.reduce((a,r)=>a+(r.graded||0),0);
-    const totalWins=daily.reduce((a,r)=>a+(r.wins||0),0);
-    const totalProfit=daily.reduce((a,r)=>a+(parseFloat(r.profit||0)),0);
-    const totalRisk=daily.reduce((a,r)=>a+(parseFloat(r.risk||0)),0);
-    const hitRate=totalBets?(totalWins/totalBets):null;
-    const roi=totalRisk>0?(totalProfit/totalRisk):null;
-    $('btBets').textContent  =totalBets;
-    $('btHR').textContent    =hitRate!=null?pct(hitRate):'—';
-    const pp=totalProfit;
+    const d = await api(`/api/tracker/backtest?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`);
+    const daily = d.daily || [];
+    const summary = d.summary || {};
+    $('btBets').textContent  =summary.bets||0;
+    $('btHR').textContent    =summary.hit_rate!=null?pct(summary.hit_rate):'—';
+    const pp=parseFloat(summary.profit||0);
     $('btProfit').textContent=money(pp);
     $('btProfit').style.color=pp>=0?'var(--g)':'var(--r)';
-    $('btROI').textContent   =roi!=null?pct(roi):'—';
+    $('btROI').textContent   =summary.roi!=null?pct(summary.roi):'—';
     $('btBody').innerHTML=daily.map(r=>`<tr>
       <td>${r.date}</td><td>${r.bets||0}</td>
       <td style="color:var(--g)">${r.wins||0}</td><td style="color:var(--r)">${r.losses||0}</td>
@@ -1499,7 +1537,7 @@ async function runBacktest() {
       <td>${r.roi!=null?pct(r.roi):'—'}</td>
     </tr>`).join('');
     $('btResults').style.display='block';
-    $('btPill').textContent=`${start} → ${end} · ${days}d`;
+    $('btPill').textContent=`${d.start||start} → ${d.end||end} · ${d.days||daily.length}d`;
     status('Backtest complete');
   } catch(e){$('btNotice').style.display='block';$('btPill').textContent='Error';status(e.message,true);}
 }
