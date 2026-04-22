@@ -1040,7 +1040,7 @@ def api_games_today():
     _maybe_refresh_savant()
     _fetch_injury_status(force=False)
     try:
-        date_str = datetime.now(ET).strftime("%Y-%m-%d")
+        date_str = (request.args.get('date') or datetime.now(ET).strftime("%Y-%m-%d")).strip()
         raw   = fetch_schedule(date_str)
         games = [g for g in [parse_game(x) for x in raw] if g]
         return jsonify({"success":True,"games":games,"count":len(games)})
@@ -9361,11 +9361,30 @@ def api_ai_boxscore(game_pk):
         }), 500
 
 # ── Shared helper: fetch game + lineup ───────────────────────────────────────
-def _props_fetch_game(game_pk):
-    """Fetch schedule entry + boxscore lineups. Searches today ± 1 day."""
+def _props_fetch_game(game_pk, date_hint=None):
+    """Fetch schedule entry + boxscore lineups, preferring the requested date."""
     gdata = None
+    candidate_dates = []
+    if date_hint:
+        date_hint = str(date_hint).strip()
+        if date_hint:
+            candidate_dates.append(date_hint)
+            try:
+                base_dt = datetime.strptime(date_hint, "%Y-%m-%d")
+                candidate_dates.extend([
+                    (base_dt + timedelta(days=-1)).strftime("%Y-%m-%d"),
+                    (base_dt + timedelta(days=1)).strftime("%Y-%m-%d"),
+                ])
+            except Exception:
+                pass
     for delta in (0, -1, 1):
-        date_str = (datetime.now(ET) + timedelta(days=delta)).strftime("%Y-%m-%d")
+        candidate_dates.append((datetime.now(ET) + timedelta(days=delta)).strftime("%Y-%m-%d"))
+
+    seen_dates = set()
+    for date_str in candidate_dates:
+        if not date_str or date_str in seen_dates:
+            continue
+        seen_dates.add(date_str)
         raw   = fetch_schedule(date_str)
         gdata = next((g for g in raw if g.get("gamePk") == game_pk), None)
         if gdata:
@@ -10069,7 +10088,8 @@ def api_props_projections(game_pk):
         _maybe_refresh_savant()
         _fetch_injury_status(force=False)
 
-        gdata, away_bats, home_bats, away_t, home_t, pitchers = _props_fetch_game(game_pk)
+        date_hint = request.args.get('date')
+        gdata, away_bats, home_bats, away_t, home_t, pitchers = _props_fetch_game(game_pk, date_hint=date_hint)
         if not gdata:
             return jsonify({"success": False, "error": "Game not found"}), 404
 
@@ -10340,7 +10360,7 @@ def api_props_line_shopping(game_pk):
         _maybe_refresh_fg()
         _maybe_refresh_savant()
 
-        gdata, away_bats, home_bats, away_t, home_t, pitchers = _props_fetch_game(game_pk)
+        gdata, away_bats, home_bats, away_t, home_t, pitchers = _props_fetch_game(game_pk, date_hint=request.args.get('date'))
         if not gdata:
             return jsonify({"success": False, "error": "Game not found"}), 404
 
@@ -10467,7 +10487,7 @@ def api_props_matchup_scores(game_pk):
         _maybe_refresh_fg()
         _maybe_refresh_savant()
 
-        gdata, away_bats, home_bats, away_t, home_t, pitchers = _props_fetch_game(game_pk)
+        gdata, away_bats, home_bats, away_t, home_t, pitchers = _props_fetch_game(game_pk, date_hint=request.args.get('date'))
         if not gdata:
             return jsonify({"success": False, "error": "Game not found"}), 404
 
@@ -11109,9 +11129,9 @@ def _compute_streak(log, stat_key, line):
     return {"direction": last_dir, "length": length}
 
 
-def _compute_dashboard_quick_props(game_pk, limit=3):
+def _compute_dashboard_quick_props(game_pk, limit=3, date_hint=None):
     """Compute top quick-prop picks for a game card strip."""
-    gdata, away_bats, home_bats, away_t, home_t, _pitchers = _props_fetch_game(game_pk)
+    gdata, away_bats, home_bats, away_t, home_t, _pitchers = _props_fetch_game(game_pk, date_hint=date_hint)
     if not gdata:
         return None, []
 
@@ -11183,8 +11203,9 @@ def api_props_trends(game_pk):
     Uses concurrent fetching to keep response time under ~4s.
     """
     try:
+        date_hint = request.args.get('date')
         # Get lineups + pitchers
-        gdata, away_bats, home_bats, away_t, home_t, pitchers = _props_fetch_game(game_pk)
+        gdata, away_bats, home_bats, away_t, home_t, pitchers = _props_fetch_game(game_pk, date_hint=date_hint)
         if not gdata:
             return jsonify({"success": False, "error": "Game not found"}), 404
 
@@ -11216,7 +11237,7 @@ def api_props_trends(game_pk):
                     results[str(pid)] = {"name": name, **data}
                 except Exception as fe:
                     results[str(pid)] = {"name": name, "error": str(fe)}
-        _gdata2, quick_props = _compute_dashboard_quick_props(game_pk, limit=3)
+        _gdata2, quick_props = _compute_dashboard_quick_props(game_pk, limit=3, date_hint=date_hint)
 
         return jsonify({
             "success":  True,
@@ -11239,7 +11260,7 @@ def api_props_quick(game_pk):
     Uses L10 over rates — lightweight, no Odds API calls needed.
     """
     try:
-        gdata, picks = _compute_dashboard_quick_props(game_pk, limit=3)
+        gdata, picks = _compute_dashboard_quick_props(game_pk, limit=3, date_hint=request.args.get('date'))
         if not gdata:
             return jsonify({"success": False, "error": "Game not found"}), 404
         return jsonify({

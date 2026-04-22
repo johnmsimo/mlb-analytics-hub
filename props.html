@@ -1102,7 +1102,8 @@ function renderUmpire(d) {
 // ── L5/L10 Trend Loading ──────────────────────────────────────────────────────
 async function loadTrends(pk) {
   try {
-    const r = await fetch(`/api/props/trends/${pk}`);
+    const qs = CUR_DATE ? `?date=${encodeURIComponent(CUR_DATE)}` : '';
+    const r = await fetch(`/api/props/trends/${pk}${qs}`);
     const d = await r.json();
     if (!d.success) return;
     TREND_DATA = d.players || {};
@@ -1197,7 +1198,8 @@ async function loadProjections() {
   gel('batterGrid').innerHTML  = loadHTML('LOADING BATTER PROJECTIONS…');
   gel('pitcherGrid').innerHTML = '';
   try {
-    const r = await fetch(`/api/props/projections/${CUR_GAME}`);
+    const qs = CUR_DATE ? `?date=${encodeURIComponent(CUR_DATE)}` : '';
+    const r = await fetch(`/api/props/projections/${CUR_GAME}${qs}`);
     PROJ_DATA = await r.json();
     if (!PROJ_DATA.success) throw new Error(PROJ_DATA.error || 'Failed');
     renderProj(PROJ_DATA);
@@ -1619,7 +1621,8 @@ async function loadLineShoppingData(gamePk) {
   const targetGame = gamePk || CUR_GAME;
   if (!targetGame) return null;
   if (LINE_SHOP_CACHE[targetGame]) return LINE_SHOP_CACHE[targetGame];
-  const r = await fetch(`/api/props/line-shopping/${targetGame}`);
+  const qs = CUR_DATE ? `?date=${encodeURIComponent(CUR_DATE)}` : '';
+  const r = await fetch(`/api/props/line-shopping/${targetGame}${qs}`);
   const d = await r.json();
   if (!d || !d.success) throw new Error((d && d.error) || 'Line shopping unavailable');
   LINE_SHOP_CACHE[targetGame] = d;
@@ -2185,7 +2188,8 @@ async function loadMatchup() {
   if (MTCH_DATA) { renderMatchup(MTCH_DATA); return; }
   gel('matchupCols').innerHTML = loadHTML('COMPUTING MATCHUP SCORES…');
   try {
-    const r = await fetch(`/api/props/matchup-scores/${CUR_GAME}`);
+    const qs = CUR_DATE ? `?date=${encodeURIComponent(CUR_DATE)}` : '';
+    const r = await fetch(`/api/props/matchup-scores/${CUR_GAME}${qs}`);
     MTCH_DATA = await r.json();
     if (!MTCH_DATA.success) throw new Error(MTCH_DATA.error || 'Failed');
     renderMatchup(MTCH_DATA);
