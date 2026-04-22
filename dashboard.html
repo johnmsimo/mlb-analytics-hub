@@ -244,6 +244,47 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
 .ai-bdg.cold{background:rgba(0,180,255,.12);color:#00b8d4;border:1px solid rgba(0,180,255,.28)}
 .ai-bdg.neu{background:rgba(0,229,255,.08);color:var(--c);border:1px solid rgba(0,229,255,.2)}
 .sp-edge{margin-top:12px;padding:11px 14px;background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.13);border-radius:9px;font-size:.7rem;color:var(--te)}
+.pm-zone-controls{display:flex;gap:8px;margin:10px 0 12px;flex-wrap:wrap;justify-content:center}
+.pm-zone-toggle{padding:6px 12px;border-radius:6px;border:1px solid rgba(0,229,255,.2);background:rgba(0,229,255,.06);color:var(--mu);font-family:Orbitron,monospace;font-size:.54rem;letter-spacing:1px;cursor:pointer;transition:all .15s}
+.pm-zone-toggle.on{background:rgba(0,229,255,.16);border-color:rgba(0,229,255,.42);color:var(--c)}
+.pm-zone-toggle:hover{border-color:rgba(0,229,255,.35)}
+.pm-zone-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin:12px 0}
+.pm-zone-cell{background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.12);border-radius:8px;padding:10px;text-align:center;cursor:pointer;transition:all .2s}
+.pm-zone-cell:hover{border-color:rgba(0,229,255,.35);transform:translateY(-2px)}
+.pm-zone-cell.high{background:rgba(0,230,118,.12);border-color:rgba(0,230,118,.28);color:#00e676}
+.pm-zone-cell.mid{background:rgba(255,152,0,.1);border-color:rgba(255,152,0,.25)}
+.pm-zone-cell.low{background:rgba(244,67,54,.12);border-color:rgba(244,67,54,.28);color:#ff5252}
+.pm-zone-label{font-family:Orbitron,monospace;font-size:.48rem;letter-spacing:1px;color:var(--mu);margin-bottom:3px}
+.pm-zone-value{font-family:Orbitron,monospace;font-size:.72rem;font-weight:700;color:var(--te);margin:4px 0}
+.pm-zone-detail{font-size:.5rem;color:var(--mu);margin-top:4px}
+.pm-zone-legend{display:flex;gap:10px;flex-wrap:wrap;font-size:.54rem;margin:10px 0;justify-content:center;color:var(--mu)}
+.pm-zone-legend-item{display:flex;align-items:center;gap:4px}
+.pm-zone-controls{display:flex;gap:8px;margin:10px 0 12px;flex-wrap:wrap}
+.pm-zone-toggle{padding:6px 12px;border-radius:6px;border:1px solid rgba(0,229,255,.2);background:rgba(0,229,255,.06);color:var(--mu);font-family:Orbitron,monospace;font-size:.54rem;letter-spacing:1px;cursor:pointer}
+.pm-zone-toggle.on{background:rgba(0,229,255,.16);border-color:rgba(0,229,255,.42);color:var(--c)}
+.pm-zone-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin:12px 0}
+.pm-zone-cell{background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.12);border-radius:8px;padding:10px;text-align:center;cursor:pointer;transition:all .2s}
+.pm-zone-cell:hover{border-color:rgba(0,229,255,.35);transform:translateY(-2px)}
+.pm-zone-cell.high{background:rgba(0,230,118,.12);border-color:rgba(0,230,118,.28);color:#00e676}
+.pm-zone-cell.mid{background:rgba(255,152,0,.1);border-color:rgba(255,152,0,.25)}
+.pm-zone-cell.low{background:rgba(244,67,54,.12);border-color:rgba(244,67,54,.28);color:#ff5252}
+.pm-zone-label{font-family:Orbitron,monospace;font-size:.48rem;letter-spacing:1px;color:var(--mu);margin-bottom:3px}
+.pm-zone-value{font-family:Orbitron,monospace;font-size:.72rem;font-weight:700;color:var(--te);margin:4px 0}
+.pm-zone-detail{font-size:.5rem;color:var(--mu);margin-top:4px}
+.pm-zone-legend{display:flex;gap:10px;flex-wrap:wrap;font-size:.54rem;margin:10px 0}
+.pm-zone-legend-item{display:flex;align-items:center;gap:4px}
+.pm-zone-legend-box{width:16px;height:16px;border-radius:4px}
+.pm-spray-wrap{display:grid;grid-template-columns:1fr;gap:10px}
+.pm-spray-filters{display:flex;gap:8px;flex-wrap:wrap}
+.pm-spray-chip{padding:6px 10px;border-radius:999px;border:1px solid rgba(0,229,255,.2);background:rgba(0,229,255,.06);color:var(--mu);font-family:Orbitron,monospace;font-size:.54rem;letter-spacing:.9px;cursor:pointer}
+.pm-spray-chip.on{background:rgba(0,229,255,.16);border-color:rgba(0,229,255,.42);color:var(--c)}
+.pm-spray-field{background:rgba(0,0,0,.2);border:1px solid rgba(0,229,255,.14);border-radius:12px;padding:8px}
+.pm-spray-legend{display:flex;gap:10px;flex-wrap:wrap;font-family:Orbitron,monospace;font-size:.56rem;color:var(--mu)}
+.pm-spray-legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px;vertical-align:middle}
+.pm-spray-kpi{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.pm-spray-kpi-card{background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.12);border-radius:10px;padding:8px 6px;text-align:center}
+.pm-spray-kpi-label{font-family:Orbitron,monospace;font-size:.48rem;letter-spacing:1px;color:var(--mu)}
+.pm-spray-kpi-val{font-family:Orbitron,monospace;font-size:.78rem;color:var(--c);font-weight:700;margin-top:4px}
 @media(max-width:600px){.sp-grid{grid-template-columns:1fr}.pm-sg{grid-template-columns:repeat(3,1fr)}}
 
 
@@ -1291,6 +1332,7 @@ syncDateUI();load();loadTeams();setInterval(function(){load(selectedGamesDate)},
       <button class="pm-tab"     data-panel="gamelog">GAME LOG</button>
       <button class="pm-tab"     data-panel="splits">SPLITS</button>
       <button class="pm-tab"     data-panel="arsenal">ARSENAL</button>
+      <button class="pm-tab"     data-panel="spray">🗺️ SPRAY</button>
       <button class="pm-tab"     data-panel="ai">&#x1F916; AI</button>
       <button class="pm-tab"     data-panel="form">&#x1F4C8; FORM</button>
     </div>
@@ -1304,6 +1346,7 @@ syncDateUI();load();loadTeams();setInterval(function(){load(selectedGamesDate)},
         <div id="pm-gamelog"  class="pm-pnl"></div>
         <div id="pm-splits"   class="pm-pnl"></div>
         <div id="pm-arsenal"  class="pm-pnl"></div>
+        <div id="pm-spray"    class="pm-pnl"></div>
         <div id="pm-ai"       class="pm-pnl"></div>
         <div id="pm-form"     class="pm-pnl"></div>
       </div>
@@ -1314,6 +1357,7 @@ syncDateUI();load();loadTeams();setInterval(function(){load(selectedGamesDate)},
 <script>
 (function(){
   var PITCH_LABELS={ff:'4-Seam FB',si:'Sinker',fc:'Cutter',st:'Sweeper',sl:'Slider',cu:'Curveball',ch:'Changeup',fs:'Splitter',kn:'Knuckleball'};
+  var PM_SPRAY_DEFAULT_FILTERS={all:true,hits:false,lhp:false,rhp:false,home:false,away:false};
 
   function nd(v){return(v===undefined||v===null||v===''||v==='---'||v==='NA'||v==='None')?'--':v;}
 
@@ -1373,6 +1417,7 @@ syncDateUI();load();loadTeams();setInterval(function(){load(selectedGamesDate)},
         buildGamelog(d);
         buildSplits(d);
         buildArsenal(d);
+        buildSpray(d);
         buildAI(d);
         buildForm(d);
       })
@@ -1566,7 +1611,17 @@ syncDateUI();load();loadTeams();setInterval(function(){load(selectedGamesDate)},
   // ── ARSENAL / CONTACT ─────────────────────────────────────────────────────
   function buildArsenal(d){
     var sv=d.sv||{},fg=d.fg||{};
+    var pid=d.id;
     var h='';
+    
+    // Sub-view toggle
+    h+='<div class="pm-zone-controls">';
+    h+='<button class="pm-zone-toggle on" data-view="arsenal">ARSENAL</button>';
+    h+='<button class="pm-zone-toggle" data-view="zone">⚾ ZONE</button>';
+    h+='</div>';
+    
+    // Arsenal view
+    h+='<div id="pm-arsenal-view">';
     if(d.isPitcher){
       var ars=sv.sv_arsenal_pct||{},vel=sv.sv_arsenal_velo||{},pks=Object.keys(ars);
       h+='<div class="pm-sh">PITCH ARSENAL</div>';
@@ -1591,7 +1646,223 @@ syncDateUI();load();loadTeams();setInterval(function(){load(selectedGamesDate)},
       [['Z-Swing%',sv.sv_z_swing],['O-Swing%',sv.sv_o_swing],['Contact%',sv.sv_contact],['SwStr%',sv.sv_swstr_pct],['BABIP',fg.fg_babip],['ISO',fg.fg_iso]].forEach(function(x){h+=sbx(x[0],x[1]);});
       h+='</div>';
     }
+    h+='</div>';
+    
+    // Zone chart view (placeholder)
+    h+='<div id="pm-zone-view" style="display:none;"><div style="text-align:center;padding:24px;color:var(--mu);font-family:Orbitron;font-size:.58rem;letter-spacing:2px">LOADING ZONE CHART…</div></div>';
+    
     document.getElementById('pm-arsenal').innerHTML=h;
+    
+    // Attach tab toggle handlers
+    document.querySelectorAll('#pm-arsenal .pm-zone-toggle').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var view=btn.getAttribute('data-view');
+        var isArsenal=view==='arsenal';
+        document.querySelectorAll('#pm-arsenal .pm-zone-toggle').forEach(function(b){b.classList.toggle('on',b.getAttribute('data-view')===view);});
+        document.getElementById('pm-arsenal-view').style.display=isArsenal?'':'none';
+        document.getElementById('pm-zone-view').style.display=isArsenal?'none':'';
+        if(!isArsenal) buildZoneChart(pid, d.isPitcher);
+      });
+    });
+  }
+
+  function _pmSprayKpi(label,val){
+    return '<div class="pm-spray-kpi-card"><div class="pm-spray-kpi-label">'+label+'</div><div class="pm-spray-kpi-val">'+val+'</div></div>';
+  }
+
+  // ── ZONE CHART BUILDER ───────────────────────────────────────────────────
+  window.__PM_ZONE_CACHE=window.__PM_ZONE_CACHE||{};
+  window.__PM_ZONE_VIEW=window.__PM_ZONE_VIEW||{};
+
+  function buildZoneChart(pid, isPitcher){
+    var el=document.getElementById('pm-zone-view');
+    if(!el) return;
+    
+    if(window.__PM_ZONE_CACHE[pid]){
+      renderZoneChart(pid, el, isPitcher);
+      return;
+    }
+    
+    el.innerHTML='<div style="text-align:center;padding:24px;color:var(--mu);font-family:Orbitron;font-size:.58rem;letter-spacing:2px">LOADING ZONE CHART…</div>';
+    fetch('/api/player/'+pid+'/zonechart')
+      .then(function(r){return r.json();})
+      .then(function(payload){
+        if(!payload.success) throw new Error(payload.error||'Failed to load zone chart');
+        window.__PM_ZONE_CACHE[pid]=payload.data||[null]*9;
+        window.__PM_ZONE_VIEW[pid]='pitcher';
+        renderZoneChart(pid, el, isPitcher);
+      })
+      .catch(function(e){
+        el.innerHTML='<div style="text-align:center;padding:24px;color:#ff6b6b;font-family:Orbitron;font-size:.58rem;letter-spacing:1px">'+e.message+'</div>';
+      });
+  }
+
+  function renderZoneChart(pid, el, isPitcher){
+    var data=window.__PM_ZONE_CACHE[pid]||[null]*9;
+    var view=window.__PM_ZONE_VIEW[pid]||'pitcher';
+    if(!isPitcher) view='batter';
+    
+    var zones=['Top-L','Top-C','Top-R','Mid-L','Heart','Mid-R','Bot-L','Bot-C','Bot-R'];
+    var h='<div class="pm-zone-controls" style="margin-bottom:10px;justify-content:center">';
+    if(isPitcher){
+      h+='<button class="pm-zone-toggle '+(view==='pitcher'?'on':'')+' " data-zoneview="pitcher">PITCHER VIEW</button>';
+      h+='<button class="pm-zone-toggle '+(view==='batter'?'on':'')+' " data-zoneview="batter">BATTER VIEW</button>';
+    }
+    h+='</div>';
+    
+    h+='<div class="pm-zone-grid">';
+    (data||[]).forEach(function(zone,idx){
+      var z=zones[idx];
+      if(!zone){
+        h+='<div class="pm-zone-cell"><div class="pm-zone-label">'+z+'</div><div style="color:var(--mu);font-size:.5rem">—</div></div>';
+        return;
+      }
+      var metric=view==='pitcher'?zone.whiff_rate:zone.ba;
+      var threshold=view==='pitcher'?35:0.30;
+      var cls=metric>threshold?'high':(metric<(threshold-0.1)||metric<0.35)?'low':'mid';
+      var metricLbl=view==='pitcher'?'Whiff':'BA';
+      var metricVal=view==='pitcher'?Math.round(metric)+'%':(metric?.toFixed(3)||'—');
+      h+='<div class="pm-zone-cell '+cls+'" title="'+z+' — '+metricLbl+' '+metricVal+'">';
+      h+='<div class="pm-zone-label">'+z+'</div>';
+      h+='<div class="pm-zone-value">'+metricVal+'</div>';
+      h+='<div class="pm-zone-detail">Pitch: '+Math.round(zone.pitch_pct)+'% · Swing: '+Math.round(zone.swing_rate)+'%</div>';
+      h+='</div>';
+    });
+    h+='</div>';
+    
+    var legDesc=view==='pitcher'?'RED = Pitcher dominates (whiff >35%)':'GREEN = Batter excels (BA >.300)';
+    h+='<div class="pm-zone-legend"><div class="pm-zone-legend-item"><span>'+legDesc+'</span></div></div>';
+    
+    el.innerHTML=h;
+    
+    if(isPitcher){
+      el.querySelectorAll('.pm-zone-toggle[data-zoneview]').forEach(function(btn){
+        btn.addEventListener('click', function(){
+          var nv=btn.getAttribute('data-zoneview');
+          window.__PM_ZONE_VIEW[pid]=nv;
+          renderZoneChart(pid, el, isPitcher);
+        });
+      });
+    }
+  }
+
+  function _pmSprayField(data){
+    var w=420,h=420,cx=w/2,cy=h/2,scale=1.22;
+    var svg='';
+    svg+='<svg viewBox="0 0 '+w+' '+h+'" style="width:100%;max-width:520px;display:block;margin:0 auto">';
+    svg+='<rect x="0" y="0" width="'+w+'" height="'+h+'" fill="rgba(0,0,0,.12)" stroke="rgba(0,229,255,.18)" stroke-width="1" />';
+    svg+='<line x1="'+cx+'" y1="40" x2="'+cx+'" y2="'+(h-40)+'" stroke="rgba(0,229,255,.16)" stroke-width="1" />';
+    svg+='<line x1="40" y1="'+cy+'" x2="'+(w-40)+'" y2="'+cy+'" stroke="rgba(0,229,255,.16)" stroke-width="1" />';
+    svg+='<circle cx="'+cx+'" cy="'+cy+'" r="40" fill="none" stroke="rgba(0,229,255,.2)" stroke-width="1" />';
+    (data||[]).forEach(function(b){
+      var x=Number(b.hc_x),y=Number(b.hc_y);
+      if(!isFinite(x)||!isFinite(y)) return;
+      var px=cx+(x-127)*scale;
+      var py=cy-(y-127)*scale;
+      var ev=Number(b.exit_velocity);
+      var r=isFinite(ev)?Math.max(3,Math.min(10,(ev-70)/5)):4;
+      var col=b.outcome==='hr'?'#3f7cff':(b.outcome==='hit'?'#00e676':'#f44336');
+      var ttl=(b.events||b.result||'Batted Ball')+' · '+(isFinite(ev)?Math.round(ev)+' mph':'EV n/a');
+      svg+='<circle cx="'+px.toFixed(2)+'" cy="'+py.toFixed(2)+'" r="'+r.toFixed(2)+'" fill="'+col+'" fill-opacity=".62" stroke="rgba(255,255,255,.25)" stroke-width="1"><title>'+ttl+'</title></circle>';
+    });
+    svg+='</svg>';
+    return svg;
+  }
+
+  function _pmSprayApplyFilters(data, f){
+    if(!Array.isArray(data)) return [];
+    if(f.all) return data;
+    return data.filter(function(b){
+      if(f.hits && b.outcome!=='hit' && b.outcome!=='hr') return false;
+      if(f.lhp && String(b.pitcher_hand||'').toUpperCase()!=='L') return false;
+      if(f.rhp && String(b.pitcher_hand||'').toUpperCase()!=='R') return false;
+      if(f.home && !b.is_home_game) return false;
+      if(f.away && b.is_home_game) return false;
+      return true;
+    });
+  }
+
+  function buildSpray(d){
+    var el=document.getElementById('pm-spray');
+    if(!el) return;
+    if(d.isPitcher){
+      el.innerHTML='<div style="text-align:center;padding:40px;color:var(--mu);font-family:Orbitron;font-size:.62rem;letter-spacing:2px">SPRAY CHART IS AVAILABLE FOR BATTERS ONLY</div>';
+      return;
+    }
+
+    var pid=d.id;
+    window.__PM_SPRAY_CACHE=window.__PM_SPRAY_CACHE||{};
+    window.__PM_SPRAY_FILTERS=window.__PM_SPRAY_FILTERS||{};
+    if(!window.__PM_SPRAY_FILTERS[pid]) window.__PM_SPRAY_FILTERS[pid]=Object.assign({}, PM_SPRAY_DEFAULT_FILTERS);
+
+    function render(){
+      var raw=window.__PM_SPRAY_CACHE[pid]||[];
+      var f=window.__PM_SPRAY_FILTERS[pid]||Object.assign({}, PM_SPRAY_DEFAULT_FILTERS);
+      var rows=_pmSprayApplyFilters(raw,f);
+      var hits=rows.filter(function(r){return r.outcome==='hit';}).length;
+      var hrs=rows.filter(function(r){return r.outcome==='hr';}).length;
+      var outs=rows.filter(function(r){return r.outcome==='out';}).length;
+      var balls=rows.length;
+      var hRate=balls>0?((hits+hrs)/balls):0;
+      var evRows=rows.filter(function(r){return isFinite(Number(r.exit_velocity));});
+      var avgEv=evRows.length?evRows.reduce(function(s,r){return s+Number(r.exit_velocity);},0)/evRows.length:null;
+      var filters='<div class="pm-spray-filters">'
+        +'<button class="pm-spray-chip '+(f.all?'on':'')+'" data-k="all">ALL</button>'
+        +'<button class="pm-spray-chip '+(f.hits?'on':'')+'" data-k="hits">HITS ONLY</button>'
+        +'<button class="pm-spray-chip '+(f.lhp?'on':'')+'" data-k="lhp">VS LHP</button>'
+        +'<button class="pm-spray-chip '+(f.rhp?'on':'')+'" data-k="rhp">VS RHP</button>'
+        +'<button class="pm-spray-chip '+(f.home?'on':'')+'" data-k="home">HOME</button>'
+        +'<button class="pm-spray-chip '+(f.away?'on':'')+'" data-k="away">AWAY</button>'
+        +'</div>';
+      var legend='<div class="pm-spray-legend">'
+        +'<span><i style="background:#00e676"></i>Single/Double/Triple</span>'
+        +'<span><i style="background:#3f7cff"></i>Home Run</span>'
+        +'<span><i style="background:#f44336"></i>Out</span>'
+        +'</div>';
+      var kpis='<div class="pm-spray-kpi">'
+        +_pmSprayKpi('BALLS',balls)
+        +_pmSprayKpi('HITS',hits)
+        +_pmSprayKpi('HR',hrs)
+        +_pmSprayKpi('AVG EV',avgEv!=null?Math.round(avgEv)+' mph':'—')
+        +'</div>';
+
+      if(!rows.length){
+        el.innerHTML='<div class="pm-spray-wrap">'+filters+'<div style="text-align:center;padding:40px;color:var(--mu);font-family:Orbitron;font-size:.62rem;letter-spacing:2px">NO BATTED BALLS MATCH THESE FILTERS</div></div>';
+      } else {
+        el.innerHTML='<div class="pm-spray-wrap"><div class="pm-sh">SPRAY CHART</div>'+filters+'<div class="pm-spray-field">'+_pmSprayField(rows)+'</div>'+legend+kpis+'<div style="font-size:.58rem;color:var(--mu)">Hit rate: '+(hRate*100).toFixed(1)+'%</div></div>';
+      }
+
+      el.querySelectorAll('.pm-spray-chip').forEach(function(btn){
+        btn.addEventListener('click', function(){
+          var k=btn.getAttribute('data-k');
+          if(k==='all'){
+            window.__PM_SPRAY_FILTERS[pid]=Object.assign({}, PM_SPRAY_DEFAULT_FILTERS);
+          } else {
+            var nf=Object.assign({}, window.__PM_SPRAY_FILTERS[pid]);
+            nf.all=false;
+            nf[k]=!nf[k];
+            window.__PM_SPRAY_FILTERS[pid]=nf;
+          }
+          render();
+        });
+      });
+    }
+
+    el.innerHTML='<div style="text-align:center;padding:28px;color:var(--mu);font-family:Orbitron;font-size:.58rem;letter-spacing:2px">LOADING SPRAY CHART…</div>';
+    if(window.__PM_SPRAY_CACHE[pid]){
+      render();
+      return;
+    }
+    fetch('/api/player/'+pid+'/spray')
+      .then(function(r){return r.json();})
+      .then(function(payload){
+        if(!payload.success) throw new Error(payload.error||'Failed to load spray chart');
+        window.__PM_SPRAY_CACHE[pid]=payload.data||[];
+        render();
+      })
+      .catch(function(e){
+        el.innerHTML='<div style="text-align:center;padding:32px;color:#ff6b6b;font-family:Orbitron;font-size:.58rem;letter-spacing:1px">'+e.message+'</div>';
+      });
   }
 
   // ── FORM ────────────────────────────────────────────────────────────────────

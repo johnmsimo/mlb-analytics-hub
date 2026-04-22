@@ -486,7 +486,7 @@ _injury_loading = False
 _injury_worker_started = False
 
 # ── Spray Chart Cache (batted ball data) ────────────────────────────────────
-_spray_cache = {}  # keyed by player_id, stores list of batted balls with coordinates
+_spray_cache = {}  # keyed by player_id, stores {'date': YYYY-MM-DD, 'data': [...]} 
 
 # ── Strike Zone Chart Cache (zone metrics) ──────────────────────────────────
 _zonechart_cache = {}  # keyed by player_id, stores 9-zone metrics
@@ -2559,73 +2559,86 @@ def api_player_splits(player_id, group):
 def api_player_spray(player_id):
     """Spray chart: current season batted ball positions for a batter."""
     try:
-        # Check cache first
-        if player_id in _spray_cache:
-            return jsonify({"success": True, "data": _spray_cache[player_id]})
+        today = datetime.now().strftime("%Y-%m-%d")
 
-        # Fetch player name for pybaseball lookup
+        # Check cache first (daily TTL)
+        cached = _spray_cache.get(player_id)
+        if cached and cached.get("date") == today:
+            return jsonify({"success": True, "data": cached.get("data", [])})
+
+        # Fetch player identity and type
         pr = requests.get(f"{MLB_API}/people/{player_id}", timeout=10)
         pr.raise_for_status()
         people = pr.json().get("people", [])
         if not people:
             return jsonify({"success": False, "error": "Player not found"}), 404
-        
-        player_name = people[0].get("fullName", "Unknown")
+
+        is_pitcher = (people[0].get("primaryPosition", {}).get("abbreviation", "") or "?") in ("P", "SP", "RP", "CP")
+        if is_pitcher:
+            _spray_cache[player_id] = {"date": today, "data": []}
+            return jsonify({"success": True, "data": []})
         
         # Fetch spray chart data from pybaseball
         import pybaseball as pb
-        year = datetime.now().year
-        sc = pb.statcast_batter(player_name, year)
+        start_dt = f"{datetime.now().year}-03-01"
+        end_dt = today
+        sc = pb.statcast_batter(start_dt=start_dt, end_dt=end_dt, player_id=int(player_id))
         
         if sc is None or sc.empty:
-            _spray_cache[player_id] = []
+            _spray_cache[player_id] = {"date": today, "data": []}
             return jsonify({"success": True, "data": []})
-        
+
+        def _to_float(v):
+            try:
+                if v is None:
+                    return None
+                return float(v)
+            except Exception:
+                return None
+
         # Extract batted ball data with key fields
         spray_data = []
-        for idx, row in sc.iterrows():
+        for _, row in sc.iterrows():
             # Skip if no hit coordinates
-            if not (isinstance(row.get('hc_x'), (int, float)) and isinstance(row.get('hc_y'), (int, float))):
+            hc_x = _to_float(row.get("hc_x"))
+            hc_y = _to_float(row.get("hc_y"))
+            if hc_x is None or hc_y is None:
                 continue
-            if not isinstance(row.get('hit_distance', 0), (int, float)):
-                continue
-            
-            result = row.get('result', '')
-            outcome = row.get('type', 'X')
-            ev = row.get('launch_speed')
-            la = row.get('launch_angle')
-            game_type = row.get('home_team') if row.get('inning_topbot') == 'Bot' else row.get('away_team')
-            
-            # Determine outcome category
-            if result in ('Single', 'Double', 'Triple'):
+
+            events = (row.get("events") or "").strip().lower()
+            result = (row.get("events") or row.get("des") or "").strip()
+            if events in ("single", "double", "triple"):
                 outcome_cat = 'hit'
-            elif result == 'Home Run':
+            elif events == "home_run":
                 outcome_cat = 'hr'
-            elif result in ('Field Out', 'Strikeout - Bunted In Play', 'Strikeout - In Play', 'Sac Fly', 'Force Out'):
-                outcome_cat = 'out'
             else:
                 outcome_cat = 'out'
-            
+
+            ev = _to_float(row.get("launch_speed"))
+            la = _to_float(row.get("launch_angle"))
+            hit_distance = _to_float(row.get("hit_distance_sc"))
+
             spray_data.append({
-                'hc_x': round(float(row['hc_x']), 2),
-                'hc_y': round(float(row['hc_y']), 2),
-                'hit_distance': float(row.get('hit_distance', 0)),
-                'launch_angle': float(la) if isinstance(la, (int, float)) else None,
-                'exit_velocity': float(ev) if isinstance(ev, (int, float)) else None,
-                'pitch_type': row.get('pitch_type', 'UNK'),
+                'hc_x': round(hc_x, 2),
+                'hc_y': round(hc_y, 2),
+                'events': events or None,
+                'hit_distance': hit_distance,
+                'launch_angle': la,
+                'exit_velocity': ev,
+                'pitch_type': row.get('pitch_type', 'UNK') or 'UNK',
                 'result': result,
                 'outcome': outcome_cat,
                 'date': str(row.get('game_date', '')),
                 'home_team': row.get('home_team', ''),
                 'away_team': row.get('away_team', ''),
                 'is_home_game': row.get('inning_topbot') == 'Bot',
-                'pitcher_hand': row.get('pitcher', {}).get('hand', '?') if isinstance(row.get('pitcher'), dict) else '?',
+                'pitcher_hand': row.get('p_throws', '?') or '?',
             })
-        
+
         # Cache the result
-        _spray_cache[player_id] = spray_data
+        _spray_cache[player_id] = {"date": today, "data": spray_data}
         return jsonify({"success": True, "data": spray_data})
-    
+
     except Exception as ex:
         print(f"[api_player_spray] {player_id}: {traceback.format_exc()}")
         return jsonify({"success": False, "error": str(ex), "data": []}), 500
