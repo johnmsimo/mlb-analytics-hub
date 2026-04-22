@@ -15,30 +15,27 @@ app = Flask(__name__)
 CORS(app)
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-DASHBOARD_HTML = open(os.path.join(_HERE, 'dashboard.html')).read()
-DEEP_DIVE_HTML = open(os.path.join(_HERE, 'deepdive.html')).read()
-PROPS_HTML = open(os.path.join(_HERE, 'props.html')).read()
-try:
-    CHEATSHEET_HTML = open(os.path.join(_HERE, 'cheatsheet.html')).read()
-except FileNotFoundError:
-    CHEATSHEET_HTML = "<h1>cheatsheet.html missing from project root</h1>"
-try:
-    TRACKER_HTML = open(os.path.join(_HERE, 'tracker.html')).read()
-except FileNotFoundError:
-    TRACKER_HTML = "<h1>tracker.html missing from project root</h1>"
-# Pitcher Analysis page — linked from dashboard header as /pitcher-deep-dive.
-try:
-    PITCHER_DEEP_DIVE_HTML = open(os.path.join(_HERE, 'pitcher_deepdive.html')).read()
-except FileNotFoundError:
-    PITCHER_DEEP_DIVE_HTML = "<h1>pitcher_deepdive.html missing from project root</h1>"
-try:
-    GAMESIDE_DEEPDIVE_HTML = open(os.path.join(_HERE, 'gameside_deepdive.html')).read()
-except FileNotFoundError:
-    GAMESIDE_DEEPDIVE_HTML = "<h1>gameside_deepdive.html missing</h1>"
-try:
-    BREAKOUT_DETECTOR_HTML = open(os.path.join(_HERE, 'breakout_detector.html')).read()
-except FileNotFoundError:
-    BREAKOUT_DETECTOR_HTML = "<h1>breakout_detector.html missing</h1>"
+
+def _read_html_or_fallback(filename):
+    path = os.path.join(_HERE, filename)
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return f.read()
+    except FileNotFoundError:
+        return f"<h1>{filename} missing from project root</h1>"
+    except Exception as ex:
+        return f"<h1>Failed to load {filename}: {ex}</h1>"
+
+
+DASHBOARD_HTML = _read_html_or_fallback('dashboard.html')
+DEEP_DIVE_HTML = _read_html_or_fallback('deepdive.html')
+PROPS_HTML = _read_html_or_fallback('props.html')
+CHEATSHEET_HTML = _read_html_or_fallback('cheatsheet.html')
+TRACKER_HTML = _read_html_or_fallback('tracker.html')
+# Pitcher Analysis page - linked from dashboard header as /pitcher-deep-dive.
+PITCHER_DEEP_DIVE_HTML = _read_html_or_fallback('pitcher_deepdive.html')
+GAMESIDE_DEEPDIVE_HTML = _read_html_or_fallback('gameside_deepdive.html')
+BREAKOUT_DETECTOR_HTML = _read_html_or_fallback('breakout_detector.html')
 DATA_DIR = os.path.join(_HERE, 'data')
 os.makedirs(DATA_DIR, exist_ok=True)
 TRACKER_STORE = os.path.join(DATA_DIR, 'daily_tracker.json')

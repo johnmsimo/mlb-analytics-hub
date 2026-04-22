@@ -63,10 +63,11 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .c-g{color:var(--g)} .c-o{color:var(--o)} .c-r{color:var(--r)} .c-c{color:var(--sv)}
 
 /* TABS */
-.pc-tabs{display:flex;border-bottom:1px solid var(--b);padding:0 18px}
-.pc-tab{padding:9px 14px;font-family:'Orbitron',monospace;font-size:.6rem;letter-spacing:1.5px;color:var(--mu);cursor:pointer;border-bottom:2px solid transparent;transition:all .15s;white-space:nowrap}
-.pc-tab.active{color:var(--c);border-bottom-color:var(--c)}
-.pc-tab:hover{color:var(--t)}
+.pc-tabs{display:flex;border-bottom:1px solid var(--b);padding:6px 18px 0;gap:6px;overflow-x:auto;scrollbar-width:thin}
+.pc-tab{padding:8px 12px;font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:1.4px;color:#9fc2e6;cursor:pointer;border:1px solid rgba(0,229,255,.2);border-bottom:2px solid transparent;border-radius:8px 8px 0 0;background:rgba(8,20,36,.55);transition:all .15s;white-space:nowrap;flex:0 0 auto;position:relative}
+.pc-tab.active{color:#c8fbff;border-color:rgba(0,229,255,.55);border-bottom-color:var(--c);background:linear-gradient(180deg,rgba(0,229,255,.18),rgba(0,229,255,.08));box-shadow:0 0 0 1px rgba(0,229,255,.22) inset,0 0 12px rgba(0,229,255,.2);font-weight:700;transform:translateY(-1px);text-shadow:0 0 8px rgba(0,229,255,.35)}
+.pc-tab.active::after{content:'';position:absolute;left:10px;right:10px;bottom:-2px;height:2px;border-radius:999px;background:linear-gradient(90deg,rgba(0,229,255,.05),rgba(0,229,255,.95),rgba(0,229,255,.05));box-shadow:0 0 10px rgba(0,229,255,.6)}
+.pc-tab:hover{color:var(--t);background:rgba(0,229,255,.12)}
 
 /* PANES */
 .pc-pane{display:none;padding:16px 18px}
@@ -186,7 +187,7 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .na{padding:20px;text-align:center;color:var(--mu);font-family:'Orbitron',monospace;font-size:.66rem;letter-spacing:1.5px;line-height:2}
 .placeholder{padding:60px 20px;text-align:center;color:var(--mu);font-family:'Orbitron',monospace;font-size:.75rem;letter-spacing:3px;line-height:2.5}
 footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6rem;color:var(--mu);letter-spacing:2px;font-family:'Orbitron',monospace;margin-top:24px}
-@media(max-width:900px){.cards-grid{grid-template-columns:1fr}nav,selbar,.srcbar,.main{padding-left:16px;padding-right:16px}.kpi-row{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:900px){.cards-grid{grid-template-columns:1fr}nav,.selbar,.srcbar,.main{padding-left:16px;padding-right:16px}.kpi-row{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:900px){.vuln-grid{grid-template-columns:1fr}.vuln-board-grid{grid-template-columns:1fr}}
 /* Picks Panel */
 .pd-picks-wrap{max-width:960px;margin:0 auto 20px;padding:0 20px}
@@ -420,7 +421,6 @@ async function analyze(silent=false){
 
   }catch(e){
     if(!silent) $('cardsGrid').innerHTML=`<div class="pc" style="grid-column:1/-1"><div class="empty">Error: ${e.message}</div></div>`;
-    $('vulnerabilityBoard').style.display='none';
   }
 }
 
@@ -932,7 +932,7 @@ function _pitchThreatScore(b, pitchType){
     // Breaking balls: contact quality (xBA) + discipline matters
     return (xba-0.250)*80 + (xwoba-0.320)*60;
   } else {
-    // Off-speed: plate discipline + overall quality
+    // Off-speed: xwOBA + contact quality (xBA)
     return (xwoba-0.320)*100 + (xba-0.250)*50;
   }
 }
@@ -975,7 +975,7 @@ function buildPitchMatchups(pitcherId, pct, velo){
   return `<div style="margin-top:14px">
     <div class="ars-head"><span class="tag sv">MATCH</span> WHO HITS EACH PITCH</div>
     ${sections}
-    <div class="scout-note" style="margin-top:6px;font-size:.54rem">Top 3 threat batters vs each pitch type. Power pitches scored by EV/ISO/Barrel%; breaking balls by xBA/xwOBA; off-speed by plate discipline.</div>
+    <div class="scout-note" style="margin-top:6px;font-size:.54rem">Top 3 threat batters vs each pitch type. Power pitches scored by EV/ISO/Barrel%; breaking balls by xBA/xwOBA; off-speed by xwOBA + contact quality.</div>
   </div>`;
 }
 
