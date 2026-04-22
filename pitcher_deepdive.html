@@ -178,11 +178,6 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .vuln-signal.neutral{color:var(--mu)}
 .vuln-metric{font-family:'Orbitron',monospace;font-size:.65rem;color:var(--t)}
 .vuln-note{margin-top:10px;font-size:.58rem;color:var(--mu);line-height:1.6}
-.vuln-board{margin-top:16px;background:var(--card);border:1px solid var(--b);border-radius:12px;padding:14px}
-.vuln-board-h{font-family:'Orbitron',monospace;font-size:.63rem;letter-spacing:2px;color:var(--c);margin-bottom:10px}
-.vuln-board-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.vuln-board-card{background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.07);border-radius:10px;padding:10px}
-.vuln-board-title{font-family:'Orbitron',monospace;font-size:.58rem;letter-spacing:1.5px;color:var(--t);margin-bottom:8px}
 
 /* MISC */
 .spinner{width:32px;height:32px;border:2px solid rgba(0,229,255,.1);border-top-color:var(--c);border-radius:50%;animation:spin 1s linear infinite;margin:40px auto}
@@ -265,7 +260,6 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 <div class="main">
   <div id="placeholder" class="placeholder">⚾<br>SELECT A GAME AND PITCHER<br>THEN CLICK ANALYZE</div>
   <div id="cardsGrid" class="cards-grid" style="display:none"></div>
-  <div id="vulnerabilityBoard" class="vuln-board" style="display:none"></div>
 </div>
 
 <footer>MLB ANALYTICS HUB · PITCHER DEEP DIVE · FG + STATCAST + MLB STATS API · FOR ENTERTAINMENT PURPOSES ONLY</footer>
@@ -275,11 +269,11 @@ const PITCH_NAMES = {ff:'4-Seam FB',si:'Sinker',fc:'Cutter',st:'Sweeper',sl:'Sli
 
 let GAMES=[], PD=null, LOGS={}, MATCHUPS={}, PROPS_DATA=null;
 // FIX: added LAST_GAME_IDX to reliably track which game was last analyzed
-let FG_READY=false, LAST_PK=null, LAST_GAME_IDX=null;
+let FG_READY=false, SV_READY=false, LAST_PK=null, LAST_GAME_IDX=null;
 let POLL=null, RETRY_COUNT=0;
 
 const $=id=>document.getElementById(id);
-const nd=v=>(v!==undefined&&v!==null&&v!=='NA'&&v!=='N/A'&&v!==''&&v!=='?'&&parseFloat(v)!==0)?v:'---';
+const nd=v=>{if(v===undefined||v===null||v==='NA'||v==='N/A'||v===''||v==='?')return'---';const n=parseFloat(v);return isNaN(n)?'---':v;};
 const fP=v=>{const n=parseFloat(v);return isNaN(n)?'---':(n<1?n*100:n).toFixed(1)+'%'};
 const eraC=v=>{const n=parseFloat(v);if(isNaN(n)||n===0)return'';return n<3.20?'c-g':n>4.80?'c-r':n>4.00?'c-o':''};
 const fipC=v=>{const n=parseFloat(v);if(isNaN(n)||n===0)return'';return n<3.20?'c-g':n>4.50?'c-r':n>3.80?'c-o':''};
@@ -292,17 +286,28 @@ async function checkCache(){
     const d=await fetch('/api/status').then(r=>r.json());
     const fgPit=d.fangraphs?.pitchers||0;
     const fgLoaded=d.fangraphs?.loaded||false;
-    FG_READY=fgLoaded&&fgPit>0;
+    const svArsenals=d.savant?.arsenals||0;
+    const newFgReady=fgLoaded&&fgPit>0;
+    const newSvReady=svArsenals>0;
 
-    if(FG_READY){
-      $('cacheLabel').textContent=`✓ FG: ${fgPit} PITCHERS · SV: ${d.savant?.arsenals||0} ARSENALS`;
+    // Trigger re-analyze when either cache transitions to ready
+    const cacheJustReady=(newFgReady&&!FG_READY)||(newSvReady&&!SV_READY);
+    FG_READY=newFgReady;
+    SV_READY=newSvReady;
+    const allReady=FG_READY&&SV_READY;
+
+    if(allReady){
+      $('cacheLabel').textContent=`✓ FG: ${fgPit} PITCHERS · SV: ${svArsenals} ARSENALS`;
       $('cacheLabel').style.color='var(--g)';
       $('cacheBanner').className='cache-banner ready';
       $('cachePulse').className='pulse done';
-      $('cacheBannerMsg').textContent=`✓ FANGRAPHS LOADED — ${fgPit} PITCHERS READY`;
+      $('cacheBannerMsg').textContent=`✓ ALL CACHES LOADED — ${fgPit} PITCHERS · ${svArsenals} ARSENALS`;
       if(POLL){clearInterval(POLL);POLL=null;}
-      // FIX: auto-refresh cards only if a prior analysis was done (LAST_PK set)
-      if(LAST_PK!==null) await analyze(true);
+    } else if(FG_READY){
+      $('cacheLabel').textContent=`✓ FG: ${fgPit} · ⟳ SV ARSENALS: ${svArsenals} (LOADING…)`;
+      $('cacheLabel').style.color='var(--o)';
+      $('cacheBanner').className='cache-banner show';
+      $('cacheBannerMsg').textContent=`FG READY — SAVANT: ${svArsenals} ARSENALS LOADED — REFRESHING IN 8s`;
     } else {
       $('cacheLabel').textContent=`⟳ FG: ${fgPit} PITCHERS (LOADING…)`;
       $('cacheLabel').style.color='var(--o)';
@@ -310,13 +315,15 @@ async function checkCache(){
       $('cacheBannerMsg').textContent=`FG CACHE: ${fgPit} PITCHERS LOADED — REFRESHING IN 8s`;
       RETRY_COUNT++;
     }
+    // Auto-refresh cards whenever a cache becomes ready
+    if(cacheJustReady&&LAST_PK!==null) await analyze(true);
   }catch(e){$('cacheLabel').textContent='STATUS UNAVAILABLE';}
 }
 
 // ── BOOT ────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded',async()=>{
   await checkCache();
-  if(!FG_READY) POLL=setInterval(checkCache,8000);
+  if(!FG_READY||!SV_READY) POLL=setInterval(checkCache,8000);
   await loadGames();
 });
 
@@ -399,7 +406,6 @@ async function analyze(silent=false){
     $('cardsGrid').style.display='grid';
     $('cardsGrid').innerHTML=away+home;
     $('placeholder').style.display='none';
-    renderVulnerabilityBoard(g);
 
     // Animate arsenal bars
     setTimeout(()=>{
@@ -539,17 +545,22 @@ function buildPdPicksPanel() {
   </div>`;
 }
 
-// Re-render all open threats panes once PROPS_DATA arrives
+// Re-render threats and arsenal panes once PROPS_DATA / MATCHUPS arrive
 function rebuildThreats(){
   if(!PD||!PD.success) return;
   for(const pit of [PD.awayPitcher, PD.homePitcher]){
     if(!pit?.id) continue;
-    const paneId = `${pit.id}-threats`;
-    const pane = document.getElementById(paneId);
-    if(!pane) continue;
     const side = MATCHUPS[pit.id];
     if(!side) continue;
-    pane.innerHTML = buildThreatsPane(pit.id);
+    // Rebuild threats pane
+    const threatsPane = document.getElementById(`${pit.id}-threats`);
+    if(threatsPane) threatsPane.innerHTML = buildThreatsPane(pit.id);
+    // Rebuild arsenal pane to include pitch matchups (now that MATCHUPS is populated)
+    const arsPane = document.getElementById(`${pit.id}-ars`);
+    if(arsPane){
+      arsPane.innerHTML = buildArsenalPane(pit.stats||{}, pit.id);
+      setTimeout(()=>arsPane.querySelectorAll('.ars-b').forEach(b=>{b.style.width=b.dataset.w+'%';}),60);
+    }
   }
 }
 
@@ -633,7 +644,7 @@ function buildCard(pit,teamAbbr,oppAbbr){
     <div id="${pit.id}-vuln"    class="pc-pane">${buildVulnPane(pit.id)}</div>
     <div id="${pit.id}-proj"    class="pc-pane">${buildProjPane(s,log,oppAbbr)}</div>
     <div id="${pit.id}-log"     class="pc-pane">${buildLogPane(log)}</div>
-    <div id="${pit.id}-ars"     class="pc-pane">${buildArsenalPane(s)}</div>
+    <div id="${pit.id}-ars"     class="pc-pane">${buildArsenalPane(s, pit.id)}</div>
   </div>`;
 }
 
@@ -685,25 +696,6 @@ function buildVulnPane(pitcherId){
   <div class="vuln-note">Sprint 3.2 profile blends opponent contact quality, pitcher run prevention and strikeout environment to show where batter props are most or least attackable.</div>`;
 }
 
-function renderVulnerabilityBoard(game){
-  const board = $('vulnerabilityBoard');
-  if(!board || !PD || !PD.success){
-    if(board) board.style.display='none';
-    return;
-  }
-  const cards = [
-    {pit: PD.awayPitcher, team: game?.awayAbbr || 'AWAY'},
-    {pit: PD.homePitcher, team: game?.homeAbbr || 'HOME'}
-  ].filter(x => x.pit && x.pit.id)
-   .map(x => `<div class="vuln-board-card"><div class="vuln-board-title">${x.team} · ${x.pit.name}</div>${buildVulnPane(x.pit.id)}</div>`)
-   .join('');
-  if(!cards){
-    board.style.display='none';
-    return;
-  }
-  board.style.display='block';
-  board.innerHTML = `<div class="vuln-board-h">PROP VULNERABILITY BOARD</div><div class="vuln-board-grid">${cards}</div>`;
-}
 
 // ── KPI ROW ──────────────────────────────────────────────────────────────
 function buildKpiRow(s){
@@ -925,12 +917,77 @@ function buildLogPane(log){
     </table>`;
 }
 
+// ── PITCH-TYPE BATTER MATCHUPS ────────────────────────────────────────────
+function _pitchThreatScore(b, pitchType){
+  const POWER=['ff','si','fc'], BREAKING=['sl','st','cu','kc'], OFFSPEED=['ch','fs','sv','fp'];
+  const ev    = parseFloat(b.ev)      || 88.5;
+  const iso   = parseFloat(b.iso)     || 0.140;
+  const xwoba = parseFloat(b.xwoba)   || 0.320;
+  const brl   = parseFloat(b.brl_pct) || 6.0;
+  const xba   = parseFloat(b.xba)     || 0.250;
+  if(POWER.includes(pitchType)){
+    // Power pitches: high EV + barrel% + ISO hitters make the most damage
+    return (ev-88.5)*1.5 + (iso-0.140)*100 + (brl-6.0)*2.0;
+  } else if(BREAKING.includes(pitchType)){
+    // Breaking balls: contact quality (xBA) + discipline matters
+    return (xba-0.250)*80 + (xwoba-0.320)*60;
+  } else {
+    // Off-speed: plate discipline + overall quality
+    return (xwoba-0.320)*100 + (xba-0.250)*50;
+  }
+}
+
+function buildPitchMatchups(pitcherId, pct, velo){
+  const side = MATCHUPS[pitcherId];
+  if(!side || !side.threats || !side.threats.length) return '';
+  const threats = side.threats;
+  // Only show pitches with meaningful usage (>=8%)
+  const keys = Object.keys(pct).filter(k=>pct[k]>=8).sort((a,b)=>pct[b]-pct[a]).slice(0,4);
+  if(!keys.length) return '';
+
+  const sections = keys.map(k=>{
+    const pitchName = PITCH_NAMES[k]||k.toUpperCase();
+    const veloStr   = velo[k] ? velo[k].toFixed(1)+' mph' : '';
+    const scored = threats
+      .map(b=>({...b, ps:_pitchThreatScore(b,k)}))
+      .sort((a,b)=>b.ps-a.ps)
+      .slice(0,3);
+    const chips = scored.map(b=>{
+      const danger = b.ps>5?'#f44336':b.ps>0?'#ff9800':'#6a8db0';
+      const bg     = b.ps>5?'rgba(244,67,54,.10)':b.ps>0?'rgba(255,152,0,.08)':'rgba(106,141,176,.07)';
+      const bor    = b.ps>5?'rgba(244,67,54,.25)':b.ps>0?'rgba(255,152,0,.22)':'rgba(106,141,176,.2)';
+      const lastName = b.name.split(' ').slice(-1)[0];
+      const stat = b.ev ? `EV ${parseFloat(b.ev).toFixed(0)}` : (b.xwoba ? `xwOBA ${parseFloat(b.xwoba).toFixed(3)}` : '');
+      return `<span style="display:inline-flex;align-items:center;gap:5px;padding:3px 9px;background:${bg};border:1px solid ${bor};border-radius:6px;font-size:.55rem">
+        <span style="color:var(--t);font-weight:600">${lastName}</span>
+        ${stat?`<span style="color:${danger};font-family:Orbitron,monospace;font-size:.48rem">${stat}</span>`:''}
+      </span>`;
+    }).join('');
+    return `<div style="padding:8px 0;border-bottom:1px solid rgba(255,255,255,.04)">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+        <span style="font-family:Orbitron,monospace;font-size:.58rem;color:var(--sv)">${pitchName}</span>
+        <span style="font-family:Orbitron,monospace;font-size:.5rem;color:var(--mu)">${pct[k].toFixed(1)}%${veloStr?' · '+veloStr:''}</span>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:5px">${chips}</div>
+    </div>`;
+  }).join('');
+
+  return `<div style="margin-top:14px">
+    <div class="ars-head"><span class="tag sv">MATCH</span> WHO HITS EACH PITCH</div>
+    ${sections}
+    <div class="scout-note" style="margin-top:6px;font-size:.54rem">Top 3 threat batters vs each pitch type. Power pitches scored by EV/ISO/Barrel%; breaking balls by xBA/xwOBA; off-speed by plate discipline.</div>
+  </div>`;
+}
+
 // ── ARSENAL PANE ──────────────────────────────────────────────────────────
-function buildArsenalPane(s){
+function buildArsenalPane(s, pitcherId){
   const pct=s.sv_arsenal_pct||{};
   const velo=s.sv_arsenal_velo||{};
   const keys=Object.keys(pct).filter(k=>pct[k]>0).sort((a,b)=>pct[b]-pct[a]);
-  if(!keys.length)return`<div class="na">⟳ ARSENAL DATA LOADING…<br><span style="font-size:.6rem">Will appear once Savant cache is ready</span></div>`;
+  if(!keys.length){
+    const btnStyle='margin-top:10px;padding:6px 14px;background:rgba(0,229,255,.1);border:1px solid rgba(0,229,255,.3);border-radius:6px;color:var(--c);font-family:Orbitron,monospace;font-size:.56rem;letter-spacing:1px;cursor:pointer';
+    return`<div class="na" style="line-height:2">⟳ ARSENAL DATA LOADING…<br><span style="font-size:.6rem">Waiting for Statcast cache — will auto-update</span><br><button style="${btnStyle}" onclick="if(LAST_PK)analyze(true)">↻ RETRY NOW</button></div>`;
+  }
   const rows=keys.map(k=>`<div class="ars-row">
     <div class="ars-name">${PITCH_NAMES[k]||k.toUpperCase()}</div>
     <div class="ars-bw"><div class="ars-b" data-w="${Math.min(100,pct[k])}" style="width:0%"></div></div>
@@ -945,11 +1002,13 @@ function buildArsenalPane(s){
   if(kpct>0.27)note+=`<strong style="color:var(--g)">Elite K rate (${fP(kpct)})</strong> — target strikeout props. `;
   else if(kpct>0.22)note+=`Above-avg K rate (${fP(kpct)}). `;
   else if(kpct>0&&kpct<0.18)note+=`<strong style="color:var(--r)">Below-avg K rate (${fP(kpct)})</strong> — fade K overs. `;
+  const matchups = buildPitchMatchups(pitcherId, pct, velo);
   return`
     <div class="ars-head"><span class="tag sv">SV</span> PITCH ARSENAL — STATCAST</div>
     <div class="ars-cols"><span>PITCH</span><span>USAGE</span><span style="text-align:right">PCT</span><span style="text-align:right">VELO</span></div>
     ${rows}
-    <div class="scout-note">${note}</div>`;
+    <div class="scout-note">${note}</div>
+    ${matchups}`;
 }
 // ── THREATS PANE (top damage threats vs this pitcher) ────────────────────
 function buildThreatsPane(pitcherId){
