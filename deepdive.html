@@ -2085,7 +2085,15 @@ function loadSimulation(){
   var panel = document.getElementById('simPanel');
   if(panel) panel.innerHTML = '<div class="spinner"></div>';
   fetch('/api/simulate/' + GPK)
-    .then(function(r){ if(!r.ok) throw new Error('Server '+r.status+' — check Render logs'); return r.json(); })
+    .then(function(r){
+      return r.json().catch(function(){ return {}; }).then(function(body){
+        if(!r.ok){
+          var msg = (body && body.error) ? body.error : ('Server '+r.status+' — check Render logs');
+          throw new Error(msg);
+        }
+        return body;
+      });
+    })
     .then(function(d){
       if(!d.success) throw new Error(d.error || 'Simulation failed');
       SIM_DATA = d;

@@ -3427,11 +3427,22 @@ def _pitch_type_advantage(batter_id, pitcher_id, batter_name='', pitcher_name=''
 
 def _num(v, d=0.0):
     try:
-        if v in (None, "", "N/A", "---"):
-            return d if d is None else float(d)
-        return float(v)
-    except:
-        return d if d is None else float(d)
+        if v in (None, "", "N/A", "---", ".---", "-.--"):
+            raise ValueError('empty numeric')
+        f = float(v)
+        if not math.isfinite(f):
+            raise ValueError('non-finite numeric')
+        return f
+    except Exception:
+        try:
+            if d is None:
+                return None
+            fd = float(d)
+            if not math.isfinite(fd):
+                return 0.0
+            return fd
+        except Exception:
+            return 0.0
 
 
 def _clamp(v, lo, hi):
@@ -4192,7 +4203,13 @@ def api_simulate(game_pk):
         away_team_id = away_team.get('id')
         home_team_id = home_team.get('id')
 
-        box = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=10).json().get('teams', {})
+        box = {}
+        try:
+            r_box = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=10)
+            if r_box.ok:
+                box = (r_box.json() or {}).get('teams', {}) or {}
+        except Exception:
+            box = {}
         away_lineup = get_batters_from_boxscore(box.get('away', {}), 'away')
         home_lineup = get_batters_from_boxscore(box.get('home', {}), 'home')
 
