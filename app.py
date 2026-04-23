@@ -1487,7 +1487,6 @@ def _collect_mlb_memory_snapshot(date_str=None, days_back=2, max_games_per_day=3
             "savant": sv_summary,
             "injuries": injury_summary,
             "odds": _odds_cache_status_payload(),
-        },
             "comprehensive": comprehensive_data,
         },
     }
