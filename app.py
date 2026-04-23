@@ -1061,7 +1061,16 @@ def cheatsheets_page():
 
 @app.route('/tracker')
 def tracker_page():
-    return TRACKER_HTML
+    html = _read_html_or_fallback('tracker.html')
+    return Response(
+        html,
+        mimetype='text/html',
+        headers={
+            'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+            'Pragma': 'no-cache',
+            'Expires': '0',
+        },
+    )
 
 @app.route('/consistency')
 def consistency_page():

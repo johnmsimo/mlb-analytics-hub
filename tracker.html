@@ -253,6 +253,9 @@ details[open] summary::before{transform:rotate(90deg)}
 <div class="ctrl">
   <input type="date" id="trackDate" style="max-width:150px" aria-label="Slate date">
   <button class="btn primary" id="loadDayBtn">Refresh Live Day</button>
+  <button class="btn" id="captureDayBtn">Capture Slate</button>
+  <button class="btn" id="captureCloseBtn">Capture Closing</button>
+  <button class="btn" id="gradeDayBtn">Grade Day</button>
   <button class="btn" id="manualPickBtn">＋ Add Manual Pick</button>
   <div class="ctrl-sep"></div>
   <button class="btn gold" id="syncPerfBtn">📊 Sync Performance</button>
@@ -773,16 +776,32 @@ async function loadDay() {
   status('Loading…');
   try {
     const d = await api(`/api/tracker/today?date=${date}`);
+    const entries = Array.isArray(d?.entries) ? d.entries : [];
     st.day = d;
     renderSummary(d);
     renderMarketTable(d);
-    populateMktFilter(d.entries||[]);
+    populateMktFilter(entries);
     renderBoard();
     renderParlayBuilder();
     $('datePill').textContent = d.capturedAt ? `Live ${date} · synced ${ts(d.capturedAt)}` : `Live ${date} · no saved picks yet`;
-    status('Day loaded');
+    if (!entries.length) {
+      let hasGames = false;
+      try {
+        const slate = await api(`/api/games/today?date=${encodeURIComponent(date)}`);
+        hasGames = Array.isArray(slate?.games) && slate.games.length > 0;
+      } catch {}
+      if (hasGames) {
+        status('No saved picks for this date. Click Capture Slate to load picks.', true);
+      } else {
+        status('No games scheduled and no saved picks for this date.');
+      }
+    } else {
+      status(`Loaded ${entries.length} picks for ${date}`);
+    }
     loadModelRecord();
-  } catch(e) { status(e.message, true); }
+  } catch(e) { 
+    status(e.message, true); 
+  }
 }
 
 async function captureDay() {
@@ -839,39 +858,51 @@ async function gradeDay() {
 
 // ── Hero summary ──────────────────────────────────────────────────────────────
 function renderSummary(d) {
-  const s = d.summary || {};
-  const bk = s.bankroll || {};
-  const vs = s.value || {};
-  $('hPicks').textContent    = s.picks || 0;
-  $('hGraded').textContent   = s.graded || 0;
-  $('hHitRate').textContent  = s.hit_rate!=null ? pct(s.hit_rate) : '—';
-  const profit = parseFloat(vs.dollars||0);
-  $('hProfit').textContent   = money(profit);
-  $('hProfit').style.color   = profit>0?'var(--g)':profit<0?'var(--r)':'var(--txt)';
-  $('hRisk').textContent     = money(bk.planned_stake||0);
-  $('hBankroll').textContent = money(bk.live_bankroll||bk.starting_bankroll||0);
+  try {
+    const s = d.summary || {};
+    const bk = s.bankroll || {};
+    const vs = s.value || {};
+    console.log('[renderSummary] summary keys:', Object.keys(s), 'bankroll:', bk, 'value:', vs);
+    $('hPicks').textContent    = s.picks || 0;
+    $('hGraded').textContent   = s.graded || 0;
+    $('hHitRate').textContent  = s.hit_rate!=null ? pct(s.hit_rate) : '—';
+    const profit = parseFloat(vs.dollars||0);
+    $('hProfit').textContent   = money(profit);
+    $('hProfit').style.color   = profit>0?'var(--g)':profit<0?'var(--r)':'var(--txt)';
+    $('hRisk').textContent     = money(bk.planned_stake||0);
+    $('hBankroll').textContent = money(bk.live_bankroll||bk.starting_bankroll||0);
+  } catch(e) {
+    console.error('[renderSummary] Error:', e);
+    $('hPicks').textContent = $('hGraded').textContent = $('hHitRate').textContent = $('hProfit').textContent = $('hRisk').textContent = $('hBankroll').textContent = '—';
+  }
 }
 
 // ── Market breakdown table ────────────────────────────────────────────────────
 function renderMarketTable(d) {
-  const bm = (d.summary||{}).by_market || {};
-  const rows = Object.entries(bm).map(([mk, v]) => {
-    const graded = (v.wins||0)+(v.losses||0)+(v.pushes||0);
-    const hr = graded ? (v.wins||0)/graded : null;
-    return `<tr>
-      <td>${mkTag(mk)}</td>
-      <td>${v.picks||0}</td>
-      <td>${graded}</td>
-      <td style="color:var(--g)">${v.wins||0}</td>
-      <td style="color:var(--r)">${v.losses||0}</td>
-      <td style="color:var(--y)">${v.pushes||0}</td>
-      <td>${hr!=null?pct(hr):'—'}</td>
-      <td style="color:${(v.units||0)>=0?'var(--g)':'var(--r)'}">${num(v.units||0,2)}</td>
-      <td style="color:${(v.dollars||0)>=0?'var(--g)':'var(--r)'}">${money(v.dollars||0)}</td>
-    </tr>`;
-  });
-  $('mktBody').innerHTML = rows.length ? rows.join('') : '<tr><td colspan="9" class="empty">No market data.</td></tr>';
-  $('mktSub').textContent = rows.length ? `${rows.length} markets` : '';
+  try {
+    const bm = (d.summary||{}).by_market || {};
+    console.log('[renderMarketTable] by_market:', bm);
+    const rows = Object.entries(bm).map(([mk, v]) => {
+      const graded = (v.wins||0)+(v.losses||0)+(v.pushes||0);
+      const hr = graded ? (v.wins||0)/graded : null;
+      return `<tr>
+        <td>${mkTag(mk)}</td>
+        <td>${v.picks||0}</td>
+        <td>${graded}</td>
+        <td style="color:var(--g)">${v.wins||0}</td>
+        <td style="color:var(--r)">${v.losses||0}</td>
+        <td style="color:var(--y)">${v.pushes||0}</td>
+        <td>${hr!=null?pct(hr):'—'}</td>
+        <td style="color:${(v.units||0)>=0?'var(--g)':'var(--r)'}">${num(v.units||0,2)}</td>
+        <td style="color:${(v.dollars||0)>=0?'var(--g)':'var(--r)'}">${money(v.dollars||0)}</td>
+      </tr>`;
+    });
+    $('mktBody').innerHTML = rows.length ? rows.join('') : '<tr><td colspan="9" class="empty">No market data.</td></tr>';
+    $('mktSub').textContent = rows.length ? `${rows.length} markets` : '';
+  } catch(e) {
+    console.error('[renderMarketTable] Error:', e);
+    $('mktBody').innerHTML = '<tr><td colspan="9" class="empty">Error rendering markets</td></tr>';
+  }
 }
 
 // ── Populate market filter ────────────────────────────────────────────────────
@@ -890,77 +921,86 @@ function populateMktFilter(entries) {
 
 // ── Working board ─────────────────────────────────────────────────────────────
 function renderBoard() {
-  const entries = (st.day||{}).entries || [];
-  const mkt = $('fMkt').value;
-  const res = $('fRes').value;
-  const tier= $('fTier').value;
-  const srt = $('fSort').value;
-  const {evOnly, pendingOnly, coreOnly} = st.flags;
+  try {
+    const entries = (st.day||{}).entries || [];
+    console.log('[renderBoard] entries count:', entries.length, 'entries:', entries);
+    const mkt = $('fMkt').value;
+    const res = $('fRes').value;
+    const tier= $('fTier').value;
+    const srt = $('fSort').value;
+    const {evOnly, pendingOnly, coreOnly} = st.flags;
+    console.log('[renderBoard] filters:', {mkt, res, tier, evOnly, pendingOnly, coreOnly});
 
-  let rows = entries.filter(r => {
-    if (mkt && r.marketKey !== mkt) return false;
-    if (res && (r.grade||'pending') !== res) return false;
-    if (tier && r.confidenceTier !== tier) return false;
-    if (evOnly) {
-      const ev = evPercent(r.adjProb, r.marketImplied);
-      if (ev === null || ev <= 0) return false;
+    let rows = entries.filter(r => {
+      if (mkt && r.marketKey !== mkt) return false;
+      if (res && (r.grade||'pending') !== res) return false;
+      if (tier && r.confidenceTier !== tier) return false;
+      if (evOnly) {
+        const ev = evPercent(r.adjProb, r.marketImplied);
+        if (ev === null || ev <= 0) return false;
+      }
+      if (pendingOnly && (r.grade||'pending') !== 'pending') return false;
+      if (coreOnly && !['A','B'].includes(r.confidenceTier||'D')) return false;
+      return true;
+    });
+    console.log('[renderBoard] filtered rows:', rows.length);
+
+    // Sort
+    rows.sort((a,b) => {
+      if (srt === 'edge')   return (parseFloat(b.edge)||0) - (parseFloat(a.edge)||0);
+      if (srt === 'adjProb')return (parseFloat(b.adjProb)||0) - (parseFloat(a.adjProb)||0);
+      if (srt === 'hub')    return hubRating(b.adjProb,b.edge) - hubRating(a.adjProb,a.edge);
+      if (srt === 'ev')     return (evPercent(b.adjProb,b.marketImplied)||0) - (evPercent(a.adjProb,a.marketImplied)||0);
+      if (srt === 'profit') return (parseFloat(b.profitDollars)||0) - (parseFloat(a.profitDollars)||0);
+      return (parseFloat(b.score)||0) - (parseFloat(a.score)||0); // default: score
+    });
+
+    $('boardSub').textContent = `${rows.length} of ${entries.length} entries`;
+
+    if (!rows.length) {
+      const msg = entries.length === 0 ? 'No entries saved yet. Click "Capture Slate" to add picks for today.' : 'No entries match current filters.';
+      $('boardBody').innerHTML = `<tr><td colspan="19" class="empty">${msg}</td></tr>`;
+      setupParlayDnD();
+      return;
     }
-    if (pendingOnly && (r.grade||'pending') !== 'pending') return false;
-    if (coreOnly && !['A','B'].includes(r.confidenceTier||'D')) return false;
-    return true;
-  });
 
-  // Sort
-  rows.sort((a,b) => {
-    if (srt === 'edge')   return (parseFloat(b.edge)||0) - (parseFloat(a.edge)||0);
-    if (srt === 'adjProb')return (parseFloat(b.adjProb)||0) - (parseFloat(a.adjProb)||0);
-    if (srt === 'hub')    return hubRating(b.adjProb,b.edge) - hubRating(a.adjProb,a.edge);
-    if (srt === 'ev')     return (evPercent(b.adjProb,b.marketImplied)||0) - (evPercent(a.adjProb,a.marketImplied)||0);
-    if (srt === 'profit') return (parseFloat(b.profitDollars)||0) - (parseFloat(a.profitDollars)||0);
-    return (parseFloat(b.score)||0) - (parseFloat(a.score)||0); // default: score
-  });
-
-  $('boardSub').textContent = `${rows.length} of ${entries.length} entries`;
-
-  if (!rows.length) {
-    $('boardBody').innerHTML = '<tr><td colspan="19" class="empty">No entries match current filters.</td></tr>';
+    $('boardBody').innerHTML = rows.map(r => {
+      const grade = r.grade || 'pending';
+      const hub   = hubRating(r.adjProb, r.edge);
+      const ev    = evPercent(r.adjProb, r.marketImplied);
+      const profit= parseFloat(r.profitDollars||0);
+      const clv   = r.clvEdge != null ? parseFloat(r.clvEdge) : null;
+      const rowCls= {win:'row-win',loss:'row-loss',push:'row-push',pending:''}[grade]||'';
+      const profitCol = profit>0?'var(--g)':profit<0?'var(--r)':'var(--mu)';
+      const inParlay = st.parlay.includes(r.id);
+      const canDrag = r.marketKey !== 'parlay';
+      return `<tr class="${rowCls}" data-pick-id="${safe(r.id,'')}" draggable="${canDrag ? 'true' : 'false'}">
+        <td><strong>${safe(r.player)}</strong></td>
+        <td>${safe(r.team)}</td>
+        <td>${mkTag(r.marketKey)}</td>
+        <td>${safe(r.sideLabel || r.recommendedSide || 'Over')}</td>
+        <td>${safe(r.line)}</td>
+        <td>${hubBadge(hub)}</td>
+        <td>${evHtml(r.adjProb, r.marketImplied)}</td>
+        <td>${pct(r.adjProb)}</td>
+        <td>${r.edge!=null?pct(r.edge):'—'}</td>
+        <td>${num(r.modelMean,2)}</td>
+        <td>${priceShopHtml(r)}</td>
+        <td>${r.closingPrice!=null?r.closingPrice:'—'}</td>
+        <td>${clvHtml(r.clvEdge)}</td>
+        <td><input class="stake-input" type="number" step="0.01" value="${num(r.stakeDollars||0,2,'0.00')}" onchange="updatePickField('${r.id}','stakeDollars',this.value)"></td>
+        <td><input class="actual-input" type="number" step="0.01" value="${r.actual!=null?r.actual:''}" placeholder="—" onchange="updatePickField('${r.id}','actual',this.value)"></td>
+        <td><select class="grade-select" onchange="updatePickField('${r.id}','grade',this.value)"><option value="pending" ${grade==='pending'?'selected':''}>Pending</option><option value="win" ${grade==='win'?'selected':''}>Win</option><option value="loss" ${grade==='loss'?'selected':''}>Loss</option><option value="push" ${grade==='push'?'selected':''}>Push</option></select></td>
+        <td>${tierBadge(r.confidenceTier)}</td>
+        <td style="color:${profitCol};font-weight:600">${grade==='pending'?'—':money(profit)}</td>
+        <td><div class="action-row"><button class="mini-btn ${inParlay?'on':''}" onclick="toggleParlay('${r.id}')">${inParlay?'Remove Parlay':'Add Parlay'}</button><button class="mini-btn danger" onclick="removePick('${r.id}')">Remove</button></div></td>
+      </tr>`;
+    }).join('');
     setupParlayDnD();
-    return;
+  } catch(e) {
+    console.error('[renderBoard] Error:', e);
+    $('boardBody').innerHTML = `<tr><td colspan="19" class="empty">Error rendering board: ${safe(e.message)}</td></tr>`;
   }
-
-  $('boardBody').innerHTML = rows.map(r => {
-    const grade = r.grade || 'pending';
-    const hub   = hubRating(r.adjProb, r.edge);
-    const ev    = evPercent(r.adjProb, r.marketImplied);
-    const profit= parseFloat(r.profitDollars||0);
-    const clv   = r.clvEdge != null ? parseFloat(r.clvEdge) : null;
-    const rowCls= {win:'row-win',loss:'row-loss',push:'row-push',pending:''}[grade]||'';
-    const profitCol = profit>0?'var(--g)':profit<0?'var(--r)':'var(--mu)';
-    const inParlay = st.parlay.includes(r.id);
-    const canDrag = r.marketKey !== 'parlay';
-    return `<tr class="${rowCls}" data-pick-id="${safe(r.id,'')}" draggable="${canDrag ? 'true' : 'false'}">
-      <td><strong>${safe(r.player)}</strong></td>
-      <td>${safe(r.team)}</td>
-      <td>${mkTag(r.marketKey)}</td>
-      <td>${safe(r.sideLabel || r.recommendedSide || 'Over')}</td>
-      <td>${safe(r.line)}</td>
-      <td>${hubBadge(hub)}</td>
-      <td>${evHtml(r.adjProb, r.marketImplied)}</td>
-      <td>${pct(r.adjProb)}</td>
-      <td>${r.edge!=null?pct(r.edge):'—'}</td>
-      <td>${num(r.modelMean,2)}</td>
-      <td>${priceShopHtml(r)}</td>
-      <td>${r.closingPrice!=null?r.closingPrice:'—'}</td>
-      <td>${clvHtml(r.clvEdge)}</td>
-      <td><input class="stake-input" type="number" step="0.01" value="${num(r.stakeDollars||0,2,'0.00')}" onchange="updatePickField('${r.id}','stakeDollars',this.value)"></td>
-      <td><input class="actual-input" type="number" step="0.01" value="${r.actual!=null?r.actual:''}" placeholder="—" onchange="updatePickField('${r.id}','actual',this.value)"></td>
-      <td><select class="grade-select" onchange="updatePickField('${r.id}','grade',this.value)"><option value="pending" ${grade==='pending'?'selected':''}>Pending</option><option value="win" ${grade==='win'?'selected':''}>Win</option><option value="loss" ${grade==='loss'?'selected':''}>Loss</option><option value="push" ${grade==='push'?'selected':''}>Push</option></select></td>
-      <td>${tierBadge(r.confidenceTier)}</td>
-      <td style="color:${profitCol};font-weight:600">${grade==='pending'?'—':money(profit)}</td>
-      <td><div class="action-row"><button class="mini-btn ${inParlay?'on':''}" onclick="toggleParlay('${r.id}')">${inParlay?'Remove Parlay':'Add Parlay'}</button><button class="mini-btn danger" onclick="removePick('${r.id}')">Remove</button></div></td>
-    </tr>`;
-  }).join('');
-  setupParlayDnD();
 }
 
 function setupParlayDnD() {
@@ -1580,6 +1620,7 @@ function toggleCore() {
 function wire() {
   const pairs = [
     ['loadDayBtn', loadDay], ['reloadBtn', loadDay],
+    ['captureDayBtn', captureDay], ['captureCloseBtn', captureClose], ['gradeDayBtn', gradeDay],
     ['manualPickBtn', openManualPick], ['syncPerfBtn', syncPerformance],
     ['exportCsvBtn', ()=>exportTracker('csv')], ['exportPdfBtn', ()=>exportTracker('pdf')],
     ['btExportCsvBtn', ()=>exportTracker('csv')], ['btExportPdfBtn', ()=>exportTracker('pdf')],
@@ -1615,8 +1656,6 @@ async function boot() {
   try { await loadAdj(); } catch{}
   try { await loadDay(); } catch(e){status(e.message,true);}
   try { await Promise.allSettled([loadModelRecord(), loadCal(), loadVal(), loadBR(), loadAttr()]); } catch{}
-
-  status('Tracker ready');
 }
 
 boot();
