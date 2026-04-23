@@ -9662,6 +9662,68 @@ def _props_fetch_game(game_pk, date_hint=None):
         if not home_bats:
             home_bats = _parse_sched(lineups.get("homeBatters") or [])
 
+    # Last resort: build a provisional top-9 from active roster so projections
+    # still render before official/projected lineups are published.
+    if not away_bats or not home_bats:
+        def _roster_fallback(team_id):
+            out = []
+            if not team_id:
+                return out
+            try:
+                rr = requests.get(f"{MLB_API}/teams/{team_id}/roster?rosterType=active", timeout=8)
+                rr.raise_for_status()
+                for p in (rr.json().get("roster") or []):
+                    pos = ((p.get("position") or {}).get("abbreviation") or "?").upper()
+                    if pos in ("P", "SP", "RP", "CP"):
+                        continue
+                    person = p.get("person") or {}
+                    name = (person.get("fullName") or "").strip()
+                    pid = person.get("id")
+                    if not name:
+                        continue
+                    fgb = fg_batter(name)
+                    svb = sv_batter(name)
+                    out.append({
+                        "slot": len(out) + 1,
+                        "id": pid,
+                        "name": name,
+                        "pos": pos,
+                        "lineup_status": "pending",
+                        "avg": fgb.get("fg_avg", ".---"),
+                        "obp": fgb.get("fg_obp", ".---"),
+                        "slg": fgb.get("fg_slg", ".---"),
+                        "ops": fgb.get("fg_ops", ".---"),
+                        "ab": 0,
+                        "hits": 0,
+                        "hr": 0,
+                        "rbi": 0,
+                        "fg_pa": fgb.get("fg_pa", "N/A"),
+                        "fg_r": fgb.get("fg_r", "N/A"),
+                        "fg_sb": fgb.get("fg_sb", "N/A"),
+                        "fg_woba": fgb.get("fg_woba", "N/A"),
+                        "fg_wrc": fgb.get("fg_wrc", "N/A"),
+                        "fg_war": fgb.get("fg_war", "N/A"),
+                        "sv_xba": svb.get("sv_xba", "N/A"),
+                        "sv_xslg": svb.get("sv_xslg", "N/A"),
+                        "sv_xwoba": svb.get("sv_xwoba", "N/A"),
+                        "sv_ev": svb.get("sv_ev", "N/A"),
+                        "sv_hh_pct": svb.get("sv_hh_pct", "N/A"),
+                        "sv_brl_pct": svb.get("sv_brl_pct", "N/A"),
+                        "sv_la": svb.get("sv_la", "N/A"),
+                    })
+                    if len(out) >= 9:
+                        break
+            except Exception as ex:
+                print(f"[props] roster fallback error team={team_id}: {ex}")
+            return out
+
+        away_team_id = (away_t.get("team") or {}).get("id")
+        home_team_id = (home_t.get("team") or {}).get("id")
+        if not away_bats:
+            away_bats = _roster_fallback(away_team_id)
+        if not home_bats:
+            home_bats = _roster_fallback(home_team_id)
+
     return gdata, away_bats, home_bats, away_t, home_t, {"ap": ap_info, "hp": hp_info}
 
 

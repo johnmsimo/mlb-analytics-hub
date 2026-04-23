@@ -740,6 +740,16 @@ function buildStatsPane(s,log){
 
   const hasFG = hasStat(fip);
   const hasSV = hasStat(xera);
+  const fgNotice = !hasFG
+    ? (FG_READY
+      ? `<div class="loading-notice fg">ℹ FG ADVANCED STATS UNAVAILABLE FOR THIS PITCHER</div>`
+      : `<div class="loading-notice fg">⟳ CACHE LOADING — CLICK ↻ REFRESH NOW IN BANNER ABOVE</div>`)
+    : '';
+  const svNotice = !hasSV
+    ? (SV_READY
+      ? `<div class="loading-notice sv">ℹ SAVANT STATS UNAVAILABLE FOR THIS PITCHER</div>`
+      : `<div class="loading-notice sv">⟳ SAVANT LOADING…</div>`)
+    : '';
 
   let xdiffRow='';
   if(hasFG&&hasSV){
@@ -770,7 +780,7 @@ function buildStatsPane(s,log){
     </table>
 
     <div class="sec-hdr fg"><span class="tag fg">FG</span> FANGRAPHS ADVANCED</div>
-    ${!hasFG?`<div class="loading-notice fg">⟳ CACHE LOADING — CLICK ↻ REFRESH NOW IN BANNER ABOVE</div>`:''}
+    ${fgNotice}
     <table class="stab">
       <tr><td>FIP</td><td class="${fipC(fip)}">${hasFG?parseFloat(fip).toFixed(2):'---'}</td></tr>
       <tr><td>xFIP</td><td class="${fipC(xfip)}">${hasFG&&hasStat(xfip)?parseFloat(xfip).toFixed(2):'---'}</td></tr>
@@ -782,7 +792,7 @@ function buildStatsPane(s,log){
     </table>
 
     <div class="sec-hdr sv"><span class="tag sv">SV</span> BASEBALL SAVANT</div>
-    ${!hasSV?`<div class="loading-notice sv">⟳ SAVANT LOADING…</div>`:''}
+    ${svNotice}
     <table class="stab">
       <tr><td>xERA</td><td class="${eraC(xera)}">${hasSV?parseFloat(xera).toFixed(2):'---'}</td></tr>
       ${xdiffRow}
