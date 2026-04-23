@@ -1,5 +1,6 @@
 import os, threading, traceback, difflib, io, csv as csvmod, json, re, time, uuid, unicodedata
 import requests
+import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 from uuid import uuid4
@@ -1270,11 +1271,12 @@ def _zonechart_cache_set(player_id, today, zone_data):
         _zonechart_cache[player_id] = {"date": today, "data": zone_data}
 
 
-def _compute_zonechart_data(player_id):
+def _compute_zonechart_data(player_id, force_refresh=False):
     today = datetime.now().strftime("%Y-%m-%d")
-    cached = _zonechart_cache_get(player_id, today)
-    if cached is not None:
-        return cached
+    if not force_refresh:
+        cached = _zonechart_cache_get(player_id, today)
+        if cached is not None:
+            return cached
 
     pr = requests.get(f"{MLB_API}/people/{player_id}", timeout=10)
     pr.raise_for_status()
@@ -2648,10 +2650,11 @@ def api_player_spray(player_id):
     """Spray chart: current season batted ball positions for a batter."""
     try:
         today = datetime.now().strftime("%Y-%m-%d")
+        refresh = str(request.args.get('refresh') or '').strip().lower() in ('1', 'true', 'yes')
 
         # Check cache first (daily TTL)
         cached = _spray_cache.get(player_id)
-        if cached and cached.get("date") == today:
+        if (not refresh) and cached and cached.get("date") == today:
             return jsonify({"success": True, "data": cached.get("data", [])})
 
         # Fetch player identity and type
@@ -2751,7 +2754,8 @@ def api_player_spray(player_id):
 def api_player_zonechart(player_id):
     """Strike zone chart: 3×3 zone metrics for pitcher or batter."""
     try:
-        zone_data = _compute_zonechart_data(player_id)
+        refresh = str(request.args.get('refresh') or '').strip().lower() in ('1', 'true', 'yes')
+        zone_data = _compute_zonechart_data(player_id, force_refresh=refresh)
         return jsonify({"success": True, "data": zone_data})
     
     except ValueError as ex:

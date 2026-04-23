@@ -348,6 +348,12 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .sc-legend-item{display:flex;align-items:center;gap:4px}
 .sc-legend-dot{width:12px;height:12px;border-radius:50%}
 .sc-empty{padding:24px;text-align:center;color:var(--mu);font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:1.3px}
+.chart-empty-reason{margin:8px auto 0;max-width:620px;padding:8px 10px;border-radius:8px;background:rgba(255,152,0,.08);border:1px solid rgba(255,152,0,.28);color:#ffcc80;font-family:'Orbitron',monospace;font-size:.52rem;letter-spacing:.8px;line-height:1.5}
+.chart-retry-wrap{display:flex;justify-content:center;margin-top:10px}
+.chart-retry-btn{padding:6px 14px;border-radius:8px;border:1px solid rgba(0,229,255,.35);background:rgba(0,229,255,.1);color:var(--c);font-family:'Orbitron',monospace;font-size:.56rem;letter-spacing:1.2px;cursor:pointer;transition:all .2s}
+.chart-retry-btn:hover{border-color:rgba(0,229,255,.55);background:rgba(0,229,255,.18)}
+.chart-retry-btn:disabled{opacity:.65;cursor:wait;border-color:rgba(0,229,255,.2);background:rgba(0,229,255,.06)}
+.chart-refresh-badge{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;border:1px solid rgba(0,230,118,.35);background:rgba(0,230,118,.1);color:var(--g);font-family:'Orbitron',monospace;font-size:.5rem;letter-spacing:1px}
 /* ── Strike Zone Chart ── */
 .zc-modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:3000;background:rgba(2,6,16,.82);backdrop-filter:blur(4px)}
 .zc-modal.show{display:flex}
@@ -659,8 +665,10 @@ let VAL_FILT      = 'all';
 let LINE_SHOP_CACHE = {};
 let SPRAY_CHART_DATA = {};  // keyed by player_id
 let SPRAY_CHART_FILTERS = {}; // keyed by player_id, stores active filter state
+let SPRAY_CHART_META = {}; // keyed by player_id, stores no-data/error reason
 let ZONE_CHART_DATA = {};  // keyed by player_id
 let ZONE_CHART_VIEW = {};  // keyed by player_id, stores 'pitcher' or 'batter' view
+let ZONE_CHART_META = {};  // keyed by player_id, stores no-data/error reason
 
 const MKT_LABELS = {
   player_hits:'Hits', player_home_runs:'Home Runs', player_total_bases:'Total Bases',
@@ -806,7 +814,15 @@ async function loadGames() {
     renderChips(games);
     if (games.length) {
       const first = games[0];
-      await selectGame(first.gamePk, first.awayAbbr, first.homeAbbr);
+      // Always return to the projections/batters pane on day load.
+      document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === 'projections'));
+      document.querySelectorAll('.tabpanel').forEach(p => p.classList.toggle('active', p.id === 'tab-projections'));
+      switchSub('batters');
+      try {
+        await selectGame(first.gamePk, first.awayAbbr, first.homeAbbr);
+      } catch (ex) {
+        gel('batterGrid').innerHTML = errHTML(`AUTO-LOAD FAILED: ${ex.message || ex}`);
+      }
     }
   } catch(e) {
     chips(`<div style="color:var(--r);font-family:Orbitron,monospace;font-size:.68rem;padding:10px">ERROR: ${e.message}</div>`);
@@ -1728,23 +1744,94 @@ function closeLineShop(ev) {
   modal.classList.remove('show');
 }
 
-async function loadSprayChartData(playerId) {
-  if (SPRAY_CHART_DATA[playerId]) return SPRAY_CHART_DATA[playerId];
+async function loadSprayChartData(playerId, forceRefresh = false) {
+  const hasCached = Object.prototype.hasOwnProperty.call(SPRAY_CHART_DATA, playerId);
+  if (!forceRefresh && hasCached) return SPRAY_CHART_DATA[playerId];
   try {
-    const r = await fetch(`/api/player/${playerId}/spray`);
+    const qs = forceRefresh ? '?refresh=1' : '';
+    const r = await fetch(`/api/player/${playerId}/spray${qs}`);
     const d = await r.json();
     if (!d.success || !d.data) {
       SPRAY_CHART_DATA[playerId] = [];
+      SPRAY_CHART_META[playerId] = {
+        reason: 'api_error',
+        detail: d?.error || `HTTP ${r.status}`,
+        refreshedFromSource: false,
+      };
+      return [];
+    }
+    if (!Array.isArray(d.data) || d.data.length === 0) {
+      if (!forceRefresh) {
+        return await loadSprayChartData(playerId, true);
+      }
+      SPRAY_CHART_DATA[playerId] = [];
+      SPRAY_CHART_META[playerId] = {
+        reason: 'empty_dataset',
+        detail: 'No tracked batted-ball events in current Statcast window.',
+        refreshedFromSource: false,
+      };
       return [];
     }
     SPRAY_CHART_DATA[playerId] = d.data;
+    SPRAY_CHART_META[playerId] = { reason: 'ok', detail: '', refreshedFromSource: !!forceRefresh };
     SPRAY_CHART_FILTERS[playerId] = { all: true, hits: false, lhp: false, rhp: false, home: false, away: false };
     return d.data;
   } catch (e) {
     console.error('[loadSprayChartData]', e);
     SPRAY_CHART_DATA[playerId] = [];
+    SPRAY_CHART_META[playerId] = {
+      reason: 'fetch_error',
+      detail: e?.message || 'Request failed',
+      refreshedFromSource: false,
+    };
     return [];
   }
+}
+
+function chartNoDataReasonHtml(kind, playerId, playerName) {
+  const meta = (kind === 'spray' ? SPRAY_CHART_META[playerId] : ZONE_CHART_META[playerId]) || {};
+  const reason = String(meta.reason || '').toLowerCase();
+  if (!reason || reason === 'ok') return '';
+  if (reason === 'empty_dataset') {
+    return `<div class="chart-empty-reason">NO TRACKED STATCAST EVENTS AVAILABLE FOR THIS VIEW YET.</div>`;
+  }
+  const escName = String(playerName || '').replace(/'/g, "\\'");
+  const retryFn = kind === 'spray' ? 'retrySprayChart' : 'retryZoneChart';
+  const retryHtml = `<div class="chart-retry-wrap"><button class="chart-retry-btn" onclick="${retryFn}(event, ${playerId}, '${escName}')">RETRY</button></div>`;
+  if (reason === 'api_error') {
+    return `<div class="chart-empty-reason">DATA ENDPOINT RETURNED AN ERROR: ${String(meta.detail || 'unknown').toUpperCase()}</div>${retryHtml}`;
+  }
+  return `<div class="chart-empty-reason">DATA REQUEST FAILED: ${String(meta.detail || 'network issue').toUpperCase()}</div>${retryHtml}`;
+}
+
+function chartRefreshBadgeHtml(kind, playerId) {
+  const meta = (kind === 'spray' ? SPRAY_CHART_META[playerId] : ZONE_CHART_META[playerId]) || {};
+  if (!meta.refreshedFromSource) return '';
+  return '<div class="chart-retry-wrap"><span class="chart-refresh-badge">✓ REFRESHED FROM SOURCE</span></div>';
+}
+
+async function retrySprayChart(ev, playerId, playerName) {
+  const btn = ev?.currentTarget;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'RETRYING...';
+  }
+  delete SPRAY_CHART_DATA[playerId];
+  delete SPRAY_CHART_META[playerId];
+  delete SPRAY_CHART_FILTERS[playerId];
+  await openSprayChart(playerId, playerName || 'PLAYER');
+}
+
+async function retryZoneChart(ev, playerId, playerName) {
+  const btn = ev?.currentTarget;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'RETRYING...';
+  }
+  delete ZONE_CHART_DATA[playerId];
+  delete ZONE_CHART_META[playerId];
+  delete ZONE_CHART_VIEW[playerId];
+  await openZoneChart(playerId, playerName || 'PLAYER');
 }
 
 async function openSprayChart(playerId, playerName) {
@@ -1756,11 +1843,12 @@ async function openSprayChart(playerId, playerName) {
   body.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
   const data = await loadSprayChartData(playerId);
   if (!data || data.length === 0) {
-    body.innerHTML = noData('No spray chart data available for this player.');
+    body.innerHTML = noData('No spray chart data available for this player.') + chartNoDataReasonHtml('spray', playerId, playerName);
     modal.classList.add('show');
     return;
   }
   updateSprayChartDisplay(playerId);
+  body.innerHTML = chartRefreshBadgeHtml('spray', playerId);
   modal.classList.add('show');
 }
 
@@ -1830,7 +1918,8 @@ function createSprayChartField(data) {
   svg += `<line x1="${cx-120}" y1="${cy}" x2="${cx+120}" y2="${cy}" stroke="rgba(0,229,255,.18)" stroke-width="1" opacity=".3"/>`;
   svg += `<circle cx="${cx}" cy="${cy}" r="40" fill="none" stroke="#00e5ff" stroke-width="2" opacity=".2"/>`;
   svg += `<circle cx="${cx}" cy="${cy}" r="60" fill="none" stroke="rgba(0,229,255,.18)" stroke-width="1" opacity=".15"/>`;
-  let statsByOutcome = { hit: 0, hr: 0, out: 0 };\n  data.forEach(b => {
+  let statsByOutcome = { hit: 0, hr: 0, out: 0 };
+  data.forEach(b => {
     if (!b.hc_x || !b.hc_y) return;
     let x = cx + (b.hc_x - 127) * scale;
     let y = cy - (b.hc_y - 127) * scale;
@@ -1872,21 +1961,46 @@ function createSprayChartLegend() {
 
 let LAST_SPRAY_STATS = null;
 
-async function loadZoneChartData(playerId) {
-  if (ZONE_CHART_DATA[playerId]) return ZONE_CHART_DATA[playerId];
+async function loadZoneChartData(playerId, forceRefresh = false) {
+  const hasCached = Object.prototype.hasOwnProperty.call(ZONE_CHART_DATA, playerId);
+  if (!forceRefresh && hasCached) return ZONE_CHART_DATA[playerId];
   try {
-    const r = await fetch(`/api/player/${playerId}/zonechart`);
+    const qs = forceRefresh ? '?refresh=1' : '';
+    const r = await fetch(`/api/player/${playerId}/zonechart${qs}`);
     const d = await r.json();
     if (!d.success || !d.data) {
-      ZONE_CHART_DATA[playerId] = [null] * 9;
+      ZONE_CHART_DATA[playerId] = Array(9).fill(null);
+      ZONE_CHART_META[playerId] = {
+        reason: 'api_error',
+        detail: d?.error || `HTTP ${r.status}`,
+        refreshedFromSource: false,
+      };
+      return [];
+    }
+    if (!Array.isArray(d.data) || d.data.filter(z => z).length === 0) {
+      if (!forceRefresh) {
+        return await loadZoneChartData(playerId, true);
+      }
+      ZONE_CHART_DATA[playerId] = Array(9).fill(null);
+      ZONE_CHART_META[playerId] = {
+        reason: 'empty_dataset',
+        detail: 'No tracked zone events in current Statcast window.',
+        refreshedFromSource: false,
+      };
       return [];
     }
     ZONE_CHART_DATA[playerId] = d.data;
+    ZONE_CHART_META[playerId] = { reason: 'ok', detail: '', refreshedFromSource: !!forceRefresh };
     ZONE_CHART_VIEW[playerId] = 'pitcher';  // default to pitcher view
     return d.data;
   } catch (e) {
     console.error('[loadZoneChartData]', e);
-    ZONE_CHART_DATA[playerId] = [null] * 9;
+    ZONE_CHART_DATA[playerId] = Array(9).fill(null);
+    ZONE_CHART_META[playerId] = {
+      reason: 'fetch_error',
+      detail: e?.message || 'Request failed',
+      refreshedFromSource: false,
+    };
     return [];
   }
 }
@@ -1900,11 +2014,12 @@ async function openZoneChart(playerId, playerName) {
   body.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
   const data = await loadZoneChartData(playerId);
   if (!data || data.filter(z => z).length === 0) {
-    body.innerHTML = noData('No zone chart data available for this player.');
+    body.innerHTML = noData('No zone chart data available for this player.') + chartNoDataReasonHtml('zone', playerId, playerName);
     modal.classList.add('show');
     return;
   }
   updateZoneChartDisplay(playerId);
+  body.innerHTML = chartRefreshBadgeHtml('zone', playerId);
   modal.classList.add('show');
 }
 
