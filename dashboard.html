@@ -1532,35 +1532,40 @@ function initSettingsView(){
   loadTrackerSettings();
   refreshSettingsPanel();
   loadComprehensiveSettings();
+  loadUploadedFiles();
   refreshBrainStatus();
 }
-  function refreshBrainStatus(){
-    fetch('/api/brain/ingest-status').then(function(r){return r.json();}).then(function(d){
-      if(!d||!d.success){setText('brainMsg','Status load failed',true);return;}
-      var summary=d.summary||{};
-      var sc=d.ingestion&&d.ingestion.statscast?d.ingestion.statscast.summary||{}:{};
-      var fg=d.ingestion&&d.ingestion.fangraphs?d.ingestion.fangraphs.summary||{}:{};
-      var mlb=d.ingestion&&d.ingestion.mlbApi?d.ingestion.mlbApi.summary||{}:{};
-      document.getElementById('brainStatcast').textContent=(sc.pitcherXStats||0)+' xStats, '+(sc.batterXStats||0)+' Batter xStats';
-      document.getElementById('brainFanGraphs').textContent=(fg.batters||0)+' Batters, '+(fg.pitchers||0)+' Pitchers';
-      document.getElementById('brainMLBPlayers').textContent=(mlb.totalPlayers||0)+' Players across '+(mlb.totalTeams||0)+' Teams';
-      document.getElementById('brainTotalData').textContent=summary.totalDataPoints?summary.totalDataPoints.toLocaleString():'-';
-      document.getElementById('brainIngestStatus').textContent=(summary.dataSourcesActive||0)+' sources active';
-      setText('brainMsg','Brain status updated');
-    }).catch(function(e){setText('brainMsg',e.message||'Status failed',true);});
-  }
 
-  function triggerBrainIngest(){
-    setText('brainMsg','Triggering comprehensive ingestion...');
-    fetch('/api/brain/ingest-trigger',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({force:true})})
-      .then(function(r){return r.json();})
-      .then(function(d){
-        if(!d||!d.success) throw new Error(d.error||'Ingest failed');
-        setText('brainMsg','Ingestion complete: '+(d.data&&d.data.totalDataPoints||0)+' data points');
-        refreshBrainStatus();
-      }).catch(function(e){setText('brainMsg',e.message||'Ingest failed',true);});
-  }
-  loadUploadedFiles();
+function refreshBrainStatus(){
+  fetch('/api/brain/ingest-status').then(function(r){return r.json();}).then(function(d){
+    if(!d||!d.success){setText('brainMsg','Status load failed',true);return;}
+    var summary=d.summary||{};
+    var sc=d.ingestion&&d.ingestion.statscast?d.ingestion.statscast.summary||{}:{};
+    var fg=d.ingestion&&d.ingestion.fangraphs?d.ingestion.fangraphs.summary||{}:{};
+    var mlb=d.ingestion&&d.ingestion.mlbApi?d.ingestion.mlbApi.summary||{}:{};
+    var elSC=document.getElementById('brainStatcast');
+    var elFG=document.getElementById('brainFanGraphs');
+    var elMLB=document.getElementById('brainMLBPlayers');
+    var elTotal=document.getElementById('brainTotalData');
+    var elStatus=document.getElementById('brainIngestStatus');
+    if(elSC) elSC.textContent=(sc.pitcherXStats||0)+' xStats, '+(sc.batterXStats||0)+' Batter xStats';
+    if(elFG) elFG.textContent=(fg.batters||0)+' Batters, '+(fg.pitchers||0)+' Pitchers';
+    if(elMLB) elMLB.textContent=(mlb.totalPlayers||0)+' Players across '+(mlb.totalTeams||0)+' Teams';
+    if(elTotal) elTotal.textContent=summary.totalDataPoints?summary.totalDataPoints.toLocaleString():'-';
+    if(elStatus) elStatus.textContent=(summary.dataSourcesActive||0)+' sources active';
+    setText('brainMsg','Brain status updated');
+  }).catch(function(e){setText('brainMsg',e.message||'Status failed',true);});
+}
+
+function triggerBrainIngest(){
+  setText('brainMsg','Triggering comprehensive ingestion...');
+  fetch('/api/brain/ingest-trigger',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({force:true})})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d||!d.success) throw new Error(d.error||'Ingest failed');
+      setText('brainMsg','Ingestion complete: '+(d.data&&d.data.totalDataPoints||0)+' data points');
+      refreshBrainStatus();
+    }).catch(function(e){setText('brainMsg',e.message||'Ingest failed',true);});
 }
 
 let selectedGamesDate=etTodayStr();
