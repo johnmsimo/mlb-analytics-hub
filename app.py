@@ -45,6 +45,16 @@ CAL_HISTORY_STORE = os.path.join(DATA_DIR, 'calibration_history.json')
 VALUE_HISTORY_STORE = os.path.join(DATA_DIR, 'value_history.json')
 _PROPS_SCAN_CACHE = {}
 _CONSISTENCY_CACHE = {}
+_props_scan_cache_lock = threading.Lock()
+_props_scan_refreshing = False
+_consistency_cache_lock = threading.Lock()
+_consistency_refreshing = False
+_PROPS_SCAN_TTL = 20 * 60
+_CONSISTENCY_TTL = 20 * 60
+_weather_cache_lock = threading.Lock()
+_weather_cache = {}
+_WEATHER_TTL = 20 * 60
+_WEATHER_FAIL_TTL = 120
 
 
 def _load_json(path, default):
@@ -420,6 +430,8 @@ _spray_cache = {}  # keyed by player_id, stores {'date': YYYY-MM-DD, 'data': [..
 
 # ── Strike Zone Chart Cache (zone metrics) ──────────────────────────────────
 _zonechart_cache = {}  # keyed by player_id, stores 9-zone metrics
+_zonechart_lock = threading.Lock()
+_zonechart_prefetching = set()
 
 PITCH_ORDER  = ["ff","si","fc","st","sl","cu","ch","fs","kn","sv"]
 PITCH_LABELS = {
@@ -748,6 +760,18 @@ def fetch_schedule(date_str):
     return dates[0].get("games", []) if dates else []
 
 
+def fetch_schedule_game(game_pk):
+    url = (f"{MLB_API}/schedule?sportId=1&gamePk={game_pk}"
+        "&hydrate=team,probablePitcher,lineups,linescore,venue(location),weather")
+    r = requests.get(url, timeout=10)
+    r.raise_for_status()
+    dates = r.json().get("dates", [])
+    if not dates:
+        return None
+    games = dates[0].get("games", [])
+    return games[0] if games else None
+
+
 # UTC offset for each MLB venue — used to find correct local hour for Open-Meteo index
 # ET=-5, CT=-6, MT=-7, PT=-8
 VENUE_UTC_OFFSET = {
@@ -792,6 +816,14 @@ def get_weather(lat, lon, game_hour=13, venue_id=None):
         lat, lon = STADIUM_COORDS[venue_id]
     if lat is None or lon is None:
         return {"temp":"N/A","rain_chance":"N/A","wind_speed":"N/A","condition":"N/A"}
+
+    cache_key = (int(venue_id or 0), round(float(lat), 3), round(float(lon), 3), int(game_hour))
+    now = time.time()
+    with _weather_cache_lock:
+        cached = _weather_cache.get(cache_key)
+    if cached and (now - float(cached.get("ts") or 0)) < float(cached.get("ttl") or _WEATHER_TTL):
+        return dict(cached.get("payload") or {})
+
     try:
         r = requests.get(WX_API, params={
             "latitude":lat,"longitude":lon,
@@ -817,7 +849,7 @@ def get_weather(lat, lon, game_hour=13, venue_id=None):
         compass = _deg_to_compass(wdeg)
         wind_speed = round(wind[idx]) if idx < len(wind) else "N/A"
         wind_str = f"{wind_speed} mph {compass}".strip()
-        return {
+        payload = {
             "temp":       round(temps[idx]) if idx < len(temps) else "N/A",
             "rain_chance":precip[idx] if idx < len(precip) else "N/A",
             "wind_speed": wind_speed,
@@ -825,9 +857,15 @@ def get_weather(lat, lon, game_hour=13, venue_id=None):
             "wind":       wind_str,
             "condition":  wcode_map.get(wcode, "Clear"),
         }
+        with _weather_cache_lock:
+            _weather_cache[cache_key] = {"ts": now, "ttl": _WEATHER_TTL, "payload": payload}
+        return payload
     except Exception as ex:
         print(f"[get_weather] lat={lat} lon={lon} hour={game_hour} venue={venue_id} err={ex}")
-        return {"temp":"N/A","rain_chance":"N/A","wind_speed":"N/A","wind_dir":"","wind":"N/A","condition":"N/A"}
+        payload = {"temp":"N/A","rain_chance":"N/A","wind_speed":"N/A","wind_dir":"","wind":"N/A","condition":"N/A"}
+        with _weather_cache_lock:
+            _weather_cache[cache_key] = {"ts": now, "ttl": _WEATHER_FAIL_TTL, "payload": payload}
+        return payload
 
 def pitcher_stats_mlb(player_id):
     try:
@@ -892,7 +930,10 @@ def parse_game(g):
     try:
         pk   = g.get("gamePk")
         stat = g.get("status",{}).get("detailedState","Scheduled")
-        st   = "Live" if "Progress" in stat else ("Final" if "Final" in stat else "Scheduled")
+        st_l = str(stat or "").lower()
+        is_live = "progress" in st_l or "manager challenge" in st_l or "review" in st_l
+        is_final = any(token in st_l for token in ("final", "game over", "completed early"))
+        st   = "Live" if is_live else ("Final" if is_final else "Scheduled")
         away = g.get("teams",{}).get("away",{})
         home = g.get("teams",{}).get("home",{})
         at   = away.get("team",{}); ht = home.get("team",{})
@@ -1051,11 +1092,28 @@ def api_games_today():
     try:
         date_str = (request.args.get('date') or datetime.now(ET).strftime("%Y-%m-%d")).strip()
         raw   = fetch_schedule(date_str)
-        games = [g for g in [parse_game(x) for x in raw] if g]
+        workers = min(12, max(1, len(raw)))
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            games = [g for g in ex.map(parse_game, raw) if g]
         return jsonify({"success":True,"games":games,"count":len(games)})
     except Exception as ex:
         print("[api_games_today]", traceback.format_exc())
         return jsonify({"success":False,"error":str(ex),"games":[]}), 500
+
+
+@app.route("/api/game-summary/<int:game_pk>")
+def api_game_summary(game_pk):
+    try:
+        gdata = fetch_schedule_game(game_pk)
+        if not gdata:
+            return jsonify({"success": False, "error": "Game not found"}), 404
+        parsed = parse_game(gdata)
+        if not parsed:
+            return jsonify({"success": False, "error": "Unable to parse game"}), 500
+        return jsonify({"success": True, "game": parsed})
+    except Exception as ex:
+        print("[api_game_summary]", traceback.format_exc())
+        return jsonify({"success": False, "error": str(ex)}), 500
 
 @app.route("/api/game/<int:game_pk>")
 def api_game_detail(game_pk):
@@ -1150,44 +1208,134 @@ def api_pitchers(game_pk):
     _maybe_refresh_fg()
     _maybe_refresh_savant()
     try:
-        raw = fetch_schedule(datetime.now(ET).strftime("%Y-%m-%d"))
-        for g in raw:
-            if g.get("gamePk") == game_pk:
-                ap = g.get("teams",{}).get("away",{}).get("probablePitcher",{})
-                hp = g.get("teams",{}).get("home",{}).get("probablePitcher",{})
-                an = ap.get("fullName","TBD"); hn = hp.get("fullName","TBD")
-                # Merge MLB API + FanGraphs + Savant for each pitcher
-                def build_pitcher_stats(name, pid):
-                    mlb = pitcher_stats_mlb(pid) if pid else {}
-                    fg  = fg_pitcher(name)
-                    sv  = sv_pitcher(name)
-                    s   = dict(mlb)
-                    s.update(fg)
-                    for k,v in sv.items():
-                        if k not in ("sv_arsenal_pct","sv_arsenal_velo"):
-                            s[k] = v
-                    s["sv_arsenal_pct"]  = sv.get("sv_arsenal_pct",{})
-                    s["sv_arsenal_velo"] = sv.get("sv_arsenal_velo",{})
-                    return s
-                return jsonify({
-                    "success": True,
-                    "awayPitcher": {
-                        "id": ap.get("id"),
-                        "name": an,
-                        "stats": build_pitcher_stats(an, ap.get("id")),
-                        "vulnerability": _pitcher_prop_vulnerability(ap.get("id"), game_pk),
-                    },
-                    "homePitcher": {
-                        "id": hp.get("id"),
-                        "name": hn,
-                        "stats": build_pitcher_stats(hn, hp.get("id")),
-                        "vulnerability": _pitcher_prop_vulnerability(hp.get("id"), game_pk),
-                    },
-                })
+        g = fetch_schedule_game(game_pk)
+        if g:
+            ap = g.get("teams",{}).get("away",{}).get("probablePitcher",{})
+            hp = g.get("teams",{}).get("home",{}).get("probablePitcher",{})
+            an = ap.get("fullName","TBD"); hn = hp.get("fullName","TBD")
+            # Merge MLB API + FanGraphs + Savant for each pitcher
+            def build_pitcher_stats(name, pid):
+                mlb = pitcher_stats_mlb(pid) if pid else {}
+                fg  = fg_pitcher(name)
+                sv  = sv_pitcher(name)
+                s   = dict(mlb)
+                s.update(fg)
+                for k,v in sv.items():
+                    if k not in ("sv_arsenal_pct","sv_arsenal_velo"):
+                        s[k] = v
+                s["sv_arsenal_pct"]  = sv.get("sv_arsenal_pct",{})
+                s["sv_arsenal_velo"] = sv.get("sv_arsenal_velo",{})
+                return s
+
+            # Warm zone-chart cache in background so modal opens quickly.
+            _trigger_zonechart_prefetch_async(ap.get("id"))
+            _trigger_zonechart_prefetch_async(hp.get("id"))
+
+            return jsonify({
+                "success": True,
+                "awayPitcher": {
+                    "id": ap.get("id"),
+                    "name": an,
+                    "stats": build_pitcher_stats(an, ap.get("id")),
+                    "vulnerability": _pitcher_prop_vulnerability(ap.get("id"), game_pk),
+                },
+                "homePitcher": {
+                    "id": hp.get("id"),
+                    "name": hn,
+                    "stats": build_pitcher_stats(hn, hp.get("id")),
+                    "vulnerability": _pitcher_prop_vulnerability(hp.get("id"), game_pk),
+                },
+            })
         return jsonify({"success":False,"error":"Game not found","awayPitcher":{},"homePitcher":{}})
     except Exception as ex:
         print("[api_pitchers]", traceback.format_exc())
         return jsonify({"success":False,"error":str(ex),"awayPitcher":{},"homePitcher":{}}), 500
+
+
+def _zonechart_cache_get(player_id, today):
+    with _zonechart_lock:
+        entry = _zonechart_cache.get(player_id)
+    if entry is None:
+        return None
+    if isinstance(entry, dict) and 'data' in entry:
+        if entry.get('date') == today:
+            return entry.get('data')
+        return None
+    # Back-compat for older in-memory cache shape (plain list)
+    return entry
+
+
+def _zonechart_cache_set(player_id, today, zone_data):
+    with _zonechart_lock:
+        _zonechart_cache[player_id] = {"date": today, "data": zone_data}
+
+
+def _compute_zonechart_data(player_id):
+    today = datetime.now().strftime("%Y-%m-%d")
+    cached = _zonechart_cache_get(player_id, today)
+    if cached is not None:
+        return cached
+
+    pr = requests.get(f"{MLB_API}/people/{player_id}", timeout=10)
+    pr.raise_for_status()
+    people = pr.json().get("people", [])
+    if not people:
+        raise ValueError("Player not found")
+
+    is_pitcher = (people[0].get("primaryPosition", {}).get("abbreviation", "") or "?") in ("P", "SP", "RP", "CP")
+
+    import pybaseball as pb
+    year = datetime.now().year
+    start_dt = f"{year}-03-01"
+    end_dt = today
+
+    zone_data = [None] * 9
+    if is_pitcher:
+        sc = pb.statcast_pitcher(start_dt=start_dt, end_dt=end_dt, player_id=int(player_id))
+        if sc is None or sc.empty:
+            _zonechart_cache_set(player_id, today, zone_data)
+            return zone_data
+        for zone_id in range(9):
+            zone_data[zone_id] = _compute_zone_metrics_pitcher(sc, zone_id, is_pitcher=True)
+    else:
+        sc = pb.statcast_batter(start_dt=start_dt, end_dt=end_dt, player_id=int(player_id))
+        if sc is None or sc.empty:
+            _zonechart_cache_set(player_id, today, zone_data)
+            return zone_data
+        for zone_id in range(9):
+            zone_data[zone_id] = _compute_zone_metrics_pitcher(sc, zone_id, is_pitcher=False)
+
+    _zonechart_cache_set(player_id, today, zone_data)
+    return zone_data
+
+
+def _trigger_zonechart_prefetch_async(player_id):
+    if not player_id:
+        return
+    try:
+        pid = int(player_id)
+    except Exception:
+        return
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    if _zonechart_cache_get(pid, today) is not None:
+        return
+
+    with _zonechart_lock:
+        if pid in _zonechart_prefetching:
+            return
+        _zonechart_prefetching.add(pid)
+
+    def _runner():
+        try:
+            _compute_zonechart_data(pid)
+        except Exception:
+            print(f"[zonechart_prefetch] {pid}: {traceback.format_exc()}")
+        finally:
+            with _zonechart_lock:
+                _zonechart_prefetching.discard(pid)
+
+    threading.Thread(target=_runner, daemon=True).start()
 
 
 # ── Pitcher vs. Opposing Lineup — "Top Damage Threats" ───────────────────────
@@ -1388,8 +1536,7 @@ def _pitcher_prop_vulnerability(pitcher_id, game_pk):
         return {}
 
     try:
-        raw = fetch_schedule(datetime.now(ET).strftime("%Y-%m-%d"))
-        game = next((g for g in raw if g.get("gamePk") == game_pk), None)
+        game = fetch_schedule_game(game_pk)
         if not game:
             return {}
 
@@ -1469,8 +1616,7 @@ def api_pitcher_matchup(game_pk):
     _maybe_refresh_fg()
     _maybe_refresh_savant()
     try:
-        raw = fetch_schedule(datetime.now(ET).strftime("%Y-%m-%d"))
-        game = next((g for g in raw if g.get("gamePk") == game_pk), None)
+        game = fetch_schedule_game(game_pk)
         if not game:
             return jsonify({"success": False, "error": "Game not found"}), 404
 
@@ -1716,8 +1862,7 @@ def api_game_projection(game_pk):
     _maybe_refresh_fg()
     _maybe_refresh_savant()
     try:
-        raw = fetch_schedule(datetime.now(ET).strftime("%Y-%m-%d"))
-        gdata = next((g for g in raw if g.get("gamePk") == game_pk), None)
+        gdata = fetch_schedule_game(game_pk)
         if not gdata:
             return jsonify({"success": False, "error": "Game not found"})
         away_t = gdata.get("teams",{}).get("away",{})
@@ -2535,9 +2680,24 @@ def api_player_spray(player_id):
             try:
                 if v is None:
                     return None
-                return float(v)
+                if pd.isna(v):
+                    return None
+                value = float(v)
+                if pd.isna(value):
+                    return None
+                return value
             except Exception:
                 return None
+
+        def _to_text(v):
+            if v is None:
+                return ""
+            try:
+                if pd.isna(v):
+                    return ""
+            except Exception:
+                pass
+            return str(v).strip()
 
         # Extract batted ball data with key fields
         spray_data = []
@@ -2548,8 +2708,8 @@ def api_player_spray(player_id):
             if hc_x is None or hc_y is None:
                 continue
 
-            events = (row.get("events") or "").strip().lower()
-            result = (row.get("events") or row.get("des") or "").strip()
+            events = _to_text(row.get("events")).lower()
+            result = _to_text(row.get("events")) or _to_text(row.get("des"))
             if events in ("single", "double", "triple"):
                 outcome_cat = 'hit'
             elif events == "home_run":
@@ -2591,51 +2751,11 @@ def api_player_spray(player_id):
 def api_player_zonechart(player_id):
     """Strike zone chart: 3×3 zone metrics for pitcher or batter."""
     try:
-        # Check cache first
-        if player_id in _zonechart_cache:
-            return jsonify({"success": True, "data": _zonechart_cache[player_id]})
-
-        # Fetch player name for pybaseball lookup
-        pr = requests.get(f"{MLB_API}/people/{player_id}", timeout=10)
-        pr.raise_for_status()
-        people = pr.json().get("people", [])
-        if not people:
-            return jsonify({"success": False, "error": "Player not found"}), 404
-        
-        player_name = people[0].get("fullName", "Unknown")
-        is_pitcher = (people[0].get("primaryPosition", {}).get("abbreviation", "") or "?") in ("P", "SP", "RP", "CP")
-        
-        # Fetch zone data from pybaseball
-        import pybaseball as pb
-        year = datetime.now().year
-        
-        zone_data = [None] * 9  # Initialize 9 zones (0-8)
-        
-        if is_pitcher:
-            # For pitchers: use statcast_pitcher
-            sc = pb.statcast_pitcher(player_name, year)
-            if sc is None or sc.empty:
-                _zonechart_cache[player_id] = zone_data
-                return jsonify({"success": True, "data": zone_data})
-            
-            # Map plate_x, plate_z to 9 zones (standard MLB strike zone grid)
-            # Zones: 0=top-left, 1=top-center, 2=top-right, 3=mid-left, 4=heart, 5=mid-right, 6=bot-left, 7=bot-center, 8=bot-right
-            for zone_id in range(9):
-                zone_data[zone_id] = _compute_zone_metrics_pitcher(sc, zone_id, is_pitcher=True)
-        else:
-            # For batters: use statcast_batter to find pitches faced
-            sc = pb.statcast_batter(player_name, year)
-            if sc is None or sc.empty:
-                _zonechart_cache[player_id] = zone_data
-                return jsonify({"success": True, "data": zone_data})
-            
-            for zone_id in range(9):
-                zone_data[zone_id] = _compute_zone_metrics_pitcher(sc, zone_id, is_pitcher=False)
-        
-        # Cache the result
-        _zonechart_cache[player_id] = zone_data
+        zone_data = _compute_zonechart_data(player_id)
         return jsonify({"success": True, "data": zone_data})
     
+    except ValueError as ex:
+        return jsonify({"success": False, "error": str(ex), "data": [None]*9}), 404
     except Exception as ex:
         print(f"[api_player_zonechart] {player_id}: {traceback.format_exc()}")
         return jsonify({"success": False, "error": str(ex), "data": [None]*9}), 500
@@ -2701,11 +2821,13 @@ def _compute_zone_metrics_pitcher(sc, zone_id, is_pitcher=True):
     whiff_rate = round(whiffs / swings * 100, 1) if swings > 0 else 0
     
     # BA & SLG: only for batted balls
-    hit_results = ['Single', 'Double', 'Triple', 'Home Run']
-    hits = len(zone_pitches[zone_pitches['result'].isin(hit_results)])
-    home_runs = len(zone_pitches[zone_pitches['result'] == 'Home Run'])
-    doubles = len(zone_pitches[zone_pitches['result'] == 'Double'])
-    triples = len(zone_pitches[zone_pitches['result'] == 'Triple'])
+    events = zone_pitches['events'].fillna('') if 'events' in zone_pitches else pd.Series(dtype=object)
+    hit_results = ['single', 'double', 'triple', 'home_run']
+    normalized_events = events.astype(str).str.strip().str.lower()
+    hits = len(zone_pitches[normalized_events.isin(hit_results)])
+    home_runs = len(zone_pitches[normalized_events == 'home_run'])
+    doubles = len(zone_pitches[normalized_events == 'double'])
+    triples = len(zone_pitches[normalized_events == 'triple'])
     singles = hits - home_runs - doubles - triples
     
     batted_balls = len(zone_pitches[zone_pitches['type'] == 'X'])
@@ -5090,8 +5212,7 @@ def _nrfi_market_snapshot(away_name, home_name):
 
 
 def _compute_nrfi(game_pk):
-    sched = fetch_schedule(datetime.now(ET).strftime('%Y-%m-%d'))
-    g = next((x for x in sched if x.get('gamePk') == game_pk), None)
+    g = fetch_schedule_game(game_pk)
     if not g:
         return {'success': False, 'error': 'Game not found'}
 
@@ -5239,8 +5360,7 @@ def api_nrfi(game_pk):
 @app.route('/api/market/<int:game_pk>')
 def api_market(game_pk):
     try:
-        raw = fetch_schedule(datetime.now(ET).strftime('%Y-%m-%d'))
-        g = next((x for x in raw if x.get('gamePk') == game_pk), None)
+        g = fetch_schedule_game(game_pk)
         if not g:
             return jsonify({'success': False, 'error': 'Game not found'}), 404
 
@@ -6698,16 +6818,26 @@ def _tracker_export_pdf_bytes(date_str):
     return _simple_pdf_bytes(lines, title='MLB Analytics Hub - Tracker Summary Card', subtitle=subtitle)
 
 
-def _props_scan_today_payload(date_str, refresh=False):
-    ttl = 20 * 60
-    now = time.time()
-    cached = _PROPS_SCAN_CACHE.get(date_str)
-    if cached and not refresh and (now - cached.get('ts', 0) < ttl):
-        payload = dict(cached.get('payload') or {})
-        payload['cacheAgeSec'] = int(now - cached.get('ts', 0))
-        payload['cached'] = True
-        return payload
+def _empty_props_scan_payload(date_str):
+    return {
+        'success': True,
+        'date': date_str,
+        'games': [],
+        'gameCount': 0,
+        'props': [],
+        'batters': [],
+        'pitchers': [],
+        'injury_summary': {'count': 0, 'players': []},
+        'matchup': 'FULL SLATE · 0 GAMES',
+        'scanMode': True,
+        'generatedAt': datetime.now(timezone.utc).isoformat(),
+        'cacheAgeSec': 0,
+        'cached': False,
+    }
 
+
+def _compute_props_scan_today_payload(date_str):
+    now = time.time()
     _maybe_refresh_fg()
     _maybe_refresh_savant()
     _fetch_injury_status(force=False)
@@ -6798,7 +6928,66 @@ def _props_scan_today_payload(date_str, refresh=False):
         'cacheAgeSec': 0,
         'cached': False,
     }
-    _PROPS_SCAN_CACHE[date_str] = {'ts': now, 'payload': payload}
+    with _props_scan_cache_lock:
+        _PROPS_SCAN_CACHE[date_str] = {'ts': now, 'payload': payload}
+    return payload
+
+
+def _trigger_props_scan_refresh_async(date_str, reason='auto'):
+    global _props_scan_refreshing
+    with _props_scan_cache_lock:
+        if _props_scan_refreshing:
+            return False
+        _props_scan_refreshing = True
+
+    def _runner():
+        global _props_scan_refreshing
+        try:
+            _compute_props_scan_today_payload(date_str)
+            print(f'[props_scan] refreshed ({reason})')
+        except Exception:
+            print(f'[props_scan] refresh failed {traceback.format_exc()}')
+        finally:
+            with _props_scan_cache_lock:
+                _props_scan_refreshing = False
+
+    threading.Thread(target=_runner, daemon=True).start()
+    return True
+
+
+def _props_scan_today_payload(date_str, refresh=False):
+    now = time.time()
+    with _props_scan_cache_lock:
+        cached = _PROPS_SCAN_CACHE.get(date_str)
+        refreshing = _props_scan_refreshing
+    ts = float((cached or {}).get('ts') or 0)
+    age = int(now - ts) if ts else 0
+
+    if cached and not refresh and (now - ts) < _PROPS_SCAN_TTL:
+        payload = dict(cached.get('payload') or {})
+        payload['cacheAgeSec'] = age
+        payload['cached'] = True
+        payload['computing'] = False
+        return payload
+
+    if refresh:
+        return _compute_props_scan_today_payload(date_str)
+
+    if cached:
+        if not refreshing:
+            _trigger_props_scan_refresh_async(date_str, reason='stale_cache')
+        payload = dict(cached.get('payload') or {})
+        payload['cacheAgeSec'] = age
+        payload['cached'] = True
+        payload['computing'] = True
+        payload['message'] = 'Refreshing in background'
+        return payload
+
+    if not refreshing:
+        _trigger_props_scan_refresh_async(date_str, reason='cold_start')
+    payload = _empty_props_scan_payload(date_str)
+    payload['computing'] = True
+    payload['message'] = 'Computing... auto-refresh in 20s'
     return payload
 
 
@@ -8337,23 +8526,54 @@ def _get_cheatsheets_today(force=False):
         ts = float(_cheatsheet_cache.get('ts') or 0)
         cdate = _cheatsheet_cache.get('date')
         csig = _cheatsheet_cache.get('signature')
+        refreshing = _cheatsheet_refreshing
 
     if (not force) and cached and cdate == today and csig == signature and (now - ts) < _CHEATSHEET_TTL:
         out = dict(cached)
         out['cacheAgeSec'] = int(now - ts)
         out['cached'] = True
+        out['computing'] = False
         return out
 
-    fresh = _compute_cheatsheets_today(today)
-    with _cheatsheet_cache_lock:
-        _cheatsheet_cache['data'] = fresh
-        _cheatsheet_cache['ts'] = now
-        _cheatsheet_cache['date'] = today
-        _cheatsheet_cache['signature'] = fresh.get('signature')
-    out = dict(fresh)
-    out['cacheAgeSec'] = 0
-    out['cached'] = False
-    return out
+    if force:
+        fresh = _compute_cheatsheets_today(today)
+        with _cheatsheet_cache_lock:
+            _cheatsheet_cache['data'] = fresh
+            _cheatsheet_cache['ts'] = now
+            _cheatsheet_cache['date'] = today
+            _cheatsheet_cache['signature'] = fresh.get('signature')
+        out = dict(fresh)
+        out['cacheAgeSec'] = 0
+        out['cached'] = False
+        out['computing'] = False
+        return out
+
+    if cached:
+        if not refreshing:
+            _trigger_cheatsheet_refresh_async(reason='stale_cache')
+        out = dict(cached)
+        out['cacheAgeSec'] = int(now - ts)
+        out['cached'] = True
+        out['computing'] = True
+        out['message'] = 'Refreshing in background'
+        return out
+
+    if not refreshing:
+        _trigger_cheatsheet_refresh_async(reason='cold_start')
+    return {
+        'success': True,
+        'date': today,
+        'hitsBoard': {'rows': []},
+        'battingOrderMatchups': {'rows': []},
+        'pitcherWeakspots': {'cards': []},
+        'generatedAt': datetime.now(timezone.utc).isoformat(),
+        'signature': signature,
+        'games': len(sched or []),
+        'cacheAgeSec': 0,
+        'cached': False,
+        'computing': True,
+        'message': 'Computing... auto-refresh in 20s',
+    }
 
 
 def _trigger_cheatsheet_refresh_async(reason='manual'):
@@ -8629,14 +8849,7 @@ def api_lineup(game_pk):
         # ── Step 2: Fallback to schedule-hydrated projected lineups ──────────
         if not away_source or not home_source:
             try:
-                date_str = datetime.now(ET).strftime('%Y-%m-%d')
-                sched_url = (f"{MLB_API}/schedule?sportId=1&date={date_str}"
-                             "&hydrate=team,probablePitcher,lineups,linescore,venue(location),weather")
-                sr = requests.get(sched_url, timeout=10)
-                sr.raise_for_status()
-                dates = sr.json().get('dates', [])
-                raw = dates[0].get('games', []) if dates else []
-                gdata = next((g for g in raw if g.get('gamePk') == game_pk), None)
+                gdata = fetch_schedule_game(game_pk)
                 if gdata:
                     lineups = gdata.get('lineups') or {}
                     def _parse_sched_lu(hitters):
@@ -9173,9 +9386,7 @@ def api_ai_boxscore(game_pk):
     """AI-powered box score projections using weather, player stats, and recent performance."""
     try:
         # Fetch game data
-        date_str = datetime.now(ET).strftime("%Y-%m-%d")
-        raw = fetch_schedule(date_str)
-        gdata = next((g for g in raw if g.get("gamePk") == game_pk), None)
+        gdata = fetch_schedule_game(game_pk)
         if not gdata:
             return jsonify({'success': False, 'error': 'Game not found', 'projections': None})
         
@@ -10166,8 +10377,9 @@ def api_props_projections(game_pk):
 
         def enrich_batters(batters, opp_pfg, opp_psv, opp_pst, opp_abbr, opp_pname, opp_pid, own_abbr='', lineup_confirmed=False):
             opp_hand = (opp_pst.get("pitchHand") or "R").upper()
-            result   = []
-            for b in batters[:9]:
+            batters_top = list((batters or [])[:9])
+
+            def _enrich_one(b):
                 name = b.get("name", "")
                 bfg  = fg_batter(name)
                 bsv  = sv_batter(name)
@@ -10191,7 +10403,7 @@ def api_props_projections(game_pk):
                 wind_bucket = "out" if wx_adj > 0.01 else ("in" if wx_adj < -0.01 else "calm")
                 park_bucket = "hitter" if pf >= 1.04 else ("pitcher" if pf <= 0.96 else "neutral")
                 slot_bucket = "1-3" if slot <= 3 else ("4-6" if slot <= 6 else "7-9")
-                result.append({
+                return {
                     "name":         name,
                     "team":         own_abbr or b.get("team", ""),
                     "pos":          b.get("pos", ""),
@@ -10243,8 +10455,11 @@ def api_props_projections(game_pk):
                     "vs_l_ops":     b.get("vs_l_ops"),
                     "vs_r_ops":     b.get("vs_r_ops"),
                     "proj":         proj,
-                })
-            return result
+                }
+
+            workers = min(9, max(1, len(batters_top)))
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                return list(ex.map(_enrich_one, batters_top))
 
         away_proj = enrich_batters(away_bats, hp_fg, hp_sv, hp_st, home_abbr, hp_name, hp_id, own_abbr=away_abbr, lineup_confirmed=away_confirmed)
         home_proj = enrich_batters(home_bats, ap_fg, ap_sv, ap_st, away_abbr, ap_name, ap_id, own_abbr=home_abbr, lineup_confirmed=home_confirmed)
@@ -10961,16 +11176,22 @@ def _consistency_window_summary(values, line, limit=None):
     return {'over': over, 'total': total, 'pct': round(over / total, 3)}
 
 
-def _consistency_payload(date_str, refresh=False):
-    ttl = 20 * 60
-    now = time.time()
-    cached = _CONSISTENCY_CACHE.get(date_str)
-    if cached and not refresh and (now - cached.get('ts', 0) < ttl):
-        payload = dict(cached.get('payload') or {})
-        payload['cacheAgeSec'] = int(now - cached.get('ts', 0))
-        payload['cached'] = True
-        return payload
+def _empty_consistency_payload(date_str):
+    return {
+        'success': True,
+        'date': date_str,
+        'generatedAt': datetime.now(timezone.utc).isoformat(),
+        'cached': False,
+        'cacheAgeSec': 0,
+        'games': [],
+        'teams': [],
+        'slots': [],
+        'markets': [],
+    }
 
+
+def _compute_consistency_payload(date_str):
+    now = time.time()
     raw_games = fetch_schedule(date_str)
     parsed_games = [parse_game(g) for g in raw_games]
     parsed_games = [g for g in parsed_games if g]
@@ -11084,7 +11305,66 @@ def _consistency_payload(date_str, refresh=False):
         'slots': sorted(slots),
         'markets': list(sheets.values()),
     }
-    _CONSISTENCY_CACHE[date_str] = {'ts': now, 'payload': payload}
+    with _consistency_cache_lock:
+        _CONSISTENCY_CACHE[date_str] = {'ts': now, 'payload': payload}
+    return payload
+
+
+def _trigger_consistency_refresh_async(date_str, reason='auto'):
+    global _consistency_refreshing
+    with _consistency_cache_lock:
+        if _consistency_refreshing:
+            return False
+        _consistency_refreshing = True
+
+    def _runner():
+        global _consistency_refreshing
+        try:
+            _compute_consistency_payload(date_str)
+            print(f'[consistency] refreshed ({reason})')
+        except Exception:
+            print(f'[consistency] refresh failed {traceback.format_exc()}')
+        finally:
+            with _consistency_cache_lock:
+                _consistency_refreshing = False
+
+    threading.Thread(target=_runner, daemon=True).start()
+    return True
+
+
+def _consistency_payload(date_str, refresh=False):
+    now = time.time()
+    with _consistency_cache_lock:
+        cached = _CONSISTENCY_CACHE.get(date_str)
+        refreshing = _consistency_refreshing
+    ts = float((cached or {}).get('ts') or 0)
+    age = int(now - ts) if ts else 0
+
+    if cached and not refresh and (now - ts) < _CONSISTENCY_TTL:
+        payload = dict(cached.get('payload') or {})
+        payload['cacheAgeSec'] = age
+        payload['cached'] = True
+        payload['computing'] = False
+        return payload
+
+    if refresh:
+        return _compute_consistency_payload(date_str)
+
+    if cached:
+        if not refreshing:
+            _trigger_consistency_refresh_async(date_str, reason='stale_cache')
+        payload = dict(cached.get('payload') or {})
+        payload['cacheAgeSec'] = age
+        payload['cached'] = True
+        payload['computing'] = True
+        payload['message'] = 'Refreshing in background'
+        return payload
+
+    if not refreshing:
+        _trigger_consistency_refresh_async(date_str, reason='cold_start')
+    payload = _empty_consistency_payload(date_str)
+    payload['computing'] = True
+    payload['message'] = 'Computing... auto-refresh in 20s'
     return payload
 
 

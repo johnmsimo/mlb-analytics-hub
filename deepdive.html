@@ -650,11 +650,11 @@ function saveAIPick(idx, ev){
 }
 
 function loadGame(){
-  fetch('/api/games/today').then(function(r){return r.json();}).then(function(d){
+  fetch('/api/game-summary/' + GPK).then(function(r){return r.json();}).then(function(d){
     if(!d.success)throw new Error(d.error||'failed');
-    var found=null;for(var i=0;i<d.games.length;i++){if(d.games[i].gamePk==GPK){found=d.games[i];break;}}
-    if(!found)throw new Error('Game not found');
-    GD=found;renderHeader();renderEdge();renderWx();renderPark();renderMatchup();populateSels();
+    if(!d.game)throw new Error('Game not found');
+    GD=d.game;renderHeader();renderEdge();renderWx();renderPark();renderMatchup();populateSels();
+    if(GP_DATA){ renderGameProjection(GP_DATA); }
   }).catch(function(e){document.getElementById('mhTeams').innerHTML='<p style="color:var(--m);font-family:Orbitron;font-size:.85rem">'+e.message+'</p>';});
 }
 function loadPitchers(){
@@ -1064,6 +1064,42 @@ function renderGameProjection(d) {
   var favCol = d.favorite === 'EVEN' ? 'var(--mu)' : 'var(--c)';
   var wxNote = d.wxAdj && d.wxAdj !== 0
     ? '<div class="wi2" style="margin-top:10px">Weather adj: '+(d.wxAdj>0?'+':'')+d.wxAdj+' runs/team ('+(d.wxAdj>0?'Hot weather boosts scoring':'Cold weather suppresses scoring')+')</div>' : '';
+  var compareHtml = '';
+  var gameStatus = (GD && GD.status) ? String(GD.status) : '';
+  var isFinal = gameStatus === 'Final' || gameStatus === 'Game Over' || gameStatus === 'Completed Early';
+  if(isFinal && GD){
+    var actualAway = Number(GD.awayScore || 0);
+    var actualHome = Number(GD.homeScore || 0);
+    var actualTotal = actualAway + actualHome;
+    var modelWinner = d.favorite === 'EVEN' ? 'PUSH' : d.favorite;
+    var actualWinner = actualAway === actualHome ? 'PUSH' : (actualAway > actualHome ? d.awayAbbr : d.homeAbbr);
+    var winnerHit = modelWinner === 'PUSH' ? 'NO EDGE' : (modelWinner === actualWinner ? 'CORRECT' : 'MISSED');
+    var winnerCol = winnerHit === 'CORRECT' ? 'var(--g)' : winnerHit === 'MISSED' ? 'var(--m)' : 'var(--mu)';
+    var totalDiff = Math.abs((Number(d.total) || 0) - actualTotal).toFixed(1);
+    compareHtml =
+      '<div class="proj-note" style="margin-top:14px;padding:12px;border:1px solid rgba(0,229,255,.14);background:rgba(0,229,255,.04)">'
+      + '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px">'
+      + '<div style="font-family:Orbitron,monospace;font-size:.72rem;letter-spacing:1.3px;color:var(--c)">MODEL VS ACTUAL</div>'
+      + '<div style="font-size:.62rem;color:var(--mu)">'+gameStatus.toUpperCase()+' RESULT</div>'
+      + '</div>'
+      + '<div class="gp-grid">'
+      + '<div class="ps"><div class="pv">'+d.awayAbbr+' '+d.awayRuns+'</div><div class="plb">MODEL AWAY</div></div>'
+      + '<div class="ps"><div class="pv" style="color:var(--g)">'+d.awayAbbr+' '+actualAway+'</div><div class="plb">ACTUAL AWAY</div></div>'
+      + '<div class="ps"><div class="pv" style="color:var(--o)">'+totalDiff+'</div><div class="plb">TOTAL ERROR</div></div>'
+      + '</div>'
+      + '<div class="gp-grid" style="margin-top:10px">'
+      + '<div class="ps"><div class="pv">'+d.homeAbbr+' '+d.homeRuns+'</div><div class="plb">MODEL HOME</div></div>'
+      + '<div class="ps"><div class="pv" style="color:var(--g)">'+d.homeAbbr+' '+actualHome+'</div><div class="plb">ACTUAL HOME</div></div>'
+      + '<div class="ps"><div class="pv" style="color:'+winnerCol+'">'+winnerHit+'</div><div class="plb">WINNER CALL</div></div>'
+      + '</div>'
+      + '<div class="gp-row" style="margin-top:10px">'
+      + '<div class="ps"><div class="pv" style="font-size:.84rem">'+d.total+'</div><div class="plb">MODEL TOTAL</div></div>'
+      + '<div class="ps"><div class="pv" style="font-size:.84rem;color:var(--g)">'+actualTotal+'</div><div class="plb">ACTUAL TOTAL</div></div>'
+      + '<div class="ps"><div class="pv" style="font-size:.84rem;color:'+winnerCol+'">'+actualWinner+'</div><div class="plb">ACTUAL WINNER</div></div>'
+      + '<div class="ps"><div class="pv" style="font-size:.84rem">'+modelWinner+'</div><div class="plb">MODEL WINNER</div></div>'
+      + '</div>'
+      + '</div>';
+  }
 
   document.getElementById('gpContent').innerHTML =
     '<div class="ou-big">' +
@@ -1083,6 +1119,7 @@ function renderGameProjection(d) {
       '<div class="ps"><div class="pv" style="font-size:.84rem">'+d.parkFactor+'x</div><div class="plb">PARK FACTOR</div></div>' +
     '</div>' +
     wxNote +
+    compareHtml +
     '<div class="proj-note" style="margin-top:10px">Model: 60% xERA + 40% FIP vs lineup avg xwOBA \xd7 park factor. '
       + d.awayAbbr+' opp ERA: '+d.awayPitcherEra+' / FIP: '+d.awayPitcherFip
       + ' \xa0|\xa0 '+d.homeAbbr+' opp ERA: '+d.homePitcherEra+' / FIP: '+d.homePitcherFip+'</div>';

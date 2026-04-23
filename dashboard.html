@@ -455,9 +455,9 @@ function seriesBadge(sg,st){
   return'<span class="series-bdg sb-mid">G'+sg+' OF '+st+' · MID-SERIES</span>';
 }
 function mkCard(g){
-  var bc=g.status==='Live'?'bl':g.status==='Final'?'bf':'bs';
-  var bl=g.status==='Live'?'&#9679; LIVE':g.status==='Final'?'FINAL':'SCHEDULED';
-  var isFinal=g.status==='Final';
+  var isFinal=g.status==='Final'||g.status==='Game Over'||g.status==='Completed Early';
+  var bc=g.status==='Live'?'bl':isFinal?'bf':'bs';
+  var bl=g.status==='Live'?'&#9679; LIVE':isFinal?'FINAL':'SCHEDULED';
   var aL=g.awayLogo?'<img src="'+g.awayLogo+'" alt="'+g.awayAbbr+'" width="42" height="42" loading="lazy">'
     :'<span style="font-family:Orbitron;font-size:.9rem;color:var(--c)">'+g.awayAbbr+'</span>';
   var hL=g.homeLogo?'<img src="'+g.homeLogo+'" alt="'+g.homeAbbr+'" width="42" height="42" loading="lazy">'
