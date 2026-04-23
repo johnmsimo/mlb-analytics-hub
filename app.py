@@ -8840,6 +8840,11 @@ def _mc_rec(edge):
 def _mc_compute_background():
     global _mc_cache_data, _mc_cache_ts, _mc_computing
     try:
+        # Ensure stat caches are fresh before computing
+        _maybe_refresh_fg()
+        _maybe_refresh_savant()
+        _fetch_injury_status(force=False)
+        
         date_str = datetime.now(ET).strftime('%Y-%m-%d')
         url = (f"{MLB_API}/schedule?sportId=1&date={date_str}"
                "&hydrate=team,probablePitcher,lineups")
