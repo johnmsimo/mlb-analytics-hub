@@ -802,7 +802,12 @@ async function loadGames() {
   try {
     const r = await fetch(`/api/games/today?date=${encodeURIComponent(date)}`);
     const d = await r.json();
-    renderChips(d.games || []);
+    const games = d.games || [];
+    renderChips(games);
+    if (games.length) {
+      const first = games[0];
+      await selectGame(first.gamePk, first.awayAbbr, first.homeAbbr);
+    }
   } catch(e) {
     chips(`<div style="color:var(--r);font-family:Orbitron,monospace;font-size:.68rem;padding:10px">ERROR: ${e.message}</div>`);
   }
