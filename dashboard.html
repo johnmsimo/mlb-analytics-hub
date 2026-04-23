@@ -348,6 +348,19 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
 @media(max-width:700px){.bb-ratings-full{grid-template-columns:1fr}}
 .bb-cat-btn[data-cat="RATINGS"].active{background:rgba(255,215,0,.1);border-color:rgba(255,215,0,.35);color:#ffd54f}
 
+.settings-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px}
+.settings-card{background:rgba(255,255,255,.03);border:1px solid rgba(0,229,255,.12);border-radius:14px;padding:14px}
+.settings-title{font-family:Orbitron,monospace;font-size:.64rem;color:var(--c);letter-spacing:2px;margin-bottom:12px}
+.settings-row{display:flex;flex-direction:column;gap:6px;margin-bottom:10px}
+.settings-row label{font-size:.58rem;color:var(--mu);font-family:Orbitron,monospace;letter-spacing:1.2px}
+.settings-input,.settings-text{background:#0d1423;border:1px solid var(--b);border-radius:10px;padding:9px 10px;color:var(--t);font-size:.74rem}
+.settings-text{resize:vertical}
+.settings-two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.settings-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px}
+.settings-msg{font-size:.64rem;color:var(--mu)}
+.settings-status{font-size:.68rem;color:var(--t);line-height:1.6;background:rgba(0,0,0,.2);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:10px;margin-bottom:10px;white-space:pre-line}
+@media(max-width:700px){.settings-two{grid-template-columns:1fr}}
+
 </style>
 </head>
 <body>
@@ -366,6 +379,7 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
     <div class="ss"><div class="ss-v" id="sl">-</div><div class="ss-l">LIVE NOW</div></div>
     <div class="ss"><div class="ss-v" id="se">-</div><div class="ss-l">AVG EDGE</div></div>
     <div class="ss"><div class="ss-v" id="sh">-</div><div class="ss-l">HIGH CONF</div></div>
+    <div class="ss"><div class="ss-v" id="sm">-</div><div class="ss-l" id="sml">MEMORY</div></div>
   </div>
 </div>
 <div class="topnav">
@@ -378,6 +392,7 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
   <button class="tabbtn" onclick="switchView('teamsView',this)">TEAMS</button>
   <button class="tabbtn" onclick="switchView('nrfiView',this);initNRFI()">NRFI</button>
   <button class="tabbtn" onclick="switchView('bestBetsView',this);initBestBets()">🎯 BEST BETS</button>
+  <button class="tabbtn" onclick="switchView('settingsView',this);initSettingsView()">⚙ SETTINGS</button>
 
 </div>
 <div class="main">
@@ -439,6 +454,133 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
         <button class="bb-cat-btn" data-cat="RATINGS" onclick="setBBCat('RATINGS',this)" style="border-color:rgba(255,215,0,.3);color:#ffd54f">🏆 RATINGS</button>
       </div>
       <div class="bb-picks-grid" id="bbPicksInner"></div>
+    </div>
+  </div>
+
+  <div id="settingsView" class="view">
+    <div class="sh">⚙ ADMIN SETTINGS</div>
+    <div class="panel">
+      <div class="settings-grid">
+        <div class="settings-card">
+          <div class="settings-title">ADMIN DETAILS</div>
+          <div class="settings-row"><label>Organization</label><input id="admOrg" class="settings-input" placeholder="MLB Analytics Hub"></div>
+          <div class="settings-row"><label>Admin Name</label><input id="admName" class="settings-input" placeholder="Owner / Admin"></div>
+          <div class="settings-row"><label>Contact Email</label><input id="admEmail" class="settings-input" placeholder="ops@example.com"></div>
+          <div class="settings-row"><label>Timezone</label><input id="admTz" class="settings-input" placeholder="America/New_York"></div>
+          <div class="settings-row"><label>Operational Mode</label><select id="admMode" class="select"><option value="normal">NORMAL</option><option value="maintenance">MAINTENANCE</option><option value="read_only">READ_ONLY</option></select></div>
+          <div class="settings-row"><label>Notes</label><textarea id="admNotes" class="settings-text" rows="4" placeholder="Important operational details, escalation notes, runbooks..."></textarea></div>
+          <div class="settings-actions"><button class="tabbtn" onclick="saveAdminSettings()">SAVE ADMIN DETAILS</button><span id="admMsg" class="settings-msg"></span></div>
+        </div>
+
+        <div class="settings-card">
+          <div class="settings-title">RISK & TRACKER SETTINGS</div>
+          <div class="settings-two">
+            <div class="settings-row"><label>Bankroll</label><input id="setBankroll" class="settings-input" type="number" step="1"></div>
+            <div class="settings-row"><label>Kelly Fraction</label><input id="setKelly" class="settings-input" type="number" step="0.01" min="0" max="1"></div>
+            <div class="settings-row"><label>Unit Size %</label><input id="setUnit" class="settings-input" type="number" step="0.001" min="0" max="1"></div>
+            <div class="settings-row"><label>Max Bet %</label><input id="setMaxBet" class="settings-input" type="number" step="0.001" min="0" max="1"></div>
+            <div class="settings-row"><label>Picks / Game</label><input id="setCapGame" class="settings-input" type="number" step="1" min="1" max="30"></div>
+            <div class="settings-row"><label>Best Edge Threshold</label><input id="setEdge" class="settings-input" type="number" step="0.001" min="0" max="1"></div>
+          </div>
+          <div class="settings-actions"><button class="tabbtn" onclick="saveTrackerSettings()">SAVE TRACKER SETTINGS</button><span id="trkMsg" class="settings-msg"></span></div>
+        </div>
+
+        <div class="settings-card">
+          <div class="settings-title">MEMORY COLLECTION CONTROLS</div>
+          <div id="setMemStatus" class="settings-status">Loading memory status…</div>
+          <div class="settings-actions">
+            <button class="tabbtn" onclick="runMemoryCollect('light')">RUN LIGHT</button>
+            <button class="tabbtn" onclick="runMemoryCollect('deep')">RUN DEEP</button>
+            <button class="tabbtn" onclick="runMemoryCollect('auto')">RUN AUTO</button>
+            <button class="tabbtn" onclick="refreshSettingsPanel()">REFRESH</button>
+          </div>
+          <div id="memMsg" class="settings-msg"></div>
+        </div>
+
+        <div class="settings-card">
+          <div class="settings-title">INTELLIGENCE & AI</div>
+          <div class="settings-two">
+            <div class="settings-row"><label>Enable AI</label><select id="intEnableAI" class="select"><option value="true">Enabled</option><option value="false">Disabled</option></select></div>
+            <div class="settings-row"><label>Claude Model</label><input id="intModel" class="settings-input" placeholder="claude-sonnet-4-20250514"></div>
+            <div class="settings-row"><label>Insight Style</label><select id="intStyle" class="select"><option value="detailed">Detailed</option><option value="concise">Concise</option><option value="technical">Technical</option></select></div>
+          </div>
+          <div class="settings-row"><label>Park Factor Weight</label><input id="intParkFactor" class="settings-input" type="number" step="0.01" min="0" max="1"></div>
+          <div class="settings-row"><label>Weather Weight</label><input id="intWeather" class="settings-input" type="number" step="0.01" min="0" max="1"></div>
+          <div class="settings-row"><label>Opponent Impact Weight</label><input id="intOpponent" class="settings-input" type="number" step="0.01" min="0" max="1"></div>
+          <div class="settings-actions"><button class="tabbtn" onclick="saveIntelligenceSettings()">SAVE AI SETTINGS</button><span id="intMsg" class="settings-msg"></span></div>
+        </div>
+
+        <div class="settings-card">
+          <div class="settings-title">DATA COLLECTION</div>
+          <div class="settings-two">
+            <div class="settings-row"><label>Enable FanGraphs</label><select id="dcFanGraphs" class="select"><option value="true">✓ Enabled</option><option value="false">✗ Disabled</option></select></div>
+            <div class="settings-row"><label>Enable Savant</label><select id="dcSavant" class="select"><option value="true">✓ Enabled</option><option value="false">✗ Disabled</option></select></div>
+            <div class="settings-row"><label>Enable Odds API</label><select id="dcOdds" class="select"><option value="true">✓ Enabled</option><option value="false">✗ Disabled</option></select></div>
+            <div class="settings-row"><label>Enable Weather API</label><select id="dcWeather" class="select"><option value="true">✓ Enabled</option><option value="false">✗ Disabled</option></select></div>
+            <div class="settings-row"><label>FanGraphs Refresh (hrs)</label><input id="dcFGRefresh" class="settings-input" type="number" step="1" min="1" max="24"></div>
+            <div class="settings-row"><label>Savant Refresh (hrs)</label><input id="dcSavantRefresh" class="settings-input" type="number" step="1" min="1" max="24"></div>
+            <div class="settings-row"><label>Odds Refresh (min)</label><input id="dcOddsRefresh" class="settings-input" type="number" step="1" min="5" max="360"></div>
+            <div class="settings-row"><label>Weather Refresh (min)</label><input id="dcWeatherRefresh" class="settings-input" type="number" step="1" min="10" max="360"></div>
+          </div>
+          <div class="settings-actions"><button class="tabbtn" onclick="saveDataCollectionSettings()">SAVE DATA COLLECTION</button><span id="dcMsg" class="settings-msg"></span></div>
+        </div>
+
+        <div class="settings-card">
+          <div class="settings-title">API & CACHE CONFIGURATION</div>
+          <div class="settings-two">
+            <div class="settings-row"><label>Odds Events TTL (sec)</label><input id="acOddsEventsTTL" class="settings-input" type="number" step="1" min="300" max="86400"></div>
+            <div class="settings-row"><label>Odds Game TTL (sec)</label><input id="acOddsGameTTL" class="settings-input" type="number" step="1" min="300" max="86400"></div>
+            <div class="settings-row"><label>Odds NRFI TTL (sec)</label><input id="acOddsNRFITTL" class="settings-input" type="number" step="1" min="60" max="3600"></div>
+            <div class="settings-row"><label>Memory Snapshots to Keep</label><input id="acMemSnapshots" class="settings-input" type="number" step="1" min="6" max="100"></div>
+            <div class="settings-row"><label>Memory Max Size (MB)</label><input id="acMemMaxMB" class="settings-input" type="number" step="1" min="10" max="100"></div>
+            <div class="settings-row"><label>Weather Cache TTL (min)</label><input id="acWeatherTTL" class="settings-input" type="number" step="1" min="5" max="120"></div>
+            <div class="settings-row"><label>Props Scan Cache TTL (min)</label><input id="acPropsScanTTL" class="settings-input" type="number" step="1" min="5" max="120"></div>
+            <div class="settings-row"><label>Consistency Cache TTL (min)</label><input id="acConsTTL" class="settings-input" type="number" step="1" min="5" max="120"></div>
+          </div>
+          <div class="settings-actions"><button class="tabbtn" onclick="saveAPIConfigSettings()">SAVE API CONFIG</button><span id="acMsg" class="settings-msg"></span></div>
+        </div>
+
+        <div class="settings-card">
+          <div class="settings-title">PERFORMANCE & SYSTEM</div>
+          <div class="settings-two">
+            <div class="settings-row"><label>Background Worker Interval (min)</label><input id="perfWorkerInterval" class="settings-input" type="number" step="1" min="30" max="1440"></div>
+            <div class="settings-row"><label>Max Concurrent Requests</label><input id="perfMaxConcurrent" class="settings-input" type="number" step="1" min="1" max="50"></div>
+            <div class="settings-row"><label>API Timeout (sec)</label><input id="perfAPITimeout" class="settings-input" type="number" step="1" min="5" max="120"></div>
+            <div class="settings-row"><label>Enable Diagnostics</label><select id="perfDiagnostics" class="select"><option value="false">Off</option><option value="true">On (verbose logging)</option></select></div>
+            <div class="settings-row"><label>Log Level</label><select id="perfLogLevel" class="select"><option value="DEBUG">DEBUG</option><option value="INFO">INFO</option><option value="WARNING">WARNING</option><option value="ERROR">ERROR</option></select></div>
+          </div>
+          <div class="settings-actions"><button class="tabbtn" onclick="savePerformanceSettings()">SAVE PERFORMANCE SETTINGS</button><span id="perfMsg" class="settings-msg"></span></div>
+        </div>
+
+        <div class="settings-card">
+          <div class="settings-title">UPLOAD DATA FOR BRAIN</div>
+          <div class="settings-row"><label>Upload File</label><input id="uploadBrainFile" class="settings-input" type="file" accept=".csv,.json,.txt" multiple></div>
+          <div class="settings-row"><label>File Type</label><select id="uploadBrainType" class="select"><option value="player_stats">Player Stats</option><option value="historical_data">Historical Data</option><option value="custom_model">Custom Model</option><option value="injury_report">Injury Report</option><option value="lineup_template">Lineup Template</option><option value="odds_data">Odds Data</option><option value="other">Other</option></select></div>
+          <div class="settings-actions"><button class="tabbtn" onclick="uploadBrainData()">UPLOAD</button><span id="uploadMsg" class="settings-msg"></span></div>
+          <div style="margin-top:12px;border-top:1px solid rgba(255,255,255,.1);padding-top:12px;">
+            <div style="font-size:.75rem;color:var(--mu);margin-bottom:8px;letter-spacing:0.5px">UPLOADED FILES:</div>
+            <div id="uploadedFilesList" style="max-height:200px;overflow-y:auto;font-size:.7rem;color:var(--mu);font-family:monospace;line-height:1.4"></div>
+
+                  <div class="settings-card">
+                    <div class="settings-title">BRAIN DATA INGESTIÓN</div>
+                    <div style="font-size:.62rem;color:var(--mu);margin-bottom:12px;line-height:1.6">
+                      <div style="margin-bottom:8px"><strong>Statscast/Savant:</strong> <span id="brainStatcast">-</span></div>
+                      <div style="margin-bottom:8px"><strong>FanGraphs:</strong> <span id="brainFanGraphs">-</span></div>
+                      <div style="margin-bottom:8px"><strong>MLB API Players:</strong> <span id="brainMLBPlayers">-</span></div>
+                      <div style="margin-bottom:8px"><strong>Total Data Points:</strong> <span id="brainTotalData" style="color:var(--c);font-weight:700">-</span></div>
+                      <div style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,.1)">
+                        <span style="font-size:.56rem;color:var(--mu);font-style:italic">Status: <span id="brainIngestStatus">Unknown</span></span>
+                      </div>
+                    </div>
+                    <div class="settings-actions">
+                      <button class="tabbtn" onclick="triggerBrainIngest()">INGEST NOW</button>
+                      <button class="tabbtn" onclick="refreshBrainStatus()">REFRESH</button>
+                      <span id="brainMsg" class="settings-msg"></span>
+                    </div>
+                  </div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -1165,6 +1307,262 @@ function renderBBPicks(){
 
 function etTodayStr(){const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());const y=parts.find(p=>p.type==='year').value,m=parts.find(p=>p.type==='month').value,d=parts.find(p=>p.type==='day').value;return y+'-'+m+'-'+d}
 function fmtDateLabel(v){try{const dt=new Date(v+'T12:00:00');return dt.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',year:'numeric'})}catch(e){return v}}
+function minsAgo(iso){if(!iso)return null;var t=Date.parse(iso);if(!t)return null;return Math.max(0,Math.floor((Date.now()-t)/60000));}
+function loadMemoryStatus(){
+  var v=document.getElementById('sm'),l=document.getElementById('sml');
+  if(!v||!l)return;
+  fetch('/api/memory/status').then(function(r){return r.json();}).then(function(d){
+    if(!d||!d.success||!d.status) throw new Error('status');
+    var s=d.status||{};
+    var c=(s.snapshotCount==null?'-':s.snapshotCount);
+    v.textContent=s.collecting?(''+c+'*'):(''+c);
+    var m=s.latest&&s.latest.mode?s.latest.mode.toUpperCase():(s.nextMode?s.nextMode.toUpperCase():'MEMORY');
+    var age=minsAgo(s.lastCollectAt);
+    l.textContent=(s.collecting?'COLLECTING ':'')+m+(age==null?'':' · '+age+'m');
+    if(s.lastError){l.textContent='MEM ERR';}
+  }).catch(function(){v.textContent='-';l.textContent='MEMORY';});
+}
+
+function setText(id,msg,bad){var el=document.getElementById(id);if(!el)return;el.textContent=msg||'';el.style.color=bad?'#ef5350':'var(--mu)';}
+
+function loadAdminSettings(){
+  fetch('/api/admin/settings').then(function(r){return r.json();}).then(function(d){
+    if(!d||!d.success) throw new Error('Unable to load admin settings');
+    var s=d.settings||{};
+    document.getElementById('admOrg').value=s.orgName||'';
+    document.getElementById('admName').value=s.adminName||'';
+    document.getElementById('admEmail').value=s.contactEmail||'';
+    document.getElementById('admTz').value=s.timezone||'America/New_York';
+    document.getElementById('admMode').value=s.operationalMode||'normal';
+    document.getElementById('admNotes').value=s.notes||'';
+    setText('admMsg','Loaded');
+  }).catch(function(e){setText('admMsg',e.message||'Load failed',true);});
+}
+
+function saveAdminSettings(){
+  var payload={
+    orgName:document.getElementById('admOrg').value.trim(),
+    adminName:document.getElementById('admName').value.trim(),
+    contactEmail:document.getElementById('admEmail').value.trim(),
+    timezone:document.getElementById('admTz').value.trim()||'America/New_York',
+    operationalMode:document.getElementById('admMode').value,
+    notes:document.getElementById('admNotes').value.trim()
+  };
+  fetch('/api/admin/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
+    .then(function(r){return r.json();}).then(function(d){
+      if(!d||!d.success) throw new Error(d.error||'Save failed');
+      setText('admMsg','Saved');
+    }).catch(function(e){setText('admMsg',e.message||'Save failed',true);});
+}
+
+function loadTrackerSettings(){
+  fetch('/api/tracker/settings').then(function(r){return r.json();}).then(function(d){
+    if(!d||!d.success) throw new Error('Unable to load tracker settings');
+    var s=d.settings||{};
+    document.getElementById('setBankroll').value=s.bankroll==null?'':s.bankroll;
+    document.getElementById('setKelly').value=s.kelly_fraction==null?'':s.kelly_fraction;
+    document.getElementById('setUnit').value=s.unit_size_pct==null?'':s.unit_size_pct;
+    document.getElementById('setMaxBet').value=s.max_bet_pct==null?'':s.max_bet_pct;
+    document.getElementById('setCapGame').value=s.captured_per_game==null?'':s.captured_per_game;
+    document.getElementById('setEdge').value=s.best_edge_threshold==null?'':s.best_edge_threshold;
+    setText('trkMsg','Loaded');
+  }).catch(function(e){setText('trkMsg',e.message||'Load failed',true);});
+}
+
+function saveTrackerSettings(){
+  var payload={
+    bankroll:parseFloat(document.getElementById('setBankroll').value||0),
+    kelly_fraction:parseFloat(document.getElementById('setKelly').value||0),
+    unit_size_pct:parseFloat(document.getElementById('setUnit').value||0),
+    max_bet_pct:parseFloat(document.getElementById('setMaxBet').value||0),
+    captured_per_game:parseInt(document.getElementById('setCapGame').value||14,10),
+    best_edge_threshold:parseFloat(document.getElementById('setEdge').value||0.03)
+  };
+  fetch('/api/tracker/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
+    .then(function(r){return r.json();}).then(function(d){
+      if(!d||!d.success) throw new Error(d.error||'Save failed');
+      setText('trkMsg','Saved');
+    }).catch(function(e){setText('trkMsg',e.message||'Save failed',true);});
+}
+
+function renderMemorySettingsStatus(s){
+  var el=document.getElementById('setMemStatus');
+  if(!el||!s)return;
+  var mode=(s.latest&&s.latest.mode)||s.nextMode||'unknown';
+  var age=minsAgo(s.lastCollectAt);
+  var lines=[
+    'Snapshots: '+(s.snapshotCount==null?'-':s.snapshotCount),
+    'Last Mode: '+String(mode).toUpperCase(),
+    'Collecting: '+(s.collecting?'YES':'NO'),
+    'Last Collect: '+(age==null?'N/A':(age+' min ago')),
+    'File Size: '+((s.file&&s.file.sizeBytes)||0)+' bytes'
+  ];
+  if(s.lastError) lines.push('Error: '+s.lastError);
+  el.textContent=lines.join('\n');
+}
+
+function refreshSettingsPanel(){
+  fetch('/api/memory/status').then(function(r){return r.json();}).then(function(d){
+    if(!d||!d.success) throw new Error('Unable to load memory status');
+    renderMemorySettingsStatus(d.status||{});
+    setText('memMsg','Status updated');
+  }).catch(function(e){setText('memMsg',e.message||'Status failed',true);});
+}
+
+function runMemoryCollect(mode){
+  var target=mode==='deep'?'/api/memory/collect/deep':'/api/memory/collect';
+  var body=mode==='deep'?{}:{mode:mode};
+  setText('memMsg','Running '+mode.toUpperCase()+' collection...');
+  fetch(target,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+    .then(function(r){return r.json();}).then(function(d){
+      if(!d||!d.success) throw new Error(d.error||'Collection failed');
+      setText('memMsg','Collection started/completed: '+(mode||'manual').toUpperCase());
+      loadMemoryStatus();
+      refreshSettingsPanel();
+    }).catch(function(e){setText('memMsg',e.message||'Collection failed',true);});
+}
+
+function loadComprehensiveSettings(){
+  fetch('/api/app-settings').then(function(r){return r.json();}).then(function(d){
+    if(!d||!d.success) throw new Error('Unable to load app settings');
+    var s=d.settings||{};
+    var intSettings=s.intelligence||{};
+    document.getElementById('intEnableAI').value=String(intSettings.enableAI);
+    document.getElementById('intModel').value=intSettings.claudeModel||'';
+    document.getElementById('intStyle').value=intSettings.insightStyle||'detailed';
+    document.getElementById('intParkFactor').value=intSettings.parkFactorWeight||0.30;
+    document.getElementById('intWeather').value=intSettings.weatherWeight||0.20;
+    document.getElementById('intOpponent').value=intSettings.opponentWeight||0.25;
+    var dcSettings=s.dataCollection||{};
+    document.getElementById('dcFanGraphs').value=String(dcSettings.enableFanGraphs);
+    document.getElementById('dcSavant').value=String(dcSettings.enableSavant);
+    document.getElementById('dcOdds').value=String(dcSettings.enableOdds);
+    document.getElementById('dcWeather').value=String(dcSettings.enableWeather);
+    document.getElementById('dcFGRefresh').value=dcSettings.fgRefreshHours||6;
+    document.getElementById('dcSavantRefresh').value=dcSettings.savantRefreshHours||4;
+    document.getElementById('dcOddsRefresh').value=dcSettings.oddsRefreshMinutes||30;
+    document.getElementById('dcWeatherRefresh').value=dcSettings.weatherRefreshMinutes||60;
+    var acSettings=s.apiConfig||{};
+    document.getElementById('acOddsEventsTTL').value=acSettings.oddsEventsTTLSec||21600;
+    document.getElementById('acOddsGameTTL').value=acSettings.oddsGameTTLSec||86400;
+    document.getElementById('acOddsNRFITTL').value=acSettings.oddsNRFITTLSec||300;
+    document.getElementById('acMemSnapshots').value=acSettings.memoryKeepSnapshots||30;
+    document.getElementById('acMemMaxMB').value=acSettings.memoryMaxBytesMB||12;
+    document.getElementById('acWeatherTTL').value=acSettings.weatherCacheTTLMin||20;
+    document.getElementById('acPropsScanTTL').value=acSettings.propScanCacheTTLMin||20;
+    document.getElementById('acConsTTL').value=acSettings.consistencyCacheTTLMin||20;
+    var perfSettings=s.performance||{};
+    document.getElementById('perfWorkerInterval').value=perfSettings.backgroundWorkerIntervalMin||180;
+    document.getElementById('perfMaxConcurrent').value=perfSettings.maxConcurrentRequests||10;
+    document.getElementById('perfAPITimeout').value=perfSettings.apiTimeoutSec||30;
+    document.getElementById('perfDiagnostics').value=String(perfSettings.enableDiagnostics);
+    document.getElementById('perfLogLevel').value=perfSettings.logLevel||'INFO';
+  }).catch(function(e){console.error('Load comprehensive settings failed:',e);});
+}
+
+function saveIntelligenceSettings(){
+  var payload={intelligence:{enableAI:document.getElementById('intEnableAI').value==='true',claudeModel:document.getElementById('intModel').value||'claude-sonnet-4-20250514',insightStyle:document.getElementById('intStyle').value||'detailed',parkFactorWeight:parseFloat(document.getElementById('intParkFactor').value||0.30),weatherWeight:parseFloat(document.getElementById('intWeather').value||0.20),opponentWeight:parseFloat(document.getElementById('intOpponent').value||0.25)}};
+  fetch('/api/app-settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(function(r){return r.json();}).then(function(d){if(!d||!d.success) throw new Error(d.error||'Save failed');setText('intMsg','Saved');}).catch(function(e){setText('intMsg',e.message||'Save failed',true);});
+}
+
+function saveDataCollectionSettings(){
+  var payload={dataCollection:{enableFanGraphs:document.getElementById('dcFanGraphs').value==='true',enableSavant:document.getElementById('dcSavant').value==='true',enableOdds:document.getElementById('dcOdds').value==='true',enableWeather:document.getElementById('dcWeather').value==='true',fgRefreshHours:parseInt(document.getElementById('dcFGRefresh').value||6,10),savantRefreshHours:parseInt(document.getElementById('dcSavantRefresh').value||4,10),oddsRefreshMinutes:parseInt(document.getElementById('dcOddsRefresh').value||30,10),weatherRefreshMinutes:parseInt(document.getElementById('dcWeatherRefresh').value||60,10)}};
+  fetch('/api/app-settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(function(r){return r.json();}).then(function(d){if(!d||!d.success) throw new Error(d.error||'Save failed');setText('dcMsg','Saved');}).catch(function(e){setText('dcMsg',e.message||'Save failed',true);});
+}
+
+function saveAPIConfigSettings(){
+  var payload={apiConfig:{oddsEventsTTLSec:parseInt(document.getElementById('acOddsEventsTTL').value||21600,10),oddsGameTTLSec:parseInt(document.getElementById('acOddsGameTTL').value||86400,10),oddsNRFITTLSec:parseInt(document.getElementById('acOddsNRFITTL').value||300,10),memoryKeepSnapshots:parseInt(document.getElementById('acMemSnapshots').value||30,10),memoryMaxBytesMB:parseInt(document.getElementById('acMemMaxMB').value||12,10),weatherCacheTTLMin:parseInt(document.getElementById('acWeatherTTL').value||20,10),propScanCacheTTLMin:parseInt(document.getElementById('acPropsScanTTL').value||20,10),consistencyCacheTTLMin:parseInt(document.getElementById('acConsTTL').value||20,10)}};
+  fetch('/api/app-settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(function(r){return r.json();}).then(function(d){if(!d||!d.success) throw new Error(d.error||'Save failed');setText('acMsg','Saved');}).catch(function(e){setText('acMsg',e.message||'Save failed',true);});
+}
+
+function savePerformanceSettings(){
+  var payload={performance:{backgroundWorkerIntervalMin:parseInt(document.getElementById('perfWorkerInterval').value||180,10),maxConcurrentRequests:parseInt(document.getElementById('perfMaxConcurrent').value||10,10),apiTimeoutSec:parseInt(document.getElementById('perfAPITimeout').value||30,10),enableDiagnostics:document.getElementById('perfDiagnostics').value==='true',logLevel:document.getElementById('perfLogLevel').value||'INFO'}};
+  fetch('/api/app-settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(function(r){return r.json();}).then(function(d){if(!d||!d.success) throw new Error(d.error||'Save failed');setText('perfMsg','Saved');}).catch(function(e){setText('perfMsg',e.message||'Save failed',true);});
+}
+
+function loadUploadedFiles(){
+  fetch('/api/brain-data/list').then(function(r){return r.json();}).then(function(d){
+    if(!d||!d.success){setText('uploadMsg','Unable to load files',true);return;}
+    var files=d.files||[];
+    var el=document.getElementById('uploadedFilesList');
+    if(!files.length){el.textContent='No files uploaded yet.';return;}
+    var html=files.map(function(f){
+      return '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.05)">'
+        +'<span>'+f.filename+' ('+f.type+', '+f.sizeKB+'KB)</span>'
+        +'<button class="tabbtn" style="padding:2px 6px;font-size:.65rem" onclick="deleteBrainDataFile(\''+f.filename+'\')">DELETE</button>'
+        +'</div>';
+    }).join('');
+    el.innerHTML=html;
+  }).catch(function(e){setText('uploadMsg','Load files failed',true);});
+}
+
+function uploadBrainData(){
+  var fileInput=document.getElementById('uploadBrainFile');
+  var typeSelect=document.getElementById('uploadBrainType');
+  var files=fileInput.files;
+  if(!files||!files.length){setText('uploadMsg','No file selected',true);return;}
+  var fileType=typeSelect.value||'other';
+  setText('uploadMsg','Uploading '+files.length+' file(s)...');
+  var formData=new FormData();
+  Array.from(files).forEach(function(f){formData.append('files',f);});
+  formData.append('type',fileType);
+  fetch('/api/brain-data/upload',{method:'POST',body:formData})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d||!d.success) throw new Error(d.error||'Upload failed');
+      setText('uploadMsg','Uploaded '+d.uploadedCount+' file(s)');
+      fileInput.value='';
+      loadUploadedFiles();
+    }).catch(function(e){setText('uploadMsg',e.message||'Upload failed',true);});
+}
+
+function deleteBrainDataFile(filename){
+  if(!confirm('Delete '+filename+'?')) return;
+  fetch('/api/brain-data/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:filename})})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d||!d.success) throw new Error(d.error||'Delete failed');
+      setText('uploadMsg','File deleted');
+      loadUploadedFiles();
+    }).catch(function(e){setText('uploadMsg',e.message||'Delete failed',true);});
+}
+
+function initSettingsView(){
+  loadAdminSettings();
+  loadTrackerSettings();
+  refreshSettingsPanel();
+  loadComprehensiveSettings();
+  refreshBrainStatus();
+}
+  function refreshBrainStatus(){
+    fetch('/api/brain/ingest-status').then(function(r){return r.json();}).then(function(d){
+      if(!d||!d.success){setText('brainMsg','Status load failed',true);return;}
+      var summary=d.summary||{};
+      var sc=d.ingestion&&d.ingestion.statscast?d.ingestion.statscast.summary||{}:{};
+      var fg=d.ingestion&&d.ingestion.fangraphs?d.ingestion.fangraphs.summary||{}:{};
+      var mlb=d.ingestion&&d.ingestion.mlbApi?d.ingestion.mlbApi.summary||{}:{};
+      document.getElementById('brainStatcast').textContent=(sc.pitcherXStats||0)+' xStats, '+(sc.batterXStats||0)+' Batter xStats';
+      document.getElementById('brainFanGraphs').textContent=(fg.batters||0)+' Batters, '+(fg.pitchers||0)+' Pitchers';
+      document.getElementById('brainMLBPlayers').textContent=(mlb.totalPlayers||0)+' Players across '+(mlb.totalTeams||0)+' Teams';
+      document.getElementById('brainTotalData').textContent=summary.totalDataPoints?summary.totalDataPoints.toLocaleString():'-';
+      document.getElementById('brainIngestStatus').textContent=(summary.dataSourcesActive||0)+' sources active';
+      setText('brainMsg','Brain status updated');
+    }).catch(function(e){setText('brainMsg',e.message||'Status failed',true);});
+  }
+
+  function triggerBrainIngest(){
+    setText('brainMsg','Triggering comprehensive ingestion...');
+    fetch('/api/brain/ingest-trigger',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({force:true})})
+      .then(function(r){return r.json();})
+      .then(function(d){
+        if(!d||!d.success) throw new Error(d.error||'Ingest failed');
+        setText('brainMsg','Ingestion complete: '+(d.data&&d.data.totalDataPoints||0)+' data points');
+        refreshBrainStatus();
+      }).catch(function(e){setText('brainMsg',e.message||'Ingest failed',true);});
+  }
+  loadUploadedFiles();
+}
+
 let selectedGamesDate=etTodayStr();
 let NRFI_ROWS=[];
 let NRFI_LAST_DATE='';
@@ -1234,7 +1632,7 @@ document.getElementById('prevDateBtn').addEventListener('click',function(){shift
 document.getElementById('nextDateBtn').addEventListener('click',function(){shiftGamesDate(1)});
 document.getElementById('todayDateBtn').addEventListener('click',function(){selectedGamesDate=etTodayStr();syncDateUI();load(selectedGamesDate)});
 document.getElementById('tomorrowDateBtn').addEventListener('click',function(){selectedGamesDate=shiftDate(etTodayStr(),1);syncDateUI();load(selectedGamesDate)});
-syncDateUI();load();loadTeams();setInterval(function(){load(selectedGamesDate)},60000);
+syncDateUI();load();loadTeams();loadMemoryStatus();setInterval(function(){load(selectedGamesDate)},60000);setInterval(loadMemoryStatus,90000);
 </script>
 <!-- LIVE GAMEPLAY PATCH -->
 <style>

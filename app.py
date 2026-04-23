@@ -40,16 +40,27 @@ GAMESIDE_DEEPDIVE_HTML = _read_html_or_fallback('gameside_deepdive.html')
 BREAKOUT_DETECTOR_HTML = _read_html_or_fallback('breakout_detector.html')
 DATA_DIR = os.path.join(_HERE, 'data')
 os.makedirs(DATA_DIR, exist_ok=True)
+BRAIN_DATA_DIR = os.path.join(DATA_DIR, 'brain_uploads')
+os.makedirs(BRAIN_DATA_DIR, exist_ok=True)
 TRACKER_STORE = os.path.join(DATA_DIR, 'daily_tracker.json')
 ADJUST_STORE = os.path.join(DATA_DIR, 'model_adjustments.json')
 CAL_HISTORY_STORE = os.path.join(DATA_DIR, 'calibration_history.json')
 VALUE_HISTORY_STORE = os.path.join(DATA_DIR, 'value_history.json')
+MLB_MEMORY_STORE = os.path.join(DATA_DIR, 'mlb_memory_store.json')
+ADMIN_SETTINGS_STORE = os.path.join(DATA_DIR, 'admin_settings.json')
+SETTINGS_STORE = os.path.join(DATA_DIR, 'app_settings.json')
+_MLB_MEMORY_KEEP_SNAPSHOTS = max(6, int(float(os.getenv('MLB_MEMORY_KEEP_SNAPSHOTS', '30') or 30)))
+_MLB_MEMORY_MAX_BYTES = max(500_000, int(float(os.getenv('MLB_MEMORY_MAX_BYTES', '12000000') or 12000000)))
 _PROPS_SCAN_CACHE = {}
 _CONSISTENCY_CACHE = {}
 _props_scan_cache_lock = threading.Lock()
 _props_scan_refreshing = False
 _consistency_cache_lock = threading.Lock()
 _consistency_refreshing = False
+_mlb_memory_lock = threading.Lock()
+_mlb_memory_collecting = False
+_mlb_memory_last_collect = None
+_mlb_memory_last_error = None
 _PROPS_SCAN_TTL = 20 * 60
 _CONSISTENCY_TTL = 20 * 60
 _weather_cache_lock = threading.Lock()
@@ -78,6 +89,190 @@ def _save_json(path, payload):
         return True
     except Exception:
         return False
+
+
+def _admin_settings_default():
+    return {
+        "orgName": "MLB Analytics Hub",
+        "adminName": "",
+        "contactEmail": "",
+        "timezone": "America/New_York",
+        "notes": "",
+        "operationalMode": "normal",
+        "updatedAt": None,
+    }
+
+
+def _get_admin_settings():
+    payload = _load_json(ADMIN_SETTINGS_STORE, _admin_settings_default())
+    if not isinstance(payload, dict):
+        payload = _admin_settings_default()
+    base = _admin_settings_default()
+    base.update({k: v for k, v in payload.items() if k in base})
+    return base
+
+
+def _save_admin_settings(payload):
+    current = _get_admin_settings()
+    for k in ("orgName", "adminName", "contactEmail", "timezone", "notes", "operationalMode"):
+        if k in payload:
+            current[k] = payload.get(k)
+    current["updatedAt"] = datetime.now(timezone.utc).isoformat()
+    _save_json(ADMIN_SETTINGS_STORE, current)
+    return current
+
+
+def _app_settings_default():
+    return {
+        "intelligence": {
+            "enableAI": True,
+            "claudeModel": "claude-sonnet-4-20250514",
+            "insightStyle": "detailed",
+            "parkFactorWeight": 0.30,
+            "weatherWeight": 0.20,
+            "opponentWeight": 0.25,
+            "homeDepthWeight": 0.10,
+            "awayDepthWeight": 0.15,
+        },
+        "dataCollection": {
+            "enableFanGraphs": True,
+            "enableSavant": True,
+            "enableOdds": True,
+            "enableWeather": True,
+            "fgRefreshHours": 6,
+            "savantRefreshHours": 4,
+            "oddsRefreshMinutes": 30,
+            "weatherRefreshMinutes": 60,
+        },
+        "apiConfig": {
+            "oddsEventsTTLSec": int(os.getenv('ODDS_EVENTS_TTL_SEC', '21600')),
+            "oddsGameTTLSec": int(os.getenv('ODDS_GAME_TTL_SEC', '86400')),
+            "oddsNRFITTLSec": int(os.getenv('ODDS_NRFI_TTL_SEC', '300')),
+            "memoryKeepSnapshots": _MLB_MEMORY_KEEP_SNAPSHOTS,
+            "memoryMaxBytesMB": _MLB_MEMORY_MAX_BYTES // (1024 * 1024),
+            "weatherCacheTTLMin": 20,
+            "propScanCacheTTLMin": 20,
+            "consistencyCacheTTLMin": 20,
+        },
+        "performance": {
+            "backgroundWorkerIntervalMin": 180,
+            "maxConcurrentRequests": 10,
+            "apiTimeoutSec": 30,
+            "enableDiagnostics": False,
+            "logLevel": "INFO",
+        },
+        "updatedAt": None,
+    }
+
+
+def _get_app_settings():
+    payload = _load_json(SETTINGS_STORE, _app_settings_default())
+    if not isinstance(payload, dict):
+        payload = _app_settings_default()
+    base = _app_settings_default()
+    base.update({k: v for k, v in payload.items() if k in base})
+    for section in ['intelligence', 'dataCollection', 'apiConfig', 'performance']:
+        if section in base and section in payload:
+            base[section].update({k: v for k, v in payload[section].items() if k in base[section]})
+    return base
+
+
+def _save_app_settings(payload):
+    if not isinstance(payload, dict):
+        return _get_app_settings()
+    current = _get_app_settings()
+    current['updatedAt'] = datetime.now(timezone.utc).isoformat()
+    for section in ['intelligence', 'dataCollection', 'apiConfig', 'performance']:
+        if section in payload and isinstance(payload[section], dict):
+            for key, val in payload[section].items():
+                if key in current.get(section, {}):
+                    current[section][key] = val
+    _save_json(SETTINGS_STORE, current)
+    return current
+
+
+def _mlb_memory_store_default():
+    return {
+        "latest": None,
+        "snapshots": [],
+        "updatedAt": None,
+    }
+
+
+def _mlb_memory_store_payload():
+    payload = _load_json(MLB_MEMORY_STORE, _mlb_memory_store_default())
+    if not isinstance(payload, dict):
+        return _mlb_memory_store_default()
+    payload.setdefault("latest", None)
+    payload.setdefault("snapshots", [])
+    payload.setdefault("updatedAt", None)
+    if not isinstance(payload.get("snapshots"), list):
+        payload["snapshots"] = []
+    return payload
+
+
+def _append_mlb_memory_snapshot(snapshot, keep=30):
+    payload = _mlb_memory_store_payload()
+    snapshots = payload.get("snapshots") or []
+    snapshots.append(snapshot)
+    keep = max(6, int(keep or _MLB_MEMORY_KEEP_SNAPSHOTS))
+    if len(snapshots) > keep:
+        snapshots = snapshots[-keep:]
+
+    # Keep newest snapshots rich, compact older ones to preserve long-term history.
+    compacted = []
+    for idx, snap in enumerate(snapshots):
+        is_recent = idx >= max(0, len(snapshots) - 3)
+        compacted.append(_compact_mlb_memory_snapshot(snap, keep_detail=is_recent))
+    snapshots = compacted
+
+    # Prune oldest snapshots until file size target is respected.
+    while snapshots:
+        test_payload = {
+            "latest": snapshots[-1],
+            "snapshots": snapshots,
+            "updatedAt": datetime.now(timezone.utc).isoformat(),
+        }
+        est_size = len(json.dumps(test_payload, ensure_ascii=False))
+        if est_size <= _MLB_MEMORY_MAX_BYTES or len(snapshots) <= 6:
+            break
+        snapshots = snapshots[1:]
+
+    payload["snapshots"] = snapshots
+    payload["latest"] = snapshots[-1] if snapshots else _compact_mlb_memory_snapshot(snapshot, keep_detail=True)
+    payload["updatedAt"] = datetime.now(timezone.utc).isoformat()
+    _save_json(MLB_MEMORY_STORE, payload)
+    return payload
+
+
+def _compact_mlb_memory_snapshot(snapshot, keep_detail=False):
+    if not isinstance(snapshot, dict):
+        return {}
+    out = dict(snapshot)
+    out["compact"] = not bool(keep_detail)
+
+    games = dict(out.get("games") or {})
+    boxscores = list(games.get("boxscores") or [])
+    if not keep_detail and len(boxscores) > 6:
+        games["boxscoresSample"] = boxscores[:6]
+        games["boxscoreCount"] = len(boxscores)
+        games.pop("boxscores", None)
+    out["games"] = games
+
+    players = dict(out.get("players") or {})
+    featured = list(players.get("featured") or [])
+    if not keep_detail and len(featured) > 40:
+        players["featuredSample"] = featured[:40]
+        players["featuredCount"] = len(featured)
+        players.pop("featured", None)
+    out["players"] = players
+
+    schedule = list(out.get("schedule") or [])
+    if not keep_detail and len(schedule) > 3:
+        out["schedule"] = schedule[:3]
+        out["scheduleTruncated"] = True
+
+    return out
 
 MLB_API   = "https://statsapi.mlb.com/api/v1"
 WX_API    = "https://api.open-meteo.com/v1/forecast"
@@ -773,6 +968,532 @@ def fetch_schedule_game(game_pk):
     return games[0] if games else None
 
 
+def _collect_mlb_endpoint(url, params=None, timeout=15, default=None):
+    default = {} if default is None else default
+    try:
+        r = requests.get(url, params=params or {}, timeout=timeout)
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return default
+
+
+def _memory_collect_schedule_window(date_str, days_back=2, max_games_per_day=30):
+    try:
+        start_dt = datetime.strptime(date_str, "%Y-%m-%d").date()
+    except Exception:
+        start_dt = datetime.now(ET).date()
+    days = []
+    game_pks = []
+    for d in range(max(0, int(days_back)) + 1):
+        ds = (start_dt - timedelta(days=d)).isoformat()
+        games = fetch_schedule(ds)
+        if max_games_per_day:
+            games = games[:max(1, int(max_games_per_day))]
+        parsed = [g for g in (parse_game(x) for x in games) if g]
+        days.append({
+            "date": ds,
+            "gameCount": len(parsed),
+            "games": parsed,
+        })
+        game_pks.extend([g.get("gamePk") for g in parsed if g.get("gamePk")])
+    return days, game_pks
+
+
+def _memory_collect_boxscores(game_pks, max_games=20):
+    picked = [int(gpk) for gpk in (game_pks or []) if gpk][:max(1, int(max_games))]
+    boxscores = []
+    player_ids = set()
+    for gpk in picked:
+        payload = _collect_mlb_endpoint(f"{MLB_API}/game/{gpk}/boxscore", timeout=12, default={})
+        teams = payload.get("teams") or {}
+        away = teams.get("away") or {}
+        home = teams.get("home") or {}
+        away_batters = get_batters_from_boxscore(away, "away")
+        home_batters = get_batters_from_boxscore(home, "home")
+        for row in (away_batters + home_batters):
+            pid = row.get("id")
+            if pid:
+                try:
+                    player_ids.add(int(pid))
+                except Exception:
+                    pass
+        for side in (away, home):
+            team_pitchers = side.get("pitchers") or []
+            for pid in team_pitchers[:6]:
+                try:
+                    player_ids.add(int(pid))
+                except Exception:
+                    pass
+        boxscores.append({
+            "gamePk": gpk,
+            "awayTeam": ((away.get("team") or {}).get("abbreviation") or "AWAY"),
+            "homeTeam": ((home.get("team") or {}).get("abbreviation") or "HOME"),
+            "awayLineup": away_batters,
+            "homeLineup": home_batters,
+            "awayPitchers": list((away.get("pitchers") or []))[:10],
+            "homePitchers": list((home.get("pitchers") or []))[:10],
+        })
+    return boxscores, sorted(player_ids)
+
+
+def _memory_collect_player_cards(player_ids, max_players=160):
+    out = []
+    for pid in (player_ids or [])[:max(1, int(max_players))]:
+        payload = _collect_mlb_endpoint(
+            f"{MLB_API}/people/{pid}",
+            params={
+                "hydrate": f"stats(group=[hitting,pitching],type=season,season={datetime.now().year}),currentTeam",
+            },
+            timeout=10,
+            default={},
+        )
+        people = payload.get("people") or []
+        if not people:
+            continue
+        p = people[0]
+        team = p.get("currentTeam") or {}
+        stats_payload = {}
+        for row in (p.get("stats") or []):
+            grp = ((row.get("group") or {}).get("displayName") or "").lower()
+            splits = row.get("splits") or []
+            if not splits:
+                continue
+            stats_payload[grp or "unknown"] = splits[0].get("stat") or {}
+        out.append({
+            "id": pid,
+            "name": p.get("fullName") or "Unknown",
+            "teamId": team.get("id"),
+            "team": team.get("abbreviation") or "?",
+            "position": ((p.get("primaryPosition") or {}).get("abbreviation") or "?"),
+            "bats": ((p.get("batSide") or {}).get("code") or "?"),
+            "throws": ((p.get("pitchHand") or {}).get("code") or "?"),
+            "stats": stats_payload,
+            "injury": _get_player_injury(pid),
+        })
+    return out
+
+
+def _memory_mode_for_now(mode):
+    m = (mode or 'auto').strip().lower()
+    if m in ('light', 'deep'):
+        return m
+    hr = datetime.now(ET).hour
+    return 'deep' if 2 <= hr < 6 else 'light'
+
+
+def _memory_mode_defaults(mode):
+    resolved = _memory_mode_for_now(mode)
+    if resolved == 'deep':
+        return {
+            'mode': 'deep',
+            'days_back': 7,
+            'max_games_per_day': 30,
+            'include_boxscores': True,
+            'max_players': 360,
+            'include_team_rosters': True,
+            'transactions_days': 7,
+        }
+    return {
+        'mode': 'light',
+        'days_back': 2,
+        'max_games_per_day': 30,
+        'include_boxscores': True,
+        'max_players': 180,
+        'include_team_rosters': False,
+        'transactions_days': 2,
+    }
+
+
+def _memory_collect_team_stats(team_ids):
+    rows = []
+    yr = datetime.now().year
+    for tid in (team_ids or []):
+        hit = _collect_mlb_endpoint(
+            f"{MLB_API}/teams/{tid}/stats",
+            params={"stats": "season", "group": "hitting", "season": yr},
+            timeout=10,
+            default={},
+        )
+        pit = _collect_mlb_endpoint(
+            f"{MLB_API}/teams/{tid}/stats",
+            params={"stats": "season", "group": "pitching", "season": yr},
+            timeout=10,
+            default={},
+        )
+        rows.append({
+            "teamId": tid,
+            "hitting": (((hit.get('stats') or [{}])[0].get('splits') or [{}])[0].get('stat') or {}),
+            "pitching": (((pit.get('stats') or [{}])[0].get('splits') or [{}])[0].get('stat') or {}),
+        })
+    return rows
+
+
+def _memory_collect_team_rosters(team_ids, max_players_per_team=45):
+    out = []
+    for tid in (team_ids or []):
+        payload = _collect_mlb_endpoint(
+            f"{MLB_API}/teams/{tid}/roster",
+            params={"rosterType": "active"},
+            timeout=10,
+            default={},
+        )
+        rows = []
+        for p in (payload.get('roster') or [])[:max(10, int(max_players_per_team))]:
+            person = p.get('person') or {}
+            rows.append({
+                "id": person.get('id'),
+                "name": person.get('fullName'),
+                "pos": ((p.get('position') or {}).get('abbreviation') or '?'),
+                "status": ((p.get('status') or {}).get('description') or ''),
+            })
+        out.append({"teamId": tid, "players": rows})
+    return out
+
+
+def _memory_collect_transactions(date_str, days_back=2, max_rows=500):
+    try:
+        end_dt = datetime.strptime(date_str, '%Y-%m-%d').date()
+    except Exception:
+        end_dt = datetime.now(ET).date()
+    start_dt = end_dt - timedelta(days=max(0, int(days_back)))
+    payload = _collect_mlb_endpoint(
+        f"{MLB_API}/transactions",
+        params={
+            "sportId": 1,
+            "startDate": start_dt.isoformat(),
+            "endDate": end_dt.isoformat(),
+        },
+        timeout=12,
+        default={},
+    )
+    txs = list(payload.get('transactions') or [])[:max(50, int(max_rows))]
+    return [{
+        "id": t.get('id'),
+        "date": t.get('date'),
+        "type": t.get('typeDesc') or t.get('typeCode'),
+        "player": ((t.get('person') or t.get('player') or {}).get('fullName') or t.get('playerName')),
+        "teamId": ((t.get('team') or t.get('toTeam') or {}).get('id') or (t.get('fromTeam') or {}).get('id')),
+        "description": t.get('description') or t.get('note') or '',
+    } for t in txs]
+
+def _memory_ingest_statscast_data(date_str=None, max_records=5000):
+    """
+    Comprehensively ingest Statscast/Savant data: pitch-level, xStats, batted ball data.
+    Collects from loaded caches and returns structured summary + sample data.
+    """
+    try:
+        if not date_str:
+            date_str = datetime.now(ET).strftime("%Y-%m-%d")
+        out = {"date": date_str, "sources": [], "summary": {}, "sampleData": {}}
+        
+        with _sv_lock:
+            if _sv_loaded:
+                out["summary"]["pitcherXStats"] = len(_sv_pit_xstats)
+                out["summary"]["batterXStats"] = len(_sv_bat_xstats)
+                out["summary"]["batterStatcast"] = len(_sv_bat_statcast)
+                out["summary"]["pitchArsenal"] = len(_sv_arsenal_pct)
+                out["sources"].append("Savant xStats")
+                out["sources"].append("Savant Statcast")
+                out["sources"].append("Savant Pitch Arsenal")
+                
+                if _sv_bat_xstats:
+                    sample_batter = list(_sv_bat_xstats.items())[:5]
+                    out["sampleData"]["batter_xstats"] = [{"name": name, "stats": stats} for name, stats in sample_batter]
+                if _sv_pit_xstats:
+                    sample_pitcher = list(_sv_pit_xstats.items())[:5]
+                    out["sampleData"]["pitcher_xstats"] = [{"name": name, "stats": stats} for name, stats in sample_pitcher]
+                if _sv_arsenal_pct:
+                    sample_arsenal = list(_sv_arsenal_pct.items())[:3]
+                    out["sampleData"]["pitch_arsenal"] = [{"name": name, "arsenal": arsenal} for name, arsenal in sample_arsenal]
+        
+        return out
+    except Exception as e:
+        print(f"[_memory_ingest_statscast_data] Error: {e}")
+        return {"date": date_str, "sources": [], "summary": {}, "error": str(e)}
+
+
+def _memory_ingest_fangraphs_data(max_records=5000):
+    """
+    Comprehensively ingest FanGraphs data: batter and pitcher stat records.
+    Returns structured summary + sample stat records.
+    """
+    try:
+        out = {"sources": [], "summary": {}, "sampleData": {}}
+        
+        with _fg_lock:
+            if _fg_loaded:
+                batter_count = len(_fg_bat)
+                pitcher_count = len(_fg_pit)
+                out["summary"]["batters"] = batter_count
+                out["summary"]["pitchers"] = pitcher_count
+                out["sources"].append("FanGraphs (via MLB API)")
+                
+                if _fg_bat:
+                    sample_batters = list(_fg_bat.items())[:10]
+                    out["sampleData"]["batters"] = [{"name": name, "stats": stats} for name, stats in sample_batters]
+                if _fg_pit:
+                    sample_pitchers = list(_fg_pit.items())[:10]
+                    out["sampleData"]["pitchers"] = [{"name": name, "stats": stats} for name, stats in sample_pitchers]
+        
+        return out
+    except Exception as e:
+        print(f"[_memory_ingest_fangraphs_data] Error: {e}")
+        return {"sources": [], "summary": {}, "error": str(e)}
+
+
+def _memory_ingest_mlb_api_player_stats(team_ids, max_players=200, season=None):
+    """
+    Comprehensively ingest MLB API player stats: hitting, pitching, fielding stats per team.
+    Returns structured player performance data organized by position/role.
+    """
+    try:
+        if not season:
+            season = datetime.now().year
+        
+        out = {"season": season, "teams": {}, "summary": {}}
+        total_players = 0
+        
+        for tid in team_ids[:30]:
+            try:
+                payload = _collect_mlb_endpoint(
+                    f"{MLB_API}/teams/{tid}?hydrate=roster",
+                    timeout=12,
+                    default={}
+                )
+                team_info = payload.get("team") or {}
+                roster = payload.get("roster") or []
+                
+                players_by_type = {"batters": [], "pitchers": [], "other": []}
+                
+                for player_entry in roster[:max_players]:
+                    person = player_entry.get("person") or {}
+                    position = player_entry.get("position") or {}
+                    player_id = person.get("id")
+                    
+                    if not player_id:
+                        continue
+                    
+                    player_info = {
+                        "id": player_id,
+                        "name": person.get("fullName"),
+                        "position": position.get("abbreviation") or position.get("name"),
+                        "jersey": player_entry.get("jerseyNumber"),
+                        "status": (player_entry.get("status") or {}).get("description"),
+                    }
+                    
+                    pos_code = position.get("code") or ""
+                    if pos_code == "P":
+                        players_by_type["pitchers"].append(player_info)
+                    elif pos_code in ("C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "DH"):
+                        players_by_type["batters"].append(player_info)
+                    else:
+                        players_by_type["other"].append(player_info)
+                    
+                    total_players += 1
+                
+                out["teams"][str(tid)] = {
+                    "teamName": team_info.get("name"),
+                    "players": players_by_type,
+                    "rosterSize": len(roster),
+                }
+            except Exception as e:
+                print(f"[_memory_ingest_mlb_api_player_stats] Team {tid} error: {e}")
+        
+        out["summary"]["totalTeams"] = len(out["teams"])
+        out["summary"]["totalPlayers"] = total_players
+        out["sources"] = ["MLB API Team Rosters"]
+        
+        return out
+    except Exception as e:
+        print(f"[_memory_ingest_mlb_api_player_stats] Error: {e}")
+        return {"season": season, "teams": {}, "summary": {}, "error": str(e)}
+
+
+def _memory_collect_comprehensive_data(date_str=None, team_ids=None, mode='light'):
+    """
+    Orchestrates comprehensive data ingestion from all sources:
+    - Statscast/Savant (pitch-level, xStats, batted balls)
+    - FanGraphs (batter/pitcher stats)
+    - MLB API (player stats, advanced metrics)
+    """
+    try:
+        if not date_str:
+            date_str = datetime.now(ET).strftime("%Y-%m-%d")
+        if not team_ids:
+            team_ids = []
+        
+        # Ingest from each source
+        statscast_data = _memory_ingest_statscast_data(date_str)
+        fangraphs_data = _memory_ingest_fangraphs_data()
+        mlb_api_data = _memory_ingest_mlb_api_player_stats(team_ids)
+        
+        # Compile comprehensive summary
+        comprehensive = {
+            "date": date_str,
+            "mode": mode,
+            "collectedAt": datetime.now(timezone.utc).isoformat(),
+            "sources": {
+                "statscast": statscast_data,
+                "fangraphs": fangraphs_data,
+                "mlbApi": mlb_api_data,
+            },
+            "totalDataPoints": (
+                sum(statscast_data.get("summary", {}).values()) +
+                sum(fangraphs_data.get("summary", {}).values()) +
+                mlb_api_data.get("summary", {}).get("totalPlayers", 0)
+            ),
+        }
+        
+        return comprehensive
+    except Exception as e:
+        print(f"[_memory_collect_comprehensive_data] Error: {e}")
+        return {"error": str(e)}
+
+
+
+def _collect_mlb_memory_snapshot(date_str=None, days_back=2, max_games_per_day=30, include_boxscores=True, max_players=160, mode='light', include_team_rosters=False, transactions_days=2):
+    _maybe_refresh_fg()
+    _maybe_refresh_savant()
+    _fetch_injury_status(force=False)
+
+    today_et = (date_str or datetime.now(ET).strftime("%Y-%m-%d")).strip()
+    created_at = datetime.now(timezone.utc).isoformat()
+
+    teams_payload = _collect_mlb_endpoint(
+        f"{MLB_API}/teams",
+        params={"sportId": 1, "activeStatus": "Y"},
+        timeout=12,
+        default={},
+    )
+    teams = [
+        {
+            "id": t.get("id"),
+            "name": t.get("name"),
+            "abbr": t.get("abbreviation"),
+            "venueId": ((t.get("venue") or {}).get("id")),
+            "division": ((t.get("division") or {}).get("name")),
+            "league": ((t.get("league") or {}).get("name")),
+        }
+        for t in (teams_payload.get("teams") or [])
+        if t.get("id")
+    ]
+    team_ids = [t.get("id") for t in teams if t.get("id")]
+
+    standings_payload = _collect_mlb_endpoint(
+        f"{MLB_API}/standings",
+        params={"sportId": 1, "standingsType": "regularSeason"},
+        timeout=12,
+        default={},
+    )
+
+    leaders_payload = _collect_mlb_endpoint(
+        f"{MLB_API}/stats/leaders",
+        params={
+            "leaderCategories": "homeRuns,runsBattedIn,battingAverage,onBasePlusSlugging,earnedRunAverage,strikeouts,whip",
+            "sportId": 1,
+            "season": datetime.now().year,
+            "limit": 15,
+        },
+        timeout=12,
+        default={},
+    )
+
+    schedule_days, game_pks = _memory_collect_schedule_window(
+        today_et,
+        days_back=days_back,
+        max_games_per_day=max_games_per_day,
+    )
+
+    boxscores = []
+    box_player_ids = []
+    if include_boxscores:
+        boxscores, box_player_ids = _memory_collect_boxscores(game_pks, max_games=20)
+
+    probable_pitcher_ids = []
+    raw_today = fetch_schedule(today_et)
+    for g in (raw_today or []):
+        away_pp = (((g.get("teams") or {}).get("away") or {}).get("probablePitcher") or {}).get("id")
+        home_pp = (((g.get("teams") or {}).get("home") or {}).get("probablePitcher") or {}).get("id")
+        if away_pp:
+            probable_pitcher_ids.append(away_pp)
+        if home_pp:
+            probable_pitcher_ids.append(home_pp)
+
+    featured_player_ids = sorted({int(x) for x in (box_player_ids + probable_pitcher_ids) if x})
+    player_cards = _memory_collect_player_cards(featured_player_ids, max_players=max_players)
+
+    team_stats = _memory_collect_team_stats(team_ids)
+    team_rosters = _memory_collect_team_rosters(team_ids) if include_team_rosters else []
+    transactions = _memory_collect_transactions(today_et, days_back=transactions_days)
+
+    comprehensive_data = _memory_collect_comprehensive_data(today_et, team_ids, mode)
+    team_ids = [t.get("id") for t in teams if t.get("id")]
+    team_ids = [t.get("id") for t in teams if t.get("id")]
+
+    with _fg_lock:
+        fg_summary = {
+            "loaded": _fg_loaded,
+            "loadDate": str(_fg_load_date) if _fg_load_date else None,
+            "batters": len(_fg_bat),
+            "pitchers": len(_fg_pit),
+        }
+    with _sv_lock:
+        sv_summary = {
+            "loaded": _sv_loaded,
+            "loadDate": str(_sv_load_date) if _sv_load_date else None,
+            "pitcherXStats": len(_sv_pit_xstats),
+            "batterXStats": len(_sv_bat_xstats),
+            "batterStatcast": len(_sv_bat_statcast),
+            "pitchArsenal": len(_sv_arsenal_pct),
+        }
+    with _injury_lock:
+        injury_summary = {
+            "updatedAt": _injury_last_refresh.isoformat() if _injury_last_refresh else None,
+            "count": len(_injury_cache),
+            "rows": list(_injury_cache.values())[:120],
+        }
+
+    snapshot = {
+        "createdAt": created_at,
+        "targetDateET": today_et,
+        "windowDays": int(max(0, days_back)) + 1,
+        "meta": {
+            "mode": mode,
+            "teamCount": len(teams),
+            "scheduleDays": len(schedule_days),
+            "gameCount": sum(int(d.get("gameCount") or 0) for d in schedule_days),
+            "boxscoreCount": len(boxscores),
+            "featuredPlayers": len(player_cards),
+            "transactions": len(transactions),
+        },
+        "league": {
+            "teams": teams,
+            "standings": standings_payload.get("records") or [],
+            "leaders": leaders_payload.get("leagueLeaders") or [],
+            "teamStats": team_stats,
+            "transactions": transactions,
+        },
+        "schedule": schedule_days,
+        "games": {
+            "boxscores": boxscores,
+        },
+        "players": {
+            "featured": player_cards,
+            "teamRosters": team_rosters,
+        },
+        "caches": {
+            "fangraphs": fg_summary,
+            "savant": sv_summary,
+            "injuries": injury_summary,
+            "odds": _odds_cache_status_payload(),
+        },
+            "comprehensive": comprehensive_data,
+        },
+    }
+    return snapshot
+
+
 # UTC offset for each MLB venue — used to find correct local hour for Open-Meteo index
 # ET=-5, CT=-6, MT=-7, PT=-8
 VENUE_UTC_OFFSET = {
@@ -1092,7 +1813,345 @@ def api_status():
     return jsonify({
         "fangraphs": {"loaded":fgl,"date":str(fgd),"batters":fgb,"pitchers":fgp},
         "savant":    {"loaded":svl,"date":str(svd),"pit_xstats":svpi,"bat_xstats":svbi,"statcast":svsc,"arsenals":svar},
+        "mlbMemory": _mlb_memory_status_payload(),
     })
+
+
+def _mlb_memory_status_payload():
+    payload = _mlb_memory_store_payload()
+    latest = payload.get("latest") if isinstance(payload.get("latest"), dict) else None
+    latest_meta = (latest or {}).get("meta") or {}
+    file_exists = os.path.exists(MLB_MEMORY_STORE)
+    with _mlb_memory_lock:
+        collecting = bool(_mlb_memory_collecting)
+        last_collect = _mlb_memory_last_collect
+        last_error = _mlb_memory_last_error
+    return {
+        "collecting": collecting,
+        "lastCollectAt": last_collect,
+        "lastError": last_error,
+        "nextMode": _memory_mode_for_now('auto'),
+        "snapshotCount": len(payload.get("snapshots") or []),
+        "latest": {
+            "createdAt": (latest or {}).get("createdAt"),
+            "targetDateET": (latest or {}).get("targetDateET"),
+            "teamCount": latest_meta.get("teamCount"),
+            "gameCount": latest_meta.get("gameCount"),
+            "featuredPlayers": latest_meta.get("featuredPlayers"),
+            "mode": latest_meta.get("mode"),
+        },
+        "file": {
+            "exists": file_exists,
+            "path": MLB_MEMORY_STORE,
+            "sizeBytes": os.path.getsize(MLB_MEMORY_STORE) if file_exists else 0,
+            "modifiedAt": datetime.fromtimestamp(os.path.getmtime(MLB_MEMORY_STORE), tz=timezone.utc).isoformat() if file_exists else None,
+        },
+        "updatedAt": payload.get("updatedAt"),
+    }
+
+
+def _run_mlb_memory_collect(date_str=None, days_back=2, max_games_per_day=30, include_boxscores=True, max_players=160, mode=None):
+    global _mlb_memory_collecting, _mlb_memory_last_collect, _mlb_memory_last_error
+    with _mlb_memory_lock:
+        if _mlb_memory_collecting:
+            return None, "Collect already in progress"
+        _mlb_memory_collecting = True
+        _mlb_memory_last_error = None
+    try:
+        defaults = _memory_mode_defaults(mode)
+        eff_mode = defaults.get('mode')
+        snapshot = _collect_mlb_memory_snapshot(
+            date_str=date_str,
+            days_back=int(defaults.get('days_back', days_back) if mode else days_back),
+            max_games_per_day=int(defaults.get('max_games_per_day', max_games_per_day) if mode else max_games_per_day),
+            include_boxscores=bool(defaults.get('include_boxscores', include_boxscores) if mode else include_boxscores),
+            max_players=int(defaults.get('max_players', max_players) if mode else max_players),
+            mode=eff_mode if mode else 'manual',
+            include_team_rosters=bool(defaults.get('include_team_rosters', False) if mode else False),
+            transactions_days=int(defaults.get('transactions_days', 2) if mode else 2),
+        )
+        _append_mlb_memory_snapshot(snapshot, keep=_MLB_MEMORY_KEEP_SNAPSHOTS)
+        _mlb_memory_last_collect = datetime.now(timezone.utc).isoformat()
+        return snapshot, None
+    except Exception as ex:
+        _mlb_memory_last_error = str(ex)
+        return None, str(ex)
+    finally:
+        with _mlb_memory_lock:
+            _mlb_memory_collecting = False
+
+
+_mlb_memory_worker_started = False
+
+
+def _start_mlb_memory_worker(interval_sec=3 * 60 * 60):
+    global _mlb_memory_worker_started
+    with _mlb_memory_lock:
+        if _mlb_memory_worker_started:
+            return
+        _mlb_memory_worker_started = True
+
+    def _runner():
+        while True:
+            try:
+                _run_mlb_memory_collect(
+                    date_str=datetime.now(ET).strftime('%Y-%m-%d'),
+                    mode='auto',
+                )
+            except Exception as ex:
+                print(f'[mlb_memory_worker] {ex}')
+            time.sleep(max(1800, int(interval_sec)))
+
+    threading.Thread(target=_runner, daemon=True).start()
+
+
+@app.route('/api/memory/status')
+def api_memory_status():
+    try:
+        return jsonify({"success": True, "status": _mlb_memory_status_payload()})
+    except Exception as ex:
+        print(f'[api_memory_status] {traceback.format_exc()}')
+        return jsonify({"success": False, "error": str(ex)}), 500
+
+
+@app.route('/api/admin/settings', methods=['GET', 'POST'])
+def api_admin_settings():
+    try:
+        if request.method == 'GET':
+            return jsonify({'success': True, 'settings': _get_admin_settings()})
+        payload = request.get_json(silent=True) or {}
+        saved = _save_admin_settings(payload)
+        return jsonify({'success': True, 'settings': saved})
+    except Exception as ex:
+        print(f'[api_admin_settings] {traceback.format_exc()}')
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
+@app.route('/api/app-settings', methods=['GET', 'POST'])
+def api_app_settings():
+    try:
+        if request.method == 'GET':
+            return jsonify({'success': True, 'settings': _get_app_settings()})
+        payload = request.get_json(silent=True) or {}
+        saved = _save_app_settings(payload)
+        return jsonify({'success': True, 'settings': saved})
+    except Exception as ex:
+        print(f'[api_app_settings] {traceback.format_exc()}')
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
+@app.route('/api/brain-data/upload', methods=['POST'])
+def api_brain_data_upload():
+    try:
+        files_uploaded = []
+        file_type = request.form.get('type', 'other')
+        uploaded_files = request.files.getlist('files')
+        if not uploaded_files:
+            return jsonify({'success': False, 'error': 'No files provided'}), 400
+        for f in uploaded_files:
+            if f and f.filename:
+                try:
+                    filename = f.filename
+                    safe_name = "".join(c for c in filename if c.isalnum() or c in ('._-'))
+                    if not safe_name:
+                        safe_name = f"upload_{uuid4().hex[:8]}.dat"
+                    file_path = os.path.join(BRAIN_DATA_DIR, safe_name)
+                    f.save(file_path)
+                    files_uploaded.append(safe_name)
+                    print(f"[api_brain_data_upload] Uploaded {safe_name} ({file_type})")
+                except Exception as ex:
+                    print(f"[api_brain_data_upload] File save failed for {f.filename}: {ex}")
+        if not files_uploaded:
+            return jsonify({'success': False, 'error': 'No files successfully uploaded'}), 400
+        return jsonify({'success': True, 'uploadedCount': len(files_uploaded), 'files': files_uploaded})
+    except Exception as ex:
+        print(f'[api_brain_data_upload] {traceback.format_exc()}')
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
+@app.route('/api/brain-data/list', methods=['GET'])
+def api_brain_data_list():
+    try:
+        files = []
+        if os.path.exists(BRAIN_DATA_DIR):
+            for fname in os.listdir(BRAIN_DATA_DIR):
+                fpath = os.path.join(BRAIN_DATA_DIR, fname)
+                if os.path.isfile(fpath):
+                    size_bytes = os.path.getsize(fpath)
+                    size_kb = round(size_bytes / 1024, 2)
+                    ext = os.path.splitext(fname)[1].lower()
+                    file_type = 'JSON' if ext == '.json' else 'CSV' if ext == '.csv' else 'TXT' if ext == '.txt' else 'File'
+                    files.append({'filename': fname, 'sizeBytes': size_bytes, 'sizeKB': size_kb, 'type': file_type})
+        return jsonify({'success': True, 'files': files})
+    except Exception as ex:
+        print(f'[api_brain_data_list] {traceback.format_exc()}')
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
+@app.route('/api/brain-data/delete', methods=['POST'])
+def api_brain_data_delete():
+    try:
+        payload = request.get_json(silent=True) or {}
+        filename = payload.get('filename', '').strip()
+        if not filename:
+            return jsonify({'success': False, 'error': 'No filename provided'}), 400
+        safe_name = "".join(c for c in filename if c.isalnum() or c in ('._-'))
+        if safe_name != filename:
+            return jsonify({'success': False, 'error': 'Invalid filename'}), 400
+        fpath = os.path.join(BRAIN_DATA_DIR, safe_name)
+        if not os.path.exists(fpath):
+            return jsonify({'success': False, 'error': 'File not found'}), 404
+        os.remove(fpath)
+        print(f"[api_brain_data_delete] Deleted {safe_name}")
+        return jsonify({'success': True, 'message': 'File deleted'})
+    except Exception as ex:
+        print(f'[api_brain_data_delete] {traceback.format_exc()}')
+
+
+        @app.route('/api/brain/ingest-status', methods=['GET'])
+        def api_brain_ingest_status():
+            """
+            Returns comprehensive ingestion status: what data sources are loaded and how much data.
+            Shows Statscast, FanGraphs, and MLB API availability in the brain.
+            """
+            try:
+                today_et = datetime.now(ET).strftime("%Y-%m-%d")
+        
+                statscast = _memory_ingest_statscast_data(today_et)
+                fangraphs = _memory_ingest_fangraphs_data()
+                mlb_api = _memory_ingest_mlb_api_player_stats([i for i in range(108, 146)])
+        
+                return jsonify({
+                    'success': True,
+                    'brainStatus': {
+                        'lastUpdated': datetime.now(timezone.utc).isoformat(),
+                        'dataIngestedAt': datetime.now(timezone.utc).isoformat(),
+                    },
+                    'ingestion': {
+                        'statscast': statscast,
+                        'fangraphs': fangraphs,
+                        'mlbApi': mlb_api,
+                    },
+                    'summary': {
+                        'totalStatscastRecords': sum(statscast.get('summary', {}).values()),
+                        'totalFanGraphsRecords': sum(fangraphs.get('summary', {}).values()),
+                        'totalPlayerRecords': mlb_api.get('summary', {}).get('totalPlayers', 0),
+                        'dataSourcesActive': len([s for s in statscast.get('sources', []) if s] + [f for f in fangraphs.get('sources', []) if f] + [m for m in mlb_api.get('sources', []) if m]),
+                    }
+                })
+            except Exception as ex:
+                print(f'[api_brain_ingest_status] {traceback.format_exc()}')
+                return jsonify({'success': False, 'error': str(ex)}), 500
+
+
+        @app.route('/api/brain/ingest-trigger', methods=['POST'])
+        def api_brain_ingest_trigger():
+            """
+            Manually trigger comprehensive data ingestion from all sources.
+            Rrefresh Statscast, FanGraphs, and MLB API caches.
+            """
+            try:
+                force_refresh = request.get_json(silent=True) or {}
+                force = force_refresh.get('force', False)
+        
+                _maybe_refresh_fg()
+                _maybe_refresh_savant()
+                _fetch_injury_status(force=force)
+        
+                today_et = datetime.now(ET).strftime("%Y-%m-%d")
+                comprehensive = _memory_collect_comprehensive_data(today_et, team_ids=[i for i in range(108, 146)], mode='manual')
+        
+                return jsonify({
+                    'success': True,
+                    'message': 'Ingestion triggered and completed',
+                    'data': comprehensive,
+                })
+            except Exception as ex:
+                print(f'[api_brain_ingest_trigger] {traceback.format_exc()}')
+                return jsonify({'success': False, 'error': str(ex)}), 500
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
+@app.route('/api/memory/latest')
+def api_memory_latest():
+    try:
+        payload = _mlb_memory_store_payload()
+        latest = payload.get("latest") if isinstance(payload.get("latest"), dict) else None
+        if not latest:
+            return jsonify({"success": False, "error": "No MLB memory snapshot collected yet"}), 404
+        summary_only = str(request.args.get('summaryOnly') or '').strip().lower() in ('1', 'true', 'yes')
+        if summary_only:
+            return jsonify({
+                "success": True,
+                "snapshot": {
+                    "createdAt": latest.get("createdAt"),
+                    "targetDateET": latest.get("targetDateET"),
+                    "meta": latest.get("meta") or {},
+                },
+            })
+        return jsonify({"success": True, "snapshot": latest})
+    except Exception as ex:
+        print(f'[api_memory_latest] {traceback.format_exc()}')
+        return jsonify({"success": False, "error": str(ex)}), 500
+
+
+@app.route('/api/memory/collect', methods=['POST'])
+def api_memory_collect():
+    payload = request.get_json(silent=True) or {}
+    try:
+        date_str = (payload.get('date') or request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')).strip()
+        days_back = int(payload.get('daysBack', request.args.get('daysBack', 2)) or 2)
+        max_games_per_day = int(payload.get('maxGamesPerDay', request.args.get('maxGamesPerDay', 30)) or 30)
+        include_boxscores = str(payload.get('includeBoxscores', request.args.get('includeBoxscores', '1'))).strip().lower() in ('1', 'true', 'yes')
+        max_players = int(payload.get('maxPlayers', request.args.get('maxPlayers', 160)) or 160)
+        mode = str(payload.get('mode', request.args.get('mode', 'manual'))).strip().lower()
+        if mode not in ('manual', 'light', 'deep', 'auto'):
+            mode = 'manual'
+
+        snapshot, err = _run_mlb_memory_collect(
+            date_str=date_str,
+            days_back=max(0, min(days_back, 14)),
+            max_games_per_day=max(1, min(max_games_per_day, 30)),
+            include_boxscores=include_boxscores,
+            max_players=max(20, min(max_players, 500)),
+            mode=None if mode == 'manual' else mode,
+        )
+        if err:
+            code = 409 if "in progress" in err.lower() else 500
+            return jsonify({"success": False, "error": err}), code
+
+        return jsonify({
+            "success": True,
+            "snapshotMeta": snapshot.get("meta") or {},
+            "createdAt": snapshot.get("createdAt"),
+            "targetDateET": snapshot.get("targetDateET"),
+            "mode": mode,
+            "status": _mlb_memory_status_payload(),
+        })
+    except Exception as ex:
+        print(f'[api_memory_collect] {traceback.format_exc()}')
+        return jsonify({"success": False, "error": str(ex)}), 500
+
+
+@app.route('/api/memory/collect/deep', methods=['POST'])
+def api_memory_collect_deep():
+    try:
+        payload = request.get_json(silent=True) or {}
+        date_str = (payload.get('date') or request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')).strip()
+        snapshot, err = _run_mlb_memory_collect(date_str=date_str, mode='deep')
+        if err:
+            code = 409 if "in progress" in err.lower() else 500
+            return jsonify({"success": False, "error": err}), code
+        return jsonify({
+            "success": True,
+            "createdAt": snapshot.get("createdAt"),
+            "targetDateET": snapshot.get("targetDateET"),
+            "snapshotMeta": snapshot.get("meta") or {},
+            "status": _mlb_memory_status_payload(),
+        })
+    except Exception as ex:
+        print(f'[api_memory_collect_deep] {traceback.format_exc()}')
+        return jsonify({"success": False, "error": str(ex)}), 500
 
 @app.route("/api/games/today")
 def api_games_today():
@@ -12585,6 +13644,7 @@ def api_breakout_candidates():
 # Start hourly injury refresh worker once routes/helpers are loaded.
 _start_injury_worker()
 _start_tracker_auto_sync_worker()
+_start_mlb_memory_worker()
 
 
 if __name__ == "__main__":
