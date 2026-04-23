@@ -4187,11 +4187,104 @@ def api_simulate(game_pk):
         g = next((x for x in raw if x.get('gamePk') == game_pk), None)
         if not g:
             return jsonify({'success': False, 'error': 'Game not found'}), 404
+        away_team = g.get('teams', {}).get('away', {}).get('team', {})
+        home_team = g.get('teams', {}).get('home', {}).get('team', {})
+        away_team_id = away_team.get('id')
+        home_team_id = home_team.get('id')
+
         box = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=10).json().get('teams', {})
         away_lineup = get_batters_from_boxscore(box.get('away', {}), 'away')
         home_lineup = get_batters_from_boxscore(box.get('home', {}), 'home')
+
+        def _parse_sched_lineup(hitters):
+            out = []
+            for i, p in enumerate(hitters or [], start=1):
+                name = (p.get('fullName') or p.get('name') or '').strip()
+                pid = p.get('id') or p.get('playerId')
+                pos = (p.get('primaryPosition') or {}).get('abbreviation', '?')
+                if not name:
+                    continue
+                fgb = fg_batter(name)
+                svb = sv_batter(name)
+                bio = _bio_cache.get(pid) or {}
+                out.append({
+                    'slot': i,
+                    'id': pid,
+                    'name': name,
+                    'pos': pos,
+                    'bats': bio.get('bats', 'R'),
+                    'avg': fgb.get('fg_avg', '.---'),
+                    'obp': fgb.get('fg_obp', '.---'),
+                    'slg': fgb.get('fg_slg', '.---'),
+                    'ops': fgb.get('fg_ops', '.---'),
+                    'fg_sb': fgb.get('fg_sb', 0),
+                    'fg_woba': fgb.get('fg_woba', 'N/A'),
+                    'fg_wrc': fgb.get('fg_wrc', 'N/A'),
+                    'sv_xba': svb.get('sv_xba', 'N/A'),
+                    'sv_xslg': svb.get('sv_xslg', 'N/A'),
+                    'sv_xwoba': svb.get('sv_xwoba', 'N/A'),
+                    'sv_ev': svb.get('sv_ev', 'N/A'),
+                    'sv_hh_pct': svb.get('sv_hh_pct', 'N/A'),
+                    'sv_brl_pct': svb.get('sv_brl_pct', 'N/A'),
+                })
+            return out
+
+        def _roster_lineup(team_id):
+            if not team_id:
+                return []
+            try:
+                rr = requests.get(f"{MLB_API}/teams/{team_id}/roster?rosterType=active", timeout=8)
+                rr.raise_for_status()
+                out = []
+                for entry in (rr.json().get('roster') or []):
+                    pos = ((entry.get('position') or {}).get('abbreviation') or '?')
+                    if pos in ('P', 'SP', 'RP', 'CP'):
+                        continue
+                    name = ((entry.get('person') or {}).get('fullName') or '').strip()
+                    pid = (entry.get('person') or {}).get('id')
+                    if not name:
+                        continue
+                    fgb = fg_batter(name)
+                    svb = sv_batter(name)
+                    bio = _bio_cache.get(pid) or {}
+                    out.append({
+                        'slot': len(out) + 1,
+                        'id': pid,
+                        'name': name,
+                        'pos': pos,
+                        'bats': bio.get('bats', 'R'),
+                        'avg': fgb.get('fg_avg', '.---'),
+                        'obp': fgb.get('fg_obp', '.---'),
+                        'slg': fgb.get('fg_slg', '.---'),
+                        'ops': fgb.get('fg_ops', '.---'),
+                        'fg_sb': fgb.get('fg_sb', 0),
+                        'fg_woba': fgb.get('fg_woba', 'N/A'),
+                        'fg_wrc': fgb.get('fg_wrc', 'N/A'),
+                        'sv_xba': svb.get('sv_xba', 'N/A'),
+                        'sv_xslg': svb.get('sv_xslg', 'N/A'),
+                        'sv_xwoba': svb.get('sv_xwoba', 'N/A'),
+                        'sv_ev': svb.get('sv_ev', 'N/A'),
+                        'sv_hh_pct': svb.get('sv_hh_pct', 'N/A'),
+                        'sv_brl_pct': svb.get('sv_brl_pct', 'N/A'),
+                    })
+                    if len(out) >= 9:
+                        break
+                return out
+            except Exception:
+                return []
+
         if not away_lineup or not home_lineup:
-            return jsonify({'success': False, 'error': 'Lineups not posted yet'}), 400
+            lineups = (g.get('lineups') or {})
+            if not away_lineup:
+                away_lineup = _parse_sched_lineup(lineups.get('awayBatters'))
+            if not home_lineup:
+                home_lineup = _parse_sched_lineup(lineups.get('homeBatters'))
+            if len(away_lineup) < 5:
+                away_lineup = _roster_lineup(away_team_id)
+            if len(home_lineup) < 5:
+                home_lineup = _roster_lineup(home_team_id)
+        if not away_lineup or not home_lineup:
+            return jsonify({'success': False, 'error': 'Lineups unavailable for simulation'}), 400
         try:
             requested_sims = int(request.args.get('sims', 5000) or 5000)
         except Exception:
@@ -4205,10 +4298,6 @@ def api_simulate(game_pk):
         if cached and not refresh and cached.get('date') == today and cached.get('signature') == cache_signature:
             return jsonify(cached.get('payload') or {'success': False, 'error': 'Cached simulation payload missing'})
 
-        away_team = g.get('teams', {}).get('away', {}).get('team', {})
-        home_team = g.get('teams', {}).get('home', {}).get('team', {})
-        away_team_id = away_team.get('id')
-        home_team_id = home_team.get('id')
         away_abbr = away_team.get('abbreviation', 'AWAY')
         home_abbr = home_team.get('abbreviation', 'HOME')
 
