@@ -23,7 +23,7 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .strip{display:flex;align-items:center;justify-content:space-between;padding:18px 32px;background:linear-gradient(90deg,rgba(0,229,255,.05),rgba(224,64,251,.04));border-bottom:1px solid var(--b);flex-wrap:wrap;gap:12px}
 .strip-title{font-family:'Orbitron',monospace;font-size:1rem;color:var(--mu);letter-spacing:5px}
 .strip-stats{display:flex;gap:32px;flex-wrap:wrap}
-.ss{text-align:center}.ss-v{font-family:'Orbitron',monospace;font-size:1.6rem;font-weight:700;color:var(--c);text-shadow:0 0 12px rgba(0,229,255,.4)}.ss-l{font-size:.65rem;color:var(--mu);letter-spacing:2px;margin-top:2px}
+.ss{text-align:center}.ss-v{font-family:'Orbitron',monospace;font-size:1.6rem;font-weight:700;color:var(--c);text-shadow:0 0 12px rgba(0,229,255,.4)}.ss-l{font-size:.65rem;color:var(--mu);letter-spacing:2px;margin-top:2px}.ss-click{cursor:pointer;transition:transform .15s ease,color .15s ease}.ss-click:hover{transform:translateY(-2px)}
 .main{padding:28px 32px;max-width:1600px;margin:0 auto}
 .sh{font-family:'Orbitron',monospace;font-size:.78rem;color:var(--mu);letter-spacing:4px;margin-bottom:20px;display:flex;align-items:center;gap:12px}
 .sh::after{content:'';flex:1;height:1px;background:linear-gradient(90deg,var(--b),transparent)}
@@ -359,6 +359,11 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
 .settings-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px}
 .settings-msg{font-size:.64rem;color:var(--mu)}
 .settings-status{font-size:.68rem;color:var(--t);line-height:1.6;background:rgba(0,0,0,.2);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:10px;margin-bottom:10px;white-space:pre-line}
+.toast{position:fixed;right:18px;bottom:18px;z-index:1200;min-width:220px;max-width:360px;padding:12px 14px;border-radius:12px;border:1px solid rgba(255,255,255,.12);background:rgba(5,10,24,.96);box-shadow:0 18px 40px rgba(0,0,0,.45);font-size:.72rem;line-height:1.5;color:var(--t);opacity:0;transform:translateY(8px);pointer-events:none;transition:opacity .22s ease,transform .22s ease}
+.toast.show{opacity:1;transform:translateY(0)}
+.toast.ok{border-color:rgba(0,230,118,.28);color:#b9ffd5}
+.toast.warn{border-color:rgba(255,152,0,.28);color:#ffe1b0}
+.toast.err{border-color:rgba(239,83,80,.35);color:#ffc9c7}
 @media(max-width:700px){.settings-two{grid-template-columns:1fr}}
 
 </style>
@@ -380,6 +385,7 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
     <div class="ss"><div class="ss-v" id="se">-</div><div class="ss-l">AVG EDGE</div></div>
     <div class="ss"><div class="ss-v" id="sh">-</div><div class="ss-l">HIGH CONF</div></div>
     <div class="ss"><div class="ss-v" id="sm">-</div><div class="ss-l" id="sml">MEMORY</div></div>
+    <div class="ss ss-click" onclick="openDailySummaryPanel()" title="Open final daily summary in Settings"><div class="ss-v" id="sd">-</div><div class="ss-l" id="sdl">DAILY SUMMARY</div></div>
   </div>
 </div>
 <div class="topnav">
@@ -560,24 +566,37 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
           <div style="margin-top:12px;border-top:1px solid rgba(255,255,255,.1);padding-top:12px;">
             <div style="font-size:.75rem;color:var(--mu);margin-bottom:8px;letter-spacing:0.5px">UPLOADED FILES:</div>
             <div id="uploadedFilesList" style="max-height:200px;overflow-y:auto;font-size:.7rem;color:var(--mu);font-family:monospace;line-height:1.4"></div>
+          </div>
+        </div>
 
-                  <div class="settings-card">
-                    <div class="settings-title">BRAIN DATA INGESTIÓN</div>
-                    <div style="font-size:.62rem;color:var(--mu);margin-bottom:12px;line-height:1.6">
-                      <div style="margin-bottom:8px"><strong>Statscast/Savant:</strong> <span id="brainStatcast">-</span></div>
-                      <div style="margin-bottom:8px"><strong>FanGraphs:</strong> <span id="brainFanGraphs">-</span></div>
-                      <div style="margin-bottom:8px"><strong>MLB API Players:</strong> <span id="brainMLBPlayers">-</span></div>
-                      <div style="margin-bottom:8px"><strong>Total Data Points:</strong> <span id="brainTotalData" style="color:var(--c);font-weight:700">-</span></div>
-                      <div style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,.1)">
-                        <span style="font-size:.56rem;color:var(--mu);font-style:italic">Status: <span id="brainIngestStatus">Unknown</span></span>
-                      </div>
-                    </div>
-                    <div class="settings-actions">
-                      <button class="tabbtn" onclick="triggerBrainIngest()">INGEST NOW</button>
-                      <button class="tabbtn" onclick="refreshBrainStatus()">REFRESH</button>
-                      <span id="brainMsg" class="settings-msg"></span>
-                    </div>
-                  </div>
+        <div class="settings-card">
+          <div class="settings-title">BRAIN DATA INGESTIÓN</div>
+          <div style="font-size:.62rem;color:var(--mu);margin-bottom:12px;line-height:1.6">
+            <div style="margin-bottom:8px"><strong>Statscast/Savant:</strong> <span id="brainStatcast">-</span></div>
+            <div style="margin-bottom:8px"><strong>FanGraphs:</strong> <span id="brainFanGraphs">-</span></div>
+            <div style="margin-bottom:8px"><strong>MLB API Players:</strong> <span id="brainMLBPlayers">-</span></div>
+            <div style="margin-bottom:8px"><strong>Total Data Points:</strong> <span id="brainTotalData" style="color:var(--c);font-weight:700">-</span></div>
+            <div style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,.1)">
+              <span style="font-size:.56rem;color:var(--mu);font-style:italic">Status: <span id="brainIngestStatus">Unknown</span></span>
+            </div>
+          </div>
+          <div class="settings-actions">
+            <button class="tabbtn" onclick="triggerBrainIngest()">INGEST NOW</button>
+            <button class="tabbtn" onclick="refreshBrainStatus()">REFRESH</button>
+            <span id="brainMsg" class="settings-msg"></span>
+          </div>
+        </div>
+
+        <div class="settings-card">
+          <div class="settings-title">FINAL DAILY SUMMARY</div>
+          <div id="dailySummaryStatus" class="settings-status">Loading final daily summary…</div>
+          <div id="dailySummaryDetails" style="font-size:.68rem;color:var(--t);line-height:1.6"></div>
+          <div class="settings-actions">
+            <button class="tabbtn" onclick="loadFinalDailySummary(true)">BUILD LIVE SUMMARY</button>
+            <button class="tabbtn" onclick="rebuildAndPushFinalDailySummary()">REBUILD + PUSH</button>
+            <button class="tabbtn" onclick="pushFinalDailySummary()">PUSH SUMMARY</button>
+            <button class="tabbtn" onclick="loadStoredFinalDailySummary()">LOAD STORED</button>
+            <span id="dailySummaryMsg" class="settings-msg"></span>
           </div>
         </div>
       </div>
@@ -585,6 +604,7 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
   </div>
 
 </div>
+<div id="appToast" class="toast"></div>
 <footer><div class="footstack"><div>MLB ANALYTICS HUB &nbsp;|&nbsp; DATA: MLB API &middot; FANGRAPHS &middot; BASEBALL SAVANT &middot; OPEN-METEO</div><div><span class="fgtag">FG</span> FANGRAPHS: wOBA &middot; wRC+ &middot; FIP &middot; xFIP &middot; WAR &nbsp;|&nbsp; <span class="svtag">SV</span> BASEBALL SAVANT: xERA &middot; xBA &middot; xSLG &middot; xwOBA &middot; EV &middot; HH% &middot; Barrel% &middot; Pitch Arsenal</div><div>FOR ENTERTAINMENT PURPOSES ONLY</div></div></footer>
 <script>
 function tick(){var n=new Date(),h=n.getHours(),m=n.getMinutes(),s=n.getSeconds(),h12=(h%12||12),ap=h>=12?'PM':'AM';document.getElementById('clk').textContent=('0'+h12).slice(-2)+':'+('0'+m).slice(-2)+':'+('0'+s).slice(-2)+' '+ap;document.getElementById('dt').textContent=n.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'}).toUpperCase();}
@@ -1323,6 +1343,51 @@ function loadMemoryStatus(){
   }).catch(function(){v.textContent='-';l.textContent='MEMORY';});
 }
 
+function loadDailySummaryBadge(){
+  var v=document.getElementById('sd'),l=document.getElementById('sdl');
+  if(!v||!l)return;
+  fetch('/api/model-actual/daily-summary/stored').then(function(r){
+    if(r.status===404) return {success:false, notFound:true};
+    return r.json();
+  }).then(function(d){
+    if(!d||!d.success||!d.payload){
+      v.textContent='OPEN';
+      l.textContent='NOT PUSHED';
+      v.style.color='var(--o)';
+      l.style.color='var(--o)';
+      return;
+    }
+    var payload=d.payload||{};
+    var s=payload.summary||{};
+    var age=minsAgo(payload.pushedAt||payload.generatedAt);
+    v.textContent='READY';
+    l.textContent=(s.gamesProcessed||0)+' GAMES'+(age==null?'':' · '+age+'m');
+    v.style.color='var(--g)';
+    l.style.color='var(--g)';
+  }).catch(function(){v.textContent='-';l.textContent='SUMMARY';v.style.color='var(--mu)';l.style.color='var(--mu)';});
+}
+
+function openDailySummaryPanel(){
+  var settingsBtn=document.querySelector('.topnav .tabbtn:last-child');
+  switchView('settingsView', settingsBtn || null);
+  initSettingsView();
+  setTimeout(function(){
+    var el=document.getElementById('dailySummaryStatus');
+    if(el && el.scrollIntoView) el.scrollIntoView({behavior:'smooth', block:'center'});
+  }, 80);
+}
+
+var __toastTimer=null;
+function showToast(msg, kind){
+  var el=document.getElementById('appToast');
+  if(!el) return;
+  el.className='toast ' + (kind||'ok');
+  el.textContent=msg||'';
+  el.classList.add('show');
+  if(__toastTimer) clearTimeout(__toastTimer);
+  __toastTimer=setTimeout(function(){ el.classList.remove('show'); }, 2600);
+}
+
 function setText(id,msg,bad){var el=document.getElementById(id);if(!el)return;el.textContent=msg||'';el.style.color=bad?'#ef5350':'var(--mu)';}
 
 function loadAdminSettings(){
@@ -1534,6 +1599,7 @@ function initSettingsView(){
   loadComprehensiveSettings();
   loadUploadedFiles();
   refreshBrainStatus();
+  loadStoredFinalDailySummary();
 }
 
 function refreshBrainStatus(){
@@ -1566,6 +1632,105 @@ function triggerBrainIngest(){
       setText('brainMsg','Ingestion complete: '+(d.data&&d.data.totalDataPoints||0)+' data points');
       refreshBrainStatus();
     }).catch(function(e){setText('brainMsg',e.message||'Ingest failed',true);});
+}
+
+function renderFinalDailySummary(payload, sourceLabel){
+  var statusEl=document.getElementById('dailySummaryStatus');
+  var detailsEl=document.getElementById('dailySummaryDetails');
+  if(!statusEl||!detailsEl) return;
+  if(!payload||!payload.summary){
+    statusEl.textContent='No final daily summary available.';
+    detailsEl.innerHTML='';
+    return;
+  }
+  var summary=payload.summary||{};
+  var pushedAt=payload.pushedAt||payload.generatedAt;
+  var pushedBy=payload.pushedBy||'system';
+  var pushedOrg=payload.pushedOrg||'';
+  var pushedAge=minsAgo(pushedAt);
+  var staleWarning=(pushedAge!=null&&pushedAge>=360)?('Summary is stale ('+pushedAge+'m old). Rebuild before relying on recommendations.') : '';
+  var topParlays=summary.topParlays||[];
+  var recos=summary.modelAdjustmentRecommendations||[];
+  var trackerRecos=summary.trackerCalibrationRecommendations||[];
+  statusEl.textContent=(summary.headline||'Final daily summary loaded') + (sourceLabel ? ' ['+sourceLabel+']' : '');
+  var html=''
+    +'<div><strong>Pushed:</strong> '+(pushedAt||'N/A')+' <span style="color:var(--mu)">by '+pushedBy+(pushedOrg?(' · '+pushedOrg):'')+'</span></div>'
+    +(staleWarning?'<div style="margin-top:8px;padding:8px 10px;border:1px solid rgba(255,152,0,.24);background:rgba(255,152,0,.08);border-radius:8px;color:#ffd59a">'+staleWarning+'</div>':'')
+    +'<div><strong>Games Processed:</strong> '+(summary.gamesProcessed||0)+' | <strong>Finals:</strong> '+(summary.finalGames||0)+'</div>'
+    +'<div><strong>Winner Accuracy:</strong> '+(summary.winnerAccuracy==null?'N/A':(Number(summary.winnerAccuracy*100).toFixed(1)+'%'))+' | <strong>Avg Total Error:</strong> '+(summary.avgTotalError==null?'N/A':summary.avgTotalError)+'</div>'
+    +'<div><strong>Avg F5 Total:</strong> '+(summary.avgF5Total==null?'N/A':summary.avgF5Total)+' | <strong>Avg MC Total:</strong> '+(summary.avgMonteCarloTotal==null?'N/A':summary.avgMonteCarloTotal)+'</div>';
+  html += '<div style="margin-top:10px"><strong>Top Parlay Candidates</strong></div>';
+  html += topParlays.length ? topParlays.map(function(p){
+    var teams=((p.teams||{}).away||'AWAY')+' @ '+((p.teams||{}).home||'HOME');
+    return '<div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,.05)">'+teams+' | P '+(p.combinedProb==null?'--':(Number(p.combinedProb*100).toFixed(1)+'%'))+' | EV '+(p.combinedEVPct==null?'--':(Number(p.combinedEVPct).toFixed(2)+'%'))+'<br><span style="color:var(--mu)">'+((p.legs||[]).join(' + ')||'No legs')+'</span></div>';
+  }).join('') : '<div style="color:var(--mu)">No parlay candidates stored.</div>';
+  html += '<div style="margin-top:10px"><strong>Model Adjustment Recommendations</strong></div>';
+  html += recos.length ? recos.map(function(r){
+    return '<div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,.05)"><span style="color:var(--c)">'+String(r.severity||'low').toUpperCase()+'</span> — '+(r.recommendation||'Hold current settings')+'</div>';
+  }).join('') : '<div style="color:var(--mu)">No model adjustment recommendations.</div>';
+  html += '<div style="margin-top:10px"><strong>Tracker Calibration Suggestions</strong></div>';
+  html += trackerRecos.length ? trackerRecos.slice(0,5).map(function(r){
+    return '<div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,.05)">'+(r.marketKey||'market')+': '+(r.action||'hold')+' to '+(r.suggested_multiplier==null?'--':r.suggested_multiplier)+'</div>';
+  }).join('') : '<div style="color:var(--mu)">No tracker calibration suggestions.</div>';
+  detailsEl.innerHTML=html;
+}
+
+function loadFinalDailySummary(forceLive){
+  setText('dailySummaryMsg',forceLive?'Building live summary...':'Loading summary...');
+  fetch('/api/model-actual/daily-summary'+(forceLive?'?sims=300':''))
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d||!d.success) throw new Error(d.error||'Summary load failed');
+      renderFinalDailySummary(d,'LIVE');
+      setText('dailySummaryMsg','Live summary loaded');
+      if(forceLive) showToast('Live daily summary rebuilt','ok');
+    }).catch(function(e){setText('dailySummaryMsg',e.message||'Summary load failed',true);});
+}
+
+function loadStoredFinalDailySummary(){
+  setText('dailySummaryMsg','Loading stored summary...');
+  fetch('/api/model-actual/daily-summary/stored')
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d||!d.success) throw new Error(d.error||'Stored summary unavailable');
+      renderFinalDailySummary(d.payload||{},'STORED');
+      loadDailySummaryBadge();
+      setText('dailySummaryMsg','Stored summary loaded');
+    }).catch(function(e){setText('dailySummaryMsg',e.message||'Stored summary unavailable',true);});
+}
+
+function pushFinalDailySummary(){
+  setText('dailySummaryMsg','Pushing final daily summary...');
+  fetch('/api/model-actual/daily-summary/push',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sims:300})})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d||!d.success) throw new Error(d.error||'Push failed');
+      loadStoredFinalDailySummary();
+      loadDailySummaryBadge();
+      setText('dailySummaryMsg','Final daily summary pushed');
+      showToast('Final daily summary pushed','ok');
+    }).catch(function(e){setText('dailySummaryMsg',e.message||'Push failed',true);});
+}
+
+function rebuildAndPushFinalDailySummary(){
+  setText('dailySummaryMsg','Rebuilding and pushing summary...');
+  fetch('/api/model-actual/daily-summary/push',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sims:300})})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d||!d.success) throw new Error(d.error||'Rebuild + push failed');
+      return fetch('/api/model-actual/daily-summary/stored');
+    })
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d||!d.success) throw new Error(d.error||'Stored summary unavailable after push');
+      renderFinalDailySummary(d.payload||{},'STORED');
+      loadDailySummaryBadge();
+      setText('dailySummaryMsg','Rebuilt and pushed final summary');
+      showToast('Rebuilt and pushed final summary','ok');
+    }).catch(function(e){
+      setText('dailySummaryMsg',e.message||'Rebuild + push failed',true);
+      showToast(e.message||'Rebuild + push failed','err');
+    });
 }
 
 let selectedGamesDate=etTodayStr();
@@ -1637,7 +1802,7 @@ document.getElementById('prevDateBtn').addEventListener('click',function(){shift
 document.getElementById('nextDateBtn').addEventListener('click',function(){shiftGamesDate(1)});
 document.getElementById('todayDateBtn').addEventListener('click',function(){selectedGamesDate=etTodayStr();syncDateUI();load(selectedGamesDate)});
 document.getElementById('tomorrowDateBtn').addEventListener('click',function(){selectedGamesDate=shiftDate(etTodayStr(),1);syncDateUI();load(selectedGamesDate)});
-syncDateUI();load();loadTeams();loadMemoryStatus();setInterval(function(){load(selectedGamesDate)},60000);setInterval(loadMemoryStatus,90000);
+syncDateUI();load();loadTeams();loadMemoryStatus();loadDailySummaryBadge();setInterval(function(){load(selectedGamesDate)},60000);setInterval(loadMemoryStatus,90000);setInterval(loadDailySummaryBadge,90000);
 </script>
 <!-- LIVE GAMEPLAY PATCH -->
 <style>

@@ -203,7 +203,12 @@
         renderHits((d.hitsBoard || {}).rows || []);
         renderMatchups((d.battingOrderMatchups || {}).rows || []);
         renderWeakspots((d.pitcherWeakspots || {}).cards || []);
-        status.textContent = 'Updated ' + (d.generatedAt || 'now') + ' | cache age ' + (d.cacheAgeSec || 0) + 's';
+        if(d.computing){
+          status.textContent = (d.message || 'Computing... auto-refresh in 20s') + ' | retrying in 5s';
+          setTimeout(function(){ loadData(false); }, 5000);
+        }else{
+          status.textContent = 'Updated ' + (d.generatedAt || 'now') + ' | cache age ' + (d.cacheAgeSec || 0) + 's';
+        }
       }catch(e){
         status.textContent = 'Error: ' + e.message;
       }finally{

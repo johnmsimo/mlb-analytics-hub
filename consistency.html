@@ -285,7 +285,12 @@
         setOptions('slotFilter', (data.slots || []).map(s => ({ value: String(s), label: `Slot ${s}` })), 'All Slots');
         buildTabs(data.markets || []);
         renderActiveMarket();
-        status.textContent = `Updated ${data.generatedAt || 'now'} | ${data.cached ? 'cached' : 'fresh'} payload for ${data.date || etToday()}`;
+        if(data.computing){
+          status.textContent = `${data.message || 'Computing... auto-refresh in 20s'} | retrying in 5s`;
+          setTimeout(function(){ loadData(false); }, 5000);
+        }else{
+          status.textContent = `Updated ${data.generatedAt || 'now'} | ${data.cached ? 'cached' : 'fresh'} payload for ${data.date || etToday()}`;
+        }
       }catch(err){
         document.getElementById('sheetBody').innerHTML = `<tr><td colspan="13" class="empty">${err.message}</td></tr>`;
         document.getElementById('sheetMeta').innerHTML = '';

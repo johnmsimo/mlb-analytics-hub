@@ -49,6 +49,7 @@ VALUE_HISTORY_STORE = os.path.join(DATA_DIR, 'value_history.json')
 MLB_MEMORY_STORE = os.path.join(DATA_DIR, 'mlb_memory_store.json')
 ADMIN_SETTINGS_STORE = os.path.join(DATA_DIR, 'admin_settings.json')
 SETTINGS_STORE = os.path.join(DATA_DIR, 'app_settings.json')
+MODEL_DAILY_SUMMARY_STORE = os.path.join(DATA_DIR, 'model_daily_summary.json')
 _MLB_MEMORY_KEEP_SNAPSHOTS = max(6, int(float(os.getenv('MLB_MEMORY_KEEP_SNAPSHOTS', '30') or 30)))
 _MLB_MEMORY_MAX_BYTES = max(500_000, int(float(os.getenv('MLB_MEMORY_MAX_BYTES', '12000000') or 12000000)))
 _PROPS_SCAN_CACHE = {}
@@ -2182,6 +2183,299 @@ def api_game_summary(game_pk):
     except Exception as ex:
         print("[api_game_summary]", traceback.format_exc())
         return jsonify({"success": False, "error": str(ex)}), 500
+
+
+def _as_json_payload(resp):
+    """Normalize Flask view return values (Response or (Response, status)) to a dict payload."""
+    try:
+        if isinstance(resp, tuple):
+            resp = resp[0]
+        if hasattr(resp, 'get_json'):
+            return resp.get_json(silent=True) or {}
+    except Exception:
+        pass
+    return {}
+
+
+def _safe_num(v, default=0.0):
+    try:
+        return float(v)
+    except Exception:
+        return float(default)
+
+
+def _build_model_actual_compare_payload(game_pk, sims=1200):
+    gdata = fetch_schedule_game(game_pk)
+    if not gdata:
+        return {"success": False, "error": "Game not found"}
+
+    parsed = parse_game(gdata) or {}
+    game_status = str(parsed.get('status') or gdata.get('status', {}).get('detailedState') or '')
+    is_final = game_status in ('Final', 'Game Over', 'Completed Early')
+    away_abbr = parsed.get('awayAbbr') or ((gdata.get('teams', {}).get('away', {}).get('team', {}) or {}).get('abbreviation', 'AWAY'))
+    home_abbr = parsed.get('homeAbbr') or ((gdata.get('teams', {}).get('home', {}).get('team', {}) or {}).get('abbreviation', 'HOME'))
+
+    proj = _as_json_payload(api_game_projection(game_pk))
+    f5 = _as_json_payload(api_f5_model(game_pk))
+    sim = _as_json_payload(api_simulate(game_pk))
+
+    away_actual = int(parsed.get('awayScore') or 0)
+    home_actual = int(parsed.get('homeScore') or 0)
+    actual_total = away_actual + home_actual
+
+    model_total = _safe_num(proj.get('total'))
+    total_error = abs(model_total - actual_total) if is_final else None
+
+    model_winner = proj.get('favorite') or 'EVEN'
+    actual_winner = 'PUSH' if away_actual == home_actual else (away_abbr if away_actual > home_actual else home_abbr)
+    winner_hit = 'NO EDGE' if model_winner == 'EVEN' else ('CORRECT' if model_winner == actual_winner else 'MISSED')
+
+    sim_team = (sim.get('team') or {}) if isinstance(sim, dict) else {}
+    sim_home_win = _safe_num(sim_team.get('home_win_pct'))
+    sim_away_win = _safe_num(sim_team.get('away_win_pct'))
+    sim_mean_total = _safe_num(sim_team.get('mean_total'))
+
+    top_sgp = (sim.get('top_sgp_combos') or [])[:3]
+    top_parlay = top_sgp[0] if top_sgp else None
+    parlay_rec = {
+        'label': 'No strong correlation parlay found',
+        'combinedProb': None,
+        'combinedEVPct': None,
+        'legs': [],
+    }
+    if top_parlay:
+        parlay_rec = {
+            'label': 'Top Monte Carlo SGP pair',
+            'combinedProb': top_parlay.get('combined_prob'),
+            'combinedEVPct': top_parlay.get('combined_ev_pct'),
+            'legs': top_parlay.get('legs') or [],
+        }
+
+    total_signal = 'NEUTRAL'
+    if model_total >= 9.5 and sim_mean_total >= 9.0:
+        total_signal = 'OVER LEAN'
+    elif model_total <= 7.6 and sim_mean_total <= 8.0:
+        total_signal = 'UNDER LEAN'
+
+    adjustment_reco = {
+        'severity': 'low',
+        'recommendation': 'Hold model weights',
+        'reason': 'Projection and simulation are aligned',
+    }
+    if is_final and total_error is not None:
+        if total_error >= 3.0:
+            adjustment_reco = {
+                'severity': 'high',
+                'recommendation': 'Reduce total confidence and lower high-volatility market multipliers by 0.02',
+                'reason': f'Large total miss ({total_error:.1f} runs)',
+            }
+        elif total_error >= 1.8:
+            adjustment_reco = {
+                'severity': 'medium',
+                'recommendation': 'Slightly de-risk totals and game-side exposure',
+                'reason': f'Moderate total miss ({total_error:.1f} runs)',
+            }
+
+    return {
+        'success': True,
+        'gamePk': game_pk,
+        'status': game_status,
+        'isFinal': is_final,
+        'teams': {'away': away_abbr, 'home': home_abbr},
+        'projection': {
+            'awayRuns': proj.get('awayRuns'),
+            'homeRuns': proj.get('homeRuns'),
+            'total': proj.get('total'),
+            'favorite': proj.get('favorite'),
+            'runEnv': proj.get('runEnv'),
+            'storylines': proj.get('matchup_insights') or [],
+        },
+        'actual': {
+            'awayRuns': away_actual,
+            'homeRuns': home_actual,
+            'total': actual_total,
+            'winner': actual_winner,
+        },
+        'comparison': {
+            'winnerCall': winner_hit,
+            'modelWinner': model_winner,
+            'actualWinner': actual_winner,
+            'totalError': round(total_error, 2) if total_error is not None else None,
+            'projectionBias': round((model_total - actual_total), 2) if is_final else None,
+        },
+        'f5Model': {
+            'awayF5': f5.get('awayF5'),
+            'homeF5': f5.get('homeF5'),
+            'totalF5': f5.get('totalF5'),
+            'signal': f5.get('signal'),
+            'favorite': f5.get('f5Favorite'),
+        },
+        'monteCarlo': {
+            'sims': (sim.get('meta') or {}).get('sims'),
+            'meanTotal': sim_team.get('mean_total'),
+            'homeWinPct': sim_team.get('home_win_pct'),
+            'awayWinPct': sim_team.get('away_win_pct'),
+            'topCorrelatedCombos': top_sgp,
+        },
+        'recommendations': {
+            'parlay': parlay_rec,
+            'totalSignal': total_signal,
+            'moneylineLean': home_abbr if sim_home_win >= sim_away_win else away_abbr,
+            'adjustment': adjustment_reco,
+        },
+        'snapshotAt': datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _build_model_daily_summary_payload(date_str=None, sims=500):
+    date_str = date_str or datetime.now(ET).strftime('%Y-%m-%d')
+    schedule = fetch_schedule(date_str) or []
+    games = []
+    for g in schedule[:20]:
+        gpk = g.get('gamePk')
+        if not gpk:
+            continue
+        try:
+            games.append(_build_model_actual_compare_payload(int(gpk), sims=sims))
+        except Exception as ex:
+            games.append({'success': False, 'gamePk': gpk, 'error': str(ex)})
+
+    ok_games = [g for g in games if g.get('success')]
+    finals = [g for g in ok_games if g.get('isFinal')]
+    final_count = len(finals)
+    winner_correct = sum(1 for g in finals if (g.get('comparison') or {}).get('winnerCall') == 'CORRECT')
+    winner_accuracy = round(winner_correct / max(1, final_count), 4) if final_count else None
+    total_errors = [float((g.get('comparison') or {}).get('totalError')) for g in finals if (g.get('comparison') or {}).get('totalError') is not None]
+    avg_total_error = round(sum(total_errors) / len(total_errors), 3) if total_errors else None
+
+    avg_f5_total = round(sum(_safe_num((g.get('f5Model') or {}).get('totalF5')) for g in ok_games) / max(1, len(ok_games)), 3) if ok_games else 0
+    avg_sim_total = round(sum(_safe_num((g.get('monteCarlo') or {}).get('meanTotal')) for g in ok_games) / max(1, len(ok_games)), 3) if ok_games else 0
+
+    top_parlays = []
+    for g in ok_games:
+        p = ((g.get('recommendations') or {}).get('parlay') or {})
+        if p.get('combinedProb') is not None:
+            top_parlays.append({
+                'gamePk': g.get('gamePk'),
+                'teams': g.get('teams'),
+                'combinedProb': p.get('combinedProb'),
+                'combinedEVPct': p.get('combinedEVPct'),
+                'legs': p.get('legs') or [],
+            })
+    top_parlays.sort(key=lambda x: float(x.get('combinedProb') or 0), reverse=True)
+    top_parlays = top_parlays[:8]
+
+    current_adj = _get_adjustments()
+    calibration_markets = _market_calibration(_collect_window_entries(date_str, 14), current_adj)
+    calibration_actions = [m for m in calibration_markets if m.get('action') != 'hold'][:8]
+
+    model_adjustment_recommendations = []
+    if avg_total_error is not None and avg_total_error >= 2.0:
+        model_adjustment_recommendations.append({
+            'type': 'totals_calibration',
+            'severity': 'high' if avg_total_error >= 2.8 else 'medium',
+            'recommendation': 'Tighten total projections and reduce aggregate totals exposure',
+            'metric': {'avgTotalError': avg_total_error},
+        })
+    if winner_accuracy is not None and winner_accuracy < 0.5:
+        model_adjustment_recommendations.append({
+            'type': 'winner_calibration',
+            'severity': 'medium',
+            'recommendation': 'Lower moneyline confidence and increase threshold for game-side recommendations',
+            'metric': {'winnerAccuracy': winner_accuracy},
+        })
+    if not model_adjustment_recommendations:
+        model_adjustment_recommendations.append({
+            'type': 'stability',
+            'severity': 'low',
+            'recommendation': 'No urgent model shifts; keep current multipliers and monitor',
+            'metric': {'winnerAccuracy': winner_accuracy, 'avgTotalError': avg_total_error},
+        })
+
+    final_summary = {
+        'headline': f"Slate summary for {date_str}: {len(ok_games)} games processed",
+        'gamesProcessed': len(ok_games),
+        'finalGames': final_count,
+        'winnerAccuracy': winner_accuracy,
+        'avgTotalError': avg_total_error,
+        'avgF5Total': avg_f5_total,
+        'avgMonteCarloTotal': avg_sim_total,
+        'topParlays': top_parlays,
+        'modelAdjustmentRecommendations': model_adjustment_recommendations,
+        'trackerCalibrationRecommendations': calibration_actions,
+    }
+
+    return {
+        'success': True,
+        'date': date_str,
+        'generatedAt': datetime.now(timezone.utc).isoformat(),
+        'games': ok_games,
+        'summary': final_summary,
+    }
+
+
+@app.route('/api/model-actual/compare/<int:game_pk>')
+def api_model_actual_compare(game_pk):
+    try:
+        sims = int(request.args.get('sims', 1200) or 1200)
+        sims = max(500, min(2500, sims))
+        payload = _build_model_actual_compare_payload(game_pk, sims=sims)
+        code = 200 if payload.get('success') else 404
+        return jsonify(payload), code
+    except Exception as ex:
+        print('[api_model_actual_compare]', traceback.format_exc())
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
+@app.route('/api/model-actual/daily-summary')
+def api_model_actual_daily_summary():
+    try:
+        date_str = request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
+        sims = int(request.args.get('sims', 500) or 500)
+        sims = max(300, min(1000, sims))
+        return jsonify(_build_model_daily_summary_payload(date_str=date_str, sims=sims))
+    except Exception as ex:
+        print('[api_model_actual_daily_summary]', traceback.format_exc())
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
+@app.route('/api/model-actual/daily-summary/push', methods=['POST'])
+def api_model_actual_daily_summary_push():
+    try:
+        payload = request.get_json(silent=True) or {}
+        date_str = payload.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
+        sims = int(payload.get('sims', 500) or 500)
+        summary_payload = _build_model_daily_summary_payload(date_str=date_str, sims=sims)
+        admin = _get_admin_settings()
+        summary_payload['pushedAt'] = datetime.now(timezone.utc).isoformat()
+        summary_payload['pushedBy'] = admin.get('adminName') or 'system'
+        summary_payload['pushedOrg'] = admin.get('orgName') or 'MLB Analytics Hub'
+        store = _load_json(MODEL_DAILY_SUMMARY_STORE, {})
+        store[date_str] = summary_payload
+        _save_json(MODEL_DAILY_SUMMARY_STORE, store)
+        _append_calibration_history('daily_summary_push', _get_adjustments(), {
+            'date': date_str,
+            'note': 'Pushed model adjustment recommendations into final daily summary',
+            'applied': summary_payload.get('summary', {}).get('modelAdjustmentRecommendations', []),
+        })
+        return jsonify({'success': True, 'date': date_str, 'summary': summary_payload.get('summary', {})})
+    except Exception as ex:
+        print('[api_model_actual_daily_summary_push]', traceback.format_exc())
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
+@app.route('/api/model-actual/daily-summary/stored')
+def api_model_actual_daily_summary_stored():
+    try:
+        date_str = request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
+        store = _load_json(MODEL_DAILY_SUMMARY_STORE, {})
+        payload = store.get(date_str)
+        if not isinstance(payload, dict):
+            return jsonify({'success': False, 'error': 'No stored daily summary for date', 'date': date_str}), 404
+        return jsonify({'success': True, 'date': date_str, 'payload': payload})
+    except Exception as ex:
+        print('[api_model_actual_daily_summary_stored]', traceback.format_exc())
+        return jsonify({'success': False, 'error': str(ex)}), 500
 
 @app.route("/api/game/<int:game_pk>")
 def api_game_detail(game_pk):

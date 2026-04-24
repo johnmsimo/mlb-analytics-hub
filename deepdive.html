@@ -1037,17 +1037,89 @@ loadGame();loadPitchers();loadLineups();
 
 // ── Phase 3 ───────────────────────────────────────────────────────────────────
 var GP_DATA = null;
+var MODEL_ACTUAL_DATA = null;
 var SPLITS_CACHE = {};
 
 function loadGameProjection() {
   fetch('/api/game-projection/' + GPK).then(function(r){return r.json();}).then(function(d){
     GP_DATA = d;
     renderGameProjection(d);
+    loadModelActualCompare();
   }).catch(function(e){
     var el = document.getElementById('gpContent');
     if(el) el.innerHTML = '<p class="na">Game projection unavailable: '+e.message+'</p>';
     var sEl = document.getElementById('storylineContent');
     if(sEl) sEl.innerHTML = '<p class="na">Storylines unavailable: '+e.message+'</p>';
+  });
+}
+
+function loadModelActualCompare(){
+  fetch('/api/model-actual/compare/' + GPK)
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      MODEL_ACTUAL_DATA = d;
+      renderModelActualCompare(d);
+    })
+    .catch(function(){
+      renderModelActualCompare({success:false,error:'Comprehensive compare unavailable'});
+    });
+}
+
+function renderModelActualCompare(d){
+  var el = document.getElementById('modelActualRich');
+  if(!el) return;
+  if(!d || !d.success){
+    el.innerHTML = '<div class="proj-note" style="margin-top:8px">Comprehensive compare unavailable right now.</div>';
+    return;
+  }
+  var f5 = d.f5Model || {};
+  var mc = d.monteCarlo || {};
+  var rec = d.recommendations || {};
+  var parlay = rec.parlay || {};
+  var cmp = d.comparison || {};
+  var totalErr = cmp.totalError == null ? 'N/A' : Number(cmp.totalError).toFixed(2);
+  var winnerCall = cmp.winnerCall || 'N/A';
+  var winnerCol = winnerCall === 'CORRECT' ? 'var(--g)' : (winnerCall === 'MISSED' ? 'var(--m)' : 'var(--mu)');
+  var legs = (parlay.legs || []).slice(0,2);
+  var legsTxt = legs.length ? legs.join(' + ') : 'No strong pair identified';
+  var adj = rec.adjustment || {};
+  el.innerHTML = ''
+    + '<div class="proj-note" style="margin-top:10px;padding:12px;border:1px solid rgba(255,152,0,.22);background:rgba(255,152,0,.06)">'
+    + '<div style="font-family:Orbitron,monospace;font-size:.68rem;letter-spacing:1.5px;color:#ffb74d;margin-bottom:8px">FULL MODEL SUMMARY (PROJ + F5 + MONTE CARLO + PARLAY)</div>'
+    + '<div class="gp-grid">'
+    + '<div class="ps"><div class="pv" style="font-size:.84rem">'+(f5.totalF5==null?'--':f5.totalF5)+'</div><div class="plb">F5 TOTAL</div></div>'
+    + '<div class="ps"><div class="pv" style="font-size:.84rem">'+(mc.meanTotal==null?'--':mc.meanTotal)+'</div><div class="plb">MC MEAN TOTAL</div></div>'
+    + '<div class="ps"><div class="pv" style="font-size:.84rem;color:'+winnerCol+'">'+winnerCall+'</div><div class="plb">WINNER CALL</div></div>'
+    + '<div class="ps"><div class="pv" style="font-size:.84rem">'+totalErr+'</div><div class="plb">TOTAL ERROR</div></div>'
+    + '</div>'
+    + '<div class="gp-grid" style="margin-top:10px">'
+    + '<div class="ps"><div class="pv" style="font-size:.75rem">'+(rec.totalSignal||'NEUTRAL')+'</div><div class="plb">TOTAL SIGNAL</div></div>'
+    + '<div class="ps"><div class="pv" style="font-size:.75rem">'+(rec.moneylineLean||'EVEN')+'</div><div class="plb">MONEYLINE LEAN</div></div>'
+    + '<div class="ps"><div class="pv" style="font-size:.75rem">'+(parlay.combinedProb==null?'--':pct(parlay.combinedProb))+'</div><div class="plb">PARLAY PROB</div></div>'
+    + '<div class="ps"><div class="pv" style="font-size:.75rem">'+(parlay.combinedEVPct==null?'--':(Number(parlay.combinedEVPct).toFixed(2)+'%'))+'</div><div class="plb">PARLAY EV</div></div>'
+    + '</div>'
+    + '<div class="proj-note" style="margin-top:8px">Top SGP Pair: '+legsTxt+'</div>'
+    + '<div class="proj-note" style="margin-top:8px">Adjustment Recommendation ('+(adj.severity||'low').toUpperCase()+'): '+(adj.recommendation||'Hold model weights')+'<br><span style="color:var(--mu)">'+(adj.reason||'')+'</span></div>'
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">'
+    + '<button class="btn" onclick="pushDailySummaryRecommendations()" style="padding:7px 12px;font-size:.62rem">PUSH TO FINAL DAILY SUMMARY</button>'
+    + '<span id="dailySummaryPushMsg" style="font-size:.62rem;color:var(--mu)"></span>'
+    + '</div>'
+    + '</div>';
+}
+
+function pushDailySummaryRecommendations(){
+  var el = document.getElementById('dailySummaryPushMsg');
+  if(el) el.textContent = 'Pushing slate summary...';
+  fetch('/api/model-actual/daily-summary/push', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({date: etToday()})
+  }).then(function(r){ return r.json(); }).then(function(d){
+    if(!d || !d.success) throw new Error((d && d.error) || 'Push failed');
+    var s = d.summary || {};
+    if(el) el.textContent = 'Pushed: ' + (s.gamesProcessed || 0) + ' games, ' + ((s.modelAdjustmentRecommendations || []).length) + ' recommendations.';
+  }).catch(function(e){
+    if(el) el.textContent = 'Push failed: ' + (e.message || 'Unknown error');
   });
 }
 
@@ -1098,6 +1170,7 @@ function renderGameProjection(d) {
       + '<div class="ps"><div class="pv" style="font-size:.84rem;color:'+winnerCol+'">'+actualWinner+'</div><div class="plb">ACTUAL WINNER</div></div>'
       + '<div class="ps"><div class="pv" style="font-size:.84rem">'+modelWinner+'</div><div class="plb">MODEL WINNER</div></div>'
       + '</div>'
+        + '<div id="modelActualRich"></div>'
       + '</div>';
   }
 
@@ -1549,6 +1622,10 @@ var SIM_TOP_SGP = [];
 
 function _normName(s){ return (s || '').toString().trim().toLowerCase(); }
 function _normMarket(m){ return (m || '').toString().trim().toLowerCase(); }
+function etToday(){
+  var d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
 function _simCorrKey(playerA, marketA, playerB, marketB){
   var left = _normName(playerA) + '|' + _normMarket(marketA);
   var right = _normName(playerB) + '|' + _normMarket(marketB);
