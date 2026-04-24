@@ -58,6 +58,8 @@ _props_scan_cache_lock = threading.Lock()
 _props_scan_refreshing = False
 _consistency_cache_lock = threading.Lock()
 _consistency_refreshing = False
+_daily_summary_push_lock = threading.Lock()
+_daily_summary_push_jobs = {}
 _mlb_memory_lock = threading.Lock()
 _mlb_memory_collecting = False
 _mlb_memory_last_collect = None
@@ -2210,7 +2212,7 @@ def _safe_num(v, default=0.0):
         return float(default)
 
 
-def _build_model_actual_compare_payload(game_pk, sims=1200):
+def _build_model_actual_compare_payload(game_pk, sims=1200, include_sim=True):
     gdata = fetch_schedule_game(game_pk)
     if not gdata:
         return {"success": False, "error": "Game not found"}
@@ -2223,7 +2225,7 @@ def _build_model_actual_compare_payload(game_pk, sims=1200):
 
     proj = _as_json_payload(api_game_projection(game_pk))
     f5 = _as_json_payload(api_f5_model(game_pk))
-    sim = _as_json_payload(api_simulate(game_pk))
+    sim = _as_json_payload(api_simulate(game_pk)) if include_sim else {}
 
     away_actual = int(parsed.get('awayScore') or 0)
     home_actual = int(parsed.get('homeScore') or 0)
@@ -2237,11 +2239,18 @@ def _build_model_actual_compare_payload(game_pk, sims=1200):
     winner_hit = 'NO EDGE' if model_winner == 'EVEN' else ('CORRECT' if model_winner == actual_winner else 'MISSED')
 
     sim_team = (sim.get('team') or {}) if isinstance(sim, dict) else {}
+    if not sim_team:
+        # Lightweight fallback when skipping expensive simulation calls.
+        sim_team = {
+            'home_win_pct': 0.5,
+            'away_win_pct': 0.5,
+            'mean_total': model_total,
+        }
     sim_home_win = _safe_num(sim_team.get('home_win_pct'))
     sim_away_win = _safe_num(sim_team.get('away_win_pct'))
     sim_mean_total = _safe_num(sim_team.get('mean_total'))
 
-    top_sgp = (sim.get('top_sgp_combos') or [])[:3]
+    top_sgp = (sim.get('top_sgp_combos') or [])[:3] if include_sim else []
     top_parlay = top_sgp[0] if top_sgp else None
     parlay_rec = {
         'label': 'No strong correlation parlay found',
@@ -2260,6 +2269,10 @@ def _build_model_actual_compare_payload(game_pk, sims=1200):
     total_signal = 'NEUTRAL'
     if model_total >= 9.5 and sim_mean_total >= 9.0:
         total_signal = 'OVER LEAN'
+        moneyline_lean = home_abbr if sim_home_win >= sim_away_win else away_abbr
+        if proj.get('favorite') in (home_abbr, away_abbr):
+            moneyline_lean = proj.get('favorite')
+
     elif model_total <= 7.6 and sim_mean_total <= 8.0:
         total_signal = 'UNDER LEAN'
 
@@ -2317,7 +2330,7 @@ def _build_model_actual_compare_payload(game_pk, sims=1200):
             'favorite': f5.get('f5Favorite'),
         },
         'monteCarlo': {
-            'sims': (sim.get('meta') or {}).get('sims'),
+            'sims': (sim.get('meta') or {}).get('sims') if include_sim else None,
             'meanTotal': sim_team.get('mean_total'),
             'homeWinPct': sim_team.get('home_win_pct'),
             'awayWinPct': sim_team.get('away_win_pct'),
@@ -2326,23 +2339,23 @@ def _build_model_actual_compare_payload(game_pk, sims=1200):
         'recommendations': {
             'parlay': parlay_rec,
             'totalSignal': total_signal,
-            'moneylineLean': home_abbr if sim_home_win >= sim_away_win else away_abbr,
+            'moneylineLean': moneyline_lean,
             'adjustment': adjustment_reco,
         },
         'snapshotAt': datetime.now(timezone.utc).isoformat(),
     }
 
 
-def _build_model_daily_summary_payload(date_str=None, sims=500):
+def _build_model_daily_summary_payload(date_str=None, sims=500, include_sim=True, max_games=20):
     date_str = date_str or datetime.now(ET).strftime('%Y-%m-%d')
     schedule = fetch_schedule(date_str) or []
     games = []
-    for g in schedule[:20]:
+    for g in schedule[:max(1, int(max_games or 20))]:
         gpk = g.get('gamePk')
         if not gpk:
             continue
         try:
-            games.append(_build_model_actual_compare_payload(int(gpk), sims=sims))
+            games.append(_build_model_actual_compare_payload(int(gpk), sims=sims, include_sim=include_sim))
         except Exception as ex:
             games.append({'success': False, 'gamePk': gpk, 'error': str(ex)})
 
@@ -2415,9 +2428,61 @@ def _build_model_daily_summary_payload(date_str=None, sims=500):
         'success': True,
         'date': date_str,
         'generatedAt': datetime.now(timezone.utc).isoformat(),
+        'includeSimulation': bool(include_sim),
+        'maxGamesProcessed': max(1, int(max_games or 20)),
         'games': ok_games,
         'summary': final_summary,
     }
+
+
+def _set_daily_summary_push_job(date_str, state, message='', error=''):
+    with _daily_summary_push_lock:
+        prev = _daily_summary_push_jobs.get(date_str) or {}
+        payload = {
+            'date': date_str,
+            'state': state,
+            'message': message or prev.get('message', ''),
+            'error': error or '',
+            'startedAt': prev.get('startedAt') or datetime.now(timezone.utc).isoformat(),
+            'updatedAt': datetime.now(timezone.utc).isoformat(),
+        }
+        if state in ('completed', 'failed'):
+            payload['completedAt'] = datetime.now(timezone.utc).isoformat()
+        _daily_summary_push_jobs[date_str] = payload
+        return payload
+
+
+def _run_daily_summary_push_job(date_str, sims, include_sim, max_games):
+    _set_daily_summary_push_job(date_str, 'running', 'Building final daily summary...')
+    try:
+        summary_payload = _build_model_daily_summary_payload(
+            date_str=date_str,
+            sims=sims,
+            include_sim=include_sim,
+            max_games=max_games,
+        )
+        admin = _get_admin_settings()
+        summary_payload['pushedAt'] = datetime.now(timezone.utc).isoformat()
+        summary_payload['pushedBy'] = admin.get('adminName') or 'system'
+        summary_payload['pushedOrg'] = admin.get('orgName') or 'MLB Analytics Hub'
+
+        store = _load_json(MODEL_DAILY_SUMMARY_STORE, {})
+        store[date_str] = summary_payload
+        _save_json(MODEL_DAILY_SUMMARY_STORE, store)
+
+        _append_calibration_history('daily_summary_push', _get_adjustments(), {
+            'date': date_str,
+            'note': 'Pushed model adjustment recommendations into final daily summary',
+            'applied': summary_payload.get('summary', {}).get('modelAdjustmentRecommendations', []),
+        })
+        _set_daily_summary_push_job(
+            date_str,
+            'completed',
+            f"Push complete: {(summary_payload.get('summary') or {}).get('gamesProcessed', 0)} games processed.",
+        )
+    except Exception as ex:
+        print('[daily_summary_push_job]', traceback.format_exc())
+        _set_daily_summary_push_job(date_str, 'failed', 'Push failed.', str(ex))
 
 
 @app.route('/api/model-actual/compare/<int:game_pk>')
@@ -2439,7 +2504,10 @@ def api_model_actual_daily_summary():
         date_str = request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
         sims = int(request.args.get('sims', 500) or 500)
         sims = max(300, min(1000, sims))
-        return jsonify(_build_model_daily_summary_payload(date_str=date_str, sims=sims))
+        include_sim = str(request.args.get('includeSim', '0')).strip().lower() in ('1', 'true', 'yes')
+        max_games = int(request.args.get('maxGames', 20) or 20)
+        max_games = max(5, min(20, max_games))
+        return jsonify(_build_model_daily_summary_payload(date_str=date_str, sims=sims, include_sim=include_sim, max_games=max_games))
     except Exception as ex:
         print('[api_model_actual_daily_summary]', traceback.format_exc())
         return jsonify({'success': False, 'error': str(ex)}), 500
@@ -2450,23 +2518,47 @@ def api_model_actual_daily_summary_push():
     try:
         payload = request.get_json(silent=True) or {}
         date_str = payload.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
-        sims = int(payload.get('sims', 500) or 500)
-        summary_payload = _build_model_daily_summary_payload(date_str=date_str, sims=sims)
-        admin = _get_admin_settings()
-        summary_payload['pushedAt'] = datetime.now(timezone.utc).isoformat()
-        summary_payload['pushedBy'] = admin.get('adminName') or 'system'
-        summary_payload['pushedOrg'] = admin.get('orgName') or 'MLB Analytics Hub'
-        store = _load_json(MODEL_DAILY_SUMMARY_STORE, {})
-        store[date_str] = summary_payload
-        _save_json(MODEL_DAILY_SUMMARY_STORE, store)
-        _append_calibration_history('daily_summary_push', _get_adjustments(), {
+        sims = int(payload.get('sims', 800) or 800)
+        sims = max(300, min(1500, sims))
+        include_sim = str(payload.get('includeSim', '1')).strip().lower() in ('1', 'true', 'yes')
+        max_games = int(payload.get('maxGames', 20) or 20)
+        max_games = max(5, min(20, max_games))
+
+        with _daily_summary_push_lock:
+            running = (_daily_summary_push_jobs.get(date_str) or {}).get('state') == 'running'
+            running_status = _daily_summary_push_jobs.get(date_str)
+        if running:
+            return jsonify({'success': True, 'queued': True, 'alreadyRunning': True, 'date': date_str, 'status': running_status})
+
+        _set_daily_summary_push_job(date_str, 'queued', 'Push queued...')
+        threading.Thread(
+            target=_run_daily_summary_push_job,
+            args=(date_str, sims, include_sim, max_games),
+            daemon=True,
+        ).start()
+        return jsonify({
+            'success': True,
+            'queued': True,
             'date': date_str,
-            'note': 'Pushed model adjustment recommendations into final daily summary',
-            'applied': summary_payload.get('summary', {}).get('modelAdjustmentRecommendations', []),
+            'status': _daily_summary_push_jobs.get(date_str),
+            'config': {'sims': sims, 'includeSim': include_sim, 'maxGames': max_games},
         })
-        return jsonify({'success': True, 'date': date_str, 'summary': summary_payload.get('summary', {})})
     except Exception as ex:
         print('[api_model_actual_daily_summary_push]', traceback.format_exc())
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
+@app.route('/api/model-actual/daily-summary/push-status')
+def api_model_actual_daily_summary_push_status():
+    try:
+        date_str = request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
+        with _daily_summary_push_lock:
+            status = _daily_summary_push_jobs.get(date_str)
+        if not status:
+            return jsonify({'success': True, 'date': date_str, 'state': 'idle', 'status': None})
+        return jsonify({'success': True, 'date': date_str, 'state': status.get('state') or 'idle', 'status': status})
+    except Exception as ex:
+        print('[api_model_actual_daily_summary_push_status]', traceback.format_exc())
         return jsonify({'success': False, 'error': str(ex)}), 500
 
 

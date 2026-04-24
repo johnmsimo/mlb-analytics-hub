@@ -1136,11 +1136,43 @@ function pushDailySummaryRecommendations(){
   apiFetch('/api/model-actual/daily-summary/push', {
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({date: etToday()})
+    body:JSON.stringify({date: etToday(), sims: 800, includeSim: true, maxGames: 20})
   }).then(function(r){ return r.json(); }).then(function(d){
     if(!d || !d.success) throw new Error((d && d.error) || 'Push failed');
-    var s = d.summary || {};
-    if(el) el.textContent = 'Pushed: ' + (s.gamesProcessed || 0) + ' games, ' + ((s.modelAdjustmentRecommendations || []).length) + ' recommendations.';
+    var dateStr = d.date || etToday();
+    if(el) el.textContent = 'Push queued. Building full summary...';
+    (function pollStatus(attempt){
+      attempt = attempt || 0;
+      if(attempt > 80){
+        if(el) el.textContent = 'Push still running. Check stored summary shortly.';
+        return;
+      }
+      apiFetch('/api/model-actual/daily-summary/push-status?date='+encodeURIComponent(dateStr))
+        .then(function(r){ return r.json(); })
+        .then(function(st){
+          if(!st || !st.success){
+            setTimeout(function(){ pollStatus(attempt+1); }, 2500);
+            return;
+          }
+          var state = (st.status||{}).state || st.state || 'idle';
+          if(state === 'completed'){
+            apiFetch('/api/model-actual/daily-summary/stored?date='+encodeURIComponent(dateStr))
+              .then(function(r){ return r.json(); })
+              .then(function(sd){
+                var s = ((sd||{}).payload||{}).summary || {};
+                if(el) el.textContent = 'Pushed: ' + (s.gamesProcessed || 0) + ' games, ' + ((s.modelAdjustmentRecommendations || []).length) + ' recommendations.';
+              })
+              .catch(function(){ if(el) el.textContent = 'Push complete. Stored summary is ready.'; });
+            return;
+          }
+          if(state === 'failed'){
+            if(el) el.textContent = 'Push failed: ' + (((st.status||{}).error) || 'Unknown error');
+            return;
+          }
+          setTimeout(function(){ pollStatus(attempt+1); }, 2500);
+        })
+        .catch(function(){ setTimeout(function(){ pollStatus(attempt+1); }, 2500); });
+    })(0);
   }).catch(function(e){
     if(el) el.textContent = 'Push failed: ' + (e.message || 'Unknown error');
   });

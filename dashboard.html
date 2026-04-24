@@ -607,6 +607,7 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
             <button class="tabbtn" onclick="loadStoredFinalDailySummary()">LOAD STORED</button>
             <span id="dailySummaryMsg" class="settings-msg"></span>
           </div>
+          <div id="dailySummaryPushState" style="margin-top:8px;font-size:.62rem;color:var(--mu);letter-spacing:.5px">Push state: checking…</div>
         </div>
       </div>
     </div>
@@ -1631,6 +1632,10 @@ function initSettingsView(){
   loadUploadedFiles();
   refreshBrainStatus();
   loadStoredFinalDailySummary();
+  refreshDailySummaryPushState();
+  if(!__dailySummaryPushStateTimer){
+    __dailySummaryPushStateTimer=setInterval(refreshDailySummaryPushState,5000);
+  }
 }
 
 function refreshBrainStatus(){
@@ -1730,34 +1735,94 @@ function loadStoredFinalDailySummary(){
     }).catch(function(e){setText('dailySummaryMsg',e.message||'Stored summary unavailable',true);});
 }
 
+function pollDailySummaryPushStatus(dateStr, onDone, onFail, attempt){
+  attempt = attempt || 0;
+  if(attempt > 80){
+    if(onFail) onFail(new Error('Push is taking longer than expected. Please retry load stored.'));
+    return;
+  }
+  apiFetch('/api/model-actual/daily-summary/push-status?date='+encodeURIComponent(dateStr||etTodayStr()))
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d||!d.success) throw new Error(d&&d.error||'Unable to check push status');
+      var st=(d.status||{}).state||d.state||'idle';
+      if(st==='completed'){ if(onDone) onDone(d); return; }
+      if(st==='failed'){ if(onFail) onFail(new Error((d.status&&d.status.error)||'Push failed')); return; }
+      setTimeout(function(){ pollDailySummaryPushStatus(dateStr,onDone,onFail,attempt+1); }, 2500);
+    })
+    .catch(function(e){
+      setTimeout(function(){ pollDailySummaryPushStatus(dateStr,onDone,onFail,attempt+1); }, 2500);
+    });
+}
+
+var __dailySummaryPushStateTimer = null;
+function refreshDailySummaryPushState(){
+  var el=document.getElementById('dailySummaryPushState');
+  if(!el) return;
+  var dateStr=etTodayStr();
+  apiFetch('/api/model-actual/daily-summary/push-status?date='+encodeURIComponent(dateStr))
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d||!d.success){
+        el.textContent='Push state: unavailable';
+        el.style.color='var(--o)';
+        return;
+      }
+      var state=((d.state||((d.status||{}).state)||'idle')+'').toLowerCase();
+      var msg=((d.status||{}).message)||'';
+      var err=((d.status||{}).error)||'';
+      if(state==='running'||state==='queued') el.style.color='var(--c)';
+      else if(state==='completed') el.style.color='var(--g)';
+      else if(state==='failed') el.style.color='#ef5350';
+      else el.style.color='var(--mu)';
+      var tail = state==='failed' ? (err?(' · '+err):'') : (msg?(' · '+msg):'');
+      el.textContent='Push state: '+state.toUpperCase()+tail;
+    })
+    .catch(function(){
+      el.textContent='Push state: unavailable';
+      el.style.color='var(--o)';
+    });
+}
+
 function pushFinalDailySummary(){
   setText('dailySummaryMsg','Pushing final daily summary...');
-  apiFetch('/api/model-actual/daily-summary/push',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sims:300})})
+  apiFetch('/api/model-actual/daily-summary/push',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sims:800,includeSim:true,maxGames:20})})
     .then(function(r){return r.json();})
     .then(function(d){
       if(!d||!d.success) throw new Error(d.error||'Push failed');
-      loadStoredFinalDailySummary();
-      loadDailySummaryBadge();
-      setText('dailySummaryMsg','Final daily summary pushed');
-      showToast('Final daily summary pushed','ok');
+      var dateStr=d.date||etTodayStr();
+      setText('dailySummaryMsg','Push queued. Building full summary...');
+      showToast('Daily summary push queued','warn');
+      pollDailySummaryPushStatus(dateStr,function(){
+        loadStoredFinalDailySummary();
+        loadDailySummaryBadge();
+        setText('dailySummaryMsg','Final daily summary pushed');
+        showToast('Final daily summary pushed','ok');
+      },function(err){
+        setText('dailySummaryMsg',err.message||'Push failed',true);
+        showToast(err.message||'Push failed','err');
+      });
     }).catch(function(e){setText('dailySummaryMsg',e.message||'Push failed',true);});
 }
 
 function rebuildAndPushFinalDailySummary(){
   setText('dailySummaryMsg','Rebuilding and pushing summary...');
-  apiFetch('/api/model-actual/daily-summary/push',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sims:300})})
+  apiFetch('/api/model-actual/daily-summary/push',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sims:800,includeSim:true,maxGames:20})})
     .then(function(r){return r.json();})
     .then(function(d){
       if(!d||!d.success) throw new Error(d.error||'Rebuild + push failed');
-      return apiFetch('/api/model-actual/daily-summary/stored');
-    })
-    .then(function(r){return r.json();})
-    .then(function(d){
-      if(!d||!d.success) throw new Error(d.error||'Stored summary unavailable after push');
-      renderFinalDailySummary(d.payload||{},'STORED');
-      loadDailySummaryBadge();
-      setText('dailySummaryMsg','Rebuilt and pushed final summary');
-      showToast('Rebuilt and pushed final summary','ok');
+      var dateStr=d.date||etTodayStr();
+      setText('dailySummaryMsg','Push queued. Building full summary...');
+      showToast('Rebuild + push queued','warn');
+      pollDailySummaryPushStatus(dateStr,function(){
+        loadStoredFinalDailySummary();
+        loadDailySummaryBadge();
+        setText('dailySummaryMsg','Rebuilt and pushed final summary');
+        showToast('Rebuilt and pushed final summary','ok');
+      },function(err){
+        setText('dailySummaryMsg',err.message||'Rebuild + push failed',true);
+        showToast(err.message||'Rebuild + push failed','err');
+      });
     }).catch(function(e){
       setText('dailySummaryMsg',e.message||'Rebuild + push failed',true);
       showToast(e.message||'Rebuild + push failed','err');
