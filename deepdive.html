@@ -2210,7 +2210,7 @@ function loadSimulation(){
       }
     };
   }
-  fetch('/api/simulate/' + GPK)
+  fetch('/api/simulate/' + GPK + '?sims=800')
     .then(function(r){
       return r.json().catch(function(){ return {}; }).then(function(body){
         if(!r.ok){

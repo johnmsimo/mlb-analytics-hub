@@ -5650,6 +5650,12 @@ def _simulation_fallback_payload(game_obj, game_pk, sims=0, warning=''):
 @app.route('/api/simulate/<int:game_pk>')
 def api_simulate(game_pk):
     try:
+        try:
+            requested_sims = int(request.args.get('sims', 800) or 800)
+        except Exception:
+            requested_sims = 800
+        sims = max(200, min(1200, requested_sims))
+
         # Prefer direct game lookup so deep-dive works for non-today game IDs too.
         g = fetch_schedule_game(game_pk)
         if not g:
@@ -5659,7 +5665,7 @@ def api_simulate(game_pk):
             fallback = _simulation_fallback_payload(
                 {},
                 game_pk,
-                sims=request.args.get('sims', 0),
+                sims=sims,
                 warning='Game not found for simulation; returned fallback payload.'
             )
             return jsonify(fallback)
@@ -5767,11 +5773,7 @@ def api_simulate(game_pk):
                 home_lineup = _roster_lineup(home_team_id)
         if not away_lineup or not home_lineup:
             return jsonify({'success': False, 'error': 'Lineups unavailable for simulation'}), 400
-        try:
-            requested_sims = int(request.args.get('sims', 5000) or 5000)
-        except Exception:
-            requested_sims = 5000
-        sims = max(500, min(5000, requested_sims))
+        # Keep simulation within Render memory/timeout budget.
         today = datetime.now(ET).strftime('%Y-%m-%d')
         lineup_signature = _game_lineup_signature(g, away_lineup, home_lineup)
         cache_signature = f"{lineup_signature}|sims:{sims}"
@@ -6068,7 +6070,7 @@ def api_simulate(game_pk):
             fallback = _simulation_fallback_payload(
                 g,
                 game_pk,
-                sims=request.args.get('sims', 0),
+                sims=sims,
                 warning=f'Fallback mode: {str(ex) or "simulation error"}'
             )
             return jsonify(fallback)
@@ -6077,7 +6079,7 @@ def api_simulate(game_pk):
             emergency = _simulation_fallback_payload(
                 {},
                 game_pk,
-                sims=request.args.get('sims', 0),
+                sims=sims,
                 warning=f'Emergency fallback: {str(ex) or "simulation error"}; {str(fallback_ex) or "fallback error"}'
             )
             return jsonify(emergency)
