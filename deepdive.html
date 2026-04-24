@@ -465,6 +465,7 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
       <button class="tb2 ac" data-tab="away" onclick="showTab('away')">AWAY LINEUP</button>
       <button class="tb2" data-tab="home" onclick="showTab('home')">HOME LINEUP</button>
       <button class="tb2" data-tab="proj" onclick="showTab('proj')">PROJECTIONS</button>
+      <button class="tb2" data-tab="compare" onclick="showTab('compare')">MODEL VS ACTUAL</button>
       <button class="tb2" data-tab="matrix" onclick="showTab('matrix')">&#9881; HIT RATE MATRIX</button>
       <button class="tb2" data-tab="batting-order" onclick="showTab('batting-order')">&#128203; BATTING ORDER</button>
     </div>
@@ -1059,9 +1060,11 @@ function loadModelActualCompare(){
     .then(function(d){
       MODEL_ACTUAL_DATA = d;
       renderModelActualCompare(d);
+      if(ACTIVE_TAB==='compare') renderDeepDiveCompare();
     })
     .catch(function(){
       renderModelActualCompare({success:false,error:'Comprehensive compare unavailable'});
+      if(ACTIVE_TAB==='compare') renderDeepDiveCompare();
     });
 }
 
@@ -3087,10 +3090,88 @@ function jumpToProjection(name){
 function syncTabButtons(tab){
   document.querySelectorAll('.tb2[data-tab]').forEach(function(btn){ btn.classList.toggle('ac', btn.getAttribute('data-tab')===tab); });
 }
+
+function renderDeepDiveCompare(){
+  var box=document.getElementById('luP');
+  if(!box) return;
+  var status=(GD&&GD.status)?String(GD.status):'';
+  var isFinal=status==='Final'||status==='Game Over'||status==='Completed Early';
+  var away=(GD&&GD.awayAbbr)||((GP_DATA&&GP_DATA.awayAbbr)||'AWAY');
+  var home=(GD&&GD.homeAbbr)||((GP_DATA&&GP_DATA.homeAbbr)||'HOME');
+  var actualAway=Number((GD&&GD.awayScore)||0);
+  var actualHome=Number((GD&&GD.homeScore)||0);
+  var actualTotal=actualAway+actualHome;
+
+  var cmp=(MODEL_ACTUAL_DATA&&MODEL_ACTUAL_DATA.success)?MODEL_ACTUAL_DATA:{};
+  var c=(cmp.comparison)||{};
+  var f5=(cmp.f5Model)||{};
+  var mc=(cmp.monteCarlo)||{};
+  var rec=(cmp.recommendations)||{};
+  var parlay=(rec.parlay)||{};
+  var simTeam=(SIM_DATA&&SIM_DATA.team)||{};
+
+  var projTotal=(GP_DATA&&GP_DATA.total!=null)?Number(GP_DATA.total):null;
+  var projWinner=(GP_DATA&&GP_DATA.favorite)?GP_DATA.favorite:'EVEN';
+  var actualWinner=actualAway===actualHome?'PUSH':(actualAway>actualHome?away:home);
+  var totalErr=(c.totalError!=null)?Number(c.totalError).toFixed(2):(isFinal&&projTotal!=null?Math.abs(projTotal-actualTotal).toFixed(2):'N/A');
+  var winnerCall=c.winnerCall||(projWinner==='EVEN'?'NO EDGE':(projWinner===actualWinner?'CORRECT':'MISSED'));
+  var winnerCol=winnerCall==='CORRECT'?'var(--g)':(winnerCall==='MISSED'?'var(--m)':'var(--mu)');
+
+  var f5Total=(f5.totalF5!=null)?f5.totalF5:'--';
+  var f5Signal=f5.signal||'N/A';
+  var mcTotal=(mc.meanTotal!=null)?mc.meanTotal:((simTeam.mean_total!=null)?simTeam.mean_total:'--');
+  var mcHome=(mc.homeWinPct!=null)?mc.homeWinPct:simTeam.home_win_pct;
+  var mcAway=(mc.awayWinPct!=null)?mc.awayWinPct:simTeam.away_win_pct;
+
+  var legs=(parlay.legs||[]).slice(0,3);
+  var legsTxt=legs.length?legs.join(' + '):'No strong correlated pair yet';
+  var adj=(rec.adjustment)||{};
+  var adjLine=(adj.recommendation||'Hold model settings') + (adj.reason?(' — '+adj.reason):'');
+
+  var loadedBits=[];
+  loadedBits.push('Projection ' + (GP_DATA&&GP_DATA.success?'OK':'PENDING'));
+  loadedBits.push('Compare ' + (cmp&&cmp.success?'OK':'PENDING'));
+  loadedBits.push('Simulation ' + (SIM_DATA&&SIM_DATA.success?'OK':'PENDING'));
+  loadedBits.push('Props ' + (PROPS_DATA&&PROPS_DATA.success?'OK':'PENDING'));
+
+  box.innerHTML=''
+    +'<div class="proj-note" style="margin-bottom:10px">Comprehensive deep-dive compare view across projection, F5, Monte Carlo, parlay signal, and adjustment recommendation.</div>'
+    +'<div class="mc-grid">'
+      +'<div class="mc-card"><div class="mc-v" style="color:var(--g)">'+away+' '+actualAway+'</div><div class="mc-l">ACTUAL AWAY</div></div>'
+      +'<div class="mc-card"><div class="mc-v" style="color:var(--g)">'+home+' '+actualHome+'</div><div class="mc-l">ACTUAL HOME</div></div>'
+      +'<div class="mc-card"><div class="mc-v" style="color:var(--g)">'+actualTotal+'</div><div class="mc-l">ACTUAL TOTAL</div></div>'
+      +'<div class="mc-card"><div class="mc-v" style="color:'+winnerCol+'">'+winnerCall+'</div><div class="mc-l">WINNER CALL</div></div>'
+    +'</div>'
+    +'<div class="mc-grid">'
+      +'<div class="mc-card"><div class="mc-v">'+(projTotal==null?'--':projTotal.toFixed(2))+'</div><div class="mc-l">MODEL TOTAL</div></div>'
+      +'<div class="mc-card"><div class="mc-v">'+totalErr+'</div><div class="mc-l">TOTAL ERROR</div></div>'
+      +'<div class="mc-card"><div class="mc-v">'+f5Total+'</div><div class="mc-l">F5 MODEL TOTAL</div></div>'
+      +'<div class="mc-card"><div class="mc-v">'+mcTotal+'</div><div class="mc-l">MC MEAN TOTAL</div></div>'
+    +'</div>'
+    +'<div class="mc-box-wrap">'
+      +'<div class="mc-box"><h4>MONEYLINE + TOTAL SIGNALS</h4><table class="mc-table"><tbody>'
+        +'<tr><td>Model winner</td><td>'+(projWinner||'EVEN')+'</td><td>Actual winner</td><td>'+actualWinner+'</td></tr>'
+        +'<tr><td>F5 signal</td><td>'+(f5Signal||'N/A')+'</td><td>Total signal</td><td>'+(rec.totalSignal||'NEUTRAL')+'</td></tr>'
+        +'<tr><td>Moneyline lean</td><td>'+(rec.moneylineLean||'EVEN')+'</td><td>Game status</td><td>'+(status||'Scheduled')+'</td></tr>'
+        +'<tr><td>'+away+' MC win%</td><td>'+(mcAway==null?'--':pct(mcAway))+'</td><td>'+home+' MC win%</td><td>'+(mcHome==null?'--':pct(mcHome))+'</td></tr>'
+      +'</tbody></table></div>'
+      +'<div class="mc-box"><h4>PARLAY + ADJUSTMENT</h4><table class="mc-table"><tbody>'
+        +'<tr><td>Top SGP pair</td><td colspan="3">'+legsTxt+'</td></tr>'
+        +'<tr><td>Combined prob</td><td>'+(parlay.combinedProb==null?'--':pct(parlay.combinedProb))+'</td><td>Combined EV</td><td>'+(parlay.combinedEVPct==null?'--':(Number(parlay.combinedEVPct).toFixed(2)+'%'))+'</td></tr>'
+        +'<tr><td>Adjustment severity</td><td>'+(adj.severity?String(adj.severity).toUpperCase():'LOW')+'</td><td>Source</td><td>MODEL VS ACTUAL</td></tr>'
+      +'</tbody></table>'
+      +'<div class="proj-note" style="margin-top:8px">'+adjLine+'</div>'
+      +'</div>'
+    +'</div>'
+    +'<div class="proj-note" style="margin-top:8px">Data readiness: '+loadedBits.join(' · ')+'</div>'
+    +(isFinal?'':'<div class="proj-note" style="margin-top:8px">Game is not final yet, so model-vs-actual scoring will complete after final result posts.</div>');
+}
+
 showTab = function(tab){
   ACTIVE_TAB = tab;
   syncTabButtons(tab);
   if(tab==='proj'){ renderProjectionHub(); return; }
+  if(tab==='compare'){ renderDeepDiveCompare(); return; }
   if(__oldShowTab) __oldShowTab(tab);
 };
 
@@ -3098,11 +3179,13 @@ var __oldRenderPropPanel = (typeof renderPropPanel === 'function') ? renderPropP
 renderPropPanel = function(){
   if(__oldRenderPropPanel) __oldRenderPropPanel();
   if(ACTIVE_TAB==='proj') renderProjectionHub();
+  if(ACTIVE_TAB==='compare') renderDeepDiveCompare();
 };
 var __oldRenderMarketPanel = (typeof renderMarketPanel === 'function') ? renderMarketPanel : null;
 renderMarketPanel = function(){
   if(__oldRenderMarketPanel) __oldRenderMarketPanel();
   if(ACTIVE_TAB==='proj') renderProjectionHub();
+  if(ACTIVE_TAB==='compare') renderDeepDiveCompare();
 };
 setTimeout(function(){ if(ACTIVE_TAB==='proj') renderProjectionHub(); }, 4500);
 
