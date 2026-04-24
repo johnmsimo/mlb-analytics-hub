@@ -5650,10 +5650,19 @@ def _simulation_fallback_payload(game_obj, game_pk, sims=0, warning=''):
 @app.route('/api/simulate/<int:game_pk>')
 def api_simulate(game_pk):
     try:
-        raw = fetch_schedule(datetime.now(ET).strftime('%Y-%m-%d'))
-        g = next((x for x in raw if x.get('gamePk') == game_pk), None)
+        # Prefer direct game lookup so deep-dive works for non-today game IDs too.
+        g = fetch_schedule_game(game_pk)
         if not g:
-            return jsonify({'success': False, 'error': 'Game not found'}), 404
+            raw = fetch_schedule(datetime.now(ET).strftime('%Y-%m-%d'))
+            g = next((x for x in raw if x.get('gamePk') == game_pk), None)
+        if not g:
+            fallback = _simulation_fallback_payload(
+                {},
+                game_pk,
+                sims=request.args.get('sims', 0),
+                warning='Game not found for simulation; returned fallback payload.'
+            )
+            return jsonify(fallback)
         away_team = g.get('teams', {}).get('away', {}).get('team', {})
         home_team = g.get('teams', {}).get('home', {}).get('team', {})
         away_team_id = away_team.get('id')
@@ -6055,7 +6064,7 @@ def api_simulate(game_pk):
     except Exception as ex:
         print('[api_simulate]', traceback.format_exc())
         try:
-            g = fetch_schedule_game(game_pk)
+            g = fetch_schedule_game(game_pk) or {}
             fallback = _simulation_fallback_payload(
                 g,
                 game_pk,
@@ -6063,8 +6072,15 @@ def api_simulate(game_pk):
                 warning=f'Fallback mode: {str(ex) or "simulation error"}'
             )
             return jsonify(fallback)
-        except Exception:
-            return jsonify({'success': False, 'error': str(ex)}), 500
+        except Exception as fallback_ex:
+            print('[api_simulate:fallback]', traceback.format_exc())
+            emergency = _simulation_fallback_payload(
+                {},
+                game_pk,
+                sims=request.args.get('sims', 0),
+                warning=f'Emergency fallback: {str(ex) or "simulation error"}; {str(fallback_ex) or "fallback error"}'
+            )
+            return jsonify(emergency)
 
 
 
