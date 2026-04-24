@@ -834,6 +834,31 @@ def _maybe_refresh_fg():
                 with _fg_lock: _fg_loading = False
         threading.Thread(target=_runner, daemon=True).start()
 
+
+def _wait_for_fg_data(timeout_sec=15):
+    """Wait for FG data to be loaded or trigger a load if not started.
+    
+    Args:
+        timeout_sec: Maximum time to wait in seconds
+    
+    Returns:
+        True if data is loaded, False if timeout/error occurred
+    """
+    _maybe_refresh_fg()  # Trigger load if not already loading
+    
+    start = time.time()
+    while time.time() - start < timeout_sec:
+        with _fg_lock:
+            if _fg_loaded and len(_fg_pit) > 0:
+                return True
+            if not _fg_loading:
+                # Not loading and not loaded, try again
+                _maybe_refresh_fg()
+        time.sleep(0.1)
+    
+    return False
+
+
 def _fuzzy_lookup(name, cache):
     if not name or not cache: return {}
     k = name.strip().lower()
@@ -2451,7 +2476,9 @@ def api_memory_collect_deep():
 
 @app.route("/api/games/today")
 def api_games_today():
-    _maybe_refresh_fg()
+    fg_ready = _wait_for_fg_data(timeout_sec=15)
+    if not fg_ready:
+        print("[api_games_today] WARNING: FG data timed out after 15s, proceeding with partial data")
     _maybe_refresh_savant()
     _fetch_injury_status(force=False)
     try:
@@ -2865,7 +2892,9 @@ def api_model_actual_daily_summary_stored():
 
 @app.route("/api/game/<int:game_pk>")
 def api_game_detail(game_pk):
-    _maybe_refresh_fg()
+    fg_ready = _wait_for_fg_data(timeout_sec=15)
+    if not fg_ready:
+        print("[api_game_detail] WARNING: FG data timed out after 15s, proceeding with partial data")
     _maybe_refresh_savant()
     try:
         r = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=10)
@@ -2953,7 +2982,10 @@ def api_game_livedata(game_pk):
 
 @app.route("/api/pitchers/<int:game_pk>")
 def api_pitchers(game_pk):
-    _maybe_refresh_fg()
+    # Ensure FG data is loaded (wait up to 15 seconds)
+    fg_ready = _wait_for_fg_data(timeout_sec=15)
+    if not fg_ready:
+        print("[api_pitchers] WARNING: FG data timed out after 15s, proceeding with partial data")
     _maybe_refresh_savant()
     try:
         g = fetch_schedule_game(game_pk)
@@ -10152,12 +10184,11 @@ _TEAMS_OVERVIEW_TTL   = 600  # seconds
 def api_teams_overview():
     """Load all 30 MLB teams with rosters. Uses only cached in-memory FG/Savant
     data for player stats — no per-player MLB API calls to avoid timeouts."""
-    import time as _time
     # Serve from cache if fresh.
     with _teams_overview_lock:
         cached = _teams_overview_cache["data"]
         ts     = _teams_overview_cache["ts"]
-    if cached and (_time.time() - ts) < _TEAMS_OVERVIEW_TTL:
+    if cached and (time.time() - ts) < _TEAMS_OVERVIEW_TTL:
         return jsonify(cached)
     try:
         teams_resp = requests.get(f"{MLB_API}/teams?sportId=1&activeStatus=Y&sportId=1", timeout=12)
@@ -12345,7 +12376,9 @@ def _matchup_score(batter, pitcher_fg, pitcher_sv, pitcher_hand='R'):
 @app.route('/api/props/projections/<int:game_pk>')
 def api_props_projections(game_pk):
     try:
-        _maybe_refresh_fg()
+        fg_ready = _wait_for_fg_data(timeout_sec=15)
+        if not fg_ready:
+            print("[api_props_projections] WARNING: FG data timed out after 15s, proceeding with partial data")
         _maybe_refresh_savant()
         _fetch_injury_status(force=False)
 
@@ -14337,6 +14370,31 @@ def api_breakout_candidates():
     except Exception as ex:
         print(f"[api_breakout_candidates] {traceback.format_exc()}")
         return jsonify({"success": False, "error": str(ex), "players": []}), 500
+
+# ── Preload caches at startup ───────────────────────────────────────────
+# Load FG and Savant data before serving requests to ensure data is available
+# on first access. This runs in background threads to avoid blocking startup.
+def _preload_caches():
+    """Preload FG and Savant caches at startup in background threads."""
+    def load_fg():
+        try:
+            _load_fg_data()
+            print("[STARTUP] FG cache preload complete")
+        except Exception as ex:
+            print(f"[STARTUP] FG cache preload failed: {ex}")
+    
+    def load_sv():
+        try:
+            _load_savant_data()
+            print("[STARTUP] Savant cache preload complete")
+        except Exception as ex:
+            print(f"[STARTUP] Savant cache preload failed: {ex}")
+    
+    # Start cache loads in parallel background threads
+    threading.Thread(target=load_fg, daemon=True).start()
+    threading.Thread(target=load_sv, daemon=True).start()
+
+_preload_caches()
 
 # Start hourly injury refresh worker once routes/helpers are loaded.
 _start_injury_worker()
