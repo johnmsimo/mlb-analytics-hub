@@ -845,17 +845,45 @@ def _wait_for_fg_data(timeout_sec=15):
         True if data is loaded, False if timeout/error occurred
     """
     _maybe_refresh_fg()  # Trigger load if not already loading
-    
+
     start = time.time()
     while time.time() - start < timeout_sec:
+        should_trigger = False
         with _fg_lock:
             if _fg_loaded and len(_fg_pit) > 0:
                 return True
-            if not _fg_loading:
-                # Not loading and not loaded, try again
-                _maybe_refresh_fg()
+            should_trigger = not _fg_loading
+        if should_trigger:
+            # Call outside the lock to avoid re-entrant lock deadlock.
+            _maybe_refresh_fg()
         time.sleep(0.1)
     
+    return False
+
+
+def _wait_for_savant_data(timeout_sec=15):
+    """Wait for Savant data to be loaded or trigger a load if not started.
+
+    Args:
+        timeout_sec: Maximum time to wait in seconds
+
+    Returns:
+        True if data is loaded, False if timeout/error occurred
+    """
+    _maybe_refresh_savant()  # Trigger load if not already loading
+
+    start = time.time()
+    while time.time() - start < timeout_sec:
+        should_trigger = False
+        with _sv_lock:
+            if _sv_loaded and len(_sv_pit_xstats) > 0:
+                return True
+            should_trigger = not _sv_loading
+        if should_trigger:
+            # Call outside the lock to avoid re-entrant lock deadlock.
+            _maybe_refresh_savant()
+        time.sleep(0.1)
+
     return False
 
 
@@ -2986,7 +3014,9 @@ def api_pitchers(game_pk):
     fg_ready = _wait_for_fg_data(timeout_sec=15)
     if not fg_ready:
         print("[api_pitchers] WARNING: FG data timed out after 15s, proceeding with partial data")
-    _maybe_refresh_savant()
+    sv_ready = _wait_for_savant_data(timeout_sec=15)
+    if not sv_ready:
+        print("[api_pitchers] WARNING: Savant data timed out after 15s, proceeding with partial data")
     try:
         g = fetch_schedule_game(game_pk)
         if g:
