@@ -4,10 +4,7 @@ import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 from uuid import uuid4
-try:
-    from zoneinfo import ZoneInfo
-except ImportError:
-    from backports.zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo
 ET = ZoneInfo("America/New_York")
 from flask import Flask, jsonify, request, Response
 from flask_cors import CORS
@@ -598,8 +595,9 @@ def _load_fg_data():
     global _fg_loaded, _fg_load_date
     _load_fg_data_from_mlb_api()
     with _fg_lock:
-        _fg_loaded = True
-        _fg_load_date = datetime.now().date()
+        has_data = bool(_fg_pit) or bool(_fg_bat)
+        _fg_loaded = has_data
+        _fg_load_date = datetime.now().date() if has_data else None
 
 
 def _safe_num(v, default=0.0):
@@ -876,7 +874,7 @@ def _wait_for_savant_data(timeout_sec=15):
     while time.time() - start < timeout_sec:
         should_trigger = False
         with _sv_lock:
-            if _sv_loaded and len(_sv_pit_xstats) > 0:
+            if _sv_loaded and len(_sv_pit_xstats) > 0 and len(_sv_arsenal_pct) > 0:
                 return True
             should_trigger = not _sv_loading
         if should_trigger:
@@ -1065,8 +1063,9 @@ def _load_savant_data():
         print("[Savant] Arsenal velo failed:", ex)
 
     with _sv_lock:
-        _sv_loaded    = True
-        _sv_load_date = datetime.now().date()
+        has_data = bool(_sv_pit_xstats) or bool(_sv_bat_xstats) or bool(_sv_bat_statcast) or bool(_sv_arsenal_pct) or bool(_sv_arsenal_velo)
+        _sv_loaded    = has_data
+        _sv_load_date = datetime.now().date() if has_data else None
     print("[Savant] All caches ready")
 
 def _maybe_refresh_savant():
@@ -10285,7 +10284,7 @@ def api_teams_overview():
         payload = {'success': True, 'teams': [r for r in results if r]}
         with _teams_overview_lock:
             _teams_overview_cache["data"] = payload
-            _teams_overview_cache["ts"]   = _time.time()
+            _teams_overview_cache["ts"]   = time.time()
         return jsonify(payload)
     except Exception as ex:
         # If we have a stale cached payload, serve it rather than failing.

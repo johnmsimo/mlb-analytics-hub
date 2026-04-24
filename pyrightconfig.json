@@ -1,0 +1,8 @@
+{
+  "typeCheckingMode": "off",
+  "reportMissingImports": "none",
+  "reportMissingTypeStubs": "none",
+  "include": [
+    "app.py"
+  ]
+}
