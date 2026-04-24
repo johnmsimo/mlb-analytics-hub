@@ -2162,10 +2162,10 @@ function loadSimulation(){
   var panel = document.getElementById('simPanel');
   if(panel) panel.innerHTML = '<div class="spinner"></div>';
   function simFallback(msg){
-    var away = (GAME_DATA && GAME_DATA.awayAbbr) ? GAME_DATA.awayAbbr : 'AWAY';
-    var home = (GAME_DATA && GAME_DATA.homeAbbr) ? GAME_DATA.homeAbbr : 'HOME';
-    var awaySp = (GAME_DATA && GAME_DATA.awayStarter && GAME_DATA.awayStarter.name) ? GAME_DATA.awayStarter.name : 'Away SP';
-    var homeSp = (GAME_DATA && GAME_DATA.homeStarter && GAME_DATA.homeStarter.name) ? GAME_DATA.homeStarter.name : 'Home SP';
+    var away = (GD && GD.awayAbbr) ? GD.awayAbbr : 'AWAY';
+    var home = (GD && GD.homeAbbr) ? GD.homeAbbr : 'HOME';
+    var awaySp = (PD && PD.awayPitcher && PD.awayPitcher.name) ? PD.awayPitcher.name : 'Away SP';
+    var homeSp = (PD && PD.homePitcher && PD.homePitcher.name) ? PD.homePitcher.name : 'Home SP';
     return {
       success: true,
       fallback: true,
