@@ -495,16 +495,23 @@ function pv(v,fb){return(v!==undefined&&v!==null&&v!=='N/A'&&v!=='')?v:fb;}
 function fmtP(v){var n=parseFloat(v);return isNaN(n)?'N/A':(n*100).toFixed(1)+'%';}
 function toF(v,d){var n=parseFloat(v);return isNaN(n)?d:n;}
 function apiFetch(path, opts){
-  try{return fetch(path, opts);}catch(e1){
+  var origin=(window.location&&window.location.origin&&window.location.origin!=='null')
+    ? window.location.origin
+    : ((window.location&&window.location.protocol&&window.location.host)?(window.location.protocol+'//'+window.location.host):'');
+  function _fallback(err){
+    if(!origin){
+      return Promise.reject(err&&err.message?err:new Error('Request initialization failed'));
+    }
     try{
-      var origin=(window.location&&window.location.origin&&window.location.origin!=='null')
-        ? window.location.origin
-        : ((window.location&&window.location.protocol&&window.location.host)?(window.location.protocol+'//'+window.location.host):'');
-      if(!origin) throw e1;
       return fetch(origin+path, opts);
     }catch(e2){
       return Promise.reject(e2&&e2.message?e2:new Error('Request initialization failed'));
     }
+  }
+  try{
+    return fetch(path, opts).catch(_fallback);
+  }catch(e1){
+    return _fallback(e1);
   }
 }
 
