@@ -2157,7 +2157,13 @@ function lookupPitchX(playerName){
   return null;
 }
 
-function loadSimulation(){
+function loadSimulation(opts){
+  opts = opts || {};
+  var sims = parseInt(opts.sims || 800, 10);
+  if(!isFinite(sims)) sims = 800;
+  sims = Math.max(200, Math.min(1200, sims));
+  var refresh = opts.refresh ? 1 : 0;
+  var highPrecision = !!opts.highPrecision;
   ensureSimWrap();
   var panel = document.getElementById('simPanel');
   if(panel) panel.innerHTML = '<div class="spinner"></div>';
@@ -2170,7 +2176,7 @@ function loadSimulation(){
       success: true,
       fallback: true,
       warning: msg || 'Client fallback simulation payload.',
-      meta: { sims: 0, awayAbbr: away, homeAbbr: home, parkFactor: 1.0 },
+      meta: { sims: sims, awayAbbr: away, homeAbbr: home, parkFactor: 1.0 },
       team: {
         away_mean_runs: 4.2,
         home_mean_runs: 4.3,
@@ -2210,7 +2216,7 @@ function loadSimulation(){
       }
     };
   }
-  fetch('/api/simulate/' + GPK + '?sims=800')
+  fetch('/api/simulate/' + GPK + '?sims=' + sims + (refresh ? '&refresh=1' : ''))
     .then(function(r){
       return r.json().catch(function(){ return {}; }).then(function(body){
         if(!r.ok){
@@ -2227,7 +2233,7 @@ function loadSimulation(){
       _buildSimCorrLookup(d.correlations || []);
       var badge = document.querySelector('#simWrap .tag-sv');
       if(badge){
-        var runs = (d.meta && d.meta.sims) ? Number(d.meta.sims).toLocaleString() + ' RUNS' : 'FALLBACK';
+        var runs = (d.meta && d.meta.sims) ? Number(d.meta.sims).toLocaleString() + (highPrecision ? ' RUNS · HP' : ' RUNS') : 'FALLBACK';
         badge.textContent = runs;
       }
       renderSimulation();
@@ -2238,6 +2244,14 @@ function loadSimulation(){
       if(el) el.innerHTML = '<p class="na">Simulation unavailable: '+e.message+'</p>'
         +'<button onclick="loadSimulation()" style="margin-top:10px;padding:6px 16px;border:1px solid rgba(0,229,255,.3);border-radius:999px;background:rgba(0,229,255,.08);color:var(--c);font-family:Orbitron,monospace;font-size:.62rem;letter-spacing:1px;cursor:pointer">&#8635; RETRY</button>';
     });
+}
+
+function refreshSimulation(){
+  loadSimulation({refresh:1});
+}
+
+function runHighPrecisionSimulation(){
+  loadSimulation({sims:1200, refresh:1, highPrecision:true});
 }
 
 function ensureNrfiWrap(){
@@ -2408,6 +2422,11 @@ function renderSimulation(){
     + '<div class="mc-card"><div class="mc-v">'+pct(t.p_9plus_total)+'</div><div class="mc-l">P(TOTAL 9+)</div></div>'
     + '<div class="mc-card"><div class="mc-v">'+pct(t.p_10plus_total)+'</div><div class="mc-l">P(TOTAL 10+)</div></div>'
     + '</div>'
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 4px">'
+    + '<button class="btn" onclick="refreshSimulation()" style="padding:6px 12px;font-size:.62rem">REFRESH SIM</button>'
+    + '<button class="btn" onclick="runHighPrecisionSimulation()" style="padding:6px 12px;font-size:.62rem">HIGH PRECISION RECHECK</button>'
+    + '</div>'
+    + '<div class="proj-note" style="margin-bottom:10px">Default load uses fast mode (lower sims) for stability. Use <strong>HIGH PRECISION RECHECK</strong> for tighter probabilities on this game.</div>'
     + '<div class="mc-box-wrap">'
     + '<div class="mc-box"><h4>HANDEDNESS CONTEXT</h4><table class="mc-table"><tbody>'
       + '<tr><td>'+m.awayAbbr+' lineup</td><td>L '+(h.awayLineup?h.awayLineup.L:0)+' / R '+(h.awayLineup?h.awayLineup.R:0)+' / S '+(h.awayLineup?h.awayLineup.S:0)+'</td></tr>'
