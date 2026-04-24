@@ -608,6 +608,16 @@ def _safe_num(v, default=0.0):
         return default
 
 
+def _season_candidates(depth=4):
+    """Return candidate MLB seasons from current year backwards."""
+    y = datetime.now().year
+    out = []
+    for i in range(max(1, int(depth)) + 1):
+        out.append(max(2000, y - i))
+    # Preserve order while removing duplicates.
+    return list(dict.fromkeys(out))
+
+
 def _load_fg_data_from_mlb_api():
     """Derive FG-compatible batting/pitching caches from the MLB Stats API
     *bulk* stats endpoint (`/stats?playerPool=all`).
@@ -642,27 +652,43 @@ def _load_fg_data_from_mlb_api():
     except Exception as ex:
         print("[FG-derived] player list failed:", ex)
 
+    def _fetch_bulk_splits(group_name):
+        """Fetch MLB bulk stat splits with fallbacks for endpoint quirks."""
+        seasons = _season_candidates(depth=4)
+        variants = [
+            {"gameType": "R", "sportId": 1},
+            {"sportId": 1},
+            {"gameType": "R"},
+            {},
+        ]
+        for season in seasons:
+            for variant in variants:
+                params = {
+                    "stats": "season",
+                    "group": group_name,
+                    "season": season,
+                    "playerPool": "all",
+                    "limit": 5000,
+                }
+                params.update(variant)
+                try:
+                    r = requests.get(f"{MLB_API}/stats", params=params, timeout=30)
+                    r.raise_for_status()
+                    stats_groups = r.json().get("stats", []) or []
+                    splits = stats_groups[0].get("splits", []) if stats_groups else []
+                    if splits:
+                        print(f"[FG-derived] {group_name} splits={len(splits)} season={season} params={variant or {'default': True}}")
+                        return splits, season
+                    print(f"[FG-derived] {group_name} empty season={season} params={variant or {'default': True}}")
+                except Exception as ex:
+                    print(f"[FG-derived] {group_name} fetch failed season={season} params={variant or {'default': True}}: {ex}")
+        return [], None
+
     # ── Pitchers (one bulk call) ──────────────────────────────────────────
     pit_out = {}
-    try:
-        r = requests.get(
-            f"{MLB_API}/stats",
-            params={
-                "stats":      "season",
-                "group":      "pitching",
-                "season":     year,
-                "playerPool": "all",
-                "gameType":   "R",
-                "limit":      2000,
-            },
-            timeout=30,
-        )
-        r.raise_for_status()
-        stats_groups = r.json().get("stats", []) or []
-        splits = stats_groups[0].get("splits", []) if stats_groups else []
-    except Exception as ex:
-        print("[FG-derived] pitching bulk fetch failed:", ex)
-        splits = []
+    splits, pit_season = _fetch_bulk_splits("pitching")
+    if pit_season and pit_season != year:
+        print(f"[FG-derived] Using fallback pitching season {pit_season}")
 
     for row in splits:
         try:
@@ -736,25 +762,9 @@ def _load_fg_data_from_mlb_api():
 
     # ── Batters (one bulk call) ───────────────────────────────────────────
     bat_out = {}
-    try:
-        r = requests.get(
-            f"{MLB_API}/stats",
-            params={
-                "stats":      "season",
-                "group":      "hitting",
-                "season":     year,
-                "playerPool": "all",
-                "gameType":   "R",
-                "limit":      2000,
-            },
-            timeout=30,
-        )
-        r.raise_for_status()
-        stats_groups = r.json().get("stats", []) or []
-        splits = stats_groups[0].get("splits", []) if stats_groups else []
-    except Exception as ex:
-        print("[FG-derived] hitting bulk fetch failed:", ex)
-        splits = []
+    splits, bat_season = _fetch_bulk_splits("hitting")
+    if bat_season and bat_season != year:
+        print(f"[FG-derived] Using fallback hitting season {bat_season}")
 
     for row in splits:
         try:
@@ -955,15 +965,36 @@ def _fetch_sv_csv(url):
     text = r.text.lstrip("\ufeff")
     return list(csvmod.DictReader(io.StringIO(text)))
 
+
+def _fetch_sv_csv_by_season(url_template, seasons):
+    """Fetch Savant CSV using first season that returns non-empty rows."""
+    for y in seasons:
+        url = url_template.format(year=y)
+        try:
+            rows = _fetch_sv_csv(url)
+            if rows:
+                print(f"[Savant] rows={len(rows)} season={y} url={url.split('?')[0]}")
+                return rows, y
+            print(f"[Savant] empty season={y} url={url.split('?')[0]}")
+        except Exception as ex:
+            print(f"[Savant] fetch failed season={y}: {ex}")
+    return [], None
+
 def _load_savant_data():
     global _sv_pit_xstats, _sv_bat_xstats, _sv_bat_statcast
     global _sv_arsenal_pct, _sv_arsenal_velo, _sv_loaded, _sv_load_date
     y = datetime.now().year
+    seasons = _season_candidates(depth=4)
     BASE = "https://baseballsavant.mlb.com"
 
     # 1. Pitcher xERA
     try:
-        rows = _fetch_sv_csv(f"{BASE}/leaderboard/expected_statistics?type=pitcher&year={y}&position=&team=&min=1&csv=true")
+        rows, sy = _fetch_sv_csv_by_season(
+            f"{BASE}/leaderboard/expected_statistics?type=pitcher&year={{year}}&position=&team=&min=1&csv=true",
+            seasons,
+        )
+        if sy:
+            y = sy
         d = {}
         for row in rows:
             raw = row.get("last_name, first_name","").strip()
@@ -984,7 +1015,10 @@ def _load_savant_data():
 
     # 2. Batter xBA/xSLG/xwOBA
     try:
-        rows = _fetch_sv_csv(f"{BASE}/leaderboard/expected_statistics?type=batter&year={y}&position=&team=&min=1&csv=true")
+        rows, _ = _fetch_sv_csv_by_season(
+            f"{BASE}/leaderboard/expected_statistics?type=batter&year={{year}}&position=&team=&min=1&csv=true",
+            [y] + [s for s in seasons if s != y],
+        )
         d = {}
         for row in rows:
             raw = row.get("last_name, first_name","").strip()
@@ -1004,7 +1038,10 @@ def _load_savant_data():
 
     # 3. Statcast batter EV / HH% / Barrel%
     try:
-        rows = _fetch_sv_csv(f"{BASE}/leaderboard/statcast?type=batter&year={y}&position=&team=&min=1&csv=true")
+        rows, _ = _fetch_sv_csv_by_season(
+            f"{BASE}/leaderboard/statcast?type=batter&year={{year}}&position=&team=&min=1&csv=true",
+            [y] + [s for s in seasons if s != y],
+        )
         d = {}
         for row in rows:
             raw = row.get("last_name, first_name","").strip()
@@ -1026,7 +1063,10 @@ def _load_savant_data():
 
     # 4. Pitch arsenal % usage
     try:
-        rows = _fetch_sv_csv(f"{BASE}/leaderboard/pitch-arsenals?year={y}&min=1&type=n_&hand=&csv=true")
+        rows, _ = _fetch_sv_csv_by_season(
+            f"{BASE}/leaderboard/pitch-arsenals?year={{year}}&min=1&type=n_&hand=&csv=true",
+            [y] + [s for s in seasons if s != y],
+        )
         d = {}
         for row in rows:
             raw = row.get("last_name, first_name","").strip()
@@ -1045,7 +1085,10 @@ def _load_savant_data():
 
     # 5. Pitch arsenal velocities
     try:
-        rows = _fetch_sv_csv(f"{BASE}/leaderboard/pitch-arsenals?year={y}&min=1&type=avg_speed&hand=&csv=true")
+        rows, _ = _fetch_sv_csv_by_season(
+            f"{BASE}/leaderboard/pitch-arsenals?year={{year}}&min=1&type=avg_speed&hand=&csv=true",
+            [y] + [s for s in seasons if s != y],
+        )
         d = {}
         for row in rows:
             raw = row.get("last_name, first_name","").strip()
@@ -3013,9 +3056,23 @@ def api_pitchers(game_pk):
     fg_ready = _wait_for_fg_data(timeout_sec=15)
     if not fg_ready:
         print("[api_pitchers] WARNING: FG data timed out after 15s, proceeding with partial data")
+        try:
+            _load_fg_data()
+            with _fg_lock:
+                fg_ready = _fg_loaded and len(_fg_pit) > 0
+            print(f"[api_pitchers] FG synchronous fallback loaded={fg_ready}")
+        except Exception as ex:
+            print(f"[api_pitchers] FG synchronous fallback failed: {ex}")
     sv_ready = _wait_for_savant_data(timeout_sec=15)
     if not sv_ready:
         print("[api_pitchers] WARNING: Savant data timed out after 15s, proceeding with partial data")
+        try:
+            _load_savant_data()
+            with _sv_lock:
+                sv_ready = _sv_loaded and len(_sv_pit_xstats) > 0
+            print(f"[api_pitchers] Savant synchronous fallback loaded={sv_ready}")
+        except Exception as ex:
+            print(f"[api_pitchers] Savant synchronous fallback failed: {ex}")
     try:
         g = fetch_schedule_game(game_pk)
         if g:
