@@ -396,6 +396,7 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
   <a href="/pitcher-deep-dive" style="padding:7px 16px;background:rgba(250,100,0,.07);border:1px solid rgba(250,100,0,.28);border-radius:8px;color:#fa6400;font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:2px;text-decoration:none">⚾ PITCHER ANALYSIS</a>
   <button class="tabbtn active" onclick="switchView('gamesView',this)">TODAY'S GAMES</button>
   <button class="tabbtn" onclick="switchView('teamsView',this)">TEAMS</button>
+  <button class="tabbtn" onclick="switchView('mcView',this);initMonteCarlo()">MONTE CARLO</button>
   <button class="tabbtn" onclick="switchView('nrfiView',this);initNRFI()">NRFI</button>
   <button class="tabbtn" onclick="switchView('bestBetsView',this);initBestBets()">🎯 BEST BETS</button>
   <button class="tabbtn" onclick="switchView('settingsView',this);initSettingsView()">⚙ SETTINGS</button>
@@ -460,6 +461,14 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
         <button class="bb-cat-btn" data-cat="RATINGS" onclick="setBBCat('RATINGS',this)" style="border-color:rgba(255,215,0,.3);color:#ffd54f">🏆 RATINGS</button>
       </div>
       <div class="bb-picks-grid" id="bbPicksInner"></div>
+    </div>
+  </div>
+
+  <div id="mcView" class="view">
+    <div class="sh">MONTE CARLO PROJECTION BOARD</div>
+    <div class="panel">
+      <div id="mcStatus" class="pillish" style="margin-bottom:10px">Loading projections…</div>
+      <div id="mcWrap"><div class="sw"><div class="sp"></div><div class="st">LOADING MONTE CARLO…</div></div></div>
     </div>
   </div>
 
@@ -875,6 +884,7 @@ function _mcFP(p){return(parseFloat(p||0)*100).toFixed(1)+'%';}
 function _mcEsc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 function renderMC(d){
   var wrap=document.getElementById('mcWrap'), st=document.getElementById('mcStatus');
+  if(!wrap||!st) return;
   if(d.computing&&(!d.topProps||!d.topProps.length)){
     wrap.innerHTML='<div class="sw"><div class="sp"></div><div class="st">COMPUTING PROJECTIONS…</div>'
       +'<div style="font-size:.65rem;color:var(--mu);margin-top:8px;font-family:Orbitron,monospace;letter-spacing:1px">Auto-refreshing in 20s</div></div>';
@@ -960,11 +970,12 @@ function _mcSetF(type,val){
   _mcRenderRows();
 }
 function _mcPoll(){
-  fetch('/api/projections/monte-carlo')
+  apiFetch('/api/projections/monte-carlo')
     .then(function(r){if(!r.ok)return null;return r.json();})
     .then(function(d){if(d&&d.success){MC_DATA=d;renderMC(d);}})
     .catch(function(){});
 }
+function initMonteCarlo(){ _mcPoll(); }
 
 // ── BEST BETS ENGINE ──────────────────────────────────────────────────────────
 let BB_GAMES=[], BB_CUR_PK=null, BB_DATA=null, BB_CAT='ALL', BB_LOADED=false;
