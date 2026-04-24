@@ -2006,69 +2006,75 @@ def api_brain_data_delete():
         return jsonify({'success': True, 'message': 'File deleted'})
     except Exception as ex:
         print(f'[api_brain_data_delete] {traceback.format_exc()}')
+        return jsonify({'success': False, 'error': str(ex)}), 500
 
 
-        @app.route('/api/brain/ingest-status', methods=['GET'])
-        def api_brain_ingest_status():
-            """
-            Returns comprehensive ingestion status: what data sources are loaded and how much data.
-            Shows Statscast, FanGraphs, and MLB API availability in the brain.
-            """
-            try:
-                today_et = datetime.now(ET).strftime("%Y-%m-%d")
-        
-                statscast = _memory_ingest_statscast_data(today_et)
-                fangraphs = _memory_ingest_fangraphs_data()
-                mlb_api = _memory_ingest_mlb_api_player_stats([i for i in range(108, 146)])
-        
-                return jsonify({
-                    'success': True,
-                    'brainStatus': {
-                        'lastUpdated': datetime.now(timezone.utc).isoformat(),
-                        'dataIngestedAt': datetime.now(timezone.utc).isoformat(),
-                    },
-                    'ingestion': {
-                        'statscast': statscast,
-                        'fangraphs': fangraphs,
-                        'mlbApi': mlb_api,
-                    },
-                    'summary': {
-                        'totalStatscastRecords': sum(statscast.get('summary', {}).values()),
-                        'totalFanGraphsRecords': sum(fangraphs.get('summary', {}).values()),
-                        'totalPlayerRecords': mlb_api.get('summary', {}).get('totalPlayers', 0),
-                        'dataSourcesActive': len([s for s in statscast.get('sources', []) if s] + [f for f in fangraphs.get('sources', []) if f] + [m for m in mlb_api.get('sources', []) if m]),
-                    }
-                })
-            except Exception as ex:
-                print(f'[api_brain_ingest_status] {traceback.format_exc()}')
-                return jsonify({'success': False, 'error': str(ex)}), 500
+@app.route('/api/brain/ingest-status', methods=['GET'])
+def api_brain_ingest_status():
+    """
+    Returns comprehensive ingestion status: what data sources are loaded and how much data.
+    Shows Statscast, FanGraphs, and MLB API availability in the brain.
+    """
+    try:
+        today_et = datetime.now(ET).strftime("%Y-%m-%d")
+
+        statscast = _memory_ingest_statscast_data(today_et)
+        fangraphs = _memory_ingest_fangraphs_data()
+        mlb_api = _memory_ingest_mlb_api_player_stats([i for i in range(108, 146)])
+
+        total_statscast = sum(statscast.get('summary', {}).values())
+        total_fangraphs = sum(fangraphs.get('summary', {}).values())
+        total_players = mlb_api.get('summary', {}).get('totalPlayers', 0)
+        total_points = int(total_statscast) + int(total_fangraphs) + int(total_players)
+
+        return jsonify({
+            'success': True,
+            'brainStatus': {
+                'lastUpdated': datetime.now(timezone.utc).isoformat(),
+                'dataIngestedAt': datetime.now(timezone.utc).isoformat(),
+            },
+            'ingestion': {
+                'statscast': statscast,
+                'fangraphs': fangraphs,
+                'mlbApi': mlb_api,
+            },
+            'summary': {
+                'totalStatscastRecords': total_statscast,
+                'totalFanGraphsRecords': total_fangraphs,
+                'totalPlayerRecords': total_players,
+                'totalDataPoints': total_points,
+                'dataSourcesActive': len([s for s in statscast.get('sources', []) if s] + [f for f in fangraphs.get('sources', []) if f] + [m for m in mlb_api.get('sources', []) if m]),
+            }
+        })
+    except Exception as ex:
+        print(f'[api_brain_ingest_status] {traceback.format_exc()}')
+        return jsonify({'success': False, 'error': str(ex)}), 500
 
 
-        @app.route('/api/brain/ingest-trigger', methods=['POST'])
-        def api_brain_ingest_trigger():
-            """
-            Manually trigger comprehensive data ingestion from all sources.
-            Rrefresh Statscast, FanGraphs, and MLB API caches.
-            """
-            try:
-                force_refresh = request.get_json(silent=True) or {}
-                force = force_refresh.get('force', False)
-        
-                _maybe_refresh_fg()
-                _maybe_refresh_savant()
-                _fetch_injury_status(force=force)
-        
-                today_et = datetime.now(ET).strftime("%Y-%m-%d")
-                comprehensive = _memory_collect_comprehensive_data(today_et, team_ids=[i for i in range(108, 146)], mode='manual')
-        
-                return jsonify({
-                    'success': True,
-                    'message': 'Ingestion triggered and completed',
-                    'data': comprehensive,
-                })
-            except Exception as ex:
-                print(f'[api_brain_ingest_trigger] {traceback.format_exc()}')
-                return jsonify({'success': False, 'error': str(ex)}), 500
+@app.route('/api/brain/ingest-trigger', methods=['POST'])
+def api_brain_ingest_trigger():
+    """
+    Manually trigger comprehensive data ingestion from all sources.
+    Refresh Statscast, FanGraphs, and MLB API caches.
+    """
+    try:
+        force_refresh = request.get_json(silent=True) or {}
+        force = force_refresh.get('force', False)
+
+        _maybe_refresh_fg()
+        _maybe_refresh_savant()
+        _fetch_injury_status(force=force)
+
+        today_et = datetime.now(ET).strftime("%Y-%m-%d")
+        comprehensive = _memory_collect_comprehensive_data(today_et, team_ids=[i for i in range(108, 146)], mode='manual')
+
+        return jsonify({
+            'success': True,
+            'message': 'Ingestion triggered and completed',
+            'data': comprehensive,
+        })
+    except Exception as ex:
+        print(f'[api_brain_ingest_trigger] {traceback.format_exc()}')
         return jsonify({'success': False, 'error': str(ex)}), 500
 
 

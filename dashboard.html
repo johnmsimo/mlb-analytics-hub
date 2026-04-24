@@ -1328,6 +1328,19 @@ function renderBBPicks(){
 function etTodayStr(){const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());const y=parts.find(p=>p.type==='year').value,m=parts.find(p=>p.type==='month').value,d=parts.find(p=>p.type==='day').value;return y+'-'+m+'-'+d}
 function fmtDateLabel(v){try{const dt=new Date(v+'T12:00:00');return dt.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',year:'numeric'})}catch(e){return v}}
 function minsAgo(iso){if(!iso)return null;var t=Date.parse(iso);if(!t)return null;return Math.max(0,Math.floor((Date.now()-t)/60000));}
+function apiFetch(path, opts){
+  try{return fetch(path, opts);}catch(e1){
+    try{
+      var origin=(window.location&&window.location.origin&&window.location.origin!=='null')
+        ? window.location.origin
+        : ((window.location&&window.location.protocol&&window.location.host)?(window.location.protocol+'//'+window.location.host):'');
+      if(!origin) throw e1;
+      return fetch(origin+path, opts);
+    }catch(e2){
+      return Promise.reject(e2&&e2.message?e2:new Error('Request initialization failed'));
+    }
+  }
+}
 function loadMemoryStatus(){
   var v=document.getElementById('sm'),l=document.getElementById('sml');
   if(!v||!l)return;
@@ -1346,7 +1359,7 @@ function loadMemoryStatus(){
 function loadDailySummaryBadge(){
   var v=document.getElementById('sd'),l=document.getElementById('sdl');
   if(!v||!l)return;
-  fetch('/api/model-actual/daily-summary/stored').then(function(r){
+  apiFetch('/api/model-actual/daily-summary/stored').then(function(r){
     if(r.status===404) return {success:false, notFound:true};
     return r.json();
   }).then(function(d){
@@ -1603,7 +1616,7 @@ function initSettingsView(){
 }
 
 function refreshBrainStatus(){
-  fetch('/api/brain/ingest-status').then(function(r){return r.json();}).then(function(d){
+  apiFetch('/api/brain/ingest-status').then(function(r){return r.json();}).then(function(d){
     if(!d||!d.success){setText('brainMsg','Status load failed',true);return;}
     var summary=d.summary||{};
     var sc=d.ingestion&&d.ingestion.statscast?d.ingestion.statscast.summary||{}:{};
@@ -1625,7 +1638,7 @@ function refreshBrainStatus(){
 
 function triggerBrainIngest(){
   setText('brainMsg','Triggering comprehensive ingestion...');
-  fetch('/api/brain/ingest-trigger',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({force:true})})
+  apiFetch('/api/brain/ingest-trigger',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({force:true})})
     .then(function(r){return r.json();})
     .then(function(d){
       if(!d||!d.success) throw new Error(d.error||'Ingest failed');
@@ -1677,7 +1690,7 @@ function renderFinalDailySummary(payload, sourceLabel){
 
 function loadFinalDailySummary(forceLive){
   setText('dailySummaryMsg',forceLive?'Building live summary...':'Loading summary...');
-  fetch('/api/model-actual/daily-summary'+(forceLive?'?sims=300':''))
+  apiFetch('/api/model-actual/daily-summary'+(forceLive?'?sims=300':''))
     .then(function(r){return r.json();})
     .then(function(d){
       if(!d||!d.success) throw new Error(d.error||'Summary load failed');
@@ -1689,7 +1702,7 @@ function loadFinalDailySummary(forceLive){
 
 function loadStoredFinalDailySummary(){
   setText('dailySummaryMsg','Loading stored summary...');
-  fetch('/api/model-actual/daily-summary/stored')
+  apiFetch('/api/model-actual/daily-summary/stored')
     .then(function(r){return r.json();})
     .then(function(d){
       if(!d||!d.success) throw new Error(d.error||'Stored summary unavailable');
@@ -1701,7 +1714,7 @@ function loadStoredFinalDailySummary(){
 
 function pushFinalDailySummary(){
   setText('dailySummaryMsg','Pushing final daily summary...');
-  fetch('/api/model-actual/daily-summary/push',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sims:300})})
+  apiFetch('/api/model-actual/daily-summary/push',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sims:300})})
     .then(function(r){return r.json();})
     .then(function(d){
       if(!d||!d.success) throw new Error(d.error||'Push failed');
@@ -1714,11 +1727,11 @@ function pushFinalDailySummary(){
 
 function rebuildAndPushFinalDailySummary(){
   setText('dailySummaryMsg','Rebuilding and pushing summary...');
-  fetch('/api/model-actual/daily-summary/push',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sims:300})})
+  apiFetch('/api/model-actual/daily-summary/push',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sims:300})})
     .then(function(r){return r.json();})
     .then(function(d){
       if(!d||!d.success) throw new Error(d.error||'Rebuild + push failed');
-      return fetch('/api/model-actual/daily-summary/stored');
+      return apiFetch('/api/model-actual/daily-summary/stored');
     })
     .then(function(r){return r.json();})
     .then(function(d){
