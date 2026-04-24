@@ -584,7 +584,9 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
             <div style="margin-bottom:8px"><strong>Statscast/Savant:</strong> <span id="brainStatcast">-</span></div>
             <div style="margin-bottom:8px"><strong>FanGraphs:</strong> <span id="brainFanGraphs">-</span></div>
             <div style="margin-bottom:8px"><strong>MLB API Players:</strong> <span id="brainMLBPlayers">-</span></div>
+            <div style="margin-bottom:8px"><strong>Manual Uploads:</strong> <span id="brainManualUploads">-</span></div>
             <div style="margin-bottom:8px"><strong>Total Data Points:</strong> <span id="brainTotalData" style="color:var(--c);font-weight:700">-</span></div>
+            <div id="brainUploadNote" style="font-size:.56rem;color:var(--mu);line-height:1.5;margin-top:10px;padding:8px 10px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.03);border-radius:8px">Uploaded files are listed below and staged separately from the live brain sources.</div>
             <div style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,.1)">
               <span style="font-size:.56rem;color:var(--mu);font-style:italic">Status: <span id="brainIngestStatus">Unknown</span></span>
             </div>
@@ -1584,12 +1586,21 @@ function loadUploadedFiles(){
     var el=document.getElementById('uploadedFilesList');
     if(!files.length){el.textContent='No files uploaded yet.';return;}
     var html=files.map(function(f){
+      var state=(f.ingestState||'staged').toUpperCase();
+      var stateColor=f.ingestState==='ingested'?'#81c784':f.ingestState==='error'?'#ff6b6b':f.ingestState==='empty'?'#ffd166':'#8ecae6';
+      var details=[];
+      if(f.category) details.push(f.category.replace(/_/g,' '));
+      details.push(f.type);
+      details.push(f.sizeKB+'KB');
+      if(f.recordCount) details.push(f.recordCount+' records');
+      if(f.error) details.push('error');
       return '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.05)">'
-        +'<span>'+f.filename+' ('+f.type+', '+f.sizeKB+'KB)</span>'
+        +'<span><strong>'+f.filename+'</strong><br><span style="color:var(--mu)">'+details.join(' · ')+'</span><br><span style="color:'+stateColor+'">'+state+'</span>'+(f.error?'<br><span style="color:#ff6b6b">'+f.error+'</span>':'')+'</span>'
         +'<button class="tabbtn" style="padding:2px 6px;font-size:.65rem" onclick="deleteBrainDataFile(\''+f.filename+'\')">DELETE</button>'
         +'</div>';
     }).join('');
     el.innerHTML=html;
+    refreshBrainStatus();
   }).catch(function(e){setText('uploadMsg','Load files failed',true);});
 }
 
@@ -1607,7 +1618,7 @@ function uploadBrainData(){
     .then(function(r){return r.json();})
     .then(function(d){
       if(!d||!d.success) throw new Error(d.error||'Upload failed');
-      setText('uploadMsg','Uploaded '+d.uploadedCount+' file(s)');
+      setText('uploadMsg','Uploaded '+d.uploadedCount+' file(s). Click INGEST NOW to parse them into the brain.');
       fileInput.value='';
       loadUploadedFiles();
     }).catch(function(e){setText('uploadMsg',e.message||'Upload failed',true);});
@@ -1645,16 +1656,21 @@ function refreshBrainStatus(){
     var sc=d.ingestion&&d.ingestion.statscast?d.ingestion.statscast.summary||{}:{};
     var fg=d.ingestion&&d.ingestion.fangraphs?d.ingestion.fangraphs.summary||{}:{};
     var mlb=d.ingestion&&d.ingestion.mlbApi?d.ingestion.mlbApi.summary||{}:{};
+    var uploads=d.ingestion&&d.ingestion.manualUploads?d.ingestion.manualUploads:{};
     var elSC=document.getElementById('brainStatcast');
     var elFG=document.getElementById('brainFanGraphs');
     var elMLB=document.getElementById('brainMLBPlayers');
+    var elUploads=document.getElementById('brainManualUploads');
     var elTotal=document.getElementById('brainTotalData');
     var elStatus=document.getElementById('brainIngestStatus');
+    var elUploadNote=document.getElementById('brainUploadNote');
     if(elSC) elSC.textContent=(sc.pitcherXStats||0)+' xStats, '+(sc.batterXStats||0)+' Batter xStats';
     if(elFG) elFG.textContent=(fg.batters||0)+' Batters, '+(fg.pitchers||0)+' Pitchers';
     if(elMLB) elMLB.textContent=(mlb.totalPlayers||0)+' Players across '+(mlb.totalTeams||0)+' Teams';
+    if(elUploads) elUploads.textContent=(uploads.count||0)+' file(s), '+(uploads.totalRecords||0)+' records, '+(uploads.statusLabel||'0 files');
     if(elTotal) elTotal.textContent=summary.totalDataPoints?summary.totalDataPoints.toLocaleString():'-';
-    if(elStatus) elStatus.textContent=(summary.dataSourcesActive||0)+' sources active';
+    if(elStatus) elStatus.textContent=(summary.dataSourcesActive||0)+' live sources active · '+(summary.totalManualUploadRecords||0)+' manual upload records';
+    if(elUploadNote) elUploadNote.textContent=uploads.message||'Uploaded files are listed below and staged separately from the live brain sources.';
     setText('brainMsg','Brain status updated');
   }).catch(function(e){setText('brainMsg',e.message||'Status failed',true);});
 }
@@ -1665,8 +1681,11 @@ function triggerBrainIngest(){
     .then(function(r){return r.json();})
     .then(function(d){
       if(!d||!d.success) throw new Error(d.error||'Ingest failed');
-      setText('brainMsg','Ingestion complete: '+(d.data&&d.data.totalDataPoints||0)+' data points');
+      var uploadCount=d.manualUploads&&d.manualUploads.ingestedFiles||0;
+      var uploadRecords=d.manualUploads&&d.manualUploads.totalRecords||0;
+      setText('brainMsg','Ingestion complete: '+(d.data&&d.data.totalDataPoints||0)+' total data points, '+uploadCount+' uploaded file(s) parsed for '+uploadRecords+' manual records.');
       refreshBrainStatus();
+      loadUploadedFiles();
     }).catch(function(e){setText('brainMsg',e.message||'Ingest failed',true);});
 }
 

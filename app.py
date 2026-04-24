@@ -42,6 +42,7 @@ DATA_DIR = os.path.join(_HERE, 'data')
 os.makedirs(DATA_DIR, exist_ok=True)
 BRAIN_DATA_DIR = os.path.join(DATA_DIR, 'brain_uploads')
 os.makedirs(BRAIN_DATA_DIR, exist_ok=True)
+BRAIN_UPLOAD_STATE_STORE = os.path.join(DATA_DIR, 'brain_upload_state.json')
 TRACKER_STORE = os.path.join(DATA_DIR, 'daily_tracker.json')
 ADJUST_STORE = os.path.join(DATA_DIR, 'model_adjustments.json')
 CAL_HISTORY_STORE = os.path.join(DATA_DIR, 'calibration_history.json')
@@ -60,6 +61,7 @@ _consistency_cache_lock = threading.Lock()
 _consistency_refreshing = False
 _daily_summary_push_lock = threading.Lock()
 _daily_summary_push_jobs = {}
+_brain_upload_lock = threading.Lock()
 _mlb_memory_lock = threading.Lock()
 _mlb_memory_collecting = False
 _mlb_memory_last_collect = None
@@ -92,6 +94,253 @@ def _save_json(path, payload):
         return True
     except Exception:
         return False
+
+
+def _brain_upload_state_default():
+    return {
+        "files": {},
+        "updatedAt": None,
+        "lastIngestedAt": None,
+    }
+
+
+def _get_brain_upload_state():
+    payload = _load_json(BRAIN_UPLOAD_STATE_STORE, _brain_upload_state_default())
+    if not isinstance(payload, dict):
+        payload = _brain_upload_state_default()
+    files = payload.get('files')
+    if not isinstance(files, dict):
+        files = {}
+    payload['files'] = files
+    return payload
+
+
+def _save_brain_upload_state(payload):
+    base = _brain_upload_state_default()
+    if isinstance(payload, dict):
+        base.update(payload)
+    base['updatedAt'] = datetime.now(timezone.utc).isoformat()
+    _save_json(BRAIN_UPLOAD_STATE_STORE, base)
+    return base
+
+
+def _safe_brain_upload_name(filename):
+    safe_name = "".join(c for c in (filename or '') if c.isalnum() or c in ('._-'))
+    return safe_name or f"upload_{uuid4().hex[:8]}.dat"
+
+
+def _unique_brain_upload_name(filename):
+    safe_name = _safe_brain_upload_name(filename)
+    stem, ext = os.path.splitext(safe_name)
+    candidate = safe_name
+    idx = 1
+    while os.path.exists(os.path.join(BRAIN_DATA_DIR, candidate)):
+        candidate = f"{stem}_{idx}{ext}"
+        idx += 1
+    return candidate
+
+
+def _brain_upload_detect_record_count(payload):
+    if isinstance(payload, list):
+        return len(payload), payload[:3]
+    if isinstance(payload, dict):
+        for key in ('rows', 'data', 'items', 'records', 'players', 'games'):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return len(value), value[:3]
+        return len(payload.keys()), [dict(list(payload.items())[:5])]
+    return 1, [payload]
+
+
+def _brain_upload_parse_file(file_path, category, existing_entry=None):
+    ext = os.path.splitext(file_path)[1].lower()
+    stat = os.stat(file_path)
+    base = {
+        'category': category or 'other',
+        'sizeBytes': stat.st_size,
+        'sizeKB': round(stat.st_size / 1024, 2),
+        'modifiedAt': datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+        'parsedAt': datetime.now(timezone.utc).isoformat(),
+        'ingestState': 'ingested',
+        'error': None,
+        'recordCount': 0,
+        'fieldCount': 0,
+        'fields': [],
+        'sample': [],
+    }
+    try:
+        if ext == '.csv':
+            with open(file_path, 'r', encoding='utf-8-sig', newline='') as f:
+                reader = csvmod.reader(f)
+                rows = list(reader)
+            if rows:
+                header = rows[0]
+                data_rows = rows[1:] if header else rows
+                base['fieldCount'] = len(header)
+                base['fields'] = header[:12]
+                base['recordCount'] = len(data_rows)
+                base['sample'] = [row[:12] for row in data_rows[:3]]
+            else:
+                base['ingestState'] = 'empty'
+        elif ext == '.json':
+            with open(file_path, 'r', encoding='utf-8-sig') as f:
+                payload = json.load(f)
+            count, sample = _brain_upload_detect_record_count(payload)
+            base['recordCount'] = count
+            if isinstance(payload, dict):
+                base['fields'] = list(payload.keys())[:12]
+                base['fieldCount'] = len(payload.keys())
+            elif sample and isinstance(sample[0], dict):
+                base['fields'] = list(sample[0].keys())[:12]
+                base['fieldCount'] = len(sample[0].keys())
+            base['sample'] = sample
+        else:
+            with open(file_path, 'r', encoding='utf-8-sig', errors='replace') as f:
+                lines = [line.strip() for line in f.readlines()]
+            non_empty = [line for line in lines if line]
+            base['recordCount'] = len(non_empty)
+            base['fieldCount'] = 1
+            base['fields'] = ['text']
+            base['sample'] = non_empty[:3]
+            if not non_empty:
+                base['ingestState'] = 'empty'
+    except Exception as ex:
+        base['ingestState'] = 'error'
+        base['error'] = str(ex)
+    if existing_entry:
+        base['uploadedAt'] = existing_entry.get('uploadedAt')
+    return base
+
+
+def _process_uploaded_brain_files(force=False):
+    with _brain_upload_lock:
+        state = _get_brain_upload_state()
+        files_state = state.get('files', {})
+        existing_names = set(files_state.keys())
+        disk_names = set()
+        for fname in sorted(os.listdir(BRAIN_DATA_DIR)) if os.path.exists(BRAIN_DATA_DIR) else []:
+            fpath = os.path.join(BRAIN_DATA_DIR, fname)
+            if not os.path.isfile(fpath):
+                continue
+            disk_names.add(fname)
+            entry = files_state.get(fname) or {}
+            if not entry:
+                files_state[fname] = {
+                    'filename': fname,
+                    'category': 'other',
+                    'uploadedAt': datetime.fromtimestamp(os.path.getmtime(fpath), tz=timezone.utc).isoformat(),
+                    'ingestState': 'staged',
+                }
+                entry = files_state[fname]
+            modified_at = datetime.fromtimestamp(os.path.getmtime(fpath), tz=timezone.utc).isoformat()
+            needs_parse = force or entry.get('parsedAt') is None or entry.get('modifiedAt') != modified_at or entry.get('ingestState') in ('staged', 'error')
+            entry['filename'] = fname
+            entry['modifiedAt'] = modified_at
+            entry['sizeBytes'] = os.path.getsize(fpath)
+            entry['sizeKB'] = round(entry['sizeBytes'] / 1024, 2)
+            if needs_parse:
+                parsed = _brain_upload_parse_file(fpath, entry.get('category'), entry)
+                entry.update(parsed)
+            files_state[fname] = entry
+        for stale_name in sorted(existing_names - disk_names):
+            files_state.pop(stale_name, None)
+        state['files'] = files_state
+        state['lastIngestedAt'] = datetime.now(timezone.utc).isoformat()
+        _save_brain_upload_state(state)
+        return _brain_uploaded_files_summary(state=state)
+
+
+def _brain_uploaded_files_summary(state=None):
+    if state is None:
+        state = _get_brain_upload_state()
+    files_state = state.get('files', {})
+    files = []
+    total_size_bytes = 0
+    total_records = 0
+    ingested_files = 0
+    staged_files = 0
+    error_files = 0
+    empty_files = 0
+    latest_modified_at = None
+    latest_filename = ''
+    for fname in sorted(files_state.keys()):
+        entry = dict(files_state.get(fname) or {})
+        fpath = os.path.join(BRAIN_DATA_DIR, fname)
+        if not os.path.isfile(fpath):
+            continue
+        size_bytes = int(entry.get('sizeBytes') or os.path.getsize(fpath) or 0)
+        total_size_bytes += size_bytes
+        total_records += int(entry.get('recordCount') or 0)
+        ingest_state = entry.get('ingestState') or 'staged'
+        if ingest_state == 'ingested':
+            ingested_files += 1
+        elif ingest_state == 'error':
+            error_files += 1
+        elif ingest_state == 'empty':
+            empty_files += 1
+        else:
+            staged_files += 1
+        modified_at = entry.get('modifiedAt') or datetime.fromtimestamp(os.path.getmtime(fpath), tz=timezone.utc).isoformat()
+        if latest_modified_at is None or modified_at > latest_modified_at:
+            latest_modified_at = modified_at
+            latest_filename = fname
+        ext = os.path.splitext(fname)[1].lower()
+        files.append({
+            'filename': fname,
+            'sizeBytes': size_bytes,
+            'sizeKB': round(size_bytes / 1024, 2),
+            'type': 'JSON' if ext == '.json' else 'CSV' if ext == '.csv' else 'TXT' if ext == '.txt' else 'File',
+            'category': entry.get('category') or 'other',
+            'uploadedAt': entry.get('uploadedAt'),
+            'modifiedAt': modified_at,
+            'parsedAt': entry.get('parsedAt'),
+            'ingestState': ingest_state,
+            'recordCount': int(entry.get('recordCount') or 0),
+            'fieldCount': int(entry.get('fieldCount') or 0),
+            'fields': entry.get('fields') or [],
+            'error': entry.get('error'),
+        })
+    status_parts = []
+    if ingested_files:
+        status_parts.append(f"{ingested_files} ingested")
+    if staged_files:
+        status_parts.append(f"{staged_files} staged")
+    if empty_files:
+        status_parts.append(f"{empty_files} empty")
+    if error_files:
+        status_parts.append(f"{error_files} error")
+    ingestion_state = 'empty'
+    if error_files:
+        ingestion_state = 'partial_error' if ingested_files else 'error'
+    elif staged_files:
+        ingestion_state = 'staged' if not ingested_files else 'partial'
+    elif ingested_files or empty_files:
+        ingestion_state = 'ingested'
+    message = 'No uploaded files.'
+    if files:
+        if staged_files:
+            message = 'Uploaded files are staged. Run INGEST NOW to parse them into brain memory.'
+        elif error_files:
+            message = 'Some uploaded files failed to ingest. Check the file list for details.'
+        else:
+            message = 'Uploaded files have been parsed into manual brain memory for this session.'
+    return {
+        'count': len(files),
+        'totalSizeBytes': total_size_bytes,
+        'totalSizeKB': round(total_size_bytes / 1024, 2),
+        'totalRecords': total_records,
+        'ingestedFiles': ingested_files,
+        'stagedFiles': staged_files,
+        'errorFiles': error_files,
+        'emptyFiles': empty_files,
+        'latestFilename': latest_filename,
+        'latestModifiedAt': latest_modified_at,
+        'files': files,
+        'ingestionState': ingestion_state,
+        'lastIngestedAt': state.get('lastIngestedAt'),
+        'message': message,
+        'statusLabel': ', '.join(status_parts) if status_parts else '0 files',
+    }
 
 
 def _admin_settings_default():
@@ -1330,6 +1579,8 @@ def _memory_collect_comprehensive_data(date_str=None, team_ids=None, mode='light
         statscast_data = _memory_ingest_statscast_data(date_str)
         fangraphs_data = _memory_ingest_fangraphs_data()
         mlb_api_data = _memory_ingest_mlb_api_player_stats(team_ids)
+        manual_uploads_data = _process_uploaded_brain_files(force=(mode == 'manual'))
+        manual_upload_records = int(manual_uploads_data.get('totalRecords') or 0)
         
         # Compile comprehensive summary
         comprehensive = {
@@ -1340,12 +1591,15 @@ def _memory_collect_comprehensive_data(date_str=None, team_ids=None, mode='light
                 "statscast": statscast_data,
                 "fangraphs": fangraphs_data,
                 "mlbApi": mlb_api_data,
+                "manualUploads": manual_uploads_data,
             },
             "totalDataPoints": (
                 sum(statscast_data.get("summary", {}).values()) +
                 sum(fangraphs_data.get("summary", {}).values()) +
-                mlb_api_data.get("summary", {}).get("totalPlayers", 0)
+                mlb_api_data.get("summary", {}).get("totalPlayers", 0) +
+                manual_upload_records
             ),
+            "manualUploadRecords": manual_upload_records,
         }
         
         return comprehensive
@@ -1954,9 +2208,7 @@ def api_brain_data_upload():
             if f and f.filename:
                 try:
                     filename = f.filename
-                    safe_name = "".join(c for c in filename if c.isalnum() or c in ('._-'))
-                    if not safe_name:
-                        safe_name = f"upload_{uuid4().hex[:8]}.dat"
+                    safe_name = _unique_brain_upload_name(filename)
                     file_path = os.path.join(BRAIN_DATA_DIR, safe_name)
                     f.save(file_path)
                     files_uploaded.append(safe_name)
@@ -1965,7 +2217,36 @@ def api_brain_data_upload():
                     print(f"[api_brain_data_upload] File save failed for {f.filename}: {ex}")
         if not files_uploaded:
             return jsonify({'success': False, 'error': 'No files successfully uploaded'}), 400
-        return jsonify({'success': True, 'uploadedCount': len(files_uploaded), 'files': files_uploaded})
+        with _brain_upload_lock:
+            state = _get_brain_upload_state()
+            files_state = state.get('files', {})
+            uploaded_at = datetime.now(timezone.utc).isoformat()
+            for safe_name in files_uploaded:
+                fpath = os.path.join(BRAIN_DATA_DIR, safe_name)
+                stat = os.stat(fpath)
+                files_state[safe_name] = {
+                    'filename': safe_name,
+                    'category': file_type or 'other',
+                    'uploadedAt': uploaded_at,
+                    'modifiedAt': datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+                    'sizeBytes': stat.st_size,
+                    'sizeKB': round(stat.st_size / 1024, 2),
+                    'ingestState': 'staged',
+                    'parsedAt': None,
+                    'recordCount': 0,
+                    'fieldCount': 0,
+                    'fields': [],
+                    'error': None,
+                }
+            state['files'] = files_state
+            _save_brain_upload_state(state)
+        upload_summary = _brain_uploaded_files_summary()
+        return jsonify({
+            'success': True,
+            'uploadedCount': len(files_uploaded),
+            'files': files_uploaded,
+            'uploadSummary': upload_summary,
+        })
     except Exception as ex:
         print(f'[api_brain_data_upload] {traceback.format_exc()}')
         return jsonify({'success': False, 'error': str(ex)}), 500
@@ -1974,17 +2255,8 @@ def api_brain_data_upload():
 @app.route('/api/brain-data/list', methods=['GET'])
 def api_brain_data_list():
     try:
-        files = []
-        if os.path.exists(BRAIN_DATA_DIR):
-            for fname in os.listdir(BRAIN_DATA_DIR):
-                fpath = os.path.join(BRAIN_DATA_DIR, fname)
-                if os.path.isfile(fpath):
-                    size_bytes = os.path.getsize(fpath)
-                    size_kb = round(size_bytes / 1024, 2)
-                    ext = os.path.splitext(fname)[1].lower()
-                    file_type = 'JSON' if ext == '.json' else 'CSV' if ext == '.csv' else 'TXT' if ext == '.txt' else 'File'
-                    files.append({'filename': fname, 'sizeBytes': size_bytes, 'sizeKB': size_kb, 'type': file_type})
-        return jsonify({'success': True, 'files': files})
+        upload_summary = _brain_uploaded_files_summary()
+        return jsonify({'success': True, 'files': upload_summary.get('files', []), 'uploadSummary': upload_summary})
     except Exception as ex:
         print(f'[api_brain_data_list] {traceback.format_exc()}')
         return jsonify({'success': False, 'error': str(ex)}), 500
@@ -2004,6 +2276,12 @@ def api_brain_data_delete():
         if not os.path.exists(fpath):
             return jsonify({'success': False, 'error': 'File not found'}), 404
         os.remove(fpath)
+        with _brain_upload_lock:
+            state = _get_brain_upload_state()
+            files_state = state.get('files', {})
+            files_state.pop(safe_name, None)
+            state['files'] = files_state
+            _save_brain_upload_state(state)
         print(f"[api_brain_data_delete] Deleted {safe_name}")
         return jsonify({'success': True, 'message': 'File deleted'})
     except Exception as ex:
@@ -2027,24 +2305,32 @@ def api_brain_ingest_status():
         total_statscast = sum(statscast.get('summary', {}).values())
         total_fangraphs = sum(fangraphs.get('summary', {}).values())
         total_players = mlb_api.get('summary', {}).get('totalPlayers', 0)
-        total_points = int(total_statscast) + int(total_fangraphs) + int(total_players)
+        upload_summary = _brain_uploaded_files_summary()
+        manual_records = int(upload_summary.get('totalRecords') or 0)
+        total_points = int(total_statscast) + int(total_fangraphs) + int(total_players) + manual_records
 
         return jsonify({
             'success': True,
             'brainStatus': {
                 'lastUpdated': datetime.now(timezone.utc).isoformat(),
-                'dataIngestedAt': datetime.now(timezone.utc).isoformat(),
+                'dataIngestedAt': upload_summary.get('lastIngestedAt') or datetime.now(timezone.utc).isoformat(),
             },
             'ingestion': {
                 'statscast': statscast,
                 'fangraphs': fangraphs,
                 'mlbApi': mlb_api,
+                'manualUploads': upload_summary,
             },
             'summary': {
                 'totalStatscastRecords': total_statscast,
                 'totalFanGraphsRecords': total_fangraphs,
                 'totalPlayerRecords': total_players,
+                'totalManualUploadRecords': manual_records,
                 'totalDataPoints': total_points,
+                'totalLiveDataPoints': int(total_statscast) + int(total_fangraphs) + int(total_players),
+                'manualUploadFiles': upload_summary.get('count', 0),
+                'manualUploadSizeKB': upload_summary.get('totalSizeKB', 0),
+                'manualUploadState': upload_summary.get('ingestionState', 'staged_only'),
                 'dataSourcesActive': len([s for s in statscast.get('sources', []) if s] + [f for f in fangraphs.get('sources', []) if f] + [m for m in mlb_api.get('sources', []) if m]),
             }
         })
@@ -2069,11 +2355,13 @@ def api_brain_ingest_trigger():
 
         today_et = datetime.now(ET).strftime("%Y-%m-%d")
         comprehensive = _memory_collect_comprehensive_data(today_et, team_ids=[i for i in range(108, 146)], mode='manual')
+        manual_uploads = comprehensive.get('sources', {}).get('manualUploads', {})
 
         return jsonify({
             'success': True,
             'message': 'Ingestion triggered and completed',
             'data': comprehensive,
+            'manualUploads': manual_uploads,
         })
     except Exception as ex:
         print(f'[api_brain_ingest_trigger] {traceback.format_exc()}')
