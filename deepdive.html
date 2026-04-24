@@ -494,6 +494,19 @@ function brlc(v){var n=parseFloat(v);if(isNaN(n))return'';return n>=10?'av-g':n>
 function pv(v,fb){return(v!==undefined&&v!==null&&v!=='N/A'&&v!=='')?v:fb;}
 function fmtP(v){var n=parseFloat(v);return isNaN(n)?'N/A':(n*100).toFixed(1)+'%';}
 function toF(v,d){var n=parseFloat(v);return isNaN(n)?d:n;}
+function apiFetch(path, opts){
+  try{return fetch(path, opts);}catch(e1){
+    try{
+      var origin=(window.location&&window.location.origin&&window.location.origin!=='null')
+        ? window.location.origin
+        : ((window.location&&window.location.protocol&&window.location.host)?(window.location.protocol+'//'+window.location.host):'');
+      if(!origin) throw e1;
+      return fetch(origin+path, opts);
+    }catch(e2){
+      return Promise.reject(e2&&e2.message?e2:new Error('Request initialization failed'));
+    }
+  }
+}
 
 function loadTrackedKeys(){
   try{var raw=localStorage.getItem(TRACK_LS_KEY);TRACKED_KEYS=raw?new Set(JSON.parse(raw)):new Set();}
@@ -1055,7 +1068,7 @@ function loadGameProjection() {
 }
 
 function loadModelActualCompare(){
-  fetch('/api/model-actual/compare/' + GPK)
+  apiFetch('/api/model-actual/compare/' + GPK)
     .then(function(r){ return r.json(); })
     .then(function(d){
       MODEL_ACTUAL_DATA = d;
@@ -1113,7 +1126,7 @@ function renderModelActualCompare(d){
 function pushDailySummaryRecommendations(){
   var el = document.getElementById('dailySummaryPushMsg');
   if(el) el.textContent = 'Pushing slate summary...';
-  fetch('/api/model-actual/daily-summary/push', {
+  apiFetch('/api/model-actual/daily-summary/push', {
     method:'POST',
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify({date: etToday()})
