@@ -2111,7 +2111,7 @@ def get_batters_from_boxscore(team_data, side):
         })
     return out
 
-def parse_game(g):
+def parse_game(g, prefer_live_weather=True):
     try:
         pk   = g.get("gamePk")
         stat = g.get("status",{}).get("detailedState","Scheduled")
@@ -2137,11 +2137,20 @@ def parse_game(g):
             game_hour_local = (dt_utc_wx + timedelta(hours=utc_offset)).hour
         except:
             game_hour_local = 13
-        wx = get_weather(lat, lon, game_hour_local, venue_id=venue_id)
-        # Fallback: use MLB schedule weather when Open-Meteo fails or returns unavailable data.
-        if (wx.get("temp") in (None, "N/A") or wx.get("condition") in (None, "", "N/A")):
-            raw_weather = g.get("weather", {}) or {}
-            if raw_weather:
+        raw_weather = g.get("weather", {}) or {}
+        if not prefer_live_weather and raw_weather:
+            wx = {
+                "temp": raw_weather.get("temp", "N/A"),
+                "condition": raw_weather.get("condition", "N/A"),
+                "wind": raw_weather.get("wind", "N/A"),
+                "wind_speed": raw_weather.get("wind", "N/A"),
+                "wind_dir": "",
+                "rain_chance": raw_weather.get("precipitationChance", "N/A"),
+            }
+        else:
+            wx = get_weather(lat, lon, game_hour_local, venue_id=venue_id)
+            # Fallback: use MLB schedule weather when Open-Meteo fails or returns unavailable data.
+            if (wx.get("temp") in (None, "N/A") or wx.get("condition") in (None, "", "N/A")) and raw_weather:
                 print(f"[weather_fallback] using MLB weather for gamePk={pk} venue={venue_id}")
                 wx = {
                     "temp": raw_weather.get("temp", "N/A"),
@@ -2724,6 +2733,7 @@ def api_memory_collect_deep():
 
 @app.route("/api/games/today")
 def api_games_today():
+    t0 = time.perf_counter()
     # Keep dashboard responsive during cold starts; refresh in background.
     _maybe_refresh_fg()
     _maybe_refresh_savant()
@@ -2733,11 +2743,15 @@ def api_games_today():
         raw   = fetch_schedule(date_str)
         workers = min(12, max(1, len(raw)))
         with ThreadPoolExecutor(max_workers=workers) as ex:
-            games = [g for g in ex.map(parse_game, raw) if g]
+            games = [g for g in ex.map(lambda x: parse_game(x, prefer_live_weather=False), raw) if g]
         return jsonify({"success":True,"games":games,"count":len(games)})
     except Exception as ex:
         print("[api_games_today]", traceback.format_exc())
         return jsonify({"success":False,"error":str(ex),"games":[]}), 500
+    finally:
+        ms = int((time.perf_counter() - t0) * 1000)
+        if ms >= 1000:
+            print(f"[perf] /api/games/today {ms}ms")
 
 
 @app.route("/api/game-summary/<int:game_pk>")
@@ -3139,9 +3153,9 @@ def api_model_actual_daily_summary_stored():
 
 @app.route("/api/game/<int:game_pk>")
 def api_game_detail(game_pk):
-    fg_ready = _wait_for_fg_data(timeout_sec=15)
-    if not fg_ready:
-        print("[api_game_detail] WARNING: FG data timed out after 15s, proceeding with partial data")
+    t0 = time.perf_counter()
+    # Keep endpoint responsive during cold starts; refresh in background.
+    _maybe_refresh_fg()
     _maybe_refresh_savant()
     try:
         r = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=10)
@@ -3155,6 +3169,10 @@ def api_game_detail(game_pk):
     except Exception as ex:
         print("[api_game_detail]", traceback.format_exc())
         return jsonify({"success":False,"error":str(ex),"awayBatters":[],"homeBatters":[]}), 500
+    finally:
+        ms = int((time.perf_counter() - t0) * 1000)
+        if ms >= 1000:
+            print(f"[perf] /api/game/{game_pk} {ms}ms")
 
 @app.route("/api/game/livedata/<int:game_pk>")
 def api_game_livedata(game_pk):
@@ -3229,27 +3247,10 @@ def api_game_livedata(game_pk):
 
 @app.route("/api/pitchers/<int:game_pk>")
 def api_pitchers(game_pk):
-    # Ensure FG data is loaded (wait up to 15 seconds)
-    fg_ready = _wait_for_fg_data(timeout_sec=15)
-    if not fg_ready:
-        print("[api_pitchers] WARNING: FG data timed out after 15s, proceeding with partial data")
-        try:
-            _load_fg_data()
-            with _fg_lock:
-                fg_ready = _fg_loaded and len(_fg_pit) > 0
-            print(f"[api_pitchers] FG synchronous fallback loaded={fg_ready}")
-        except Exception as ex:
-            print(f"[api_pitchers] FG synchronous fallback failed: {ex}")
-    sv_ready = _wait_for_savant_data(timeout_sec=15)
-    if not sv_ready:
-        print("[api_pitchers] WARNING: Savant data timed out after 15s, proceeding with partial data")
-        try:
-            _load_savant_data()
-            with _sv_lock:
-                sv_ready = _sv_loaded and len(_sv_pit_xstats) > 0
-            print(f"[api_pitchers] Savant synchronous fallback loaded={sv_ready}")
-        except Exception as ex:
-            print(f"[api_pitchers] Savant synchronous fallback failed: {ex}")
+    t0 = time.perf_counter()
+    # Keep endpoint responsive during cold starts; refresh in background.
+    _maybe_refresh_fg()
+    _maybe_refresh_savant()
     try:
         g = fetch_schedule_game(game_pk)
         if g:
@@ -3293,6 +3294,10 @@ def api_pitchers(game_pk):
     except Exception as ex:
         print("[api_pitchers]", traceback.format_exc())
         return jsonify({"success":False,"error":str(ex),"awayPitcher":{},"homePitcher":{}}), 500
+    finally:
+        ms = int((time.perf_counter() - t0) * 1000)
+        if ms >= 1000:
+            print(f"[perf] /api/pitchers/{game_pk} {ms}ms")
 
 
 def _zonechart_cache_get(player_id, today):
@@ -12903,10 +12908,10 @@ def _matchup_score(batter, pitcher_fg, pitcher_sv, pitcher_hand='R'):
 # ── Route: Prop projections ───────────────────────────────────────────────────
 @app.route('/api/props/projections/<int:game_pk>')
 def api_props_projections(game_pk):
+    t0 = time.perf_counter()
     try:
-        fg_ready = _wait_for_fg_data(timeout_sec=15)
-        if not fg_ready:
-            print("[api_props_projections] WARNING: FG data timed out after 15s, proceeding with partial data")
+        # Keep endpoint responsive during cold starts; refresh in background.
+        _maybe_refresh_fg()
         _maybe_refresh_savant()
         _fetch_injury_status(force=False)
 
@@ -13167,6 +13172,10 @@ def api_props_projections(game_pk):
     except Exception as ex:
         print(f"[api_props_projections] {traceback.format_exc()}")
         return jsonify({"success": False, "error": str(ex)}), 500
+    finally:
+        ms = int((time.perf_counter() - t0) * 1000)
+        if ms >= 1000:
+            print(f"[perf] /api/props/projections/{game_pk} {ms}ms")
 
 
 @app.route('/api/props/scan/today')
@@ -14719,10 +14728,6 @@ def api_lineup_status(game_pk):
         print(f"[api_lineup_status] {traceback.format_exc()}")
         return jsonify({"success": False, "error": str(ex)}), 500
 
-
-# Boot background loaders (guarded so /api/* calls during load don't re-spawn).
-_maybe_refresh_fg()
-_maybe_refresh_savant()
 
 # =============================================================
 # GAMESIDE DEEP DIVE — reference-style layered matchup view

@@ -827,7 +827,16 @@ function qpSave(e,pick,btnId){
 }
 
 let TEAM_DATA={teams:[]}, TEAM_PITCH_RANK={rankings:[]}, MC_DATA={games:[],topProps:[]};
-function switchView(id, btn){ document.querySelectorAll('.view').forEach(v=>v.classList.remove('active')); document.getElementById(id).classList.add('active'); document.querySelectorAll('.tabbtn').forEach(b=>b.classList.remove('active')); if(btn) btn.classList.add('active'); }
+let TEAMS_LOADED=false;
+function switchView(id, btn){
+  document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  document.querySelectorAll('.tabbtn').forEach(b=>b.classList.remove('active'));
+  if(btn) btn.classList.add('active');
+  if(id==='teamsView' && !TEAMS_LOADED){
+    loadTeams();
+  }
+}
 function numOrDash(v){ return (v===undefined||v===null||v==='') ? '—' : v; }
 function renderTeamPitchingRankings(rankings){
   const wrap=document.getElementById('teamPitchRankWrap');
@@ -868,6 +877,7 @@ function loadTeams(){
   fetch('/api/teams/overview').then(r=>r.json()).then(function(d){
     if(!d.success) throw new Error(d.error||'Team load failed');
     TEAM_DATA=d;
+    TEAMS_LOADED=true;
     const sel=document.getElementById('teamSelect');
     sel.innerHTML=(d.teams||[]).map(t=>'<option value="'+t.id+'">'+t.abbr+' — '+t.name+'</option>').join('');
     document.getElementById('teamStatus').textContent=(d.teams||[]).length+' teams loaded';
@@ -1459,10 +1469,18 @@ function apiFetch(path, opts){
     return _fallback(e1);
   }
 }
+function apiFetchJson(path, opts){
+  var t0=performance.now();
+  return apiFetch(path, opts).then(function(r){
+    var ms=Math.round(performance.now()-t0);
+    if(ms>1200) console.warn('[slow-api]', path, ms+'ms', 'status='+r.status);
+    return r.json();
+  });
+}
 function loadMemoryStatus(){
   var v=document.getElementById('sm'),l=document.getElementById('sml');
   if(!v||!l)return;
-  fetch('/api/memory/status').then(function(r){return r.json();}).then(function(d){
+  apiFetchJson('/api/memory/status').then(function(d){
     if(!d||!d.success||!d.status) throw new Error('status');
     var s=d.status||{};
     var c=(s.snapshotCount==null?'-':s.snapshotCount);
@@ -1952,6 +1970,7 @@ function syncDateUI(){var inp=document.getElementById('gamesDateInput'),lbl=docu
 function shiftDate(dateStr,days){var dt=new Date(dateStr+'T12:00:00');dt.setDate(dt.getDate()+days);return dt.toISOString().slice(0,10);}
 function shiftGamesDate(days){selectedGamesDate=shiftDate(selectedGamesDate,days);syncDateUI();load(selectedGamesDate)}
 function load(dateStr){if(dateStr) selectedGamesDate=dateStr;syncDateUI();fetch('/api/games/today?date='+encodeURIComponent(selectedGamesDate)).then(function(r){return r.json()}).then(function(d){if(!d.success)throw new Error(d.error||'API error');var gs=d.games||[];window.__lastGames=gs;document.getElementById('sg').textContent=gs.length||0;document.getElementById('sl').textContent=gs.filter(function(g){return g.status==='Live'}).length;var edges=gs.map(function(g){return g.edge});document.getElementById('se').textContent=edges.length?(edges.reduce(function(a,b){return a+b},0)/edges.length).toFixed(1):'--';document.getElementById('sh').textContent=gs.filter(function(g){return g.edge>=8}).length;if(!gs.length){document.getElementById('gc').innerHTML='<div class="ng"><h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px">NO GAMES FOR '+fmtDateLabel(selectedGamesDate).toUpperCase()+'</h3></div>';}else{document.getElementById('gc').innerHTML='<div class="grid">'+gs.map(mkCard).join('')+'</div>';setTimeout(function(){document.querySelectorAll('.fill').forEach(function(e){e.style.width=e.getAttribute('data-w')+'%'})},150);if(window.initLiveCards)initLiveCards(gs);}if(document.getElementById('nrfiView').classList.contains('active')) loadNRFIBoard(gs);}).catch(function(e){document.getElementById('gc').innerHTML='<div class="sw"><div style="background:rgba(224,64,251,.08);border:1px solid rgba(224,64,251,.3);border-radius:12px;padding:24px 32px;text-align:center"><h3 style="color:var(--m);font-family:Orbitron;margin-bottom:8px">CONNECTION ERROR</h3><p style="color:var(--mu);font-size:.82rem">'+e.message+'</p></div></div>'})}
+function load(dateStr){if(dateStr) selectedGamesDate=dateStr;syncDateUI();apiFetchJson('/api/games/today?date='+encodeURIComponent(selectedGamesDate)).then(function(d){if(!d.success)throw new Error(d.error||'API error');var gs=d.games||[];window.__lastGames=gs;document.getElementById('sg').textContent=gs.length||0;document.getElementById('sl').textContent=gs.filter(function(g){return g.status==='Live'}).length;var edges=gs.map(function(g){return g.edge});document.getElementById('se').textContent=edges.length?(edges.reduce(function(a,b){return a+b},0)/edges.length).toFixed(1):'--';document.getElementById('sh').textContent=gs.filter(function(g){return g.edge>=8}).length;if(!gs.length){document.getElementById('gc').innerHTML='<div class="ng"><h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px">NO GAMES FOR '+fmtDateLabel(selectedGamesDate).toUpperCase()+'</h3></div>';}else{document.getElementById('gc').innerHTML='<div class="grid">'+gs.map(mkCard).join('')+'</div>';setTimeout(function(){document.querySelectorAll('.fill').forEach(function(e){e.style.width=e.getAttribute('data-w')+'%'})},150);if(window.initLiveCards)initLiveCards(gs);}if(document.getElementById('nrfiView').classList.contains('active')) loadNRFIBoard(gs);}).catch(function(e){document.getElementById('gc').innerHTML='<div class="sw"><div style="background:rgba(224,64,251,.08);border:1px solid rgba(224,64,251,.3);border-radius:12px;padding:24px 32px;text-align:center"><h3 style="color:var(--m);font-family:Orbitron;margin-bottom:8px">CONNECTION ERROR</h3><p style="color:var(--mu);font-size:.82rem">'+e.message+'</p></div></div>'})}
 function initNRFI(){ if(NRFI_LAST_DATE===selectedGamesDate && NRFI_ROWS.length) return; loadNRFIBoard(window.__lastGames||[]); }
 function loadNRFIBoard(games){
   var meta=document.getElementById('nrfiMeta'), body=document.getElementById('nrfiBody');
@@ -2014,7 +2033,13 @@ document.getElementById('prevDateBtn').addEventListener('click',function(){shift
 document.getElementById('nextDateBtn').addEventListener('click',function(){shiftGamesDate(1)});
 document.getElementById('todayDateBtn').addEventListener('click',function(){selectedGamesDate=etTodayStr();syncDateUI();load(selectedGamesDate)});
 document.getElementById('tomorrowDateBtn').addEventListener('click',function(){selectedGamesDate=shiftDate(etTodayStr(),1);syncDateUI();load(selectedGamesDate)});
-syncDateUI();load();loadTeams();loadMemoryStatus();loadDailySummaryBadge();setInterval(function(){load(selectedGamesDate)},60000);setInterval(loadMemoryStatus,90000);setInterval(loadDailySummaryBadge,90000);
+syncDateUI();
+load();
+setTimeout(loadMemoryStatus, 1200);
+setTimeout(loadDailySummaryBadge, 1800);
+setInterval(function(){load(selectedGamesDate)},60000);
+setInterval(loadMemoryStatus,90000);
+setInterval(loadDailySummaryBadge,90000);
 </script>
 <!-- LIVE GAMEPLAY PATCH -->
 <style>
