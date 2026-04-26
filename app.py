@@ -655,6 +655,20 @@ def _safe_num(v, default=0.0):
         return default
 
 
+def _normalize_date_str(value, fallback=None):
+    """Return a YYYY-MM-DD string from loose date/datetime inputs."""
+    fb = (fallback or datetime.now(ET).strftime("%Y-%m-%d")).strip()
+    raw = str(value or "").strip()
+    if not raw:
+        return fb
+
+    token = raw.split("T", 1)[0].strip().replace("/", "-")
+    try:
+        return datetime.strptime(token, "%Y-%m-%d").strftime("%Y-%m-%d")
+    except Exception:
+        return fb
+
+
 def _season_candidates(depth=4):
     """Return candidate MLB seasons from current year backwards."""
     y = datetime.now().year
@@ -2710,13 +2724,12 @@ def api_memory_collect_deep():
 
 @app.route("/api/games/today")
 def api_games_today():
-    fg_ready = _wait_for_fg_data(timeout_sec=15)
-    if not fg_ready:
-        print("[api_games_today] WARNING: FG data timed out after 15s, proceeding with partial data")
+    # Keep dashboard responsive during cold starts; refresh in background.
+    _maybe_refresh_fg()
     _maybe_refresh_savant()
     _fetch_injury_status(force=False)
     try:
-        date_str = (request.args.get('date') or datetime.now(ET).strftime("%Y-%m-%d")).strip()
+        date_str = _normalize_date_str(request.args.get('date'))
         raw   = fetch_schedule(date_str)
         workers = min(12, max(1, len(raw)))
         with ThreadPoolExecutor(max_workers=workers) as ex:
@@ -12122,7 +12135,7 @@ def _props_fetch_game(game_pk, date_hint=None):
     gdata = None
     candidate_dates = []
     if date_hint:
-        date_hint = str(date_hint).strip()
+        date_hint = _normalize_date_str(date_hint, fallback='')
         if date_hint:
             candidate_dates.append(date_hint)
             try:

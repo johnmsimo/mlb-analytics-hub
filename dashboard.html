@@ -765,7 +765,7 @@ function toggleQuickProps(e,pk){
   if(!open)return;
   if(QP_DATA[pk]){renderQuickProps(pk,QP_DATA[pk]);return;}
   strip.innerHTML='<div class="qp-loading">Loading top props…</div>';
-  fetch('/api/props/trends/'+pk)
+  fetch('/api/props/quick/'+pk+'?date='+encodeURIComponent(selectedGamesDate))
     .then(function(r){return r.json();})
     .then(function(d){QP_DATA[pk]=d;renderQuickProps(pk,d);})
     .catch(function(){
