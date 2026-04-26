@@ -581,7 +581,7 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
           <thead><tr>
             <th>PLAYER</th><th>TEAM</th><th>MARKET</th>
             <th>BOOK LINE</th><th>PROJECTION</th><th>EDGE</th>
-            <th>IMPL PROB</th><th>EV%</th><th>HUB</th><th>BEST PRICE</th><th>SAVE</th>
+            <th>IMPL PROB</th><th>EV%</th><th>HUB</th><th>KELLY½</th><th>FAIR ODDS</th><th>SLOT</th><th>BEST PRICE</th><th>SAVE</th>
           </tr></thead>
           <tbody id="valueTbody"></tbody>
         </table>
@@ -1008,7 +1008,7 @@ async function loadTab(tab) {
       return;
     }
     if (tab === 'matchup') gel('matchupCols').innerHTML = errHTML('FULL SCAN IS PROJECTIONS-ONLY. SELECT A SPECIFIC GAME FOR MATCHUP SCORES.');
-    if (tab === 'value') gel('valueTbody').innerHTML = `<tr><td colspan="11"><div class="no-tracker">FULL SCAN USES THE PROJECTIONS BOARD. SELECT A SPECIFIC GAME FOR TRACKER CROSS-REFERENCE.</div></td></tr>`;
+    if (tab === 'value') gel('valueTbody').innerHTML = `<tr><td colspan="14"><div class="no-tracker">FULL SCAN USES THE PROJECTIONS BOARD. SELECT A SPECIFIC GAME FOR TRACKER CROSS-REFERENCE.</div></td></tr>`;
     return;
   }
   if (!CUR_GAME) return;
@@ -2442,11 +2442,11 @@ function renderInjuryBanner(d) {
 // ── Value bets ────────────────────────────────────────────────────────────────
 async function loadValueBets() {
   if (!PROJ_DATA) {
-    gel('valueTbody').innerHTML = `<tr><td colspan="11"><div class="no-tracker">LOADING PROJECTIONS FIRST…</div></td></tr>`;
+    gel('valueTbody').innerHTML = `<tr><td colspan="14"><div class="no-tracker">LOADING PROJECTIONS FIRST…</div></td></tr>`;
     await loadProjections();
     if (!PROJ_DATA) return;
   }
-  gel('valueTbody').innerHTML = `<tr><td colspan="11">${loadHTML('CROSS-REFERENCING TRACKER ENTRIES…')}</td></tr>`;
+  gel('valueTbody').innerHTML = `<tr><td colspan="14">${loadHTML('CROSS-REFERENCING TRACKER ENTRIES…')}</td></tr>`;
   try {
     const r = await fetch(`/api/tracker/entries?date=${CUR_DATE}&gamePk=${CUR_GAME}`);
     const d = await r.json();
@@ -2457,7 +2457,7 @@ async function loadValueBets() {
     }
     renderValueTable(VAL_FILT);
   } catch(e) {
-    gel('valueTbody').innerHTML = `<tr><td colspan="11"><div class="no-tracker" style="color:var(--r)">ERROR: ${e.message}</div></td></tr>`;
+    gel('valueTbody').innerHTML = `<tr><td colspan="14"><div class="no-tracker" style="color:var(--r)">ERROR: ${e.message}</div></td></tr>`;
   }
 }
 
@@ -2535,10 +2535,23 @@ function renderValueTable(filter) {
   gel('vbTop').textContent   = topE !== null ? '+'+(topE*100).toFixed(1)+'%' : '—';
 
   if (!rows.length) {
-    gel('valueTbody').innerHTML = `<tr><td colspan="11"><div class="no-tracker">${
+    gel('valueTbody').innerHTML = `<tr><td colspan="14"><div class="no-tracker">${
       all.length===0 ? 'NO TRACKER ENTRIES FOR THIS GAME\nCAPTURE PROPS IN THE DAILY TRACKER FIRST' : 'NO ENTRIES MATCH THIS FILTER'
     }</div></td></tr>`;
     return;
+  }
+
+  function _vbKelly(edge, implProb, overPrice){
+    if(edge==null||edge<=0||!overPrice) return null;
+    const b2 = overPrice>0 ? overPrice/100 : 100/Math.abs(overPrice);
+    const modelP = Math.min(0.99,(implProb||0.5)+edge);
+    const full = ((b2*modelP)-(1-modelP))/b2;
+    return Math.max(0,full*0.5);
+  }
+  function _vbFairPrice(prob){
+    if(!prob||prob<=0||prob>=1) return '—';
+    const o = prob>=0.5 ? Math.round(-prob*100/(1-prob)) : Math.round((1-prob)*100/prob);
+    return (o>0?'+':'')+o;
   }
 
   gel('valueTbody').innerHTML = rows.map(b => {
@@ -2566,6 +2579,16 @@ function renderValueTable(filter) {
           ${lr?`Line ${lr[0]}–${lr[1]}`:'Line —'} · ${books||0} books${vary?' · varies':''}
         </div>
       </div>`;
+    // Kelly + fair price
+    const implP = b.implProb != null ? +b.implProb : 0.5;
+    const oPrice = overPx != null ? +overPx : null;
+    const kelly  = _vbKelly(b.edge, implP, oPrice);
+    const kellyStr = kelly&&kelly>0 ? (kelly*100).toFixed(1)+'%' : '—';
+    const kellyCls = kelly&&kelly>0.025?'kelly-hi':kelly&&kelly>0.01?'kelly-md':kelly&&kelly>0?'kelly-lo':'kelly-na';
+    const fairOdds = b.adjProb ? _vbFairPrice(+b.adjProb) : (implP ? _vbFairPrice(implP+(b.edge||0)) : '—');
+    const slotNum = b.slot ?? b.battingOrder ?? null;
+    const slotStr = slotNum ? '#'+slotNum : '—';
+    const slotCol = slotNum<=3?'#00e676':slotNum<=6?'var(--c)':'var(--mu)';
     return `<tr class="${b.edge>0.07?'hi-edge':''}">
       <td style="font-weight:700">${b.player||'—'}</td>
       <td style="color:var(--mu)">${b.team||'—'}</td>
@@ -2576,6 +2599,9 @@ function renderValueTable(filter) {
       <td style="color:var(--mu)">${b.implProb!=null?(b.implProb*100).toFixed(1)+'%':'—'}</td>
       <td>${evHtml(b.evPct)}</td>
       <td>${hubBadge(b.hubRating != null ? b.hubRating : computeHubRating(b.adjProb, b.edge))}</td>
+      <td class="kelly-cell ${kellyCls}">${kellyStr}</td>
+      <td style="font-family:'Orbitron',monospace;font-size:.65rem;color:#80cbc4">${fairOdds}</td>
+      <td style="font-family:'Orbitron',monospace;font-size:.65rem;color:${slotCol}">${slotStr}</td>
       <td>${oddsCell}</td>
       <td><button class="save-btn${isSaved?' saved':''}" data-key="${key.replace(/"/g,'&quot;')}" onclick="savePickFromVB(${idx})">${isSaved?'✓ SAVED':'＋ SAVE'}</button></td>
     </tr>`;

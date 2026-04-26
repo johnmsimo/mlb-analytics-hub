@@ -879,6 +879,16 @@ function marketLabelLite(m){ const map={batter_hits:'Hits',batter_total_bases:'T
 // ── MC Projection Board ──────────────────────────────────────────────────────
 var _MCA=[], _MFG='all', _MFM='all', _MFR='all', _MC_POLL=null;
 function _mcMkCls(m){return m==='batter_hits'?'mk-hit':m==='batter_total_bases'?'mk-tb':m==='batter_home_runs'?'mk-hr':m==='batter_rbis'?'mk-rbi':m==='pitcher_strikeouts'?'mk-k':'mk-hit';}
+function _mcAmericanOdds(prob){if(!prob||prob<=0||prob>=1)return null;return prob>=0.5?Math.round(-prob*100/(1-prob)):Math.round((1-prob)*100/prob);}
+function _mcFairPrice(prob){var o=_mcAmericanOdds(prob);return o==null?'—':(o>0?'+':'')+o;}
+function _mcKellyPct(prob,price){if(!prob||!price)return null;var b=price>0?price/100:100/Math.abs(price);var q=1-prob;var f=((b*prob)-q)/b;return Math.max(0,f);}
+function _mcKellyCell(prob,price){
+  var k=_mcKellyPct(prob,price);
+  if(k==null||k<=0)return '<span style="color:#6a8db0;font-family:Orbitron,monospace;font-size:.65rem">—</span>';
+  var pct=(k*50*100).toFixed(1); // half-Kelly × 100
+  var cls=pct>=2.5?'#00e676':pct>=1.0?'#00e5ff':'#ff9800';
+  return '<span style="font-family:Orbitron,monospace;font-size:.68rem;font-weight:700;color:'+cls+'">'+pct+'%</span>';
+}
 function _mcGCls(g){return g==='A+'?'g-ap':g==='A'?'g-a':g==='B'?'g-b':g==='C'?'g-c':'g-d';}
 function _mcRCls(r){return r==='STRONG PLAY'?'r-sp':r==='PLAY'?'r-p':r==='LEAN'?'r-l':r==='WATCH'?'r-w':'r-s';}
 function _mcECls(e){var n=parseFloat(e||0);return n>=0.06?'mc-ep':n<=-0.02?'mc-en':'mc-eu';}
@@ -932,8 +942,10 @@ function renderMC(d){
     +'<div><div class="mc-sv" style="color:#00e676">'+te+'</div><div class="mc-sl">TOP EDGE</div></div>'
     +'</div>'
     +'<div class="mc-tw"><table class="mct"><thead><tr>'
-    +'<th>PLAYER</th><th>GAME</th><th>MARKET</th><th>LINE</th><th>GRADE</th><th>REC</th><th>EDGE</th><th>PROB</th><th>REASONING</th>'
-    +'</tr></thead><tbody id="mcTbody"></tbody></table></div></div>';
+    +'<th>PLAYER</th><th>GAME</th><th>MARKET</th><th>LINE</th><th>GRADE</th><th>REC</th><th>EDGE</th><th>PROB</th><th>KELLY½</th><th>FAIR PRICE</th><th>BOOK</th><th>REASONING</th>'
+    +'</tr></thead><tbody id="mcTbody"></tbody></table></div>
+<div id="mcTopStrip" style="display:none;padding:12px 14px 6px;border-top:1px solid rgba(0,229,255,.1)"></div>
+</div>';
   st.textContent=all.length+' props · stat model';
   _mcRenderRows();
 }
@@ -946,9 +958,36 @@ function _mcRenderRows(){
     return true;
   });
   f.sort(function(a,b){return parseFloat(b.edge||0)-parseFloat(a.edge||0);});
-  if(!f.length){tb.innerHTML='<tr><td colspan="9" class="mc-none">NO PROPS MATCH FILTERS</td></tr>';return;}
+  if(!f.length){tb.innerHTML='<tr><td colspan="12" class="mc-none">NO PROPS MATCH FILTERS</td></tr>';return;}
+  // Top Picks strip (A/A+ only)
+  var topStrip=document.getElementById('mcTopStrip');
+  var apPlays=f.filter(function(p){return p.grade==='A+'||p.grade==='A';}).slice(0,5);
+  if(topStrip&&apPlays.length){
+    topStrip.style.display='';
+    topStrip.innerHTML='<div style="font-family:Orbitron,monospace;font-size:.58rem;color:var(--mu);letter-spacing:2px;margin-bottom:8px">⭐ TOP PLAYS (A/A+)</div>'
+      +'<div style="display:flex;flex-wrap:wrap;gap:8px">'
+      +apPlays.map(function(p){
+        var k=_mcKellyPct(parseFloat(p.prob||0),parseFloat(p.price||0));
+        var kTxt=k&&k>0?'Kelly½: '+(k*50*100).toFixed(1)+'%':'';
+        var fair=_mcFairPrice(parseFloat(p.prob||0));
+        var gc=p.grade==='A+'?'#00e676':'#00e5ff';
+        return '<div style="background:rgba(0,229,255,.06);border:1px solid rgba(0,229,255,.18);border-radius:10px;padding:7px 12px;min-width:160px">'
+          +'<div style="font-family:Orbitron,monospace;font-size:.62rem;font-weight:700;color:var(--t)">'+_mcEsc(p.player||'—')+'</div>'
+          +'<div style="font-size:.6rem;color:var(--mu);margin:2px 0">'+marketLabelLite(p.market)+' '+numOrDash(p.line)+'</div>'
+          +'<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">'
+          +'<span style="font-family:Orbitron,monospace;font-size:.6rem;font-weight:700;color:'+gc+'">'+_mcEsc(p.grade)+'</span>'
+          +'<span style="font-size:.58rem;color:#00e676">'+_mcFE(p.edge)+'</span>'
+          +(kTxt?'<span style="font-size:.55rem;color:#ffd54f">'+kTxt+'</span>':'')
+          +'<span style="font-size:.55rem;color:var(--mu)">Fair:'+fair+'</span>'
+          +'</div>'
+          +'</div>';
+      }).join('')+'</div>';
+  } else if(topStrip){ topStrip.style.display='none'; }
   tb.innerHTML=f.map(function(p){
     var prob=parseFloat(p.prob||0),bw=Math.max(0,Math.min(100,(prob-0.3)*143));
+    var price=parseFloat(p.price||0);
+    var fair=_mcFairPrice(prob);
+    var bkTxt=_mcEsc(p.bookmaker||p.source||'Model');
     return '<tr>'
       +'<td><span class="mc-pn">'+_mcEsc(p.player||'—')+'</span></td>'
       +'<td style="font-size:.61rem;color:var(--mu);white-space:nowrap">'+_mcEsc(p.matchup||'—')+'</td>'
@@ -959,6 +998,9 @@ function _mcRenderRows(){
       +'<td><span class="mc-ev '+_mcECls(p.edge)+'">'+_mcFE(p.edge)+'</span></td>'
       +'<td><span style="font-family:Orbitron,monospace;font-size:.72rem">'+_mcFP(p.prob)+'</span>'
       +'<div class="mc-pb"><div class="mc-pf" style="width:'+bw+'%"></div></div></td>'
+      +'<td>'+_mcKellyCell(prob,price||null)+'</td>'
+      +'<td style="font-family:Orbitron,monospace;font-size:.65rem;color:#80cbc4">'+fair+'</td>'
+      +'<td style="font-size:.58rem;color:var(--mu)">'+bkTxt+'</td>'
       +'<td><span class="mc-rs">'+_mcEsc(p.reasoning||'—')+'</span></td>'
       +'</tr>';
   }).join('');
@@ -1290,6 +1332,46 @@ function renderBBPicks(){
   const confColor={ELITE:'#00e676',STRONG:'var(--c)',LEAN:'#ff9800'};
   const rankEmoji=['🥇','🥈','🥉'];
 
+  // Kelly sizing helper (half-Kelly)
+  function bbKelly(edge, impliedProb, price){
+    if(edge==null||edge<=0||!price) return null;
+    const b = price>0 ? price/100 : 100/Math.abs(price);
+    const modelProb = Math.min(0.99, (impliedProb||0.5) + edge);
+    const q = 1 - modelProb;
+    const full = ((b*modelProb)-q)/b;
+    return Math.max(0, full * 0.5); // half-Kelly
+  }
+  function bbKellyHtml(edge, impliedProb, price){
+    const k = bbKelly(edge, impliedProb, price);
+    if(!k||k<=0) return '';
+    const pct = (k*100).toFixed(1);
+    const col = pct>=2.5?'#00e676':pct>=1.0?'#00e5ff':'#ff9800';
+    return '<span style="font-family:Orbitron,monospace;font-size:.55rem;font-weight:700;color:'+col+';background:'+col+'15;padding:2px 7px;border-radius:6px;border:1px solid '+col+'30">KELLY½ '+pct+'%</span>';
+  }
+  function bbFairPrice(prob){
+    if(!prob||prob<=0||prob>=1) return null;
+    const o = prob>=0.5 ? Math.round(-prob*100/(1-prob)) : Math.round((1-prob)*100/prob);
+    return (o>0?'+':'')+o;
+  }
+  // MC cross-reference
+  function bbMcGrade(pickName, cat){
+    if(!_MCA||!_MCA.length) return null;
+    const nm = (pickName||'').toLowerCase();
+    const mk = cat==='K'?'pitcher_strikeouts':cat==='HR'?'batter_home_runs':cat==='BASES'?'batter_total_bases':cat==='HITS'?'batter_hits':cat==='RBI'?'batter_rbis':'';
+    const match = _MCA.find(function(m){
+      const mn=(m.player||'').toLowerCase();
+      return mn===nm||(nm.length>4&&mn.includes(nm.slice(0,nm.length-2)))||(mn.length>4&&nm.includes(mn.slice(0,mn.length-2)));
+    });
+    if(!match) return null;
+    if(mk&&match.market!==mk) return null;
+    return match.grade||null;
+  }
+  function bbMcBadge(grade){
+    if(!grade) return '';
+    const col=grade==='A+'?'#00e676':grade==='A'?'#00e5ff':'#ffd54f';
+    return '<span style="font-family:Orbitron,monospace;font-size:.5rem;font-weight:700;color:'+col+';background:'+col+'15;padding:2px 7px;border-radius:6px;border:1px solid '+col+'40">MC '+grade+'</span>';
+  }
+
   function mkPickCard(p,i,showRank){
     const cc=BB_CAT_COLORS[p.cat]||'var(--c)';
     const cf=confColor[p.conf]||'var(--mu)';
@@ -1303,6 +1385,20 @@ function renderBBPicks(){
       ?'<div class="bb-proj-row"><span class="bb-proj-lbl">PROJ</span><span class="bb-proj-val" style="color:'+cc+'">'+p.projVal.toFixed(2)+'</span>'+lineSpan+dirPill+edgeSpan+'</div>'
       :'<div style="height:4px"></div>';
     const rankBadge=showRank&&i<3?rankEmoji[i]+' ':'';
+
+    // Extra decision signals
+    const implProb = p.line!=null&&p.projVal!=null ? Math.min(0.99, 0.5 + (p.projVal-p.line)*0.28) : 0.5;
+    const bookPrice = p.pick&&p.pick.match(/\(([+-]\d+)\)/) ? parseInt(p.pick.match(/\(([+-]\d+)\)/)[1]) : null;
+    const kellyHtml = bbKellyHtml(p.edge, implProb, bookPrice);
+    const fairP = bookPrice ? bbFairPrice(implProb) : null;
+    const fairHtml = fairP ? '<span style="font-family:Orbitron,monospace;font-size:.5rem;color:#80cbc4;padding:2px 7px;background:rgba(128,203,196,.08);border-radius:6px;border:1px solid rgba(128,203,196,.2)">FAIR '+fairP+'</span>' : '';
+    const mcGrade = bbMcGrade(p.name, p.cat);
+    const mcHtml = bbMcBadge(mcGrade);
+
+    const signalRow = (kellyHtml||fairHtml||mcHtml)
+      ? '<div style="display:flex;flex-wrap:wrap;gap:5px;margin:5px 0 2px">'+kellyHtml+fairHtml+mcHtml+'</div>'
+      : '';
+
     return '<div class="bb-card bb-'+p.type.toLowerCase()+'">'
       +'<div class="bb-card-top">'
       +'<div class="bb-cat-tag" style="background:'+cc+'18;color:'+cc+';border-color:'+cc+'40">'+p.cat+'</div>'
@@ -1310,6 +1406,7 @@ function renderBBPicks(){
       +'<div class="bb-conf" style="color:'+cf+'">'+confStars[p.conf]+'<span class="bb-conf-lbl">'+p.conf+'</span></div>'
       +'</div>'
       +projRow
+      +signalRow
       +'<div class="bb-reason">'+p.reason+'</div>'
       +'</div>';
   }

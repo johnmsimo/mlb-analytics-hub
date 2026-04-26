@@ -9,6 +9,51 @@ ET = ZoneInfo("America/New_York")
 from flask import Flask, jsonify, request, Response
 from flask_cors import CORS
 
+
+def _load_local_env_file(env_path):
+    """Load simple KEY=VALUE pairs from .env into os.environ if missing."""
+    if not os.path.exists(env_path):
+        return
+    try:
+        with open(env_path, 'r', encoding='utf-8') as f:
+            for raw in f:
+                line = (raw or '').strip()
+                if not line or line.startswith('#') or '=' not in line:
+                    continue
+                key, val = line.split('=', 1)
+                key = key.strip()
+                val = val.strip()
+                if not key:
+                    continue
+                if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+                    val = val[1:-1]
+                os.environ.setdefault(key, val)
+    except Exception as ex:
+        print(f"[env] failed loading {env_path}: {ex}")
+
+
+_load_local_env_file(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'))
+
+from mc_upgrades import (
+    AntitheticRandom,
+    BATX_WEIGHTS_V2,
+    LEAGUE_PLATOON_SPLITS,
+    MARKET_MODEL_WEIGHTS,
+    PLATOON_M,
+    build_ump_sim_adjustments,
+    build_weather_multipliers,
+    devig_power,
+    derive_probs_v2,
+    get_sim_env_adjustments,
+    get_prewarm_status,
+    logit_blend_prob,
+    pitcher_component_v2,
+    platoon_blend_v2,
+    prewarm_today_caches,
+    relief_fatigue_penalty,
+    ttop_woba_penalty,
+)
+
 app = Flask(__name__)
 CORS(app)
 
@@ -2218,6 +2263,72 @@ def api_status():
         "fangraphs": {"loaded":fgl,"date":str(fgd),"batters":fgb,"pitchers":fgp},
         "savant":    {"loaded":svl,"date":str(svd),"pit_xstats":svpi,"bat_xstats":svbi,"statcast":svsc,"arsenals":svar},
         "mlbMemory": _mlb_memory_status_payload(),
+    })
+
+
+@app.route('/api/mc-upgrades/status')
+def api_mc_upgrades_status():
+    return jsonify({
+        "success": True,
+        "prewarm": get_prewarm_status(),
+        "batx_weights": BATX_WEIGHTS_V2,
+        "market_model_weights": MARKET_MODEL_WEIGHTS,
+        "platoon_m": PLATOON_M,
+        "league_platoon_splits": LEAGUE_PLATOON_SPLITS,
+    })
+
+
+@app.route('/api/tracker/blend-debug')
+def api_tracker_blend_debug():
+    """QA endpoint: returns per-row rawProb, rawMultProb, marketImplied, adjProb, edge for a game."""
+    game_pk = request.args.get('gamePk') or request.args.get('game_pk')
+    if not game_pk:
+        return jsonify({"error": "gamePk required"}), 400
+    try:
+        game_pk = int(game_pk)
+    except Exception:
+        return jsonify({"error": "gamePk must be an integer"}), 400
+    adjustments = _get_adjustments()
+    _maybe_refresh_fg()
+    game_obj = fetch_schedule_game(game_pk)
+    if not game_obj:
+        return jsonify({"error": "game not found"}), 404
+    game_date = ((game_obj.get('gameDate') or '').split('T')[0] or
+                 datetime.now(ET).strftime('%Y-%m-%d'))
+    rows = _build_tracker_rows_for_game(game_pk, game_date, adjustments=adjustments, _sched=[game_obj], include_odds=True)
+    debug_rows = []
+    for r in rows:
+        market_implied = r.get('marketImplied')
+        under_implied = _american_to_implied(r.get('bestUnderPrice'))
+        fair_over = None
+        fair_under = None
+        if market_implied and under_implied:
+            fair_over, fair_under = devig_power(market_implied, under_implied)
+        debug_rows.append({
+            "player": r.get('player'),
+            "team": r.get('team'),
+            "marketKey": r.get('marketKey'),
+            "line": r.get('line'),
+            "rawProb": r.get('rawProb'),
+            "rawMultProb": r.get('rawMultProb'),
+            "marketImplied": market_implied,
+            "underImplied": under_implied,
+            "fairOver": fair_over,
+            "fairUnder": fair_under,
+            "adjProb": r.get('adjProb'),
+            "edge": r.get('edge'),
+            "hubRating": r.get('hubRating'),
+            "evPct": r.get('evPct'),
+            "blended": r.get('marketImplied') is not None and r.get('marketImplied', 0) > 0,
+        })
+    blended_count = sum(1 for r in debug_rows if r['blended'])
+    return jsonify({
+        "gamePk": game_pk,
+        "gameDate": game_date,
+        "totalRows": len(debug_rows),
+        "blendedRows": blended_count,
+        "multiplicativeOnlyRows": len(debug_rows) - blended_count,
+        "rows": debug_rows,
     })
 
 
@@ -5694,7 +5805,8 @@ def _batx_for_sim(batter, opp_pitcher, park, weather):
         pitcher_hand = (opp_pitcher.get('pitchHand') or 'R').upper()
         proj = _project_batter_batx(
             batter, opp_pitcher.get('name', ''), opp_fg, opp_sv,
-            park, weather or {}, pitcher_hand=pitcher_hand
+            park, weather or {}, pitcher_hand=pitcher_hand,
+            opp_pitcher_id=opp_pitcher.get('id')
         )
         adj = proj.get('adjustments', {})
         comp = _clamp(proj.get('composite', 1.0), 0.70, 1.30)
@@ -5819,6 +5931,20 @@ def _pick_event(probs, rng):
     return 'out'
 
 
+def _normalize_pa_probs(probs):
+    normalized = dict(probs or {})
+    non_out_total = (
+        float(normalized.get('bb', 0.0) or 0.0)
+        + float(normalized.get('1b', 0.0) or 0.0)
+        + float(normalized.get('2b', 0.0) or 0.0)
+        + float(normalized.get('3b', 0.0) or 0.0)
+        + float(normalized.get('hr', 0.0) or 0.0)
+    )
+    normalized['out'] = max(0.28, 1.0 - non_out_total)
+    normalized['kshare'] = _clamp(float(normalized.get('kshare', 0.18) or 0.18), 0.18, 0.78)
+    return normalized
+
+
 def _blank_batter_line(b):
     return {'id': b.get('id'), 'name': b.get('name', ''), 'slot': b.get('slot', 0), 'pos': b.get('pos', ''), 'bats': b.get('bats', 'S'), 'pa': 0, 'ab': 0, 'h': 0, '1b': 0, '2b': 0, '3b': 0, 'hr': 0, 'rbi': 0, 'r': 0, 'bb': 0, 'k': 0, 'tb': 0, 'sb': 0, 'cs': 0}
 
@@ -5923,7 +6049,32 @@ def _select_relief_tier(inning, runs_allowed, starter_outs, tiers):
     return tiers['middle']
 
 
-def _simulate_offense(lineup, opp_starter, opp_team_id, park, rng, batx_map=None):
+def _team_relief_fatigue_woba(team_id: int) -> float:
+    """
+    Best-effort computation of team bullpen fatigue wOBA penalty.
+    Uses the last 3 days of relief appearances; returns 0.0 on any error.
+    """
+    try:
+        recent = _team_recent_games(team_id, 3)
+        if not recent:
+            return 0.0
+        report = _build_bullpen_fatigue(team_id, '', recent)
+        penalties = []
+        for rel in report.get('relievers', []):
+            dp = rel.get('days_pitched') or []
+            pl = rel.get('pitches_total') or 0
+            p = relief_fatigue_penalty(dp, min(pl, 35))
+            if p > 0:
+                penalties.append(p)
+        if not penalties:
+            return 0.0
+        return round(sum(penalties) / len(penalties), 4)
+    except Exception:
+        return 0.0
+
+
+def _simulate_offense(lineup, opp_starter, opp_team_id, park, rng, batx_map=None,
+                      wx_mults=None, ump_adj=None, relief_fatigue_woba: float = 0.0):
     """
     batx_map: dict {batter_index: batx_dict} pre-computed by _batx_for_sim().
     When provided, BAT X multipliers are applied to _derive_probs() output for
@@ -5935,11 +6086,46 @@ def _simulate_offense(lineup, opp_starter, opp_team_id, park, rng, batx_map=None
     relief_lines = {'Closer': _blank_pitcher_line('Closer'), 'Setup': _blank_pitcher_line('Setup'), 'Middle': _blank_pitcher_line('Middle')}
     starter_target = _starter_outs_target(opp_starter, rng)
     runs = 0; batter_ptr = 0
+    pitcher_batters_faced = {}
+    pitcher_pitch_counts = {}
+    arsenal_cache = {}
+
+    def _arsenal_size(pitcher_model):
+        pitcher_name = pitcher_model.get('name', '')
+        if pitcher_name in arsenal_cache:
+            return arsenal_cache[pitcher_name]
+        arsenal = (sv_pitcher(pitcher_name).get('sv_arsenal_pct') or {}) if pitcher_name else {}
+        arsenal_size = len(arsenal.keys()) if isinstance(arsenal, dict) and arsenal else 3
+        arsenal_cache[pitcher_name] = arsenal_size or 3
+        return arsenal_cache[pitcher_name]
+
+    _is_relief = {False}  # mutable flag: True once starter exits
+
+    def _pa_probs(batter, pitcher_model, batx_adjustments, is_relief=False):
+        pitcher_name = pitcher_model.get('name', 'Unknown')
+        batters_faced = pitcher_batters_faced.get(pitcher_name, 0)
+        pitches_thrown = pitcher_pitch_counts.get(pitcher_name, 0)
+        ttop_val = ttop_woba_penalty(batters_faced, pitches_thrown, _arsenal_size(pitcher_model))
+        # Apply bullpen fatigue wOBA penalty for relief appearances
+        extra_penalty = relief_fatigue_woba if is_relief else 0.0
+        probs = derive_probs_v2(
+            batter,
+            pitcher_model,
+            park,
+            batx=batx_adjustments,
+            wx_mults=wx_mults,
+            ump_adj=ump_adj,
+            ttop_penalty_val=ttop_val + extra_penalty,
+        )
+        pitcher_batters_faced[pitcher_name] = batters_faced + 1
+        pitcher_pitch_counts[pitcher_name] = pitches_thrown + 5
+        return _normalize_pa_probs(probs)
+
     # Pre-compute probs against starter with BAT X; relief uses same BAT X but fresh probs
     probs_cache = {}
     for i, b in enumerate(lineup):
         bx = batx_map.get(i) if batx_map else None
-        probs_cache[i] = _derive_probs(b, opp_starter, park, batx=bx)
+        probs_cache[i] = _pa_probs(b, opp_starter, bx, is_relief=False)
     for inning in range(1, 10):
         outs = 0
         bases = [None, None, None]
@@ -5964,7 +6150,7 @@ def _simulate_offense(lineup, opp_starter, opp_team_id, park, rng, batx_map=None
                 pm = _select_relief_tier(inning, runs, starter_line['outs'], tiers)
                 pl = relief_lines[pm['name']]
             bx = batx_map.get(batter_ptr) if batx_map else None
-            probs = _derive_probs(b, pm, park, batx=bx)
+            probs = _pa_probs(b, pm, bx, is_relief=not use_starter)
             probs_cache[batter_ptr] = probs
             ev = _pick_event(probs, rng)
             s['pa'] += 1
@@ -6205,7 +6391,7 @@ def api_simulate(game_pk):
             requested_sims = int(request.args.get('sims', 800) or 800)
         except Exception:
             requested_sims = 800
-        sims = max(200, min(1200, requested_sims))
+        sims = max(200, min(2000, requested_sims))
 
         # Prefer direct game lookup so deep-dive works for non-today game IDs too.
         g = fetch_schedule_game(game_pk)
@@ -6341,6 +6527,8 @@ def api_simulate(game_pk):
         away_pitcher = _pitcher_model(away_p.get('fullName', 'Away SP'), away_p.get('id'), away_team_id)
         home_pitcher = _pitcher_model(home_p.get('fullName', 'Home SP'), home_p.get('id'), home_team_id)
         park = PARK_FACTORS.get(home_team_id, 1.0)
+        away_relief_fatigue_woba = _team_relief_fatigue_woba(home_team_id)
+        home_relief_fatigue_woba = _team_relief_fatigue_woba(away_team_id)
 
         # ── Fetch weather for BAT X integration ──────────────────────────────
         ven      = g.get('venue', {})
@@ -6361,12 +6549,41 @@ def api_simulate(game_pk):
         except Exception:
             wx = {}
 
+        ump_data = None
+        try:
+            game_date_str = (g.get('gameDate') or today).split('T')[0]
+            official_games = _fetch_schedule_with_officials(game_date_str, game_date_str)
+            official_game = next((item for item in official_games if item.get('gamePk') == game_pk), None)
+            ump = _get_hp_umpire(official_game or {})
+            if ump and ump.get('id'):
+                ump_data = _get_cached_ump(ump.get('id'), ump.get('fullName', ''))
+        except Exception:
+            ump_data = None
+
+        ump_cache = {}
+        if ump_data:
+            ump_cache[game_pk] = {
+                'date': datetime.now(ET).date(),
+                'data': ump_data,
+            }
+        sim_env = get_sim_env_adjustments(
+            game_pk,
+            g,
+            wx or {},
+            home_team_id,
+            ump_cache=ump_cache,
+            DOME_VENUES=DOME_VENUES,
+            PARK_FACTORS=PARK_FACTORS,
+        )
+        wx_mults = sim_env['wx_mults']
+        ump_adj = sim_env['ump_adj']
+
         # ── Pre-compute BAT X multipliers per batter (once, not per sim) ─────
         # away batters face home_pitcher; home batters face away_pitcher
         away_batx_map = {i: _batx_for_sim(b, home_pitcher, park, wx) for i, b in enumerate(away_lineup)}
         home_batx_map = {i: _batx_for_sim(b, away_pitcher, park, wx) for i, b in enumerate(home_lineup)}
 
-        rng = random.Random(game_pk + int(datetime.now().strftime('%Y%m%d')) + 6)
+        rng = AntitheticRandom(game_pk + int(datetime.now().strftime('%Y%m%d')) + 6)
 
         away_store = {i: [] for i in range(len(away_lineup))}
         home_store = {i: [] for i in range(len(home_lineup))}
@@ -6379,8 +6596,20 @@ def api_simulate(game_pk):
         sample = None
 
         for sim in range(sims):
-            away_off = _simulate_offense(away_lineup, home_pitcher, home_team_id, park, rng, batx_map=away_batx_map)
-            home_off = _simulate_offense(home_lineup, away_pitcher, away_team_id, park, rng, batx_map=home_batx_map)
+            if sim % 2 == 1:
+                rng.start_antithetic()
+            away_off = _simulate_offense(
+                away_lineup, home_pitcher, home_team_id, park, rng,
+                batx_map=away_batx_map, wx_mults=wx_mults, ump_adj=ump_adj,
+                relief_fatigue_woba=away_relief_fatigue_woba,
+            )
+            home_off = _simulate_offense(
+                home_lineup, away_pitcher, away_team_id, park, rng,
+                batx_map=home_batx_map, wx_mults=wx_mults, ump_adj=ump_adj,
+                relief_fatigue_woba=home_relief_fatigue_woba,
+            )
+            if sim % 2 == 1:
+                rng.stop_antithetic()
             if sample is None:
                 sample = {
                     'away': away_off, 'home': home_off,
@@ -6654,16 +6883,37 @@ def _odds_ttl_seconds(env_key, default_seconds, min_seconds=30, max_seconds=24 *
         return int(default_seconds)
     return max(int(min_seconds), min(int(max_seconds), ttl))
 
+
+def _odds_bool_env(env_key, default='1'):
+    return str(os.getenv(env_key, default)).strip().lower() in ('1', 'true', 'yes')
+
 # ── Odds API cache — prevents burning credits on every request ────────────────
-# Events list: cache 30 min (rarely changes mid-day)
-# Per-game odds snapshot: cache 15 min (single fetch reused everywhere)
+# Events list: cache 6h (rarely changes intraday)
+# Per-game odds snapshot: cache 24h by default (single fetch reused everywhere)
 _ODDS_EVENTS_CACHE: dict = {}          # {'data': [...], 'ts': float}
 _ODDS_GAME_CACHE:  dict = {}           # {event_id: {'all': [...], 'ts': float}}
-_ODDS_EVENTS_TTL  = _odds_ttl_seconds('ODDS_EVENTS_TTL_SEC', 30 * 60)
-_ODDS_GAME_TTL    = _odds_ttl_seconds('ODDS_GAME_TTL_SEC', 15 * 60)
+_ODDS_EVENTS_TTL  = _odds_ttl_seconds('ODDS_EVENTS_TTL_SEC', 6 * 60 * 60)
+_ODDS_GAME_TTL    = _odds_ttl_seconds('ODDS_GAME_TTL_SEC', 24 * 60 * 60)
 _ODDS_NRFI_TTL    = _odds_ttl_seconds('ODDS_NRFI_TTL_SEC', 5 * 60)
-_ODDS_DAILY_CACHE = str(os.getenv('ODDS_DAILY_CACHE', '1')).strip().lower() in ('1', 'true', 'yes')
+_ODDS_DAILY_CACHE = _odds_bool_env('ODDS_DAILY_CACHE', '1')
+_ODDS_SNAPSHOT_STRICT = _odds_bool_env('ODDS_SNAPSHOT_STRICT', '1')
+_ODDS_SNAPSHOT_AUTOWARM = _odds_bool_env('ODDS_SNAPSHOT_AUTOWARM', '1')
+_ODDS_SNAPSHOT_HEARTBEAT_SEC = _odds_ttl_seconds('ODDS_SNAPSHOT_HEARTBEAT_SEC', 5 * 60, min_seconds=60, max_seconds=60 * 60)
+_ODDS_SNAPSHOT_RETRY_SEC = _odds_ttl_seconds('ODDS_SNAPSHOT_RETRY_SEC', 15 * 60, min_seconds=60, max_seconds=6 * 60 * 60)
 _ODDS_CACHE_LOCK = threading.Lock()
+_ODDS_SNAPSHOT_WORKER_LOCK = threading.Lock()
+_ODDS_SNAPSHOT_WORKER_STARTED = False
+_ODDS_SNAPSHOT_WORKER_LAST_ATTEMPT = 0.0
+_ODDS_SNAPSHOT_META: dict = {
+    'date': None,
+    'complete': False,
+    'running': False,
+    'startedAt': None,
+    'completedAt': None,
+    'eventsCount': 0,
+    'eventsFetched': 0,
+    'errors': [],
+}
 _ODDS_ALL_MARKETS = (
     'h2h,spreads,totals,h2h_1st_1_innings,'
     'batter_hits,batter_total_bases,batter_home_runs,batter_rbis,'
@@ -6691,6 +6941,7 @@ def _persist_odds_caches():
         'date': _odds_today_key(),
         'events': _ODDS_EVENTS_CACHE,
         'games': _ODDS_GAME_CACHE,
+        'snapshot': _ODDS_SNAPSHOT_META,
         'savedAt': datetime.now(timezone.utc).isoformat(),
     }
     _save_json(ODDS_CACHE_STORE, payload)
@@ -6704,10 +6955,152 @@ def _restore_odds_caches():
         return
     events = payload.get('events') or {}
     games = payload.get('games') or {}
+    snapshot = payload.get('snapshot') or {}
     if isinstance(events, dict):
         _ODDS_EVENTS_CACHE.update(events)
     if isinstance(games, dict):
         _ODDS_GAME_CACHE.update(games)
+    if isinstance(snapshot, dict):
+        _ODDS_SNAPSHOT_META.update(snapshot)
+        _ODDS_SNAPSHOT_META['running'] = False
+
+
+def _ensure_daily_odds_snapshot():
+    """Build one full odds snapshot for today, then serve cache-only for the rest of the day."""
+    if not ODDS_API_KEY:
+        return False
+
+    with _ODDS_CACHE_LOCK:
+        today = _odds_today_key()
+        if _ODDS_SNAPSHOT_META.get('date') == today and _ODDS_SNAPSHOT_META.get('complete'):
+            return True
+        if _ODDS_SNAPSHOT_META.get('running'):
+            return False
+        _ODDS_SNAPSHOT_META.update({
+            'date': today,
+            'complete': False,
+            'running': True,
+            'startedAt': datetime.now(timezone.utc).isoformat(),
+            'completedAt': None,
+            'eventsCount': 0,
+            'eventsFetched': 0,
+            'errors': [],
+        })
+
+    try:
+        now = time.time()
+        r = requests.get(
+            'https://api.the-odds-api.com/v4/sports/baseball_mlb/events',
+            params={'apiKey': ODDS_API_KEY, 'dateFormat': 'iso'},
+            timeout=12,
+        )
+        r.raise_for_status()
+        events = r.json() or []
+
+        with _ODDS_CACHE_LOCK:
+            _ODDS_EVENTS_CACHE['data'] = events
+            _ODDS_EVENTS_CACHE['ts'] = now
+            _ODDS_EVENTS_CACHE['cache_date'] = _odds_today_key()
+            _ODDS_SNAPSHOT_META['eventsCount'] = len(events)
+
+        fetched = 0
+        errors = []
+        for ev in events:
+            eid = ev.get('id')
+            if not eid:
+                continue
+            try:
+                now_ev = time.time()
+                rr = requests.get(
+                    f'https://api.the-odds-api.com/v4/sports/baseball_mlb/events/{eid}/odds',
+                    params={
+                        'apiKey': ODDS_API_KEY,
+                        'regions': ODDS_REGION,
+                        'markets': _ODDS_ALL_MARKETS,
+                        'oddsFormat': 'american',
+                        'dateFormat': 'iso',
+                    },
+                    timeout=15,
+                )
+                rr.raise_for_status()
+                books = rr.json().get('bookmakers', []) or []
+                with _ODDS_CACHE_LOCK:
+                    _ODDS_GAME_CACHE[eid] = {
+                        'all': books,
+                        'ts': now_ev,
+                        'cache_date': _odds_today_key(),
+                    }
+                fetched += 1
+            except Exception as ex:
+                errors.append(f'{eid}: {ex}')
+
+        with _ODDS_CACHE_LOCK:
+            _ODDS_SNAPSHOT_META['eventsFetched'] = fetched
+            _ODDS_SNAPSHOT_META['errors'] = errors[:50]
+            _ODDS_SNAPSHOT_META['completedAt'] = datetime.now(timezone.utc).isoformat()
+            _ODDS_SNAPSHOT_META['complete'] = True
+            _ODDS_SNAPSHOT_META['running'] = False
+            _persist_odds_caches()
+
+        print(f'[Odds] Daily snapshot complete: events={len(events)} fetched={fetched} errors={len(errors)}')
+        return True
+    except Exception as ex:
+        with _ODDS_CACHE_LOCK:
+            _ODDS_SNAPSHOT_META['errors'] = [str(ex)]
+            _ODDS_SNAPSHOT_META['completedAt'] = datetime.now(timezone.utc).isoformat()
+            _ODDS_SNAPSHOT_META['complete'] = False
+            _ODDS_SNAPSHOT_META['running'] = False
+            _persist_odds_caches()
+        print(f'[Odds] Daily snapshot failed: {ex}')
+        return False
+
+
+def _odds_snapshot_ready_today():
+    with _ODDS_CACHE_LOCK:
+        return (
+            _ODDS_SNAPSHOT_META.get('date') == _odds_today_key()
+            and bool(_ODDS_SNAPSHOT_META.get('complete'))
+        )
+
+
+def _start_odds_snapshot_worker():
+    """Continuously ensure today's odds snapshot is built without manual priming."""
+    global _ODDS_SNAPSHOT_WORKER_STARTED, _ODDS_SNAPSHOT_WORKER_LAST_ATTEMPT
+    with _ODDS_SNAPSHOT_WORKER_LOCK:
+        if _ODDS_SNAPSHOT_WORKER_STARTED:
+            return
+        _ODDS_SNAPSHOT_WORKER_STARTED = True
+
+    def _runner():
+        global _ODDS_SNAPSHOT_WORKER_LAST_ATTEMPT
+        # Give startup loaders a short head start.
+        time.sleep(8)
+        while True:
+            try:
+                if not _ODDS_SNAPSHOT_AUTOWARM or not ODDS_API_KEY:
+                    time.sleep(5 * 60)
+                    continue
+
+                if _odds_snapshot_ready_today():
+                    time.sleep(_ODDS_SNAPSHOT_HEARTBEAT_SEC)
+                    continue
+
+                now = time.time()
+                if (now - _ODDS_SNAPSHOT_WORKER_LAST_ATTEMPT) < _ODDS_SNAPSHOT_RETRY_SEC:
+                    time.sleep(30)
+                    continue
+
+                _ODDS_SNAPSHOT_WORKER_LAST_ATTEMPT = now
+                built = _ensure_daily_odds_snapshot()
+                if built:
+                    print('[ODDS_WORKER] Daily snapshot ready')
+                else:
+                    print('[ODDS_WORKER] Snapshot attempt incomplete; will retry')
+            except Exception as ex:
+                print(f'[ODDS_WORKER] Snapshot loop error: {ex}')
+            time.sleep(30)
+
+    threading.Thread(target=_runner, daemon=True).start()
 
 
 _restore_odds_caches()
@@ -6733,24 +7126,11 @@ def _find_odds_event(away_name, home_name):
     if not ODDS_API_KEY:
         return None, []
     try:
+        ok = _ensure_daily_odds_snapshot()
+        if _ODDS_SNAPSHOT_STRICT and (not ok or not _odds_snapshot_ready_today()):
+            return None, []
         with _ODDS_CACHE_LOCK:
-            use_cached = _odds_cache_entry_fresh(_ODDS_EVENTS_CACHE, 'data', _ODDS_EVENTS_TTL)
-            events = (_ODDS_EVENTS_CACHE.get('data') or []) if use_cached else None
-        if events is None:
-            now = time.time()
-            r = requests.get(
-                'https://api.the-odds-api.com/v4/sports/baseball_mlb/events',
-                params={'apiKey': ODDS_API_KEY, 'dateFormat': 'iso'},
-                timeout=12,
-            )
-            r.raise_for_status()
-            events = r.json() or []
-            with _ODDS_CACHE_LOCK:
-                _ODDS_EVENTS_CACHE['data'] = events
-                _ODDS_EVENTS_CACHE['ts'] = now
-                _ODDS_EVENTS_CACHE['cache_date'] = _odds_today_key()
-                _persist_odds_caches()
-            print(f'[Odds] Refreshed events list ({len(events)}). Remaining: {r.headers.get("x-requests-remaining","?")}')
+            events = _ODDS_EVENTS_CACHE.get('data') or []
         na = _norm_name(away_name)
         nh = _norm_name(home_name)
         for ev in events:
@@ -6831,34 +7211,16 @@ def _best_spread(bookmakers, away_name, home_name):
 def _load_event_odds(event_id, featured_only=False):
     if not ODDS_API_KEY or not event_id:
         return []
-    with _ODDS_CACHE_LOCK:
-        cached = _ODDS_GAME_CACHE.get(event_id)
-        if _odds_cache_entry_fresh(cached, 'all', _ODDS_GAME_TTL):
-            return (cached or {}).get('all') or []
     try:
-        now = time.time()
-        r = requests.get(
-            f'https://api.the-odds-api.com/v4/sports/baseball_mlb/events/{event_id}/odds',
-            params={
-                'apiKey': ODDS_API_KEY,
-                'regions': ODDS_REGION,
-                'markets': _ODDS_ALL_MARKETS,
-                'oddsFormat': 'american',
-                'dateFormat': 'iso',
-            },
-            timeout=15,
-        )
-        r.raise_for_status()
-        result = r.json().get('bookmakers', []) or []
-        print(f'[Odds] Fetched unified odds for {event_id}. Remaining: {r.headers.get("x-requests-remaining","?")}')
+        ok = _ensure_daily_odds_snapshot()
+        if _ODDS_SNAPSHOT_STRICT and (not ok or not _odds_snapshot_ready_today()):
+            return []
         with _ODDS_CACHE_LOCK:
-            entry = _ODDS_GAME_CACHE.setdefault(event_id, {'ts': now})
-            entry['all'] = result
-            entry['ts'] = now
-            entry['cache_date'] = _odds_today_key()
-            _persist_odds_caches()
-        return result
+            cached = _ODDS_GAME_CACHE.get(event_id)
+            return (cached or {}).get('all') or []
     except:
+        with _ODDS_CACHE_LOCK:
+            cached = _ODDS_GAME_CACHE.get(event_id)
         return (cached or {}).get('all', [])
 
 
@@ -6886,21 +7248,11 @@ def _load_event_market_odds(event_id, markets, cache_key, ttl_sec):
 def _refresh_odds_events_cache():
     if not ODDS_API_KEY:
         return []
-    now = time.time()
-    r = requests.get(
-        'https://api.the-odds-api.com/v4/sports/baseball_mlb/events',
-        params={'apiKey': ODDS_API_KEY, 'dateFormat': 'iso'},
-        timeout=12,
-    )
-    r.raise_for_status()
-    events = r.json() or []
+    ok = _ensure_daily_odds_snapshot()
+    if _ODDS_SNAPSHOT_STRICT and (not ok or not _odds_snapshot_ready_today()):
+        return []
     with _ODDS_CACHE_LOCK:
-        _ODDS_EVENTS_CACHE['data'] = events
-        _ODDS_EVENTS_CACHE['ts'] = now
-        _ODDS_EVENTS_CACHE['cache_date'] = _odds_today_key()
-        _persist_odds_caches()
-    print(f'[Odds] Force-refreshed events list ({len(events)}). Remaining: {r.headers.get("x-requests-remaining","?")}')
-    return events
+        return _ODDS_EVENTS_CACHE.get('data') or []
 
 
 def _odds_cache_status_payload():
@@ -6934,6 +7286,8 @@ def _odds_cache_status_payload():
         'success': True,
         'keyConfigured': bool(ODDS_API_KEY),
         'dailyCacheEnabled': _ODDS_DAILY_CACHE,
+        'snapshotStrict': _ODDS_SNAPSHOT_STRICT,
+        'snapshotAutowarm': _ODDS_SNAPSHOT_AUTOWARM,
         'todayET': _odds_today_key(),
         'ttl': {
             'eventsSec': _ODDS_EVENTS_TTL,
@@ -6949,6 +7303,12 @@ def _odds_cache_status_payload():
             'count': game_cached,
             'entries': game_rows[:30],
         },
+        'snapshot': dict(_ODDS_SNAPSHOT_META),
+        'snapshotWorker': {
+            'started': _ODDS_SNAPSHOT_WORKER_STARTED,
+            'retrySec': _ODDS_SNAPSHOT_RETRY_SEC,
+            'heartbeatSec': _ODDS_SNAPSHOT_HEARTBEAT_SEC,
+        },
         'file': file_meta,
     }
 
@@ -6956,6 +7316,16 @@ def _odds_cache_status_payload():
 def _clear_odds_caches_locked():
     _ODDS_EVENTS_CACHE.clear()
     _ODDS_GAME_CACHE.clear()
+    _ODDS_SNAPSHOT_META.update({
+        'date': None,
+        'complete': False,
+        'running': False,
+        'startedAt': None,
+        'completedAt': None,
+        'eventsCount': 0,
+        'eventsFetched': 0,
+        'errors': [],
+    })
     _persist_odds_caches()
 
 
@@ -6971,7 +7341,7 @@ def api_odds_cache_status():
 @app.route('/api/odds/cache/refresh', methods=['POST'])
 def api_odds_cache_refresh():
     payload = request.get_json(silent=True) or {}
-    mode = str(payload.get('mode') or request.args.get('mode') or 'events').strip().lower()
+    mode = str(payload.get('mode') or request.args.get('mode') or 'snapshot').strip().lower()
     date_str = str(payload.get('date') or request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')).strip()
     event_id = payload.get('eventId') or request.args.get('eventId')
     game_pk = payload.get('gamePk') or request.args.get('gamePk')
@@ -6996,7 +7366,12 @@ def api_odds_cache_refresh():
             'clearFirst': clear_first,
         }
 
-        if mode in ('today', 'all'):
+        if mode in ('snapshot', 'build'):
+            snapshot_ok = _odds_snapshot_ready_today()
+            result['snapshotBuilt'] = snapshot_ok
+            result['prefetchedEventIds'] = list((_ODDS_GAME_CACHE or {}).keys())[:50]
+            result['prefetchedCount'] = len(_ODDS_GAME_CACHE or {})
+        elif mode in ('today', 'all'):
             sched = fetch_schedule(date_str)
             event_map = {
                 (_norm_name(ev.get('away_team')), _norm_name(ev.get('home_team'))): ev
@@ -7903,10 +8278,16 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                 raw_prob = float(p.get(prob_field, 0) or 0)
                 if raw_prob < 0.10:
                     continue
-                adj_prob = _clamp01(raw_prob * _market_mult(mk, adjustments))
+                raw_mult_prob = _clamp01(raw_prob * _market_mult(mk, adjustments))
                 market = find_market(p.get('name'), mk, line)
                 msum = _market_price_summary(market_props, p.get('name'), mk, line)
                 market_implied = msum.get('market_implied')
+                if market_implied and market_implied > 0:
+                    over_imp = market_implied
+                    under_imp = _american_to_implied(msum.get('best_under_price')) or (1 - over_imp)
+                    adj_prob = logit_blend_prob(raw_mult_prob, over_imp, mk, over_imp, under_imp)
+                else:
+                    adj_prob = raw_mult_prob
                 edge = (adj_prob - market_implied) if market_implied is not None else None
                 score = (edge * 100.0 if edge is not None else 0) + adj_prob
                 hub = _hub_rating(adj_prob, edge or 0)
@@ -7914,7 +8295,7 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                 ev_pct = round(adj_prob / mi - 1, 4) if mi and mi > 0 else None
                 temp_row = {
                     'date': capture_date, 'gamePk': game_pk, 'team': team_abbr, 'player': p.get('name'), 'playerId': p.get('id'), 'slot': p.get('slot'), 'marketKey': mk, 'line': line, 'recommendedSide': 'Over',
-                    'rawProb': round(raw_prob, 4), 'adjProb': round(adj_prob, 4), 'modelMean': round(float(p.get(mean_field, 0) or 0), 3), 'edge': round(edge, 4) if edge is not None else None,
+                    'rawProb': round(raw_prob, 4), 'rawMultProb': round(raw_mult_prob, 4), 'adjProb': round(adj_prob, 4), 'modelMean': round(float(p.get(mean_field, 0) or 0), 3), 'edge': round(edge, 4) if edge is not None else None,
                     'bookmaker': msum.get('market_bookmaker'), 'marketPrice': msum.get('best_over_price'), 'marketImplied': market_implied,
                     'bestAvailablePrice': msum.get('best_over_price'), 'bestAvailableBook': msum.get('best_over_book'),
                     'bestOverPrice': msum.get('best_over_price'), 'bestOverBook': msum.get('best_over_book'),
@@ -7949,10 +8330,16 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
             raw_prob = float(sp.get(prob_field, 0) or 0)
             if raw_prob < 0.12:
                 continue
-            adj_prob = _clamp01(raw_prob * _market_mult('pitcher_strikeouts', adjustments))
+            raw_mult_prob = _clamp01(raw_prob * _market_mult('pitcher_strikeouts', adjustments))
             market = find_market(sp.get('name'), 'pitcher_strikeouts', line)
             msum = _market_price_summary(market_props, sp.get('name'), 'pitcher_strikeouts', line)
             market_implied = msum.get('market_implied')
+            if market_implied and market_implied > 0:
+                over_imp = market_implied
+                under_imp = _american_to_implied(msum.get('best_under_price')) or (1 - over_imp)
+                adj_prob = logit_blend_prob(raw_mult_prob, over_imp, 'pitcher_strikeouts', over_imp, under_imp)
+            else:
+                adj_prob = raw_mult_prob
             edge = (adj_prob - market_implied) if market_implied is not None else None
             score = (edge * 100.0 if edge is not None else 0) + adj_prob
             hub = _hub_rating(adj_prob, edge or 0)
@@ -7960,7 +8347,7 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
             ev_pct = round(adj_prob / mi - 1, 4) if mi and mi > 0 else None
             temp_row = {
                 'date': capture_date, 'gamePk': game_pk, 'team': team_abbr, 'player': sp.get('name'), 'playerId': sp.get('id'), 'marketKey': 'pitcher_strikeouts', 'line': line, 'recommendedSide': 'Over',
-                'rawProb': round(raw_prob, 4), 'adjProb': round(adj_prob, 4), 'modelMean': round(float(sp.get('mean_k', 0) or 0), 3), 'edge': round(edge, 4) if edge is not None else None,
+                'rawProb': round(raw_prob, 4), 'rawMultProb': round(raw_mult_prob, 4), 'adjProb': round(adj_prob, 4), 'modelMean': round(float(sp.get('mean_k', 0) or 0), 3), 'edge': round(edge, 4) if edge is not None else None,
                 'bookmaker': msum.get('market_bookmaker'), 'marketPrice': msum.get('best_over_price'), 'marketImplied': market_implied,
                 'bestAvailablePrice': msum.get('best_over_price'), 'bestAvailableBook': msum.get('best_over_book'),
                 'bestOverPrice': msum.get('best_over_price'), 'bestOverBook': msum.get('best_over_book'),
@@ -11938,17 +12325,7 @@ _STAT_DEFAULTS = {
 # ── BAT X component weights (calibration hook) ────────────────────────────────
 # Sum of weights defines relative contribution to composite multiplier.
 # Increase/decrease individual weights to calibrate vs historical results.
-BATX_WEIGHTS = {
-    "contact":    0.28,   # platoon-blended AVG + xBA
-    "power":      0.18,   # ISO, barrel%, EV, xSLG
-    "discipline": 0.12,   # BB%, K%, xwOBA
-    "platoon":    0.10,   # hand matchup edge
-    "park":       0.07,   # park factor
-    "weather":    0.05,   # temp/wind
-    "pitcher":    0.12,   # FIP/xERA/K% resistance + recent form
-    "form":       0.05,   # Phase 1: L7 wOBA edge vs league
-    "bvp":        0.03,   # Phase 1: BvP shrunk wOBA × reliability
-}
+BATX_WEIGHTS = BATX_WEIGHTS_V2
 
 
 def _batter_hand_note(batter, pitcher_hand):
@@ -11977,10 +12354,10 @@ def _project_batter(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_sv,
     sv   = sv_batter(name)
 
     # ── Platoon-blended base rates ────────────────────────────────────────────
-    avg  = _platoon_blend(batter, pitcher_hand, 'avg')
-    obp  = _platoon_blend(batter, pitcher_hand, 'obp')
-    slg  = _platoon_blend(batter, pitcher_hand, 'slg')
-    ops  = _platoon_blend(batter, pitcher_hand, 'ops')
+    avg  = platoon_blend_v2(batter, pitcher_hand, 'avg')
+    obp  = platoon_blend_v2(batter, pitcher_hand, 'obp')
+    slg  = platoon_blend_v2(batter, pitcher_hand, 'slg')
+    ops  = platoon_blend_v2(batter, pitcher_hand, 'ops')
 
     # Fallback chain for fg-only stats (not in splits)
     fg_pa  = _safe_f(fg.get("fg_pa"),  200)
@@ -12078,6 +12455,7 @@ _LEAGUE_BRL_PCT = 0.063   # 6.3 %
 
 def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_sv,
                           park_factor, weather, pitcher_hand='R',
+                          opp_pitcher_id=None,
                           form=None, bvp=None):
     """
     BAT X-style projection engine with named component weights (BATX_WEIGHTS).
@@ -12097,10 +12475,10 @@ def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_s
     exp_pa = round(4.35 - (slot - 1) * 0.095, 2)
 
     # ── Platoon-blended base rates ────────────────────────────────────────────
-    avg  = _platoon_blend(batter, pitcher_hand, 'avg')
-    obp  = _platoon_blend(batter, pitcher_hand, 'obp')
-    slg  = _platoon_blend(batter, pitcher_hand, 'slg')
-    ops  = _platoon_blend(batter, pitcher_hand, 'ops')
+    avg  = platoon_blend_v2(batter, pitcher_hand, 'avg')
+    obp  = platoon_blend_v2(batter, pitcher_hand, 'obp')
+    slg  = platoon_blend_v2(batter, pitcher_hand, 'slg')
+    ops  = platoon_blend_v2(batter, pitcher_hand, 'ops')
 
     season_avg = _safe_f(batter.get('avg') or fg.get('fg_avg'), _STAT_DEFAULTS['avg'])
     season_ops = _safe_f(batter.get('ops'), _STAT_DEFAULTS['ops'])
@@ -12182,13 +12560,11 @@ def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_s
     # ── COMPONENT 7: Pitcher resistance ──────────────────────────────────────
     opp_era  = _safe_f(opp_pitcher_fg.get("fg_era")  or opp_pitcher_sv.get("sv_era_p"), 4.20)
     opp_xera = _safe_f(opp_pitcher_sv.get("sv_xera"), opp_era)
-    opp_fip  = _safe_f(opp_pitcher_fg.get("fg_fip"),  opp_era)
-    opp_kpct = _safe_f(opp_pitcher_fg.get("fg_kpct"), _LEAGUE_K_PCT)
     bat_kpct = fg_kp
 
-    season_pit_ratio = (opp_fip + opp_xera) / 2 / 4.20   # >1 = easy pitcher
-    pit_mult  = _clamp(season_pit_ratio, 0.72, 1.28)
-    k_adj     = 1.0 - _clamp((opp_kpct - bat_kpct) * 0.5, -0.15, 0.15)
+    recent_form = _pitcher_recent_form(opp_pitcher_id) if opp_pitcher_id else {}
+    pit_mult, kpct_blended = pitcher_component_v2(opp_pitcher_fg, opp_pitcher_sv, recent_form)
+    k_adj     = 1.0 - _clamp((kpct_blended - bat_kpct) * 0.5, -0.15, 0.15)
     # Platoon K modifier: disadvantage means more Ks
     if bat != 'S':
         plat_k = 0.97 if ((bat == 'L' and pit == 'R') or (bat == 'R' and pit == 'L')) else 1.03
@@ -12609,6 +12985,7 @@ def api_props_projections(game_pk):
                 proj = _project_batter_batx(
                     b, opp_pname, opp_pfg, opp_psv, pf, wx,
                     pitcher_hand=opp_hand,
+                    opp_pitcher_id=opp_pid,
                     form=form, bvp=bvp,
                 )
                 slot = int(b.get("slot") or 9)
@@ -14532,6 +14909,24 @@ def _preload_caches():
     # Start cache loads in parallel background threads
     threading.Thread(target=load_fg, daemon=True).start()
     threading.Thread(target=load_sv, daemon=True).start()
+
+    def _prewarm_when_ready():
+        # Wait for FG data to be available before prewarming dependent caches.
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            with _fg_lock:
+                if _fg_loaded:
+                    break
+            time.sleep(2)
+        prewarm_today_caches({
+            "fetch_schedule": fetch_schedule,
+            "_fetch_bvp": _fetch_bvp,
+            "_pitcher_recent_form": _pitcher_recent_form,
+            "_get_cached_ump": _get_cached_ump,
+        })
+
+    threading.Thread(target=_prewarm_when_ready, daemon=True).start()
+    _start_odds_snapshot_worker()
 
 _preload_caches()
 
