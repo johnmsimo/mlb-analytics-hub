@@ -633,6 +633,7 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 <script>
 // ── Helpers (declared first — used by everything below) ───────────────────────
 const gel    = id  => document.getElementById(id);
+const esc    = s   => String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const show   = id  => { const el=gel(id); if(el) el.style.display=''; };
 const hide   = id  => { const el=gel(id); if(el) el.style.display='none'; };
 const chips  = html => gel('gameChips').innerHTML = html;
@@ -888,10 +889,10 @@ function renderChips(games) {
   if (!games.length) { chips('<div style="color:var(--mu);font-family:Orbitron,monospace;font-size:.68rem;letter-spacing:2px;padding:10px">NO GAMES SCHEDULED</div>'); return; }
   chips(games.map(g => {
     const live = g.status === 'Live';
-    const esc  = s => String(s||'').replace(/'/g,"\\'");
-    return `<div class="gchip ${live?'live':''}" id="chip-${g.gamePk}"
-      onclick="selectGame(${g.gamePk},'${esc(g.awayAbbr)}','${esc(g.homeAbbr)}')">
-      <div class="gchip-teams">${g.awayAbbr} @ ${g.homeAbbr}</div>
+    const escAttr = s => String(s||'').replace(/'/g,"\\'");
+    return `<div class="gchip ${live?'live':''}" id="chip-${esc(String(g.gamePk||''))}"
+      onclick="selectGame(${g.gamePk},'${escAttr(g.awayAbbr)}','${escAttr(g.homeAbbr)}')">
+      <div class="gchip-teams">${esc(g.awayAbbr||'')} @ ${esc(g.homeAbbr||'')}</div>
       <div class="gchip-time">${g.gameTime||g.time||''}</div>
       <div class="gchip-st ${live?'live':''}">${g.status||'SCHED'}</div>
     </div>`;
@@ -2181,7 +2182,7 @@ function batterCard(b) {
 
   return `<div class="bcard">
     <div class="bcard-top">
-      <div><div class="bcard-name">${b.name||'—'} ${injBadge}</div><div class="bcard-meta">${b.pos||''} · ${b.team||''}</div>${verify}</div>
+      <div><div class="bcard-name">${esc(b.name||'—')} ${injBadge}</div><div class="bcard-meta">${esc(b.pos||'')} · ${esc(b.team||'')}</div>${verify}</div>
       <div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:4px">
         <div class="bcard-slot">${b.slot||'?'}</div>
         ${hub != null ? hubBadge(hub) : ''}

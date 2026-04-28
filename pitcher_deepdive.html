@@ -266,6 +266,7 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 <footer>MLB ANALYTICS HUB · PITCHER DEEP DIVE · FG + STATCAST + MLB STATS API · FOR ENTERTAINMENT PURPOSES ONLY</footer>
 
 <script>
+function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 const PITCH_NAMES = {ff:'4-Seam FB',si:'Sinker',fc:'Cutter',st:'Sweeper',sl:'Slider',cu:'Curveball',ch:'Changeup',fs:'Splitter',kn:'Knuckleball',sv:'Slurve',kc:'KC Curve',fp:'Forkball'};
 
 let GAMES=[], PD=null, LOGS={}, MATCHUPS={}, PROPS_DATA=null;
@@ -336,7 +337,7 @@ async function loadGames(){
     const sel=$('gameSelect');
     if(!GAMES.length){sel.innerHTML='<option value="">No games today</option>';return;}
     sel.innerHTML='<option value="">— Select a game —</option>'+
-      GAMES.map((g,i)=>`<option value="${i}">${g.awayAbbr} @ ${g.homeAbbr} – ${g.gameTime||g.time||''}</option>`).join('');
+      GAMES.map((g,i)=>`<option value="${i}">${esc(g.awayAbbr||'')} @ ${esc(g.homeAbbr||'')} – ${esc(g.gameTime||g.time||'')}</option>`).join('');
   }catch(e){$('gameSelect').innerHTML='<option value="">Error loading games</option>';}
 }
 
@@ -345,8 +346,8 @@ function onGameChange(){
   const ps=$('pitcherSelect');
   if(idx===''){ps.innerHTML='<option value="">Select game first</option>';return;}
   const g=GAMES[parseInt(idx)];
-  ps.innerHTML=`<option value="away">${g.awayAbbr} – ${g.awayPitcher||'TBD'}</option>`+
-               `<option value="home">${g.homeAbbr} – ${g.homePitcher||'TBD'}</option>`;
+  ps.innerHTML=`<option value="away">${esc(g.awayAbbr||'')} – ${esc(g.awayPitcher||'TBD')}</option>`+
+               `<option value="home">${esc(g.homeAbbr||'')} – ${esc(g.homePitcher||'TBD')}</option>`;
 }
 
 // FIX: manualRefresh always forces a full re-analyze regardless of FG_READY state
