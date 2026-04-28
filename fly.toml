@@ -1,7 +1,6 @@
-# fly.toml app configuration file generated for mlb-analytics-hub on 2026-04-27T17:16:32Z
+# fly.toml app configuration file for mlb-analytics-hub
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
-#
 
 app = 'mlb-analytics-hub'
 primary_region = 'ewr'
@@ -27,7 +26,7 @@ primary_region = 'ewr'
   grace_period = "120s"
   interval = "30s"
   method = "GET"
-  path = "/api/health"
+  path = "/api/status"
   timeout = "10s"
 
 [[vm]]

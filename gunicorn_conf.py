@@ -1,10 +1,10 @@
 """
-Gunicorn config for mlb-analytics-hub on Render.
+Gunicorn config for mlb-analytics-hub on Fly.io.
 
 Key goals:
-  • Survive Render's 512MB starter-plan memory limit
+  • Survive Fly.io 2GB memory limit cleanly
     - 1 worker  ->  caches live in a single process, no 2x RAM duplication
-    - preload_app=True  -> parent imports app.py once; workers fork copy-on-write
+    - preload_app=False  -> avoids daemon thread fork-death on gunicorn master
   • Never get SIGKILL'd mid-cache-build
     - 600s request timeout (the MLB-API-derived build can take 2-4 minutes)
     - 300s graceful shutdown
@@ -16,11 +16,11 @@ Key goals:
 """
 import os
 
-# Bind — Render sets $PORT; fall back to 10000 locally.
+# Bind — Fly.io sets $PORT; fall back to 8080.
 bind = f"0.0.0.0:{os.environ.get('PORT', '8080')}"
 
-# One worker only.  pybaseball + Savant caches are large (~150MB) and
-# 2 workers on a 512MB Render instance == OOM -> SIGKILL loop.
+# One worker only. pybaseball + Savant caches are large (~150MB) and
+# 2 workers on a 2GB instance == unnecessary cache duplication.
 workers = 1
 
 # Threaded worker so the caches (loaded by background daemon threads)
@@ -29,16 +29,16 @@ worker_class = "gthread"
 threads = 4
 
 # The MLB-API-derived cache build hits 900+ players and can take 120-240s
-# on a cold boot; anything less and Render kills the worker.
+# on a cold boot; anything less and gunicorn kills the worker.
 timeout = 600
 graceful_timeout = 300
 
-# Do NOT preload the app.  If we preload, gunicorn's master imports
+# Do NOT preload the app. If we preload, gunicorn's master imports
 # app.py once, kicks off the background cache-loader threads IN THE MASTER,
-# then forks workers.  On fork, daemon threads do NOT copy over, so the
-# worker inherits `_fg_loading=True` / `_sv_loading=True` flags with no
+# then forks workers. On fork, daemon threads do NOT copy over, so the
+# worker inherits _fg_loading=True / _sv_loading=True flags with no
 # thread actually running — caches never populate and every request sees
-# empty stats.  With workers=1 preload is also meaningless.
+# empty stats. With workers=1 preload is also meaningless.
 preload_app = False
 
 # Keep connections open a bit longer than the default (2s) so the CDN
@@ -49,7 +49,7 @@ keepalive = 15
 # full pybaseball/Savant re-load which blows the memory/time budget.
 max_requests = 0
 
-# Logging — send access/error to stdout/stderr so Render captures them.
+# Logging — send access/error to stdout/stderr so Fly.io captures them.
 accesslog = "-"
 errorlog = "-"
 loglevel = "info"
