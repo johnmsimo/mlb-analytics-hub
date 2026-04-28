@@ -59,6 +59,24 @@ CORS(app)
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
+# ── Admin token auth ─────────────────────────────────────────────────────────
+# Set ADMIN_TOKEN env var to enable write-route protection.
+# When set, POST/PATCH/DELETE requests to admin/tracker routes require:
+#   Authorization: Bearer <token>   OR   X-Admin-Token: <token>
+_ADMIN_TOKEN = os.getenv('ADMIN_TOKEN', '').strip()
+
+def _check_admin_auth():
+    """Return None if auth passes (or is disabled), else a 401 Response."""
+    if not _ADMIN_TOKEN:
+        return None
+    auth_header = request.headers.get('Authorization', '')
+    token_header = request.headers.get('X-Admin-Token', '')
+    bearer = auth_header.removeprefix('Bearer ').strip() if auth_header.startswith('Bearer ') else ''
+    provided = bearer or token_header.strip()
+    if provided == _ADMIN_TOKEN:
+        return None
+    return jsonify({'success': False, 'error': 'Unauthorized'}), 401
+
 def _read_html_or_fallback(filename):
     path = os.path.join(_HERE, filename)
     try:
@@ -1032,7 +1050,7 @@ def _sv_key(raw):
 
 def _sv_f(val):
     try: return round(float(val), 2)
-    except: return "N/A"
+    except Exception: return "N/A"
 
 def _fetch_sv_csv(url):
     """Fetch a Baseball Savant CSV with realistic browser headers and retry logic.
@@ -1177,7 +1195,7 @@ def _load_savant_data():
                 v = row.get("n_" + pt,"").strip()
                 if v:
                     try: pitches[pt] = round(float(v), 1)
-                    except: pass
+                    except Exception: pass
             if pitches: d[_sv_key(raw)] = pitches
         with _sv_lock: _sv_arsenal_pct = d
         print(f"[Savant] Arsenal %: {len(d)}")
@@ -1199,7 +1217,7 @@ def _load_savant_data():
                 v = row.get(pt + "_avg_speed","").strip()
                 if v:
                     try: velos[pt] = round(float(v), 1)
-                    except: pass
+                    except Exception: pass
             if velos: d[_sv_key(raw)] = velos
         with _sv_lock: _sv_arsenal_velo = d
         print(f"[Savant] Arsenal velo: {len(d)}")
@@ -2068,7 +2086,7 @@ def pitcher_stats_mlb(player_id):
             "bb9":  round(float(s.get("walksPer9Inn",0) or 0),2),
             "hr9":  round(float(s.get("homeRunsPer9",0) or 0),2),
         }
-    except: return {}
+    except Exception: return {}
 
 def get_batters_from_boxscore(team_data, side):
     out = []
@@ -2083,7 +2101,7 @@ def get_batters_from_boxscore(team_data, side):
         ss  = p.get("seasonStats",{}).get("batting",{})
         slot= p.get("battingOrder",0)
         try: slot = int(str(slot)[0])
-        except: slot = 0
+        except Exception: slot = 0
         fgb = fg_batter(name)
         svb = sv_batter(name)
         out.append({
@@ -2135,7 +2153,7 @@ def parse_game(g, prefer_live_weather=True):
             from datetime import timedelta
             utc_offset      = VENUE_UTC_OFFSET.get(venue_id, -5)
             game_hour_local = (dt_utc_wx + timedelta(hours=utc_offset)).hour
-        except:
+        except Exception:
             game_hour_local = 13
         raw_weather = g.get("weather", {}) or {}
         if not prefer_live_weather and raw_weather:
@@ -2165,7 +2183,7 @@ def parse_game(g, prefer_live_weather=True):
             dt_utc = datetime.fromisoformat(gt.replace("Z","+00:00"))
             dt_et  = dt_utc.astimezone(ET)
             gt_fmt = dt_et.strftime("%-I:%M %p ET")
-        except: gt_fmt = "TBD"
+        except Exception: gt_fmt = "TBD"
         pf   = PARK_FACTORS.get(hid, 1.0)
         series_game  = int(g.get("seriesGameNumber") or 1)
         series_total = int(g.get("gamesInSeries")    or 3)
@@ -2454,6 +2472,10 @@ def api_memory_status():
 
 @app.route('/api/admin/settings', methods=['GET', 'POST'])
 def api_admin_settings():
+    if request.method == 'POST':
+        denied = _check_admin_auth()
+        if denied:
+            return denied
     try:
         if request.method == 'GET':
             return jsonify({'success': True, 'settings': _get_admin_settings()})
@@ -2467,6 +2489,10 @@ def api_admin_settings():
 
 @app.route('/api/app-settings', methods=['GET', 'POST'])
 def api_app_settings():
+    if request.method == 'POST':
+        denied = _check_admin_auth()
+        if denied:
+            return denied
     try:
         if request.method == 'GET':
             return jsonify({'success': True, 'settings': _get_app_settings()})
@@ -3929,13 +3955,13 @@ def api_game_projection(game_pk):
                 try:
                     f = float(v)
                     if 0 < f < 12: return f
-                except: pass
+                except Exception: pass
             return 4.50
         def best_fip(fg, fallback):
             try:
                 f = float(fg.get("fg_fip",0))
                 if 0 < f < 12: return f
-            except: pass
+            except Exception: pass
             return fallback
         # home pitcher faces away lineup, away pitcher faces home lineup
         away_pit_era = best_era(hp_sv, hp_fg, hp_mlb)
@@ -3949,7 +3975,8 @@ def api_game_projection(game_pk):
             box = r.json().get("teams",{})
             away_bats = get_batters_from_boxscore(box.get("away",{}), "away")
             home_bats = get_batters_from_boxscore(box.get("home",{}), "home")
-        except:
+        except Exception as ex:
+            print(f'[api_game_projection] boxscore fetch failed for {game_pk}: {ex}')
             away_bats = []; home_bats = []
         def lineup_xwoba(bats):
             vals = []
@@ -3958,7 +3985,7 @@ def api_game_projection(game_pk):
                     try:
                         f = float(b.get(k,0))
                         if 0.1 < f < 0.6: vals.append(f); break
-                    except: pass
+                    except Exception: pass
                 else:
                     vals.append(0.320)
             return round(sum(vals)/len(vals), 3) if vals else 0.320
@@ -4004,7 +4031,7 @@ def api_game_projection(game_pk):
                 elif t > 76: wx_adj = 0.10
                 elif t < 48: wx_adj = -0.20
                 elif t < 56: wx_adj = -0.10
-            except: pass
+            except Exception: pass
         away_runs = round(away_runs + wx_adj, 1)
         home_runs = round(home_runs + wx_adj, 1)
         total = round(away_runs + home_runs, 1)
@@ -4954,7 +4981,7 @@ def _parse_ip(ip_val):
         whole = int(f)
         part  = round(f - whole, 1)
         return whole + part / 0.3   # convert .1→1/3, .2→2/3
-    except:
+    except Exception:
         return 0.0
 
 
@@ -5524,7 +5551,7 @@ def player_profile(player_id):
             'bats': p.get('batSide', {}).get('code', 'S') or 'S',
             'throws': p.get('pitchHand', {}).get('code', 'R') or 'R',
         }
-    except:
+    except Exception:
         out = {'bats': 'S', 'throws': 'R'}
     _bio_cache[player_id] = out
     return out
@@ -5557,7 +5584,7 @@ def hitter_split_profile(player_id):
                 'slg': _num(s.get('slg'), 0.0),
                 'pa': int(s.get('plateAppearances', 0) or 0),
             }
-    except:
+    except Exception:
         out = {}
     _hit_split_cache[player_id] = out
     return out
@@ -5585,7 +5612,7 @@ def team_pitching_context(team_id):
             'bb9': _clamp(_num(s.get('walksPer9Inn'), 3.2), 2.0, 4.8),
             'hr9': _clamp(_num(s.get('homeRunsPer9'), 1.10), 0.7, 1.7),
         }
-    except:
+    except Exception:
         out = dict(BULLPEN_BASE)
     _team_pitch_cache[key] = out
     return out
@@ -5682,7 +5709,7 @@ def pitcher_stats_mlb(player_id):
             "hr9": round(float(s.get("homeRunsPer9", 0) or 0), 2),
             "pitchHand": prof.get('throws', 'R'),
         }
-    except:
+    except Exception:
         prof = player_profile(player_id)
         return {'pitchHand': prof.get('throws', 'R')}
 
@@ -5701,7 +5728,7 @@ def get_batters_from_boxscore(team_data, side):
         slot = p.get("battingOrder", 0)
         try:
             slot = int(str(slot)[0])
-        except:
+        except Exception:
             slot = 0
         fgb = fg_batter(name)
         svb = sv_batter(name)
@@ -7136,7 +7163,7 @@ def _american_to_implied(price):
         if p < 0:
             return round((-p) / ((-p) + 100.0), 4)
         return None
-    except:
+    except Exception:
         return None
 
 
@@ -7155,7 +7182,8 @@ def _find_odds_event(away_name, home_name):
             if _norm_name(ev.get('away_team')) == na and _norm_name(ev.get('home_team')) == nh:
                 return ev, events
         return None, events
-    except:
+    except Exception as ex:
+        print(f'[_find_odds_event] {ex}')
         return None, []
 
 
@@ -7236,7 +7264,8 @@ def _load_event_odds(event_id, featured_only=False):
         with _ODDS_CACHE_LOCK:
             cached = _ODDS_GAME_CACHE.get(event_id)
             return (cached or {}).get('all') or []
-    except:
+    except Exception as ex:
+        print(f'[_load_event_odds] {ex}')
         with _ODDS_CACHE_LOCK:
             cached = _ODDS_GAME_CACHE.get(event_id)
         return (cached or {}).get('all', [])
@@ -8153,8 +8182,8 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
         box = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=10).json().get('teams', {})
         away_lineup = get_batters_from_boxscore(box.get('away', {}), 'away')
         home_lineup = get_batters_from_boxscore(box.get('home', {}), 'home')
-    except Exception:
-        pass
+    except Exception as ex:
+        print(f'[tracker_rows] boxscore fetch failed for {game_pk}: {ex}')
 
     # ── Pre-game fallback: scheduled lineups from already hydrated schedule ──
     if not away_lineup or not home_lineup:
@@ -8187,8 +8216,8 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                 away_lineup = _parse_scheduled_lineup(lineups.get('awayBatters', []))
             if not home_lineup:
                 home_lineup = _parse_scheduled_lineup(lineups.get('homeBatters', []))
-        except Exception:
-            pass
+        except Exception as ex:
+            print(f'[tracker_rows] scheduled lineup parse failed for {game_pk}: {ex}')
 
     # ── Last resort: active roster (top 9 position players) ─────────────────
     def _roster_lineup(team_id):
@@ -8615,6 +8644,9 @@ def _start_tracker_auto_sync_worker():
 @app.route('/api/tracker/adjustments', methods=['GET', 'POST'])
 def api_tracker_adjustments():
     if request.method == 'POST':
+        denied = _check_admin_auth()
+        if denied:
+            return denied
         payload = request.get_json(silent=True) or {}
         base = _get_adjustments()
         for key in ['captured_per_game', 'best_edge_threshold', 'best_prob_threshold', 'bankroll', 'kelly_fraction', 'unit_size_pct', 'max_bet_pct', 'max_daily_risk_pct', 'max_team_exposure_pct', 'max_market_exposure_pct', 'max_game_exposure_pct']:
@@ -8638,6 +8670,9 @@ def api_tracker_date(date_str):
 
 @app.route('/api/tracker/capture/<date_str>', methods=['POST'])
 def api_tracker_capture(date_str):
+    denied = _check_admin_auth()
+    if denied:
+        return denied
     try:
         adjustments = _get_adjustments()
         sched = fetch_schedule(date_str)
@@ -8654,23 +8689,45 @@ def api_tracker_capture(date_str):
         failed_games = []
         include_odds = str(os.getenv('TRACKER_CAPTURE_INCLUDE_ODDS', '0')).strip().lower() in ('1', 'true', 'yes')
 
-        for g in sched:
-            if time.time() >= deadline:
-                break
+        # Parallelise I/O-bound boxscore/roster fetches across games.
+        # cap workers at 4 to stay within the single-Gunicorn-worker memory budget.
+        max_workers = min(4, len(sched))
+        time_limit = max(1.0, deadline - time.time() - 1.0)
+
+        def _capture_one(g):
             gpk = g.get('gamePk')
             try:
                 rows = _build_tracker_rows_for_game(gpk, date_str, adjustments, _sched=sched, include_odds=include_odds)
-                all_entries.extend(rows)
-                captured_games += 1
+                return gpk, rows, None, False
             except Exception as ex:
                 print(f'[tracker_capture_game {gpk}]', traceback.format_exc())
                 try:
                     rows = _build_tracker_rows_quick(g, date_str, adjustments)
+                    return gpk, rows, None, True
+                except Exception as ex2:
+                    return gpk, [], str(ex)[:140], False
+
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {pool.submit(_capture_one, g): g for g in sched}
+            games_within_budget = []
+            games_timed_out = []
+            for fut in as_completed(futures, timeout=time_limit):
+                games_within_budget.append(fut)
+            timed_out_futures = [f for f in futures if f not in set(games_within_budget)]
+            games_timed_out = [futures[f] for f in timed_out_futures]
+
+        for fut in games_within_budget:
+            try:
+                gpk, rows, err, recovered = fut.result()
+                if err:
+                    failed_games.append({'gamePk': gpk, 'error': err})
+                else:
                     all_entries.extend(rows)
                     captured_games += 1
-                    recovered_games += 1
-                except Exception:
-                    failed_games.append({'gamePk': gpk, 'error': str(ex)[:140]})
+                    if recovered:
+                        recovered_games += 1
+            except Exception:
+                pass
 
         store = _load_json(TRACKER_STORE, {})
         day = _normalize_tracker_day(store.get(date_str))
@@ -8678,8 +8735,8 @@ def api_tracker_capture(date_str):
         entries.sort(key=lambda x: x.get('score', 0), reverse=True)
         store[date_str] = {'capturedAt': datetime.now().isoformat(), 'gradedAt': None, 'closingCapturedAt': None, 'entries': entries}
         _save_json(TRACKER_STORE, store)
-        timed_out = captured_games < len(sched)
-        remaining_games = sched[captured_games:] if timed_out else []
+        timed_out = bool(games_timed_out)
+        remaining_games = games_timed_out if timed_out else []
         background_started = False
         if remaining_games and str(os.getenv('TRACKER_CAPTURE_BACKGROUND', '1')).strip().lower() in ('1', 'true', 'yes'):
             with _TRACKER_CAPTURE_LOCK:
@@ -8725,6 +8782,9 @@ def api_tracker_capture(date_str):
 
 @app.route('/api/tracker/grade/<date_str>', methods=['POST'])
 def api_tracker_grade(date_str):
+    denied = _check_admin_auth()
+    if denied:
+        return denied
     store = _load_json(TRACKER_STORE, {})
     raw_day = store.get(date_str)
     if raw_day is None:
@@ -8829,7 +8889,7 @@ def _normalize_tracker_day(day_payload):
 def _dates_in_window(end_date_str, window_days):
     try:
         end_dt = datetime.strptime(end_date_str, '%Y-%m-%d').date()
-    except:
+    except Exception:
         end_dt = datetime.now().date()
     return [(end_dt - timedelta(days=i)).isoformat() for i in range(max(1, int(window_days)))]
 
@@ -9685,7 +9745,10 @@ def api_tracker_performance():
 def api_tracker_backtest():
     start = (request.args.get('start') or '').strip()
     end = (request.args.get('end') or '').strip()
-    sims = request.args.get('sims', 2000)
+    try:
+        sims = max(200, min(2000, int(request.args.get('sims', 2000) or 2000)))
+    except (TypeError, ValueError):
+        sims = 2000
     if not start or not end:
         return jsonify({'success': False, 'error': 'start and end are required (YYYY-MM-DD)'}), 400
     try:
@@ -9719,6 +9782,9 @@ def api_tracker_settings():
 
 @app.route('/api/tracker/pick', methods=['POST'])
 def api_tracker_pick():
+    denied = _check_admin_auth()
+    if denied:
+        return denied
     entry = request.get_json(silent=True) or {}
     if not entry.get('player') or not entry.get('marketKey'):
         return jsonify({'success': False, 'error': 'Missing player or marketKey'}), 400
@@ -9772,6 +9838,9 @@ def api_tracker_pick():
 
 @app.route('/api/tracker/pick/<pick_id>', methods=['PATCH'])
 def api_tracker_pick_patch(pick_id):
+    denied = _check_admin_auth()
+    if denied:
+        return denied
     payload = request.get_json(silent=True) or {}
     date_hint = payload.get('date') or request.args.get('date')
     store = _load_json(TRACKER_STORE, {})
@@ -9802,6 +9871,9 @@ def api_tracker_pick_patch(pick_id):
 
 @app.route('/api/tracker/pick/<pick_id>', methods=['DELETE'])
 def api_tracker_pick_delete(pick_id):
+    denied = _check_admin_auth()
+    if denied:
+        return denied
     today = request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
     store = _load_json(TRACKER_STORE, {})
     date_str, day, entries, idx, row = _tracker_find_pick(store, pick_id, today)
@@ -9889,6 +9961,9 @@ def api_tracker_parlay():
 
 @app.route('/api/tracker/calibration/apply', methods=['POST'])
 def api_tracker_calibration_apply():
+    denied = _check_admin_auth()
+    if denied:
+        return denied
     payload = request.get_json(silent=True) or {}
     date_str = payload.get('date') or datetime.now().strftime('%Y-%m-%d')
     window = int(payload.get('window', 7) or 7)
@@ -9913,7 +9988,7 @@ def _profit_units_from_american(price):
             return round(p / 100.0, 4)
         if p < 0:
             return round(100.0 / abs(p), 4)
-    except:
+    except Exception:
         pass
     return None
 
@@ -10142,7 +10217,7 @@ def _kelly_fraction(prob, price):
         q = 1.0 - p
         frac = ((b * p) - q) / b
         return round(max(0.0, frac), 6)
-    except:
+    except Exception:
         return 0.0
 
 
@@ -11236,7 +11311,7 @@ def _mc_compute_background():
                             name = ((e.get('person') or {}).get('fullName') or '').strip()
                             if name: out.append({'name': name, 'slot': 0, 'side': side})
                         return out[:15]
-                    except: return []
+                    except Exception: return []
 
                 if len(away_lu) < 5: away_lu = _roster(away_tid, 'away')
                 if len(home_lu) < 5: home_lu = _roster(home_tid, 'home')
@@ -11275,19 +11350,19 @@ def _mc_compute_background():
                         if not name: continue
                         svb = sv_batter(name); fgb = fg_batter(name)
                         try: xba  = float(svb.get('sv_xba')    or fgb.get('fg_avg')  or 0.250)
-                        except: xba  = 0.250
+                        except Exception: xba  = 0.250
                         try: woba = float(svb.get('sv_xwoba')  or fgb.get('fg_woba') or 0.320)
-                        except: woba = 0.320
+                        except Exception: woba = 0.320
                         try: brl  = float(svb.get('sv_brl_pct') or 0)
-                        except: brl  = 0.0
+                        except Exception: brl  = 0.0
                         try: ev   = float(svb.get('sv_ev')     or 88.0)
-                        except: ev   = 88.0
+                        except Exception: ev   = 88.0
                         try: slg  = float(fgb.get('fg_slg')    or 0.380)
-                        except: slg  = 0.380
+                        except Exception: slg  = 0.380
                         try: wrc  = int(fgb.get('fg_wrc')      or 100)
-                        except: wrc  = 100
+                        except Exception: wrc  = 100
                         try: obp  = float(fgb.get('fg_obp')    or 0.320)
-                        except: obp  = 0.320
+                        except Exception: obp  = 0.320
                         lm = 1.06 if slot<=2 else (1.03 if slot<=4 else (0.97 if slot>=8 else 1.0))
                         for mk, line, prob, reason in [
                             ('batter_hits',        0.5, min(0.92, xba *3.2*lm),
@@ -11312,15 +11387,15 @@ def _mc_compute_background():
                         if not pname: continue
                         fgp = fg_pitcher(pname); svp = sv_pitcher(pname)
                         try: k9    = float(fgp.get('fg_k9')   or 0)
-                        except: k9 = 0.0
+                        except Exception: k9 = 0.0
                         try: xfip  = float(fgp.get('fg_xfip') or fgp.get('fg_fip') or 4.0)
-                        except: xfip = 4.0
+                        except Exception: xfip = 4.0
                         try: whiff = float(svp.get('sv_whiff') or 0)
-                        except: whiff = 0.0
+                        except Exception: whiff = 0.0
                         try: bb9   = float(fgp.get('fg_bb9')  or 3.5)
-                        except: bb9  = 3.5
+                        except Exception: bb9  = 3.5
                         try: ip    = float(fgp.get('fg_ip')   or 0)
-                        except: ip   = 0.0
+                        except Exception: ip   = 0.0
                         k_prob = min(0.87, max(0.25,
                             (k9/9*0.85 if k9>0 else 0.50)
                             + ((whiff-22)/100*0.4 if whiff>22 else 0)
@@ -11963,7 +12038,7 @@ def api_ai_boxscore(game_pk):
         try:
             dt_utc_wx = datetime.fromisoformat(gdata.get("gameDate","").replace("Z","+00:00"))
             game_hour = dt_utc_wx.astimezone(ET).hour
-        except:
+        except Exception:
             game_hour = 13
         
         wx = get_weather(lat, lon, game_hour, venue_id=venue_id)
@@ -11994,9 +12069,10 @@ def api_ai_boxscore(game_pk):
             box = r.json().get("teams",{})
             away_bats = get_batters_from_boxscore(box.get("away",{}), "away")
             home_bats = get_batters_from_boxscore(box.get("home",{}), "home")
-        except:
+        except Exception as ex:
+            print(f'[ai_boxscore] boxscore fetch failed for {game_pk}: {ex}')
             away_bats = []; home_bats = []
-        
+
         # Park factor
         hid = home_t.get("team",{}).get("id")
         pf = PARK_FACTORS.get(hid, 1.0)

@@ -619,6 +619,7 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
 <div id="appToast" class="toast"></div>
 <footer><div class="footstack"><div>MLB ANALYTICS HUB &nbsp;|&nbsp; DATA: MLB API &middot; FANGRAPHS &middot; BASEBALL SAVANT &middot; OPEN-METEO</div><div><span class="fgtag">FG</span> FANGRAPHS: wOBA &middot; wRC+ &middot; FIP &middot; xFIP &middot; WAR &nbsp;|&nbsp; <span class="svtag">SV</span> BASEBALL SAVANT: xERA &middot; xBA &middot; xSLG &middot; xwOBA &middot; EV &middot; HH% &middot; Barrel% &middot; Pitch Arsenal</div><div>FOR ENTERTAINMENT PURPOSES ONLY</div></div></footer>
 <script>
+function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function tick(){var n=new Date(),h=n.getHours(),m=n.getMinutes(),s=n.getSeconds(),h12=(h%12||12),ap=h>=12?'PM':'AM';document.getElementById('clk').textContent=('0'+h12).slice(-2)+':'+('0'+m).slice(-2)+':'+('0'+s).slice(-2)+' '+ap;document.getElementById('dt').textContent=n.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'}).toUpperCase();}
 setInterval(tick,1000);tick();
 function wicon(c){var s=(c||'').toLowerCase();if(s.indexOf('rain')>=0||s.indexOf('shower')>=0)return'&#127783;';if(s.indexOf('thunder')>=0)return'&#9928;';if(s.indexOf('cloud')>=0)return'&#9925;';if(s.indexOf('fog')>=0)return'&#127787;';if(s.indexOf('snow')>=0)return'&#10052;';if(s.indexOf('clear')>=0||s.indexOf('sun')>=0)return'&#9728;';return'&#127780;';}
@@ -862,8 +863,8 @@ function renderTeamPitchingRankings(rankings){
 function renderTeam(team){
   const wrap=document.getElementById('teamWrap');
   if(!team){ wrap.innerHTML='<div class="ng"><h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px">NO TEAM DATA</h3></div>'; return; }
-  wrap.innerHTML='<div class="team-head"><img class="team-logo" src="'+team.logo+'" alt="'+team.abbr+'" loading="lazy" width="56" height="56"><div><div class="team-name">'+team.name+'</div><div class="team-meta">'+team.players.length+' roster entries loaded</div></div></div>'
-    +'<div class="roster-grid">'+(team.players||[]).map(function(p){return '<div class="player-card" style="cursor:pointer" data-pid="'+p.id+'"><div class="player-top"><img class="player-photo" src="'+(p.image||'')+'" alt="'+p.name+'" loading="lazy" width="54" height="54"><div><div class="player-pos">'+(p.pos||'?')+'</div><div class="player-name">'+(p.name||'?')+'</div></div></div><div class="stat-row"><div class="stat"><div class="stat-l">'+p.label1+'</div><div class="stat-v">'+numOrDash(p.value1)+'</div></div><div class="stat"><div class="stat-l">'+p.label2+'</div><div class="stat-v">'+numOrDash(p.value2)+'</div></div><div class="stat"><div class="stat-l">'+p.label3+'</div><div class="stat-v">'+numOrDash(p.value3)+'</div></div></div></div>';}).join('')+'</div>';
+  wrap.innerHTML='<div class="team-head"><img class="team-logo" src="'+esc(team.logo||'')+'" alt="'+esc(team.abbr||'')+'" loading="lazy" width="56" height="56"><div><div class="team-name">'+esc(team.name||'')+'</div><div class="team-meta">'+team.players.length+' roster entries loaded</div></div></div>'
+    +'<div class="roster-grid">'+(team.players||[]).map(function(p){return '<div class="player-card" style="cursor:pointer" data-pid="'+esc(String(p.id||''))+'"><div class="player-top"><img class="player-photo" src="'+esc(p.image||'')+'" alt="'+esc(p.name||'')+'" loading="lazy" width="54" height="54"><div><div class="player-pos">'+esc(p.pos||'?')+'</div><div class="player-name">'+esc(p.name||'?')+'</div></div></div><div class="stat-row"><div class="stat"><div class="stat-l">'+esc(p.label1||'')+'</div><div class="stat-v">'+numOrDash(p.value1)+'</div></div><div class="stat"><div class="stat-l">'+esc(p.label2||'')+'</div><div class="stat-v">'+numOrDash(p.value2)+'</div></div><div class="stat"><div class="stat-l">'+esc(p.label3||'')+'</div><div class="stat-v">'+numOrDash(p.value3)+'</div></div></div></div>';}).join('')+'</div>';
 }
 function loadTeams(){
   fetch('/api/teams/pitching-rankings').then(r=>r.json()).then(function(d){
@@ -878,7 +879,7 @@ function loadTeams(){
     TEAM_DATA=d;
     TEAMS_LOADED=true;
     const sel=document.getElementById('teamSelect');
-    sel.innerHTML=(d.teams||[]).map(t=>'<option value="'+t.id+'">'+t.abbr+' — '+t.name+'</option>').join('');
+    sel.innerHTML=(d.teams||[]).map(t=>'<option value="'+esc(String(t.id||''))+'">'+esc(t.abbr||'')+' — '+esc(t.name||'')+'</option>').join('');
     document.getElementById('teamStatus').textContent=(d.teams||[]).length+' teams loaded';
     if((d.teams||[]).length) renderTeam(d.teams[0]);
     sel.onchange=function(){ renderTeam((TEAM_DATA.teams||[]).find(t=>String(t.id)===String(sel.value))); };

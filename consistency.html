@@ -146,6 +146,8 @@
     let DATA = null;
     let ACTIVE_MARKET = null;
 
+    function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
     function etToday(){
       const d = new Date().toLocaleDateString('en-US', { timeZone: 'America/New_York' });
       const [m, day, y] = d.split('/');
@@ -251,10 +253,10 @@
         const ev = Number(row.evPct || 0);
         const evClass = ev >= 0 ? 'pos' : 'neg';
         return '<tr>' +
-          `<td><div class="player">${row.player || '-'}</div><div class="small">ID ${row.playerId || '-'}</div></td>` +
-          `<td>${row.team || '-'}</td>` +
-          `<td>${row.opp || '-'}</td>` +
-          `<td>${row.gameLabel || '-'}</td>` +
+          `<td><div class="player">${esc(row.player || '-')}</div><div class="small">ID ${esc(row.playerId || '-')}</div></td>` +
+          `<td>${esc(row.team || '-')}</td>` +
+          `<td>${esc(row.opp || '-')}</td>` +
+          `<td>${esc(row.gameLabel || '-')}</td>` +
           `<td>${row.slot == null ? '-' : row.slot}</td>` +
           `<td>${num(row.line, 1)}</td>` +
           `<td>${rateMarkup(row.l5)}</td>` +

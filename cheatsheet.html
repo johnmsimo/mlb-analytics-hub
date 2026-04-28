@@ -96,6 +96,8 @@
   <script>
     let DATA = null;
 
+    function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
     function switchTab(name, btn){
       document.querySelectorAll('.panel').forEach(p=>p.classList.remove('on'));
       document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));
@@ -135,13 +137,13 @@
       const games = new Set(rows.map(r=>r.gamePk)).size;
       meta.innerHTML = '<span class="pill">Rows: '+rows.length+'</span><span class="pill">Games: '+games+'</span><span class="pill">Sorted by HUB</span>';
       body.innerHTML = rows.map(r => '<tr>'+
-        '<td>'+ (r.player||'-') +'</td>'+
-        '<td>'+ (r.team||'-') +'</td>'+
-        '<td>'+ (r.slot||'-') +'</td>'+
-        '<td>'+ (r.matchup||'-') +'</td>'+
-        '<td>'+ (r.vsHand||'-') +'</td>'+
+        '<td>'+ esc(r.player||'-') +'</td>'+
+        '<td>'+ esc(r.team||'-') +'</td>'+
+        '<td>'+ esc(r.slot||'-') +'</td>'+
+        '<td>'+ esc(r.matchup||'-') +'</td>'+
+        '<td>'+ esc(r.vsHand||'-') +'</td>'+
         '<td class="'+l10Class(r.l10Pct)+'">'+pct(r.l10Pct)+'</td>'+
-        '<td>'+ (r.bvpGrade||'-') +'</td>'+
+        '<td>'+ esc(r.bvpGrade||'-') +'</td>'+
         '<td>'+ (r.hubRating==null?'-':r.hubRating) +'</td>'+
         '<td class="'+((r.evPct||0)>=0?'good':'bad')+'">'+num(r.evPct,1)+'%</td>'+
       '</tr>').join('');
@@ -158,13 +160,13 @@
       const games = [...new Set(rows.map(r=>r.matchup))].length;
       meta.innerHTML = '<span class="pill">Games: '+games+'</span><span class="pill">Rows: '+rows.length+'</span>';
       body.innerHTML = rows.map(r => '<tr>'+
-        '<td>'+ (r.matchup||'-') +'</td>'+
-        '<td>'+ (r.rank||'-') +'</td>'+
-        '<td>'+ (r.player||'-') +'</td>'+
-        '<td>'+ (r.team||'-') +'</td>'+
-        '<td>'+ (r.slot||'-') +'</td>'+
+        '<td>'+ esc(r.matchup||'-') +'</td>'+
+        '<td>'+ esc(r.rank||'-') +'</td>'+
+        '<td>'+ esc(r.player||'-') +'</td>'+
+        '<td>'+ esc(r.team||'-') +'</td>'+
+        '<td>'+ esc(r.slot||'-') +'</td>'+
         '<td>'+ num(r.matchupScore,1) +'</td>'+
-        '<td>'+ (r.bvpGrade||'-') +'</td>'+
+        '<td>'+ esc(r.bvpGrade||'-') +'</td>'+
         '<td class="'+l10Class(r.l10Pct)+'">'+pct(r.l10Pct)+'</td>'+
         '<td>'+ (r.hubRating==null?'-':r.hubRating) +'</td>'+
       '</tr>').join('');
@@ -181,11 +183,11 @@
       meta.innerHTML = '<span class="pill">Pitchers: '+cards.length+'</span>';
       wrap.innerHTML = cards.map(c =>
         '<div class="card">'+
-          '<h4>'+ (c.pitcherName||'-') +' ('+(c.team||'-')+')</h4>'+
-          '<div class="line">Weakspot slots: '+(c.weakSlots||'-')+'</div>'+
-          '<div class="line">Pitch vulnerability: '+(c.pitchVulnerability||'-')+'</div>'+
-          '<div class="line">Form: '+(c.formLabel||'-')+'</div>'+
-          '<div class="line">Recommendation: '+(c.recommendation||'-')+'</div>'+
+          '<h4>'+ esc(c.pitcherName||'-') +' ('+esc(c.team||'-')+')</h4>'+
+          '<div class="line">Weakspot slots: '+esc(c.weakSlots||'-')+'</div>'+
+          '<div class="line">Pitch vulnerability: '+esc(c.pitchVulnerability||'-')+'</div>'+
+          '<div class="line">Form: '+esc(c.formLabel||'-')+'</div>'+
+          '<div class="line">Recommendation: '+esc(c.recommendation||'-')+'</div>'+
         '</div>'
       ).join('');
     }

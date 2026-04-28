@@ -662,7 +662,7 @@ const st = {
 
 // ── Utilities ────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
-const safe = (v, fb='—') => (v==null||v===''||v===undefined) ? fb : String(v);
+const safe = (v, fb='—') => { if(v==null||v==='') return fb; return String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); };
 const num  = (v, d=2, fb='—') => { const n=parseFloat(v); return isNaN(n)?fb:n.toFixed(d); };
 const pct  = (v, d=1, fb='—') => { const n=parseFloat(v); return isNaN(n)?fb:(n*100).toFixed(d)+'%'; };
 const money= v => { const n=parseFloat(v); if(isNaN(n)) return '—'; return (n>=0?'$'+n.toFixed(2):'-$'+Math.abs(n).toFixed(2)); };

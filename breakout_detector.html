@@ -248,6 +248,7 @@ table.bt tbody td{padding:11px 8px;font-variant-numeric:tabular-nums;font-family
 </div>
 
 <script>
+function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 // ============================================================
 // LIVE 2026 MLB BREAKOUT DETECTOR — Signal Engine
 // Integrates with your Flask app's /api routes:
@@ -362,8 +363,8 @@ function render(){
     const dEVcls = s.dEV >= 1.5 ? 'delta-up' : s.dEV <= -0.5 ? 'delta-dn' : 'delta-fl';
     const xDelta = p.xwoba - p.woba;
     const xCls = xDelta >= .010 ? 'delta-up' : xDelta <= -.015 ? 'delta-dn' : 'delta-fl';
-    return `<tr data-name="${p.name}" class="${state.selected===p.name?'active':''}">
-      <td><span class="pn">${p.name}</span><span class="pn-team">${p.team} · ${p.pos}</span></td>
+    return `<tr data-name="${esc(p.name)}" class="${state.selected===p.name?'active':''}">
+      <td><span class="pn">${esc(p.name)}</span><span class="pn-team">${esc(p.team)} · ${esc(p.pos)}</span></td>
       <td><span class="score ${cls}">${s.total}</span></td>
       <td>${p.ev95.toFixed(1)}</td>
       <td class="${dEVcls}">${s.dEV>=0?'+':''}${s.dEV.toFixed(1)}</td>
@@ -405,8 +406,8 @@ function renderDetail(p){
 
   document.getElementById('detail').innerHTML = `
     <div class="det-hdr">
-      <div class="det-name">${p.name}</div>
-      <div class="det-meta">${p.team} · ${p.pos} · Breakout Score ${s.total}/100</div>
+      <div class="det-name">${esc(p.name)}</div>
+      <div class="det-meta">${esc(p.team)} · ${esc(p.pos)} · Breakout Score ${s.total}/100</div>
     </div>
     <div class="verdict ${vcls}">
       <div class="v-title ${vcls}">${vlbl}</div>
