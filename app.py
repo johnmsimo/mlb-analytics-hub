@@ -11771,7 +11771,15 @@ def api_build_parlay():
             game_pk = sel.get('game_pk')
             player = sel.get('player')
             market = sel.get('market')
-            projection = float(sel.get('projection', 0))
+            raw_proj = sel.get('projection', 0)
+            try:
+                # Handle 'N/A', None, or other non-numeric projections
+                if raw_proj in (None, '', '-.--', '.---', 'N/A'):
+                    projection = 0.0
+                else:
+                    projection = float(raw_proj)
+            except Exception:
+                projection = 0.0
             side = sel.get('side', 'Over')
             
             # Estimate win probability
