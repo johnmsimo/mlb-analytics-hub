@@ -17,7 +17,7 @@ Key goals:
 import os
 
 # Bind — Render sets $PORT; fall back to 10000 locally.
-bind = f"0.0.0.0:{os.environ.get('PORT', '10000')}"
+bind = f"0.0.0.0:{os.environ.get('PORT', '8080')}"
 
 # One worker only.  pybaseball + Savant caches are large (~150MB) and
 # 2 workers on a 512MB Render instance == OOM -> SIGKILL loop.
