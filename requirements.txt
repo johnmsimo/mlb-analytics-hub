@@ -10,3 +10,4 @@ scipy>=1.11
 fuzzywuzzy>=0.18
 python-Levenshtein>=0.21
 tzdata>=2024.1
+scikit-learn>=1.3
