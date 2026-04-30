@@ -1,1 +1,7 @@
-
+# Place trained .pkl files here after running xgb_training_pipeline.py
+# xgb_hits.pkl
+# xgb_k_3_5.pkl
+# xgb_k_4_5.pkl
+# xgb_k_5_5.pkl
+# xgb_feature_cols.json
+# model_metrics.json
