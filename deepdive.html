@@ -414,6 +414,54 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .trk-save:hover{border-color:rgba(0,229,255,.45);background:rgba(0,229,255,.14)}
 .trk-save.saved{border-color:rgba(0,230,118,.45);background:rgba(0,230,118,.1);color:var(--g)}
 .trk-save.saving{opacity:.55;cursor:wait}
+
+/* ── STRIKE ENGINE ──────────────────────────────────────────── */
+.se-wrap{margin-top:6px}
+.se-controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+.se-select{background:#081220;border:1px solid rgba(0,229,255,.16);color:var(--t);padding:8px 10px;border-radius:8px;font-size:.72rem;outline:none}
+.se-select:focus{border-color:var(--c)}
+.se-btn{padding:8px 18px;border-radius:8px;border:1px solid rgba(0,229,255,.28);background:rgba(0,229,255,.08);color:var(--c);font-family:'Orbitron',monospace;font-size:.64rem;letter-spacing:1.5px;cursor:pointer;transition:all .2s}
+.se-btn:hover{background:rgba(0,229,255,.16);border-color:rgba(0,229,255,.5)}
+.se-btn-run{border-color:rgba(0,230,118,.3);background:rgba(0,230,118,.1);color:var(--g)}
+.se-btn-run:hover{background:rgba(0,230,118,.2)}
+.se-sims-label{font-size:.58rem;color:var(--mu);letter-spacing:1px;font-family:'Orbitron',monospace}
+.se-legend{display:flex;gap:12px;flex-wrap:wrap;margin:10px 0 6px;font-size:.6rem}
+.se-section-hdr{background:rgba(0,229,255,.05);border-top:1px solid rgba(0,229,255,.18);border-bottom:1px solid rgba(0,229,255,.08);padding:6px 10px;font-family:'Orbitron',monospace;font-size:.6rem;letter-spacing:2px;color:var(--c);display:flex;align-items:center;gap:8px}
+.se-section-hdr.home-hdr{background:rgba(224,64,251,.05);border-top-color:rgba(224,64,251,.18);border-bottom-color:rgba(224,64,251,.08);color:var(--m)}
+.se-table{width:100%;border-collapse:collapse;font-size:.64rem}
+.se-table th{font-size:.5rem;color:var(--mu);letter-spacing:1px;padding:5px 6px;border-bottom:1px solid var(--b);font-family:'Orbitron',monospace;text-align:center;white-space:nowrap;background:rgba(0,0,0,.25)}
+.se-table th.left{text-align:left}
+.se-table td{padding:6px 5px;border-bottom:1px solid rgba(255,255,255,.04);text-align:center;white-space:nowrap;vertical-align:middle}
+.se-table td.left{text-align:left}
+.se-table tr:hover td{background:rgba(0,229,255,.03)}
+.se-prob-hot{background:rgba(0,230,118,.22);color:#00e676;font-weight:700;border-radius:3px;padding:2px 5px;font-family:'Orbitron',monospace;font-size:.66rem}
+.se-prob-good{background:rgba(76,175,80,.14);color:#4caf50;border-radius:3px;padding:2px 5px;font-family:'Orbitron',monospace;font-size:.66rem}
+.se-prob-warm{background:rgba(118,255,3,.1);color:#76ff03;border-radius:3px;padding:2px 5px;font-family:'Orbitron',monospace;font-size:.66rem}
+.se-prob-mid{background:rgba(255,152,0,.12);color:#ff9800;border-radius:3px;padding:2px 5px;font-family:'Orbitron',monospace;font-size:.66rem}
+.se-prob-cold{background:rgba(244,67,54,.1);color:#f44336;border-radius:3px;padding:2px 5px;font-family:'Orbitron',monospace;font-size:.66rem}
+.se-prob-na{color:var(--mu);font-size:.62rem}
+.se-tier-1{display:inline-block;padding:2px 8px;border-radius:999px;background:rgba(0,230,118,.18);color:#00e676;border:1px solid rgba(0,230,118,.35);font-family:'Orbitron',monospace;font-size:.52rem;letter-spacing:1px}
+.se-tier-2{display:inline-block;padding:2px 8px;border-radius:999px;background:rgba(0,229,255,.12);color:var(--c);border:1px solid rgba(0,229,255,.28);font-family:'Orbitron',monospace;font-size:.52rem;letter-spacing:1px}
+.se-tier-3{display:inline-block;padding:2px 8px;border-radius:999px;background:rgba(255,152,0,.1);color:#ff9800;border:1px solid rgba(255,152,0,.28);font-family:'Orbitron',monospace;font-size:.52rem;letter-spacing:1px}
+.se-tier-fade{display:inline-block;padding:2px 8px;border-radius:999px;background:rgba(244,67,54,.08);color:#f44336;border:1px solid rgba(244,67,54,.22);font-family:'Orbitron',monospace;font-size:.52rem;letter-spacing:1px}
+.se-prop-wrap{display:inline-flex;align-items:center;gap:3px}
+.se-line-input{width:46px;background:rgba(0,0,0,.4);border:1px solid rgba(255,255,255,.1);color:var(--t);padding:3px 5px;border-radius:5px;font-size:.64rem;font-family:'Orbitron',monospace;text-align:center;outline:none}
+.se-line-input:focus{border-color:var(--c)}
+.se-edge-pos{color:#00e676;font-weight:700;font-family:'Orbitron',monospace;font-size:.64rem}
+.se-edge-neg{color:#f44336;font-weight:700;font-family:'Orbitron',monospace;font-size:.64rem}
+.se-edge-neu{color:var(--mu);font-family:'Orbitron',monospace;font-size:.64rem}
+.se-sig-wrap{padding:0 8px 0}
+.se-sig-row{display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.03);font-size:.58rem}
+.se-sig-row:last-child{border-bottom:none}
+.se-sig-key{color:var(--mu)}
+.se-sig-val{font-family:'Orbitron',monospace}
+.se-sig-pos{color:#00e676}.se-sig-neg{color:#f44336}.se-sig-neu{color:var(--mu)}
+.se-summary{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px}
+.se-sum-card{background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.05);border-radius:10px;padding:10px;text-align:center}
+.se-sum-v{font-family:'Orbitron',monospace;font-size:1.1rem;font-weight:700;color:var(--c)}
+.se-sum-l{font-size:.54rem;color:var(--mu);letter-spacing:1.5px;margin-top:4px}
+@media(max-width:860px){.se-summary{grid-template-columns:1fr 1fr}.se-table{font-size:.6rem}.se-controls{gap:7px}}
+
 </style>
 </head>
 <body>
@@ -468,6 +516,7 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
       <button class="tb2" data-tab="compare" onclick="showTab('compare')">MODEL VS ACTUAL</button>
       <button class="tb2" data-tab="matrix" onclick="showTab('matrix')">&#9881; HIT RATE MATRIX</button>
       <button class="tb2" data-tab="batting-order" onclick="showTab('batting-order')">&#128203; BATTING ORDER</button>
+      <button class="tb2" data-tab="strike-engine" onclick="showTab('strike-engine')">&#9889; STRIKE ENGINE</button>
     </div>
     <div id="luP"><div class="spinner"></div></div>
   </div>
@@ -4318,6 +4367,331 @@ setTimeout(function() {
   }, 1500);
 
   
+
+// ══════════════════════════════════════════════════════════════
+// ⚡ STRIKE ENGINE — 5-Layer Probability + Monte Carlo
+// ══════════════════════════════════════════════════════════════
+var SE_SIMS  = 10000;
+var SE_LINES = {};   // stores user-entered American odds keyed by playerName+propType
+
+// PA by lineup slot (avg per 9-inning game, slots 1-9)
+var SE_PA_TABLE = [4.6,4.4,4.3,4.1,4.0,3.9,3.8,3.7,3.6];
+
+function sePitcherMult(tone){
+  var t=String(tone||'mid').toLowerCase();
+  if(t==='top5')     return 0.82;
+  if(t==='bottom10') return 1.14;
+  return 1.00;
+}
+function sePitchTypeMult(status){
+  var s=String(status||'neutral').toLowerCase();
+  if(s==='favorable')   return 1.08;
+  if(s==='unfavorable') return 0.92;
+  return 1.00;
+}
+function seSplitMult(splitAvg,baseAvg){
+  var sa=parseFloat(splitAvg),ba=parseFloat(baseAvg);
+  if(isNaN(sa)||sa<=0) return 1.00;
+  if(!isNaN(ba)&&ba>0){
+    var diff=sa-ba;
+    if(diff>= 0.025) return 1.07;
+    if(diff<=-0.025) return 0.93;
+  }
+  return 1.00;
+}
+function seIsoUnlock(iso){
+  var n=parseFloat(iso);
+  if(isNaN(n)) return {tag:'—',xbhBoost:1.00,hrBoost:1.00};
+  if(n>=0.200) return {tag:'HOT ZONE',xbhBoost:1.28,hrBoost:1.42};
+  if(n>=0.150) return {tag:'WATCH',   xbhBoost:1.12,hrBoost:1.18};
+  return             {tag:'—',       xbhBoost:1.00,hrBoost:1.00};
+}
+function seEvMult(ev){
+  var n=parseFloat(ev);
+  if(isNaN(n)||n<70) return 1.00;
+  return 1+(n-88.5)*0.008;
+}
+function seXwOBAtoXBA(xwoba){
+  var x=parseFloat(xwoba);
+  if(isNaN(x)||x<=0) return null;
+  return Math.max(0.08,Math.min(0.45,0.32+0.72*(x-0.320)));
+}
+function seHRratePA(brl_pct,ev,iso){
+  var brl=parseFloat(brl_pct);
+  if(isNaN(brl)) brl=5;
+  var base=brl*0.012;
+  base*=seEvMult(ev);
+  base*=seIsoUnlock(iso).hrBoost;
+  return Math.max(0.005,Math.min(0.18,base));
+}
+
+function seComputePlayer(b,pitcherTone){
+  var avg     =parseFloat(b.avg)     ||0.245;
+  var slg     =parseFloat(b.slg)     ||0.380;
+  var iso     =parseFloat(b.iso)     ||0.130;
+  var xwoba   =parseFloat(b.xwoba)   ||0;
+  var ev      =parseFloat(b.ev)      ||88.0;
+  var brl_pct =parseFloat(b.brl_pct) ||5.0;
+  var splitAvg=parseFloat(b.split_avg)||0;
+  var slot    =parseInt(b.slot)      ||5;
+  var pitchTypeStat=b.pitch_type_advantage||'neutral';
+
+  // Layer 1: Baseline Prior
+  var xba=seXwOBAtoXBA(xwoba);
+  var pHit;
+  if(xba) pHit=0.35*avg+0.40*xba+0.25*(splitAvg>0?splitAvg:avg);
+  else    pHit=0.60*avg+0.40*(splitAvg>0?splitAvg:avg);
+
+  // Layer 2: True-Skill Corrector
+  var evM=seEvMult(ev);
+  var iu =seIsoUnlock(iso);
+  pHit=Math.min(0.55,pHit*(0.85+0.15*evM));
+
+  // Layer 3: Matchup
+  var pitcherM  =sePitcherMult(pitcherTone);
+  var pitchTypeM=sePitchTypeMult(pitchTypeStat);
+  var splitM    =seSplitMult(splitAvg,avg);
+  pHit=Math.max(0.08,Math.min(0.60,pHit*pitcherM*pitchTypeM*splitM));
+
+  // XBH / HR / Single rates per PA
+  var hrPerPA  =seHRratePA(brl_pct,ev,iso)*pitcherM;
+  var xbhPerPA =Math.max(0.02,(slg-avg)/3.5)*iu.xbhBoost*pitcherM;
+  xbhPerPA=Math.min(xbhPerPA,pHit*0.55);
+  var singPerPA=Math.max(0.01,pHit-xbhPerPA-hrPerPA);
+
+  // Layer 4: PA volume by slot
+  var slotIdx=Math.max(0,Math.min(8,(slot||5)-1));
+  var expPA=SE_PA_TABLE[slotIdx];
+  var pGame1H=1-Math.pow(1-pHit,expPA);
+
+  var signals=[
+    {k:'Baseline Prior', v:avg.toFixed(3),               d:0},
+    {k:'xBA Proxy',      v:xba?xba.toFixed(3):'—',       d:xba?(xba-avg):0},
+    {k:'EV Boost',       v:'x'+evM.toFixed(3),            d:evM-1},
+    {k:'ISO Unlock',     v:iu.tag,                        d:iu.xbhBoost-1},
+    {k:'Pitcher Tier',   v:pitcherTone||'Mid',            d:pitcherM-1},
+    {k:'Pitch Type',     v:pitchTypeStat,                 d:pitchTypeM-1},
+    {k:'vs-Split',       v:splitM===1?'—':(splitM>1?'+ADV':'-DIS'), d:splitM-1},
+    {k:'Exp PA (slot '+slot+')', v:expPA.toFixed(1)+' PA', d:0}
+  ];
+
+  return {name:b.name,slot:slot,pos:b.pos,pHitPA:pHit,pGame1H:pGame1H,
+          hrPerPA:hrPerPA,xbhPerPA:xbhPerPA,singPerPA:singPerPA,
+          expPA:expPA,iso:iso,isoTag:iu.tag,signals:signals,pitcherTone:pitcherTone};
+}
+
+function seSimulate(comp,nSims){
+  var p=comp.pHitPA, hr=comp.hrPerPA, xbh=comp.xbhPerPA;
+  var nPA=Math.round(comp.expPA);
+  var hits1=0,hits2=0,tb2=0,tb3=0,hrCnt=0,tbSum=0;
+  for(var s=0;s<nSims;s++){
+    var H=0,TB=0;
+    for(var pa=0;pa<nPA;pa++){
+      var r=Math.random();
+      if(r<hr){H++;TB+=4;hrCnt++;}
+      else if(r<hr+xbh){H++;TB+=(Math.random()<0.7?2:3);}
+      else if(r<p){H++;TB+=1;}
+    }
+    tbSum+=TB;
+    if(H>=1)hits1++;
+    if(H>=2)hits2++;
+    if(TB>=2)tb2++;
+    if(TB>=3)tb3++;
+  }
+  return{p1h:hits1/nSims,p2h:hits2/nSims,p2tb:tb2/nSims,p3tb:tb3/nSims,
+         phr:(hrCnt/nSims)/Math.max(1,nPA),expTB:tbSum/nSims};
+}
+
+function seConvictionTier(sim,comp){
+  var p=sim.p1h, hasPower=comp.isoTag!=='—';
+  if(p>=0.75&&(comp.pitcherTone==='bottom10'||hasPower)) return 1;
+  if(p>=0.72) return 1;
+  if(p>=0.65) return 2;
+  if(p>=0.54) return 3;
+  return 0;
+}
+function seTierHtml(tier){
+  if(tier===1) return '<span class="se-tier-1">T1 MAX</span>';
+  if(tier===2) return '<span class="se-tier-2">T2 STRONG</span>';
+  if(tier===3) return '<span class="se-tier-3">T3 SIT</span>';
+  return '<span class="se-tier-fade">FADE</span>';
+}
+function seProbCell(v){
+  if(v==null||isNaN(v)) return '<span class="se-prob-na">—</span>';
+  var pct=Math.round(v*100);
+  var cls=pct>=75?'se-prob-hot':pct>=65?'se-prob-good':pct>=55?'se-prob-warm':pct>=45?'se-prob-mid':'se-prob-cold';
+  return '<span class="'+cls+'">'+pct+'%</span>';
+}
+
+function seEdgeCell(modelProb,playerName,propKey){
+  var lineKey=playerName+'__'+propKey;
+  var storedLine=SE_LINES[lineKey]||'';
+  var edgeHtml='';
+  if(storedLine!==''&&!isNaN(parseFloat(storedLine))){
+    var io=parseFloat(storedLine);
+    var ip=io<0?Math.abs(io)/(Math.abs(io)+100):100/(io+100);
+    ip=Math.max(0.01,Math.min(0.99,ip));
+    var edge=(modelProb-ip)*100;
+    var ec=edge>3?'se-edge-pos':edge<-3?'se-edge-neg':'se-edge-neu';
+    edgeHtml='<span class="'+ec+'" style="margin-left:3px">'+(edge>0?'+':'')+edge.toFixed(1)+'%</span>';
+  }
+  return '<div class="se-prop-wrap">'
+    +'<input class="se-line-input" type="number" step="5" placeholder="odds"'
+    +' value="'+storedLine+'"'
+    +' data-linekey="'+lineKey+'"'
+    +' data-modelprob="'+modelProb.toFixed(4)+'"'
+    +' onchange="seLineChanged(this)"'
+    +' title="American odds: -135 or +110">'
+    +edgeHtml+'</div>';
+}
+
+function seLineChanged(input){
+  var key=input.getAttribute('data-linekey');
+  SE_LINES[key]=input.value;
+  var mp=parseFloat(input.getAttribute('data-modelprob'));
+  var next=input.nextElementSibling;
+  if(!next){next=document.createElement('span');input.parentNode.appendChild(next);}
+  if(input.value===''||isNaN(parseFloat(input.value))){
+    if(next.tagName) next.textContent=''; return;
+  }
+  var io=parseFloat(input.value);
+  var ip=io<0?Math.abs(io)/(Math.abs(io)+100):100/(io+100);
+  ip=Math.max(0.01,Math.min(0.99,ip));
+  var edge=(mp-ip)*100;
+  var ec=edge>3?'se-edge-pos':edge<-3?'se-edge-neg':'se-edge-neu';
+  next.className=ec; next.style.marginLeft='3px';
+  next.textContent=(edge>0?'+':'')+edge.toFixed(1)+'%';
+}
+
+function seSummaryBar(all){
+  var t1=0,t2=0,fade=0,hot=0;
+  all.forEach(function(r){
+    if(r.tier===1)t1++;else if(r.tier===2)t2++;else if(r.tier===0)fade++;
+    if(r.comp&&r.comp.isoTag!=='—')hot++;
+  });
+  return '<div class="se-summary">'
+    +'<div class="se-sum-card"><div class="se-sum-v" style="color:#00e676">'+t1+'</div><div class="se-sum-l">TIER 1 MAX</div></div>'
+    +'<div class="se-sum-card"><div class="se-sum-v">'+t2+'</div><div class="se-sum-l">TIER 2 STRONG</div></div>'
+    +'<div class="se-sum-card"><div class="se-sum-v" style="color:#ff9800">'+hot+'</div><div class="se-sum-l">ISO HOT ZONE</div></div>'
+    +'<div class="se-sum-card"><div class="se-sum-v" style="color:#f44336">'+fade+'</div><div class="se-sum-l">FADE</div></div>'
+    +'</div>';
+}
+
+function seTheadHtml(){
+  return '<thead><tr>'
+    +'<th class="left">#</th>'
+    +'<th class="left" style="min-width:130px">PLAYER</th>'
+    +'<th>TIER</th>'
+    +'<th>P(1H)</th><th style="min-width:92px">1H ODDS&#x2192;EDGE</th>'
+    +'<th>P(2TB)</th><th style="min-width:92px">2TB ODDS&#x2192;EDGE</th>'
+    +'<th>P(3TB)</th><th style="min-width:92px">3TB ODDS&#x2192;EDGE</th>'
+    +'<th>P(HR)</th><th style="min-width:92px">HR ODDS&#x2192;EDGE</th>'
+    +'<th>xTB</th>'
+    +'</tr></thead>';
+}
+
+function seRenderSide(batters,pitcherTone,nSims){
+  if(!batters||!batters.length) return {html:'<p class="na" style="padding:12px">Lineup not available.</p>',results:[]};
+  var sorted=batters.slice().sort(function(a,b){return(a.slot||99)-(b.slot||99);});
+  var rows='', allRes=[];
+  sorted.forEach(function(b){
+    var comp=seComputePlayer(b,pitcherTone);
+    var sim =seSimulate(comp,nSims);
+    var tier=seConvictionTier(sim,comp);
+    allRes.push({comp:comp,sim:sim,tier:tier,name:b.name});
+
+    var sigRows=comp.signals.map(function(s){
+      var dc=s.d>0.001?'se-sig-pos':(s.d<-0.001?'se-sig-neg':'se-sig-neu');
+      return '<div class="se-sig-row"><span class="se-sig-key">'+s.k+'</span>'
+            +'<span class="se-sig-val '+dc+'">'+s.v+'</span></div>';
+    }).join('');
+
+    rows+='<tr>'
+      +'<td class="left"><span style="color:var(--mu);font-family:Orbitron,monospace;font-size:.6rem">'+(b.slot||'?')+'</span></td>'
+      +'<td class="left"><span style="font-size:.68rem">'+(b.name||'?')+'</span>'
+      +'<span style="margin-left:5px" class="pos-tag">'+(b.pos||'?')+'</span>'
+      +'<div style="margin-top:2px"><details><summary style="cursor:pointer;font-size:.52rem;color:var(--mu);letter-spacing:1px;font-family:Orbitron,monospace;list-style:none">&#9658; LAYERS</summary>'
+      +'<div class="se-sig-wrap" style="margin-top:4px">'+sigRows+'</div></details></div></td>'
+      +'<td>'+seTierHtml(tier)+'</td>'
+      +'<td>'+seProbCell(sim.p1h)+'</td>'
+      +'<td>'+seEdgeCell(sim.p1h, b.name,'1h')+'</td>'
+      +'<td>'+seProbCell(sim.p2tb)+'</td>'
+      +'<td>'+seEdgeCell(sim.p2tb,b.name,'2tb')+'</td>'
+      +'<td>'+seProbCell(sim.p3tb)+'</td>'
+      +'<td>'+seEdgeCell(sim.p3tb,b.name,'3tb')+'</td>'
+      +'<td>'+seProbCell(sim.phr*comp.expPA)+'</td>'
+      +'<td>'+seEdgeCell(sim.phr*comp.expPA,b.name,'hr')+'</td>'
+      +'<td><span style="font-family:Orbitron,monospace;font-size:.64rem;color:var(--c)">'+sim.expTB.toFixed(2)+'</span></td>'
+      +'</tr>';
+  });
+  return {html:rows,results:allRes};
+}
+
+function renderStrikeEngine(){
+  var box=document.getElementById('luP');
+  if(!box) return;
+  if(!BOM_DATA||!BOM_DATA.success){
+    box.innerHTML='<div style="padding:20px"><p class="na">&#9889; STRIKE Engine needs Batting Order data.<br>'
+      +'Click <strong style="color:var(--c)">&#128203; BATTING ORDER</strong> first to load it, then return here.</p></div>';
+    return;
+  }
+  var nSims=SE_SIMS, d=BOM_DATA;
+  var homeTone=(d.homeStaffBadge&&d.homeStaffBadge.tone)||'mid';
+  var awayTone=(d.awayStaffBadge&&d.awayStaffBadge.tone)||'mid';
+  var awayRes=seRenderSide(d.awayBatters,homeTone,nSims);
+  var homeRes=seRenderSide(d.homeBatters,awayTone,nSims);
+  var all=awayRes.results.concat(homeRes.results);
+  var thead=seTheadHtml();
+
+  box.innerHTML='<div class="se-wrap">'
+    +'<div class="se-controls">'
+    +'<span class="se-sims-label">SIMS:</span>'
+    +'<select class="se-select" id="seSimsSelect">'
+    +'<option value="2000">2,000</option>'
+    +'<option value="5000">5,000</option>'
+    +'<option value="10000" selected>10,000</option>'
+    +'<option value="25000">25,000</option>'
+    +'<option value="50000">50,000</option>'
+    +'</select>'
+    +'<button class="se-btn se-btn-run" onclick="seRerun()">&#9654; RUN ENGINE</button>'
+    +'<span style="font-size:.58rem;color:var(--mu);letter-spacing:1px">Enter American odds per row for edge % &mdash; e.g. <span style="color:var(--c)">-135</span> or <span style="color:var(--c)">+110</span></span>'
+    +'</div>'
+    +seSummaryBar(all)
+    +'<div class="se-section-hdr">&#9889; <span>'+(d.awayAbbr||'AWAY')+' BATTERS</span>'
+    +'<span style="font-size:.58rem;color:var(--mu)">vs '+(d.homePitcherName||'?')+' ('+(d.homePitcherHand||'?')+'HP) &mdash; '+((d.homeStaffBadge&&d.homeStaffBadge.label)||'Mid-Pack')+'</span></div>'
+    +'<div style="overflow-x:auto"><table class="se-table">'+thead+'<tbody>'+awayRes.html+'</tbody></table></div>'
+    +'<div class="se-section-hdr home-hdr" style="margin-top:10px">&#9889; <span>'+(d.homeAbbr||'HOME')+' BATTERS</span>'
+    +'<span style="font-size:.58rem;color:var(--mu)">vs '+(d.awayPitcherName||'?')+' ('+(d.awayPitcherHand||'?')+'HP) &mdash; '+((d.awayStaffBadge&&d.awayStaffBadge.label)||'Mid-Pack')+'</span></div>'
+    +'<div style="overflow-x:auto"><table class="se-table">'+thead+'<tbody>'+homeRes.html+'</tbody></table></div>'
+    +'<div class="se-legend">'
+    +'<span class="se-tier-1">T1 MAX</span><span style="color:var(--mu)">P(1H)&#x2265;72%</span> '
+    +'<span class="se-tier-2">T2 STRONG</span><span style="color:var(--mu)">P(1H)&#x2265;65%</span> '
+    +'<span class="se-tier-3">T3 SIT</span><span style="color:var(--mu)">P(1H)&#x2265;54%</span> '
+    +'<span class="se-tier-fade">FADE</span>'
+    +'<span style="color:var(--mu)"> | xTB = Expected Total Bases | odds: American (-135, +110)</span>'
+    +'</div></div>';
+}
+
+function seRerun(){
+  var sel=document.getElementById('seSimsSelect');
+  if(sel) SE_SIMS=parseInt(sel.value)||10000;
+  renderStrikeEngine();
+}
+
+// Extend showTab chain
+var _origShowTabSE=showTab;
+showTab=function(side){
+  if(side==='strike-engine'){
+    ACTIVE_TAB=side;
+    document.querySelectorAll('.tb2').forEach(function(b){
+      b.classList.toggle('ac',b.getAttribute('data-tab')===side);
+    });
+    renderStrikeEngine();
+    return;
+  }
+  _origShowTabSE(side);
+};
+
 </script>
 </body>
 </html>
