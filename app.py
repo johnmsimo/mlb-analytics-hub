@@ -8830,8 +8830,8 @@ def api_tracker_capture(date_str):
 
         # Keep request under edge/proxy timeout by enforcing a hard budget.
         # Capture Closing can fetch lines after this returns.
-        budget_sec = float(os.getenv('TRACKER_CAPTURE_BUDGET_SEC', '22') or 22)
-        deadline = time.time() + max(8.0, min(55.0, budget_sec))
+        budget_sec = float(os.getenv('TRACKER_CAPTURE_BUDGET_SEC', '240') or 240)
+        deadline = time.time() + max(30.0, min(300.0, budget_sec))
         all_entries = []
         captured_games = 0
         recovered_games = 0
