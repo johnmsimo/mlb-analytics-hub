@@ -354,6 +354,38 @@ details[open] summary::before{transform:rotate(90deg)}
         </table>
       </div>
     </div>
+
+    <!-- Bet Slip (portfolio engine recommendations) -->
+    <div class="panel" style="margin-top:14px">
+      <div class="panel-hd">
+        <div class="panel-title">Bet Slip</div>
+        <span class="panel-sub" id="betslipPill">Capture a slate to generate recommendations</span>
+      </div>
+      <div class="slip-tabs">
+        <button class="slip-tab on" data-sv="core" onclick="switchSlip(this)">⭐ Core</button>
+        <button class="slip-tab" data-sv="flex" onclick="switchSlip(this)">Flex</button>
+        <button class="slip-tab" data-sv="all" onclick="switchSlip(this)">All Singles</button>
+        <button class="slip-tab" data-sv="parlays" onclick="switchSlip(this)">Parlays</button>
+      </div>
+      <div class="slip-view on" id="sv-core">
+        <div id="coreCards"><div class="empty">No core picks yet.</div></div>
+      </div>
+      <div class="slip-view" id="sv-flex">
+        <div id="flexCards"><div class="empty">No flex picks yet.</div></div>
+      </div>
+      <div class="slip-view" id="sv-all">
+        <div id="allCards"><div class="empty">No picks yet.</div></div>
+      </div>
+      <div class="slip-view" id="sv-parlays">
+        <div id="betslipParlayCards"><div class="empty">No parlay recommendations.</div></div>
+      </div>
+      <div class="scards" style="margin-top:12px">
+        <div class="scard"><div class="scard-v" id="betslipBets">0</div><div class="scard-l">Recommended</div></div>
+        <div class="scard"><div class="scard-v" id="betslipRisk" style="color:var(--y)">$0</div><div class="scard-l">Total Risk</div></div>
+        <div class="scard"><div class="scard-v" id="betslipEdge">—</div><div class="scard-l">Avg Edge</div></div>
+        <div class="scard"><div class="scard-v" id="betslipCoreFlex">0 core · 0 flex</div><div class="scard-l">Core / Flex</div></div>
+      </div>
+    </div>
   </div>
 
   <!-- RIGHT: Parlay Builder + Settings -->
@@ -1139,20 +1171,21 @@ async function loadSlip(silent=false) {
 function renderSlip(slip) {
   if (!slip) return;
   const s = slip.summary || {};
-  $('slipBets').textContent    = s.recommended_bets || 0;
-  $('slipRisk').textContent    = money(s.total_risk||0);
-  $('slipAvgEdge').textContent = s.avg_edge!=null ? pct(s.avg_edge) : '—';
-  $('slipPill').textContent    = `${s.core_bets||0} core · ${s.flex_bets||0} flex`;
+  $('betslipBets').textContent    = s.recommended_bets || 0;
+  $('betslipRisk').textContent    = money(s.total_risk||0);
+  $('betslipEdge').textContent    = s.avg_edge!=null ? pct(s.avg_edge) : '—';
+  $('betslipCoreFlex').textContent= `${s.core_bets||0} core · ${s.flex_bets||0} flex`;
+  $('betslipPill').textContent    = `${s.recommended_bets||0} picks · ${money(s.total_risk||0)} risk`;
 
   const singles = slip.singles || [];
   const core    = slip.core    || [];
   const flex    = slip.flex    || [];
   const parlays = slip.parlays || [];
 
-  $('coreCards').innerHTML  = renderPickCards(core)  || '<div class="empty">No core picks.</div>';
-  $('flexCards').innerHTML  = renderPickCards(flex)  || '<div class="empty">No flex picks.</div>';
-  $('allCards').innerHTML   = renderPickCards(singles)|| '<div class="empty">No picks.</div>';
-  $('parlayCards').innerHTML= renderParlayCards(parlays) || '<div class="empty">No parlay ideas.</div>';
+  $('coreCards').innerHTML         = renderPickCards(core)    || '<div class="empty">No core picks.</div>';
+  $('flexCards').innerHTML         = renderPickCards(flex)    || '<div class="empty">No flex picks.</div>';
+  $('allCards').innerHTML          = renderPickCards(singles) || '<div class="empty">No picks.</div>';
+  $('betslipParlayCards').innerHTML= renderParlayCards(parlays) || '<div class="empty">No parlay ideas.</div>';
 }
 
 function renderPickCards(picks) {
