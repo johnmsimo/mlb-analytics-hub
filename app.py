@@ -10142,47 +10142,6 @@ def _profit_units_from_american(price):
     return None
 
 
-def _recalc_tracker_entry(row):
-    if row.get('openingPrice') is None and row.get('marketPrice') is not None:
-        row['openingPrice'] = row.get('marketPrice')
-    row['openingImplied'] = _american_to_implied(row.get('openingPrice'))
-    if row.get('marketImplied') is None and row.get('marketPrice') is not None:
-        row['marketImplied'] = _american_to_implied(row.get('marketPrice'))
-    implied_for_edge = row.get('marketImplied')
-    if implied_for_edge is None:
-        implied_for_edge = row.get('openingImplied')
-    if row.get('closingPrice') is not None:
-        row['closingImplied'] = _american_to_implied(row.get('closingPrice'))
-        if implied_for_edge is None:
-            implied_for_edge = row.get('closingImplied')
-    if row.get('edge') is None and row.get('adjProb') is not None and implied_for_edge is not None:
-        try:
-            row['edge'] = round(float(row.get('adjProb')) - float(implied_for_edge), 4)
-        except Exception:
-            row['edge'] = None
-    if row.get('evPct') is None and row.get('adjProb') is not None and implied_for_edge not in (None, 0):
-        try:
-            mi = float(implied_for_edge)
-            if mi > 0:
-                row['evPct'] = round(float(row.get('adjProb')) / mi - 1, 4)
-        except Exception:
-            row['evPct'] = None
-    if row.get('openingImplied') is not None and row.get('closingImplied') is not None:
-        row['clvEdge'] = round(float(row['closingImplied']) - float(row['openingImplied']), 4)
-    else:
-        row['clvEdge'] = None
-    if row.get('grade') in ('win', 'loss', 'push'):
-        if row.get('grade') == 'win':
-            row['profitUnits'] = _profit_units_from_american(row.get('openingPrice'))
-        elif row.get('grade') == 'loss':
-            row['profitUnits'] = -1.0
-        else:
-            row['profitUnits'] = 0.0
-    else:
-        row['profitUnits'] = None
-    return row
-
-
 def _recalc_tracker_entries(entries):
     for row in entries or []:
         _recalc_tracker_entry(row)
@@ -10396,35 +10355,37 @@ def _recalc_tracker_entry(row):
     if row.get('openingPrice') is None and row.get('marketPrice') is not None:
         row['openingPrice'] = row.get('marketPrice')
     row['openingImplied'] = _american_to_implied(row.get('openingPrice'))
+    if row.get('marketImplied') is None and row.get('marketPrice') is not None:
+        row['marketImplied'] = _american_to_implied(row.get('marketPrice'))
+    implied_for_edge = row.get('marketImplied') or row.get('openingImplied')
     if row.get('closingPrice') is not None:
         row['closingImplied'] = _american_to_implied(row.get('closingPrice'))
+        if implied_for_edge is None:
+            implied_for_edge = row.get('closingImplied')
     if row.get('openingImplied') is not None and row.get('closingImplied') is not None:
         row['clvEdge'] = round(float(row['closingImplied']) - float(row['openingImplied']), 4)
-    # Phase 1: Compute profitDollars from stakeDollars + grade
-    if row.get('stakeDollars') is not None and row.get('grade') in ('win', 'loss', 'push'):
-        stake = float(row.get('stakeDollars', 0))
-        grade = row.get('grade')
-        if grade == 'win':
-            closing_price = row.get('closingPrice')
-            if closing_price is not None:
-                if closing_price > 0:
-                    profit_dollars = round(stake * (closing_price / 100.0), 2)
-                else:
-                    profit_dollars = round(stake / abs(closing_price / 100.0), 2)
-                row['profitDollars'] = profit_dollars
-        elif grade == 'loss':
-            row['profitDollars'] = -stake
-        elif grade == 'push':
-            row['profitDollars'] = 0.0
     else:
-        row['clvEdge'] = None
+        row.setdefault('clvEdge', None)
+    if row.get('edge') is None and row.get('adjProb') is not None and implied_for_edge is not None:
+        try:
+            row['edge'] = round(float(row['adjProb']) - float(implied_for_edge), 4)
+        except Exception:
+            row['edge'] = None
+    if row.get('evPct') is None and row.get('adjProb') is not None and implied_for_edge not in (None, 0):
+        try:
+            mi = float(implied_for_edge)
+            if mi > 0:
+                row['evPct'] = round(float(row['adjProb']) / mi - 1, 4)
+        except Exception:
+            row['evPct'] = None
 
     adj = _get_adjustments()
     stake = _stake_profile(row, adj)
     row['fullKellyPct'] = stake['full_kelly_pct']
     row['stakePct'] = stake['stake_pct']
     row['stakeUnits'] = stake['stake_units']
-    row['stakeDollars'] = stake['stake_dollars']
+    if row.get('stakeDollars') is None:
+        row['stakeDollars'] = stake['stake_dollars']
 
     if row.get('grade') in ('win', 'loss', 'push'):
         if row.get('grade') == 'win':
