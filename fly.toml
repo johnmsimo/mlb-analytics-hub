@@ -31,5 +31,5 @@ XGB_MODEL_DIR = "./models"
   cpus = 1
 
 [mounts]
-  source = "myapp_data"
-  destination = "/data"
+  source = "mlb_data"
+  destination = "/app/data"
