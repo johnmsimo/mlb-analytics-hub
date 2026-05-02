@@ -905,11 +905,7 @@ function renderHeader(){
     :'<span style="font-family:Orbitron;color:var(--c)">'+g.homeAbbr+'</span>';
   var sc=g.status==='Live'?'bg2':'bc';
   document.getElementById('mhTeams').innerHTML=
-    '<div class="mhte"><div class="mhl">'+ai+'</div>
-  <!-- ★ NEW TAB PANELS -->
-  <div id="tab-pitch-mix" class="new-tab-panel"></div>
-  <div id="tab-h2h" class="new-tab-panel"></div>
-  <div id="tab-hr-sim" class="new-tab-panel"></div><div class="mha">'+g.awayAbbr+'</div><div class="mhfn">'+g.awayName+'</div></div>'
+    '<div class="mhte"><div class="mhl">'+ai+'</div><div class="mha">'+g.awayAbbr+'</div><div class="mhfn">'+g.awayName+'</div></div>'
     +'<div class="mhvs">VS</div>'
     +'<div class="mhte"><div class="mhl">'+hi+'</div><div class="mha">'+g.homeAbbr+'</div><div class="mhfn">'+g.homeName+'</div></div>';
   var sg=g.seriesGame, st=g.seriesTotal;
@@ -5153,7 +5149,7 @@ function renderTopPicksBoard(){
         +'<div class="pick-note">'+p.note+'</div>'
       +'</div>'
       +'<div class="pick-odds">'
-        +'<button class="pick-btn" onclick="showTab('away')">ANALYSIS ›</button>'
+        +'<button class="pick-btn" onclick="showTab(\'away\')">ANALYSIS ›</button>'
       +'</div>'
     +'</div>';
   });
@@ -5204,8 +5200,8 @@ function renderPitchMix(){
   }
   var rOpts=[{k:'season',l:'FULL SEASON'},{k:'l30',l:'L30D'},{k:'l10',l:'L10D'},{k:'l5',l:'L5D'}];
   var bOpts=[{k:'all',l:'ALL BATS'},{k:'L',l:'VS LHB'},{k:'R',l:'VS RHB'}];
-  var rb=rOpts.map(function(o){return '<button class="pm-btn'+(PM_RANGE===o.k?' on':'')+'" onclick="PM_RANGE=''+o.k+'';renderPitchMix()">'+o.l+'</button>';}).join('');
-  var bb=bOpts.map(function(o){return '<button class="pm-btn'+(PM_BATS===o.k?' on':'')+'" onclick="PM_BATS=''+o.k+'';renderPitchMix()">'+o.l+'</button>';}).join('');
+  var rb=rOpts.map(function(o){return '<button class="pm-btn'+(PM_RANGE===o.k?' on':'')+'" onclick="PM_RANGE=\''+o.k+'\';renderPitchMix()">'+o.l+'</button>';}).join('');
+  var bb=bOpts.map(function(o){return '<button class="pm-btn'+(PM_BATS===o.k?' on':'')+'" onclick="PM_BATS=\''+o.k+'\';renderPitchMix()">'+o.l+'</button>';}).join('');
   var aLabel='<span style="color:var(--fg)">⚾</span> '+(awayP&&(awayP.name||awayP.fullName)||(GD&&GD.awayAbbr+' SP')||'AWAY SP');
   var hLabel='<span style="color:var(--sv)">⚾</span> '+(homeP&&(homeP.name||homeP.fullName)||(GD&&GD.homeAbbr+' SP')||'HOME SP');
   el.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px">'
@@ -5241,8 +5237,8 @@ function renderH2H(){
     var kpi='<div class="h2h-kpi-row">'
       +'<div class="h2h-kpi"><div class="h2h-kpi-val">'+d.l10AvgEV.toFixed(1)+'</div><div class="h2h-kpi-lbl">L10 AVG EV</div></div>'
       +'<div class="h2h-kpi"><div class="h2h-kpi-val">'+d.l10Barrel.toFixed(1)+'%</div><div class="h2h-kpi-lbl">L10 BARREL%</div></div>'
-      +'<div class="h2h-kpi"><div class="h2h-kpi-val">'+d.ev26.toFixed(1)+'</div><div class="h2h-kpi-lbl">'26 AVG EV</div></div>'
-      +'<div class="h2h-kpi"><div class="h2h-kpi-val">'+d.barrel26.toFixed(1)+'%</div><div class="h2h-kpi-lbl">'26 BARREL%</div></div>'
+      +'<div class="h2h-kpi"><div class="h2h-kpi-val">'+d.ev26.toFixed(1)+'</div><div class="h2h-kpi-lbl">&apos;26 AVG EV</div></div>'
+      +'<div class="h2h-kpi"><div class="h2h-kpi-val">'+d.barrel26.toFixed(1)+'%</div><div class="h2h-kpi-lbl">&apos;26 BARREL%</div></div>'
       +'</div>';
     var tbl='<div class="h2h-sec-hd">📋 HEAD-TO-HEAD RECORD</div>'
       +'<div style="overflow-x:auto"><table class="h2h-table"><thead><tr>'
