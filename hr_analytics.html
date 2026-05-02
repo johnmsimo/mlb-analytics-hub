@@ -1,0 +1,842 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>HR Analytics Hub — MLB</title>
+<style>
+:root{
+  --bg:#0d1117;--card:#161b22;--border:#30363d;--accent:#238636;
+  --accent2:#1f6feb;--warn:#d29922;--danger:#f85149;
+  --text:#e6edf3;--muted:#8b949e;--hot:#ff7b72;--cold:#79c0ff;
+  --score-hi:#3fb950;--score-mid:#d29922;--score-lo:#8b949e;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh}
+a{color:var(--cold);text-decoration:none}
+
+/* ── Header ── */
+.header{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--border);background:#0d1117ee;position:sticky;top:0;z-index:100}
+.logo{font-size:22px;font-weight:700;background:linear-gradient(90deg,#3fb950,#1f6feb);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.nav-links{display:flex;gap:16px;margin-left:auto;font-size:13px}
+.nav-links a{color:var(--muted)}
+.nav-links a:hover{color:var(--text)}
+.header-meta{margin-left:auto;font-size:12px;color:var(--muted)}
+
+/* ── Layout ── */
+.layout{display:grid;grid-template-columns:420px 1fr;min-height:calc(100vh - 57px)}
+@media(max-width:900px){.layout{grid-template-columns:1fr;grid-template-rows:auto 1fr}}
+
+/* ── Left panel ── */
+.left-panel{border-right:1px solid var(--border);display:flex;flex-direction:column;background:var(--bg)}
+.panel-header{padding:14px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px}
+.panel-title{font-size:14px;font-weight:600;color:var(--text)}
+.panel-sub{font-size:12px;color:var(--muted);margin-left:auto}
+.refresh-btn{background:var(--card);border:1px solid var(--border);color:var(--muted);padding:4px 10px;border-radius:6px;font-size:12px;cursor:pointer;transition:color .2s}
+.refresh-btn:hover{color:var(--text)}
+
+.filters{padding:10px 16px;display:flex;gap:8px;flex-wrap:wrap;border-bottom:1px solid var(--border)}
+.filter-btn{background:var(--card);border:1px solid var(--border);color:var(--muted);padding:4px 10px;border-radius:20px;font-size:12px;cursor:pointer;transition:all .15s}
+.filter-btn.active,.filter-btn:hover{background:var(--accent2);border-color:var(--accent2);color:#fff}
+
+.leaderboard{overflow-y:auto;flex:1}
+
+.batter-card{padding:12px 16px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .15s;display:grid;grid-template-columns:36px 1fr auto;gap:10px;align-items:center}
+.batter-card:hover,.batter-card.selected{background:#1c2128}
+.batter-card.selected{border-left:3px solid var(--accent2)}
+
+.rank-badge{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0}
+.rank-1{background:#ffd700;color:#000}
+.rank-2{background:#c0c0c0;color:#000}
+.rank-3{background:#cd7f32;color:#fff}
+.rank-other{background:var(--border);color:var(--muted)}
+
+.batter-info{min-width:0}
+.batter-name{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.batter-meta{font-size:11px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.batter-stats{font-size:11px;color:var(--muted);margin-top:3px}
+.batter-stats span{margin-right:8px}
+
+.score-block{text-align:center;flex-shrink:0}
+.score-val{font-size:22px;font-weight:800;line-height:1}
+.score-hi{color:var(--score-hi)}
+.score-mid{color:var(--score-mid)}
+.score-lo{color:var(--score-lo)}
+.score-label{font-size:10px;color:var(--muted);margin-top:1px}
+.prob-badge{font-size:11px;background:#1f6feb22;color:var(--cold);border:1px solid #1f6feb44;padding:2px 7px;border-radius:10px;margin-top:4px;display:inline-block}
+
+.empty-state{padding:40px;text-align:center;color:var(--muted);font-size:14px}
+.loader{display:flex;align-items:center;justify-content:center;padding:40px;color:var(--muted);font-size:14px;gap:10px}
+.spinner{width:20px;height:20px;border:2px solid var(--border);border-top-color:var(--accent2);border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── Right panel (detail) ── */
+.right-panel{padding:20px;overflow-y:auto}
+.detail-placeholder{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--muted);text-align:center;gap:16px}
+.detail-placeholder svg{opacity:.3}
+.detail-placeholder h3{font-size:18px;font-weight:500}
+.detail-placeholder p{font-size:13px;max-width:300px;line-height:1.6}
+
+.detail-header{display:flex;align-items:flex-start;gap:16px;margin-bottom:20px;flex-wrap:wrap}
+.detail-name{font-size:24px;font-weight:700}
+.detail-sub{font-size:14px;color:var(--muted);margin-top:4px}
+.score-ring{width:72px;height:72px;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;border:3px solid;flex-shrink:0}
+.score-ring.hi{border-color:var(--score-hi)}
+.score-ring.mid{border-color:var(--score-mid)}
+.score-ring.lo{border-color:var(--score-lo)}
+.score-ring .val{font-size:22px;font-weight:800;line-height:1}
+.score-ring .lbl{font-size:10px;color:var(--muted)}
+
+.section{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px}
+.section-title{font-size:13px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+.section-title svg{opacity:.7}
+
+/* ── Key inputs grid ── */
+.inputs-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px}
+.input-item{background:#0d1117;border:1px solid var(--border);border-radius:6px;padding:10px;text-align:center}
+.input-val{font-size:18px;font-weight:700;color:var(--text)}
+.input-lbl{font-size:11px;color:var(--muted);margin-top:3px}
+.input-note{font-size:10px;color:var(--muted);margin-top:2px}
+
+/* ── Prob strip ── */
+.prob-strip{display:flex;gap:12px;margin-bottom:12px;flex-wrap:wrap}
+.prob-box{flex:1;min-width:120px;background:#0d1117;border:1px solid var(--border);border-radius:8px;padding:14px;text-align:center}
+.prob-big{font-size:32px;font-weight:800;color:var(--cold)}
+.prob-lbl{font-size:12px;color:var(--muted);margin-top:4px}
+
+/* ── Histogram ── */
+.histogram{display:flex;align-items:flex-end;gap:6px;height:80px;padding:4px 0}
+.hist-bar-wrap{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px}
+.hist-bar{width:100%;background:var(--accent2);border-radius:4px 4px 0 0;transition:height .4s;min-height:2px}
+.hist-bar.hr-bar{background:var(--score-hi)}
+.hist-label{font-size:10px;color:var(--muted)}
+.hist-count{font-size:9px;color:var(--muted)}
+
+/* ── Pitch mix table ── */
+.pitch-table{width:100%;border-collapse:collapse;font-size:12px}
+.pitch-table th{color:var(--muted);text-align:right;padding:5px 8px;font-weight:500;font-size:11px;border-bottom:1px solid var(--border)}
+.pitch-table th:first-child{text-align:left}
+.pitch-table td{padding:6px 8px;border-bottom:1px solid var(--border)22;text-align:right}
+.pitch-table td:first-child{text-align:left;font-weight:600}
+.pitch-table tr:last-child td{border-bottom:none}
+.pitch-tag{background:var(--border);border-radius:4px;padding:2px 6px;font-size:10px;font-weight:600;color:var(--text)}
+.row-pit{background:#0d111700}
+.row-bat{background:#1f6feb08}
+.row-sep{height:4px;background:transparent}
+.adv-hi{color:var(--hot)}
+.adv-lo{color:var(--cold)}
+.mix-score-badge{display:inline-block;padding:4px 12px;border-radius:20px;font-size:13px;font-weight:700;border:1px solid}
+.mix-hi{background:#3fb95022;border-color:#3fb95066;color:#3fb950}
+.mix-mid{background:#d2992222;border-color:#d2992266;color:#d29922}
+.mix-lo{background:#8b949e22;border-color:#8b949e66;color:#8b949e}
+
+/* ── H2H section ── */
+.h2h-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.h2h-cell{background:#0d1117;border:1px solid var(--border);border-radius:6px;padding:8px;text-align:center}
+.h2h-val{font-size:16px;font-weight:700}
+.h2h-lbl{font-size:11px;color:var(--muted);margin-top:2px}
+.sample-note{font-size:11px;color:var(--warn);margin-top:8px;padding:6px 10px;background:#d2992210;border-radius:4px}
+
+/* ── Scouting report ── */
+.scouting-text{font-size:14px;line-height:1.7;color:var(--text);white-space:pre-wrap}
+.scouting-loader{color:var(--muted);font-size:13px;display:flex;align-items:center;gap:8px}
+.bet-tag{display:inline-block;padding:3px 10px;border-radius:4px;font-weight:700;font-size:12px;margin-right:8px}
+.bet-BET{background:#3fb95022;color:#3fb950;border:1px solid #3fb95044}
+.bet-LEAN{background:#d2992222;color:#d29922;border:1px solid #d2992244}
+.bet-PASS{background:#f8514922;color:#f85149;border:1px solid #f8514944}
+.scouting-actions{display:flex;gap:8px;margin-top:10px}
+.btn{padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:12px;cursor:pointer;transition:all .15s}
+.btn:hover{background:#1c2128}
+.btn-primary{background:var(--accent2);border-color:var(--accent2);color:#fff}
+.btn-primary:hover{background:#1a5fcc}
+
+/* ── Platoon badge ── */
+.platoon-adv{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600}
+.plat-good{background:#3fb95022;color:#3fb950}
+.plat-bad{background:#f8514922;color:#f85149}
+
+/* ── Tabs ── */
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--border);margin-bottom:16px}
+.tab{padding:8px 16px;font-size:13px;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;transition:all .15s}
+.tab.active,.tab:hover{color:var(--text)}
+.tab.active{border-bottom-color:var(--accent2);color:var(--text)}
+.tab-panel{display:none}
+.tab-panel.active{display:block}
+
+/* ── Error / warning ── */
+.warning-box{background:#d2992215;border:1px solid #d2992244;border-radius:6px;padding:10px 14px;font-size:12px;color:var(--warn);margin-bottom:12px}
+.error-box{background:#f8514915;border:1px solid #f8514944;border-radius:6px;padding:10px 14px;font-size:12px;color:var(--hot);margin-bottom:12px}
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="logo">⚾ HR Analytics Hub</div>
+  <nav class="nav-links">
+    <a href="/">Dashboard</a>
+    <a href="/props">Props</a>
+    <a href="/breakout-detector">Breakout</a>
+    <a href="/hr-analytics" style="color:var(--text);font-weight:600">HR Lab</a>
+  </nav>
+  <div class="header-meta" id="headerDate"></div>
+</div>
+
+<div class="layout">
+  <!-- Left: Ranked Leaderboard -->
+  <div class="left-panel">
+    <div class="panel-header">
+      <span class="panel-title">Today's HR Rankings</span>
+      <span class="panel-sub" id="lastRefreshed"></span>
+      <button class="refresh-btn" onclick="loadDailyScores(true)">↻ Refresh</button>
+    </div>
+    <div class="filters" id="gameFilters">
+      <button class="filter-btn active" data-game="all" onclick="filterByGame('all',this)">All Games</button>
+    </div>
+    <div class="leaderboard" id="leaderboard">
+      <div class="loader"><div class="spinner"></div> Loading today's matchups…</div>
+    </div>
+  </div>
+
+  <!-- Right: Detail Panel -->
+  <div class="right-panel" id="detailPanel">
+    <div class="detail-placeholder" id="placeholderMsg">
+      <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/>
+      </svg>
+      <h3>Select a batter to analyze</h3>
+      <p>Click any player on the leaderboard to see the HR simulator, pitch mix matchup, H2H splits, and AI scouting report.</p>
+    </div>
+    <div id="detailContent" style="display:none"></div>
+  </div>
+</div>
+
+<script>
+const API = '';
+let allScores = [];
+let selectedBatter = null;
+let activeGameFilter = 'all';
+let scoutingLoading = false;
+
+// ── Utilities ────────────────────────────────────────────────────────────────
+
+function fmt(v, decimals=3) {
+  if (v == null || v === 'N/A' || v === '---') return '—';
+  const n = parseFloat(v);
+  if (isNaN(n)) return '—';
+  return n.toFixed(decimals);
+}
+
+function fmtPct(v) {
+  const n = parseFloat(v);
+  if (isNaN(n)) return '—';
+  return n.toFixed(1) + '%';
+}
+
+function scoreClass(s) {
+  if (s >= 65) return 'score-hi';
+  if (s >= 45) return 'score-mid';
+  return 'score-lo';
+}
+
+function scoreRingClass(s) {
+  if (s >= 65) return 'hi';
+  if (s >= 45) return 'mid';
+  return 'lo';
+}
+
+function probPct(p) {
+  return (p * 100).toFixed(1) + '%';
+}
+
+function setHeaderDate() {
+  const now = new Date();
+  document.getElementById('headerDate').textContent =
+    now.toLocaleDateString('en-US', {weekday:'long', month:'long', day:'numeric', year:'numeric'});
+}
+
+// ── Daily Scores ─────────────────────────────────────────────────────────────
+
+async function loadDailyScores(force=false) {
+  document.getElementById('leaderboard').innerHTML =
+    '<div class="loader"><div class="spinner"></div> Loading rankings…</div>';
+
+  try {
+    const url = API + '/api/hr-analytics/daily-scores' + (force ? '?force=1' : '');
+    const r   = await fetch(url);
+    const d   = await r.json();
+
+    if (!d.success || !d.scores) {
+      document.getElementById('leaderboard').innerHTML =
+        `<div class="empty-state">No data available.<br><small>${d.error||''}</small></div>`;
+      return;
+    }
+
+    allScores = d.scores;
+    document.getElementById('lastRefreshed').textContent =
+      d.cached ? 'cached' : 'live';
+
+    buildGameFilters(allScores);
+    renderLeaderboard(allScores);
+  } catch(e) {
+    document.getElementById('leaderboard').innerHTML =
+      `<div class="empty-state">Error loading data: ${e.message}</div>`;
+  }
+}
+
+function buildGameFilters(scores) {
+  const games = {};
+  scores.forEach(s => {
+    const key = s.game_pk;
+    if (!games[key]) games[key] = `${s.team} vs ${s.opp_team}`;
+  });
+
+  const container = document.getElementById('gameFilters');
+  container.innerHTML = '<button class="filter-btn active" data-game="all" onclick="filterByGame(\'all\',this)">All Games</button>';
+  Object.entries(games).forEach(([pk, label]) => {
+    const btn = document.createElement('button');
+    btn.className = 'filter-btn';
+    btn.dataset.game = pk;
+    btn.textContent = label.length > 20 ? label.slice(0,18)+'…' : label;
+    btn.onclick = () => filterByGame(pk, btn);
+    container.appendChild(btn);
+  });
+}
+
+function filterByGame(gamePk, btn) {
+  activeGameFilter = gamePk;
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderLeaderboard(allScores);
+}
+
+function renderLeaderboard(scores) {
+  const filtered = activeGameFilter === 'all'
+    ? scores
+    : scores.filter(s => String(s.game_pk) === String(activeGameFilter));
+
+  if (!filtered.length) {
+    document.getElementById('leaderboard').innerHTML =
+      '<div class="empty-state">No batters found for this filter.</div>';
+    return;
+  }
+
+  const html = filtered.map((s, i) => {
+    const rank = i + 1;
+    const rankClass = rank === 1 ? 'rank-1' : rank === 2 ? 'rank-2' : rank === 3 ? 'rank-3' : 'rank-other';
+    const sc = scoreClass(s.score);
+    const selected = selectedBatter && selectedBatter.batter_id === s.batter_id && selectedBatter.pitcher_id === s.pitcher_id ? ' selected' : '';
+    return `
+    <div class="batter-card${selected}" onclick="selectBatter(${JSON.stringify(s).replace(/"/g,'&quot;')})">
+      <div class="rank-badge ${rankClass}">#${rank}</div>
+      <div class="batter-info">
+        <div class="batter-name">${s.batter}</div>
+        <div class="batter-meta">vs ${s.pitcher} &bull; ${s.team} @ ${s.opp_team}</div>
+        <div class="batter-stats">
+          <span>ISO ${fmt(s.iso,3)}</span>
+          <span>Brl% ${fmtPct(s.barrel_pct)}</span>
+          <span>HH% ${fmtPct(s.hh_pct)}</span>
+          <span>PkHR ${s.park_hr_idx}</span>
+        </div>
+      </div>
+      <div class="score-block">
+        <div class="score-val ${sc}">${s.score.toFixed(0)}</div>
+        <div class="score-label">Score</div>
+        <div class="prob-badge">${probPct(s.prob_hr)} HR</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  document.getElementById('leaderboard').innerHTML = html;
+}
+
+// ── Batter Selection ─────────────────────────────────────────────────────────
+
+async function selectBatter(s) {
+  selectedBatter = s;
+  renderLeaderboard(allScores);
+
+  document.getElementById('placeholderMsg').style.display = 'none';
+  const dc = document.getElementById('detailContent');
+  dc.style.display = 'block';
+
+  renderDetailSkeleton(s);
+  await loadSimulator(s);
+}
+
+function renderDetailSkeleton(s) {
+  const sc = scoreClass(s.score);
+  const rc = scoreRingClass(s.score);
+  document.getElementById('detailContent').innerHTML = `
+    <div class="detail-header">
+      <div class="score-ring ${rc}">
+        <div class="val ${sc}">${s.score.toFixed(0)}</div>
+        <div class="lbl">Score</div>
+      </div>
+      <div>
+        <div class="detail-name">${s.batter}</div>
+        <div class="detail-sub">
+          vs <strong>${s.pitcher}</strong> &bull;
+          ${s.team} @ ${s.opp_team}
+          &bull; <span class="game-time">${s.game_time || ''}</span>
+        </div>
+        <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+          <div class="prob-badge" style="font-size:13px;padding:4px 12px">
+            ${probPct(s.prob_hr)} prob HR today
+          </div>
+          <div class="prob-badge" style="font-size:13px;padding:4px 12px;background:#3fb95022;color:#3fb950;border-color:#3fb95044">
+            Park HR Index: ${s.park_hr_idx}
+          </div>
+          <div class="prob-badge ${s.batter_hand !== 'L' ? 'plat-good' : 'plat-bad'}" style="font-size:13px;padding:4px 12px">
+            Bats ${s.batter_hand}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tabs" id="detailTabs">
+      <div class="tab active" onclick="switchTab('simulator',this)">Simulator</div>
+      <div class="tab" onclick="switchTab('pitchmix',this)">Pitch Mix</div>
+      <div class="tab" onclick="switchTab('h2h',this)">H2H</div>
+      <div class="tab" onclick="switchTab('scouting',this)">AI Report</div>
+    </div>
+
+    <div id="tab-simulator" class="tab-panel active">
+      <div class="loader"><div class="spinner"></div> Running Monte Carlo…</div>
+    </div>
+    <div id="tab-pitchmix" class="tab-panel">
+      <div class="loader"><div class="spinner"></div> Loading pitch mix data…</div>
+    </div>
+    <div id="tab-h2h" class="tab-panel">
+      <div class="loader"><div class="spinner"></div> Loading H2H splits…</div>
+    </div>
+    <div id="tab-scouting" class="tab-panel">
+      <div class="section">
+        <div class="section-title">AI Scouting Report</div>
+        <div class="scouting-loader"><div class="spinner"></div> Generating report…</div>
+        <div class="scouting-actions" style="margin-top:14px">
+          <button class="btn btn-primary" onclick="loadScouting(${s.batter_id},${s.pitcher_id},${s.game_pk})">Generate Report</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function switchTab(name, el) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('tab-' + name).classList.add('active');
+
+  if (name === 'pitchmix' && selectedBatter) loadPitchMix(selectedBatter);
+  if (name === 'h2h' && selectedBatter) loadH2H(selectedBatter);
+  if (name === 'scouting' && selectedBatter) loadScouting(selectedBatter.batter_id, selectedBatter.pitcher_id, selectedBatter.game_pk);
+}
+
+// ── Simulator Tab ────────────────────────────────────────────────────────────
+
+async function loadSimulator(s) {
+  const panel = document.getElementById('tab-simulator');
+  if (!panel) return;
+
+  try {
+    const url = `${API}/api/hr-analytics/simulator?batter_id=${s.batter_id}&pitcher_id=${s.pitcher_id}&game_pk=${s.game_pk}&batter_name=${encodeURIComponent(s.batter)}`;
+    const r = await fetch(url);
+    const d = await r.json();
+
+    if (!d.success) {
+      panel.innerHTML = `<div class="error-box">${d.error}</div>`;
+      return;
+    }
+
+    renderSimulator(panel, d, s);
+  } catch(e) {
+    panel.innerHTML = `<div class="error-box">Failed to load simulator: ${e.message}</div>`;
+  }
+}
+
+function renderSimulator(panel, d, s) {
+  const dist   = d.mc_distribution || [];
+  const total  = dist.reduce((a,b) => a+b, 0) || 1;
+  const maxBar = Math.max(...dist, 1);
+
+  const histBars = dist.map((count, k) => {
+    const pct  = (count / total * 100).toFixed(1);
+    const h    = Math.max(4, Math.round(count / maxBar * 72));
+    const isHR = k >= 1;
+    return `
+    <div class="hist-bar-wrap" title="${k} HR: ${pct}% (${count} sims)">
+      <div class="hist-bar ${isHR ? 'hr-bar' : ''}" style="height:${h}px"></div>
+      <div class="hist-label">${k} HR</div>
+      <div class="hist-count">${pct}%</div>
+    </div>`;
+  }).join('');
+
+  const inp = d.inputs || s;
+
+  panel.innerHTML = `
+    <div class="section">
+      <div class="section-title">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        Monte Carlo Simulator (1,000 games × 4 AB)
+      </div>
+      <div class="prob-strip">
+        <div class="prob-box">
+          <div class="prob-big">${probPct(d.prob_hr_today)}</div>
+          <div class="prob-lbl">HR Probability (MC)</div>
+        </div>
+        <div class="prob-box">
+          <div class="prob-big">${probPct(d.prob_hr_closed)}</div>
+          <div class="prob-lbl">Closed Form (1–(1–p)⁴)</div>
+        </div>
+        <div class="prob-box">
+          <div class="prob-big">${(d.p_per_ab * 100).toFixed(2)}%</div>
+          <div class="prob-lbl">p HR per AB</div>
+        </div>
+      </div>
+      <div class="histogram">${histBars}</div>
+      <div style="text-align:center;font-size:11px;color:var(--muted);margin-top:6px">Blue = 0 HR &nbsp; Green = 1+ HR &nbsp; 1,000 simulated games</div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Key Inputs</div>
+      <div class="inputs-grid">
+        <div class="input-item">
+          <div class="input-val">${fmt(inp.iso,3)}</div>
+          <div class="input-lbl">ISO</div>
+          <div class="input-note">Power (SLG–AVG)</div>
+        </div>
+        <div class="input-item">
+          <div class="input-val">${fmtPct(inp.barrel_pct)}</div>
+          <div class="input-lbl">Barrel%</div>
+          <div class="input-note">Lg avg 8.5%</div>
+        </div>
+        <div class="input-item">
+          <div class="input-val">${fmtPct(inp.hh_pct)}</div>
+          <div class="input-lbl">Hard Hit%</div>
+          <div class="input-note">EV ≥ 95 mph</div>
+        </div>
+        <div class="input-item">
+          <div class="input-val">${fmt(inp.avg_ev||inp.avg_ev,1)} mph</div>
+          <div class="input-lbl">Avg EV</div>
+          <div class="input-note">Exit velocity</div>
+        </div>
+        <div class="input-item">
+          <div class="input-val">${fmt(inp.hr9_vs_hand||inp.hr9_vs_hand,2)}</div>
+          <div class="input-lbl">Pit HR/9</div>
+          <div class="input-note">vs ${inp.batter_hand} bats</div>
+        </div>
+        <div class="input-item">
+          <div class="input-val">${inp.park_hr_idx||inp.park_hr_idx}</div>
+          <div class="input-lbl">Park HR idx</div>
+          <div class="input-note">100 = neutral</div>
+        </div>
+        <div class="input-item">
+          <div class="input-val">${fmt(inp.mix_score,2)}×</div>
+          <div class="input-lbl">Mix Score</div>
+          <div class="input-note">1.0 = avg</div>
+        </div>
+        <div class="input-item">
+          <div class="input-val">${fmt(inp.xwoba,3)}</div>
+          <div class="input-lbl">xwOBA</div>
+          <div class="input-note">Expected</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// ── Pitch Mix Tab ─────────────────────────────────────────────────────────────
+
+let pitchMixLoaded = {};
+
+async function loadPitchMix(s) {
+  const key = `${s.batter_id}-${s.pitcher_id}`;
+  if (pitchMixLoaded[key]) return;
+
+  const panel = document.getElementById('tab-pitchmix');
+  if (!panel) return;
+
+  try {
+    const url = `${API}/api/hr-analytics/pitch-mix/${s.batter_id}/${s.pitcher_id}`;
+    const r   = await fetch(url);
+    const d   = await r.json();
+
+    renderPitchMix(panel, d, s);
+    pitchMixLoaded[key] = true;
+  } catch(e) {
+    panel.innerHTML = `<div class="error-box">Pitch mix data unavailable: ${e.message}</div>`;
+  }
+}
+
+function renderPitchMix(panel, d, s) {
+  if (!d.success) {
+    panel.innerHTML = `<div class="error-box">${d.error}</div>`;
+    return;
+  }
+
+  const rows = d.pitch_table || [];
+  const mixScore = d.mix_score || 1.0;
+  const mixClass = mixScore >= 1.1 ? 'mix-hi' : mixScore >= 0.9 ? 'mix-mid' : 'mix-lo';
+  const mixLabel = mixScore >= 1.1 ? 'Favorable' : mixScore >= 0.9 ? 'Neutral' : 'Unfavorable';
+
+  let tableHtml = '';
+  if (!rows.length) {
+    tableHtml = '<div class="warning-box">Pitch arsenal outcome data not yet loaded. Scores use a mix score of 1.0 (league average). Data loads daily at startup.</div>';
+  } else {
+    const rowsHtml = rows.slice(0,5).map(r => {
+      const adv = r.ratio >= 1.1 ? 'adv-hi' : r.ratio <= 0.9 ? 'adv-lo' : '';
+      const usageBar = `<div style="display:inline-block;width:${Math.round(r.usage)}px;height:4px;background:var(--accent2);border-radius:2px;margin-left:6px;vertical-align:middle"></div>`;
+      return `
+        <tr class="row-pit">
+          <td><span class="pitch-tag">${r.pitch}</span>${usageBar}</td>
+          <td>${r.usage.toFixed(0)}%</td>
+          <td>${fmt(r.pit_ba,3)}</td>
+          <td>${fmt(r.pit_slg,3)}</td>
+          <td>${fmt(r.pit_woba,3)}</td>
+          <td>${r.pit_whiff != null ? r.pit_whiff.toFixed(1)+'%' : '—'}</td>
+          <td>${r.pit_hh != null ? r.pit_hh.toFixed(1)+'%' : '—'}</td>
+        </tr>
+        <tr class="row-bat">
+          <td style="color:var(--muted);font-size:11px;font-weight:400;padding-left:20px">Batter vs</td>
+          <td>—</td>
+          <td>—</td>
+          <td class="${adv}">${fmt(r.bat_slg,3)}</td>
+          <td class="${adv}">${fmt(r.bat_woba,3)}</td>
+          <td class="${adv}">${r.bat_whiff != null ? r.bat_whiff.toFixed(1)+'%' : '—'}</td>
+          <td class="${adv}">${r.bat_hh != null ? r.bat_hh.toFixed(1)+'%' : '—'}</td>
+        </tr>
+        <tr class="row-sep"><td colspan="7"></td></tr>`;
+    }).join('');
+
+    tableHtml = `
+      <div style="overflow-x:auto">
+        <table class="pitch-table">
+          <thead>
+            <tr>
+              <th>Pitch</th><th>Usage</th><th>BA</th><th>SLG</th><th>wOBA</th><th>Whiff%</th><th>HH%</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+      </div>
+      <div style="font-size:11px;color:var(--muted);margin-top:8px">
+        Top row = pitcher's stats allowed; Bottom row = this batter's stats vs that pitch type.
+        <span class="adv-hi">Green</span> = batter advantage, <span class="adv-lo">Blue</span> = disadvantage.
+      </div>`;
+  }
+
+  panel.innerHTML = `
+    <div class="section">
+      <div class="section-title">Pitch Mix Matchup Score</div>
+      <div style="margin-bottom:14px;display:flex;align-items:center;gap:12px">
+        <span class="mix-score-badge ${mixClass}">${mixScore.toFixed(2)}× — ${mixLabel}</span>
+        <span style="font-size:12px;color:var(--muted)">
+          ${s.pitcher} vs ${s.batter}
+        </span>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:12px">
+        Score = weighted avg of batter's SLG vs each pitch type relative to league average,
+        weighted by pitcher's usage. 1.0 = exactly league average.
+      </div>
+      ${tableHtml}
+    </div>
+  `;
+}
+
+// ── H2H Tab ───────────────────────────────────────────────────────────────────
+
+let h2hLoaded = {};
+
+async function loadH2H(s) {
+  const key = `${s.batter_id}-${s.pitcher_id}`;
+  if (h2hLoaded[key]) return;
+
+  const panel = document.getElementById('tab-h2h');
+  if (!panel) return;
+
+  try {
+    const url = `${API}/api/bvp/${s.batter_id}/${s.pitcher_id}`;
+    const r   = await fetch(url);
+    const d   = await r.json();
+
+    renderH2H(panel, d, s);
+    h2hLoaded[key] = true;
+  } catch(e) {
+    panel.innerHTML = `<div class="error-box">H2H data unavailable: ${e.message}</div>`;
+  }
+}
+
+function renderH2H(panel, d, s) {
+  if (!d.success && d.pa === 0) {
+    panel.innerHTML = `
+      <div class="section">
+        <div class="section-title">Career Head-to-Head</div>
+        <div class="warning-box">No career H2H data on record for this matchup.</div>
+      </div>`;
+    return;
+  }
+
+  const shrunk = d.shrunk || {};
+  const pa = d.pa || 0;
+  const paNote = pa < 25 ? 'Small sample — shrunk toward league avg' : pa < 50 ? 'Moderate sample' : 'Reliable sample';
+
+  panel.innerHTML = `
+    <div class="section">
+      <div class="section-title">Career Head-to-Head: ${s.batter} vs ${s.pitcher}</div>
+      ${pa < 25 ? `<div class="warning-box">⚠ Only ${pa} PA career H2H. Per research, signal emerges near 50-100 PA. Treat as flavor, not primary input.</div>` : ''}
+      <div class="h2h-grid">
+        <div class="h2h-cell">
+          <div class="h2h-val">${pa}</div>
+          <div class="h2h-lbl">PA</div>
+        </div>
+        <div class="h2h-cell">
+          <div class="h2h-val">${d.hr ?? '—'}</div>
+          <div class="h2h-lbl">HR</div>
+        </div>
+        <div class="h2h-cell">
+          <div class="h2h-val">${d.avg != null ? d.avg.toFixed(3) : '—'}</div>
+          <div class="h2h-lbl">AVG</div>
+        </div>
+        <div class="h2h-cell">
+          <div class="h2h-val">${d.ops != null ? d.ops.toFixed(3) : '—'}</div>
+          <div class="h2h-lbl">OPS</div>
+        </div>
+      </div>
+      ${d.bb != null ? `
+      <div style="display:flex;gap:16px;margin-top:12px;flex-wrap:wrap;font-size:13px">
+        <span><strong>${d.ab ?? '—'}</strong> <span style="color:var(--muted)">AB</span></span>
+        <span><strong>${d.h ?? '—'}</strong> <span style="color:var(--muted)">H</span></span>
+        <span><strong>${d.bb ?? '—'}</strong> <span style="color:var(--muted)">BB</span></span>
+        <span><strong>${d.so ?? '—'}</strong> <span style="color:var(--muted)">K</span></span>
+      </div>` : ''}
+      ${d.sample_note || d.note ? `<div class="sample-note">${d.sample_note || d.note}</div>` : ''}
+    </div>
+
+    ${shrunk && Object.keys(shrunk).length ? `
+    <div class="section">
+      <div class="section-title">Bayesian-Shrunk Rates</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:10px">Blends career H2H with league priors. Smaller samples lean more toward league averages.</div>
+      <div class="h2h-grid">
+        <div class="h2h-cell">
+          <div class="h2h-val">${shrunk.woba != null ? shrunk.woba.toFixed(3) : '—'}</div>
+          <div class="h2h-lbl">wOBA (shrunk)</div>
+        </div>
+        <div class="h2h-cell">
+          <div class="h2h-val">${shrunk.avg != null ? shrunk.avg.toFixed(3) : '—'}</div>
+          <div class="h2h-lbl">AVG (shrunk)</div>
+        </div>
+        <div class="h2h-cell">
+          <div class="h2h-val">${d.reliability != null ? (d.reliability*100).toFixed(0)+'%' : '—'}</div>
+          <div class="h2h-lbl">Reliability</div>
+        </div>
+        <div class="h2h-cell">
+          <div class="h2h-val">${d.woba_edge != null ? (d.woba_edge >= 0 ? '+' : '') + d.woba_edge.toFixed(3) : '—'}</div>
+          <div class="h2h-lbl">wOBA Edge</div>
+        </div>
+      </div>
+    </div>` : ''}
+  `;
+}
+
+// ── Scouting Tab ──────────────────────────────────────────────────────────────
+
+let scoutingLoaded = {};
+
+async function loadScouting(batterId, pitcherId, gamePk) {
+  const key = `${batterId}-${pitcherId}`;
+  if (scoutingLoaded[key]) return;
+
+  const panel = document.getElementById('tab-scouting');
+  if (!panel) return;
+
+  panel.innerHTML = `
+    <div class="section">
+      <div class="section-title">AI Scouting Report</div>
+      <div class="scouting-loader"><div class="spinner"></div> Generating Claude analysis…</div>
+    </div>`;
+
+  try {
+    const url = `${API}/api/hr-analytics/scouting/${batterId}/${pitcherId}/${gamePk||0}`;
+    const r   = await fetch(url);
+    const d   = await r.json();
+
+    if (!d.success) {
+      panel.innerHTML = `
+        <div class="section">
+          <div class="section-title">AI Scouting Report</div>
+          <div class="error-box">${d.error}</div>
+          <div class="scouting-actions">
+            <button class="btn btn-primary" onclick="scoutingLoaded['${key}']=false;loadScouting(${batterId},${pitcherId},${gamePk})">Retry</button>
+          </div>
+        </div>`;
+      return;
+    }
+
+    scoutingLoaded[key] = true;
+    renderScouting(panel, d, batterId, pitcherId, gamePk);
+  } catch(e) {
+    panel.innerHTML = `
+      <div class="section">
+        <div class="section-title">AI Scouting Report</div>
+        <div class="error-box">Failed: ${e.message}</div>
+      </div>`;
+  }
+}
+
+function renderScouting(panel, d, batterId, pitcherId, gamePk) {
+  const report = d.report || '';
+  const verdict = report.startsWith('BET') ? 'BET' : report.startsWith('LEAN') ? 'LEAN' : report.startsWith('PASS') ? 'PASS' : '';
+  const payload = d.payload || {};
+
+  panel.innerHTML = `
+    <div class="section">
+      <div class="section-title">AI Scouting Report</div>
+      ${verdict ? `<span class="bet-tag bet-${verdict}">${verdict}</span>` : ''}
+      <div class="scouting-text" style="margin-top:${verdict?'10px':'0'}">${report}</div>
+      <div class="scouting-actions">
+        <button class="btn" onclick="scoutingLoaded['${batterId}-${pitcherId}']=false;loadScouting(${batterId},${pitcherId},${gamePk})">Regenerate</button>
+        <button class="btn" onclick="copyReport(this)">Copy Report</button>
+      </div>
+      ${d.cached ? '<div style="font-size:11px;color:var(--muted);margin-top:8px">Cached for today\'s matchup.</div>' : ''}
+    </div>
+
+    ${payload.model ? `
+    <div class="section">
+      <div class="section-title">Model Snapshot</div>
+      <div class="inputs-grid">
+        <div class="input-item">
+          <div class="input-val">${payload.model.prob_hr_today_pct}%</div>
+          <div class="input-lbl">HR Probability</div>
+        </div>
+        <div class="input-item">
+          <div class="input-val">${payload.model.score_0_100}/100</div>
+          <div class="input-lbl">Composite Score</div>
+        </div>
+        <div class="input-item">
+          <div class="input-val">${payload.model.p_per_ab}%</div>
+          <div class="input-lbl">p per AB</div>
+        </div>
+        <div class="input-item">
+          <div class="input-val">${payload.model.platoon||'—'}</div>
+          <div class="input-lbl">Platoon</div>
+        </div>
+      </div>
+    </div>` : ''}
+  `;
+}
+
+function copyReport(btn) {
+  const txt = document.querySelector('.scouting-text');
+  if (!txt) return;
+  navigator.clipboard.writeText(txt.textContent || '').then(() => {
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = 'Copy Report', 2000);
+  });
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+
+setHeaderDate();
+loadDailyScores();
+</script>
+</body>
+</html>

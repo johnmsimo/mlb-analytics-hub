@@ -118,6 +118,7 @@ CONSISTENCY_HTML = _read_html_or_fallback('consistency.html')
 PITCHER_DEEP_DIVE_HTML = _read_html_or_fallback('pitcher_deepdive.html')
 GAMESIDE_DEEPDIVE_HTML = _read_html_or_fallback('gameside_deepdive.html')
 BREAKOUT_DETECTOR_HTML = _read_html_or_fallback('breakout_detector.html')
+HR_ANALYTICS_HTML = _read_html_or_fallback('hr_analytics.html')
 DATA_DIR = os.path.join(_HERE, 'data')
 os.makedirs(DATA_DIR, exist_ok=True)
 BRAIN_DATA_DIR = os.path.join(DATA_DIR, 'brain_uploads')
@@ -684,6 +685,18 @@ PARK_FACTORS = {
     113:0.94,115:1.00
 }
 
+# ── HR-specific Park Factors (index 100 = neutral, higher = more HRs) ────────
+# Approximate 3-year rolling HR park index from Statcast data.
+# Camden Yards (110) reflects the 2025 wall restoration; override if Savant
+# rolling window hasn't fully refreshed yet.
+HR_PARK_FACTORS = {
+    109: 114, 144: 94,  110: 108, 111: 101, 112: 109, 137: 92,
+    115: 112, 116: 100, 117: 103, 118: 108, 119: 104, 108: 95,
+    146: 95,  158: 99,  142: 99,  121: 100, 147: 118, 133: 107,
+    143: 111, 134: 95,  136: 95,  138: 98,  139: 96,  140: 112,
+    141: 102, 120: 99,  135: 97,  145: 95,  113: 100, 114: 98,
+}
+
 _fg_lock = threading.Lock()
 _fg_bat = {}
 _fg_pit = {}
@@ -1086,8 +1099,10 @@ _sv_lock         = threading.Lock()
 _sv_pit_xstats   = {}
 _sv_bat_xstats   = {}
 _sv_bat_statcast = {}
-_sv_arsenal_pct  = {}
-_sv_arsenal_velo = {}
+_sv_arsenal_pct       = {}
+_sv_arsenal_velo      = {}
+_sv_pit_arsenal_stats = {}  # {player_id_str: {pitch_name: {usage,ba,slg,woba,whiff_pct,hh_pct,k_pct,run_val}}}
+_sv_bat_arsenal_stats = {}  # {player_id_str: {pitch_name: {slg,woba,whiff_pct,hh_pct}}}
 _sv_loaded    = False
 _sv_load_date = None
 _sv_loading   = False
@@ -1302,11 +1317,69 @@ def _load_savant_data():
     except Exception as ex:
         print("[Savant] Arsenal velo failed:", ex)
 
+    # 6. Pitcher pitch-arsenal outcome stats (BA/SLG/wOBA/whiff%/HH% per pitch type)
+    try:
+        rows, _ = _fetch_sv_csv_by_season(
+            f"{BASE}/leaderboard/pitch-arsenal-stats?type=pitcher&pitchType=&year={{year}}&team=&min=25&csv=true",
+            [y] + [s for s in seasons if s != y],
+        )
+        d = {}
+        for row in rows:
+            pid_str = (row.get("player_id") or "").strip()
+            ptype   = (row.get("pitch_name") or "").strip()
+            if not pid_str or not ptype:
+                continue
+            if pid_str not in d:
+                d[pid_str] = {}
+            try:
+                usage = float(row.get("pitch_usage") or 0)
+            except Exception:
+                usage = 0.0
+            d[pid_str][ptype] = {
+                "usage":     usage,
+                "ba":        _sv_f(row.get("ba")),
+                "slg":       _sv_f(row.get("slg")),
+                "woba":      _sv_f(row.get("woba")),
+                "whiff_pct": _sv_f(row.get("whiff_percent")),
+                "hh_pct":    _sv_f(row.get("hard_hit_percent")),
+                "k_pct":     _sv_f(row.get("k_percent")),
+                "run_val":   _sv_f(row.get("run_value_per_100")),
+            }
+        with _sv_lock: _sv_pit_arsenal_stats = d
+        print(f"[Savant] Pitcher arsenal stats: {len(d)} pitchers")
+    except Exception as ex:
+        print("[Savant] Pitcher arsenal stats failed:", ex)
+
+    # 7. Batter pitch-arsenal outcome stats (SLG/wOBA/whiff%/HH% per pitch type faced)
+    try:
+        rows, _ = _fetch_sv_csv_by_season(
+            f"{BASE}/leaderboard/pitch-arsenal-stats?type=batter&pitchType=&year={{year}}&team=&min=25&csv=true",
+            [y] + [s for s in seasons if s != y],
+        )
+        d = {}
+        for row in rows:
+            pid_str = (row.get("player_id") or "").strip()
+            ptype   = (row.get("pitch_name") or "").strip()
+            if not pid_str or not ptype:
+                continue
+            if pid_str not in d:
+                d[pid_str] = {}
+            d[pid_str][ptype] = {
+                "slg":       _sv_f(row.get("slg")),
+                "woba":      _sv_f(row.get("woba")),
+                "whiff_pct": _sv_f(row.get("whiff_percent")),
+                "hh_pct":    _sv_f(row.get("hard_hit_percent")),
+            }
+        with _sv_lock: _sv_bat_arsenal_stats = d
+        print(f"[Savant] Batter arsenal stats: {len(d)} batters")
+    except Exception as ex:
+        print("[Savant] Batter arsenal stats failed:", ex)
+
     with _sv_lock:
         has_data = bool(_sv_pit_xstats) or bool(_sv_bat_xstats) or bool(_sv_bat_statcast) or bool(_sv_arsenal_pct) or bool(_sv_arsenal_velo)
         _sv_loaded    = has_data
         _sv_load_date = datetime.now().date() if has_data else None
-    print(f"[Savant] All caches ready: pitxstats={len(_sv_pit_xstats)} batxstats={len(_sv_bat_xstats)} statcast={len(_sv_bat_statcast)} arsenal={len(_sv_arsenal_pct)} velo={len(_sv_arsenal_velo)} loaded={_sv_loaded}")
+    print(f"[Savant] All caches ready: pitxstats={len(_sv_pit_xstats)} batxstats={len(_sv_bat_xstats)} statcast={len(_sv_bat_statcast)} arsenal={len(_sv_arsenal_pct)} velo={len(_sv_arsenal_velo)} pit_arsenal={len(_sv_pit_arsenal_stats)} bat_arsenal={len(_sv_bat_arsenal_stats)} loaded={_sv_loaded}")
 
 def _maybe_refresh_savant():
     global _sv_loading
@@ -15099,6 +15172,669 @@ def api_breakout_candidates():
     except Exception as ex:
         print(f"[api_breakout_candidates] {traceback.format_exc()}")
         return jsonify({"success": False, "error": str(ex), "players": []}), 500
+
+# =============================================================
+# HR ANALYTICS HUB — Propalytics-style HR probability engine
+# =============================================================
+
+import numpy as _np_mod
+
+# ── League baseline constants for z-score composite ─────────────────────────
+_HR_LEAGUE = {
+    "iso_mu": 0.165,      "iso_sd": 0.045,
+    "barrel_mu": 8.5,     "barrel_sd": 4.0,
+    "hh_mu": 40.0,        "hh_sd": 8.0,
+    "hr9_mu": 1.25,       "hr9_sd": 0.55,
+    "park_mu": 100.0,     "park_sd": 8.0,
+    "mix_mu": 1.0,        "mix_sd": 0.18,
+}
+
+# League SLG per pitch type — used as denominator in mix score
+_LEAGUE_SLG_BY_PITCH = {
+    "4-Seam Fastball": 0.440, "Sinker": 0.420, "Cutter": 0.390,
+    "Slider": 0.360,          "Sweeper": 0.350, "Curveball": 0.330,
+    "Changeup": 0.350,        "Splitter": 0.340, "Knuckleball": 0.360,
+    "Slurve": 0.340,
+}
+
+# Scouting report in-memory cache {(batter_id, pitcher_id, date_str): text}
+_hr_scouting_cache: dict = {}
+_hr_scouting_lock = threading.Lock()
+
+# Daily HR score cache
+_hr_daily_cache: dict = {}  # {"date": str, "scores": list}
+_hr_daily_lock  = threading.Lock()
+
+# Pitcher H/L handedness splits cache {pitcher_id: (date, {vl_hr9, vr_hr9})}
+_hr_hand_cache: dict = {}
+_hr_hand_lock  = threading.Lock()
+
+
+def _fetch_pitcher_hr9_by_hand(pitcher_id):
+    """Return {vl_hr9, vr_hr9} from MLB Stats API statSplits sitCodes.
+    Falls back to fg_pitcher overall HR/9 if API call fails."""
+    today = datetime.now().date()
+    with _hr_hand_lock:
+        cached = _hr_hand_cache.get(pitcher_id)
+        if cached and cached[0] == today:
+            return cached[1]
+
+    year = datetime.now().year
+    result = {"vl_hr9": 1.25, "vr_hr9": 1.25}
+    try:
+        r = requests.get(
+            f"{MLB_API}/people/{pitcher_id}/stats",
+            params={
+                "stats": "statSplits",
+                "group": "pitching",
+                "sitCodes": "vl,vr",
+                "season": year,
+                "sportId": 1,
+            },
+            timeout=10,
+        )
+        r.raise_for_status()
+        splits = (r.json().get("stats") or [{}])[0].get("splits", [])
+        for sp in splits:
+            sc = sp.get("sitCode", "")
+            s  = sp.get("stat", {})
+            ip  = _parse_ip(s.get("inningsPitched", 0))
+            hr  = float(s.get("homeRuns", 0) or 0)
+            hr9 = round(hr * 9 / ip, 3) if ip > 0 else 1.25
+            if sc == "vl":
+                result["vl_hr9"] = hr9
+            elif sc == "vr":
+                result["vr_hr9"] = hr9
+    except Exception:
+        pass
+
+    with _hr_hand_lock:
+        _hr_hand_cache[pitcher_id] = (today, result)
+    return result
+
+
+def _get_sv_pid_by_id(player_id):
+    """Return player_id str for cross-referencing arsenal stats caches."""
+    return str(player_id).strip()
+
+
+def _compute_pitch_mix_score(pit_pid_str, bat_pid_str):
+    """Compute pitch-mix matchup score.
+    Returns (score, table_rows) where score is a float (1.0 = league avg)
+    and table_rows is a list of dicts for the UI table.
+    """
+    with _sv_lock:
+        pit_arsenal = dict(_sv_pit_arsenal_stats.get(pit_pid_str, {}))
+        bat_arsenal = dict(_sv_bat_arsenal_stats.get(bat_pid_str, {}))
+
+    if not pit_arsenal:
+        return 1.0, []
+
+    score = 0.0
+    weight_sum = 0.0
+    table_rows = []
+
+    # Sort by pitcher usage descending
+    sorted_pitches = sorted(pit_arsenal.items(), key=lambda x: x[1].get("usage", 0), reverse=True)
+
+    for pitch_name, pit_stats in sorted_pitches[:6]:
+        usage = pit_stats.get("usage", 0)
+        if usage <= 0:
+            continue
+        pit_slg = pit_stats.get("slg", 0.400)
+        if not isinstance(pit_slg, float) or pit_slg == 0:
+            pit_slg = 0.400
+
+        bat_stats = bat_arsenal.get(pitch_name, {})
+        bat_slg   = bat_stats.get("slg")
+        if not bat_slg or not isinstance(bat_slg, float) or bat_slg == 0:
+            bat_slg = None  # no data
+
+        league_slg = _LEAGUE_SLG_BY_PITCH.get(pitch_name, 0.390)
+
+        ratio = (bat_slg / league_slg) if bat_slg else 1.0
+        score     += ratio * usage
+        weight_sum += usage
+
+        table_rows.append({
+            "pitch":       pitch_name,
+            "usage":       round(usage, 1),
+            "pit_ba":      pit_stats.get("ba"),
+            "pit_slg":     pit_stats.get("slg"),
+            "pit_woba":    pit_stats.get("woba"),
+            "pit_whiff":   pit_stats.get("whiff_pct"),
+            "pit_hh":      pit_stats.get("hh_pct"),
+            "pit_rv100":   pit_stats.get("run_val"),
+            "bat_slg":     bat_stats.get("slg"),
+            "bat_woba":    bat_stats.get("woba"),
+            "bat_whiff":   bat_stats.get("whiff_pct"),
+            "bat_hh":      bat_stats.get("hh_pct"),
+            "ratio":       round(ratio, 3),
+        })
+
+    final_score = (score / weight_sum) if weight_sum > 0 else 1.0
+    return round(final_score, 3), table_rows
+
+
+def _p_hr_per_ab(iso, barrel_pct, hh_pct, hr9_vs_hand, park_hr_idx, mix_score):
+    """Compute per-AB HR probability from weighted input factors.
+    Calibrated to 2024 MLB-wide HR rate ~3.2% (1 HR per 31 AB).
+    """
+    base = 0.032
+    iso_f    = (max(0.01, iso)    / 0.165) ** 0.6
+    barrel_f = (max(0.1, barrel_pct) / 8.5)  ** 0.5
+    hh_f     = (max(5.0, hh_pct)  / 40.0) ** 0.3
+    pit_f    = (max(0.1, hr9_vs_hand) / 1.25) ** 0.7
+    park_f   = park_hr_idx / 100.0
+    mix_f    = max(0.5, min(2.0, mix_score))
+    p = base * iso_f * barrel_f * hh_f * pit_f * park_f * mix_f
+    return round(min(p, 0.28), 5)
+
+
+def _daily_hr_score(iso, barrel_pct, hh_pct, hr9_hand, park_hr_idx, mix_score, platoon_adv=0):
+    """Compute 0-100 daily composite HR score via weighted z-scores."""
+    def _z(x, mu, sd):
+        return (x - mu) / sd if sd > 0 else 0.0
+
+    raw = (
+        0.30 * _z(iso,          _HR_LEAGUE["iso_mu"],    _HR_LEAGUE["iso_sd"])    +
+        0.25 * _z(barrel_pct,   _HR_LEAGUE["barrel_mu"], _HR_LEAGUE["barrel_sd"]) +
+        0.20 * _z(hr9_hand,     _HR_LEAGUE["hr9_mu"],    _HR_LEAGUE["hr9_sd"])    +
+        0.10 * _z(park_hr_idx,  _HR_LEAGUE["park_mu"],   _HR_LEAGUE["park_sd"])   +
+        0.10 * _z(mix_score,    _HR_LEAGUE["mix_mu"],    _HR_LEAGUE["mix_sd"])    +
+        0.05 * platoon_adv
+    )
+    return max(0, min(100, round(50 + 12 * raw, 1)))
+
+
+def _run_hr_monte_carlo(p_per_ab, ab_per_game=4, n_sims=1000):
+    """Run Monte Carlo for HR in a game. Returns prob and distribution."""
+    rng  = _np_mod.random.default_rng()
+    sims = rng.binomial(n=ab_per_game, p=p_per_ab, size=n_sims)
+    prob_any = float((sims >= 1).mean())
+    dist = [int((sims == k).sum()) for k in range(ab_per_game + 1)]
+    return round(prob_any, 4), dist
+
+
+def _gather_batter_hr_inputs(batter_name, batter_id, pitcher_id, home_team_id, batter_hand=None):
+    """Collect all inputs needed for HR probability computation.
+    Returns a dict of inputs + intermediate values.
+    """
+    _maybe_refresh_fg()
+    _maybe_refresh_savant()
+
+    fgb = fg_batter(batter_name)
+    svb = sv_batter(batter_name)
+
+    iso        = _num(fgb.get("fg_iso"), 0.0) or max(0.0, _num(svb.get("sv_xslg"), 0.400) - _num(svb.get("sv_xba"), 0.260))
+    barrel_pct = _num(svb.get("sv_brl_pct"), 8.5)
+    hh_pct     = _num(svb.get("sv_hh_pct"), 40.0)
+    avg_ev     = _num(svb.get("sv_ev"), 88.0)
+    max_ev     = _num(svb.get("sv_max_ev"), 103.0)
+    xwoba      = _num(svb.get("sv_xwoba"), 0.320)
+
+    if batter_hand is None:
+        bio        = player_profile(batter_id)
+        batter_hand = bio.get("bats", "R")
+
+    hand_splits = _fetch_pitcher_hr9_by_hand(pitcher_id)
+    hand_key    = "vl_hr9" if batter_hand == "L" else "vr_hr9"
+    hr9_vs_hand = hand_splits.get(hand_key, 1.25)
+
+    park_hr_idx = HR_PARK_FACTORS.get(home_team_id, 100)
+
+    pit_pid_str = _get_sv_pid_by_id(pitcher_id)
+    sv_pit = sv_pitcher("") if False else {}  # just to trigger cache load
+    pit_svp = sv_pitcher("")
+    # Look up pitcher's sv_pid via its name — try FG then direct
+    fgp_by_id = {}
+    try:
+        r = requests.get(f"{MLB_API}/people/{pitcher_id}", timeout=6)
+        pitcher_full_name = (r.json().get("people") or [{}])[0].get("fullName", "")
+    except Exception:
+        pitcher_full_name = ""
+    fgp = fg_pitcher(pitcher_full_name) if pitcher_full_name else {}
+    svp = sv_pitcher(pitcher_full_name) if pitcher_full_name else {}
+    # Resolve pitcher's Savant player_id for arsenal lookup
+    pit_pid_str = str(svp.get("sv_pid", "") or pitcher_id).strip()
+
+    bat_pid_str = str(svb.get("sv_pid", "") or batter_id).strip()
+    mix_score, pitch_table = _compute_pitch_mix_score(pit_pid_str, bat_pid_str)
+
+    # Platoon advantage: +1 if batter hits same hand as pitcher throws, -1 if opposite, 0 = switch
+    pit_hand = "R"
+    if pitcher_full_name:
+        try:
+            pr = requests.get(f"{MLB_API}/people/{pitcher_id}", timeout=5)
+            pit_hand = (pr.json().get("people") or [{}])[0].get("pitchHand", {}).get("code", "R")
+        except Exception:
+            pass
+    platoon_adv = 0.5 if batter_hand != pit_hand else -0.3  # same hand = platoon disadvantage
+
+    return {
+        "batter_name": batter_name,
+        "batter_id": batter_id,
+        "batter_hand": batter_hand,
+        "pitcher_id": pitcher_id,
+        "pitcher_name": pitcher_full_name,
+        "pitcher_hand": pit_hand,
+        "iso": round(iso, 3),
+        "barrel_pct": round(barrel_pct, 1),
+        "hh_pct": round(hh_pct, 1),
+        "avg_ev": round(avg_ev, 1),
+        "max_ev": round(max_ev, 1),
+        "xwoba": round(xwoba, 3),
+        "hr9_vs_hand": round(hr9_vs_hand, 3),
+        "park_hr_idx": park_hr_idx,
+        "home_team_id": home_team_id,
+        "mix_score": mix_score,
+        "platoon_adv": platoon_adv,
+        "pitch_table": pitch_table,
+        "pitcher_era": _num(fgp.get("fg_era"), 4.50),
+        "pitcher_hr9": _num(fgp.get("fg_hr9"), 1.25),
+        "fg_hr": int(_num(fgb.get("fg_hr"), 0)),
+        "fg_pa": int(_num(fgb.get("fg_pa"), 0)),
+    }
+
+
+def _build_scouting_payload(inputs, bvp, p_per_ab, prob_any, score):
+    """Assemble the structured payload sent to Claude for the scouting report."""
+    park_name = ""
+    try:
+        r = requests.get(f"{MLB_API}/teams/{inputs['home_team_id']}/venue", timeout=5)
+        park_name = (r.json().get("venues") or [{}])[0].get("name", "")
+    except Exception:
+        pass
+    if not park_name:
+        park_name = f"Team {inputs['home_team_id']} park"
+
+    return {
+        "batter": {
+            "name": inputs["batter_name"],
+            "hand": inputs["batter_hand"],
+            "iso": inputs["iso"],
+            "barrel_pct": inputs["barrel_pct"],
+            "hh_pct": inputs["hh_pct"],
+            "avg_ev": inputs["avg_ev"],
+            "xwoba": inputs["xwoba"],
+            "season_hr": inputs["fg_hr"],
+            "season_pa": inputs["fg_pa"],
+        },
+        "pitcher": {
+            "name": inputs["pitcher_name"],
+            "hand": inputs["pitcher_hand"],
+            "hr9_vs_this_hand": inputs["hr9_vs_hand"],
+            "hr9_overall": inputs["pitcher_hr9"],
+            "era": inputs["pitcher_era"],
+        },
+        "park": {
+            "name": park_name,
+            "hr_index": inputs["park_hr_idx"],
+        },
+        "h2h": {
+            "pa": bvp.get("pa", 0),
+            "hr": bvp.get("hr", 0),
+            "avg": bvp.get("avg"),
+            "ops": bvp.get("ops"),
+            "sample_note": bvp.get("note", ""),
+        },
+        "model": {
+            "p_per_ab": round(p_per_ab * 100, 2),
+            "prob_hr_today_pct": round(prob_any * 100, 2),
+            "score_0_100": score,
+            "mix_score": inputs["mix_score"],
+            "platoon": "advantage" if inputs["platoon_adv"] > 0 else "disadvantage",
+        },
+    }
+
+
+def _call_claude_scouting_report(payload):
+    """Call Claude to generate a HR scouting report. Returns text or None."""
+    import anthropic
+    api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return None
+    client = anthropic.Anthropic(api_key=api_key)
+    batter = payload["batter"]["name"]
+    pitcher = payload["pitcher"]["name"]
+    park    = payload["park"]["name"]
+    prompt = (
+        f"You are an MLB advance-scouting analyst. Write a 120-150 word scouting paragraph "
+        f"for a Home Run prop bet on {batter} vs {pitcher} at {park} today. "
+        f"Lead with the bottom line (BET / LEAN / PASS), then justify with the data. "
+        f"Cite specific numbers from the DATA block. Do not invent stats. "
+        f"Style: confident analyst, no hedging adverbs. Mention park factor and platoon "
+        f"only if they materially move the number.\n\nDATA:\n"
+        + json.dumps(payload, indent=2)
+    )
+    try:
+        resp = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return (resp.content[0].text or "").strip()
+    except Exception as ex:
+        print(f"[HR scouting] Claude call failed: {ex}")
+        return None
+
+
+# ── HR Analytics routes ───────────────────────────────────────────────────────
+
+@app.route("/hr-analytics")
+def hr_analytics_page():
+    return HR_ANALYTICS_HTML
+
+
+@app.route("/api/hr-analytics/simulator")
+def api_hr_analytics_simulator():
+    """HR probability simulator for a batter vs pitcher matchup.
+    Query params: batter_id, pitcher_id, game_pk, batter_name (optional)
+    """
+    try:
+        batter_id   = int(request.args.get("batter_id", 0) or 0)
+        pitcher_id  = int(request.args.get("pitcher_id", 0) or 0)
+        game_pk     = int(request.args.get("game_pk", 0) or 0)
+        batter_name = (request.args.get("batter_name") or "").strip()
+
+        if not batter_id or not pitcher_id:
+            return jsonify({"success": False, "error": "batter_id and pitcher_id required"}), 400
+
+        # Resolve batter name if not provided
+        if not batter_name:
+            try:
+                r = requests.get(f"{MLB_API}/people/{batter_id}", timeout=6)
+                batter_name = (r.json().get("people") or [{}])[0].get("fullName", "")
+            except Exception:
+                pass
+        if not batter_name:
+            return jsonify({"success": False, "error": "Could not resolve batter name"}), 404
+
+        # Resolve home team from game
+        home_team_id = 0
+        if game_pk:
+            try:
+                gdata = fetch_schedule_game(game_pk)
+                if gdata:
+                    home_team_id = ((gdata.get("teams") or {}).get("home") or {}).get("team", {}).get("id", 0)
+            except Exception:
+                pass
+
+        inputs = _gather_batter_hr_inputs(batter_name, batter_id, pitcher_id, home_team_id)
+        p_per_ab = _p_hr_per_ab(
+            inputs["iso"], inputs["barrel_pct"], inputs["hh_pct"],
+            inputs["hr9_vs_hand"], inputs["park_hr_idx"], inputs["mix_score"],
+        )
+        prob_any, mc_dist = _run_hr_monte_carlo(p_per_ab)
+        score = _daily_hr_score(
+            inputs["iso"], inputs["barrel_pct"], inputs["hh_pct"],
+            inputs["hr9_vs_hand"], inputs["park_hr_idx"], inputs["mix_score"],
+            inputs["platoon_adv"],
+        )
+        prob_closed = round(1 - (1 - p_per_ab) ** 4, 4)
+
+        return jsonify({
+            "success": True,
+            "batter":       batter_name,
+            "batter_id":    batter_id,
+            "pitcher_id":   pitcher_id,
+            "pitcher":      inputs["pitcher_name"],
+            "inputs":       {k: v for k, v in inputs.items() if k != "pitch_table"},
+            "p_per_ab":     p_per_ab,
+            "prob_hr_today":    prob_any,
+            "prob_hr_closed":   prob_closed,
+            "mc_distribution":  mc_dist,
+            "score_0_100":      score,
+            "pitch_table":  inputs["pitch_table"],
+        })
+    except Exception as ex:
+        print(f"[api_hr_analytics_simulator] {traceback.format_exc()}")
+        return jsonify({"success": False, "error": str(ex)}), 500
+
+
+@app.route("/api/hr-analytics/pitch-mix/<int:batter_id>/<int:pitcher_id>")
+def api_hr_pitch_mix(batter_id, pitcher_id):
+    """Pitch mix matchup table for a batter vs pitcher."""
+    try:
+        _maybe_refresh_savant()
+        batter_name  = ""
+        pitcher_name = ""
+        try:
+            rb = requests.get(f"{MLB_API}/people/{batter_id}", timeout=6)
+            batter_name = (rb.json().get("people") or [{}])[0].get("fullName", "")
+            rp = requests.get(f"{MLB_API}/people/{pitcher_id}", timeout=6)
+            pitcher_name = (rp.json().get("people") or [{}])[0].get("fullName", "")
+        except Exception:
+            pass
+
+        svb = sv_batter(batter_name) if batter_name else {}
+        svp = sv_pitcher(pitcher_name) if pitcher_name else {}
+        bat_pid_str = str(svb.get("sv_pid", "") or batter_id).strip()
+        pit_pid_str = str(svp.get("sv_pid", "") or pitcher_id).strip()
+
+        mix_score, table_rows = _compute_pitch_mix_score(pit_pid_str, bat_pid_str)
+
+        return jsonify({
+            "success": True,
+            "batter_id": batter_id,
+            "pitcher_id": pitcher_id,
+            "batter": batter_name,
+            "pitcher": pitcher_name,
+            "mix_score": mix_score,
+            "pitch_table": table_rows,
+            "note": "No pitch arsenal data" if not table_rows else "",
+        })
+    except Exception as ex:
+        return jsonify({"success": False, "error": str(ex)}), 500
+
+
+@app.route("/api/hr-analytics/scouting/<int:batter_id>/<int:pitcher_id>/<int:game_pk>")
+def api_hr_scouting(batter_id, pitcher_id, game_pk):
+    """Claude-powered HR scouting report. Cached per (batter, pitcher, date)."""
+    try:
+        date_str = datetime.now(ET).strftime("%Y-%m-%d")
+        cache_key = (batter_id, pitcher_id, date_str)
+        with _hr_scouting_lock:
+            cached = _hr_scouting_cache.get(cache_key)
+        if cached:
+            return jsonify({"success": True, "report": cached, "cached": True})
+
+        batter_name = ""
+        try:
+            r = requests.get(f"{MLB_API}/people/{batter_id}", timeout=6)
+            batter_name = (r.json().get("people") or [{}])[0].get("fullName", "")
+        except Exception:
+            pass
+        if not batter_name:
+            return jsonify({"success": False, "error": "Could not resolve batter"}), 404
+
+        home_team_id = 0
+        if game_pk:
+            try:
+                gdata = fetch_schedule_game(game_pk)
+                if gdata:
+                    home_team_id = ((gdata.get("teams") or {}).get("home") or {}).get("team", {}).get("id", 0)
+            except Exception:
+                pass
+
+        inputs  = _gather_batter_hr_inputs(batter_name, batter_id, pitcher_id, home_team_id)
+        bvp     = _fetch_bvp(batter_id, pitcher_id) or {}
+        p_per_ab = _p_hr_per_ab(
+            inputs["iso"], inputs["barrel_pct"], inputs["hh_pct"],
+            inputs["hr9_vs_hand"], inputs["park_hr_idx"], inputs["mix_score"],
+        )
+        prob_any, _ = _run_hr_monte_carlo(p_per_ab, n_sims=500)
+        score = _daily_hr_score(
+            inputs["iso"], inputs["barrel_pct"], inputs["hh_pct"],
+            inputs["hr9_vs_hand"], inputs["park_hr_idx"], inputs["mix_score"],
+        )
+
+        payload = _build_scouting_payload(inputs, bvp, p_per_ab, prob_any, score)
+        report  = _call_claude_scouting_report(payload)
+        if not report:
+            report = (
+                f"Insufficient API access for AI scouting report. "
+                f"Model score: {score}/100. HR probability: {round(prob_any*100,1)}%. "
+                f"Key factors: ISO {inputs['iso']}, Barrel% {inputs['barrel_pct']}, "
+                f"Park HR index {inputs['park_hr_idx']}."
+            )
+
+        with _hr_scouting_lock:
+            _hr_scouting_cache[cache_key] = report
+
+        return jsonify({
+            "success": True,
+            "report": report,
+            "cached": False,
+            "payload": payload,
+        })
+    except Exception as ex:
+        print(f"[api_hr_scouting] {traceback.format_exc()}")
+        return jsonify({"success": False, "error": str(ex)}), 500
+
+
+@app.route("/api/hr-analytics/daily-scores")
+def api_hr_daily_scores():
+    """Ranked 0-100 HR scores for every starting batter in today's games."""
+    try:
+        date_str = datetime.now(ET).strftime("%Y-%m-%d")
+        with _hr_daily_lock:
+            cached = _hr_daily_cache.get("date")
+            if cached == date_str and _hr_daily_cache.get("scores"):
+                return jsonify({
+                    "success": True,
+                    "date": date_str,
+                    "scores": _hr_daily_cache["scores"],
+                    "cached": True,
+                })
+
+        _maybe_refresh_fg()
+        _maybe_refresh_savant()
+
+        games_raw = fetch_schedule(date_str) or []
+        scores = []
+
+        for game in games_raw:
+            game_pk = game.get("gamePk")
+            if not game_pk:
+                continue
+            teams     = game.get("teams") or {}
+            home_info = (teams.get("home") or {}).get("team") or {}
+            away_info = (teams.get("away") or {}).get("team") or {}
+            home_tid  = home_info.get("id", 0)
+            away_tid  = away_info.get("id", 0)
+            home_name = home_info.get("name", "")
+            away_name = away_info.get("name", "")
+
+            # Probable pitchers
+            home_prob = (teams.get("home") or {}).get("probablePitcher") or {}
+            away_prob = (teams.get("away") or {}).get("probablePitcher") or {}
+
+            game_time = (game.get("gameDate") or "")[-8:-3] if game.get("gameDate") else ""
+
+            # Fetch lineup for this game
+            lineup_data = {}
+            try:
+                lr = requests.get(
+                    f"http://localhost:{os.environ.get('PORT', 10000)}/api/lineup/{game_pk}",
+                    timeout=8,
+                )
+                if lr.ok:
+                    lineup_data = lr.json()
+            except Exception:
+                pass
+
+            for side in ("away", "home"):
+                batters   = lineup_data.get(side, [])
+                opp_prob  = home_prob if side == "away" else away_prob
+                opp_pid   = opp_prob.get("id", 0)
+                opp_name  = opp_prob.get("fullName", "TBD")
+                team_tid  = away_tid if side == "away" else home_tid
+                team_name = away_name if side == "away" else home_name
+                opp_team  = home_name if side == "away" else away_name
+
+                if not opp_pid:
+                    continue
+
+                for b in batters[:9]:
+                    bid    = b.get("id") or b.get("playerId")
+                    bname  = (b.get("name") or b.get("fullName") or "").strip()
+                    bhand  = b.get("bats", "R")
+                    slot   = b.get("slot", 0)
+                    if not bid or not bname:
+                        continue
+
+                    try:
+                        fgb = fg_batter(bname)
+                        svb = sv_batter(bname)
+                        iso        = _num(fgb.get("fg_iso"), 0.0) or max(0.0, _num(svb.get("sv_xslg"), 0.380) - _num(svb.get("sv_xba"), 0.250))
+                        barrel_pct = _num(svb.get("sv_brl_pct"), 8.5)
+                        hh_pct     = _num(svb.get("sv_hh_pct"), 40.0)
+                        fgp_hr9    = _num(fg_pitcher(opp_name).get("fg_hr9"), 1.25) if opp_name else 1.25
+
+                        hand_splits = _fetch_pitcher_hr9_by_hand(opp_pid)
+                        hand_key    = "vl_hr9" if bhand == "L" else "vr_hr9"
+                        hr9_vs_hand = hand_splits.get(hand_key, fgp_hr9)
+
+                        park_hr_idx = HR_PARK_FACTORS.get(home_tid, 100)
+                        bat_pid_str = str(svb.get("sv_pid", "") or bid).strip()
+                        svp = sv_pitcher(opp_name) if opp_name else {}
+                        pit_pid_str = str(svp.get("sv_pid", "") or opp_pid).strip()
+                        mix_score, _ = _compute_pitch_mix_score(pit_pid_str, bat_pid_str)
+
+                        pit_hand = "R"
+                        try:
+                            bio_p = player_profile(opp_pid)
+                            pit_hand = bio_p.get("throws", "R")
+                        except Exception:
+                            pass
+                        platoon_adv = 0.5 if bhand != pit_hand else -0.3
+
+                        p_per_ab = _p_hr_per_ab(iso, barrel_pct, hh_pct, hr9_vs_hand, park_hr_idx, mix_score)
+                        prob_any  = round(1 - (1 - p_per_ab) ** 4, 4)
+                        score     = _daily_hr_score(iso, barrel_pct, hh_pct, hr9_vs_hand, park_hr_idx, mix_score, platoon_adv)
+
+                        scores.append({
+                            "batter_id":   bid,
+                            "batter":      bname,
+                            "batter_hand": bhand,
+                            "slot":        slot,
+                            "team":        team_name,
+                            "opp_team":    opp_team,
+                            "pitcher_id":  opp_pid,
+                            "pitcher":     opp_name,
+                            "game_pk":     game_pk,
+                            "game_time":   game_time,
+                            "home_team_id": home_tid,
+                            "score":       score,
+                            "prob_hr":     prob_any,
+                            "p_per_ab":    p_per_ab,
+                            "iso":         round(iso, 3),
+                            "barrel_pct":  round(barrel_pct, 1),
+                            "hh_pct":      round(hh_pct, 1),
+                            "hr9_vs_hand": round(hr9_vs_hand, 3),
+                            "park_hr_idx": park_hr_idx,
+                            "mix_score":   mix_score,
+                        })
+                    except Exception:
+                        continue
+
+        scores.sort(key=lambda x: x["score"], reverse=True)
+
+        with _hr_daily_lock:
+            _hr_daily_cache["date"]   = date_str
+            _hr_daily_cache["scores"] = scores
+
+        return jsonify({
+            "success": True,
+            "date": date_str,
+            "scores": scores,
+            "cached": False,
+        })
+    except Exception as ex:
+        print(f"[api_hr_daily_scores] {traceback.format_exc()}")
+        return jsonify({"success": False, "error": str(ex), "scores": []}), 500
+
 
 # ── Preload caches at startup ───────────────────────────────────────────
 # Load FG and Savant data before serving requests to ensure data is available
