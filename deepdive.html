@@ -870,7 +870,13 @@ function loadGame(){
     if(!d.game)throw new Error('Game not found');
     GD=d.game;renderHeader();renderEdge();renderWx();renderPark();renderMatchup();populateSels();
     if(GP_DATA){ renderGameProjection(GP_DATA); }
-  }).catch(function(e){document.getElementById('mhTeams').innerHTML='<p style="color:var(--m);font-family:Orbitron;font-size:.85rem">'+e.message+'</p>';});
+  }).catch(function(e){
+    document.getElementById('mhTeams').innerHTML='<p style="color:var(--m);font-family:Orbitron;font-size:.85rem">'+e.message+'</p>';
+    document.getElementById('topPicksBoard').innerHTML='<p class="na">Game data unavailable: '+e.message+'</p>';
+    document.getElementById('tab-h2h').innerHTML='<p class="na">Game data unavailable: '+e.message+'</p>';
+    document.getElementById('tab-hr-sim').innerHTML='<p class="na">Game data unavailable: '+e.message+'</p>';
+    document.getElementById('tab-pitch-mix').innerHTML='<p class="na">Game data unavailable: '+e.message+'</p>';
+  });
 }
 function loadPitchers(){
   fetch('/api/pitchers/'+GPK).then(function(r){return r.json();}).then(function(d){
@@ -888,13 +894,21 @@ function loadPitchers(){
       }
     }).catch(function(){});
   })
-    .catch(function(){document.getElementById('pitP').innerHTML='<p class="na">Pitcher data unavailable</p>';});
+    .catch(function(e){
+      document.getElementById('pitP').innerHTML='<p class="na">Pitcher data unavailable: '+(e && e.message ? e.message : 'Unknown error')+'</p>';
+      document.getElementById('tab-pitch-mix').innerHTML='<p class="na">Pitcher data unavailable: '+(e && e.message ? e.message : 'Unknown error')+'</p>';
+    });
 }
 function loadLineups(){
   fetch('/api/game/'+GPK).then(function(r){return r.json();}).then(function(d){
     if(d.success){AL=d.awayBatters||[];HL=d.homeBatters||[];}
     showTab('away');populateSels();
-  }).catch(function(){document.getElementById('luP').innerHTML='<p class="na">Lineup not yet posted. Check back ~3h before first pitch.</p>';});
+  }).catch(function(e){
+    document.getElementById('luP').innerHTML='<p class="na">Lineup not yet posted or unavailable: '+(e && e.message ? e.message : 'Unknown error')+'</p>';
+    document.getElementById('topPicksBoard').innerHTML='<p class="na">Lineup data unavailable: '+(e && e.message ? e.message : 'Unknown error')+'</p>';
+    document.getElementById('tab-h2h').innerHTML='<p class="na">Lineup data unavailable: '+(e && e.message ? e.message : 'Unknown error')+'</p>';
+    document.getElementById('tab-hr-sim').innerHTML='<p class="na">Lineup data unavailable: '+(e && e.message ? e.message : 'Unknown error')+'</p>';
+  });
 }
 
 function renderHeader(){

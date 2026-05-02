@@ -2275,9 +2275,19 @@ def get_batters_from_boxscore(team_data, side):
         pos = p.get("position",{}).get("abbreviation","?")
         s   = p.get("stats",{}).get("batting",{})
         ss  = p.get("seasonStats",{}).get("batting",{})
-        slot= p.get("battingOrder",0)
-        try: slot = int(str(slot)[0])
-        except Exception: slot = 0
+        slot_raw = p.get("battingOrder", 0)
+        slot = 0
+        # MLB API usually gives battingOrder as a string like '101', '201', etc. Use first digit if possible.
+        if isinstance(slot_raw, int):
+            slot = slot_raw if 1 <= slot_raw <= 9 else 0
+        elif isinstance(slot_raw, str):
+            # Accept '101', '201', etc. (first digit is order)
+            if slot_raw and slot_raw[0].isdigit():
+                slot = int(slot_raw[0])
+            else:
+                slot = 0
+        else:
+            slot = 0
         fgb = fg_batter(name)
         svb = sv_batter(name)
         out.append({
