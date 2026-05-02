@@ -2427,7 +2427,13 @@ def dashboard():
 
 @app.route("/deep-dive/<int:game_pk>")
 def deep_dive(game_pk):
-    return DEEP_DIVE_HTML
+    # Read fresh on every request so a stale startup-time cache never shows
+    # the "missing from project root" fallback after a file restore.
+    html = _read_html_or_fallback('deepdive.html')
+    return Response(html, mimetype='text/html', headers={
+        'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+        'Pragma': 'no-cache',
+    })
 
 @app.route('/props')
 def props_page():
