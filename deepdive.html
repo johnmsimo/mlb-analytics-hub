@@ -5196,10 +5196,10 @@ function renderPitchMix(){
   var rOpts = [{k:'season',l:'FULL'},{k:'l30',l:'L30D'},{k:'l10',l:'L10D'},{k:'l5',l:'L5D'}];
   var bOpts = [{k:'all',l:'ALL'},{k:'L',l:'VS LHB'},{k:'R',l:'VS RHB'}];
   var rBtns = rOpts.map(function(o){
-    return '<button class="pm-btn'+(PM_RANGE===o.k?' on':'')+'" onclick="PM_RANGE=''+o.k+'';renderPitchMix()">'+o.l+'</button>';
+    return '<button class="pm-btn'+(PM_RANGE===o.k?' on':'')+'" onclick="PM_RANGE=\''+o.k+'\';renderPitchMix()">'+o.l+'</button>';
   }).join('');
   var bBtns = bOpts.map(function(o){
-    return '<button class="pm-btn'+(PM_BATS===o.k?' on':'')+'" onclick="PM_BATS=''+o.k+'';renderPitchMix()">'+o.l+'</button>';
+    return '<button class="pm-btn'+(PM_BATS===o.k?' on':'')+'" onclick="PM_BATS=\''+o.k+'\';renderPitchMix()">'+o.l+'</button>';
   }).join('');
 
   var aLabel = (awayP&&(awayP.name||awayP.fullName)) || ((gd&&gd.awayAbbr)||'AWAY') + ' SP';
@@ -5284,8 +5284,8 @@ function renderH2H(){
     '<div class="h2h-kpi-row">' +
       '<div class="h2h-kpi"><div class="h2h-kpi-val">'+ev.toFixed(1)+'</div><div class="h2h-kpi-lbl">L10 AVG EV</div></div>' +
       '<div class="h2h-kpi"><div class="h2h-kpi-val">'+barrel.toFixed(1)+'%</div><div class="h2h-kpi-lbl">L10 BARREL%</div></div>' +
-      '<div class="h2h-kpi"><div class="h2h-kpi-val">'+(ev+1.5).toFixed(1)+'</div><div class="h2h-kpi-lbl">'26 AVG EV</div></div>' +
-      '<div class="h2h-kpi"><div class="h2h-kpi-val">'+(barrel+0.8).toFixed(1)+'%</div><div class="h2h-kpi-lbl">'26 BARREL%</div></div>' +
+      '<div class="h2h-kpi"><div class="h2h-kpi-val">'+(ev+1.5).toFixed(1)+'</div><div class="h2h-kpi-lbl">2026 AVG EV</div></div>' +
+      '<div class="h2h-kpi"><div class="h2h-kpi-val">'+(barrel+0.8).toFixed(1)+'%</div><div class="h2h-kpi-lbl">2026 BARREL%</div></div>' +
     '</div>' +
     '<div style="overflow-x:auto">' +
       '<table class="h2h-ev-table">' +
