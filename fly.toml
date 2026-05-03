@@ -26,7 +26,7 @@ XGB_MODEL_DIR = "./models"
     timeout = "10s"
 
 [[vm]]
-  memory = "1gb"
+  memory = "3gb"
   cpu_kind = "shared"
   cpus = 1
 
