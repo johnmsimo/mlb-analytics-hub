@@ -6,13 +6,16 @@ Key goals:
     - 1 worker  ->  caches live in a single process, no 2x RAM duplication
     - preload_app=False  -> avoids daemon thread fork-death on gunicorn master
   • Never get SIGKILL'd mid-cache-build
-    - 600s request timeout (the MLB-API-derived build can take 2-4 minutes)
-    - 300s graceful shutdown
+    - 120s request timeout (reduced from 600s — 600s caused the worker to
+      appear frozen to Fly's watchdog, triggering health check failures)
+    - 30s graceful shutdown (faster recovery if worker does need to restart)
   • Better latency for I/O-bound MLB API calls under load
     - gthread worker class with 4 threads -> serves 4 concurrent requests
       while the sync loaders run in background daemon threads
   • No boot-storm
     - max_requests disabled (we DO NOT want to recycle and re-load caches)
+  • auto_stop_machines=false in fly.toml keeps machine alive so caches
+    are never lost to a suspend/resume cycle
 """
 import os
 
@@ -28,10 +31,12 @@ workers = 1
 worker_class = "gthread"
 threads = 4
 
-# The MLB-API-derived cache build hits 900+ players and can take 120-240s
-# on a cold boot; anything less and gunicorn kills the worker.
-timeout = 600
-graceful_timeout = 300
+# Reduced from 600s. With gthread, a 600s timeout means Gunicorn waits
+# 10 minutes before declaring the worker dead — but Fly.io's watchdog
+# marks the machine unhealthy long before that. 120s is a safe ceiling
+# for any single request while still allowing fast recovery on hangs.
+timeout = 120
+graceful_timeout = 30
 
 # Do NOT preload the app. If we preload, gunicorn's master imports
 # app.py once, kicks off the background cache-loader threads IN THE MASTER,
