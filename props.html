@@ -438,8 +438,12 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
     <div class="no-game-txt">SELECT A GAME ABOVE TO VIEW PROJECTIONS</div>
   </div>
 
+
   <div id="mainContent" style="display:none">
-    <div id="matchHeader" style="margin-bottom:16px;font-family:'Orbitron',monospace;font-size:.72rem;color:var(--mu);letter-spacing:3px"></div>
+  <div id="matchHeader" style="margin-bottom:16px;font-family:'Orbitron',monospace;font-size:.72rem;color:var(--mu);letter-spacing:3px"></div>
+
+  <!-- ── Major Market Odds Panel ── -->
+  <div id="majorMarketsPanel" style="margin-bottom:18px;display:none"></div>
 
     <!-- ── Umpire Banner ── -->
     <div class="ump-banner" id="umpBanner">
@@ -1262,7 +1266,40 @@ function trendPillsForPitcher(playerId) {
   return `<div class="pp-trends"><div class="pp-trend-hd">L5 TREND</div><div class="pp-trend-row">${streakHtml}${pills}</div></div>`;
 }
 
-// ── Projections ───────────────────────────────────────────────────────────────
+
+// ── Major Market Odds Panel ──
+function renderMajorMarketsPanel(gameLines) {
+  const panel = gel('majorMarketsPanel');
+  if (!panel) return;
+  if (!gameLines || Object.keys(gameLines).length === 0) {
+    panel.style.display = 'none';
+    panel.innerHTML = '';
+    return;
+  }
+  const mkOrder = ['moneyline', 'spread', 'total'];
+  const mkLabels = {moneyline: 'Moneyline', spread: 'Spread', total: 'Total'};
+  const oddsRow = mkOrder.map(mk => {
+    const arr = gameLines[mk];
+    if (!arr || !arr.length) return '';
+    return `<div style="margin-bottom:7px">
+      <span style="font-family:'Orbitron',monospace;font-size:.7rem;color:var(--c);letter-spacing:1.5px;min-width:80px;display:inline-block">${mkLabels[mk]}</span>
+      ${arr.map(line => {
+        const lineStr = line.line != null ? `<span style='color:var(--o);font-weight:700'>${line.line}</span>` : '';
+        const away = line.away_odds != null ? `<span style='color:var(--mu)'>${line.away_team||'Away'}:</span> <span style='color:var(--c);font-weight:700'>${line.away_odds>0?'+':''}${line.away_odds}</span>` : '';
+        const home = line.home_odds != null ? `<span style='color:var(--mu)'>${line.home_team||'Home'}:</span> <span style='color:var(--c);font-weight:700'>${line.home_odds>0?'+':''}${line.home_odds}</span>` : '';
+        return `<span style='margin-right:18px'>${lineStr} ${away} ${home}</span>`;
+      }).join('')}
+    </div>`;
+  }).join('');
+  panel.innerHTML = `
+    <div style="background:rgba(0,229,255,.07);border:1px solid var(--b);border-radius:12px;padding:13px 18px;display:flex;flex-direction:column;gap:2px">
+      <div style="font-family:'Orbitron',monospace;font-size:.68rem;letter-spacing:2px;color:var(--c);margin-bottom:4px">MAJOR MARKET ODDS</div>
+      ${oddsRow || '<div style="color:var(--mu)">No odds available.</div>'}
+    </div>
+  `;
+  panel.style.display = '';
+}
+
 async function loadProjections() {
   if (PROJ_DATA) { renderProj(PROJ_DATA); return; }
   gel('batterGrid').innerHTML  = loadHTML('LOADING BATTER PROJECTIONS…');
@@ -1273,11 +1310,16 @@ async function loadProjections() {
     PROJ_DATA = await r.json();
     if (!PROJ_DATA.success) throw new Error(PROJ_DATA.error || 'Failed');
     renderProj(PROJ_DATA);
-  } catch(e) { gel('batterGrid').innerHTML = errHTML(e.message); }
+    renderMajorMarketsPanel(PROJ_DATA.game_lines || {});
+  } catch(e) {
+    gel('batterGrid').innerHTML = errHTML(e.message);
+    renderMajorMarketsPanel({});
+  }
 }
 
 function renderProj(d) {
   renderInjuryBanner(d);
+  renderMajorMarketsPanel(d.game_lines || {});
   applyPFFilters();
   renderPitchers(d.pitchers || []);
   buildPropsPicksPanel(d);

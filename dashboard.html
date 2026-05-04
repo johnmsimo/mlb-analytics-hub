@@ -446,6 +446,7 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
         <div id="bbWeatherLbl" style="font-size:.62rem;color:var(--mu)"></div>
       </div>
       <div id="bbStatsRow" class="bb-stats-row" style="display:none"></div>
+      <div id="bbMajorMarketsRow" class="bb-major-markets-row" style="display:none;margin-bottom:14px"></div>
       <div class="bb-cat-row" id="bbCatRow">
         <button class="bb-cat-btn active" data-cat="ALL" onclick="setBBCat('ALL',this)">ALL</button>
         <button class="bb-cat-btn" data-cat="HITS" onclick="setBBCat('HITS',this)">⚾ HITS</button>
@@ -699,9 +700,15 @@ function mkCard(g){
     ?'<a href="/deep-dive/'+g.gamePk+'" onclick="event.stopPropagation()" style="display:block;margin-top:8px;padding:9px;background:rgba(76,175,80,.09);border:1px solid rgba(76,175,80,.35);border-radius:8px;text-align:center;font-family:Orbitron,monospace;font-size:.6rem;letter-spacing:1.5px;color:#81c784;cursor:pointer;text-decoration:none">&#128202; MODEL vs ACTUAL — COMPARE</a>'
     :'<div class="ap">&#9889; DEEP DIVE ANALYSIS</div>';
   return '<div class="card" onclick="if(event.target.closest(\'a,button,.lineup-toggle,.lineup-section,.qp-strip\'))return;location.href=\'/deep-dive/'+g.gamePk+'\'">'
-    +'<div class="ct"><div style="display:flex;gap:6px;align-items:center"><span class="badge '+bc+'">'+bl+'</span>'+seriesBadge(g.seriesGame,g.seriesTotal)+'</div><span class="ctime">'+g.gameTime+(g.doubleHeader?'<span style="background:rgba(255,152,0,.12);color:#ff9800;border:1px solid rgba(255,152,0,.35);border-radius:4px;font-size:.62rem;letter-spacing:1.5px;padding:2px 6px;margin-left:5px;font-family:Orbitron,monospace;font-weight:700">DH·G'+(g.gameNumber||1)+'</span>':'')+'</span></div>'
+    // Card top: status badge and time
+    +'<div class="ct"><div style="display:flex;gap:6px;align-items:center"><span class="badge '+bc+'">'+bl+'</span></div><span class="ctime">'+g.gameTime+(g.doubleHeader?'<span style="background:rgba(255,152,0,.12);color:#ff9800;border:1px solid rgba(255,152,0,.35);border-radius:4px;font-size:.62rem;letter-spacing:1.5px;padding:2px 6px;margin-left:5px;font-family:Orbitron,monospace;font-weight:700">DH·G'+(g.gameNumber||1)+'</span>':'')+'</span></div>'
+    // Team logos and names
     +matchupBlock
+    // Series badge always visible, moved below logos
+    +'<div style="display:flex;justify-content:center;margin:8px 0 4px 0">'+seriesBadge(g.seriesGame,g.seriesTotal)+'</div>'
+    // Live status placeholder
     + (g.status==='Live'? '<div id="ls-'+g.gamePk+'" class="ls-placeholder"></div>' : '')
+    // SPs, weather, edge, venue, etc.
     +'<div class="pr"><div class="pi"><div class="pl">AWAY SP</div><div class="pn">'+g.awayPitcher+'</div></div>'
     +'<div style="width:1px;background:rgba(255,255,255,.05)"></div>'
     +'<div class="pi"><div class="pl">HOME SP</div><div class="pn">'+g.homePitcher+'</div></div></div>'
@@ -711,6 +718,7 @@ function mkCard(g){
     +'<div class="vn">'+g.venue+'</div>'
     +inj
     +deepDiveBtn
+    // Lineup and quick props buttons
     +(isFinal?'':('<button class="lineup-toggle" onclick="toggleLineup(event,'+g.gamePk+')">&#9776; SHOW LINEUP</button>'
     +'<div class="lineup-section" id="lu-'+g.gamePk+'">'
       +'<div class="card-lineup" id="cl-'+g.gamePk+'"><div class="cl-loading">Lineup loading…</div></div>'
@@ -720,7 +728,36 @@ function mkCard(g){
     +'<div class="qp-strip" id="qp-'+g.gamePk+'">'
       +'<div class="qp-loading" id="qpl-'+g.gamePk+'">Loading top props…</div>'
     +'</div>'))
+    // Admin odds refresh button (always visible for now)
+    +'<button class="lineup-toggle" style="margin-top:10px;background:rgba(0,229,255,.04);color:#00e5ff;font-weight:700" onclick="refreshOddsForGame(event,'+g.gamePk+')">&#x21bb; REFRESH ODDS</button>'
     +'</div>';
+// Admin odds refresh logic
+function refreshOddsForGame(e, gamePk) {
+  e.stopPropagation();
+  var btn = e.currentTarget;
+  var orig = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="sp" style="width:18px;height:18px;margin-right:6px"></span>Refreshing...';
+  fetch('/api/odds/cache/refresh', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode: 'event', gamePk: gamePk, clearFirst: true })
+  })
+    .then(r => r.json())
+    .then(d => {
+      if (d && d.success) {
+        btn.innerHTML = '&#x2714; Odds refreshed!';
+        setTimeout(() => { btn.innerHTML = orig; btn.disabled = false; }, 1800);
+      } else {
+        btn.innerHTML = '&#x26a0; Refresh failed';
+        setTimeout(() => { btn.innerHTML = orig; btn.disabled = false; }, 2200);
+      }
+    })
+    .catch(() => {
+      btn.innerHTML = '&#x26a0; Refresh failed';
+      setTimeout(() => { btn.innerHTML = orig; btn.disabled = false; }, 2200);
+    });
+}
 }
 
 var LINEUPS={};
@@ -1420,14 +1457,49 @@ function renderBBPicks(){
     }
   }
 
-  // ── Filter + Sort ─────────────────────────────────────
+  // ── Major Market Odds Panel ──────────────────────────
+  const mmRow = document.getElementById('bbMajorMarketsRow');
+  if (mmRow && BB_DATA && BB_DATA.game_lines) {
+    const gl = BB_DATA.game_lines;
+    let html = '';
+    // Moneyline
+    if (gl.moneyline && (gl.moneyline.away || gl.moneyline.home)) {
+      html += '<div class="bb-mm-block"><div class="bb-mm-label">MONEYLINE</div>';
+      if (gl.moneyline.away) html += '<div class="bb-mm-odds">' + esc(BB_DATA.awayFull||'AWAY') + ': <span class="bb-mm-price">' + (gl.moneyline.away.price>0?'+':'') + gl.moneyline.away.price + '</span></div>';
+      if (gl.moneyline.home) html += '<div class="bb-mm-odds">' + esc(BB_DATA.homeFull||'HOME') + ': <span class="bb-mm-price">' + (gl.moneyline.home.price>0?'+':'') + gl.moneyline.home.price + '</span></div>';
+      html += '</div>';
+    }
+    // Spread
+    if (gl.spread && (gl.spread.away || gl.spread.home)) {
+      html += '<div class="bb-mm-block"><div class="bb-mm-label">SPREAD</div>';
+      if (gl.spread.away) html += '<div class="bb-mm-odds">' + esc(BB_DATA.awayFull||'AWAY') + ' ' + (gl.spread.away.point>0?'+':'') + gl.spread.away.point + ': <span class="bb-mm-price">' + (gl.spread.away.price>0?'+':'') + gl.spread.away.price + '</span></div>';
+      if (gl.spread.home) html += '<div class="bb-mm-odds">' + esc(BB_DATA.homeFull||'HOME') + ' ' + (gl.spread.home.point>0?'+':'') + gl.spread.home.point + ': <span class="bb-mm-price">' + (gl.spread.home.price>0?'+':'') + gl.spread.home.price + '</span></div>';
+      html += '</div>';
+    }
+    // Total
+    if (gl.total) {
+      html += '<div class="bb-mm-block"><div class="bb-mm-label">TOTAL</div>';
+      html += '<div class="bb-mm-odds">O ' + gl.total.line + ': <span class="bb-mm-price">' + (gl.total.over_price>0?'+':'') + gl.total.over_price + '</span></div>';
+      html += '<div class="bb-mm-odds">U ' + gl.total.line + ': <span class="bb-mm-price">' + (gl.total.under_price>0?'+':'') + gl.total.under_price + '</span></div>';
+      html += '</div>';
+    }
+    if (html) {
+      mmRow.innerHTML = html;
+      mmRow.style.display = 'flex';
+      mmRow.style.gap = '28px';
+      mmRow.style.flexWrap = 'wrap';
+    } else {
+      mmRow.innerHTML = '';
+      mmRow.style.display = 'none';
+    }
+  }
   const filtered=BB_CAT==='ALL'||BB_CAT==='RATINGS'?picks:picks.filter(p=>p.cat===BB_CAT);
   filtered.sort((a,b)=>{
     const rank={ELITE:0,STRONG:1,LEAN:2};
     return rank[a.conf]-rank[b.conf]||b.score-a.score;
   });
 
-  if(!filtered.length){ el.innerHTML='<div class="bb-loading">NO PICKS FOR "'+BB_CAT+'" — TRY ANOTHER CATEGORY</div>'; return; }
+  if(!filtered.length){ el.innerHTML='<div class="bb-loading">NO PICKS FOR "'+BB_CAT+'" — TRY ANOTHER CATEGORY</div>'; if(mmRow) mmRow.style.display='none'; return; }
 
   // ── Shared card builder ───────────────────────────────
   const confStars={ELITE:'⭐⭐⭐⭐⭐',STRONG:'⭐⭐⭐⭐',LEAN:'⭐⭐⭐'};
@@ -2146,6 +2218,39 @@ setInterval(loadDailySummaryBadge,90000);
 </script>
 <!-- LIVE GAMEPLAY PATCH -->
 <style>
+.bb-major-markets-row {
+  display: flex;
+  gap: 28px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.bb-mm-block {
+  background: rgba(255,255,255,.03);
+  border: 1px solid rgba(0,229,255,.13);
+  border-radius: 10px;
+  padding: 10px 18px 8px 18px;
+  min-width: 140px;
+  margin-bottom: 2px;
+}
+.bb-mm-label {
+  font-family: Orbitron, monospace;
+  font-size: .62rem;
+  color: #ffd54f;
+  letter-spacing: 1.5px;
+  margin-bottom: 4px;
+  font-weight: 700;
+}
+.bb-mm-odds {
+  font-family: Orbitron, monospace;
+  font-size: .74rem;
+  color: var(--t);
+  margin-bottom: 2px;
+}
+.bb-mm-price {
+  color: #ffd54f;
+  font-weight: 700;
+  margin-left: 2px;
+}
 .ls-placeholder,.ls-wrap{display:block}
 .ls-wrap{margin:10px 0 8px;background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.14);border-radius:10px;overflow:hidden;font-size:.72rem}
 .ls-inning{display:flex;align-items:center;justify-content:space-between;padding:6px 12px 4px;background:rgba(0,229,255,.07);border-bottom:1px solid rgba(0,229,255,.1)}

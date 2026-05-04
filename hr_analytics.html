@@ -198,6 +198,8 @@ a{color:var(--cold);text-decoration:none}
 
   <!-- Right: Detail Panel -->
   <div class="right-panel" id="detailPanel">
+    <!-- Major Market Odds Panel -->
+    <div id="majorMarketsPanel" style="margin-bottom:18px;display:none"></div>
     <div class="detail-placeholder" id="placeholderMsg">
       <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
         <circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/>
@@ -207,6 +209,47 @@ a{color:var(--cold);text-decoration:none}
     </div>
     <div id="detailContent" style="display:none"></div>
   </div>
+// ── Major Market Odds Panel ──
+async function renderMajorMarketsPanelHR(gamePk) {
+  const panel = document.getElementById('majorMarketsPanel');
+  if (!panel) return;
+  if (!gamePk) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
+  try {
+    const r = await fetch(`/api/game/${gamePk}`);
+    const d = await r.json();
+    const gameLines = d.game_lines || {};
+    if (!gameLines || Object.keys(gameLines).length === 0) {
+      panel.style.display = 'none';
+      panel.innerHTML = '';
+      return;
+    }
+    const mkOrder = ['moneyline', 'spread', 'total'];
+    const mkLabels = {moneyline: 'Moneyline', spread: 'Spread', total: 'Total'};
+    const oddsRow = mkOrder.map(mk => {
+      const arr = gameLines[mk];
+      if (!arr || !arr.length) return '';
+      return `<div style=\"margin-bottom:7px\">`
+        + `<span style=\"font-family:'Orbitron',monospace;font-size:.7rem;color:#00e5ff;letter-spacing:1.5px;min-width:80px;display:inline-block\">${mkLabels[mk]}</span>`
+        + arr.map(line => {
+            const lineStr = line.line != null ? `<span style='color:#d29922;font-weight:700'>${line.line}</span>` : '';
+            const away = line.away_odds != null ? `<span style='color:#8b949e'>${line.away_team||'Away'}:</span> <span style='color:#00e5ff;font-weight:700'>${line.away_odds>0?'+':''}${line.away_odds}</span>` : '';
+            const home = line.home_odds != null ? `<span style='color:#8b949e'>${line.home_team||'Home'}:</span> <span style='color:#00e5ff;font-weight:700'>${line.home_odds>0?'+':''}${line.home_odds}</span>` : '';
+            return `<span style='margin-right:18px'>${lineStr} ${away} ${home}</span>`;
+          }).join('')
+        + `</div>`;
+    }).join('');
+    panel.innerHTML = `
+      <div style=\"background:#161b22;border:1px solid #30363d;border-radius:12px;padding:13px 18px;display:flex;flex-direction:column;gap:2px\">
+        <div style=\"font-family:'Orbitron',monospace;font-size:.68rem;letter-spacing:2px;color:#00e5ff;margin-bottom:4px\">MAJOR MARKET ODDS</div>
+        ${oddsRow || '<div style=\"color:#8b949e\">No odds available.</div>'}
+      </div>
+    `;
+    panel.style.display = '';
+  } catch(e) {
+    panel.style.display = 'none';
+    panel.innerHTML = '';
+  }
+}
 </div>
 
 <script>
@@ -301,11 +344,14 @@ function buildGameFilters(scores) {
   });
 }
 
-function filterByGame(gamePk, btn) {
+async function filterByGame(gamePk, btn) {
   activeGameFilter = gamePk;
   document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   renderLeaderboard(allScores);
+  // Show major market odds for this game
+  if (gamePk !== 'all') await renderMajorMarketsPanelHR(gamePk);
+  else renderMajorMarketsPanelHR(null);
 }
 
 function renderLeaderboard(scores) {
@@ -837,6 +883,8 @@ function copyReport(btn) {
 
 setHeaderDate();
 loadDailyScores();
+// Show odds panel for "all" (none)
+renderMajorMarketsPanelHR(null);
 </script>
 </body>
 </html>

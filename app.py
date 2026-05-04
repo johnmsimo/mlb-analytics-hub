@@ -13500,21 +13500,43 @@ def api_props_projections(game_pk):
                 "description": pp.get("injuryDescription") or st,
             })
 
-        # ── Fetch game lines from Odds API (uses cache — no extra credits) ────
-        away_full = away_t.get("team", {}).get("name", "")
-        home_full = home_t.get("team", {}).get("name", "")
-        event, _ = _find_odds_event(away_full, home_full)
-        game_lines = {}
+
+        # ── Attach Odds API prop lines/odds to each pitcher and batter ───────
+        odds_props = {}
         if event:
-            featured = _load_event_odds(event.get('id'), featured_only=True)
-            game_lines = {
-                'moneyline': _best_moneyline(featured, away_full, home_full),
-                'total':     _best_total(featured),
-                'spread':    _best_spread(featured, away_full, home_full),
-                'awayFull':  away_full,
-                'homeFull':  home_full,
-                'eventId':   event.get('id'),
-            }
+            props_books = _load_event_odds(event.get('id'), featured_only=False) or []
+            valid_names = set([x.get('name') for x in away_bats + home_bats if x.get('name')])
+            ap = pitchers.get('ap', {}) if isinstance(pitchers, dict) else {}
+            hp = pitchers.get('hp', {}) if isinstance(pitchers, dict) else {}
+            if ap.get('fullName'): valid_names.add(ap.get('fullName'))
+            if hp.get('fullName'): valid_names.add(hp.get('fullName'))
+            market_props = _parse_prop_markets(props_books, valid_names)
+            # Build lookup: (player, marketKey) -> list of lines/odds
+            for prop in market_props:
+                key = (prop.get('player'), prop.get('marketKey'))
+                odds_props.setdefault(key, []).append({
+                    'line': prop.get('line'),
+                    'odds': prop.get('odds'),
+                    'side': prop.get('side'),
+                    'book': prop.get('book'),
+                    'marketKey': prop.get('marketKey'),
+                })
+
+        # Attach to batters
+        for b in all_batters:
+            b['oddsMarkets'] = []
+            for mk in ['batter_hits', 'batter_total_bases', 'batter_home_runs', 'batter_rbis']:
+                odds = odds_props.get((b.get('name'), mk), [])
+                if odds:
+                    b['oddsMarkets'].extend(odds)
+
+        # Attach to pitchers
+        for p in pitchers_out:
+            p['oddsMarkets'] = []
+            for mk in ['pitcher_strikeouts', 'pitcher_outs_recorded', 'pitcher_earned_runs']:
+                odds = odds_props.get((p.get('name'), mk), [])
+                if odds:
+                    p['oddsMarkets'].extend(odds)
 
         return jsonify({
             "success":     True,

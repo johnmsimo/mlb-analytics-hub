@@ -857,17 +857,43 @@ function buildProjPane(s,log,oppAbbr){
   const sigCls=qs?'sig-qs':risky?'sig-risky':'sig-avg';
   const sigTxt=qs?'✓ QUALITY START LIKELY':risky?'⚠ RISKY OUTING':'~ AVERAGE OUTING';
 
-  // ── PITCH X O/U pills ──────────────────────────────────────────────────
-  const ouLines=[3.5,4.5,5.5,6.5];
-  const ouPills=ouLines.map(line=>{
-    const o=poissonOver(kProj,line);
-    const edge=kProj-line;
-    const dir=edge>=0?'OVER':'UNDER';
-    const col=dir==='OVER'?'#4caf50':'#f44336';
-    const bg =dir==='OVER'?'rgba(76,175,80,.1)':'rgba(244,67,54,.08)';
-    const bor=dir==='OVER'?'rgba(76,175,80,.3)':'rgba(244,67,54,.25)';
-    return`<span style="display:inline-block;padding:4px 9px;border-radius:6px;font-family:Orbitron,monospace;font-size:.54rem;letter-spacing:.8px;border:1px solid ${bor};background:${bg};color:${col};margin-right:5px;margin-bottom:5px">K ${line} <strong>${dir}</strong> <span style="opacity:.65;font-size:.48rem">${(edge>=0?'+':'')+edge.toFixed(2)}</span> <span style="opacity:.5;font-size:.46rem">${o}%</span></span>`;
-  }).join('');
+  // ── Show real Odds API lines/odds for pitcher K props if available ──
+  let ouPills = '';
+  if (typeof PROPS_DATA === 'object' && PROPS_DATA && Array.isArray(PROPS_DATA.pitchers)) {
+    const pitcher = PROPS_DATA.pitchers.find(p => p.name === s.name);
+    if (pitcher && Array.isArray(pitcher.oddsMarkets)) {
+      const kMarkets = pitcher.oddsMarkets.filter(m => m.marketKey === 'pitcher_strikeouts');
+      if (kMarkets.length) {
+        ouPills = kMarkets.map(m => {
+          const line = m.line;
+          const odds = m.odds;
+          const side = m.side;
+          const book = m.book || '';
+          const col = side === 'Over' ? '#4caf50' : '#f44336';
+          const bg = side === 'Over' ? 'rgba(76,175,80,.1)' : 'rgba(244,67,54,.08)';
+          const bor = side === 'Over' ? 'rgba(76,175,80,.3)' : 'rgba(244,67,54,.25)';
+          return `<span style=\"display:inline-block;padding:4px 9px;border-radius:6px;font-family:Orbitron,monospace;font-size:.54rem;letter-spacing:.8px;border:1px solid ${bor};background:${bg};color:${col};margin-right:5px;margin-bottom:5px\">K ${line} <strong>${side.toUpperCase()}</strong> <span style=\"opacity:.65;font-size:.48rem\">${odds ? (odds > 0 ? '+'+odds : odds) : ''}</span> <span style=\"opacity:.5;font-size:.46rem\">${book}</span>`+
+            ` <button style=\"margin-left:6px;padding:2px 7px;font-size:.5rem;border-radius:6px;border:1px solid var(--c);background:rgba(0,229,255,.08);color:var(--c);cursor:pointer\" onclick=\\\"addToParlayFromPitcher('${esc(s.name||'Pitcher')}', 'pitcher_strikeouts', ${line}, '${side}', 'K ${line}', ${odds})\\\">+ Parlay</button>`+
+            `</span>`;
+        }).join('');
+      }
+    }
+  }
+  // Fallback to model lines if no oddsMarkets
+  if (!ouPills) {
+    const ouLines=[3.5,4.5,5.5,6.5];
+    ouPills=ouLines.map(line=>{
+      const o=poissonOver(kProj,line);
+      const edge=kProj-line;
+      const dir=edge>=0?'OVER':'UNDER';
+      const col=dir==='OVER'?'#4caf50':'#f44336';
+      const bg =dir==='OVER'?'rgba(76,175,80,.1)':'rgba(244,67,54,.08)';
+      const bor=dir==='OVER'?'rgba(76,175,80,.3)':'rgba(244,67,54,.25)';
+      return`<span style=\"display:inline-block;padding:4px 9px;border-radius:6px;font-family:Orbitron,monospace;font-size:.54rem;letter-spacing:.8px;border:1px solid ${bor};background:${bg};color:${col};margin-right:5px;margin-bottom:5px\">K ${line} <strong>${dir}</strong> <span style=\"opacity:.65;font-size:.48rem\">${(edge>=0?'+':'')+edge.toFixed(2)}</span>`+
+        ` <button style=\"margin-left:6px;padding:2px 7px;font-size:.5rem;border-radius:6px;border:1px solid var(--c);background:rgba(0,229,255,.08);color:var(--c);cursor:pointer\" onclick=\\\"addToParlayFromPitcher('${esc(s.name||'Pitcher')}', 'pitcher_strikeouts', ${line}, '${dir==='OVER'?'Over':'Under'}', 'K ${line}')\\\">+ Parlay</button>`+
+        `</span>`;
+    }).join('');
+  }
 
   // ── Reasoning ──────────────────────────────────────────────────────────
   const l5kTotal=l5.reduce((a,g)=>a+(g.k||0),0);
@@ -891,24 +917,24 @@ function buildProjPane(s,log,oppAbbr){
     const rec=o>=60?'▲ OVER':o<=40?'▼ UNDER':'—';
     return`<tr><td>K ${line}</td><td class="${cls}">${o}%</td><td>${100-o}%</td><td style="color:${o>=60?'var(--g)':o<=40?'var(--r)':'var(--mu)'}">${rec}</td></tr>`;
   }).join('');
-  return`
-    <div style="font-family:'Orbitron',monospace;font-size:.6rem;letter-spacing:2px;color:var(--mu);margin-bottom:10px">PITCH X ENGINE</div>
-    <div class="proj-kpis">
-      <div class="proj-kpi"><div class="proj-kpi-val pv-ip">${blendIP}</div><div class="proj-kpi-lbl">PROJ IP</div></div>
-      <div class="proj-kpi"><div class="proj-kpi-val pv-k">${blendK}</div><div class="proj-kpi-lbl">PROJ K</div></div>
-      <div class="proj-kpi"><div class="proj-kpi-val pv-er">${blendER}</div><div class="proj-kpi-lbl">PROJ ER</div></div>
-    </div>
-    <div class="sig-badge ${sigCls}">${sigTxt}</div>
-    <div style="margin:10px 0 6px;font-family:'Orbitron',monospace;font-size:.55rem;letter-spacing:1.5px;color:var(--mu)">K OVER/UNDER PICKS</div>
-    <div style="margin-bottom:10px">${ouPills}</div>
-    <div style="font-size:.62rem;color:var(--mu);margin-bottom:4px">${formStr}</div>
-    ${kRateStr?`<div style="font-size:.62rem;color:var(--mu);margin-bottom:10px">${kRateStr}</div>`:''}
-    <div style="font-family:'Orbitron',monospace;font-size:.58rem;color:var(--mu);letter-spacing:2px;margin-bottom:6px">FULL K LINE TABLE vs ${oppAbbr}</div>
-    <table class="kprop-table">
-      <tr><th>LINE</th><th>OVER %</th><th>UNDER %</th><th>SIGNAL</th></tr>
-      ${kRows}
-    </table>
-    <div class="proj-note">Model: ${blend} &nbsp;·&nbsp; xERA ${nd(s.sv_xera)} &nbsp;·&nbsp; FIP ${nd(s.fg_fip)} &nbsp;·&nbsp; K/9 ${nd(s.fg_k9||s.k9)}<br>Poisson distribution used for K prop hit rates.</div>`;
+  try {
+    if (!player || !marketKey) throw new Error('Missing player or market');
+    const pending = JSON.parse(localStorage.getItem('pendingParlayLegs') || '[]');
+    const queue = Array.isArray(pending) ? pending : [];
+    queue.push({
+      player,
+      marketKey,
+      line,
+      recommendedSide,
+      savedAt: Date.now(),
+      source: 'pitcher_deep_dive',
+      reason: `Imported from Pitcher Deep Dive (${label || marketKey})`,
+    });
+    localStorage.setItem('pendingParlayLegs', JSON.stringify(queue));
+    window.location.href = '/tracker';
+  } catch (e) {
+    alert('Failed to add to parlay: ' + e.message);
+  }
 }
 function poissonOver(mu,line){
   if(mu<=0)return 50;
