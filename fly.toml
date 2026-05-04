@@ -19,11 +19,11 @@ primary_region = "ewr"
   processes = ["app"]
 
   [[http_service.checks]]
-    grace_period = "300s"
+    grace_period = "600s"
     interval = "30s"
     method = "GET"
     path = "/health"
-    timeout = "10s"
+    timeout = "30s"
 
 [[vm]]
   memory = "2gb"
