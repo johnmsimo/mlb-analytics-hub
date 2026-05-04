@@ -281,19 +281,19 @@
             gamePk: r.gamePk,
             team: r.team,
             recommendedSide: 'Over',
+            savedAt: Date.now(),
             source: 'consistency_sheet',
           };
-          addPropToParlay(leg.player, leg.marketKey, leg.line, leg.gamePk, leg.recommendedSide, leg.team);
+          addLegToPendingParlay(leg);
         }
 
-        // --- Parlay Handoff Logic ---
-        function addPropToParlay(player, marketKey, line, gamePk, side, team){
+        // --- Unified Parlay Handoff Logic ---
+        function addLegToPendingParlay(leg){
           try{
-            const leg = {player, marketKey, line, gamePk, side, team, savedAt: Date.now(), source: 'consistency'};
             let legs = [];
-            try{legs = JSON.parse(localStorage.getItem('parlay_legs')||'[]');}catch(e){}
+            try{legs = JSON.parse(localStorage.getItem('pendingParlayLegs')||'[]');}catch(e){}
             legs.push(leg);
-            localStorage.setItem('parlay_legs', JSON.stringify(legs));
+            localStorage.setItem('pendingParlayLegs', JSON.stringify(legs));
             window.location.href = '/tracker';
           }catch(e){alert('Failed to add to parlay: '+e.message);}
         }

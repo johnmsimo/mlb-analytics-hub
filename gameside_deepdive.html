@@ -469,17 +469,17 @@ async function load(silent) {
         </div>`;
       </script>
       <script>
-      // ── Parlay Handler ──
+      // --- Unified Parlay Handler ---
       function addToParlay(leg) {
         try {
-          const key = 'parlay_legs';
           let legs = [];
-          try { legs = JSON.parse(localStorage.getItem(key)) || []; } catch {}
-          // Prevent duplicate (same player, market, line, game)
-          if (!legs.some(l => l.player === leg.player && l.marketKey === leg.marketKey && String(l.line) === String(leg.line) && String(l.gamePk) === String(leg.gamePk))) {
-            legs.push(leg);
-            localStorage.setItem(key, JSON.stringify(legs));
-          }
+          try { legs = JSON.parse(localStorage.getItem('pendingParlayLegs')) || []; } catch {}
+          legs.push({
+            ...leg,
+            savedAt: Date.now(),
+            source: leg.source || 'gameside_deepdive',
+          });
+          localStorage.setItem('pendingParlayLegs', JSON.stringify(legs));
           window.location.href = '/tracker';
         } catch(e) {
           alert('Failed to add to parlay: ' + e.message);

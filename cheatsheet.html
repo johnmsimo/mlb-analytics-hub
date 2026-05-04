@@ -195,6 +195,8 @@
       ).join('');
     }
     // --- Parlay Button Handlers ---
+
+    // --- Unified Parlay Button Handlers ---
     function addHitsRowToParlay(idx){
       if(!DATA || !DATA.hitsBoard || !DATA.hitsBoard.rows) return;
       const r = DATA.hitsBoard.rows[idx];
@@ -206,9 +208,10 @@
         gamePk: r.gamePk,
         team: r.team,
         recommendedSide: 'Over',
+        savedAt: Date.now(),
         source: 'cheatsheet_hits',
       };
-      addPropToParlay(leg.player, leg.marketKey, leg.line, leg.gamePk, leg.recommendedSide, leg.team);
+      addLegToPendingParlay(leg);
     }
 
     function addMatchupRowToParlay(idx){
@@ -222,9 +225,10 @@
         gamePk: r.gamePk,
         team: r.team,
         recommendedSide: 'Over',
+        savedAt: Date.now(),
         source: 'cheatsheet_matchups',
       };
-      addPropToParlay(leg.player, leg.marketKey, leg.line, leg.gamePk, leg.recommendedSide, leg.team);
+      addLegToPendingParlay(leg);
     }
 
     function addWeakspotToParlay(idx){
@@ -238,19 +242,19 @@
         gamePk: c.gamePk,
         team: c.team,
         recommendedSide: 'Over',
+        savedAt: Date.now(),
         source: 'cheatsheet_weakspots',
       };
-      addPropToParlay(leg.player, leg.marketKey, leg.line, leg.gamePk, leg.recommendedSide, leg.team);
+      addLegToPendingParlay(leg);
     }
 
-    // --- Parlay Handoff Logic ---
-    function addPropToParlay(player, marketKey, line, gamePk, side, team){
+    // --- Unified Parlay Handoff Logic ---
+    function addLegToPendingParlay(leg){
       try{
-        const leg = {player, marketKey, line, gamePk, side, team, savedAt: Date.now(), source: 'cheatsheet'};
         let legs = [];
-        try{legs = JSON.parse(localStorage.getItem('parlay_legs')||'[]');}catch(e){}
+        try{legs = JSON.parse(localStorage.getItem('pendingParlayLegs')||'[]');}catch(e){}
         legs.push(leg);
-        localStorage.setItem('parlay_legs', JSON.stringify(legs));
+        localStorage.setItem('pendingParlayLegs', JSON.stringify(legs));
         window.location.href = '/tracker';
       }catch(e){alert('Failed to add to parlay: '+e.message);}
     }

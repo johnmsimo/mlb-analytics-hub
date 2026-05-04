@@ -587,6 +587,12 @@ function batxOUPills(proj, adj, playerName) {
     { stat: 'tb', line: 1.5, label: 'TB 1.5' }, { stat: 'tb', line: 2.5, label: 'TB 2.5' },
     { stat: 'hr', line: 0.5, label: 'HR 0.5' }, { stat: 'rbi', line: 0.5, label: 'RBI 0.5' },
   ];
+  const MARKET_KEY_BY_STAT = {
+    hits: 'batter_hits',
+    tb: 'batter_total_bases',
+    hr: 'batter_home_runs',
+    rbi: 'batter_rbis',
+  };
   const pills = lines.map(def => {
     const p = proj[def.stat]; if (p == null) return '';
     const edge = p - def.line;
@@ -594,9 +600,9 @@ function batxOUPills(proj, adj, playerName) {
     const col = dir === 'OVER' ? '#4caf50' : '#f44336';
     const bg = dir === 'OVER' ? 'rgba(76,175,80,.1)' : 'rgba(244,67,54,.08)';
     const bor = dir === 'OVER' ? 'rgba(76,175,80,.3)' : 'rgba(244,67,54,.25)';
-    const propLabel = `${def.label} ${dir}`;
+    const marketKey = MARKET_KEY_BY_STAT[def.stat] || '';
     return `<span style=\"padding:3px 8px;border-radius:5px;font-family:Orbitron,monospace;font-size:.5rem;letter-spacing:.6px;border:1px solid ${bor};background:${bg};color:${col};white-space:nowrap\">${def.label} <strong>${dir}</strong> <span style=\"opacity:.6;font-size:.44rem\">${(edge >= 0 ? '+' : '') + edge.toFixed(2)}</span></span>` +
-      ` <button style=\"margin-left:4px;padding:2px 7px;font-size:.5rem;border-radius:6px;border:1px solid var(--c);background:rgba(0,229,255,.08);color:var(--c);cursor:pointer\" onclick=\"addToParlayFromPitcher('${(playerName||'Player').replace(/'/g, "\\'")}', '${propLabel}' )\">+ Parlay</button>`;
+      ` <button style=\"margin-left:4px;padding:2px 7px;font-size:.5rem;border-radius:6px;border:1px solid var(--c);background:rgba(0,229,255,.08);color:var(--c);cursor:pointer\" onclick=\"addToParlayFromPitcher('${(playerName||'Player').replace(/'/g, "\\'")}', '${marketKey}', ${def.line}, '${dir === 'OVER' ? 'Over' : 'Under'}', '${def.label}')\">+ Parlay</button>`;
   }).filter(Boolean).join('');
   if (!pills) return '';
   const comp = proj.composite;
@@ -646,19 +652,30 @@ function buildCard(pit,teamAbbr,oppAbbr){
     <div id="${pit.id}-threats" class="pc-pane">${buildThreatsPane(pit.id)}</div>
     <div id="${pit.id}-vuln"    class="pc-pane">${buildVulnPane(pit.id)}</div>
     <div id="${pit.id}-proj"    class="pc-pane">${buildProjPane(s,log,oppAbbr,pit.name)}</div>
-    // Add to Parlay handler for pitcher deepdive
-    function addToParlayFromPitcher(player, market) {
-      try {
-        const leg = { player, market };
-        localStorage.setItem('pendingParlayLeg', JSON.stringify(leg));
-        window.location.href = '/tracker';
-      } catch (e) {
-        alert('Failed to add to parlay: ' + e.message);
-      }
-    }
     <div id="${pit.id}-log"     class="pc-pane">${buildLogPane(log)}</div>
     <div id="${pit.id}-ars"     class="pc-pane">${buildArsenalPane(s, pit.id)}</div>
   </div>`;
+}
+
+function addToParlayFromPitcher(player, marketKey, line, recommendedSide, label) {
+  try {
+    if (!player || !marketKey) throw new Error('Missing player or market');
+    const pending = JSON.parse(localStorage.getItem('pendingParlayLegs') || '[]');
+    const queue = Array.isArray(pending) ? pending : [];
+    queue.push({
+      player,
+      marketKey,
+      line,
+      recommendedSide,
+      sideLabel: recommendedSide,
+      source: 'pitcher_deep_dive',
+      reason: `Imported from Pitcher Deep Dive (${label || marketKey})`,
+    });
+    localStorage.setItem('pendingParlayLegs', JSON.stringify(queue));
+    window.location.href = '/tracker';
+  } catch (e) {
+    alert('Failed to add to parlay: ' + e.message);
+  }
 }
 
 function getPitcherVulnerability(pitcherId){

@@ -973,13 +973,25 @@ async function checkLineupStatus(pk) {
 // ── Parlay Handler ──
 function addToParlay(leg) {
   try {
-    const key = 'parlay_legs';
-    let legs = [];
-    try { legs = JSON.parse(localStorage.getItem(key)) || []; } catch {}
+    if (!leg || !leg.player || !leg.marketKey) throw new Error('Missing player or market');
+    let queue = [];
+    try { queue = JSON.parse(localStorage.getItem('pendingParlayLegs')) || []; } catch {}
+    if (!Array.isArray(queue)) queue = [];
     // Prevent duplicate (same player, market, line, game)
-    if (!legs.some(l => l.player === leg.player && l.marketKey === leg.marketKey && String(l.line) === String(leg.line) && String(l.gamePk) === String(leg.gamePk))) {
-      legs.push(leg);
-      localStorage.setItem(key, JSON.stringify(legs));
+    if (!queue.some(l => l.player === leg.player && l.marketKey === leg.marketKey && String(l.line) === String(leg.line) && String(l.gamePk) === String(leg.gamePk))) {
+      queue.push({
+        player: leg.player,
+        marketKey: leg.marketKey,
+        line: leg.line,
+        team: leg.team || '',
+        opp: leg.opp || '',
+        recommendedSide: leg.recommendedSide || 'Over',
+        sideLabel: leg.sideLabel || leg.recommendedSide || 'Over',
+        source: 'props_board',
+        reason: 'Imported from Props Board',
+        gamePk: leg.gamePk || '',
+      });
+      localStorage.setItem('pendingParlayLegs', JSON.stringify(queue));
     }
     window.location.href = '/tracker';
   } catch(e) {
