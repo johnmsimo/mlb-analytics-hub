@@ -3463,7 +3463,7 @@ def api_game_detail(game_pk):
             away_bats = get_batters_from_boxscore(d.get("away",{}), "away")
             home_bats = get_batters_from_boxscore(d.get("home",{}), "home")
         except Exception as ex:
-            print("[api_game_detail] boxscore error:", ex)
+            print(f"[api_game_detail] boxscore error game_pk={game_pk}: {traceback.format_exc()}")
         # Pre-game fallback: use schedule lineup or roster when boxscore has no batters.
         if not away_bats or not home_bats:
             _, fb_away, fb_home, _, _, _ = _props_fetch_game(game_pk)
