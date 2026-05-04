@@ -28,8 +28,11 @@ workers = 1
 
 # Threaded worker so the caches (loaded by background daemon threads)
 # don't block request handling.
+# 6 threads: enough headroom so health checks always get a free thread
+# even when several slow API requests (Monte Carlo, Savant fetches, etc.)
+# are concurrently occupying others.
 worker_class = "gthread"
-threads = 4
+threads = 6
 
 # Reduced from 600s. With gthread, a 600s timeout means Gunicorn waits
 # 10 minutes before declaring the worker dead — but Fly.io's watchdog
