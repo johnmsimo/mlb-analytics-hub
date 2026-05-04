@@ -873,7 +873,7 @@ function buildProjPane(s,log,oppAbbr){
           const bg = side === 'Over' ? 'rgba(76,175,80,.1)' : 'rgba(244,67,54,.08)';
           const bor = side === 'Over' ? 'rgba(76,175,80,.3)' : 'rgba(244,67,54,.25)';
           return `<span style=\"display:inline-block;padding:4px 9px;border-radius:6px;font-family:Orbitron,monospace;font-size:.54rem;letter-spacing:.8px;border:1px solid ${bor};background:${bg};color:${col};margin-right:5px;margin-bottom:5px\">K ${line} <strong>${side.toUpperCase()}</strong> <span style=\"opacity:.65;font-size:.48rem\">${odds ? (odds > 0 ? '+'+odds : odds) : ''}</span> <span style=\"opacity:.5;font-size:.46rem\">${book}</span>`+
-            ` <button style=\"margin-left:6px;padding:2px 7px;font-size:.5rem;border-radius:6px;border:1px solid var(--c);background:rgba(0,229,255,.08);color:var(--c);cursor:pointer\" onclick=\\\"addToParlayFromPitcher('${esc(s.name||'Pitcher')}', 'pitcher_strikeouts', ${line}, '${side}', 'K ${line}', ${odds})\\\">+ Parlay</button>`+
+            ` <button style=\"margin-left:6px;padding:2px 7px;font-size:.5rem;border-radius:6px;border:1px solid var(--c);background:rgba(0,229,255,.08);color:var(--c);cursor:pointer\" onclick=\\\"addToParlayFromPitcher('${esc(playerName||s.name||'Pitcher')}', 'pitcher_strikeouts', ${line}, '${side}', 'K ${line}', ${odds})\\\">+ Parlay</button>`+
             `</span>`;
         }).join('');
       }
@@ -890,7 +890,7 @@ function buildProjPane(s,log,oppAbbr){
       const bg =dir==='OVER'?'rgba(76,175,80,.1)':'rgba(244,67,54,.08)';
       const bor=dir==='OVER'?'rgba(76,175,80,.3)':'rgba(244,67,54,.25)';
       return`<span style=\"display:inline-block;padding:4px 9px;border-radius:6px;font-family:Orbitron,monospace;font-size:.54rem;letter-spacing:.8px;border:1px solid ${bor};background:${bg};color:${col};margin-right:5px;margin-bottom:5px\">K ${line} <strong>${dir}</strong> <span style=\"opacity:.65;font-size:.48rem\">${(edge>=0?'+':'')+edge.toFixed(2)}</span>`+
-        ` <button style=\"margin-left:6px;padding:2px 7px;font-size:.5rem;border-radius:6px;border:1px solid var(--c);background:rgba(0,229,255,.08);color:var(--c);cursor:pointer\" onclick=\\\"addToParlayFromPitcher('${esc(s.name||'Pitcher')}', 'pitcher_strikeouts', ${line}, '${dir==='OVER'?'Over':'Under'}', 'K ${line}')\\\">+ Parlay</button>`+
+        ` <button style=\"margin-left:6px;padding:2px 7px;font-size:.5rem;border-radius:6px;border:1px solid var(--c);background:rgba(0,229,255,.08);color:var(--c);cursor:pointer\" onclick=\\\"addToParlayFromPitcher('${esc(playerName||s.name||'Pitcher')}', 'pitcher_strikeouts', ${line}, '${dir==='OVER'?'Over':'Under'}', 'K ${line}')\\\">+ Parlay</button>`+
         `</span>`;
     }).join('');
   }
