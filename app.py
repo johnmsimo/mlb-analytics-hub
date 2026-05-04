@@ -1,4 +1,5 @@
-import os, threading, traceback, difflib, io, csv as csvmod, json, re, time, uuid, unicodedata
+import os, threading, traceback, difflib, io, csv as csvmod, json, re, time, uuid, unicodedata, logging
+logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s %(message)s')
 import requests
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -29,7 +30,7 @@ def _load_local_env_file(env_path):
                     val = val[1:-1]
                 os.environ.setdefault(key, val)
     except Exception as ex:
-        print(f"[env] failed loading {env_path}: {ex}")
+        logging.warning(f"[env] failed loading {env_path}: {ex}")
 
 
 _load_local_env_file(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'))
@@ -74,8 +75,21 @@ from brain_merge_patch import (
     _brain_overlay_lock,
 )
 
+
 app = Flask(__name__)
 CORS(app)
+
+# ── Global error handler for uncaught exceptions ──
+@app.errorhandler(Exception)
+def handle_exception(e):
+    """Return JSON for uncaught exceptions and log the error."""
+    logging.error("[Flask] Unhandled exception", exc_info=e)
+    resp = {
+        "success": False,
+        "error": str(e),
+        "type": type(e).__name__,
+    }
+    return jsonify(resp), 500
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -153,6 +167,9 @@ _weather_cache_lock = threading.Lock()
 _weather_cache = {}
 _WEATHER_TTL = 20 * 60
 _WEATHER_FAIL_TTL = 120
+_active_roster_cache_lock = threading.Lock()
+_active_roster_cache = {}
+_ACTIVE_ROSTER_TTL = 30 * 60
 
 
 def _load_json(path, default):
@@ -175,6 +192,27 @@ def _save_json(path, payload):
         return True
     except Exception:
         return False
+
+
+def _get_active_roster(team_id, ttl_sec=_ACTIVE_ROSTER_TTL):
+    """Fetch and cache active roster entries for a team to avoid repeated API calls."""
+    if not team_id:
+        return []
+    key = str(team_id)
+    now = time.time()
+    with _active_roster_cache_lock:
+        cached = _active_roster_cache.get(key)
+        if cached and (now - float(cached.get('ts') or 0.0)) < float(ttl_sec):
+            return list(cached.get('roster') or [])
+    try:
+        rr = requests.get(f"{MLB_API}/teams/{team_id}/roster?rosterType=active", timeout=8)
+        rr.raise_for_status()
+        roster = list((rr.json() or {}).get('roster') or [])
+    except Exception:
+        roster = []
+    with _active_roster_cache_lock:
+        _active_roster_cache[key] = {'ts': now, 'roster': roster}
+    return list(roster)
 
 
 def _brain_upload_state_default():
@@ -707,13 +745,13 @@ _fg_loading = False
 
 def _load_fg_data():
     global _fg_loaded, _fg_load_date
-    print("[FG] _load_fg_data: starting MLB-API-derived load…")
+    logging.info("[FG] _load_fg_data: starting MLB-API-derived load…")
     _load_fg_data_from_mlb_api()
     with _fg_lock:
         has_data = bool(_fg_pit) or bool(_fg_bat)
         _fg_loaded = has_data
         _fg_load_date = datetime.now().date() if has_data else None
-    print(f"[FG] _load_fg_data done: loaded={_fg_loaded} pit={len(_fg_pit)} bat={len(_fg_bat)}")
+    logging.info(f"[FG] _load_fg_data done: loaded={_fg_loaded} pit={len(_fg_pit)} bat={len(_fg_bat)}")
 
 
 def _safe_num(v, default=0.0):
@@ -763,7 +801,7 @@ def _load_fg_data_from_mlb_api():
     """
     global _fg_bat, _fg_pit
     year = datetime.now().year
-    print("[FG] Starting MLB-API-derived load…")
+    logging.info("[FG] Starting MLB-API-derived load…")
 
     # Fetch every active player's batSide so the matchup projection can use
     # handedness.  One small call for the whole league.
@@ -778,9 +816,9 @@ def _load_fg_data_from_mlb_api():
             name = (p.get("fullName") or "").strip()
             if name:
                 bat_side_by_name[name.lower()] = ((p.get("batSide") or {}).get("code") or "R")
-        print(f"[FG] {len(bat_side_by_name)} active players found")
+        logging.info(f"[FG] {len(bat_side_by_name)} active players found")
     except Exception as ex:
-        print("[FG-derived] player list failed:", ex)
+        logging.warning(f"[FG-derived] player list failed: {ex}")
 
     def _fetch_bulk_splits(group_name):
         """Fetch MLB bulk stat splits with fallbacks for endpoint quirks."""
@@ -808,20 +846,20 @@ def _load_fg_data_from_mlb_api():
                     stats_groups = r.json().get("stats", []) or []
                     splits = stats_groups[0].get("splits", []) if stats_groups else []
                     if splits:
-                        print(f"[FG-derived] {group_name} splits={len(splits)} season={season}")
+                        logging.info(f"[FG-derived] {group_name} splits={len(splits)} season={season}")
                         return splits, season
-                    print(f"[FG-derived] {group_name} empty season={season} — trying next variant")
+                    logging.info(f"[FG-derived] {group_name} empty season={season} — trying next variant")
                 except requests.exceptions.Timeout:
-                    print(f"[FG-derived] {group_name} TIMEOUT season={season} — trying next")
+                    logging.warning(f"[FG-derived] {group_name} TIMEOUT season={season} — trying next")
                 except Exception as ex:
-                    print(f"[FG-derived] {group_name} fetch failed season={season}: {ex}")
+                    logging.warning(f"[FG-derived] {group_name} fetch failed season={season}: {ex}")
         return [], None
 
     # ── Pitchers (one bulk call) ──────────────────────────────────────────
     pit_out = {}
     splits, pit_season = _fetch_bulk_splits("pitching")
     if pit_season and pit_season != year:
-        print(f"[FG-derived] Using fallback pitching season {pit_season}")
+        logging.info(f"[FG-derived] Using fallback pitching season {pit_season}")
 
     for row in splits:
         try:
@@ -891,13 +929,13 @@ def _load_fg_data_from_mlb_api():
                 "fg_gb_pct": round(go / (go + ao), 3) if (go + ao) > 0 else 0.45,
             }
         except Exception as ex:
-            print(f"[FG-pit-derived] pid={person.get('id') if 'person' in dir() else '?'}: {ex}")
+            logging.warning(f"[FG-pit-derived] pid={person.get('id') if 'person' in dir() else '?'}: {ex}")
 
     # ── Batters (one bulk call) ───────────────────────────────────────────
     bat_out = {}
     splits, bat_season = _fetch_bulk_splits("hitting")
     if bat_season and bat_season != year:
-        print(f"[FG-derived] Using fallback hitting season {bat_season}")
+        logging.info(f"[FG-derived] Using fallback hitting season {bat_season}")
 
     for row in splits:
         try:
@@ -951,13 +989,13 @@ def _load_fg_data_from_mlb_api():
                 "fg_bats":  bat_side_by_name.get(name.lower(), "R"),
             }
         except Exception as ex:
-            print(f"[FG-bat-derived] pid={person.get('id') if 'person' in dir() else '?'}: {ex}")
+            logging.warning(f"[FG-bat-derived] pid={person.get('id') if 'person' in dir() else '?'}: {ex}")
 
     with _fg_lock:
         _fg_pit = pit_out
         _fg_bat = bat_out
-    print(f"[FG] Done — {len(pit_out)} pitchers / {len(bat_out)} batters")
-    print(f"[FG] Cache ready — {len(pit_out)} P / {len(bat_out)} B")
+    logging.info(f"[FG] Done — {len(pit_out)} pitchers / {len(bat_out)} batters")
+    logging.info(f"[FG] Cache ready — {len(pit_out)} P / {len(bat_out)} B")
 
 def _maybe_refresh_fg():
     global _fg_loading
@@ -973,7 +1011,7 @@ def _maybe_refresh_fg():
             try:
                 _load_fg_data()
             except Exception as _ex:
-                print(f"[FG] background load error: {_ex}")
+                logging.error(f"[FG] background load error: {_ex}")
             finally:
                 with _fg_lock:
                     _fg_loading = False  # ALWAYS reset, even on crash
@@ -1183,13 +1221,13 @@ def _fetch_sv_csv_by_season(url_template, seasons):
         try:
             rows = _fetch_sv_csv(url)
             if rows:
-                print(f"[Savant] {endpoint} rows={len(rows)} season={y}")
+                logging.info(f"[Savant] {endpoint} rows={len(rows)} season={y}")
                 return rows, y
-            print(f"[Savant] {endpoint} empty season={y} — trying next season")
+            logging.info(f"[Savant] {endpoint} empty season={y} — trying next season")
         except requests.exceptions.Timeout:
-            print(f"[Savant] {endpoint} TIMEOUT season={y} — trying next")
+            logging.warning(f"[Savant] {endpoint} TIMEOUT season={y} — trying next")
         except Exception as ex:
-            print(f"[Savant] {endpoint} fetch failed season={y}: {ex}")
+            logging.warning(f"[Savant] {endpoint} fetch failed season={y}: {ex}")
     return [], None
 
 def _load_savant_data():
@@ -1221,9 +1259,9 @@ def _load_savant_data():
                 "sv_pid":     row.get("player_id",""),
             }
         with _sv_lock: _sv_pit_xstats = d
-        print(f"[Savant] Pitcher xStats: {len(d)}")
+        logging.info(f"[Savant] Pitcher xStats: {len(d)}")
     except Exception as ex:
-        print("[Savant] Pitcher xStats failed:", ex)
+        logging.warning(f"[Savant] Pitcher xStats failed: {ex}")
 
     # 2. Batter xBA/xSLG/xwOBA
     try:
@@ -1244,9 +1282,9 @@ def _load_savant_data():
                 "sv_pid":   row.get("player_id",""),
             }
         with _sv_lock: _sv_bat_xstats = d
-        print(f"[Savant] Batter xStats: {len(d)}")
+        logging.info(f"[Savant] Batter xStats: {len(d)}")
     except Exception as ex:
-        print("[Savant] Batter xStats failed:", ex)
+        logging.warning(f"[Savant] Batter xStats failed: {ex}")
 
     # 3. Statcast batter EV / HH% / Barrel%
     try:
@@ -1269,9 +1307,9 @@ def _load_savant_data():
                 "sv_max_ev": _sv_f(row.get("max_hit_speed")),
             }
         with _sv_lock: _sv_bat_statcast = d
-        print(f"[Savant] Batter Statcast: {len(d)}")
+        logging.info(f"[Savant] Batter Statcast: {len(d)}")
     except Exception as ex:
-        print("[Savant] Batter Statcast failed:", ex)
+        logging.warning(f"[Savant] Batter Statcast failed: {ex}")
 
     # 4. Pitch arsenal % usage
     try:
@@ -1291,9 +1329,9 @@ def _load_savant_data():
                     except Exception: pass
             if pitches: d[_sv_key(raw)] = pitches
         with _sv_lock: _sv_arsenal_pct = d
-        print(f"[Savant] Arsenal %: {len(d)}")
+        logging.info(f"[Savant] Arsenal %: {len(d)}")
     except Exception as ex:
-        print("[Savant] Arsenal % failed:", ex)
+        logging.warning(f"[Savant] Arsenal % failed: {ex}")
 
     # 5. Pitch arsenal velocities
     try:
@@ -1313,9 +1351,9 @@ def _load_savant_data():
                     except Exception: pass
             if velos: d[_sv_key(raw)] = velos
         with _sv_lock: _sv_arsenal_velo = d
-        print(f"[Savant] Arsenal velo: {len(d)}")
+        logging.info(f"[Savant] Arsenal velo: {len(d)}")
     except Exception as ex:
-        print("[Savant] Arsenal velo failed:", ex)
+        logging.warning(f"[Savant] Arsenal velo failed: {ex}")
 
     # 6. Pitcher pitch-arsenal outcome stats (BA/SLG/wOBA/whiff%/HH% per pitch type)
     try:
@@ -1346,9 +1384,9 @@ def _load_savant_data():
                 "run_val":   _sv_f(row.get("run_value_per_100")),
             }
         with _sv_lock: _sv_pit_arsenal_stats = d
-        print(f"[Savant] Pitcher arsenal stats: {len(d)} pitchers")
+        logging.info(f"[Savant] Pitcher arsenal stats: {len(d)} pitchers")
     except Exception as ex:
-        print("[Savant] Pitcher arsenal stats failed:", ex)
+        logging.warning(f"[Savant] Pitcher arsenal stats failed: {ex}")
 
     # 7. Batter pitch-arsenal outcome stats (SLG/wOBA/whiff%/HH% per pitch type faced)
     try:
@@ -1371,15 +1409,15 @@ def _load_savant_data():
                 "hh_pct":    _sv_f(row.get("hard_hit_percent")),
             }
         with _sv_lock: _sv_bat_arsenal_stats = d
-        print(f"[Savant] Batter arsenal stats: {len(d)} batters")
+        logging.info(f"[Savant] Batter arsenal stats: {len(d)} batters")
     except Exception as ex:
-        print("[Savant] Batter arsenal stats failed:", ex)
+        logging.warning(f"[Savant] Batter arsenal stats failed: {ex}")
 
     with _sv_lock:
         has_data = bool(_sv_pit_xstats) or bool(_sv_bat_xstats) or bool(_sv_bat_statcast) or bool(_sv_arsenal_pct) or bool(_sv_arsenal_velo)
         _sv_loaded    = has_data
         _sv_load_date = datetime.now().date() if has_data else None
-    print(f"[Savant] All caches ready: pitxstats={len(_sv_pit_xstats)} batxstats={len(_sv_bat_xstats)} statcast={len(_sv_bat_statcast)} arsenal={len(_sv_arsenal_pct)} velo={len(_sv_arsenal_velo)} pit_arsenal={len(_sv_pit_arsenal_stats)} bat_arsenal={len(_sv_bat_arsenal_stats)} loaded={_sv_loaded}")
+    logging.info(f"[Savant] All caches ready: pitxstats={len(_sv_pit_xstats)} batxstats={len(_sv_bat_xstats)} statcast={len(_sv_bat_statcast)} arsenal={len(_sv_arsenal_pct)} velo={len(_sv_arsenal_velo)} pit_arsenal={len(_sv_pit_arsenal_stats)} bat_arsenal={len(_sv_bat_arsenal_stats)} loaded={_sv_loaded}")
 
 def _maybe_refresh_savant():
     global _sv_loading
@@ -2487,25 +2525,32 @@ def pitcher_deep_dive_page(pitcher_id=None):
 
 @app.route("/api/status")
 def api_status():
+    t0 = time.time()
     with _fg_lock:
         fgl, fgd, fgb, fgp = _fg_loaded, _fg_load_date, len(_fg_bat), len(_fg_pit)
     with _sv_lock:
         svl, svd = _sv_loaded, _sv_load_date
         svpi, svbi, svsc, svar = len(_sv_pit_xstats), len(_sv_bat_xstats), len(_sv_bat_statcast), len(_sv_arsenal_pct)
-    return jsonify({
+    resp = jsonify({
         "fangraphs": {"loaded":fgl,"date":str(fgd),"batters":fgb,"pitchers":fgp},
         "savant":    {"loaded":svl,"date":str(svd),"pit_xstats":svpi,"bat_xstats":svbi,"statcast":svsc,"arsenals":svar},
         "mlbMemory": _mlb_memory_status_payload(),
     })
+    logging.info(f"[API] /api/status took {time.time() - t0:.3f}s")
+    return resp
 
 @app.route('/health')
 def health_check():
-    return {'status': 'ok'}, 200
+    t0 = time.time()
+    resp = {'status': 'ok'}
+    logging.info(f"[API] /health took {time.time() - t0:.3f}s")
+    return resp, 200
 
 
 @app.route('/api/mc-upgrades/status')
 def api_mc_upgrades_status():
-    return jsonify({
+    t0 = time.time()
+    resp = jsonify({
         "success": True,
         "prewarm": get_prewarm_status(),
         "batx_weights": BATX_WEIGHTS_V2,
@@ -2513,22 +2558,28 @@ def api_mc_upgrades_status():
         "platoon_m": PLATOON_M,
         "league_platoon_splits": LEAGUE_PLATOON_SPLITS,
     })
+    logging.info(f"[API] /api/mc-upgrades/status took {time.time() - t0:.3f}s")
+    return resp
 
 
 @app.route('/api/tracker/blend-debug')
 def api_tracker_blend_debug():
     """QA endpoint: returns per-row rawProb, rawMultProb, marketImplied, adjProb, edge for a game."""
+    t0 = time.time()
     game_pk = request.args.get('gamePk') or request.args.get('game_pk')
     if not game_pk:
+        logging.info(f"[API] /api/tracker/blend-debug took {time.time() - t0:.3f}s (missing gamePk)")
         return jsonify({"error": "gamePk required"}), 400
     try:
         game_pk = int(game_pk)
     except Exception:
+        logging.info(f"[API] /api/tracker/blend-debug took {time.time() - t0:.3f}s (bad gamePk)")
         return jsonify({"error": "gamePk must be an integer"}), 400
     adjustments = _get_adjustments()
     _maybe_refresh_fg()
     game_obj = fetch_schedule_game(game_pk)
     if not game_obj:
+        logging.info(f"[API] /api/tracker/blend-debug took {time.time() - t0:.3f}s (game not found)")
         return jsonify({"error": "game not found"}), 404
     game_date = ((game_obj.get('gameDate') or '').split('T')[0] or
                  datetime.now(ET).strftime('%Y-%m-%d'))
@@ -2966,28 +3017,31 @@ def api_games_today():
         workers = min(12, max(1, len(raw)))
         with ThreadPoolExecutor(max_workers=workers) as ex:
             games = [g for g in ex.map(lambda x: parse_game(x, prefer_live_weather=False), raw) if g]
-        return jsonify({"success":True,"games":games,"count":len(games)})
+        resp = jsonify({"success":True,"games":games,"count":len(games)})
+        logging.info(f"[API] /api/games/today took {time.perf_counter() - t0:.3f}s")
+        return resp
     except Exception as ex:
-        print("[api_games_today]", traceback.format_exc())
+        logging.error(f"[api_games_today] {traceback.format_exc()}")
         return jsonify({"success":False,"error":str(ex),"games":[]}), 500
-    finally:
-        ms = int((time.perf_counter() - t0) * 1000)
-        if ms >= 1000:
-            print(f"[perf] /api/games/today {ms}ms")
 
 
 @app.route("/api/game-summary/<int:game_pk>")
 def api_game_summary(game_pk):
+    t0 = time.perf_counter()
     try:
         gdata = fetch_schedule_game(game_pk)
         if not gdata:
+            logging.info(f"[API] /api/game-summary/{{game_pk}} took {time.perf_counter() - t0:.3f}s (not found)")
             return jsonify({"success": False, "error": "Game not found"}), 404
         parsed = parse_game(gdata)
         if not parsed:
+            logging.info(f"[API] /api/game-summary/{{game_pk}} took {time.perf_counter() - t0:.3f}s (parse fail)")
             return jsonify({"success": False, "error": "Unable to parse game"}), 500
-        return jsonify({"success": True, "game": parsed})
+        resp = jsonify({"success": True, "game": parsed})
+        logging.info(f"[API] /api/game-summary/{{game_pk}} took {time.perf_counter() - t0:.3f}s")
+        return resp
     except Exception as ex:
-        print("[api_game_summary]", traceback.format_exc())
+        logging.error(f"[api_game_summary] {traceback.format_exc()}")
         return jsonify({"success": False, "error": str(ex)}), 500
 
 
@@ -6737,10 +6791,8 @@ def api_simulate(game_pk):
             if not team_id:
                 return []
             try:
-                rr = requests.get(f"{MLB_API}/teams/{team_id}/roster?rosterType=active", timeout=8)
-                rr.raise_for_status()
                 out = []
-                for entry in (rr.json().get('roster') or []):
+                for entry in _get_active_roster(team_id):
                     pos = ((entry.get('position') or {}).get('abbreviation') or '?')
                     if pos in ('P', 'SP', 'RP', 'CP'):
                         continue
@@ -8456,10 +8508,8 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
     # ── Last resort: active roster (top 9 position players) ─────────────────
     def _roster_lineup(team_id):
         try:
-            r = requests.get(f"{MLB_API}/teams/{team_id}/roster?rosterType=active", timeout=8)
-            r.raise_for_status()
             out = []
-            for entry in (r.json().get('roster') or []):
+            for entry in _get_active_roster(team_id):
                 pos = ((entry.get('position') or {}).get('abbreviation') or '?')
                 if pos in ('P', 'SP', 'RP', 'CP'):
                     continue
@@ -9698,18 +9748,26 @@ def _compute_props_scan_today_payload(date_str):
     flat_props = []
     injury_rows = []
 
-    for game in raw_games:
+    def _scan_game(game):
         game_pk = game.get('gamePk')
+        local_batters = []
+        local_pitchers = []
+        local_props = []
+        local_injuries = []
         if not game_pk:
-            continue
+            return local_batters, local_pitchers, local_props, local_injuries
         try:
-            proj_resp = api_props_projections(int(game_pk))
+            with app.test_request_context(
+                f'/api/props/projections/{int(game_pk)}',
+                query_string={'date': date_str},
+            ):
+                proj_resp = api_props_projections(int(game_pk))
             status_code = 200
             if isinstance(proj_resp, tuple):
                 proj_resp, status_code = proj_resp
             proj_payload = proj_resp.get_json(silent=True) if hasattr(proj_resp, 'get_json') else None
             if status_code != 200 or not proj_payload or not proj_payload.get('success'):
-                continue
+                return local_batters, local_pitchers, local_props, local_injuries
 
             tracker_rows = _build_tracker_rows_for_game(int(game_pk), date_str, adjustments, _sched=raw_games, include_odds=True) or []
             best_by_player = {}
@@ -9732,7 +9790,7 @@ def _compute_props_scan_today_payload(date_str):
                 item['scanHubRating'] = best.get('hubRating') if best else None
                 item['scanEvPct'] = best.get('evPct') if best else None
                 item['scanBestProp'] = best
-                batters.append(item)
+                local_batters.append(item)
 
             for pitcher in proj_payload.get('pitchers', []):
                 item = dict(pitcher)
@@ -9740,19 +9798,30 @@ def _compute_props_scan_today_payload(date_str):
                 item['matchup'] = proj_payload.get('matchup')
                 item['awayAbbr'] = proj_payload.get('awayAbbr')
                 item['homeAbbr'] = proj_payload.get('homeAbbr')
-                pitchers.append(item)
+                local_pitchers.append(item)
 
             for row in tracker_rows:
                 item = dict(row)
                 item['matchup'] = proj_payload.get('matchup')
                 item['awayAbbr'] = proj_payload.get('awayAbbr')
                 item['homeAbbr'] = proj_payload.get('homeAbbr')
-                flat_props.append(item)
+                local_props.append(item)
 
             for row in (proj_payload.get('injury_summary') or {}).get('players', []):
-                injury_rows.append(dict(row))
+                local_injuries.append(dict(row))
         except Exception:
             print(f'[api_props_scan_today game {game_pk}] {traceback.format_exc()}')
+        return local_batters, local_pitchers, local_props, local_injuries
+
+    scan_workers = min(6, max(1, len(raw_games)))
+    with ThreadPoolExecutor(max_workers=scan_workers) as ex:
+        futs = [ex.submit(_scan_game, g) for g in raw_games]
+        for fut in as_completed(futs):
+            b, p, props, injuries = fut.result()
+            batters.extend(b)
+            pitchers.extend(p)
+            flat_props.extend(props)
+            injury_rows.extend(injuries)
 
     flat_props.sort(key=lambda x: (-(float(x.get('hubRating') or 0)), -(float(x.get('edge') or 0)), -(float(x.get('adjProb') or 0))))
     batters.sort(key=lambda x: (-(float(x.get('scanHubRating') or 0)), -(float(((x.get('proj') or {}).get('hits') or 0)))))
@@ -11017,11 +11086,7 @@ def api_teams_overview():
         def fetch_roster(t):
             # ZERO per-player API calls — all stats from pre-cached FG/Savant
             tid = t.get('id')
-            try:
-                rr = requests.get(f"{MLB_API}/teams/{tid}/roster?rosterType=active", timeout=8)
-                roster = rr.json().get('roster', []) if rr.ok else []
-            except Exception:
-                roster = []
+            roster = _get_active_roster(tid)
             players = []
             for r in roster[:40]:
                 try:
@@ -11470,7 +11535,7 @@ def _mc_compute_background():
         games, ranked = [], []
         has_odds = bool(ODDS_API_KEY)
 
-        for g in raw:
+        def _compute_game(g):
             game_pk   = g.get('gamePk')
             away_t    = g.get('teams', {}).get('away', {})
             home_t    = g.get('teams', {}).get('home', {})
@@ -11500,17 +11565,17 @@ def _mc_compute_background():
                 home_lu = _parse(home_hitters, 'home')
 
                 def _roster(tid, side):
-                    try:
-                        r = requests.get(f"{MLB_API}/teams/{tid}/roster?rosterType=active", timeout=5)
-                        r.raise_for_status()
-                        out = []
-                        for e in (r.json().get('roster') or []):
-                            pos  = ((e.get('position') or {}).get('abbreviation') or '?')
-                            if pos in ('P','SP','RP','CP'): continue
-                            name = ((e.get('person') or {}).get('fullName') or '').strip()
-                            if name: out.append({'name': name, 'slot': 0, 'side': side})
-                        return out[:15]
-                    except Exception: return []
+                    out = []
+                    for e in _get_active_roster(tid):
+                        pos  = ((e.get('position') or {}).get('abbreviation') or '?')
+                        if pos in ('P', 'SP', 'RP', 'CP'):
+                            continue
+                        name = ((e.get('person') or {}).get('fullName') or '').strip()
+                        if name:
+                            out.append({'name': name, 'slot': 0, 'side': side})
+                        if len(out) >= 15:
+                            break
+                    return out
 
                 if len(away_lu) < 5: away_lu = _roster(away_tid, 'away')
                 if len(home_lu) < 5: home_lu = _roster(home_tid, 'home')
@@ -11599,12 +11664,21 @@ def _mc_compute_background():
 
                     top_props = sorted(top_props, key=lambda x: x['edge'], reverse=True)
 
-                ranked.extend(top_props)
             except Exception:
                 print(f"[mc_bg] {matchup}: {traceback.format_exc()}")
-            games.append({'gamePk': game_pk, 'matchup': matchup, 'topProps': top_props})
+            return {'gamePk': game_pk, 'matchup': matchup, 'topProps': top_props}, top_props
+
+        workers = min(6, max(1, len(raw)))
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futs = [ex.submit(_compute_game, g) for g in raw]
+            for fut in as_completed(futs):
+                game_row, top_props = fut.result()
+                games.append(game_row)
+                if top_props:
+                    ranked.extend(top_props)
 
         ranked = sorted(ranked, key=lambda x: x.get('edge', 0), reverse=True)
+        games = sorted(games, key=lambda x: x.get('matchup') or '')
         result = {'success': True, 'date': date_str, 'hasOdds': has_odds,
                   'games': games, 'topProps': ranked[:500], 'computing': False}
         with _mc_cache_lock:
@@ -11704,10 +11778,8 @@ def api_lineup(game_pk):
         # ── Step 3: Last resort — active roster top position players ─────────
         def _roster_fallback_lu(team_id):
             try:
-                rr = requests.get(f"{MLB_API}/teams/{team_id}/roster?rosterType=active", timeout=8)
-                rr.raise_for_status()
                 out = []
-                for entry in (rr.json().get('roster') or []):
+                for entry in _get_active_roster(team_id):
                     pos = ((entry.get('position') or {}).get('abbreviation') or '?')
                     if pos in ('P', 'SP', 'RP', 'CP'):
                         continue
@@ -12505,9 +12577,7 @@ def _props_fetch_game(game_pk, date_hint=None):
             if not team_id:
                 return out
             try:
-                rr = requests.get(f"{MLB_API}/teams/{team_id}/roster?rosterType=active", timeout=8)
-                rr.raise_for_status()
-                for p in (rr.json().get("roster") or []):
+                for p in _get_active_roster(team_id):
                     pos = ((p.get("position") or {}).get("abbreviation") or "?").upper()
                     if pos in ("P", "SP", "RP", "CP"):
                         continue
