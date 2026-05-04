@@ -1266,26 +1266,6 @@ function showTab(side){
       +'<td class="'+avc(p.avg)+'">'+pv(p.avg,'---')+'</td>'
       +'<td>'+pv(p.obp,'---')+'</td><td>'+pv(p.slg,'---')+'</td><td>'+pv(p.ops,'---')+'</td>'
       +'<td>'+p.ab+'</td><td>'+p.hr+'</td><td>'+p.rbi+'</td>'+fc+sc+'</tr>';
-  // Add to Parlay handler (stub)
-  function addToParlay(playerName, type, idx) {
-    // Compose a parlay leg object (expand as needed)
-    var leg = {
-      type: type,
-      name: playerName,
-      idx: idx,
-      source: 'deepdive',
-      ts: Date.now()
-    };
-    // Store in localStorage for tracker to pick up
-    var pending = [];
-    try {
-      pending = JSON.parse(localStorage.getItem('pendingParlayLegs')||'[]');
-    } catch(e) {}
-    pending.push(leg);
-    localStorage.setItem('pendingParlayLegs', JSON.stringify(pending));
-    // Redirect to tracker
-    window.location.href = '/tracker';
-  }
   }).join('');
   document.getElementById('luP').innerHTML=
     '<div style="overflow-x:auto"><table class="lu-table"><thead>'+hdr+'</thead><tbody>'+rows+'</tbody></table></div>'
@@ -1293,6 +1273,24 @@ function showTab(side){
       +(hasFg?'<span style="color:var(--fg)">&#9889; Orange = FanGraphs (wOBA/wRC+/WAR)</span>':'')
       +(hasSvX||hasSvSc?'<span style="color:var(--sv)">&#127987;&#65039; Cyan = Baseball Savant (xStats/EV/HH%/Brl%)</span>':'')
       +'</div>':'');
+}
+
+// Add to Parlay handler — saves a pending leg to localStorage and navigates to tracker
+function addToParlay(playerName, type, idx) {
+  var leg = {
+    type: type,
+    name: playerName,
+    idx: idx,
+    source: 'deepdive',
+    ts: Date.now()
+  };
+  var pending = [];
+  try {
+    pending = JSON.parse(localStorage.getItem('pendingParlayLegs')||'[]');
+  } catch(e) {}
+  pending.push(leg);
+  localStorage.setItem('pendingParlayLegs', JSON.stringify(pending));
+  window.location.href = '/tracker';
 }
 
 loadTrackedKeys();
@@ -2307,10 +2305,11 @@ function loadPropsProjections(){
         if(ACTIVE_TAB==='proj') renderProjectionHub();
         // Refresh pitcher cards so PITCH X panels populate
         if(PD && PD.success) renderPitchers();
-        buildParlayRec();
       }
+      // Always clear the spinner regardless of success/failure
+      buildParlayRec();
     })
-    .catch(function(){}); // silent — BAT X panel will show placeholder
+    .catch(function(){ buildParlayRec(); }); // clear spinner on network error
 }
 
 function buildParlayRec(){
