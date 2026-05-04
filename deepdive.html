@@ -1260,10 +1260,32 @@ function showTab(side){
     if(hasSvSc)sc+='<td class="sv-c '+evc(p.sv_ev)+'">'+pv(p.sv_ev,'---')+'</td>'
       +'<td class="sv-c '+hhc(p.sv_hh_pct)+'">'+pv(p.sv_hh_pct,'---')+'</td>'
       +'<td class="sv-c '+brlc(p.sv_brl_pct)+'">'+pv(p.sv_brl_pct,'---')+'</td>';
-    return '<tr><td class="on">'+(i+1)+'</td><td>'+p.name+'</td><td><span class="pos-tag">'+p.pos+'</span></td>'
+    // Add to Parlay button
+    var addBtn = '<button class="parlay-btn" style="margin-left:8px;padding:2px 8px;font-size:.7rem;border-radius:6px;border:1px solid var(--c);background:rgba(0,229,255,.08);color:var(--c);cursor:pointer" onclick="addToParlay(\''+esc(p.name)+'\', \'player\', '+i+')">+ Parlay</button>';
+    return '<tr><td class="on">'+(i+1)+'</td><td>'+p.name+addBtn+'</td><td><span class="pos-tag">'+p.pos+'</span></td>'
       +'<td class="'+avc(p.avg)+'">'+pv(p.avg,'---')+'</td>'
       +'<td>'+pv(p.obp,'---')+'</td><td>'+pv(p.slg,'---')+'</td><td>'+pv(p.ops,'---')+'</td>'
       +'<td>'+p.ab+'</td><td>'+p.hr+'</td><td>'+p.rbi+'</td>'+fc+sc+'</tr>';
+  // Add to Parlay handler (stub)
+  function addToParlay(playerName, type, idx) {
+    // Compose a parlay leg object (expand as needed)
+    var leg = {
+      type: type,
+      name: playerName,
+      idx: idx,
+      source: 'deepdive',
+      ts: Date.now()
+    };
+    // Store in localStorage for tracker to pick up
+    var pending = [];
+    try {
+      pending = JSON.parse(localStorage.getItem('pendingParlayLegs')||'[]');
+    } catch(e) {}
+    pending.push(leg);
+    localStorage.setItem('pendingParlayLegs', JSON.stringify(pending));
+    // Redirect to tracker
+    window.location.href = '/tracker';
+  }
   }).join('');
   document.getElementById('luP').innerHTML=
     '<div style="overflow-x:auto"><table class="lu-table"><thead>'+hdr+'</thead><tbody>'+rows+'</tbody></table></div>'

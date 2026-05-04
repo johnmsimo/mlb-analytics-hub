@@ -1,3 +1,33 @@
+// --- Auto-import pending parlay legs from deepdive/localStorage ---
+window.addEventListener('DOMContentLoaded', function() {
+  try {
+    var pending = JSON.parse(localStorage.getItem('pendingParlayLegs')||'[]');
+    if (pending && pending.length) {
+      pending.forEach(function(leg) {
+        // You may want to map this to your actual pick/leg structure
+        addPendingParlayLeg(leg);
+      });
+      localStorage.removeItem('pendingParlayLegs');
+    }
+  } catch(e) {}
+});
+
+function addPendingParlayLeg(leg) {
+  // This is a stub. You should map 'leg' to your actual pick/leg structure.
+  // For demo, just show a toast or add to builder if you have a JS API.
+  if (window.addLegToParlayBuilder) {
+    window.addLegToParlayBuilder(leg);
+  } else {
+    // Fallback: show a message
+    var el = document.getElementById('parlayCards');
+    if (el) {
+      var div = document.createElement('div');
+      div.className = 'parlay-leg';
+      div.textContent = '+ ' + (leg.name || 'Unknown') + ' (from deepdive)';
+      el.appendChild(div);
+    }
+  }
+}
 <!DOCTYPE html>
 <html lang="en">
 <head>

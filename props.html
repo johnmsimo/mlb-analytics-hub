@@ -33,6 +33,16 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 @keyframes lpulse{0%,100%{box-shadow:0 0 0 0 rgba(0,230,118,.3)}50%{box-shadow:0 0 0 4px rgba(0,230,118,0)}}
 .gchip-teams{font-family:'Orbitron',monospace;font-size:.72rem;color:var(--c);letter-spacing:.8px;font-weight:700}
 .gchip-time{font-size:.65rem;color:var(--mu)}
+  // + Parlay buttons for actionable props
+  function actionableParlayBtns() {
+    const props = [];
+    if (p.hits != null) props.push({marketKey:'player_hits', label:`HITS ${p.hits.toFixed(2)}`, line:p.hits});
+    if (p.hr != null)   props.push({marketKey:'player_home_runs', label:`HR ${p.hr.toFixed(2)}`, line:p.hr});
+    if (p.tb != null)   props.push({marketKey:'player_total_bases', label:`TB ${p.tb.toFixed(2)}`, line:p.tb});
+    if (p.rbi != null)  props.push({marketKey:'player_rbi', label:`RBI ${p.rbi.toFixed(2)}`, line:p.rbi});
+    if (p.hrr != null)  props.push({marketKey:'player_hrr', label:`H+R+RBI ${p.hrr.toFixed(2)}`, line:p.hrr});
+    return props.map(prop => `<button class="save-btn parlay-btn" onclick="addToParlay({player:'${esc(b.name)}',team:'${esc(b.team)}',marketKey:'${prop.marketKey}',line:'${prop.line}',gamePk:'${b.gamePk||''}'})">＋ PARLAY</button>`).join(' ');
+  }
 .gchip-st{font-size:.58rem;font-family:'Orbitron',monospace;letter-spacing:1px;color:var(--mu)}
 .gchip-st.live{color:var(--g)}
 .main{padding:24px 32px;max-width:1640px;margin:0 auto}
@@ -43,6 +53,7 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .tab{padding:11px 24px;border-radius:10px 10px 0 0;border:1px solid transparent;border-bottom:none;background:transparent;color:var(--mu);font-family:'Orbitron',monospace;font-size:.68rem;letter-spacing:1.5px;cursor:pointer;transition:all .2s;margin-bottom:-1px}
 .tab:hover{color:var(--t);background:rgba(255,255,255,.03)}
 .tab.active{background:var(--card);border-color:var(--b);border-bottom-color:var(--card);color:var(--c)}
+        ${actionableParlayBtns()}
 .tabpanel{display:none}.tabpanel.active{display:block}
 .subtabs{display:flex;gap:8px;margin-bottom:18px}
 .stab{padding:7px 18px;border-radius:999px;border:1px solid var(--b);background:rgba(255,255,255,.02);color:var(--mu);font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:1.5px;cursor:pointer;transition:all .2s}
@@ -818,6 +829,13 @@ async function loadGames() {
       document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === 'projections'));
       document.querySelectorAll('.tabpanel').forEach(p => p.classList.toggle('active', p.id === 'tab-projections'));
       switchSub('batters');
+  // + Parlay buttons for actionable pitcher props
+  function actionableParlayBtns() {
+    const props = [];
+    if (pr.k != null) [3.5,4.5,5.5,6.5].forEach(line => props.push({marketKey:'pitcher_strikeouts', label:`K ${line}`, line:line}));
+    if (pr.bb != null) props.push({marketKey:'pitcher_walks', label:`BB ${pr.bb.toFixed(2)}`, line:pr.bb});
+    return props.map(prop => `<button class="save-btn parlay-btn" onclick="addToParlay({player:'${esc(p.name)}',team:'${esc(p.team)}',marketKey:'${prop.marketKey}',line:'${prop.line}',gamePk:'${p.gamePk||''}'})">＋ PARLAY</button>`).join(' ');
+  }
       try {
         await selectGame(first.gamePk, first.awayAbbr, first.homeAbbr);
       } catch (ex) {
@@ -840,6 +858,7 @@ async function loadFullScan() {
   CUR_AWAY = '';
   FULL_SCAN_MODE = true;
   PROJ_DATA = MTCH_DATA = null;
+    <div style="margin:10px 0">${actionableParlayBtns()}</div>
   LINE_SHOP_CACHE = {};
   SPRAY_CHART_DATA = {};
   SPRAY_CHART_FILTERS = {};
@@ -931,6 +950,8 @@ async function selectGame(pk, awayAbbr, homeAbbr) {
   startLineupPolling(pk);
 
   const activeTab = document.querySelector('.tab.active')?.dataset.tab || 'projections';
+      // + Parlay button
+      const parlayBtn = `<button class='save-btn parlay-btn' onclick="addToParlay({player:'${esc(b.player)}',team:'${esc(b.team)}',marketKey:'${b.marketKey}',line:'${b.line}',gamePk:'${b.gamePk||''}'})">＋ PARLAY</button>`;
   await loadTab(activeTab);
 }
 
@@ -949,6 +970,22 @@ async function checkLineupStatus(pk) {
   } catch(e) { console.warn('[lineup-poll]', e.message); }
 }
 
+// ── Parlay Handler ──
+function addToParlay(leg) {
+  try {
+    const key = 'parlay_legs';
+    let legs = [];
+    try { legs = JSON.parse(localStorage.getItem(key)) || []; } catch {}
+    // Prevent duplicate (same player, market, line, game)
+    if (!legs.some(l => l.player === leg.player && l.marketKey === leg.marketKey && String(l.line) === String(leg.line) && String(l.gamePk) === String(leg.gamePk))) {
+      legs.push(leg);
+      localStorage.setItem(key, JSON.stringify(legs));
+    }
+    window.location.href = '/tracker';
+  } catch(e) {
+    alert('Failed to add to parlay: ' + e.message);
+  }
+}
 function startLineupPolling(pk) {
   // Immediate first check
   checkLineupStatus(pk);

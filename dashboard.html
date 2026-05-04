@@ -823,6 +823,8 @@ function renderQuickProps(pk,d){
     var key=p.playerId+':'+p.market+':'+p.line;
     var saved=tracked.indexOf(key)>=0;
     var bid='qpsave-'+pk+'-'+i;
+    // --- Add Parlay Button ---
+    var parlayBtn = '<button class="qp-save" style="margin-left:6px;background:rgba(224,64,251,.08);border:1px solid #e040fb;color:#e040fb" onclick="addToParlayFromQP(event,'+encodeURIComponent(JSON.stringify(p))+')">+ Parlay</button>';
     return '<div class="qp-row">'
       +'<span class="qp-name">'+p.player+'</span>'
       +'<span class="qp-mkt">'+mkt+'</span>'
@@ -831,6 +833,7 @@ function renderQuickProps(pk,d){
       +'<button class="qp-save'+(saved?' saved':'')
       +'" id="'+bid+'" onclick="qpSave(event,'+JSON.stringify(p)+',\''+bid+'\')">'
       +(saved?'✓ Saved':'💾')+'</button>'
+      +parlayBtn
       +'</div>';
   }).join('');
 }
@@ -856,6 +859,33 @@ function qpSave(e,pick,btnId){
       }
     })
     .catch(function(){if(btn)btn.textContent='Err';});
+}
+
+// --- Add to Parlay from Quick Props ---
+function addToParlayFromQP(e, pickStr) {
+  e.stopPropagation();
+  try {
+    var pick = JSON.parse(decodeURIComponent(pickStr));
+    var parlayLegs = JSON.parse(localStorage.getItem('parlayLegs') || '[]');
+    // Normalize prop for parlay
+    var leg = {
+      player: pick.player,
+      playerId: pick.playerId,
+      team: pick.team,
+      marketKey: pick.marketKey || ('batter_' + pick.market),
+      line: pick.line,
+      recommendedSide: 'Over',
+      source: 'dashboard',
+      adjProb: pick.l10_pct || 0.5,
+      hubRating: pick.hubRating || pick.hub_score || 0,
+      evPct: (pick.evPct != null ? pick.evPct / 100 : null)
+    };
+    parlayLegs.push(leg);
+    localStorage.setItem('parlayLegs', JSON.stringify(parlayLegs));
+    window.location.href = '/tracker';
+  } catch (err) {
+    showToast('Failed to add to parlay', 'err');
+  }
 }
 
 let TEAM_DATA={teams:[]}, TEAM_PITCH_RANK={rankings:[]}, MC_DATA={games:[],topProps:[]};
@@ -1030,6 +1060,23 @@ function _mcRenderRows(){
     var price=parseFloat(p.price||0);
     var fair=_mcFairPrice(prob);
     var bkTxt=_mcEsc(p.bookmaker||p.source||'Model');
+    // --- Add Parlay Button for actionable props ---
+    var parlayBtn = '';
+    if (p.player && p.market && p.line != null) {
+      var parlayObj = encodeURIComponent(JSON.stringify({
+        player: p.player,
+        playerId: p.playerId,
+        team: p.team,
+        marketKey: p.market,
+        line: p.line,
+        recommendedSide: (p.recommendation && p.recommendation.toUpperCase().includes('UNDER')) ? 'Under' : 'Over',
+        source: 'mc',
+        adjProb: p.prob,
+        hubRating: p.hubRating || 0,
+        evPct: p.edge != null ? parseFloat(p.edge) : null
+      }));
+      parlayBtn = '<button class="qp-save" style="margin-left:6px;background:rgba(224,64,251,.08);border:1px solid #e040fb;color:#e040fb" onclick="addToParlayFromMC(event,\''+parlayObj+'\')">+ Parlay</button>';
+    }
     return '<tr>'
       +'<td><span class="mc-pn">'+_mcEsc(p.player||'—')+'</span></td>'
       +'<td style="font-size:.61rem;color:var(--mu);white-space:nowrap">'+_mcEsc(p.matchup||'—')+'</td>'
@@ -1043,9 +1090,22 @@ function _mcRenderRows(){
       +'<td>'+_mcKellyCell(prob,price||null)+'</td>'
       +'<td style="font-family:Orbitron,monospace;font-size:.65rem;color:#80cbc4">'+fair+'</td>'
       +'<td style="font-size:.58rem;color:var(--mu)">'+bkTxt+'</td>'
-      +'<td><span class="mc-rs">'+_mcEsc(p.reasoning||'—')+'</span></td>'
+      +'<td><span class="mc-rs">'+_mcEsc(p.reasoning||'—')+'</span>'+parlayBtn+'</td>'
       +'</tr>';
   }).join('');
+// --- Add to Parlay from MC Board ---
+function addToParlayFromMC(e, pickStr) {
+  e.stopPropagation();
+  try {
+    var pick = JSON.parse(decodeURIComponent(pickStr));
+    var parlayLegs = JSON.parse(localStorage.getItem('parlayLegs') || '[]');
+    parlayLegs.push(pick);
+    localStorage.setItem('parlayLegs', JSON.stringify(parlayLegs));
+    window.location.href = '/tracker';
+  } catch (err) {
+    showToast('Failed to add to parlay', 'err');
+  }
+}
 }
 function _mcSetF(type,val){
   if(type==='g')_MFG=val;if(type==='m')_MFM=val;if(type==='r')_MFR=val;
