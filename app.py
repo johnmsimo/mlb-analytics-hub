@@ -183,6 +183,8 @@ _weather_cache_lock = threading.Lock()
 _weather_cache = {}
 _WEATHER_TTL = 20 * 60
 _WEATHER_FAIL_TTL = 120
+# Seconds to wait for FG / Savant caches on each request during cold starts.
+_CACHE_WAIT_TIMEOUT_SEC = 5
 _active_roster_cache_lock = threading.Lock()
 _active_roster_cache = {}
 _ACTIVE_ROSTER_TTL = 30 * 60
@@ -3449,9 +3451,9 @@ def api_model_actual_daily_summary_stored():
 @app.route("/api/game/<int:game_pk>")
 def api_game_detail(game_pk):
     t0 = time.perf_counter()
-    # Keep endpoint responsive during cold starts; refresh in background.
-    _maybe_refresh_fg()
-    _maybe_refresh_savant()
+    # Wait up to 5 s for each cache so FG/Savant columns appear even on cold starts.
+    _wait_for_fg_data(timeout_sec=_CACHE_WAIT_TIMEOUT_SEC)
+    _wait_for_savant_data(timeout_sec=_CACHE_WAIT_TIMEOUT_SEC)
     try:
         r = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=10)
         r.raise_for_status()

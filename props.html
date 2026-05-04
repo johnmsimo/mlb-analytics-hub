@@ -668,6 +668,7 @@ let LINEUP_STATUS = {};    // gamePk → {changes, away, home} — last known st
 let SORT_KEY      = 'hits';
 let VAL_FILT      = 'all';
 let LINE_SHOP_CACHE = {};
+const SCAN_RETRY_DELAY_MS = 20000;  // ms before auto-retrying a computing full scan
 let SPRAY_CHART_DATA = {};  // keyed by player_id
 let SPRAY_CHART_FILTERS = {}; // keyed by player_id, stores active filter state
 let SPRAY_CHART_META = {}; // keyed by player_id, stores no-data/error reason
@@ -864,6 +865,18 @@ async function loadFullScan() {
     const r = await fetch(`/api/props/scan/today?date=${encodeURIComponent(date)}`);
     const d = await r.json();
     if (!d.success) throw new Error(d.error || 'Full scan unavailable');
+    // Server is still computing the scan — show a message and auto-retry
+    if (d.computing) {
+      gel('batterGrid').innerHTML = loadHTML('SCAN COMPUTING…');
+      const wrap = document.getElementById('propsPicksWrap');
+      const el   = document.getElementById('propsPicksPanel');
+      if (wrap) wrap.style.display = '';
+      if (el)   el.innerHTML = '<div class="props-pr-empty">⏳ FULL SCAN COMPUTING — AUTO-REFRESHING IN 20s</div>';
+      gel('matchHeader').innerHTML = `FULL SLATE · ${date}`;
+      gel('lastUpdate').textContent = 'SCAN COMPUTING… AUTO-REFRESH IN 20s';
+      setTimeout(loadFullScan, SCAN_RETRY_DELAY_MS);
+      return;
+    }
     PROJ_DATA = d;
     VAL_DATA = d.props || [];
     PLAYER_HUB_MAP = {};
@@ -1370,7 +1383,14 @@ function buildPropsPicksPanel(d) {
   if (!wrap || !el) return;
   const batters  = d.batters  || [];
   const pitchers = d.pitchers || [];
-  if (!batters.length && !pitchers.length) return;
+  if (!batters.length && !pitchers.length) {
+    // If the wrap is already visible (e.g. from a prior game selection), replace the
+    // spinner with a neutral message so it doesn't spin forever.
+    if (wrap && wrap.style.display !== 'none') {
+      el.innerHTML = '<div class="props-pr-empty">No top picks available for this selection.</div>';
+    }
+    return;
+  }
   wrap.style.display = '';
 
   const COMP_LABELS = {contact:'contact quality',power:'raw power',discipline:'plate discipline',platoon:'platoon edge',park:'park factor',weather:'weather',pitcher:'pitcher matchup',form:'recent form',bvp:'BvP history'};
