@@ -3455,13 +3455,26 @@ def api_game_detail(game_pk):
     _wait_for_fg_data(timeout_sec=_CACHE_WAIT_TIMEOUT_SEC)
     _wait_for_savant_data(timeout_sec=_CACHE_WAIT_TIMEOUT_SEC)
     try:
-        r = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=10)
-        r.raise_for_status()
-        d = r.json().get("teams",{})
+        away_bats, home_bats = [], []
+        try:
+            r = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=10)
+            r.raise_for_status()
+            d = r.json().get("teams",{})
+            away_bats = get_batters_from_boxscore(d.get("away",{}), "away")
+            home_bats = get_batters_from_boxscore(d.get("home",{}), "home")
+        except Exception as ex:
+            print("[api_game_detail] boxscore error:", ex)
+        # Pre-game fallback: use schedule lineup or roster when boxscore has no batters.
+        if not away_bats or not home_bats:
+            _, fb_away, fb_home, _, _, _ = _props_fetch_game(game_pk)
+            if not away_bats:
+                away_bats = fb_away
+            if not home_bats:
+                home_bats = fb_home
         return jsonify({
             "success": True,
-            "awayBatters": get_batters_from_boxscore(d.get("away",{}), "away"),
-            "homeBatters": get_batters_from_boxscore(d.get("home",{}), "home"),
+            "awayBatters": away_bats,
+            "homeBatters": home_bats,
         })
     except Exception as ex:
         print("[api_game_detail]", traceback.format_exc())
@@ -13298,6 +13311,19 @@ def api_props_projections(game_pk):
         home_abbr = home_t.get("team", {}).get("abbreviation", "HOME")
         home_id   = home_t.get("team", {}).get("id")
         pf        = PARK_FACTORS.get(home_id, 1.0)
+
+        away_full = away_t.get("team", {}).get("name", away_abbr)
+        home_full = home_t.get("team", {}).get("name", home_abbr)
+
+        event, _ = _find_odds_event(away_full, home_full)
+        featured  = _load_event_odds(event.get("id") if event else None, featured_only=True) if event else []
+        game_lines = {
+            "awayFull":  away_full,
+            "homeFull":  home_full,
+            "moneyline": _best_moneyline(featured, away_full, home_full),
+            "total":     _best_total(featured),
+            "spread":    _best_spread(featured, away_full, home_full),
+        }
 
         ap_info = pitchers["ap"]; hp_info = pitchers["hp"]
         ap_name = ap_info.get("fullName", "TBD")
