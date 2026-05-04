@@ -594,6 +594,7 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
           <div class="settings-actions">
             <button class="tabbtn" onclick="triggerBrainIngest()">INGEST NOW</button>
             <button class="tabbtn" onclick="refreshBrainStatus()">REFRESH</button>
+            <button class="tabbtn" onclick="fetchMLBPlayers()">FETCH MLB API PLAYERS</button>
             <span id="brainMsg" class="settings-msg"></span>
           </div>
         </div>
@@ -623,6 +624,22 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
 <div id="appToast" class="toast"></div>
 <footer><div class="footstack"><div>MLB ANALYTICS HUB &nbsp;|&nbsp; DATA: MLB API &middot; FANGRAPHS &middot; BASEBALL SAVANT &middot; OPEN-METEO</div><div><span class="fgtag">FG</span> FANGRAPHS: wOBA &middot; wRC+ &middot; FIP &middot; xFIP &middot; WAR &nbsp;|&nbsp; <span class="svtag">SV</span> BASEBALL SAVANT: xERA &middot; xBA &middot; xSLG &middot; xwOBA &middot; EV &middot; HH% &middot; Barrel% &middot; Pitch Arsenal</div><div>FOR ENTERTAINMENT PURPOSES ONLY</div></div></footer>
 <script>
+// --- MLB API Players fetch button logic ---
+function fetchMLBPlayers() {
+  setText('brainMsg', 'Fetching MLB API players...');
+  fetch('/api/brain/fetch-mlb-players', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({})
+  })
+    .then(r => r.json())
+    .then(d => {
+      if (!d || !d.success) throw new Error(d.error || 'Fetch failed');
+      setText('brainMsg', 'Fetched ' + (d.summary?.totalPlayers || 0) + ' players across ' + (d.summary?.totalTeams || 0) + ' teams.');
+      refreshBrainStatus();
+    })
+    .catch(e => setText('brainMsg', e.message || 'Fetch failed', true));
+}
 // --- FINAL DAILY SUMMARY date picker logic ---
 function getSelectedSummaryDate() {
   const inp = document.getElementById('dailySummaryDate');
