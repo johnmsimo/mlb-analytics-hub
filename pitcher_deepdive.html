@@ -571,7 +571,7 @@ function lookupBatX(playerName){
   return batters.find(b=>b.name===playerName) || null;
 }
 
-function batxOUPills(proj, adj){
+function batxOUPills(proj, adj, playerName){
   if(!proj || !adj) return '';
   const COMP_LABELS={contact:'contact quality',power:'raw power',discipline:'plate discipline',platoon:'platoon edge',park:'park factor',weather:'weather',pitcher:'pitcher matchup',form:'recent form',bvp:'BvP history'};
   const keys=Object.keys(adj).filter(k=>COMP_LABELS[k]&&adj[k]!=null);
@@ -582,6 +582,12 @@ function batxOUPills(proj, adj){
   if(topPos.length) parts.push('Boosted by '+topPos.map(k=>COMP_LABELS[k]).join(' & '));
   if(topNeg.length) parts.push('limited by '+topNeg.map(k=>COMP_LABELS[k]).join(' & '));
   const reasoning=parts.join('; ');
+  const MARKET_KEY_BY_STAT = {
+    hits: 'batter_hits',
+    tb: 'batter_total_bases',
+    hr: 'batter_home_runs',
+    rbi: 'batter_rbis',
+  };
   const lines=[
     {stat:'hits',line:0.5,label:'H 0.5'},{stat:'hits',line:1.5,label:'H 1.5'},
     {stat:'tb',line:1.5,label:'TB 1.5'},{stat:'tb',line:2.5,label:'TB 2.5'},
@@ -594,7 +600,9 @@ function batxOUPills(proj, adj){
     const col=dir==='OVER'?'#4caf50':'#f44336';
     const bg=dir==='OVER'?'rgba(76,175,80,.1)':'rgba(244,67,54,.08)';
     const bor=dir==='OVER'?'rgba(76,175,80,.3)':'rgba(244,67,54,.25)';
-    return`<span style="padding:3px 8px;border-radius:5px;font-family:Orbitron,monospace;font-size:.5rem;letter-spacing:.6px;border:1px solid ${bor};background:${bg};color:${col};white-space:nowrap">${def.label} <strong>${dir}</strong> <span style="opacity:.6;font-size:.44rem">${(edge>=0?'+':'')+edge.toFixed(2)}</span></span>`;
+    const marketKey = MARKET_KEY_BY_STAT[def.stat] || '';
+    return`<span style="padding:3px 8px;border-radius:5px;font-family:Orbitron,monospace;font-size:.5rem;letter-spacing:.6px;border:1px solid ${bor};background:${bg};color:${col};white-space:nowrap">${def.label} <strong>${dir}</strong> <span style="opacity:.6;font-size:.44rem">${(edge>=0?'+':'')+edge.toFixed(2)}</span></span>` +
+      ` <button style="margin-left:4px;padding:2px 7px;font-size:.5rem;border-radius:6px;border:1px solid var(--c);background:rgba(0,229,255,.08);color:var(--c);cursor:pointer" onclick="addToParlayFromPitcher('${(playerName||'Player').replace(/'/g, "\\'")}', '${marketKey}', ${def.line}, '${dir === 'OVER' ? 'Over' : 'Under'}', '${def.label}')">+ Parlay</button>`;
   }).filter(Boolean).join('');
   if(!pills) return '';
   const comp=proj.composite;
@@ -647,6 +655,27 @@ function buildCard(pit,teamAbbr,oppAbbr){
     <div id="${pit.id}-log"     class="pc-pane">${buildLogPane(log)}</div>
     <div id="${pit.id}-ars"     class="pc-pane">${buildArsenalPane(s, pit.id)}</div>
   </div>`;
+}
+
+function addToParlayFromPitcher(player, marketKey, line, recommendedSide, label) {
+  try {
+    if (!player || !marketKey) throw new Error('Missing player or market');
+    const pending = JSON.parse(localStorage.getItem('pendingParlayLegs') || '[]');
+    const queue = Array.isArray(pending) ? pending : [];
+    queue.push({
+      player,
+      marketKey,
+      line,
+      recommendedSide,
+      sideLabel: recommendedSide,
+      source: 'pitcher_deep_dive',
+      reason: `Imported from Pitcher Deep Dive (${label || marketKey})`,
+    });
+    localStorage.setItem('pendingParlayLegs', JSON.stringify(queue));
+    window.location.href = '/tracker';
+  } catch (e) {
+    alert('Failed to add to parlay: ' + e.message);
+  }
 }
 
 function getPitcherVulnerability(pitcherId){
@@ -1075,7 +1104,7 @@ function buildThreatsPane(pitcherId){
         <div class="th-proj-cell"><div class="v ${probCls(b.hrProb)}">${(b.hrProb*100).toFixed(0)}%</div><div class="lbl">HR</div></div>
         <div class="th-proj-cell"><div class="v ${probCls(b.rbiProb)}">${(b.rbiProb*100).toFixed(0)}%</div><div class="lbl">1+ RBI</div></div>
       </div>
-      ${ (() => { const bx=lookupBatX(b.name); return bx ? batxOUPills(bx.proj, bx.proj?.adjustments) : (PROPS_DATA ? '' : '<div style="grid-column:1/-1;font-size:.52rem;color:var(--mu);opacity:.6">BAT X loading…</div>'); })() }
+      ${ (() => { const bx=lookupBatX(b.name); return bx ? batxOUPills(bx.proj, bx.proj?.adjustments, b.name) : (PROPS_DATA ? '' : '<div style="grid-column:1/-1;font-size:.52rem;color:var(--mu);opacity:.6">BAT X loading…</div>'); })() }
     </div>`;
   }).join('');
 
