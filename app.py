@@ -1947,19 +1947,23 @@ def _memory_ingest_mlb_api_player_stats(team_ids, max_players=200, season=None):
                     timeout=12,
                     default={}
                 )
-                team_info = payload.get("team") or {}
-                roster = payload.get("roster") or []
-                
+                # MLB API now returns 'teams' array
+                teams = payload.get("teams") or []
+                if not teams:
+                    print(f"[_memory_ingest_mlb_api_player_stats] Team {tid} missing in API response.")
+                    continue
+                team_info = teams[0]
+                roster_obj = team_info.get("roster") or {}
+                roster = roster_obj.get("roster", []) if isinstance(roster_obj, dict) else []
+
                 players_by_type = {"batters": [], "pitchers": [], "other": []}
-                
+
                 for player_entry in roster[:max_players]:
                     person = player_entry.get("person") or {}
                     position = player_entry.get("position") or {}
                     player_id = person.get("id")
-                    
                     if not player_id:
                         continue
-                    
                     player_info = {
                         "id": player_id,
                         "name": person.get("fullName"),
@@ -1967,7 +1971,6 @@ def _memory_ingest_mlb_api_player_stats(team_ids, max_players=200, season=None):
                         "jersey": player_entry.get("jerseyNumber"),
                         "status": (player_entry.get("status") or {}).get("description"),
                     }
-                    
                     pos_code = position.get("code") or ""
                     if pos_code == "P":
                         players_by_type["pitchers"].append(player_info)
@@ -1975,9 +1978,8 @@ def _memory_ingest_mlb_api_player_stats(team_ids, max_players=200, season=None):
                         players_by_type["batters"].append(player_info)
                     else:
                         players_by_type["other"].append(player_info)
-                    
                     total_players += 1
-                
+
                 out["teams"][str(tid)] = {
                     "teamName": team_info.get("name"),
                     "players": players_by_type,

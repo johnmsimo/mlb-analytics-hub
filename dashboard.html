@@ -600,6 +600,10 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
 
         <div class="settings-card">
           <div class="settings-title">FINAL DAILY SUMMARY</div>
+          <div style="margin-bottom:10px">
+            <label for="dailySummaryDate" style="font-size:.7rem;color:var(--mu);margin-right:8px">Select Date:</label>
+            <input type="date" id="dailySummaryDate" style="font-size:.9rem;padding:2px 8px;border-radius:5px;border:1px solid var(--b);background:var(--card);color:var(--t)" value="" onchange="onDailySummaryDateChange()">
+          </div>
           <div id="dailySummaryStatus" class="settings-status">Loading final daily summary…</div>
           <div id="dailySummaryDetails" style="font-size:.68rem;color:var(--t);line-height:1.6"></div>
           <div class="settings-actions">
@@ -619,6 +623,17 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
 <div id="appToast" class="toast"></div>
 <footer><div class="footstack"><div>MLB ANALYTICS HUB &nbsp;|&nbsp; DATA: MLB API &middot; FANGRAPHS &middot; BASEBALL SAVANT &middot; OPEN-METEO</div><div><span class="fgtag">FG</span> FANGRAPHS: wOBA &middot; wRC+ &middot; FIP &middot; xFIP &middot; WAR &nbsp;|&nbsp; <span class="svtag">SV</span> BASEBALL SAVANT: xERA &middot; xBA &middot; xSLG &middot; xwOBA &middot; EV &middot; HH% &middot; Barrel% &middot; Pitch Arsenal</div><div>FOR ENTERTAINMENT PURPOSES ONLY</div></div></footer>
 <script>
+// --- FINAL DAILY SUMMARY date picker logic ---
+function getSelectedSummaryDate() {
+  const inp = document.getElementById('dailySummaryDate');
+  return inp && inp.value ? inp.value : (new Date()).toISOString().slice(0,10);
+}
+
+function onDailySummaryDateChange() {
+  // Optionally auto-refresh summary on date change
+  loadStoredFinalDailySummary();
+  refreshDailySummaryPushState();
+}
 function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function tick(){var n=new Date(),h=n.getHours(),m=n.getMinutes(),s=n.getSeconds(),h12=(h%12||12),ap=h>=12?'PM':'AM';document.getElementById('clk').textContent=('0'+h12).slice(-2)+':'+('0'+m).slice(-2)+':'+('0'+s).slice(-2)+' '+ap;document.getElementById('dt').textContent=n.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'}).toUpperCase();}
 setInterval(tick,1000);tick();
@@ -1847,7 +1862,8 @@ function renderFinalDailySummary(payload, sourceLabel){
 
 function loadFinalDailySummary(forceLive){
   setText('dailySummaryMsg',forceLive?'Building live summary...':'Loading summary...');
-  apiFetch('/api/model-actual/daily-summary'+(forceLive?'?sims=300':''))
+  const date = getSelectedSummaryDate();
+  apiFetch(`/api/model-actual/daily-summary?date=${encodeURIComponent(date)}${forceLive?'&sims=300':''}`)
     .then(function(r){return r.json();})
     .then(function(d){
       if(!d||!d.success) throw new Error(d.error||'Summary load failed');
@@ -1859,7 +1875,8 @@ function loadFinalDailySummary(forceLive){
 
 function loadStoredFinalDailySummary(){
   setText('dailySummaryMsg','Loading stored summary...');
-  apiFetch('/api/model-actual/daily-summary/stored')
+  const date = getSelectedSummaryDate();
+  apiFetch(`/api/model-actual/daily-summary/stored?date=${encodeURIComponent(date)}`)
     .then(function(r){return r.json();})
     .then(function(d){
       if(!d||!d.success) throw new Error(d.error||'Stored summary unavailable');
@@ -1875,7 +1892,7 @@ function pollDailySummaryPushStatus(dateStr, onDone, onFail, attempt){
     if(onFail) onFail(new Error('Push is taking longer than expected. Please retry load stored.'));
     return;
   }
-  apiFetch('/api/model-actual/daily-summary/push-status?date='+encodeURIComponent(dateStr||etTodayStr()))
+  apiFetch('/api/model-actual/daily-summary/push-status?date='+encodeURIComponent(dateStr||getSelectedSummaryDate()))
     .then(function(r){return r.json();})
     .then(function(d){
       if(!d||!d.success) throw new Error(d&&d.error||'Unable to check push status');
@@ -1893,7 +1910,7 @@ var __dailySummaryPushStateTimer = null;
 function refreshDailySummaryPushState(){
   var el=document.getElementById('dailySummaryPushState');
   if(!el) return;
-  var dateStr=etTodayStr();
+  var dateStr=getSelectedSummaryDate();
   apiFetch('/api/model-actual/daily-summary/push-status?date='+encodeURIComponent(dateStr))
     .then(function(r){return r.json();})
     .then(function(d){
@@ -1920,7 +1937,12 @@ function refreshDailySummaryPushState(){
 
 function pushFinalDailySummary(){
   setText('dailySummaryMsg','Pushing final daily summary...');
-  apiFetch('/api/model-actual/daily-summary/push',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sims:800,includeSim:true,maxGames:20})})
+  const date = getSelectedSummaryDate();
+  apiFetch('/api/model-actual/daily-summary/push',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({date,sims:800,includeSim:true,maxGames:20})
+  })
     .then(function(r){return r.json();})
     .then(function(d){
       if(!d||!d.success) throw new Error(d.error||'Push failed');
@@ -1941,7 +1963,12 @@ function pushFinalDailySummary(){
 
 function rebuildAndPushFinalDailySummary(){
   setText('dailySummaryMsg','Rebuilding and pushing summary...');
-  apiFetch('/api/model-actual/daily-summary/push',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sims:800,includeSim:true,maxGames:20})})
+  const date = getSelectedSummaryDate();
+  apiFetch('/api/model-actual/daily-summary/push',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({date,sims:800,includeSim:true,maxGames:20})
+  })
     .then(function(r){return r.json();})
     .then(function(d){
       if(!d||!d.success) throw new Error(d.error||'Rebuild + push failed');
