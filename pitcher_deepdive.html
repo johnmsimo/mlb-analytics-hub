@@ -836,7 +836,7 @@ function buildStatsPane(s,log){
 }
 
 // ── PROJECTION PANE ───────────────────────────────────────────────────────
-function buildProjPane(s,log,oppAbbr){
+function buildProjPane(s,log,oppAbbr,playerName){
   const era  = parseFloat(s.sv_xera||s.fg_era||s.era)||4.20;
   const k9   = parseFloat(s.fg_k9||s.k9)||8.0;
   const kpct = parseFloat(s.fg_kpct)||(k9/36);
@@ -860,7 +860,7 @@ function buildProjPane(s,log,oppAbbr){
   // ── Show real Odds API lines/odds for pitcher K props if available ──
   let ouPills = '';
   if (typeof PROPS_DATA === 'object' && PROPS_DATA && Array.isArray(PROPS_DATA.pitchers)) {
-    const pitcher = PROPS_DATA.pitchers.find(p => p.name === s.name);
+    const pitcher = PROPS_DATA.pitchers.find(p => p.name === (playerName || s.name));
     if (pitcher && Array.isArray(pitcher.oddsMarkets)) {
       const kMarkets = pitcher.oddsMarkets.filter(m => m.marketKey === 'pitcher_strikeouts');
       if (kMarkets.length) {
