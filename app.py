@@ -1,18 +1,3 @@
- 
-@app.route('/api/brain/fetch-mlb-players', methods=['POST'])
-def api_brain_fetch_mlb_players():
-    """
-    Manually fetch and ingest all MLB API player data for all teams (current season).
-    """
-    try:
-        season = request.get_json(silent=True) or {}
-        year = season.get('season') or datetime.now().year
-        team_ids = [i for i in range(108, 146)]
-        result = _memory_ingest_mlb_api_player_stats(team_ids, season=year)
-        return jsonify({'success': True, 'summary': result.get('summary', {}), 'details': result})
-    except Exception as ex:
-        print(f'[api_brain_fetch_mlb_players] {traceback.format_exc()}')
-        return jsonify({'success': False, 'error': str(ex)}), 500
 import os, threading, traceback, difflib, io, csv as csvmod, json, re, time, uuid, unicodedata, logging
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s %(message)s')
 import requests
@@ -93,6 +78,22 @@ from brain_merge_patch import (
 
 app = Flask(__name__)
 CORS(app)
+
+# --- MLB API PLAYERS INGEST ROUTE (must be after app = Flask(__name__)) ---
+@app.route('/api/brain/fetch-mlb-players', methods=['POST'])
+def api_brain_fetch_mlb_players():
+    """
+    Manually fetch and ingest all MLB API player data for all teams (current season).
+    """
+    try:
+        season = request.get_json(silent=True) or {}
+        year = season.get('season') or datetime.now().year
+        team_ids = [i for i in range(108, 146)]
+        result = _memory_ingest_mlb_api_player_stats(team_ids, season=year)
+        return jsonify({'success': True, 'summary': result.get('summary', {}), 'details': result})
+    except Exception as ex:
+        print(f'[api_brain_fetch_mlb_players] {traceback.format_exc()}')
+        return jsonify({'success': False, 'error': str(ex)}), 500
 
 # ── Global error handler for uncaught exceptions ──
 @app.errorhandler(Exception)
