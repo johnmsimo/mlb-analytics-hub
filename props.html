@@ -33,16 +33,6 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 @keyframes lpulse{0%,100%{box-shadow:0 0 0 0 rgba(0,230,118,.3)}50%{box-shadow:0 0 0 4px rgba(0,230,118,0)}}
 .gchip-teams{font-family:'Orbitron',monospace;font-size:.72rem;color:var(--c);letter-spacing:.8px;font-weight:700}
 .gchip-time{font-size:.65rem;color:var(--mu)}
-  // + Parlay buttons for actionable props
-  function actionableParlayBtns() {
-    const props = [];
-    if (p.hits != null) props.push({marketKey:'player_hits', label:`HITS ${p.hits.toFixed(2)}`, line:p.hits});
-    if (p.hr != null)   props.push({marketKey:'player_home_runs', label:`HR ${p.hr.toFixed(2)}`, line:p.hr});
-    if (p.tb != null)   props.push({marketKey:'player_total_bases', label:`TB ${p.tb.toFixed(2)}`, line:p.tb});
-    if (p.rbi != null)  props.push({marketKey:'player_rbi', label:`RBI ${p.rbi.toFixed(2)}`, line:p.rbi});
-    if (p.hrr != null)  props.push({marketKey:'player_hrr', label:`H+R+RBI ${p.hrr.toFixed(2)}`, line:p.hrr});
-    return props.map(prop => `<button class="save-btn parlay-btn" onclick="addToParlay({player:'${esc(b.name)}',team:'${esc(b.team)}',marketKey:'${prop.marketKey}',line:'${prop.line}',gamePk:'${b.gamePk||''}'})">＋ PARLAY</button>`).join(' ');
-  }
 .gchip-st{font-size:.58rem;font-family:'Orbitron',monospace;letter-spacing:1px;color:var(--mu)}
 .gchip-st.live{color:var(--g)}
 .main{padding:24px 32px;max-width:1640px;margin:0 auto}
@@ -53,7 +43,6 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .tab{padding:11px 24px;border-radius:10px 10px 0 0;border:1px solid transparent;border-bottom:none;background:transparent;color:var(--mu);font-family:'Orbitron',monospace;font-size:.68rem;letter-spacing:1.5px;cursor:pointer;transition:all .2s;margin-bottom:-1px}
 .tab:hover{color:var(--t);background:rgba(255,255,255,.03)}
 .tab.active{background:var(--card);border-color:var(--b);border-bottom-color:var(--card);color:var(--c)}
-        ${actionableParlayBtns()}
 .tabpanel{display:none}.tabpanel.active{display:block}
 .subtabs{display:flex;gap:8px;margin-bottom:18px}
 .stab{padding:7px 18px;border-radius:999px;border:1px solid var(--b);background:rgba(255,255,255,.02);color:var(--mu);font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:1.5px;cursor:pointer;transition:all .2s}
@@ -833,13 +822,6 @@ async function loadGames() {
       document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === 'projections'));
       document.querySelectorAll('.tabpanel').forEach(p => p.classList.toggle('active', p.id === 'tab-projections'));
       switchSub('batters');
-  // + Parlay buttons for actionable pitcher props
-  function actionableParlayBtns() {
-    const props = [];
-    if (pr.k != null) [3.5,4.5,5.5,6.5].forEach(line => props.push({marketKey:'pitcher_strikeouts', label:`K ${line}`, line:line}));
-    if (pr.bb != null) props.push({marketKey:'pitcher_walks', label:`BB ${pr.bb.toFixed(2)}`, line:pr.bb});
-    return props.map(prop => `<button class="save-btn parlay-btn" onclick="addToParlay({player:'${esc(p.name)}',team:'${esc(p.team)}',marketKey:'${prop.marketKey}',line:'${prop.line}',gamePk:'${p.gamePk||''}'})">＋ PARLAY</button>`).join(' ');
-  }
       try {
         await selectGame(first.gamePk, first.awayAbbr, first.homeAbbr);
       } catch (ex) {
@@ -862,7 +844,6 @@ async function loadFullScan() {
   CUR_AWAY = '';
   FULL_SCAN_MODE = true;
   PROJ_DATA = MTCH_DATA = null;
-    <div style="margin:10px 0">${actionableParlayBtns()}</div>
   LINE_SHOP_CACHE = {};
   SPRAY_CHART_DATA = {};
   SPRAY_CHART_FILTERS = {};
@@ -954,8 +935,6 @@ async function selectGame(pk, awayAbbr, homeAbbr) {
   startLineupPolling(pk);
 
   const activeTab = document.querySelector('.tab.active')?.dataset.tab || 'projections';
-      // + Parlay button
-      const parlayBtn = `<button class='save-btn parlay-btn' onclick="addToParlay({player:'${esc(b.player)}',team:'${esc(b.team)}',marketKey:'${b.marketKey}',line:'${b.line}',gamePk:'${b.gamePk||''}'})">＋ PARLAY</button>`;
   await loadTab(activeTab);
 }
 
@@ -1002,6 +981,19 @@ function addToParlay(leg) {
     alert('Failed to add to parlay: ' + e.message);
   }
 }
+
+// ── Parlay button click delegation (data-* attributes, no inline scope variables) ──
+document.addEventListener('click', function(e) {
+  const btn = e.target.closest('.parlay-btn');
+  if (!btn) return;
+  addToParlay({
+    player:    btn.dataset.player    ?? '',
+    team:      btn.dataset.team      ?? '',
+    marketKey: btn.dataset.marketKey ?? '',
+    line:      btn.dataset.line      ?? '',
+    gamePk:    btn.dataset.gamePk    ?? '',
+  });
+});
 function startLineupPolling(pk) {
   // Immediate first check
   checkLineupStatus(pk);
@@ -1276,25 +1268,68 @@ function renderMajorMarketsPanel(gameLines) {
     panel.innerHTML = '';
     return;
   }
-  const mkOrder = ['moneyline', 'spread', 'total'];
-  const mkLabels = {moneyline: 'Moneyline', spread: 'Spread', total: 'Total'};
-  const oddsRow = mkOrder.map(mk => {
-    const arr = gameLines[mk];
-    if (!arr || !arr.length) return '';
+
+  const awayFull = gameLines.awayFull ?? 'Away';
+  const homeFull = gameLines.homeFull ?? 'Home';
+
+  // Moneyline: { away: {price, bookmaker}, home: {price, bookmaker} }
+  const renderMoneyline = () => {
+    const ml = gameLines.moneyline;
+    if (!ml) return '';
+    const awayPrice = ml.away?.price;
+    const homePrice = ml.home?.price;
+    if (awayPrice == null && homePrice == null) return '';
+    const away = awayPrice != null ? `<span style='color:var(--mu)'>${awayFull}:</span> <span style='color:var(--c);font-weight:700'>${awayPrice > 0 ? '+' : ''}${awayPrice}</span>` : '';
+    const home = homePrice != null ? `<span style='color:var(--mu)'>${homeFull}:</span> <span style='color:var(--c);font-weight:700'>${homePrice > 0 ? '+' : ''}${homePrice}</span>` : '';
     return `<div style="margin-bottom:7px">
-      <span style="font-family:'Orbitron',monospace;font-size:.7rem;color:var(--c);letter-spacing:1.5px;min-width:80px;display:inline-block">${mkLabels[mk]}</span>
-      ${arr.map(line => {
-        const lineStr = line.line != null ? `<span style='color:var(--o);font-weight:700'>${line.line}</span>` : '';
-        const away = line.away_odds != null ? `<span style='color:var(--mu)'>${line.away_team||'Away'}:</span> <span style='color:var(--c);font-weight:700'>${line.away_odds>0?'+':''}${line.away_odds}</span>` : '';
-        const home = line.home_odds != null ? `<span style='color:var(--mu)'>${line.home_team||'Home'}:</span> <span style='color:var(--c);font-weight:700'>${line.home_odds>0?'+':''}${line.home_odds}</span>` : '';
-        return `<span style='margin-right:18px'>${lineStr} ${away} ${home}</span>`;
-      }).join('')}
+      <span style="font-family:'Orbitron',monospace;font-size:.7rem;color:var(--c);letter-spacing:1.5px;min-width:80px;display:inline-block">Moneyline</span>
+      <span style='margin-right:18px'>${away}&nbsp;&nbsp;${home}</span>
     </div>`;
-  }).join('');
+  };
+
+  // Total: { line, over_price, under_price, bookmaker }
+  const renderTotal = () => {
+    const tot = gameLines.total;
+    if (!tot) return '';
+    const line = tot.line ?? 'N/A';
+    const overPrice  = tot.over_price;
+    const underPrice = tot.under_price;
+    if (overPrice == null && underPrice == null) return '';
+    const over  = overPrice  != null ? `<span style='color:var(--g)'>O${line} ${overPrice  > 0 ? '+' : ''}${overPrice}</span>`  : '';
+    const under = underPrice != null ? `<span style='color:var(--r)'>U${line} ${underPrice > 0 ? '+' : ''}${underPrice}</span>` : '';
+    return `<div style="margin-bottom:7px">
+      <span style="font-family:'Orbitron',monospace;font-size:.7rem;color:var(--c);letter-spacing:1.5px;min-width:80px;display:inline-block">Total</span>
+      <span style='margin-right:18px'>${over}&nbsp;&nbsp;${under}</span>
+    </div>`;
+  };
+
+  // Spread: { away: {point, price, bookmaker}, home: {point, price, bookmaker} }
+  const renderSpread = () => {
+    const sp = gameLines.spread;
+    if (!sp) return '';
+    const awayPoint = sp.away?.point;
+    const awayPrice = sp.away?.price;
+    const homePoint = sp.home?.point;
+    const homePrice = sp.home?.price;
+    if (awayPoint == null && homePoint == null) return '';
+    const away = (awayPoint != null && awayPrice != null) ? `<span style='color:var(--mu)'>${awayFull}:</span> <span style='color:var(--c);font-weight:700'>${awayPoint > 0 ? '+' : ''}${awayPoint} (${awayPrice > 0 ? '+' : ''}${awayPrice})</span>` : '';
+    const home = (homePoint != null && homePrice != null) ? `<span style='color:var(--mu)'>${homeFull}:</span> <span style='color:var(--c);font-weight:700'>${homePoint > 0 ? '+' : ''}${homePoint} (${homePrice > 0 ? '+' : ''}${homePrice})</span>` : '';
+    return `<div style="margin-bottom:7px">
+      <span style="font-family:'Orbitron',monospace;font-size:.7rem;color:var(--c);letter-spacing:1.5px;min-width:80px;display:inline-block">Spread</span>
+      <span style='margin-right:18px'>${away}&nbsp;&nbsp;${home}</span>
+    </div>`;
+  };
+
+  const oddsRow = [renderMoneyline(), renderTotal(), renderSpread()].filter(Boolean).join('');
+  if (!oddsRow) {
+    panel.innerHTML = '<p style="color:var(--mu);padding:8px 0;font-size:.75rem">No projection data available</p>';
+    panel.style.display = '';
+    return;
+  }
   panel.innerHTML = `
     <div style="background:rgba(0,229,255,.07);border:1px solid var(--b);border-radius:12px;padding:13px 18px;display:flex;flex-direction:column;gap:2px">
       <div style="font-family:'Orbitron',monospace;font-size:.68rem;letter-spacing:2px;color:var(--c);margin-bottom:4px">MAJOR MARKET ODDS</div>
-      ${oddsRow || '<div style="color:var(--mu)">No odds available.</div>'}
+      ${oddsRow}
     </div>
   `;
   panel.style.display = '';
@@ -2303,6 +2338,12 @@ function batterCard(b) {
     ${hrPanel}
     ${batxHtml}
     ${trnd}
+    <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px">
+      ${p.hits != null ? `<button class="save-btn parlay-btn" data-player="${esc(b.name)}" data-team="${esc(b.team||'')}" data-market-key="player_hits" data-line="${p.hits.toFixed(2)}" data-game-pk="${b.gamePk||''}">＋ H PARLAY</button>` : ''}
+      ${p.hr != null   ? `<button class="save-btn parlay-btn" data-player="${esc(b.name)}" data-team="${esc(b.team||'')}" data-market-key="player_home_runs" data-line="${p.hr.toFixed(2)}" data-game-pk="${b.gamePk||''}">＋ HR PARLAY</button>` : ''}
+      ${p.tb != null   ? `<button class="save-btn parlay-btn" data-player="${esc(b.name)}" data-team="${esc(b.team||'')}" data-market-key="player_total_bases" data-line="${p.tb.toFixed(2)}" data-game-pk="${b.gamePk||''}">＋ TB PARLAY</button>` : ''}
+      ${p.rbi != null  ? `<button class="save-btn parlay-btn" data-player="${esc(b.name)}" data-team="${esc(b.team||'')}" data-market-key="player_rbi" data-line="${p.rbi.toFixed(2)}" data-game-pk="${b.gamePk||''}">＋ RBI PARLAY</button>` : ''}
+    </div>
   </div>`;
 }
 
@@ -2390,6 +2431,9 @@ function pitcherPanel(p) {
       &nbsp;·&nbsp; Opp wOBA: <span>${p.opp_woba?Number(p.opp_woba).toFixed(3):'—'}</span>
     </div>
     ${pitchXPanel(p, pr)}
+    ${pr.k != null ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px">
+      ${[3.5, 4.5, 5.5, 6.5].map(line => `<button class="save-btn parlay-btn" data-player="${esc(p.name||'')}" data-team="${esc(p.team||'')}" data-market-key="pitcher_strikeouts" data-line="${line}" data-game-pk="${p.gamePk||''}">＋ K ${line}</button>`).join('')}
+    </div>` : ''}
     ${trnd}
   </div>`;
 }
