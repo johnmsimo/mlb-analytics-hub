@@ -23,7 +23,7 @@ primary_region = "ewr"
     grace_period = "600s"
     interval = "30s"
     method = "GET"
-    path = "/api/status"
+    path = "/health"
     timeout = "30s"
 
 [[vm]]
