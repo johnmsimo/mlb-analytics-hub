@@ -11365,7 +11365,8 @@ def _compute_cheatsheets_today(date_str):
                 weak_slots = ', '.join(str(x) for x in top_slots) if top_slots else 'n/a'
 
                 with _sv_lock:
-                    arsenal = dict(_sv_arsenal_pct.get(p_id, {}) or {})
+                    _name_key = _sv_key(p_name) if p_name else ""
+                    arsenal = dict(_sv_arsenal_pct.get(_name_key, {}) or {})
                 primary_pitch, primary_pct = ('Unknown', 0)
                 if arsenal:
                     primary_pitch, primary_pct = max(arsenal.items(), key=lambda kv: kv[1])
@@ -11383,12 +11384,17 @@ def _compute_cheatsheets_today(date_str):
                     form_label = f"STABLE ({recent_era:.2f} ERA recent)"
 
                 avg_top_score = sum(x.get('score', 50) for x in opp_scores[:4]) / max(1, len(opp_scores[:4]))
-                if avg_top_score >= 62:
+                if 'STRUGGLING' in form_label:
                     rec = 'Target top-order hits/TB overs'
-                elif avg_top_score <= 44:
-                    rec = 'Consider fading opposing batter overs'
-                else:
+                elif 'DEALING' in form_label:
                     rec = 'Play selectively by lineup slot and price'
+                else:  # STABLE
+                    if avg_top_score >= 62:
+                        rec = 'Target top-order hits/TB overs'
+                    elif avg_top_score <= 44:
+                        rec = 'Consider fading opposing batter overs'
+                    else:
+                        rec = 'Play selectively by lineup slot and price'
 
                 return {
                     'pitcherName': p_name,
