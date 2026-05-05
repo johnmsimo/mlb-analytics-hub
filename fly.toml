@@ -9,6 +9,7 @@ primary_region = "ewr"
 [env]
   PORT = "8080"
   XGB_MODEL_DIR = "./models"
+  PYBASEBALL_CACHE = "1"
 
 [http_service]
   internal_port = 8080
@@ -22,7 +23,7 @@ primary_region = "ewr"
     grace_period = "600s"
     interval = "30s"
     method = "GET"
-    path = "/health"
+    path = "/api/status"
     timeout = "30s"
 
 [[vm]]
