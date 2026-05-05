@@ -2700,7 +2700,7 @@ renderPropPanel = function(){
   var home = (SIM_DATA.playerProps && SIM_DATA.playerProps.home) ? SIM_DATA.playerProps.home.slice() : [];
   away.forEach(function(x){x.team=m.awayAbbr || 'AWAY';});
   home.forEach(function(x){x.team=m.homeAbbr || 'HOME';});
-  var rows = away.concat(home).sort(function(a,b){return (a.team+b.slot).localeCompare(b.team+a.slot);}).map(function(p){
+  var rows = away.concat(home).sort(function(a,b){return (a.team+a.slot).localeCompare(b.team+b.slot);}).map(function(p){
     return '<tr>'
       + '<td><span class="pos-tag">'+p.team+'</span></td>'
       + '<td style="font-size:.72rem">'+p.slot+'. '+p.name+'</td>'

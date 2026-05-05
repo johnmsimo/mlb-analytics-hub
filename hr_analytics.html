@@ -561,17 +561,17 @@ function renderSimulator(panel, d, s) {
           <div class="input-note">EV ≥ 95 mph</div>
         </div>
         <div class="input-item">
-          <div class="input-val">${fmt(inp.avg_ev||inp.avg_ev,1)} mph</div>
+          <div class="input-val">${fmt(inp.avg_ev,1)} mph</div>
           <div class="input-lbl">Avg EV</div>
           <div class="input-note">Exit velocity</div>
         </div>
         <div class="input-item">
-          <div class="input-val">${fmt(inp.hr9_vs_hand||inp.hr9_vs_hand,2)}</div>
+          <div class="input-val">${fmt(inp.hr9_vs_hand,2)}</div>
           <div class="input-lbl">Pit HR/9</div>
           <div class="input-note">vs ${inp.batter_hand} bats</div>
         </div>
         <div class="input-item">
-          <div class="input-val">${inp.park_hr_idx||inp.park_hr_idx}</div>
+          <div class="input-val">${inp.park_hr_idx}</div>
           <div class="input-lbl">Park HR idx</div>
           <div class="input-note">100 = neutral</div>
         </div>
