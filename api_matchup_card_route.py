@@ -239,9 +239,9 @@ def api_matchup_card(game_pk):
 
         # ── Final payload ────────────────────────────────────────────────────────────────
         payload = {
-            'away_team':     away_abbr,
+            'away_team':     away_team_obj.get('name', away_abbr),
             'away_team_abr': away_abbr,
-            'home_team':     home_abbr,
+            'home_team':     home_team_obj.get('name', home_abbr),
             'home_team_abr': home_abbr,
             'game_time':     gdata.get('gameDate', ''),
             'away_pitcher':  {
