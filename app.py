@@ -9130,7 +9130,7 @@ def api_tracker_grade(date_str):
                 h1 = int((((first.get('home') or {}).get('runs')) or 0))
                 actual = a1 + h1
                 row['actual'] = actual
-                row['grade'] = _grade_side(actual, row.get('line', 0.5), row.get('recommendedSide') or 'Over')
+                row['grade'] = _grade_side(actual, row.get('line', 0.5), 'Under' if mk == 'nrfi' else 'Over')
                 row['status'] = 'graded'
                 continue
             box = requests.get(f"{MLB_API}/game/{gpk}/boxscore", timeout=10).json().get('teams', {})
@@ -9315,7 +9315,7 @@ def _tracker_live_summary(entries, adjustments=None):
     profit_dollars = round(sum(float(x.get('profitDollars') or 0) for x in graded), 2)
     profit_units = round(sum(float(x.get('profitUnits') or 0) for x in graded), 3)
     clv_rows = [x for x in graded if x.get('clvEdge') is not None]
-    positive_clv = [x for x in clv_rows if float(x.get('clvEdge') or 0) < 0]
+    positive_clv = [x for x in clv_rows if float(x.get('clvEdge') or 0) > 0]
     avg_clv = round(sum(float(x.get('clvEdge') or 0) for x in clv_rows) / max(1, len(clv_rows)), 4) if clv_rows else None
     live_bankroll = round(float(adjustments.get('bankroll') or 0) + profit_dollars, 2)
     summary['pending'] = len(pending)
@@ -9402,7 +9402,7 @@ def _tracker_performance_payload(date_str=None, window_days=30):
     available_markets = sorted({row.get('marketKey') for row in entries if row.get('marketKey')})
     value_rows = [row for row in entries if row.get('grade') in ('win', 'loss', 'push')]
     clv_rows = [row for row in value_rows if row.get('clvEdge') is not None]
-    top_clv = sorted(clv_rows, key=lambda x: float(x.get('clvEdge') or 0))[:10]
+    top_clv = sorted(clv_rows, key=lambda x: float(x.get('clvEdge') or 0), reverse=True)[:10]
     daily = []
     for ds in reversed(_dates_in_window(date_str, window_days)):
         rows = _normalize_tracker_day(_tracker_store().get(ds)).get('entries', [])
@@ -11064,7 +11064,7 @@ def _attribution_dashboard(end_date_str, window_days):
     market_rows = sorted([_attr_bucket_finalize(k, v) for k, v in market_buckets.items()], key=lambda x: (x['profit'], x['avg_clv'], x['bets']), reverse=True)
     tier_rows = [_attr_bucket_finalize(k, tier_buckets.get(k, _attr_bucket_init())) for k in ['A', 'B', 'C', 'D']]
     strongest = [x for x in market_rows if x['avg_clv'] > 0 and x['roi'] > 0][:8]
-    weakest = sorted(market_rows, key=lambda x: (x['roi'], x['avg_clv']))[:8]
+    weakest = sorted([x for x in market_rows if x['graded'] > 0], key=lambda x: (x['roi'], x['avg_clv']))[:8]
     return {
         'summary': {
             'graded': overall_row['graded'],
