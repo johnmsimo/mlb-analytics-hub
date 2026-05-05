@@ -9315,7 +9315,7 @@ def _tracker_live_summary(entries, adjustments=None):
     profit_dollars = round(sum(float(x.get('profitDollars') or 0) for x in graded), 2)
     profit_units = round(sum(float(x.get('profitUnits') or 0) for x in graded), 3)
     clv_rows = [x for x in graded if x.get('clvEdge') is not None]
-    positive_clv = [x for x in clv_rows if float(x.get('clvEdge') or 0) < 0]
+    positive_clv = [x for x in clv_rows if float(x.get('clvEdge') or 0) > 0]
     avg_clv = round(sum(float(x.get('clvEdge') or 0) for x in clv_rows) / max(1, len(clv_rows)), 4) if clv_rows else None
     live_bankroll = round(float(adjustments.get('bankroll') or 0) + profit_dollars, 2)
     summary['pending'] = len(pending)
@@ -9402,7 +9402,7 @@ def _tracker_performance_payload(date_str=None, window_days=30):
     available_markets = sorted({row.get('marketKey') for row in entries if row.get('marketKey')})
     value_rows = [row for row in entries if row.get('grade') in ('win', 'loss', 'push')]
     clv_rows = [row for row in value_rows if row.get('clvEdge') is not None]
-    top_clv = sorted(clv_rows, key=lambda x: float(x.get('clvEdge') or 0))[:10]
+    top_clv = sorted(clv_rows, key=lambda x: float(x.get('clvEdge') or 0), reverse=True)[:10]
     daily = []
     for ds in reversed(_dates_in_window(date_str, window_days)):
         rows = _normalize_tracker_day(_tracker_store().get(ds)).get('entries', [])
