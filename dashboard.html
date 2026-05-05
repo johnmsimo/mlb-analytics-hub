@@ -903,7 +903,7 @@ function addToParlayFromQP(e, pickStr) {
   e.stopPropagation();
   try {
     var pick = JSON.parse(decodeURIComponent(pickStr));
-    var parlayLegs = JSON.parse(localStorage.getItem('parlayLegs') || '[]');
+    var queue = JSON.parse(localStorage.getItem('pendingParlayLegs') || '[]');
     // Normalize prop for parlay
     var leg = {
       player: pick.player,
@@ -917,8 +917,8 @@ function addToParlayFromQP(e, pickStr) {
       hubRating: pick.hubRating || pick.hub_score || 0,
       evPct: (pick.evPct != null ? pick.evPct / 100 : null)
     };
-    parlayLegs.push(leg);
-    localStorage.setItem('parlayLegs', JSON.stringify(parlayLegs));
+    queue.push(leg);
+    localStorage.setItem('pendingParlayLegs', JSON.stringify(queue));
     window.location.href = '/tracker';
   } catch (err) {
     showToast('Failed to add to parlay', 'err');
@@ -1130,19 +1130,19 @@ function _mcRenderRows(){
       +'<td><span class="mc-rs">'+_mcEsc(p.reasoning||'—')+'</span>'+parlayBtn+'</td>'
       +'</tr>';
   }).join('');
+}
 // --- Add to Parlay from MC Board ---
 function addToParlayFromMC(e, pickStr) {
   e.stopPropagation();
   try {
     var pick = JSON.parse(decodeURIComponent(pickStr));
-    var parlayLegs = JSON.parse(localStorage.getItem('parlayLegs') || '[]');
-    parlayLegs.push(pick);
-    localStorage.setItem('parlayLegs', JSON.stringify(parlayLegs));
+    var queue = JSON.parse(localStorage.getItem('pendingParlayLegs') || '[]');
+    queue.push(pick);
+    localStorage.setItem('pendingParlayLegs', JSON.stringify(queue));
     window.location.href = '/tracker';
   } catch (err) {
     showToast('Failed to add to parlay', 'err');
   }
-}
 }
 function _mcSetF(type,val){
   if(type==='g')_MFG=val;if(type==='m')_MFM=val;if(type==='r')_MFR=val;
