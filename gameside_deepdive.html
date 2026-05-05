@@ -467,8 +467,6 @@ async function load(silent) {
           <div class=\"tpods\">${odds} @ ${book}</div>
           ${hasSignal ? `<button class='save-btn parlay-btn' style='margin-top:6px' onclick=\"addToParlay({player:'${esc(b.name||b.fullName)}',team:'${esc(b.team||'')}',marketKey:'player_home_runs',line:'0.5',gamePk:GPK})\">＋ PARLAY</button>` : ''}
         </div>`;
-      </script>
-      <script>
       // --- Unified Parlay Handler ---
       function addToParlay(leg) {
         try {

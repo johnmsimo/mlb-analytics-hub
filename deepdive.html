@@ -5754,9 +5754,14 @@ function renderHRSim(){
 
 // ── TOP HR PICKS PANEL ───────────────────────────────────────────
 function scoreBatter(b, pitcher, gd, teamAbbr){
-  var iso    = parseFloat(b&&(b.iso||b.ISO))                                          || 0.15;
-  var barrel = parseFloat(b&&(b.barrelpct||b.barrelPct))                              || 6.0;
-  var ev     = parseFloat(b&&(b.avgev||b.avgEV||b.ev))                               || 87.0;
+  // ISO: prefer explicit field, then compute from SLG-AVG, then default
+  var slg = parseFloat(b&&(b.slg||b.fg_slg));
+  var avg = parseFloat(b&&(b.avg||b.fg_avg));
+  var iso = parseFloat(b&&(b.iso||b.ISO)) || ((!isNaN(slg)&&!isNaN(avg)) ? Math.max(0, slg-avg) : 0.15);
+  // Barrel%: sv_brl_pct is the Savant field name in batter objects
+  var barrel = parseFloat(b&&(b.barrelpct||b.barrelPct||b.sv_brl_pct)) || 6.0;
+  // Exit velo: sv_ev is the Savant field name in batter objects
+  var ev     = parseFloat(b&&(b.avgev||b.avgEV||b.ev||b.sv_ev))        || 87.0;
   var hr9    = parseFloat(pitcher&&pitcher.stats&&(pitcher.stats.hr9||pitcher.stats.hrper9)) || 1.2;
   var pf     = parseFloat((gd&&(gd.parkFactor||gd.park_factor)))                     || 1.0;
   var score  = Math.round((iso*80) + (barrel*3.5) + ((ev-85)*1.5) + (hr9*6) + ((pf-1)*30));
@@ -5828,6 +5833,24 @@ function renderHRPicksPanel(){
     loadGame = function(){
       var r = _origLoadGame.apply(this, arguments);
       setTimeout(renderHRPicksPanel, 2500);
+      return r;
+    };
+  }
+  // Re-render when pitchers finish loading (pitchers needed for scoreBatter)
+  var _origLoadPitchers = typeof loadPitchers==='function' ? loadPitchers : null;
+  if(_origLoadPitchers){
+    loadPitchers = function(){
+      var r = _origLoadPitchers.apply(this, arguments);
+      setTimeout(renderHRPicksPanel, 500);
+      return r;
+    };
+  }
+  // Re-render when lineups finish loading (AL/HL needed for picks)
+  var _hrOrigLoadLineups = typeof loadLineups==='function' ? loadLineups : null;
+  if(_hrOrigLoadLineups){
+    loadLineups = function(){
+      var r = _hrOrigLoadLineups.apply(this, arguments);
+      setTimeout(renderHRPicksPanel, 800);
       return r;
     };
   }
