@@ -5501,7 +5501,20 @@ def api_bvp_projection(batter_id, pitcher_id):
 
     except Exception as ex:
         print(f"[api_bvp_projection] {traceback.format_exc()}")
-        return jsonify({"success": False, "error": str(ex)}), 500
+        # Partial fallback: return FG-based quality metrics so the card never shows "Stats loading…"
+        try:
+            _fb = fg_batter(batter_name) if batter_name else {}
+            _fallback_quality = {
+                "fg_woba":  round(_safe_f(_fb.get("fg_woba"), None), 3) if _safe_f(_fb.get("fg_woba"), None) is not None else None,
+                "fg_iso":   round(_safe_f(_fb.get("fg_iso"),  None), 3) if _safe_f(_fb.get("fg_iso"),  None) is not None else None,
+                "fg_kpct":  round(_safe_f(_fb.get("fg_kpct"), None), 3) if _safe_f(_fb.get("fg_kpct"), None) is not None else None,
+                "fg_bbpct": round(_safe_f(_fb.get("fg_bbpct"),None), 3) if _safe_f(_fb.get("fg_bbpct"),None) is not None else None,
+                "fg_ops":   round(_safe_f(_fb.get("fg_ops"),  None), 3) if _safe_f(_fb.get("fg_ops"),  None) is not None else None,
+                "source": "fg",
+            }
+            return jsonify({"success": False, "error": str(ex), "batterQuality": _fallback_quality})
+        except Exception:
+            return jsonify({"success": False, "error": str(ex)}), 500
 
 
 @app.route("/api/bvp/<int:batter_id>/<int:pitcher_id>/arsenal")
@@ -5541,8 +5554,8 @@ def api_bvp_arsenal(batter_id, pitcher_id):
             label = PITCH_LABELS.get(code, code.upper())
             pct  = raw_pct.get(code)
             velo = raw_velo.get(code)
-            # _sv_pit_arsenal_stats stores raw pitch count; use _sv_arsenal_pct (fraction) for %
-            usage_pct = round(float(pct) * 100, 1) if pct is not None else None
+            # _sv_arsenal_pct already stores % values (e.g. 35.0 = 35%); fall back to pitch_usage from table_rows
+            usage_pct = round(float(pct), 1) if pct is not None else row.get("usage")
             pitches.append({
                 "code":       code,
                 "label":      label,
@@ -5567,7 +5580,7 @@ def api_bvp_arsenal(batter_id, pitcher_id):
                 pitches.append({
                     "code":    code,
                     "label":   label,
-                    "usage":   round(float(pct_val) * 100, 1) if pct_val is not None else None,
+                    "usage":   round(float(pct_val), 1) if pct_val is not None else None,
                     "velo":    round(float(velo), 1) if velo is not None else None,
                 })
 
