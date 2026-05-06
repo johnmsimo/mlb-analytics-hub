@@ -95,6 +95,201 @@ def api_brain_fetch_mlb_players():
         print(f'[api_brain_fetch_mlb_players] {traceback.format_exc()}')
         return jsonify({'success': False, 'error': str(ex)}), 500
 
+# ══════════════════════════════════════════════════════════════════════════════
+# BVP CONTEXT ENDPOINTS — Last 10 Games, Platoon Splits, Arsenal Matchup
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route('/api/player/<int:player_id>/recent-games', methods=['GET'])
+def api_player_recent_games(player_id):
+    """Last 10 games for batter with rolling AVG/OPS/HR stats."""
+    try:
+        year = datetime.now().year
+        url = f"{MLB_API}/people/{player_id}/stats"
+        params = {"stats": "gameLog", "group": "hitting", "season": year}
+        
+        r = requests.get(url, params=params, timeout=10)
+        r.raise_for_status()
+        
+        stats = r.json().get("stats", [])
+        if not stats:
+            return jsonify({"last10": {}, "games": []})
+        
+        splits = stats[0].get("splits", [])
+        recent = splits[-10:] if len(splits) >= 10 else splits
+        
+        # Aggregate stats
+        total_ab = sum(_safe_num(g.get("stat", {}).get("atBats"), 0) for g in recent)
+        total_hits = sum(_safe_num(g.get("stat", {}).get("hits"), 0) for g in recent)
+        total_hr = sum(_safe_num(g.get("stat", {}).get("homeRuns"), 0) for g in recent)
+        total_bb = sum(_safe_num(g.get("stat", {}).get("baseOnBalls"), 0) for g in recent)
+        total_hbp = sum(_safe_num(g.get("stat", {}).get("hitByPitch"), 0) for g in recent)
+        total_sf = sum(_safe_num(g.get("stat", {}).get("sacFlies"), 0) for g in recent)
+        
+        avg = round(total_hits / total_ab, 3) if total_ab > 0 else 0.000
+        
+        obp_num = total_hits + total_bb + total_hbp
+        obp_den = total_ab + total_bb + total_hbp + total_sf
+        obp = round(obp_num / obp_den, 3) if obp_den > 0 else 0.000
+        
+        doubles = sum(_safe_num(g.get("stat", {}).get("doubles"), 0) for g in recent)
+        triples = sum(_safe_num(g.get("stat", {}).get("triples"), 0) for g in recent)
+        total_bases = total_hits + doubles + (2 * triples) + (3 * total_hr)
+        slg = round(total_bases / total_ab, 3) if total_ab > 0 else 0.000
+        ops = round(obp + slg, 3)
+        
+        games = []
+        for g in recent:
+            stat = g.get("stat", {})
+            games.append({
+                "date": g.get("date", ""),
+                "opponent": (g.get("opponent", {}) or {}).get("name", ""),
+                "ab": int(stat.get("atBats", 0)),
+                "hits": int(stat.get("hits", 0)),
+                "hr": int(stat.get("homeRuns", 0)),
+                "rbi": int(stat.get("rbi", 0)),
+                "bb": int(stat.get("baseOnBalls", 0)),
+                "k": int(stat.get("strikeOuts", 0))
+            })
+        
+        return jsonify({
+            "last10": {
+                "games": len(recent),
+                "avg": avg,
+                "obp": obp,
+                "slg": slg,
+                "ops": ops,
+                "hr": int(total_hr),
+                "hits": int(total_hits),
+                "ab": int(total_ab)
+            },
+            "games": games
+        })
+        
+    except Exception as ex:
+        logging.error(f"[api_player_recent_games] {ex}")
+        return jsonify({"error": str(ex), "last10": {}, "games": []}), 500
+
+
+@app.route('/api/player/<int:player_id>/platoon-splits', methods=['GET'])
+def api_player_platoon_splits(player_id):
+    """Career splits vs LHP and RHP."""
+    try:
+        year = datetime.now().year
+        url = f"{MLB_API}/people/{player_id}/stats"
+        params = {"stats": "statSplits", "group": "hitting", "sitCodes": "l,r", "season": year}
+        
+        r = requests.get(url, params=params, timeout=10)
+        r.raise_for_status()
+        
+        stats = r.json().get("stats", [])
+        lhp_data = {}
+        rhp_data = {}
+        
+        for stat_group in stats:
+            for split in stat_group.get("splits", []):
+                stat = split.get("stat", {})
+                split_code = (split.get("split", {}) or {}).get("code", "")
+                
+                data_obj = {
+                    "pa": int(_safe_num(stat.get("plateAppearances"), 0)),
+                    "avg": round(_safe_num(stat.get("avg"), 0), 3),
+                    "obp": round(_safe_num(stat.get("obp"), 0), 3),
+                    "slg": round(_safe_num(stat.get("slg"), 0), 3),
+                    "ops": round(_safe_num(stat.get("ops"), 0), 3),
+                    "hr": int(_safe_num(stat.get("homeRuns"), 0))
+                }
+                
+                if split_code == "l":
+                    lhp_data = data_obj
+                elif split_code == "r":
+                    rhp_data = data_obj
+        
+        return jsonify({"vsLHP": lhp_data, "vsRHP": rhp_data})
+        
+    except Exception as ex:
+        logging.error(f"[api_player_platoon_splits] {ex}")
+        return jsonify({"error": str(ex), "vsLHP": {}, "vsRHP": {}}), 500
+
+
+@app.route('/api/player/<int:batter_id>/arsenal-matchup/<int:pitcher_id>', methods=['GET'])
+def api_player_arsenal_matchup(batter_id, pitcher_id):
+    """Batter's performance vs pitchers with similar arsenals."""
+    try:
+        pitcher_info_url = f"{MLB_API}/people/{pitcher_id}"
+        p_resp = requests.get(pitcher_info_url, timeout=8)
+        p_resp.raise_for_status()
+        people = p_resp.json().get("people", [])
+        if not people:
+            return jsonify({"error": "Pitcher not found", "similarArsenal": {}}), 404
+        
+        pitcher_name = people[0].get("fullName", "")
+        pitcher_hand = ((people[0].get("pitchHand") or {}).get("code") or "R")
+        pitcher_arsenal = sv_pitcher(pitcher_name).get("sv_arsenal_pct", {})
+        
+        if not pitcher_arsenal:
+            return jsonify({
+                "pitcherName": pitcher_name,
+                "pitcherHand": pitcher_hand,
+                "arsenal": {},
+                "similarArsenal": {},
+                "message": "No arsenal data available"
+            })
+        
+        primary_pitch = max(pitcher_arsenal.items(), key=lambda x: x[1])[0] if pitcher_arsenal else None
+        
+        with _sv_lock:
+            arsenal_pct_cache = dict(_sv_arsenal_pct)
+        
+        similar_pitchers = []
+        for name, arsenal in arsenal_pct_cache.items():
+            if not arsenal:
+                continue
+            other_primary = max(arsenal.items(), key=lambda x: x[1])[0] if arsenal else None
+            if other_primary == primary_pitch:
+                score = _arsenal_similarity(pitcher_arsenal, arsenal)
+                if score >= 0.70 and name.lower() != pitcher_name.lower():
+                    similar_pitchers.append({"name": name, "similarity": round(score, 2), "arsenal": arsenal})
+        
+        similar_pitchers.sort(key=lambda x: x["similarity"], reverse=True)
+        similar_pitchers = similar_pitchers[:10]
+        
+        aggregate_stats = {
+            "pitchers": len(similar_pitchers),
+            "pa": 0,
+            "avg": 0.000,
+            "ops": 0.000,
+            "hr": 0,
+            "message": f"Found {len(similar_pitchers)} pitchers with similar arsenal ({PITCH_LABELS.get(primary_pitch, primary_pitch)}-primary)"
+        }
+        
+        return jsonify({
+            "pitcherName": pitcher_name,
+            "pitcherHand": pitcher_hand,
+            "primaryPitch": PITCH_LABELS.get(primary_pitch, primary_pitch),
+            "arsenal": {PITCH_LABELS.get(k, k): v for k, v in pitcher_arsenal.items()},
+            "similarPitchers": [{
+                "name": p["name"],
+                "similarity": p["similarity"],
+                "primaryPitch": PITCH_LABELS.get(max(p["arsenal"].items(), key=lambda x: x[1])[0], "")
+            } for p in similar_pitchers],
+            "similarArsenal": aggregate_stats
+        })
+        
+    except Exception as ex:
+        logging.error(f"[api_player_arsenal_matchup] {ex}")
+        return jsonify({"error": str(ex), "similarArsenal": {}}), 500
+
+
+def _arsenal_similarity(arsenal1, arsenal2):
+    """Cosine similarity between two pitch arsenals (0.0-1.0)."""
+    all_pitches = set(list(arsenal1.keys()) + list(arsenal2.keys()))
+    vec1 = [arsenal1.get(p, 0) for p in all_pitches]
+    vec2 = [arsenal2.get(p, 0) for p in all_pitches]
+    dot_product = sum(a * b for a, b in zip(vec1, vec2))
+    mag1 = sum(a * a for a in vec1) ** 0.5
+    mag2 = sum(b * b for b in vec2) ** 0.5
+    return dot_product / (mag1 * mag2) if mag1 and mag2 else 0.0
+
 # ── Global error handler for uncaught exceptions ──
 @app.errorhandler(Exception)
 def handle_exception(e):
