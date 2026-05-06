@@ -83,6 +83,130 @@
     /* Sample note */
     .sample-note{font-size:.75rem;color:var(--mu);background:rgba(255,255,255,.03);border-radius:8px;padding:8px 12px;margin-bottom:14px;border-left:3px solid rgba(0,229,255,.25)}
 
+    /* ── Context Sections (Last 10, Splits, Arsenal) ────────────────────── */
+    .context-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    @media(max-width: 900px) {
+      .context-grid { grid-template-columns: 1fr; }
+    }
+    
+    .context-card {
+      background: rgba(255,255,255,.02);
+      border: 1px solid var(--b);
+      border-radius: 10px;
+      padding: 12px;
+    }
+    
+    .context-card-header {
+      font-size: .68rem;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--mu);
+      margin-bottom: 8px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--b);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .context-badge {
+      background: rgba(0,229,255,.08);
+      color: var(--c);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: .65rem;
+      font-weight: 600;
+    }
+    
+    .context-stat-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 0;
+      border-bottom: 1px solid rgba(255,255,255,.03);
+    }
+    .context-stat-row:last-child {
+      border-bottom: none;
+    }
+    
+    .context-stat-label {
+      font-size: .75rem;
+      color: var(--mu);
+    }
+    
+    .context-stat-value {
+      font-size: .85rem;
+      font-weight: 700;
+      color: var(--t);
+    }
+    
+    .context-stat-value.good { color: var(--g); }
+    .context-stat-value.warn { color: var(--y); }
+    .context-stat-value.bad { color: var(--r); }
+    
+    .split-compare {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    
+    .split-box {
+      background: rgba(0,0,0,.15);
+      border-radius: 6px;
+      padding: 8px;
+      text-align: center;
+    }
+    
+    .split-label {
+      font-size: .65rem;
+      color: var(--mu);
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      margin-bottom: 4px;
+    }
+    
+    .split-value {
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--t);
+    }
+    
+    .split-sub {
+      font-size: .68rem;
+      color: var(--mu);
+      margin-top: 2px;
+    }
+    
+    .arsenal-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-top: 6px;
+    }
+    
+    .arsenal-pill {
+      background: rgba(0,229,255,.06);
+      border: 1px solid rgba(0,229,255,.15);
+      border-radius: 12px;
+      padding: 3px 8px;
+      font-size: .65rem;
+      color: var(--c);
+      white-space: nowrap;
+    }
+    
+    .context-loading {
+      text-align: center;
+      padding: 16px;
+      color: var(--mu);
+      font-size: .78rem;
+    }
+
     /* Game log */
     .section-label{font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--mu);margin-bottom:8px}
     .tbl-wrap{overflow-x:auto;border:1px solid var(--b);border-radius:10px;margin-bottom:14px}
