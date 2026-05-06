@@ -274,6 +274,62 @@
       color: #ce93d8;
       border: 1px solid rgba(156,39,176,.3);
     }
+
+    /* Grade basis label under the badge */
+    .grade-basis-lbl {
+      font-size: .56rem;
+      letter-spacing: .06em;
+      text-align: center;
+      color: var(--mu);
+      margin-top: 4px;
+      text-transform: uppercase;
+    }
+    .grade-badge-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      flex-shrink: 0;
+    }
+
+    /* Prop signal section */
+    .prop-signal-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    @media(max-width: 700px) {
+      .prop-signal-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+    .prop-signal-box {
+      background: rgba(0,0,0,.2);
+      border: 1px solid var(--b);
+      border-radius: 8px;
+      padding: 8px 6px;
+      text-align: center;
+    }
+    .prop-signal-type {
+      font-size: .62rem;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      color: var(--mu);
+      margin-bottom: 5px;
+    }
+    .prop-signal-val {
+      font-size: .72rem;
+      font-weight: 700;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+    .prop-signal-sub {
+      font-size: .6rem;
+      color: var(--mu);
+      margin-top: 3px;
+    }
+    .sig-strong { color: var(--g); }
+    .sig-mod    { color: var(--c); }
+    .sig-lean   { color: var(--y); }
+    .sig-fade   { color: var(--r); }
   </style>
 </head>
 <body>
@@ -484,11 +540,18 @@ function renderDetail(data) {
     return 'class="bad"';
   };
 
-  const gameRows = games.slice(0, 15).map(g => {
+  // Grade basis label — H2H, vs RHP, vs LHP
+  const gradeBasis = summary.grade_basis === 'platoon'
+    ? `vs ${summary.pitcher_hand === 'L' ? 'LHP' : 'RHP'}`
+    : (pa >= 10 ? 'H2H' : pa > 0 ? 'H2H*' : 'vs RHP/LHP');
+
+  const gameRows = games.slice(0, 10).map(g => {
     const hitColor = g.hits >= 1 ? 'class="good"' : 'class="bad"';
+    const pitcherDisplay = g.pitcher && g.pitcher !== '—' ? g.pitcher : (pitcherName || '—');
+    const teamDisplay = g.team ? `<span style="color:var(--mu);font-size:.68rem">${g.team}</span> ` : '';
     return `<tr>
       <td>${g.date||'—'}</td>
-      <td>${g.pitcher||pitcherName||'—'}</td>
+      <td>${teamDisplay}${pitcherDisplay}</td>
       <td ${hitColor}>${g.ab??'—'}/${g.hits??'—'}</td>
       <td>${g.hr||0}</td>
       <td>${g.rbi||0}</td>
@@ -506,7 +569,10 @@ function renderDetail(data) {
         <div class="bvp-vs">career history vs.</div>
         <div class="bvp-pitcher">${pitcherName}</div>
       </div>
-      <div class="grade-badge ${gbClass}">${grade}</div>
+      <div class="grade-badge-wrap">
+        <div class="grade-badge ${gbClass}">${grade}</div>
+        <div class="grade-basis-lbl">${gradeBasis}</div>
+      </div>
     </div>
 
     ${summary.sample_note ? `<div class="sample-note">${summary.sample_note}</div>` : ''}
@@ -535,18 +601,26 @@ function renderDetail(data) {
       <div class="context-card"><div class="context-loading">Loading arsenal matchup...</div></div>
     </div>
 
-    <div class="section-label">Recent Matchup History</div>
+    <div class="section-label">Prop Signals <span style="font-size:.6rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— based on recent form + context</span></div>
+    <div class="prop-signal-grid" id="propSignalGrid">
+      <div class="prop-signal-box"><div class="prop-signal-type">HIT</div><div class="prop-signal-val" style="color:var(--mu)">—</div></div>
+      <div class="prop-signal-box"><div class="prop-signal-type">TOTAL BASES</div><div class="prop-signal-val" style="color:var(--mu)">—</div></div>
+      <div class="prop-signal-box"><div class="prop-signal-type">HOME RUN</div><div class="prop-signal-val" style="color:var(--mu)">—</div></div>
+      <div class="prop-signal-box"><div class="prop-signal-type">K RISK</div><div class="prop-signal-val" style="color:var(--mu)">—</div></div>
+    </div>
+
+    <div class="section-label">Last 5 Games</div>
     <div class="tbl-wrap">
       <table>
         <thead><tr>
-          <th>Date</th><th>Pitcher</th><th>AB/H</th><th>HR</th><th>RBI</th><th>BB</th><th>K</th><th>Score</th>
+          <th>Date</th><th>Pitcher (Team)</th><th>AB/H</th><th>HR</th><th>RBI</th><th>BB</th><th>K</th><th>Score</th>
         </tr></thead>
         <tbody>${gameRows}</tbody>
       </table>
     </div>
   `;
 
-  // Fetch and render context data
+  // Fetch and render context data + prop signals
   loadContextData(batterId, pitcherId);
 }
 
@@ -648,6 +722,82 @@ async function loadContextData(batterId, pitcherId) {
     `;
 
     contextGrid.innerHTML = card1 + card2 + card3;
+
+    // ── Prop Signals ────────────────────────────────────────────────────────
+    const propGrid = document.getElementById('propSignalGrid');
+    if (!propGrid) return;
+
+    const recentGames = recent.games || [];
+    const totalK  = recentGames.reduce((s, g) => s + (g.k  || 0), 0);
+    const totalAB = recentGames.reduce((s, g) => s + (g.ab || 0), 0);
+    const kRate   = totalAB > 0 ? totalK / totalAB : 0;
+
+    // Consecutive hits streak from game list (most-recent last)
+    let streak = 0;
+    const revGames = [...recentGames].reverse();
+    for (const g of revGames) {
+      if (g.hits >= 1) streak++;
+      else break;
+    }
+
+    const l10 = recent.last10 || {};
+    const hitAvg = l10.avg || 0;
+    const l10HR  = l10.hr  || 0;
+    const l10H   = l10.hits || 0;
+    const l10AB  = l10.ab  || 0;
+
+    // HIT signal
+    let hitSig, hitCls, hitSub;
+    if (hitAvg >= 0.340 || streak >= 5)         { hitSig = '🔥 HOT';    hitCls = 'sig-strong'; hitSub = `${streak}G streak · .${Math.round(hitAvg*1000)} AVG`; }
+    else if (hitAvg >= 0.280 || streak >= 3)    { hitSig = '↑ HEATING'; hitCls = 'sig-mod';    hitSub = `${streak}G streak · .${Math.round(hitAvg*1000)} AVG`; }
+    else if (hitAvg >= 0.240)                   { hitSig = '→ NEUTRAL'; hitCls = 'sig-lean';   hitSub = `.${Math.round(hitAvg*1000)} AVG L10`; }
+    else                                         { hitSig = '❄ COLD';   hitCls = 'sig-fade';   hitSub = `.${Math.round(hitAvg*1000)} AVG L10`; }
+
+    // TOTAL BASES signal (combine avg + HR rate)
+    const hPerAB = l10AB > 0 ? l10H / l10AB : 0;
+    let tbSig, tbCls, tbSub;
+    if (l10HR >= 4 || hPerAB > 0.370)          { tbSig = '🔥 SURGE';  tbCls = 'sig-strong'; tbSub = `${l10HR} HR · .${Math.round(hPerAB*1000)} H/AB`; }
+    else if (l10HR >= 2 || hPerAB > 0.290)     { tbSig = '↑ SOLID';  tbCls = 'sig-mod';    tbSub = `${l10HR} HR · .${Math.round(hPerAB*1000)} H/AB`; }
+    else if (hPerAB > 0.230)                   { tbSig = '→ LEAN';   tbCls = 'sig-lean';   tbSub = `${l10HR} HR · .${Math.round(hPerAB*1000)} H/AB`; }
+    else                                        { tbSig = '↓ WEAK';   tbCls = 'sig-fade';   tbSub = `${l10HR} HR · .${Math.round(hPerAB*1000)} H/AB`; }
+
+    // HOME RUN signal
+    let hrSig, hrCls, hrSub;
+    if (l10HR >= 4)                             { hrSig = '🔥 ON FIRE'; hrCls = 'sig-strong'; hrSub = `${l10HR} HR last 10G`; }
+    else if (l10HR >= 2)                        { hrSig = '↑ IN FORM'; hrCls = 'sig-mod';    hrSub = `${l10HR} HR last 10G`; }
+    else if (l10HR >= 1)                        { hrSig = '→ LEAN';   hrCls = 'sig-lean';   hrSub = `${l10HR} HR last 10G`; }
+    else                                        { hrSig = '↓ COLD';   hrCls = 'sig-fade';   hrSub = `0 HR last ${l10.games||10}G`; }
+
+    // K RISK (batter K rate — high = pitcher K prop target)
+    let kSig, kCls, kSub;
+    if (kRate >= 0.32)                          { kSig = 'HIGH K RISK'; kCls = 'sig-fade';   kSub = `${Math.round(kRate*100)}% K rate`; }
+    else if (kRate >= 0.22)                     { kSig = 'MODERATE';    kCls = 'sig-lean';   kSub = `${Math.round(kRate*100)}% K rate`; }
+    else if (kRate >= 0.12)                     { kSig = 'LOW RISK';    kCls = 'sig-mod';    kSub = `${Math.round(kRate*100)}% K rate`; }
+    else if (totalAB > 0)                       { kSig = 'CONTACT';     kCls = 'sig-strong'; kSub = `${Math.round(kRate*100)}% K rate`; }
+    else                                        { kSig = '—';           kCls = '';            kSub = 'Insufficient data'; }
+
+    propGrid.innerHTML = `
+      <div class="prop-signal-box">
+        <div class="prop-signal-type">HIT (1+H)</div>
+        <div class="prop-signal-val ${hitCls}">${hitSig}</div>
+        <div class="prop-signal-sub">${hitSub}</div>
+      </div>
+      <div class="prop-signal-box">
+        <div class="prop-signal-type">TOTAL BASES</div>
+        <div class="prop-signal-val ${tbCls}">${tbSig}</div>
+        <div class="prop-signal-sub">${tbSub}</div>
+      </div>
+      <div class="prop-signal-box">
+        <div class="prop-signal-type">HOME RUN</div>
+        <div class="prop-signal-val ${hrCls}">${hrSig}</div>
+        <div class="prop-signal-sub">${hrSub}</div>
+      </div>
+      <div class="prop-signal-box">
+        <div class="prop-signal-type">K RISK</div>
+        <div class="prop-signal-val ${kCls}">${kSig}</div>
+        <div class="prop-signal-sub">${kSub}</div>
+      </div>
+    `;
 
   } catch(err) {
     console.error('Context data failed:', err);

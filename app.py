@@ -5209,6 +5209,9 @@ def api_bvp(batter_id, pitcher_id):
     return jsonify({
         "success": True,
         "grade": result.get("grade", "D"),
+        "grade_basis": result.get("grade_basis", "h2h"),
+        "pitcher_hand": result.get("pitcher_hand"),
+        "platoon_ops": result.get("platoon_ops"),
         "ops": result.get("ops"),
         "avg": result.get("avg"),
         "hr": result.get("hr", 0),
@@ -5231,13 +5234,16 @@ def api_player_bvp_games(player_id, pitcher_id):
         games = []
         score_cache = {}
 
-        def _score_for_game(game_pk, batter_team_id=None):
+        def _game_info(game_pk, batter_team_id=None):
+            """Return (score_txt, win_loss, opp_pitcher_name, opp_team_abbr) from boxscore."""
             if not game_pk:
-                return "—", ""
+                return "—", "", "—", ""
             if game_pk in score_cache:
                 return score_cache[game_pk]
             score_txt = "—"
-            result = ""
+            win_loss = ""
+            opp_pitcher = "—"
+            opp_team = ""
             try:
                 br = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=8)
                 if br.ok:
@@ -5249,20 +5255,35 @@ def api_player_bvp_games(player_id, pitcher_id):
                     home_runs = int((((home.get("teamStats") or {}).get("batting") or {}).get("runs") or 0))
                     away_id = ((away.get("team") or {}).get("id"))
                     home_id = ((home.get("team") or {}).get("id"))
+                    # Determine which side the batter is on to set score perspective + opp side
                     if batter_team_id and batter_team_id == away_id:
                         score_txt = f"{away_runs}-{home_runs}"
-                        result = "W" if away_runs > home_runs else ("L" if away_runs < home_runs else "T")
+                        win_loss = "W" if away_runs > home_runs else ("L" if away_runs < home_runs else "T")
+                        opp_side = home
                     elif batter_team_id and batter_team_id == home_id:
                         score_txt = f"{home_runs}-{away_runs}"
-                        result = "W" if home_runs > away_runs else ("L" if home_runs < away_runs else "T")
+                        win_loss = "W" if home_runs > away_runs else ("L" if home_runs < away_runs else "T")
+                        opp_side = away
                     else:
                         score_txt = f"{away_runs}-{home_runs}"
+                        opp_side = home
+                    # Extract opposing team abbreviation
+                    opp_team = ((opp_side.get("team") or {}).get("abbreviation") or
+                                (opp_side.get("team") or {}).get("teamName") or "")
+                    # Extract opposing starting pitcher (first in pitchers list)
+                    opp_pitchers = opp_side.get("pitchers", [])
+                    opp_players = opp_side.get("players", {})
+                    if opp_pitchers:
+                        starter_key = f"ID{opp_pitchers[0]}"
+                        starter = opp_players.get(starter_key, {})
+                        opp_pitcher = ((starter.get("person") or {}).get("fullName") or
+                                       (starter.get("person") or {}).get("lastName") or "—")
             except Exception:
                 pass
-            score_cache[game_pk] = (score_txt, result)
+            score_cache[game_pk] = (score_txt, win_loss, opp_pitcher, opp_team)
             return score_cache[game_pk]
 
-        # Resolve pitcher name BEFORE building game rows
+        # Resolve today's pitcher name for summary line
         pitcher_name = "Pitcher"
         try:
             pr = requests.get(f"{MLB_API}/people/{pitcher_id}", timeout=6)
@@ -5271,47 +5292,39 @@ def api_player_bvp_games(player_id, pitcher_id):
         except Exception:
             pass
 
-        # Try direct opposingPlayerId game-log filter across recent seasons.
-        for yr in [year, year - 1, year - 2]:
-            if len(games) >= 5:
-                break
-            try:
-                gr = requests.get(
-                    f"{MLB_API}/people/{player_id}/stats",
-                    params={
-                        "stats": "gameLog",
-                        "group": "hitting",
-                        "season": yr,
-                        "opposingPlayerId": pitcher_id,
-                        "sportId": 1,
-                    },
-                    timeout=10,
-                )
-                if not gr.ok:
-                    continue
-                splits = (gr.json().get("stats") or [{}])[0].get("splits", [])
-                for sp in reversed(splits):
+        # Fetch recent game log (no opposingPlayerId filter — that param unreliable)
+        # and extract the actual pitcher faced from each game's boxscore.
+        try:
+            gr = requests.get(
+                f"{MLB_API}/people/{player_id}/stats",
+                params={"stats": "gameLog", "group": "hitting", "season": year, "sportId": 1},
+                timeout=10,
+            )
+            if gr.ok:
+                all_splits = (gr.json().get("stats") or [{}])[0].get("splits", [])
+                for sp in reversed(all_splits):
                     if len(games) >= 5:
                         break
                     st = sp.get("stat", {})
                     gm = sp.get("game") or {}
                     game_pk = gm.get("gamePk")
                     team_id = ((sp.get("team") or {}).get("id"))
-                    score_txt, result = _score_for_game(game_pk, batter_team_id=team_id)
+                    score_txt, win_loss, opp_pitcher, opp_team = _game_info(game_pk, batter_team_id=team_id)
                     games.append({
                         "date": (sp.get("date") or "")[:10],
                         "score": score_txt,
-                        "pitcher": pitcher_name,
+                        "pitcher": opp_pitcher,
+                        "team": opp_team,
                         "ab": int(st.get("atBats", 0) or 0),
                         "hits": int(st.get("hits", 0) or 0),
                         "hr": int(st.get("homeRuns", 0) or 0),
                         "rbi": int(st.get("rbi", 0) or 0),
                         "k": int(st.get("strikeOuts", 0) or 0),
                         "bb": int(st.get("baseOnBalls", 0) or 0),
-                        "result": result,
+                        "result": win_loss,
                     })
-            except Exception:
-                continue
+        except Exception:
+            pass
 
         # Ensure latest first.
         games = sorted(games, key=lambda x: x.get("date", ""), reverse=True)[:5]
@@ -5929,6 +5942,49 @@ def _fetch_bvp(batter_id, pitcher_id):
         r.raise_for_status()
         splits = (r.json().get("stats") or [{}])[0].get("splits", [])
         if not splits:
+            # No career H2H — grade based on batter's platoon split vs pitcher handedness
+            platoon_grade = "C"
+            platoon_ops = None
+            pitcher_hand = "R"
+            grade_basis = "platoon"
+            try:
+                pr = requests.get(f"{MLB_API}/people/{pitcher_id}", timeout=6)
+                if pr.ok:
+                    ppeople = pr.json().get("people", [{}])
+                    pitcher_hand = ((ppeople[0].get("pitchHand") or {}).get("code") or "R")
+            except Exception:
+                pass
+            try:
+                year_now = datetime.now().year
+                sit_code = "l" if pitcher_hand == "L" else "r"
+                sr = requests.get(
+                    f"{MLB_API}/people/{batter_id}/stats",
+                    params={"stats": "statSplits", "group": "hitting",
+                            "sitCodes": sit_code, "season": year_now, "sportId": 1},
+                    timeout=8,
+                )
+                if sr.ok:
+                    for sg in sr.json().get("stats", []):
+                        for sp in sg.get("splits", []):
+                            if (sp.get("split") or {}).get("code") == sit_code:
+                                raw = sp.get("stat", {})
+                                platoon_ops = _safe_f(raw.get("ops"), None)
+                                break
+                        if platoon_ops is not None:
+                            break
+                if platoon_ops is not None:
+                    if platoon_ops >= 0.950:
+                        platoon_grade = "A+"
+                    elif platoon_ops >= 0.850:
+                        platoon_grade = "A"
+                    elif platoon_ops >= 0.750:
+                        platoon_grade = "B"
+                    elif platoon_ops >= 0.650:
+                        platoon_grade = "C"
+                    else:
+                        platoon_grade = "D"
+            except Exception:
+                pass
             result = {
                 "success": True,
                 "pa": 0,
@@ -5939,10 +5995,13 @@ def _fetch_bvp(batter_id, pitcher_id):
                 "ops": None,
                 "season_ops": None,
                 "ops_ratio": None,
-                "grade": "D",
-                "sample_note": "No career H2H on record",
+                "grade": platoon_grade,
+                "grade_basis": grade_basis,
+                "pitcher_hand": pitcher_hand,
+                "platoon_ops": platoon_ops,
+                "sample_note": f"No career H2H — grade reflects vs {'LHP' if pitcher_hand == 'L' else 'RHP'} splits",
                 "note": "No career H2H on record",
-                "tooltip": "No career BvP sample",
+                "tooltip": f"No career BvP sample | vs {'LHP' if pitcher_hand == 'L' else 'RHP'} OPS: {platoon_ops:.3f}" if platoon_ops else "No career BvP sample",
                 "shrunk": {},
             }
         else:
