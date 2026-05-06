@@ -228,8 +228,11 @@ def _get_active_roster(team_id, ttl_sec=_ACTIVE_ROSTER_TTL):
         roster = list((rr.json() or {}).get('roster') or [])
     except Exception:
         roster = []
-    with _active_roster_cache_lock:
-        _active_roster_cache[key] = {'ts': now, 'roster': roster}
+    # Only cache successful (non-empty) responses — an empty result from a
+    # transient API failure would otherwise poison the cache for 30 minutes.
+    if roster:
+        with _active_roster_cache_lock:
+            _active_roster_cache[key] = {'ts': now, 'roster': roster}
     return list(roster)
 
 

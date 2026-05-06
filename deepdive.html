@@ -694,6 +694,7 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 var GPK=parseInt(window.location.pathname.split('/').pop());
 var GD=null,PD=null,AL=[],HL=[];
 var PMD=null;
+var _lineupRetries=0;
 var PL={ff:"4-Seam",si:"Sinker",fc:"Cutter",st:"Sweeper",sl:"Slider",cu:"Curveball",ch:"Changeup",fs:"Splitter",kn:"Knuckleball",sv:"Slurve"};
 var PO=["ff","si","fc","st","sl","cu","ch","fs","kn","sv"];
 var TRACK_LS_KEY='hub_tracked_keys';
@@ -916,19 +917,34 @@ function loadPitchers(){
   })
     .catch(function(){document.getElementById('pitP').innerHTML='<p class="na">Pitcher data unavailable</p>';});
 }
-function loadLineups(){
+function _fetchLineups(){
+  var luP = document.getElementById('luP');
   fetch('/api/game/'+GPK).then(function(r){return r.json();}).then(function(d){
     if(d.isPostponed||d.isCancelled||d.isSuspended||d.isInactive){
       var label = d.isPostponed?'Game Postponed':d.isCancelled?'Game Cancelled':'Game Suspended';
-      document.getElementById('luP').innerHTML='<p class="na">'+label+' — No lineup available.</p>';
+      if(luP) luP.innerHTML='<p class="na">'+label+' — No lineup available.</p>';
       return;
     }
     if(d.success){AL=d.awayBatters||[];HL=d.homeBatters||[];}
+    if(!AL.length && !HL.length && _lineupRetries < 2){
+      _lineupRetries++;
+      if(luP) luP.innerHTML='<div class="spinner"></div>';
+      setTimeout(_fetchLineups, 8000);
+      return;
+    }
     showTab('away');populateSels();
-    // Trigger HR picks render now that lineups are loaded
     if(typeof renderHRPicksPanel==='function') setTimeout(renderHRPicksPanel,200);
-  }).catch(function(){document.getElementById('luP').innerHTML='<p class="na">Lineup not yet posted. Check back ~3h before first pitch.</p>';});
+  }).catch(function(){
+    if(_lineupRetries < 2){
+      _lineupRetries++;
+      if(luP) luP.innerHTML='<div class="spinner"></div>';
+      setTimeout(_fetchLineups, 8000);
+    } else {
+      if(luP) luP.innerHTML='<p class="na">Lineup data unavailable. Try refreshing the page.</p>';
+    }
+  });
 }
+function loadLineups(){ _lineupRetries=0; _fetchLineups(); }
 
 function renderHeader(){
   var g=GD;
@@ -2285,6 +2301,7 @@ setTimeout(function() { ensureParlayPanel(); }, 500);
 // ── Phase 4 Monte Carlo Simulation UI ────────────────────────────────────────
 var SIM_DATA = null;
 var PROPS_DATA = null;
+var PROPS_LOAD_DONE = false;
 var NRFI_DATA = null;
 
 function pct(v){
@@ -2315,16 +2332,19 @@ function loadPropsProjections(){
         // Refresh pitcher cards so PITCH X panels populate
         if(PD && PD.success) renderPitchers();
       }
-      // Always clear the spinner regardless of success/failure
+      PROPS_LOAD_DONE = true;
       buildParlayRec();
     })
-    .catch(function(){ buildParlayRec(); }); // clear spinner on network error
+    .catch(function(){ PROPS_LOAD_DONE = true; buildParlayRec(); });
 }
 
 function buildParlayRec(){
   var el = document.getElementById('parlayRecPanel');
   if(!el) return;
-  if(!PROPS_DATA || !PROPS_DATA.success){ el.innerHTML='<div class="pr-empty">BAT X data loading…</div>'; return; }
+  if(!PROPS_DATA || !PROPS_DATA.success){
+    el.innerHTML='<div class="pr-empty">'+(PROPS_LOAD_DONE?'No projection data available for this game.':'BAT X data loading…')+'</div>';
+    return;
+  }
 
   var batters = PROPS_DATA.batters || [];
   var pitchers = PROPS_DATA.pitchers || [];
