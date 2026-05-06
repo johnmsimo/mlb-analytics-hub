@@ -590,7 +590,8 @@ function renderDetail(data) {
     </tr>`;
   }).join('') || '<tr><td colspan="8" style="color:var(--mu);text-align:center;padding:12px">No game logs available</td></tr>';
 
-  // ── xStats row (Feature #2) ────────────────────────────────────────────────
+  // ── xStats / quality row (Feature #2) ────────────────────────────────────
+  const _bqSrc = bq.source || 'fg';
   const xstatsHtml = bq.xba != null ? `
     <div class="section-label" style="margin-top:12px">Expected Stats <span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— Statcast / season</span></div>
     <div class="stat-row" style="grid-template-columns:repeat(5,1fr)">
@@ -614,7 +615,26 @@ function renderDetail(data) {
         <div class="stat-val ${xstatColor(bq.brl_pct, 6.3)}">${bq.brl_pct != null ? bq.brl_pct.toFixed(1)+'%' : '—'}</div>
         <div class="stat-lbl">BRL%${pctBadge(bq.brl_pct_rank)}</div>
       </div>
-    </div>` : '';
+    </div>` : (bq.fg_woba != null ? `
+    <div class="section-label" style="margin-top:12px">Season Rates <span style="font-size:.58rem;color:var(--y);font-weight:400;text-transform:none;letter-spacing:0">— FanGraphs / MLB (Statcast unavailable)</span></div>
+    <div class="stat-row" style="grid-template-columns:repeat(4,1fr)">
+      <div class="stat-box">
+        <div class="stat-val ${xstatColor(bq.fg_woba, 0.310)}">${bq.fg_woba != null ? bq.fg_woba.toFixed(3) : '—'}</div>
+        <div class="stat-lbl">wOBA</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-val ${xstatColor(bq.fg_iso, 0.150)}">${bq.fg_iso != null ? bq.fg_iso.toFixed(3) : '—'}</div>
+        <div class="stat-lbl">ISO</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-val ${bq.fg_kpct <= 0.18 ? 'good' : bq.fg_kpct >= 0.26 ? 'bad' : ''}">${bq.fg_kpct != null ? (bq.fg_kpct*100).toFixed(1)+'%' : '—'}</div>
+        <div class="stat-lbl">K%</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-val ${bq.fg_bbpct >= 0.10 ? 'good' : bq.fg_bbpct < 0.06 ? 'bad' : ''}">${bq.fg_bbpct != null ? (bq.fg_bbpct*100).toFixed(1)+'%' : '—'}</div>
+        <div class="stat-lbl">BB%</div>
+      </div>
+    </div>` : '');
 
   // ── Pitcher profile compact note ───────────────────────────────────────────
   const pitNotes = [];
@@ -876,23 +896,61 @@ async function loadContextData(batterId, pitcherId, proj) {
       </div>`;
     }
 
-    const card4 = bq.ev != null ? `
-      <div class="context-card">
-        <div class="context-card-header">
-          <span>Quality Metrics</span>
-          <span class="context-badge">Statcast</span>
-        </div>
-        ${qualRow('Exit Velo', evVal, ' mph', bq.ev_pct)}
-        ${qualRow('Barrel%', brlVal, '%', bq.brl_pct_rank)}
-        ${qualRow('Hard Hit%', hhVal, '%', bq.hh_pct_rank)}
-        ${qualRow('xwOBA', xwobaVal, '', bq.xwoba_pct)}
-      </div>
-    ` : `
-      <div class="context-card">
-        <div class="context-card-header"><span>Quality Metrics</span></div>
-        <div class="context-stat-row" style="color:var(--dim);font-size:.75rem;padding:8px 0">No Statcast data</div>
-      </div>
-    `;
+    // Card 4: Quality Metrics — Savant preferred, FanGraphs fallback
+    const hasSavant = bq.ev != null || bq.xba != null;
+    const hasFG     = bq.fg_woba != null || bq.fg_iso != null;
+
+    function fmtPct3(v) { return v != null ? Number(v * 100).toFixed(1) + '%' : '—'; }
+
+    let card4;
+    if (hasSavant) {
+      card4 = `
+        <div class="context-card">
+          <div class="context-card-header">
+            <span>Quality Metrics</span>
+            <span class="context-badge">Statcast</span>
+          </div>
+          ${qualRow('Exit Velo', evVal, ' mph', bq.ev_pct)}
+          ${qualRow('Barrel%', brlVal, '%', bq.brl_pct_rank)}
+          ${qualRow('Hard Hit%', hhVal, '%', bq.hh_pct_rank)}
+          ${qualRow('xwOBA', xwobaVal, '', bq.xwoba_pct)}
+        </div>`;
+    } else if (hasFG) {
+      const fgWobaClass = bq.fg_woba >= 0.340 ? 'good' : bq.fg_woba >= 0.310 ? '' : 'bad';
+      const fgIsoClass  = bq.fg_iso  >= 0.180 ? 'good' : bq.fg_iso  >= 0.120 ? '' : 'bad';
+      const fgKClass    = bq.fg_kpct <= 0.180 ? 'good' : bq.fg_kpct <= 0.240 ? '' : 'bad';
+      const fgBBClass   = bq.fg_bbpct >= 0.100 ? 'good' : bq.fg_bbpct >= 0.070 ? '' : 'bad';
+      card4 = `
+        <div class="context-card">
+          <div class="context-card-header">
+            <span>Quality Metrics</span>
+            <span class="context-badge" style="color:var(--y);border-color:rgba(255,215,0,.3)">FanGraphs</span>
+          </div>
+          <div class="context-stat-row">
+            <span class="context-stat-label">wOBA</span>
+            <span class="context-stat-value ${fgWobaClass}">${bq.fg_woba != null ? bq.fg_woba.toFixed(3) : '—'}</span>
+          </div>
+          <div class="context-stat-row">
+            <span class="context-stat-label">ISO</span>
+            <span class="context-stat-value ${fgIsoClass}">${bq.fg_iso != null ? bq.fg_iso.toFixed(3) : '—'}</span>
+          </div>
+          <div class="context-stat-row">
+            <span class="context-stat-label">K%</span>
+            <span class="context-stat-value ${fgKClass}">${fmtPct3(bq.fg_kpct)}</span>
+          </div>
+          <div class="context-stat-row">
+            <span class="context-stat-label">BB%</span>
+            <span class="context-stat-value ${fgBBClass}">${fmtPct3(bq.fg_bbpct)}</span>
+          </div>
+          <div style="font-size:.6rem;color:var(--dim);margin-top:4px">Statcast unavailable — using MLB/FG rates</div>
+        </div>`;
+    } else {
+      card4 = `
+        <div class="context-card">
+          <div class="context-card-header"><span>Quality Metrics</span></div>
+          <div class="context-stat-row" style="color:var(--dim);font-size:.75rem;padding:8px 0">Stats loading…</div>
+        </div>`;
+    }
 
     contextGrid.innerHTML = card1 + card2 + card3 + card4;
 

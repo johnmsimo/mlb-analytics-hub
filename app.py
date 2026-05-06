@@ -1552,6 +1552,10 @@ _sv_loaded    = False
 _sv_load_date = None
 _sv_loading   = False
 
+# Per-player direct Savant lookup cache {(player_id, year): (date, dict)}
+_sv_player_batter_cache: dict = {}
+_sv_player_batter_lock  = threading.Lock()
+
 # ── Injury Cache (MLB transactions) ─────────────────────────────────────────
 _injury_lock = threading.Lock()
 _injury_cache = {}
@@ -1883,6 +1887,52 @@ def sv_batter(name):
     except Exception:
         pass
     return r
+
+
+def _fetch_savant_player_batter(player_id, year):
+    """Direct per-player Savant CSV fetch by MLB player_id (same ID Savant uses).
+    Falls back to empty dict — never raises. Results cached daily."""
+    today = datetime.now().date()
+    key = (int(player_id), int(year))
+    with _sv_player_batter_lock:
+        cached = _sv_player_batter_cache.get(key)
+        if cached and cached[0] == today:
+            return cached[1]
+
+    BASE = "https://baseballsavant.mlb.com"
+    result = {}
+    try:
+        rows = _fetch_sv_csv(
+            f"{BASE}/leaderboard/expected_statistics?type=batter&year={year}"
+            f"&position=&team=&min=1&player_id={player_id}&csv=true"
+        )
+        for row in rows:
+            result.update({
+                "sv_xba":   _sv_f(row.get("est_ba")),
+                "sv_xslg":  _sv_f(row.get("est_slg")),
+                "sv_xwoba": _sv_f(row.get("est_woba")),
+                "sv_k_pct": _sv_f(row.get("k_percent")),
+                "sv_bb_pct":_sv_f(row.get("bb_percent")),
+            })
+    except Exception:
+        pass
+    try:
+        rows = _fetch_sv_csv(
+            f"{BASE}/leaderboard/statcast?type=batter&year={year}"
+            f"&position=&team=&min=1&player_id={player_id}&csv=true"
+        )
+        for row in rows:
+            result.update({
+                "sv_ev":      _sv_f(row.get("avg_hit_speed")),
+                "sv_hh_pct":  _sv_f(row.get("ev95percent")),
+                "sv_brl_pct": _sv_f(row.get("brl_percent")),
+            })
+    except Exception:
+        pass
+
+    with _sv_player_batter_lock:
+        _sv_player_batter_cache[key] = (today, result)
+    return result
 
 
 def _pct_rank(values, value):
@@ -5265,6 +5315,14 @@ def api_bvp_projection(batter_id, pitcher_id):
         fg_pit = fg_pitcher(pitcher_name) or {}
         sv_pit = sv_pitcher(pitcher_name) or {}
 
+        # Tier-2 fallback: direct per-player Savant CSV when bulk cache misses
+        _sv_key_fields = ("sv_xba", "sv_ev", "sv_brl_pct")
+        if not any(_safe_f(sv_bat.get(k), None) for k in _sv_key_fields):
+            _direct = _fetch_savant_player_batter(batter_id, datetime.now().year)
+            if _direct:
+                sv_bat = dict(sv_bat)
+                sv_bat.update({k: v for k, v in _direct.items() if v not in (None, "N/A")})
+
         # ── 3. Build batter object with platoon splits ───────────────────────
         splits = hitter_split_profile(batter_id)
         vl = splits.get("vl", {})
@@ -5374,18 +5432,34 @@ def api_bvp_projection(batter_id, pitcher_id):
             vals = [x for x in vals if x is not None and x > 0]
             return _pct_rank(vals, val)
 
+        # FanGraphs tier-3 fallback (always available from MLB API bulk cache)
+        fg_woba  = _safe_f(fg_bat.get("fg_woba"),  None)
+        fg_iso   = _safe_f(fg_bat.get("fg_iso"),   None)
+        fg_kpct  = _safe_f(fg_bat.get("fg_kpct"),  None)
+        fg_bbpct = _safe_f(fg_bat.get("fg_bbpct"), None)
+        fg_ops   = _safe_f(fg_bat.get("fg_ops"),   None)
+
+        _has_savant = sv_ev is not None or sv_xba is not None
         batter_quality = {
+            # Savant metrics (may be None if unavailable even after direct fetch)
             "xba":      round(sv_xba,  3) if sv_xba  is not None else None,
             "xslg":     round(sv_xslg, 3) if sv_xslg is not None else None,
             "xwoba":    round(sv_xwoba,3) if sv_xwoba is not None else None,
             "ev":       round(sv_ev,   1) if sv_ev    is not None else None,
             "brl_pct":  round(sv_brl,  1) if sv_brl   is not None else None,
             "hh_pct":   round(sv_hh,   1) if sv_hh    is not None else None,
-            "ev_pct":   _pct(_sc, "sv_ev",      sv_ev),
+            "ev_pct":       _pct(_sc, "sv_ev",      sv_ev),
             "brl_pct_rank": _pct(_sc, "sv_brl_pct", sv_brl),
             "hh_pct_rank":  _pct(_sc, "sv_hh_pct",  sv_hh),
-            "xba_pct":  _pct(_xs, "sv_xba",    sv_xba),
-            "xwoba_pct":_pct(_xs, "sv_xwoba",  sv_xwoba),
+            "xba_pct":      _pct(_xs, "sv_xba",     sv_xba),
+            "xwoba_pct":    _pct(_xs, "sv_xwoba",   sv_xwoba),
+            # FanGraphs metrics (always present as fallback)
+            "fg_woba":  round(fg_woba,  3) if fg_woba  is not None else None,
+            "fg_iso":   round(fg_iso,   3) if fg_iso   is not None else None,
+            "fg_kpct":  round(fg_kpct,  3) if fg_kpct  is not None else None,
+            "fg_bbpct": round(fg_bbpct, 3) if fg_bbpct is not None else None,
+            "fg_ops":   round(fg_ops,   3) if fg_ops   is not None else None,
+            "source":   "savant" if _has_savant else "fg",
         }
 
         pitcher_profile = {
