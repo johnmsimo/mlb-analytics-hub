@@ -11516,13 +11516,15 @@ def _compute_cheatsheets_today(date_str):
 
             def _weakspot_card(p_name, p_id, p_team, opp_bats, p_fg, p_sv, p_hand,
                                  game_time_sort='9999', game_time_display=''):
-                p_name = (p_name or '').strip()
-                is_tbd_pitcher = not p_name or p_name == 'TBD'
-                p_name = p_name or 'TBD'
+                raw_pitcher_name = (p_name or '').strip()
+                is_tbd_pitcher = not raw_pitcher_name or raw_pitcher_name == 'TBD'
+                p_display_name = raw_pitcher_name or 'TBD'
+                p_fg = p_fg or {}
+                p_sv = p_sv or {}
                 opp_scores = []
                 if not is_tbd_pitcher:
                     for b in (opp_bats or [])[:9]:
-                        sc = _matchup_score(b, p_fg or {}, p_sv or {}, pitcher_hand=p_hand)
+                        sc = _matchup_score(b, p_fg, p_sv, pitcher_hand=p_hand)
                         opp_scores.append({'slot': b.get('slot', 0), 'score': sc.get('score', 50), 'batter': b})
                     opp_scores.sort(key=lambda x: x.get('score', 0), reverse=True)
                 top_slots = sorted([x.get('slot') for x in opp_scores[:3] if x.get('slot')])
@@ -11548,7 +11550,7 @@ def _compute_cheatsheets_today(date_str):
                     recent = {}
                 else:
                     with _sv_lock:
-                        _name_key = _sv_key(p_name) if p_name else ""
+                        _name_key = _sv_key(p_display_name) if p_display_name else ""
                         arsenal = dict(_sv_arsenal_pct.get(_name_key, {}) or {})
                         if not arsenal and _name_key:
                             _match = difflib.get_close_matches(_name_key, _sv_arsenal_pct.keys(), n=1, cutoff=0.72)
@@ -11575,7 +11577,7 @@ def _compute_cheatsheets_today(date_str):
                 k_prop_display = None
                 if not is_tbd_pitcher:
                     try:
-                        p_fg_k = fg_pitcher(p_name) or {}
+                        p_fg_k = fg_pitcher(p_display_name) or {}
                         k9_season = _safe_f(p_fg_k.get('fg_k9'), 0.0)
                         k9_recent = _safe_f((recent or {}).get('k9_recent'), k9_season)
                         k9_blended = round(0.6 * k9_season + 0.4 * k9_recent, 1) if k9_recent else round(k9_season, 1)
@@ -11610,7 +11612,7 @@ def _compute_cheatsheets_today(date_str):
                         rec = 'Play selectively by lineup slot and price'
 
                 return {
-                    'pitcherName': p_name,
+                    'pitcherName': p_display_name,
                     'pitcherId': p_id,
                     'team': p_team,
                     'weakSlots': weak_slots,
