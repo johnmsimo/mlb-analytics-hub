@@ -4883,53 +4883,53 @@ def api_player_bvp_games(player_id, pitcher_id):
         # Resolve pitcher name BEFORE building game rows
         pitcher_name = "Pitcher"
         try:
-           pr = requests.get(f"{MLB_API}/people/{pitcher_id}", timeout=6)
-           if pr.ok:
-               pitcher_name = ((pr.json().get("people") or [{}])[0].get("fullName") or "Pitcher")
-       except Exception:
-           pass
+            pr = requests.get(f"{MLB_API}/people/{pitcher_id}", timeout=6)
+            if pr.ok:
+                pitcher_name = ((pr.json().get("people") or [{}])[0].get("fullName") or "Pitcher")
+        except Exception:
+            pass
 
-       # Try direct opposingPlayerId game-log filter across recent seasons.
-       for yr in [year, year - 1, year - 2]:
-           if len(games) >= 5:
-              break
-           try:
-               gr = requests.get(
-                   f"{MLB_API}/people/{player_id}/stats",
-                   params={
-                      "stats": "gameLog",
-                      "group": "hitting",
-                      "season": yr,
-                      "opposingPlayerId": pitcher_id,
-                      "sportId": 1,
-                   },
-                   timeout=10,
-               )
-               if not gr.ok:
-                   continue
-               splits = (gr.json().get("stats") or [{}])[0].get("splits", [])
-               for sp in reversed(splits):
-                   if len(games) >= 5:
-                      break
-                   st = sp.get("stat", {})
-                   gm = sp.get("game") or {}
-                   game_pk = gm.get("gamePk")
-                   team_id = ((sp.get("team") or {}).get("id"))
-                   score_txt, result = _score_for_game(game_pk, batter_team_id=team_id)
-                   games.append({
-                       "date": (sp.get("date") or "")[:10],
-                       "score": score_txt,
-                       "pitcher": pitcher_name,          # ← ADDED
-                       "ab": int(st.get("atBats", 0) or 0),
-                       "hits": int(st.get("hits", 0) or 0),  # ← was "h", now "hits"
-                       "hr": int(st.get("homeRuns", 0) or 0),
-                       "rbi": int(st.get("rbi", 0) or 0),
-                       "k": int(st.get("strikeOuts", 0) or 0),
-                       "bb": int(st.get("baseOnBalls", 0) or 0),
-                       "result": result,
-                   })
-           except Exception:
-               continue
+        # Try direct opposingPlayerId game-log filter across recent seasons.
+        for yr in [year, year - 1, year - 2]:
+            if len(games) >= 5:
+                break
+            try:
+                gr = requests.get(
+                    f"{MLB_API}/people/{player_id}/stats",
+                    params={
+                        "stats": "gameLog",
+                        "group": "hitting",
+                        "season": yr,
+                        "opposingPlayerId": pitcher_id,
+                        "sportId": 1,
+                    },
+                    timeout=10,
+                )
+                if not gr.ok:
+                    continue
+                splits = (gr.json().get("stats") or [{}])[0].get("splits", [])
+                for sp in reversed(splits):
+                    if len(games) >= 5:
+                        break
+                    st = sp.get("stat", {})
+                    gm = sp.get("game") or {}
+                    game_pk = gm.get("gamePk")
+                    team_id = ((sp.get("team") or {}).get("id"))
+                    score_txt, result = _score_for_game(game_pk, batter_team_id=team_id)
+                    games.append({
+                        "date": (sp.get("date") or "")[:10],
+                        "score": score_txt,
+                        "pitcher": pitcher_name,
+                        "ab": int(st.get("atBats", 0) or 0),
+                        "hits": int(st.get("hits", 0) or 0),
+                        "hr": int(st.get("homeRuns", 0) or 0),
+                        "rbi": int(st.get("rbi", 0) or 0),
+                        "k": int(st.get("strikeOuts", 0) or 0),
+                        "bb": int(st.get("baseOnBalls", 0) or 0),
+                        "result": result,
+                    })
+            except Exception:
+                continue
 
         # Ensure latest first.
         games = sorted(games, key=lambda x: x.get("date", ""), reverse=True)[:5]
