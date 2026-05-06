@@ -405,6 +405,7 @@ function esc(s) { return (s||'').replace(/'/g, "\\'"); }
 
 function renderDetail(data) {
   const { summary, logs, batterName, pitcherName } = data;
+  const { batterId, pitcherId } = selectedBatter;
   const grade = summary.grade || '?';
   const gbClass = 'gb-' + grade.replace('+','\\+');
   const pa = summary.pa || 0;
@@ -432,6 +433,7 @@ function renderDetail(data) {
     </tr>`;
   }).join('') || '<tr><td colspan="8" style="color:var(--mu);text-align:center;padding:12px">No game logs available</td></tr>';
 
+  // Render initial layout with loading placeholders
   document.getElementById('detailPanel').innerHTML = `
     <div class="bvp-header">
       <div class="bvp-names">
@@ -461,6 +463,13 @@ function renderDetail(data) {
       <div class="prob-box"><div class="prob-val">${fmtPct(probs.rbi1)}</div><div class="prob-lbl">1+ RBI</div></div>
     </div>` : ''}
 
+    <div class="section-label">Recent Form & Matchup Context</div>
+    <div class="context-grid" id="contextGrid">
+      <div class="context-card"><div class="context-loading">Loading last 10 games...</div></div>
+      <div class="context-card"><div class="context-loading">Loading platoon splits...</div></div>
+      <div class="context-card"><div class="context-loading">Loading arsenal matchup...</div></div>
+    </div>
+
     <div class="section-label">Recent Matchup History</div>
     <div class="tbl-wrap">
       <table>
@@ -471,6 +480,117 @@ function renderDetail(data) {
       </table>
     </div>
   `;
+
+  // Fetch and render context data
+  loadContextData(batterId, pitcherId);
+}
+
+async function loadContextData(batterId, pitcherId) {
+  try {
+    const [recent, splits, arsenal] = await Promise.all([
+      fetch(`/api/player/${batterId}/recent-games`).then(r => r.json()),
+      fetch(`/api/player/${batterId}/platoon-splits`).then(r => r.json()),
+      fetch(`/api/player/${batterId}/arsenal-matchup/${pitcherId}`).then(r => r.json())
+    ]);
+
+    const contextGrid = document.getElementById('contextGrid');
+    if (!contextGrid) return;
+
+    // Card 1: Last 10 Games
+    const last10 = recent.last10 || {};
+    const opsClass = last10.ops >= 0.800 ? 'good' : last10.ops >= 0.700 ? '' : 'bad';
+    const avgClass = last10.avg >= 0.280 ? 'good' : last10.avg >= 0.240 ? '' : 'bad';
+    
+    const card1 = `
+      <div class="context-card">
+        <div class="context-card-header">
+          <span>Last 10 Games</span>
+          <span class="context-badge">${last10.games || 0}G</span>
+        </div>
+        <div class="context-stat-row">
+          <span class="context-stat-label">AVG</span>
+          <span class="context-stat-value ${avgClass}">${fmtAvg(last10.avg)}</span>
+        </div>
+        <div class="context-stat-row">
+          <span class="context-stat-label">OPS</span>
+          <span class="context-stat-value ${opsClass}">${fmtOps(last10.ops)}</span>
+        </div>
+        <div class="context-stat-row">
+          <span class="context-stat-label">HR</span>
+          <span class="context-stat-value">${last10.hr || 0}</span>
+        </div>
+        <div class="context-stat-row">
+          <span class="context-stat-label">Hits</span>
+          <span class="context-stat-value">${last10.hits || 0}/${last10.ab || 0}</span>
+        </div>
+      </div>
+    `;
+
+    // Card 2: Platoon Splits
+    const vsLHP = splits.vsLHP || {};
+    const vsRHP = splits.vsRHP || {};
+    const pitcherHand = arsenal.pitcherHand || 'R';
+    const relevantSplit = pitcherHand === 'L' ? vsLHP : vsRHP;
+    const otherSplit = pitcherHand === 'L' ? vsRHP : vsLHP;
+    
+    const card2 = `
+      <div class="context-card">
+        <div class="context-card-header">
+          <span>Platoon Splits</span>
+          <span class="context-badge">vs ${pitcherHand}HP</span>
+        </div>
+        <div class="split-compare">
+          <div class="split-box" style="border: 2px solid rgba(0,229,255,.35);">
+            <div class="split-label">vs ${pitcherHand}HP</div>
+            <div class="split-value">${fmtOps(relevantSplit.ops)}</div>
+            <div class="split-sub">${fmtAvg(relevantSplit.avg)} AVG</div>
+            <div class="split-sub">${relevantSplit.pa || 0} PA</div>
+          </div>
+          <div class="split-box">
+            <div class="split-label">vs ${pitcherHand === 'L' ? 'R' : 'L'}HP</div>
+            <div class="split-value">${fmtOps(otherSplit.ops)}</div>
+            <div class="split-sub">${fmtAvg(otherSplit.avg)} AVG</div>
+            <div class="split-sub">${otherSplit.pa || 0} PA</div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    // Card 3: Arsenal Matchup
+    const similarPitchers = arsenal.similarPitchers || [];
+    const arsenalStats = arsenal.similarArsenal || {};
+    const primaryPitch = arsenal.primaryPitch || 'Fastball';
+    
+    const card3 = `
+      <div class="context-card">
+        <div class="context-card-header">
+          <span>Similar Arsenal</span>
+          <span class="context-badge">${primaryPitch}</span>
+        </div>
+        <div class="context-stat-row">
+          <span class="context-stat-label">Similar Pitchers</span>
+          <span class="context-stat-value">${arsenalStats.pitchers || 0}</span>
+        </div>
+        <div class="context-stat-row">
+          <span class="context-stat-label" style="font-size:.68rem">${arsenalStats.message || 'Loading...'}</span>
+        </div>
+        <div class="arsenal-list">
+          ${similarPitchers.slice(0, 5).map(p => 
+            `<div class="arsenal-pill" title="${p.similarity * 100}% match">${p.name.split(' ').pop()}</div>`
+          ).join('')}
+        </div>
+      </div>
+    `;
+
+    contextGrid.innerHTML = card1 + card2 + card3;
+
+  } catch(err) {
+    console.error('Context data failed:', err);
+    const contextGrid = document.getElementById('contextGrid');
+    if (contextGrid) {
+      contextGrid.innerHTML = '<div class="context-card"><div style="color:var(--r);padding:12px;text-align:center">Failed to load context data</div></div>';
+    }
+  }
 }
 
 loadGames();
