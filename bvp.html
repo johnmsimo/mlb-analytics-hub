@@ -220,6 +220,60 @@
     @keyframes spin{to{transform:rotate(360deg)}}
     .loading-row{padding:20px;text-align:center;color:var(--mu)}
     .pill{display:inline-block;border:1px solid rgba(0,229,255,.3);border-radius:999px;padding:2px 8px;font-size:.68rem;color:var(--c)}
+    
+    /* Performance Badges */
+    .badge-row {
+      display: flex;
+      gap: 3px;
+      margin-top: 3px;
+      flex-wrap: wrap;
+    }
+    
+    .perf-badge {
+      font-size: .58rem;
+      font-weight: 700;
+      padding: 1px 5px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      white-space: nowrap;
+    }
+    
+    .perf-green {
+      background: rgba(0,230,118,.15);
+      color: var(--g);
+      border: 1px solid rgba(0,230,118,.3);
+    }
+    
+    .perf-yellow {
+      background: rgba(245,197,66,.12);
+      color: var(--y);
+      border: 1px solid rgba(245,197,66,.3);
+    }
+    
+    .perf-orange {
+      background: rgba(255,152,0,.12);
+      color: var(--o);
+      border: 1px solid rgba(255,152,0,.3);
+    }
+    
+    .perf-red {
+      background: rgba(255,82,82,.1);
+      color: var(--r);
+      border: 1px solid rgba(255,82,82,.25);
+    }
+    
+    .perf-blue {
+      background: rgba(0,229,255,.12);
+      color: var(--c);
+      border: 1px solid rgba(0,229,255,.3);
+    }
+    
+    .perf-purple {
+      background: rgba(156,39,176,.12);
+      color: #ce93d8;
+      border: 1px solid rgba(156,39,176,.3);
+    }
   </style>
 </head>
 <body>
@@ -330,7 +384,10 @@ function renderLineup() {
     const grade = gradeCache[cKey] || '?';
     return `<div class="batter-row" id="br_${b.id}_${oppPitcherId}" onclick="selectBatter(${b.id},'${esc(b.name)}',${oppPitcherId},'${esc((oppPitcherId === awayP.id ? awayP.name : homeP.name) || '')}')">
       <span class="b-slot">${b.slot||'?'}</span>
-      <span class="b-name">${b.name}</span>
+      <span class="b-name">
+        ${b.name}
+        <div class="badge-row" id="badges_${b.id}"></div>
+      </span>
       <span class="b-ops">${b.ops||'—'}</span>
       <span class="b-grade ${gradeClass(grade)}">${grade}</span>
     </div>`;
@@ -339,15 +396,23 @@ function renderLineup() {
   document.getElementById('lineupPanel').innerHTML = `
     <div class="lp-header"><span>${g.awayAbbr} @ ${g.homeAbbr}</span><span class="pill">${g.gameTime||''}</span></div>
     <div class="lp-team">${g.awayAbbr} BATTERS</div>
-    <div class="lp-pitcher">vs ${homeP.name || g.homePitcher || 'TBD'}</div>
+    <div class="lp-pitcher" id="pitcher_away">vs ${homeP.name || g.homePitcher || 'TBD'}</div>
     ${makeRows(away, homeP.id)}
     <div class="lp-team" style="margin-top:12px">${g.homeAbbr} BATTERS</div>
-    <div class="lp-pitcher">vs ${awayP.name || g.awayPitcher || 'TBD'}</div>
+    <div class="lp-pitcher" id="pitcher_home">vs ${awayP.name || g.awayPitcher || 'TBD'}</div>
     ${makeRows(home, awayP.id)}
   `;
 
   prefetchGrades(away, homeP.id || null);
   prefetchGrades(home, awayP.id || null);
+  
+  // Load batter badges
+  loadBatterBadges(away);
+  loadBatterBadges(home);
+  
+  // Load pitcher badges
+  if (homeP.id) loadPitcherBadge(homeP.id, 'pitcher_away');
+  if (awayP.id) loadPitcherBadge(awayP.id, 'pitcher_home');
 }
 
 async function prefetchGrades(batters, pitcherId) {
@@ -591,6 +656,34 @@ async function loadContextData(batterId, pitcherId) {
       contextGrid.innerHTML = '<div class="context-card"><div style="color:var(--r);padding:12px;text-align:center">Failed to load context data</div></div>';
     }
   }
+}
+async function loadBatterBadges(batters) {
+  for (const b of batters) {
+    try {
+      const r = await fetch(`/api/player/${b.id}/performance-badges`);
+      const data = await r.json();
+      const badgeEl = document.getElementById(`badges_${b.id}`);
+      if (badgeEl && data.badges && data.badges.length) {
+        badgeEl.innerHTML = data.badges.slice(0, 2).map(badge => 
+          `<span class="perf-badge perf-${badge.color}" title="${badge.props.join(', ')}">${badge.label}</span>`
+        ).join('');
+      }
+    } catch(e) { console.error('Badge fetch failed:', e); }
+  }
+}
+
+async function loadPitcherBadge(pitcherId, elementId) {
+  try {
+    const r = await fetch(`/api/pitcher/${pitcherId}/performance-badges`);
+    const data = await r.json();
+    const el = document.getElementById(elementId);
+    if (el && data.badges && data.badges.length) {
+      const badgeHtml = data.badges.slice(0, 1).map(badge =>
+        `<span class="perf-badge perf-${badge.color}" style="margin-left:6px" title="${badge.props.join(', ')}">${badge.label}</span>`
+      ).join('');
+      el.innerHTML += badgeHtml;
+    }
+  } catch(e) { console.error('Pitcher badge failed:', e); }
 }
 
 loadGames();
