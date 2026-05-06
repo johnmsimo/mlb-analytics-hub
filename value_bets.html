@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MLB Analytics Hub - Value Bets</title>
+  <style>
+    :root{--bg:#070d18;--card:#101a2a;--card2:#0b1322;--b:#223149;--t:#dfe9ff;--mu:#8ea4c8;--c:#00e5ff;--g:#00e676;--o:#ff9800;--r:#ff5252;--y:#f5c542}
+    *{box-sizing:border-box}
+    body{margin:0;background:radial-gradient(circle at 10% 0%,#0f1d36,transparent 45%),var(--bg);color:var(--t);font-family:Segoe UI,Arial,sans-serif;min-height:100vh}
+    .wrap{max-width:1500px;margin:0 auto;padding:18px}
+    .top{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px}
+    .brand{font-weight:700;letter-spacing:.08em}
+    .sub{color:var(--mu);font-size:.85rem;margin-top:2px}
+    .actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    a.toplink{color:var(--c);text-decoration:none;padding:7px 11px;border:1px solid rgba(0,229,255,.2);border-radius:999px;font-size:.82rem}
+    .btn{border:1px solid rgba(0,229,255,.35);background:rgba(0,229,255,.08);color:var(--c);padding:8px 14px;border-radius:10px;cursor:pointer;font-size:.82rem}
+    .btn:disabled{opacity:.5;cursor:not-allowed}
+    select,input[type=range]{font:inherit;background:var(--card);border:1px solid var(--b);color:var(--t);border-radius:8px;padding:6px 10px}
+
+    /* Hero stats */
+    .hero{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px}
+    @media(max-width:800px){.hero{grid-template-columns:repeat(2,1fr)}}
+    .hstat{background:linear-gradient(180deg,var(--card),var(--card2));border:1px solid var(--b);border-radius:14px;padding:14px 16px}
+    .hstat-v{font-size:1.5rem;font-weight:800;color:var(--c)}
+    .hstat-l{margin-top:4px;font-size:.68rem;letter-spacing:.08em;color:var(--mu);text-transform:uppercase}
+
+    /* Filters */
+    .filters{background:linear-gradient(180deg,var(--card),var(--card2));border:1px solid var(--b);border-radius:14px;padding:12px 16px;display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+    .filter-group{display:flex;flex-direction:column;gap:4px}
+    .filter-label{font-size:.68rem;letter-spacing:.07em;text-transform:uppercase;color:var(--mu)}
+
+    /* Table */
+    .tbl-panel{background:linear-gradient(180deg,var(--card),var(--card2));border:1px solid var(--b);border-radius:14px;padding:14px}
+    .tbl-wrap{overflow-x:auto;border:1px solid var(--b);border-radius:10px}
+    table{width:100%;border-collapse:collapse;min-width:900px}
+    th,td{padding:9px 11px;border-bottom:1px solid rgba(255,255,255,.05);font-size:.8rem;text-align:left;white-space:nowrap}
+    th{font-size:.68rem;letter-spacing:.07em;color:var(--mu);background:rgba(0,0,0,.18);text-transform:uppercase;cursor:pointer;user-select:none}
+    th:hover{color:var(--c)}
+    th.asc::after{content:' ▲';font-size:.6rem}
+    th.desc::after{content:' ▼';font-size:.6rem}
+    tr:hover td{background:rgba(0,229,255,.03)}
+    tr:last-child td{border-bottom:none}
+
+    .rank{color:var(--mu);font-size:.75rem;font-weight:700;min-width:24px}
+    .player-name{font-weight:700;font-size:.85rem}
+    .team-badge{font-size:.7rem;color:var(--mu)}
+    .market-pill{display:inline-block;background:rgba(0,229,255,.08);border:1px solid rgba(0,229,255,.2);border-radius:6px;padding:2px 7px;font-size:.7rem;color:var(--c)}
+    .edge-val{font-weight:700;color:var(--g)}
+    .edge-neg{font-weight:700;color:var(--r)}
+    .ev-pos{color:var(--g);font-weight:700}
+    .ev-neg{color:var(--r)}
+    .hub{display:inline-block;padding:3px 7px;border-radius:6px;border:1px solid rgba(0,229,255,.25);background:rgba(0,229,255,.08);color:var(--c);font-weight:700;font-size:.76rem}
+    .hub.high{background:rgba(0,230,118,.1);border-color:rgba(0,230,118,.35);color:var(--g)}
+    .hub.mid{background:rgba(245,197,66,.08);border-color:rgba(245,197,66,.3);color:var(--y)}
+
+    .grade-badge{display:inline-block;padding:2px 8px;border-radius:6px;font-size:.72rem;font-weight:800}
+    .gA\+,.gA{background:rgba(0,230,118,.12);color:var(--g);border:1px solid rgba(0,230,118,.35)}
+    .gB{background:rgba(0,229,255,.1);color:var(--c);border:1px solid rgba(0,229,255,.3)}
+    .gC{background:rgba(245,197,66,.1);color:var(--y);border:1px solid rgba(245,197,66,.3)}
+    .gD{background:rgba(255,82,82,.08);color:var(--r);border:1px solid rgba(255,82,82,.25)}
+
+    .rec-strong{color:var(--g);font-weight:700;font-size:.75rem}
+    .rec-play{color:var(--c);font-weight:700;font-size:.75rem}
+    .rec-lean{color:var(--y);font-size:.75rem}
+    .rec-watch{color:var(--mu);font-size:.75rem}
+    .rec-skip{color:var(--r);font-size:.75rem}
+
+    .reason-cell{max-width:240px;overflow:hidden;text-overflow:ellipsis;font-size:.72rem;color:var(--mu)}
+    .deeplink{color:var(--c);font-size:.7rem;text-decoration:none}
+    .deeplink:hover{text-decoration:underline}
+
+    .empty{padding:36px;text-align:center;color:var(--mu)}
+    .spinner{display:inline-block;width:20px;height:20px;border:2px solid rgba(0,229,255,.2);border-top-color:var(--c);border-radius:50%;animation:spin .7s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .loading{padding:40px;text-align:center;color:var(--mu)}
+    .computing-note{padding:10px 14px;background:rgba(245,197,66,.08);border:1px solid rgba(245,197,66,.25);border-radius:8px;color:var(--y);font-size:.8rem;margin-bottom:12px;display:none}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div>
+      <div class="brand">MLB ANALYTICS HUB — VALUE BETS</div>
+      <div class="sub" id="statusText">Loading today's +EV opportunities…</div>
+    </div>
+    <div class="actions">
+      <a class="toplink" href="/">Dashboard</a>
+      <a class="toplink" href="/props">Props</a>
+      <a class="toplink" href="/batter-vs-pitcher">BvP</a>
+      <a class="toplink" href="/nrfi">NRFI</a>
+      <a class="toplink" href="/tracker">Tracker</a>
+      <button class="btn" id="refreshBtn" onclick="loadData(true)">Refresh</button>
+    </div>
+  </div>
+
+  <div class="hero">
+    <div class="hstat"><div class="hstat-v" id="hCount">—</div><div class="hstat-l">Value Plays</div></div>
+    <div class="hstat"><div class="hstat-v" id="hEdge">—</div><div class="hstat-l">Avg Edge</div></div>
+    <div class="hstat"><div class="hstat-v" id="hHub">—</div><div class="hstat-l">Avg Hub Rating</div></div>
+    <div class="hstat"><div class="hstat-v" id="hGradeA">—</div><div class="hstat-l">A/A+ Grade Plays</div></div>
+  </div>
+
+  <div class="filters">
+    <div class="filter-group">
+      <div class="filter-label">Min Edge</div>
+      <select id="minEdge" onchange="applyFilters()">
+        <option value="0.01">1%+</option>
+        <option value="0.02">2%+</option>
+        <option value="0.03" selected>3%+</option>
+        <option value="0.05">5%+</option>
+        <option value="0.08">8%+</option>
+        <option value="0.10">10%+</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <div class="filter-label">Market Type</div>
+      <select id="marketFilter" onchange="applyFilters()">
+        <option value="">All Markets</option>
+        <option value="batter_hits">Hits</option>
+        <option value="batter_home_runs">Home Runs</option>
+        <option value="batter_total_bases">Total Bases</option>
+        <option value="batter_rbis">RBIs</option>
+        <option value="pitcher_strikeouts">Pitcher Ks</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <div class="filter-label">Min Grade</div>
+      <select id="gradeFilter" onchange="applyFilters()">
+        <option value="">All Grades</option>
+        <option value="A">A / A+</option>
+        <option value="B">B+</option>
+        <option value="C">C+</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <div class="filter-label">Min Hub Rating</div>
+      <select id="hubFilter" onchange="applyFilters()">
+        <option value="0">Any</option>
+        <option value="50">50+</option>
+        <option value="60">60+</option>
+        <option value="70">70+</option>
+      </select>
+    </div>
+  </div>
+
+  <div id="computingNote" class="computing-note">⏳ Model is computing — results are partial. Page will auto-refresh in 20s.</div>
+
+  <div class="tbl-panel">
+    <div id="tableWrap"><div class="loading"><div class="spinner"></div><br>Loading value bets…</div></div>
+  </div>
+</div>
+
+<script>
+let allProps = [];
+let sortCol = 'edge';
+let sortDir = -1;
+let refreshTimer = null;
+
+const MARKET_LABELS = {
+  batter_hits: 'Hits', batter_home_runs: 'HRs', batter_total_bases: 'Total Bases',
+  batter_rbis: 'RBIs', batter_runs_scored: 'Runs', batter_stolen_bases: 'SB',
+  batter_walks: 'Walks', pitcher_strikeouts: 'Pitcher Ks',
+};
+
+function mLabel(mk) { return MARKET_LABELS[mk] || mk; }
+
+function edgeGrade(edge) {
+  if (edge >= 0.15) return 'A+';
+  if (edge >= 0.10) return 'A';
+  if (edge >= 0.06) return 'B';
+  if (edge >= 0.02) return 'C';
+  return 'D';
+}
+
+function edgeRec(edge) {
+  if (edge >= 0.15) return '<span class="rec-strong">STRONG PLAY</span>';
+  if (edge >= 0.10) return '<span class="rec-play">PLAY</span>';
+  if (edge >= 0.06) return '<span class="rec-lean">LEAN</span>';
+  if (edge >= 0.02) return '<span class="rec-watch">WATCH</span>';
+  return '<span class="rec-skip">SKIP</span>';
+}
+
+function hubClass(hub) {
+  if (hub >= 70) return 'hub high';
+  if (hub >= 50) return 'hub mid';
+  return 'hub';
+}
+
+function gradeClass(g) {
+  if (!g) return 'grade-badge gD';
+  if (g === 'A+') return 'grade-badge gA\\+';
+  if (g === 'A') return 'grade-badge gA';
+  if (g === 'B') return 'grade-badge gB';
+  if (g === 'C') return 'grade-badge gC';
+  return 'grade-badge gD';
+}
+
+async function loadData(force) {
+  const btn = document.getElementById('refreshBtn');
+  btn.disabled = true;
+  btn.textContent = 'Loading…';
+  clearTimeout(refreshTimer);
+  try {
+    const url = '/api/props/scan/today' + (force ? '?refresh=1' : '');
+    const r = await fetch(url);
+    const d = await r.json();
+    allProps = (d.props || []).filter(p => p.edge != null);
+    const isComputing = d.computing || false;
+    document.getElementById('computingNote').style.display = isComputing ? 'block' : 'none';
+    if (isComputing) refreshTimer = setTimeout(() => loadData(false), 20000);
+    applyFilters();
+    document.getElementById('statusText').textContent = `${allProps.length} props with edge data · ${d.date || 'today'}`;
+  } catch(e) {
+    document.getElementById('tableWrap').innerHTML = '<div class="empty">Failed to load data. Check connection.</div>';
+  }
+  btn.disabled = false;
+  btn.textContent = 'Refresh';
+}
+
+function applyFilters() {
+  const minEdge = parseFloat(document.getElementById('minEdge').value) || 0.03;
+  const mkt = document.getElementById('marketFilter').value;
+  const gradeMin = document.getElementById('gradeFilter').value;
+  const hubMin = parseInt(document.getElementById('hubFilter').value) || 0;
+
+  const gradeOrder = {'A+':5,'A':4,'B':3,'C':2,'D':1};
+  const minGradeScore = gradeMin ? (gradeOrder[gradeMin] || 0) : 0;
+
+  let rows = allProps.filter(p => {
+    const edge = parseFloat(p.edge) || 0;
+    if (edge < minEdge) return false;
+    if (mkt && p.marketKey !== mkt) return false;
+    if (minGradeScore) {
+      const g = edgeGrade(edge);
+      if ((gradeOrder[g] || 0) < minGradeScore) return false;
+    }
+    const hub = parseFloat(p.hubRating) || 0;
+    if (hub < hubMin) return false;
+    return true;
+  });
+
+  rows.sort((a, b) => {
+    let av = parseFloat(a[sortCol]) || 0;
+    let bv = parseFloat(b[sortCol]) || 0;
+    return (av - bv) * sortDir;
+  });
+
+  updateHero(rows);
+  renderTable(rows);
+}
+
+function updateHero(rows) {
+  const count = rows.length;
+  const avgEdge = count ? rows.reduce((s,r) => s + (parseFloat(r.edge)||0), 0) / count : 0;
+  const avgHub = count ? rows.reduce((s,r) => s + (parseFloat(r.hubRating)||0), 0) / count : 0;
+  const aCount = rows.filter(r => {
+    const g = edgeGrade(parseFloat(r.edge)||0);
+    return g === 'A' || g === 'A+';
+  }).length;
+  document.getElementById('hCount').textContent = count;
+  document.getElementById('hEdge').textContent = count ? (avgEdge * 100).toFixed(1) + '%' : '—';
+  document.getElementById('hHub').textContent = count ? Math.round(avgHub) : '—';
+  document.getElementById('hGradeA').textContent = aCount;
+}
+
+function setSort(col) {
+  if (sortCol === col) { sortDir *= -1; }
+  else { sortCol = col; sortDir = -1; }
+  applyFilters();
+}
+
+function thClass(col) {
+  if (sortCol !== col) return '';
+  return sortDir < 0 ? ' class="desc"' : ' class="asc"';
+}
+
+function renderTable(rows) {
+  if (!rows.length) {
+    document.getElementById('tableWrap').innerHTML = '<div class="empty">No value bets match current filters.</div>';
+    return;
+  }
+
+  const bodyRows = rows.map((p, i) => {
+    const edge = parseFloat(p.edge) || 0;
+    const adjProb = parseFloat(p.adjProb) || 0;
+    const implied = parseFloat(p.marketImplied) || 0;
+    const hub = parseFloat(p.hubRating) || 0;
+    const ev = parseFloat(p.evPct);
+    const grade = edgeGrade(edge);
+    const side = p.recommendedSide === 'over' ? 'Over' : p.recommendedSide === 'under' ? 'Under' : '';
+    const line = p.line != null ? `${side} ${p.line}` : side;
+    return `<tr>
+      <td class="rank">#${i+1}</td>
+      <td><div class="player-name">${p.player||'—'}</div><div class="team-badge">${p.team||''} vs ${p.opp||''}</div></td>
+      <td><span class="market-pill">${mLabel(p.marketKey||'')}</span></td>
+      <td>${line||'—'}</td>
+      <td>${adjProb ? (adjProb*100).toFixed(1)+'%' : '—'}</td>
+      <td>${implied ? (implied*100).toFixed(1)+'%' : '—'}</td>
+      <td class="edge-val">+${(edge*100).toFixed(1)}%</td>
+      <td class="${!isNaN(ev) && ev > 0 ? 'ev-pos' : 'ev-neg'}">${!isNaN(ev) ? (ev*100).toFixed(1)+'%' : '—'}</td>
+      <td><span class="${hubClass(hub)}">${Math.round(hub)}</span></td>
+      <td><span class="${gradeClass(grade)}">${grade}</span></td>
+      <td>${edgeRec(edge)}</td>
+      <td class="reason-cell" title="${(p.reason||'').replace(/"/g,"'")}">
+        ${p.gamePk ? `<a class="deeplink" href="/deep-dive/${p.gamePk}">Game →</a>` : '—'}
+      </td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('tableWrap').innerHTML = `
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr>
+          <th${thClass('rank')} onclick="setSort('rank')">#</th>
+          <th>Player</th>
+          <th onclick="setSort('marketKey')"${thClass('marketKey')}>Market</th>
+          <th>Line</th>
+          <th onclick="setSort('adjProb')"${thClass('adjProb')}>Model %</th>
+          <th onclick="setSort('marketImplied')"${thClass('marketImplied')}>Implied %</th>
+          <th onclick="setSort('edge')"${thClass('edge')}>Edge</th>
+          <th onclick="setSort('evPct')"${thClass('evPct')}>EV%</th>
+          <th onclick="setSort('hubRating')"${thClass('hubRating')}>Hub</th>
+          <th>Grade</th>
+          <th>Rec</th>
+          <th>Link</th>
+        </tr></thead>
+        <tbody>${bodyRows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+loadData(false);
+</script>
+</body>
+</html>
