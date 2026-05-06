@@ -204,7 +204,7 @@ function renderLineup() {
   const makeRows = (batters, oppPitcherId) => batters.map(b => {
     const cKey = `${b.id}_${oppPitcherId}`;
     const grade = gradeCache[cKey] || '?';
-    return `<div class="batter-row" id="br_${b.id}_${oppPitcherId}" onclick="selectBatter(${b.id},'${esc(b.name)}',${oppPitcherId},'${esc((oppPitcherId === awayP.id ? homeP.name : awayP.name) || '')}')">
+    return `<div class="batter-row" id="br_${b.id}_${oppPitcherId}" onclick="selectBatter(${b.id},'${esc(b.name)}',${oppPitcherId},'${esc((oppPitcherId === awayP.id ? awayP.name : homeP.name) || '')}')">
       <span class="b-slot">${b.slot||'?'}</span>
       <span class="b-name">${b.name}</span>
       <span class="b-ops">${b.ops||'—'}</span>
@@ -222,12 +222,12 @@ function renderLineup() {
     ${makeRows(home, awayP.id)}
   `;
 
-  prefetchGrades(away, homeP.id);
-  prefetchGrades(home, awayP.id);
+  prefetchGrades(away, homeP.id || null);
+  prefetchGrades(home, awayP.id || null);
 }
 
 async function prefetchGrades(batters, pitcherId) {
-  if (!pitcherId) return;
+  if (!pitcherId || pitcherId === 0) return;
   for (const b of batters) {
     const cKey = `${b.id}_${pitcherId}`;
     if (gradeCache[cKey]) continue;
