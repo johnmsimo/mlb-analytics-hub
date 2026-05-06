@@ -11506,109 +11506,117 @@ def _compute_cheatsheets_today(date_str):
     def _process_game(g):
         local_hits, local_matchups, local_weakspots = [], [], []
         gpk = g.get('gamePk')
+        matchup = str(gpk)
 
+        # Stage 1: fetch game data (hard fail — nothing to build without it)
         try:
             gdata, away_bats, home_bats, away_t, home_t, pitchers = _props_fetch_game(
                 gpk, date_hint=date_str, gdata_override=g
             )
             if not gdata:
+                print(f"[CHEATSHEET] no gdata for {gpk}")
                 return local_hits, local_matchups, local_weakspots
+        except Exception as ex:
+            print(f"[CHEATSHEET] propsfetchgame failed for {gpk}: {ex}")
+            return local_hits, local_matchups, local_weakspots
 
-            away_team = away_t.get('team', {}) if isinstance(away_t, dict) else {}
-            home_team = home_t.get('team', {}) if isinstance(home_t, dict) else {}
-            away_abbr = away_team.get('abbreviation', 'AWAY')
-            home_abbr = home_team.get('abbreviation', 'HOME')
-            home_tid = home_team.get('id')
+        away_team = away_t.get('team', {}) if isinstance(away_t, dict) else {}
+        home_team = home_t.get('team', {}) if isinstance(home_t, dict) else {}
+        away_abbr = away_team.get('abbreviation', 'AWAY')
+        home_abbr = home_team.get('abbreviation', 'HOME')
+        home_tid = home_team.get('id')
 
-            is_dh = str(g.get('doubleHeader') or 'N').upper() == 'Y'
-            game_number = int(g.get('gameNumber') or 1)
-            matchup = f"{away_abbr} @ {home_abbr}"
-            matchup_key = f"{away_abbr}-{home_abbr}-{gpk}"
+        is_dh = str(g.get('doubleHeader') or 'N').upper() == 'Y'
+        game_number = int(g.get('gameNumber') or 1)
+        matchup = f"{away_abbr} @ {home_abbr}"
+        matchup_key = f"{away_abbr}-{home_abbr}-{gpk}"
 
-            raw_game_dt = g.get('gameDate', '')
-            try:
-                dt_utc = datetime.fromisoformat(raw_game_dt.replace('Z', '+00:00'))
-                game_time_sort = dt_utc.astimezone(ET).strftime('%H%M')
-                game_time_display = dt_utc.astimezone(ET).strftime('%-I:%M %p ET')
-            except Exception:
-                game_time_sort = '9999'
-                game_time_display = ''
+        raw_game_dt = g.get('gameDate', '')
+        try:
+            dt_utc = datetime.fromisoformat(raw_game_dt.replace('Z', '+00:00'))
+            game_time_sort = dt_utc.astimezone(ET).strftime('%H%M')
+            game_time_display = dt_utc.astimezone(ET).strftime('%-I:%M %p ET')
+        except Exception:
+            game_time_sort = '9999'
+            game_time_display = ''
 
-            park = PARK_FACTORS.get(home_tid, 1.0)
+        park = PARK_FACTORS.get(home_tid, 1.0)
 
-            ap = (pitchers or {}).get('ap') or {}
-            hp = (pitchers or {}).get('hp') or {}
-            ap_name = ap.get('fullName', 'TBD')
-            hp_name = hp.get('fullName', 'TBD')
-            ap_id = ap.get('id')
-            hp_id = hp.get('id')
+        ap = (pitchers or {}).get('ap') or {}
+        hp = (pitchers or {}).get('hp') or {}
+        ap_name = ap.get('fullName', 'TBD')
+        hp_name = hp.get('fullName', 'TBD')
+        ap_id = ap.get('id')
+        hp_id = hp.get('id')
 
-            ap_fg = fg_pitcher(ap_name) or {}
-            hp_fg = fg_pitcher(hp_name) or {}
-            ap_sv = sv_pitcher(ap_name) or {}
-            hp_sv = sv_pitcher(hp_name) or {}
+        ap_fg = fg_pitcher(ap_name) or {}
+        hp_fg = fg_pitcher(hp_name) or {}
+        ap_sv = sv_pitcher(ap_name) or {}
+        hp_sv = sv_pitcher(hp_name) or {}
 
-            ap_stats = pitcher_stats_mlb(ap_id) if ap_id else {}
-            hp_stats = pitcher_stats_mlb(hp_id) if hp_id else {}
-            ap_hand = ap_stats.get('pitchHand') or 'R'
-            hp_hand = hp_stats.get('pitchHand') or 'R'
+        ap_stats = pitcher_stats_mlb(ap_id) if ap_id else {}
+        hp_stats = pitcher_stats_mlb(hp_id) if hp_id else {}
+        ap_hand = ap_stats.get('pitchHand') or 'R'
+        hp_hand = hp_stats.get('pitchHand') or 'R'
 
-            def _side_rows(batters, team_abbr, opp_name, opp_id, opp_hand, opp_fg, opp_sv):
-                rows = []
-                for b in (batters or [])[:9]:
-                    name = b.get('name')
-                    pid = b.get('id')
-                    if not name:
-                        continue
+        def _side_rows(batters, team_abbr, opp_name, opp_id, opp_hand, opp_fg, opp_sv):
+            rows = []
+            for b in (batters or [])[:9]:
+                name = b.get('name')
+                pid = b.get('id')
+                if not name:
+                    continue
 
-                    score = _matchup_score(b, opp_fg, opp_sv, pitcher_hand=opp_hand)
-                    l10_pct = _l10_hit_pct_for_player(pid, l10_memo)
-                    bvp_data = _fetch_bvp(pid, opp_id) if pid and opp_id else None
-                    bvp_grade = _compute_bvp_grade(bvp_data) if bvp_data else 'D'
-                    matchup_grade = _cheatsheet_matchup_grade(
-                        score.get('tier'),
-                        pitch_adv={'status': 'neutral'},
-                        bvp_grade=bvp_grade,
-                        bvp_pa=(bvp_data or {}).get('pa', 0),
-                    )
+                score = _matchup_score(b, opp_fg, opp_sv, pitcher_hand=opp_hand)
+                l10_pct = _l10_hit_pct_for_player(pid, l10_memo)
+                bvp_data = _fetch_bvp(pid, opp_id) if pid and opp_id else None
+                bvp_grade = _compute_bvp_grade(bvp_data) if bvp_data else 'D'
+                matchup_grade = _cheatsheet_matchup_grade(
+                    score.get('tier'),
+                    pitch_adv={'status': 'neutral'},
+                    bvp_grade=bvp_grade,
+                    bvp_pa=(bvp_data or {}).get('pa', 0),
+                )
 
-                    split_ops = platoon_blend_v2(b, opp_hand, 'ops')
-                    split_score = max(0.0, min(1.0, (split_ops - 0.550) / 0.350))
-                    park_score = max(0.0, min(1.0, (park - 0.90) / 0.25))
-                    l10_score = l10_pct if l10_pct is not None else 0.50
-                    comp = (
-                        _bvp_points(bvp_grade) * 0.30
-                        + l10_score * 0.25
-                        + split_score * 0.20
-                        + park_score * 0.15
-                        + _pitch_adv_points('neutral') * 0.10
-                    )
-                    comp_pct = round(comp * 100.0, 1)
-                    model_prob = max(0.01, min(0.99, (score.get('score') or 50) / 100.0))
-                    edge = model_prob - 0.50
-                    hub = _hub_rating(model_prob, edge, l10_score)
+                split_ops = platoon_blend_v2(b, opp_hand, 'ops')
+                split_score = max(0.0, min(1.0, (split_ops - 0.550) / 0.350))
+                park_score = max(0.0, min(1.0, (park - 0.90) / 0.25))
+                l10_score = l10_pct if l10_pct is not None else 0.50
+                comp = (
+                    _bvp_points(bvp_grade) * 0.30
+                    + l10_score * 0.25
+                    + split_score * 0.20
+                    + park_score * 0.15
+                    + _pitch_adv_points('neutral') * 0.10
+                )
+                comp_pct = round(comp * 100.0, 1)
+                model_prob = max(0.01, min(0.99, (score.get('score') or 50) / 100.0))
+                edge = model_prob - 0.50
+                hub = _hub_rating(model_prob, edge, l10_score)
 
-                    rows.append({
-                        'gamePk': gpk,
-                        'matchup': matchup,
-                        'player': name,
-                        'playerId': pid,
-                        'team': team_abbr,
-                        'slot': b.get('slot'),
-                        'marketKey': 'batterhits',
-                        'line': 0.5,
-                        'vsHand': opp_hand,
-                        'oppPitcher': opp_name,
-                        'l10Pct': l10_pct,
-                        'bvpGrade': bvp_grade,
-                        'matchupGrade': matchup_grade,
-                        'hubRating': hub,
-                        'evPct': round(edge * 100.0, 1),
-                        'matchupScore': score.get('score'),
-                        'composite': comp_pct,
-                    })
-                return rows
+                rows.append({
+                    'gamePk': gpk,
+                    'matchup': matchup,
+                    'player': name,
+                    'playerId': pid,
+                    'team': team_abbr,
+                    'slot': b.get('slot'),
+                    'marketKey': 'batterhits',
+                    'line': 0.5,
+                    'vsHand': opp_hand,
+                    'oppPitcher': opp_name,
+                    'l10Pct': l10_pct,
+                    'bvpGrade': bvp_grade,
+                    'matchupGrade': matchup_grade,
+                    'hubRating': hub,
+                    'evPct': round(edge * 100.0, 1),
+                    'matchupScore': score.get('score'),
+                    'composite': comp_pct,
+                })
+            return rows
 
+        # Stage 2: hits/matchups rows (soft fail — weakspot cards can still be built)
+        try:
             away_rows = _side_rows(away_bats, away_abbr, hp_name, hp_id, hp_hand, hp_fg, hp_sv)
             home_rows = _side_rows(home_bats, home_abbr, ap_name, ap_id, ap_hand, ap_fg, ap_sv)
             local_hits.extend(away_rows)
@@ -11629,7 +11637,11 @@ def _compute_cheatsheets_today(date_str):
                     'l10Pct': row.get('l10Pct'),
                     'hubRating': row.get('hubRating'),
                 })
+        except Exception as ex:
+            print(f"[CHEATSHEET] hits/matchups failed for {gpk} {matchup}: {ex}")
 
+        # Stage 3: weakspot cards (soft fail — hits/matchups already collected)
+        try:
             c1 = _weakspot_card(
                 ap_name, ap_id, away_abbr, home_bats, ap_fg, ap_sv, ap_hand,
                 matchup, matchup_key, gpk, is_dh, game_number, game_time_sort, game_time_display
@@ -11642,9 +11654,10 @@ def _compute_cheatsheets_today(date_str):
                 local_weakspots.append(c1)
             if c2:
                 local_weakspots.append(c2)
-        except Exception:
-            print(f"[cheatsheet_game {gpk}]", traceback.format_exc())
+        except Exception as ex:
+            print(f"[CHEATSHEET] weakspotcard failed for {gpk} {matchup}: {ex}")
 
+        print(f"[CHEATSHEET] {gpk} {matchup} -> hits:{len(local_hits)} matchups:{len(local_matchups)} weakspots:{len(local_weakspots)}")
         return local_hits, local_matchups, local_weakspots
 
     with ThreadPoolExecutor(max_workers=6) as ex:
