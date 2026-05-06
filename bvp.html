@@ -721,17 +721,37 @@ async function loadContextData(batterId, pitcherId, proj) {
     const [recent, splits, arsenal] = await Promise.all([
       fetch(`/api/player/${batterId}/recent-games`).then(r => r.json()),
       fetch(`/api/player/${batterId}/platoon-splits`).then(r => r.json()),
-      fetch(`/api/player/${batterId}/arsenal-matchup/${pitcherId}`).then(r => r.json())
+      fetch(`/api/bvp/${batterId}/${pitcherId}/arsenal`).then(r => r.json()).catch(() => ({}))
     ]);
 
     const contextGrid = document.getElementById('contextGrid');
     if (!contextGrid) return;
 
-    // Card 1: Last 10 Games
+    // Card 1: Last 10 Games + sparkline
     const last10 = recent.last10 || {};
     const opsClass = last10.ops >= 0.800 ? 'good' : last10.ops >= 0.700 ? '' : 'bad';
     const avgClass = last10.avg >= 0.280 ? 'good' : last10.avg >= 0.240 ? '' : 'bad';
-    
+
+    // Build hit-rate sparkline bars from game list
+    const sparkGames = (recent.games || []);
+    const sparkW = 120, sparkH = 24, barW = Math.max(6, Math.floor(sparkW / Math.max(sparkGames.length, 1)) - 2);
+    const sparkBars = sparkGames.map((g, i) => {
+      const hasHit = g.hits >= 1;
+      const hasHR  = g.hr   >= 1;
+      const col = hasHR ? 'var(--g)' : hasHit ? 'rgba(0,229,255,.85)' : 'rgba(255,255,255,.12)';
+      const x = i * (barW + 2);
+      return `<rect x="${x}" y="${hasHit ? 6 : 14}" width="${barW}" height="${hasHit ? sparkH - 6 : sparkH - 14}" fill="${col}" rx="1"/>`;
+    }).join('');
+    const sparkSvg = sparkGames.length ? `
+      <svg viewBox="0 0 ${sparkGames.length * (barW+2)} ${sparkH}" style="width:100%;height:${sparkH}px;margin-top:6px;display:block">
+        ${sparkBars}
+      </svg>
+      <div style="display:flex;gap:8px;margin-top:3px">
+        <span style="font-size:.6rem;color:var(--dim)"><span style="color:rgba(0,229,255,.85)">■</span> Hit</span>
+        <span style="font-size:.6rem;color:var(--dim)"><span style="color:var(--g)">■</span> HR</span>
+        <span style="font-size:.6rem;color:var(--dim)"><span style="color:rgba(255,255,255,.18)">■</span> 0H</span>
+      </div>` : '';
+
     const card1 = `
       <div class="context-card">
         <div class="context-card-header">
@@ -754,6 +774,7 @@ async function loadContextData(batterId, pitcherId, proj) {
           <span class="context-stat-label">Hits</span>
           <span class="context-stat-value">${last10.hits || 0}/${last10.ab || 0}</span>
         </div>
+        ${sparkSvg}
       </div>
     `;
 
@@ -787,29 +808,54 @@ async function loadContextData(batterId, pitcherId, proj) {
       </div>
     `;
 
-    // Card 3: Arsenal Matchup
-    const similarPitchers = arsenal.similarPitchers || [];
-    const arsenalStats = arsenal.similarArsenal || {};
-    const primaryPitch = arsenal.primaryPitch || 'Fastball';
-    
+    // Card 3: Pitch Arsenal Breakdown
+    const pitches = arsenal.pitches || [];
+    const mixScore = arsenal.mixScore || 1.0;
+    const primaryPitch = arsenal.primaryPitch || '—';
+    const mixCls = mixScore >= 1.15 ? 'good' : mixScore <= 0.87 ? 'bad' : '';
+    const mixLbl = mixScore >= 1.15 ? 'Favorable' : mixScore <= 0.87 ? 'Unfavorable' : 'Neutral';
+
+    function fmtStat(v, dec) {
+      if (v == null) return '—';
+      return Number(v).toFixed(dec != null ? dec : 3);
+    }
+    function pitchRatioClass(r) {
+      if (r == null) return '';
+      return r >= 1.15 ? 'good' : r <= 0.85 ? 'bad' : '';
+    }
+
+    const pitchRows = pitches.slice(0, 5).map(p => {
+      const usagePct = p.usage != null ? Math.round(p.usage) + '%' : '—';
+      const veloStr  = p.velo  != null ? p.velo.toFixed(1)         : '—';
+      const batWoba  = p.bat_woba != null ? fmtStat(p.bat_woba) : (p.pit_woba != null ? `<span style="color:var(--dim)">${fmtStat(p.pit_woba)}</span>` : '—');
+      const whiffStr = p.bat_whiff != null ? Math.round(p.bat_whiff) + '%' : (p.pit_whiff != null ? `<span style="color:var(--dim)">${Math.round(p.pit_whiff)}%</span>` : '—');
+      const rCls = pitchRatioClass(p.ratio);
+      return `<div style="display:grid;grid-template-columns:1fr 28px 42px 44px 44px;gap:2px 4px;align-items:center;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.05)">
+        <span style="font-size:.72rem;color:var(--t)">${p.label}</span>
+        <span style="font-size:.68rem;color:var(--dim)">${usagePct}</span>
+        <span style="font-size:.68rem;color:var(--dim)">${veloStr}</span>
+        <span style="font-size:.72rem;color:var(--t)">${batWoba}</span>
+        <span style="font-size:.72rem;color:var(--t)" class="${rCls}">${whiffStr}</span>
+      </div>`;
+    }).join('');
+
     const card3 = `
       <div class="context-card">
         <div class="context-card-header">
-          <span>Similar Arsenal</span>
-          <span class="context-badge">${primaryPitch}</span>
+          <span>Pitch Arsenal</span>
+          <span class="context-badge ${mixCls}">${mixLbl}</span>
         </div>
-        <div class="context-stat-row">
-          <span class="context-stat-label">Similar Pitchers</span>
-          <span class="context-stat-value">${arsenalStats.pitchers || 0}</span>
-        </div>
-        <div class="context-stat-row">
-          <span class="context-stat-label" style="font-size:.68rem">${arsenalStats.message || 'Loading...'}</span>
-        </div>
-        <div class="arsenal-list">
-          ${similarPitchers.slice(0, 5).map(p => 
-            `<div class="arsenal-pill" title="${p.similarity * 100}% match">${p.name.split(' ').pop()}</div>`
-          ).join('')}
-        </div>
+        ${pitches.length ? `
+          <div style="display:grid;grid-template-columns:1fr 28px 42px 44px 44px;gap:2px 4px;padding:2px 0 4px;border-bottom:1px solid rgba(255,255,255,.12)">
+            <span style="font-size:.62rem;color:var(--dim)">Pitch</span>
+            <span style="font-size:.62rem;color:var(--dim)">Use%</span>
+            <span style="font-size:.62rem;color:var(--dim)">Velo</span>
+            <span style="font-size:.62rem;color:var(--dim)">wOBA</span>
+            <span style="font-size:.62rem;color:var(--dim)">Whiff%</span>
+          </div>
+          ${pitchRows}
+          <div style="font-size:.64rem;color:var(--dim);margin-top:6px">wOBA/Whiff% = batter vs pitch type</div>
+        ` : `<div class="context-stat-row" style="color:var(--dim);font-size:.75rem;padding:8px 0">No arsenal data available</div>`}
       </div>
     `;
 

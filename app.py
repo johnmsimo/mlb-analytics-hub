@@ -5430,6 +5430,88 @@ def api_bvp_projection(batter_id, pitcher_id):
         return jsonify({"success": False, "error": str(ex)}), 500
 
 
+@app.route("/api/bvp/<int:batter_id>/<int:pitcher_id>/arsenal")
+def api_bvp_arsenal(batter_id, pitcher_id):
+    """Pitch arsenal breakdown for batter vs pitcher matchup."""
+    try:
+        _maybe_refresh_fg()
+        _maybe_refresh_savant()
+
+        # Resolve pitcher name + hand
+        pitcher_name = ""
+        pitcher_hand = "R"
+        try:
+            rp = requests.get(f"{MLB_API}/people/{pitcher_id}", timeout=8)
+            if rp.ok:
+                ppl = rp.json().get("people") or [{}]
+                pitcher_name = (ppl[0].get("fullName") or "").strip()
+                pitcher_hand = ((ppl[0].get("pitchHand") or {}).get("code") or "R").upper()
+        except Exception:
+            pass
+
+        pit_pid_str = str(pitcher_id)
+        bat_pid_str = str(batter_id)
+
+        # Pitch-mix matchup score + per-pitch table
+        mix_score, table_rows = _compute_pitch_mix_score(pit_pid_str, bat_pid_str)
+
+        # Pitcher's raw arsenal pct + velo from Savant
+        svp = sv_pitcher(pitcher_name) if pitcher_name else {}
+        raw_pct  = (svp.get("sv_arsenal_pct")  or {}) if isinstance(svp, dict) else {}
+        raw_velo = (svp.get("sv_arsenal_velo") or {}) if isinstance(svp, dict) else {}
+
+        # Build enriched pitch list (merge table_rows with pct/velo)
+        pitches = []
+        for row in table_rows:
+            code = (row.get("pitch") or "").lower()
+            label = PITCH_LABELS.get(code, code.upper())
+            pct  = raw_pct.get(code)
+            velo = raw_velo.get(code)
+            pitches.append({
+                "code":       code,
+                "label":      label,
+                "usage":      row.get("usage"),
+                "velo":       round(float(velo), 1) if velo is not None else None,
+                "pit_ba":     row.get("pit_ba"),
+                "pit_slg":    row.get("pit_slg"),
+                "pit_woba":   row.get("pit_woba"),
+                "pit_whiff":  row.get("pit_whiff"),
+                "bat_slg":    row.get("bat_slg"),
+                "bat_woba":   row.get("bat_woba"),
+                "bat_whiff":  row.get("bat_whiff"),
+                "bat_hh":     row.get("bat_hh"),
+                "ratio":      row.get("ratio"),
+            })
+
+        # If no pit_arsenal data, fall back to pct-only list (no batter breakdown)
+        if not pitches and raw_pct:
+            for code, pct_val in sorted(raw_pct.items(), key=lambda kv: kv[1], reverse=True):
+                label = PITCH_LABELS.get(code, code.upper())
+                velo  = raw_velo.get(code)
+                pitches.append({
+                    "code":    code,
+                    "label":   label,
+                    "usage":   round(float(pct_val) * 100, 1) if pct_val is not None else None,
+                    "velo":    round(float(velo), 1) if velo is not None else None,
+                })
+
+        primary_pitch = pitches[0]["label"] if pitches else None
+
+        return jsonify({
+            "success":      True,
+            "pitcherName":  pitcher_name,
+            "pitcherHand":  pitcher_hand,
+            "mixScore":     mix_score,
+            "primaryPitch": primary_pitch,
+            "pitches":      pitches,
+        })
+
+    except Exception as ex:
+        import traceback as _tb
+        print(f"[api_bvp_arsenal] {_tb.format_exc()}")
+        return jsonify({"success": False, "error": str(ex)}), 500
+
+
 @app.route("/api/player/<int:player_id>/bvp/<int:pitcher_id>")
 def api_player_bvp_games(player_id, pitcher_id):
     """Opponent-specific game logs: summary + latest matchup games."""
