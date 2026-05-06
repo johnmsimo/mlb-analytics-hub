@@ -305,13 +305,15 @@
       }
       meta.innerHTML = '<span class="pill">Pitchers: '+cards.length+'</span>';
 
-      // Group by matchup key
-      const groups = {}, groupTime = {};
+      // Group by matchupKey (gamePk-unique) so doubleheader games stay separate.
+      // Fall back to matchup string for older API responses without matchupKey.
+      const groups = {}, groupTime = {}, groupMeta = {};
       cards.forEach((c, idx) => {
-        const key = c.matchup || 'Unknown Game';
+        const key = c.matchupKey || c.matchup || 'Unknown Game';
         if(!groups[key]) groups[key] = [];
         groups[key].push({card:c, idx});
         if(c.gameTime && !groupTime[key]) groupTime[key] = c.gameTime;
+        if(!groupMeta[key]) groupMeta[key] = { matchup: c.matchup||key, isDoubleHeader: c.isDoubleHeader, gameNumber: c.gameNumber };
       });
 
       // Sort groups by game time
@@ -322,16 +324,21 @@
       wrap.innerHTML = sortedKeys.map(key => {
         const pair   = groups[key];
         const tLabel = groupTime[key] || '';
-        // Parse "ATH @ PHI" or "ATH vs PHI"
-        const parts  = key.split(/@|vs/i);
-        const away   = parts[0] ? parts[0].trim() : key;
+        const meta   = groupMeta[key] || {};
+        const matchupStr = meta.matchup || key;
+        // Parse "ATH @ PHI"
+        const parts  = matchupStr.split(/@|vs/i);
+        const away   = parts[0] ? parts[0].trim() : matchupStr;
         const home   = parts[1] ? parts[1].trim() : '';
         const mLabel = home
           ? '<strong>'+esc(away)+'</strong> <span style="color:var(--mu)">@</span> <strong>'+esc(home)+'</strong>'
-          : esc(key);
+          : esc(matchupStr);
+        const dhBadge = meta.isDoubleHeader
+          ? '<span style="background:rgba(167,139,250,.12);color:#a78bfa;border:1px solid rgba(167,139,250,.4);border-radius:3px;font-size:.6rem;letter-spacing:1px;padding:1px 5px;font-family:Orbitron,monospace;margin-left:6px">DH·G'+(meta.gameNumber||1)+'</span>'
+          : '';
         return '<div class="game-group">'+
           '<div class="game-header">'+
-            '<span class="gh-matchup">'+mLabel+'</span>'+
+            '<span class="gh-matchup">'+mLabel+dhBadge+'</span>'+
             (tLabel?'<span class="gh-time">'+esc(tLabel)+'</span>':'')+
             '<span class="gh-meta">'+pair.length+' pitcher'+(pair.length!==1?'s':'')+'</span>'+
           '</div>'+

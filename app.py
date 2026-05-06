@@ -11275,7 +11275,8 @@ def _compute_cheatsheets_today(date_str):
         local_weakspots = []
         gpk = g.get('gamePk')
         try:
-            gdata, away_bats, home_bats, away_t, home_t, pitchers = _props_fetch_game(gpk)
+            # Pass the already-fetched schedule entry to avoid a redundant fetch_schedule call.
+            gdata, away_bats, home_bats, away_t, home_t, pitchers = _props_fetch_game(gpk, gdata_override=g)
             if not gdata:
                 return local_hits, local_matchups, local_weakspots
 
@@ -11285,7 +11286,12 @@ def _compute_cheatsheets_today(date_str):
             home_abbr = home_team.get('abbreviation', 'HOME')
             away_tid = away_team.get('id')
             home_tid = home_team.get('id')
+            # Use gamePk-keyed matchup so doubleheader games aren't merged in the UI.
+            _dh = str(g.get('doubleHeader') or 'N').upper()
+            _gn = int(g.get('gameNumber') or 1)
+            is_dh = _dh == 'Y'
             matchup = f"{away_abbr} @ {home_abbr}"
+            matchup_key = f"{away_abbr}@{home_abbr}|{gpk}"  # unique even for doubleheaders
             # Parse game time for chronological sort and display
             raw_game_dt = g.get('gameDate', '')
             try:
@@ -11478,6 +11484,10 @@ def _compute_cheatsheets_today(date_str):
                     'formLabel': form_label,
                     'recommendation': rec,
                     'matchup': matchup,
+                    'matchupKey': matchup_key,
+                    'gamePk': gpk,
+                    'isDoubleHeader': is_dh,
+                    'gameNumber': _gn,
                     'gameTimeSort': game_time_sort,
                     'gameTime': game_time_display,
                     'kProp': k_prop_display,
@@ -12603,34 +12613,42 @@ def api_ai_boxscore(game_pk):
         }), 500
 
 # ── Shared helper: fetch game + lineup ───────────────────────────────────────
-def _props_fetch_game(game_pk, date_hint=None):
-    """Fetch schedule entry + boxscore lineups, preferring the requested date."""
-    gdata = None
-    candidate_dates = []
-    if date_hint:
-        date_hint = _normalize_date_str(date_hint, fallback='')
-        if date_hint:
-            candidate_dates.append(date_hint)
-            try:
-                base_dt = datetime.strptime(date_hint, "%Y-%m-%d")
-                candidate_dates.extend([
-                    (base_dt + timedelta(days=-1)).strftime("%Y-%m-%d"),
-                    (base_dt + timedelta(days=1)).strftime("%Y-%m-%d"),
-                ])
-            except Exception:
-                pass
-    for delta in (0, -1, 1):
-        candidate_dates.append((datetime.now(ET) + timedelta(days=delta)).strftime("%Y-%m-%d"))
+def _props_fetch_game(game_pk, date_hint=None, gdata_override=None):
+    """Fetch schedule entry + boxscore lineups, preferring the requested date.
 
-    seen_dates = set()
-    for date_str in candidate_dates:
-        if not date_str or date_str in seen_dates:
-            continue
-        seen_dates.add(date_str)
-        raw   = fetch_schedule(date_str)
-        gdata = next((g for g in raw if g.get("gamePk") == game_pk), None)
-        if gdata:
-            break
+    Pass gdata_override to skip the schedule fetch when the caller already has
+    the raw schedule entry (e.g. cheatsheet bulk processing avoids N redundant
+    fetch_schedule calls by passing the already-fetched entry directly).
+    """
+    if gdata_override and gdata_override.get("gamePk") == game_pk:
+        gdata = gdata_override
+    else:
+        gdata = None
+        candidate_dates = []
+        if date_hint:
+            date_hint = _normalize_date_str(date_hint, fallback='')
+            if date_hint:
+                candidate_dates.append(date_hint)
+                try:
+                    base_dt = datetime.strptime(date_hint, "%Y-%m-%d")
+                    candidate_dates.extend([
+                        (base_dt + timedelta(days=-1)).strftime("%Y-%m-%d"),
+                        (base_dt + timedelta(days=1)).strftime("%Y-%m-%d"),
+                    ])
+                except Exception:
+                    pass
+        for delta in (0, -1, 1):
+            candidate_dates.append((datetime.now(ET) + timedelta(days=delta)).strftime("%Y-%m-%d"))
+
+        seen_dates = set()
+        for date_str in candidate_dates:
+            if not date_str or date_str in seen_dates:
+                continue
+            seen_dates.add(date_str)
+            raw   = fetch_schedule(date_str)
+            gdata = next((g for g in raw if g.get("gamePk") == game_pk), None)
+            if gdata:
+                break
     if not gdata:
         return None, [], [], {}, {}, {}
 
