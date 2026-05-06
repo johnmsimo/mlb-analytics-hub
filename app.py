@@ -3593,6 +3593,8 @@ def api_pitchers(game_pk):
                         s[k] = v
                 s["sv_arsenal_pct"]  = sv.get("sv_arsenal_pct",{})
                 s["sv_arsenal_velo"] = sv.get("sv_arsenal_velo",{})
+                with _sv_lock:
+                    s["sv_pit_arsenal_stats"] = dict(_sv_pit_arsenal_stats.get(str(pid), {})) if pid else {}
                 return s
 
             # Warm zone-chart cache in background so modal opens quickly.
