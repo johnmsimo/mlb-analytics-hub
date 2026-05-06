@@ -11506,7 +11506,7 @@ def _compute_cheatsheets_today(date_str):
     def _process_game(g):
         local_hits, local_matchups, local_weakspots = [], [], []
         gpk = g.get('gamePk')
-        matchup = str(gpk)
+        matchup = ''
 
         # Stage 1: fetch game data (hard fail — nothing to build without it)
         try:
@@ -11517,7 +11517,7 @@ def _compute_cheatsheets_today(date_str):
                 print(f"[CHEATSHEET] no gdata for {gpk}")
                 return local_hits, local_matchups, local_weakspots
         except Exception as ex:
-            print(f"[CHEATSHEET] propsfetchgame failed for {gpk}: {ex}")
+            print(f"[CHEATSHEET] _props_fetch_game failed for {gpk}: {ex}")
             return local_hits, local_matchups, local_weakspots
 
         away_team = away_t.get('team', {}) if isinstance(away_t, dict) else {}
@@ -11655,7 +11655,7 @@ def _compute_cheatsheets_today(date_str):
             if c2:
                 local_weakspots.append(c2)
         except Exception as ex:
-            print(f"[CHEATSHEET] weakspotcard failed for {gpk} {matchup}: {ex}")
+            print(f"[CHEATSHEET] _weakspot_card failed for {gpk} {matchup}: {ex}")
 
         print(f"[CHEATSHEET] {gpk} {matchup} -> hits:{len(local_hits)} matchups:{len(local_matchups)} weakspots:{len(local_weakspots)}")
         return local_hits, local_matchups, local_weakspots
