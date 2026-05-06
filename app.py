@@ -10905,6 +10905,33 @@ def _compute_bvp_grade(bvp_data):
     return 'D'
 
 
+def _cheatsheet_matchup_grade(score_tier, pitch_adv=None, bvp_grade=None, bvp_pa=0):
+    ladder = ['D', 'C', 'B', 'A', 'A+']
+    tier = str(score_tier or 'C').upper()
+    base_idx = {
+        'A+': 4,
+        'A': 3,
+        'B': 2,
+        'C': 1,
+        'D': 0,
+    }.get(tier, 1)
+
+    status = str((pitch_adv or {}).get('status') or 'neutral').lower()
+    if status == 'favorable':
+        base_idx += 1
+    elif status == 'unfavorable':
+        base_idx -= 1
+
+    pa = int(bvp_pa or 0)
+    bvp = str(bvp_grade or '').upper()
+    if pa >= 10 and bvp in ('A+', 'A'):
+        base_idx += 1
+    elif pa >= 15 and bvp == 'D':
+        base_idx -= 1
+
+    return ladder[max(0, min(len(ladder) - 1, base_idx))]
+
+
 # ── Phase 17 Bet Slip Builder + Final Card Output ─────────────────────────────
 
 def _confidence_tier(row):
@@ -11359,32 +11386,6 @@ def _compute_cheatsheets_today(date_str):
         s = str(status or 'neutral').lower()
         return {'favorable': 0.85, 'neutral': 0.50, 'unfavorable': 0.20}.get(s, 0.50)
 
-    def _cheatsheet_matchup_grade(score_tier, pitch_adv=None, bvp_grade=None, bvp_pa=0):
-        ladder = ['D', 'C', 'B', 'A', 'A+']
-        tier = str(score_tier or 'C').upper()
-        base_idx = {
-            'A+': 4,
-            'A': 3,
-            'B': 2,
-            'C': 1,
-            'D': 0,
-        }.get(tier, 1)
-
-        status = str((pitch_adv or {}).get('status') or 'neutral').lower()
-        if status == 'favorable':
-            base_idx += 1
-        elif status == 'unfavorable':
-            base_idx -= 1
-
-        pa = int(bvp_pa or 0)
-        bvp = str(bvp_grade or '').upper()
-        if pa >= 10 and bvp in ('A+', 'A'):
-            base_idx += 1
-        elif pa >= 15 and bvp == 'D':
-            base_idx -= 1
-
-        return ladder[max(0, min(len(ladder) - 1, base_idx))]
-
     def _process_game(g):
         local_hits = []
         local_matchups = []
@@ -11570,27 +11571,26 @@ def _compute_cheatsheets_today(date_str):
 
                 # K prop display block
                 k_prop_display = None
-                try:
-                    if is_tbd_pitcher:
-                        raise ValueError('probable pitcher pending')
-                    p_fg_k = fg_pitcher(p_name) or {}
-                    k9_season = _safe_f(p_fg_k.get('fg_k9'), 0.0)
-                    k9_recent = _safe_f((recent or {}).get('k9_recent'), k9_season)
-                    k9_blended = round(0.6 * k9_season + 0.4 * k9_recent, 1) if k9_recent else round(k9_season, 1)
-                    xfip = _safe_f(p_fg_k.get('fg_xfip') or p_fg_k.get('fg_fip'), 4.0)
-                    total_ip = _safe_f(p_fg_k.get('fg_ip'), 0.0)
-                    total_gs = _safe_f(p_fg_k.get('fg_gs') or p_fg_k.get('fg_g'), 1.0)
-                    k_per_start = round(k9_season * (total_ip / max(1.0, total_gs)) / 9.0, 1) if total_ip > 0 else 0.0
-                    if k9_blended >= 7.5:
-                        k_line = 4.5 if k9_blended < 8.5 else 5.5
-                        k_prop_display = {
-                            'line': k_line,
-                            'k9Blended': k9_blended,
-                            'xfip': round(xfip, 2),
-                            'kStartRecent': k_per_start,
-                        }
-                except Exception:
-                    pass
+                if not is_tbd_pitcher:
+                    try:
+                        p_fg_k = fg_pitcher(p_name) or {}
+                        k9_season = _safe_f(p_fg_k.get('fg_k9'), 0.0)
+                        k9_recent = _safe_f((recent or {}).get('k9_recent'), k9_season)
+                        k9_blended = round(0.6 * k9_season + 0.4 * k9_recent, 1) if k9_recent else round(k9_season, 1)
+                        xfip = _safe_f(p_fg_k.get('fg_xfip') or p_fg_k.get('fg_fip'), 4.0)
+                        total_ip = _safe_f(p_fg_k.get('fg_ip'), 0.0)
+                        total_gs = _safe_f(p_fg_k.get('fg_gs') or p_fg_k.get('fg_g'), 1.0)
+                        k_per_start = round(k9_season * (total_ip / max(1.0, total_gs)) / 9.0, 1) if total_ip > 0 else 0.0
+                        if k9_blended >= 7.5:
+                            k_line = 4.5 if k9_blended < 8.5 else 5.5
+                            k_prop_display = {
+                                'line': k_line,
+                                'k9Blended': k9_blended,
+                                'xfip': round(xfip, 2),
+                                'kStartRecent': k_per_start,
+                            }
+                    except Exception:
+                        pass
 
                 avg_top_score = sum(x.get('score', 50) for x in opp_scores[:4]) / max(1, len(opp_scores[:4]))
                 if is_tbd_pitcher:
