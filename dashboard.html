@@ -35,6 +35,8 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .bs{background:rgba(0,229,255,.08);color:var(--c);border:1px solid rgba(0,229,255,.25)}
 .bl{background:rgba(0,230,118,.1);color:var(--g);border:1px solid rgba(0,230,118,.3);animation:pb 2s ease-in-out infinite}
 .bf{background:rgba(106,141,176,.1);color:var(--mu);border:1px solid rgba(106,141,176,.2)}
+.bp{background:rgba(255,153,0,.1);color:#ff9900;border:1px solid rgba(255,153,0,.35)}
+.card-inactive{opacity:.65;filter:grayscale(.25)}
 @keyframes pb{0%,100%{box-shadow:0 0 0 0 rgba(0,230,118,.4)}50%{box-shadow:0 0 0 3px rgba(0,230,118,0)}}
 .ctime{font-size:.72rem;color:var(--mu);font-family:'Orbitron',monospace}
 .mu{display:flex;align-items:center;justify-content:center;gap:14px;margin-bottom:16px}
@@ -664,8 +666,12 @@ function seriesBadge(sg,st){
 }
 function mkCard(g){
   var isFinal=g.status==='Final'||g.status==='Game Over'||g.status==='Completed Early';
-  var bc=g.status==='Live'?'bl':isFinal?'bf':'bs';
-  var bl=g.status==='Live'?'&#9679; LIVE':isFinal?'FINAL':'SCHEDULED';
+  var isPostponed=g.isPostponed||g.status==='Postponed';
+  var isCancelled=g.isCancelled||g.status==='Cancelled';
+  var isSuspended=g.isSuspended||g.status==='Suspended';
+  var isInactive=isPostponed||isCancelled||isSuspended;
+  var bc=g.status==='Live'?'bl':isFinal?'bf':isPostponed||isCancelled||isSuspended?'bp':'bs';
+  var bl=g.status==='Live'?'&#9679; LIVE':isFinal?'FINAL':isPostponed?'POSTPONED':isCancelled?'CANCELLED':isSuspended?'SUSPENDED':'SCHEDULED';
   var aL=g.awayLogo?'<img src="'+g.awayLogo+'" alt="'+g.awayAbbr+'" width="42" height="42" loading="lazy">'
     :'<span style="font-family:Orbitron;font-size:.9rem;color:var(--c)">'+g.awayAbbr+'</span>';
   var hL=g.homeLogo?'<img src="'+g.homeLogo+'" alt="'+g.homeAbbr+'" width="42" height="42" loading="lazy">'
@@ -699,9 +705,11 @@ function mkCard(g){
   var deepDiveBtn=isFinal
     ?'<a href="/deep-dive/'+g.gamePk+'" onclick="event.stopPropagation()" style="display:block;margin-top:8px;padding:9px;background:rgba(76,175,80,.09);border:1px solid rgba(76,175,80,.35);border-radius:8px;text-align:center;font-family:Orbitron,monospace;font-size:.6rem;letter-spacing:1.5px;color:#81c784;cursor:pointer;text-decoration:none">&#128202; MODEL vs ACTUAL — COMPARE</a>'
     :'<div class="ap">&#9889; DEEP DIVE ANALYSIS</div>';
-  return '<div class="card" onclick="if(event.target.closest(\'a,button,.lineup-toggle,.lineup-section,.qp-strip\'))return;location.href=\'/deep-dive/'+g.gamePk+'\'">'
+  var dhBadge=g.isDoubleHeader?'<span style="background:rgba(167,139,250,.12);color:#a78bfa;border:1px solid rgba(167,139,250,.4);border-radius:4px;font-size:.62rem;letter-spacing:1.5px;padding:2px 6px;margin-left:5px;font-family:Orbitron,monospace;font-weight:700">DH·G'+(g.gameNumber||1)+'</span>':'';
+  var timeDisplay=isPostponed?'PPD':isCancelled?'CNCL':isSuspended?'SUSP':(g.gameTime||'');
+  return '<div class="card'+(isInactive?' card-inactive':'')+'" onclick="if(event.target.closest(\'a,button,.lineup-toggle,.lineup-section,.qp-strip\'))return;location.href=\'/deep-dive/'+g.gamePk+'\'">'
     // Card top: status badge and time
-    +'<div class="ct"><div style="display:flex;gap:6px;align-items:center"><span class="badge '+bc+'">'+bl+'</span></div><span class="ctime">'+g.gameTime+(g.doubleHeader?'<span style="background:rgba(255,152,0,.12);color:#ff9800;border:1px solid rgba(255,152,0,.35);border-radius:4px;font-size:.62rem;letter-spacing:1.5px;padding:2px 6px;margin-left:5px;font-family:Orbitron,monospace;font-weight:700">DH·G'+(g.gameNumber||1)+'</span>':'')+'</span></div>'
+    +'<div class="ct"><div style="display:flex;gap:6px;align-items:center"><span class="badge '+bc+'">'+bl+'</span></div><span class="ctime">'+timeDisplay+dhBadge+'</span></div>'
     // Team logos and names
     +matchupBlock
     // Series badge always visible, moved below logos
@@ -2145,7 +2153,7 @@ let NRFI_LAST_DATE='';
 function syncDateUI(){var inp=document.getElementById('gamesDateInput'),lbl=document.getElementById('gamesDateLabel'),todayBtn=document.getElementById('todayDateBtn'),tmrwBtn=document.getElementById('tomorrowDateBtn');var today=etTodayStr();var tomorrow=shiftDate(today,1);if(inp) inp.value=selectedGamesDate;if(lbl) lbl.textContent=fmtDateLabel(selectedGamesDate);if(todayBtn) todayBtn.classList.toggle('active',selectedGamesDate===today);if(tmrwBtn) tmrwBtn.classList.toggle('active',selectedGamesDate===tomorrow)}
 function shiftDate(dateStr,days){var dt=new Date(dateStr+'T12:00:00');dt.setDate(dt.getDate()+days);return dt.toISOString().slice(0,10);}
 function shiftGamesDate(days){selectedGamesDate=shiftDate(selectedGamesDate,days);syncDateUI();load(selectedGamesDate)}
-function load(dateStr){if(dateStr) selectedGamesDate=dateStr;syncDateUI();apiFetchJson('/api/games/today?date='+encodeURIComponent(selectedGamesDate)).then(function(d){if(!d.success)throw new Error(d.error||'API error');var gs=d.games||[];window.__lastGames=gs;document.getElementById('sg').textContent=gs.length||0;document.getElementById('sl').textContent=gs.filter(function(g){return g.status==='Live'}).length;var edges=gs.map(function(g){return g.edge});document.getElementById('se').textContent=edges.length?(edges.reduce(function(a,b){return a+b},0)/edges.length).toFixed(1):'--';document.getElementById('sh').textContent=gs.filter(function(g){return g.edge>=8}).length;if(!gs.length){document.getElementById('gc').innerHTML='<div class="ng"><h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px">NO GAMES FOR '+fmtDateLabel(selectedGamesDate).toUpperCase()+'</h3></div>';}else{document.getElementById('gc').innerHTML='<div class="grid">'+gs.map(mkCard).join('')+'</div>';setTimeout(function(){document.querySelectorAll('.fill').forEach(function(e){e.style.width=e.getAttribute('data-w')+'%'})},150);if(window.initLiveCards)initLiveCards(gs);}if(document.getElementById('nrfiView').classList.contains('active')) loadNRFIBoard(gs);}).catch(function(e){document.getElementById('gc').innerHTML='<div class="sw"><div style="background:rgba(224,64,251,.08);border:1px solid rgba(224,64,251,.3);border-radius:12px;padding:24px 32px;text-align:center"><h3 style="color:var(--m);font-family:Orbitron;margin-bottom:8px">CONNECTION ERROR</h3><p style="color:var(--mu);font-size:.82rem">'+e.message+'</p></div></div>'})}
+function load(dateStr){if(dateStr) selectedGamesDate=dateStr;syncDateUI();apiFetchJson('/api/games/today?date='+encodeURIComponent(selectedGamesDate)).then(function(d){if(!d.success)throw new Error(d.error||'API error');var gs=d.games||[];window.__lastGames=gs;var activeGs=gs.filter(function(g){return !g.isPostponed&&!g.isCancelled&&!g.isSuspended&&g.status!=='Postponed'&&g.status!=='Cancelled'&&g.status!=='Suspended';});document.getElementById('sg').textContent=activeGs.length||0;document.getElementById('sl').textContent=activeGs.filter(function(g){return g.status==='Live'}).length;var edges=activeGs.map(function(g){return g.edge});document.getElementById('se').textContent=edges.length?(edges.reduce(function(a,b){return a+b},0)/edges.length).toFixed(1):'--';document.getElementById('sh').textContent=activeGs.filter(function(g){return g.edge>=8}).length;if(!gs.length){document.getElementById('gc').innerHTML='<div class="ng"><h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px">NO GAMES FOR '+fmtDateLabel(selectedGamesDate).toUpperCase()+'</h3></div>';}else{document.getElementById('gc').innerHTML='<div class="grid">'+gs.map(mkCard).join('')+'</div>';setTimeout(function(){document.querySelectorAll('.fill').forEach(function(e){e.style.width=e.getAttribute('data-w')+'%'})},150);if(window.initLiveCards)initLiveCards(gs);}if(document.getElementById('nrfiView').classList.contains('active')) loadNRFIBoard(activeGs);}).catch(function(e){document.getElementById('gc').innerHTML='<div class="sw"><div style="background:rgba(224,64,251,.08);border:1px solid rgba(224,64,251,.3);border-radius:12px;padding:24px 32px;text-align:center"><h3 style="color:var(--m);font-family:Orbitron;margin-bottom:8px">CONNECTION ERROR</h3><p style="color:var(--mu);font-size:.82rem">'+e.message+'</p></div></div>'})}
 function initNRFI(){ if(NRFI_LAST_DATE===selectedGamesDate && NRFI_ROWS.length) return; loadNRFIBoard(window.__lastGames||[]); }
 function loadNRFIBoard(games){
   var meta=document.getElementById('nrfiMeta'), body=document.getElementById('nrfiBody');
