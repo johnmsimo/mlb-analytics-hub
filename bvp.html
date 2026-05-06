@@ -506,11 +506,13 @@ async function selectBatter(batterId, batterName, pitcherId, pitcherName) {
   if (bvpCache[cKey]) { renderDetail(bvpCache[cKey]); return; }
 
   try {
-    const [summaryRes, logsRes] = await Promise.all([
+    const gamePk = currentGame ? currentGame.gamePk : '';
+    const [summaryRes, logsRes, projRes] = await Promise.all([
       fetch(`/api/bvp/${batterId}/${pitcherId}`).then(r => r.json()),
-      fetch(`/api/player/${batterId}/bvp/${pitcherId}`).then(r => r.json()).catch(() => ({}))
+      fetch(`/api/player/${batterId}/bvp/${pitcherId}`).then(r => r.json()).catch(() => ({})),
+      fetch(`/api/bvp/${batterId}/${pitcherId}/projection${gamePk ? '?game_pk='+gamePk : ''}`).then(r => r.json()).catch(() => ({}))
     ]);
-    const data = { summary: summaryRes, logs: logsRes, batterName, pitcherName };
+    const data = { summary: summaryRes, logs: logsRes, proj: projRes, batterName, pitcherName };
     bvpCache[cKey] = data;
     renderDetail(data);
   } catch(e) {
@@ -524,14 +526,41 @@ function fmtOps(v) { return v != null ? Number(v).toFixed(3) : '—'; }
 
 function esc(s) { return (s||'').replace(/'/g, "\\'"); }
 
+// ── Stat quality colour helpers ──────────────────────────────────────────────
+function xstatColor(val, lg, higherIsBetter = true) {
+  if (val == null) return '';
+  const delta = higherIsBetter ? val - lg : lg - val;
+  if (delta >  0.025) return 'good';
+  if (delta > -0.010) return '';
+  return 'bad';
+}
+function pctColor(pct) {
+  if (pct == null) return '';
+  if (pct >= 70) return 'good';
+  if (pct >= 40) return '';
+  return 'bad';
+}
+function fmtPct2(v, dec=1) { return v != null ? Number(v*100).toFixed(dec)+'%' : '—'; }
+function pctBadge(pct) {
+  if (pct == null) return '';
+  const cls = pctColor(pct);
+  return `<span style="font-size:.58rem;margin-left:4px;color:var(--${cls==='good'?'g':cls==='bad'?'r':'mu'})">${pct}th</span>`;
+}
+
 function renderDetail(data) {
-  const { summary, logs, batterName, pitcherName } = data;
+  const { summary, logs, proj, batterName, pitcherName } = data;
   const { batterId, pitcherId } = selectedBatter;
-  const grade = summary.grade || '?';
+  const grade   = summary.grade || '?';
   const gbClass = 'gb-' + grade.replace('+','\\+');
-  const pa = summary.pa || 0;
-  const probs = logs.projectedProbs || {};
-  const games = logs.games || [];
+  const pa      = summary.pa || 0;
+  const games   = logs.games || [];
+
+  // Use projection probs (Feature #1); fallback to legacy logs field
+  const probs = (proj && proj.projectedProbs) || logs.projectedProbs || null;
+  const ev    = (proj && proj.expectedValues)  || {};
+  const bq    = (proj && proj.batterQuality)   || {};
+  const pp    = (proj && proj.pitcherProfile)  || {};
+  const mc    = (proj && proj.matchupContext)  || {};
 
   const ratioColor = (r) => {
     if (r == null) return '';
@@ -540,7 +569,7 @@ function renderDetail(data) {
     return 'class="bad"';
   };
 
-  // Grade basis label — H2H, vs RHP, vs LHP
+  // Grade basis label
   const gradeBasis = summary.grade_basis === 'platoon'
     ? `vs ${summary.pitcher_hand === 'L' ? 'LHP' : 'RHP'}`
     : (pa >= 10 ? 'H2H' : pa > 0 ? 'H2H*' : 'vs RHP/LHP');
@@ -561,7 +590,71 @@ function renderDetail(data) {
     </tr>`;
   }).join('') || '<tr><td colspan="8" style="color:var(--mu);text-align:center;padding:12px">No game logs available</td></tr>';
 
-  // Render initial layout with loading placeholders
+  // ── xStats row (Feature #2) ────────────────────────────────────────────────
+  const xstatsHtml = bq.xba != null ? `
+    <div class="section-label" style="margin-top:12px">Expected Stats <span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— Statcast / season</span></div>
+    <div class="stat-row" style="grid-template-columns:repeat(5,1fr)">
+      <div class="stat-box">
+        <div class="stat-val ${xstatColor(bq.xba, 0.250)}">${fmtAvg(bq.xba)}</div>
+        <div class="stat-lbl">xBA${pctBadge(bq.xba_pct)}</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-val ${xstatColor(bq.xslg, 0.390)}">${fmtOps(bq.xslg)}</div>
+        <div class="stat-lbl">xSLG</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-val ${xstatColor(bq.xwoba, 0.310)}">${fmtOps(bq.xwoba)}</div>
+        <div class="stat-lbl">xwOBA${pctBadge(bq.xwoba_pct)}</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-val ${xstatColor(bq.ev, 88.5)}">${bq.ev != null ? bq.ev.toFixed(1) : '—'}</div>
+        <div class="stat-lbl">EV mph${pctBadge(bq.ev_pct)}</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-val ${xstatColor(bq.brl_pct, 6.3)}">${bq.brl_pct != null ? bq.brl_pct.toFixed(1)+'%' : '—'}</div>
+        <div class="stat-lbl">BRL%${pctBadge(bq.brl_pct_rank)}</div>
+      </div>
+    </div>` : '';
+
+  // ── Pitcher profile compact note ───────────────────────────────────────────
+  const pitNotes = [];
+  if (pp.xera   != null) pitNotes.push(`xERA ${pp.xera.toFixed(2)}`);
+  if (pp.whiff_pct != null) pitNotes.push(`Whiff ${(pp.whiff_pct).toFixed(1)}%`);
+  if (pp.k_pct  != null) pitNotes.push(`K% ${(pp.k_pct*100).toFixed(1)}%`);
+  if (pp.xwoba_against != null) pitNotes.push(`xwOBA-against ${pp.xwoba_against.toFixed(3)}`);
+  const pitProfileHtml = pitNotes.length ? `
+    <div style="font-size:.65rem;color:var(--mu);background:rgba(0,0,0,.2);border-radius:6px;padding:5px 10px;margin-bottom:12px;border-left:2px solid rgba(0,229,255,.2)">
+      <span style="color:var(--c);margin-right:4px">Pitcher:</span>${pitNotes.join(' · ')}
+      ${mc.platoonNote ? `<span style="margin-left:8px;color:var(--y)">${mc.platoonNote}</span>` : ''}
+    </div>` : '';
+
+  // ── Projected probs section (Feature #1) ──────────────────────────────────
+  const probHtml = probs ? `
+    <div class="section-label">Model Projections <span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— BATX engine · platoon + BvP adjusted</span></div>
+    <div class="prob-row">
+      <div class="prob-box">
+        <div class="prob-val ${probs.hit1>=0.60?'class="good"':probs.hit1<0.42?'class="bad"':''}">${fmtPct2(probs.hit1)}</div>
+        <div class="prob-lbl">1+ Hit</div>
+        ${ev.hits != null ? `<div style="font-size:.58rem;color:var(--mu);margin-top:2px">E: ${ev.hits.toFixed(2)} H</div>` : ''}
+      </div>
+      <div class="prob-box">
+        <div class="prob-val">${fmtPct2(probs.tb2)}</div>
+        <div class="prob-lbl">2+ TB</div>
+        ${ev.tb != null ? `<div style="font-size:.58rem;color:var(--mu);margin-top:2px">E: ${ev.tb.toFixed(2)} TB</div>` : ''}
+      </div>
+      <div class="prob-box">
+        <div class="prob-val ${probs.hr>=0.12?'class="good"':''}">${fmtPct2(probs.hr)}</div>
+        <div class="prob-lbl">Home Run</div>
+        ${ev.hr != null ? `<div style="font-size:.58rem;color:var(--mu);margin-top:2px">E: ${ev.hr.toFixed(3)} HR</div>` : ''}
+      </div>
+      <div class="prob-box">
+        <div class="prob-val">${fmtPct2(probs.rbi1)}</div>
+        <div class="prob-lbl">1+ RBI</div>
+        ${ev.rbi != null ? `<div style="font-size:.58rem;color:var(--mu);margin-top:2px">E: ${ev.rbi.toFixed(2)} RBI</div>` : ''}
+      </div>
+    </div>` : '';
+
+  // Render layout
   document.getElementById('detailPanel').innerHTML = `
     <div class="bvp-header">
       <div class="bvp-names">
@@ -577,6 +670,7 @@ function renderDetail(data) {
 
     ${summary.sample_note ? `<div class="sample-note">${summary.sample_note}</div>` : ''}
 
+    <div class="section-label">Career H2H Stats</div>
     <div class="stat-row">
       <div class="stat-box"><div class="stat-val">${pa}</div><div class="stat-lbl">PA</div></div>
       <div class="stat-box"><div class="stat-val">${fmtAvg(summary.avg)}</div><div class="stat-lbl">AVG</div></div>
@@ -585,23 +679,21 @@ function renderDetail(data) {
       <div class="stat-box"><div class="stat-val" ${ratioColor(summary.ops_ratio)}>${summary.ops_ratio!=null ? Number(summary.ops_ratio).toFixed(2)+'x' : '—'}</div><div class="stat-lbl">OPS Ratio</div></div>
     </div>
 
-    ${probs && Object.keys(probs).length ? `
-    <div class="section-label">Model Projections (Today's Game)</div>
-    <div class="prob-row">
-      <div class="prob-box"><div class="prob-val">${fmtPct(probs.hit1)}</div><div class="prob-lbl">1+ Hit</div></div>
-      <div class="prob-box"><div class="prob-val">${fmtPct(probs.tb2)}</div><div class="prob-lbl">2+ TB</div></div>
-      <div class="prob-box"><div class="prob-val">${fmtPct(probs.hr)}</div><div class="prob-lbl">Home Run</div></div>
-      <div class="prob-box"><div class="prob-val">${fmtPct(probs.rbi1)}</div><div class="prob-lbl">1+ RBI</div></div>
-    </div>` : ''}
+    ${xstatsHtml}
+
+    ${pitProfileHtml}
+
+    ${probHtml}
 
     <div class="section-label">Recent Form & Matchup Context</div>
     <div class="context-grid" id="contextGrid">
       <div class="context-card"><div class="context-loading">Loading last 10 games...</div></div>
       <div class="context-card"><div class="context-loading">Loading platoon splits...</div></div>
       <div class="context-card"><div class="context-loading">Loading arsenal matchup...</div></div>
+      <div class="context-card"><div class="context-loading">Loading quality metrics...</div></div>
     </div>
 
-    <div class="section-label">Prop Signals <span style="font-size:.6rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— based on recent form + context</span></div>
+    <div class="section-label">Prop Signals <span style="font-size:.6rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— recent form based</span></div>
     <div class="prop-signal-grid" id="propSignalGrid">
       <div class="prop-signal-box"><div class="prop-signal-type">HIT</div><div class="prop-signal-val" style="color:var(--mu)">—</div></div>
       <div class="prop-signal-box"><div class="prop-signal-type">TOTAL BASES</div><div class="prop-signal-val" style="color:var(--mu)">—</div></div>
@@ -620,26 +712,46 @@ function renderDetail(data) {
     </div>
   `;
 
-  // Fetch and render context data + prop signals
-  loadContextData(batterId, pitcherId);
+  // Fetch context cards + prop signals (pass proj for quality card)
+  loadContextData(batterId, pitcherId, proj);
 }
 
-async function loadContextData(batterId, pitcherId) {
+async function loadContextData(batterId, pitcherId, proj) {
   try {
     const [recent, splits, arsenal] = await Promise.all([
       fetch(`/api/player/${batterId}/recent-games`).then(r => r.json()),
       fetch(`/api/player/${batterId}/platoon-splits`).then(r => r.json()),
-      fetch(`/api/player/${batterId}/arsenal-matchup/${pitcherId}`).then(r => r.json())
+      fetch(`/api/bvp/${batterId}/${pitcherId}/arsenal`).then(r => r.json()).catch(() => ({}))
     ]);
 
     const contextGrid = document.getElementById('contextGrid');
     if (!contextGrid) return;
 
-    // Card 1: Last 10 Games
+    // Card 1: Last 10 Games + sparkline
     const last10 = recent.last10 || {};
     const opsClass = last10.ops >= 0.800 ? 'good' : last10.ops >= 0.700 ? '' : 'bad';
     const avgClass = last10.avg >= 0.280 ? 'good' : last10.avg >= 0.240 ? '' : 'bad';
-    
+
+    // Build hit-rate sparkline bars from game list
+    const sparkGames = (recent.games || []);
+    const sparkW = 120, sparkH = 24, barW = Math.max(6, Math.floor(sparkW / Math.max(sparkGames.length, 1)) - 2);
+    const sparkBars = sparkGames.map((g, i) => {
+      const hasHit = g.hits >= 1;
+      const hasHR  = g.hr   >= 1;
+      const col = hasHR ? 'var(--g)' : hasHit ? 'rgba(0,229,255,.85)' : 'rgba(255,255,255,.12)';
+      const x = i * (barW + 2);
+      return `<rect x="${x}" y="${hasHit ? 6 : 14}" width="${barW}" height="${hasHit ? sparkH - 6 : sparkH - 14}" fill="${col}" rx="1"/>`;
+    }).join('');
+    const sparkSvg = sparkGames.length ? `
+      <svg viewBox="0 0 ${sparkGames.length * (barW+2)} ${sparkH}" style="width:100%;height:${sparkH}px;margin-top:6px;display:block">
+        ${sparkBars}
+      </svg>
+      <div style="display:flex;gap:8px;margin-top:3px">
+        <span style="font-size:.6rem;color:var(--dim)"><span style="color:rgba(0,229,255,.85)">■</span> Hit</span>
+        <span style="font-size:.6rem;color:var(--dim)"><span style="color:var(--g)">■</span> HR</span>
+        <span style="font-size:.6rem;color:var(--dim)"><span style="color:rgba(255,255,255,.18)">■</span> 0H</span>
+      </div>` : '';
+
     const card1 = `
       <div class="context-card">
         <div class="context-card-header">
@@ -662,6 +774,7 @@ async function loadContextData(batterId, pitcherId) {
           <span class="context-stat-label">Hits</span>
           <span class="context-stat-value">${last10.hits || 0}/${last10.ab || 0}</span>
         </div>
+        ${sparkSvg}
       </div>
     `;
 
@@ -695,33 +808,93 @@ async function loadContextData(batterId, pitcherId) {
       </div>
     `;
 
-    // Card 3: Arsenal Matchup
-    const similarPitchers = arsenal.similarPitchers || [];
-    const arsenalStats = arsenal.similarArsenal || {};
-    const primaryPitch = arsenal.primaryPitch || 'Fastball';
-    
+    // Card 3: Pitch Arsenal Breakdown
+    const pitches = arsenal.pitches || [];
+    const mixScore = arsenal.mixScore || 1.0;
+    const primaryPitch = arsenal.primaryPitch || '—';
+    const mixCls = mixScore >= 1.15 ? 'good' : mixScore <= 0.87 ? 'bad' : '';
+    const mixLbl = mixScore >= 1.15 ? 'Favorable' : mixScore <= 0.87 ? 'Unfavorable' : 'Neutral';
+
+    function fmtStat(v, dec) {
+      if (v == null) return '—';
+      return Number(v).toFixed(dec != null ? dec : 3);
+    }
+    function pitchRatioClass(r) {
+      if (r == null) return '';
+      return r >= 1.15 ? 'good' : r <= 0.85 ? 'bad' : '';
+    }
+
+    const pitchRows = pitches.slice(0, 5).map(p => {
+      const usagePct = p.usage != null ? Math.round(p.usage) + '%' : '—';
+      const veloStr  = p.velo  != null ? p.velo.toFixed(1)         : '—';
+      const batWoba  = p.bat_woba != null ? fmtStat(p.bat_woba) : (p.pit_woba != null ? `<span style="color:var(--dim)">${fmtStat(p.pit_woba)}</span>` : '—');
+      const whiffStr = p.bat_whiff != null ? Math.round(p.bat_whiff) + '%' : (p.pit_whiff != null ? `<span style="color:var(--dim)">${Math.round(p.pit_whiff)}%</span>` : '—');
+      const rCls = pitchRatioClass(p.ratio);
+      return `<div style="display:grid;grid-template-columns:1fr 28px 42px 44px 44px;gap:2px 4px;align-items:center;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.05)">
+        <span style="font-size:.72rem;color:var(--t)">${p.label}</span>
+        <span style="font-size:.68rem;color:var(--dim)">${usagePct}</span>
+        <span style="font-size:.68rem;color:var(--dim)">${veloStr}</span>
+        <span style="font-size:.72rem;color:var(--t)">${batWoba}</span>
+        <span style="font-size:.72rem;color:var(--t)" class="${rCls}">${whiffStr}</span>
+      </div>`;
+    }).join('');
+
     const card3 = `
       <div class="context-card">
         <div class="context-card-header">
-          <span>Similar Arsenal</span>
-          <span class="context-badge">${primaryPitch}</span>
+          <span>Pitch Arsenal</span>
+          <span class="context-badge ${mixCls}">${mixLbl}</span>
         </div>
-        <div class="context-stat-row">
-          <span class="context-stat-label">Similar Pitchers</span>
-          <span class="context-stat-value">${arsenalStats.pitchers || 0}</span>
-        </div>
-        <div class="context-stat-row">
-          <span class="context-stat-label" style="font-size:.68rem">${arsenalStats.message || 'Loading...'}</span>
-        </div>
-        <div class="arsenal-list">
-          ${similarPitchers.slice(0, 5).map(p => 
-            `<div class="arsenal-pill" title="${p.similarity * 100}% match">${p.name.split(' ').pop()}</div>`
-          ).join('')}
-        </div>
+        ${pitches.length ? `
+          <div style="display:grid;grid-template-columns:1fr 28px 42px 44px 44px;gap:2px 4px;padding:2px 0 4px;border-bottom:1px solid rgba(255,255,255,.12)">
+            <span style="font-size:.62rem;color:var(--dim)">Pitch</span>
+            <span style="font-size:.62rem;color:var(--dim)">Use%</span>
+            <span style="font-size:.62rem;color:var(--dim)">Velo</span>
+            <span style="font-size:.62rem;color:var(--dim)">wOBA</span>
+            <span style="font-size:.62rem;color:var(--dim)">Whiff%</span>
+          </div>
+          ${pitchRows}
+          <div style="font-size:.64rem;color:var(--dim);margin-top:6px">wOBA/Whiff% = batter vs pitch type</div>
+        ` : `<div class="context-stat-row" style="color:var(--dim);font-size:.75rem;padding:8px 0">No arsenal data available</div>`}
       </div>
     `;
 
-    contextGrid.innerHTML = card1 + card2 + card3;
+    // Card 4: Quality Metrics (from projection endpoint)
+    const bq = (proj && proj.batterQuality) || {};
+    const evVal   = bq.ev    != null ? bq.ev.toFixed(1)    : null;
+    const brlVal  = bq.brl_pct != null ? (bq.brl_pct * 100).toFixed(1) : null;
+    const hhVal   = bq.hh_pct  != null ? (bq.hh_pct  * 100).toFixed(1) : null;
+    const xwobaVal = bq.xwoba  != null ? bq.xwoba.toFixed(3)           : null;
+
+    function qualRow(label, val, suffix, pctRank) {
+      if (val == null) return '';
+      const pctStr = pctRank != null ? pctBadge(pctRank) : '';
+      const cls = pctRank != null ? pctColor(pctRank) : '';
+      return `<div class="context-stat-row">
+        <span class="context-stat-label">${label}</span>
+        <span class="context-stat-value ${cls}">${val}${suffix}${pctStr}</span>
+      </div>`;
+    }
+
+    const card4 = bq.ev != null ? `
+      <div class="context-card">
+        <div class="context-card-header">
+          <span>Quality Metrics</span>
+          <span class="context-badge">Statcast</span>
+        </div>
+        ${qualRow('Exit Velo', evVal, ' mph', bq.ev_pct)}
+        ${qualRow('Barrel%', brlVal, '%', bq.brl_pct_rank)}
+        ${qualRow('Hard Hit%', hhVal, '%', bq.hh_pct_rank)}
+        ${qualRow('xwOBA', xwobaVal, '', bq.xwoba_pct)}
+      </div>
+    ` : `
+      <div class="context-card">
+        <div class="context-card-header"><span>Quality Metrics</span></div>
+        <div class="context-stat-row" style="color:var(--dim);font-size:.75rem;padding:8px 0">No Statcast data</div>
+      </div>
+    `;
+
+    contextGrid.innerHTML = card1 + card2 + card3 + card4;
 
     // ── Prop Signals ────────────────────────────────────────────────────────
     const propGrid = document.getElementById('propSignalGrid');

@@ -5222,6 +5222,296 @@ def api_bvp(batter_id, pitcher_id):
     })
 
 
+@app.route("/api/bvp/<int:batter_id>/<int:pitcher_id>/projection")
+def api_bvp_projection(batter_id, pitcher_id):
+    """
+    Full BATX matchup projection + xStats for the BvP detail panel.
+    Returns projected game probs (hit1/tb2/hr/rbi1), expected values,
+    Statcast quality metrics (xBA, xSLG, xwOBA, EV, barrel%, HH%),
+    and pitcher resistance profile.
+    Query params: game_pk (int) — enriches park factor + dome flag.
+                  slot (int, 1-9) — batter's lineup slot, defaults to 5.
+    """
+    game_pk     = request.args.get("game_pk",  type=int)
+    lineup_slot = request.args.get("slot",     type=int, default=5)
+
+    try:
+        _wait_for_fg_data(timeout_sec=3)
+        _wait_for_savant_data(timeout_sec=3)
+
+        # ── 1. Resolve player names + handedness ────────────────────────────
+        batter_name  = pitcher_name = ""
+        bats_code    = "S"
+        pitcher_hand = "R"
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+            b_fut = ex.submit(requests.get, f"{MLB_API}/people/{batter_id}",  timeout=6)
+            p_fut = ex.submit(requests.get, f"{MLB_API}/people/{pitcher_id}", timeout=6)
+            br = b_fut.result(timeout=8)
+            pr = p_fut.result(timeout=8)
+
+        if br.ok:
+            bp = (br.json().get("people") or [{}])[0]
+            batter_name = bp.get("fullName", "")
+            bats_code   = (bp.get("batSide")  or {}).get("code", "S") or "S"
+        if pr.ok:
+            pp = (pr.json().get("people") or [{}])[0]
+            pitcher_name = pp.get("fullName", "")
+            pitcher_hand = (pp.get("pitchHand") or {}).get("code", "R") or "R"
+
+        # ── 2. Load FG + Savant stats ────────────────────────────────────────
+        fg_bat = fg_batter(batter_name)  or {}
+        sv_bat = sv_batter(batter_name)  or {}
+        fg_pit = fg_pitcher(pitcher_name) or {}
+        sv_pit = sv_pitcher(pitcher_name) or {}
+
+        # ── 3. Build batter object with platoon splits ───────────────────────
+        splits = hitter_split_profile(batter_id)
+        vl = splits.get("vl", {})
+        vr = splits.get("vr", {})
+
+        batter_obj = {
+            "name":     batter_name,
+            "bats":     bats_code,
+            "slot":     lineup_slot,
+            "avg":      _safe_f(fg_bat.get("fg_avg"),  0.245),
+            "obp":      _safe_f(fg_bat.get("fg_obp"),  0.315),
+            "slg":      _safe_f(fg_bat.get("fg_slg"),  0.390),
+            "ops":      _safe_f(fg_bat.get("fg_ops"),  0.705),
+            "vs_l_avg": vl.get("avg", 0), "vs_l_ops": vl.get("ops", 0),
+            "vs_l_obp": vl.get("obp", 0), "vs_l_slg": vl.get("slg", 0),
+            "vs_l_pa":  vl.get("pa",  0),
+            "vs_r_avg": vr.get("avg", 0), "vs_r_ops": vr.get("ops", 0),
+            "vs_r_obp": vr.get("obp", 0), "vs_r_slg": vr.get("slg", 0),
+            "vs_r_pa":  vr.get("pa",  0),
+        }
+
+        # ── 4. Game context: park factor + dome ──────────────────────────────
+        park_factor = 1.0
+        weather     = {}
+        if game_pk:
+            try:
+                sr = requests.get(
+                    f"{MLB_API}/schedule",
+                    params={"gamePk": game_pk, "hydrate": "team,venue", "sportId": 1},
+                    timeout=6,
+                )
+                if sr.ok:
+                    dates = sr.json().get("dates", [])
+                    if dates and dates[0].get("games"):
+                        gm      = dates[0]["games"][0]
+                        home_id = (((gm.get("teams") or {}).get("home") or {}).get("team") or {}).get("id")
+                        if home_id:
+                            park_factor = PARK_FACTORS.get(home_id, 1.0)
+                        venue_id = (gm.get("venue") or {}).get("id")
+                        if venue_id and venue_id in DOME_VENUES:
+                            weather = {"dome": True, "temp": 72, "wind_speed": 0}
+            except Exception:
+                pass
+
+        # ── 5. BvP component (already cached) ───────────────────────────────
+        bvp_data = _fetch_bvp(batter_id, pitcher_id)
+
+        # ── 6. BATX projection (most complete model) ─────────────────────────
+        batx = _project_batter_batx(
+            batter_obj, pitcher_name, fg_pit, sv_pit,
+            park_factor, weather, pitcher_hand,
+            opp_pitcher_id=pitcher_id, bvp=bvp_data,
+        )
+
+        # ── 7. Calibrated game probs via _project_batter_vs_pitcher ─────────
+        bstats = {
+            "sv_xba":    _safe_f(sv_bat.get("sv_xba"),     0.250),
+            "sv_xwoba":  _safe_f(sv_bat.get("sv_xwoba"),   0.310),
+            "fg_iso":    _safe_f(fg_bat.get("fg_iso"),     0.145),
+            "sv_brl_pct":_safe_f(sv_bat.get("sv_brl_pct"), 6.0),
+            "fg_pa":     _safe_f(fg_bat.get("fg_pa"),      200),
+            "fg_avg":    _safe_f(fg_bat.get("fg_avg"),     0.245),
+            "fg_woba":   _safe_f(fg_bat.get("fg_woba"),    0.310),
+        }
+        pstats = {
+            "fg_fip":  _safe_f(fg_pit.get("fg_xfip") or fg_pit.get("fg_era"), 4.20),
+            "fg_hr9":  _safe_f(fg_pit.get("fg_hr9"),  1.10),
+            "fg_kpct": _safe_f(fg_pit.get("fg_kpct"), 0.22),
+        }
+        gp = _project_batter_vs_pitcher(bstats, pstats)
+
+        # BATX expected → Poisson probs; blend with calibrated probs (60/40)
+        hits_m = float(batx.get("hits", 0) or 0)
+        tb_m   = float(batx.get("tb",   0) or 0)
+        hr_m   = float(batx.get("hr",   0) or 0)
+        rbi_m  = float(batx.get("rbi",  0) or 0)
+        r_m    = float(batx.get("r",    0) or 0)
+
+        def _blend_prob(cal, batx_p):
+            return round(max(0.01, min(0.99, 0.60 * cal + 0.40 * batx_p)), 3)
+
+        probs = {
+            "hit1": _blend_prob(gp["hitProb"], _poisson_over_prob(hits_m, 0.5)),
+            "tb2":  _blend_prob(gp["tbProb"],  _poisson_over_prob(tb_m,   1.5)),
+            "hr":   _blend_prob(gp["hrProb"],  _poisson_over_prob(hr_m,   0.5)),
+            "rbi1": _blend_prob(gp["rbiProb"], _poisson_over_prob(rbi_m,  0.5)),
+            "r1":   round(_poisson_over_prob(r_m, 0.5), 3),
+        }
+
+        # ── 8. xStats + Statcast quality metrics ─────────────────────────────
+        sv_xba   = _safe_f(sv_bat.get("sv_xba"),    None)
+        sv_xslg  = _safe_f(sv_bat.get("sv_xslg"),   None)
+        sv_xwoba = _safe_f(sv_bat.get("sv_xwoba"),  None)
+        sv_ev    = _safe_f(sv_bat.get("sv_ev"),      None)
+        sv_brl   = _safe_f(sv_bat.get("sv_brl_pct"),None)
+        sv_hh    = _safe_f(sv_bat.get("sv_hh_pct"), None)
+
+        # Percentile ranks across all Savant batters
+        with _sv_lock:
+            _sc = dict(_sv_bat_statcast)
+            _xs = dict(_sv_bat_xstats)
+
+        def _pct(cache, field, val):
+            if val is None:
+                return None
+            vals = [_safe_f(v.get(field), None) for v in cache.values()]
+            vals = [x for x in vals if x is not None and x > 0]
+            return _pct_rank(vals, val)
+
+        batter_quality = {
+            "xba":      round(sv_xba,  3) if sv_xba  is not None else None,
+            "xslg":     round(sv_xslg, 3) if sv_xslg is not None else None,
+            "xwoba":    round(sv_xwoba,3) if sv_xwoba is not None else None,
+            "ev":       round(sv_ev,   1) if sv_ev    is not None else None,
+            "brl_pct":  round(sv_brl,  1) if sv_brl   is not None else None,
+            "hh_pct":   round(sv_hh,   1) if sv_hh    is not None else None,
+            "ev_pct":   _pct(_sc, "sv_ev",      sv_ev),
+            "brl_pct_rank": _pct(_sc, "sv_brl_pct", sv_brl),
+            "hh_pct_rank":  _pct(_sc, "sv_hh_pct",  sv_hh),
+            "xba_pct":  _pct(_xs, "sv_xba",    sv_xba),
+            "xwoba_pct":_pct(_xs, "sv_xwoba",  sv_xwoba),
+        }
+
+        pitcher_profile = {
+            "xera":      _safe_f(sv_pit.get("sv_xera"),    None),
+            "xwoba_against": _safe_f(sv_pit.get("sv_xwoba_p"), None),
+            "whiff_pct": _safe_f(sv_pit.get("sv_whiff"),   None),
+            "k_pct":     _safe_f(sv_pit.get("sv_k_pct"),   None),
+            "bb_pct":    _safe_f(sv_pit.get("sv_bb_pct"),  None),
+            "era":       _safe_f(fg_pit.get("fg_era"),      None),
+            "k9":        _safe_f(fg_pit.get("fg_k9"),       None),
+        }
+
+        return jsonify({
+            "success":      True,
+            "batterName":   batter_name,
+            "pitcherName":  pitcher_name,
+            "pitcherHand":  pitcher_hand,
+            "parkFactor":   park_factor,
+            "projectedProbs": probs,
+            "expectedValues": {
+                "hits": round(hits_m, 3),
+                "tb":   round(tb_m,   3),
+                "hr":   round(hr_m,   4),
+                "rbi":  round(rbi_m,  3),
+                "r":    round(r_m,    3),
+            },
+            "matchupContext": {
+                "platoonNote": batx.get("platoon_note", ""),
+                "splitOps":    round(float(batx.get("split_ops") or 0), 3),
+                "splitAvg":    round(float(batx.get("split_avg") or 0), 3),
+                "expPA":       batx.get("expected_pa", 4.0),
+                "bvpGrade":    (bvp_data or {}).get("grade", "?"),
+                "bvpPA":       (bvp_data or {}).get("pa", 0),
+            },
+            "batterQuality":  batter_quality,
+            "pitcherProfile": pitcher_profile,
+            "adjustments":    batx.get("adjustments", {}),
+        })
+
+    except Exception as ex:
+        print(f"[api_bvp_projection] {traceback.format_exc()}")
+        return jsonify({"success": False, "error": str(ex)}), 500
+
+
+@app.route("/api/bvp/<int:batter_id>/<int:pitcher_id>/arsenal")
+def api_bvp_arsenal(batter_id, pitcher_id):
+    """Pitch arsenal breakdown for batter vs pitcher matchup."""
+    try:
+        _maybe_refresh_fg()
+        _maybe_refresh_savant()
+
+        # Resolve pitcher name + hand
+        pitcher_name = ""
+        pitcher_hand = "R"
+        try:
+            rp = requests.get(f"{MLB_API}/people/{pitcher_id}", timeout=8)
+            if rp.ok:
+                ppl = rp.json().get("people") or [{}]
+                pitcher_name = (ppl[0].get("fullName") or "").strip()
+                pitcher_hand = ((ppl[0].get("pitchHand") or {}).get("code") or "R").upper()
+        except Exception:
+            pass
+
+        pit_pid_str = str(pitcher_id)
+        bat_pid_str = str(batter_id)
+
+        # Pitch-mix matchup score + per-pitch table
+        mix_score, table_rows = _compute_pitch_mix_score(pit_pid_str, bat_pid_str)
+
+        # Pitcher's raw arsenal pct + velo from Savant
+        svp = sv_pitcher(pitcher_name) if pitcher_name else {}
+        raw_pct  = (svp.get("sv_arsenal_pct")  or {}) if isinstance(svp, dict) else {}
+        raw_velo = (svp.get("sv_arsenal_velo") or {}) if isinstance(svp, dict) else {}
+
+        # Build enriched pitch list (merge table_rows with pct/velo)
+        pitches = []
+        for row in table_rows:
+            code = (row.get("pitch") or "").lower()
+            label = PITCH_LABELS.get(code, code.upper())
+            pct  = raw_pct.get(code)
+            velo = raw_velo.get(code)
+            pitches.append({
+                "code":       code,
+                "label":      label,
+                "usage":      row.get("usage"),
+                "velo":       round(float(velo), 1) if velo is not None else None,
+                "pit_ba":     row.get("pit_ba"),
+                "pit_slg":    row.get("pit_slg"),
+                "pit_woba":   row.get("pit_woba"),
+                "pit_whiff":  row.get("pit_whiff"),
+                "bat_slg":    row.get("bat_slg"),
+                "bat_woba":   row.get("bat_woba"),
+                "bat_whiff":  row.get("bat_whiff"),
+                "bat_hh":     row.get("bat_hh"),
+                "ratio":      row.get("ratio"),
+            })
+
+        # If no pit_arsenal data, fall back to pct-only list (no batter breakdown)
+        if not pitches and raw_pct:
+            for code, pct_val in sorted(raw_pct.items(), key=lambda kv: kv[1], reverse=True):
+                label = PITCH_LABELS.get(code, code.upper())
+                velo  = raw_velo.get(code)
+                pitches.append({
+                    "code":    code,
+                    "label":   label,
+                    "usage":   round(float(pct_val) * 100, 1) if pct_val is not None else None,
+                    "velo":    round(float(velo), 1) if velo is not None else None,
+                })
+
+        primary_pitch = pitches[0]["label"] if pitches else None
+
+        return jsonify({
+            "success":      True,
+            "pitcherName":  pitcher_name,
+            "pitcherHand":  pitcher_hand,
+            "mixScore":     mix_score,
+            "primaryPitch": primary_pitch,
+            "pitches":      pitches,
+        })
+
+    except Exception as ex:
+        import traceback as _tb
+        print(f"[api_bvp_arsenal] {_tb.format_exc()}")
+        return jsonify({"success": False, "error": str(ex)}), 500
+
+
 @app.route("/api/player/<int:player_id>/bvp/<int:pitcher_id>")
 def api_player_bvp_games(player_id, pitcher_id):
     """Opponent-specific game logs: summary + latest matchup games."""
