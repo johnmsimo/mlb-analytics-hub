@@ -4934,14 +4934,6 @@ def api_player_bvp_games(player_id, pitcher_id):
         # Ensure latest first.
         games = sorted(games, key=lambda x: x.get("date", ""), reverse=True)[:5]
 
-        pitcher_name = "Pitcher"
-        try:
-            pr = requests.get(f"{MLB_API}/people/{pitcher_id}", timeout=6)
-            if pr.ok:
-                pitcher_name = ((pr.json().get("people") or [{}])[0].get("fullName") or "Pitcher")
-        except Exception:
-            pass
-
         ab = bvp.get("ab", 0) or 0
         avg = bvp.get("avg")
         hr = bvp.get("hr", 0) or 0
