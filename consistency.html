@@ -249,7 +249,7 @@
         return;
       }
 
-      body.innerHTML = rows.map(row => {
+      body.innerHTML = rows.map((row, idx) => {
         const ev = Number(row.evPct || 0);
         const evClass = ev >= 0 ? 'pos' : 'neg';
         return '<tr>' +
@@ -266,8 +266,36 @@
           `<td>${row.sampleSize || 0}</td>` +
           `<td><span class="hub">${row.hubRating == null ? '-' : num(row.hubRating, 0)}</span></td>` +
           `<td class="ev ${evClass}">${num(ev, 1)}%</td>` +
+          `<td><button class="btn parlay-btn" onclick="addConsistencyRowToParlay(${idx})">+ Parlay</button></td>` +
         '</tr>';
       }).join('');
+    }
+
+    function addConsistencyRowToParlay(idx){
+      const sheet = activeSheet();
+      if(!sheet || !sheet.rows || !sheet.rows[idx]) return;
+      const r = sheet.rows[idx];
+      const leg = {
+        player: r.player,
+        marketKey: sheet.marketKey || 'batter_hits',
+        line: r.line || 1.5,
+        gamePk: r.gamePk,
+        team: r.team,
+        recommendedSide: 'Over',
+        savedAt: Date.now(),
+        source: 'consistency_sheet',
+      };
+      addLegToPendingParlay(leg);
+    }
+
+    function addLegToPendingParlay(leg){
+      try{
+        let legs = [];
+        try{legs = JSON.parse(localStorage.getItem('pendingParlayLegs')||'[]');}catch(e){}
+        legs.push(leg);
+        localStorage.setItem('pendingParlayLegs', JSON.stringify(legs));
+        window.location.href = '/tracker';
+      }catch(e){alert('Failed to add to parlay: '+e.message);}
     }
 
     async function loadData(force){

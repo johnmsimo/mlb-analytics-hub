@@ -35,6 +35,9 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .gchip-time{font-size:.65rem;color:var(--mu)}
 .gchip-st{font-size:.58rem;font-family:'Orbitron',monospace;letter-spacing:1px;color:var(--mu)}
 .gchip-st.live{color:var(--g)}
+.gchip-st.postponed{color:#ff9900}
+.gchip.postponed{border-color:rgba(255,153,0,.35);pointer-events:none}
+.gchip-dh{font-size:.56rem;font-family:'Orbitron',monospace;letter-spacing:1px;color:#a78bfa;padding:1px 4px;border:1px solid rgba(167,139,250,.4);border-radius:3px;display:inline-block;margin-top:1px}
 .main{padding:24px 32px;max-width:1640px;margin:0 auto}
 .no-game{text-align:center;padding:80px 20px;color:var(--mu)}
 .no-game-icon{font-size:3rem;margin-bottom:16px;opacity:.35}
@@ -427,8 +430,12 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
     <div class="no-game-txt">SELECT A GAME ABOVE TO VIEW PROJECTIONS</div>
   </div>
 
+
   <div id="mainContent" style="display:none">
-    <div id="matchHeader" style="margin-bottom:16px;font-family:'Orbitron',monospace;font-size:.72rem;color:var(--mu);letter-spacing:3px"></div>
+  <div id="matchHeader" style="margin-bottom:16px;font-family:'Orbitron',monospace;font-size:.72rem;color:var(--mu);letter-spacing:3px"></div>
+
+  <!-- ── Major Market Odds Panel ── -->
+  <div id="majorMarketsPanel" style="margin-bottom:18px;display:none"></div>
 
     <!-- ── Umpire Banner ── -->
     <div class="ump-banner" id="umpBanner">
@@ -664,6 +671,7 @@ let LINEUP_STATUS = {};    // gamePk → {changes, away, home} — last known st
 let SORT_KEY      = 'hits';
 let VAL_FILT      = 'all';
 let LINE_SHOP_CACHE = {};
+const SCAN_RETRY_DELAY_MS = 20000;  // ms before auto-retrying a computing full scan
 let SPRAY_CHART_DATA = {};  // keyed by player_id
 let SPRAY_CHART_FILTERS = {}; // keyed by player_id, stores active filter state
 let SPRAY_CHART_META = {}; // keyed by player_id, stores no-data/error reason
@@ -812,14 +820,16 @@ async function loadGames() {
     const d = await r.json();
     const games = d.games || [];
     renderChips(games);
-    if (games.length) {
-      const first = games[0];
+    // Auto-select the first active (non-postponed/cancelled/suspended) game.
+    const activeGame = games.find(g => !g.isPostponed && !g.isCancelled && !g.isSuspended
+                                        && g.status !== 'Postponed' && g.status !== 'Cancelled' && g.status !== 'Suspended');
+    if (activeGame) {
       // Always return to the projections/batters pane on day load.
       document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === 'projections'));
       document.querySelectorAll('.tabpanel').forEach(p => p.classList.toggle('active', p.id === 'tab-projections'));
       switchSub('batters');
       try {
-        await selectGame(first.gamePk, first.awayAbbr, first.homeAbbr);
+        await selectGame(activeGame.gamePk, activeGame.awayAbbr, activeGame.homeAbbr);
       } catch (ex) {
         gel('batterGrid').innerHTML = errHTML(`AUTO-LOAD FAILED: ${ex.message || ex}`);
       }
@@ -860,6 +870,18 @@ async function loadFullScan() {
     const r = await fetch(`/api/props/scan/today?date=${encodeURIComponent(date)}`);
     const d = await r.json();
     if (!d.success) throw new Error(d.error || 'Full scan unavailable');
+    // Server is still computing the scan — show a message and auto-retry
+    if (d.computing) {
+      gel('batterGrid').innerHTML = loadHTML('SCAN COMPUTING…');
+      const wrap = document.getElementById('propsPicksWrap');
+      const el   = document.getElementById('propsPicksPanel');
+      if (wrap) wrap.style.display = '';
+      if (el)   el.innerHTML = '<div class="props-pr-empty">⏳ FULL SCAN COMPUTING — AUTO-REFRESHING IN 20s</div>';
+      gel('matchHeader').innerHTML = `FULL SLATE · ${date}`;
+      gel('lastUpdate').textContent = 'SCAN COMPUTING… AUTO-REFRESH IN 20s';
+      setTimeout(loadFullScan, SCAN_RETRY_DELAY_MS);
+      return;
+    }
     PROJ_DATA = d;
     VAL_DATA = d.props || [];
     PLAYER_HUB_MAP = {};
@@ -889,12 +911,26 @@ function renderChips(games) {
   if (!games.length) { chips('<div style="color:var(--mu);font-family:Orbitron,monospace;font-size:.68rem;letter-spacing:2px;padding:10px">NO GAMES SCHEDULED</div>'); return; }
   chips(games.map(g => {
     const live = g.status === 'Live';
+    const postponed = g.isPostponed || g.status === 'Postponed';
+    const cancelled = g.isCancelled || g.status === 'Cancelled';
+    const suspended = g.isSuspended || g.status === 'Suspended';
+    const inactive  = postponed || cancelled || suspended;
+    const dh = g.isDoubleHeader;
     const escAttr = s => String(s||'').replace(/'/g,"\\'");
-    return `<div class="gchip ${live?'live':''}" id="chip-${esc(String(g.gamePk||''))}"
-      onclick="selectGame(${g.gamePk},'${escAttr(g.awayAbbr)}','${escAttr(g.homeAbbr)}')">
+    let statusLabel = g.status || 'SCHED';
+    if (postponed) statusLabel = 'POSTPONED';
+    else if (cancelled) statusLabel = 'CANCELLED';
+    else if (suspended) statusLabel = 'SUSPENDED';
+    const dhBadge = dh ? `<div class="gchip-dh">DH·G${g.gameNumber||1}</div>` : '';
+    const chipClass = `gchip${live?' live':''}${inactive?' postponed':''}`;
+    const clickAttr = inactive
+      ? ''
+      : `onclick="selectGame(${g.gamePk},'${escAttr(g.awayAbbr)}','${escAttr(g.homeAbbr)}')"`;
+    return `<div class="${chipClass}" id="chip-${esc(String(g.gamePk||''))}" ${clickAttr} style="${inactive?'opacity:.55;cursor:default':''}">
       <div class="gchip-teams">${esc(g.awayAbbr||'')} @ ${esc(g.homeAbbr||'')}</div>
-      <div class="gchip-time">${g.gameTime||g.time||''}</div>
-      <div class="gchip-st ${live?'live':''}">${g.status||'SCHED'}</div>
+      <div class="gchip-time">${postponed?'PPD':cancelled?'CNCL':suspended?'SUSP':(g.gameTime||g.time||'')}</div>
+      ${dhBadge}
+      <div class="gchip-st ${live?'live':''} ${inactive?'postponed':''}">${statusLabel}</div>
     </div>`;
   }).join(''));
 }
@@ -949,6 +985,47 @@ async function checkLineupStatus(pk) {
   } catch(e) { console.warn('[lineup-poll]', e.message); }
 }
 
+// ── Parlay Handler ──
+function addToParlay(leg) {
+  try {
+    if (!leg || !leg.player || !leg.marketKey) throw new Error('Missing player or market');
+    let queue = [];
+    try { queue = JSON.parse(localStorage.getItem('pendingParlayLegs')) || []; } catch {}
+    if (!Array.isArray(queue)) queue = [];
+    // Prevent duplicate (same player, market, line, game)
+    if (!queue.some(l => l.player === leg.player && l.marketKey === leg.marketKey && String(l.line) === String(leg.line) && String(l.gamePk) === String(leg.gamePk))) {
+      queue.push({
+        player: leg.player,
+        marketKey: leg.marketKey,
+        line: leg.line,
+        team: leg.team || '',
+        opp: leg.opp || '',
+        recommendedSide: leg.recommendedSide || 'Over',
+        sideLabel: leg.sideLabel || leg.recommendedSide || 'Over',
+        source: 'props_board',
+        reason: 'Imported from Props Board',
+        gamePk: leg.gamePk || '',
+      });
+      localStorage.setItem('pendingParlayLegs', JSON.stringify(queue));
+    }
+    window.location.href = '/tracker';
+  } catch(e) {
+    alert('Failed to add to parlay: ' + e.message);
+  }
+}
+
+// ── Parlay button click delegation (data-* attributes, no inline scope variables) ──
+document.addEventListener('click', function(e) {
+  const btn = e.target.closest('.parlay-btn');
+  if (!btn) return;
+  addToParlay({
+    player:    btn.dataset.player    ?? '',
+    team:      btn.dataset.team      ?? '',
+    marketKey: btn.dataset.marketKey ?? '',
+    line:      btn.dataset.line      ?? '',
+    gamePk:    btn.dataset.gamePk    ?? '',
+  });
+});
 function startLineupPolling(pk) {
   // Immediate first check
   checkLineupStatus(pk);
@@ -1213,7 +1290,83 @@ function trendPillsForPitcher(playerId) {
   return `<div class="pp-trends"><div class="pp-trend-hd">L5 TREND</div><div class="pp-trend-row">${streakHtml}${pills}</div></div>`;
 }
 
-// ── Projections ───────────────────────────────────────────────────────────────
+
+// ── Major Market Odds Panel ──
+function renderMajorMarketsPanel(gameLines) {
+  const panel = gel('majorMarketsPanel');
+  if (!panel) return;
+  if (!gameLines || Object.keys(gameLines).length === 0) {
+    panel.style.display = 'none';
+    panel.innerHTML = '';
+    return;
+  }
+
+  const awayFull = gameLines.awayFull ?? 'Away';
+  const homeFull = gameLines.homeFull ?? 'Home';
+
+  // Moneyline: { away: {price, bookmaker}, home: {price, bookmaker} }
+  const renderMoneyline = () => {
+    const ml = gameLines.moneyline;
+    if (!ml) return '';
+    const awayPrice = ml.away?.price;
+    const homePrice = ml.home?.price;
+    if (awayPrice == null && homePrice == null) return '';
+    const away = awayPrice != null ? `<span style='color:var(--mu)'>${awayFull}:</span> <span style='color:var(--c);font-weight:700'>${awayPrice > 0 ? '+' : ''}${awayPrice}</span>` : '';
+    const home = homePrice != null ? `<span style='color:var(--mu)'>${homeFull}:</span> <span style='color:var(--c);font-weight:700'>${homePrice > 0 ? '+' : ''}${homePrice}</span>` : '';
+    return `<div style="margin-bottom:7px">
+      <span style="font-family:'Orbitron',monospace;font-size:.7rem;color:var(--c);letter-spacing:1.5px;min-width:80px;display:inline-block">Moneyline</span>
+      <span style='margin-right:18px'>${away}&nbsp;&nbsp;${home}</span>
+    </div>`;
+  };
+
+  // Total: { line, over_price, under_price, bookmaker }
+  const renderTotal = () => {
+    const tot = gameLines.total;
+    if (!tot) return '';
+    const line = tot.line ?? 'N/A';
+    const overPrice  = tot.over_price;
+    const underPrice = tot.under_price;
+    if (overPrice == null && underPrice == null) return '';
+    const over  = overPrice  != null ? `<span style='color:var(--g)'>O${line} ${overPrice  > 0 ? '+' : ''}${overPrice}</span>`  : '';
+    const under = underPrice != null ? `<span style='color:var(--r)'>U${line} ${underPrice > 0 ? '+' : ''}${underPrice}</span>` : '';
+    return `<div style="margin-bottom:7px">
+      <span style="font-family:'Orbitron',monospace;font-size:.7rem;color:var(--c);letter-spacing:1.5px;min-width:80px;display:inline-block">Total</span>
+      <span style='margin-right:18px'>${over}&nbsp;&nbsp;${under}</span>
+    </div>`;
+  };
+
+  // Spread: { away: {point, price, bookmaker}, home: {point, price, bookmaker} }
+  const renderSpread = () => {
+    const sp = gameLines.spread;
+    if (!sp) return '';
+    const awayPoint = sp.away?.point;
+    const awayPrice = sp.away?.price;
+    const homePoint = sp.home?.point;
+    const homePrice = sp.home?.price;
+    if (awayPoint == null && homePoint == null) return '';
+    const away = (awayPoint != null && awayPrice != null) ? `<span style='color:var(--mu)'>${awayFull}:</span> <span style='color:var(--c);font-weight:700'>${awayPoint > 0 ? '+' : ''}${awayPoint} (${awayPrice > 0 ? '+' : ''}${awayPrice})</span>` : '';
+    const home = (homePoint != null && homePrice != null) ? `<span style='color:var(--mu)'>${homeFull}:</span> <span style='color:var(--c);font-weight:700'>${homePoint > 0 ? '+' : ''}${homePoint} (${homePrice > 0 ? '+' : ''}${homePrice})</span>` : '';
+    return `<div style="margin-bottom:7px">
+      <span style="font-family:'Orbitron',monospace;font-size:.7rem;color:var(--c);letter-spacing:1.5px;min-width:80px;display:inline-block">Spread</span>
+      <span style='margin-right:18px'>${away}&nbsp;&nbsp;${home}</span>
+    </div>`;
+  };
+
+  const oddsRow = [renderMoneyline(), renderTotal(), renderSpread()].filter(Boolean).join('');
+  if (!oddsRow) {
+    panel.innerHTML = '<p style="color:var(--mu);padding:8px 0;font-size:.75rem">No projection data available</p>';
+    panel.style.display = '';
+    return;
+  }
+  panel.innerHTML = `
+    <div style="background:rgba(0,229,255,.07);border:1px solid var(--b);border-radius:12px;padding:13px 18px;display:flex;flex-direction:column;gap:2px">
+      <div style="font-family:'Orbitron',monospace;font-size:.68rem;letter-spacing:2px;color:var(--c);margin-bottom:4px">MAJOR MARKET ODDS</div>
+      ${oddsRow}
+    </div>
+  `;
+  panel.style.display = '';
+}
+
 async function loadProjections() {
   if (PROJ_DATA) { renderProj(PROJ_DATA); return; }
   gel('batterGrid').innerHTML  = loadHTML('LOADING BATTER PROJECTIONS…');
@@ -1224,11 +1377,16 @@ async function loadProjections() {
     PROJ_DATA = await r.json();
     if (!PROJ_DATA.success) throw new Error(PROJ_DATA.error || 'Failed');
     renderProj(PROJ_DATA);
-  } catch(e) { gel('batterGrid').innerHTML = errHTML(e.message); }
+    renderMajorMarketsPanel(PROJ_DATA.game_lines || {});
+  } catch(e) {
+    gel('batterGrid').innerHTML = errHTML(e.message);
+    renderMajorMarketsPanel({});
+  }
 }
 
 function renderProj(d) {
   renderInjuryBanner(d);
+  renderMajorMarketsPanel(d.game_lines || {});
   applyPFFilters();
   renderPitchers(d.pitchers || []);
   buildPropsPicksPanel(d);
@@ -1244,7 +1402,14 @@ function buildPropsPicksPanel(d) {
   if (!wrap || !el) return;
   const batters  = d.batters  || [];
   const pitchers = d.pitchers || [];
-  if (!batters.length && !pitchers.length) return;
+  if (!batters.length && !pitchers.length) {
+    // If the wrap is already visible (e.g. from a prior game selection), replace the
+    // spinner with a neutral message so it doesn't spin forever.
+    if (wrap && wrap.style.display !== 'none') {
+      el.innerHTML = '<div class="props-pr-empty">No top picks available for this selection.</div>';
+    }
+    return;
+  }
   wrap.style.display = '';
 
   const COMP_LABELS = {contact:'contact quality',power:'raw power',discipline:'plate discipline',platoon:'platoon edge',park:'park factor',weather:'weather',pitcher:'pitcher matchup',form:'recent form',bvp:'BvP history'};
@@ -2212,6 +2377,12 @@ function batterCard(b) {
     ${hrPanel}
     ${batxHtml}
     ${trnd}
+    <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px">
+      ${p.hits != null ? `<button class="save-btn parlay-btn" data-player="${esc(b.name)}" data-team="${esc(b.team||'')}" data-market-key="player_hits" data-line="${p.hits.toFixed(2)}" data-game-pk="${b.gamePk||''}">＋ H PARLAY</button>` : ''}
+      ${p.hr != null   ? `<button class="save-btn parlay-btn" data-player="${esc(b.name)}" data-team="${esc(b.team||'')}" data-market-key="player_home_runs" data-line="${p.hr.toFixed(2)}" data-game-pk="${b.gamePk||''}">＋ HR PARLAY</button>` : ''}
+      ${p.tb != null   ? `<button class="save-btn parlay-btn" data-player="${esc(b.name)}" data-team="${esc(b.team||'')}" data-market-key="player_total_bases" data-line="${p.tb.toFixed(2)}" data-game-pk="${b.gamePk||''}">＋ TB PARLAY</button>` : ''}
+      ${p.rbi != null  ? `<button class="save-btn parlay-btn" data-player="${esc(b.name)}" data-team="${esc(b.team||'')}" data-market-key="player_rbi" data-line="${p.rbi.toFixed(2)}" data-game-pk="${b.gamePk||''}">＋ RBI PARLAY</button>` : ''}
+    </div>
   </div>`;
 }
 
@@ -2299,6 +2470,9 @@ function pitcherPanel(p) {
       &nbsp;·&nbsp; Opp wOBA: <span>${p.opp_woba?Number(p.opp_woba).toFixed(3):'—'}</span>
     </div>
     ${pitchXPanel(p, pr)}
+    ${pr.k != null ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px">
+      ${[3.5, 4.5, 5.5, 6.5].map(line => `<button class="save-btn parlay-btn" data-player="${esc(p.name||'')}" data-team="${esc(p.team||'')}" data-market-key="pitcher_strikeouts" data-line="${line}" data-game-pk="${p.gamePk||''}">＋ K ${line}</button>`).join('')}
+    </div>` : ''}
     ${trnd}
   </div>`;
 }

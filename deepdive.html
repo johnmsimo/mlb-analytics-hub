@@ -899,6 +899,8 @@ function loadGame(){
 function loadPitchers(){
   fetch('/api/pitchers/'+GPK).then(function(r){return r.json();}).then(function(d){
     PD=d;renderPitchers();populateSels();
+    // Trigger HR picks render now that pitcher data is loaded
+    if(typeof renderHRPicksPanel==='function') setTimeout(renderHRPicksPanel,300);
     fetch('/api/pitcher-matchup/'+GPK).then(function(r){return r.json();}).then(function(md){
       PMD = md;
       if(md && md.success && PD && PD.success){
@@ -916,8 +918,15 @@ function loadPitchers(){
 }
 function loadLineups(){
   fetch('/api/game/'+GPK).then(function(r){return r.json();}).then(function(d){
+    if(d.isPostponed||d.isCancelled||d.isSuspended||d.isInactive){
+      var label = d.isPostponed?'Game Postponed':d.isCancelled?'Game Cancelled':'Game Suspended';
+      document.getElementById('luP').innerHTML='<p class="na">'+label+' — No lineup available.</p>';
+      return;
+    }
     if(d.success){AL=d.awayBatters||[];HL=d.homeBatters||[];}
     showTab('away');populateSels();
+    // Trigger HR picks render now that lineups are loaded
+    if(typeof renderHRPicksPanel==='function') setTimeout(renderHRPicksPanel,200);
   }).catch(function(){document.getElementById('luP').innerHTML='<p class="na">Lineup not yet posted. Check back ~3h before first pitch.</p>';});
 }
 
@@ -1260,7 +1269,9 @@ function showTab(side){
     if(hasSvSc)sc+='<td class="sv-c '+evc(p.sv_ev)+'">'+pv(p.sv_ev,'---')+'</td>'
       +'<td class="sv-c '+hhc(p.sv_hh_pct)+'">'+pv(p.sv_hh_pct,'---')+'</td>'
       +'<td class="sv-c '+brlc(p.sv_brl_pct)+'">'+pv(p.sv_brl_pct,'---')+'</td>';
-    return '<tr><td class="on">'+(i+1)+'</td><td>'+p.name+'</td><td><span class="pos-tag">'+p.pos+'</span></td>'
+    // Add to Parlay button
+    var addBtn = '<button class="parlay-btn" style="margin-left:8px;padding:2px 8px;font-size:.7rem;border-radius:6px;border:1px solid var(--c);background:rgba(0,229,255,.08);color:var(--c);cursor:pointer" onclick="addToParlay(\''+esc(p.name)+'\', \'player\', '+i+')">+ Parlay</button>';
+    return '<tr><td class="on">'+(i+1)+'</td><td>'+p.name+addBtn+'</td><td><span class="pos-tag">'+p.pos+'</span></td>'
       +'<td class="'+avc(p.avg)+'">'+pv(p.avg,'---')+'</td>'
       +'<td>'+pv(p.obp,'---')+'</td><td>'+pv(p.slg,'---')+'</td><td>'+pv(p.ops,'---')+'</td>'
       +'<td>'+p.ab+'</td><td>'+p.hr+'</td><td>'+p.rbi+'</td>'+fc+sc+'</tr>';
@@ -1271,6 +1282,24 @@ function showTab(side){
       +(hasFg?'<span style="color:var(--fg)">&#9889; Orange = FanGraphs (wOBA/wRC+/WAR)</span>':'')
       +(hasSvX||hasSvSc?'<span style="color:var(--sv)">&#127987;&#65039; Cyan = Baseball Savant (xStats/EV/HH%/Brl%)</span>':'')
       +'</div>':'');
+}
+
+// Add to Parlay handler — saves a pending leg to localStorage and navigates to tracker
+function addToParlay(playerName, type, idx) {
+  var leg = {
+    type: type,
+    name: playerName,
+    idx: idx,
+    source: 'deepdive',
+    ts: Date.now()
+  };
+  var pending = [];
+  try {
+    pending = JSON.parse(localStorage.getItem('pendingParlayLegs')||'[]');
+  } catch(e) {}
+  pending.push(leg);
+  localStorage.setItem('pendingParlayLegs', JSON.stringify(pending));
+  window.location.href = '/tracker';
 }
 
 loadTrackedKeys();
@@ -2285,10 +2314,11 @@ function loadPropsProjections(){
         if(ACTIVE_TAB==='proj') renderProjectionHub();
         // Refresh pitcher cards so PITCH X panels populate
         if(PD && PD.success) renderPitchers();
-        buildParlayRec();
       }
+      // Always clear the spinner regardless of success/failure
+      buildParlayRec();
     })
-    .catch(function(){}); // silent — BAT X panel will show placeholder
+    .catch(function(){ buildParlayRec(); }); // clear spinner on network error
 }
 
 function buildParlayRec(){
@@ -2679,7 +2709,7 @@ renderPropPanel = function(){
   var home = (SIM_DATA.playerProps && SIM_DATA.playerProps.home) ? SIM_DATA.playerProps.home.slice() : [];
   away.forEach(function(x){x.team=m.awayAbbr || 'AWAY';});
   home.forEach(function(x){x.team=m.homeAbbr || 'HOME';});
-  var rows = away.concat(home).sort(function(a,b){return (a.team+b.slot).localeCompare(b.team+a.slot);}).map(function(p){
+  var rows = away.concat(home).sort(function(a,b){return (a.team+a.slot).localeCompare(b.team+b.slot);}).map(function(p){
     return '<tr>'
       + '<td><span class="pos-tag">'+p.team+'</span></td>'
       + '<td style="font-size:.72rem">'+p.slot+'. '+p.name+'</td>'
@@ -3061,13 +3091,23 @@ function renderMarketPanel(){
   var edgeRows = edges.map(function(x){
     return '<tr><td>'+x.type+'</td><td>'+x.target+'</td><td>'+x.side+'</td><td>'+x.book+'</td><td>'+x.line+'</td><td>'+pct(x.model)+'</td><td>'+pct(x.implied)+'</td><td style="color:'+(x.edge>=0.03?'#60f6a9':'#f7d774')+'">'+pct(x.edge)+'</td></tr>';
   }).join('');
-  var ml = lines.moneyline || {}, tot = lines.total || {};
+  var ml = lines.moneyline || {}, tot = lines.total || {}, spd = lines.spread || {};
+  // Spread (run line) odds for both teams
+  var spreadStr = 'N/A';
+  if (spd && spd.away && spd.home) {
+    var awayStr = (spd.away.line != null && spd.away.price != null) ? (spd.away.line + ' ' + spd.away.price + ' @ ' + (spd.away.bookmaker||'')) : '';
+    var homeStr = (spd.home.line != null && spd.home.price != null) ? (spd.home.line + ' ' + spd.home.price + ' @ ' + (spd.home.bookmaker||'')) : '';
+    if (awayStr || homeStr) {
+      spreadStr = (m.awayAbbr||'AWAY')+': '+(awayStr||'N/A')+' &nbsp;|&nbsp; '+(m.homeAbbr||'HOME')+': '+(homeStr||'N/A');
+    }
+  }
   el.innerHTML = ''
     + '<div class="edge-grid">'
     + '<div class="edge-box"><div class="edge-k">LINEUP TRACKING</div><div class="edge-v">'+(m.awayAbbr||'AWAY')+' '+(l.awayConfirmed?'CONFIRMED':'PENDING')+' / '+(m.homeAbbr||'HOME')+' '+(l.homeConfirmed?'CONFIRMED':'PENDING')+'</div><div class="mc-note">Away lineup count: '+(l.awayCount||0)+' &nbsp;|&nbsp; Home lineup count: '+(l.homeCount||0)+' &nbsp;|&nbsp; Status: '+(l.status||'Scheduled')+'</div><div class="mc-note">Featured books: '+(m.bookmakersFeatured||0)+' &nbsp;|&nbsp; Prop books: '+(m.bookmakersProps||0)+' &nbsp;|&nbsp; Odds event found: '+(m.oddsEventFound?'YES':'NO')+'</div></div>'
     + '<div class="edge-box"><div class="edge-k">LIVE LINES</div>'
     + '<div class="mc-note">Moneyline — '+(m.awayAbbr||'AWAY')+': '+((ml.away&&ml.away.price!=null)?ml.away.price+' @ '+ml.away.bookmaker:'N/A')+' &nbsp;|&nbsp; '+(m.homeAbbr||'HOME')+': '+((ml.home&&ml.home.price!=null)?ml.home.price+' @ '+ml.home.bookmaker:'N/A')+'</div>'
-    + '<div class="mc-note">Total — '+((tot.line!=null)?tot.line+' O '+tot.over_price+' / U '+tot.under_price+' @ '+tot.bookmaker:'N/A')+'</div></div>'
+    + '<div class="mc-note">Total — '+((tot.line!=null)?tot.line+' O '+tot.over_price+' / U '+tot.under_price+' @ '+tot.bookmaker:'N/A')+'</div>'
+    + '<div class="mc-note">Spread — '+spreadStr+'</div>'
     + '</div>'
     + '<div class="edge-box"><div class="edge-k">TOP MODEL EDGES</div><table class="edge-table"><thead><tr><th>MARKET</th><th>TARGET</th><th>SIDE</th><th>BOOK</th><th>ODDS</th><th>MODEL</th><th>IMPLIED</th><th>EDGE</th></tr></thead><tbody>'
     + (edgeRows || '<tr><td colspan="8">No mapped edges yet. Odds may be unavailable or unmatched to current simulation outputs.</td></tr>')
@@ -5723,9 +5763,14 @@ function renderHRSim(){
 
 // ── TOP HR PICKS PANEL ───────────────────────────────────────────
 function scoreBatter(b, pitcher, gd, teamAbbr){
-  var iso    = parseFloat(b&&(b.iso||b.ISO))                                          || 0.15;
-  var barrel = parseFloat(b&&(b.barrelpct||b.barrelPct))                              || 6.0;
-  var ev     = parseFloat(b&&(b.avgev||b.avgEV||b.ev))                               || 87.0;
+  // ISO: prefer explicit field, then compute from SLG-AVG, then default
+  var slg = parseFloat(b&&(b.slg||b.fg_slg));
+  var avg = parseFloat(b&&(b.avg||b.fg_avg));
+  var iso = parseFloat(b&&(b.iso||b.ISO)) || ((!isNaN(slg)&&!isNaN(avg)) ? Math.max(0, slg-avg) : 0.15);
+  // Barrel%: sv_brl_pct is the Savant field name in batter objects
+  var barrel = parseFloat(b&&(b.barrelpct||b.barrelPct||b.sv_brl_pct)) || 6.0;
+  // Exit velo: sv_ev is the Savant field name in batter objects
+  var ev     = parseFloat(b&&(b.avgev||b.avgEV||b.ev||b.sv_ev))        || 87.0;
   var hr9    = parseFloat(pitcher&&pitcher.stats&&(pitcher.stats.hr9||pitcher.stats.hrper9)) || 1.2;
   var pf     = parseFloat((gd&&(gd.parkFactor||gd.park_factor)))                     || 1.0;
   var score  = Math.round((iso*80) + (barrel*3.5) + ((ev-85)*1.5) + (hr9*6) + ((pf-1)*30));
@@ -5766,7 +5811,7 @@ function renderHRPicksPanel(){
   el.innerHTML = h;
 }
 
-// Inject TOP HR PICKS panel into the DOM and auto-render after data loads
+// Inject TOP HR PICKS panel and poll until lineup + pitcher data are both ready.
 (function(){
   function injectHRPicksPanel(){
     if(document.getElementById('hrPicksPanel')) return;
@@ -5780,25 +5825,35 @@ function renderHRPicksPanel(){
       if(parlayWrap) dg.insertBefore(wrap, parlayWrap);
       else dg.appendChild(wrap);
     }
-    // Render immediately (spinner will show until data loads)
-    renderHRPicksPanel();
   }
 
-  // Wait for DOM then inject
+  // Poll until both lineup (AL/HL) and pitcher data (PD) are available, then render.
+  // Retries every 600ms for up to 15s so it always fires even on slow connections.
+  function pollAndRenderHRPicks(attemptsLeft){
+    var al = safeAL ? safeAL() : (Array.isArray(AL) ? AL : []);
+    var hl = safeHL ? safeHL() : (Array.isArray(HL) ? HL : []);
+    var pd = safePD ? safePD() : null;
+    if((al.length || hl.length) && pd){
+      renderHRPicksPanel();
+      return;
+    }
+    if(attemptsLeft > 0){
+      setTimeout(function(){ pollAndRenderHRPicks(attemptsLeft-1); }, 600);
+    } else {
+      // Give up and render with whatever data is available (may show partial or no picks).
+      renderHRPicksPanel();
+    }
+  }
+
+  function init(){
+    injectHRPicksPanel();
+    pollAndRenderHRPicks(25); // poll up to 25 × 600ms = 15s
+  }
+
   if(document.readyState==='loading'){
-    document.addEventListener('DOMContentLoaded', function(){ setTimeout(injectHRPicksPanel, 400); });
+    document.addEventListener('DOMContentLoaded', function(){ setTimeout(init, 100); });
   } else {
-    setTimeout(injectHRPicksPanel, 400);
-  }
-
-  // Re-render picks panel whenever game data reloads
-  var _origLoadGame = typeof loadGame==='function' ? loadGame : null;
-  if(_origLoadGame){
-    loadGame = function(){
-      var r = _origLoadGame.apply(this, arguments);
-      setTimeout(renderHRPicksPanel, 2500);
-      return r;
-    };
+    setTimeout(init, 100);
   }
 })();
 // ═══════════════════════════════════════════════════════════════

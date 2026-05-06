@@ -296,8 +296,8 @@ def sv_pitcher(name):
             ap = dict(_app._sv_arsenal_pct)
             av = dict(_app._sv_arsenal_velo)
         r = dict(_app._fuzzy_lookup(name, xs) or {})
-        r["sv_arsenal_pct"]  = _app._fuzzy_lookup(name, ap)
-        r["sv_arsenal_velo"] = _app._fuzzy_lookup(name, av)
+        r.update(_app._fuzzy_lookup(name, ap) or {})
+        r.update(_app._fuzzy_lookup(name, av) or {})
     except Exception:
         r = {}
     with _brain_overlay_lock:

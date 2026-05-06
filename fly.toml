@@ -9,6 +9,7 @@ primary_region = "ewr"
 [env]
   PORT = "8080"
   XGB_MODEL_DIR = "./models"
+  PYBASEBALL_CACHE = "1"
 
 [http_service]
   internal_port = 8080
@@ -18,21 +19,12 @@ primary_region = "ewr"
   min_machines_running = 1
   processes = ["app"]
 
-  # Concurrency limits prevent request pile-up from exhausting the thread
-  # pool. With 8 gunicorn threads, a soft limit of 6 lets Fly's load
-  # balancer route new requests elsewhere before all threads are consumed.
-  # Hard limit of 10 acts as the absolute ceiling before Fly queues/drops.
-  [http_service.concurrency]
-    type = "requests"
-    soft_limit = 6
-    hard_limit = 10
-
   [[http_service.checks]]
-    grace_period = "300s"
+    grace_period = "600s"
     interval = "30s"
     method = "GET"
     path = "/health"
-    timeout = "10s"
+    timeout = "30s"
 
 [[vm]]
   memory = "2gb"

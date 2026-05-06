@@ -304,6 +304,9 @@ function renderBatter(b, pStats, teamLogo) {
   const book = !hasSignal ? '—' : pf>57?'DraftKings':pf>50?'FanDuel':'Kalshi';
   const why = whyNote(b, pStats);
 
+    // + Parlay button for actionable prop (HR line)
+    const parlayBtn = hasSignal ? `<button class=\"save-btn parlay-btn\" style=\"margin-left:8px\" onclick=\"addToParlay({player:'${esc(b.name||b.fullName)}',team:'${esc(b.team||'')}',marketKey:'player_home_runs',line:'0.5',gamePk:GPK})\">＋ PARLAY</button>` : '';
+
   return `
     <div class="bp">
       <img class="bp-logo" src="${teamLogo||''}" alt="" loading="lazy" width="24" height="24" onerror="this.style.visibility='hidden'">
@@ -312,6 +315,7 @@ function renderBatter(b, pStats, teamLogo) {
         <span class="pf-tag ${pfCls(pf)}">PF ${pf.toFixed(1)}</span>
         <span class="bh-tag ${hand}">${hand}HB</span>
         <span class="bp-line">o0.5 HR</span>
+          ${parlayBtn}
       </div>
       <div class="bp-odds">
         <div class="bp-o">${odds}</div>
@@ -457,11 +461,28 @@ async function load(silent) {
         const hasSignal = num(b.sv_xwoba)!==null || num(b.fg_woba)!==null || num(b.fg_iso)!==null;
         const odds = hasSignal ? ('+' + Math.round(Math.max(250, 2500 - b._pf * 28))) : '—';
         const book = !hasSignal ? 'N/A' : b._pf>57?'DraftKings':b._pf>50?'FanDuel':'Kalshi';
-        html += `<div class="tpc">
-          <div><span class="tpr ${i===0?'g':''}">${i+1}</span><span class="tpn">${esc(b.name||b.fullName||'—')}${i===0?' ⭐':''}</span></div>
-          <div class="tpm">${hand}HB · PF ${b._pf.toFixed(1)}</div>
-          <div class="tpods">${odds} @ ${book}</div>
+        html += `<div class=\"tpc\">
+          <div><span class=\"tpr ${i===0?'g':''}\">${i+1}</span><span class=\"tpn\">${esc(b.name||b.fullName||'—')}${i===0?' ⭐':''}</span></div>
+          <div class=\"tpm\">${hand}HB · PF ${b._pf.toFixed(1)}</div>
+          <div class=\"tpods\">${odds} @ ${book}</div>
+          ${hasSignal ? `<button class='save-btn parlay-btn' style='margin-top:6px' onclick=\"addToParlay({player:'${esc(b.name||b.fullName)}',team:'${esc(b.team||'')}',marketKey:'player_home_runs',line:'0.5',gamePk:GPK})\">＋ PARLAY</button>` : ''}
         </div>`;
+      // --- Unified Parlay Handler ---
+      function addToParlay(leg) {
+        try {
+          let legs = [];
+          try { legs = JSON.parse(localStorage.getItem('pendingParlayLegs')) || []; } catch {}
+          legs.push({
+            ...leg,
+            savedAt: Date.now(),
+            source: leg.source || 'gameside_deepdive',
+          });
+          localStorage.setItem('pendingParlayLegs', JSON.stringify(legs));
+          window.location.href = '/tracker';
+        } catch(e) {
+          alert('Failed to add to parlay: ' + e.message);
+        }
+      }
       });
       html += '</div>';
     }

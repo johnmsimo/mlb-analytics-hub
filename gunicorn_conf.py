@@ -6,16 +6,12 @@ Key goals:
     - 1 worker  ->  caches live in a single process, no 2x RAM duplication
     - preload_app=False  -> avoids daemon thread fork-death on gunicorn master
   • Never get SIGKILL'd mid-cache-build
-    - 120s request timeout — enough for heavy projections without freezing
-      Fly's watchdog (which checks /health every 30s with a 10s timeout)
+    - 120s request timeout (reduced from 600s — 600s caused the worker to
+      appear frozen to Fly's watchdog, triggering health check failures)
     - 30s graceful shutdown (faster recovery if worker does need to restart)
   • Better latency for I/O-bound MLB API calls under load
-    - gthread worker class with 8 threads (was 4)
-      ROOT CAUSE FIX: with only 4 threads, /api/props/projections (~2s) +
-      3 other parallel requests consumed ALL threads simultaneously, leaving
-      zero threads to respond to Fly.io's /health check → servicecheck
-      failure → [PR04] load balancer crash loop.
-      8 threads gives the health check guaranteed headroom even under burst.
+    - gthread worker class with 4 threads -> serves 4 concurrent requests
+      while the sync loaders run in background daemon threads
   • No boot-storm
     - max_requests disabled (we DO NOT want to recycle and re-load caches)
   • auto_stop_machines=false in fly.toml keeps machine alive so caches
@@ -32,21 +28,16 @@ workers = 1
 
 # Threaded worker so the caches (loaded by background daemon threads)
 # don't block request handling.
+# 6 threads: enough headroom so health checks always get a free thread
+# even when several slow API requests (Monte Carlo, Savant fetches, etc.)
+# are concurrently occupying others.
 worker_class = "gthread"
+threads = 6
 
-# 8 threads (was 4). Key fix for the health check starvation bug:
-# heavy endpoints like /api/props/projections hold a thread for ~2s;
-# with 4 threads and a busy dashboard firing parallel requests, all
-# threads could be consumed before Fly's health check gets one.
-# 8 threads ensures /health always has a free thread to respond.
-threads = 8
-
-# Max simultaneous connections this worker will accept. Gives the OS-level
-# accept queue enough room during request bursts.
-worker_connections = 100
-
-# 120s ceiling for any single request — safe for sims without making
-# Fly's watchdog think the process is frozen.
+# Reduced from 600s. With gthread, a 600s timeout means Gunicorn waits
+# 10 minutes before declaring the worker dead — but Fly.io's watchdog
+# marks the machine unhealthy long before that. 120s is a safe ceiling
+# for any single request while still allowing fast recovery on hangs.
 timeout = 120
 graceful_timeout = 30
 
@@ -58,9 +49,9 @@ graceful_timeout = 30
 # empty stats. With workers=1 preload is also meaningless.
 preload_app = False
 
-# Release idle keep-alive connections a bit faster than before (15s → 10s)
-# so stale connections don't occupy thread slots unnecessarily.
-keepalive = 10
+# Keep connections open a bit longer than the default (2s) so the CDN
+# can reuse them for dashboards that fire many parallel /api/* calls.
+keepalive = 15
 
 # Do NOT recycle workers based on request count — recycling triggers a
 # full pybaseball/Savant re-load which blows the memory/time budget.
