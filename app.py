@@ -11386,238 +11386,233 @@ def _compute_cheatsheets_today(date_str):
         s = str(status or 'neutral').lower()
         return {'favorable': 0.85, 'neutral': 0.50, 'unfavorable': 0.20}.get(s, 0.50)
 
-    def processgame(g):
-    localhits, localmatchups, localweakspots = [], [], []
-    gpk = g.get("gamePk")
+    def _weakspot_card(p_name, p_id, p_team, opp_bats, p_fg, p_sv, p_hand, matchup, matchup_key,
+                       gpk, is_dh, game_number, game_time_sort='9999', game_time_display=''):
+        raw_pitcher_name = (p_name or '').strip()
+        is_tbd_pitcher = not raw_pitcher_name or raw_pitcher_name == 'TBD'
+        p_display_name = raw_pitcher_name or 'TBD'
+        p_fg = p_fg or {}
+        p_sv = p_sv or {}
 
-    try:
-        gdata, awaybats, homebats, awayt, homet, pitchers = propsfetchgame(gpk, gdataoverride=g)
-        if not gdata:
-            print(f"[CHEATSHEET] game={gpk} stage=propsfetchgame-empty")
-            return localhits, localmatchups, localweakspots
-    except Exception as ex:
-        print(f"[CHEATSHEET] game={gpk} stage=propsfetchgame error={ex}")
-        print(traceback.format_exc())
-        return localhits, localmatchups, localweakspots
-
-    awayteam = awayt.get("team", {}) if isinstance(awayt, dict) else {}
-    hometeam = homet.get("team", {}) if isinstance(homet, dict) else {}
-
-    awayabbr = awayteam.get("abbreviation", "AWAY")
-    homeabbr = hometeam.get("abbreviation", "HOME")
-    awaytid = awayteam.get("id")
-    hometid = hometeam.get("id")
-
-    dh = str(g.get("doubleHeader") or "N").upper()
-    gn = int(g.get("gameNumber") or 1)
-    isdh = dh == "Y"
-
-    matchup = f"{awayabbr} @ {homeabbr}"
-    matchupkey = f"{awayabbr}-{homeabbr}-{gpk}"
-
-    rawgamedt = g.get("gameDate", "")
-    try:
-        dtutc = datetime.fromisoformat(rawgamedt.replace("Z", "+00:00"))
-        gametimesort = dtutc.astimezone(ET).strftime("%H%M")
-        gametimedisplay = dtutc.astimezone(ET).strftime("%-I:%M %p ET")
-    except Exception:
-        gametimesort = "9999"
-        gametimedisplay = ""
-
-    park = PARKFACTORS.get(hometid, 1.0)
-
-    ap = (pitchers or {}).get("ap") or {}
-    hp = (pitchers or {}).get("hp") or {}
-
-    apname = ap.get("fullName", "TBD")
-    hpname = hp.get("fullName", "TBD")
-    apid = ap.get("id")
-    hpid = hp.get("id")
-
-    apfg = fgpitcher(apname)
-    hpfg = fgpitcher(hpname)
-    apsv = svpitcher(apname)
-    hpsv = svpitcher(hpname)
-
-    apst = pitcherstatsmlb(apid) if apid else {}
-    hpst = pitcherstatsmlb(hpid) if hpid else {}
-
-    aphand = apst.get("pitchHand") or "R"
-    hphand = hpst.get("pitchHand") or "R"
-
-    try:
-        def siderows(batters, teamabbr, oppname, oppid, opphand, oppfg, oppsv):
-            rows = []
-            for b in (batters or [])[:9]:
-                name = b.get("name")
-                pid = b.get("id")
-                if not name:
+        opp_scores = []
+        if not is_tbd_pitcher:
+            for b in (opp_bats or [])[:9]:
+                try:
+                    sc = _matchup_score(b, p_fg, p_sv, pitcher_hand=p_hand)
+                    opp_scores.append({'slot': b.get('slot', 0), 'score': sc.get('score', 50), 'batter': b})
+                except Exception:
                     continue
+            opp_scores.sort(key=lambda x: x.get('score', 0), reverse=True)
 
-                score = matchupscore(b, oppfg, oppsv, pitcherhand=opphand)
-                l10pct = l10hitpctforplayer(pid, l10memo)
-                bvpdata = fetchbvp(pid, oppid) if pid and oppid else None
-                bvpgrade = computebvpgrade(bvpdata)
-                pitchadv = pitchtypeadvantage(pid, oppid, battername=name, pitchername=oppname) if pid and oppid else {"status": "neutral"}
-                matchupgrade = cheatsheetmatchupgrade(
-                    score.get("tier"),
-                    pitchadv=pitchadv,
-                    bvpgrade=bvpgrade,
-                    bvppa=(bvpdata or {}).get("pa")
-                )
+        top_slots = sorted([x.get('slot') for x in opp_scores[:3] if x.get('slot')])
+        weak_slots = ', '.join(str(x) for x in top_slots) if top_slots else ('pending' if is_tbd_pitcher else 'n/a')
 
-                splitops = platoonblendv2(b, opphand, opsonly=True)
-                splitscore = max(0.0, min(1.0, (splitops - 0.550) / 0.350))
-                parkscore = max(0.0, min(1.0, (park - 0.90) / 0.25))
-                l10score = l10pct if l10pct is not None else 0.50
-                comp = (
-                    bvppoints(bvpgrade) * 0.30
-                    + l10score * 0.25
-                    + splitscore * 0.20
-                    + parkscore * 0.15
-                    + pitchadvpoints((pitchadv or {}).get("status")) * 0.10
-                )
-                comppct = round(comp * 100.0, 1)
-                modelprob = max(0.01, min(0.99, score.get("score", 50) / 100.0))
-                edge = modelprob - 0.50
-                hub = hubrating(modelprob, edge, l10score)
-                evpct = round(edge * 100.0, 1)
-
-                rows.append({
-                    "gamePk": gpk,
-                    "matchup": matchup,
-                    "player": name,
-                    "playerId": pid,
-                    "team": teamabbr,
-                    "slot": b.get("slot"),
-                    "marketKey": "batterhits",
-                    "line": 0.5,
-                    "vsHand": opphand,
-                    "oppPitcher": oppname,
-                    "l10Pct": l10pct,
-                    "bvpGrade": bvpgrade,
-                    "matchupGrade": matchupgrade,
-                    "hubRating": hub,
-                    "evPct": evpct,
-                    "matchupScore": score.get("score"),
-                    "composite": comppct,
-                })
-            return rows
-
-        awayrows = siderows(awaybats, awayabbr, hpname, hpid, hphand, hpfg, hpsv)
-        homerows = siderows(homebats, homeabbr, apname, apid, aphand, apfg, apsv)
-
-        localhits.extend(awayrows)
-        localhits.extend(homerows)
-
-        ranked = sorted(awayrows + homerows, key=lambda x: x.get("composite") or 0, reverse=True)
-        for i, row in enumerate(ranked, start=1):
-            localmatchups.append({
-                "gamePk": row.get("gamePk"),
-                "matchup": row.get("matchup"),
-                "rank": i,
-                "player": row.get("player"),
-                "team": row.get("team"),
-                "slot": row.get("slot"),
-                "matchupScore": row.get("composite"),
-                "bvpGrade": row.get("bvpGrade"),
-                "matchupGrade": row.get("matchupGrade"),
-                "l10Pct": row.get("l10Pct"),
-                "hubRating": row.get("hubRating"),
+        top_batters = []
+        for entry in opp_scores[:3]:
+            b = entry.get('batter', {})
+            b_name = b.get('name', '')
+            b_fg = fg_batter(b_name) or {}
+            top_batters.append({
+                'name': b_name,
+                'slot': entry.get('slot', 0),
+                'score': round(entry.get('score', 50), 1),
+                'avg': b_fg.get('fg_avg', b.get('avg', '')),
             })
-    except Exception as ex:
-        print(f"[CHEATSHEET] game={gpk} stage=hits-matchups error={ex}")
-        print(traceback.format_exc())
 
-    def weakspotcard_safe(pname, pid, pteam, oppbats, pfg, psv, phand):
-        try:
-            return weakspotcard(
-                pname, pid, pteam, oppbats, pfg, psv, phand,
-                gametimesort, gametimedisplay
-            )
-        except Exception as ex:
-            print(f"[CHEATSHEET] game={gpk} stage=weakspotcard team={pteam} pitcher={pname} error={ex}")
-            print(traceback.format_exc())
+        if is_tbd_pitcher:
+            pitch_vuln = 'Awaiting probable pitcher'
+            form_label = 'PENDING PROBABLE'
+            recent = {}
+        else:
+            with _sv_lock:
+                name_key = _sv_key(p_display_name) if p_display_name else ''
+                arsenal = dict(_sv_arsenal_pct.get(name_key, {}) or {})
+                if not arsenal and name_key:
+                    match_name = difflib.get_close_matches(name_key, _sv_arsenal_pct.keys(), n=1, cutoff=0.72)
+                    if match_name:
+                        arsenal = dict(_sv_arsenal_pct.get(match_name[0], {}) or {})
+            primary_pitch, primary_pct = ('Unknown', 0)
+            if arsenal:
+                primary_pitch, primary_pct = max(arsenal.items(), key=lambda kv: kv[1])
+            pitch_label = PITCH_LABELS.get(primary_pitch, primary_pitch)
+            pitch_vuln = f"{pitch_label} ({round(float(primary_pct or 0), 1)}% usage)"
 
-            rawpitchername = (pname or "").strip()
-            istbdpitcher = not rawpitchername or rawpitchername == "TBD"
-            pdisplayname = rawpitchername or "TBD"
-
-            fallback_scores = []
-            if not istbdpitcher:
-                for b in (oppbats or [])[:9]:
-                    try:
-                        sc = matchupscore(b, pfg or {}, psv or {}, pitcherhand=phand)
-                        fallback_scores.append({
-                            "slot": b.get("slot", 0),
-                            "score": sc.get("score", 50),
-                            "batter": b
-                        })
-                    except Exception:
-                        continue
-                fallback_scores.sort(key=lambda x: x.get("score", 0), reverse=True)
-
-            topslots = [x.get("slot") for x in fallback_scores[:3] if x.get("slot")]
-            weakslots = ", ".join(str(x) for x in topslots) if topslots else ("pending" if istbdpitcher else "na")
-
-            topbatters = []
-            for entry in fallback_scores[:3]:
-                b = entry.get("batter") or {}
-                bname = b.get("name", "-")
-                bfg = fgbatter(bname) or {}
-                topbatters.append({
-                    "name": bname,
-                    "slot": entry.get("slot", 0),
-                    "score": round(entry.get("score", 50), 1),
-                    "avg": bfg.get("fgavg", b.get("avg", "---")),
-                    "woba": bfg.get("fgwoba", "---"),
-                })
-
-            if istbdpitcher:
-                pitchvuln = "Awaiting probable pitcher"
-                formlabel = "PENDING PROBABLE"
-                rec = "Wait for the listed starter before attacking this game"
+            recent = _pitcher_recent_form(p_id) if p_id else {}
+            season_era = _safe_f((pitcher_stats_mlb(p_id) or {}).get('era'), 4.20) if p_id else 4.20
+            recent_era = _safe_f((recent or {}).get('era_recent'), season_era)
+            if recent and recent_era <= max(2.70, season_era - 0.4):
+                form_label = f"DEALING ({recent_era:.2f} ERA last {recent.get('n_starts', 0)} starts)"
+            elif recent and recent_era >= min(6.50, season_era + 0.5):
+                form_label = f"STRUGGLING ({recent_era:.2f} ERA last {recent.get('n_starts', 0)} starts)"
             else:
-                pitchvuln = "Data fallback"
-                seasonera = safef((pitcherstatsmlb(pid) or {}).get("era"), 4.20) if pid else 4.20
-                if seasonera <= 3.30:
-                    formlabel = f"DEALING ({seasonera:.2f} ERA season fallback)"
-                elif seasonera >= 5.25:
-                    formlabel = f"STRUGGLING ({seasonera:.2f} ERA season fallback)"
-                else:
-                    formlabel = f"STABLE ({seasonera:.2f} ERA season fallback)"
-                rec = "Play selectively by lineup slot and price"
+                era_src = 'recent' if recent else 'season'
+                form_label = f"STABLE ({recent_era:.2f} ERA {era_src})"
 
-            return {
-                "pitcherName": pdisplayname,
-                "pitcherId": pid,
-                "team": pteam,
-                "weakSlots": weakslots,
-                "topBatters": topbatters,
-                "pitchVulnerability": pitchvuln,
-                "formLabel": formlabel,
-                "recommendation": rec,
-                "matchup": matchup,
-                "matchupKey": matchupkey,
-                "gamePk": gpk,
-                "isDoubleHeader": isdh,
-                "gameNumber": gn,
-                "gameTimeSort": gametimesort,
-                "gameTime": gametimedisplay,
-                "kProp": None,
-                "parlayReasoning": "Fallback weakspot card rendered because one or more pitcher data sources failed.",
-            }
+        k_prop_display = None
+        if not is_tbd_pitcher:
+            try:
+                p_fg_k = fg_pitcher(p_display_name) or {}
+                k9_season = _safe_f(p_fg_k.get('fg_k9'), 0.0)
+                k9_recent = _safe_f((recent or {}).get('k9_recent'), k9_season)
+                k9_blended = round(0.6 * k9_season + 0.4 * k9_recent, 1) if k9_recent else round(k9_season, 1)
+                xfip = _safe_f(p_fg_k.get('fg_xfip') or p_fg_k.get('fg_fip'), 4.0)
+                total_ip = _safe_f(p_fg_k.get('fg_ip'), 0.0)
+                total_gs = _safe_f(p_fg_k.get('fg_gs') or p_fg_k.get('fg_g'), 1.0)
+                k_per_start = round(k9_season * (total_ip / max(1.0, total_gs)) / 9.0, 1) if total_ip > 0 else 0.0
+                if k9_blended >= 7.5:
+                    k_line = 4.5 if k9_blended < 8.5 else 5.5
+                    k_prop_display = {
+                        'line': k_line,
+                        'k9Blended': k9_blended,
+                        'xfip': round(xfip, 2),
+                        'kStartRecent': k_per_start,
+                    }
+            except Exception:
+                pass
 
-    c1 = weakspotcard_safe(apname, apid, awayabbr, homebats, apfg, apsv, aphand)
-    c2 = weakspotcard_safe(hpname, hpid, homeabbr, awaybats, hpfg, hpsv, hphand)
+        avg_top_score = sum(x.get('score', 50) for x in opp_scores[:4]) / max(1, len(opp_scores[:4]))
+        if is_tbd_pitcher:
+            rec = 'Wait for the listed starter before attacking this game'
+        elif 'STRUGGLING' in form_label:
+            rec = 'Target top-order hits/TB overs'
+        elif 'DEALING' in form_label:
+            rec = 'Play selectively by lineup slot and price'
+        elif avg_top_score >= 62:
+            rec = 'Target top-order hits/TB overs'
+        elif avg_top_score <= 44:
+            rec = 'Consider fading opposing batter overs'
+        else:
+            rec = 'Play selectively by lineup slot and price'
 
-    if c1:
-        localweakspots.append(c1)
-    if c2:
-        localweakspots.append(c2)
+        return {
+            'pitcherName': p_display_name,
+            'pitcherId': p_id,
+            'team': p_team,
+            'weakSlots': weak_slots,
+            'topBatters': top_batters,
+            'pitchVulnerability': pitch_vuln,
+            'formLabel': form_label,
+            'recommendation': rec,
+            'matchup': matchup,
+            'matchupKey': matchup_key,
+            'gamePk': gpk,
+            'isDoubleHeader': is_dh,
+            'gameNumber': game_number,
+            'gameTimeSort': game_time_sort,
+            'gameTime': game_time_display,
+            'kProp': k_prop_display,
+        }
 
-    print(f"[CHEATSHEET] game={gpk} complete weakspots={len(localweakspots)} hits={len(localhits)} matchups={len(localmatchups)}")
-    return localhits, localmatchups, localweakspots
+    def _process_game(g):
+        local_hits, local_matchups, local_weakspots = [], [], []
+        gpk = g.get('gamePk')
+
+        try:
+            gdata, away_bats, home_bats, away_t, home_t, pitchers = _props_fetch_game(
+                gpk, date_hint=date_str, gdata_override=g
+            )
+            if not gdata:
+                return local_hits, local_matchups, local_weakspots
+
+            away_team = away_t.get('team', {}) if isinstance(away_t, dict) else {}
+            home_team = home_t.get('team', {}) if isinstance(home_t, dict) else {}
+            away_abbr = away_team.get('abbreviation', 'AWAY')
+            home_abbr = home_team.get('abbreviation', 'HOME')
+            home_tid = home_team.get('id')
+
+            is_dh = str(g.get('doubleHeader') or 'N').upper() == 'Y'
+            game_number = int(g.get('gameNumber') or 1)
+            matchup = f"{away_abbr} @ {home_abbr}"
+            matchup_key = f"{away_abbr}-{home_abbr}-{gpk}"
+
+            raw_game_dt = g.get('gameDate', '')
+            try:
+                dt_utc = datetime.fromisoformat(raw_game_dt.replace('Z', '+00:00'))
+                game_time_sort = dt_utc.astimezone(ET).strftime('%H%M')
+                game_time_display = dt_utc.astimezone(ET).strftime('%-I:%M %p ET')
+            except Exception:
+                game_time_sort = '9999'
+                game_time_display = ''
+
+            park = PARK_FACTORS.get(home_tid, 1.0)
+
+            ap = (pitchers or {}).get('ap') or {}
+            hp = (pitchers or {}).get('hp') or {}
+            ap_name = ap.get('fullName', 'TBD')
+            hp_name = hp.get('fullName', 'TBD')
+            ap_id = ap.get('id')
+            hp_id = hp.get('id')
+
+            ap_fg = fg_pitcher(ap_name) or {}
+            hp_fg = fg_pitcher(hp_name) or {}
+            ap_sv = sv_pitcher(ap_name) or {}
+            hp_sv = sv_pitcher(hp_name) or {}
+
+            ap_stats = pitcher_stats_mlb(ap_id) if ap_id else {}
+            hp_stats = pitcher_stats_mlb(hp_id) if hp_id else {}
+            ap_hand = ap_stats.get('pitchHand') or 'R'
+            hp_hand = hp_stats.get('pitchHand') or 'R'
+
+            def _side_rows(batters, team_abbr, opp_name, opp_id, opp_hand, opp_fg, opp_sv):
+                rows = []
+                for b in (batters or [])[:9]:
+                    name = b.get('name')
+                    pid = b.get('id')
+                    if not name:
+                        continue
+
+                    score = _matchup_score(b, opp_fg, opp_sv, pitcher_hand=opp_hand)
+                    l10_pct = _l10_hit_pct_for_player(pid, l10_memo)
+                    bvp_data = _fetch_bvp(pid, opp_id) if pid and opp_id else None
+                    bvp_grade = _compute_bvp_grade(bvp_data) if bvp_data else 'D'
+                    matchup_grade = _cheatsheet_matchup_grade(
+                        score.get('tier'),
+                        pitch_adv={'status': 'neutral'},
+                        bvp_grade=bvp_grade,
+                        bvp_pa=(bvp_data or {}).get('pa', 0),
+                    )
+
+                    split_ops = platoon_blend_v2(b, opp_hand, 'ops')
+                    split_score = max(0.0, min(1.0, (split_ops - 0.550) / 0.350))
+                    park_score = max(0.0, min(1.0, (park - 0.90) / 0.25))
+                    l10_score = l10_pct if l10_pct is not None else 0.50
+                    comp = (
+                        _bvp_points(bvp_grade) * 0.30
+                        + l10_score * 0.25
+                        + split_score * 0.20
+                        + park_score * 0.15
+                        + _pitch_adv_points('neutral') * 0.10
+                    )
+                    comp_pct = round(comp * 100.0, 1)
+                    model_prob = max(0.01, min(0.99, (score.get('score') or 50) / 100.0))
+                    edge = model_prob - 0.50
+                    hub = _hub_rating(model_prob, edge, l10_score)
+
+                    rows.append({
+                        'gamePk': gpk,
+                        'matchup': matchup,
+                        'player': name,
+                        'playerId': pid,
+                        'team': team_abbr,
+                        'slot': b.get('slot'),
+                        'marketKey': 'batterhits',
+                        'line': 0.5,
+                        'vsHand': opp_hand,
+                        'oppPitcher': opp_name,
+                        'l10Pct': l10_pct,
+                        'bvpGrade': bvp_grade,
+                        'matchupGrade': matchup_grade,
+                        'hubRating': hub,
+                        'evPct': round(edge * 100.0, 1),
+                        'matchupScore': score.get('score'),
+                        'composite': comp_pct,
+                    })
+                return rows
+
+            away_rows = _side_rows(away_bats, away_abbr, hp_name, hp_id, hp_hand, hp_fg, hp_sv)
+            home_rows = _side_rows(home_bats, home_abbr, ap_name, ap_id, ap_hand, ap_fg, ap_sv)
+            local_hits.extend(away_rows)
+            local_hits.extend(home_rows)
 
             ranked = sorted(away_rows + home_rows, key=lambda x: (x.get('composite') or 0), reverse=True)
             for i, row in enumerate(ranked, start=1):
@@ -11635,131 +11630,21 @@ def _compute_cheatsheets_today(date_str):
                     'hubRating': row.get('hubRating'),
                 })
 
-            def _weakspot_card(p_name, p_id, p_team, opp_bats, p_fg, p_sv, p_hand,
-                                 game_time_sort='9999', game_time_display=''):
-                raw_pitcher_name = (p_name or '').strip()
-                is_tbd_pitcher = not raw_pitcher_name or raw_pitcher_name == 'TBD'
-                p_display_name = raw_pitcher_name or 'TBD'
-                p_fg = p_fg or {}
-                p_sv = p_sv or {}
-                opp_scores = []
-                if not is_tbd_pitcher:
-                    for b in (opp_bats or [])[:9]:
-                        sc = _matchup_score(b, p_fg, p_sv, pitcher_hand=p_hand)
-                        opp_scores.append({'slot': b.get('slot', 0), 'score': sc.get('score', 50), 'batter': b})
-                    opp_scores.sort(key=lambda x: x.get('score', 0), reverse=True)
-                top_slots = sorted([x.get('slot') for x in opp_scores[:3] if x.get('slot')])
-                weak_slots = ', '.join(str(x) for x in top_slots) if top_slots else ('pending' if is_tbd_pitcher else 'n/a')
-
-                # Build top 3 batter targets with name, slot, score, avg
-                top_batters = []
-                for entry in opp_scores[:3]:
-                    b = entry.get('batter', {})
-                    b_name = b.get('name', '')
-                    b_fg = fg_batter(b_name) or {}
-                    top_batters.append({
-                        'name': b_name,
-                        'slot': entry.get('slot', 0),
-                        'score': round(entry.get('score', 50), 1),
-                        'avg': b_fg.get('fg_avg', b.get('avg', '')),
-                    })
-
-                # Arsenal lookup with fuzzy fallback (fixes 'Unknown (0.0% usage)')
-                if is_tbd_pitcher:
-                    pitch_vuln = 'Awaiting probable pitcher'
-                    form_label = 'PENDING PROBABLE'
-                    recent = {}
-                else:
-                    with _sv_lock:
-                        _name_key = _sv_key(p_display_name) if p_display_name else ""
-                        arsenal = dict(_sv_arsenal_pct.get(_name_key, {}) or {})
-                        if not arsenal and _name_key:
-                            _match = difflib.get_close_matches(_name_key, _sv_arsenal_pct.keys(), n=1, cutoff=0.72)
-                            if _match:
-                                arsenal = dict(_sv_arsenal_pct.get(_match[0], {}) or {})
-                    primary_pitch, primary_pct = ('Unknown', 0)
-                    if arsenal:
-                        primary_pitch, primary_pct = max(arsenal.items(), key=lambda kv: kv[1])
-                    pitch_label = PITCH_LABELS.get(primary_pitch, primary_pitch)
-                    pitch_vuln = f"{pitch_label} ({round(float(primary_pct or 0), 1)}% usage)"
-
-                    recent = _pitcher_recent_form(p_id) if p_id else {}
-                    season_era = _safe_f((pitcher_stats_mlb(p_id) or {}).get('era'), 4.20) if p_id else 4.20
-                    recent_era = _safe_f(recent.get('era_recent'), season_era)
-                    if recent and recent_era <= max(2.70, season_era - 0.4):
-                        form_label = f"DEALING ({recent_era:.2f} ERA last {recent.get('n_starts', 0)} starts)"
-                    elif recent and recent_era >= min(6.50, season_era + 0.5):
-                        form_label = f"STRUGGLING ({recent_era:.2f} ERA last {recent.get('n_starts', 0)} starts)"
-                    else:
-                        era_src = "recent" if recent else "season"
-                        form_label = f"STABLE ({recent_era:.2f} ERA {era_src})"
-
-                # K prop display block
-                k_prop_display = None
-                if not is_tbd_pitcher:
-                    try:
-                        p_fg_k = fg_pitcher(p_display_name) or {}
-                        k9_season = _safe_f(p_fg_k.get('fg_k9'), 0.0)
-                        k9_recent = _safe_f((recent or {}).get('k9_recent'), k9_season)
-                        k9_blended = round(0.6 * k9_season + 0.4 * k9_recent, 1) if k9_recent else round(k9_season, 1)
-                        xfip = _safe_f(p_fg_k.get('fg_xfip') or p_fg_k.get('fg_fip'), 4.0)
-                        total_ip = _safe_f(p_fg_k.get('fg_ip'), 0.0)
-                        total_gs = _safe_f(p_fg_k.get('fg_gs') or p_fg_k.get('fg_g'), 1.0)
-                        k_per_start = round(k9_season * (total_ip / max(1.0, total_gs)) / 9.0, 1) if total_ip > 0 else 0.0
-                        if k9_blended >= 7.5:
-                            k_line = 4.5 if k9_blended < 8.5 else 5.5
-                            k_prop_display = {
-                                'line': k_line,
-                                'k9Blended': k9_blended,
-                                'xfip': round(xfip, 2),
-                                'kStartRecent': k_per_start,
-                            }
-                    except Exception:
-                        pass
-
-                avg_top_score = sum(x.get('score', 50) for x in opp_scores[:4]) / max(1, len(opp_scores[:4]))
-                if is_tbd_pitcher:
-                    rec = 'Wait for the listed starter before attacking this game'
-                elif 'STRUGGLING' in form_label:
-                    rec = 'Target top-order hits/TB overs'
-                elif 'DEALING' in form_label:
-                    rec = 'Play selectively by lineup slot and price'
-                else:  # STABLE
-                    if avg_top_score >= 62:
-                        rec = 'Target top-order hits/TB overs'
-                    elif avg_top_score <= 44:
-                        rec = 'Consider fading opposing batter overs'
-                    else:
-                        rec = 'Play selectively by lineup slot and price'
-
-                return {
-                    'pitcherName': p_display_name,
-                    'pitcherId': p_id,
-                    'team': p_team,
-                    'weakSlots': weak_slots,
-                    'topBatters': top_batters,
-                    'pitchVulnerability': pitch_vuln,
-                    'formLabel': form_label,
-                    'recommendation': rec,
-                    'matchup': matchup,
-                    'matchupKey': matchup_key,
-                    'gamePk': gpk,
-                    'isDoubleHeader': is_dh,
-                    'gameNumber': _gn,
-                    'gameTimeSort': game_time_sort,
-                    'gameTime': game_time_display,
-                    'kProp': k_prop_display,
-                }
-
-            c1 = _weakspot_card(ap_name, ap_id, away_abbr, home_bats, ap_fg, ap_sv, ap_hand, game_time_sort, game_time_display)
-            c2 = _weakspot_card(hp_name, hp_id, home_abbr, away_bats, hp_fg, hp_sv, hp_hand, game_time_sort, game_time_display)
+            c1 = _weakspot_card(
+                ap_name, ap_id, away_abbr, home_bats, ap_fg, ap_sv, ap_hand,
+                matchup, matchup_key, gpk, is_dh, game_number, game_time_sort, game_time_display
+            )
+            c2 = _weakspot_card(
+                hp_name, hp_id, home_abbr, away_bats, hp_fg, hp_sv, hp_hand,
+                matchup, matchup_key, gpk, is_dh, game_number, game_time_sort, game_time_display
+            )
             if c1:
                 local_weakspots.append(c1)
             if c2:
                 local_weakspots.append(c2)
-
         except Exception:
             print(f"[cheatsheet_game {gpk}]", traceback.format_exc())
+
         return local_hits, local_matchups, local_weakspots
 
     with ThreadPoolExecutor(max_workers=6) as ex:
