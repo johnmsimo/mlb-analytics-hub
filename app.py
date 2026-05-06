@@ -176,20 +176,20 @@ def api_player_platoon_splits(player_id):
     try:
         year = datetime.now().year
         url = f"{MLB_API}/people/{player_id}/stats"
-        params = {"stats": "statSplits", "group": "hitting", "sitCodes": "l,r", "season": year}
-        
+        params = {"stats": "statSplits", "group": "hitting", "sitCodes": "vl,vr", "season": year}
+
         r = requests.get(url, params=params, timeout=10)
         r.raise_for_status()
-        
+
         stats = r.json().get("stats", [])
         lhp_data = {}
         rhp_data = {}
-        
+
         for stat_group in stats:
             for split in stat_group.get("splits", []):
                 stat = split.get("stat", {})
                 split_code = (split.get("split", {}) or {}).get("code", "")
-                
+
                 data_obj = {
                     "pa": int(_safe_num(stat.get("plateAppearances"), 0)),
                     "avg": round(_safe_num(stat.get("avg"), 0), 3),
@@ -198,10 +198,10 @@ def api_player_platoon_splits(player_id):
                     "ops": round(_safe_num(stat.get("ops"), 0), 3),
                     "hr": int(_safe_num(stat.get("homeRuns"), 0))
                 }
-                
-                if split_code == "l":
+
+                if split_code == "vl":
                     lhp_data = data_obj
-                elif split_code == "r":
+                elif split_code == "vr":
                     rhp_data = data_obj
         
         return jsonify({"vsLHP": lhp_data, "vsRHP": rhp_data})
@@ -5467,10 +5467,12 @@ def api_bvp_arsenal(batter_id, pitcher_id):
             label = PITCH_LABELS.get(code, code.upper())
             pct  = raw_pct.get(code)
             velo = raw_velo.get(code)
+            # _sv_pit_arsenal_stats stores raw pitch count; use _sv_arsenal_pct (fraction) for %
+            usage_pct = round(float(pct) * 100, 1) if pct is not None else None
             pitches.append({
                 "code":       code,
                 "label":      label,
-                "usage":      row.get("usage"),
+                "usage":      usage_pct,
                 "velo":       round(float(velo), 1) if velo is not None else None,
                 "pit_ba":     row.get("pit_ba"),
                 "pit_slg":    row.get("pit_slg"),

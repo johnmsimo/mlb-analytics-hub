@@ -633,7 +633,7 @@ function renderDetail(data) {
     <div class="section-label">Model Projections <span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— BATX engine · platoon + BvP adjusted</span></div>
     <div class="prob-row">
       <div class="prob-box">
-        <div class="prob-val ${probs.hit1>=0.60?'class="good"':probs.hit1<0.42?'class="bad"':''}">${fmtPct2(probs.hit1)}</div>
+        <div class="prob-val ${probs.hit1>=0.60?'good':probs.hit1<0.42?'bad':''}">${fmtPct2(probs.hit1)}</div>
         <div class="prob-lbl">1+ Hit</div>
         ${ev.hits != null ? `<div style="font-size:.58rem;color:var(--mu);margin-top:2px">E: ${ev.hits.toFixed(2)} H</div>` : ''}
       </div>
@@ -643,7 +643,7 @@ function renderDetail(data) {
         ${ev.tb != null ? `<div style="font-size:.58rem;color:var(--mu);margin-top:2px">E: ${ev.tb.toFixed(2)} TB</div>` : ''}
       </div>
       <div class="prob-box">
-        <div class="prob-val ${probs.hr>=0.12?'class="good"':''}">${fmtPct2(probs.hr)}</div>
+        <div class="prob-val ${probs.hr>=0.12?'good':''}">${fmtPct2(probs.hr)}</div>
         <div class="prob-lbl">Home Run</div>
         ${ev.hr != null ? `<div style="font-size:.58rem;color:var(--mu);margin-top:2px">E: ${ev.hr.toFixed(3)} HR</div>` : ''}
       </div>
