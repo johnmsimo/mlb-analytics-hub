@@ -290,6 +290,193 @@ def _arsenal_similarity(arsenal1, arsenal2):
     mag2 = sum(b * b for b in vec2) ** 0.5
     return dot_product / (mag1 * mag2) if mag1 and mag2 else 0.0
 
+# ══════════════════════════════════════════════════════════════════════════════
+# PERFORMANCE BADGE SYSTEM — Batter & Pitcher Trends
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route('/api/player/<int:player_id>/performance-badges', methods=['GET'])
+def api_player_performance_badges(player_id):
+    """Returns performance badges for a batter based on recent trends."""
+    try:
+        year = datetime.now().year
+        
+        # Get player info
+        player_info_url = f"{MLB_API}/people/{player_id}"
+        p_resp = requests.get(player_info_url, timeout=8)
+        p_resp.raise_for_status()
+        people = p_resp.json().get("people", [])
+        if not people:
+            return jsonify({"badges": [], "metrics": {}}), 404
+        
+        player_name = people[0].get("fullName", "")
+        
+        # Get last 10 games
+        url = f"{MLB_API}/people/{player_id}/stats"
+        params = {"stats": "gameLog", "group": "hitting", "season": year}
+        r = requests.get(url, params=params, timeout=10)
+        r.raise_for_status()
+        
+        stats = r.json().get("stats", [])
+        if not stats:
+            return jsonify({"badges": [], "metrics": {}})
+        
+        splits = stats[0].get("splits", [])
+        recent = splits[-10:] if len(splits) >= 10 else splits
+        last_5 = splits[-5:] if len(splits) >= 5 else splits
+        
+        badges = []
+        metrics = {}
+        
+        # Calculate streak metrics
+        consecutive_hits = 0
+        for game in reversed(recent):
+            if int(game.get("stat", {}).get("hits", 0)) >= 1:
+                consecutive_hits += 1
+            else:
+                break
+        
+        # Last 5 games stats
+        l5_hits = sum(int(g.get("stat", {}).get("hits", 0)) for g in last_5)
+        l5_ab = sum(int(g.get("stat", {}).get("atBats", 0)) for g in last_5)
+        l5_hr = sum(int(g.get("stat", {}).get("homeRuns", 0)) for g in last_5)
+        l5_xbh = sum(int(g.get("stat", {}).get("doubles", 0)) + int(g.get("stat", {}).get("triples", 0)) for g in last_5)
+        l5_k = sum(int(g.get("stat", {}).get("strikeOuts", 0)) for g in last_5)
+        
+        l5_avg = round(l5_hits / l5_ab, 3) if l5_ab > 0 else 0.000
+        l5_k_rate = round(l5_k / l5_ab, 3) if l5_ab > 0 else 0.000
+        
+        # Get Savant data for barrel rate
+        savant_data = svbatter(player_name) or {}
+        barrel_pct = _safe_num(savant_data.get("svbrlpct"), 0)
+        hard_hit_pct = _safe_num(savant_data.get("svhhpct"), 0)
+        
+        metrics = {
+            "consecutiveHitGames": consecutive_hits,
+            "last5Avg": l5_avg,
+            "last5HR": l5_hr,
+            "last5XBH": l5_xbh,
+            "last5Krate": l5_k_rate,
+            "barrelPct": barrel_pct,
+            "hardHitPct": hard_hit_pct
+        }
+        
+        # Badge Logic
+        if consecutive_hits >= 5:
+            badges.append({"type": "HOT_STREAK", "label": f"{consecutive_hits}G Streak", "color": "green", "props": ["HIT", "TB"]})
+        elif consecutive_hits >= 3:
+            badges.append({"type": "HEATING_UP", "label": f"{consecutive_hits}G Streak", "color": "yellow", "props": ["HIT"]})
+        elif consecutive_hits == 0 and l5_avg < 0.180:
+            badges.append({"type": "COLD_STREAK", "label": f".{int(l5_avg*1000)} L5", "color": "red", "props": []})
+        
+        if l5_hr >= 3 or (l5_hr >= 2 and barrel_pct > 12):
+            badges.append({"type": "POWER_SURGE", "label": f"{l5_hr} HR L5", "color": "orange", "props": ["HR", "TB"]})
+        
+        if l5_k_rate < 0.15 and l5_avg > 0.280:
+            badges.append({"type": "CONTACT_MODE", "label": f".{int(l5_avg*1000)}/{int(l5_k_rate*100)}%K", "color": "blue", "props": ["HIT", "RBI"]})
+        
+        if barrel_pct > 15:
+            badges.append({"type": "BARREL_KING", "label": f"{barrel_pct:.1f}% BRL", "color": "purple", "props": ["HR", "TB"]})
+        
+        return jsonify({"badges": badges, "metrics": metrics})
+        
+    except Exception as ex:
+        logging.error(f"[api_player_performance_badges] {ex}")
+        return jsonify({"error": str(ex), "badges": [], "metrics": {}}), 500
+
+
+@app.route('/api/pitcher/<int:pitcher_id>/performance-badges', methods=['GET'])
+def api_pitcher_performance_badges(pitcher_id):
+    """Returns performance badges for a pitcher based on recent trends & command."""
+    try:
+        year = datetime.now().year
+        
+        # Get pitcher info
+        pitcher_info_url = f"{MLB_API}/people/{pitcher_id}"
+        p_resp = requests.get(pitcher_info_url, timeout=8)
+        p_resp.raise_for_status()
+        people = p_resp.json().get("people", [])
+        if not people:
+            return jsonify({"badges": [], "metrics": {}}), 404
+        
+        pitcher_name = people[0].get("fullName", "")
+        pitcher_hand = ((people[0].get("pitchHand") or {}).get("code") or "R")
+        
+        # Get last 5 starts
+        url = f"{MLB_API}/people/{pitcher_id}/stats"
+        params = {"stats": "gameLog", "group": "pitching", "season": year}
+        r = requests.get(url, params=params, timeout=10)
+        r.raise_for_status()
+        
+        stats = r.json().get("stats", [])
+        if not stats:
+            return jsonify({"badges": [], "metrics": {}})
+        
+        splits = stats[0].get("splits", [])
+        last_5 = splits[-5:] if len(splits) >= 5 else splits
+        
+        badges = []
+        metrics = {}
+        
+        # Calculate recent stats
+        l5_ip = sum(_safe_num(g.get("stat", {}).get("inningsPitched"), 0) for g in last_5)
+        l5_bb = sum(int(g.get("stat", {}).get("baseOnBalls", 0)) for g in last_5)
+        l5_k = sum(int(g.get("stat", {}).get("strikeOuts", 0)) for g in last_5)
+        l5_hits = sum(int(g.get("stat", {}).get("hits", 0)) for g in last_5)
+        l5_er = sum(int(g.get("stat", {}).get("earnedRuns", 0)) for g in last_5)
+        
+        bb_per_9 = round((l5_bb / l5_ip) * 9, 2) if l5_ip > 0 else 0
+        k_per_9 = round((l5_k / l5_ip) * 9, 2) if l5_ip > 0 else 0
+        era_l5 = round((l5_er / l5_ip) * 9, 2) if l5_ip > 0 else 0
+        
+        # Get season stats for platoon splits
+        split_params = {"stats": "statSplits", "group": "pitching", "sitCodes": "l,r", "season": year}
+        split_r = requests.get(f"{MLB_API}/people/{pitcher_id}/stats", params=split_params, timeout=10)
+        split_r.raise_for_status()
+        split_stats = split_r.json().get("stats", [])
+        
+        vs_lhb_ops = 0.000
+        vs_rhb_ops = 0.000
+        
+        for stat_group in split_stats:
+            for split in stat_group.get("splits", []):
+                stat = split.get("stat", {})
+                split_code = (split.get("split", {}) or {}).get("code", "")
+                if split_code == "l":
+                    vs_lhb_ops = round(_safe_num(stat.get("ops"), 0), 3)
+                elif split_code == "r":
+                    vs_rhb_ops = round(_safe_num(stat.get("ops"), 0), 3)
+        
+        metrics = {
+            "bb9_l5": bb_per_9,
+            "k9_l5": k_per_9,
+            "era_l5": era_l5,
+            "vsLHB_ops": vs_lhb_ops,
+            "vsRHB_ops": vs_rhb_ops,
+            "pitcherHand": pitcher_hand
+        }
+        
+        # Badge Logic
+        if bb_per_9 > 4.0:
+            badges.append({"type": "STRUGGLING_COMMAND", "label": f"{bb_per_9} BB/9", "color": "red", "props": ["FADE_K"]})
+        
+        if era_l5 > 6.0:
+            badges.append({"type": "GETTING_SHELLED", "label": f"{era_l5} ERA L5", "color": "red", "props": ["TARGET_BATS"]})
+        
+        if k_per_9 > 11.0:
+            badges.append({"type": "STRIKEOUT_MODE", "label": f"{k_per_9} K/9", "color": "green", "props": ["K_PROP"]})
+        
+        # Platoon vulnerability
+        if pitcher_hand == "R" and vs_lhb_ops > 0.850:
+            badges.append({"type": "VULNERABLE_LHB", "label": f"LHB .{int(vs_lhb_ops*1000)}", "color": "orange", "props": ["TARGET_LHB"]})
+        elif pitcher_hand == "L" and vs_rhb_ops > 0.850:
+            badges.append({"type": "VULNERABLE_RHB", "label": f"RHB .{int(vs_rhb_ops*1000)}", "color": "orange", "props": ["TARGET_RHB"]})
+        
+        return jsonify({"badges": badges, "metrics": metrics})
+        
+    except Exception as ex:
+        logging.error(f"[api_pitcher_performance_badges] {ex}")
+        return jsonify({"error": str(ex), "badges": [], "metrics": {}}), 500
+
 # ── Global error handler for uncaught exceptions ──
 @app.errorhandler(Exception)
 def handle_exception(e):
