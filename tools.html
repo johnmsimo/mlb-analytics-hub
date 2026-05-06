@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MLB Analytics Hub - Tools</title>
+  <style>
+    :root{--bg:#070d18;--card:#101a2a;--card2:#0b1322;--b:#223149;--t:#dfe9ff;--mu:#8ea4c8;--c:#00e5ff;--g:#00e676;--o:#ff9800;--r:#ff5252;--y:#f5c542}
+    *{box-sizing:border-box}
+    body{margin:0;background:radial-gradient(circle at 10% 0%,#0f1d36,transparent 45%),var(--bg);color:var(--t);font-family:Segoe UI,Arial,sans-serif;min-height:100vh}
+    .wrap{max-width:1100px;margin:0 auto;padding:18px}
+    .top{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:20px}
+    .brand{font-weight:700;letter-spacing:.08em}
+    .sub{color:var(--mu);font-size:.85rem;margin-top:2px}
+    .actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    a.toplink{color:var(--c);text-decoration:none;padding:7px 11px;border:1px solid rgba(0,229,255,.2);border-radius:999px;font-size:.82rem}
+
+    /* Tabs */
+    .tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:20px}
+    .tab{border:1px solid var(--b);background:rgba(255,255,255,.03);color:var(--mu);padding:10px 18px;border-radius:999px;cursor:pointer;font-size:.85rem;transition:.15s}
+    .tab.on{color:var(--bg);background:var(--c);border-color:var(--c);font-weight:700}
+    .panel{display:none}
+    .panel.on{display:block}
+
+    /* Calculator card */
+    .calc-card{background:linear-gradient(180deg,var(--card),var(--card2));border:1px solid var(--b);border-radius:16px;padding:22px;max-width:680px}
+    .calc-title{font-size:1rem;font-weight:700;color:var(--t);margin-bottom:4px}
+    .calc-desc{font-size:.8rem;color:var(--mu);margin-bottom:18px}
+
+    /* Form rows */
+    .form-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:16px}
+    .field{display:flex;flex-direction:column;gap:5px}
+    .field label{font-size:.7rem;letter-spacing:.07em;text-transform:uppercase;color:var(--mu)}
+    .field input,.field select{font:inherit;background:rgba(255,255,255,.05);border:1px solid var(--b);color:var(--t);border-radius:9px;padding:9px 12px;font-size:.9rem;transition:.15s;width:100%}
+    .field input:focus,.field select:focus{outline:none;border-color:rgba(0,229,255,.5);background:rgba(0,229,255,.04)}
+    .field input::placeholder{color:var(--mu)}
+
+    /* Result box */
+    .result{background:rgba(0,229,255,.06);border:1px solid rgba(0,229,255,.2);border-radius:12px;padding:16px;margin-top:4px}
+    .result-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px}
+    .result-item{text-align:center}
+    .result-val{font-size:1.4rem;font-weight:800;color:var(--c)}
+    .result-val.pos{color:var(--g)}
+    .result-val.neg{color:var(--r)}
+    .result-val.warn{color:var(--o)}
+    .result-lbl{font-size:.65rem;letter-spacing:.07em;text-transform:uppercase;color:var(--mu);margin-top:3px}
+    .result-note{font-size:.75rem;color:var(--mu);margin-top:10px;border-top:1px solid rgba(255,255,255,.06);padding-top:10px;line-height:1.5}
+
+    /* Divider */
+    .divider{border:none;border-top:1px solid var(--b);margin:18px 0}
+
+    /* Parlay legs */
+    .parlay-legs{display:flex;flex-direction:column;gap:8px;margin-bottom:14px}
+    .parlay-leg{display:flex;gap:8px;align-items:center}
+    .parlay-leg input{flex:1;font:inherit;background:rgba(255,255,255,.05);border:1px solid var(--b);color:var(--t);border-radius:9px;padding:8px 12px;font-size:.88rem}
+    .parlay-leg input:focus{outline:none;border-color:rgba(0,229,255,.4)}
+    .leg-del{background:rgba(255,82,82,.1);border:1px solid rgba(255,82,82,.25);color:var(--r);border-radius:7px;padding:6px 10px;cursor:pointer;font-size:.78rem;flex-shrink:0}
+    .leg-del:hover{background:rgba(255,82,82,.2)}
+    .add-leg{border:1px dashed rgba(0,229,255,.25);background:transparent;color:var(--c);border-radius:9px;padding:8px;cursor:pointer;font-size:.82rem;width:100%;transition:.15s}
+    .add-leg:hover{background:rgba(0,229,255,.06)}
+
+    /* Bet button */
+    .calc-btn{border:none;background:linear-gradient(135deg,rgba(0,229,255,.25),rgba(0,229,255,.12));color:var(--c);border:1px solid rgba(0,229,255,.35);border-radius:10px;padding:10px 20px;cursor:pointer;font-size:.88rem;font-weight:700;transition:.15s;width:100%}
+    .calc-btn:hover{background:linear-gradient(135deg,rgba(0,229,255,.35),rgba(0,229,255,.18))}
+
+    /* Odds format toggle */
+    .odds-fmt{display:flex;gap:6px;margin-bottom:14px}
+    .fmt-btn{border:1px solid var(--b);background:rgba(255,255,255,.03);color:var(--mu);padding:5px 12px;border-radius:999px;cursor:pointer;font-size:.78rem}
+    .fmt-btn.on{color:var(--c);border-color:rgba(0,229,255,.4);background:rgba(0,229,255,.1)}
+
+    .info-box{background:rgba(255,255,255,.03);border:1px solid var(--b);border-radius:10px;padding:12px 14px;font-size:.78rem;color:var(--mu);line-height:1.6;margin-top:14px}
+    .info-box strong{color:var(--t)}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div>
+      <div class="brand">MLB ANALYTICS HUB — TOOLS</div>
+      <div class="sub">Betting calculators: No-Vig, Kelly, EV, Parlay</div>
+    </div>
+    <div class="actions">
+      <a class="toplink" href="/">Dashboard</a>
+      <a class="toplink" href="/props">Props</a>
+      <a class="toplink" href="/value-bets">Value Bets</a>
+      <a class="toplink" href="/nrfi">NRFI</a>
+      <a class="toplink" href="/batter-vs-pitcher">BvP</a>
+      <a class="toplink" href="/tracker">Tracker</a>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab on" onclick="switchTab('novig',this)">No-Vig Calculator</button>
+    <button class="tab" onclick="switchTab('kelly',this)">Kelly Calculator</button>
+    <button class="tab" onclick="switchTab('ev',this)">EV Calculator</button>
+    <button class="tab" onclick="switchTab('parlay',this)">Parlay Calculator</button>
+  </div>
+
+  <!-- NO-VIG -->
+  <div class="panel on" id="panel-novig">
+    <div class="calc-card">
+      <div class="calc-title">No-Vig Fair Odds Calculator</div>
+      <div class="calc-desc">Enter both sides of a market to strip the bookmaker's vig and find the true implied probabilities.</div>
+      <div class="form-grid">
+        <div class="field">
+          <label>Side A Odds (American)</label>
+          <input id="nv-sideA" type="number" placeholder="-110" oninput="calcNoVig()">
+        </div>
+        <div class="field">
+          <label>Side B Odds (American)</label>
+          <input id="nv-sideB" type="number" placeholder="+100" oninput="calcNoVig()">
+        </div>
+      </div>
+      <div id="nv-result"></div>
+      <div class="info-box">
+        <strong>How it works:</strong> Books price both sides with a margin baked in — e.g., -110/-110 = 52.4% each side, which sums to 104.8% (the 4.8% is the vig). This calculator removes that margin to show the true implied probabilities.
+      </div>
+    </div>
+  </div>
+
+  <!-- KELLY -->
+  <div class="panel" id="panel-kelly">
+    <div class="calc-card">
+      <div class="calc-title">Kelly Criterion Stake Calculator</div>
+      <div class="calc-desc">Calculates mathematically optimal stake size to maximize long-run bankroll growth given your edge.</div>
+      <div class="form-grid">
+        <div class="field">
+          <label>Bankroll ($)</label>
+          <input id="kl-bankroll" type="number" placeholder="1000" oninput="calcKelly()">
+        </div>
+        <div class="field">
+          <label>Your Model Probability (%)</label>
+          <input id="kl-prob" type="number" placeholder="58" min="1" max="99" oninput="calcKelly()">
+        </div>
+        <div class="field">
+          <label>Bet Odds (American)</label>
+          <input id="kl-odds" type="number" placeholder="-110" oninput="calcKelly()">
+        </div>
+        <div class="field">
+          <label>Kelly Fraction</label>
+          <select id="kl-frac" onchange="calcKelly()">
+            <option value="1">Full Kelly</option>
+            <option value="0.5" selected>Half Kelly (recommended)</option>
+            <option value="0.25">Quarter Kelly</option>
+          </select>
+        </div>
+      </div>
+      <div id="kl-result"></div>
+      <div class="info-box">
+        <strong>Formula:</strong> Kelly % = (p × b − q) / b, where p = win probability, q = 1−p, b = decimal odds − 1. <br>
+        <strong>Tip:</strong> Half Kelly is strongly recommended for prop betting — it reduces variance while retaining ~75% of expected growth.
+      </div>
+    </div>
+  </div>
+
+  <!-- EV -->
+  <div class="panel" id="panel-ev">
+    <div class="calc-card">
+      <div class="calc-title">Expected Value Calculator</div>
+      <div class="calc-desc">Calculate the expected value of a bet given your edge over the market.</div>
+      <div class="form-grid">
+        <div class="field">
+          <label>Your Model Probability (%)</label>
+          <input id="ev-prob" type="number" placeholder="58" min="1" max="99" oninput="calcEV()">
+        </div>
+        <div class="field">
+          <label>Bet Odds (American)</label>
+          <input id="ev-odds" type="number" placeholder="-110" oninput="calcEV()">
+        </div>
+        <div class="field">
+          <label>Stake ($)</label>
+          <input id="ev-stake" type="number" placeholder="100" oninput="calcEV()">
+        </div>
+      </div>
+      <div id="ev-result"></div>
+      <div class="info-box">
+        <strong>Formula:</strong> EV = (prob × profit) − ((1 − prob) × stake). A positive EV means the bet is mathematically profitable over a large sample.
+      </div>
+    </div>
+  </div>
+
+  <!-- PARLAY -->
+  <div class="panel" id="panel-parlay">
+    <div class="calc-card">
+      <div class="calc-title">Parlay Calculator</div>
+      <div class="calc-desc">Build a parlay with up to 10 legs. Enter American odds for each leg.</div>
+      <div class="field" style="margin-bottom:14px;max-width:200px">
+        <label>Stake ($)</label>
+        <input id="pl-stake" type="number" placeholder="100" oninput="calcParlay()">
+      </div>
+      <div class="parlay-legs" id="pl-legs">
+        <div class="parlay-leg">
+          <input type="number" placeholder="Leg 1 odds (e.g. -110)" class="pl-leg-input" oninput="calcParlay()">
+          <button class="leg-del" onclick="removeLeg(this)" title="Remove">✕</button>
+        </div>
+        <div class="parlay-leg">
+          <input type="number" placeholder="Leg 2 odds (e.g. +120)" class="pl-leg-input" oninput="calcParlay()">
+          <button class="leg-del" onclick="removeLeg(this)" title="Remove">✕</button>
+        </div>
+      </div>
+      <button class="add-leg" onclick="addLeg()">+ Add Leg</button>
+      <hr class="divider">
+      <div id="pl-result"></div>
+      <div class="info-box" style="margin-top:14px">
+        <strong>Correlated parlays:</strong> Legs within the same game (e.g. NRFI + low-scoring team) can be correlated — meaning if one hits, the other is more likely to hit. Standard parlay calculators assume independence; correlated plays can have higher true EV than shown.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function switchTab(id, btn) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('on'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('on'));
+  btn.classList.add('on');
+  document.getElementById('panel-' + id).classList.add('on');
+}
+
+/* ── American odds helpers ────────────────────────────── */
+function americanToDecimal(american) {
+  const a = parseFloat(american);
+  if (isNaN(a)) return null;
+  return a > 0 ? (a / 100) + 1 : (100 / Math.abs(a)) + 1;
+}
+
+function decimalToImplied(dec) {
+  return dec ? 1 / dec : null;
+}
+
+function americanToImplied(american) {
+  const a = parseFloat(american);
+  if (isNaN(a)) return null;
+  return a < 0 ? Math.abs(a) / (Math.abs(a) + 100) : 100 / (a + 100);
+}
+
+function fmtPct(v) { return (v * 100).toFixed(2) + '%'; }
+function fmtMoney(v) { return (v >= 0 ? '+' : '') + '$' + Math.abs(v).toFixed(2); }
+function fmtOddsAmerican(dec) {
+  if (!dec) return '—';
+  const v = (dec - 1) * 100;
+  return v >= 100 ? '+' + Math.round(v) : Math.round(-(100 / (dec - 1)));
+}
+
+/* ── No-Vig ───────────────────────────────────────────── */
+function calcNoVig() {
+  const a = parseFloat(document.getElementById('nv-sideA').value);
+  const b = parseFloat(document.getElementById('nv-sideB').value);
+  const el = document.getElementById('nv-result');
+  if (isNaN(a) || isNaN(b)) { el.innerHTML = ''; return; }
+
+  const rawA = americanToImplied(a);
+  const rawB = americanToImplied(b);
+  const juice = rawA + rawB;
+  const fairA = rawA / juice;
+  const fairB = rawB / juice;
+  const vig = ((juice - 1) * 100).toFixed(2);
+
+  const fairDecA = 1 / fairA;
+  const fairDecB = 1 / fairB;
+  const fairAmA = fmtOddsAmerican(fairDecA);
+  const fairAmB = fmtOddsAmerican(fairDecB);
+
+  el.innerHTML = `
+    <div class="result">
+      <div class="result-grid">
+        <div class="result-item">
+          <div class="result-val">${fmtPct(fairA)}</div>
+          <div class="result-lbl">Side A Fair Prob</div>
+        </div>
+        <div class="result-item">
+          <div class="result-val">${fmtPct(fairB)}</div>
+          <div class="result-lbl">Side B Fair Prob</div>
+        </div>
+        <div class="result-item">
+          <div class="result-val warn">${vig}%</div>
+          <div class="result-lbl">Book Vig (Margin)</div>
+        </div>
+        <div class="result-item">
+          <div class="result-val">${fairAmA}</div>
+          <div class="result-lbl">Side A Fair Odds</div>
+        </div>
+        <div class="result-item">
+          <div class="result-val">${fairAmB}</div>
+          <div class="result-lbl">Side B Fair Odds</div>
+        </div>
+      </div>
+      <div class="result-note">
+        Raw implied: Side A ${fmtPct(rawA)}, Side B ${fmtPct(rawB)}, total ${fmtPct(juice)} (vig = ${fmtPct(juice - 1)}).
+        Fair no-vig probabilities sum to exactly 100%.
+      </div>
+    </div>
+  `;
+}
+
+/* ── Kelly ────────────────────────────────────────────── */
+function calcKelly() {
+  const bankroll = parseFloat(document.getElementById('kl-bankroll').value);
+  const probPct = parseFloat(document.getElementById('kl-prob').value);
+  const odds = parseFloat(document.getElementById('kl-odds').value);
+  const frac = parseFloat(document.getElementById('kl-frac').value);
+  const el = document.getElementById('kl-result');
+
+  if (isNaN(bankroll) || isNaN(probPct) || isNaN(odds)) { el.innerHTML = ''; return; }
+  const p = probPct / 100;
+  const q = 1 - p;
+  const dec = americanToDecimal(odds);
+  if (!dec) { el.innerHTML = ''; return; }
+  const b = dec - 1;
+  const kelly = (p * b - q) / b;
+  const adjKelly = kelly * frac;
+  const stake = adjKelly > 0 ? bankroll * adjKelly : 0;
+  const edge = p - (1 / dec);
+  const evPct = p * b - q;
+
+  const stakeClass = adjKelly <= 0 ? 'neg' : adjKelly > 0.15 ? 'warn' : 'pos';
+  el.innerHTML = `
+    <div class="result">
+      <div class="result-grid">
+        <div class="result-item">
+          <div class="result-val ${stakeClass}">$${stake.toFixed(2)}</div>
+          <div class="result-lbl">Optimal Stake</div>
+        </div>
+        <div class="result-item">
+          <div class="result-val ${adjKelly <= 0 ? 'neg' : 'pos'}">${(adjKelly * 100).toFixed(2)}%</div>
+          <div class="result-lbl">Kelly % of Bankroll</div>
+        </div>
+        <div class="result-item">
+          <div class="result-val ${edge > 0 ? 'pos' : 'neg'}">${edge > 0 ? '+' : ''}${(edge * 100).toFixed(2)}%</div>
+          <div class="result-lbl">Edge vs Market</div>
+        </div>
+        <div class="result-item">
+          <div class="result-val ${evPct > 0 ? 'pos' : 'neg'}">${evPct > 0 ? '+' : ''}${(evPct * 100).toFixed(2)}%</div>
+          <div class="result-lbl">EV per Unit</div>
+        </div>
+      </div>
+      ${adjKelly <= 0 ? '<div class="result-note" style="color:var(--r)">Negative Kelly — this bet has no mathematical edge. Do not bet.</div>' : ''}
+      ${adjKelly > 0.20 ? '<div class="result-note" style="color:var(--o)">Kelly suggests a very large stake. Consider reducing to Quarter Kelly for safety.</div>' : ''}
+    </div>
+  `;
+}
+
+/* ── EV ───────────────────────────────────────────────── */
+function calcEV() {
+  const probPct = parseFloat(document.getElementById('ev-prob').value);
+  const odds = parseFloat(document.getElementById('ev-odds').value);
+  const stake = parseFloat(document.getElementById('ev-stake').value) || 100;
+  const el = document.getElementById('ev-result');
+
+  if (isNaN(probPct) || isNaN(odds)) { el.innerHTML = ''; return; }
+  const p = probPct / 100;
+  const q = 1 - p;
+  const dec = americanToDecimal(odds);
+  if (!dec) { el.innerHTML = ''; return; }
+  const profit = stake * (dec - 1);
+  const ev = p * profit - q * stake;
+  const evPct = p * (dec - 1) - q;
+  const implied = 1 / dec;
+  const edge = p - implied;
+
+  el.innerHTML = `
+    <div class="result">
+      <div class="result-grid">
+        <div class="result-item">
+          <div class="result-val ${ev > 0 ? 'pos' : 'neg'}">${fmtMoney(ev)}</div>
+          <div class="result-lbl">Expected Value ($)</div>
+        </div>
+        <div class="result-item">
+          <div class="result-val ${evPct > 0 ? 'pos' : 'neg'}">${evPct > 0 ? '+' : ''}${(evPct * 100).toFixed(2)}%</div>
+          <div class="result-lbl">EV per Bet (%)</div>
+        </div>
+        <div class="result-item">
+          <div class="result-val ${edge > 0 ? 'pos' : 'neg'}">${edge > 0 ? '+' : ''}${(edge * 100).toFixed(2)}%</div>
+          <div class="result-lbl">Edge vs Implied</div>
+        </div>
+        <div class="result-item">
+          <div class="result-val">${fmtPct(implied)}</div>
+          <div class="result-lbl">Book Implied Prob</div>
+        </div>
+      </div>
+      <div class="result-note">
+        At $${stake.toFixed(0)}/bet over 100 bets: estimated profit ${fmtMoney(ev * 100)} (before variance).
+        ${ev < 0 ? 'This bet has negative EV — the book has the edge.' : 'Positive EV bet — edge is in your favor.'}
+      </div>
+    </div>
+  `;
+}
+
+/* ── Parlay ───────────────────────────────────────────── */
+function addLeg() {
+  const legs = document.getElementById('pl-legs');
+  const count = legs.children.length + 1;
+  if (count > 10) return;
+  const div = document.createElement('div');
+  div.className = 'parlay-leg';
+  div.innerHTML = `<input type="number" placeholder="Leg ${count} odds" class="pl-leg-input" oninput="calcParlay()">
+    <button class="leg-del" onclick="removeLeg(this)" title="Remove">✕</button>`;
+  legs.appendChild(div);
+  calcParlay();
+}
+
+function removeLeg(btn) {
+  const legs = document.getElementById('pl-legs');
+  if (legs.children.length <= 2) return;
+  btn.parentElement.remove();
+  calcParlay();
+}
+
+function calcParlay() {
+  const stake = parseFloat(document.getElementById('pl-stake').value) || 100;
+  const inputs = document.querySelectorAll('.pl-leg-input');
+  const el = document.getElementById('pl-result');
+
+  let decProduct = 1;
+  let impliedProduct = 1;
+  let validLegs = 0;
+  const legData = [];
+
+  inputs.forEach((inp, i) => {
+    const v = parseFloat(inp.value);
+    if (!isNaN(v) && v !== 0) {
+      const dec = americanToDecimal(v);
+      const imp = decimalToImplied(dec);
+      if (dec && imp) {
+        decProduct *= dec;
+        impliedProduct *= imp;
+        validLegs++;
+        legData.push({ odds: v, dec, imp });
+      }
+    }
+  });
+
+  if (validLegs < 2) { el.innerHTML = ''; return; }
+
+  const parlayPayout = stake * decProduct;
+  const parlayProfit = parlayPayout - stake;
+  const parlayOddsAm = fmtOddsAmerican(decProduct);
+  const vig = 1 - impliedProduct;
+  const fairImplied = impliedProduct;
+
+  el.innerHTML = `
+    <div class="result">
+      <div class="result-grid">
+        <div class="result-item">
+          <div class="result-val pos">$${parlayPayout.toFixed(2)}</div>
+          <div class="result-lbl">Total Payout</div>
+        </div>
+        <div class="result-item">
+          <div class="result-val pos">$${parlayProfit.toFixed(2)}</div>
+          <div class="result-lbl">Profit</div>
+        </div>
+        <div class="result-item">
+          <div class="result-val">${parlayOddsAm}</div>
+          <div class="result-lbl">Parlay Odds</div>
+        </div>
+        <div class="result-item">
+          <div class="result-val">${(decProduct).toFixed(3)}x</div>
+          <div class="result-lbl">Decimal Multiplier</div>
+        </div>
+        <div class="result-item">
+          <div class="result-val">${fmtPct(fairImplied)}</div>
+          <div class="result-lbl">Win Probability</div>
+        </div>
+        <div class="result-item">
+          <div class="result-val warn">${(vig * 100).toFixed(2)}%</div>
+          <div class="result-lbl">Combined Vig</div>
+        </div>
+      </div>
+      <div class="result-note">
+        ${validLegs}-leg parlay · Win probability ${fmtPct(fairImplied)} (assuming independent legs).
+        Expected value per bet: ${fmtMoney(fairImplied * parlayProfit - (1 - fairImplied) * stake)}.
+        Vig compounds per leg — prefer fewer legs for better EV.
+      </div>
+    </div>
+  `;
+}
+</script>
+</body>
+</html>

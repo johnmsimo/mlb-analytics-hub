@@ -149,6 +149,10 @@ PITCHER_DEEP_DIVE_HTML = _read_html_or_fallback('pitcher_deepdive.html')
 GAMESIDE_DEEPDIVE_HTML = _read_html_or_fallback('gameside_deepdive.html')
 BREAKOUT_DETECTOR_HTML = _read_html_or_fallback('breakout_detector.html')
 HR_ANALYTICS_HTML = _read_html_or_fallback('hr_analytics.html')
+BVP_HTML = _read_html_or_fallback('bvp.html')
+VALUE_BETS_HTML = _read_html_or_fallback('value_bets.html')
+NRFI_HTML = _read_html_or_fallback('nrfi.html')
+TOOLS_HTML = _read_html_or_fallback('tools.html')
 DATA_DIR = os.path.join(_HERE, 'data')
 os.makedirs(DATA_DIR, exist_ok=True)
 BRAIN_DATA_DIR = os.path.join(DATA_DIR, 'brain_uploads')
@@ -2557,6 +2561,22 @@ def tracker_page():
 @app.route('/consistency')
 def consistency_page():
     return CONSISTENCY_HTML
+
+@app.route('/batter-vs-pitcher')
+def bvp_page():
+    return BVP_HTML
+
+@app.route('/value-bets')
+def value_bets_page():
+    return VALUE_BETS_HTML
+
+@app.route('/nrfi')
+def nrfi_page():
+    return NRFI_HTML
+
+@app.route('/tools')
+def tools_page():
+    return TOOLS_HTML
 
 @app.route('/pitcher-deep-dive')
 @app.route('/pitcher-deep-dive/<int:pitcher_id>')

@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MLB Analytics Hub - NRFI</title>
+  <style>
+    :root{--bg:#070d18;--card:#101a2a;--card2:#0b1322;--b:#223149;--t:#dfe9ff;--mu:#8ea4c8;--c:#00e5ff;--g:#00e676;--o:#ff9800;--r:#ff5252;--y:#f5c542}
+    *{box-sizing:border-box}
+    body{margin:0;background:radial-gradient(circle at 10% 0%,#0f1d36,transparent 45%),var(--bg);color:var(--t);font-family:Segoe UI,Arial,sans-serif;min-height:100vh}
+    .wrap{max-width:1400px;margin:0 auto;padding:18px}
+    .top{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px}
+    .brand{font-weight:700;letter-spacing:.08em}
+    .sub{color:var(--mu);font-size:.85rem;margin-top:2px}
+    .actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    a.toplink{color:var(--c);text-decoration:none;padding:7px 11px;border:1px solid rgba(0,229,255,.2);border-radius:999px;font-size:.82rem}
+    .btn{border:1px solid rgba(0,229,255,.35);background:rgba(0,229,255,.08);color:var(--c);padding:8px 14px;border-radius:10px;cursor:pointer;font-size:.82rem}
+    .btn:disabled{opacity:.5;cursor:not-allowed}
+
+    /* Hero */
+    .hero{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px}
+    @media(max-width:800px){.hero{grid-template-columns:repeat(2,1fr)}}
+    .hstat{background:linear-gradient(180deg,var(--card),var(--card2));border:1px solid var(--b);border-radius:14px;padding:14px 16px}
+    .hstat-v{font-size:1.5rem;font-weight:800;color:var(--c)}
+    .hstat-l{margin-top:4px;font-size:.68rem;letter-spacing:.08em;color:var(--mu);text-transform:uppercase}
+
+    /* Sort/filter bar */
+    .toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+    .toolbar select{font:inherit;background:var(--card);border:1px solid var(--b);color:var(--t);border-radius:8px;padding:6px 10px;font-size:.82rem}
+    .toolbar label{font-size:.78rem;color:var(--mu);display:flex;align-items:center;gap:6px}
+
+    /* Cards grid */
+    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px}
+
+    /* Game card */
+    .ncard{background:linear-gradient(180deg,var(--card),var(--card2));border:1px solid var(--b);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:10px;transition:.15s}
+    .ncard:hover{border-color:rgba(0,229,255,.25);box-shadow:0 0 12px rgba(0,229,255,.07)}
+    .ncard.edge-pos{border-color:rgba(0,230,118,.25)}
+    .ncard.edge-neg{border-color:rgba(255,82,82,.18)}
+
+    .nc-matchup{font-weight:800;font-size:1rem;color:var(--t);display:flex;justify-content:space-between;align-items:center}
+    .nc-time{font-size:.72rem;color:var(--y);border:1px solid rgba(245,197,66,.3);border-radius:999px;padding:2px 9px}
+    .nc-sp{font-size:.78rem;color:var(--mu);display:flex;flex-direction:column;gap:3px}
+    .nc-sp span{color:var(--t);font-weight:600}
+
+    /* Probability bar */
+    .prob-section{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .prob-block{background:rgba(255,255,255,.03);border:1px solid var(--b);border-radius:10px;padding:10px;text-align:center}
+    .prob-block-label{font-size:.62rem;letter-spacing:.08em;text-transform:uppercase;color:var(--mu);margin-bottom:4px}
+    .prob-val{font-size:1.2rem;font-weight:800}
+    .prob-bar-wrap{height:5px;background:rgba(255,255,255,.07);border-radius:3px;margin-top:6px;overflow:hidden}
+    .prob-bar{height:100%;border-radius:3px;transition:width .4s}
+
+    /* Edge badge */
+    .edge-row{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+    .edge-badge{font-size:1rem;font-weight:800;padding:4px 12px;border-radius:8px}
+    .edge-badge.pos{background:rgba(0,230,118,.12);color:var(--g);border:1px solid rgba(0,230,118,.35)}
+    .edge-badge.neg{background:rgba(255,82,82,.1);color:var(--r);border:1px solid rgba(255,82,82,.25)}
+    .edge-badge.neutral{background:rgba(0,229,255,.08);color:var(--c);border:1px solid rgba(0,229,255,.25)}
+    .rec-badge{font-size:.75rem;font-weight:700;padding:4px 10px;border-radius:8px}
+    .rec-strong{background:rgba(0,230,118,.12);color:var(--g);border:1px solid rgba(0,230,118,.3)}
+    .rec-play{background:rgba(0,229,255,.1);color:var(--c);border:1px solid rgba(0,229,255,.3)}
+    .rec-lean{background:rgba(245,197,66,.1);color:var(--y);border:1px solid rgba(245,197,66,.3)}
+    .rec-watch{background:rgba(142,164,200,.1);color:var(--mu);border:1px solid rgba(142,164,200,.25)}
+    .rec-yrfi{background:rgba(255,82,82,.1);color:var(--r);border:1px solid rgba(255,82,82,.25)}
+
+    .book-row{font-size:.72rem;color:var(--mu);display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+    .book-price{color:var(--t);font-weight:600}
+
+    /* Key factors */
+    .factors{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:4px}
+    .factors li{font-size:.72rem;color:var(--mu);display:flex;align-items:flex-start;gap:5px}
+    .factors li::before{content:'·';color:var(--c);font-size:.9rem;flex-shrink:0}
+
+    /* Weather chip */
+    .wx-row{display:flex;gap:8px;flex-wrap:wrap;font-size:.72rem;color:var(--mu)}
+    .wx-chip{background:rgba(255,255,255,.04);border:1px solid var(--b);border-radius:6px;padding:2px 7px}
+
+    .deeplink{color:var(--c);font-size:.72rem;text-decoration:none}
+    .deeplink:hover{text-decoration:underline}
+
+    .empty{padding:36px;text-align:center;color:var(--mu)}
+    .spinner{display:inline-block;width:22px;height:22px;border:2px solid rgba(0,229,255,.2);border-top-color:var(--c);border-radius:50%;animation:spin .7s linear infinite;margin:auto}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .loading{padding:40px;text-align:center;color:var(--mu)}
+
+    .era-badge{font-size:.68rem;padding:1px 6px;border-radius:5px;background:rgba(255,255,255,.06);color:var(--mu)}
+    .era-good{background:rgba(0,230,118,.1);color:var(--g)}
+    .era-bad{background:rgba(255,82,82,.1);color:var(--r)}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div>
+      <div class="brand">MLB ANALYTICS HUB — NRFI</div>
+      <div class="sub" id="statusText">Loading first-inning scoring analysis for all today's games…</div>
+    </div>
+    <div class="actions">
+      <a class="toplink" href="/">Dashboard</a>
+      <a class="toplink" href="/props">Props</a>
+      <a class="toplink" href="/batter-vs-pitcher">BvP</a>
+      <a class="toplink" href="/value-bets">Value Bets</a>
+      <a class="toplink" href="/tracker">Tracker</a>
+      <button class="btn" id="refreshBtn" onclick="loadData(true)">Refresh</button>
+    </div>
+  </div>
+
+  <div class="hero">
+    <div class="hstat"><div class="hstat-v" id="hGames">—</div><div class="hstat-l">Games Today</div></div>
+    <div class="hstat"><div class="hstat-v" id="hAvgNRFI">—</div><div class="hstat-l">Avg Model NRFI%</div></div>
+    <div class="hstat"><div class="hstat-v" id="hEdgePlays">—</div><div class="hstat-l">Positive Edge NRFI</div></div>
+    <div class="hstat"><div class="hstat-v" id="hYRFI">—</div><div class="hstat-l">YRFI Edges</div></div>
+  </div>
+
+  <div class="toolbar">
+    <label>Sort by:
+      <select id="sortSel" onchange="renderCards()">
+        <option value="nrfi_edge">NRFI Edge</option>
+        <option value="nrfi_prob">Model NRFI%</option>
+        <option value="game">Game (A–Z)</option>
+      </select>
+    </label>
+    <label>Show:
+      <select id="showSel" onchange="renderCards()">
+        <option value="all">All Games</option>
+        <option value="edge">NRFI Edge Only</option>
+        <option value="yrfi">YRFI Edge Only</option>
+        <option value="strong">Strong Plays Only</option>
+      </select>
+    </label>
+  </div>
+
+  <div id="gridWrap"><div class="loading"><div class="spinner"></div><br><br>Loading NRFI data…</div></div>
+</div>
+
+<script>
+let nrfiData = [];
+let gamesData = [];
+
+function nrfiRec(edge, prob) {
+  if (edge == null) return { label: 'NO ODDS', cls: 'rec-watch' };
+  if (edge >= 0.10) return { label: 'STRONG NRFI', cls: 'rec-strong' };
+  if (edge >= 0.05) return { label: 'PLAY NRFI', cls: 'rec-play' };
+  if (edge >= 0.02) return { label: 'LEAN NRFI', cls: 'rec-lean' };
+  if (edge <= -0.05) return { label: 'LEAN YRFI', cls: 'rec-yrfi' };
+  if (edge <= -0.10) return { label: 'PLAY YRFI', cls: 'rec-yrfi' };
+  return { label: 'WATCH', cls: 'rec-watch' };
+}
+
+function eraClass(era) {
+  if (era <= 3.0) return 'era-badge era-good';
+  if (era >= 5.0) return 'era-badge era-bad';
+  return 'era-badge';
+}
+
+function barColor(prob) {
+  if (prob >= 0.65) return 'var(--g)';
+  if (prob >= 0.50) return 'var(--c)';
+  if (prob >= 0.40) return 'var(--y)';
+  return 'var(--r)';
+}
+
+async function loadData(force) {
+  const btn = document.getElementById('refreshBtn');
+  btn.disabled = true;
+  btn.textContent = 'Loading…';
+  document.getElementById('gridWrap').innerHTML = '<div class="loading"><div class="spinner"></div><br><br>Fetching games and NRFI data…</div>';
+
+  try {
+    const r = await fetch('/api/games/today');
+    const d = await r.json();
+    gamesData = (d.games || []).filter(g => !g.isPostponed && !g.isCancelled);
+
+    nrfiData = [];
+    await Promise.all(gamesData.map(async g => {
+      try {
+        const nr = await fetch(`/api/nrfi/${g.gamePk}`).then(r => r.json());
+        if (nr.success) nrfiData.push({ ...nr, gameInfo: g });
+      } catch(e) {}
+    }));
+
+    updateHero();
+    renderCards();
+    document.getElementById('statusText').textContent = `${nrfiData.length} of ${gamesData.length} games loaded · First-inning model vs. market.`;
+  } catch(e) {
+    document.getElementById('gridWrap').innerHTML = '<div class="empty">Failed to load data. Check connection.</div>';
+  }
+  btn.disabled = false;
+  btn.textContent = 'Refresh';
+}
+
+function updateHero() {
+  const n = nrfiData.length;
+  const avgProb = n ? nrfiData.reduce((s,r) => s + (r.nrfi_prob||0), 0) / n : 0;
+  const edgePlays = nrfiData.filter(r => r.nrfi_edge != null && r.nrfi_edge > 0.02).length;
+  const yrfiPlays = nrfiData.filter(r => r.nrfi_edge != null && r.nrfi_edge < -0.02).length;
+  document.getElementById('hGames').textContent = gamesData.length;
+  document.getElementById('hAvgNRFI').textContent = n ? (avgProb * 100).toFixed(1) + '%' : '—';
+  document.getElementById('hEdgePlays').textContent = edgePlays;
+  document.getElementById('hYRFI').textContent = yrfiPlays;
+}
+
+function renderCards() {
+  const sortBy = document.getElementById('sortSel').value;
+  const showMode = document.getElementById('showSel').value;
+
+  let rows = [...nrfiData];
+
+  if (showMode === 'edge') rows = rows.filter(r => r.nrfi_edge != null && r.nrfi_edge > 0.02);
+  else if (showMode === 'yrfi') rows = rows.filter(r => r.nrfi_edge != null && r.nrfi_edge < -0.02);
+  else if (showMode === 'strong') rows = rows.filter(r => r.nrfi_edge != null && Math.abs(r.nrfi_edge) >= 0.06);
+
+  rows.sort((a, b) => {
+    if (sortBy === 'nrfi_prob') return (b.nrfi_prob||0) - (a.nrfi_prob||0);
+    if (sortBy === 'game') return (a.game||'').localeCompare(b.game||'');
+    const ae = a.nrfi_edge != null ? a.nrfi_edge : -99;
+    const be = b.nrfi_edge != null ? b.nrfi_edge : -99;
+    return be - ae;
+  });
+
+  if (!rows.length) {
+    document.getElementById('gridWrap').innerHTML = '<div class="empty">No games match current filters.</div>';
+    return;
+  }
+
+  const cards = rows.map(r => {
+    const nProb = r.nrfi_prob || 0;
+    const yProb = r.yrfi_prob || 0;
+    const edge = r.nrfi_edge;
+    const mktImplied = r.market_nrfi_implied;
+    const rec = nrfiRec(edge, nProb);
+    const edgePct = edge != null ? (edge >= 0 ? '+' : '') + (edge * 100).toFixed(1) + '%' : 'No Odds';
+    const edgeCls = edge == null ? 'neutral' : edge > 0.02 ? 'pos' : edge < -0.02 ? 'neg' : 'neutral';
+    const cardCls = edge == null ? '' : edge > 0.02 ? ' edge-pos' : edge < -0.02 ? ' edge-neg' : '';
+
+    const awayEra = r.away_sp_i1_era;
+    const homeEra = r.home_sp_i1_era;
+    const wx = r.weather || {};
+    const factors = r.key_factors || [];
+    const gamePk = (r.gameInfo||{}).gamePk || r.gamePk;
+
+    return `<div class="ncard${cardCls}">
+      <div class="nc-matchup">
+        <span>${r.game || (r.away + ' @ ' + r.home)}</span>
+        <span class="nc-time">${(r.gameInfo||{}).gameTime||''}</span>
+      </div>
+
+      <div class="nc-sp">
+        <div>Away SP: <span>${r.away_sp||'TBD'}</span>
+          <span class="${eraClass(awayEra)}">i1 ERA ${awayEra!=null?awayEra.toFixed(2):'—'}</span>
+        </div>
+        <div>Home SP: <span>${r.home_sp||'TBD'}</span>
+          <span class="${eraClass(homeEra)}">i1 ERA ${homeEra!=null?homeEra.toFixed(2):'—'}</span>
+        </div>
+      </div>
+
+      <div class="prob-section">
+        <div class="prob-block">
+          <div class="prob-block-label">Model NRFI</div>
+          <div class="prob-val" style="color:${barColor(nProb)}">${(nProb*100).toFixed(1)}%</div>
+          <div class="prob-bar-wrap"><div class="prob-bar" style="width:${(nProb*100).toFixed(0)}%;background:${barColor(nProb)}"></div></div>
+        </div>
+        <div class="prob-block">
+          <div class="prob-block-label">${mktImplied ? 'Market Implied' : 'Model YRFI'}</div>
+          <div class="prob-val" style="color:var(--mu)">${mktImplied ? (mktImplied*100).toFixed(1)+'%' : (yProb*100).toFixed(1)+'%'}</div>
+          <div class="prob-bar-wrap"><div class="prob-bar" style="width:${mktImplied ? (mktImplied*100).toFixed(0) : (yProb*100).toFixed(0)}%;background:var(--b)"></div></div>
+        </div>
+      </div>
+
+      <div class="edge-row">
+        <div>
+          <div style="font-size:.62rem;letter-spacing:.07em;text-transform:uppercase;color:var(--mu);margin-bottom:3px">Edge</div>
+          <span class="edge-badge ${edgeCls}">${edgePct}</span>
+        </div>
+        <span class="rec-badge ${rec.cls}">${rec.label}</span>
+      </div>
+
+      ${r.book_price ? `<div class="book-row">Best odds: <span class="book-price">${r.book_price > 0 ? '+' : ''}${r.book_price}</span> · ${r.bookmaker||''}</div>` : ''}
+
+      ${wx.temp || wx.wind ? `
+      <div class="wx-row">
+        ${wx.temp ? `<span class="wx-chip">🌡 ${wx.temp}°F</span>` : ''}
+        ${wx.wind_speed ? `<span class="wx-chip">💨 ${wx.wind_speed}mph ${wx.wind_dir||''}</span>` : ''}
+        ${wx.condition ? `<span class="wx-chip">${wx.condition}</span>` : ''}
+      </div>` : ''}
+
+      ${factors.length ? `<ul class="factors">${factors.map(f => `<li>${f}</li>`).join('')}</ul>` : ''}
+
+      ${gamePk ? `<a class="deeplink" href="/deep-dive/${gamePk}">Full game deep-dive →</a>` : ''}
+    </div>`;
+  }).join('');
+
+  document.getElementById('gridWrap').innerHTML = `<div class="grid">${cards}</div>`;
+}
+
+loadData(false);
+</script>
+</body>
+</html>
