@@ -35,6 +35,9 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .gchip-time{font-size:.65rem;color:var(--mu)}
 .gchip-st{font-size:.58rem;font-family:'Orbitron',monospace;letter-spacing:1px;color:var(--mu)}
 .gchip-st.live{color:var(--g)}
+.gchip-st.postponed{color:#ff9900}
+.gchip.postponed{border-color:rgba(255,153,0,.35);pointer-events:none}
+.gchip-dh{font-size:.56rem;font-family:'Orbitron',monospace;letter-spacing:1px;color:#a78bfa;padding:1px 4px;border:1px solid rgba(167,139,250,.4);border-radius:3px;display:inline-block;margin-top:1px}
 .main{padding:24px 32px;max-width:1640px;margin:0 auto}
 .no-game{text-align:center;padding:80px 20px;color:var(--mu)}
 .no-game-icon{font-size:3rem;margin-bottom:16px;opacity:.35}
@@ -817,14 +820,16 @@ async function loadGames() {
     const d = await r.json();
     const games = d.games || [];
     renderChips(games);
-    if (games.length) {
-      const first = games[0];
+    // Auto-select the first active (non-postponed/cancelled/suspended) game.
+    const activeGame = games.find(g => !g.isPostponed && !g.isCancelled && !g.isSuspended
+                                        && g.status !== 'Postponed' && g.status !== 'Cancelled' && g.status !== 'Suspended');
+    if (activeGame) {
       // Always return to the projections/batters pane on day load.
       document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === 'projections'));
       document.querySelectorAll('.tabpanel').forEach(p => p.classList.toggle('active', p.id === 'tab-projections'));
       switchSub('batters');
       try {
-        await selectGame(first.gamePk, first.awayAbbr, first.homeAbbr);
+        await selectGame(activeGame.gamePk, activeGame.awayAbbr, activeGame.homeAbbr);
       } catch (ex) {
         gel('batterGrid').innerHTML = errHTML(`AUTO-LOAD FAILED: ${ex.message || ex}`);
       }
@@ -906,12 +911,26 @@ function renderChips(games) {
   if (!games.length) { chips('<div style="color:var(--mu);font-family:Orbitron,monospace;font-size:.68rem;letter-spacing:2px;padding:10px">NO GAMES SCHEDULED</div>'); return; }
   chips(games.map(g => {
     const live = g.status === 'Live';
+    const postponed = g.isPostponed || g.status === 'Postponed';
+    const cancelled = g.isCancelled || g.status === 'Cancelled';
+    const suspended = g.isSuspended || g.status === 'Suspended';
+    const inactive  = postponed || cancelled || suspended;
+    const dh = g.isDoubleHeader;
     const escAttr = s => String(s||'').replace(/'/g,"\\'");
-    return `<div class="gchip ${live?'live':''}" id="chip-${esc(String(g.gamePk||''))}"
-      onclick="selectGame(${g.gamePk},'${escAttr(g.awayAbbr)}','${escAttr(g.homeAbbr)}')">
+    let statusLabel = g.status || 'SCHED';
+    if (postponed) statusLabel = 'POSTPONED';
+    else if (cancelled) statusLabel = 'CANCELLED';
+    else if (suspended) statusLabel = 'SUSPENDED';
+    const dhBadge = dh ? `<div class="gchip-dh">DH·G${g.gameNumber||1}</div>` : '';
+    const chipClass = `gchip${live?' live':''}${inactive?' postponed':''}`;
+    const clickAttr = inactive
+      ? ''
+      : `onclick="selectGame(${g.gamePk},'${escAttr(g.awayAbbr)}','${escAttr(g.homeAbbr)}')"`;
+    return `<div class="${chipClass}" id="chip-${esc(String(g.gamePk||''))}" ${clickAttr} style="${inactive?'opacity:.55;cursor:default':''}">
       <div class="gchip-teams">${esc(g.awayAbbr||'')} @ ${esc(g.homeAbbr||'')}</div>
-      <div class="gchip-time">${g.gameTime||g.time||''}</div>
-      <div class="gchip-st ${live?'live':''}">${g.status||'SCHED'}</div>
+      <div class="gchip-time">${postponed?'PPD':cancelled?'CNCL':suspended?'SUSP':(g.gameTime||g.time||'')}</div>
+      ${dhBadge}
+      <div class="gchip-st ${live?'live':''} ${inactive?'postponed':''}">${statusLabel}</div>
     </div>`;
   }).join(''));
 }

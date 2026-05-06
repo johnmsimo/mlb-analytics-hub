@@ -899,6 +899,8 @@ function loadGame(){
 function loadPitchers(){
   fetch('/api/pitchers/'+GPK).then(function(r){return r.json();}).then(function(d){
     PD=d;renderPitchers();populateSels();
+    // Trigger HR picks render now that pitcher data is loaded
+    if(typeof renderHRPicksPanel==='function') setTimeout(renderHRPicksPanel,300);
     fetch('/api/pitcher-matchup/'+GPK).then(function(r){return r.json();}).then(function(md){
       PMD = md;
       if(md && md.success && PD && PD.success){
@@ -916,8 +918,15 @@ function loadPitchers(){
 }
 function loadLineups(){
   fetch('/api/game/'+GPK).then(function(r){return r.json();}).then(function(d){
+    if(d.isPostponed||d.isCancelled||d.isSuspended||d.isInactive){
+      var label = d.isPostponed?'Game Postponed':d.isCancelled?'Game Cancelled':'Game Suspended';
+      document.getElementById('luP').innerHTML='<p class="na">'+label+' — No lineup available.</p>';
+      return;
+    }
     if(d.success){AL=d.awayBatters||[];HL=d.homeBatters||[];}
     showTab('away');populateSels();
+    // Trigger HR picks render now that lineups are loaded
+    if(typeof renderHRPicksPanel==='function') setTimeout(renderHRPicksPanel,200);
   }).catch(function(){document.getElementById('luP').innerHTML='<p class="na">Lineup not yet posted. Check back ~3h before first pitch.</p>';});
 }
 
@@ -5802,7 +5811,7 @@ function renderHRPicksPanel(){
   el.innerHTML = h;
 }
 
-// Inject TOP HR PICKS panel into the DOM and auto-render after data loads
+// Inject TOP HR PICKS panel and poll until lineup + pitcher data are both ready.
 (function(){
   function injectHRPicksPanel(){
     if(document.getElementById('hrPicksPanel')) return;
@@ -5816,43 +5825,35 @@ function renderHRPicksPanel(){
       if(parlayWrap) dg.insertBefore(wrap, parlayWrap);
       else dg.appendChild(wrap);
     }
-    // Render immediately (spinner will show until data loads)
-    renderHRPicksPanel();
   }
 
-  // Wait for DOM then inject
+  // Poll until both lineup (AL/HL) and pitcher data (PD) are available, then render.
+  // Retries every 600ms for up to 15s so it always fires even on slow connections.
+  function pollAndRenderHRPicks(attemptsLeft){
+    var al = safeAL ? safeAL() : (Array.isArray(AL) ? AL : []);
+    var hl = safeHL ? safeHL() : (Array.isArray(HL) ? HL : []);
+    var pd = safePD ? safePD() : null;
+    if((al.length || hl.length) && pd){
+      renderHRPicksPanel();
+      return;
+    }
+    if(attemptsLeft > 0){
+      setTimeout(function(){ pollAndRenderHRPicks(attemptsLeft-1); }, 600);
+    } else {
+      // Give up and render with whatever data is available (may show partial or no picks).
+      renderHRPicksPanel();
+    }
+  }
+
+  function init(){
+    injectHRPicksPanel();
+    pollAndRenderHRPicks(25); // poll up to 25 × 600ms = 15s
+  }
+
   if(document.readyState==='loading'){
-    document.addEventListener('DOMContentLoaded', function(){ setTimeout(injectHRPicksPanel, 400); });
+    document.addEventListener('DOMContentLoaded', function(){ setTimeout(init, 100); });
   } else {
-    setTimeout(injectHRPicksPanel, 400);
-  }
-
-  // Re-render picks panel whenever game data reloads
-  var _origLoadGame = typeof loadGame==='function' ? loadGame : null;
-  if(_origLoadGame){
-    loadGame = function(){
-      var r = _origLoadGame.apply(this, arguments);
-      setTimeout(renderHRPicksPanel, 2500);
-      return r;
-    };
-  }
-  // Re-render when pitchers finish loading (pitchers needed for scoreBatter)
-  var _origLoadPitchers = typeof loadPitchers==='function' ? loadPitchers : null;
-  if(_origLoadPitchers){
-    loadPitchers = function(){
-      var r = _origLoadPitchers.apply(this, arguments);
-      setTimeout(renderHRPicksPanel, 500);
-      return r;
-    };
-  }
-  // Re-render when lineups finish loading (AL/HL needed for picks)
-  var _hrOrigLoadLineups = typeof loadLineups==='function' ? loadLineups : null;
-  if(_hrOrigLoadLineups){
-    loadLineups = function(){
-      var r = _hrOrigLoadLineups.apply(this, arguments);
-      setTimeout(renderHRPicksPanel, 800);
-      return r;
-    };
+    setTimeout(init, 100);
   }
 })();
 // ═══════════════════════════════════════════════════════════════

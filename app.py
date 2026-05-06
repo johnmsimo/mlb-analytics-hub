@@ -2380,7 +2380,17 @@ def parse_game(g, prefer_live_weather=True):
         st_l = str(stat or "").lower()
         is_live = "progress" in st_l or "manager challenge" in st_l or "review" in st_l
         is_final = any(token in st_l for token in ("final", "game over", "completed early"))
-        st   = "Live" if is_live else ("Final" if is_final else "Scheduled")
+        is_postponed = "postponed" in st_l
+        is_cancelled = "cancelled" in st_l or "canceled" in st_l
+        is_suspended = "suspended" in st_l
+        if is_postponed:
+            st = "Postponed"
+        elif is_cancelled:
+            st = "Cancelled"
+        elif is_suspended:
+            st = "Suspended"
+        else:
+            st = "Live" if is_live else ("Final" if is_final else "Scheduled")
         away = g.get("teams",{}).get("away",{})
         home = g.get("teams",{}).get("home",{})
         at   = away.get("team",{}); ht = home.get("team",{})
@@ -2431,6 +2441,9 @@ def parse_game(g, prefer_live_weather=True):
         pf   = PARK_FACTORS.get(hid, 1.0)
         series_game  = int(g.get("seriesGameNumber") or 1)
         series_total = int(g.get("gamesInSeries")    or 3)
+        double_header = str(g.get("doubleHeader") or "N").upper()
+        game_number   = int(g.get("gameNumber") or 1)
+        is_double_header = double_header == "Y"
         ap_n = ap.get("fullName","TBD"); hp_n = hp.get("fullName","TBD")
         fgap = fg_pitcher(ap_n); fghp = fg_pitcher(hp_n)
         era_a = float(fgap.get("fg_era") or 4.50); era_h = float(fghp.get("fg_era") or 4.50)
@@ -2470,6 +2483,11 @@ def parse_game(g, prefer_live_weather=True):
         home_score = home.get("score")
         return {
             "gamePk": pk, "status": st,
+            "isPostponed": is_postponed,
+            "isCancelled": is_cancelled,
+            "isSuspended": is_suspended,
+            "isDoubleHeader": is_double_header,
+            "gameNumber": game_number,
             "awayAbbr": at.get("abbreviation","?"), "awayName": at.get("name",""),
             "homeAbbr": ht.get("abbreviation","?"), "homeName": ht.get("name",""),
             "awayLogo": LOGO_BASE.format(team_id=aid) if aid else "",
@@ -3455,26 +3473,22 @@ def api_game_detail(game_pk):
     _wait_for_fg_data(timeout_sec=_CACHE_WAIT_TIMEOUT_SEC)
     _wait_for_savant_data(timeout_sec=_CACHE_WAIT_TIMEOUT_SEC)
     try:
-        away_bats, home_bats = [], []
-        try:
-            r = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=10)
-            r.raise_for_status()
-            d = r.json().get("teams",{})
-            away_bats = get_batters_from_boxscore(d.get("away",{}), "away")
-            home_bats = get_batters_from_boxscore(d.get("home",{}), "home")
-        except Exception as ex:
-            print(f"[api_game_detail] boxscore error game_pk={game_pk}: {traceback.format_exc()}")
-        # Pre-game fallback: use schedule lineup or roster when boxscore has no batters.
-        if not away_bats or not home_bats:
-            _, fb_away, fb_home, _, _, _ = _props_fetch_game(game_pk)
-            if not away_bats:
-                away_bats = fb_away
-            if not home_bats:
-                home_bats = fb_home
+        # Use _props_fetch_game as the single source of truth: it handles boxscore,
+        # schedule lineups, and roster fallback in one call.
+        gdata, away_bats, home_bats, away_t, home_t, _ = _props_fetch_game(game_pk)
+        if not gdata:
+            return jsonify({"success": False, "error": "Game not found", "awayBatters": [], "homeBatters": []}), 404
+        _gstatus = str((gdata.get("status") or {}).get("detailedState") or "").lower()
+        _is_inactive = any(tok in _gstatus for tok in ("postponed", "cancelled", "canceled", "suspended"))
         return jsonify({
             "success": True,
             "awayBatters": away_bats,
             "homeBatters": home_bats,
+            "isPostponed": "postponed" in _gstatus,
+            "isCancelled": any(tok in _gstatus for tok in ("cancelled", "canceled")),
+            "isSuspended": "suspended" in _gstatus,
+            "isInactive": _is_inactive,
+            "gameStatus": _gstatus,
         })
     except Exception as ex:
         print("[api_game_detail]", traceback.format_exc())
@@ -11223,7 +11237,13 @@ def _l10_hit_pct_for_player(player_id, memo):
 
 
 def _compute_cheatsheets_today(date_str):
-    sched = fetch_schedule(date_str)
+    full_sched = fetch_schedule(date_str)
+    # Remove postponed, cancelled, and suspended games — no lineup data available.
+    sched = [
+        g for g in full_sched
+        if not any(tok in str((g.get("status") or {}).get("detailedState") or "").lower()
+                   for tok in ("postponed", "cancelled", "canceled", "suspended"))
+    ]
     if not sched:
         return {
             'success': True,
@@ -11493,7 +11513,7 @@ def _compute_cheatsheets_today(date_str):
         'battingOrderMatchups': {'rows': matchup_rows[:450]},
         'pitcherWeakspots': {'cards': weakspot_cards},
         'generatedAt': datetime.now(timezone.utc).isoformat(),
-        'signature': _cheatsheet_signature(sched),
+        'signature': _cheatsheet_signature(full_sched),
         'games': len(sched),
     }
 
@@ -12619,15 +12639,20 @@ def _props_fetch_game(game_pk, date_hint=None):
     ap_info = away_t.get("probablePitcher", {})
     hp_info = home_t.get("probablePitcher", {})
 
+    # Skip boxscore fetch for postponed/cancelled games — there is no game to score.
+    _gstatus = str((gdata.get("status") or {}).get("detailedState") or "").lower()
+    _is_inactive = any(tok in _gstatus for tok in ("postponed", "cancelled", "canceled", "suspended"))
+
     away_bats, home_bats = [], []
-    try:
-        r = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=10)
-        r.raise_for_status()
-        box = r.json().get("teams", {})
-        away_bats = get_batters_from_boxscore(box.get("away", {}), "away")
-        home_bats = get_batters_from_boxscore(box.get("home", {}), "home")
-    except Exception as ex:
-        print(f"[props] boxscore error: {ex}")
+    if not _is_inactive:
+        try:
+            r = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=10)
+            r.raise_for_status()
+            box = r.json().get("teams", {})
+            away_bats = get_batters_from_boxscore(box.get("away", {}), "away")
+            home_bats = get_batters_from_boxscore(box.get("home", {}), "home")
+        except Exception as ex:
+            print(f"[props] boxscore error: {ex}")
 
     # Pre-game fallback: hydrate scheduled lineups from schedule payload.
     if not away_bats or not home_bats:
