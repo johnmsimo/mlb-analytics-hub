@@ -10916,14 +10916,14 @@ def _cheatsheet_matchup_grade(score_tier, pitch_adv=None, bvp_grade=None, bvp_pa
         'D': 0,
     }.get(tier, 1)
 
-    status = str((pitch_adv or {}).get('status') or 'neutral').lower()
+    status = (pitch_adv or {}).get('status', 'neutral').lower()
     if status == 'favorable':
         base_idx += 1
     elif status == 'unfavorable':
         base_idx -= 1
 
     pa = int(bvp_pa or 0)
-    bvp = str(bvp_grade or '').upper()
+    bvp = (bvp_grade or '').upper()
     if pa >= 10 and bvp in ('A+', 'A'):
         base_idx += 1
     elif pa >= 15 and bvp == 'D':
@@ -11516,15 +11516,17 @@ def _compute_cheatsheets_today(date_str):
 
             def _weakspot_card(p_name, p_id, p_team, opp_bats, p_fg, p_sv, p_hand,
                                  game_time_sort='9999', game_time_display=''):
-                p_name = (p_name or '').strip() or 'TBD'
-                is_tbd_pitcher = p_name == 'TBD'
+                p_name = (p_name or '').strip()
+                is_tbd_pitcher = not p_name or p_name == 'TBD'
+                p_name = p_name or 'TBD'
                 opp_scores = []
-                for b in (opp_bats or [])[:9]:
-                    sc = _matchup_score(b, p_fg or {}, p_sv or {}, pitcher_hand=p_hand)
-                    opp_scores.append({'slot': b.get('slot', 0), 'score': sc.get('score', 50), 'batter': b})
-                opp_scores.sort(key=lambda x: x.get('score', 0), reverse=True)
+                if not is_tbd_pitcher:
+                    for b in (opp_bats or [])[:9]:
+                        sc = _matchup_score(b, p_fg or {}, p_sv or {}, pitcher_hand=p_hand)
+                        opp_scores.append({'slot': b.get('slot', 0), 'score': sc.get('score', 50), 'batter': b})
+                    opp_scores.sort(key=lambda x: x.get('score', 0), reverse=True)
                 top_slots = sorted([x.get('slot') for x in opp_scores[:3] if x.get('slot')])
-                weak_slots = ', '.join(str(x) for x in top_slots) if top_slots else 'n/a'
+                weak_slots = ', '.join(str(x) for x in top_slots) if top_slots else ('pending' if is_tbd_pitcher else 'n/a')
 
                 # Build top 3 batter targets with name, slot, score, avg
                 top_batters = []
