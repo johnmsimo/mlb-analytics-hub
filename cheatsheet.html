@@ -104,7 +104,7 @@
         <table>
           <thead>
             <tr>
-              <th>Player</th><th>Team</th><th>Slot</th><th>Matchup</th><th>vs Hand</th><th>L10 %</th><th>BvP</th><th>Hub</th><th>EV %</th>
+              <th>Player</th><th>Team</th><th>Slot</th><th>Matchup</th><th>vs Hand</th><th>L10 %</th><th>Grade</th><th>Hub</th><th>EV %</th>
             </tr>
           </thead>
           <tbody id="hitsBody"></tbody>
@@ -118,7 +118,7 @@
         <table>
           <thead>
             <tr>
-              <th>Game</th><th>Rank</th><th>Player</th><th>Team</th><th>Slot</th><th>Score</th><th>BvP</th><th>L10 %</th><th>Hub</th>
+              <th>Game</th><th>Rank</th><th>Player</th><th>Team</th><th>Slot</th><th>Score</th><th>Grade</th><th>L10 %</th><th>Hub</th>
             </tr>
           </thead>
           <tbody id="matchBody"></tbody>
@@ -182,7 +182,7 @@
         '<td>'+ esc(r.matchup||'-') +'</td>'+
         '<td>'+ esc(r.vsHand||'-') +'</td>'+
         '<td class="'+l10Class(r.l10Pct)+'">'+pct(r.l10Pct)+'</td>'+
-        '<td>'+ esc(r.bvpGrade||'-') +'</td>'+
+        '<td>'+ esc(r.matchupGrade||r.bvpGrade||'-') +'</td>'+
         '<td>'+ (r.hubRating==null?'-':r.hubRating) +'</td>'+
         '<td class="'+((r.evPct||0)>=0?'good':'bad')+'">'+num(r.evPct,1)+'%</td>'+
         '<td><button class="btn parlay-btn" onclick="addHitsRowToParlay('+idx+')">+ Parlay</button></td>'+
@@ -206,7 +206,7 @@
         '<td>'+ esc(r.team||'-') +'</td>'+
         '<td>'+ esc(r.slot||'-') +'</td>'+
         '<td>'+ num(r.matchupScore,1) +'</td>'+
-        '<td>'+ esc(r.bvpGrade||'-') +'</td>'+
+        '<td>'+ esc(r.matchupGrade||r.bvpGrade||'-') +'</td>'+
         '<td class="'+l10Class(r.l10Pct)+'">'+pct(r.l10Pct)+'</td>'+
         '<td>'+ (r.hubRating==null?'-':r.hubRating) +'</td>'+
         '<td><button class="btn parlay-btn" onclick="addMatchupRowToParlay('+idx+')">+ Parlay</button></td>'+

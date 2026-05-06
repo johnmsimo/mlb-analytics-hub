@@ -11359,6 +11359,32 @@ def _compute_cheatsheets_today(date_str):
         s = str(status or 'neutral').lower()
         return {'favorable': 0.85, 'neutral': 0.50, 'unfavorable': 0.20}.get(s, 0.50)
 
+    def _cheatsheet_matchup_grade(score_tier, pitch_adv=None, bvp_grade=None, bvp_pa=0):
+        ladder = ['D', 'C', 'B', 'A', 'A+']
+        tier = str(score_tier or 'C').upper()
+        base_idx = {
+            'A+': 4,
+            'A': 3,
+            'B': 2,
+            'C': 1,
+            'D': 0,
+        }.get(tier, 1)
+
+        status = str((pitch_adv or {}).get('status') or 'neutral').lower()
+        if status == 'favorable':
+            base_idx += 1
+        elif status == 'unfavorable':
+            base_idx -= 1
+
+        pa = int(bvp_pa or 0)
+        bvp = str(bvp_grade or '').upper()
+        if pa >= 10 and bvp in ('A+', 'A'):
+            base_idx += 1
+        elif pa >= 15 and bvp == 'D':
+            base_idx -= 1
+
+        return ladder[max(0, min(len(ladder) - 1, base_idx))]
+
     def _process_game(g):
         local_hits = []
         local_matchups = []
@@ -11422,6 +11448,12 @@ def _compute_cheatsheets_today(date_str):
                     bvp_data = _fetch_bvp(pid, opp_id) if (pid and opp_id) else None
                     bvp_grade = _compute_bvp_grade(bvp_data)
                     pitch_adv = _pitch_type_advantage(pid, opp_id, batter_name=name, pitcher_name=opp_name) if (pid and opp_id) else {'status': 'neutral'}
+                    matchup_grade = _cheatsheet_matchup_grade(
+                        score.get('tier'),
+                        pitch_adv=pitch_adv,
+                        bvp_grade=bvp_grade,
+                        bvp_pa=(bvp_data or {}).get('pa'),
+                    )
                     split_ops = platoon_blend_v2(b, opp_hand, 'ops')
                     split_score = max(0.0, min(1.0, (split_ops - 0.550) / 0.350))
                     park_score = max(0.0, min(1.0, (park - 0.90) / 0.25))
@@ -11452,6 +11484,7 @@ def _compute_cheatsheets_today(date_str):
                         'oppPitcher': opp_name,
                         'l10Pct': l10_pct,
                         'bvpGrade': bvp_grade,
+                        'matchupGrade': matchup_grade,
                         'hubRating': hub,
                         'evPct': ev_pct,
                         'matchupScore': score.get('score'),
@@ -11475,17 +11508,18 @@ def _compute_cheatsheets_today(date_str):
                     'slot': row.get('slot'),
                     'matchupScore': row.get('composite'),
                     'bvpGrade': row.get('bvpGrade'),
+                    'matchupGrade': row.get('matchupGrade'),
                     'l10Pct': row.get('l10Pct'),
                     'hubRating': row.get('hubRating'),
                 })
 
             def _weakspot_card(p_name, p_id, p_team, opp_bats, p_fg, p_sv, p_hand,
                                  game_time_sort='9999', game_time_display=''):
-                if not p_name or p_name == 'TBD':
-                    return None
+                p_name = (p_name or '').strip() or 'TBD'
+                is_tbd_pitcher = p_name == 'TBD'
                 opp_scores = []
                 for b in (opp_bats or [])[:9]:
-                    sc = _matchup_score(b, p_fg, p_sv, pitcher_hand=p_hand)
+                    sc = _matchup_score(b, p_fg or {}, p_sv or {}, pitcher_hand=p_hand)
                     opp_scores.append({'slot': b.get('slot', 0), 'score': sc.get('score', 50), 'batter': b})
                 opp_scores.sort(key=lambda x: x.get('score', 0), reverse=True)
                 top_slots = sorted([x.get('slot') for x in opp_scores[:3] if x.get('slot')])
@@ -11505,33 +11539,40 @@ def _compute_cheatsheets_today(date_str):
                     })
 
                 # Arsenal lookup with fuzzy fallback (fixes 'Unknown (0.0% usage)')
-                with _sv_lock:
-                    _name_key = _sv_key(p_name) if p_name else ""
-                    arsenal = dict(_sv_arsenal_pct.get(_name_key, {}) or {})
-                    if not arsenal and _name_key:
-                        _match = difflib.get_close_matches(_name_key, _sv_arsenal_pct.keys(), n=1, cutoff=0.72)
-                        if _match:
-                            arsenal = dict(_sv_arsenal_pct.get(_match[0], {}) or {})
-                primary_pitch, primary_pct = ('Unknown', 0)
-                if arsenal:
-                    primary_pitch, primary_pct = max(arsenal.items(), key=lambda kv: kv[1])
-                pitch_label = PITCH_LABELS.get(primary_pitch, primary_pitch)
-                pitch_vuln = f"{pitch_label} ({round(float(primary_pct or 0), 1)}% usage)"
-
-                recent = _pitcher_recent_form(p_id) if p_id else {}
-                season_era = _safe_f((pitcher_stats_mlb(p_id) or {}).get('era'), 4.20) if p_id else 4.20
-                recent_era = _safe_f(recent.get('era_recent'), season_era)
-                if recent and recent_era <= max(2.70, season_era - 0.4):
-                    form_label = f"DEALING ({recent_era:.2f} ERA last {recent.get('n_starts', 0)} starts)"
-                elif recent and recent_era >= min(6.50, season_era + 0.5):
-                    form_label = f"STRUGGLING ({recent_era:.2f} ERA last {recent.get('n_starts', 0)} starts)"
+                if is_tbd_pitcher:
+                    pitch_vuln = 'Awaiting probable pitcher'
+                    form_label = 'PENDING PROBABLE'
+                    recent = {}
                 else:
-                    era_src = "recent" if recent else "season"
-                    form_label = f"STABLE ({recent_era:.2f} ERA {era_src})"
+                    with _sv_lock:
+                        _name_key = _sv_key(p_name) if p_name else ""
+                        arsenal = dict(_sv_arsenal_pct.get(_name_key, {}) or {})
+                        if not arsenal and _name_key:
+                            _match = difflib.get_close_matches(_name_key, _sv_arsenal_pct.keys(), n=1, cutoff=0.72)
+                            if _match:
+                                arsenal = dict(_sv_arsenal_pct.get(_match[0], {}) or {})
+                    primary_pitch, primary_pct = ('Unknown', 0)
+                    if arsenal:
+                        primary_pitch, primary_pct = max(arsenal.items(), key=lambda kv: kv[1])
+                    pitch_label = PITCH_LABELS.get(primary_pitch, primary_pitch)
+                    pitch_vuln = f"{pitch_label} ({round(float(primary_pct or 0), 1)}% usage)"
+
+                    recent = _pitcher_recent_form(p_id) if p_id else {}
+                    season_era = _safe_f((pitcher_stats_mlb(p_id) or {}).get('era'), 4.20) if p_id else 4.20
+                    recent_era = _safe_f(recent.get('era_recent'), season_era)
+                    if recent and recent_era <= max(2.70, season_era - 0.4):
+                        form_label = f"DEALING ({recent_era:.2f} ERA last {recent.get('n_starts', 0)} starts)"
+                    elif recent and recent_era >= min(6.50, season_era + 0.5):
+                        form_label = f"STRUGGLING ({recent_era:.2f} ERA last {recent.get('n_starts', 0)} starts)"
+                    else:
+                        era_src = "recent" if recent else "season"
+                        form_label = f"STABLE ({recent_era:.2f} ERA {era_src})"
 
                 # K prop display block
                 k_prop_display = None
                 try:
+                    if is_tbd_pitcher:
+                        raise ValueError('probable pitcher pending')
                     p_fg_k = fg_pitcher(p_name) or {}
                     k9_season = _safe_f(p_fg_k.get('fg_k9'), 0.0)
                     k9_recent = _safe_f((recent or {}).get('k9_recent'), k9_season)
@@ -11552,7 +11593,9 @@ def _compute_cheatsheets_today(date_str):
                     pass
 
                 avg_top_score = sum(x.get('score', 50) for x in opp_scores[:4]) / max(1, len(opp_scores[:4]))
-                if 'STRUGGLING' in form_label:
+                if is_tbd_pitcher:
+                    rec = 'Wait for the listed starter before attacking this game'
+                elif 'STRUGGLING' in form_label:
                     rec = 'Target top-order hits/TB overs'
                 elif 'DEALING' in form_label:
                     rec = 'Play selectively by lineup slot and price'
