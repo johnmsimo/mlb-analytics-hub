@@ -7824,6 +7824,67 @@ def api_odds_cache_refresh():
         return jsonify({'success': False, 'error': str(ex)}), 500
 
 
+def _poisson_over_prob(mean, line):
+    """P(X > line) = P(X >= floor(line)+1) via Poisson(mean). Works for any half-integer line."""
+    k = int(line) + 1
+    if mean <= 0 or k < 1:
+        return 0.0
+    lam = float(mean)
+    log_p = -lam
+    cdf = math.exp(log_p)
+    for x in range(1, k):
+        log_p += math.log(lam) - math.log(x)
+        cdf += math.exp(log_p)
+    return max(0.0, min(1.0, 1.0 - cdf))
+
+
+def _market_lines_for_player(market_props, player, mk):
+    """Sorted list of distinct lines actually offered in the market for a player/market combo."""
+    seen = set()
+    for item in market_props:
+        if item.get('player') == player and item.get('market_key') == mk:
+            try:
+                seen.add(round(float(item.get('line')), 2))
+            except (TypeError, ValueError):
+                pass
+    return sorted(seen)
+
+
+# Maps (market_key, line) → precomputed MC prob field; None = use Poisson from mean
+_BATTER_PROB_FIELD_FOR = {
+    ('batter_hits', 0.5): 'p_1plus_hit',
+    ('batter_hits', 1.5): 'p_2plus_hit',
+    ('batter_total_bases', 1.5): 'p_2plus_tb',
+    ('batter_home_runs', 0.5): 'p_1plus_hr',
+    ('batter_rbis', 0.5): 'p_1plus_rbi',
+    ('batter_runs_scored', 0.5): 'p_1plus_run',
+    ('batter_hits_runs_rbis', 1.5): 'p_2plus_hrr',
+    ('batter_hits_runs_rbis', 2.5): 'p_3plus_hrr',
+    ('batter_hits_runs_rbis', 3.5): 'p_4plus_hrr',
+    ('batter_stolen_bases', 0.5): 'p_1plus_sb',
+}
+_BATTER_MEAN_FIELD_FOR_MK = {
+    'batter_hits': 'mean_hits',
+    'batter_total_bases': 'mean_tb',
+    'batter_home_runs': 'mean_hr',
+    'batter_rbis': 'mean_rbi',
+    'batter_runs_scored': 'mean_runs',
+    'batter_hits_runs_rbis': 'mean_hrr',
+    'batter_stolen_bases': 'mean_sb',
+}
+# Fallback lines used when no Odds API data for a player/market
+_BATTER_FALLBACK_LINE = {
+    'batter_hits': 0.5,
+    'batter_total_bases': 1.5,
+    'batter_home_runs': 0.5,
+    'batter_rbis': 0.5,
+    'batter_runs_scored': 0.5,
+    'batter_hits_runs_rbis': 2.5,
+    'batter_stolen_bases': 0.5,
+}
+_K_PROB_FIELD_FOR = {3.5: 'p_4plus_k', 4.5: 'p_5plus_k', 5.5: 'p_6plus_k'}
+
+
 def _parse_prop_markets(bookmakers, valid_names):
     grouped = {}
     for bk in bookmakers or []:
@@ -8662,75 +8723,79 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
         return None
 
     rows = []
-    hit_defs = [
-        ('batter_hits', 0.5, 'p_1plus_hit', 'mean_hits'),
-        ('batter_hits', 1.5, 'p_2plus_hit', 'mean_hits'),
-        ('batter_total_bases', 1.5, 'p_2plus_tb', 'mean_tb'),
-        ('batter_home_runs', 0.5, 'p_1plus_hr', 'mean_hr'),
-        ('batter_rbis', 0.5, 'p_1plus_rbi', 'mean_rbi'),
-        ('batter_runs_scored', 0.5, 'p_1plus_run', 'mean_runs'),
-        ('batter_hits_runs_rbis', 1.5, 'p_2plus_hrr', 'mean_hrr'),
-        ('batter_hits_runs_rbis', 2.5, 'p_3plus_hrr', 'mean_hrr'),
-        ('batter_hits_runs_rbis', 3.5, 'p_4plus_hrr', 'mean_hrr'),
-        ('batter_stolen_bases', 0.5, 'p_1plus_sb', 'mean_sb'),
-    ]
 
     def process_hitters(arr, team_abbr, opp_name):
         for p in arr:
-            for mk, line, prob_field, mean_field in hit_defs:
-                raw_prob = float(p.get(prob_field, 0) or 0)
-                if raw_prob < 0.10:
-                    continue
-                raw_mult_prob = _clamp01(raw_prob * _market_mult(mk, adjustments))
-                market = find_market(p.get('name'), mk, line)
-                msum = _market_price_summary(market_props, p.get('name'), mk, line)
-                market_implied = msum.get('market_implied')
-                if market_implied and market_implied > 0:
-                    over_imp = market_implied
-                    under_imp = _american_to_implied(msum.get('best_under_price')) or (1 - over_imp)
-                    adj_prob = logit_blend_prob(raw_mult_prob, over_imp, mk, over_imp, under_imp)
-                else:
-                    adj_prob = raw_mult_prob
-                edge = (adj_prob - market_implied) if market_implied is not None else None
-                score = (edge * 100.0 if edge is not None else 0) + adj_prob
-                hub = _hub_rating(adj_prob, edge or 0)
-                mi = market_implied
-                ev_pct = round(adj_prob / mi - 1, 4) if mi and mi > 0 else None
-                temp_row = {
-                    'date': capture_date, 'gamePk': game_pk, 'team': team_abbr, 'player': p.get('name'), 'playerId': p.get('id'), 'slot': p.get('slot'), 'marketKey': mk, 'line': line, 'recommendedSide': 'Over',
-                    'rawProb': round(raw_prob, 4), 'rawMultProb': round(raw_mult_prob, 4), 'adjProb': round(adj_prob, 4), 'modelMean': round(float(p.get(mean_field, 0) or 0), 3), 'edge': round(edge, 4) if edge is not None else None,
-                    'bookmaker': msum.get('market_bookmaker'), 'marketPrice': msum.get('best_over_price'), 'marketImplied': market_implied,
-                    'bestAvailablePrice': msum.get('best_over_price'), 'bestAvailableBook': msum.get('best_over_book'),
-                    'bestOverPrice': msum.get('best_over_price'), 'bestOverBook': msum.get('best_over_book'),
-                    'bestUnderPrice': msum.get('best_under_price'), 'bestUnderBook': msum.get('best_under_book'),
-                    'lineRange': msum.get('line_range'), 'bookCount': msum.get('book_count'), 'lineVaries': msum.get('line_varies'),
-                    'best_over_price': msum.get('best_over_price'), 'best_over_book': msum.get('best_over_book'),
-                    'best_under_price': msum.get('best_under_price'), 'best_under_book': msum.get('best_under_book'),
-                    'line_range': msum.get('line_range'), 'book_count': msum.get('book_count'), 'line_varies': msum.get('line_varies'),
-                    'score': round(score, 4), 'hubRating': hub, 'evPct': ev_pct, 'opp': opp_name, 'reason': _projection_reason_short(p.get('name'), mk, adj_prob, edge, opp_name), 'status': 'pending', 'actual': None, 'grade': 'pending', 'openingPrice': msum.get('best_over_price'), 'openingImplied': market_implied, 'closingPrice': None, 'closingImplied': None, 'closingBookmaker': None, 'closingCapturedAt': None, 'clvEdge': None, 'profitUnits': None, 'profitDollars': None,
-                    'parlayId': None, 'parlayLeg': None
-                }
-                # Phase 1: Add schema fields
-                temp_row['id'] = str(uuid4())
-                temp_row['savedAt'] = datetime.now(ET).isoformat()
-                temp_row['source'] = 'props_board'
-                stake_profile = _stake_profile(temp_row, adjustments)
-                temp_row['stakeDollars'] = stake_profile.get('stake_dollars')
-                # Phase 2: Add tier and BvP grade
-                temp_row['confidenceTier'] = _confidence_tier(temp_row)
-                if home_pitcher and home_pitcher.get('id'):
-                    bvp_data = _fetch_bvp(p.get('id'), home_pitcher.get('id'))
-                    temp_row['bvpGrade'] = _compute_bvp_grade(bvp_data)
-                else:
-                    temp_row['bvpGrade'] = None
-                rows.append(temp_row)
+            player_name = p.get('name')
+            for mk, mean_field in _BATTER_MEAN_FIELD_FOR_MK.items():
+                # Use actual market lines from Odds API; fall back to single default
+                mkt_lines = _market_lines_for_player(market_props, player_name, mk)
+                lines_to_use = mkt_lines if mkt_lines else [_BATTER_FALLBACK_LINE[mk]]
+                for line in lines_to_use:
+                    prob_field = _BATTER_PROB_FIELD_FOR.get((mk, line))
+                    if prob_field:
+                        raw_prob = float(p.get(prob_field, 0) or 0)
+                    else:
+                        raw_prob = _poisson_over_prob(float(p.get(mean_field, 0) or 0), line)
+                    if raw_prob < 0.10:
+                        continue
+                    raw_mult_prob = _clamp01(raw_prob * _market_mult(mk, adjustments))
+                    market = find_market(player_name, mk, line)
+                    msum = _market_price_summary(market_props, player_name, mk, line)
+                    market_implied = msum.get('market_implied')
+                    if market_implied and market_implied > 0:
+                        over_imp = market_implied
+                        under_imp = _american_to_implied(msum.get('best_under_price')) or (1 - over_imp)
+                        adj_prob = logit_blend_prob(raw_mult_prob, over_imp, mk, over_imp, under_imp)
+                    else:
+                        adj_prob = raw_mult_prob
+                    edge = (adj_prob - market_implied) if market_implied is not None else None
+                    score = (edge * 100.0 if edge is not None else 0) + adj_prob
+                    hub = _hub_rating(adj_prob, edge or 0)
+                    mi = market_implied
+                    ev_pct = round(adj_prob / mi - 1, 4) if mi and mi > 0 else None
+                    temp_row = {
+                        'date': capture_date, 'gamePk': game_pk, 'team': team_abbr, 'player': p.get('name'), 'playerId': p.get('id'), 'slot': p.get('slot'), 'marketKey': mk, 'line': line, 'recommendedSide': 'Over',
+                        'rawProb': round(raw_prob, 4), 'rawMultProb': round(raw_mult_prob, 4), 'adjProb': round(adj_prob, 4), 'modelMean': round(float(p.get(mean_field, 0) or 0), 3), 'edge': round(edge, 4) if edge is not None else None,
+                        'bookmaker': msum.get('market_bookmaker'), 'marketPrice': msum.get('best_over_price'), 'marketImplied': market_implied,
+                        'bestAvailablePrice': msum.get('best_over_price'), 'bestAvailableBook': msum.get('best_over_book'),
+                        'bestOverPrice': msum.get('best_over_price'), 'bestOverBook': msum.get('best_over_book'),
+                        'bestUnderPrice': msum.get('best_under_price'), 'bestUnderBook': msum.get('best_under_book'),
+                        'lineRange': msum.get('line_range'), 'bookCount': msum.get('book_count'), 'lineVaries': msum.get('line_varies'),
+                        'best_over_price': msum.get('best_over_price'), 'best_over_book': msum.get('best_over_book'),
+                        'best_under_price': msum.get('best_under_price'), 'best_under_book': msum.get('best_under_book'),
+                        'line_range': msum.get('line_range'), 'book_count': msum.get('book_count'), 'line_varies': msum.get('line_varies'),
+                        'score': round(score, 4), 'hubRating': hub, 'evPct': ev_pct, 'opp': opp_name, 'reason': _projection_reason_short(p.get('name'), mk, adj_prob, edge, opp_name), 'status': 'pending', 'actual': None, 'grade': 'pending', 'openingPrice': msum.get('best_over_price'), 'openingImplied': market_implied, 'closingPrice': None, 'closingImplied': None, 'closingBookmaker': None, 'closingCapturedAt': None, 'clvEdge': None, 'profitUnits': None, 'profitDollars': None,
+                        'parlayId': None, 'parlayLeg': None
+                    }
+                    # Phase 1: Add schema fields
+                    temp_row['id'] = str(uuid4())
+                    temp_row['savedAt'] = datetime.now(ET).isoformat()
+                    temp_row['source'] = 'props_board'
+                    stake_profile = _stake_profile(temp_row, adjustments)
+                    temp_row['stakeDollars'] = stake_profile.get('stake_dollars')
+                    # Phase 2: Add tier and BvP grade
+                    temp_row['confidenceTier'] = _confidence_tier(temp_row)
+                    if home_pitcher and home_pitcher.get('id'):
+                        bvp_data = _fetch_bvp(p.get('id'), home_pitcher.get('id'))
+                        temp_row['bvpGrade'] = _compute_bvp_grade(bvp_data)
+                    else:
+                        temp_row['bvpGrade'] = None
+                    rows.append(temp_row)
 
     process_hitters(away_props, away_abbr, home_pitcher.get('name'))
     process_hitters(home_props, home_abbr, away_pitcher.get('name'))
 
     for sp, team_abbr in [(away_sp, away_abbr), (home_sp, home_abbr)]:
-        for line, prob_field in [(3.5, 'p_4plus_k'), (4.5, 'p_5plus_k'), (5.5, 'p_6plus_k')]:
-            raw_prob = float(sp.get(prob_field, 0) or 0)
+        sp_mkt_lines = _market_lines_for_player(market_props, sp.get('name'), 'pitcher_strikeouts')
+        k_lines = sp_mkt_lines if sp_mkt_lines else [3.5, 4.5, 5.5]
+        mean_k = float(sp.get('mean_k', 0) or 0)
+        for line in k_lines:
+            prob_field = _K_PROB_FIELD_FOR.get(line)
+            if prob_field:
+                raw_prob = float(sp.get(prob_field, 0) or 0)
+            else:
+                raw_prob = _poisson_over_prob(mean_k, line)
             # XGBoost blend for K props (60% XGB / 40% Monte Carlo when model loaded)
             _xgb_k = xgb_k_prob(sp, line=line)
             if _xgb_k is not None:
