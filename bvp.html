@@ -1,0 +1,1073 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MLB Analytics Hub - Batter vs Pitcher</title>
+  <style>
+    :root{--bg:#070d18;--card:#101a2a;--card2:#0b1322;--b:#223149;--t:#dfe9ff;--mu:#8ea4c8;--c:#00e5ff;--g:#00e676;--o:#ff9800;--r:#ff5252;--y:#f5c542}
+    *{box-sizing:border-box}
+    body{margin:0;background:radial-gradient(circle at 10% 0%,#0f1d36,transparent 45%),var(--bg);color:var(--t);font-family:Segoe UI,Arial,sans-serif;min-height:100vh}
+    .wrap{max-width:1500px;margin:0 auto;padding:18px}
+    .top{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px}
+    .brand{font-weight:700;letter-spacing:.08em}
+    .sub{color:var(--mu);font-size:.85rem;margin-top:2px}
+    .actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    a.toplink{color:var(--c);text-decoration:none;padding:7px 11px;border:1px solid rgba(0,229,255,.2);border-radius:999px;font-size:.82rem}
+    .btn{border:1px solid rgba(0,229,255,.35);background:rgba(0,229,255,.08);color:var(--c);padding:8px 14px;border-radius:10px;cursor:pointer;font-size:.82rem}
+    .btn:disabled{opacity:.5;cursor:not-allowed}
+
+    /* Game pills */
+    .game-strip{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;margin-bottom:16px;scrollbar-width:thin;scrollbar-color:var(--b) transparent}
+    .game-strip::-webkit-scrollbar{height:4px}
+    .game-strip::-webkit-scrollbar-thumb{background:var(--b);border-radius:4px}
+    .gpill{flex-shrink:0;border:1px solid var(--b);background:rgba(255,255,255,.03);border-radius:12px;padding:8px 14px;cursor:pointer;transition:.15s;min-width:130px;text-align:center}
+    .gpill:hover{border-color:rgba(0,229,255,.3);background:rgba(0,229,255,.05)}
+    .gpill.sel{border-color:rgba(0,229,255,.5);background:rgba(0,229,255,.1)}
+    .gpill-match{font-weight:700;font-size:.85rem;color:var(--t)}
+    .gpill-time{font-size:.7rem;color:var(--mu);margin-top:2px}
+    .gpill-sp{font-size:.66rem;color:var(--mu);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+    /* Main layout */
+    .main{display:grid;grid-template-columns:280px 1fr;gap:14px;min-height:500px}
+    @media(max-width:900px){.main{grid-template-columns:1fr}}
+
+    /* Lineup panel */
+    .lineup-panel{background:linear-gradient(180deg,var(--card),var(--card2));border:1px solid var(--b);border-radius:14px;padding:12px;height:fit-content}
+    .lp-header{font-size:.72rem;letter-spacing:.08em;color:var(--mu);text-transform:uppercase;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center}
+    .lp-team{font-size:.78rem;font-weight:700;color:var(--c);margin:10px 0 6px 0;padding:4px 0;border-bottom:1px solid var(--b)}
+    .lp-pitcher{font-size:.72rem;color:var(--mu);margin-bottom:8px;padding:4px 8px;background:rgba(0,229,255,.05);border-radius:6px;border-left:2px solid rgba(0,229,255,.3)}
+    .batter-row{display:flex;align-items:center;gap:8px;padding:6px 6px;border-radius:8px;cursor:pointer;transition:.12s;border:1px solid transparent}
+    .batter-row:hover{background:rgba(0,229,255,.05);border-color:rgba(0,229,255,.15)}
+    .batter-row.sel{background:rgba(0,229,255,.1);border-color:rgba(0,229,255,.35)}
+    .b-slot{font-size:.7rem;color:var(--mu);min-width:16px;text-align:center}
+    .b-name{font-size:.82rem;font-weight:600;flex:1}
+    .b-ops{font-size:.7rem;color:var(--mu)}
+    .b-grade{font-size:.65rem;font-weight:700;padding:1px 5px;border-radius:5px;min-width:22px;text-align:center}
+    .grade-A\+,.grade-A{background:rgba(0,230,118,.15);color:var(--g);border:1px solid rgba(0,230,118,.3)}
+    .grade-B{background:rgba(0,229,255,.12);color:var(--c);border:1px solid rgba(0,229,255,.3)}
+    .grade-C{background:rgba(245,197,66,.12);color:var(--y);border:1px solid rgba(245,197,66,.3)}
+    .grade-D,.grade-\?{background:rgba(255,82,82,.1);color:var(--r);border:1px solid rgba(255,82,82,.25)}
+
+    /* Detail panel */
+    .detail-panel{background:linear-gradient(180deg,var(--card),var(--card2));border:1px solid var(--b);border-radius:14px;padding:16px}
+    .empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;height:300px;color:var(--mu);text-align:center;gap:8px}
+    .empty-icon{font-size:2.5rem;opacity:.4}
+
+    /* BvP Header */
+    .bvp-header{display:flex;align-items:flex-start;gap:14px;margin-bottom:16px;flex-wrap:wrap}
+    .bvp-names{flex:1}
+    .bvp-batter{font-size:1.25rem;font-weight:800;color:var(--t)}
+    .bvp-vs{font-size:.8rem;color:var(--mu);margin:2px 0}
+    .bvp-pitcher{font-size:1rem;font-weight:600;color:var(--c)}
+    .grade-badge{font-size:1.4rem;font-weight:900;width:58px;height:58px;display:flex;align-items:center;justify-content:center;border-radius:12px;flex-shrink:0}
+    .gb-A\+,.gb-A{background:rgba(0,230,118,.12);color:var(--g);border:2px solid rgba(0,230,118,.4)}
+    .gb-B{background:rgba(0,229,255,.1);color:var(--c);border:2px solid rgba(0,229,255,.35)}
+    .gb-C{background:rgba(245,197,66,.1);color:var(--y);border:2px solid rgba(245,197,66,.3)}
+    .gb-D,.gb-\?{background:rgba(255,82,82,.08);color:var(--r);border:2px solid rgba(255,82,82,.25)}
+
+    /* Stats row */
+    .stat-row{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:16px}
+    @media(max-width:600px){.stat-row{grid-template-columns:repeat(3,1fr)}}
+    .stat-box{background:rgba(255,255,255,.03);border:1px solid var(--b);border-radius:10px;padding:10px;text-align:center}
+    .stat-val{font-size:1.1rem;font-weight:700;color:var(--c)}
+    .stat-lbl{font-size:.65rem;letter-spacing:.07em;text-transform:uppercase;color:var(--mu);margin-top:3px}
+
+    /* Projection probs */
+    .prob-row{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:16px}
+    @media(max-width:600px){.prob-row{grid-template-columns:repeat(2,1fr)}}
+    .prob-box{background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.15);border-radius:10px;padding:10px;text-align:center}
+    .prob-val{font-size:1rem;font-weight:700;color:var(--t)}
+    .prob-lbl{font-size:.62rem;letter-spacing:.06em;text-transform:uppercase;color:var(--mu);margin-top:3px}
+
+    /* Sample note */
+    .sample-note{font-size:.75rem;color:var(--mu);background:rgba(255,255,255,.03);border-radius:8px;padding:8px 12px;margin-bottom:14px;border-left:3px solid rgba(0,229,255,.25)}
+
+    /* ── Context Sections (Last 10, Splits, Arsenal) ────────────────────── */
+    .context-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    @media(max-width: 900px) {
+      .context-grid { grid-template-columns: 1fr; }
+    }
+    
+    .context-card {
+      background: rgba(255,255,255,.02);
+      border: 1px solid var(--b);
+      border-radius: 10px;
+      padding: 12px;
+    }
+    
+    .context-card-header {
+      font-size: .68rem;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--mu);
+      margin-bottom: 8px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--b);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .context-badge {
+      background: rgba(0,229,255,.08);
+      color: var(--c);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: .65rem;
+      font-weight: 600;
+    }
+    
+    .context-stat-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 0;
+      border-bottom: 1px solid rgba(255,255,255,.03);
+    }
+    .context-stat-row:last-child {
+      border-bottom: none;
+    }
+    
+    .context-stat-label {
+      font-size: .75rem;
+      color: var(--mu);
+    }
+    
+    .context-stat-value {
+      font-size: .85rem;
+      font-weight: 700;
+      color: var(--t);
+    }
+    
+    .context-stat-value.good { color: var(--g); }
+    .context-stat-value.warn { color: var(--y); }
+    .context-stat-value.bad { color: var(--r); }
+    
+    .split-compare {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    
+    .split-box {
+      background: rgba(0,0,0,.15);
+      border-radius: 6px;
+      padding: 8px;
+      text-align: center;
+    }
+    
+    .split-label {
+      font-size: .65rem;
+      color: var(--mu);
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      margin-bottom: 4px;
+    }
+    
+    .split-value {
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--t);
+    }
+    
+    .split-sub {
+      font-size: .68rem;
+      color: var(--mu);
+      margin-top: 2px;
+    }
+    
+    .arsenal-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-top: 6px;
+    }
+    
+    .arsenal-pill {
+      background: rgba(0,229,255,.06);
+      border: 1px solid rgba(0,229,255,.15);
+      border-radius: 12px;
+      padding: 3px 8px;
+      font-size: .65rem;
+      color: var(--c);
+      white-space: nowrap;
+    }
+    
+    .context-loading {
+      text-align: center;
+      padding: 16px;
+      color: var(--mu);
+      font-size: .78rem;
+    }
+
+    /* Game log */
+    .section-label{font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--mu);margin-bottom:8px}
+    .tbl-wrap{overflow-x:auto;border:1px solid var(--b);border-radius:10px;margin-bottom:14px}
+    table{width:100%;border-collapse:collapse;min-width:480px}
+    th,td{padding:7px 10px;border-bottom:1px solid rgba(255,255,255,.05);font-size:.78rem;text-align:left;white-space:nowrap}
+    th{font-size:.68rem;letter-spacing:.07em;color:var(--mu);background:rgba(0,0,0,.18);text-transform:uppercase}
+    tr:last-child td{border-bottom:none}
+    tr:hover td{background:rgba(0,229,255,.03)}
+    .good{color:var(--g)} .warn{color:var(--o)} .bad{color:var(--r)}
+    .spinner{display:inline-block;width:18px;height:18px;border:2px solid rgba(0,229,255,.2);border-top-color:var(--c);border-radius:50%;animation:spin .7s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .loading-row{padding:20px;text-align:center;color:var(--mu)}
+    .pill{display:inline-block;border:1px solid rgba(0,229,255,.3);border-radius:999px;padding:2px 8px;font-size:.68rem;color:var(--c)}
+    
+    /* Performance Badges */
+    .badge-row {
+      display: flex;
+      gap: 3px;
+      margin-top: 3px;
+      flex-wrap: wrap;
+    }
+    
+    .perf-badge {
+      font-size: .58rem;
+      font-weight: 700;
+      padding: 1px 5px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      white-space: nowrap;
+    }
+    
+    .perf-green {
+      background: rgba(0,230,118,.15);
+      color: var(--g);
+      border: 1px solid rgba(0,230,118,.3);
+    }
+    
+    .perf-yellow {
+      background: rgba(245,197,66,.12);
+      color: var(--y);
+      border: 1px solid rgba(245,197,66,.3);
+    }
+    
+    .perf-orange {
+      background: rgba(255,152,0,.12);
+      color: var(--o);
+      border: 1px solid rgba(255,152,0,.3);
+    }
+    
+    .perf-red {
+      background: rgba(255,82,82,.1);
+      color: var(--r);
+      border: 1px solid rgba(255,82,82,.25);
+    }
+    
+    .perf-blue {
+      background: rgba(0,229,255,.12);
+      color: var(--c);
+      border: 1px solid rgba(0,229,255,.3);
+    }
+    
+    .perf-purple {
+      background: rgba(156,39,176,.12);
+      color: #ce93d8;
+      border: 1px solid rgba(156,39,176,.3);
+    }
+
+    /* Grade basis label under the badge */
+    .grade-basis-lbl {
+      font-size: .56rem;
+      letter-spacing: .06em;
+      text-align: center;
+      color: var(--mu);
+      margin-top: 4px;
+      text-transform: uppercase;
+    }
+    .grade-badge-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      flex-shrink: 0;
+    }
+
+    /* Prop signal section */
+    .prop-signal-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    @media(max-width: 700px) {
+      .prop-signal-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+    .prop-signal-box {
+      background: rgba(0,0,0,.2);
+      border: 1px solid var(--b);
+      border-radius: 8px;
+      padding: 8px 6px;
+      text-align: center;
+    }
+    .prop-signal-type {
+      font-size: .62rem;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      color: var(--mu);
+      margin-bottom: 5px;
+    }
+    .prop-signal-val {
+      font-size: .72rem;
+      font-weight: 700;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+    .prop-signal-sub {
+      font-size: .6rem;
+      color: var(--mu);
+      margin-top: 3px;
+    }
+    .sig-strong { color: var(--g); }
+    .sig-mod    { color: var(--c); }
+    .sig-lean   { color: var(--y); }
+    .sig-fade   { color: var(--r); }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div>
+      <div class="brand">MLB ANALYTICS HUB — BATTER VS PITCHER</div>
+      <div class="sub" id="statusText">Select a game to explore head-to-head matchup history.</div>
+    </div>
+    <div class="actions">
+      <a class="toplink" href="/">Dashboard</a>
+      <a class="toplink" href="/props">Props</a>
+      <a class="toplink" href="/value-bets">Value Bets</a>
+      <a class="toplink" href="/nrfi">NRFI</a>
+      <a class="toplink" href="/tracker">Tracker</a>
+      <button class="btn" onclick="loadGames()">Refresh</button>
+    </div>
+  </div>
+
+  <div class="game-strip" id="gameStrip">
+    <div style="padding:12px 0;color:var(--mu);font-size:.82rem">Loading today's games…</div>
+  </div>
+
+  <div class="main" id="mainLayout">
+    <div class="lineup-panel" id="lineupPanel">
+      <div style="color:var(--mu);font-size:.82rem;text-align:center;padding:24px 0">Select a game above.</div>
+    </div>
+    <div class="detail-panel" id="detailPanel">
+      <div class="empty-state">
+        <div class="empty-icon">⚾</div>
+        <div style="font-size:.9rem;font-weight:600">Select a batter from the lineup</div>
+        <div style="font-size:.78rem">Career matchup history, grade, and projected probabilities will appear here.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let gamesData = [];
+let currentGame = null;
+let currentLineup = null;
+let selectedBatter = null;
+let bvpCache = {};
+let gradeCache = {};
+
+async function loadGames() {
+  const strip = document.getElementById('gameStrip');
+  strip.innerHTML = '<div style="padding:12px 0;color:var(--mu);font-size:.82rem">Loading…</div>';
+  try {
+    const r = await fetch('/api/games/today');
+    const d = await r.json();
+    gamesData = (d.games || []).filter(g => !g.isPostponed && !g.isCancelled);
+    renderGameStrip();
+    document.getElementById('statusText').textContent = `${gamesData.length} games today — click a matchup to explore BvP data.`;
+  } catch(e) {
+    strip.innerHTML = '<div style="color:var(--r);padding:10px">Failed to load games.</div>';
+  }
+}
+
+function renderGameStrip() {
+  const strip = document.getElementById('gameStrip');
+  if (!gamesData.length) { strip.innerHTML = '<div style="padding:10px;color:var(--mu)">No games today.</div>'; return; }
+  strip.innerHTML = gamesData.map((g,i) => `
+    <div class="gpill${currentGame && currentGame.gamePk === g.gamePk ? ' sel' : ''}" onclick="selectGame(${i})">
+      <div class="gpill-match">${g.awayAbbr} @ ${g.homeAbbr}</div>
+      <div class="gpill-time">${g.gameTime || ''}</div>
+      <div class="gpill-sp">${(g.awayPitcher||'TBD').split(' ').pop()} v ${(g.homePitcher||'TBD').split(' ').pop()}</div>
+    </div>
+  `).join('');
+}
+
+async function selectGame(idx) {
+  currentGame = gamesData[idx];
+  selectedBatter = null;
+  renderGameStrip();
+  document.getElementById('detailPanel').innerHTML = `<div class="empty-state"><div class="empty-icon">⚾</div><div style="font-size:.9rem">Select a batter from the lineup</div></div>`;
+
+  const lp = document.getElementById('lineupPanel');
+  lp.innerHTML = '<div class="loading-row"><div class="spinner" style="margin:auto"></div></div>';
+
+  try {
+    const [lineupRes, pitcherRes] = await Promise.all([
+      fetch(`/api/lineup/${currentGame.gamePk}`).then(r => r.json()),
+      fetch(`/api/pitchers/${currentGame.gamePk}`).then(r => r.json())
+    ]);
+    currentLineup = { lineup: lineupRes, pitchers: pitcherRes };
+    renderLineup();
+  } catch(e) {
+    lp.innerHTML = '<div style="color:var(--r);padding:10px">Failed to load lineup.</div>';
+  }
+}
+
+function gradeClass(g) {
+  if (!g || g === '?') return 'grade-?';
+  return 'grade-' + g.replace('+','\\+');
+}
+
+function renderLineup() {
+  const { lineup, pitchers } = currentLineup;
+  const g = currentGame;
+  const away = lineup.away || [];
+  const home = lineup.home || [];
+  const awayP = pitchers.awayPitcher || {};
+  const homeP = pitchers.homePitcher || {};
+
+  const makeRows = (batters, oppPitcherId) => batters.map(b => {
+    const cKey = `${b.id}_${oppPitcherId}`;
+    const grade = gradeCache[cKey] || '?';
+    return `<div class="batter-row" id="br_${b.id}_${oppPitcherId}" onclick="selectBatter(${b.id},'${esc(b.name)}',${oppPitcherId},'${esc((oppPitcherId === awayP.id ? awayP.name : homeP.name) || '')}')">
+      <span class="b-slot">${b.slot||'?'}</span>
+      <span class="b-name">
+        ${b.name}
+        <div class="badge-row" id="badges_${b.id}"></div>
+      </span>
+      <span class="b-ops">${b.ops||'—'}</span>
+      <span class="b-grade ${gradeClass(grade)}">${grade}</span>
+    </div>`;
+  }).join('');
+
+  document.getElementById('lineupPanel').innerHTML = `
+    <div class="lp-header"><span>${g.awayAbbr} @ ${g.homeAbbr}</span><span class="pill">${g.gameTime||''}</span></div>
+    <div class="lp-team">${g.awayAbbr} BATTERS</div>
+    <div class="lp-pitcher" id="pitcher_away">vs ${homeP.name || g.homePitcher || 'TBD'}</div>
+    ${makeRows(away, homeP.id)}
+    <div class="lp-team" style="margin-top:12px">${g.homeAbbr} BATTERS</div>
+    <div class="lp-pitcher" id="pitcher_home">vs ${awayP.name || g.awayPitcher || 'TBD'}</div>
+    ${makeRows(home, awayP.id)}
+  `;
+
+  prefetchGrades(away, homeP.id || null);
+  prefetchGrades(home, awayP.id || null);
+  
+  // Load batter badges
+  loadBatterBadges(away);
+  loadBatterBadges(home);
+  
+  // Load pitcher badges
+  if (homeP.id) loadPitcherBadge(homeP.id, 'pitcher_away');
+  if (awayP.id) loadPitcherBadge(awayP.id, 'pitcher_home');
+}
+
+async function prefetchGrades(batters, pitcherId) {
+  if (!pitcherId || pitcherId === 0) return;
+  for (const b of batters) {
+    const cKey = `${b.id}_${pitcherId}`;
+    if (gradeCache[cKey]) continue;
+    try {
+      const r = await fetch(`/api/bvp/${b.id}/${pitcherId}`);
+      const d = await r.json();
+      gradeCache[cKey] = d.grade || '?';
+      const el = document.getElementById(`br_${b.id}_${pitcherId}`);
+      if (el) {
+        const span = el.querySelector('.b-grade');
+        if (span) {
+          span.className = `b-grade ${gradeClass(d.grade || '?')}`;
+          span.textContent = d.grade || '?';
+        }
+      }
+    } catch(e) { gradeCache[cKey] = '?'; }
+  }
+}
+
+async function selectBatter(batterId, batterName, pitcherId, pitcherName) {
+  selectedBatter = { batterId, batterName, pitcherId, pitcherName };
+
+  document.querySelectorAll('.batter-row').forEach(r => r.classList.remove('sel'));
+  const el = document.getElementById(`br_${batterId}_${pitcherId}`);
+  if (el) el.classList.add('sel');
+
+  const dp = document.getElementById('detailPanel');
+  dp.innerHTML = '<div class="loading-row"><div class="spinner" style="margin:auto"></div><div style="margin-top:8px;color:var(--mu);font-size:.8rem">Loading BvP data…</div></div>';
+
+  const cKey = `detail_${batterId}_${pitcherId}`;
+  if (bvpCache[cKey]) { renderDetail(bvpCache[cKey]); return; }
+
+  try {
+    const gamePk = currentGame ? currentGame.gamePk : '';
+    const [summaryRes, logsRes, projRes] = await Promise.all([
+      fetch(`/api/bvp/${batterId}/${pitcherId}`).then(r => r.json()),
+      fetch(`/api/player/${batterId}/bvp/${pitcherId}`).then(r => r.json()).catch(() => ({})),
+      fetch(`/api/bvp/${batterId}/${pitcherId}/projection${gamePk ? '?game_pk='+gamePk : ''}`).then(r => r.json()).catch(() => ({}))
+    ]);
+    const data = { summary: summaryRes, logs: logsRes, proj: projRes, batterName, pitcherName };
+    bvpCache[cKey] = data;
+    renderDetail(data);
+  } catch(e) {
+    dp.innerHTML = '<div style="color:var(--r);padding:16px">Failed to load BvP data.</div>';
+  }
+}
+
+function fmtPct(v) { return v != null ? (v * 100).toFixed(1) + '%' : '—'; }
+function fmtAvg(v) { return v != null ? Number(v).toFixed(3) : '—'; }
+function fmtOps(v) { return v != null ? Number(v).toFixed(3) : '—'; }
+
+function esc(s) { return (s||'').replace(/'/g, "\\'"); }
+
+// ── Stat quality colour helpers ──────────────────────────────────────────────
+function xstatColor(val, lg, higherIsBetter = true) {
+  if (val == null) return '';
+  const delta = higherIsBetter ? val - lg : lg - val;
+  if (delta >  0.025) return 'good';
+  if (delta > -0.010) return '';
+  return 'bad';
+}
+function pctColor(pct) {
+  if (pct == null) return '';
+  if (pct >= 70) return 'good';
+  if (pct >= 40) return '';
+  return 'bad';
+}
+function fmtPct2(v, dec=1) { return v != null ? Number(v*100).toFixed(dec)+'%' : '—'; }
+function pctBadge(pct) {
+  if (pct == null) return '';
+  const cls = pctColor(pct);
+  return `<span style="font-size:.58rem;margin-left:4px;color:var(--${cls==='good'?'g':cls==='bad'?'r':'mu'})">${pct}th</span>`;
+}
+
+function renderDetail(data) {
+  const { summary, logs, proj, batterName, pitcherName } = data;
+  const { batterId, pitcherId } = selectedBatter;
+  const grade   = summary.grade || '?';
+  const gbClass = 'gb-' + grade.replace('+','\\+');
+  const pa      = summary.pa || 0;
+  const games   = logs.games || [];
+
+  // Use projection probs (Feature #1); fallback to legacy logs field
+  const probs = (proj && proj.projectedProbs) || logs.projectedProbs || null;
+  const ev    = (proj && proj.expectedValues)  || {};
+  const bq    = (proj && proj.batterQuality)   || {};
+  const pp    = (proj && proj.pitcherProfile)  || {};
+  const mc    = (proj && proj.matchupContext)  || {};
+
+  const ratioColor = (r) => {
+    if (r == null) return '';
+    if (r >= 1.20) return 'class="good"';
+    if (r >= 1.00) return '';
+    return 'class="bad"';
+  };
+
+  // Grade basis label
+  const gradeBasis = summary.grade_basis === 'platoon'
+    ? `vs ${summary.pitcher_hand === 'L' ? 'LHP' : 'RHP'}`
+    : (pa >= 10 ? 'H2H' : pa > 0 ? 'H2H*' : 'vs RHP/LHP');
+
+  const gameRows = games.slice(0, 10).map(g => {
+    const hitColor = g.hits >= 1 ? 'class="good"' : 'class="bad"';
+    const pitcherDisplay = g.pitcher && g.pitcher !== '—' ? g.pitcher : (pitcherName || '—');
+    const teamDisplay = g.team ? `<span style="color:var(--mu);font-size:.68rem">${g.team}</span> ` : '';
+    return `<tr>
+      <td>${g.date||'—'}</td>
+      <td>${teamDisplay}${pitcherDisplay}</td>
+      <td ${hitColor}>${g.ab??'—'}/${g.hits??'—'}</td>
+      <td>${g.hr||0}</td>
+      <td>${g.rbi||0}</td>
+      <td>${g.bb||0}</td>
+      <td>${g.k||0}</td>
+      <td style="color:var(--mu);font-size:.7rem">${g.score||'—'} ${g.result||''}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="8" style="color:var(--mu);text-align:center;padding:12px">No game logs available</td></tr>';
+
+  // ── xStats / quality row (Feature #2) ────────────────────────────────────
+  const _bqSrc = bq.source || 'fg';
+  const xstatsHtml = bq.xba != null ? `
+    <div class="section-label" style="margin-top:12px">Expected Stats <span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— Statcast / season</span></div>
+    <div class="stat-row" style="grid-template-columns:repeat(5,1fr)">
+      <div class="stat-box">
+        <div class="stat-val ${xstatColor(bq.xba, 0.250)}">${fmtAvg(bq.xba)}</div>
+        <div class="stat-lbl">xBA${pctBadge(bq.xba_pct)}</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-val ${xstatColor(bq.xslg, 0.390)}">${fmtOps(bq.xslg)}</div>
+        <div class="stat-lbl">xSLG</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-val ${xstatColor(bq.xwoba, 0.310)}">${fmtOps(bq.xwoba)}</div>
+        <div class="stat-lbl">xwOBA${pctBadge(bq.xwoba_pct)}</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-val ${xstatColor(bq.ev, 88.5)}">${bq.ev != null ? bq.ev.toFixed(1) : '—'}</div>
+        <div class="stat-lbl">EV mph${pctBadge(bq.ev_pct)}</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-val ${xstatColor(bq.brl_pct, 6.3)}">${bq.brl_pct != null ? bq.brl_pct.toFixed(1)+'%' : '—'}</div>
+        <div class="stat-lbl">BRL%${pctBadge(bq.brl_pct_rank)}</div>
+      </div>
+    </div>` : (bq.fg_woba != null ? `
+    <div class="section-label" style="margin-top:12px">Season Rates <span style="font-size:.58rem;color:var(--y);font-weight:400;text-transform:none;letter-spacing:0">— FanGraphs / MLB (Statcast unavailable)</span></div>
+    <div class="stat-row" style="grid-template-columns:repeat(4,1fr)">
+      <div class="stat-box">
+        <div class="stat-val ${xstatColor(bq.fg_woba, 0.310)}">${bq.fg_woba != null ? bq.fg_woba.toFixed(3) : '—'}</div>
+        <div class="stat-lbl">wOBA</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-val ${xstatColor(bq.fg_iso, 0.150)}">${bq.fg_iso != null ? bq.fg_iso.toFixed(3) : '—'}</div>
+        <div class="stat-lbl">ISO</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-val ${bq.fg_kpct <= 0.18 ? 'good' : bq.fg_kpct >= 0.26 ? 'bad' : ''}">${bq.fg_kpct != null ? (bq.fg_kpct*100).toFixed(1)+'%' : '—'}</div>
+        <div class="stat-lbl">K%</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-val ${bq.fg_bbpct >= 0.10 ? 'good' : bq.fg_bbpct < 0.06 ? 'bad' : ''}">${bq.fg_bbpct != null ? (bq.fg_bbpct*100).toFixed(1)+'%' : '—'}</div>
+        <div class="stat-lbl">BB%</div>
+      </div>
+    </div>` : '');
+
+  // ── Pitcher profile compact note ───────────────────────────────────────────
+  const pitNotes = [];
+  if (pp.xera   != null) pitNotes.push(`xERA ${pp.xera.toFixed(2)}`);
+  if (pp.whiff_pct != null) pitNotes.push(`Whiff ${(pp.whiff_pct).toFixed(1)}%`);
+  if (pp.k_pct  != null) pitNotes.push(`K% ${(pp.k_pct*100).toFixed(1)}%`);
+  if (pp.xwoba_against != null) pitNotes.push(`xwOBA-against ${pp.xwoba_against.toFixed(3)}`);
+  const pitProfileHtml = pitNotes.length ? `
+    <div style="font-size:.65rem;color:var(--mu);background:rgba(0,0,0,.2);border-radius:6px;padding:5px 10px;margin-bottom:12px;border-left:2px solid rgba(0,229,255,.2)">
+      <span style="color:var(--c);margin-right:4px">Pitcher:</span>${pitNotes.join(' · ')}
+      ${mc.platoonNote ? `<span style="margin-left:8px;color:var(--y)">${mc.platoonNote}</span>` : ''}
+    </div>` : '';
+
+  // ── Projected probs section (Feature #1) ──────────────────────────────────
+  const probHtml = probs ? `
+    <div class="section-label">Model Projections <span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— BATX engine · platoon + BvP adjusted</span></div>
+    <div class="prob-row">
+      <div class="prob-box">
+        <div class="prob-val ${probs.hit1>=0.60?'good':probs.hit1<0.42?'bad':''}">${fmtPct2(probs.hit1)}</div>
+        <div class="prob-lbl">1+ Hit</div>
+        ${ev.hits != null ? `<div style="font-size:.58rem;color:var(--mu);margin-top:2px">E: ${ev.hits.toFixed(2)} H</div>` : ''}
+      </div>
+      <div class="prob-box">
+        <div class="prob-val">${fmtPct2(probs.tb2)}</div>
+        <div class="prob-lbl">2+ TB</div>
+        ${ev.tb != null ? `<div style="font-size:.58rem;color:var(--mu);margin-top:2px">E: ${ev.tb.toFixed(2)} TB</div>` : ''}
+      </div>
+      <div class="prob-box">
+        <div class="prob-val ${probs.hr>=0.12?'good':''}">${fmtPct2(probs.hr)}</div>
+        <div class="prob-lbl">Home Run</div>
+        ${ev.hr != null ? `<div style="font-size:.58rem;color:var(--mu);margin-top:2px">E: ${ev.hr.toFixed(3)} HR</div>` : ''}
+      </div>
+      <div class="prob-box">
+        <div class="prob-val">${fmtPct2(probs.rbi1)}</div>
+        <div class="prob-lbl">1+ RBI</div>
+        ${ev.rbi != null ? `<div style="font-size:.58rem;color:var(--mu);margin-top:2px">E: ${ev.rbi.toFixed(2)} RBI</div>` : ''}
+      </div>
+    </div>` : '';
+
+  // Render layout
+  document.getElementById('detailPanel').innerHTML = `
+    <div class="bvp-header">
+      <div class="bvp-names">
+        <div class="bvp-batter">${batterName}</div>
+        <div class="bvp-vs">career history vs.</div>
+        <div class="bvp-pitcher">${pitcherName}</div>
+      </div>
+      <div class="grade-badge-wrap">
+        <div class="grade-badge ${gbClass}">${grade}</div>
+        <div class="grade-basis-lbl">${gradeBasis}</div>
+      </div>
+    </div>
+
+    ${summary.sample_note ? `<div class="sample-note">${summary.sample_note}</div>` : ''}
+
+    <div class="section-label">Career H2H Stats</div>
+    <div class="stat-row">
+      <div class="stat-box"><div class="stat-val">${pa}</div><div class="stat-lbl">PA</div></div>
+      <div class="stat-box"><div class="stat-val">${fmtAvg(summary.avg)}</div><div class="stat-lbl">AVG</div></div>
+      <div class="stat-box"><div class="stat-val">${fmtOps(summary.ops)}</div><div class="stat-lbl">OPS</div></div>
+      <div class="stat-box"><div class="stat-val">${summary.hr??'—'}</div><div class="stat-lbl">HR</div></div>
+      <div class="stat-box"><div class="stat-val" ${ratioColor(summary.ops_ratio)}>${summary.ops_ratio!=null ? Number(summary.ops_ratio).toFixed(2)+'x' : '—'}</div><div class="stat-lbl">OPS Ratio</div></div>
+    </div>
+
+    ${xstatsHtml}
+
+    ${pitProfileHtml}
+
+    ${probHtml}
+
+    <div class="section-label">Recent Form & Matchup Context</div>
+    <div class="context-grid" id="contextGrid">
+      <div class="context-card"><div class="context-loading">Loading last 10 games...</div></div>
+      <div class="context-card"><div class="context-loading">Loading platoon splits...</div></div>
+      <div class="context-card"><div class="context-loading">Loading arsenal matchup...</div></div>
+      <div class="context-card"><div class="context-loading">Loading quality metrics...</div></div>
+    </div>
+
+    <div class="section-label">Prop Signals <span style="font-size:.6rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— recent form based</span></div>
+    <div class="prop-signal-grid" id="propSignalGrid">
+      <div class="prop-signal-box"><div class="prop-signal-type">HIT</div><div class="prop-signal-val" style="color:var(--mu)">—</div></div>
+      <div class="prop-signal-box"><div class="prop-signal-type">TOTAL BASES</div><div class="prop-signal-val" style="color:var(--mu)">—</div></div>
+      <div class="prop-signal-box"><div class="prop-signal-type">HOME RUN</div><div class="prop-signal-val" style="color:var(--mu)">—</div></div>
+      <div class="prop-signal-box"><div class="prop-signal-type">K RISK</div><div class="prop-signal-val" style="color:var(--mu)">—</div></div>
+    </div>
+
+    <div class="section-label">Last 5 Games</div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr>
+          <th>Date</th><th>Pitcher (Team)</th><th>AB/H</th><th>HR</th><th>RBI</th><th>BB</th><th>K</th><th>Score</th>
+        </tr></thead>
+        <tbody>${gameRows}</tbody>
+      </table>
+    </div>
+  `;
+
+  // Fetch context cards + prop signals (pass proj for quality card)
+  loadContextData(batterId, pitcherId, proj);
+}
+
+async function loadContextData(batterId, pitcherId, proj) {
+  try {
+    const [recent, splits, arsenal] = await Promise.all([
+      fetch(`/api/player/${batterId}/recent-games`).then(r => r.json()),
+      fetch(`/api/player/${batterId}/platoon-splits`).then(r => r.json()),
+      fetch(`/api/bvp/${batterId}/${pitcherId}/arsenal`).then(r => r.json()).catch(() => ({}))
+    ]);
+
+    const contextGrid = document.getElementById('contextGrid');
+    if (!contextGrid) return;
+
+    // Card 1: Last 10 Games + sparkline
+    const last10 = recent.last10 || {};
+    const opsClass = last10.ops >= 0.800 ? 'good' : last10.ops >= 0.700 ? '' : 'bad';
+    const avgClass = last10.avg >= 0.280 ? 'good' : last10.avg >= 0.240 ? '' : 'bad';
+
+    // Build hit-rate sparkline bars from game list
+    const sparkGames = (recent.games || []);
+    const sparkW = 120, sparkH = 24, barW = Math.max(6, Math.floor(sparkW / Math.max(sparkGames.length, 1)) - 2);
+    const sparkBars = sparkGames.map((g, i) => {
+      const hasHit = g.hits >= 1;
+      const hasHR  = g.hr   >= 1;
+      const col = hasHR ? 'var(--g)' : hasHit ? 'rgba(0,229,255,.85)' : 'rgba(255,255,255,.12)';
+      const x = i * (barW + 2);
+      return `<rect x="${x}" y="${hasHit ? 6 : 14}" width="${barW}" height="${hasHit ? sparkH - 6 : sparkH - 14}" fill="${col}" rx="1"/>`;
+    }).join('');
+    const sparkSvg = sparkGames.length ? `
+      <svg viewBox="0 0 ${sparkGames.length * (barW+2)} ${sparkH}" style="width:100%;height:${sparkH}px;margin-top:6px;display:block">
+        ${sparkBars}
+      </svg>
+      <div style="display:flex;gap:8px;margin-top:3px">
+        <span style="font-size:.6rem;color:var(--dim)"><span style="color:rgba(0,229,255,.85)">■</span> Hit</span>
+        <span style="font-size:.6rem;color:var(--dim)"><span style="color:var(--g)">■</span> HR</span>
+        <span style="font-size:.6rem;color:var(--dim)"><span style="color:rgba(255,255,255,.18)">■</span> 0H</span>
+      </div>` : '';
+
+    const card1 = `
+      <div class="context-card">
+        <div class="context-card-header">
+          <span>Last 10 Games</span>
+          <span class="context-badge">${last10.games || 0}G</span>
+        </div>
+        <div class="context-stat-row">
+          <span class="context-stat-label">AVG</span>
+          <span class="context-stat-value ${avgClass}">${fmtAvg(last10.avg)}</span>
+        </div>
+        <div class="context-stat-row">
+          <span class="context-stat-label">OPS</span>
+          <span class="context-stat-value ${opsClass}">${fmtOps(last10.ops)}</span>
+        </div>
+        <div class="context-stat-row">
+          <span class="context-stat-label">HR</span>
+          <span class="context-stat-value">${last10.hr || 0}</span>
+        </div>
+        <div class="context-stat-row">
+          <span class="context-stat-label">Hits</span>
+          <span class="context-stat-value">${last10.hits || 0}/${last10.ab || 0}</span>
+        </div>
+        ${sparkSvg}
+      </div>
+    `;
+
+    // Card 2: Platoon Splits
+    const vsLHP = splits.vsLHP || {};
+    const vsRHP = splits.vsRHP || {};
+    const pitcherHand = arsenal.pitcherHand || 'R';
+    const relevantSplit = pitcherHand === 'L' ? vsLHP : vsRHP;
+    const otherSplit = pitcherHand === 'L' ? vsRHP : vsLHP;
+    
+    const card2 = `
+      <div class="context-card">
+        <div class="context-card-header">
+          <span>Platoon Splits</span>
+          <span class="context-badge">vs ${pitcherHand}HP</span>
+        </div>
+        <div class="split-compare">
+          <div class="split-box" style="border: 2px solid rgba(0,229,255,.35);">
+            <div class="split-label">vs ${pitcherHand}HP</div>
+            <div class="split-value">${fmtOps(relevantSplit.ops)}</div>
+            <div class="split-sub">${fmtAvg(relevantSplit.avg)} AVG</div>
+            <div class="split-sub">${relevantSplit.pa || 0} PA</div>
+          </div>
+          <div class="split-box">
+            <div class="split-label">vs ${pitcherHand === 'L' ? 'R' : 'L'}HP</div>
+            <div class="split-value">${fmtOps(otherSplit.ops)}</div>
+            <div class="split-sub">${fmtAvg(otherSplit.avg)} AVG</div>
+            <div class="split-sub">${otherSplit.pa || 0} PA</div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    // Card 3: Pitch Arsenal Breakdown
+    const pitches = arsenal.pitches || [];
+    const mixScore = arsenal.mixScore || 1.0;
+    const primaryPitch = arsenal.primaryPitch || '—';
+    const mixCls = mixScore >= 1.15 ? 'good' : mixScore <= 0.87 ? 'bad' : '';
+    const mixLbl = mixScore >= 1.15 ? 'Favorable' : mixScore <= 0.87 ? 'Unfavorable' : 'Neutral';
+
+    function fmtStat(v, dec) {
+      if (v == null) return '—';
+      return Number(v).toFixed(dec != null ? dec : 3);
+    }
+    function pitchRatioClass(r) {
+      if (r == null) return '';
+      return r >= 1.15 ? 'good' : r <= 0.85 ? 'bad' : '';
+    }
+
+    const pitchRows = pitches.slice(0, 5).map(p => {
+      const usagePct = p.usage != null ? Math.round(p.usage) + '%' : '—';
+      const veloStr  = p.velo  != null ? p.velo.toFixed(1)         : '—';
+      const batWoba  = p.bat_woba != null ? fmtStat(p.bat_woba) : (p.pit_woba != null ? `<span style="color:var(--dim)">${fmtStat(p.pit_woba)}</span>` : '—');
+      const whiffStr = p.bat_whiff != null ? Math.round(p.bat_whiff) + '%' : (p.pit_whiff != null ? `<span style="color:var(--dim)">${Math.round(p.pit_whiff)}%</span>` : '—');
+      const rCls = pitchRatioClass(p.ratio);
+      return `<div style="display:grid;grid-template-columns:1fr 28px 42px 44px 44px;gap:2px 4px;align-items:center;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.05)">
+        <span style="font-size:.72rem;color:var(--t)">${p.label}</span>
+        <span style="font-size:.68rem;color:var(--dim)">${usagePct}</span>
+        <span style="font-size:.68rem;color:var(--dim)">${veloStr}</span>
+        <span style="font-size:.72rem;color:var(--t)">${batWoba}</span>
+        <span style="font-size:.72rem;color:var(--t)" class="${rCls}">${whiffStr}</span>
+      </div>`;
+    }).join('');
+
+    const card3 = `
+      <div class="context-card">
+        <div class="context-card-header">
+          <span>Pitch Arsenal</span>
+          <span class="context-badge ${mixCls}">${mixLbl}</span>
+        </div>
+        ${pitches.length ? `
+          <div style="display:grid;grid-template-columns:1fr 28px 42px 44px 44px;gap:2px 4px;padding:2px 0 4px;border-bottom:1px solid rgba(255,255,255,.12)">
+            <span style="font-size:.62rem;color:var(--dim)">Pitch</span>
+            <span style="font-size:.62rem;color:var(--dim)">Use%</span>
+            <span style="font-size:.62rem;color:var(--dim)">Velo</span>
+            <span style="font-size:.62rem;color:var(--dim)">wOBA</span>
+            <span style="font-size:.62rem;color:var(--dim)">Whiff%</span>
+          </div>
+          ${pitchRows}
+          <div style="font-size:.64rem;color:var(--dim);margin-top:6px">wOBA/Whiff% = batter vs pitch type</div>
+        ` : `<div class="context-stat-row" style="color:var(--dim);font-size:.75rem;padding:8px 0">No arsenal data available</div>`}
+      </div>
+    `;
+
+    // Card 4: Quality Metrics (from projection endpoint)
+    const bq = (proj && proj.batterQuality) || {};
+    const evVal   = bq.ev    != null ? bq.ev.toFixed(1)    : null;
+    const brlVal  = bq.brl_pct != null ? (bq.brl_pct * 100).toFixed(1) : null;
+    const hhVal   = bq.hh_pct  != null ? (bq.hh_pct  * 100).toFixed(1) : null;
+    const xwobaVal = bq.xwoba  != null ? bq.xwoba.toFixed(3)           : null;
+
+    function qualRow(label, val, suffix, pctRank) {
+      if (val == null) return '';
+      const pctStr = pctRank != null ? pctBadge(pctRank) : '';
+      const cls = pctRank != null ? pctColor(pctRank) : '';
+      return `<div class="context-stat-row">
+        <span class="context-stat-label">${label}</span>
+        <span class="context-stat-value ${cls}">${val}${suffix}${pctStr}</span>
+      </div>`;
+    }
+
+    // Card 4: Quality Metrics — Savant preferred, FanGraphs fallback
+    const hasSavant = bq.ev != null || bq.xba != null;
+    const hasFG     = bq.fg_woba != null || bq.fg_iso != null;
+
+    function fmtPct3(v) { return v != null ? Number(v * 100).toFixed(1) + '%' : '—'; }
+
+    let card4;
+    if (hasSavant) {
+      card4 = `
+        <div class="context-card">
+          <div class="context-card-header">
+            <span>Quality Metrics</span>
+            <span class="context-badge">Statcast</span>
+          </div>
+          ${qualRow('Exit Velo', evVal, ' mph', bq.ev_pct)}
+          ${qualRow('Barrel%', brlVal, '%', bq.brl_pct_rank)}
+          ${qualRow('Hard Hit%', hhVal, '%', bq.hh_pct_rank)}
+          ${qualRow('xwOBA', xwobaVal, '', bq.xwoba_pct)}
+        </div>`;
+    } else if (hasFG) {
+      const fgWobaClass = bq.fg_woba >= 0.340 ? 'good' : bq.fg_woba >= 0.310 ? '' : 'bad';
+      const fgIsoClass  = bq.fg_iso  >= 0.180 ? 'good' : bq.fg_iso  >= 0.120 ? '' : 'bad';
+      const fgKClass    = bq.fg_kpct <= 0.180 ? 'good' : bq.fg_kpct <= 0.240 ? '' : 'bad';
+      const fgBBClass   = bq.fg_bbpct >= 0.100 ? 'good' : bq.fg_bbpct >= 0.070 ? '' : 'bad';
+      card4 = `
+        <div class="context-card">
+          <div class="context-card-header">
+            <span>Quality Metrics</span>
+            <span class="context-badge" style="color:var(--y);border-color:rgba(255,215,0,.3)">FanGraphs</span>
+          </div>
+          <div class="context-stat-row">
+            <span class="context-stat-label">wOBA</span>
+            <span class="context-stat-value ${fgWobaClass}">${bq.fg_woba != null ? bq.fg_woba.toFixed(3) : '—'}</span>
+          </div>
+          <div class="context-stat-row">
+            <span class="context-stat-label">ISO</span>
+            <span class="context-stat-value ${fgIsoClass}">${bq.fg_iso != null ? bq.fg_iso.toFixed(3) : '—'}</span>
+          </div>
+          <div class="context-stat-row">
+            <span class="context-stat-label">K%</span>
+            <span class="context-stat-value ${fgKClass}">${fmtPct3(bq.fg_kpct)}</span>
+          </div>
+          <div class="context-stat-row">
+            <span class="context-stat-label">BB%</span>
+            <span class="context-stat-value ${fgBBClass}">${fmtPct3(bq.fg_bbpct)}</span>
+          </div>
+          <div style="font-size:.6rem;color:var(--dim);margin-top:4px">Statcast unavailable — using MLB/FG rates</div>
+        </div>`;
+    } else {
+      card4 = `
+        <div class="context-card">
+          <div class="context-card-header"><span>Quality Metrics</span></div>
+          <div class="context-stat-row" style="color:var(--dim);font-size:.75rem;padding:8px 0">Stats loading…</div>
+        </div>`;
+    }
+
+    contextGrid.innerHTML = card1 + card2 + card3 + card4;
+
+    // ── Prop Signals ────────────────────────────────────────────────────────
+    const propGrid = document.getElementById('propSignalGrid');
+    if (!propGrid) return;
+
+    const recentGames = recent.games || [];
+    const totalK  = recentGames.reduce((s, g) => s + (g.k  || 0), 0);
+    const totalAB = recentGames.reduce((s, g) => s + (g.ab || 0), 0);
+    const kRate   = totalAB > 0 ? totalK / totalAB : 0;
+
+    // Consecutive hits streak from game list (most-recent last)
+    let streak = 0;
+    const revGames = [...recentGames].reverse();
+    for (const g of revGames) {
+      if (g.hits >= 1) streak++;
+      else break;
+    }
+
+    const l10 = recent.last10 || {};
+    const hitAvg = l10.avg || 0;
+    const l10HR  = l10.hr  || 0;
+    const l10H   = l10.hits || 0;
+    const l10AB  = l10.ab  || 0;
+
+    // HIT signal
+    let hitSig, hitCls, hitSub;
+    if (hitAvg >= 0.340 || streak >= 5)         { hitSig = '🔥 HOT';    hitCls = 'sig-strong'; hitSub = `${streak}G streak · .${Math.round(hitAvg*1000)} AVG`; }
+    else if (hitAvg >= 0.280 || streak >= 3)    { hitSig = '↑ HEATING'; hitCls = 'sig-mod';    hitSub = `${streak}G streak · .${Math.round(hitAvg*1000)} AVG`; }
+    else if (hitAvg >= 0.240)                   { hitSig = '→ NEUTRAL'; hitCls = 'sig-lean';   hitSub = `.${Math.round(hitAvg*1000)} AVG L10`; }
+    else                                         { hitSig = '❄ COLD';   hitCls = 'sig-fade';   hitSub = `.${Math.round(hitAvg*1000)} AVG L10`; }
+
+    // TOTAL BASES signal (combine avg + HR rate)
+    const hPerAB = l10AB > 0 ? l10H / l10AB : 0;
+    let tbSig, tbCls, tbSub;
+    if (l10HR >= 4 || hPerAB > 0.370)          { tbSig = '🔥 SURGE';  tbCls = 'sig-strong'; tbSub = `${l10HR} HR · .${Math.round(hPerAB*1000)} H/AB`; }
+    else if (l10HR >= 2 || hPerAB > 0.290)     { tbSig = '↑ SOLID';  tbCls = 'sig-mod';    tbSub = `${l10HR} HR · .${Math.round(hPerAB*1000)} H/AB`; }
+    else if (hPerAB > 0.230)                   { tbSig = '→ LEAN';   tbCls = 'sig-lean';   tbSub = `${l10HR} HR · .${Math.round(hPerAB*1000)} H/AB`; }
+    else                                        { tbSig = '↓ WEAK';   tbCls = 'sig-fade';   tbSub = `${l10HR} HR · .${Math.round(hPerAB*1000)} H/AB`; }
+
+    // HOME RUN signal
+    let hrSig, hrCls, hrSub;
+    if (l10HR >= 4)                             { hrSig = '🔥 ON FIRE'; hrCls = 'sig-strong'; hrSub = `${l10HR} HR last 10G`; }
+    else if (l10HR >= 2)                        { hrSig = '↑ IN FORM'; hrCls = 'sig-mod';    hrSub = `${l10HR} HR last 10G`; }
+    else if (l10HR >= 1)                        { hrSig = '→ LEAN';   hrCls = 'sig-lean';   hrSub = `${l10HR} HR last 10G`; }
+    else                                        { hrSig = '↓ COLD';   hrCls = 'sig-fade';   hrSub = `0 HR last ${l10.games||10}G`; }
+
+    // K RISK (batter K rate — high = pitcher K prop target)
+    let kSig, kCls, kSub;
+    if (kRate >= 0.32)                          { kSig = 'HIGH K RISK'; kCls = 'sig-fade';   kSub = `${Math.round(kRate*100)}% K rate`; }
+    else if (kRate >= 0.22)                     { kSig = 'MODERATE';    kCls = 'sig-lean';   kSub = `${Math.round(kRate*100)}% K rate`; }
+    else if (kRate >= 0.12)                     { kSig = 'LOW RISK';    kCls = 'sig-mod';    kSub = `${Math.round(kRate*100)}% K rate`; }
+    else if (totalAB > 0)                       { kSig = 'CONTACT';     kCls = 'sig-strong'; kSub = `${Math.round(kRate*100)}% K rate`; }
+    else                                        { kSig = '—';           kCls = '';            kSub = 'Insufficient data'; }
+
+    propGrid.innerHTML = `
+      <div class="prop-signal-box">
+        <div class="prop-signal-type">HIT (1+H)</div>
+        <div class="prop-signal-val ${hitCls}">${hitSig}</div>
+        <div class="prop-signal-sub">${hitSub}</div>
+      </div>
+      <div class="prop-signal-box">
+        <div class="prop-signal-type">TOTAL BASES</div>
+        <div class="prop-signal-val ${tbCls}">${tbSig}</div>
+        <div class="prop-signal-sub">${tbSub}</div>
+      </div>
+      <div class="prop-signal-box">
+        <div class="prop-signal-type">HOME RUN</div>
+        <div class="prop-signal-val ${hrCls}">${hrSig}</div>
+        <div class="prop-signal-sub">${hrSub}</div>
+      </div>
+      <div class="prop-signal-box">
+        <div class="prop-signal-type">K RISK</div>
+        <div class="prop-signal-val ${kCls}">${kSig}</div>
+        <div class="prop-signal-sub">${kSub}</div>
+      </div>
+    `;
+
+  } catch(err) {
+    console.error('Context data failed:', err);
+    const contextGrid = document.getElementById('contextGrid');
+    if (contextGrid) {
+      contextGrid.innerHTML = '<div class="context-card"><div style="color:var(--r);padding:12px;text-align:center">Failed to load context data</div></div>';
+    }
+  }
+}
+async function loadBatterBadges(batters) {
+  for (const b of batters) {
+    try {
+      const r = await fetch(`/api/player/${b.id}/performance-badges`);
+      const data = await r.json();
+      const badgeEl = document.getElementById(`badges_${b.id}`);
+      if (badgeEl && data.badges && data.badges.length) {
+        badgeEl.innerHTML = data.badges.slice(0, 2).map(badge => 
+          `<span class="perf-badge perf-${badge.color}" title="${badge.props.join(', ')}">${badge.label}</span>`
+        ).join('');
+      }
+    } catch(e) { console.error('Badge fetch failed:', e); }
+  }
+}
+
+async function loadPitcherBadge(pitcherId, elementId) {
+  try {
+    const r = await fetch(`/api/pitcher/${pitcherId}/performance-badges`);
+    const data = await r.json();
+    const el = document.getElementById(elementId);
+    if (el && data.badges && data.badges.length) {
+      const badgeHtml = data.badges.slice(0, 1).map(badge =>
+        `<span class="perf-badge perf-${badge.color}" style="margin-left:6px" title="${badge.props.join(', ')}">${badge.label}</span>`
+      ).join('');
+      el.innerHTML += badgeHtml;
+    }
+  } catch(e) { console.error('Pitcher badge failed:', e); }
+}
+
+loadGames();
+</script>
+</body>
+</html>
