@@ -4040,7 +4040,10 @@ def api_pitchers(game_pk):
         if g:
             ap = g.get("teams",{}).get("away",{}).get("probablePitcher",{})
             hp = g.get("teams",{}).get("home",{}).get("probablePitcher",{})
-            an = ap.get("fullName","TBD"); hn = hp.get("fullName","TBD")
+            # Caller may supply names from the games list to prevent mismatch
+            # when the schedule API returns different probable pitchers between calls.
+            an = request.args.get("away_name") or ap.get("fullName","TBD")
+            hn = request.args.get("home_name") or hp.get("fullName","TBD")
             # Merge MLB API + FanGraphs + Savant for each pitcher
             def build_pitcher_stats(name, pid):
                 mlb = pitcher_stats_mlb(pid) if pid else {}

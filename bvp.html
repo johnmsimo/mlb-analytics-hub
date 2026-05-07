@@ -411,9 +411,13 @@ async function selectGame(idx) {
   lp.innerHTML = '<div class="loading-row"><div class="spinner" style="margin:auto"></div></div>';
 
   try {
+    const pitcherParams = new URLSearchParams({
+      away_name: currentGame.awayPitcher || '',
+      home_name: currentGame.homePitcher || '',
+    });
     const [lineupRes, pitcherRes] = await Promise.all([
       fetch(`/api/lineup/${currentGame.gamePk}`).then(r => r.json()),
-      fetch(`/api/pitchers/${currentGame.gamePk}`).then(r => r.json())
+      fetch(`/api/pitchers/${currentGame.gamePk}?${pitcherParams}`).then(r => r.json())
     ]);
     currentLineup = { lineup: lineupRes, pitchers: pitcherRes };
     renderLineup();
