@@ -145,6 +145,7 @@
   </div>
 
   <div id="computingNote" class="computing-note">⏳ Model is computing — results are partial. Page will auto-refresh in 20s.</div>
+  <div id="noOddsNotice" class="computing-note" style="display:none;background:rgba(255,193,7,.08);border-color:rgba(255,193,7,.3);color:#ffc107;">⚠ No odds data — showing model projections ranked by Hub Rating. Edge calculations require the Odds API key.</div>
 
   <div class="tbl-panel">
     <div id="tableWrap"><div class="loading"><div class="spinner"></div><br>Loading value bets…</div></div>
@@ -205,12 +206,17 @@ async function loadData(force) {
     const url = '/api/props/scan/today' + (force ? '?refresh=1' : '');
     const r = await fetch(url);
     const d = await r.json();
-    allProps = (d.props || []).filter(p => p.edge != null);
+    allProps = (d.props || []);
     const isComputing = d.computing || false;
     document.getElementById('computingNote').style.display = isComputing ? 'block' : 'none';
     if (isComputing) refreshTimer = setTimeout(() => loadData(false), 20000);
+    const hasOdds = allProps.some(p => p.edge != null);
+    const noOddsNotice = document.getElementById('noOddsNotice');
+    if (noOddsNotice) noOddsNotice.style.display = (!hasOdds && allProps.length > 0) ? 'block' : 'none';
     applyFilters();
-    document.getElementById('statusText').textContent = `${allProps.length} props with edge data · ${d.date || 'today'}`;
+    const edgeCount = allProps.filter(p => p.edge != null).length;
+    const label = hasOdds ? `${edgeCount} props with edge · ${allProps.length} total · ${d.date || 'today'}` : `${allProps.length} model props · ${d.date || 'today'} · no odds data`;
+    document.getElementById('statusText').textContent = label;
   } catch(e) {
     document.getElementById('tableWrap').innerHTML = '<div class="empty">Failed to load data. Check connection.</div>';
   }
@@ -228,11 +234,11 @@ function applyFilters() {
   const minGradeScore = gradeMin ? (gradeOrder[gradeMin] || 0) : 0;
 
   let rows = allProps.filter(p => {
-    const edge = parseFloat(p.edge) || 0;
-    if (edge < minEdge) return false;
+    const edge = p.edge != null ? (parseFloat(p.edge) || 0) : null;
+    if (edge !== null && edge < minEdge) return false;
     if (mkt && p.marketKey !== mkt) return false;
     if (minGradeScore) {
-      const g = edgeGrade(edge);
+      const g = edgeGrade(edge != null ? edge : 0);
       if ((gradeOrder[g] || 0) < minGradeScore) return false;
     }
     const hub = parseFloat(p.hubRating) || 0;

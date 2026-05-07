@@ -2763,52 +2763,48 @@ def pitcher_stats_mlb(player_id):
 
 def get_batters_from_boxscore(team_data, side):
     out = []
-    batters = team_data.get("batters",[])
-    players = team_data.get("players",{})
+    batters = team_data.get("batters", [])
+    players = team_data.get("players", {})
     for pid in batters:
         key = f"ID{pid}"
-        p   = players.get(key,{})
-        name= p.get("person",{}).get("fullName","")
-        pos = p.get("position",{}).get("abbreviation","?")
-        s   = p.get("stats",{}).get("batting",{})
-        ss  = p.get("seasonStats",{}).get("batting",{})
+        p = players.get(key, {})
+        name = p.get("person", {}).get("fullName", "")
+        pos = p.get("position", {}).get("abbreviation", "?")
+        s = p.get("stats", {}).get("batting", {})
+        ss = p.get("seasonStats", {}).get("batting", {})
         slot_raw = p.get("battingOrder", 0)
         slot = 0
-        # MLB API usually gives battingOrder as a string like '101', '201', etc. Use first digit if possible.
         if isinstance(slot_raw, int):
             slot = slot_raw if 1 <= slot_raw <= 9 else 0
         elif isinstance(slot_raw, str):
-            # Accept '101', '201', etc. (first digit is order)
             if slot_raw and slot_raw[0].isdigit():
                 slot = int(slot_raw[0])
-            else:
-                slot = 0
-        else:
-            slot = 0
         fgb = fg_batter(name)
         svb = sv_batter(name)
+        bio = _bio_cache.get(pid, {})
+        spl = _hit_split_cache.get(pid, {})
         out.append({
             "slot": slot, "id": pid, "name": name, "pos": pos,
             "lineup_status": "confirmed",
-            "avg":  ss.get("avg",  fgb.get("fg_avg",".---")),
-            "obp":  ss.get("obp",  fgb.get("fg_obp",".---")),
-            "slg":  ss.get("slg",  fgb.get("fg_slg",".---")),
-            "ops":  ss.get("ops",  fgb.get("fg_ops",".---")),
-            "ab":   s.get("atBats",0), "hits": s.get("hits",0),
-            "hr":   s.get("homeRuns",0), "rbi": s.get("rbi",0),
-            # FanGraphs
-            "fg_pa":  fgb.get("fg_pa","N/A"), "fg_r":  fgb.get("fg_r","N/A"),
-            "fg_sb":  fgb.get("fg_sb","N/A"), "fg_woba":fgb.get("fg_woba","N/A"),
-            "fg_wrc": fgb.get("fg_wrc","N/A"), "fg_war":fgb.get("fg_war","N/A"),
-            # Baseball Savant
-            "sv_xba":    svb.get("sv_xba","N/A"),
-            "sv_xslg":   svb.get("sv_xslg","N/A"),
-            "sv_xwoba":  svb.get("sv_xwoba","N/A"),
-            "sv_ev":     svb.get("sv_ev","N/A"),
-            "sv_hh_pct": svb.get("sv_hh_pct","N/A"),
-            "sv_brl_pct":svb.get("sv_brl_pct","N/A"),
-            "pull_pct_air": svb.get("pull_pct_air","N/A"),
-            "sv_la":     svb.get("sv_la","N/A"),
+            "bats": bio.get("bats", "S"),
+            "avg": ss.get("avg", fgb.get("fg_avg", ".---")),
+            "obp": ss.get("obp", fgb.get("fg_obp", ".---")),
+            "slg": ss.get("slg", fgb.get("fg_slg", ".---")),
+            "ops": ss.get("ops", fgb.get("fg_ops", ".---")),
+            "ab": s.get("atBats", 0), "hits": s.get("hits", 0),
+            "hr": s.get("homeRuns", 0), "rbi": s.get("rbi", 0),
+            "vs_l_avg": round(spl.get('vl', {}).get('avg', 0), 3) if spl.get('vl') else "N/A",
+            "vs_r_avg": round(spl.get('vr', {}).get('avg', 0), 3) if spl.get('vr') else "N/A",
+            "vs_l_ops": round(spl.get('vl', {}).get('ops', 0), 3) if spl.get('vl') else "N/A",
+            "vs_r_ops": round(spl.get('vr', {}).get('ops', 0), 3) if spl.get('vr') else "N/A",
+            "fg_pa": fgb.get("fg_pa", "N/A"), "fg_r": fgb.get("fg_r", "N/A"),
+            "fg_sb": fgb.get("fg_sb", "N/A"), "fg_woba": fgb.get("fg_woba", "N/A"),
+            "fg_wrc": fgb.get("fg_wrc", "N/A"), "fg_war": fgb.get("fg_war", "N/A"),
+            "sv_xba": svb.get("sv_xba", "N/A"), "sv_xslg": svb.get("sv_xslg", "N/A"),
+            "sv_xwoba": svb.get("sv_xwoba", "N/A"), "sv_ev": svb.get("sv_ev", "N/A"),
+            "sv_hh_pct": svb.get("sv_hh_pct", "N/A"), "sv_brl_pct": svb.get("sv_brl_pct", "N/A"),
+            "pull_pct_air": svb.get("pull_pct_air", "N/A"),
+            "sv_la": svb.get("sv_la", "N/A"),
         })
     return out
 
@@ -6872,50 +6868,6 @@ def pitcher_stats_mlb(player_id):
     except Exception:
         prof = player_profile(player_id)
         return {'pitchHand': prof.get('throws', 'R')}
-
-
-def get_batters_from_boxscore(team_data, side):
-    out = []
-    batters = team_data.get("batters", [])
-    players = team_data.get("players", {})
-    for pid in batters:
-        key = f"ID{pid}"
-        p = players.get(key, {})
-        name = p.get("person", {}).get("fullName", "")
-        pos = p.get("position", {}).get("abbreviation", "?")
-        s = p.get("stats", {}).get("batting", {})
-        ss = p.get("seasonStats", {}).get("batting", {})
-        slot = p.get("battingOrder", 0)
-        try:
-            slot = int(str(slot)[0])
-        except Exception:
-            slot = 0
-        fgb = fg_batter(name)
-        svb = sv_batter(name)
-        prof = player_profile(pid)
-        spl = hitter_split_profile(pid)
-        out.append({
-            "slot": slot, "id": pid, "name": name, "pos": pos,
-            "avg": ss.get("avg", fgb.get("fg_avg", ".---")),
-            "obp": ss.get("obp", fgb.get("fg_obp", ".---")),
-            "slg": ss.get("slg", fgb.get("fg_slg", ".---")),
-            "ops": ss.get("ops", fgb.get("fg_ops", ".---")),
-            "ab": s.get("atBats", 0), "hits": s.get("hits", 0),
-            "hr": s.get("homeRuns", 0), "rbi": s.get("rbi", 0),
-            "bats": prof.get('bats', 'S'),
-            "vs_l_avg": round(spl.get('vl', {}).get('avg', 0), 3) if spl.get('vl') else "N/A",
-            "vs_r_avg": round(spl.get('vr', {}).get('avg', 0), 3) if spl.get('vr') else "N/A",
-            "vs_l_ops": round(spl.get('vl', {}).get('ops', 0), 3) if spl.get('vl') else "N/A",
-            "vs_r_ops": round(spl.get('vr', {}).get('ops', 0), 3) if spl.get('vr') else "N/A",
-            "fg_pa": fgb.get("fg_pa", "N/A"), "fg_r": fgb.get("fg_r", "N/A"),
-            "fg_sb": fgb.get("fg_sb", "N/A"), "fg_woba": fgb.get("fg_woba", "N/A"),
-            "fg_wrc": fgb.get("fg_wrc", "N/A"), "fg_war": fgb.get("fg_war", "N/A"),
-            "sv_xba": svb.get("sv_xba", "N/A"), "sv_xslg": svb.get("sv_xslg", "N/A"),
-            "sv_xwoba": svb.get("sv_xwoba", "N/A"), "sv_ev": svb.get("sv_ev", "N/A"),
-            "sv_hh_pct": svb.get("sv_hh_pct", "N/A"), "sv_brl_pct": svb.get("sv_brl_pct", "N/A"),
-            "sv_la": svb.get("sv_la", "N/A"),
-        })
-    return out
 
 
 def _pitcher_model(name, pid=None, team_id=None):
@@ -15318,14 +15270,20 @@ def _compute_consistency_payload(date_str):
     game_meta = {g.get('gamePk'): g for g in parsed_games}
     adjustments = _get_adjustments()
     rows = []
-    for game in raw_games:
+
+    def _consistency_game_rows(game):
         game_pk = game.get('gamePk')
         if not game_pk:
-            continue
+            return []
         try:
-            rows.extend(_build_tracker_rows_for_game(int(game_pk), date_str, adjustments, _sched=raw_games, include_odds=False) or [])
+            return _build_tracker_rows_for_game(int(game_pk), date_str, adjustments, _sched=raw_games, include_odds=False) or []
         except Exception:
             print(f'[consistency_rows {game_pk}] {traceback.format_exc()}')
+            return []
+
+    with ThreadPoolExecutor(max_workers=min(6, max(1, len(raw_games)))) as _cex:
+        for _game_rows in _cex.map(_consistency_game_rows, raw_games):
+            rows.extend(_game_rows)
 
     supported_markets = {
         'batter_hits', 'batter_total_bases', 'batter_home_runs', 'batter_rbis',
