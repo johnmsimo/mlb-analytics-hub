@@ -568,7 +568,7 @@ _CONSISTENCY_TTL = 20 * 60
 _weather_cache_lock = threading.Lock()
 _weather_cache = {}
 _WEATHER_TTL = 20 * 60
-_WEATHER_FAIL_TTL = 120
+_WEATHER_FAIL_TTL = 30
 # Seconds to wait for FG / Savant caches on each request during cold starts.
 _CACHE_WAIT_TIMEOUT_SEC = 5
 _active_roster_cache_lock = threading.Lock()
@@ -2740,7 +2740,10 @@ def get_weather(lat, lon, game_hour=13, venue_id=None):
         print(f"[get_weather] lat={lat} lon={lon} hour={game_hour} venue={venue_id} err={ex}")
         payload = {"temp":"N/A","rain_chance":"N/A","wind_speed":"N/A","wind_dir":"","wind":"N/A","condition":"N/A"}
         with _weather_cache_lock:
-            _weather_cache[cache_key] = {"ts": now, "ttl": _WEATHER_FAIL_TTL, "payload": payload}
+            # Don't overwrite a valid entry that a concurrent thread may have written.
+            existing = _weather_cache.get(cache_key)
+            if not existing or existing.get("payload", {}).get("temp") in (None, "N/A"):
+                _weather_cache[cache_key] = {"ts": now, "ttl": _WEATHER_FAIL_TTL, "payload": payload}
         return payload
 
 def pitcher_stats_mlb(player_id):
@@ -2845,15 +2848,21 @@ def parse_game(g, prefer_live_weather=True):
         except Exception:
             game_hour_local = 13
         raw_weather = g.get("weather", {}) or {}
-        if not prefer_live_weather and raw_weather:
-            wx = {
-                "temp": raw_weather.get("temp", "N/A"),
-                "condition": raw_weather.get("condition", "N/A"),
-                "wind": raw_weather.get("wind", "N/A"),
-                "wind_speed": raw_weather.get("wind", "N/A"),
-                "wind_dir": "",
-                "rain_chance": raw_weather.get("precipitationChance", "N/A"),
-            }
+        if not prefer_live_weather:
+            # Bulk dashboard load: use MLB schedule weather if present; otherwise skip
+            # the Open-Meteo call entirely to avoid parallel cache pollution.
+            if raw_weather:
+                wx = {
+                    "temp": raw_weather.get("temp", "N/A"),
+                    "condition": raw_weather.get("condition", "N/A"),
+                    "wind": raw_weather.get("wind", "N/A"),
+                    "wind_speed": raw_weather.get("wind", "N/A"),
+                    "wind_dir": "",
+                    "rain_chance": raw_weather.get("precipitationChance", "N/A"),
+                }
+            else:
+                wx = {"temp": "N/A", "condition": "N/A", "wind": "N/A",
+                      "wind_speed": "N/A", "wind_dir": "", "rain_chance": "N/A"}
         else:
             wx = get_weather(lat, lon, game_hour_local, venue_id=venue_id)
             # Fallback: use MLB schedule weather when Open-Meteo fails or returns unavailable data.
