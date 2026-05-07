@@ -5294,7 +5294,7 @@ def api_bvp_projection(batter_id, pitcher_id):
         bats_code    = "S"
         pitcher_hand = "R"
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+        with ThreadPoolExecutor(max_workers=2) as ex:
             b_fut = ex.submit(requests.get, f"{MLB_API}/people/{batter_id}",  timeout=6)
             p_fut = ex.submit(requests.get, f"{MLB_API}/people/{pitcher_id}", timeout=6)
             br = b_fut.result(timeout=8)
@@ -5370,11 +5370,14 @@ def api_bvp_projection(batter_id, pitcher_id):
         # ── 5. BvP component (already cached) ───────────────────────────────
         bvp_data = _fetch_bvp(batter_id, pitcher_id)
 
+        # ── 5b. Rolling form for batter (daily-cached) ──────────────────────
+        batter_form = _fetch_rolling_form(batter_id, False)
+
         # ── 6. BATX projection (most complete model) ─────────────────────────
         batx = _project_batter_batx(
             batter_obj, pitcher_name, fg_pit, sv_pit,
             park_factor, weather, pitcher_hand,
-            opp_pitcher_id=pitcher_id, bvp=bvp_data,
+            opp_pitcher_id=pitcher_id, bvp=bvp_data, form=batter_form,
         )
 
         # ── 7. Calibrated game probs via _project_batter_vs_pitcher ─────────
