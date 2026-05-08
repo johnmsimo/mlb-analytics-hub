@@ -2,7 +2,9 @@
 fangraphs_loader.py
 ═══════════════════════════════════════════════════════════════════════
 Single FanGraphs data layer for MLB Analytics Hub.
-Loads all 4 CSVs from the data/ folder at startup and caches them.
+Loads CSVs from the data/ folder at startup and caches them.
+Falls back to 2025 data when a player has < MIN_IP / MIN_PA in 2026.
+
 All app modules (props, NRFI, HR analytics, deep dive, BvP) should
 import from here instead of reading CSV files directly.
 
@@ -28,13 +30,23 @@ from functools import lru_cache
 # ── Paths ────────────────────────────────────────────────────────────────────
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 
-BAT_PATH     = os.path.join(DATA_DIR, "fg_batting_2026.csv")
-PIT_PATH     = os.path.join(DATA_DIR, "fg_pitching_2026.csv")
-PROJ_BAT_PATH = os.path.join(DATA_DIR, "fg_steamer_bat_2026.csv")
-PROJ_PIT_PATH = os.path.join(DATA_DIR, "fg_steamer_pit_2026.csv")
+BAT_PATH       = os.path.join(DATA_DIR, "fg_batting_2026.csv")
+PIT_PATH       = os.path.join(DATA_DIR, "fg_pitching_2026.csv")
+BAT_PATH_2025  = os.path.join(DATA_DIR, "fg_batting_2025.csv")
+PIT_PATH_2025  = os.path.join(DATA_DIR, "fg_pitching_2025.csv")
 
-# ── Internal cache (loaded once at first call) ────────────────────────────────
+PROJ_BAT_PATH  = os.path.join(DATA_DIR, "fg_steamer_bat_2026.csv")
+PROJ_PIT_PATH  = os.path.join(DATA_DIR, "fg_steamer_pit_2026.csv")
+PROJ_BAT_PATH2 = os.path.join(DATA_DIR, "fg_proj_bat_2026.csv")
+PROJ_PIT_PATH2 = os.path.join(DATA_DIR, "fg_proj_pit_2026.csv")
+
+# Minimum 2026 sample before we consider the row "real" data
+MIN_IP = 5.0   # innings pitched
+MIN_PA = 20    # plate appearances
+
+# ── Internal cache (loaded once at first call) ───────────────────────────────
 _cache = {}
+
 
 def _clean_name_html(df: pd.DataFrame, col: str = "Name") -> pd.DataFrame:
     """Strip HTML anchor tags from Name/Team columns FanGraphs returns."""
@@ -44,52 +56,124 @@ def _clean_name_html(df: pd.DataFrame, col: str = "Name") -> pd.DataFrame:
         )
     return df
 
+
+def _try_load(path: str, key: str) -> pd.DataFrame:
+    """Load one CSV, clean it, return DataFrame (empty on failure)."""
+    try:
+        df = pd.read_csv(path, low_memory=False)
+        for col in ("Name", "Team", "PlayerName"):
+            df = _clean_name_html(df, col)
+        if "playerid" in df.columns:
+            df["playerid"] = df["playerid"].astype(str).str.strip()
+        if "xMLBAMID" in df.columns:
+            df["xMLBAMID"] = df["xMLBAMID"].astype(str).str.strip()
+        print(f"[FG Loader] {key}: {df.shape[0]} rows, {df.shape[1]} cols")
+        return df
+    except FileNotFoundError:
+        print(f"[FG Loader] WARNING: {path} not found — {key} will be empty")
+        return pd.DataFrame()
+    except Exception as e:
+        print(f"[FG Loader] ERROR loading {key}: {e}")
+        return pd.DataFrame()
+
+
+def _find_proj_path(primary: str, fallback: str) -> str:
+    """Return whichever projection path actually exists on disk."""
+    if os.path.exists(primary):
+        return primary
+    if os.path.exists(fallback):
+        return fallback
+    return primary  # will fail gracefully in _try_load
+
+
 def _load_all():
-    """Load and cache all 4 CSVs. Called once on first access."""
+    """Load and cache all CSVs. Called once on first access."""
     if _cache:
         return
 
-    for key, path in [
-        ("bat",      BAT_PATH),
-        ("pit",      PIT_PATH),
-        ("proj_bat", PROJ_BAT_PATH),
-        ("proj_pit", PROJ_PIT_PATH),
-    ]:
-        try:
-            df = pd.read_csv(path, low_memory=False)
-            # Clean HTML from name/team columns
-            for col in ("Name", "Team", "PlayerName"):
-                df = _clean_name_html(df, col)
-            # Normalise playerid to string for consistent merging
-            if "playerid" in df.columns:
-                df["playerid"] = df["playerid"].astype(str).str.strip()
-            if "xMLBAMID" in df.columns:
-                df["xMLBAMID"] = df["xMLBAMID"].astype(str).str.strip()
-            _cache[key] = df
-            print(f"[FG Loader] {key}: {df.shape[0]} rows, {df.shape[1]} cols")
-        except FileNotFoundError:
-            print(f"[FG Loader] WARNING: {path} not found — {key} will be empty")
-            _cache[key] = pd.DataFrame()
-        except Exception as e:
-            print(f"[FG Loader] ERROR loading {key}: {e}")
-            _cache[key] = pd.DataFrame()
+    _cache["bat"]      = _try_load(BAT_PATH,      "bat_2026")
+    _cache["pit"]      = _try_load(PIT_PATH,       "pit_2026")
+    _cache["bat_2025"] = _try_load(BAT_PATH_2025,  "bat_2025")
+    _cache["pit_2025"] = _try_load(PIT_PATH_2025,  "pit_2025")
+
+    proj_bat = _find_proj_path(PROJ_BAT_PATH, PROJ_BAT_PATH2)
+    proj_pit = _find_proj_path(PROJ_PIT_PATH, PROJ_PIT_PATH2)
+    _cache["proj_bat"] = _try_load(proj_bat, "proj_bat")
+    _cache["proj_pit"] = _try_load(proj_pit, "proj_pit")
+
+    print(f"[FG Loader] All caches ready. Keys: {list(_cache.keys())}")
+
+
+# ── Name-matching helpers ─────────────────────────────────────────────────────
+
+def _name_col(df: pd.DataFrame) -> str:
+    return "PlayerName" if "PlayerName" in df.columns else "Name"
+
+
+def _find_row(df: pd.DataFrame, name: str = None, player_id: str = None) -> pd.DataFrame:
+    """Return matching row(s) from df by id or name (exact then partial)."""
+    if df.empty:
+        return pd.DataFrame()
+    if player_id:
+        if "playerid" in df.columns:
+            row = df[df["playerid"] == str(player_id)]
+            if not row.empty:
+                return row
+    if name:
+        nc = _name_col(df)
+        nl = name.lower().strip()
+        row = df[df[nc].str.lower().str.strip() == nl]
+        if not row.empty:
+            return row
+        row = df[df[nc].str.lower().str.contains(nl, na=False)]
+        if not row.empty:
+            return row
+    return pd.DataFrame()
+
+
+def _has_enough_sample(row: pd.Series, ptype: str) -> bool:
+    """Return True if 2026 row has enough innings/PA to be reliable."""
+    if ptype == "pit":
+        ip = 0.0
+        for col in ("IP", "ip", "innings_pitched"):
+            if col in row.index:
+                try:
+                    ip = float(row[col])
+                    break
+                except (ValueError, TypeError):
+                    pass
+        return ip >= MIN_IP
+    else:
+        pa = 0
+        for col in ("PA", "pa", "plate_appearances"):
+            if col in row.index:
+                try:
+                    pa = int(row[col])
+                    break
+                except (ValueError, TypeError):
+                    pass
+        return pa >= MIN_PA
+
 
 # ── Public accessors ──────────────────────────────────────────────────────────
 
 def get_all_batters() -> pd.DataFrame:
-    """Return full batting stats DataFrame (475 columns)."""
+    """Return full 2026 batting stats DataFrame."""
     _load_all()
     return _cache["bat"].copy()
 
+
 def get_all_pitchers() -> pd.DataFrame:
-    """Return full pitching stats DataFrame."""
+    """Return full 2026 pitching stats DataFrame."""
     _load_all()
     return _cache["pit"].copy()
+
 
 def get_all_projections_bat() -> pd.DataFrame:
     """Return full Steamer batting projections DataFrame."""
     _load_all()
     return _cache["proj_bat"].copy()
+
 
 def get_all_projections_pit() -> pd.DataFrame:
     """Return full Steamer pitching projections DataFrame."""
@@ -100,77 +184,75 @@ def get_all_projections_pit() -> pd.DataFrame:
 def find_player_id(name: str, player_type: str = "bat") -> str | None:
     """
     Fuzzy-find a FanGraphs playerid by player name.
+    Checks 2026 first, then 2025 fallback.
     player_type: 'bat' or 'pit'
     Returns playerid string or None if not found.
     """
     _load_all()
-    key = "bat" if player_type == "bat" else "pit"
-    df = _cache[key]
-    if df.empty:
-        return None
-
-    name_col = "PlayerName" if "PlayerName" in df.columns else "Name"
-    name_lower = name.lower().strip()
-
-    # Exact match first
-    match = df[df[name_col].str.lower().str.strip() == name_lower]
-    if not match.empty:
-        return str(match.iloc[0]["playerid"])
-
-    # Partial match fallback
-    match = df[df[name_col].str.lower().str.contains(name_lower, na=False)]
-    if not match.empty:
-        return str(match.iloc[0]["playerid"])
-
+    for key in (("bat" if player_type == "bat" else "pit"),
+                ("bat_2025" if player_type == "bat" else "pit_2025")):
+        df = _cache.get(key, pd.DataFrame())
+        row = _find_row(df, name=name)
+        if not row.empty and "playerid" in row.columns:
+            return str(row.iloc[0]["playerid"])
     return None
 
 
 def get_batter_stats(player_id: str = None, name: str = None) -> dict:
     """
     Get full batting stats for one player.
-    Pass either playerid (string) or name (string).
-    Returns a dict of all stat columns, or {} if not found.
+    Returns 2026 data if PA >= MIN_PA, otherwise falls back to 2025.
     """
     _load_all()
-    df = _cache["bat"]
-    if df.empty:
-        return {}
+    row26 = _find_row(_cache["bat"], player_id=player_id, name=name)
+    if not row26.empty:
+        r = row26.iloc[0]
+        if _has_enough_sample(r, "bat"):
+            return r.to_dict()
+        # 2026 exists but small sample — merge 2025 as base, overlay 2026
+        row25 = _find_row(_cache["bat_2025"], player_id=player_id, name=name)
+        if not row25.empty:
+            merged = {**row25.iloc[0].to_dict(), **r.to_dict()}
+            print(f"[FG Loader] batter '{name or player_id}' using 2025+2026 merged (PA<{MIN_PA})")
+            return merged
+        return r.to_dict()
 
-    if player_id:
-        row = df[df["playerid"] == str(player_id)]
-    elif name:
-        pid = find_player_id(name, "bat")
-        row = df[df["playerid"] == pid] if pid else pd.DataFrame()
-    else:
-        return {}
+    # No 2026 row at all — fall back fully to 2025
+    row25 = _find_row(_cache["bat_2025"], player_id=player_id, name=name)
+    if not row25.empty:
+        print(f"[FG Loader] batter '{name or player_id}' using 2025 fallback (no 2026 row)")
+        return row25.iloc[0].to_dict()
 
-    if row.empty:
-        return {}
-    return row.iloc[0].to_dict()
+    return {}
 
 
 def get_pitcher_stats(player_id: str = None, name: str = None) -> dict:
     """
     Get full pitching stats for one player.
-    Pass either playerid (string) or name (string).
-    Returns a dict of all stat columns, or {} if not found.
+    Returns 2026 data if IP >= MIN_IP, otherwise falls back to 2025.
+    Handles returning pitchers (Lodolo, post-TJ, etc.) gracefully.
     """
     _load_all()
-    df = _cache["pit"]
-    if df.empty:
-        return {}
+    row26 = _find_row(_cache["pit"], player_id=player_id, name=name)
+    if not row26.empty:
+        r = row26.iloc[0]
+        if _has_enough_sample(r, "pit"):
+            return r.to_dict()
+        # Small 2026 sample — use 2025 as base, overlay 2026 current-season fields
+        row25 = _find_row(_cache["pit_2025"], player_id=player_id, name=name)
+        if not row25.empty:
+            merged = {**row25.iloc[0].to_dict(), **r.to_dict()}
+            print(f"[FG Loader] pitcher '{name or player_id}' using 2025+2026 merged (IP<{MIN_IP})")
+            return merged
+        return r.to_dict()
 
-    if player_id:
-        row = df[df["playerid"] == str(player_id)]
-    elif name:
-        pid = find_player_id(name, "pit")
-        row = df[df["playerid"] == pid] if pid else pd.DataFrame()
-    else:
-        return {}
+    # No 2026 row at all — fall back fully to 2025
+    row25 = _find_row(_cache["pit_2025"], player_id=player_id, name=name)
+    if not row25.empty:
+        print(f"[FG Loader] pitcher '{name or player_id}' using 2025 fallback (no 2026 row)")
+        return row25.iloc[0].to_dict()
 
-    if row.empty:
-        return {}
-    return row.iloc[0].to_dict()
+    return {}
 
 
 def get_batter_projection(player_id: str = None, name: str = None) -> dict:
@@ -182,22 +264,7 @@ def get_batter_projection(player_id: str = None, name: str = None) -> dict:
     df = _cache["proj_bat"]
     if df.empty:
         return {}
-
-    id_col = "playerid" if "playerid" in df.columns else (
-        "minpos" if "minpos" in df.columns else None
-    )
-
-    if player_id and id_col:
-        row = df[df[id_col].astype(str) == str(player_id)]
-    elif name:
-        name_col = "PlayerName" if "PlayerName" in df.columns else "Name"
-        if name_col in df.columns:
-            row = df[df[name_col].str.lower().str.strip() == name.lower().strip()]
-        else:
-            return {}
-    else:
-        return {}
-
+    row = _find_row(df, player_id=player_id, name=name)
     if row.empty:
         return {}
     return row.iloc[0].to_dict()
@@ -212,20 +279,7 @@ def get_pitcher_projection(player_id: str = None, name: str = None) -> dict:
     df = _cache["proj_pit"]
     if df.empty:
         return {}
-
-    id_col = "playerid" if "playerid" in df.columns else None
-
-    if player_id and id_col:
-        row = df[df[id_col].astype(str) == str(player_id)]
-    elif name:
-        name_col = "PlayerName" if "PlayerName" in df.columns else "Name"
-        if name_col in df.columns:
-            row = df[df[name_col].str.lower().str.strip() == name.lower().strip()]
-        else:
-            return {}
-    else:
-        return {}
-
+    row = _find_row(df, player_id=player_id, name=name)
     if row.empty:
         return {}
     return row.iloc[0].to_dict()
