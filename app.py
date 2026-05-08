@@ -37,12 +37,15 @@ _load_local_env_file(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.
 
 # XGBoost prop scorer — loaded once at startup; falls back gracefully if models missing
 try:
-    from xgb_prop_scorer import xgb_hit_prob, xgb_k_prob
+    from xgb_prop_scorer import xgb_hit_prob, xgb_k_prob, xgb_ready, enrich_batter, enrich_pitcher
     _XGB_AVAILABLE = True
 except ImportError:
     _XGB_AVAILABLE = False
-    def xgb_hit_prob(*a, **k): return None
-    def xgb_k_prob(*a, **k):   return None
+    def xgb_hit_prob(*a, **k):   return None
+    def xgb_k_prob(*a, **k):     return None
+    def xgb_ready(_=None):       return False
+    def enrich_batter(d, **k):   return d
+    def enrich_pitcher(d, **k):  return d
 
 from mc_upgrades import (
     AntitheticRandom,
