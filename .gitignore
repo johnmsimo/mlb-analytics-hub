@@ -10,5 +10,5 @@ venv/
 ENV/
 env/
 
-# Local data snapshots and caches
-data/
+# Local data snapshots and caches — keep data/ tracked so Fly.io gets CSVs
+# data/
