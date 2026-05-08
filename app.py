@@ -1858,20 +1858,20 @@ def _maybe_refresh_savant():
 
 def sv_pitcher(name):
     """Savant pitcher stats with Brain overlay. Brain fills missing sv keys only."""
-    with sv_lock:
-        xs = dict(svpitxstats)
-        ap = dict(svarsenalpct)
-        av = dict(svarsenalvelo)
-    lx = fuzzy_lookup(name, xs)
+    with _sv_lock:
+        xs = dict(_sv_pit_xstats)
+        ap = dict(_sv_arsenal_pct)
+        av = dict(_sv_arsenal_velo)
+    lx = _fuzzy_lookup(name, xs)
     r = dict(lx) if lx else {}
-    lap = fuzzy_lookup(name, ap)
-    lav = fuzzy_lookup(name, av)
+    lap = _fuzzy_lookup(name, ap)
+    lav = _fuzzy_lookup(name, av)
     r["svarsenalpct"] = lap if lap else {}
     r["svarsenalvelo"] = lav if lav else {}
     try:
-        from brainmergepatch import brainfuzzy, brainpitoverlay as bpo
-        with brainoverlay_lock:
-            brain = brainfuzzy(name, bpo)
+        from brain_merge_patch import _brain_fuzzy, _brain_pit_overlay as _bpo
+        with _brain_overlay_lock:
+            brain = _brain_fuzzy(name, _bpo)
         for k, v in brain.items():
             if k not in r or r[k] in (None, "", "NA", "N/A"):
                 r[k] = v
@@ -1881,18 +1881,18 @@ def sv_pitcher(name):
 
 def sv_batter(name):
     """Savant batter stats with Brain overlay. Brain fills missing sv keys only."""
-    with sv_lock:
-        xs = dict(svbatxstats)
-        sc = dict(svbatstatcast)
-    lx = fuzzy_lookup(name, xs)
-    ls = fuzzy_lookup(name, sc)
+    with _sv_lock:
+        xs = dict(_sv_bat_xstats)
+        sc = dict(_sv_bat_statcast)
+    lx = _fuzzy_lookup(name, xs)
+    ls = _fuzzy_lookup(name, sc)
     r = dict(lx) if lx else {}
     if ls:
         r.update(ls)
     try:
-        from brainmergepatch import brainfuzzy, brainbatoverlay as bbo
-        with brainoverlay_lock:
-            brain = brainfuzzy(name, bbo)
+        from brain_merge_patch import _brain_fuzzy, _brain_bat_overlay as _bbo
+        with _brain_overlay_lock:
+            brain = _brain_fuzzy(name, _bbo)
         for k, v in brain.items():
             if k not in r or r[k] in (None, "", "NA", "N/A"):
                 r[k] = v
