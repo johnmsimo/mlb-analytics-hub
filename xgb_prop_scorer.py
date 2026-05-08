@@ -1,6 +1,6 @@
 """
 xgb_prop_scorer.py  —  Production XGBoost Prop Scorer
-═══════════════════════════════════════════════════════════════════════════════
+═══════════════════════════════════════════════════════════════════════
 Drop-in module for app.py.  Import at the top of app.py:
 
     from xgb_prop_scorer import xgb_hit_prob, xgb_k_prob, xgb_ready
@@ -31,7 +31,12 @@ Model files (produced by xgb_training_pipeline.py / Colab notebook):
 
 All functions fail silently (return None) if the model files are absent,
 so the existing formula continues to run without modification.
-═══════════════════════════════════════════════════════════════════════════════
+
+FanGraphs Integration:
+    When batter/pitcher dicts are missing stat keys, the scorer now
+    automatically enriches them from fangraphs_loader using the
+    player name or playerid present in the dict.
+═══════════════════════════════════════════════════════════════════════
 """
 
 from __future__ import annotations
@@ -44,7 +49,24 @@ from typing import Optional
 
 import numpy as np
 
-# ── Paths ───────────────────────────────────────────────────────────────────
+# ── FanGraphs loader (optional — graceful if missing) ──────────────────────
+try:
+    from fangraphs_loader import (
+        get_batter_stats,
+        get_pitcher_stats,
+        get_batter_projection,
+        get_pitcher_projection,
+    )
+    _FG_AVAILABLE = True
+except ImportError:
+    _FG_AVAILABLE = False
+    def get_batter_stats(*a, **kw):    return {}
+    def get_pitcher_stats(*a, **kw):   return {}
+    def get_batter_projection(*a, **kw): return {}
+    def get_pitcher_projection(*a, **kw): return {}
+
+
+# ── Paths ────────────────────────────────────────────────────────────────────
 _HERE        = os.path.dirname(os.path.abspath(__file__))
 _MODEL_DIR   = os.path.join(_HERE, 'models')
 _FEAT_FILE   = os.path.join(_MODEL_DIR, 'xgb_feature_cols.json')
@@ -56,7 +78,7 @@ _MODEL_PATHS = {
     'k_5.5': os.path.join(_MODEL_DIR, 'xgb_k_5_5.pkl'),
 }
 
-# ── Model registry (lazy-loaded once) ───────────────────────────────────────
+# ── Model registry (lazy-loaded once) ────────────────────────────────
 _lock    = threading.Lock()
 _models  : dict = {}           # key → XGBClassifier
 _feat_cols: dict = {}          # key → list[str]
@@ -103,6 +125,148 @@ def xgb_ready(market: str = 'hits') -> bool:
     return False
 
 
+# ── FanGraphs enrichment ──────────────────────────────────────────────────
+
+def _enrich_batter_from_fg(d: dict) -> dict:
+    """
+    Fetch real FanGraphs batting stats and merge them INTO the batter dict.
+    Uses playerid or name from the passed dict. Existing keys are NOT
+    overwritten — FG data fills in only what's missing.
+    """
+    if not _FG_AVAILABLE:
+        return d
+
+    pid  = str(d.get('fgId') or d.get('playerid') or d.get('fg_id') or '')
+    name = str(d.get('name') or d.get('Name') or d.get('PlayerName') or '')
+
+    fg = {}
+    if pid and pid not in ('', 'None', '0'):
+        fg = get_batter_stats(player_id=pid)
+    if not fg and name:
+        fg = get_batter_stats(name=name)
+
+    if not fg:
+        return d
+
+    # FanGraphs column → internal scorer key mapping
+    FG_BAT_MAP = {
+        'xAVG':        'svxba',
+        'xwOBA':       'svxwoba',
+        'xSLG':        'svxslg',
+        'EV':          'svev',
+        'Barrel%':     'svbrlpct',
+        'HardHit%':    'svhhpct',
+        'SwStr%':      'svsspct',
+        'LA':          'svla',
+        'K%':          'fgkpct',
+        'BB%':         'fgbbpct',
+        'wOBA':        'fgwoba',
+        'SLG':         'fgslg',
+        'wRC+':        'fgwrcplus',
+        'ISO':         'fgiso',
+        'BABIP':       'fgbabip',
+        'O-Swing%':    'fgoswing',
+        'Z-Contact%':  'fgzcontact',
+        'Pull%':       'fgpull',
+        'Hard%':       'fghard',
+        'Bats':        'fgbats',
+        'xMLBAMID':    'mlbamid',
+        'playerid':    'fgId',
+        # Steamer projections (also pull)
+        'proj_wOBA':   'projwoba',
+        'proj_HR':     'projhr',
+        'proj_H':      'projh',
+    }
+
+    enriched = dict(d)  # copy so we don't mutate original
+    for fg_col, scorer_key in FG_BAT_MAP.items():
+        if scorer_key not in enriched or enriched[scorer_key] is None:
+            val = fg.get(fg_col)
+            if val is not None:
+                enriched[scorer_key] = val
+
+    # Also pull Steamer projection and layer in projected stats
+    proj = {}
+    if pid and pid not in ('', 'None', '0'):
+        proj = get_batter_projection(player_id=pid)
+    if not proj and name:
+        proj = get_batter_projection(name=name)
+    if proj:
+        for col, key in [('wOBA', 'projwoba'), ('HR', 'projhr'), ('H', 'projh'),
+                         ('AVG', 'projava'), ('OBP', 'projobp'), ('SLG', 'projslg')]:
+            if key not in enriched or enriched[key] is None:
+                val = proj.get(col)
+                if val is not None:
+                    enriched[key] = val
+
+    return enriched
+
+
+def _enrich_pitcher_from_fg(d: dict) -> dict:
+    """
+    Fetch real FanGraphs pitching stats and merge them INTO the pitcher dict.
+    Uses playerid or name from the passed dict. Existing keys are NOT
+    overwritten — FG data fills in only what's missing.
+    """
+    if not _FG_AVAILABLE:
+        return d
+
+    pid  = str(d.get('fgId') or d.get('playerid') or d.get('fg_id') or '')
+    name = str(d.get('name') or d.get('Name') or d.get('PlayerName') or '')
+
+    fg = {}
+    if pid and pid not in ('', 'None', '0'):
+        fg = get_pitcher_stats(player_id=pid)
+    if not fg and name:
+        fg = get_pitcher_stats(name=name)
+
+    if not fg:
+        return d
+
+    FG_PIT_MAP = {
+        'xERA':      'svxera',
+        'ERA':       'fgera',
+        'FIP':       'fgfip',
+        'xFIP':      'fgxfip',
+        'SIERA':     'fgsiera',
+        'K%':        'fgkpct',
+        'BB%':       'fgbbpct',
+        'SwStr%':    'svwhiffpct',
+        'HR/FB':     'fghrfb',
+        'GB%':       'fggbpct',
+        'FB%':       'fgfbpct',
+        'LD%':       'fgldpct',
+        'BABIP':     'fgbabip',
+        'WAR':       'fgwar',
+        'playerid':  'fgId',
+        'xMLBAMID':  'mlbamid',
+    }
+
+    enriched = dict(d)
+    for fg_col, scorer_key in FG_PIT_MAP.items():
+        if scorer_key not in enriched or enriched[scorer_key] is None:
+            val = fg.get(fg_col)
+            if val is not None:
+                enriched[scorer_key] = val
+
+    # Steamer pitcher projection
+    proj = {}
+    if pid and pid not in ('', 'None', '0'):
+        proj = get_pitcher_projection(player_id=pid)
+    if not proj and name:
+        proj = get_pitcher_projection(name=name)
+    if proj:
+        for col, key in [('ERA', 'projera'), ('K%', 'projkpct'),
+                         ('BB%', 'projbbpct'), ('IP', 'projip'),
+                         ('K/9', 'projk9'), ('FIP', 'projfip')]:
+            if key not in enriched or enriched[key] is None:
+                val = proj.get(col)
+                if val is not None:
+                    enriched[key] = val
+
+    return enriched
+
+
 # ── Feature helpers ──────────────────────────────────────────────────────────
 
 def _sf(d: dict, *keys, default: float = 0.0) -> float:
@@ -123,6 +287,7 @@ def _sf(d: dict, *keys, default: float = 0.0) -> float:
 def _build_hit_features(batter: dict, pitcher: dict, feat_order: list) -> Optional[np.ndarray]:
     """
     Build the 19-feature hit vector.
+    Batter and pitcher dicts are pre-enriched with FanGraphs data.
     Keys match xgb_training_pipeline.py HITS_FEATURES list.
     """
     bat_side  = (batter.get('fgbats') or batter.get('bats') or 'R').upper()[:1]
@@ -131,22 +296,22 @@ def _build_hit_features(batter: dict, pitcher: dict, feat_order: list) -> Option
                      (bat_side == 'R' and pit_hand == 'L') else 0
 
     raw = {
-        # Batter Statcast
-        'sv_xba':      _sf(batter, 'svxba',    'xba',    default=0.250),
-        'sv_xwoba':    _sf(batter, 'svxwoba',  'fgwoba', default=0.320),
-        'sv_xslg':     _sf(batter, 'svxslg',   'fgslg',  default=0.400),
-        'sv_ev':       _sf(batter, 'svev',      'ev',     default=88.0),
-        'sv_brl_pct':  _sf(batter, 'svbrlpct', 'brlpct', default=4.0),
-        'sv_hh_pct':   _sf(batter, 'svhhpct',  'hhpct',  default=35.0),
-        'sv_ss_pct':   _sf(batter, 'svsspct',  'sspct',  default=10.0),
-        'sv_la':       _sf(batter, 'svla',      'la',     default=12.0),
-        'sv_k_pct':    _sf(batter, 'fgkpct',   'svkpct', default=22.0),
-        'sv_bb_pct':   _sf(batter, 'fgbbpct',  'svbbpct',default=8.0),
+        # Batter Statcast / FanGraphs
+        'sv_xba':      _sf(batter, 'svxba',    'xAVG',   default=0.250),
+        'sv_xwoba':    _sf(batter, 'svxwoba',  'xwOBA',  'fgwoba',  default=0.320),
+        'sv_xslg':     _sf(batter, 'svxslg',   'xSLG',   'fgslg',   default=0.400),
+        'sv_ev':       _sf(batter, 'svev',      'EV',                default=88.0),
+        'sv_brl_pct':  _sf(batter, 'svbrlpct', 'Barrel%',           default=4.0),
+        'sv_hh_pct':   _sf(batter, 'svhhpct',  'HardHit%',          default=35.0),
+        'sv_ss_pct':   _sf(batter, 'svsspct',  'SwStr%',            default=10.0),
+        'sv_la':       _sf(batter, 'svla',      'LA',                default=12.0),
+        'sv_k_pct':    _sf(batter, 'fgkpct',   'K%',    'svkpct',   default=22.0),
+        'sv_bb_pct':   _sf(batter, 'fgbbpct',  'BB%',   'svbbpct',  default=8.0),
         # Pitcher opposition metrics
-        'opp_xera':    _sf(pitcher, 'svxera',  'fgera',  default=4.50),
-        'opp_k_pct':   _sf(pitcher, 'fgkpct',  'svkpct', default=22.0),
-        'opp_bb_pct':  _sf(pitcher, 'fgbbpct', 'svbbpct',default=8.0),
-        'opp_whiff':   _sf(pitcher, 'svwhiffpct','whiffpct',default=24.0),
+        'opp_xera':    _sf(pitcher, 'svxera',   'xERA',  'fgera',   default=4.50),
+        'opp_k_pct':   _sf(pitcher, 'fgkpct',   'K%',   'svkpct',   default=22.0),
+        'opp_bb_pct':  _sf(pitcher, 'fgbbpct',  'BB%',  'svbbpct',  default=8.0),
+        'opp_whiff':   _sf(pitcher, 'svwhiffpct','SwStr%','whiffpct',default=24.0),
         # Platoon
         'bats_L':      1 if bat_side == 'L' else 0,
         'throws_R':    1 if pit_hand == 'R' else 0,
@@ -180,19 +345,20 @@ def _build_hit_features(batter: dict, pitcher: dict, feat_order: list) -> Option
 def _build_k_features(pitcher: dict, feat_order: list) -> Optional[np.ndarray]:
     """
     Build the 10-feature strikeout vector.
+    Pitcher dict is pre-enriched with FanGraphs data.
     Keys match xgb_training_pipeline.py K_FEATURES list.
     """
     raw = {
-        'sv_xera':    _sf(pitcher, 'svxera',     'fgera',    default=4.50),
-        'sv_era':     _sf(pitcher, 'fgera',       'era',      default=4.50),
-        'sv_k_pct':   _sf(pitcher, 'fgkpct',     'svkpct',   default=22.0),
-        'sv_bb_pct':  _sf(pitcher, 'fgbbpct',    'svbbpct',  default=8.0),
-        'sv_whiff':   _sf(pitcher, 'svwhiffpct', 'whiffpct', default=24.0),
-        'l5_ks':      _sf(pitcher, 'l5Ks',       'l5ks',     default=4.5),
-        'l5_k_rate':  _sf(pitcher, 'l5KRate',    'l5krate',  default=0.22),
-        'l10_ks':     _sf(pitcher, 'l10Ks',      'l10ks',    default=4.5),
-        'opp_lineup_k_pct':   _sf(pitcher, 'oppKPct',  'opponentkpct', default=22.0),
-        'opp_lineup_xwoba':   _sf(pitcher, 'oppWoba',  'opponentxwoba',default=0.320),
+        'sv_xera':    _sf(pitcher, 'svxera',     'xERA',   'fgera',    default=4.50),
+        'sv_era':     _sf(pitcher, 'fgera',       'ERA',               default=4.50),
+        'sv_k_pct':   _sf(pitcher, 'fgkpct',     'K%',    'svkpct',    default=22.0),
+        'sv_bb_pct':  _sf(pitcher, 'fgbbpct',    'BB%',   'svbbpct',   default=8.0),
+        'sv_whiff':   _sf(pitcher, 'svwhiffpct', 'SwStr%','whiffpct',  default=24.0),
+        'l5_ks':      _sf(pitcher, 'l5Ks',       'l5ks',              default=4.5),
+        'l5_k_rate':  _sf(pitcher, 'l5KRate',    'l5krate',           default=0.22),
+        'l10_ks':     _sf(pitcher, 'l10Ks',      'l10ks',             default=4.5),
+        'opp_lineup_k_pct':  _sf(pitcher, 'oppKPct',  'opponentkpct', default=22.0),
+        'opp_lineup_xwoba':  _sf(pitcher, 'oppWoba',  'opponentxwoba',default=0.320),
     }
 
     for pct_key in ('sv_k_pct', 'sv_bb_pct', 'opp_lineup_k_pct'):
@@ -215,11 +381,13 @@ def _build_k_features(pitcher: dict, feat_order: list) -> Optional[np.ndarray]:
     return np.array([[raw[c] for c in K_FEATURES]], dtype=np.float32)
 
 
-# ── Public API ───────────────────────────────────────────────────────────────
+# ── Public API ──────────────────────────────────────────────────────────
 
 def xgb_hit_prob(batter: dict, pitcher: dict) -> Optional[float]:
     """
     Returns probability [0,1] that batter records ≥1 hit.
+    Automatically enriches batter/pitcher dicts with FanGraphs stats
+    before building features — no changes needed in app.py call sites.
     Returns None if model is not loaded (graceful fallback).
     """
     if not _loaded:
@@ -228,8 +396,12 @@ def xgb_hit_prob(batter: dict, pitcher: dict) -> Optional[float]:
     if model is None:
         return None
     try:
+        # Enrich with real FanGraphs data before building features
+        batter_enriched  = _enrich_batter_from_fg(batter)
+        pitcher_enriched = _enrich_pitcher_from_fg(pitcher)
+
         feat_order = _feat_cols.get('hits', [])
-        X = _build_hit_features(batter, pitcher, feat_order)
+        X = _build_hit_features(batter_enriched, pitcher_enriched, feat_order)
         if X is None:
             return None
         prob = float(model.predict_proba(X)[0, 1])
@@ -241,14 +413,13 @@ def xgb_hit_prob(batter: dict, pitcher: dict) -> Optional[float]:
 def xgb_k_prob(pitcher: dict, line: float = 4.5) -> Optional[float]:
     """
     Returns probability [0,1] that pitcher OVERS the given K line.
+    Automatically enriches pitcher dict with FanGraphs stats.
     Supported lines: 3.5, 4.5, 5.5.  Returns None if model absent.
     """
     if not _loaded:
         _load_models()
-    # Round to nearest supported line
     line_key = f'k_{line}'
     if line_key not in _models:
-        # Try fallback to nearest
         for candidate in ('k_4.5', 'k_3.5', 'k_5.5'):
             if candidate in _models:
                 line_key = candidate
@@ -256,8 +427,11 @@ def xgb_k_prob(pitcher: dict, line: float = 4.5) -> Optional[float]:
         else:
             return None
     try:
+        # Enrich with real FanGraphs data
+        pitcher_enriched = _enrich_pitcher_from_fg(pitcher)
+
         feat_order = _feat_cols.get(line_key, [])
-        X = _build_k_features(pitcher, feat_order)
+        X = _build_k_features(pitcher_enriched, feat_order)
         if X is None:
             return None
         prob = float(_models[line_key].predict_proba(X)[0, 1])
@@ -269,7 +443,7 @@ def xgb_k_prob(pitcher: dict, line: float = 4.5) -> Optional[float]:
 def xgb_hit_prob_bulk(batters: list, pitcher: dict) -> dict:
     """
     Batch version — returns {batter_name: prob} dict.
-    Slightly faster than calling xgb_hit_prob in a loop for large lineups.
+    Enriches each batter from FanGraphs automatically.
     """
     if not _loaded:
         _load_models()
@@ -277,10 +451,13 @@ def xgb_hit_prob_bulk(batters: list, pitcher: dict) -> dict:
     if model is None or not batters:
         return {}
     try:
+        # Enrich pitcher once
+        pitcher_enriched = _enrich_pitcher_from_fg(pitcher)
         feat_order = _feat_cols.get('hits', [])
         rows, names = [], []
         for b in batters:
-            X = _build_hit_features(b, pitcher, feat_order)
+            b_enriched = _enrich_batter_from_fg(b)
+            X = _build_hit_features(b_enriched, pitcher_enriched, feat_order)
             if X is not None:
                 rows.append(X[0])
                 names.append(b.get('name', ''))
@@ -295,66 +472,59 @@ def xgb_hit_prob_bulk(batters: list, pitcher: dict) -> dict:
         return {}
 
 
-# ── App.py wiring reference ──────────────────────────────────────────────────
+# ── FG enrichment helpers exposed for app.py ─────────────────────────────────
+enrich_batter  = _enrich_batter_from_fg
+enrich_pitcher = _enrich_pitcher_from_fg
+
+
+# ── App.py wiring reference ────────────────────────────────────────────────
 """
 WIRING GUIDE — where to add XGBoost blending in app.py
-═══════════════════════════════════════════════════════
+═══════════════════════════════════════════════════
 
 1.  TOP OF app.py — add import:
 
         try:
-            from xgb_prop_scorer import xgb_hit_prob, xgb_k_prob, xgb_ready
+            from xgb_prop_scorer import xgb_hit_prob, xgb_k_prob, xgb_ready, enrich_batter, enrich_pitcher
         except ImportError:
             def xgb_ready(_=None): return False
             def xgb_hit_prob(*a, **kw): return None
             def xgb_k_prob(*a, **kw): return None
+            def enrich_batter(d, **kw): return d
+            def enrich_pitcher(d, **kw): return d
 
 
 2.  Inside  enrichbatters() → enrich_one()  after rawProb is computed:
-    (search for 'rawProb' in app.py — it's built from matchupscore)
+    (search for 'rawProb' in app.py)
 
-        # ── XGBoost blend ─────────────────────────────────────────
+        # ── FanGraphs enrichment + XGBoost blend ───────────────
+        merged = enrich_batter(merged)           # pulls real FG stats
         if xgb_ready('hits'):
             xp = xgb_hit_prob(merged, opp_pitcher_dict)
             if xp is not None:
                 base_prob = row.get('rawProb', 0.50)
                 row['rawProb']    = round(0.40 * base_prob + 0.60 * xp, 4)
-                row['xgbHitProb'] = xp           # expose on card
-        # ──────────────────────────────────────────────────────────
-
-    opp_pitcher_dict should be the merged {**apfg, **apsv, **apst} dict
-    already constructed in enrichbatters() as  pfg / psv / pst.
+                row['xgbHitProb'] = xp
+        # ──────────────────────────────────────────────────────
 
 
 3.  Inside  projectpitcher()  after kprob is calculated:
     (search for 'kprob' in app.py)
 
-        # ── XGBoost K blend ───────────────────────────────────────
+        # ── FanGraphs enrichment + XGBoost K blend ─────────────
+        pit_dict = enrich_pitcher(pit_dict)     # pulls real FG stats
         if xgb_ready('k'):
             line_val = float(proj.get('line', 4.5))
             xkp = xgb_k_prob(
-                {**pfg, **psv, **pst,
-                 'oppKPct':  opp_avg_kpct,      # pre-computed lineup avg
-                 'oppWoba':  opp_avg_xwoba,},    # pre-computed lineup avg
+                {**pit_dict,
+                 'oppKPct':  opp_avg_kpct,
+                 'oppWoba':  opp_avg_xwoba},
                 line=line_val
             )
             if xkp is not None:
                 kprob = round(0.40 * kprob + 0.60 * xkp, 4)
                 proj['xgbKProb'] = xkp
-        # ──────────────────────────────────────────────────────────
-
-
-4.  Lineup-status cache invalidation (in  api_lineup_status):
-
-        if len(all_changes) > 0:
-            _matchup_card_cache.pop(game_pk, None)   # matchup card cache
-            # No XGBoost cache to clear — scorer is stateless per call.
-
-
-5.  models/ directory:
-    Create  models/  at the repo root (same level as app.py).
-    After running xgb_training_pipeline.py, copy the output .pkl files here.
-    The scorer will auto-load them on the first request after app restart.
+        # ──────────────────────────────────────────────────────
 
 
 BLEND RATIONALE
