@@ -9591,6 +9591,11 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                 raw_prob = float(sp.get(prob_field, 0) or 0)
             else:
                 raw_prob = _poisson_over_prob(mean_k, line)
+            # ── FanGraphs enrichment for pitcher K props ──────────────────────
+            if _XGB_AVAILABLE:
+                from xgb_prop_scorer import enrich_pitcher
+                sp = {**sp, **enrich_pitcher(sp)}   # merges real FG stats into sp dict
+            # ─────────────────────────────────────────────────────────────────    
             # XGBoost blend for K props (60% XGB / 40% Monte Carlo when model loaded)
             _xgb_k = xgb_k_prob(sp, line=line)
             if _xgb_k is not None:
