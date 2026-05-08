@@ -67,6 +67,11 @@
     .book-row{font-size:.72rem;color:var(--mu);display:flex;gap:6px;align-items:center;flex-wrap:wrap}
     .book-price{color:var(--t);font-weight:600}
 
+    /* Devig row */
+    .devig-row{font-size:.68rem;color:var(--mu);background:rgba(255,255,255,.03);border:1px solid var(--b);border-radius:8px;padding:6px 10px;display:flex;gap:12px;flex-wrap:wrap}
+    .devig-row span{color:var(--c)}
+    .devig-overround{color:var(--y) !important}
+
     /* Key factors */
     .factors{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:4px}
     .factors li{font-size:.72rem;color:var(--mu);display:flex;align-items:flex-start;gap:5px}
@@ -161,6 +166,35 @@ function barColor(prob) {
   return 'var(--r)';
 }
 
+// Fetch live NRFI/YRFI odds + devig for a single game and merge into the data object
+async function fetchAndMergeOdds(gameObj) {
+  const away = gameObj.away || (gameObj.gameInfo || {}).awayTeam || '';
+  const home = gameObj.home || (gameObj.gameInfo || {}).homeTeam || '';
+  const nrfiProb = gameObj.nrfi_prob || null;
+  if (!away || !home) return;
+
+  try {
+    const params = new URLSearchParams({ away, home });
+    if (nrfiProb != null) params.set('nrfi_prob', nrfiProb.toFixed(4));
+    const resp = await fetch(`/api/nrfi/odds?${params}`);
+    if (!resp.ok) return;
+    const od = await resp.json();
+    if (!od.success) return;
+
+    // Merge odds fields into the game object — overrides any placeholder nulls
+    gameObj.book_price          = od.book_price          ?? gameObj.book_price;
+    gameObj.bookmaker           = od.bookmaker           ?? gameObj.bookmaker;
+    gameObj.market_nrfi_implied = od.market_nrfi_implied ?? gameObj.market_nrfi_implied;
+    gameObj.nrfi_edge           = od.nrfi_edge           ?? gameObj.nrfi_edge;
+    gameObj.yrfi_edge           = od.yrfi_edge           ?? gameObj.yrfi_edge;
+    gameObj.fair_nrfi_prob      = od.fair_nrfi_prob;
+    gameObj.devig               = od.devig;
+    gameObj.all_books           = od.all_books;
+  } catch(e) {
+    // Odds fetch failed silently — card still renders with model data only
+  }
+}
+
 async function loadData(force) {
   const btn = document.getElementById('refreshBtn');
   btn.disabled = true;
@@ -173,6 +207,8 @@ async function loadData(force) {
     gamesData = (d.games || []).filter(g => !g.isPostponed && !g.isCancelled);
 
     nrfiData = [];
+
+    // Step 1: load model data for all games in parallel
     await Promise.all(gamesData.map(async g => {
       try {
         const nr = await fetch(`/api/nrfi/${g.gamePk}`).then(r => r.json());
@@ -180,9 +216,15 @@ async function loadData(force) {
       } catch(e) {}
     }));
 
+    // Step 2: fetch live book odds + devig for all games in parallel
+    // Uses /api/nrfi/odds which caches the Odds API call for 5 min
+    await Promise.all(nrfiData.map(gameObj => fetchAndMergeOdds(gameObj)));
+
     updateHero();
     renderCards();
-    document.getElementById('statusText').textContent = `${nrfiData.length} of ${gamesData.length} games loaded · First-inning model vs. market.`;
+    const oddsLoaded = nrfiData.filter(r => r.book_price != null).length;
+    document.getElementById('statusText').textContent =
+      `${nrfiData.length} of ${gamesData.length} games loaded · ${oddsLoaded} with live odds · First-inning model vs. market.`;
   } catch(e) {
     document.getElementById('gridWrap').innerHTML = '<div class="empty">Failed to load data. Check connection.</div>';
   }
@@ -229,6 +271,8 @@ function renderCards() {
     const yProb = r.yrfi_prob || 0;
     const edge = r.nrfi_edge;
     const mktImplied = r.market_nrfi_implied;
+    const fairProb = r.fair_nrfi_prob;
+    const devig = r.devig || {};
     const rec = nrfiRec(edge, nProb);
     const edgePct = edge != null ? (edge >= 0 ? '+' : '') + (edge * 100).toFixed(1) + '%' : 'No Odds';
     const edgeCls = edge == null ? 'neutral' : edge > 0.02 ? 'pos' : edge < -0.02 ? 'neg' : 'neutral';
@@ -239,6 +283,14 @@ function renderCards() {
     const wx = r.weather || {};
     const factors = r.key_factors || [];
     const gamePk = (r.gameInfo||{}).gamePk || r.gamePk;
+
+    // Devig row — show fair prob (power devig) + overround if available
+    const devigHtml = (fairProb != null && devig.overround != null) ? `
+      <div class="devig-row">
+        Fair NRFI (devig): <span>${(fairProb*100).toFixed(1)}%</span>
+        &nbsp;|&nbsp; Overround: <span class="devig-overround">${(devig.overround*100).toFixed(2)}%</span>
+        ${devig.methods && devig.methods.multiplicative ? `&nbsp;|&nbsp; Multi: <span>${(devig.methods.multiplicative.nrfi_fair_prob*100).toFixed(1)}%</span>` : ''}
+      </div>` : '';
 
     return `<div class="ncard${cardCls}">
       <div class="nc-matchup">
@@ -270,13 +322,15 @@ function renderCards() {
 
       <div class="edge-row">
         <div>
-          <div style="font-size:.62rem;letter-spacing:.07em;text-transform:uppercase;color:var(--mu);margin-bottom:3px">Edge</div>
+          <div style="font-size:.62rem;letter-spacing:.07em;text-transform:uppercase;color:var(--mu);margin-bottom:3px">Edge vs. Fair (Power Devig)</div>
           <span class="edge-badge ${edgeCls}">${edgePct}</span>
         </div>
         <span class="rec-badge ${rec.cls}">${rec.label}</span>
       </div>
 
       ${r.book_price ? `<div class="book-row">Best odds: <span class="book-price">${r.book_price > 0 ? '+' : ''}${r.book_price}</span> · ${r.bookmaker||''}</div>` : ''}
+
+      ${devigHtml}
 
       ${wx.temp || wx.wind ? `
       <div class="wx-row">
