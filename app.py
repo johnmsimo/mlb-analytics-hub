@@ -6896,12 +6896,12 @@ def pitcher_stats_mlb(player_id):
 
 def _pitcher_model(name, pid=None, team_id=None):
     mlb = pitcher_stats_mlb(pid) if pid else {}
+
     def _load_local_pitcher_arsenal():
         """Load and cache pitch arsenal stats from local data/ CSVs."""
         import glob
         arsenal = {}
         velo = {}
-        # Look for all pitching CSVs in data/
         for path in glob.glob(os.path.join("data", "fg*_pit*.csv")) + glob.glob(os.path.join("data", "fg_pitching_*.csv")):
             try:
                 df = pd.read_csv(path)
@@ -6910,7 +6910,6 @@ def _pitcher_model(name, pid=None, team_id=None):
                     if not name:
                         continue
                     key = _sv_key(name)
-                    # Example: Arsenal % columns: 'FA%','SL%','CH%','CU%' etc.
                     pitch_pct = {k.replace("%","").lower(): float(row[k]) for k in row.keys() if k.endswith("%") and pd.notnull(row[k])}
                     pitch_velo = {k.replace("_Velo","").lower(): float(row[k]) for k in row.keys() if k.endswith("_Velo") and pd.notnull(row[k])}
                     if pitch_pct:
@@ -6921,26 +6920,24 @@ def _pitcher_model(name, pid=None, team_id=None):
                 logging.warning(f"[LocalArsenal] Failed to load {path}: {ex}")
         return arsenal, velo
 
-    # Cache for local arsenal
-    _local_arsenal_cache = None
-    _local_arsenal_lock = threading.Lock()
+    global _local_arsenal_cache
+    if '_local_arsenal_cache' not in globals():
+        _local_arsenal_cache = None
+    if '_local_arsenal_lock' not in globals():
+        _local_arsenal_lock = threading.Lock()
 
-    hr9 = _clamp(w_tm * _num(tm.get('hr9'), BULLPEN_BASE['hr9']) + w_base * BULLPEN_BASE['hr9'] + w_sp * starter.get('hr9', 1.1) + mods.get('hr9', 0), 0.55, 1.9)
-    """Savant pitcher stats with Brain overlay and local CSV fallback."""
     with _sv_lock:
-            xs = dict(_sv_pit_xstats)
-            ap = dict(_sv_arsenal_pct)
-            av = dict(_sv_arsenal_velo)
-            lx = _fuzzy_lookup(name, xs)
-             r = dict(lx) if lx else {}
-           lap = _fuzzy_lookup(name, ap)
-           lav = _fuzzy_lookup(name, av)
+        xs = dict(_sv_pit_xstats)
+        ap = dict(_sv_arsenal_pct)
+        av = dict(_sv_arsenal_velo)
+        lx = _fuzzy_lookup(name, xs)
+        r = dict(lx) if lx else {}
+        lap = _fuzzy_lookup(name, ap)
+        lav = _fuzzy_lookup(name, av)
         r["svarsenalpct"] = lap if lap else {}
         r["svarsenalvelo"] = lav if lav else {}
 
-        # Fallback to local CSVs if Savant arsenal missing
         if not r["svarsenalpct"] or not r["svarsenalvelo"]:
-            global _local_arsenal_cache
             with _local_arsenal_lock:
                 if _local_arsenal_cache is None:
                     _local_arsenal_cache = _load_local_pitcher_arsenal()
@@ -6961,7 +6958,19 @@ def _pitcher_model(name, pid=None, team_id=None):
         except Exception:
             pass
         return r
-    return {'era': era, 'whip': whip, 'k9': k9, 'bb9': bb9, 'hr9': hr9}
+def _tier_blend(tm, starter, w_tm, w_base, w_sp, mods):
+    out = {}
+    for k in ('era', 'whip', 'k9', 'bb9', 'hr9'):
+        out[k] = _clamp(
+            w_tm * _num(tm.get(k), BULLPEN_BASE[k]) +
+            w_base * BULLPEN_BASE[k] +
+            w_sp * starter.get(k, BULLPEN_BASE[k]) +
+            mods.get(k, 0),
+            0.55 if k == 'hr9' else 0.0,
+            1.9 if k == 'hr9' else 20.0
+        )
+    return out
+
 
 
 def _bullpen_tiers(starter, team_id=None):
@@ -6973,6 +6982,8 @@ def _bullpen_tiers(starter, team_id=None):
         model['name'] = name
         model['pitchHand'] = starter.get('pitchHand', 'R')
     return {'closer': closer, 'setup': setup, 'middle': middle}
+# Alias for legacy code
+_parse_ip = parse_ip
 
 
 def _starter_outs_target(starter, rng):
