@@ -6931,10 +6931,10 @@ def _pitcher_model(name, pid=None, team_id=None):
             xs = dict(_sv_pit_xstats)
             ap = dict(_sv_arsenal_pct)
             av = dict(_sv_arsenal_velo)
-           lx = _fuzzy_lookup(name, xs)
-        r = dict(lx) if lx else {}
-        lap = _fuzzy_lookup(name, ap)
-        lav = _fuzzy_lookup(name, av)
+            lx = _fuzzy_lookup(name, xs)
+             r = dict(lx) if lx else {}
+           lap = _fuzzy_lookup(name, ap)
+           lav = _fuzzy_lookup(name, av)
         r["svarsenalpct"] = lap if lap else {}
         r["svarsenalvelo"] = lav if lav else {}
 
