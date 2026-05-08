@@ -37,12 +37,15 @@ _load_local_env_file(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.
 
 # XGBoost prop scorer — loaded once at startup; falls back gracefully if models missing
 try:
-    from xgb_prop_scorer import xgb_hit_prob, xgb_k_prob
+    from xgb_prop_scorer import xgb_hit_prob, xgb_k_prob, xgb_ready, enrich_batter, enrich_pitcher
     _XGB_AVAILABLE = True
 except ImportError:
     _XGB_AVAILABLE = False
-    def xgb_hit_prob(*a, **k): return None
-    def xgb_k_prob(*a, **k):   return None
+    def xgb_hit_prob(*a, **k):   return None
+    def xgb_k_prob(*a, **k):     return None
+    def xgb_ready(_=None):       return False
+    def enrich_batter(d, **k):   return d
+    def enrich_pitcher(d, **k):  return d
 
 from mc_upgrades import (
     AntitheticRandom,
@@ -78,6 +81,9 @@ from brain_merge_patch import (
 
 app = Flask(__name__)
 CORS(app)
+
+from nrfi_odds_routes import register_nrfi_odds_routes
+register_nrfi_odds_routes(app)
 
 # --- MLB API PLAYERS INGEST ROUTE (must be after app = Flask(__name__)) ---
 @app.route('/api/brain/fetch-mlb-players', methods=['POST'])
@@ -568,7 +574,7 @@ _CONSISTENCY_TTL = 20 * 60
 _weather_cache_lock = threading.Lock()
 _weather_cache = {}
 _WEATHER_TTL = 20 * 60
-_WEATHER_FAIL_TTL = 120
+_WEATHER_FAIL_TTL = 30
 # Seconds to wait for FG / Savant caches on each request during cold starts.
 _CACHE_WAIT_TIMEOUT_SEC = 5
 _active_roster_cache_lock = threading.Lock()
@@ -2740,7 +2746,10 @@ def get_weather(lat, lon, game_hour=13, venue_id=None):
         print(f"[get_weather] lat={lat} lon={lon} hour={game_hour} venue={venue_id} err={ex}")
         payload = {"temp":"N/A","rain_chance":"N/A","wind_speed":"N/A","wind_dir":"","wind":"N/A","condition":"N/A"}
         with _weather_cache_lock:
-            _weather_cache[cache_key] = {"ts": now, "ttl": _WEATHER_FAIL_TTL, "payload": payload}
+            # Don't overwrite a valid entry that a concurrent thread may have written.
+            existing = _weather_cache.get(cache_key)
+            if not existing or existing.get("payload", {}).get("temp") in (None, "N/A"):
+                _weather_cache[cache_key] = {"ts": now, "ttl": _WEATHER_FAIL_TTL, "payload": payload}
         return payload
 
 def pitcher_stats_mlb(player_id):
@@ -2845,15 +2854,21 @@ def parse_game(g, prefer_live_weather=True):
         except Exception:
             game_hour_local = 13
         raw_weather = g.get("weather", {}) or {}
-        if not prefer_live_weather and raw_weather:
-            wx = {
-                "temp": raw_weather.get("temp", "N/A"),
-                "condition": raw_weather.get("condition", "N/A"),
-                "wind": raw_weather.get("wind", "N/A"),
-                "wind_speed": raw_weather.get("wind", "N/A"),
-                "wind_dir": "",
-                "rain_chance": raw_weather.get("precipitationChance", "N/A"),
-            }
+        if not prefer_live_weather:
+            # Bulk dashboard load: use MLB schedule weather if present; otherwise skip
+            # the Open-Meteo call entirely to avoid parallel cache pollution.
+            if raw_weather:
+                wx = {
+                    "temp": raw_weather.get("temp", "N/A"),
+                    "condition": raw_weather.get("condition", "N/A"),
+                    "wind": raw_weather.get("wind", "N/A"),
+                    "wind_speed": raw_weather.get("wind", "N/A"),
+                    "wind_dir": "",
+                    "rain_chance": raw_weather.get("precipitationChance", "N/A"),
+                }
+            else:
+                wx = {"temp": "N/A", "condition": "N/A", "wind": "N/A",
+                      "wind_speed": "N/A", "wind_dir": "", "rain_chance": "N/A"}
         else:
             wx = get_weather(lat, lon, game_hour_local, venue_id=venue_id)
             # Fallback: use MLB schedule weather when Open-Meteo fails or returns unavailable data.
@@ -4031,7 +4046,10 @@ def api_pitchers(game_pk):
         if g:
             ap = g.get("teams",{}).get("away",{}).get("probablePitcher",{})
             hp = g.get("teams",{}).get("home",{}).get("probablePitcher",{})
-            an = ap.get("fullName","TBD"); hn = hp.get("fullName","TBD")
+            # Caller may supply names from the games list to prevent mismatch
+            # when the schedule API returns different probable pitchers between calls.
+            an = request.args.get("away_name") or ap.get("fullName","TBD")
+            hn = request.args.get("home_name") or hp.get("fullName","TBD")
             # Merge MLB API + FanGraphs + Savant for each pitcher
             def build_pitcher_stats(name, pid):
                 mlb = pitcher_stats_mlb(pid) if pid else {}
@@ -9573,6 +9591,11 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                 raw_prob = float(sp.get(prob_field, 0) or 0)
             else:
                 raw_prob = _poisson_over_prob(mean_k, line)
+            # ── FanGraphs enrichment for pitcher K props ──────────────────────
+            if _XGB_AVAILABLE:
+                from xgb_prop_scorer import enrich_pitcher
+                sp = {**sp, **enrich_pitcher(sp)}   # merges real FG stats into sp dict
+            # ─────────────────────────────────────────────────────────────────    
             # XGBoost blend for K props (60% XGB / 40% Monte Carlo when model loaded)
             _xgb_k = xgb_k_prob(sp, line=line)
             if _xgb_k is not None:
