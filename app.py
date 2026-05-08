@@ -79,6 +79,9 @@ from brain_merge_patch import (
 app = Flask(__name__)
 CORS(app)
 
+from nrfi_odds_routes import register_nrfi_odds_routes
+register_nrfi_odds_routes(app)
+
 # --- MLB API PLAYERS INGEST ROUTE (must be after app = Flask(__name__)) ---
 @app.route('/api/brain/fetch-mlb-players', methods=['POST'])
 def api_brain_fetch_mlb_players():
