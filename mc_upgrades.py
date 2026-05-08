@@ -327,7 +327,14 @@ def platoon_blend_v2(batter: dict, pitcher_hand: str, stat: str) -> float:
     }
     season_val = float(season_map.get(stat) or _STAT_DEFAULTS_V2.get(stat, 0.0) or 0.0)
 
-    if obs_split is None or float(obs_split or 0) <= 0.0:
+    # Helper to check if obs_split is a valid float
+    def _is_valid_float(val):
+        try:
+            return float(val) > 0.0
+        except (TypeError, ValueError):
+            return False
+
+    if obs_split is None or not _is_valid_float(obs_split):
         # No split data — apply theoretical league platoon advantage
         platoon_favorable = (
             (bats == "L" and hand == "R") or

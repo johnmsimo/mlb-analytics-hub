@@ -6896,29 +6896,71 @@ def pitcher_stats_mlb(player_id):
 
 def _pitcher_model(name, pid=None, team_id=None):
     mlb = pitcher_stats_mlb(pid) if pid else {}
-    fg = fg_pitcher(name)
-    sv = sv_pitcher(name)
-    era = _num(sv.get('sv_xera'), None)
-    if era is None or era == 0:
-        era = _num(fg.get('fg_era'), _num(mlb.get('era'), 4.50))
-    whip = _num(fg.get('fg_whip'), _num(mlb.get('whip'), 1.30))
-    k9 = _num(fg.get('fg_k9'), _num(mlb.get('k9'), 8.2))
-    bb9 = _num(fg.get('fg_bb9'), _num(mlb.get('bb9'), 3.1))
-    hr9 = _num(fg.get('fg_hr9'), _num(mlb.get('hr9'), 1.10))
-    return {
-        'name': name, 'id': pid, 'team_id': team_id,
-        'era': _clamp(era, 2.0, 8.5), 'whip': _clamp(whip, 0.9, 1.9),
-        'k9': _clamp(k9, 4.0, 14.0), 'bb9': _clamp(bb9, 1.0, 6.0), 'hr9': _clamp(hr9, 0.4, 2.5),
-        'pitchHand': (mlb.get('pitchHand') or player_profile(pid).get('throws', 'R')),
-    }
+    def _load_local_pitcher_arsenal():
+        """Load and cache pitch arsenal stats from local data/ CSVs."""
+        import glob
+        arsenal = {}
+        velo = {}
+        # Look for all pitching CSVs in data/
+        for path in glob.glob(os.path.join("data", "fg*_pit*.csv")) + glob.glob(os.path.join("data", "fg_pitching_*.csv")):
+            try:
+                df = pd.read_csv(path)
+                for _, row in df.iterrows():
+                    name = str(row.get("Name") or row.get("player_name") or "").strip()
+                    if not name:
+                        continue
+                    key = _sv_key(name)
+                    # Example: Arsenal % columns: 'FA%','SL%','CH%','CU%' etc.
+                    pitch_pct = {k.replace("%","").lower(): float(row[k]) for k in row.keys() if k.endswith("%") and pd.notnull(row[k])}
+                    pitch_velo = {k.replace("_Velo","").lower(): float(row[k]) for k in row.keys() if k.endswith("_Velo") and pd.notnull(row[k])}
+                    if pitch_pct:
+                        arsenal[key] = pitch_pct
+                    if pitch_velo:
+                        velo[key] = pitch_velo
+            except Exception as ex:
+                logging.warning(f"[LocalArsenal] Failed to load {path}: {ex}")
+        return arsenal, velo
 
+    # Cache for local arsenal
+    _local_arsenal_cache = None
+    _local_arsenal_lock = threading.Lock()
 
-def _tier_blend(tm, starter, w_tm, w_base, w_sp, mods):
-    era = _clamp(w_tm * _num(tm.get('era'), BULLPEN_BASE['era']) + w_base * BULLPEN_BASE['era'] + w_sp * starter.get('era', 4.2) + mods.get('era', 0), 2.6, 5.8)
-    whip = _clamp(w_tm * _num(tm.get('whip'), BULLPEN_BASE['whip']) + w_base * BULLPEN_BASE['whip'] + w_sp * starter.get('whip', 1.3) + mods.get('whip', 0), 0.98, 1.58)
-    k9 = _clamp(w_tm * _num(tm.get('k9'), BULLPEN_BASE['k9']) + w_base * BULLPEN_BASE['k9'] + w_sp * starter.get('k9', 8.2) + mods.get('k9', 0), 6.0, 12.8)
-    bb9 = _clamp(w_tm * _num(tm.get('bb9'), BULLPEN_BASE['bb9']) + w_base * BULLPEN_BASE['bb9'] + w_sp * starter.get('bb9', 3.2) + mods.get('bb9', 0), 1.8, 5.2)
     hr9 = _clamp(w_tm * _num(tm.get('hr9'), BULLPEN_BASE['hr9']) + w_base * BULLPEN_BASE['hr9'] + w_sp * starter.get('hr9', 1.1) + mods.get('hr9', 0), 0.55, 1.9)
+        """Savant pitcher stats with Brain overlay and local CSV fallback."""
+        with _sv_lock:
+            xs = dict(_sv_pit_xstats)
+            ap = dict(_sv_arsenal_pct)
+            av = dict(_sv_arsenal_velo)
+        lx = _fuzzy_lookup(name, xs)
+        r = dict(lx) if lx else {}
+        lap = _fuzzy_lookup(name, ap)
+        lav = _fuzzy_lookup(name, av)
+        r["svarsenalpct"] = lap if lap else {}
+        r["svarsenalvelo"] = lav if lav else {}
+
+        # Fallback to local CSVs if Savant arsenal missing
+        if not r["svarsenalpct"] or not r["svarsenalvelo"]:
+            global _local_arsenal_cache
+            with _local_arsenal_lock:
+                if _local_arsenal_cache is None:
+                    _local_arsenal_cache = _load_local_pitcher_arsenal()
+                local_pct, local_velo = _local_arsenal_cache
+            key = _sv_key(name)
+            if not r["svarsenalpct"] and key in local_pct:
+                r["svarsenalpct"] = local_pct[key]
+            if not r["svarsenalvelo"] and key in local_velo:
+                r["svarsenalvelo"] = local_velo[key]
+
+        try:
+            from brain_merge_patch import _brain_fuzzy, _brain_pit_overlay as _bpo
+            with _brain_overlay_lock:
+                brain = _brain_fuzzy(name, _bpo)
+            for k, v in brain.items():
+                if k not in r or r[k] in (None, "", "NA", "N/A"):
+                    r[k] = v
+        except Exception:
+            pass
+        return r
     return {'era': era, 'whip': whip, 'k9': k9, 'bb9': bb9, 'hr9': hr9}
 
 
