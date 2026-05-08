@@ -352,7 +352,7 @@ def api_player_performance_badges(player_id):
         l5_k_rate = round(l5_k / l5_ab, 3) if l5_ab > 0 else 0.000
         
         # Get Savant data for barrel rate
-        savant_data = svbatter(player_name) or {}
+        savant_data = sv_batter(player_name) or {}
         barrel_pct = _safe_num(savant_data.get("svbrlpct"), 0)
         hard_hit_pct = _safe_num(savant_data.get("svhhpct"), 0)
         
