@@ -6926,12 +6926,12 @@ def _pitcher_model(name, pid=None, team_id=None):
     _local_arsenal_lock = threading.Lock()
 
     hr9 = _clamp(w_tm * _num(tm.get('hr9'), BULLPEN_BASE['hr9']) + w_base * BULLPEN_BASE['hr9'] + w_sp * starter.get('hr9', 1.1) + mods.get('hr9', 0), 0.55, 1.9)
-        """Savant pitcher stats with Brain overlay and local CSV fallback."""
-        with _sv_lock:
+    """Savant pitcher stats with Brain overlay and local CSV fallback."""
+    with _sv_lock:
             xs = dict(_sv_pit_xstats)
             ap = dict(_sv_arsenal_pct)
             av = dict(_sv_arsenal_velo)
-        lx = _fuzzy_lookup(name, xs)
+           lx = _fuzzy_lookup(name, xs)
         r = dict(lx) if lx else {}
         lap = _fuzzy_lookup(name, ap)
         lav = _fuzzy_lookup(name, av)
