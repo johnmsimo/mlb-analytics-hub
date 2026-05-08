@@ -6108,13 +6108,13 @@ def _shrink(observed, n_obs, league_mean, prior_n):
     return round((observed * n_obs + league_mean * prior_n) / (n_obs + prior_n), 4)
 
 
-def _parse_ip(ip_val):
-    """Parse '6.1' style IP (where .1 = 1 out) to decimal innings."""
+def parse_ip(ipval):
+    """Parse '6.1' style IP where .1 = 1/3 inning, .2 = 2/3 inning."""
     try:
-        f = float(ip_val or 0)
+        f = float(ipval or 0)
         whole = int(f)
-        part  = round(f - whole, 1)
-        return whole + part / 0.3   # convert .1→1/3, .2→2/3
+        outs = round((f - whole) * 10)  # .1→1 out, .2→2 outs
+        return whole + outs / 3.0
     except Exception:
         return 0.0
 
