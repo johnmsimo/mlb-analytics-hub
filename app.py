@@ -1857,38 +1857,44 @@ def _maybe_refresh_savant():
         threading.Thread(target=_runner, daemon=True).start()
 
 def sv_pitcher(name):
-    """Savant pitcher stats with Brain overlay. Brain fills missing sv_ keys only."""
-    with _sv_lock:
-        xs = dict(_sv_pit_xstats)
-        ap = dict(_sv_arsenal_pct)
-        av = dict(_sv_arsenal_velo)
-    r = dict(_fuzzy_lookup(name, xs))
-    r["sv_arsenal_pct"]  = _fuzzy_lookup(name, ap)
-    r["sv_arsenal_velo"] = _fuzzy_lookup(name, av)
+    """Savant pitcher stats with Brain overlay. Brain fills missing sv keys only."""
+    with sv_lock:
+        xs = dict(svpitxstats)
+        ap = dict(svarsenalpct)
+        av = dict(svarsenalvelo)
+    lx = fuzzy_lookup(name, xs)
+    r = dict(lx) if lx else {}
+    lap = fuzzy_lookup(name, ap)
+    lav = fuzzy_lookup(name, av)
+    r["svarsenalpct"] = lap if lap else {}
+    r["svarsenalvelo"] = lav if lav else {}
     try:
-        from brain_merge_patch import _brain_fuzzy, _brain_pit_overlay as _bpo
-        with _brain_overlay_lock:
-            brain = _brain_fuzzy(name, _bpo)
+        from brainmergepatch import brainfuzzy, brainpitoverlay as bpo
+        with brainoverlay_lock:
+            brain = brainfuzzy(name, bpo)
         for k, v in brain.items():
-            if k not in r or r[k] in (None, "", "N/A", "NA"):
+            if k not in r or r[k] in (None, "", "NA", "N/A"):
                 r[k] = v
     except Exception:
         pass
     return r
 
 def sv_batter(name):
-    """Savant batter stats with Brain overlay. Brain fills missing sv_ keys only."""
-    with _sv_lock:
-        xs = dict(_sv_bat_xstats)
-        sc = dict(_sv_bat_statcast)
-    r = dict(_fuzzy_lookup(name, xs))
-    r.update(_fuzzy_lookup(name, sc))
+    """Savant batter stats with Brain overlay. Brain fills missing sv keys only."""
+    with sv_lock:
+        xs = dict(svbatxstats)
+        sc = dict(svbatstatcast)
+    lx = fuzzy_lookup(name, xs)
+    ls = fuzzy_lookup(name, sc)
+    r = dict(lx) if lx else {}
+    if ls:
+        r.update(ls)
     try:
-        from brain_merge_patch import _brain_fuzzy, _brain_bat_overlay as _bbo
-        with _brain_overlay_lock:
-            brain = _brain_fuzzy(name, _bbo)
+        from brainmergepatch import brainfuzzy, brainbatoverlay as bbo
+        with brainoverlay_lock:
+            brain = brainfuzzy(name, bbo)
         for k, v in brain.items():
-            if k not in r or r[k] in (None, "", "N/A", "NA"):
+            if k not in r or r[k] in (None, "", "NA", "N/A"):
                 r[k] = v
     except Exception:
         pass
