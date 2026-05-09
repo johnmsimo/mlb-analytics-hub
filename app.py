@@ -67,6 +67,16 @@ from mc_upgrades import (
     ttop_woba_penalty,
 )
 
+# ── Matchup Pipeline ───────────────────────────────────────────────────────────
+try:
+    from pipeline_scheduler import start_scheduler, get_matchup_df, get_games_df, get_pipeline_status
+    from pipeline_routes import pipeline_bp
+    _PIPELINE_AVAILABLE = True
+except ImportError:
+    _PIPELINE_AVAILABLE = False
+    logging.warning("[pipeline] pipeline_scheduler or pipeline_routes not found — skipping.")
+
+
 from brain_merge_patch import (
     load_brain_overlays,
     fg_batter as _brain_fg_batter,
@@ -84,6 +94,11 @@ CORS(app)
 
 from nrfi_odds_routes import register_nrfi_odds_routes
 register_nrfi_odds_routes(app)
+
+if _PIPELINE_AVAILABLE:
+    app.register_blueprint(pipeline_bp)
+    logging.info("[pipeline] Blueprint registered at /api/pipeline/*")
+
 
 # --- MLB API PLAYERS INGEST ROUTE (must be after app = Flask(__name__)) ---
 @app.route('/api/brain/fetch-mlb-players', methods=['POST'])
@@ -17161,6 +17176,11 @@ def _preload_caches():
 _start_injury_worker()
 _start_tracker_auto_sync_worker()
 _start_mlb_memory_worker()
+
+# Start daily pipeline scheduler (runs at 8 AM ET + on boot)
+if _PIPELINE_AVAILABLE:
+    start_scheduler()
+    logging.info("[pipeline] Scheduler armed — fires at 09:00 ET daily.")
 
 
 if __name__ == "__main__":
