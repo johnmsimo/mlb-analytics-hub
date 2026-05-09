@@ -7714,10 +7714,10 @@ def _simulation_fallback_payload(game_obj, game_pk, sims=0, warning=''):
 def api_simulate(game_pk):
     try:
         try:
-            requested_sims = int(request.args.get('sims', 10000) or 5000)
+            requested_sims = int(request.args.get('sims', 5000) or 5000)
         except Exception:
-            requested_sims = 10000
-        sims = max(10000, min(5000, requested_sims))
+            requested_sims = 5000
+        sims = max(2500, min(5000, requested_sims))
 
         # Prefer direct game lookup so deep-dive works for non-today game IDs too.
         g = fetch_schedule_game(game_pk)
