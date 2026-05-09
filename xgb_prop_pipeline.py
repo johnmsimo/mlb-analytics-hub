@@ -608,9 +608,9 @@ model_registry = {
 # Save .pkl files
 for name, reg in model_registry.items():
     path = f"{OUTPUT_DIR}/xgb_{name}.pkl"
-    joblib.dump({"model": reg["model"], "features": reg["features"],
-                 "meta": {k: v for k, v in reg.items() if k not in ("model","features")}},
-                path)
+    meta = {k: v for k, v in reg.items() if k not in ("model", "features")}
+    meta["xgboost_version"] = xgb.__version__
+    joblib.dump({"model": reg["model"], "features": reg["features"], "meta": meta}, path)
     print(f"✅ Saved: {path}")
 
 # Save metrics summary
