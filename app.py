@@ -1,4 +1,4 @@
-import os, threading, traceback, difflib, io, csv as csvmod, json, re, time, uuid, unicodedata, logging
+import os, threading, traceback, difflib, io, csv as csvmod, json, re, time, uuid, unicodedata, logging, glob as _glob
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s %(message)s')
 import requests
 import pandas as pd
@@ -6910,7 +6910,6 @@ def _pitcher_model(name, pid=None, team_id=None):
         usage columns (e.g. SL%, CH%, CB%).  Steamer projection files lack these
         columns and are intentionally skipped to avoid wasted iteration.
         """
-        import glob as _glob
         # Pitch-type abbreviation columns used by FanGraphs (2-3 letter codes + %)
         PITCH_TYPE_COLS = {
             'FA%','SI%','FC%','SL%','CU%','CH%','KC%','KN%','EP%','SC%','FO%',
