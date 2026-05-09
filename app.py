@@ -1866,8 +1866,8 @@ def sv_pitcher(name):
     r = dict(lx) if lx else {}
     lap = _fuzzy_lookup(name, ap)
     lav = _fuzzy_lookup(name, av)
-    r["svarsenalpct"] = lap if lap else {}
-    r["svarsenalvelo"] = lav if lav else {}
+    r["sv_arsenal_pct"] = lap if lap else {}
+    r["sv_arsenal_velo"] = lav if lav else {}
     try:
         from brain_merge_patch import _brain_fuzzy, _brain_pit_overlay as _bpo
         with _brain_overlay_lock:
@@ -6934,19 +6934,19 @@ def _pitcher_model(name, pid=None, team_id=None):
         r = dict(lx) if lx else {}
         lap = _fuzzy_lookup(name, ap)
         lav = _fuzzy_lookup(name, av)
-        r["svarsenalpct"] = lap if lap else {}
-        r["svarsenalvelo"] = lav if lav else {}
+        r["sv_arsenal_pct"] = lap if lap else {}
+        r["sv_arsenal_velo"] = lav if lav else {}
 
-        if not r["svarsenalpct"] or not r["svarsenalvelo"]:
+        if not r["sv_arsenal_pct"] or not r["sv_arsenal_velo"]:
             with _local_arsenal_lock:
                 if _local_arsenal_cache is None:
                     _local_arsenal_cache = _load_local_pitcher_arsenal()
                 local_pct, local_velo = _local_arsenal_cache
             key = _sv_key(name)
-            if not r["svarsenalpct"] and key in local_pct:
-                r["svarsenalpct"] = local_pct[key]
-            if not r["svarsenalvelo"] and key in local_velo:
-                r["svarsenalvelo"] = local_velo[key]
+            if not r["sv_arsenal_pct"] and key in local_pct:
+                r["sv_arsenal_pct"] = local_pct[key]
+            if not r["sv_arsenal_velo"] and key in local_velo:
+                r["sv_arsenal_velo"] = local_velo[key]
 
         try:
             from brain_merge_patch import _brain_fuzzy, _brain_pit_overlay as _bpo
@@ -9809,22 +9809,6 @@ def _build_tracker_rows_quick(game_obj, capture_date, adjustments=None):
     return rows[:keep]
 
 
-def _tracker_summary(entries):
-    total = len(entries)
-    graded = [x for x in entries if x.get('grade') in ('win', 'loss', 'push')]
-    wins = sum(1 for x in graded if x.get('grade') == 'win')
-    losses = sum(1 for x in graded if x.get('grade') == 'loss')
-    pushes = sum(1 for x in graded if x.get('grade') == 'push')
-    hit_rate = round(wins / max(1, wins + losses), 3) if graded else 0.0
-    by_market = {}
-    for x in entries:
-        mk = x.get('marketKey')
-        by_market.setdefault(mk, {'picks': 0, 'wins': 0, 'losses': 0, 'pushes': 0})
-        by_market[mk]['picks'] += 1
-        if x.get('grade') == 'win': by_market[mk]['wins'] += 1
-        elif x.get('grade') == 'loss': by_market[mk]['losses'] += 1
-        elif x.get('grade') == 'push': by_market[mk]['pushes'] += 1
-    return {'picks': total, 'graded': len(graded), 'wins': wins, 'losses': losses, 'pushes': pushes, 'hit_rate': hit_rate, 'by_market': by_market}
 
 
 _TRACKER_CAPTURE_LOCK = threading.Lock()
@@ -11302,59 +11286,6 @@ def _recalc_tracker_entries(entries):
     return entries or []
 
 
-def _daily_value_series(end_date_str, window_days, market_key=None):
-    store = _tracker_store()
-    dates = list(reversed(_dates_in_window(end_date_str, window_days)))
-    series = []
-    for ds in dates:
-        rows = list((store.get(ds) or {}).get('entries', []) or [])
-        if market_key:
-            rows = [r for r in rows if r.get('marketKey') == market_key]
-        graded = [r for r in rows if r.get('grade') in ('win', 'loss', 'push')]
-        staked = len(graded)
-        units = round(sum(float(r.get('profitUnits') or 0) for r in graded if r.get('profitUnits') is not None), 4)
-        roi = round(units / max(1, staked), 4) if graded else None
-        clv = [float(r.get('clvEdge')) for r in graded if r.get('clvEdge') is not None]
-        avg_clv = round(sum(clv) / max(1, len(clv)), 4) if clv else None
-        clv_pos = round(sum(1 for x in clv if x > 0) / max(1, len(clv)), 4) if clv else None
-        series.append({'date': ds, 'staked': staked, 'units': units, 'roi': roi, 'avg_clv': avg_clv, 'clv_pos_rate': clv_pos})
-    return series
-
-
-def _value_summary(entries):
-    graded = [r for r in entries if r.get('grade') in ('win', 'loss', 'push')]
-    units = round(sum(float(r.get('profitUnits') or 0) for r in graded if r.get('profitUnits') is not None), 4)
-    roi = round(units / max(1, len(graded)), 4) if graded else 0.0
-    clv = [float(r.get('clvEdge')) for r in graded if r.get('clvEdge') is not None]
-    avg_clv = round(sum(clv) / max(1, len(clv)), 4) if clv else 0.0
-    clv_pos = round(sum(1 for x in clv if x > 0) / max(1, len(clv)), 4) if clv else 0.0
-    return {'units': units, 'roi': roi, 'avg_clv': avg_clv, 'clv_positive_rate': clv_pos, 'graded_with_clv': len(clv)}
-
-
-def _tracker_summary(entries):
-    total = len(entries)
-    graded = [x for x in entries if x.get('grade') in ('win', 'loss', 'push')]
-    wins = sum(1 for x in graded if x.get('grade') == 'win')
-    losses = sum(1 for x in graded if x.get('grade') == 'loss')
-    pushes = sum(1 for x in graded if x.get('grade') == 'push')
-    hit_rate = round(wins / max(1, wins + losses), 3) if graded else 0.0
-    by_market = {}
-    for x in entries:
-        mk = x.get('marketKey')
-        by_market.setdefault(mk, {'picks': 0, 'wins': 0, 'losses': 0, 'pushes': 0, 'units': 0.0})
-        by_market[mk]['picks'] += 1
-        if x.get('grade') == 'win':
-            by_market[mk]['wins'] += 1
-        elif x.get('grade') == 'loss':
-            by_market[mk]['losses'] += 1
-        elif x.get('grade') == 'push':
-            by_market[mk]['pushes'] += 1
-        if x.get('profitUnits') is not None:
-            by_market[mk]['units'] = round(by_market[mk]['units'] + float(x.get('profitUnits') or 0), 4)
-    return {
-        'picks': total, 'graded': len(graded), 'wins': wins, 'losses': losses, 'pushes': pushes,
-        'hit_rate': hit_rate, 'by_market': by_market, 'value': _value_summary(entries)
-    }
 
 
 @app.route('/api/tracker/close/<date_str>', methods=['POST'])
