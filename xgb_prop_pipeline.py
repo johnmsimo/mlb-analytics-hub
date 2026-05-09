@@ -287,66 +287,63 @@ print("✅ Batter features saved")
 # CELL 5 — Feature Engineering: STRIKEOUTS MODEL
 # ============================================================
 def build_pitcher_features(pg, sv_pit, fg_pit, sv_bat_lineup, fg_bat, season):
-    """
-    Build per-game pitcher feature rows for K prop model.
-    Includes pitcher stats + opposing lineup aggregate quality.
-    """
     pg = pg.copy()
     pg["pitcher"] = pg["pitcher"].astype(int)
 
-    # ── Pitcher season stats ───────────────────────────────────────────────
     sv_p = sv_pit[sv_pit["season"] == season].copy()
     sv_p["player_id"] = sv_p["player_id"].astype(int)
     sv_p = sv_p.rename(columns={
-        "xera":          "sv_xera",
-        "era":           "sv_era",
-        "est_woba":      "sv_xwoba_against",
-        "k_percent":     "sv_k_pct",
-        "bb_percent":    "sv_bb_pct",
+        "xera": "sv_xera",
+        "era": "sv_era",
+        "k_percent": "sv_k_pct",
+        "bb_percent": "sv_bb_pct",
         "whiff_percent": "sv_whiff_pct",
     })
-    pit_cols = ["player_id","sv_xera","sv_era","sv_xwoba_against",
-                "sv_k_pct","sv_bb_pct","sv_whiff_pct"]
+    pit_cols = ["player_id", "sv_xera", "sv_era", "sv_k_pct", "sv_bb_pct", "sv_whiff_pct"]
     sv_p = sv_p[[c for c in pit_cols if c in sv_p.columns]]
 
-    fg_p = fg_pit[fg_pit["season"] == season].copy()
-    fg_p_id_col = "IDfg" if "IDfg" in fg_p.columns else "playerid"
-    fg_p_cols = [fg_p_id_col,"ERA","FIP","xFIP","K/9","BB/9","HR/9",
-                 "K%","BB%","BABIP","GB%","IP","GS","SwStr%","CSW%","Stuff+"]
-    fg_p = fg_p[[c for c in fg_p_cols if c in fg_p.columns]]
-    fg_p.columns = [c.lower().replace("/","9").replace("%","_pct")
-                      .replace("+","_plus").replace(" ","_")
-                    for c in fg_p.columns]
-    if fg_p_id_col.lower() in fg_p.columns:
-        fg_p = fg_p.rename(columns={fg_p_id_col.lower(): "pit_fg_id"})
-
     df = pg.merge(sv_p, left_on="pitcher", right_on="player_id", how="left")
+    df = df.sort_values(["pitcher", "game_date"])
 
-    # ── Opposing lineup K susceptibility ──────────────────────────────────
-    # Use season-avg batter k_pct and aggregate per game
-    sv_b = sv_bat_lineup[sv_bat_lineup["season"] == season].copy()
-    lineup_k_agg = sv_b.groupby("player_id").agg(
-        batter_k_pct=("k_percent","mean"),
-        batter_xwoba=("est_woba","mean"),
-    ).reset_index()
-    lineup_k_agg["player_id"] = lineup_k_agg["player_id"].astype(int)
-    # We don't have per-game lineup composition without a full roster lookup,
-    # so we approximate using team-level aggregates per game (game_pk + home/away)
-    # This is a reasonable proxy — replace with actual lineup pull in production
-    df["opp_lineup_k_pct_proxy"] = df["sv_k_pct"] * 0.88  # league-avg opponent contact adj
-    df["opp_lineup_xwoba_proxy"] = 0.320  # will be enriched in production
+    if "bf" not in df.columns and "ks" in df.columns:
+        df["bf"] = 18
 
-    # ── Rolling L5 K form ─────────────────────────────────────────────────
-    df = df.sort_values(["pitcher","game_date"])
-    df["l5_ks"]   = (df.groupby("pitcher")["ks"]
-                       .transform(lambda x: x.shift(1).rolling(5, min_periods=1).mean()))
-    df["l5_k_rate"] = (df.groupby("pitcher")["k_over_4.5"]
-                         .transform(lambda x: x.shift(1).rolling(5, min_periods=1).mean()))
-    df["l10_ks"]  = (df.groupby("pitcher")["ks"]
-                       .transform(lambda x: x.shift(1).rolling(10, min_periods=1).mean()))
+    if "outs_recorded" in df.columns:
+        df["ip"] = df["outs_recorded"] / 3.0
+    elif "bf" in df.columns:
+        df["ip"] = np.clip(df["bf"] / 4.2, 0, 9)
+    else:
+        df["ip"] = 5.0
+
+    df["l3_ks"] = df.groupby("pitcher")["ks"].transform(
+        lambda x: x.shift(1).rolling(3, min_periods=1).mean()
+    )
+    df["l5_ks"] = df.groupby("pitcher")["ks"].transform(
+        lambda x: x.shift(1).rolling(5, min_periods=1).mean()
+    )
+    df["l10_ks"] = df.groupby("pitcher")["ks"].transform(
+        lambda x: x.shift(1).rolling(10, min_periods=1).mean()
+    )
+
+    df["l3_ip"] = df.groupby("pitcher")["ip"].transform(
+        lambda x: x.shift(1).rolling(3, min_periods=1).mean()
+    )
+    df["l5_ip"] = df.groupby("pitcher")["ip"].transform(
+        lambda x: x.shift(1).rolling(5, min_periods=1).mean()
+    )
+
+    df["prev_game_date"] = df.groupby("pitcher")["game_date"].shift(1)
+    df["days_rest"] = (
+        pd.to_datetime(df["game_date"]) - pd.to_datetime(df["prev_game_date"])
+    ).dt.days.fillna(5).clip(lower=0, upper=14)
+
+    df["opp_lineup_k_pct_proxy"] = 22.0
+    df["opp_lineup_xwoba_proxy"] = 0.320
 
     df["season"] = season
     return df
+
+
 
 print("\n🔧 Building pitcher feature matrix (2024)...")
 pit_features = build_pitcher_features(
@@ -438,12 +435,20 @@ K_FEATURES_BASE = [
 
 def train_xgb_ks(df, target, label):
     feat_cols = [f for f in K_FEATURES_BASE if f in df.columns]
-    df_model = df[feat_cols + [target]].dropna(subset=[target])
+
+    keep_cols = feat_cols + [target]
+    for extra_col in ["ip", "bf"]:
+        if extra_col in df.columns and extra_col not in keep_cols:
+            keep_cols.append(extra_col)
+
+    df_model = df[keep_cols].dropna(subset=[target]).copy()
     df_model[feat_cols] = df_model[feat_cols].fillna(df_model[feat_cols].median())
 
-    # Filter to starters only (BF >= 12 = at least 4 innings)
-    if "bf" in df_model.columns:
-        df_model = df_model[df_model["bf"] >= 12]
+    # Filter to likely starter outings
+    if "ip" in df_model.columns:
+        df_model = df_model[df_model["ip"] >= 4.0]
+    elif "bf" in df_model.columns:
+        df_model = df_model[df_model["bf"] >= 15]
 
     X = df_model[feat_cols].values
     y = df_model[target].values.astype(int)
