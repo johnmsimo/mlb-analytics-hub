@@ -3057,8 +3057,16 @@ def api_status():
 @app.route('/health')
 def health_check():
     t0 = time.time()
-    resp = {'status': 'ok'}
-    logging.info(f"[API] /health took {time.time() - t0:.3f}s")
+    with _fg_lock:
+        fg_ready = _fg_loaded
+    with _sv_lock:
+        sv_ready = _sv_loaded
+    resp = {
+        'status': 'ok',
+        'fg_loaded': fg_ready,
+        'sv_loaded': sv_ready,
+    }
+    logging.info(f"[API] /health took {time.time()-t0:.3f}s fg={fg_ready} sv={sv_ready}")
     return resp, 200
 
 
@@ -17146,7 +17154,8 @@ def _preload_caches():
 
     _start_odds_snapshot_worker()
 
-_preload_caches()
+# _preload_caches() is now triggered via the gunicorn post_fork hook in gunicorn_conf.py
+# so that port 8080 is bound before any heavy network I/O begins.
 
 # Start hourly injury refresh worker once routes/helpers are loaded.
 _start_injury_worker()
