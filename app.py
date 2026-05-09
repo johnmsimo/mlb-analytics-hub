@@ -1558,6 +1558,11 @@ _sv_loaded    = False
 _sv_load_date = None
 _sv_loading   = False
 
+# Local pitcher arsenal cache loaded from data/ CSVs (populated once on first pitcher lookup)
+# These are declared at module level so _pitcher_model does not need globals() tricks.
+_local_arsenal_cache: object = None   # None → not yet loaded; tuple(dict, dict) → loaded
+_local_arsenal_lock  = threading.Lock()
+
 # Per-player direct Savant lookup cache {(player_id, year): (date, dict)}
 _sv_player_batter_cache: dict = {}
 _sv_player_batter_lock  = threading.Lock()
@@ -6895,23 +6900,56 @@ def pitcher_stats_mlb(player_id):
 
 
 def _pitcher_model(name, pid=None, team_id=None):
+    global _local_arsenal_cache
     mlb = pitcher_stats_mlb(pid) if pid else {}
 
     def _load_local_pitcher_arsenal():
-        """Load and cache pitch arsenal stats from local data/ CSVs."""
-        import glob
+        """Load and cache pitch arsenal stats from local data/ CSVs.
+
+        Only processes FanGraphs pitching CSV files that contain real pitch-type
+        usage columns (e.g. SL%, CH%, CB%).  Steamer projection files lack these
+        columns and are intentionally skipped to avoid wasted iteration.
+        """
+        import glob as _glob
+        # Pitch-type abbreviation columns used by FanGraphs (2-3 letter codes + %)
+        PITCH_TYPE_COLS = {
+            'FA%','SI%','FC%','SL%','CU%','CH%','KC%','KN%','EP%','SC%','FO%',
+            'PO%','XX%','CT%','CB%','SF%',
+        }
         arsenal = {}
         velo = {}
-        for path in glob.glob(os.path.join("data", "fg*_pit*.csv")) + glob.glob(os.path.join("data", "fg_pitching_*.csv")):
+        # Deduplicate paths — fg*_pit*.csv and fg_pitching_*.csv can overlap
+        seen: set = set()
+        paths = (
+            _glob.glob(os.path.join("data", "fg*_pit*.csv"))
+            + _glob.glob(os.path.join("data", "fg_pitching_*.csv"))
+        )
+        for path in paths:
+            abs_path = os.path.abspath(path)
+            if abs_path in seen:
+                continue
+            seen.add(abs_path)
             try:
                 df = pd.read_csv(path)
+                # Skip files that lack real pitch-type arsenal columns
+                has_arsenal = any(c in PITCH_TYPE_COLS or c.endswith("_Velo") for c in df.columns)
+                if not has_arsenal:
+                    continue
                 for _, row in df.iterrows():
-                    name = str(row.get("Name") or row.get("player_name") or "").strip()
-                    if not name:
+                    pname = str(row.get("Name") or row.get("PlayerName") or row.get("player_name") or "").strip()
+                    if not pname:
                         continue
-                    key = _sv_key(name)
-                    pitch_pct = {k.replace("%","").lower(): float(row[k]) for k in row.keys() if k.endswith("%") and pd.notnull(row[k])}
-                    pitch_velo = {k.replace("_Velo","").lower(): float(row[k]) for k in row.keys() if k.endswith("_Velo") and pd.notnull(row[k])}
+                    key = _sv_key(pname)
+                    pitch_pct = {
+                        k.replace("%", "").lower(): float(row[k])
+                        for k in row.keys()
+                        if k in PITCH_TYPE_COLS and pd.notnull(row[k])
+                    }
+                    pitch_velo = {
+                        k.replace("_Velo", "").lower(): float(row[k])
+                        for k in row.keys()
+                        if k.endswith("_Velo") and pd.notnull(row[k])
+                    }
                     if pitch_pct:
                         arsenal[key] = pitch_pct
                     if pitch_velo:
@@ -6920,12 +6958,9 @@ def _pitcher_model(name, pid=None, team_id=None):
                 logging.warning(f"[LocalArsenal] Failed to load {path}: {ex}")
         return arsenal, velo
 
-    global _local_arsenal_cache
-    if '_local_arsenal_cache' not in globals():
-        _local_arsenal_cache = None
-    if '_local_arsenal_lock' not in globals():
-        _local_arsenal_lock = threading.Lock()
-
+    # Grab a snapshot of all sv caches under _sv_lock (fast — dicts are already built).
+    # The local arsenal load is done OUTSIDE _sv_lock to avoid holding the global
+    # stats lock for the 2+ seconds it takes to iterate the FanGraphs CSV files.
     with _sv_lock:
         xs = dict(_sv_pit_xstats)
         ap = dict(_sv_arsenal_pct)
@@ -6937,35 +6972,37 @@ def _pitcher_model(name, pid=None, team_id=None):
         r["sv_arsenal_pct"] = lap if lap else {}
         r["sv_arsenal_velo"] = lav if lav else {}
 
-        if not r["sv_arsenal_pct"] or not r["sv_arsenal_velo"]:
-            with _local_arsenal_lock:
-                if _local_arsenal_cache is None:
-                    _local_arsenal_cache = _load_local_pitcher_arsenal()
-                local_pct, local_velo = _local_arsenal_cache
-            key = _sv_key(name)
-            if not r["sv_arsenal_pct"] and key in local_pct:
-                r["sv_arsenal_pct"] = local_pct[key]
-            if not r["sv_arsenal_velo"] and key in local_velo:
-                r["sv_arsenal_velo"] = local_velo[key]
+    # Supplement missing arsenal data from local FanGraphs CSVs — done outside
+    # _sv_lock so that other stat-lookup threads are not blocked during CSV parsing.
+    if not r["sv_arsenal_pct"] or not r["sv_arsenal_velo"]:
+        with _local_arsenal_lock:
+            if _local_arsenal_cache is None:
+                _local_arsenal_cache = _load_local_pitcher_arsenal()
+            local_pct, local_velo = _local_arsenal_cache
+        key = _sv_key(name)
+        if not r["sv_arsenal_pct"] and key in local_pct:
+            r["sv_arsenal_pct"] = local_pct[key]
+        if not r["sv_arsenal_velo"] and key in local_velo:
+            r["sv_arsenal_velo"] = local_velo[key]
 
-        try:
-            from brain_merge_patch import _brain_fuzzy, _brain_pit_overlay as _bpo
-            with _brain_overlay_lock:
-                brain = _brain_fuzzy(name, _bpo)
-            for k, v in brain.items():
-                if k not in r or r[k] in (None, "", "NA", "N/A"):
-                    r[k] = v
-        except Exception:
-            pass
-        # Always ensure 'name' is set; merge MLB API stats as fallbacks for missing fields.
-        # Normalize numeric pitch-stat keys to float so callers (e.g. _starter_outs_target,
-        # _tier_blend) can do arithmetic without TypeError on "N/A" strings from the MLB API.
-        r['name'] = name
-        _PITCH_FLOAT_KEYS = {'era', 'whip', 'k9', 'bb9', 'hr9'}
-        for k, v in mlb.items():
+    try:
+        from brain_merge_patch import _brain_fuzzy, _brain_pit_overlay as _bpo
+        with _brain_overlay_lock:
+            brain = _brain_fuzzy(name, _bpo)
+        for k, v in brain.items():
             if k not in r or r[k] in (None, "", "NA", "N/A"):
-                r[k] = _num(v, BULLPEN_BASE.get(k, 0.0)) if k in _PITCH_FLOAT_KEYS else v
-        return r
+                r[k] = v
+    except Exception:
+        pass
+    # Always ensure 'name' is set; merge MLB API stats as fallbacks for missing fields.
+    # Normalize numeric pitch-stat keys to float so callers (e.g. _starter_outs_target,
+    # _tier_blend) can do arithmetic without TypeError on "N/A" strings from the MLB API.
+    r['name'] = name
+    _PITCH_FLOAT_KEYS = {'era', 'whip', 'k9', 'bb9', 'hr9'}
+    for k, v in mlb.items():
+        if k not in r or r[k] in (None, "", "NA", "N/A"):
+            r[k] = _num(v, BULLPEN_BASE.get(k, 0.0)) if k in _PITCH_FLOAT_KEYS else v
+    return r
 def _tier_blend(tm, starter, w_tm, w_base, w_sp, mods):
     out = {}
     for k in ('era', 'whip', 'k9', 'bb9', 'hr9'):
@@ -9652,17 +9689,16 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
         sp_mkt_lines = _market_lines_for_player(market_props, sp.get('name'), 'pitcher_strikeouts')
         k_lines = sp_mkt_lines if sp_mkt_lines else [3.5, 4.5, 5.5]
         mean_k = float(sp.get('mean_k', 0) or 0)
+        # ── FanGraphs enrichment for pitcher K props (done once per starter) ──
+        if _XGB_AVAILABLE:
+            sp = {**sp, **enrich_pitcher(sp)}   # merges real FG stats into sp dict
+        # ─────────────────────────────────────────────────────────────────────
         for line in k_lines:
             prob_field = _K_PROB_FIELD_FOR.get(line)
             if prob_field:
                 raw_prob = float(sp.get(prob_field, 0) or 0)
             else:
                 raw_prob = _poisson_over_prob(mean_k, line)
-            # ── FanGraphs enrichment for pitcher K props ──────────────────────
-            if _XGB_AVAILABLE:
-                from xgb_prop_scorer import enrich_pitcher
-                sp = {**sp, **enrich_pitcher(sp)}   # merges real FG stats into sp dict
-            # ─────────────────────────────────────────────────────────────────    
             # XGBoost blend for K props (60% XGB / 40% Monte Carlo when model loaded)
             _xgb_k = xgb_k_prob(sp, line=line)
             if _xgb_k is not None:

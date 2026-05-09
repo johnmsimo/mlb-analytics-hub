@@ -72,10 +72,10 @@ _MODEL_DIR   = os.path.join(_HERE, 'models')
 _FEAT_FILE   = os.path.join(_MODEL_DIR, 'xgb_feature_cols.json')
 
 _MODEL_PATHS = {
-    'hits':  os.path.join(_MODEL_DIR, 'xgb_hits.pkl'),
-    'k_3.5': os.path.join(_MODEL_DIR, 'xgb_k_3_5.pkl'),
-    'k_4.5': os.path.join(_MODEL_DIR, 'xgb_k_4_5.pkl'),
-    'k_5.5': os.path.join(_MODEL_DIR, 'xgb_k_5_5.pkl'),
+    'hits':  os.path.join(_MODEL_DIR, 'xgb_hits_over_0.5.pkl'),
+    'k_3.5': os.path.join(_MODEL_DIR, 'xgb_k_over_3.5.pkl'),
+    'k_4.5': os.path.join(_MODEL_DIR, 'xgb_k_over_4.5.pkl'),
+    'k_5.5': os.path.join(_MODEL_DIR, 'xgb_k_over_5.5.pkl'),
 }
 
 # ── Model registry (lazy-loaded once) ────────────────────────────────
