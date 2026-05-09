@@ -10,10 +10,15 @@ Key goals:
       appear frozen to Fly's watchdog, triggering health check failures)
     - 30s graceful shutdown (faster recovery if worker does need to restart)
   • Better latency for I/O-bound MLB API calls under load
-    - gthread worker class with 4 threads -> serves 4 concurrent requests
+    - gthread worker class with 8 threads -> serves 8 concurrent requests
       while the sync loaders run in background daemon threads
+      (increased from 6 to ensure health check always gets a free thread
+       even when Monte Carlo / Savant fetches are occupying several others)
   • No boot-storm
     - max_requests disabled (we DO NOT want to recycle and re-load caches)
+  • Cache preload triggered AFTER the worker is bound (post_fork hook)
+    - This ensures port 8080 is ready before any network I/O starts,
+      so Fly.io health checks pass immediately from second 0.
   • auto_stop_machines=false in fly.toml keeps machine alive so caches
     are never lost to a suspend/resume cycle
 """
@@ -28,11 +33,11 @@ workers = 1
 
 # Threaded worker so the caches (loaded by background daemon threads)
 # don't block request handling.
-# 6 threads: enough headroom so health checks always get a free thread
-# even when several slow API requests (Monte Carlo, Savant fetches, etc.)
-# are concurrently occupying others.
+# 8 threads: ensures health checks always get a free thread even when
+# several slow API requests (Monte Carlo, Savant fetches, etc.) are
+# concurrently occupying others.
 worker_class = "gthread"
-threads = 6
+threads = 8
 
 # Reduced from 600s. With gthread, a 600s timeout means Gunicorn waits
 # 10 minutes before declaring the worker dead — but Fly.io's watchdog
@@ -65,3 +70,26 @@ access_log_format = '%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s %(L)ss'
 
 # Keep the master process's control socket quiet on shutdown.
 capture_output = True
+
+
+def post_fork(server, worker):
+    """
+    Trigger cache preloads AFTER the worker has bound to port 8080.
+
+    This is the key fix for Fly.io health check failures:
+    Previously, _preload_caches() ran at module import time, meaning
+    heavy FG/Savant network I/O could block the worker before it was
+    ready to serve requests. By moving the trigger here, the port is
+    already open and health checks return 200 immediately while caches
+    load in the background.
+
+    _preload_caches() itself spawns daemon threads and returns instantly —
+    this hook does not block gunicorn startup.
+    """
+    import threading
+    try:
+        from app import _preload_caches
+        threading.Thread(target=_preload_caches, daemon=True).start()
+        server.log.info("[post_fork] _preload_caches() triggered in background thread")
+    except Exception as ex:
+        server.log.warning(f"[post_fork] Could not trigger _preload_caches: {ex}")
