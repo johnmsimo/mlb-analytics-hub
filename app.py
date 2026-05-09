@@ -6957,6 +6957,11 @@ def _pitcher_model(name, pid=None, team_id=None):
                     r[k] = v
         except Exception:
             pass
+        # Always ensure 'name' is set; merge MLB API stats as fallbacks for missing fields
+        r['name'] = name
+        for k, v in mlb.items():
+            if k not in r or r[k] in (None, "", "NA", "N/A"):
+                r[k] = v
         return r
 def _tier_blend(tm, starter, w_tm, w_base, w_sp, mods):
     out = {}
