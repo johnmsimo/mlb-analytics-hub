@@ -22,12 +22,18 @@ Then blend into your existing probability estimates:
             kprob = 0.40 * kprob + 0.60 * xkp
             row['xgbKProb'] = round(xkp, 4)
 
-Model files (produced by xgb_training_pipeline.py / Colab notebook):
-    models/xgb_hits.pkl          — binary hit prop model
-    models/xgb_k_3_5.pkl         — K over/under 3.5
-    models/xgb_k_4_5.pkl         — K over/under 4.5
-    models/xgb_k_5_5.pkl         — K over/under 5.5
-    models/xgb_feature_cols.json — feature column order for each model
+Model files (produced by xgb_prop_pipeline.py / notebooks/xgb_production_export_colab.ipynb):
+    models/xgb_hits_over_0.5.pkl — binary hit prop model
+    models/xgb_k_over_3.5.pkl    — K over/under 3.5
+    models/xgb_k_over_4.5.pkl    — K over/under 4.5
+    models/xgb_k_over_5.5.pkl    — K over/under 5.5
+
+Artifact format:  joblib-serialised dict produced by xgb_prop_pipeline.py:
+    {"model": <CalibratedClassifierCV>, "features": [str, ...], "meta": {...}}
+The "meta" dict includes "xgboost_version" so the scorer can log it at startup.
+
+Backward compatibility: if an artifact contains a direct model object (not a dict),
+it is accepted as-is and feature columns fall back to xgb_feature_cols.json.
 
 All functions fail silently (return None) if the model files are absent,
 so the existing formula continues to run without modification.
@@ -86,24 +92,53 @@ _loaded  = False
 
 
 def _load_models() -> None:
-    """Load all available .pkl model files once at first call."""
+    """Load all available .pkl model files once at first call.
+
+    Artifacts are loaded with joblib (matching xgb_prop_pipeline.py export).
+    Each artifact is expected to be a dict:
+        {"model": <estimator>, "features": [str, ...], "meta": {...}}
+    where meta["xgboost_version"] records the version used during training.
+
+    Backward compatibility: if the loaded value is a direct model object
+    (not a dict), it is used as-is and feature columns fall back to
+    xgb_feature_cols.json.
+    """
     global _loaded
     with _lock:
         if _loaded:
             return
         try:
-            import pickle
+            import joblib
+
             feat_map: dict = {}
+            # Fallback feature map from the legacy separate JSON file.
             if os.path.exists(_FEAT_FILE):
                 with open(_FEAT_FILE) as f:
                     feat_map = json.load(f)
 
             for key, path in _MODEL_PATHS.items():
-                if os.path.exists(path):
-                    with open(path, 'rb') as f:
-                        _models[key] = pickle.load(f)
+                if not os.path.exists(path):
+                    continue
+                try:
+                    payload = joblib.load(path)
+                except Exception:
+                    print(f'[xgb_scorer] failed to load {path} — {traceback.format_exc()}')
+                    continue
+
+                # Payload dict format (produced by xgb_prop_pipeline.py).
+                if isinstance(payload, dict) and 'model' in payload:
+                    _models[key]    = payload['model']
+                    _feat_cols[key] = payload.get('features') or feat_map.get(key, [])
+                    meta            = payload.get('meta', {})
+                    xgb_ver         = meta.get('xgboost_version', 'unknown')
+                    print(f'[xgb_scorer] loaded {key} from {path}'
+                          f' (xgboost_version={xgb_ver})')
+                else:
+                    # Backward-compatible: artifact is a direct model object.
+                    _models[key]    = payload
                     _feat_cols[key] = feat_map.get(key, [])
-                    print(f'[xgb_scorer] loaded {key} from {path}')
+                    print(f'[xgb_scorer] loaded {key} from {path}'
+                          f' (legacy direct-model artifact)')
 
         except Exception:
             print('[xgb_scorer] model load failed —', traceback.format_exc())
