@@ -6957,11 +6957,14 @@ def _pitcher_model(name, pid=None, team_id=None):
                     r[k] = v
         except Exception:
             pass
-        # Always ensure 'name' is set; merge MLB API stats as fallbacks for missing fields
+        # Always ensure 'name' is set; merge MLB API stats as fallbacks for missing fields.
+        # Normalize numeric pitch-stat keys to float so callers (e.g. _starter_outs_target,
+        # _tier_blend) can do arithmetic without TypeError on "N/A" strings from the MLB API.
         r['name'] = name
+        _PITCH_FLOAT_KEYS = {'era', 'whip', 'k9', 'bb9', 'hr9'}
         for k, v in mlb.items():
             if k not in r or r[k] in (None, "", "NA", "N/A"):
-                r[k] = v
+                r[k] = _num(v, BULLPEN_BASE.get(k, 0.0)) if k in _PITCH_FLOAT_KEYS else v
         return r
 def _tier_blend(tm, starter, w_tm, w_base, w_sp, mods):
     out = {}
@@ -6969,7 +6972,7 @@ def _tier_blend(tm, starter, w_tm, w_base, w_sp, mods):
         out[k] = _clamp(
             w_tm * _num(tm.get(k), BULLPEN_BASE[k]) +
             w_base * BULLPEN_BASE[k] +
-            w_sp * starter.get(k, BULLPEN_BASE[k]) +
+            w_sp * _num(starter.get(k), BULLPEN_BASE[k]) +
             mods.get(k, 0),
             0.55 if k == 'hr9' else 0.0,
             1.9 if k == 'hr9' else 20.0
@@ -6992,7 +6995,7 @@ _parse_ip = parse_ip
 
 
 def _starter_outs_target(starter, rng):
-    mean = 16.5 + (4.1 - starter['era']) * 1.2 + (starter['k9'] - 8.2) * 0.20 - max(0, starter['whip'] - 1.25) * 2.8
+    mean = 16.5 + (4.1 - _num(starter.get('era'), 4.1)) * 1.2 + (_num(starter.get('k9'), 8.2) - 8.2) * 0.20 - max(0, _num(starter.get('whip'), 1.25) - 1.25) * 2.8
     mean = _clamp(mean, 12.0, 21.0)
     return int(_clamp(round(rng.gauss(mean, 2.4)), 9, 24))
 
