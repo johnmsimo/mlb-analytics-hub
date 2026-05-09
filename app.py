@@ -7714,10 +7714,10 @@ def _simulation_fallback_payload(game_obj, game_pk, sims=0, warning=''):
 def api_simulate(game_pk):
     try:
         try:
-            requested_sims = int(request.args.get('sims', 800) or 800)
+            requested_sims = int(request.args.get('sims', 5000) or 5000)
         except Exception:
-            requested_sims = 800
-        sims = max(200, min(2000, requested_sims))
+            requested_sims = 5000
+        sims = max(200, min(5000, requested_sims))
 
         # Prefer direct game lookup so deep-dive works for non-today game IDs too.
         g = fetch_schedule_game(game_pk)
@@ -11099,9 +11099,9 @@ def api_tracker_backtest():
     start = (request.args.get('start') or '').strip()
     end = (request.args.get('end') or '').strip()
     try:
-        sims = max(200, min(2000, int(request.args.get('sims', 2000) or 2000)))
+        sims = max(200, min(5000, int(request.args.get('sims', 5000) or 5000)))
     except (TypeError, ValueError):
-        sims = 2000
+        sims = 5000
     if not start or not end:
         return jsonify({'success': False, 'error': 'start and end are required (YYYY-MM-DD)'}), 400
     try:
