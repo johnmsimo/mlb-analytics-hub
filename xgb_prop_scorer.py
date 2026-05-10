@@ -262,6 +262,7 @@ def _build_hit_features(batter: dict, pitcher: dict, feat_order: list) -> Option
         "throws_R": 1 if pit_hand == "R" else 0,
         "platoon_adv": platoon,
         "l7_hits": _sf(batter, "l7Hits", "l7hits", default=1.5),
+        "l14_hits": _sf(batter, "l14Hits", "l14hits", default=3.0),
         "l7_hit_rate": _sf(batter, "l7HitRate", "l7hitrate", default=0.50),
     }
 
@@ -280,7 +281,7 @@ def _build_hit_features(batter: dict, pitcher: dict, feat_order: list) -> Option
         "sv_ss_pct", "sv_la", "sv_k_pct", "sv_bb_pct",
         "opp_xera", "opp_k_pct", "opp_bb_pct", "opp_whiff",
         "bats_L", "throws_R", "platoon_adv",
-        "l7_hits", "l7_hit_rate",
+        "l7_hits", "l14_hits", "l7_hit_rate",
     ]
     return np.array([[raw[c] for c in hits_features]], dtype=np.float32)
 
@@ -297,6 +298,7 @@ def _build_k_features(pitcher: dict, feat_order: list) -> Optional[np.ndarray]:
         "sv_whiff_pct": _sf(pitcher, "svwhiffpct", "SwStr%", "whiffpct", default=24.0),
         "l3_ks": _sf(pitcher, "l3Ks", "l3ks", default=4.5),
         "l5_ks": _sf(pitcher, "l5Ks", "l5ks", default=4.5),
+        "l5_k_rate": _sf(pitcher, "l5KRate", "l5krate", default=0.22),
         "l10_ks": _sf(pitcher, "l10Ks", "l10ks", default=4.5),
         "l3_ip": _sf(pitcher, "l3IP", "l3ip", default=5.0),
         "l5_ip": _sf(pitcher, "l5IP", "l5ip", default=5.0),
@@ -317,7 +319,7 @@ def _build_k_features(pitcher: dict, feat_order: list) -> Optional[np.ndarray]:
 
     k_features = [
         "sv_xera", "sv_era", "sv_k_pct", "sv_bb_pct", "sv_whiff_pct",
-        "l3_ks", "l5_ks", "l10_ks",
+        "l3_ks", "l5_ks", "l5_k_rate", "l10_ks",
         "l3_ip", "l5_ip",
         "days_rest",
         "opp_lineup_k_pct_proxy", "opp_lineup_xwoba_proxy",
@@ -356,12 +358,17 @@ def xgb_k_prob(pitcher: dict, line: float = 4.5) -> Optional[float]:
         _load_models()
     line_key = f"k_{line}"
     if line_key not in _models:
-        for candidate in ("k_4.5", "k_3.5", "k_5.5"):
-            if candidate in _models:
-                line_key = candidate
-                break
-        else:
+        # Fall back to the nearest available line rather than a fixed order.
+        candidates = []
+        for k in _models:
+            if k.startswith("k_"):
+                try:
+                    candidates.append((abs(float(k[2:]) - line), k))
+                except ValueError:
+                    pass
+        if not candidates:
             return None
+        line_key = min(candidates)[1]
 
     try:
         pitcher_enriched = _enrich_pitcher_from_fg(pitcher)
