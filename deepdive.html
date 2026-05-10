@@ -2532,9 +2532,9 @@ function lookupPitchX(playerName){
 
 function loadSimulation(opts){
   opts = opts || {};
-  var sims = parseInt(opts.sims || 800, 10);
-  if(!isFinite(sims)) sims = 800;
-  sims = Math.max(200, Math.min(1200, sims));
+  var sims = parseInt(opts.sims || 5000, 10);
+  if(!isFinite(sims)) sims = 2500;
+  sims = Math.max(2500, Math.min(5000, sims));
   var refresh = opts.refresh ? 1 : 0;
   var highPrecision = !!opts.highPrecision;
   ensureSimWrap();
@@ -2631,7 +2631,7 @@ function refreshSimulation(){
 }
 
 function runHighPrecisionSimulation(){
-  loadSimulation({sims:1200, refresh:1, highPrecision:true});
+  loadSimulation({sims:5000, refresh:1, highPrecision:true});
 }
 
 function ensureNrfiWrap(){
