@@ -17199,23 +17199,38 @@ def _preload_caches():
     threading.Thread(target=load_fg, daemon=True).start()
     threading.Thread(target=load_sv, daemon=True).start()
 
-def _prewarm_when_ready():
-    deadline = time.time() + 60
-    while time.time() < deadline:
-        with _fg_lock:
-            if _fg_loaded:
-                break
-        time.sleep(2)
-    try:
+    def _prewarm_when_ready():
+        # Wait for FG data to be available before prewarming dependent caches.
+        deadline = time.time() + 90
+        while time.time() < deadline:
+            with _fg_lock:
+                if _fg_loaded:
+                    break
+            time.sleep(3)
         prewarm_today_caches({
             "fetch_schedule": fetch_schedule,
+            "_fetch_bvp": _fetch_bvp,
+            "_pitcher_recent_form": _pitcher_recent_form,
+            "_get_cached_ump": _get_cached_ump,
         })
-    except Exception as _pw_ex:
-        logging.warning(f"[prewarm] failed: {_pw_ex}")
 
-threading.Thread(target=_prewarm_when_ready, daemon=True).start()
+    threading.Thread(target=_prewarm_when_ready, daemon=True).start()
 
-_start_odds_snapshot_worker()  # ← REMOVE the 4 spaces before this line
+    def _load_brain_overlays_when_ready():
+        """Load brain overlays after FG cache is ready (brain merges into FG data)."""
+        deadline = time.time() + 90
+        while time.time() < deadline:
+            with _fg_lock:
+                if _fg_loaded:
+                    break
+            time.sleep(3)
+        try:
+            load_brain_overlays()
+        except Exception as ex:
+            print(f"[STARTUP] brain overlay load failed: {ex}")
+    threading.Thread(target=_load_brain_overlays_when_ready, daemon=True).start()
+
+    _start_odds_snapshot_worker()
 
 # _preload_caches() is now triggered via the gunicorn post_fork hook in gunicorn_conf.py
 # so that port 8080 is bound before any heavy network I/O begins.
@@ -17225,7 +17240,7 @@ _start_injury_worker()
 _start_tracker_auto_sync_worker()
 _start_mlb_memory_worker()
 
-# Start daily pipeline scheduler (runs at 9 AM ET + on boot)
+# Start daily pipeline scheduler (runs at 8 AM ET + on boot)
 if _PIPELINE_AVAILABLE:
     start_scheduler()
     logging.info("[pipeline] Scheduler armed — fires at 09:00 ET daily.")
