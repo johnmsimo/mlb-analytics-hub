@@ -12644,6 +12644,8 @@ _mc_cache_lock  = threading.Lock()
 _mc_cache_data  = None
 _mc_cache_ts    = None
 _mc_computing   = False
+_mc_started_ts  = None   # watchdog: when _mc_computing was last set True
+_MC_COMPUTE_TIMEOUT_SEC = 300  # 5 min watchdog — reset stuck flag after this
 
 def _mc_grade(edge):
     if edge >= 0.15: return 'A+'
@@ -12660,13 +12662,23 @@ def _mc_rec(edge):
     return 'SKIP'
 
 def _mc_compute_background():
-    global _mc_cache_data, _mc_cache_ts, _mc_computing
+    global _mc_cache_data, _mc_cache_ts, _mc_computing, _mc_started_ts
     try:
         # Ensure stat caches are fresh before computing
         _maybe_refresh_fg()
         _maybe_refresh_savant()
         _fetch_injury_status(force=False)
-        
+
+        # Pre-warm the odds snapshot once here (before workers) so that each
+        # _compute_game worker can read from cache without triggering a fresh
+        # N+1 sequential HTTP fetch inside the thread pool.
+        has_odds = bool(ODDS_API_KEY)
+        if has_odds:
+            try:
+                _ensure_daily_odds_snapshot()
+            except Exception:
+                print(f"[mc_bg] odds snapshot pre-warm failed: {traceback.format_exc()}")
+
         date_str = datetime.now(ET).strftime('%Y-%m-%d')
         url = (f"{MLB_API}/schedule?sportId=1&date={date_str}"
                "&hydrate=team,probablePitcher,lineups")
@@ -12676,7 +12688,6 @@ def _mc_compute_background():
         raw   = dates[0].get('games', []) if dates else []
 
         games, ranked = [], []
-        has_odds = bool(ODDS_API_KEY)
 
         def _compute_game(g):
             game_pk   = g.get('gamePk')
@@ -12811,14 +12822,31 @@ def _mc_compute_background():
                 print(f"[mc_bg] {matchup}: {traceback.format_exc()}")
             return {'gamePk': game_pk, 'matchup': matchup, 'topProps': top_props}, top_props
 
+        # Total timeout for all workers: allow up to 90 s for the entire game
+        # batch so that a single stalled network call cannot hang the whole
+        # background thread forever.
+        _MC_FUTURES_TIMEOUT = 90
         workers = min(6, max(1, len(raw)))
         with ThreadPoolExecutor(max_workers=workers) as ex:
             futs = [ex.submit(_compute_game, g) for g in raw]
-            for fut in as_completed(futs):
-                game_row, top_props = fut.result()
-                games.append(game_row)
-                if top_props:
-                    ranked.extend(top_props)
+            try:
+                for fut in as_completed(futs, timeout=_MC_FUTURES_TIMEOUT):
+                    game_row, top_props = fut.result()
+                    games.append(game_row)
+                    if top_props:
+                        ranked.extend(top_props)
+            except TimeoutError:
+                print(f"[mc_bg] WARNING: as_completed timed out after {_MC_FUTURES_TIMEOUT}s — using partial results")
+                for fut in futs:
+                    if fut.done() and not fut.cancelled():
+                        try:
+                            game_row, top_props = fut.result()
+                            if game_row not in games:
+                                games.append(game_row)
+                            if top_props:
+                                ranked.extend(top_props)
+                        except Exception:
+                            pass
 
         ranked = sorted(ranked, key=lambda x: x.get('edge', 0), reverse=True)
         games = sorted(games, key=lambda x: x.get('matchup') or '')
@@ -12832,18 +12860,38 @@ def _mc_compute_background():
         print(f"[mc_bg] FATAL: {traceback.format_exc()}")
     finally:
         with _mc_cache_lock:
-            _mc_computing = False
+            _mc_computing  = False
+            _mc_started_ts = None
 
 
 def _mc_maybe_refresh(force=False):
-    global _mc_computing
+    global _mc_computing, _mc_started_ts
     with _mc_cache_lock:
-        running  = _mc_computing
-        age      = (datetime.now() - _mc_cache_ts).total_seconds() if _mc_cache_ts else 9999
-        has_data = _mc_cache_data is not None
-    if running: return
-    if not force and has_data and age < 1800: return
-    with _mc_cache_lock: _mc_computing = True
+        running    = _mc_computing
+        started_at = _mc_started_ts
+        age        = (datetime.now() - _mc_cache_ts).total_seconds() if _mc_cache_ts else 9999
+        has_data   = _mc_cache_data is not None
+
+    if running:
+        # Watchdog: if the background thread has been marked as computing for
+        # longer than the allowed ceiling, it has likely hung.  Reset the flag
+        # so the next poll can launch a fresh thread.
+        if started_at and (datetime.now() - started_at).total_seconds() > _MC_COMPUTE_TIMEOUT_SEC:
+            print(f"[mc_bg] watchdog: resetting stuck _mc_computing flag "
+                  f"(running for >{_MC_COMPUTE_TIMEOUT_SEC}s)")
+            with _mc_cache_lock:
+                _mc_computing  = False
+                _mc_started_ts = None
+            # Fall through to start a new thread below
+        elif not force:
+            return  # Still within timeout and not a forced refresh — wait
+
+    if not force and has_data and age < 1800:
+        return
+
+    with _mc_cache_lock:
+        _mc_computing  = True
+        _mc_started_ts = datetime.now()
     threading.Thread(target=_mc_compute_background, daemon=True).start()
 
 
