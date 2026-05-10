@@ -4299,10 +4299,6 @@ def _project_batter_vs_pitcher(batter_stats, pitcher_stats):
     # avg hitter vs avg SP:    ~50% hit, 35% TB,  4% HR, 35% RBI
     # weak hitter vs elite SP: ~30% hit, 15% TB, 1% HR,  15% RBI
     p_hit = max(0.04, min(0.38, xba * pitcher_adj * 0.90))
-    # XGBoost blend (60% XGB / 40% formula when model is loaded)
-    _xgb_hit = xgb_hit_prob(batter_stats, pitcher_stats)
-    if _xgb_hit is not None:
-        p_hit = max(0.04, min(0.38, 0.40 * p_hit + 0.60 * _xgb_hit))
     # For TB, use per-PA probability of an extra-base hit, roughly slg-xba.
     slg_proxy = xba + iso
     p_tb_pa   = (slg_proxy - xba * 0.50) * pitcher_adj   # EBH probability
@@ -4316,8 +4312,15 @@ def _project_batter_vs_pitcher(batter_stats, pitcher_stats):
         # 1 - (1 - p)^PA
         return round(1 - (1 - pp) ** pa, 3)
 
+    hit_prob = _game_prob(p_hit)
+    _xgb_hit = None
+    if xgb_ready('hits'):
+        _xgb_hit = xgb_hit_prob(batter_stats, pitcher_stats)
+        if _xgb_hit is not None:
+            hit_prob = round(_clamp(0.40 * hit_prob + 0.60 * _xgb_hit, 0.03, 0.97), 3)
+
     return {
-        "hitProb":  _game_prob(p_hit),
+        "hitProb":  hit_prob,
         "tbProb":   _game_prob(p_tb),
         "hrProb":   _game_prob(p_hr),
         "rbiProb":  _game_prob(p_rbi),
@@ -4325,6 +4328,7 @@ def _project_batter_vs_pitcher(batter_stats, pitcher_stats):
         "projTB":   round(p_tb  * pa, 2),
         "projHR":   round(p_hr  * pa, 2),
         "projRBI":  round(p_rbi * pa, 2),
+        "xgbHitProb": round(_xgb_hit, 4) if _xgb_hit is not None else None,
     }
 
 
@@ -9707,12 +9711,13 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
     process_hitters(away_props, away_abbr, home_pitcher.get('name'))
     process_hitters(home_props, home_abbr, away_pitcher.get('name'))
 
+    k_xgb_ready = xgb_ready('k')
     for sp, team_abbr in [(away_sp, away_abbr), (home_sp, home_abbr)]:
         sp_mkt_lines = _market_lines_for_player(market_props, sp.get('name'), 'pitcher_strikeouts')
         k_lines = sp_mkt_lines if sp_mkt_lines else [3.5, 4.5, 5.5]
         mean_k = float(sp.get('mean_k', 0) or 0)
         # ── FanGraphs enrichment for pitcher K props (done once per starter) ──
-        if _XGB_AVAILABLE:
+        if k_xgb_ready:
             sp = {**sp, **enrich_pitcher(sp)}   # merges real FG stats into sp dict
         # ─────────────────────────────────────────────────────────────────────
         for line in k_lines:
@@ -9722,7 +9727,7 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
             else:
                 raw_prob = _poisson_over_prob(mean_k, line)
             # XGBoost blend for K props (60% XGB / 40% Monte Carlo when model loaded)
-            _xgb_k = xgb_k_prob(sp, line=line)
+            _xgb_k = xgb_k_prob(sp, line=line) if k_xgb_ready else None
             if _xgb_k is not None:
                 raw_prob = max(0.0, min(1.0, 0.40 * raw_prob + 0.60 * _xgb_k))
             if raw_prob < 0.12:
@@ -9744,7 +9749,7 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
             ev_pct = round(adj_prob / mi - 1, 4) if mi and mi > 0 else None
             temp_row = {
                 'date': capture_date, 'gamePk': game_pk, 'team': team_abbr, 'player': sp.get('name'), 'playerId': sp.get('id'), 'marketKey': 'pitcher_strikeouts', 'line': line, 'recommendedSide': 'Over',
-                'rawProb': round(raw_prob, 4), 'rawMultProb': round(raw_mult_prob, 4), 'adjProb': round(adj_prob, 4), 'modelMean': round(float(sp.get('mean_k', 0) or 0), 3), 'edge': round(edge, 4) if edge is not None else None,
+                'rawProb': round(raw_prob, 4), 'rawMultProb': round(raw_mult_prob, 4), 'adjProb': round(adj_prob, 4), 'modelMean': round(float(sp.get('mean_k', 0) or 0), 3), 'edge': round(edge, 4) if edge is not None else None, 'xgbKProb': round(_xgb_k, 4) if _xgb_k is not None else None,
                 'bookmaker': msum.get('market_bookmaker'), 'marketPrice': msum.get('best_over_price'), 'marketImplied': market_implied,
                 'bestAvailablePrice': msum.get('best_over_price'), 'bestAvailableBook': msum.get('best_over_book'),
                 'bestOverPrice': msum.get('best_over_price'), 'bestOverBook': msum.get('best_over_book'),
