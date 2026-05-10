@@ -2540,6 +2540,8 @@ function loadSimulation(opts){
   ensureSimWrap();
   var panel = document.getElementById('simPanel');
   if(panel) panel.innerHTML = '<div class="spinner"></div>';
+  var _simAbort = new AbortController();
+  var _simTimeout = setTimeout(function(){ _simAbort.abort(); }, 90000);
   function simFallback(msg){
     var away = (GD && GD.awayAbbr) ? GD.awayAbbr : 'AWAY';
     var home = (GD && GD.homeAbbr) ? GD.homeAbbr : 'HOME';
@@ -2589,8 +2591,9 @@ function loadSimulation(opts){
       }
     };
   }
-  fetch('/api/simulate/' + GPK + '?sims=' + sims + (refresh ? '&refresh=1' : ''))
+  fetch('/api/simulate/' + GPK + '?sims=' + sims + (refresh ? '&refresh=1' : ''), {signal: _simAbort.signal})
     .then(function(r){
+      clearTimeout(_simTimeout);
       return r.json().catch(function(){ return {}; }).then(function(body){
         if(!r.ok){
           var msg = (body && body.error) ? body.error : ('Server '+r.status+' — using fallback simulation');
@@ -2613,8 +2616,12 @@ function loadSimulation(opts){
       renderPropPanel();
     })
     .catch(function(e){
+      clearTimeout(_simTimeout);
       var el = document.getElementById('simPanel');
-      if(el) el.innerHTML = '<p class="na">Simulation unavailable: '+e.message+'</p>'
+      var isTimeout = e.name === 'AbortError';
+      var msg = isTimeout ? 'Simulation timed out — using fallback data' : ('Simulation unavailable: ' + e.message);
+      if(isTimeout){ SIM_DATA = simFallback(msg); renderSimulation(); renderPropPanel(); return; }
+      if(el) el.innerHTML = '<p class="na">'+msg+'</p>'
         +'<button onclick="loadSimulation()" style="margin-top:10px;padding:6px 16px;border:1px solid rgba(0,229,255,.3);border-radius:999px;background:rgba(0,229,255,.08);color:var(--c);font-family:Orbitron,monospace;font-size:.62rem;letter-spacing:1px;cursor:pointer">&#8635; RETRY</button>';
     });
 }
