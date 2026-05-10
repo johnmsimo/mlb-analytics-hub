@@ -9273,7 +9273,7 @@ def api_ai_boxscore(game_pk):
         print(f"[api_ai_boxscore] {game_pk}: {traceback.format_exc()}")
         return jsonify({
             'success': False,
-            'error': str(ex),
+            'error': 'Internal server error',
             'projections': None
         }), 500
 
