@@ -7029,6 +7029,7 @@ def _pitcher_model(name, pid=None, team_id=None):
     for k, v in mlb.items():
         if k not in r or r[k] in (None, "", "NA", "N/A"):
             r[k] = _num(v, BULLPEN_BASE.get(k, 0.0)) if k in _PITCH_FLOAT_KEYS else v
+    r.setdefault('pitchHand', 'R')
     return r
 def _tier_blend(tm, starter, w_tm, w_base, w_sp, mods):
     out = {}
