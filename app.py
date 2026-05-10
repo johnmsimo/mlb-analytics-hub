@@ -17235,9 +17235,9 @@ threading.Thread(target=_prewarm_when_ready, daemon=True).start()
 # so that port 8080 is bound before any heavy network I/O begins.
 
 # Start hourly injury refresh worker once routes/helpers are loaded.
-_start_injury_worker()
-_start_tracker_auto_sync_worker()
-_start_mlb_memory_worker()
+ _start_injury_worker()
+ _start_tracker_auto_sync_worker()
+ _start_mlb_memory_worker()
 
 # Start daily pipeline scheduler (runs at 8 AM ET + on boot)
 if _PIPELINE_AVAILABLE:
