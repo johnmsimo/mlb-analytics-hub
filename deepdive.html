@@ -2530,8 +2530,11 @@ function lookupPitchX(playerName){
   return null;
 }
 
+var _simHandednessRetried = false;
 function loadSimulation(opts){
   opts = opts || {};
+  // Reset the handedness retry guard on each fresh (non-retry) load
+  if(!opts._handednessRetry) _simHandednessRetried = false;
   var sims = parseInt(opts.sims || 5000, 10);
   if(!isFinite(sims)) sims = 2500;
   sims = Math.max(2500, Math.min(5000, sims));
@@ -2789,6 +2792,15 @@ function renderSimulation(){
   if(!SIM_DATA || !SIM_DATA.success){ el.innerHTML = '<p class="na">Simulation data unavailable.</p>'; return; }
   var m = SIM_DATA.meta || {}, t = SIM_DATA.team || {}, h = SIM_DATA.handedness || {}, pp = SIM_DATA.pitcherProps || {}, sp = SIM_DATA.sampleBoxscore || {};
   var awayBP = pp.awayBullpen || {}, homeBP = pp.homeBullpen || {};
+  // Auto-retry once if handedness is all-zero for both teams (cold-start bio cache)
+  var awayHL = h.awayLineup || {}, homeHL = h.homeLineup || {};
+  var awayTotal = (awayHL.L||0) + (awayHL.R||0) + (awayHL.S||0);
+  var homeTotal = (homeHL.L||0) + (homeHL.R||0) + (homeHL.S||0);
+  if(awayTotal === 0 && homeTotal === 0 && !_simHandednessRetried){
+    _simHandednessRetried = true;
+    loadSimulation({refresh:1, _handednessRetry:true});
+    return;
+  }
   el.innerHTML = ''
     + '<div class="mc-grid">'
     + '<div class="mc-card"><div class="mc-v">'+m.awayAbbr+' '+t.away_mean_runs.toFixed(2)+'</div><div class="mc-l">MEAN AWAY RUNS</div></div>'
@@ -2806,7 +2818,7 @@ function renderSimulation(){
     + '<button class="btn" onclick="refreshSimulation()" style="padding:6px 12px;font-size:.62rem">REFRESH SIM</button>'
     + '<button class="btn" onclick="runHighPrecisionSimulation()" style="padding:6px 12px;font-size:.62rem">HIGH PRECISION RECHECK</button>'
     + '</div>'
-    + '<div class="proj-note" style="margin-bottom:10px">Default load uses fast mode (lower sims) for stability. Use <strong>HIGH PRECISION RECHECK</strong> for tighter probabilities on this game.</div>'
+    + '<div class="proj-note" style="margin-bottom:10px">Runs 5,000 simulations by default. Use <strong>HIGH PRECISION RECHECK</strong> to force a fresh run with full precision.</div>'
     + '<div class="mc-box-wrap">'
     + '<div class="mc-box"><h4>HANDEDNESS CONTEXT</h4><table class="mc-table"><tbody>'
       + '<tr><td>'+m.awayAbbr+' lineup</td><td>L '+(h.awayLineup?h.awayLineup.L:0)+' / R '+(h.awayLineup?h.awayLineup.R:0)+' / S '+(h.awayLineup?h.awayLineup.S:0)+'</td></tr>'
@@ -2925,7 +2937,7 @@ function renderSimulation(){
     + '<button class="btn" onclick="refreshSimulation()" style="padding:6px 12px;font-size:.62rem">REFRESH SIM</button>'
     + '<button class="btn" onclick="runHighPrecisionSimulation()" style="padding:6px 12px;font-size:.62rem">HIGH PRECISION RECHECK</button>'
     + '</div>'
-    + '<div class="proj-note" style="margin-bottom:10px">Default load uses fast mode (lower sims) for stability. Use <strong>HIGH PRECISION RECHECK</strong> for tighter probabilities on this game.</div>'
+    + '<div class="proj-note" style="margin-bottom:10px">Runs 5,000 simulations by default. Use <strong>HIGH PRECISION RECHECK</strong> to force a fresh run with full precision.</div>'
     + '<div class="mc-box-wrap">'
     + '<div class="mc-box"><h4>HANDEDNESS CONTEXT</h4><table class="mc-table"><tbody>'
       + '<tr><td>'+m.awayAbbr+' lineup</td><td>L '+(h.awayLineup?h.awayLineup.L:0)+' / R '+(h.awayLineup?h.awayLineup.R:0)+' / S '+(h.awayLineup?h.awayLineup.S:0)+'</td></tr>'
