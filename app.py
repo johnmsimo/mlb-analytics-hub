@@ -17215,7 +17215,7 @@ def _prewarm_when_ready():
 
 threading.Thread(target=_prewarm_when_ready, daemon=True).start()
 
-    _start_odds_snapshot_worker()
+_start_odds_snapshot_worker()  # ← REMOVE the 4 spaces before this line
 
 # _preload_caches() is now triggered via the gunicorn post_fork hook in gunicorn_conf.py
 # so that port 8080 is bound before any heavy network I/O begins.
@@ -17225,7 +17225,7 @@ _start_injury_worker()
 _start_tracker_auto_sync_worker()
 _start_mlb_memory_worker()
 
-# Start daily pipeline scheduler (runs at 8 AM ET + on boot)
+# Start daily pipeline scheduler (runs at 9 AM ET + on boot)
 if _PIPELINE_AVAILABLE:
     start_scheduler()
     logging.info("[pipeline] Scheduler armed — fires at 09:00 ET daily.")
