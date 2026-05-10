@@ -17199,19 +17199,19 @@ def _preload_caches():
     threading.Thread(target=load_fg, daemon=True).start()
     threading.Thread(target=load_sv, daemon=True).start()
 
-    def _prewarm_when_ready():
-        import time
-        deadline = time.time() + 90
-        while time.time() < deadline:
-            with _fg_lock:
-                if _fg_loaded:
-                    break
-            time.sleep(3)
+def _prewarm_when_ready():
+    deadline = time.time() + 90
+    while time.time() < deadline:
+        with _fg_lock:
+            if _fg_loaded:
+                break
+        time.sleep(3)
+    try:
         prewarm_today_caches({
-            "fetch_schedule":       fetch_schedule,
-            "_fetch_bvp":           _fetch_bvp,
-            "_pitcher_recent_form": _pitcher_recent_form,
+            "fetch_schedule": fetch_schedule,
         })
+    except Exception as _pw_ex:
+        logging.warning(f"[prewarm] failed: {_pw_ex}")
 
 threading.Thread(target=_prewarm_when_ready, daemon=True).start()
 
