@@ -786,11 +786,11 @@ def api_simulate(game_pk):
         print('[api_simulate]', traceback.format_exc())
         try:
             g = fetch_schedule_game(game_pk) or {}
-            fallback = _simulation_fallback_payload(g, game_pk, sims=sims, warning=f'Fallback mode: {str(ex) or "simulation error"}')
+            fallback = _simulation_fallback_payload(g, game_pk, sims=sims, warning='Fallback mode: simulation error')
             return jsonify(fallback)
         except Exception as fallback_ex:
             print('[api_simulate:fallback]', traceback.format_exc())
-            emergency = _simulation_fallback_payload({}, game_pk, sims=sims, warning=f'Emergency fallback: {str(ex) or "simulation error"}; {str(fallback_ex) or "fallback error"}')
+            emergency = _simulation_fallback_payload({}, game_pk, sims=sims, warning='Emergency fallback: simulation error; fallback error')
             return jsonify(emergency)
 
 

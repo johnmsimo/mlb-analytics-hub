@@ -563,123 +563,6 @@ def _platoon_blend(batter, pitcher_hand, stat):
     blended   = round(w_split * split_val + w_season * season_val, 4)
     return blended
 
-def _batter_hand_note(batter, pitcher_hand):
-    """
-    Returns a short string describing the platoon matchup, e.g. 'LHB vs RHP (+)'
-    Used for UI display on the projection card.
-    """
-    bat  = (batter.get('bats') or 'S').upper()
-    pit  = (pitcher_hand or 'R').upper()
-    if bat == 'S':
-        return f"SB vs {'RHP' if pit == 'R' else 'LHP'} (switch)"
-    favorable = (bat == 'L' and pit == 'R') or (bat == 'R' and pit == 'L')
-    direction = '+' if favorable else '−'
-    return f"{'LHB' if bat == 'L' else 'RHB'} vs {'RHP' if pit == 'R' else 'LHP'} ({direction})"
-
-def _project_batter(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_sv,
-                    park_factor, weather, pitcher_hand='R'):
-    """
-    Returns per-prop projections for one batter.
-    Uses platoon-blended avg/obp/slg/ops as base rates when split PA is available.
-    """
-    name = batter.get("name", "")
-    fg   = fg_batter(name)
-    sv   = sv_batter(name)
-
-    # ── Platoon-blended base rates ────────────────────────────────────────────
-    avg  = platoon_blend_v2(batter, pitcher_hand, 'avg')
-    obp  = platoon_blend_v2(batter, pitcher_hand, 'obp')
-    slg  = platoon_blend_v2(batter, pitcher_hand, 'slg')
-    ops  = platoon_blend_v2(batter, pitcher_hand, 'ops')
-
-    # Fallback chain for fg-only stats (not in splits)
-    fg_pa  = _safe_f(fg.get("fg_pa"),  200)
-    fg_hr  = _safe_f(fg.get("fg_hr"),  3)
-    fg_rbi = _safe_f(fg.get("fg_rbi"), 12)
-    fg_r   = _safe_f(fg.get("fg_r"),   12)
-    hr_r   = fg_hr  / max(fg_pa, 1)
-    rbi_r  = fg_rbi / max(fg_pa, 1)
-    r_r    = fg_r   / max(fg_pa, 1)
-
-    # Scale HR rate by platoon OPS ratio (strong platoon advantage boosts power)
-    season_ops  = _safe_f(batter.get('ops'), _STAT_DEFAULTS['ops'])
-    ops_ratio   = ops / max(season_ops, 0.400)            # ≈1.0 neutral, >1 platoon advantage
-    hr_r_adj    = hr_r * ops_ratio                        # HR scales with ops split
-
-    xwoba = _safe_f(sv.get("sv_xwoba") or fg.get("fg_woba"), 0.310)
-    brl   = _safe_f(sv.get("sv_brl_pct"), 6.0) / 100
-
-    # ── Pitcher resistance multiplier ─────────────────────────────────────────
-    opp_era  = _safe_f(opp_pitcher_fg.get("fg_era")  or opp_pitcher_sv.get("sv_era_p"), 4.20)
-    opp_xera = _safe_f(opp_pitcher_sv.get("sv_xera"), opp_era)
-    opp_xfip = _safe_f(opp_pitcher_fg.get("fg_xfip"), (opp_era + opp_xera) / 2)
-    opp_kpct = _safe_f(opp_pitcher_fg.get("fg_kpct"), 0.22)
-    bat_kpct = _safe_f(fg.get("fg_kpct") or sv.get("sv_k_pct"), 0.22)
-
-    # xFIP as 3rd anchor: stabilizes low-IP pitchers; weighted avg of ERA/xERA/xFIP
-    pit_mult = min(1.25, max(0.72, (opp_era * 0.35 + opp_xera * 0.35 + opp_xfip * 0.30) / 4.20))
-    k_adj    = 1.0 - max(0.0, (opp_kpct - bat_kpct) * 0.5)
-
-    # ── Platoon K-rate modifier ───────────────────────────────────────────────
-    # Platoon disadvantage → more K exposure
-    bat  = (batter.get('bats') or 'S').upper()
-    pit  = (pitcher_hand or 'R').upper()
-    if bat != 'S':
-        platoon_k_mod = 0.96 if ((bat == 'L' and pit == 'R') or (bat == 'R' and pit == 'L')) else 1.04
-    else:
-        platoon_k_mod = 1.0   # switch hitter, neutral
-    k_adj *= platoon_k_mod
-
-    # ── Weather multiplier ────────────────────────────────────────────────────
-    dome      = weather.get("dome", False)
-    wx_mult   = 1.0
-    if not dome:
-        temp_f   = _safe_f(weather.get("temp"), 72)
-        wind_spd = _safe_f(weather.get("wind_speed"), 0)
-        wx_mult  = 1.0 + (temp_f - 72) * 0.003 + min(0.06, float(wind_spd) * 0.003)
-
-    # ── Expected PA by slot ───────────────────────────────────────────────────
-    slot   = int(batter.get("slot") or 5)
-    exp_pa = round(4.35 - (slot - 1) * 0.095, 2)
-
-    # ── Projections ───────────────────────────────────────────────────────────
-    # Hits: platoon avg replaces season avg as base
-    hits_proj = round(max(0.05, avg * exp_pa * pit_mult * k_adj * park_factor * wx_mult), 3)
-
-    # Total Bases: built from platoon slg
-    tb_proj   = round(max(0.08, slg * exp_pa * pit_mult * k_adj * park_factor * wx_mult), 3)
-
-    # HR: platoon-adjusted hr rate + barrel bonus + park + weather
-    hr_pf     = min(1.30, park_factor * 1.08)
-    hr_proj   = round(max(0.005,
-        hr_r_adj * exp_pa * hr_pf * (1.0 + (brl - 0.06) * 0.8) * wx_mult
-    ), 4)
-
-    # RBI: correlated to hits+HR, slot bonus
-    slot_rbi_bonus = max(0.8, 1.0 + (4 - abs(slot - 4)) * 0.03)
-    rbi_proj  = round(max(0.05, rbi_r * exp_pa * pit_mult * park_factor * slot_rbi_bonus), 3)
-
-    # Runs: lead-off slots score more
-    slot_r_bonus = max(0.8, 1.1 - abs(slot - 1.5) * 0.025)
-    r_proj    = round(max(0.04, r_r * exp_pa * pit_mult * slot_r_bonus), 3)
-
-    # H+R+RBI combo
-    hrr_proj  = round(hits_proj + r_proj + rbi_proj, 3)
-
-    return {
-        "hits":        hits_proj,
-        "hr":          hr_proj,
-        "tb":          tb_proj,
-        "rbi":         rbi_proj,
-        "r":           r_proj,
-        "hrr":         hrr_proj,
-        "expected_pa": exp_pa,
-        # expose the blended rates so the frontend can show them
-        "split_avg":   round(avg, 3),
-        "split_ops":   round(ops, 3),
-        "platoon_note": _batter_hand_note(batter, pitcher_hand),
-    }
-
 def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_sv,
                           park_factor, weather, pitcher_hand='R',
                           opp_pitcher_id=None,
@@ -905,7 +788,7 @@ def _pitcher_recent_form(pitcher_id, n_starts=5):
         )
         r.raise_for_status()
         _stats_list = r.json().get("stats") or []
-        all_splits = _stats_list[0].get("splits", []) if _stats_list else []  # FIX: guard empty stats list
+        all_splits = _stats_list[0].get("splits", []) if _stats_list else []
         # Only real starts (IP >= 3.0)
         starts = [
             sp for sp in all_splits
@@ -1404,7 +1287,7 @@ def api_props_projections(game_pk):
 
     except Exception as ex:
         print(f"[api_props_projections] {traceback.format_exc()}")
-        return jsonify({"success": False, "error": str(ex)}), 500
+        return jsonify({"success": False, "error": "Internal server error"}), 500
     finally:
         ms = int((time.perf_counter() - t0) * 1000)
         if ms >= 1000:
@@ -1417,7 +1300,7 @@ def api_props_scan_today():
         return jsonify(_props_scan_today_payload(date_str, refresh=refresh))
     except Exception as ex:
         print(f"[api_props_scan_today] {traceback.format_exc()}")
-        return jsonify({'success': False, 'error': str(ex)}), 500
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 def api_props_line_shopping(game_pk):
     """Return line-shopping view grouped by player/market with all sportsbook lines."""
@@ -1467,7 +1350,7 @@ def api_props_line_shopping(game_pk):
         })
     except Exception as ex:
         print(f"[api_props_line_shopping] {traceback.format_exc()}")
-        return jsonify({"success": False, "error": str(ex)}), 500
+        return jsonify({"success": False, "error": "Internal server error"}), 500
 
 def api_batting_order_matchups(game_pk):
     """Batting-order matchup rows for deep-dive tab, including pitch-type edge."""
@@ -1531,16 +1414,16 @@ def api_batting_order_matchups(game_pk):
             "homeAbbr": home_abbr,
             "awayStaffBadge": _rank_staff_badge(away_staff.get('composite_rank')),
             "homeStaffBadge": _rank_staff_badge(home_staff.get('composite_rank')),
-            "awayPitcherName": ap_name,  # FIX: away team's own pitcher shown on away side
+            "awayPitcherName": ap_name,
             "awayPitcherHand": ap_hand,
-            "homePitcherName": hp_name,  # FIX: home team's own pitcher shown on home side
+            "homePitcherName": hp_name,
             "homePitcherHand": hp_hand,
             "awayBatters": away_rows,
             "homeBatters": home_rows,
         })
     except Exception as ex:
         print(f"[api_batting_order_matchups] {traceback.format_exc()}")
-        return jsonify({"success": False, "error": str(ex)}), 500
+        return jsonify({"success": False, "error": "Internal server error"}), 500
 
 def api_props_matchup_scores(game_pk):
     try:
@@ -1606,7 +1489,7 @@ def api_props_matchup_scores(game_pk):
 
     except Exception as ex:
         print(f"[api_props_matchup_scores] {traceback.format_exc()}")
-        return jsonify({"success": False, "error": str(ex)}), 500
+        return jsonify({"success": False, "error": "Internal server error"}), 500
 
 def _compute_dashboard_quick_props(game_pk, limit=3, date_hint=None):
     """Compute top quick-prop picks for a game card strip."""
@@ -1725,7 +1608,7 @@ def api_props_trends(game_pk):
 
     except Exception as ex:
         print(f"[api_props_trends] {traceback.format_exc()}")
-        return jsonify({"success": False, "error": str(ex)}), 500
+        return jsonify({"success": False, "error": "Internal server error"}), 500
 
 def api_props_quick(game_pk):
     """
@@ -1744,7 +1627,7 @@ def api_props_quick(game_pk):
 
     except Exception as ex:
         print(f"[api_props_quick] {traceback.format_exc()}")
-        return jsonify({"success": False, "error": str(ex)}), 500
+        return jsonify({"success": False, "error": "Internal server error"}), 500
 
 def register_props_routes(app):
     app.add_url_rule('/api/projections/monte-carlo', view_func=api_projections_monte_carlo)
@@ -1757,4 +1640,4 @@ def register_props_routes(app):
     app.add_url_rule('/api/props/quick/<int:game_pk>', view_func=api_props_quick)
 
 
-__all__ = ['configure_props_context', 'register_props_routes', '_STAT_DEFAULTS', 'BATX_WEIGHTS', '_LEAGUE_WOBA', '_LEAGUE_BB_PCT', '_LEAGUE_K_PCT', '_LEAGUE_EV', '_LEAGUE_BRL_PCT', '_empty_props_scan_payload', '_compute_props_scan_today_payload', '_trigger_props_scan_refresh_async', '_props_scan_today_payload', 'api_projections_monte_carlo', '_props_fetch_game', '_platoon_blend', '_batter_hand_note', '_project_batter', '_project_batter_batx', '_pitcher_recent_form', '_project_pitcher', '_safe_f', '_matchup_score', 'api_props_projections', 'api_props_scan_today', 'api_props_line_shopping', 'api_batting_order_matchups', 'api_props_matchup_scores', '_compute_dashboard_quick_props', 'api_props_trends', 'api_props_quick']
+__all__ = ['configure_props_context', 'register_props_routes', '_STAT_DEFAULTS', 'BATX_WEIGHTS', '_LEAGUE_WOBA', '_LEAGUE_BB_PCT', '_LEAGUE_K_PCT', '_LEAGUE_EV', '_LEAGUE_BRL_PCT', '_empty_props_scan_payload', '_compute_props_scan_today_payload', '_trigger_props_scan_refresh_async', '_props_scan_today_payload', 'api_projections_monte_carlo', '_props_fetch_game', '_platoon_blend', '_project_batter_batx', '_pitcher_recent_form', '_project_pitcher', '_safe_f', '_matchup_score', 'api_props_projections', 'api_props_scan_today', 'api_props_line_shopping', 'api_batting_order_matchups', 'api_props_matchup_scores', '_compute_dashboard_quick_props', 'api_props_trends', 'api_props_quick', '_batter_hand_note', '_project_batter']

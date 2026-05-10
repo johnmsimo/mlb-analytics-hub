@@ -1377,7 +1377,9 @@ def _tracker_export_pdf_bytes(date_str):
         for row in sorted(active, key=lambda x: -(float(x.get('edge') or 0)))[:6]:
             lines.append(f'{row.get("player") or "-"} | {row.get("marketKey") or "-"} | edge {round((float(row.get("edge") or 0) * 100), 1)}% | grade {(row.get("grade") or "pending").upper()}')
     subtitle = f'Tracker summary card for {date_str} · {summary.get("picks", 0)} tracked picks'
-    return _simple_pdf_bytes(lines, title='MLB Analytics Hub - Tracker Summary Card', subtitle=subtitle)
+    lines.insert(1, subtitle)
+    lines.insert(2, ' ')
+    return _simple_pdf_bytes(lines)
 
 def api_tracker_calibration_dashboard(date_str):
     window = int(request.args.get('window', 14) or 14)
@@ -1511,7 +1513,7 @@ def api_tracker_backtest():
         return jsonify({'success': False, 'error': 'Invalid date format. Use YYYY-MM-DD.'}), 400
     except Exception as ex:
         print(f'[api_tracker_backtest] {traceback.format_exc()}')
-        return jsonify({'success': False, 'error': str(ex)}), 500
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 def api_tracker_settings():
     if request.method == 'GET':
@@ -2433,7 +2435,7 @@ def api_tracker_entries():
 
     except Exception as ex:
         print(f"[api_tracker_entries] {traceback.format_exc()}")
-        return jsonify({"success": False, "error": str(ex)}), 500
+        return jsonify({"success": False, "error": "Internal server error"}), 500
 
 def register_tracker_routes(app):
     app.add_url_rule('/api/tracker/adjustments', view_func=api_tracker_adjustments, methods=['GET', 'POST'])

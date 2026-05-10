@@ -497,7 +497,7 @@ def api_odds_cache_status():
         return jsonify(_odds_cache_status_payload())
     except Exception as ex:
         print(f'[api_odds_cache_status] {traceback.format_exc()}')
-        return jsonify({'success': False, 'error': str(ex)}), 500
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 def api_odds_cache_refresh():
     payload = request.get_json(silent=True) or {}
@@ -576,7 +576,7 @@ def api_odds_cache_refresh():
         return jsonify(result)
     except Exception as ex:
         print(f'[api_odds_cache_refresh] {traceback.format_exc()}')
-        return jsonify({'success': False, 'error': str(ex)}), 500
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 def _poisson_over_prob(mean, line):
     """P(X > line) = P(X >= floor(line)+1) via Poisson(mean). Works for any half-integer line."""
@@ -1046,7 +1046,7 @@ def api_nrfi(game_pk):
         return jsonify(out)
     except Exception as ex:
         print('[api_nrfi]', traceback.format_exc())
-        return jsonify({'success': False, 'error': str(ex)}), 500
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 def api_market(game_pk):
     try:
@@ -1106,7 +1106,7 @@ def api_market(game_pk):
         })
     except Exception as ex:
         print('[api_market]', traceback.format_exc())
-        return jsonify({'success': False, 'error': str(ex)}), 500
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 def initialize_odds_module():
     _restore_odds_caches()
