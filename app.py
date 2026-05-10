@@ -7851,7 +7851,7 @@ def api_simulate(game_pk):
         # Keep simulation within Render memory/timeout budget.
         today = datetime.now(ET).strftime('%Y-%m-%d')
         lineup_signature = _game_lineup_signature(g, away_lineup, home_lineup)
-        cache_signature = f"{lineup_signature}|sims:{sims}"
+        cache_signature = f"{lineup_signature}|sims:{sims}|hand:v2"
         refresh = request.args.get('refresh') == '1'
         cached = _correlation_cache.get(game_pk)
         if cached and not refresh and cached.get('date') == today and cached.get('signature') == cache_signature:
