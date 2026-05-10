@@ -7840,6 +7840,14 @@ def api_simulate(game_pk):
                 home_lineup = _roster_lineup(home_team_id)
         if not away_lineup or not home_lineup:
             return jsonify({'success': False, 'error': 'Lineups unavailable for simulation'}), 400
+        # Pre-warm _bio_cache for all lineup players so bats handedness is correct
+        # even on a cold server restart (avoids L0/R0/S0 in the handedness block).
+        for _b in away_lineup + home_lineup:
+            _pid = _b.get('id')
+            if _pid and _pid not in _bio_cache:
+                player_profile(_pid)
+            if _pid and _pid in _bio_cache:
+                _b['bats'] = _bio_cache[_pid].get('bats', _b.get('bats', 'S'))
         # Keep simulation within Render memory/timeout budget.
         today = datetime.now(ET).strftime('%Y-%m-%d')
         lineup_signature = _game_lineup_signature(g, away_lineup, home_lineup)
