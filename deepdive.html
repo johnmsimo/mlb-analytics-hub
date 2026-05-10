@@ -2533,6 +2533,8 @@ function lookupPitchX(playerName){
 var _simHandednessRetried = false;
 function loadSimulation(opts){
   opts = opts || {};
+  // Reset the handedness retry guard on each fresh (non-retry) load
+  if(!opts._handednessRetry) _simHandednessRetried = false;
   var sims = parseInt(opts.sims || 5000, 10);
   if(!isFinite(sims)) sims = 2500;
   sims = Math.max(2500, Math.min(5000, sims));
@@ -2796,7 +2798,7 @@ function renderSimulation(){
   var homeTotal = (homeHL.L||0) + (homeHL.R||0) + (homeHL.S||0);
   if(awayTotal === 0 && homeTotal === 0 && !_simHandednessRetried){
     _simHandednessRetried = true;
-    loadSimulation({refresh:1});
+    loadSimulation({refresh:1, _handednessRetry:true});
     return;
   }
   el.innerHTML = ''
