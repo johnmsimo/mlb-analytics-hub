@@ -17200,12 +17200,12 @@ def _preload_caches():
     threading.Thread(target=load_sv, daemon=True).start()
 
 def _prewarm_when_ready():
-    deadline = time.time() + 90
+    deadline = time.time() + 60
     while time.time() < deadline:
         with _fg_lock:
             if _fg_loaded:
                 break
-        time.sleep(3)
+        time.sleep(2)
     try:
         prewarm_today_caches({
             "fetch_schedule": fetch_schedule,
