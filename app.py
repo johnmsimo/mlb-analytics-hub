@@ -17200,18 +17200,18 @@ def _preload_caches():
     threading.Thread(target=load_sv, daemon=True).start()
 
     def _prewarm_when_ready():
-    import time
-    deadline = time.time() + 90
-    while time.time() < deadline:
-        with _fg_lock:
-            if _fg_loaded:
-                break
-        time.sleep(3)
-    prewarm_today_caches({
-        "fetch_schedule":       fetch_schedule,
-        "_fetch_bvp":           _fetch_bvp,
-        "_pitcher_recent_form": _pitcher_recent_form,
-    })
+        import time
+        deadline = time.time() + 90
+        while time.time() < deadline:
+            with _fg_lock:
+                if _fg_loaded:
+                    break
+            time.sleep(3)
+        prewarm_today_caches({
+            "fetch_schedule":       fetch_schedule,
+            "_fetch_bvp":           _fetch_bvp,
+            "_pitcher_recent_form": _pitcher_recent_form,
+        })
 
 threading.Thread(target=_prewarm_when_ready, daemon=True).start()
 
