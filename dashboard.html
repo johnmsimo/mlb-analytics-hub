@@ -997,7 +997,7 @@ function loadTeams(){
 }
 function marketLabelLite(m){ const map={batter_hits:'Hits',batter_total_bases:'Total Bases',batter_home_runs:'Home Runs',batter_rbis:'RBIs',batter_runs_scored:'Runs',batter_stolen_bases:'SB',pitcher_strikeouts:'Pitcher Ks'}; return map[m]||m||'Market'; }
 // ── MC Projection Board ──────────────────────────────────────────────────────
-var _MCA=[], _MFG='all', _MFM='all', _MFR='all', _MC_POLL=null;
+var _MCA=[], _MFG='all', _MFM='all', _MFR='all', _MC_POLL=null, _MC_POLL_ATTEMPTS=0;
 function _mcMkCls(m){return m==='batter_hits'?'mk-hit':m==='batter_total_bases'?'mk-tb':m==='batter_home_runs'?'mk-hr':m==='batter_rbis'?'mk-rbi':m==='pitcher_strikeouts'?'mk-k':'mk-hit';}
 function _mcAmericanOdds(prob){if(!prob||prob<=0||prob>=1)return null;return prob>=0.5?Math.round(-prob*100/(1-prob)):Math.round((1-prob)*100/prob);}
 function _mcFairPrice(prob){var o=_mcAmericanOdds(prob);return o==null?'—':(o>0?'+':'')+o;}
@@ -1165,12 +1165,66 @@ function _mcSetF(type,val){
   _mcRenderRows();
 }
 function _mcPoll(){
+  _MC_POLL_ATTEMPTS = (_MC_POLL_ATTEMPTS || 0) + 1;
+  // Give up after 8 polls (~2.7 min at 20s intervals)
+  if(_MC_POLL_ATTEMPTS > 8){
+    if(_MC_POLL){clearInterval(_MC_POLL);_MC_POLL=null;}
+    _MC_POLL_ATTEMPTS = 0;
+    var wrap=document.getElementById('mcWrap'), st=document.getElementById('mcStatus');
+    if(wrap) wrap.innerHTML='<div class="ng" style="text-align:center;padding:32px">'
+      +'<h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px;margin-bottom:12px">PROJECTIONS TIMED OUT</h3>'
+      +'<p style="font-size:.7rem;color:var(--mu);margin-bottom:16px">Background compute is taking longer than expected.</p>'
+      +'<button onclick="initMonteCarlo()" style="padding:8px 20px;border:1px solid rgba(0,229,255,.35);border-radius:999px;background:rgba(0,229,255,.08);color:var(--c);font-family:Orbitron,monospace;font-size:.62rem;letter-spacing:1.5px;cursor:pointer">↻ RETRY</button>'
+      +'</div>';
+    if(st) st.textContent='Timed out — click retry';
+    return;
+  }
   apiFetch('/api/projections/monte-carlo')
     .then(function(r){if(!r.ok)return null;return r.json();})
-    .then(function(d){if(d&&d.success){MC_DATA=d;renderMC(d);}})
-    .catch(function(){});
+    .then(function(d){
+      if(d&&d.success){
+        _MC_POLL_ATTEMPTS = 0;
+        MC_DATA=d;
+        renderMC(d);
+      } else if(d && !d.success && !d.computing){
+        // Backend returned an error that won't resolve — stop polling
+        if(_MC_POLL){clearInterval(_MC_POLL);_MC_POLL=null;}
+        _MC_POLL_ATTEMPTS = 0;
+        var wrap=document.getElementById('mcWrap'), st=document.getElementById('mcStatus');
+        if(wrap) wrap.innerHTML='<div class="ng" style="text-align:center;padding:32px">'
+          +'<h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px;margin-bottom:12px">NO PROJECTIONS AVAILABLE</h3>'
+          +'<button onclick="initMonteCarlo()" style="padding:8px 20px;border:1px solid rgba(0,229,255,.35);border-radius:999px;background:rgba(0,229,255,.08);color:var(--c);font-family:Orbitron,monospace;font-size:.62rem;letter-spacing:1.5px;cursor:pointer">↻ RETRY</button>'
+          +'</div>';
+        if(st) st.textContent='No data';
+      } else if(!d){
+        if(_MC_POLL){clearInterval(_MC_POLL);_MC_POLL=null;}
+        _MC_POLL_ATTEMPTS = 0;
+        var wrap=document.getElementById('mcWrap'), st=document.getElementById('mcStatus');
+        if(wrap) wrap.innerHTML='<div class="ng" style="text-align:center;padding:32px">'
+          +'<h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px;margin-bottom:12px">NO PROJECTIONS AVAILABLE</h3>'
+          +'<button onclick="initMonteCarlo()" style="padding:8px 20px;border:1px solid rgba(0,229,255,.35);border-radius:999px;background:rgba(0,229,255,.08);color:var(--c);font-family:Orbitron,monospace;font-size:.62rem;letter-spacing:1.5px;cursor:pointer">↻ RETRY</button>'
+          +'</div>';
+        if(st) st.textContent='No data';
+      }
+      // if d.computing is true and still in progress, just let the interval continue
+    })
+    .catch(function(){
+      // On network error, stop polling and show retry
+      if(_MC_POLL){clearInterval(_MC_POLL);_MC_POLL=null;}
+      _MC_POLL_ATTEMPTS = 0;
+      var wrap=document.getElementById('mcWrap'), st=document.getElementById('mcStatus');
+      if(wrap) wrap.innerHTML='<div class="ng" style="text-align:center;padding:32px">'
+        +'<h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px;margin-bottom:12px">NETWORK ERROR</h3>'
+        +'<button onclick="initMonteCarlo()" style="padding:8px 20px;border:1px solid rgba(0,229,255,.35);border-radius:999px;background:rgba(0,229,255,.08);color:var(--c);font-family:Orbitron,monospace;font-size:.62rem;letter-spacing:1.5px;cursor:pointer">↻ RETRY</button>'
+        +'</div>';
+      if(st) st.textContent='Network error — click retry';
+    });
 }
-function initMonteCarlo(){ _mcPoll(); }
+function initMonteCarlo(){
+  _MC_POLL_ATTEMPTS = 0;
+  if(_MC_POLL){clearInterval(_MC_POLL);_MC_POLL=null;}
+  _mcPoll();
+}
 
 // ── BEST BETS ENGINE ──────────────────────────────────────────────────────────
 let BB_GAMES=[], BB_CUR_PK=null, BB_DATA=null, BB_CAT='ALL', BB_LOADED=false;
