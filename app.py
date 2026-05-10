@@ -17200,21 +17200,20 @@ def _preload_caches():
     threading.Thread(target=load_sv, daemon=True).start()
 
     def _prewarm_when_ready():
-        # Wait for FG data to be available before prewarming dependent caches.
-        deadline = time.time() + 60
-        while time.time() < deadline:
-            with _fg_lock:
-                if _fg_loaded:
-                    break
-            time.sleep(2)
-        prewarm_today_caches({
-            "fetch_schedule": fetch_schedule,
-            "_fetch_bvp": _fetch_bvp,
-            "_pitcher_recent_form": _pitcher_recent_form,
-            "_get_cached_ump": _get_cached_ump,
-        })
+    import time
+    deadline = time.time() + 90
+    while time.time() < deadline:
+        with _fg_lock:
+            if _fg_loaded:
+                break
+        time.sleep(3)
+    prewarm_today_caches({
+        "fetch_schedule":       fetch_schedule,
+        "_fetch_bvp":           _fetch_bvp,
+        "_pitcher_recent_form": _pitcher_recent_form,
+    })
 
-    threading.Thread(target=_prewarm_when_ready, daemon=True).start()
+threading.Thread(target=_prewarm_when_ready, daemon=True).start()
 
     def _load_brain_overlays_when_ready():
         """Load brain overlays after FG cache is ready (brain merges into FG data)."""
