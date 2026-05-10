@@ -5465,6 +5465,7 @@ def api_bvp_projection(batter_id, pitcher_id):
             "hr":   _blend_prob(gp["hrProb"],  _poisson_over_prob(hr_m,   0.5)),
             "rbi1": _blend_prob(gp["rbiProb"], _poisson_over_prob(rbi_m,  0.5)),
             "r1":   round(_poisson_over_prob(r_m, 0.5), 3),
+            "xgbHitProb": gp.get("xgbHitProb"),
         }
 
         # ── 8. xStats + Statcast quality metrics ─────────────────────────────
