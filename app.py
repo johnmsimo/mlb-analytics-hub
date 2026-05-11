@@ -619,6 +619,14 @@ def _save_json(path, payload):
         return False
 
 
+def _evict_if_large(d, max_size=500):
+    """Remove oldest (first-inserted) entries when dict exceeds max_size."""
+    if len(d) >= max_size:
+        to_remove = len(d) - max_size + 1
+        for k in list(d.keys())[:to_remove]:
+            del d[k]
+
+
 def _get_active_roster(team_id, ttl_sec=_ACTIVE_ROSTER_TTL):
     """Fetch and cache active roster entries for a team to avoid repeated API calls."""
     if not team_id:
@@ -1164,6 +1172,7 @@ HR_PARK_FACTORS = {
 }
 
 _fg_lock = threading.Lock()
+_fg_cond = threading.Condition(_fg_lock)   # notified when FG load completes
 _fg_bat = {}
 _fg_pit = {}
 _fg_loaded = False
@@ -1428,81 +1437,64 @@ def _load_fg_data_from_mlb_api():
 def _maybe_refresh_fg():
     global _fg_loading
     with _fg_lock:
-        loaded = _fg_loaded; date = _fg_load_date
-        already_loading = _fg_loading
-    if already_loading:
-        return
-    if not loaded or date != datetime.now().date():
-        with _fg_lock: _fg_loading = True
-        def _runner():
-            global _fg_loading
-            try:
-                _load_fg_data()
-            except Exception as _ex:
-                logging.error(f"[FG] background load error: {_ex}")
-            finally:
-                with _fg_lock:
-                    _fg_loading = False  # ALWAYS reset, even on crash
-        threading.Thread(target=_runner, daemon=True).start()
+        # Atomically check and set _fg_loading so only one thread spawns a loader.
+        if _fg_loading:
+            return
+        if _fg_loaded and _fg_load_date == datetime.now().date():
+            return
+        _fg_loading = True
+    def _runner():
+        global _fg_loading
+        try:
+            _load_fg_data()
+        except Exception as _ex:
+            logging.error(f"[FG] background load error: {_ex}")
+        finally:
+            with _fg_cond:
+                _fg_loading = False
+                _fg_cond.notify_all()
+    threading.Thread(target=_runner, daemon=True).start()
 
 
 def _wait_for_fg_data(timeout_sec=30):
-    """Wait for FG data to be loaded or trigger a load if not started.
+    """Wait for FG data to be loaded, blocking efficiently via Condition instead of busy-wait.
 
     Timeout raised to 30 s to survive Render cold-starts.
     Condition relaxed: passes if pitchers OR batters are loaded.
-
-    Args:
-        timeout_sec: Maximum time to wait in seconds
-
-    Returns:
-        True if data is loaded, False if timeout/error occurred
     """
-    _maybe_refresh_fg()  # Trigger load if not already loading
-
-    start = time.time()
-    while time.time() - start < timeout_sec:
-        should_trigger = False
-        with _fg_lock:
+    _maybe_refresh_fg()
+    deadline = time.time() + timeout_sec
+    while True:
+        with _fg_cond:
             if _fg_loaded and (len(_fg_pit) > 0 or len(_fg_bat) > 0):
                 return True
-            should_trigger = not _fg_loading
-        if should_trigger:
-            # Call outside the lock to avoid re-entrant lock deadlock.
-            _maybe_refresh_fg()
-        time.sleep(0.2)
-
-    return False
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                return False
+            _fg_cond.wait(timeout=min(remaining, 5.0))
+        # Re-trigger outside the lock if load failed and nothing is running.
+        _maybe_refresh_fg()
 
 
 def _wait_for_savant_data(timeout_sec=30):
-    """Wait for Savant data to be loaded or trigger a load if not started.
+    """Wait for Savant data to be loaded, blocking efficiently via Condition instead of busy-wait.
 
     Timeout raised to 30 s to survive Render cold-starts.
     Condition relaxed: passes if pitcherXStats OR batterXStats loaded.
     Arsenal failing alone no longer blocks every API call.
-
-    Args:
-        timeout_sec: Maximum time to wait in seconds
-
-    Returns:
-        True if data is loaded, False if timeout/error occurred
     """
-    _maybe_refresh_savant()  # Trigger load if not already loading
-
-    start = time.time()
-    while time.time() - start < timeout_sec:
-        should_trigger = False
-        with _sv_lock:
+    _maybe_refresh_savant()
+    deadline = time.time() + timeout_sec
+    while True:
+        with _sv_cond:
             if _sv_loaded and (len(_sv_pit_xstats) > 0 or len(_sv_bat_xstats) > 0):
                 return True
-            should_trigger = not _sv_loading
-        if should_trigger:
-            # Call outside the lock to avoid re-entrant lock deadlock.
-            _maybe_refresh_savant()
-        time.sleep(0.1)
-
-    return False
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                return False
+            _sv_cond.wait(timeout=min(remaining, 5.0))
+        # Re-trigger outside the lock if load failed and nothing is running.
+        _maybe_refresh_savant()
 
 
 def _fuzzy_lookup(name, cache):
@@ -1562,6 +1554,7 @@ def fg_pitcher(name):
 
 # ── Baseball Savant Cache ─────────────────────────────────────────────────────
 _sv_lock         = threading.Lock()
+_sv_cond         = threading.Condition(_sv_lock)   # notified when Savant load completes
 _sv_pit_xstats   = {}
 _sv_bat_xstats   = {}
 _sv_bat_statcast = {}
@@ -1859,22 +1852,23 @@ def _load_savant_data():
 def _maybe_refresh_savant():
     global _sv_loading
     with _sv_lock:
-        loaded = _sv_loaded; date = _sv_load_date
-        already_loading = _sv_loading
-    if already_loading:
-        return
-    if not loaded or date != datetime.now().date():
-        with _sv_lock: _sv_loading = True
-        def _runner():
-            global _sv_loading
-            try:
-                _load_savant_data()
-            except Exception as _ex:
-                print(f"[Savant] background load error: {_ex}")
-            finally:
-                with _sv_lock:
-                    _sv_loading = False  # ALWAYS reset, even on crash
-        threading.Thread(target=_runner, daemon=True).start()
+        # Atomically check and set _sv_loading so only one thread spawns a loader.
+        if _sv_loading:
+            return
+        if _sv_loaded and _sv_load_date == datetime.now().date():
+            return
+        _sv_loading = True
+    def _runner():
+        global _sv_loading
+        try:
+            _load_savant_data()
+        except Exception as _ex:
+            print(f"[Savant] background load error: {_ex}")
+        finally:
+            with _sv_cond:
+                _sv_loading = False
+                _sv_cond.notify_all()
+    threading.Thread(target=_runner, daemon=True).start()
 
 def sv_pitcher(name):
     """Savant pitcher stats with Brain overlay. Brain fills missing sv keys only."""
@@ -6791,6 +6785,7 @@ def player_profile(player_id):
         }
     except Exception:
         out = {'bats': 'S', 'throws': 'R'}
+    _evict_if_large(_bio_cache, 1000)
     _bio_cache[player_id] = out
     return out
 
@@ -6824,6 +6819,7 @@ def hitter_split_profile(player_id):
             }
     except Exception:
         out = {}
+    _evict_if_large(_hit_split_cache, 1000)
     _hit_split_cache[player_id] = out
     return out
 
@@ -6852,6 +6848,7 @@ def team_pitching_context(team_id):
         }
     except Exception:
         out = dict(BULLPEN_BASE)
+    _evict_if_large(_team_pitch_cache, 300)
     _team_pitch_cache[key] = out
     return out
 
@@ -8265,6 +8262,8 @@ _ODDS_SNAPSHOT_HEARTBEAT_SEC = _odds_ttl_seconds('ODDS_SNAPSHOT_HEARTBEAT_SEC', 
 _ODDS_SNAPSHOT_RETRY_SEC = _odds_ttl_seconds('ODDS_SNAPSHOT_RETRY_SEC', 15 * 60, min_seconds=60, max_seconds=6 * 60 * 60)
 _ODDS_CACHE_LOCK = threading.Lock()
 _ODDS_SNAPSHOT_WORKER_LOCK = threading.Lock()
+# Single-thread executor for non-blocking odds-cache file persistence.
+_odds_io_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="odds_io")
 _ODDS_SNAPSHOT_WORKER_STARTED = False
 _ODDS_SNAPSHOT_WORKER_LAST_ATTEMPT = 0.0
 _ODDS_SNAPSHOT_META: dict = {
@@ -8403,7 +8402,8 @@ def _ensure_daily_odds_snapshot():
             _ODDS_SNAPSHOT_META['completedAt'] = datetime.now(timezone.utc).isoformat()
             _ODDS_SNAPSHOT_META['complete'] = True
             _ODDS_SNAPSHOT_META['running'] = False
-            _persist_odds_caches()
+        # Persist to disk off the critical path so this thread isn't blocked by disk I/O.
+        _odds_io_executor.submit(_persist_odds_caches)
 
         print(f'[Odds] Daily snapshot complete: events={len(events)} fetched={fetched} errors={len(errors)}')
         return True
@@ -8413,7 +8413,7 @@ def _ensure_daily_odds_snapshot():
             _ODDS_SNAPSHOT_META['completedAt'] = datetime.now(timezone.utc).isoformat()
             _ODDS_SNAPSHOT_META['complete'] = False
             _ODDS_SNAPSHOT_META['running'] = False
-            _persist_odds_caches()
+        _odds_io_executor.submit(_persist_odds_caches)
         print(f'[Odds] Daily snapshot failed: {ex}')
         return False
 
@@ -14282,6 +14282,7 @@ def _pitcher_recent_form(pitcher_id, n_starts=5):
     cache_key = f"{pitcher_id}_{datetime.now(ET).strftime('%Y-%m-%d')}"
     if cache_key in _pitcher_recent_cache:
         return _pitcher_recent_cache[cache_key]
+    _evict_if_large(_pitcher_recent_cache, 500)
     try:
         yr = datetime.now().year
         r  = requests.get(
@@ -15234,6 +15235,7 @@ def _get_cached_ump(ump_id, ump_name):
         data = _load_ump_data(ump_id, ump_name)
         if data:
             with _ump_lock:
+                _evict_if_large(_ump_cache, 200)
                 _ump_cache[ump_id] = {"data": data, "date": today}
         print(f"[ump_cache] loaded {ump_name} id={ump_id}: {data}")
     threading.Thread(target=_loader, daemon=True).start()
@@ -16626,6 +16628,7 @@ def _fetch_pitcher_hr9_by_hand(pitcher_id):
         pass
 
     with _hr_hand_lock:
+        _evict_if_large(_hr_hand_cache, 500)
         _hr_hand_cache[pitcher_id] = (today, result)
     return result
 
@@ -17057,6 +17060,7 @@ def api_hr_scouting(batter_id, pitcher_id, game_pk):
             )
 
         with _hr_scouting_lock:
+            _evict_if_large(_hr_scouting_cache, 500)
             _hr_scouting_cache[cache_key] = report
 
         return jsonify({
@@ -17217,24 +17221,42 @@ def api_hr_daily_scores():
 # Load FG and Savant data before serving requests to ensure data is available
 # on first access. This runs in background threads to avoid blocking startup.
 def _preload_caches():
-    """Preload FG and Savant caches at startup in background threads."""
+    """Preload FG, Savant, and roster caches at startup in background threads."""
     def load_fg():
         try:
             _load_fg_data()
             print("[STARTUP] FG cache preload complete")
         except Exception as ex:
             print(f"[STARTUP] FG cache preload failed: {ex}")
-    
+
     def load_sv():
         try:
             _load_savant_data()
             print("[STARTUP] Savant cache preload complete")
         except Exception as ex:
             print(f"[STARTUP] Savant cache preload failed: {ex}")
-    
+
+    def load_rosters():
+        # All 30 MLB team IDs (stable; new franchises would require updating this list).
+        mlb_team_ids = [
+            133, 134, 135, 136, 137, 138, 139, 140, 141, 142,
+            143, 144, 145, 146, 147, 158, 108, 109, 110, 111,
+            112, 113, 114, 115, 116, 117, 118, 119, 120, 121,
+        ]
+        loaded = 0
+        for tid in mlb_team_ids:
+            try:
+                roster = _get_active_roster(tid)
+                if roster:
+                    loaded += 1
+            except Exception:
+                pass
+        print(f"[STARTUP] Active roster cache preload complete: {loaded}/30 teams")
+
     # Start cache loads in parallel background threads
     threading.Thread(target=load_fg, daemon=True).start()
     threading.Thread(target=load_sv, daemon=True).start()
+    threading.Thread(target=load_rosters, daemon=True).start()
 
     def _prewarm_when_ready():
         # Wait for FG data to be available before prewarming dependent caches.
