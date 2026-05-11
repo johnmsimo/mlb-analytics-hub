@@ -1899,6 +1899,31 @@ def sv_pitcher(name):
         pass
     return r
 
+def _get_pitch_arsenal(pitcher_id=None, pitcher_name=None):
+    """
+    Return per-pitch arsenal stats from existing Savant caches. No external API calls.
+    Merges rich outcome stats (wOBA, whiff%, usage) from _sv_pit_arsenal_stats (MLBAM-keyed)
+    with pct/velo data from the name-keyed caches already loaded in sv_pitcher().
+    """
+    with _sv_lock:
+        outcome = dict(_sv_pit_arsenal_stats)
+    result = {}
+    if pitcher_id:
+        result = {pt: dict(v) for pt, v in outcome.get(str(pitcher_id), {}).items()}
+    if pitcher_name:
+        sv = sv_pitcher(pitcher_name)
+        pct_map  = sv.get("sv_arsenal_pct", {})
+        velo_map = sv.get("sv_arsenal_velo", {})
+        for pt in set(list(pct_map.keys()) + list(velo_map.keys())):
+            if pt not in result:
+                result[pt] = {}
+            if pct_map.get(pt) is not None:
+                result[pt].setdefault("use_pct", pct_map[pt])
+            if velo_map.get(pt) is not None:
+                result[pt].setdefault("velo", velo_map[pt])
+    return result
+
+
 def sv_batter(name):
     """Savant batter stats with Brain overlay. Brain fills missing sv keys only."""
     with _sv_lock:
@@ -14587,6 +14612,12 @@ def api_props_projections(game_pk):
                     form=form, bvp=bvp,
                 )
                 slot = int(b.get("slot") or 9)
+                xgb_hit_p = None
+                if _XGB_AVAILABLE and xgb_ready('hits'):
+                    xgb_hit_p = xgb_hit_prob(
+                        {"name": name},
+                        {"name": opp_pname, "pitchHand": opp_hand},
+                    )
                 wx_adj = _safe_f((proj.get("adjustments") or {}).get("weather"), 0.0)
                 wind_bucket = "out" if wx_adj > 0.01 else ("in" if wx_adj < -0.01 else "calm")
                 park_bucket = "hitter" if pf >= 1.04 else ("pitcher" if pf <= 0.96 else "neutral")
@@ -14642,6 +14673,7 @@ def api_props_projections(game_pk):
                     "vs_r_avg":     b.get("vs_r_avg"),
                     "vs_l_ops":     b.get("vs_l_ops"),
                     "vs_r_ops":     b.get("vs_r_ops"),
+                    "xgbHitProb":   round(xgb_hit_p, 4) if xgb_hit_p is not None else None,
                     "proj":         proj,
                 }
 
@@ -14676,25 +14708,30 @@ def api_props_projections(game_pk):
             pinj = _get_player_injury(pid) if pid else None
             proj = _project_pitcher(pname, pid, pfg, psv, pst, opp_bats, pf, wx)
             pitchers_out.append({
-                "name":      pname,
-                "team":      pabbr,
-                "id":        pid,
-                "role":      "SP",
-                "pitchHand": phand,
-                "era":       pfg.get("fg_era") or psv.get("sv_era_p"),
-                "whip":      pfg.get("fg_whip"),
-                "fip":       pfg.get("fg_fip"),
-                "xera":      psv.get("sv_xera"),
-                "kpct":      pfg.get("fg_kpct") or psv.get("sv_k_pct"),
-                "bbpct":     pfg.get("fg_bbpct") or psv.get("sv_bb_pct"),
-                "opp_k_pct": sum(_safe_f(fg_batter(b.get("name","")).get("fg_kpct"), 0.22)
-                                 for b in opp_bats[:9]) / max(len(opp_bats[:9]), 1),
-                "opp_woba":  sum(_safe_f(fg_batter(b.get("name","")).get("fg_woba") or
-                                         sv_batter(b.get("name","")).get("sv_xwoba"), 0.310)
-                                 for b in opp_bats[:9]) / max(len(opp_bats[:9]), 1),
+                "name":        pname,
+                "team":        pabbr,
+                "id":          pid,
+                "role":        "SP",
+                "pitchHand":   phand,
+                "era":         pfg.get("fg_era") or psv.get("sv_era_p"),
+                "whip":        pfg.get("fg_whip"),
+                "fip":         pfg.get("fg_fip"),
+                "xera":        psv.get("sv_xera"),
+                "kpct":        pfg.get("fg_kpct") or psv.get("sv_k_pct"),
+                "bbpct":       pfg.get("fg_bbpct") or psv.get("sv_bb_pct"),
+                "whiffPct":    psv.get("sv_whiff"),
+                "xwoba":       psv.get("sv_xwoba"),
+                "arsenalPct":  psv.get("sv_arsenal_pct", {}),
+                "arsenalVelo": psv.get("sv_arsenal_velo", {}),
+                "pitchArsenal": _get_pitch_arsenal(pitcher_id=pid, pitcher_name=pname),
+                "opp_k_pct":   sum(_safe_f(fg_batter(b.get("name","")).get("fg_kpct"), 0.22)
+                                    for b in opp_bats[:9]) / max(len(opp_bats[:9]), 1),
+                "opp_woba":    sum(_safe_f(fg_batter(b.get("name","")).get("fg_woba") or
+                                           sv_batter(b.get("name","")).get("sv_xwoba"), 0.310)
+                                    for b in opp_bats[:9]) / max(len(opp_bats[:9]), 1),
                 "injuryStatus": (pinj or {}).get("status"),
                 "injuryDescription": (pinj or {}).get("description"),
-                "proj":      proj,
+                "proj":        proj,
             })
 
         for pp in pitchers_out:
