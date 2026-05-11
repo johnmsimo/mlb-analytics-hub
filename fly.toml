@@ -36,4 +36,3 @@ primary_region = 'ord'
   memory = '2gb'
   cpu_kind = 'shared'
   cpus = 1
-  memory_mb = 1024
