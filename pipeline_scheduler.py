@@ -40,19 +40,13 @@ _cache = {
 
 def _import_app_modules():
     """Import your existing collectors lazily so there's no circular dependency."""
-    try:
-        from schedule_collector import fetch_schedule
-    except ImportError:
-        fetch_schedule = None
+    import importlib, sys
+    app_mod = sys.modules.get("app") or importlib.import_module("app")
 
-    try:
-        from brain_merge_patch import (
-            sv_batter as _sv_batter,
-            sv_pitcher as _sv_pitcher,
-        )
-    except ImportError:
-        _sv_batter  = lambda name: {}
-        _sv_pitcher = lambda name: {}
+    fetch_schedule = getattr(app_mod, "fetch_schedule", None)
+
+    _sv_batter  = getattr(app_mod, "sv_batter",  lambda name: {})
+    _sv_pitcher = getattr(app_mod, "sv_pitcher", lambda name: {})
 
     return fetch_schedule, _sv_batter, _sv_pitcher
 
