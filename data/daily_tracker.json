@@ -1,8 +1,8 @@
 {
   "2026-05-08": {
     "capturedAt": "2026-05-08T12:00:00",
-    "gradedAt": "2026-05-09T01:30:15.763424",
-    "closingCapturedAt": null,
+    "gradedAt": "2026-05-11T19:24:08.333117",
+    "closingCapturedAt": "2026-05-11T19:24:08.239367",
     "entries": [
       {
         "id": "test-1",
@@ -29,8 +29,8 @@
   },
   "2026-05-09": {
     "capturedAt": "2026-05-09T01:35:24.876077",
-    "gradedAt": null,
-    "closingCapturedAt": null,
+    "gradedAt": "2026-05-11T19:24:08.002525",
+    "closingCapturedAt": "2026-05-11T19:24:07.774983",
     "entries": [
       {
         "date": "2026-05-09",
