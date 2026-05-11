@@ -13,6 +13,7 @@ import logging
 import os
 import requests
 import pandas as pd
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
@@ -204,6 +205,37 @@ def _extract_pitcher_statcast(sv_pitcher_fn, pitcher_name):
 
 
 # ── 6. Build Full Matchup DataFrame ───────────────────────────────────────────
+def _fetch_batter_row(batter_id, pitcher_id, pitcher_name, game_meta,
+                      pitcher_splits, pitcher_statcast, sv_batter_fn):
+    """Fetch all per-batter data in one call (runs inside a thread pool)."""
+    try:
+        pr = requests.get(f"{MLB_API}/people/{batter_id}", timeout=6)
+        person = pr.json()["people"][0]
+        batter_name = person.get("fullName", "")
+        batter_hand = (person.get("batSide") or {}).get("code", "")
+    except Exception:
+        batter_name = ""
+        batter_hand = ""
+
+    bvp            = _get_bvp(batter_id, pitcher_id)
+    batter_splits  = _get_platoon_splits(batter_id, group="hitting")
+    batter_statcast = _extract_batter_statcast(sv_batter_fn, batter_name)
+
+    return {
+        **game_meta,
+        "batter_id":   batter_id,
+        "batter_name": batter_name,
+        "batter_hand": batter_hand,
+        "pitcher_id":  pitcher_id,
+        "pitcher_name": pitcher_name,
+        **batter_statcast,
+        **bvp,
+        **batter_splits,
+        **{f"pitcher_{k}": v for k, v in pitcher_splits.items()},
+        **pitcher_statcast,
+    }
+
+
 def _build_matchup_df(games_df, sv_batter_fn, sv_pitcher_fn):
     rows = []
 
@@ -218,47 +250,33 @@ def _build_matchup_df(games_df, sv_batter_fn, sv_pitcher_fn):
 
             pitcher_id = int(pitcher_id)
 
-            # Pitcher data
             pitcher_splits   = _get_platoon_splits(pitcher_id, group="pitching")
             pitcher_statcast = _extract_pitcher_statcast(sv_pitcher_fn, pitcher_name or "")
 
-            # Position players on batting side
             batter_ids = _get_position_player_ids(batting_team_id)
-            time.sleep(0.1)
 
-            for batter_id in batter_ids:
-                bvp            = _get_bvp(batter_id, pitcher_id)
-                batter_splits  = _get_platoon_splits(batter_id, group="hitting")
+            game_meta = {
+                "game_pk":      game["gamePk"],
+                "game_date":    game["game_date"],
+                "venue":        game.get("venue"),
+                "batting_team": game[f"{batting_side}_team"],
+                "pitching_team": game[f"{pitching_side}_team"],
+            }
 
-                # Pull batter name from MLB API for Savant lookup
-                try:
-                    pr = requests.get(f"{MLB_API}/people/{batter_id}", timeout=6)
-                    batter_name = pr.json()["people"][0].get("fullName", "")
-                    batter_hand = (pr.json()["people"][0].get("batSide") or {}).get("code", "")
-                except Exception:
-                    batter_name = ""
-                    batter_hand = ""
-
-                batter_statcast = _extract_batter_statcast(sv_batter_fn, batter_name)
-
-                rows.append({
-                    "game_pk":       game["gamePk"],
-                    "game_date":     game["game_date"],
-                    "venue":         game.get("venue"),
-                    "batting_team":  game[f"{batting_side}_team"],
-                    "pitching_team": game[f"{pitching_side}_team"],
-                    "batter_id":     batter_id,
-                    "batter_name":   batter_name,
-                    "batter_hand":   batter_hand,
-                    "pitcher_id":    pitcher_id,
-                    "pitcher_name":  pitcher_name,
-                    **batter_statcast,
-                    **bvp,
-                    **batter_splits,
-                    **{f"pitcher_{k}": v for k, v in pitcher_splits.items()},
-                    **pitcher_statcast,
-                })
-                time.sleep(0.04)
+            with ThreadPoolExecutor(max_workers=min(20, len(batter_ids) or 1)) as ex:
+                futures = [
+                    ex.submit(
+                        _fetch_batter_row,
+                        bid, pitcher_id, pitcher_name, game_meta,
+                        pitcher_splits, pitcher_statcast, sv_batter_fn,
+                    )
+                    for bid in batter_ids
+                ]
+                for fut in as_completed(futures):
+                    try:
+                        rows.append(fut.result())
+                    except Exception as e:
+                        log.warning(f"[pipeline] batter row failed: {e}")
 
     return pd.DataFrame(rows)
 
