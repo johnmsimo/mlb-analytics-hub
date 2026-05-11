@@ -1511,8 +1511,6 @@ def fg_batter(name):
     with _fg_lock:
         c = dict(_fg_bat)
     live = _fuzzy_lookup(name, c)
-    with _brain_overlay_lock:
-        brain = _brain_fg_batter.__wrapped_brain_only__(name) if hasattr(_brain_fg_batter, '__wrapped_brain_only__') else {}
     try:
         from brain_merge_patch import _brain_fuzzy, _brain_bat_overlay as _bbo
         with _brain_overlay_lock:
@@ -1666,6 +1664,7 @@ def _load_savant_data():
     y = datetime.now().year
     seasons = _season_candidates(depth=4)
     BASE = "https://baseballsavant.mlb.com"
+    _failed_subcaches = []  # track which sub-caches couldn't load
 
     # 1. Pitcher xERA
     try:
@@ -1692,6 +1691,7 @@ def _load_savant_data():
         logging.info(f"[Savant] Pitcher xStats: {len(d)}")
     except Exception as ex:
         logging.warning(f"[Savant] Pitcher xStats failed: {ex}")
+        _failed_subcaches.append(f"pitcher_xstats({ex})")
 
     # 2. Batter xBA/xSLG/xwOBA
     try:
@@ -1715,6 +1715,7 @@ def _load_savant_data():
         logging.info(f"[Savant] Batter xStats: {len(d)}")
     except Exception as ex:
         logging.warning(f"[Savant] Batter xStats failed: {ex}")
+        _failed_subcaches.append(f"batter_xstats({ex})")
 
     # 3. Statcast batter EV / HH% / Barrel%
     try:
@@ -1740,6 +1741,7 @@ def _load_savant_data():
         logging.info(f"[Savant] Batter Statcast: {len(d)}")
     except Exception as ex:
         logging.warning(f"[Savant] Batter Statcast failed: {ex}")
+        _failed_subcaches.append(f"batter_statcast({ex})")
 
     # 4. Pitch arsenal % usage
     try:
@@ -1762,6 +1764,7 @@ def _load_savant_data():
         logging.info(f"[Savant] Arsenal %: {len(d)}")
     except Exception as ex:
         logging.warning(f"[Savant] Arsenal % failed: {ex}")
+        _failed_subcaches.append(f"arsenal_pct({ex})")
 
     # 5. Pitch arsenal velocities
     try:
@@ -1784,6 +1787,7 @@ def _load_savant_data():
         logging.info(f"[Savant] Arsenal velo: {len(d)}")
     except Exception as ex:
         logging.warning(f"[Savant] Arsenal velo failed: {ex}")
+        _failed_subcaches.append(f"arsenal_velo({ex})")
 
     # 6. Pitcher pitch-arsenal outcome stats (BA/SLG/wOBA/whiff%/HH% per pitch type)
     try:
@@ -1817,6 +1821,7 @@ def _load_savant_data():
         logging.info(f"[Savant] Pitcher arsenal stats: {len(d)} pitchers")
     except Exception as ex:
         logging.warning(f"[Savant] Pitcher arsenal stats failed: {ex}")
+        _failed_subcaches.append(f"pit_arsenal_stats({ex})")
 
     # 7. Batter pitch-arsenal outcome stats (SLG/wOBA/whiff%/HH% per pitch type faced)
     try:
@@ -1842,11 +1847,18 @@ def _load_savant_data():
         logging.info(f"[Savant] Batter arsenal stats: {len(d)} batters")
     except Exception as ex:
         logging.warning(f"[Savant] Batter arsenal stats failed: {ex}")
+        _failed_subcaches.append(f"bat_arsenal_stats({ex})")
 
     with _sv_lock:
         has_data = bool(_sv_pit_xstats) or bool(_sv_bat_xstats) or bool(_sv_bat_statcast) or bool(_sv_arsenal_pct) or bool(_sv_arsenal_velo)
         _sv_loaded    = has_data
         _sv_load_date = datetime.now().date() if has_data else None
+
+    if _failed_subcaches:
+        logging.error(
+            f"[Savant] {len(_failed_subcaches)}/7 sub-caches failed to load "
+            f"(stats may be incomplete): {'; '.join(_failed_subcaches)}"
+        )
     logging.info(f"[Savant] All caches ready: pitxstats={len(_sv_pit_xstats)} batxstats={len(_sv_bat_xstats)} statcast={len(_sv_bat_statcast)} arsenal={len(_sv_arsenal_pct)} velo={len(_sv_arsenal_velo)} pit_arsenal={len(_sv_pit_arsenal_stats)} bat_arsenal={len(_sv_bat_arsenal_stats)} loaded={_sv_loaded}")
 
 def _maybe_refresh_savant():
