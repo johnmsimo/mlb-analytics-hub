@@ -588,6 +588,7 @@ _PROPS_SCAN_TTL = 20 * 60
 _CONSISTENCY_TTL = 20 * 60
 _weather_cache_lock = threading.Lock()
 _weather_cache = {}
+_weather_inflight: set = set()   # keys currently being fetched; prevents duplicate HTTP calls
 _WEATHER_TTL = 20 * 60
 _WEATHER_FAIL_TTL = 30
 # Seconds to wait for FG / Savant caches on each request during cold starts.
@@ -1497,12 +1498,31 @@ def _wait_for_savant_data(timeout_sec=30):
         _maybe_refresh_savant()
 
 
-def _fuzzy_lookup(name, cache):
+_fuzzy_name_cache: dict = {}          # {(name_lower, dict_id): matched_key | ""}
+_fuzzy_name_lock = threading.Lock()
+
+def _fuzzy_lookup(name, cache, _dict_id=None):
+    """Fuzzy name lookup with result caching.
+
+    Pass _dict_id=id(underlying_dict) from the caller so the cache survives
+    the dict copy but is invalidated automatically when the data is refreshed
+    (the underlying dict object is replaced, changing its id).
+    """
     if not name or not cache: return {}
     k = name.strip().lower()
     if k in cache: return cache[k]
+    if _dict_id is not None:
+        with _fuzzy_name_lock:
+            matched = _fuzzy_name_cache.get((k, _dict_id))
+        if matched is not None:
+            return cache.get(matched, {})
     m = difflib.get_close_matches(k, cache.keys(), n=1, cutoff=0.78)
-    return cache[m[0]] if m else {}
+    matched = m[0] if m else ""
+    if _dict_id is not None:
+        with _fuzzy_name_lock:
+            _evict_if_large(_fuzzy_name_cache, 5000)
+            _fuzzy_name_cache[(k, _dict_id)] = matched
+    return cache[matched] if matched else {}
 
 def fg_batter(name):
     """FanGraphs batter stats with Brain overlay fallback.
@@ -1510,7 +1530,8 @@ def fg_batter(name):
     """
     with _fg_lock:
         c = dict(_fg_bat)
-    live = _fuzzy_lookup(name, c)
+        _bat_id = id(_fg_bat)
+    live = _fuzzy_lookup(name, c, _bat_id)
     try:
         from brain_merge_patch import _brain_fuzzy, _brain_bat_overlay as _bbo
         with _brain_overlay_lock:
@@ -1533,7 +1554,8 @@ def fg_pitcher(name):
     """
     with _fg_lock:
         c = dict(_fg_pit)
-    live = _fuzzy_lookup(name, c)
+        _pit_id = id(_fg_pit)
+    live = _fuzzy_lookup(name, c, _pit_id)
     try:
         from brain_merge_patch import _brain_fuzzy, _brain_pit_overlay as _bpo
         with _brain_overlay_lock:
@@ -1888,10 +1910,13 @@ def sv_pitcher(name):
         xs = dict(_sv_pit_xstats)
         ap = dict(_sv_arsenal_pct)
         av = dict(_sv_arsenal_velo)
-    lx = _fuzzy_lookup(name, xs)
+        _xs_id = id(_sv_pit_xstats)
+        _ap_id = id(_sv_arsenal_pct)
+        _av_id = id(_sv_arsenal_velo)
+    lx = _fuzzy_lookup(name, xs, _xs_id)
     r = dict(lx) if lx else {}
-    lap = _fuzzy_lookup(name, ap)
-    lav = _fuzzy_lookup(name, av)
+    lap = _fuzzy_lookup(name, ap, _ap_id)
+    lav = _fuzzy_lookup(name, av, _av_id)
     r["sv_arsenal_pct"] = lap if lap else {}
     r["sv_arsenal_velo"] = lav if lav else {}
     try:
@@ -1935,8 +1960,10 @@ def sv_batter(name):
     with _sv_lock:
         xs = dict(_sv_bat_xstats)
         sc = dict(_sv_bat_statcast)
-    lx = _fuzzy_lookup(name, xs)
-    ls = _fuzzy_lookup(name, sc)
+        _xs_id = id(_sv_bat_xstats)
+        _sc_id = id(_sv_bat_statcast)
+    lx = _fuzzy_lookup(name, xs, _xs_id)
+    ls = _fuzzy_lookup(name, sc, _sc_id)
     r = dict(lx) if lx else {}
     if ls:
         r.update(ls)
@@ -2760,8 +2787,12 @@ def get_weather(lat, lon, game_hour=13, venue_id=None):
     now = time.time()
     with _weather_cache_lock:
         cached = _weather_cache.get(cache_key)
-    if cached and (now - float(cached.get("ts") or 0)) < float(cached.get("ttl") or _WEATHER_TTL):
-        return dict(cached.get("payload") or {})
+        if cached and (now - float(cached.get("ts") or 0)) < float(cached.get("ttl") or _WEATHER_TTL):
+            return dict(cached.get("payload") or {})
+        # Guard against duplicate concurrent fetches for the same key.
+        if cache_key in _weather_inflight:
+            return dict(cached.get("payload") or {}) if cached else {}
+        _weather_inflight.add(cache_key)
 
     try:
         r = requests.get(WX_API, params={
@@ -2803,11 +2834,13 @@ def get_weather(lat, lon, game_hour=13, venue_id=None):
         print(f"[get_weather] lat={lat} lon={lon} hour={game_hour} venue={venue_id} err={ex}")
         payload = {"temp":"N/A","rain_chance":"N/A","wind_speed":"N/A","wind_dir":"","wind":"N/A","condition":"N/A"}
         with _weather_cache_lock:
-            # Don't overwrite a valid entry that a concurrent thread may have written.
             existing = _weather_cache.get(cache_key)
             if not existing or existing.get("payload", {}).get("temp") in (None, "N/A"):
                 _weather_cache[cache_key] = {"ts": now, "ttl": _WEATHER_FAIL_TTL, "payload": payload}
         return payload
+    finally:
+        with _weather_cache_lock:
+            _weather_inflight.discard(cache_key)
 
 def pitcher_stats_mlb(player_id):
     try:
@@ -10944,6 +10977,7 @@ def _compute_props_scan_today_payload(date_str):
         'cached': False,
     }
     with _props_scan_cache_lock:
+        _evict_if_large(_PROPS_SCAN_CACHE, 14)
         _PROPS_SCAN_CACHE[date_str] = {'ts': now, 'payload': payload}
     return payload
 
@@ -15577,6 +15611,7 @@ def _compute_consistency_payload(date_str):
         'markets': list(sheets.values()),
     }
     with _consistency_cache_lock:
+        _evict_if_large(_CONSISTENCY_CACHE, 14)
         _CONSISTENCY_CACHE[date_str] = {'ts': now, 'payload': payload}
     return payload
 
