@@ -1695,6 +1695,7 @@ def _fetch_sv_csv_by_season(url_template, seasons):
 def _load_savant_data():
     global _sv_pit_xstats, _sv_bat_xstats, _sv_bat_statcast
     global _sv_arsenal_pct, _sv_arsenal_velo, _sv_loaded, _sv_load_date
+    global _sv_pit_arsenal_stats, _sv_bat_arsenal_stats
     y = datetime.now().year
     seasons = _season_candidates(depth=4)
     BASE = "https://baseballsavant.mlb.com"
@@ -7921,10 +7922,14 @@ def api_simulate(game_pk):
             return jsonify({'success': False, 'error': 'Lineups unavailable for simulation'}), 400
         # Pre-warm _bio_cache for all lineup players so bats handedness is correct
         # even on a cold server restart (avoids L0/R0/S0 in the handedness block).
+        # Parallel fetch to stay within the JS 90s abort timeout.
+        _missing_pids = [_b.get('id') for _b in away_lineup + home_lineup
+                         if _b.get('id') and _b.get('id') not in _bio_cache]
+        if _missing_pids:
+            with ThreadPoolExecutor(max_workers=min(len(_missing_pids), 9)) as _pool:
+                list(_pool.map(player_profile, _missing_pids))
         for _b in away_lineup + home_lineup:
             _pid = _b.get('id')
-            if _pid and _pid not in _bio_cache:
-                player_profile(_pid)
             if _pid and _pid in _bio_cache:
                 _b['bats'] = _bio_cache[_pid].get('bats', _b.get('bats', 'S'))
         # Keep simulation within Render memory/timeout budget.
@@ -13853,8 +13858,10 @@ def _props_fetch_game(game_pk, date_hint=None, gdata_override=None):
                     continue
                 fgb = fg_batter(name)
                 svb = sv_batter(name)
+                bio = _bio_cache.get(pid) or {}
                 out.append({
                     "slot": i, "id": pid, "name": name, "pos": pos,
+                    "bats": bio.get("bats", p.get("batSide", {}).get("code", "S")),
                     "lineup_status": "pending",
                     "avg": fgb.get("fg_avg", ".---"), "obp": fgb.get("fg_obp", ".---"),
                     "slg": fgb.get("fg_slg", ".---"), "ops": fgb.get("fg_ops", ".---"),
@@ -14799,6 +14806,15 @@ def api_props_projections(game_pk):
                                     for b in opp_bats[:9]) / max(len(opp_bats[:9]), 1),
                 "injuryStatus": (pinj or {}).get("status"),
                 "injuryDescription": (pinj or {}).get("description"),
+                "xgbKProbs": {
+                    str(ln): xgb_k_prob(
+                        {"fgera": pfg.get("fg_era"), "fgkpct": pfg.get("fg_kpct"),
+                         "fgbbpct": pfg.get("fg_bbpct"), "svwhiffpct": psv.get("sv_whiff"),
+                         "name": pname},
+                        line=ln
+                    ) if _XGB_AVAILABLE and xgb_ready('k') else None
+                    for ln in [3.5, 4.5, 5.5]
+                } if _XGB_AVAILABLE else {},
                 "proj":        proj,
             })
 
