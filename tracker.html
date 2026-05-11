@@ -440,6 +440,38 @@ details[open] summary::before{transform:rotate(90deg)}
           <div class="mult-row"><label>Runs</label><input id="m_batter_runs_scored" type="number" step="0.01" value="1.00"></div>
           <div class="mult-row"><label>H+R+RBI</label><input id="m_batter_hits_runs_rbis" type="number" step="0.01" value="1.00"></div>
           <div class="mult-row"><label>Stolen Bases</label><input id="m_batter_stolen_bases" type="number" step="0.01" value="1.00"></div>
+
+      <!-- ── Pipeline Scheduler ── -->
+      <details id="pipelineDetails" style="margin-top:14px;border-top:1px solid var(--line2);padding-top:12px">
+        <summary style="font-size:.78rem;font-weight:600;color:var(--mu);letter-spacing:.05em;text-transform:uppercase;cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px">
+          ▸ Lineup Pipeline
+          <span id="pipelineBadge" class="pill" style="font-size:.62rem;padding:2px 8px">—</span>
+        </summary>
+        <div style="margin-top:10px;display:flex;flex-direction:column;gap:8px">
+
+          <!-- last run info -->
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+            <div class="field" style="margin:0">
+              <label style="font-size:.67rem">Last Run</label>
+              <div id="pipelineLastRun" style="font-size:.75rem;color:var(--txt);padding:4px 0">—</div>
+            </div>
+            <div class="field" style="margin:0">
+              <label style="font-size:.67rem">Rows Built</label>
+              <div id="pipelineRows" style="font-size:.75rem;color:var(--txt);padding:4px 0">—</div>
+            </div>
+          </div>
+
+          <!-- status message -->
+          <div id="pipelineMsg" style="font-size:.71rem;color:var(--mu);min-height:16px"></div>
+
+          <!-- action row -->
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <button class="btn green sm" id="pipelineRefreshBtn" onclick="triggerPipelineRefresh()">↺ Refresh Lineups</button>
+            <button class="btn sm" onclick="loadPipelineStatus()">Check Status</button>
+          </div>
+
+        </div>
+      </details>
           <div class="mult-row"><label>Strikeouts</label><input id="m_pitcher_strikeouts" type="number" step="0.01" value="1.00"></div>
           <div class="mult-row"><label>NRFI</label><input id="m_nrfi" type="number" step="0.01" value="1.00"></div>
           <div class="mult-row"><label>YRFI</label><input id="m_yrfi" type="number" step="0.01" value="1.00"></div>
@@ -1761,6 +1793,82 @@ async function boot() {
 }
 
 boot();
+
+// ── Pipeline scheduler ────────────────────────────────────────────────────────
+let _pipelinePollTimer = null;
+
+function _pipelineStatusColor(s) {
+  if (s === 'done')    return 'color:var(--g)';
+  if (s === 'running') return 'color:var(--y)';
+  if (s === 'error')   return 'color:var(--r)';
+  return 'color:var(--mu)';
+}
+
+function _fmtPipelineTs(iso) {
+  if (!iso) return '—';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleDateString('en-US',{month:'short',day:'numeric'}) + ' ' +
+           d.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
+  } catch { return iso; }
+}
+
+async function loadPipelineStatus() {
+  try {
+    const d = await api('/api/pipeline/status');
+    const badge = document.getElementById('pipelineBadge');
+    const lastRun = document.getElementById('pipelineLastRun');
+    const rows = document.getElementById('pipelineRows');
+    const msg = document.getElementById('pipelineMsg');
+    const btn = document.getElementById('pipelineRefreshBtn');
+
+    if (badge) { badge.textContent = d.status || '—'; badge.style = _pipelineStatusColor(d.status); }
+    if (lastRun) lastRun.textContent = _fmtPipelineTs(d.last_run);
+    if (rows) rows.textContent = d.rows != null ? d.rows.toLocaleString() + ' matchup rows' : '—';
+    if (msg) {
+      if (d.status === 'error') msg.textContent = '⚠ ' + (d.error || 'Unknown error');
+      else if (d.status === 'running') msg.textContent = 'Building matchup data — this takes ~2 min…';
+      else if (d.status === 'done') msg.textContent = 'Lineups loaded. All pages will use updated data.';
+      else msg.textContent = 'Pipeline has not run today yet.';
+    }
+    if (btn) btn.disabled = d.status === 'running';
+
+    return d.status;
+  } catch(e) {
+    const msg = document.getElementById('pipelineMsg');
+    if (msg) msg.textContent = '⚠ Could not reach pipeline: ' + e.message;
+    return null;
+  }
+}
+
+async function triggerPipelineRefresh() {
+  const btn = document.getElementById('pipelineRefreshBtn');
+  const msg = document.getElementById('pipelineMsg');
+  try {
+    if (btn) btn.disabled = true;
+    if (msg) msg.textContent = 'Triggering lineup refresh…';
+    await api('/api/pipeline/run', {method:'POST'});
+    if (msg) msg.textContent = 'Pipeline started — building matchup data (~2 min). Status will update automatically.';
+    // Poll every 10 s until done or error
+    if (_pipelinePollTimer) clearInterval(_pipelinePollTimer);
+    _pipelinePollTimer = setInterval(async () => {
+      const s = await loadPipelineStatus();
+      if (s === 'done' || s === 'error' || s === null) {
+        clearInterval(_pipelinePollTimer);
+        _pipelinePollTimer = null;
+      }
+    }, 10000);
+  } catch(e) {
+    if (btn) btn.disabled = false;
+    if (msg) msg.textContent = '⚠ ' + e.message;
+  }
+}
+
+// Load pipeline status whenever the details block is opened
+document.addEventListener('DOMContentLoaded', () => {
+  const det = document.getElementById('pipelineDetails');
+  if (det) det.addEventListener('toggle', () => { if (det.open) loadPipelineStatus(); });
+});
 
 // Global error fallback — surfaces any JS crash in the status bar
 window.addEventListener('error', e => { try { status('JS Error: '+e.message, true); } catch{} console.error(e); });
