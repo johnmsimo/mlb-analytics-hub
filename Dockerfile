@@ -29,7 +29,12 @@ FROM python:3.11-slim
 WORKDIR /usr/src/app
 
 # Install only runtime dependencies if needed
-RUN apt-get update && apt-get install -y --no-install-recommends     libpq5     && rm -rf /var/lib/apt/lists/*
+# redis-server is installed here so the container can run its own local Redis
+# instance when no external REDIS_URL is supplied.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libpq5 \
+        redis-server \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy the virtual environment from the build stage
 COPY --from=build /opt/venv /opt/venv
@@ -48,5 +53,16 @@ USER appuser
 ENV PORT=8080
 EXPOSE $PORT
 
-# Define the command to start your application
-CMD ["python", "app.py"]
+# Point the app at the local Redis instance.
+# Override with a real REDIS_URL (e.g. Upstash, Redis Cloud) in production
+# and the embedded redis-server is simply unused — redis_client.py will
+# connect to the external URL instead.
+ENV REDIS_URL=redis://localhost:6379
+
+# Start Redis (daemonised, no persistence, writes to /tmp so appuser can write)
+# then start the app.  Using && ensures Redis is up before the app starts.
+CMD redis-server --daemonize yes \
+        --dir /tmp \
+        --save "" \
+        --loglevel warning \
+    && python app.py
