@@ -588,6 +588,7 @@ _PROPS_SCAN_TTL = 20 * 60
 _CONSISTENCY_TTL = 20 * 60
 _weather_cache_lock = threading.Lock()
 _weather_cache = {}
+_weather_inflight: set = set()   # keys currently being fetched; prevents duplicate HTTP calls
 _WEATHER_TTL = 20 * 60
 _WEATHER_FAIL_TTL = 30
 # Seconds to wait for FG / Savant caches on each request during cold starts.
@@ -1497,12 +1498,31 @@ def _wait_for_savant_data(timeout_sec=30):
         _maybe_refresh_savant()
 
 
-def _fuzzy_lookup(name, cache):
+_fuzzy_name_cache: dict = {}          # {(name_lower, dict_id): matched_key | ""}
+_fuzzy_name_lock = threading.Lock()
+
+def _fuzzy_lookup(name, cache, _dict_id=None):
+    """Fuzzy name lookup with result caching.
+
+    Pass _dict_id=id(underlying_dict) from the caller so the cache survives
+    the dict copy but is invalidated automatically when the data is refreshed
+    (the underlying dict object is replaced, changing its id).
+    """
     if not name or not cache: return {}
     k = name.strip().lower()
     if k in cache: return cache[k]
+    if _dict_id is not None:
+        with _fuzzy_name_lock:
+            matched = _fuzzy_name_cache.get((k, _dict_id))
+        if matched is not None:
+            return cache.get(matched, {})
     m = difflib.get_close_matches(k, cache.keys(), n=1, cutoff=0.78)
-    return cache[m[0]] if m else {}
+    matched = m[0] if m else ""
+    if _dict_id is not None:
+        with _fuzzy_name_lock:
+            _evict_if_large(_fuzzy_name_cache, 5000)
+            _fuzzy_name_cache[(k, _dict_id)] = matched
+    return cache[matched] if matched else {}
 
 def fg_batter(name):
     """FanGraphs batter stats with Brain overlay fallback.
@@ -1510,9 +1530,8 @@ def fg_batter(name):
     """
     with _fg_lock:
         c = dict(_fg_bat)
-    live = _fuzzy_lookup(name, c)
-    with _brain_overlay_lock:
-        brain = _brain_fg_batter.__wrapped_brain_only__(name) if hasattr(_brain_fg_batter, '__wrapped_brain_only__') else {}
+        _bat_id = id(_fg_bat)
+    live = _fuzzy_lookup(name, c, _bat_id)
     try:
         from brain_merge_patch import _brain_fuzzy, _brain_bat_overlay as _bbo
         with _brain_overlay_lock:
@@ -1535,7 +1554,8 @@ def fg_pitcher(name):
     """
     with _fg_lock:
         c = dict(_fg_pit)
-    live = _fuzzy_lookup(name, c)
+        _pit_id = id(_fg_pit)
+    live = _fuzzy_lookup(name, c, _pit_id)
     try:
         from brain_merge_patch import _brain_fuzzy, _brain_pit_overlay as _bpo
         with _brain_overlay_lock:
@@ -1666,6 +1686,7 @@ def _load_savant_data():
     y = datetime.now().year
     seasons = _season_candidates(depth=4)
     BASE = "https://baseballsavant.mlb.com"
+    _failed_subcaches = []  # track which sub-caches couldn't load
 
     # 1. Pitcher xERA
     try:
@@ -1692,6 +1713,7 @@ def _load_savant_data():
         logging.info(f"[Savant] Pitcher xStats: {len(d)}")
     except Exception as ex:
         logging.warning(f"[Savant] Pitcher xStats failed: {ex}")
+        _failed_subcaches.append(f"pitcher_xstats({ex})")
 
     # 2. Batter xBA/xSLG/xwOBA
     try:
@@ -1715,6 +1737,7 @@ def _load_savant_data():
         logging.info(f"[Savant] Batter xStats: {len(d)}")
     except Exception as ex:
         logging.warning(f"[Savant] Batter xStats failed: {ex}")
+        _failed_subcaches.append(f"batter_xstats({ex})")
 
     # 3. Statcast batter EV / HH% / Barrel%
     try:
@@ -1740,6 +1763,7 @@ def _load_savant_data():
         logging.info(f"[Savant] Batter Statcast: {len(d)}")
     except Exception as ex:
         logging.warning(f"[Savant] Batter Statcast failed: {ex}")
+        _failed_subcaches.append(f"batter_statcast({ex})")
 
     # 4. Pitch arsenal % usage
     try:
@@ -1762,6 +1786,7 @@ def _load_savant_data():
         logging.info(f"[Savant] Arsenal %: {len(d)}")
     except Exception as ex:
         logging.warning(f"[Savant] Arsenal % failed: {ex}")
+        _failed_subcaches.append(f"arsenal_pct({ex})")
 
     # 5. Pitch arsenal velocities
     try:
@@ -1784,6 +1809,7 @@ def _load_savant_data():
         logging.info(f"[Savant] Arsenal velo: {len(d)}")
     except Exception as ex:
         logging.warning(f"[Savant] Arsenal velo failed: {ex}")
+        _failed_subcaches.append(f"arsenal_velo({ex})")
 
     # 6. Pitcher pitch-arsenal outcome stats (BA/SLG/wOBA/whiff%/HH% per pitch type)
     try:
@@ -1817,6 +1843,7 @@ def _load_savant_data():
         logging.info(f"[Savant] Pitcher arsenal stats: {len(d)} pitchers")
     except Exception as ex:
         logging.warning(f"[Savant] Pitcher arsenal stats failed: {ex}")
+        _failed_subcaches.append(f"pit_arsenal_stats({ex})")
 
     # 7. Batter pitch-arsenal outcome stats (SLG/wOBA/whiff%/HH% per pitch type faced)
     try:
@@ -1842,11 +1869,18 @@ def _load_savant_data():
         logging.info(f"[Savant] Batter arsenal stats: {len(d)} batters")
     except Exception as ex:
         logging.warning(f"[Savant] Batter arsenal stats failed: {ex}")
+        _failed_subcaches.append(f"bat_arsenal_stats({ex})")
 
     with _sv_lock:
         has_data = bool(_sv_pit_xstats) or bool(_sv_bat_xstats) or bool(_sv_bat_statcast) or bool(_sv_arsenal_pct) or bool(_sv_arsenal_velo)
         _sv_loaded    = has_data
         _sv_load_date = datetime.now().date() if has_data else None
+
+    if _failed_subcaches:
+        logging.error(
+            f"[Savant] {len(_failed_subcaches)}/7 sub-caches failed to load "
+            f"(stats may be incomplete): {'; '.join(_failed_subcaches)}"
+        )
     logging.info(f"[Savant] All caches ready: pitxstats={len(_sv_pit_xstats)} batxstats={len(_sv_bat_xstats)} statcast={len(_sv_bat_statcast)} arsenal={len(_sv_arsenal_pct)} velo={len(_sv_arsenal_velo)} pit_arsenal={len(_sv_pit_arsenal_stats)} bat_arsenal={len(_sv_bat_arsenal_stats)} loaded={_sv_loaded}")
 
 def _maybe_refresh_savant():
@@ -1876,10 +1910,13 @@ def sv_pitcher(name):
         xs = dict(_sv_pit_xstats)
         ap = dict(_sv_arsenal_pct)
         av = dict(_sv_arsenal_velo)
-    lx = _fuzzy_lookup(name, xs)
+        _xs_id = id(_sv_pit_xstats)
+        _ap_id = id(_sv_arsenal_pct)
+        _av_id = id(_sv_arsenal_velo)
+    lx = _fuzzy_lookup(name, xs, _xs_id)
     r = dict(lx) if lx else {}
-    lap = _fuzzy_lookup(name, ap)
-    lav = _fuzzy_lookup(name, av)
+    lap = _fuzzy_lookup(name, ap, _ap_id)
+    lav = _fuzzy_lookup(name, av, _av_id)
     r["sv_arsenal_pct"] = lap if lap else {}
     r["sv_arsenal_velo"] = lav if lav else {}
     try:
@@ -1923,8 +1960,10 @@ def sv_batter(name):
     with _sv_lock:
         xs = dict(_sv_bat_xstats)
         sc = dict(_sv_bat_statcast)
-    lx = _fuzzy_lookup(name, xs)
-    ls = _fuzzy_lookup(name, sc)
+        _xs_id = id(_sv_bat_xstats)
+        _sc_id = id(_sv_bat_statcast)
+    lx = _fuzzy_lookup(name, xs, _xs_id)
+    ls = _fuzzy_lookup(name, sc, _sc_id)
     r = dict(lx) if lx else {}
     if ls:
         r.update(ls)
@@ -2748,8 +2787,12 @@ def get_weather(lat, lon, game_hour=13, venue_id=None):
     now = time.time()
     with _weather_cache_lock:
         cached = _weather_cache.get(cache_key)
-    if cached and (now - float(cached.get("ts") or 0)) < float(cached.get("ttl") or _WEATHER_TTL):
-        return dict(cached.get("payload") or {})
+        if cached and (now - float(cached.get("ts") or 0)) < float(cached.get("ttl") or _WEATHER_TTL):
+            return dict(cached.get("payload") or {})
+        # Guard against duplicate concurrent fetches for the same key.
+        if cache_key in _weather_inflight:
+            return dict(cached.get("payload") or {}) if cached else {}
+        _weather_inflight.add(cache_key)
 
     try:
         r = requests.get(WX_API, params={
@@ -2791,11 +2834,13 @@ def get_weather(lat, lon, game_hour=13, venue_id=None):
         print(f"[get_weather] lat={lat} lon={lon} hour={game_hour} venue={venue_id} err={ex}")
         payload = {"temp":"N/A","rain_chance":"N/A","wind_speed":"N/A","wind_dir":"","wind":"N/A","condition":"N/A"}
         with _weather_cache_lock:
-            # Don't overwrite a valid entry that a concurrent thread may have written.
             existing = _weather_cache.get(cache_key)
             if not existing or existing.get("payload", {}).get("temp") in (None, "N/A"):
                 _weather_cache[cache_key] = {"ts": now, "ttl": _WEATHER_FAIL_TTL, "payload": payload}
         return payload
+    finally:
+        with _weather_cache_lock:
+            _weather_inflight.discard(cache_key)
 
 def pitcher_stats_mlb(player_id):
     try:
@@ -10932,6 +10977,7 @@ def _compute_props_scan_today_payload(date_str):
         'cached': False,
     }
     with _props_scan_cache_lock:
+        _evict_if_large(_PROPS_SCAN_CACHE, 14)
         _PROPS_SCAN_CACHE[date_str] = {'ts': now, 'payload': payload}
     return payload
 
@@ -15565,6 +15611,7 @@ def _compute_consistency_payload(date_str):
         'markets': list(sheets.values()),
     }
     with _consistency_cache_lock:
+        _evict_if_large(_CONSISTENCY_CACHE, 14)
         _CONSISTENCY_CACHE[date_str] = {'ts': now, 'payload': payload}
     return payload
 
