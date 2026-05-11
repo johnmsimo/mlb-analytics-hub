@@ -3406,6 +3406,22 @@ function renderProjectionDetail(){
       if(topPos2.length) reasonParts2.push('boosted by '+topPos2.map(function(k){return compLbls2[k];}).join(' & '));
       if(topNeg2.length) reasonParts2.push('limited by '+topNeg2.map(function(k){return compLbls2[k];}).join(' & '));
       if(ouPills) batxHtml += '<div style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,.06)"><div style="font-family:Orbitron,monospace;font-size:.55rem;letter-spacing:1.5px;color:var(--mu);margin-bottom:6px">O/U PICKS</div><div style="display:flex;flex-wrap:wrap">'+ouPills+'</div>'+(reasonParts2.length?'<div style="font-size:.58rem;color:var(--mu);margin-top:4px;opacity:.8">'+reasonParts2.join('; ')+'</div>':'')+'</div>';
+      // ── XGBoost hit confidence ───────────────────────────────────────────────
+      var xgbHit = bx ? bx.xgbHitProb : null;
+      if(xgbHit != null){
+        var xgbPct = Math.round(xgbHit * 100);
+        var xgbCol = xgbHit >= 0.55 ? '#4caf50' : (xgbHit >= 0.45 ? 'var(--c)' : '#ff7070');
+        var xgbBar = Math.round(Math.min(xgbHit * 2 * 100, 100));
+        batxHtml += '<div style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,.06)">'
+          + '<div style="font-family:Orbitron,monospace;font-size:.52rem;letter-spacing:1.5px;color:var(--mu);margin-bottom:5px">XGB HIT MODEL <span style="font-size:.46rem;opacity:.6">(gradient boost)</span></div>'
+          + '<div style="display:flex;align-items:center;gap:8px">'
+          + '<span style="font-size:.78rem;font-family:Orbitron,monospace;color:'+xgbCol+'">'+xgbPct+'%</span>'
+          + '<div style="flex:1;background:rgba(255,255,255,.07);border-radius:3px;height:5px">'
+          + '<div style="width:'+xgbBar+'%;height:5px;border-radius:3px;background:'+xgbCol+'"></div></div>'
+          + '<span style="font-size:.58rem;color:var(--mu)">hit prob H 0.5</span>'
+          + '</div>'
+          + '</div>';
+      }
     }
     detail += '<div class="mini-grid"><div class="mini-card fw" style="grid-column:1/-1"><h5>BAT X ENGINE</h5>'+batxHtml+'</div></div>';
   }
@@ -3453,6 +3469,21 @@ function renderProjectionDetail(){
         + '<div style="font-size:.61rem;color:var(--mu);margin-top:4px">'+flagStr+'</div>'
         + '<div style="font-size:.6rem;color:var(--mu);margin-top:3px">'+eraNote+'</div>'
         + (pp.recent_k != null ? '<div style="font-size:.6rem;color:var(--mu);margin-top:3px">Recent: '+pp.recent_k+' K / '+pp.recent_ip+' IP / '+pp.recent_er+' ER over last '+pp.recent_starts+' starts</div>' : '');
+      // ── XGBoost K confidence ─────────────────────────────────────────────────
+      var xgbKProbs = px ? (px.xgbKProbs || {}) : {};
+      var xgbKKeys = Object.keys(xgbKProbs).filter(function(k){ return xgbKProbs[k] != null; });
+      if(xgbKKeys.length){
+        pitchxHtml += '<div style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,.06)">'
+          + '<div style="font-family:Orbitron,monospace;font-size:.52rem;letter-spacing:1.5px;color:var(--mu);margin-bottom:5px">XGB K MODEL <span style="font-size:.46rem;opacity:.6">(gradient boost)</span></div>'
+          + '<div style="display:flex;flex-wrap:wrap;gap:6px">';
+        xgbKKeys.sort(function(a,b){return parseFloat(a)-parseFloat(b);}).forEach(function(ln){
+          var p = xgbKProbs[ln];
+          var pct = Math.round(p * 100);
+          var col = p >= 0.55 ? '#4caf50' : (p >= 0.45 ? 'var(--c)' : '#ff7070');
+          pitchxHtml += '<span style="font-family:Orbitron,monospace;font-size:.55rem;padding:3px 7px;border-radius:5px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.04);color:'+col+'">K'+ln+' '+pct+'%</span>';
+        });
+        pitchxHtml += '</div></div>';
+      }
     }
     detail += '<div class="mini-grid"><div class="mini-card fw" style="grid-column:1/-1"><h5>PITCH X ENGINE</h5>'+pitchxHtml+'</div></div>';
   }
