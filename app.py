@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 ET = ZoneInfo("America/New_York")
-from flask import Flask, jsonify, request, Response
+from flask import Flask, g, jsonify, request, Response
 from flask_cors import CORS
 
 
@@ -91,6 +91,18 @@ from brain_merge_patch import (
 
 app = Flask(__name__)
 CORS(app)
+
+
+@app.before_request
+def _attach_request_id():
+    g.request_id = uuid4().hex[:8]
+
+
+@app.after_request
+def _add_request_id_header(response):
+    response.headers['X-Request-Id'] = getattr(g, 'request_id', '-')
+    return response
+
 
 from nrfi_odds_routes import register_nrfi_odds_routes
 register_nrfi_odds_routes(app)
@@ -1659,7 +1671,7 @@ def _fetch_sv_csv(url):
         except Exception as ex:
             last_ex = ex
             if attempt == 0:
-                time.sleep(3)  # brief back-off before retry
+                time.sleep(random.uniform(1, 5))  # jittered back-off avoids thundering herd
     raise last_ex
 
 
@@ -12725,6 +12737,7 @@ _mc_cache_data  = None
 _mc_cache_ts    = None
 _mc_computing   = False
 _mc_started_ts  = None   # watchdog: when _mc_computing was last set True
+_mc_generation  = 0      # incremented each time a new compute thread is spawned
 _MC_COMPUTE_TIMEOUT_SEC = 300  # 5 min watchdog — reset stuck flag after this
 
 def _mc_grade(edge):
@@ -12741,7 +12754,7 @@ def _mc_rec(edge):
     if edge >= 0.02: return 'WATCH'
     return 'SKIP'
 
-def _mc_compute_background():
+def _mc_compute_background(generation):
     global _mc_cache_data, _mc_cache_ts, _mc_computing, _mc_started_ts
     try:
         # Ensure stat caches are fresh before computing
@@ -12933,19 +12946,23 @@ def _mc_compute_background():
         result = {'success': True, 'date': date_str, 'hasOdds': has_odds,
                   'games': games, 'topProps': ranked[:500], 'computing': False}
         with _mc_cache_lock:
-            _mc_cache_data = result
-            _mc_cache_ts   = datetime.now()
-        print(f"[mc_bg] done — {len(ranked)} props, {len(games)} games")
+            if _mc_generation == generation:
+                _mc_cache_data = result
+                _mc_cache_ts   = datetime.now()
+                print(f"[mc_bg] done — {len(ranked)} props, {len(games)} games")
+            else:
+                print(f"[mc_bg] discarding stale results (gen {generation} superseded by {_mc_generation})")
     except Exception:
         print(f"[mc_bg] FATAL: {traceback.format_exc()}")
     finally:
         with _mc_cache_lock:
-            _mc_computing  = False
-            _mc_started_ts = None
+            if _mc_generation == generation:
+                _mc_computing  = False
+                _mc_started_ts = None
 
 
 def _mc_maybe_refresh(force=False):
-    global _mc_computing, _mc_started_ts
+    global _mc_computing, _mc_started_ts, _mc_generation
     with _mc_cache_lock:
         running    = _mc_computing
         started_at = _mc_started_ts
@@ -12954,12 +12971,14 @@ def _mc_maybe_refresh(force=False):
 
     if running:
         # Watchdog: if the background thread has been marked as computing for
-        # longer than the allowed ceiling, it has likely hung.  Reset the flag
-        # so the next poll can launch a fresh thread.
+        # longer than the allowed ceiling, it has likely hung. Bump the generation
+        # so the stuck thread's results are discarded if it ever finishes, then
+        # reset the flag so a fresh thread can be spawned below.
         if started_at and (datetime.now() - started_at).total_seconds() > _MC_COMPUTE_TIMEOUT_SEC:
             print(f"[mc_bg] watchdog: resetting stuck _mc_computing flag "
                   f"(running for >{_MC_COMPUTE_TIMEOUT_SEC}s)")
             with _mc_cache_lock:
+                _mc_generation += 1   # invalidates the stuck thread's results
                 _mc_computing  = False
                 _mc_started_ts = None
             # Fall through to start a new thread below
@@ -12970,9 +12989,11 @@ def _mc_maybe_refresh(force=False):
         return
 
     with _mc_cache_lock:
+        _mc_generation += 1
+        gen            = _mc_generation
         _mc_computing  = True
         _mc_started_ts = datetime.now()
-    threading.Thread(target=_mc_compute_background, daemon=True).start()
+    threading.Thread(target=_mc_compute_background, args=(gen,), daemon=True).start()
 
 
 @app.route('/api/projections/monte-carlo')
