@@ -8078,9 +8078,29 @@ def _do_simulate(game_pk, sims):
         ump_adj = sim_env['ump_adj']
 
         # ── Pre-compute BAT X multipliers per batter (once, not per sim) ─────
-        # away batters face home_pitcher; home batters face away_pitcher
-        away_batx_map = {i: _batx_for_sim(b, home_pitcher, park, wx) for i, b in enumerate(away_lineup)}
-        home_batx_map = {i: _batx_for_sim(b, away_pitcher, park, wx) for i, b in enumerate(home_lineup)}
+        # away batters face home_pitcher; home batters face away_pitcher.
+        # Parallelized because each call performs BvP + platoon HTTP fetches
+        # on cold cache; sequential it dominates cold-start sim time.
+        _batx_jobs = [(i, b, home_pitcher) for i, b in enumerate(away_lineup)] \
+                   + [(i, b, away_pitcher) for i, b in enumerate(home_lineup)]
+        away_batx_map = {}
+        home_batx_map = {}
+        with ThreadPoolExecutor(max_workers=min(len(_batx_jobs) or 1, 18)) as _bx_ex:
+            _bx_futs = {
+                _bx_ex.submit(_batx_for_sim, b, opp, park, wx): (idx, b, opp)
+                for idx, b, opp in _batx_jobs
+            }
+            for _fut in as_completed(_bx_futs):
+                idx, b, opp = _bx_futs[_fut]
+                try:
+                    result = _fut.result()
+                except Exception:
+                    result = {'composite': 1.0, 'hit_mult': 1.0, 'hr_mult': 1.0,
+                              'walk_mult': 1.0, 'k_mult': 1.0}
+                if opp is home_pitcher:
+                    away_batx_map[idx] = result
+                else:
+                    home_batx_map[idx] = result
 
         rng = AntitheticRandom(game_pk + int(datetime.now().strftime('%Y%m%d')) + 6)
 
@@ -8394,8 +8414,17 @@ def api_simulate(game_pk):
         if job['status'] == 'done':
             return jsonify(job['payload'])
         elapsed = int(time.time() - job['started'])
+        # Warm path finishes in ~90s; cold start (post-redeploy) can run 3-5min
+        # while FG/Savant/pipeline workers compete for CPU. Grow the estimate
+        # past the warm budget so the UI doesn't sit at "5s remaining" forever.
+        if elapsed < 90:
+            est = 90 - elapsed
+        elif elapsed < 240:
+            est = max(20, 240 - elapsed)
+        else:
+            est = max(15, 360 - elapsed)
         return jsonify({'computing': True, 'elapsed': elapsed,
-                        'estimatedSeconds': max(5, 90 - elapsed)})
+                        'estimatedSeconds': est})
 
     # 3. Kick off background simulation
     started = time.time()
