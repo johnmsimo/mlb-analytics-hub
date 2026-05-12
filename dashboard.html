@@ -562,6 +562,21 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
         </div>
 
         <div class="settings-card">
+          <div class="settings-title">CACHE STATUS &amp; WARM-UP</div>
+          <div style="font-size:.62rem;color:var(--mu);margin-bottom:10px;line-height:1.6">
+            Readiness of background loaders the Monte Carlo sim depends on. After a redeploy, click <b>Warm Up Now</b> and wait until every row is green — cold caches make sims time out.
+          </div>
+          <div id="cacheStatusRows" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px">
+            <div style="font-size:.7rem;color:var(--mu);padding:6px 0">Loading…</div>
+          </div>
+          <div class="settings-actions">
+            <button class="tabbtn" id="cacheWarmBtn" onclick="triggerCacheWarm()">↺ WARM UP NOW</button>
+            <button class="tabbtn" onclick="loadCacheStatus()">REFRESH</button>
+            <span id="cacheReadyBadge" class="settings-msg">—</span>
+          </div>
+        </div>
+
+        <div class="settings-card">
           <div class="settings-title">PERFORMANCE & SYSTEM</div>
           <div class="settings-two">
             <div class="settings-row"><label>Background Worker Interval (min)</label><input id="perfWorkerInterval" class="settings-input" type="number" step="1" min="30" max="1440"></div>
@@ -1923,6 +1938,103 @@ function savePerformanceSettings(){
   fetch('/api/app-settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(function(r){return r.json();}).then(function(d){if(!d||!d.success) throw new Error(d.error||'Save failed');setText('perfMsg','Saved');}).catch(function(e){setText('perfMsg',e.message||'Save failed',true);});
 }
 
+// ── Cache Status panel (post-deploy warm-up) ─────────────────────────────────
+var _cachePollTimer=null;
+function _cacheDot(state){var m={ready:'●',loading:'◐',missing:'○',error:'✗'};return m[state]||'○';}
+function _cacheDotColor(state){
+  if(state==='ready')   return '#00e676';
+  if(state==='loading') return '#ffd740';
+  if(state==='error')   return '#f44336';
+  return 'rgba(255,255,255,.35)';
+}
+function _fmtCacheTs(iso){
+  if(!iso) return '—';
+  try{var d=new Date(iso);return d.toLocaleDateString('en-US',{month:'short',day:'numeric'})+' '+d.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});}catch(e){return iso;}
+}
+function _deriveCacheState(loader,info){
+  if(!info) return 'missing';
+  if(loader==='pipeline'){
+    if(info.status==='done')    return 'ready';
+    if(info.status==='running') return 'loading';
+    if(info.status==='error')   return 'error';
+    return 'missing';
+  }
+  if(info.loaded)  return 'ready';
+  if(info.loading) return 'loading';
+  return 'missing';
+}
+function _cacheRowHtml(label,state,detail){
+  return '<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.06);font-size:.72rem">'
+    +'<span style="width:14px;color:'+_cacheDotColor(state)+';font-size:1rem;text-align:center">'+_cacheDot(state)+'</span>'
+    +'<span style="flex:1;color:var(--txt)">'+label+'</span>'
+    +'<span style="color:var(--mu);font-size:.66rem">'+(detail||'')+'</span>'
+    +'</div>';
+}
+function loadCacheStatus(){
+  var rowsEl=document.getElementById('cacheStatusRows');
+  var badge=document.getElementById('cacheReadyBadge');
+  return fetch('/api/cache/status').then(function(r){return r.json();}).then(function(d){
+    if(!d){if(badge) badge.textContent='—'; return null;}
+    var fgState =_deriveCacheState('fg',d.fg);
+    var svState =_deriveCacheState('savant',d.savant);
+    var arState =_deriveCacheState('arsenal',d.arsenal);
+    var pipState=d.pipeline?_deriveCacheState('pipeline',d.pipeline):null;
+    var fgDetail =d.fg && d.fg.loaded
+      ? (d.fg.batters||0).toLocaleString()+' batters · '+(d.fg.pitchers||0).toLocaleString()+' pitchers'
+      : (d.fg && d.fg.loading?'loading…':'not loaded');
+    var svDetail =d.savant && d.savant.loaded
+      ? (d.savant.pit_xstats||0).toLocaleString()+' pit · '+(d.savant.bat_xstats||0).toLocaleString()+' bat'
+      : (d.savant && d.savant.loading?'loading…':'not loaded');
+    var arDetail =d.arsenal && d.arsenal.loaded
+      ? (d.arsenal.pitchers||0).toLocaleString()+' pitchers'
+      : 'not loaded';
+    var pipDetail=(d.pipeline && d.pipeline.status==='done')
+      ? (d.pipeline.rows||0).toLocaleString()+' rows · '+_fmtCacheTs(d.pipeline.last_run)
+      : (d.pipeline && d.pipeline.status==='running'?'building (~2 min)…'
+         : (d.pipeline && d.pipeline.status==='error'?(d.pipeline.error||'error')
+            : 'not run today'));
+    var rows=[];
+    rows.push(_cacheRowHtml('FanGraphs stats',     fgState, fgDetail));
+    rows.push(_cacheRowHtml('Baseball Savant',     svState, svDetail));
+    rows.push(_cacheRowHtml('Pitcher arsenal CSV', arState, arDetail));
+    if(pipState!==null) rows.push(_cacheRowHtml('Lineup pipeline', pipState, pipDetail));
+    if(rowsEl) rowsEl.innerHTML=rows.join('');
+    if(badge){
+      if(d.ready)                                badge.textContent='✓ READY';
+      else if(fgState==='loading'||svState==='loading'||pipState==='loading') badge.textContent='⟳ WARMING';
+      else                                       badge.textContent='○ COLD';
+    }
+    return d;
+  }).catch(function(e){
+    if(rowsEl) rowsEl.innerHTML='<div style="font-size:.7rem;color:#f44336">⚠ '+e.message+'</div>';
+    return null;
+  });
+}
+function triggerCacheWarm(){
+  var btn=document.getElementById('cacheWarmBtn');
+  var badge=document.getElementById('cacheReadyBadge');
+  if(btn) btn.disabled=true;
+  if(badge) badge.textContent='Starting…';
+  fetch('/api/cache/warm',{method:'POST'}).then(function(r){return r.json();}).then(function(r){
+    var t=(r.triggered||[]).join(', ')||'(all already warming)';
+    if(badge) badge.textContent='Started: '+t;
+    if(_cachePollTimer) clearInterval(_cachePollTimer);
+    var polls=0;
+    _cachePollTimer=setInterval(function(){
+      polls++;
+      loadCacheStatus().then(function(d){
+        if(!d||d.ready||polls>60){
+          clearInterval(_cachePollTimer);_cachePollTimer=null;
+          if(btn) btn.disabled=false;
+        }
+      });
+    },5000);
+  }).catch(function(e){
+    if(btn) btn.disabled=false;
+    if(badge) badge.textContent='⚠ '+e.message;
+  });
+}
+
 function loadUploadedFiles(){
   fetch('/api/brain-data/list').then(function(r){return r.json();}).then(function(d){
     if(!d||!d.success){setText('uploadMsg','Unable to load files',true);return;}
@@ -1984,6 +2096,7 @@ function initSettingsView(){
   loadTrackerSettings();
   refreshSettingsPanel();
   loadComprehensiveSettings();
+  loadCacheStatus();
   loadUploadedFiles();
   refreshBrainStatus();
   loadStoredFinalDailySummary();
