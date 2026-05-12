@@ -31,6 +31,7 @@ _cache = {
     "matchup_df": None,
     "games_df":   None,
     "last_run":   None,
+    "started_at": None,      # set when a run begins; cleared when it finishes
     "status":     "idle",   # idle | running | done | error
     "error_msg":  None,
 }
@@ -278,8 +279,9 @@ def _build_matchup_df(games_df, sv_batter_fn, sv_pitcher_fn):
 # ── 7. Main Pipeline Run ───────────────────────────────────────────────────────
 def run_pipeline():
     global _cache
-    _cache["status"]    = "running"
-    _cache["error_msg"] = None
+    _cache["status"]     = "running"
+    _cache["error_msg"]  = None
+    _cache["started_at"] = datetime.now().isoformat()
     log.info("[pipeline] Run started.")
 
     try:
@@ -364,9 +366,10 @@ def get_games_df() -> pd.DataFrame:
 def get_pipeline_status() -> dict:
     df = _cache["matchup_df"]
     return {
-        "status":   _cache["status"],
-        "last_run": _cache["last_run"],
-        "rows":     len(df) if df is not None else 0,
-        "games":    len(_cache["games_df"]) if _cache["games_df"] is not None else 0,
-        "error":    _cache["error_msg"],
+        "status":     _cache["status"],
+        "last_run":   _cache["last_run"],
+        "started_at": _cache["started_at"],
+        "rows":       len(df) if df is not None else 0,
+        "games":      len(_cache["games_df"]) if _cache["games_df"] is not None else 0,
+        "error":      _cache["error_msg"],
     }
