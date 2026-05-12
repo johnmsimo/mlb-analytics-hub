@@ -7856,7 +7856,6 @@ def _simulation_fallback_payload(game_obj, game_pk, sims=0, warning=''):
     }
 
 
-@app.route('/api/simulate/<int:game_pk>')
 def _do_simulate(game_pk, sims):
     """Core simulation logic, extracted so it can run in a background thread.
     Returns a plain dict (not a Flask Response)."""
