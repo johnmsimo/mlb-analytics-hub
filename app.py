@@ -1,4 +1,4 @@
-import os, threading, traceback, difflib, io, csv as csvmod, json, re, time, uuid, unicodedata, logging
+import os, threading, traceback, difflib, io, csv as csvmod, json, re, time, uuid, unicodedata, logging, glob as _glob
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s %(message)s')
 import requests
 import pandas as pd
@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 ET = ZoneInfo("America/New_York")
-from flask import Flask, jsonify, request, Response
+from flask import Flask, g, jsonify, request, Response
 from flask_cors import CORS
 
 
@@ -67,6 +67,16 @@ from mc_upgrades import (
     ttop_woba_penalty,
 )
 
+# ── Matchup Pipeline ───────────────────────────────────────────────────────────
+try:
+    from pipeline_scheduler import start_scheduler, get_matchup_df, get_games_df, get_pipeline_status
+    from pipeline_routes import pipeline_bp
+    _PIPELINE_AVAILABLE = True
+except ImportError:
+    _PIPELINE_AVAILABLE = False
+    logging.warning("[pipeline] pipeline_scheduler or pipeline_routes not found — skipping.")
+
+
 from brain_merge_patch import (
     load_brain_overlays,
     fg_batter as _brain_fg_batter,
@@ -82,8 +92,25 @@ from brain_merge_patch import (
 app = Flask(__name__)
 CORS(app)
 
+
+@app.before_request
+def _attach_request_id():
+    g.request_id = uuid4().hex[:8]
+
+
+@app.after_request
+def _add_request_id_header(response):
+    response.headers['X-Request-Id'] = getattr(g, 'request_id', '-')
+    return response
+
+
 from nrfi_odds_routes import register_nrfi_odds_routes
 register_nrfi_odds_routes(app)
+
+if _PIPELINE_AVAILABLE:
+    app.register_blueprint(pipeline_bp)
+    logging.info("[pipeline] Blueprint registered at /api/pipeline/*")
+
 
 # --- MLB API PLAYERS INGEST ROUTE (must be after app = Flask(__name__)) ---
 @app.route('/api/brain/fetch-mlb-players', methods=['POST'])
@@ -352,7 +379,7 @@ def api_player_performance_badges(player_id):
         l5_k_rate = round(l5_k / l5_ab, 3) if l5_ab > 0 else 0.000
         
         # Get Savant data for barrel rate
-        savant_data = svbatter(player_name) or {}
+        savant_data = sv_batter(player_name) or {}
         barrel_pct = _safe_num(savant_data.get("svbrlpct"), 0)
         hard_hit_pct = _safe_num(savant_data.get("svhhpct"), 0)
         
@@ -541,8 +568,11 @@ BVP_HTML = _read_html_or_fallback('bvp.html')
 VALUE_BETS_HTML = _read_html_or_fallback('value_bets.html')
 NRFI_HTML = _read_html_or_fallback('nrfi.html')
 TOOLS_HTML = _read_html_or_fallback('tools.html')
-DATA_DIR = os.path.join(_HERE, 'data')
+DATA_DIR = os.environ.get('DATA_DIR') or (
+    '/app/data' if os.path.isdir('/app/data') else os.path.join(_HERE, 'data')
+)
 os.makedirs(DATA_DIR, exist_ok=True)
+print(f"[startup] DATA_DIR={DATA_DIR}")
 BRAIN_DATA_DIR = os.path.join(DATA_DIR, 'brain_uploads')
 os.makedirs(BRAIN_DATA_DIR, exist_ok=True)
 BRAIN_UPLOAD_STATE_STORE = os.path.join(DATA_DIR, 'brain_upload_state.json')
@@ -573,6 +603,7 @@ _PROPS_SCAN_TTL = 20 * 60
 _CONSISTENCY_TTL = 20 * 60
 _weather_cache_lock = threading.Lock()
 _weather_cache = {}
+_weather_inflight: set = set()   # keys currently being fetched; prevents duplicate HTTP calls
 _WEATHER_TTL = 20 * 60
 _WEATHER_FAIL_TTL = 30
 # Seconds to wait for FG / Savant caches on each request during cold starts.
@@ -602,6 +633,14 @@ def _save_json(path, payload):
         return True
     except Exception:
         return False
+
+
+def _evict_if_large(d, max_size=500):
+    """Remove oldest (first-inserted) entries when dict exceeds max_size."""
+    if len(d) >= max_size:
+        to_remove = len(d) - max_size + 1
+        for k in list(d.keys())[:to_remove]:
+            del d[k]
 
 
 def _get_active_roster(team_id, ttl_sec=_ACTIVE_ROSTER_TTL):
@@ -1149,6 +1188,7 @@ HR_PARK_FACTORS = {
 }
 
 _fg_lock = threading.Lock()
+_fg_cond = threading.Condition(_fg_lock)   # notified when FG load completes
 _fg_bat = {}
 _fg_pit = {}
 _fg_loaded = False
@@ -1413,89 +1453,91 @@ def _load_fg_data_from_mlb_api():
 def _maybe_refresh_fg():
     global _fg_loading
     with _fg_lock:
-        loaded = _fg_loaded; date = _fg_load_date
-        already_loading = _fg_loading
-    if already_loading:
-        return
-    if not loaded or date != datetime.now().date():
-        with _fg_lock: _fg_loading = True
-        def _runner():
-            global _fg_loading
-            try:
-                _load_fg_data()
-            except Exception as _ex:
-                logging.error(f"[FG] background load error: {_ex}")
-            finally:
-                with _fg_lock:
-                    _fg_loading = False  # ALWAYS reset, even on crash
-        threading.Thread(target=_runner, daemon=True).start()
+        # Atomically check and set _fg_loading so only one thread spawns a loader.
+        if _fg_loading:
+            return
+        if _fg_loaded and _fg_load_date == datetime.now().date():
+            return
+        _fg_loading = True
+    def _runner():
+        global _fg_loading
+        try:
+            _load_fg_data()
+        except Exception as _ex:
+            logging.error(f"[FG] background load error: {_ex}")
+        finally:
+            with _fg_cond:
+                _fg_loading = False
+                _fg_cond.notify_all()
+    threading.Thread(target=_runner, daemon=True).start()
 
 
 def _wait_for_fg_data(timeout_sec=30):
-    """Wait for FG data to be loaded or trigger a load if not started.
+    """Wait for FG data to be loaded, blocking efficiently via Condition instead of busy-wait.
 
     Timeout raised to 30 s to survive Render cold-starts.
     Condition relaxed: passes if pitchers OR batters are loaded.
-
-    Args:
-        timeout_sec: Maximum time to wait in seconds
-
-    Returns:
-        True if data is loaded, False if timeout/error occurred
     """
-    _maybe_refresh_fg()  # Trigger load if not already loading
-
-    start = time.time()
-    while time.time() - start < timeout_sec:
-        should_trigger = False
-        with _fg_lock:
+    _maybe_refresh_fg()
+    deadline = time.time() + timeout_sec
+    while True:
+        with _fg_cond:
             if _fg_loaded and (len(_fg_pit) > 0 or len(_fg_bat) > 0):
                 return True
-            should_trigger = not _fg_loading
-        if should_trigger:
-            # Call outside the lock to avoid re-entrant lock deadlock.
-            _maybe_refresh_fg()
-        time.sleep(0.2)
-
-    return False
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                return False
+            _fg_cond.wait(timeout=min(remaining, 5.0))
+        # Re-trigger outside the lock if load failed and nothing is running.
+        _maybe_refresh_fg()
 
 
 def _wait_for_savant_data(timeout_sec=30):
-    """Wait for Savant data to be loaded or trigger a load if not started.
+    """Wait for Savant data to be loaded, blocking efficiently via Condition instead of busy-wait.
 
     Timeout raised to 30 s to survive Render cold-starts.
     Condition relaxed: passes if pitcherXStats OR batterXStats loaded.
     Arsenal failing alone no longer blocks every API call.
-
-    Args:
-        timeout_sec: Maximum time to wait in seconds
-
-    Returns:
-        True if data is loaded, False if timeout/error occurred
     """
-    _maybe_refresh_savant()  # Trigger load if not already loading
-
-    start = time.time()
-    while time.time() - start < timeout_sec:
-        should_trigger = False
-        with _sv_lock:
+    _maybe_refresh_savant()
+    deadline = time.time() + timeout_sec
+    while True:
+        with _sv_cond:
             if _sv_loaded and (len(_sv_pit_xstats) > 0 or len(_sv_bat_xstats) > 0):
                 return True
-            should_trigger = not _sv_loading
-        if should_trigger:
-            # Call outside the lock to avoid re-entrant lock deadlock.
-            _maybe_refresh_savant()
-        time.sleep(0.1)
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                return False
+            _sv_cond.wait(timeout=min(remaining, 5.0))
+        # Re-trigger outside the lock if load failed and nothing is running.
+        _maybe_refresh_savant()
 
-    return False
 
+_fuzzy_name_cache: dict = {}          # {(name_lower, dict_id): matched_key | ""}
+_fuzzy_name_lock = threading.Lock()
 
-def _fuzzy_lookup(name, cache):
+def _fuzzy_lookup(name, cache, _dict_id=None):
+    """Fuzzy name lookup with result caching.
+
+    Pass _dict_id=id(underlying_dict) from the caller so the cache survives
+    the dict copy but is invalidated automatically when the data is refreshed
+    (the underlying dict object is replaced, changing its id).
+    """
     if not name or not cache: return {}
     k = name.strip().lower()
     if k in cache: return cache[k]
+    if _dict_id is not None:
+        with _fuzzy_name_lock:
+            matched = _fuzzy_name_cache.get((k, _dict_id))
+        if matched is not None:
+            return cache.get(matched, {})
     m = difflib.get_close_matches(k, cache.keys(), n=1, cutoff=0.78)
-    return cache[m[0]] if m else {}
+    matched = m[0] if m else ""
+    if _dict_id is not None:
+        with _fuzzy_name_lock:
+            _evict_if_large(_fuzzy_name_cache, 5000)
+            _fuzzy_name_cache[(k, _dict_id)] = matched
+    return cache[matched] if matched else {}
 
 def fg_batter(name):
     """FanGraphs batter stats with Brain overlay fallback.
@@ -1503,9 +1545,8 @@ def fg_batter(name):
     """
     with _fg_lock:
         c = dict(_fg_bat)
-    live = _fuzzy_lookup(name, c)
-    with _brain_overlay_lock:
-        brain = _brain_fg_batter.__wrapped_brain_only__(name) if hasattr(_brain_fg_batter, '__wrapped_brain_only__') else {}
+        _bat_id = id(_fg_bat)
+    live = _fuzzy_lookup(name, c, _bat_id)
     try:
         from brain_merge_patch import _brain_fuzzy, _brain_bat_overlay as _bbo
         with _brain_overlay_lock:
@@ -1528,7 +1569,8 @@ def fg_pitcher(name):
     """
     with _fg_lock:
         c = dict(_fg_pit)
-    live = _fuzzy_lookup(name, c)
+        _pit_id = id(_fg_pit)
+    live = _fuzzy_lookup(name, c, _pit_id)
     try:
         from brain_merge_patch import _brain_fuzzy, _brain_pit_overlay as _bpo
         with _brain_overlay_lock:
@@ -1547,6 +1589,7 @@ def fg_pitcher(name):
 
 # ── Baseball Savant Cache ─────────────────────────────────────────────────────
 _sv_lock         = threading.Lock()
+_sv_cond         = threading.Condition(_sv_lock)   # notified when Savant load completes
 _sv_pit_xstats   = {}
 _sv_bat_xstats   = {}
 _sv_bat_statcast = {}
@@ -1557,6 +1600,11 @@ _sv_bat_arsenal_stats = {}  # {player_id_str: {pitch_name: {slg,woba,whiff_pct,h
 _sv_loaded    = False
 _sv_load_date = None
 _sv_loading   = False
+
+# Local pitcher arsenal cache loaded from data/ CSVs (populated once on first pitcher lookup)
+# These are declared at module level so _pitcher_model does not need globals() tricks.
+_local_arsenal_cache: object = None   # None → not yet loaded; tuple(dict, dict) → loaded
+_local_arsenal_lock  = threading.Lock()
 
 # Per-player direct Savant lookup cache {(player_id, year): (date, dict)}
 _sv_player_batter_cache: dict = {}
@@ -1626,7 +1674,7 @@ def _fetch_sv_csv(url):
         except Exception as ex:
             last_ex = ex
             if attempt == 0:
-                time.sleep(3)  # brief back-off before retry
+                time.sleep(random.uniform(1, 5))  # jittered back-off avoids thundering herd
     raise last_ex
 
 
@@ -1650,9 +1698,11 @@ def _fetch_sv_csv_by_season(url_template, seasons):
 def _load_savant_data():
     global _sv_pit_xstats, _sv_bat_xstats, _sv_bat_statcast
     global _sv_arsenal_pct, _sv_arsenal_velo, _sv_loaded, _sv_load_date
+    global _sv_pit_arsenal_stats, _sv_bat_arsenal_stats
     y = datetime.now().year
     seasons = _season_candidates(depth=4)
     BASE = "https://baseballsavant.mlb.com"
+    _failed_subcaches = []  # track which sub-caches couldn't load
 
     # 1. Pitcher xERA
     try:
@@ -1679,6 +1729,7 @@ def _load_savant_data():
         logging.info(f"[Savant] Pitcher xStats: {len(d)}")
     except Exception as ex:
         logging.warning(f"[Savant] Pitcher xStats failed: {ex}")
+        _failed_subcaches.append(f"pitcher_xstats({ex})")
 
     # 2. Batter xBA/xSLG/xwOBA
     try:
@@ -1702,6 +1753,7 @@ def _load_savant_data():
         logging.info(f"[Savant] Batter xStats: {len(d)}")
     except Exception as ex:
         logging.warning(f"[Savant] Batter xStats failed: {ex}")
+        _failed_subcaches.append(f"batter_xstats({ex})")
 
     # 3. Statcast batter EV / HH% / Barrel%
     try:
@@ -1727,6 +1779,7 @@ def _load_savant_data():
         logging.info(f"[Savant] Batter Statcast: {len(d)}")
     except Exception as ex:
         logging.warning(f"[Savant] Batter Statcast failed: {ex}")
+        _failed_subcaches.append(f"batter_statcast({ex})")
 
     # 4. Pitch arsenal % usage
     try:
@@ -1749,6 +1802,7 @@ def _load_savant_data():
         logging.info(f"[Savant] Arsenal %: {len(d)}")
     except Exception as ex:
         logging.warning(f"[Savant] Arsenal % failed: {ex}")
+        _failed_subcaches.append(f"arsenal_pct({ex})")
 
     # 5. Pitch arsenal velocities
     try:
@@ -1771,6 +1825,7 @@ def _load_savant_data():
         logging.info(f"[Savant] Arsenal velo: {len(d)}")
     except Exception as ex:
         logging.warning(f"[Savant] Arsenal velo failed: {ex}")
+        _failed_subcaches.append(f"arsenal_velo({ex})")
 
     # 6. Pitcher pitch-arsenal outcome stats (BA/SLG/wOBA/whiff%/HH% per pitch type)
     try:
@@ -1804,6 +1859,7 @@ def _load_savant_data():
         logging.info(f"[Savant] Pitcher arsenal stats: {len(d)} pitchers")
     except Exception as ex:
         logging.warning(f"[Savant] Pitcher arsenal stats failed: {ex}")
+        _failed_subcaches.append(f"pit_arsenal_stats({ex})")
 
     # 7. Batter pitch-arsenal outcome stats (SLG/wOBA/whiff%/HH% per pitch type faced)
     try:
@@ -1829,66 +1885,110 @@ def _load_savant_data():
         logging.info(f"[Savant] Batter arsenal stats: {len(d)} batters")
     except Exception as ex:
         logging.warning(f"[Savant] Batter arsenal stats failed: {ex}")
+        _failed_subcaches.append(f"bat_arsenal_stats({ex})")
 
     with _sv_lock:
         has_data = bool(_sv_pit_xstats) or bool(_sv_bat_xstats) or bool(_sv_bat_statcast) or bool(_sv_arsenal_pct) or bool(_sv_arsenal_velo)
         _sv_loaded    = has_data
         _sv_load_date = datetime.now().date() if has_data else None
+
+    if _failed_subcaches:
+        logging.error(
+            f"[Savant] {len(_failed_subcaches)}/7 sub-caches failed to load "
+            f"(stats may be incomplete): {'; '.join(_failed_subcaches)}"
+        )
     logging.info(f"[Savant] All caches ready: pitxstats={len(_sv_pit_xstats)} batxstats={len(_sv_bat_xstats)} statcast={len(_sv_bat_statcast)} arsenal={len(_sv_arsenal_pct)} velo={len(_sv_arsenal_velo)} pit_arsenal={len(_sv_pit_arsenal_stats)} bat_arsenal={len(_sv_bat_arsenal_stats)} loaded={_sv_loaded}")
 
 def _maybe_refresh_savant():
     global _sv_loading
     with _sv_lock:
-        loaded = _sv_loaded; date = _sv_load_date
-        already_loading = _sv_loading
-    if already_loading:
-        return
-    if not loaded or date != datetime.now().date():
-        with _sv_lock: _sv_loading = True
-        def _runner():
-            global _sv_loading
-            try:
-                _load_savant_data()
-            except Exception as _ex:
-                print(f"[Savant] background load error: {_ex}")
-            finally:
-                with _sv_lock:
-                    _sv_loading = False  # ALWAYS reset, even on crash
-        threading.Thread(target=_runner, daemon=True).start()
+        # Atomically check and set _sv_loading so only one thread spawns a loader.
+        if _sv_loading:
+            return
+        if _sv_loaded and _sv_load_date == datetime.now().date():
+            return
+        _sv_loading = True
+    def _runner():
+        global _sv_loading
+        try:
+            _load_savant_data()
+        except Exception as _ex:
+            print(f"[Savant] background load error: {_ex}")
+        finally:
+            with _sv_cond:
+                _sv_loading = False
+                _sv_cond.notify_all()
+    threading.Thread(target=_runner, daemon=True).start()
 
 def sv_pitcher(name):
-    """Savant pitcher stats with Brain overlay. Brain fills missing sv_ keys only."""
+    """Savant pitcher stats with Brain overlay. Brain fills missing sv keys only."""
     with _sv_lock:
         xs = dict(_sv_pit_xstats)
         ap = dict(_sv_arsenal_pct)
         av = dict(_sv_arsenal_velo)
-    r = dict(_fuzzy_lookup(name, xs))
-    r["sv_arsenal_pct"]  = _fuzzy_lookup(name, ap)
-    r["sv_arsenal_velo"] = _fuzzy_lookup(name, av)
+        _xs_id = id(_sv_pit_xstats)
+        _ap_id = id(_sv_arsenal_pct)
+        _av_id = id(_sv_arsenal_velo)
+    lx = _fuzzy_lookup(name, xs, _xs_id)
+    r = dict(lx) if lx else {}
+    lap = _fuzzy_lookup(name, ap, _ap_id)
+    lav = _fuzzy_lookup(name, av, _av_id)
+    r["sv_arsenal_pct"] = lap if lap else {}
+    r["sv_arsenal_velo"] = lav if lav else {}
     try:
         from brain_merge_patch import _brain_fuzzy, _brain_pit_overlay as _bpo
         with _brain_overlay_lock:
             brain = _brain_fuzzy(name, _bpo)
         for k, v in brain.items():
-            if k not in r or r[k] in (None, "", "N/A", "NA"):
+            if k not in r or r[k] in (None, "", "NA", "N/A"):
                 r[k] = v
     except Exception:
         pass
     return r
 
+def _get_pitch_arsenal(pitcher_id=None, pitcher_name=None):
+    """
+    Return per-pitch arsenal stats from existing Savant caches. No external API calls.
+    Merges rich outcome stats (wOBA, whiff%, usage) from _sv_pit_arsenal_stats (MLBAM-keyed)
+    with pct/velo data from the name-keyed caches already loaded in sv_pitcher().
+    """
+    with _sv_lock:
+        outcome = dict(_sv_pit_arsenal_stats)
+    result = {}
+    if pitcher_id:
+        result = {pt: dict(v) for pt, v in outcome.get(str(pitcher_id), {}).items()}
+    if pitcher_name:
+        sv = sv_pitcher(pitcher_name)
+        pct_map  = sv.get("sv_arsenal_pct", {})
+        velo_map = sv.get("sv_arsenal_velo", {})
+        for pt in set(list(pct_map.keys()) + list(velo_map.keys())):
+            if pt not in result:
+                result[pt] = {}
+            if pct_map.get(pt) is not None:
+                result[pt].setdefault("use_pct", pct_map[pt])
+            if velo_map.get(pt) is not None:
+                result[pt].setdefault("velo", velo_map[pt])
+    return result
+
+
 def sv_batter(name):
-    """Savant batter stats with Brain overlay. Brain fills missing sv_ keys only."""
+    """Savant batter stats with Brain overlay. Brain fills missing sv keys only."""
     with _sv_lock:
         xs = dict(_sv_bat_xstats)
         sc = dict(_sv_bat_statcast)
-    r = dict(_fuzzy_lookup(name, xs))
-    r.update(_fuzzy_lookup(name, sc))
+        _xs_id = id(_sv_bat_xstats)
+        _sc_id = id(_sv_bat_statcast)
+    lx = _fuzzy_lookup(name, xs, _xs_id)
+    ls = _fuzzy_lookup(name, sc, _sc_id)
+    r = dict(lx) if lx else {}
+    if ls:
+        r.update(ls)
     try:
         from brain_merge_patch import _brain_fuzzy, _brain_bat_overlay as _bbo
         with _brain_overlay_lock:
             brain = _brain_fuzzy(name, _bbo)
         for k, v in brain.items():
-            if k not in r or r[k] in (None, "", "N/A", "NA"):
+            if k not in r or r[k] in (None, "", "NA", "N/A"):
                 r[k] = v
     except Exception:
         pass
@@ -2703,8 +2803,12 @@ def get_weather(lat, lon, game_hour=13, venue_id=None):
     now = time.time()
     with _weather_cache_lock:
         cached = _weather_cache.get(cache_key)
-    if cached and (now - float(cached.get("ts") or 0)) < float(cached.get("ttl") or _WEATHER_TTL):
-        return dict(cached.get("payload") or {})
+        if cached and (now - float(cached.get("ts") or 0)) < float(cached.get("ttl") or _WEATHER_TTL):
+            return dict(cached.get("payload") or {})
+        # Guard against duplicate concurrent fetches for the same key.
+        if cache_key in _weather_inflight:
+            return dict(cached.get("payload") or {}) if cached else {}
+        _weather_inflight.add(cache_key)
 
     try:
         r = requests.get(WX_API, params={
@@ -2746,11 +2850,13 @@ def get_weather(lat, lon, game_hour=13, venue_id=None):
         print(f"[get_weather] lat={lat} lon={lon} hour={game_hour} venue={venue_id} err={ex}")
         payload = {"temp":"N/A","rain_chance":"N/A","wind_speed":"N/A","wind_dir":"","wind":"N/A","condition":"N/A"}
         with _weather_cache_lock:
-            # Don't overwrite a valid entry that a concurrent thread may have written.
             existing = _weather_cache.get(cache_key)
             if not existing or existing.get("payload", {}).get("temp") in (None, "N/A"):
                 _weather_cache[cache_key] = {"ts": now, "ttl": _WEATHER_FAIL_TTL, "payload": payload}
         return payload
+    finally:
+        with _weather_cache_lock:
+            _weather_inflight.discard(cache_key)
 
 def pitcher_stats_mlb(player_id):
     try:
@@ -3046,8 +3152,16 @@ def api_status():
 @app.route('/health')
 def health_check():
     t0 = time.time()
-    resp = {'status': 'ok'}
-    logging.info(f"[API] /health took {time.time() - t0:.3f}s")
+    with _fg_lock:
+        fg_ready = _fg_loaded
+    with _sv_lock:
+        sv_ready = _sv_loaded
+    resp = {
+        'status': 'ok',
+        'fg_loaded': fg_ready,
+        'sv_loaded': sv_ready,
+    }
+    logging.info(f"[API] /health took {time.time()-t0:.3f}s fg={fg_ready} sv={sv_ready}")
     return resp, 200
 
 
@@ -4265,10 +4379,6 @@ def _project_batter_vs_pitcher(batter_stats, pitcher_stats):
     # avg hitter vs avg SP:    ~50% hit, 35% TB,  4% HR, 35% RBI
     # weak hitter vs elite SP: ~30% hit, 15% TB, 1% HR,  15% RBI
     p_hit = max(0.04, min(0.38, xba * pitcher_adj * 0.90))
-    # XGBoost blend (60% XGB / 40% formula when model is loaded)
-    _xgb_hit = xgb_hit_prob(batter_stats, pitcher_stats)
-    if _xgb_hit is not None:
-        p_hit = max(0.04, min(0.38, 0.40 * p_hit + 0.60 * _xgb_hit))
     # For TB, use per-PA probability of an extra-base hit, roughly slg-xba.
     slg_proxy = xba + iso
     p_tb_pa   = (slg_proxy - xba * 0.50) * pitcher_adj   # EBH probability
@@ -4282,8 +4392,15 @@ def _project_batter_vs_pitcher(batter_stats, pitcher_stats):
         # 1 - (1 - p)^PA
         return round(1 - (1 - pp) ** pa, 3)
 
+    hit_prob = _game_prob(p_hit)
+    _xgb_hit = None
+    if xgb_ready('hits'):
+        _xgb_hit = xgb_hit_prob(batter_stats, pitcher_stats)
+        if _xgb_hit is not None:
+            hit_prob = round(_clamp(0.40 * hit_prob + 0.60 * _xgb_hit, 0.03, 0.97), 3)
+
     return {
-        "hitProb":  _game_prob(p_hit),
+        "hitProb":  hit_prob,
         "tbProb":   _game_prob(p_tb),
         "hrProb":   _game_prob(p_hr),
         "rbiProb":  _game_prob(p_rbi),
@@ -4291,6 +4408,7 @@ def _project_batter_vs_pitcher(batter_stats, pitcher_stats):
         "projTB":   round(p_tb  * pa, 2),
         "projHR":   round(p_hr  * pa, 2),
         "projRBI":  round(p_rbi * pa, 2),
+        "xgbHitProb": round(_xgb_hit, 4) if _xgb_hit is not None else None,
     }
 
 
@@ -5427,6 +5545,7 @@ def api_bvp_projection(batter_id, pitcher_id):
             "hr":   _blend_prob(gp["hrProb"],  _poisson_over_prob(hr_m,   0.5)),
             "rbi1": _blend_prob(gp["rbiProb"], _poisson_over_prob(rbi_m,  0.5)),
             "r1":   round(_poisson_over_prob(r_m, 0.5), 3),
+            "xgbHitProb": gp.get("xgbHitProb"),
         }
 
         # ── 8. xStats + Statcast quality metrics ─────────────────────────────
@@ -6102,13 +6221,13 @@ def _shrink(observed, n_obs, league_mean, prior_n):
     return round((observed * n_obs + league_mean * prior_n) / (n_obs + prior_n), 4)
 
 
-def _parse_ip(ip_val):
-    """Parse '6.1' style IP (where .1 = 1 out) to decimal innings."""
+def parse_ip(ipval):
+    """Parse '6.1' style IP where .1 = 1/3 inning, .2 = 2/3 inning."""
     try:
-        f = float(ip_val or 0)
+        f = float(ipval or 0)
         whole = int(f)
-        part  = round(f - whole, 1)
-        return whole + part / 0.3   # convert .1→1/3, .2→2/3
+        outs = round((f - whole) * 10)  # .1→1 out, .2→2 outs
+        return whole + outs / 3.0
     except Exception:
         return 0.0
 
@@ -6727,6 +6846,7 @@ def player_profile(player_id):
         }
     except Exception:
         out = {'bats': 'S', 'throws': 'R'}
+    _evict_if_large(_bio_cache, 1000)
     _bio_cache[player_id] = out
     return out
 
@@ -6760,6 +6880,7 @@ def hitter_split_profile(player_id):
             }
     except Exception:
         out = {}
+    _evict_if_large(_hit_split_cache, 1000)
     _hit_split_cache[player_id] = out
     return out
 
@@ -6788,6 +6909,7 @@ def team_pitching_context(team_id):
         }
     except Exception:
         out = dict(BULLPEN_BASE)
+    _evict_if_large(_team_pitch_cache, 300)
     _team_pitch_cache[key] = out
     return out
 
@@ -6864,56 +6986,159 @@ def _get_team_pitching_rankings(force=False):
     return rows, by_id
 
 
+_pitcher_stats_mlb_cache: dict = {}
+_pitcher_stats_mlb_lock = threading.Lock()
+
 def pitcher_stats_mlb(player_id):
+    today = datetime.now().date().isoformat()
+    cache_key = (player_id, today)
+    with _pitcher_stats_mlb_lock:
+        if cache_key in _pitcher_stats_mlb_cache:
+            return _pitcher_stats_mlb_cache[cache_key]
     try:
         r = requests.get(f"{MLB_API}/people/{player_id}/stats?stats=season&group=pitching&season={datetime.now().year}", timeout=8)
         r.raise_for_status()
         splits = r.json().get("stats", [{}])[0].get("splits", [])
         prof = player_profile(player_id)
         if not splits:
-            return {'pitchHand': prof.get('throws', 'R')}
-        s = splits[0].get("stat", {})
-        return {
-            "era": s.get("era", "N/A"), "whip": s.get("whip", "N/A"),
-            "ip": s.get("inningsPitched", "N/A"),
-            "wins": s.get("wins", 0), "losses": s.get("losses", 0),
-            "g": s.get("gamesPlayed", 0), "gs": s.get("gamesStarted", 0),
-            "k9": round(float(s.get("strikeoutsPer9Inn", 0) or 0), 2),
-            "bb9": round(float(s.get("walksPer9Inn", 0) or 0), 2),
-            "hr9": round(float(s.get("homeRunsPer9", 0) or 0), 2),
-            "pitchHand": prof.get('throws', 'R'),
-        }
+            result = {'pitchHand': prof.get('throws', 'R')}
+        else:
+            s = splits[0].get("stat", {})
+            result = {
+                "era": s.get("era", "N/A"), "whip": s.get("whip", "N/A"),
+                "ip": s.get("inningsPitched", "N/A"),
+                "wins": s.get("wins", 0), "losses": s.get("losses", 0),
+                "g": s.get("gamesPlayed", 0), "gs": s.get("gamesStarted", 0),
+                "k9": round(float(s.get("strikeoutsPer9Inn", 0) or 0), 2),
+                "bb9": round(float(s.get("walksPer9Inn", 0) or 0), 2),
+                "hr9": round(float(s.get("homeRunsPer9", 0) or 0), 2),
+                "pitchHand": prof.get('throws', 'R'),
+            }
     except Exception:
         prof = player_profile(player_id)
-        return {'pitchHand': prof.get('throws', 'R')}
+        result = {'pitchHand': prof.get('throws', 'R')}
+    with _pitcher_stats_mlb_lock:
+        _evict_if_large(_pitcher_stats_mlb_cache, 200)
+        _pitcher_stats_mlb_cache[cache_key] = result
+    return result
+
+
+def _load_local_pitcher_arsenal():
+    """Load pitch arsenal stats from local FanGraphs CSVs into module-level cache.
+
+    Reads fg*_pit*.csv files that contain real pitch-type usage columns.
+    Steamer projection files (which lack these columns) are skipped.
+    Called once at startup via _preload_caches() so _pitcher_model() never
+    has to pay the 20-60s CSV-parse cost on the first request.
+    """
+    PITCH_TYPE_COLS = {
+        'FA%','SI%','FC%','SL%','CU%','CH%','KC%','KN%','EP%','SC%','FO%',
+        'PO%','XX%','CT%','CB%','SF%',
+    }
+    arsenal = {}
+    velo = {}
+    seen: set = set()
+    paths = (
+        _glob.glob(os.path.join("data", "fg*_pit*.csv"))
+        + _glob.glob(os.path.join("data", "fg_pitching_*.csv"))
+    )
+    for path in paths:
+        abs_path = os.path.abspath(path)
+        if abs_path in seen:
+            continue
+        seen.add(abs_path)
+        try:
+            df = pd.read_csv(path)
+            has_arsenal = any(c in PITCH_TYPE_COLS or c.endswith("_Velo") for c in df.columns)
+            if not has_arsenal:
+                continue
+            for _, row in df.iterrows():
+                pname = str(row.get("Name") or row.get("PlayerName") or row.get("player_name") or "").strip()
+                if not pname:
+                    continue
+                key = _sv_key(pname)
+                pitch_pct = {
+                    k.replace("%", "").lower(): float(row[k])
+                    for k in row.keys()
+                    if k in PITCH_TYPE_COLS and pd.notnull(row[k])
+                }
+                pitch_velo = {
+                    k.replace("_Velo", "").lower(): float(row[k])
+                    for k in row.keys()
+                    if k.endswith("_Velo") and pd.notnull(row[k])
+                }
+                if pitch_pct:
+                    arsenal[key] = pitch_pct
+                if pitch_velo:
+                    velo[key] = pitch_velo
+        except Exception as ex:
+            logging.warning(f"[LocalArsenal] Failed to load {path}: {ex}")
+    return arsenal, velo
 
 
 def _pitcher_model(name, pid=None, team_id=None):
+    global _local_arsenal_cache
     mlb = pitcher_stats_mlb(pid) if pid else {}
-    fg = fg_pitcher(name)
-    sv = sv_pitcher(name)
-    era = _num(sv.get('sv_xera'), None)
-    if era is None or era == 0:
-        era = _num(fg.get('fg_era'), _num(mlb.get('era'), 4.50))
-    whip = _num(fg.get('fg_whip'), _num(mlb.get('whip'), 1.30))
-    k9 = _num(fg.get('fg_k9'), _num(mlb.get('k9'), 8.2))
-    bb9 = _num(fg.get('fg_bb9'), _num(mlb.get('bb9'), 3.1))
-    hr9 = _num(fg.get('fg_hr9'), _num(mlb.get('hr9'), 1.10))
-    return {
-        'name': name, 'id': pid, 'team_id': team_id,
-        'era': _clamp(era, 2.0, 8.5), 'whip': _clamp(whip, 0.9, 1.9),
-        'k9': _clamp(k9, 4.0, 14.0), 'bb9': _clamp(bb9, 1.0, 6.0), 'hr9': _clamp(hr9, 0.4, 2.5),
-        'pitchHand': (mlb.get('pitchHand') or player_profile(pid).get('throws', 'R')),
-    }
 
+    # Grab a snapshot of all sv caches under _sv_lock (fast — dicts are already built).
+    # The local arsenal load is done OUTSIDE _sv_lock to avoid holding the global
+    # stats lock for the 2+ seconds it takes to iterate the FanGraphs CSV files.
+    with _sv_lock:
+        xs = dict(_sv_pit_xstats)
+        ap = dict(_sv_arsenal_pct)
+        av = dict(_sv_arsenal_velo)
+        lx = _fuzzy_lookup(name, xs)
+        r = dict(lx) if lx else {}
+        lap = _fuzzy_lookup(name, ap)
+        lav = _fuzzy_lookup(name, av)
+        r["sv_arsenal_pct"] = lap if lap else {}
+        r["sv_arsenal_velo"] = lav if lav else {}
 
+    # Supplement missing arsenal data from local FanGraphs CSVs — done outside
+    # _sv_lock so that other stat-lookup threads are not blocked during CSV parsing.
+    if not r["sv_arsenal_pct"] or not r["sv_arsenal_velo"]:
+        with _local_arsenal_lock:
+            if _local_arsenal_cache is None:
+                _local_arsenal_cache = _load_local_pitcher_arsenal()
+            local_pct, local_velo = _local_arsenal_cache
+        key = _sv_key(name)
+        if not r["sv_arsenal_pct"] and key in local_pct:
+            r["sv_arsenal_pct"] = local_pct[key]
+        if not r["sv_arsenal_velo"] and key in local_velo:
+            r["sv_arsenal_velo"] = local_velo[key]
+
+    try:
+        from brain_merge_patch import _brain_fuzzy, _brain_pit_overlay as _bpo
+        with _brain_overlay_lock:
+            brain = _brain_fuzzy(name, _bpo)
+        for k, v in brain.items():
+            if k not in r or r[k] in (None, "", "NA", "N/A"):
+                r[k] = v
+    except Exception:
+        pass
+    # Always ensure 'name' is set; merge MLB API stats as fallbacks for missing fields.
+    # Normalize numeric pitch-stat keys to float so callers (e.g. _starter_outs_target,
+    # _tier_blend) can do arithmetic without TypeError on "N/A" strings from the MLB API.
+    r['name'] = name
+    _PITCH_FLOAT_KEYS = {'era', 'whip', 'k9', 'bb9', 'hr9'}
+    for k, v in mlb.items():
+        if k not in r or r[k] in (None, "", "NA", "N/A"):
+            r[k] = _num(v, BULLPEN_BASE.get(k, 0.0)) if k in _PITCH_FLOAT_KEYS else v
+    r.setdefault('pitchHand', 'R')
+    return r
 def _tier_blend(tm, starter, w_tm, w_base, w_sp, mods):
-    era = _clamp(w_tm * _num(tm.get('era'), BULLPEN_BASE['era']) + w_base * BULLPEN_BASE['era'] + w_sp * starter.get('era', 4.2) + mods.get('era', 0), 2.6, 5.8)
-    whip = _clamp(w_tm * _num(tm.get('whip'), BULLPEN_BASE['whip']) + w_base * BULLPEN_BASE['whip'] + w_sp * starter.get('whip', 1.3) + mods.get('whip', 0), 0.98, 1.58)
-    k9 = _clamp(w_tm * _num(tm.get('k9'), BULLPEN_BASE['k9']) + w_base * BULLPEN_BASE['k9'] + w_sp * starter.get('k9', 8.2) + mods.get('k9', 0), 6.0, 12.8)
-    bb9 = _clamp(w_tm * _num(tm.get('bb9'), BULLPEN_BASE['bb9']) + w_base * BULLPEN_BASE['bb9'] + w_sp * starter.get('bb9', 3.2) + mods.get('bb9', 0), 1.8, 5.2)
-    hr9 = _clamp(w_tm * _num(tm.get('hr9'), BULLPEN_BASE['hr9']) + w_base * BULLPEN_BASE['hr9'] + w_sp * starter.get('hr9', 1.1) + mods.get('hr9', 0), 0.55, 1.9)
-    return {'era': era, 'whip': whip, 'k9': k9, 'bb9': bb9, 'hr9': hr9}
+    out = {}
+    for k in ('era', 'whip', 'k9', 'bb9', 'hr9'):
+        out[k] = _clamp(
+            w_tm * _num(tm.get(k), BULLPEN_BASE[k]) +
+            w_base * BULLPEN_BASE[k] +
+            w_sp * _num(starter.get(k), BULLPEN_BASE[k]) +
+            mods.get(k, 0),
+            0.55 if k == 'hr9' else 0.0,
+            1.9 if k == 'hr9' else 20.0
+        )
+    return out
+
 
 
 def _bullpen_tiers(starter, team_id=None):
@@ -6925,10 +7150,12 @@ def _bullpen_tiers(starter, team_id=None):
         model['name'] = name
         model['pitchHand'] = starter.get('pitchHand', 'R')
     return {'closer': closer, 'setup': setup, 'middle': middle}
+# Alias for legacy code
+_parse_ip = parse_ip
 
 
 def _starter_outs_target(starter, rng):
-    mean = 16.5 + (4.1 - starter['era']) * 1.2 + (starter['k9'] - 8.2) * 0.20 - max(0, starter['whip'] - 1.25) * 2.8
+    mean = 16.5 + (4.1 - _num(starter.get('era'), 4.1)) * 1.2 + (_num(starter.get('k9'), 8.2) - 8.2) * 0.20 - max(0, _num(starter.get('whip'), 1.25) - 1.25) * 2.8
     mean = _clamp(mean, 12.0, 21.0)
     return int(_clamp(round(rng.gauss(mean, 2.4)), 9, 24))
 
@@ -7507,31 +7734,76 @@ def _simulation_fallback_payload(game_obj, game_pk, sims=0, warning=''):
 
     lineups = g.get('lineups') or {}
 
-    def _sample_batters(hitters):
+    # Try to source actual batters: prefer schedule-hydrated lineups, then active roster.
+    def _from_schedule(hitters):
         out = []
-        for i, p in enumerate(hitters or [], start=1):
+        for p in hitters or []:
+            pid = p.get('id') or p.get('playerId')
             nm = (p.get('fullName') or p.get('name') or '').strip()
-            if not nm:
+            if not pid or not nm:
                 continue
-            out.append({
-                'slot': i,
-                'name': nm,
-                'pos': ((p.get('primaryPosition') or {}).get('abbreviation') or '?'),
-                'ab': 4,
-                'h': 1,
-                'hr': 0,
-                'rbi': 0,
-                'r': 0,
-                'bb': 0,
-                'k': 1,
-                'tb': 1,
-            })
+            out.append({'id': pid, 'name': nm,
+                        'pos': ((p.get('primaryPosition') or {}).get('abbreviation') or '?')})
             if len(out) >= 9:
                 break
         return out
 
-    away_batters = _sample_batters(lineups.get('awayBatters'))
-    home_batters = _sample_batters(lineups.get('homeBatters'))
+    def _from_roster(team_id):
+        out = []
+        if not team_id:
+            return out
+        try:
+            for entry in _get_active_roster(team_id):
+                pos = ((entry.get('position') or {}).get('abbreviation') or '?')
+                if pos in ('P', 'SP', 'RP', 'CP'):
+                    continue
+                person = entry.get('person') or {}
+                pid = person.get('id')
+                nm = (person.get('fullName') or '').strip()
+                if not pid or not nm:
+                    continue
+                out.append({'id': pid, 'name': nm, 'pos': pos})
+                if len(out) >= 9:
+                    break
+        except Exception:
+            pass
+        return out
+
+    away_roster = _from_schedule(lineups.get('awayBatters')) or _from_roster(away_t.get('id'))
+    home_roster = _from_schedule(lineups.get('homeBatters')) or _from_roster(home_t.get('id'))
+
+    # Pre-warm bio cache in parallel so handedness counts reflect real lineup makeup.
+    _missing_pids = [b.get('id') for b in (away_roster + home_roster)
+                     if b.get('id') and b.get('id') not in _bio_cache]
+    if _missing_pids:
+        try:
+            with ThreadPoolExecutor(max_workers=min(len(_missing_pids), 9)) as _pool:
+                list(_pool.map(player_profile, _missing_pids))
+        except Exception:
+            pass
+
+    def _hand_counts(roster):
+        counts = {'L': 0, 'R': 0, 'S': 0}
+        for b in roster:
+            pid = b.get('id')
+            bats = (_bio_cache.get(pid) or {}).get('bats') or 'S'
+            bats = bats if bats in counts else 'S'
+            counts[bats] += 1
+        return counts
+
+    away_hand_counts = _hand_counts(away_roster)
+    home_hand_counts = _hand_counts(home_roster)
+
+    away_batters = [{
+        'slot': i + 1, 'id': b.get('id'), 'name': b.get('name'), 'pos': b.get('pos'),
+        'bats': (_bio_cache.get(b.get('id')) or {}).get('bats', 'S'),
+        'ab': 4, 'h': 1, 'hr': 0, 'rbi': 0, 'r': 0, 'bb': 0, 'k': 1, 'tb': 1,
+    } for i, b in enumerate(away_roster[:9])]
+    home_batters = [{
+        'slot': i + 1, 'id': b.get('id'), 'name': b.get('name'), 'pos': b.get('pos'),
+        'bats': (_bio_cache.get(b.get('id')) or {}).get('bats', 'S'),
+        'ab': 4, 'h': 1, 'hr': 0, 'rbi': 0, 'r': 0, 'bb': 0, 'k': 1, 'tb': 1,
+    } for i, b in enumerate(home_roster[:9])]
 
     return {
         'success': True,
@@ -7557,8 +7829,8 @@ def _simulation_fallback_payload(game_obj, game_pk, sims=0, warning=''):
             'tie_pct': 0.03,
         },
         'handedness': {
-            'awayLineup': {'L': 0, 'R': 0, 'S': 0},
-            'homeLineup': {'L': 0, 'R': 0, 'S': 0},
+            'awayLineup': away_hand_counts,
+            'homeLineup': home_hand_counts,
             'awayStarterHand': 'R',
             'homeStarterHand': 'R',
         },
@@ -7585,13 +7857,11 @@ def _simulation_fallback_payload(game_obj, game_pk, sims=0, warning=''):
 
 
 @app.route('/api/simulate/<int:game_pk>')
-def api_simulate(game_pk):
+def _do_simulate(game_pk, sims):
+    """Core simulation logic, extracted so it can run in a background thread.
+    Returns a plain dict (not a Flask Response)."""
     try:
-        try:
-            requested_sims = int(request.args.get('sims', 800) or 800)
-        except Exception:
-            requested_sims = 800
-        sims = max(200, min(2000, requested_sims))
+        sims = max(1500, min(5000, int(sims) if sims else 5000))
 
         # Prefer direct game lookup so deep-dive works for non-today game IDs too.
         g = fetch_schedule_game(game_pk)
@@ -7605,7 +7875,7 @@ def api_simulate(game_pk):
                 sims=sims,
                 warning='Game not found for simulation; returned fallback payload.'
             )
-            return jsonify(fallback)
+            return fallback
         away_team = g.get('teams', {}).get('away', {}).get('team', {})
         home_team = g.get('teams', {}).get('home', {}).get('team', {})
         away_team_id = away_team.get('id')
@@ -7707,28 +7977,44 @@ def api_simulate(game_pk):
             if len(home_lineup) < 5:
                 home_lineup = _roster_lineup(home_team_id)
         if not away_lineup or not home_lineup:
-            return jsonify({'success': False, 'error': 'Lineups unavailable for simulation'}), 400
-        # Keep simulation within Render memory/timeout budget.
+            return {'success': False, 'error': 'Lineups unavailable for simulation'}
+        # Pre-warm _bio_cache for all lineup players so bats handedness is correct
+        # even on a cold server restart (avoids L0/R0/S0 in the handedness block).
+        # Parallel fetch to stay within the JS 90s abort timeout.
+        _missing_pids = [_b.get('id') for _b in away_lineup + home_lineup
+                         if _b.get('id') and _b.get('id') not in _bio_cache]
+        if _missing_pids:
+            with ThreadPoolExecutor(max_workers=min(len(_missing_pids), 9)) as _pool:
+                list(_pool.map(player_profile, _missing_pids))
+        for _b in away_lineup + home_lineup:
+            _pid = _b.get('id')
+            if _pid and _pid in _bio_cache:
+                _b['bats'] = _bio_cache[_pid].get('bats', _b.get('bats', 'S'))
         today = datetime.now(ET).strftime('%Y-%m-%d')
         lineup_signature = _game_lineup_signature(g, away_lineup, home_lineup)
-        cache_signature = f"{lineup_signature}|sims:{sims}"
-        refresh = request.args.get('refresh') == '1'
+        cache_signature = f"{lineup_signature}|sims:{sims}|hand:v2"
         cached = _correlation_cache.get(game_pk)
-        if cached and not refresh and cached.get('date') == today and cached.get('signature') == cache_signature:
-            return jsonify(cached.get('payload') or {'success': False, 'error': 'Cached simulation payload missing'})
+        if cached and cached.get('date') == today and cached.get('signature') == cache_signature:
+            return cached.get('payload') or {'success': False, 'error': 'Cached simulation payload missing'}
 
         away_abbr = away_team.get('abbreviation', 'AWAY')
         home_abbr = home_team.get('abbreviation', 'HOME')
 
         away_p = g.get('teams', {}).get('away', {}).get('probablePitcher', {})
         home_p = g.get('teams', {}).get('home', {}).get('probablePitcher', {})
-        away_pitcher = _pitcher_model(away_p.get('fullName', 'Away SP'), away_p.get('id'), away_team_id)
-        home_pitcher = _pitcher_model(home_p.get('fullName', 'Home SP'), home_p.get('id'), home_team_id)
+        # _pitcher_model hits pitcher_stats_mlb (MLB API) + local CSV — run in parallel.
+        with ThreadPoolExecutor(max_workers=2) as _pm_ex:
+            _away_pm_fut = _pm_ex.submit(_pitcher_model,
+                                         away_p.get('fullName', 'Away SP'),
+                                         away_p.get('id'), away_team_id)
+            _home_pm_fut = _pm_ex.submit(_pitcher_model,
+                                         home_p.get('fullName', 'Home SP'),
+                                         home_p.get('id'), home_team_id)
+        away_pitcher = _away_pm_fut.result()
+        home_pitcher = _home_pm_fut.result()
         park = PARK_FACTORS.get(home_team_id, 1.0)
-        away_relief_fatigue_woba = _team_relief_fatigue_woba(home_team_id)
-        home_relief_fatigue_woba = _team_relief_fatigue_woba(away_team_id)
 
-        # ── Fetch weather for BAT X integration ──────────────────────────────
+        # ── Compute venue/time locals needed for weather before parallel block ─
         ven      = g.get('venue', {})
         venue_id = ven.get('id')
         vloc     = ven.get('location', {}) or {}
@@ -7736,22 +8022,38 @@ def api_simulate(game_pk):
         lat      = coords.get('latitude')
         lon      = coords.get('longitude')
         try:
-            from datetime import timedelta
-            dt_utc    = datetime.fromisoformat(g.get('gameDate', '').replace('Z', '+00:00'))
-            utc_off   = VENUE_UTC_OFFSET.get(venue_id, -5)
-            ghour     = (dt_utc + timedelta(hours=utc_off)).hour
+            dt_utc  = datetime.fromisoformat(g.get('gameDate', '').replace('Z', '+00:00'))
+            utc_off = VENUE_UTC_OFFSET.get(venue_id, -5)
+            ghour   = (dt_utc + timedelta(hours=utc_off)).hour
         except Exception:
             ghour = 13
+        game_date_str = (g.get('gameDate') or today).split('T')[0]
+
+        # ── Run all pre-simulation IO in parallel (bullpen × 2, weather, ump) ─
+        with ThreadPoolExecutor(max_workers=4) as _pre_ex:
+            _fat_away_fut = _pre_ex.submit(_team_relief_fatigue_woba, home_team_id)
+            _fat_home_fut = _pre_ex.submit(_team_relief_fatigue_woba, away_team_id)
+            _wx_fut       = _pre_ex.submit(get_weather, lat, lon, ghour, venue_id)
+            _off_fut      = _pre_ex.submit(_fetch_schedule_with_officials,
+                                           game_date_str, game_date_str)
+
         try:
-            wx = get_weather(lat, lon, ghour, venue_id=venue_id)
+            away_relief_fatigue_woba = _fat_away_fut.result()
+        except Exception:
+            away_relief_fatigue_woba = 0.0
+        try:
+            home_relief_fatigue_woba = _fat_home_fut.result()
+        except Exception:
+            home_relief_fatigue_woba = 0.0
+        try:
+            wx = _wx_fut.result() or {}
         except Exception:
             wx = {}
 
         ump_data = None
         try:
-            game_date_str = (g.get('gameDate') or today).split('T')[0]
-            official_games = _fetch_schedule_with_officials(game_date_str, game_date_str)
-            official_game = next((item for item in official_games if item.get('gamePk') == game_pk), None)
+            official_games = _off_fut.result()
+            official_game = next((x for x in official_games if x.get('gamePk') == game_pk), None)
             ump = _get_hp_umpire(official_game or {})
             if ump and ump.get('id'):
                 ump_data = _get_cached_ump(ump.get('id'), ump.get('fullName', ''))
@@ -8040,7 +8342,7 @@ def api_simulate(game_pk):
             'signature': cache_signature,
             'payload': payload,
         }
-        return jsonify(payload)
+        return payload
     except Exception as ex:
         print('[api_simulate]', traceback.format_exc())
         try:
@@ -8051,7 +8353,7 @@ def api_simulate(game_pk):
                 sims=sims,
                 warning=f'Fallback mode: {str(ex) or "simulation error"}'
             )
-            return jsonify(fallback)
+            return fallback
         except Exception as fallback_ex:
             print('[api_simulate:fallback]', traceback.format_exc())
             emergency = _simulation_fallback_payload(
@@ -8060,8 +8362,69 @@ def api_simulate(game_pk):
                 sims=sims,
                 warning=f'Emergency fallback: {str(ex) or "simulation error"}; {str(fallback_ex) or "fallback error"}'
             )
-            return jsonify(emergency)
+            return emergency
 
+
+# ── Background simulation dispatcher ─────────────────────────────────────────
+# Jobs keyed by (game_pk, sims) so that a 5k-sim request and a 2.5k-sim request
+# don't race each other.  Entries: {'status': 'running'|'done', 'started': float,
+# 'payload': dict|None}.
+_sim_bg_jobs: dict = {}
+_sim_bg_lock = threading.Lock()
+
+
+@app.route('/api/simulate/<int:game_pk>')
+def api_simulate(game_pk):
+    try:
+        sims = max(1500, min(5000, int(request.args.get('sims', 5000) or 5000)))
+    except Exception:
+        sims = 5000
+    refresh = request.args.get('refresh') == '1'
+    today = datetime.now(ET).strftime('%Y-%m-%d')
+    job_key = (game_pk, sims)
+
+    # 1. Fast cache hit
+    cached = _correlation_cache.get(game_pk)
+    if cached and not refresh and cached.get('date') == today:
+        return jsonify(cached['payload'])
+
+    # 2. Background job already running or done
+    with _sim_bg_lock:
+        job = _sim_bg_jobs.get(job_key)
+    if job and not refresh:
+        if job['status'] == 'done':
+            return jsonify(job['payload'])
+        elapsed = int(time.time() - job['started'])
+        return jsonify({'computing': True, 'elapsed': elapsed,
+                        'estimatedSeconds': max(5, 90 - elapsed)})
+
+    # 3. Kick off background simulation
+    started = time.time()
+    with _sim_bg_lock:
+        _sim_bg_jobs[job_key] = {'status': 'running', 'started': started, 'payload': None}
+
+    def _run():
+        try:
+            payload = _do_simulate(game_pk, sims)
+        except Exception as exc:
+            g = {}
+            try:
+                g = fetch_schedule_game(game_pk) or {}
+            except Exception:
+                pass
+            payload = _simulation_fallback_payload(g, game_pk, sims=0,
+                                                   warning=str(exc)[:300])
+        with _sim_bg_lock:
+            _sim_bg_jobs[job_key]['status'] = 'done'
+            _sim_bg_jobs[job_key]['payload'] = payload
+        if payload and payload.get('success'):
+            _correlation_cache[game_pk] = {
+                'date': today, 'signature': payload.get('_sig', ''),
+                'payload': payload,
+            }
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({'computing': True, 'elapsed': 0, 'estimatedSeconds': 90})
 
 
 # ── Phase 7 Odds / Lineup / Edge Infrastructure ──────────────────────────────
@@ -8100,6 +8463,8 @@ _ODDS_SNAPSHOT_HEARTBEAT_SEC = _odds_ttl_seconds('ODDS_SNAPSHOT_HEARTBEAT_SEC', 
 _ODDS_SNAPSHOT_RETRY_SEC = _odds_ttl_seconds('ODDS_SNAPSHOT_RETRY_SEC', 15 * 60, min_seconds=60, max_seconds=6 * 60 * 60)
 _ODDS_CACHE_LOCK = threading.Lock()
 _ODDS_SNAPSHOT_WORKER_LOCK = threading.Lock()
+# Single-thread executor for non-blocking odds-cache file persistence.
+_odds_io_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="odds_io")
 _ODDS_SNAPSHOT_WORKER_STARTED = False
 _ODDS_SNAPSHOT_WORKER_LAST_ATTEMPT = 0.0
 _ODDS_SNAPSHOT_META: dict = {
@@ -8238,7 +8603,8 @@ def _ensure_daily_odds_snapshot():
             _ODDS_SNAPSHOT_META['completedAt'] = datetime.now(timezone.utc).isoformat()
             _ODDS_SNAPSHOT_META['complete'] = True
             _ODDS_SNAPSHOT_META['running'] = False
-            _persist_odds_caches()
+        # Persist to disk off the critical path so this thread isn't blocked by disk I/O.
+        _odds_io_executor.submit(_persist_odds_caches)
 
         print(f'[Odds] Daily snapshot complete: events={len(events)} fetched={fetched} errors={len(errors)}')
         return True
@@ -8248,7 +8614,7 @@ def _ensure_daily_odds_snapshot():
             _ODDS_SNAPSHOT_META['completedAt'] = datetime.now(timezone.utc).isoformat()
             _ODDS_SNAPSHOT_META['complete'] = False
             _ODDS_SNAPSHOT_META['running'] = False
-            _persist_odds_caches()
+        _odds_io_executor.submit(_persist_odds_caches)
         print(f'[Odds] Daily snapshot failed: {ex}')
         return False
 
@@ -9581,23 +9947,23 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
     process_hitters(away_props, away_abbr, home_pitcher.get('name'))
     process_hitters(home_props, home_abbr, away_pitcher.get('name'))
 
+    k_xgb_ready = xgb_ready('k')
     for sp, team_abbr in [(away_sp, away_abbr), (home_sp, home_abbr)]:
         sp_mkt_lines = _market_lines_for_player(market_props, sp.get('name'), 'pitcher_strikeouts')
         k_lines = sp_mkt_lines if sp_mkt_lines else [3.5, 4.5, 5.5]
         mean_k = float(sp.get('mean_k', 0) or 0)
+        # ── FanGraphs enrichment for pitcher K props (done once per starter) ──
+        if k_xgb_ready:
+            sp = {**sp, **enrich_pitcher(sp)}   # merges real FG stats into sp dict
+        # ─────────────────────────────────────────────────────────────────────
         for line in k_lines:
             prob_field = _K_PROB_FIELD_FOR.get(line)
             if prob_field:
                 raw_prob = float(sp.get(prob_field, 0) or 0)
             else:
                 raw_prob = _poisson_over_prob(mean_k, line)
-            # ── FanGraphs enrichment for pitcher K props ──────────────────────
-            if _XGB_AVAILABLE:
-                from xgb_prop_scorer import enrich_pitcher
-                sp = {**sp, **enrich_pitcher(sp)}   # merges real FG stats into sp dict
-            # ─────────────────────────────────────────────────────────────────    
             # XGBoost blend for K props (60% XGB / 40% Monte Carlo when model loaded)
-            _xgb_k = xgb_k_prob(sp, line=line)
+            _xgb_k = xgb_k_prob(sp, line=line) if k_xgb_ready else None
             if _xgb_k is not None:
                 raw_prob = max(0.0, min(1.0, 0.40 * raw_prob + 0.60 * _xgb_k))
             if raw_prob < 0.12:
@@ -9619,7 +9985,7 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
             ev_pct = round(adj_prob / mi - 1, 4) if mi and mi > 0 else None
             temp_row = {
                 'date': capture_date, 'gamePk': game_pk, 'team': team_abbr, 'player': sp.get('name'), 'playerId': sp.get('id'), 'marketKey': 'pitcher_strikeouts', 'line': line, 'recommendedSide': 'Over',
-                'rawProb': round(raw_prob, 4), 'rawMultProb': round(raw_mult_prob, 4), 'adjProb': round(adj_prob, 4), 'modelMean': round(float(sp.get('mean_k', 0) or 0), 3), 'edge': round(edge, 4) if edge is not None else None,
+                'rawProb': round(raw_prob, 4), 'rawMultProb': round(raw_mult_prob, 4), 'adjProb': round(adj_prob, 4), 'modelMean': round(float(sp.get('mean_k', 0) or 0), 3), 'edge': round(edge, 4) if edge is not None else None, 'xgbKProb': round(_xgb_k, 4) if _xgb_k is not None else None,
                 'bookmaker': msum.get('market_bookmaker'), 'marketPrice': msum.get('best_over_price'), 'marketImplied': market_implied,
                 'bestAvailablePrice': msum.get('best_over_price'), 'bestAvailableBook': msum.get('best_over_book'),
                 'bestOverPrice': msum.get('best_over_price'), 'bestOverBook': msum.get('best_over_book'),
@@ -9750,22 +10116,6 @@ def _build_tracker_rows_quick(game_obj, capture_date, adjustments=None):
     return rows[:keep]
 
 
-def _tracker_summary(entries):
-    total = len(entries)
-    graded = [x for x in entries if x.get('grade') in ('win', 'loss', 'push')]
-    wins = sum(1 for x in graded if x.get('grade') == 'win')
-    losses = sum(1 for x in graded if x.get('grade') == 'loss')
-    pushes = sum(1 for x in graded if x.get('grade') == 'push')
-    hit_rate = round(wins / max(1, wins + losses), 3) if graded else 0.0
-    by_market = {}
-    for x in entries:
-        mk = x.get('marketKey')
-        by_market.setdefault(mk, {'picks': 0, 'wins': 0, 'losses': 0, 'pushes': 0})
-        by_market[mk]['picks'] += 1
-        if x.get('grade') == 'win': by_market[mk]['wins'] += 1
-        elif x.get('grade') == 'loss': by_market[mk]['losses'] += 1
-        elif x.get('grade') == 'push': by_market[mk]['pushes'] += 1
-    return {'picks': total, 'graded': len(graded), 'wins': wins, 'losses': losses, 'pushes': pushes, 'hit_rate': hit_rate, 'by_market': by_market}
 
 
 _TRACKER_CAPTURE_LOCK = threading.Lock()
@@ -9904,10 +10254,10 @@ def api_tracker_capture(date_str):
         if not sched:
             return jsonify({'success': False, 'error': f'No games found for {date_str}'}), 404
 
-        # Keep request under edge/proxy timeout by enforcing a hard budget.
-        # Capture Closing can fetch lines after this returns.
-        budget_sec = float(os.getenv('TRACKER_CAPTURE_BUDGET_SEC', '240') or 240)
-        deadline = time.time() + max(30.0, min(300.0, budget_sec))
+        # Keep request under Fly.io's ~60s proxy read timeout; remaining
+        # games continue in a background thread (TRACKER_CAPTURE_BACKGROUND).
+        budget_sec = float(os.getenv('TRACKER_CAPTURE_BUDGET_SEC', '45') or 45)
+        deadline = time.time() + max(15.0, min(300.0, budget_sec))
         all_entries = []
         captured_games = 0
         recovered_games = 0
@@ -10783,6 +11133,7 @@ def _compute_props_scan_today_payload(date_str):
         'cached': False,
     }
     with _props_scan_cache_lock:
+        _evict_if_large(_PROPS_SCAN_CACHE, 14)
         _PROPS_SCAN_CACHE[date_str] = {'ts': now, 'payload': payload}
     return payload
 
@@ -10990,9 +11341,9 @@ def api_tracker_backtest():
     start = (request.args.get('start') or '').strip()
     end = (request.args.get('end') or '').strip()
     try:
-        sims = max(200, min(2000, int(request.args.get('sims', 2000) or 2000)))
+        sims = max(200, min(5000, int(request.args.get('sims', 5000) or 5000)))
     except (TypeError, ValueError):
-        sims = 2000
+        sims = 5000
     if not start or not end:
         return jsonify({'success': False, 'error': 'start and end are required (YYYY-MM-DD)'}), 400
     try:
@@ -11243,59 +11594,6 @@ def _recalc_tracker_entries(entries):
     return entries or []
 
 
-def _daily_value_series(end_date_str, window_days, market_key=None):
-    store = _tracker_store()
-    dates = list(reversed(_dates_in_window(end_date_str, window_days)))
-    series = []
-    for ds in dates:
-        rows = list((store.get(ds) or {}).get('entries', []) or [])
-        if market_key:
-            rows = [r for r in rows if r.get('marketKey') == market_key]
-        graded = [r for r in rows if r.get('grade') in ('win', 'loss', 'push')]
-        staked = len(graded)
-        units = round(sum(float(r.get('profitUnits') or 0) for r in graded if r.get('profitUnits') is not None), 4)
-        roi = round(units / max(1, staked), 4) if graded else None
-        clv = [float(r.get('clvEdge')) for r in graded if r.get('clvEdge') is not None]
-        avg_clv = round(sum(clv) / max(1, len(clv)), 4) if clv else None
-        clv_pos = round(sum(1 for x in clv if x > 0) / max(1, len(clv)), 4) if clv else None
-        series.append({'date': ds, 'staked': staked, 'units': units, 'roi': roi, 'avg_clv': avg_clv, 'clv_pos_rate': clv_pos})
-    return series
-
-
-def _value_summary(entries):
-    graded = [r for r in entries if r.get('grade') in ('win', 'loss', 'push')]
-    units = round(sum(float(r.get('profitUnits') or 0) for r in graded if r.get('profitUnits') is not None), 4)
-    roi = round(units / max(1, len(graded)), 4) if graded else 0.0
-    clv = [float(r.get('clvEdge')) for r in graded if r.get('clvEdge') is not None]
-    avg_clv = round(sum(clv) / max(1, len(clv)), 4) if clv else 0.0
-    clv_pos = round(sum(1 for x in clv if x > 0) / max(1, len(clv)), 4) if clv else 0.0
-    return {'units': units, 'roi': roi, 'avg_clv': avg_clv, 'clv_positive_rate': clv_pos, 'graded_with_clv': len(clv)}
-
-
-def _tracker_summary(entries):
-    total = len(entries)
-    graded = [x for x in entries if x.get('grade') in ('win', 'loss', 'push')]
-    wins = sum(1 for x in graded if x.get('grade') == 'win')
-    losses = sum(1 for x in graded if x.get('grade') == 'loss')
-    pushes = sum(1 for x in graded if x.get('grade') == 'push')
-    hit_rate = round(wins / max(1, wins + losses), 3) if graded else 0.0
-    by_market = {}
-    for x in entries:
-        mk = x.get('marketKey')
-        by_market.setdefault(mk, {'picks': 0, 'wins': 0, 'losses': 0, 'pushes': 0, 'units': 0.0})
-        by_market[mk]['picks'] += 1
-        if x.get('grade') == 'win':
-            by_market[mk]['wins'] += 1
-        elif x.get('grade') == 'loss':
-            by_market[mk]['losses'] += 1
-        elif x.get('grade') == 'push':
-            by_market[mk]['pushes'] += 1
-        if x.get('profitUnits') is not None:
-            by_market[mk]['units'] = round(by_market[mk]['units'] + float(x.get('profitUnits') or 0), 4)
-    return {
-        'picks': total, 'graded': len(graded), 'wins': wins, 'losses': losses, 'pushes': pushes,
-        'hit_rate': hit_rate, 'by_market': by_market, 'value': _value_summary(entries)
-    }
 
 
 @app.route('/api/tracker/close/<date_str>', methods=['POST'])
@@ -12582,6 +12880,9 @@ _mc_cache_lock  = threading.Lock()
 _mc_cache_data  = None
 _mc_cache_ts    = None
 _mc_computing   = False
+_mc_started_ts  = None   # watchdog: when _mc_computing was last set True
+_mc_generation  = 0      # incremented each time a new compute thread is spawned
+_MC_COMPUTE_TIMEOUT_SEC = 300  # 5 min watchdog — reset stuck flag after this
 
 def _mc_grade(edge):
     if edge >= 0.15: return 'A+'
@@ -12597,14 +12898,24 @@ def _mc_rec(edge):
     if edge >= 0.02: return 'WATCH'
     return 'SKIP'
 
-def _mc_compute_background():
-    global _mc_cache_data, _mc_cache_ts, _mc_computing
+def _mc_compute_background(generation):
+    global _mc_cache_data, _mc_cache_ts, _mc_computing, _mc_started_ts
     try:
         # Ensure stat caches are fresh before computing
         _maybe_refresh_fg()
         _maybe_refresh_savant()
         _fetch_injury_status(force=False)
-        
+
+        # Pre-warm the odds snapshot once here (before workers) so that each
+        # _compute_game worker can read from cache without triggering a fresh
+        # N+1 sequential HTTP fetch inside the thread pool.
+        has_odds = bool(ODDS_API_KEY)
+        if has_odds:
+            try:
+                _ensure_daily_odds_snapshot()
+            except Exception:
+                print(f"[mc_bg] odds snapshot pre-warm failed: {traceback.format_exc()}")
+
         date_str = datetime.now(ET).strftime('%Y-%m-%d')
         url = (f"{MLB_API}/schedule?sportId=1&date={date_str}"
                "&hydrate=team,probablePitcher,lineups")
@@ -12614,7 +12925,6 @@ def _mc_compute_background():
         raw   = dates[0].get('games', []) if dates else []
 
         games, ranked = [], []
-        has_odds = bool(ODDS_API_KEY)
 
         def _compute_game(g):
             game_pk   = g.get('gamePk')
@@ -12749,40 +13059,85 @@ def _mc_compute_background():
                 print(f"[mc_bg] {matchup}: {traceback.format_exc()}")
             return {'gamePk': game_pk, 'matchup': matchup, 'topProps': top_props}, top_props
 
+        # Total timeout for all workers: allow up to 90 s for the entire game
+        # batch so that a single stalled network call cannot hang the whole
+        # background thread forever.
+        _MC_FUTURES_TIMEOUT = 90
         workers = min(6, max(1, len(raw)))
         with ThreadPoolExecutor(max_workers=workers) as ex:
             futs = [ex.submit(_compute_game, g) for g in raw]
-            for fut in as_completed(futs):
-                game_row, top_props = fut.result()
-                games.append(game_row)
-                if top_props:
-                    ranked.extend(top_props)
+            try:
+                for fut in as_completed(futs, timeout=_MC_FUTURES_TIMEOUT):
+                    game_row, top_props = fut.result()
+                    games.append(game_row)
+                    if top_props:
+                        ranked.extend(top_props)
+            except TimeoutError:
+                print(f"[mc_bg] WARNING: as_completed timed out after {_MC_FUTURES_TIMEOUT}s — using partial results")
+                for fut in futs:
+                    if fut.done() and not fut.cancelled():
+                        try:
+                            game_row, top_props = fut.result()
+                            if game_row not in games:
+                                games.append(game_row)
+                            if top_props:
+                                ranked.extend(top_props)
+                        except Exception:
+                            pass
 
         ranked = sorted(ranked, key=lambda x: x.get('edge', 0), reverse=True)
         games = sorted(games, key=lambda x: x.get('matchup') or '')
         result = {'success': True, 'date': date_str, 'hasOdds': has_odds,
                   'games': games, 'topProps': ranked[:500], 'computing': False}
         with _mc_cache_lock:
-            _mc_cache_data = result
-            _mc_cache_ts   = datetime.now()
-        print(f"[mc_bg] done — {len(ranked)} props, {len(games)} games")
+            if _mc_generation == generation:
+                _mc_cache_data = result
+                _mc_cache_ts   = datetime.now()
+                print(f"[mc_bg] done — {len(ranked)} props, {len(games)} games")
+            else:
+                print(f"[mc_bg] discarding stale results (gen {generation} superseded by {_mc_generation})")
     except Exception:
         print(f"[mc_bg] FATAL: {traceback.format_exc()}")
     finally:
         with _mc_cache_lock:
-            _mc_computing = False
+            if _mc_generation == generation:
+                _mc_computing  = False
+                _mc_started_ts = None
 
 
 def _mc_maybe_refresh(force=False):
-    global _mc_computing
+    global _mc_computing, _mc_started_ts, _mc_generation
     with _mc_cache_lock:
-        running  = _mc_computing
-        age      = (datetime.now() - _mc_cache_ts).total_seconds() if _mc_cache_ts else 9999
-        has_data = _mc_cache_data is not None
-    if running: return
-    if not force and has_data and age < 1800: return
-    with _mc_cache_lock: _mc_computing = True
-    threading.Thread(target=_mc_compute_background, daemon=True).start()
+        running    = _mc_computing
+        started_at = _mc_started_ts
+        age        = (datetime.now() - _mc_cache_ts).total_seconds() if _mc_cache_ts else 9999
+        has_data   = _mc_cache_data is not None
+
+    if running:
+        # Watchdog: if the background thread has been marked as computing for
+        # longer than the allowed ceiling, it has likely hung. Bump the generation
+        # so the stuck thread's results are discarded if it ever finishes, then
+        # reset the flag so a fresh thread can be spawned below.
+        if started_at and (datetime.now() - started_at).total_seconds() > _MC_COMPUTE_TIMEOUT_SEC:
+            print(f"[mc_bg] watchdog: resetting stuck _mc_computing flag "
+                  f"(running for >{_MC_COMPUTE_TIMEOUT_SEC}s)")
+            with _mc_cache_lock:
+                _mc_generation += 1   # invalidates the stuck thread's results
+                _mc_computing  = False
+                _mc_started_ts = None
+            # Fall through to start a new thread below
+        elif not force:
+            return  # Still within timeout and not a forced refresh — wait
+
+    if not force and has_data and age < 1800:
+        return
+
+    with _mc_cache_lock:
+        _mc_generation += 1
+        gen            = _mc_generation
+        _mc_computing  = True
+        _mc_started_ts = datetime.now()
+    threading.Thread(target=_mc_compute_background, args=(gen,), daemon=True).start()
 
 
 @app.route('/api/projections/monte-carlo')
@@ -13642,8 +13997,10 @@ def _props_fetch_game(game_pk, date_hint=None, gdata_override=None):
                     continue
                 fgb = fg_batter(name)
                 svb = sv_batter(name)
+                bio = _bio_cache.get(pid) or {}
                 out.append({
                     "slot": i, "id": pid, "name": name, "pos": pos,
+                    "bats": bio.get("bats", p.get("batSide", {}).get("code", "S")),
                     "lineup_status": "pending",
                     "avg": fgb.get("fg_avg", ".---"), "obp": fgb.get("fg_obp", ".---"),
                     "slg": fgb.get("fg_slg", ".---"), "ops": fgb.get("fg_ops", ".---"),
@@ -13682,11 +14039,13 @@ def _props_fetch_game(game_pk, date_hint=None, gdata_override=None):
                         continue
                     fgb = fg_batter(name)
                     svb = sv_batter(name)
+                    bio = _bio_cache.get(pid) or {}
                     out.append({
                         "slot": len(out) + 1,
                         "id": pid,
                         "name": name,
                         "pos": pos,
+                        "bats": bio.get("bats", "S"),
                         "lineup_status": "pending",
                         "avg": fgb.get("fg_avg", ".---"),
                         "obp": fgb.get("fg_obp", ".---"),
@@ -13722,6 +14081,23 @@ def _props_fetch_game(game_pk, date_hint=None, gdata_override=None):
             away_bats = _roster_fallback(away_team_id)
         if not home_bats:
             home_bats = _roster_fallback(home_team_id)
+
+    # Pre-warm bio cache in parallel so every batter carries a real `bats` value
+    # (lineup section needs this to render handedness correctly).
+    _missing_pids = [b.get("id") for b in (away_bats + home_bats)
+                     if b.get("id") and b.get("id") not in _bio_cache]
+    if _missing_pids:
+        try:
+            with ThreadPoolExecutor(max_workers=min(len(_missing_pids), 9)) as _pool:
+                list(_pool.map(player_profile, _missing_pids))
+        except Exception:
+            pass
+    for b in away_bats + home_bats:
+        pid = b.get("id")
+        if pid and pid in _bio_cache:
+            b["bats"] = _bio_cache[pid].get("bats", b.get("bats") or "S")
+        elif not b.get("bats"):
+            b["bats"] = "S"
 
     return gdata, away_bats, home_bats, away_t, home_t, {"ap": ap_info, "hp": hp_info}
 
@@ -14138,6 +14514,7 @@ def _pitcher_recent_form(pitcher_id, n_starts=5):
     cache_key = f"{pitcher_id}_{datetime.now(ET).strftime('%Y-%m-%d')}"
     if cache_key in _pitcher_recent_cache:
         return _pitcher_recent_cache[cache_key]
+    _evict_if_large(_pitcher_recent_cache, 500)
     try:
         yr = datetime.now().year
         r  = requests.get(
@@ -14468,6 +14845,12 @@ def api_props_projections(game_pk):
                     form=form, bvp=bvp,
                 )
                 slot = int(b.get("slot") or 9)
+                xgb_hit_p = None
+                if _XGB_AVAILABLE and xgb_ready('hits'):
+                    xgb_hit_p = xgb_hit_prob(
+                        {"name": name},
+                        {"name": opp_pname, "pitchHand": opp_hand},
+                    )
                 wx_adj = _safe_f((proj.get("adjustments") or {}).get("weather"), 0.0)
                 wind_bucket = "out" if wx_adj > 0.01 else ("in" if wx_adj < -0.01 else "calm")
                 park_bucket = "hitter" if pf >= 1.04 else ("pitcher" if pf <= 0.96 else "neutral")
@@ -14523,6 +14906,7 @@ def api_props_projections(game_pk):
                     "vs_r_avg":     b.get("vs_r_avg"),
                     "vs_l_ops":     b.get("vs_l_ops"),
                     "vs_r_ops":     b.get("vs_r_ops"),
+                    "xgbHitProb":   round(xgb_hit_p, 4) if xgb_hit_p is not None else None,
                     "proj":         proj,
                 }
 
@@ -14557,25 +14941,39 @@ def api_props_projections(game_pk):
             pinj = _get_player_injury(pid) if pid else None
             proj = _project_pitcher(pname, pid, pfg, psv, pst, opp_bats, pf, wx)
             pitchers_out.append({
-                "name":      pname,
-                "team":      pabbr,
-                "id":        pid,
-                "role":      "SP",
-                "pitchHand": phand,
-                "era":       pfg.get("fg_era") or psv.get("sv_era_p"),
-                "whip":      pfg.get("fg_whip"),
-                "fip":       pfg.get("fg_fip"),
-                "xera":      psv.get("sv_xera"),
-                "kpct":      pfg.get("fg_kpct") or psv.get("sv_k_pct"),
-                "bbpct":     pfg.get("fg_bbpct") or psv.get("sv_bb_pct"),
-                "opp_k_pct": sum(_safe_f(fg_batter(b.get("name","")).get("fg_kpct"), 0.22)
-                                 for b in opp_bats[:9]) / max(len(opp_bats[:9]), 1),
-                "opp_woba":  sum(_safe_f(fg_batter(b.get("name","")).get("fg_woba") or
-                                         sv_batter(b.get("name","")).get("sv_xwoba"), 0.310)
-                                 for b in opp_bats[:9]) / max(len(opp_bats[:9]), 1),
+                "name":        pname,
+                "team":        pabbr,
+                "id":          pid,
+                "role":        "SP",
+                "pitchHand":   phand,
+                "era":         pfg.get("fg_era") or psv.get("sv_era_p"),
+                "whip":        pfg.get("fg_whip"),
+                "fip":         pfg.get("fg_fip"),
+                "xera":        psv.get("sv_xera"),
+                "kpct":        pfg.get("fg_kpct") or psv.get("sv_k_pct"),
+                "bbpct":       pfg.get("fg_bbpct") or psv.get("sv_bb_pct"),
+                "whiffPct":    psv.get("sv_whiff"),
+                "xwoba":       psv.get("sv_xwoba"),
+                "arsenalPct":  psv.get("sv_arsenal_pct", {}),
+                "arsenalVelo": psv.get("sv_arsenal_velo", {}),
+                "pitchArsenal": _get_pitch_arsenal(pitcher_id=pid, pitcher_name=pname),
+                "opp_k_pct":   sum(_safe_f(fg_batter(b.get("name","")).get("fg_kpct"), 0.22)
+                                    for b in opp_bats[:9]) / max(len(opp_bats[:9]), 1),
+                "opp_woba":    sum(_safe_f(fg_batter(b.get("name","")).get("fg_woba") or
+                                           sv_batter(b.get("name","")).get("sv_xwoba"), 0.310)
+                                    for b in opp_bats[:9]) / max(len(opp_bats[:9]), 1),
                 "injuryStatus": (pinj or {}).get("status"),
                 "injuryDescription": (pinj or {}).get("description"),
-                "proj":      proj,
+                "xgbKProbs": {
+                    str(ln): xgb_k_prob(
+                        {"fgera": pfg.get("fg_era"), "fgkpct": pfg.get("fg_kpct"),
+                         "fgbbpct": pfg.get("fg_bbpct"), "svwhiffpct": psv.get("sv_whiff"),
+                         "name": pname},
+                        line=ln
+                    ) if _XGB_AVAILABLE and xgb_ready('k') else None
+                    for ln in [3.5, 4.5, 5.5]
+                } if _XGB_AVAILABLE else {},
+                "proj":        proj,
             })
 
         for pp in pitchers_out:
@@ -15078,6 +15476,7 @@ def _get_cached_ump(ump_id, ump_name):
         data = _load_ump_data(ump_id, ump_name)
         if data:
             with _ump_lock:
+                _evict_if_large(_ump_cache, 200)
                 _ump_cache[ump_id] = {"data": data, "date": today}
         print(f"[ump_cache] loaded {ump_name} id={ump_id}: {data}")
     threading.Thread(target=_loader, daemon=True).start()
@@ -15407,6 +15806,7 @@ def _compute_consistency_payload(date_str):
         'markets': list(sheets.values()),
     }
     with _consistency_cache_lock:
+        _evict_if_large(_CONSISTENCY_CACHE, 14)
         _CONSISTENCY_CACHE[date_str] = {'ts': now, 'payload': payload}
     return payload
 
@@ -16470,6 +16870,7 @@ def _fetch_pitcher_hr9_by_hand(pitcher_id):
         pass
 
     with _hr_hand_lock:
+        _evict_if_large(_hr_hand_cache, 500)
         _hr_hand_cache[pitcher_id] = (today, result)
     return result
 
@@ -16901,6 +17302,7 @@ def api_hr_scouting(batter_id, pitcher_id, game_pk):
             )
 
         with _hr_scouting_lock:
+            _evict_if_large(_hr_scouting_cache, 500)
             _hr_scouting_cache[cache_key] = report
 
         return jsonify({
@@ -17061,33 +17463,62 @@ def api_hr_daily_scores():
 # Load FG and Savant data before serving requests to ensure data is available
 # on first access. This runs in background threads to avoid blocking startup.
 def _preload_caches():
-    """Preload FG and Savant caches at startup in background threads."""
+    """Preload FG, Savant, and roster caches at startup in background threads."""
     def load_fg():
         try:
             _load_fg_data()
             print("[STARTUP] FG cache preload complete")
         except Exception as ex:
             print(f"[STARTUP] FG cache preload failed: {ex}")
-    
+
     def load_sv():
         try:
             _load_savant_data()
             print("[STARTUP] Savant cache preload complete")
         except Exception as ex:
             print(f"[STARTUP] Savant cache preload failed: {ex}")
-    
+
+    def load_rosters():
+        # All 30 MLB team IDs (stable; new franchises would require updating this list).
+        mlb_team_ids = [
+            133, 134, 135, 136, 137, 138, 139, 140, 141, 142,
+            143, 144, 145, 146, 147, 158, 108, 109, 110, 111,
+            112, 113, 114, 115, 116, 117, 118, 119, 120, 121,
+        ]
+        loaded = 0
+        for tid in mlb_team_ids:
+            try:
+                roster = _get_active_roster(tid)
+                if roster:
+                    loaded += 1
+            except Exception:
+                pass
+        print(f"[STARTUP] Active roster cache preload complete: {loaded}/30 teams")
+
+    def load_arsenal():
+        global _local_arsenal_cache
+        try:
+            with _local_arsenal_lock:
+                if _local_arsenal_cache is None:
+                    _local_arsenal_cache = _load_local_pitcher_arsenal()
+            print("[STARTUP] Local pitcher arsenal cache preload complete")
+        except Exception as ex:
+            print(f"[STARTUP] Local pitcher arsenal cache preload failed: {ex}")
+
     # Start cache loads in parallel background threads
     threading.Thread(target=load_fg, daemon=True).start()
     threading.Thread(target=load_sv, daemon=True).start()
+    threading.Thread(target=load_rosters, daemon=True).start()
+    threading.Thread(target=load_arsenal, daemon=True).start()
 
     def _prewarm_when_ready():
         # Wait for FG data to be available before prewarming dependent caches.
-        deadline = time.time() + 60
+        deadline = time.time() + 90
         while time.time() < deadline:
             with _fg_lock:
                 if _fg_loaded:
                     break
-            time.sleep(2)
+            time.sleep(3)
         prewarm_today_caches({
             "fetch_schedule": fetch_schedule,
             "_fetch_bvp": _fetch_bvp,
@@ -17113,14 +17544,23 @@ def _preload_caches():
 
     _start_odds_snapshot_worker()
 
-_preload_caches()
+# _preload_caches() is now triggered via the gunicorn post_fork hook in gunicorn_conf.py
+# so that port 8080 is bound before any heavy network I/O begins.
 
 # Start hourly injury refresh worker once routes/helpers are loaded.
 _start_injury_worker()
 _start_tracker_auto_sync_worker()
 _start_mlb_memory_worker()
 
+# Start daily pipeline scheduler (runs at 8 AM ET + on boot)
+if _PIPELINE_AVAILABLE:
+    start_scheduler()
+    logging.info("[pipeline] Scheduler armed — fires at 09:00 ET daily.")
+
 
 if __name__ == "__main__":
+    # When running via `python app.py` the gunicorn post_fork hook never fires,
+    # so trigger cache preloading here before accepting requests.
+    _preload_caches()
     port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)

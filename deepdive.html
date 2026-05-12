@@ -893,13 +893,13 @@ function loadGame(){
   fetch('/api/game-summary/' + GPK).then(function(r){return r.json();}).then(function(d){
     if(!d.success)throw new Error(d.error||'failed');
     if(!d.game)throw new Error('Game not found');
-    GD=d.game;renderHeader();renderEdge();renderWx();renderPark();renderMatchup();populateSels();
+    GD=d.game;renderHeader();renderEdge();renderWx();renderPark();renderMatchup();populateSels();_simReady.game=true;_checkSimButtonReady();
     if(GP_DATA){ renderGameProjection(GP_DATA); }
   }).catch(function(e){document.getElementById('mhTeams').innerHTML='<p style="color:var(--m);font-family:Orbitron;font-size:.85rem">'+e.message+'</p>';});
 }
 function loadPitchers(){
   fetch('/api/pitchers/'+GPK).then(function(r){return r.json();}).then(function(d){
-    PD=d;renderPitchers();populateSels();
+    PD=d;renderPitchers();populateSels();_simReady.pitchers=true;_checkSimButtonReady();
     // Trigger HR picks render now that pitcher data is loaded
     if(typeof renderHRPicksPanel==='function') setTimeout(renderHRPicksPanel,300);
     fetch('/api/pitcher-matchup/'+GPK).then(function(r){return r.json();}).then(function(md){
@@ -932,7 +932,7 @@ function _fetchLineups(){
       setTimeout(_fetchLineups, 8000);
       return;
     }
-    showTab('away');populateSels();
+    showTab('away');populateSels();_simReady.lineups=true;_checkSimButtonReady();
     if(typeof renderHRPicksPanel==='function') setTimeout(renderHRPicksPanel,200);
   }).catch(function(){
     if(_lineupRetries < 2){
@@ -941,6 +941,7 @@ function _fetchLineups(){
       setTimeout(_fetchLineups, 8000);
     } else {
       if(luP) luP.innerHTML='<p class="na">Lineup data unavailable. Try refreshing the page.</p>';
+      _simReady.lineups=true;_checkSimButtonReady();
     }
   });
 }
@@ -1319,6 +1320,7 @@ function addToParlay(playerName, type, idx) {
 }
 
 loadTrackedKeys();
+ensureSimWrap();
 loadGame();loadPitchers();loadLineups();
 
 // ── Phase 3 ───────────────────────────────────────────────────────────────────
@@ -2313,7 +2315,7 @@ function ensureSimWrap(){
   var wrap = document.createElement('div');
   wrap.id = 'simWrap';
   wrap.className = 'pnl fw pnl-src';
-  wrap.innerHTML = '<div class="pt">&#127922; MONTE CARLO SIMULATION <span class="tag-sv">5,000 RUNS</span></div><div id="simPanel"><div class="spinner"></div></div>';
+  wrap.innerHTML = '<div class="pt">&#127922; MONTE CARLO SIMULATION <span class="tag-sv" id="simRunsBadge">5,000 RUNS</span></div><div id="simPanel"><div style="padding:18px 0 10px;text-align:center"><button id="startSimBtn" onclick="loadSimulation()" style="padding:11px 32px;font-family:Orbitron,monospace;font-size:.75rem;letter-spacing:2px;border-radius:999px;border:2px solid rgba(0,229,255,.35);background:rgba(0,229,255,.07);color:var(--c);cursor:pointer;transition:background .3s,border-color .3s,color .3s">&#9654; START SIMULATION</button><div style="margin-top:10px;font-size:.65rem;color:rgba(255,255,255,.35);letter-spacing:1px" id="simReadyLabel">LOADING PAGE DATA…</div></div></div>';
   var dg = document.querySelector('.dg');
   if(dg){
     var projPanel = document.querySelector('#projP');
@@ -2321,6 +2323,30 @@ function ensureSimWrap(){
     else dg.appendChild(wrap);
   }
 }
+
+// ── Sim-button ready state ─────────────────────────────────────────────────────
+var _simReady = {game: false, pitchers: false, lineups: false};
+function _checkSimButtonReady(){
+  ensureSimWrap();
+  var btn = document.getElementById('startSimBtn');
+  var lbl = document.getElementById('simReadyLabel');
+  var all = _simReady.game && _simReady.pitchers && _simReady.lineups;
+  if(!btn) return;
+  if(all){
+    btn.style.borderColor = '#00e676';
+    btn.style.background  = 'rgba(0,230,118,.15)';
+    btn.style.color       = '#00e676';
+    if(lbl) lbl.textContent = 'ALL DATA LOADED — READY';
+    if(lbl) lbl.style.color = 'rgba(0,230,118,.7)';
+  } else {
+    var missing = [];
+    if(!_simReady.game)    missing.push('GAME');
+    if(!_simReady.pitchers) missing.push('PITCHERS');
+    if(!_simReady.lineups)  missing.push('LINEUPS');
+    if(lbl){ lbl.textContent = 'WAITING: '+missing.join(', '); lbl.style.color='rgba(255,255,255,.35)'; }
+  }
+}
+// ──────────────────────────────────────────────────────────────────────────────
 
 function loadPropsProjections(){
   fetch('/api/props/projections/' + GPK)
@@ -2530,64 +2556,94 @@ function lookupPitchX(playerName){
   return null;
 }
 
+var _simHandednessRetried = false;
+var _simPollTimer = null;
+
+function _simFallbackPayload(msg, simsVal){
+  var away = (GD && GD.awayAbbr) ? GD.awayAbbr : 'AWAY';
+  var home = (GD && GD.homeAbbr) ? GD.homeAbbr : 'HOME';
+  var awaySp = (PD && PD.awayPitcher && PD.awayPitcher.name) ? PD.awayPitcher.name : 'Away SP';
+  var homeSp = (PD && PD.homePitcher && PD.homePitcher.name) ? PD.homePitcher.name : 'Home SP';
+  return {
+    success: true, fallback: true,
+    warning: msg || 'Client fallback simulation payload.',
+    meta: { sims: simsVal || 0, awayAbbr: away, homeAbbr: home, parkFactor: 1.0 },
+    team: {
+      away_mean_runs: 4.2, home_mean_runs: 4.3, mean_total: 8.5, median_total: 8.0,
+      p_8plus_total: 0.53, p_9plus_total: 0.46, p_10plus_total: 0.35,
+      away_win_pct: 0.48, home_win_pct: 0.49, tie_pct: 0.03
+    },
+    handedness: { awayLineup:{L:0,R:0,S:0}, homeLineup:{L:0,R:0,S:0}, awayStarterHand:'R', homeStarterHand:'R' },
+    playerProps: { away: [], home: [] },
+    pitcherProps: {
+      awayStarter:{name:awaySp,mean_k:0,mean_outs:0,mean_er:0,mean_h:0,mean_bb:0},
+      homeStarter:{name:homeSp,mean_k:0,mean_outs:0,mean_er:0,mean_h:0,mean_bb:0},
+      awayBullpen:{name:away+' Bullpen',mean_k:0,mean_outs:0,mean_er:0,mean_h:0,mean_bb:0},
+      homeBullpen:{name:home+' Bullpen',mean_k:0,mean_outs:0,mean_er:0,mean_h:0,mean_bb:0},
+      awayBullpenTiers:{closer:{},setup:{},middle:{}},
+      homeBullpenTiers:{closer:{},setup:{},middle:{}}
+    },
+    correlations: [], sampleBoxscore: null
+  };
+}
+
+function _showSimComputing(elapsed, estimatedSeconds){
+  ensureSimWrap();
+  var panel = document.getElementById('simPanel');
+  if(!panel) return;
+  var remaining = Math.max(0, (estimatedSeconds || 90) - (elapsed || 0));
+  panel.innerHTML = '<div style="padding:22px 0;text-align:center">'
+    +'<div class="spinner" style="margin:0 auto 14px"></div>'
+    +'<div style="font-family:Orbitron,monospace;font-size:.68rem;letter-spacing:2px;color:var(--c)">COMPUTING 5,000 SIMULATIONS…</div>'
+    +'<div style="margin-top:8px;font-size:.62rem;color:rgba(255,255,255,.4)">~'+remaining+'s remaining</div>'
+    +'</div>';
+}
+
+function _handleSimResult(d, highPrecision, sims){
+  if(!d || !d.success) d = _simFallbackPayload((d && d.error) || 'Simulation failed', sims);
+  SIM_DATA = d;
+  _buildSimCorrLookup(d.correlations || []);
+  var badge = document.getElementById('simRunsBadge') || document.querySelector('#simWrap .tag-sv');
+  if(badge){
+    var runs = (d.meta && d.meta.sims) ? Number(d.meta.sims).toLocaleString() + (highPrecision ? ' RUNS · HP' : ' RUNS') : 'FALLBACK';
+    badge.textContent = runs;
+  }
+  renderSimulation();
+  renderPropPanel();
+}
+
+function _pollSimulation(sims, highPrecision, attempt){
+  if(attempt > 36) {  // give up after 36 × 5s = 3 min
+    _handleSimResult(_simFallbackPayload('Simulation timed out after 3 minutes'), highPrecision, sims);
+    return;
+  }
+  fetch('/api/simulate/'+GPK+'?sims='+sims)
+    .then(function(r){ return r.json().catch(function(){ return {}; }); })
+    .then(function(d){
+      if(d && d.computing){
+        _showSimComputing(d.elapsed, d.estimatedSeconds);
+        _simPollTimer = setTimeout(function(){ _pollSimulation(sims, highPrecision, attempt+1); }, 5000);
+        return;
+      }
+      _handleSimResult(d, highPrecision, sims);
+    })
+    .catch(function(){ _simPollTimer = setTimeout(function(){ _pollSimulation(sims, highPrecision, attempt+1); }, 5000); });
+}
+
 function loadSimulation(opts){
   opts = opts || {};
-  var sims = parseInt(opts.sims || 800, 10);
-  if(!isFinite(sims)) sims = 800;
-  sims = Math.max(200, Math.min(1200, sims));
+  if(!opts._handednessRetry) _simHandednessRetried = false;
+  if(_simPollTimer){ clearTimeout(_simPollTimer); _simPollTimer = null; }
+  var sims = parseInt(opts.sims || 5000, 10);
+  if(!isFinite(sims)) sims = 5000;
+  sims = Math.max(1500, Math.min(5000, sims));
   var refresh = opts.refresh ? 1 : 0;
   var highPrecision = !!opts.highPrecision;
   ensureSimWrap();
   var panel = document.getElementById('simPanel');
   if(panel) panel.innerHTML = '<div class="spinner"></div>';
   function simFallback(msg){
-    var away = (GD && GD.awayAbbr) ? GD.awayAbbr : 'AWAY';
-    var home = (GD && GD.homeAbbr) ? GD.homeAbbr : 'HOME';
-    var awaySp = (PD && PD.awayPitcher && PD.awayPitcher.name) ? PD.awayPitcher.name : 'Away SP';
-    var homeSp = (PD && PD.homePitcher && PD.homePitcher.name) ? PD.homePitcher.name : 'Home SP';
-    return {
-      success: true,
-      fallback: true,
-      warning: msg || 'Client fallback simulation payload.',
-      meta: { sims: sims, awayAbbr: away, homeAbbr: home, parkFactor: 1.0 },
-      team: {
-        away_mean_runs: 4.2,
-        home_mean_runs: 4.3,
-        mean_total: 8.5,
-        median_total: 8.0,
-        p_8plus_total: 0.53,
-        p_9plus_total: 0.46,
-        p_10plus_total: 0.35,
-        away_win_pct: 0.48,
-        home_win_pct: 0.49,
-        tie_pct: 0.03
-      },
-      handedness: {
-        awayLineup: {L:0,R:0,S:0},
-        homeLineup: {L:0,R:0,S:0},
-        awayStarterHand: 'R',
-        homeStarterHand: 'R'
-      },
-      playerProps: { away: [], home: [] },
-      pitcherProps: {
-        awayStarter: { name: awaySp, mean_k: 0, mean_outs: 0, mean_er: 0, mean_h: 0, mean_bb: 0 },
-        homeStarter: { name: homeSp, mean_k: 0, mean_outs: 0, mean_er: 0, mean_h: 0, mean_bb: 0 },
-        awayBullpen: { name: away + ' Bullpen', mean_k: 0, mean_outs: 0, mean_er: 0, mean_h: 0, mean_bb: 0 },
-        homeBullpen: { name: home + ' Bullpen', mean_k: 0, mean_outs: 0, mean_er: 0, mean_h: 0, mean_bb: 0 },
-        awayBullpenTiers: { closer: {}, setup: {}, middle: {} },
-        homeBullpenTiers: { closer: {}, setup: {}, middle: {} }
-      },
-      correlations: [],
-      top_sgp_combos: [],
-      sampleBoxscore: {
-        away: { batters: [], runs: 4, hits: 8, bb: 3, k: 8 },
-        home: { batters: [], runs: 4, hits: 8, bb: 3, k: 8 },
-        away_abbr: away,
-        home_abbr: home,
-        away_pitcher: awaySp,
-        home_pitcher: homeSp
-      }
-    };
+    return _simFallbackPayload(msg, sims);
   }
   fetch('/api/simulate/' + GPK + '?sims=' + sims + (refresh ? '&refresh=1' : ''))
     .then(function(r){
@@ -2601,30 +2657,29 @@ function loadSimulation(opts){
       });
     })
     .then(function(d){
-      if(!d || !d.success) d = simFallback((d && d.error) || 'Simulation failed — using fallback');
-      SIM_DATA = d;
-      _buildSimCorrLookup(d.correlations || []);
-      var badge = document.querySelector('#simWrap .tag-sv');
-      if(badge){
-        var runs = (d.meta && d.meta.sims) ? Number(d.meta.sims).toLocaleString() + (highPrecision ? ' RUNS · HP' : ' RUNS') : 'FALLBACK';
-        badge.textContent = runs;
+      // Server launched background job — start polling
+      if(d && d.computing){
+        _showSimComputing(d.elapsed, d.estimatedSeconds);
+        _simPollTimer = setTimeout(function(){ _pollSimulation(sims, highPrecision, 1); }, 5000);
+        return;
       }
-      renderSimulation();
-      renderPropPanel();
+      _handleSimResult(d, highPrecision, sims);
     })
     .catch(function(e){
-      var el = document.getElementById('simPanel');
-      if(el) el.innerHTML = '<p class="na">Simulation unavailable: '+e.message+'</p>'
+      var panel2 = document.getElementById('simPanel');
+      if(panel2) panel2.innerHTML = '<p class="na">Simulation unavailable: '+e.message+'</p>'
         +'<button onclick="loadSimulation()" style="margin-top:10px;padding:6px 16px;border:1px solid rgba(0,229,255,.3);border-radius:999px;background:rgba(0,229,255,.08);color:var(--c);font-family:Orbitron,monospace;font-size:.62rem;letter-spacing:1px;cursor:pointer">&#8635; RETRY</button>';
     });
 }
+
+// ── legacy function bodies replaced above; kept as shims ────────────────────
 
 function refreshSimulation(){
   loadSimulation({refresh:1});
 }
 
 function runHighPrecisionSimulation(){
-  loadSimulation({sims:1200, refresh:1, highPrecision:true});
+  loadSimulation({sims:5000, refresh:1, highPrecision:true});
 }
 
 function ensureNrfiWrap(){
@@ -2679,7 +2734,8 @@ function renderNrfiDeepDive(){
 }
 
 function renderSampleBox(teamKey, abbr, spName){
-  var box = SIM_DATA.sampleBoxscore[teamKey];
+  var box = (SIM_DATA.sampleBoxscore || {})[teamKey];
+  if(!box) return '<p class="na">Sample boxscore unavailable</p>';
   var rows = (box.batters||[]).map(function(p){
     return '<tr><td>'+p.slot+'</td><td>'+p.name+'</td><td>'+p.pos+'</td><td>'+p.ab+'</td><td>'+p.h+'</td><td>'+p.hr+'</td><td>'+p.rbi+'</td><td>'+p.r+'</td><td>'+p.bb+'</td><td>'+p.k+'</td><td>'+p.tb+'</td></tr>';
   }).join('');
@@ -2769,8 +2825,7 @@ renderPropPanel = function(){
     + '<div class="legend"><span style="color:var(--sv)">&#127922; Prop panel now uses 5,000 Monte Carlo simulations instead of lean signals.</span></div>';
 };
 
-// Trigger simulation after lineups/pitchers have had time to load
-setTimeout(loadSimulation, 1800);
+// Props projections still auto-load (fast, used by multiple panels)
 setTimeout(loadPropsProjections, 2500);
 
 
@@ -2782,6 +2837,15 @@ function renderSimulation(){
   if(!SIM_DATA || !SIM_DATA.success){ el.innerHTML = '<p class="na">Simulation data unavailable.</p>'; return; }
   var m = SIM_DATA.meta || {}, t = SIM_DATA.team || {}, h = SIM_DATA.handedness || {}, pp = SIM_DATA.pitcherProps || {}, sp = SIM_DATA.sampleBoxscore || {};
   var awayBP = pp.awayBullpen || {}, homeBP = pp.homeBullpen || {};
+  // Auto-retry once if handedness is all-zero for both teams (cold-start bio cache)
+  var awayHL = h.awayLineup || {}, homeHL = h.homeLineup || {};
+  var awayTotal = (awayHL.L||0) + (awayHL.R||0) + (awayHL.S||0);
+  var homeTotal = (homeHL.L||0) + (homeHL.R||0) + (homeHL.S||0);
+  if(awayTotal === 0 && homeTotal === 0 && !_simHandednessRetried){
+    _simHandednessRetried = true;
+    loadSimulation({refresh:1, _handednessRetry:true});
+    return;
+  }
   el.innerHTML = ''
     + '<div class="mc-grid">'
     + '<div class="mc-card"><div class="mc-v">'+m.awayAbbr+' '+t.away_mean_runs.toFixed(2)+'</div><div class="mc-l">MEAN AWAY RUNS</div></div>'
@@ -2799,7 +2863,7 @@ function renderSimulation(){
     + '<button class="btn" onclick="refreshSimulation()" style="padding:6px 12px;font-size:.62rem">REFRESH SIM</button>'
     + '<button class="btn" onclick="runHighPrecisionSimulation()" style="padding:6px 12px;font-size:.62rem">HIGH PRECISION RECHECK</button>'
     + '</div>'
-    + '<div class="proj-note" style="margin-bottom:10px">Default load uses fast mode (lower sims) for stability. Use <strong>HIGH PRECISION RECHECK</strong> for tighter probabilities on this game.</div>'
+    + '<div class="proj-note" style="margin-bottom:10px">Runs 5,000 simulations by default. Use <strong>HIGH PRECISION RECHECK</strong> to force a fresh run with full precision.</div>'
     + '<div class="mc-box-wrap">'
     + '<div class="mc-box"><h4>HANDEDNESS CONTEXT</h4><table class="mc-table"><tbody>'
       + '<tr><td>'+m.awayAbbr+' lineup</td><td>L '+(h.awayLineup?h.awayLineup.L:0)+' / R '+(h.awayLineup?h.awayLineup.R:0)+' / S '+(h.awayLineup?h.awayLineup.S:0)+'</td></tr>'
@@ -2875,7 +2939,7 @@ renderPropPanel = function(){
     + '<div class="legend"><span style="color:var(--sv)">&#127922; Phase 5 prop panel uses Monte Carlo distributions with batting-side vs pitch-hand context and team bullpen adjustments.</span></div>';
 };
 
-setTimeout(function(){ if(SIM_DATA && SIM_DATA.success){ renderSimulation(); renderPropPanel(); } else { loadSimulation(); } }, 2600);
+setTimeout(function(){ if(SIM_DATA && SIM_DATA.success){ renderSimulation(); renderPropPanel(); } }, 2600);
 
 
 
@@ -2886,7 +2950,8 @@ function tierRow(name, t){
   return '<tr><td>'+name+'</td><td>'+pp(t.mean_er)+'</td><td>'+pp(t.mean_k)+'</td><td>'+pp(t.p50_outs)+'</td><td>'+pct(t.p_2plus_er||0)+'</td></tr>';
 }
 function renderSampleBox(teamKey, abbr, spName){
-  var box = SIM_DATA.sampleBoxscore[teamKey];
+  var box = (SIM_DATA.sampleBoxscore || {})[teamKey];
+  if(!box) return '<p class="na">Sample boxscore unavailable</p>';
   var rows = (box.batters||[]).map(function(p){
     return '<tr><td>'+p.slot+'</td><td>'+p.name+'</td><td>'+p.pos+'</td><td>'+p.ab+'</td><td>'+p.h+'</td><td>'+p.hr+'</td><td>'+p.rbi+'</td><td>'+p.r+'</td><td>'+p.bb+'</td><td>'+p.k+'</td><td>'+p.tb+'</td><td>'+p.sb+'</td></tr>';
   }).join('');
@@ -2901,7 +2966,11 @@ function renderSimulation(){
   if(!SIM_DATA || !SIM_DATA.success){ el.innerHTML = '<p class="na">Simulation data unavailable.</p>'; return; }
   var m = SIM_DATA.meta || {}, t = SIM_DATA.team || {}, h = SIM_DATA.handedness || {}, ppx = SIM_DATA.pitcherProps || {}, sp = SIM_DATA.sampleBoxscore || {};
   var awt = ppx.awayBullpenTiers || {}, hmt = ppx.homeBullpenTiers || {};
+  var fallbackBanner = SIM_DATA.fallback
+    ? '<div style="margin-bottom:10px;padding:8px 12px;background:rgba(255,160,0,.08);border:1px solid rgba(255,160,0,.3);border-radius:8px;font-size:.62rem;color:#ffa000">⚠ Sim engine error — showing estimate. Error: '+(SIM_DATA.warning||'unknown').slice(0,150)+'</div>'
+    : '';
   el.innerHTML = ''
+    + fallbackBanner
     + '<div class="mc-grid">'
     + '<div class="mc-card"><div class="mc-v">'+m.awayAbbr+' '+t.away_mean_runs.toFixed(2)+'</div><div class="mc-l">MEAN AWAY RUNS</div></div>'
     + '<div class="mc-card"><div class="mc-v">'+m.homeAbbr+' '+t.home_mean_runs.toFixed(2)+'</div><div class="mc-l">MEAN HOME RUNS</div></div>'
@@ -2918,7 +2987,7 @@ function renderSimulation(){
     + '<button class="btn" onclick="refreshSimulation()" style="padding:6px 12px;font-size:.62rem">REFRESH SIM</button>'
     + '<button class="btn" onclick="runHighPrecisionSimulation()" style="padding:6px 12px;font-size:.62rem">HIGH PRECISION RECHECK</button>'
     + '</div>'
-    + '<div class="proj-note" style="margin-bottom:10px">Default load uses fast mode (lower sims) for stability. Use <strong>HIGH PRECISION RECHECK</strong> for tighter probabilities on this game.</div>'
+    + '<div class="proj-note" style="margin-bottom:10px">Runs 5,000 simulations by default. Use <strong>HIGH PRECISION RECHECK</strong> to force a fresh run with full precision.</div>'
     + '<div class="mc-box-wrap">'
     + '<div class="mc-box"><h4>HANDEDNESS CONTEXT</h4><table class="mc-table"><tbody>'
       + '<tr><td>'+m.awayAbbr+' lineup</td><td>L '+(h.awayLineup?h.awayLineup.L:0)+' / R '+(h.awayLineup?h.awayLineup.R:0)+' / S '+(h.awayLineup?h.awayLineup.S:0)+'</td></tr>'
@@ -2996,7 +3065,7 @@ renderPropPanel = function(){
     + '</div></div>'
     + '<div class="legend"><span style="color:var(--sv)">&#127922; Phase 6 prop panel adds percentiles and stolen-base probability on top of the matchup-aware simulation.</span></div>';
 };
-setTimeout(function(){ if(SIM_DATA && SIM_DATA.success){ renderSimulation(); renderPropPanel(); } else { loadSimulation(); } }, 3200);
+setTimeout(function(){ if(SIM_DATA && SIM_DATA.success){ renderSimulation(); renderPropPanel(); } }, 3200);
 setTimeout(loadNrfiDeepDive, 2400);
 
 
@@ -3387,6 +3456,22 @@ function renderProjectionDetail(){
       if(topPos2.length) reasonParts2.push('boosted by '+topPos2.map(function(k){return compLbls2[k];}).join(' & '));
       if(topNeg2.length) reasonParts2.push('limited by '+topNeg2.map(function(k){return compLbls2[k];}).join(' & '));
       if(ouPills) batxHtml += '<div style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,.06)"><div style="font-family:Orbitron,monospace;font-size:.55rem;letter-spacing:1.5px;color:var(--mu);margin-bottom:6px">O/U PICKS</div><div style="display:flex;flex-wrap:wrap">'+ouPills+'</div>'+(reasonParts2.length?'<div style="font-size:.58rem;color:var(--mu);margin-top:4px;opacity:.8">'+reasonParts2.join('; ')+'</div>':'')+'</div>';
+      // ── XGBoost hit confidence ───────────────────────────────────────────────
+      var xgbHit = bx ? bx.xgbHitProb : null;
+      if(xgbHit != null){
+        var xgbPct = Math.round(xgbHit * 100);
+        var xgbCol = xgbHit >= 0.55 ? '#4caf50' : (xgbHit >= 0.45 ? 'var(--c)' : '#ff7070');
+        var xgbBar = Math.round(Math.min(xgbHit * 2 * 100, 100));
+        batxHtml += '<div style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,.06)">'
+          + '<div style="font-family:Orbitron,monospace;font-size:.52rem;letter-spacing:1.5px;color:var(--mu);margin-bottom:5px">XGB HIT MODEL <span style="font-size:.46rem;opacity:.6">(gradient boost)</span></div>'
+          + '<div style="display:flex;align-items:center;gap:8px">'
+          + '<span style="font-size:.78rem;font-family:Orbitron,monospace;color:'+xgbCol+'">'+xgbPct+'%</span>'
+          + '<div style="flex:1;background:rgba(255,255,255,.07);border-radius:3px;height:5px">'
+          + '<div style="width:'+xgbBar+'%;height:5px;border-radius:3px;background:'+xgbCol+'"></div></div>'
+          + '<span style="font-size:.58rem;color:var(--mu)">hit prob H 0.5</span>'
+          + '</div>'
+          + '</div>';
+      }
     }
     detail += '<div class="mini-grid"><div class="mini-card fw" style="grid-column:1/-1"><h5>BAT X ENGINE</h5>'+batxHtml+'</div></div>';
   }
@@ -3434,6 +3519,21 @@ function renderProjectionDetail(){
         + '<div style="font-size:.61rem;color:var(--mu);margin-top:4px">'+flagStr+'</div>'
         + '<div style="font-size:.6rem;color:var(--mu);margin-top:3px">'+eraNote+'</div>'
         + (pp.recent_k != null ? '<div style="font-size:.6rem;color:var(--mu);margin-top:3px">Recent: '+pp.recent_k+' K / '+pp.recent_ip+' IP / '+pp.recent_er+' ER over last '+pp.recent_starts+' starts</div>' : '');
+      // ── XGBoost K confidence ─────────────────────────────────────────────────
+      var xgbKProbs = px ? (px.xgbKProbs || {}) : {};
+      var xgbKKeys = Object.keys(xgbKProbs).filter(function(k){ return xgbKProbs[k] != null; });
+      if(xgbKKeys.length){
+        pitchxHtml += '<div style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,.06)">'
+          + '<div style="font-family:Orbitron,monospace;font-size:.52rem;letter-spacing:1.5px;color:var(--mu);margin-bottom:5px">XGB K MODEL <span style="font-size:.46rem;opacity:.6">(gradient boost)</span></div>'
+          + '<div style="display:flex;flex-wrap:wrap;gap:6px">';
+        xgbKKeys.sort(function(a,b){return parseFloat(a)-parseFloat(b);}).forEach(function(ln){
+          var p = xgbKProbs[ln];
+          var pct = Math.round(p * 100);
+          var col = p >= 0.55 ? '#4caf50' : (p >= 0.45 ? 'var(--c)' : '#ff7070');
+          pitchxHtml += '<span style="font-family:Orbitron,monospace;font-size:.55rem;padding:3px 7px;border-radius:5px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.04);color:'+col+'">K'+ln+' '+pct+'%</span>';
+        });
+        pitchxHtml += '</div></div>';
+      }
     }
     detail += '<div class="mini-grid"><div class="mini-card fw" style="grid-column:1/-1"><h5>PITCH X ENGINE</h5>'+pitchxHtml+'</div></div>';
   }

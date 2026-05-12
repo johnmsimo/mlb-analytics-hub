@@ -1,0 +1,321 @@
+{
+  "latest": {
+    "createdAt": "2026-05-12T03:07:23.546093+00:00",
+    "targetDateET": "2026-05-11",
+    "windowDays": 3,
+    "meta": {
+      "mode": "light",
+      "teamCount": 0,
+      "scheduleDays": 3,
+      "gameCount": 0,
+      "boxscoreCount": 0,
+      "featuredPlayers": 0,
+      "transactions": 0
+    },
+    "league": {
+      "teams": [],
+      "standings": [],
+      "leaders": [],
+      "teamStats": [],
+      "transactions": []
+    },
+    "schedule": [
+      {
+        "date": "2026-05-11",
+        "gameCount": 0,
+        "games": []
+      },
+      {
+        "date": "2026-05-10",
+        "gameCount": 0,
+        "games": []
+      },
+      {
+        "date": "2026-05-09",
+        "gameCount": 0,
+        "games": []
+      }
+    ],
+    "games": {
+      "boxscores": []
+    },
+    "players": {
+      "featured": [],
+      "teamRosters": []
+    },
+    "caches": {
+      "fangraphs": {
+        "loaded": false,
+        "loadDate": null,
+        "batters": 0,
+        "pitchers": 0
+      },
+      "savant": {
+        "loaded": false,
+        "loadDate": null,
+        "pitcherXStats": 0,
+        "batterXStats": 0,
+        "batterStatcast": 0,
+        "pitchArsenal": 0
+      },
+      "injuries": {
+        "updatedAt": "2026-05-11T23:07:23.541437-04:00",
+        "count": 0,
+        "rows": []
+      },
+      "odds": {
+        "success": true,
+        "keyConfigured": false,
+        "dailyCacheEnabled": true,
+        "snapshotStrict": true,
+        "snapshotAutowarm": true,
+        "todayET": "2026-05-11",
+        "ttl": {
+          "eventsSec": 21600,
+          "gameSec": 86400,
+          "nrfiSec": 300
+        },
+        "eventsCache": {
+          "count": 0,
+          "cacheDate": null,
+          "ageSec": null
+        },
+        "gameCache": {
+          "count": 0,
+          "entries": []
+        },
+        "snapshot": {
+          "date": null,
+          "complete": false,
+          "running": false,
+          "startedAt": null,
+          "completedAt": null,
+          "eventsCount": 0,
+          "eventsFetched": 0,
+          "errors": []
+        },
+        "snapshotWorker": {
+          "started": false,
+          "retrySec": 900,
+          "heartbeatSec": 300
+        },
+        "file": {
+          "exists": false,
+          "path": "/home/user/mlb-analytics-hub/data/odds_cache.json",
+          "sizeBytes": 0,
+          "modifiedAt": null
+        }
+      },
+      "comprehensive": {
+        "date": "2026-05-11",
+        "mode": "light",
+        "collectedAt": "2026-05-12T03:07:23.577782+00:00",
+        "sources": {
+          "statscast": {
+            "date": "2026-05-11",
+            "sources": [],
+            "summary": {},
+            "sampleData": {}
+          },
+          "fangraphs": {
+            "sources": [],
+            "summary": {},
+            "sampleData": {}
+          },
+          "mlbApi": {
+            "season": 2026,
+            "teams": {},
+            "summary": {
+              "totalTeams": 0,
+              "totalPlayers": 0
+            },
+            "sources": [
+              "MLB API Team Rosters"
+            ]
+          },
+          "manualUploads": {
+            "count": 0,
+            "totalSizeBytes": 0,
+            "totalSizeKB": 0.0,
+            "totalRecords": 0,
+            "ingestedFiles": 0,
+            "stagedFiles": 0,
+            "errorFiles": 0,
+            "emptyFiles": 0,
+            "latestFilename": "",
+            "latestModifiedAt": null,
+            "files": [],
+            "ingestionState": "empty",
+            "lastIngestedAt": "2026-05-12T03:07:23.549704+00:00",
+            "message": "No uploaded files.",
+            "statusLabel": "0 files"
+          }
+        },
+        "totalDataPoints": 0,
+        "manualUploadRecords": 0
+      }
+    },
+    "compact": false
+  },
+  "snapshots": [
+    {
+      "createdAt": "2026-05-12T03:07:23.546093+00:00",
+      "targetDateET": "2026-05-11",
+      "windowDays": 3,
+      "meta": {
+        "mode": "light",
+        "teamCount": 0,
+        "scheduleDays": 3,
+        "gameCount": 0,
+        "boxscoreCount": 0,
+        "featuredPlayers": 0,
+        "transactions": 0
+      },
+      "league": {
+        "teams": [],
+        "standings": [],
+        "leaders": [],
+        "teamStats": [],
+        "transactions": []
+      },
+      "schedule": [
+        {
+          "date": "2026-05-11",
+          "gameCount": 0,
+          "games": []
+        },
+        {
+          "date": "2026-05-10",
+          "gameCount": 0,
+          "games": []
+        },
+        {
+          "date": "2026-05-09",
+          "gameCount": 0,
+          "games": []
+        }
+      ],
+      "games": {
+        "boxscores": []
+      },
+      "players": {
+        "featured": [],
+        "teamRosters": []
+      },
+      "caches": {
+        "fangraphs": {
+          "loaded": false,
+          "loadDate": null,
+          "batters": 0,
+          "pitchers": 0
+        },
+        "savant": {
+          "loaded": false,
+          "loadDate": null,
+          "pitcherXStats": 0,
+          "batterXStats": 0,
+          "batterStatcast": 0,
+          "pitchArsenal": 0
+        },
+        "injuries": {
+          "updatedAt": "2026-05-11T23:07:23.541437-04:00",
+          "count": 0,
+          "rows": []
+        },
+        "odds": {
+          "success": true,
+          "keyConfigured": false,
+          "dailyCacheEnabled": true,
+          "snapshotStrict": true,
+          "snapshotAutowarm": true,
+          "todayET": "2026-05-11",
+          "ttl": {
+            "eventsSec": 21600,
+            "gameSec": 86400,
+            "nrfiSec": 300
+          },
+          "eventsCache": {
+            "count": 0,
+            "cacheDate": null,
+            "ageSec": null
+          },
+          "gameCache": {
+            "count": 0,
+            "entries": []
+          },
+          "snapshot": {
+            "date": null,
+            "complete": false,
+            "running": false,
+            "startedAt": null,
+            "completedAt": null,
+            "eventsCount": 0,
+            "eventsFetched": 0,
+            "errors": []
+          },
+          "snapshotWorker": {
+            "started": false,
+            "retrySec": 900,
+            "heartbeatSec": 300
+          },
+          "file": {
+            "exists": false,
+            "path": "/home/user/mlb-analytics-hub/data/odds_cache.json",
+            "sizeBytes": 0,
+            "modifiedAt": null
+          }
+        },
+        "comprehensive": {
+          "date": "2026-05-11",
+          "mode": "light",
+          "collectedAt": "2026-05-12T03:07:23.577782+00:00",
+          "sources": {
+            "statscast": {
+              "date": "2026-05-11",
+              "sources": [],
+              "summary": {},
+              "sampleData": {}
+            },
+            "fangraphs": {
+              "sources": [],
+              "summary": {},
+              "sampleData": {}
+            },
+            "mlbApi": {
+              "season": 2026,
+              "teams": {},
+              "summary": {
+                "totalTeams": 0,
+                "totalPlayers": 0
+              },
+              "sources": [
+                "MLB API Team Rosters"
+              ]
+            },
+            "manualUploads": {
+              "count": 0,
+              "totalSizeBytes": 0,
+              "totalSizeKB": 0.0,
+              "totalRecords": 0,
+              "ingestedFiles": 0,
+              "stagedFiles": 0,
+              "errorFiles": 0,
+              "emptyFiles": 0,
+              "latestFilename": "",
+              "latestModifiedAt": null,
+              "files": [],
+              "ingestionState": "empty",
+              "lastIngestedAt": "2026-05-12T03:07:23.549704+00:00",
+              "message": "No uploaded files.",
+              "statusLabel": "0 files"
+            }
+          },
+          "totalDataPoints": 0,
+          "manualUploadRecords": 0
+        }
+      },
+      "compact": false
+    }
+  ],
+  "updatedAt": "2026-05-12T03:07:23.578144+00:00"
+}

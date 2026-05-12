@@ -287,66 +287,63 @@ print("✅ Batter features saved")
 # CELL 5 — Feature Engineering: STRIKEOUTS MODEL
 # ============================================================
 def build_pitcher_features(pg, sv_pit, fg_pit, sv_bat_lineup, fg_bat, season):
-    """
-    Build per-game pitcher feature rows for K prop model.
-    Includes pitcher stats + opposing lineup aggregate quality.
-    """
     pg = pg.copy()
     pg["pitcher"] = pg["pitcher"].astype(int)
 
-    # ── Pitcher season stats ───────────────────────────────────────────────
     sv_p = sv_pit[sv_pit["season"] == season].copy()
     sv_p["player_id"] = sv_p["player_id"].astype(int)
     sv_p = sv_p.rename(columns={
-        "xera":          "sv_xera",
-        "era":           "sv_era",
-        "est_woba":      "sv_xwoba_against",
-        "k_percent":     "sv_k_pct",
-        "bb_percent":    "sv_bb_pct",
+        "xera": "sv_xera",
+        "era": "sv_era",
+        "k_percent": "sv_k_pct",
+        "bb_percent": "sv_bb_pct",
         "whiff_percent": "sv_whiff_pct",
     })
-    pit_cols = ["player_id","sv_xera","sv_era","sv_xwoba_against",
-                "sv_k_pct","sv_bb_pct","sv_whiff_pct"]
+    pit_cols = ["player_id", "sv_xera", "sv_era", "sv_k_pct", "sv_bb_pct", "sv_whiff_pct"]
     sv_p = sv_p[[c for c in pit_cols if c in sv_p.columns]]
 
-    fg_p = fg_pit[fg_pit["season"] == season].copy()
-    fg_p_id_col = "IDfg" if "IDfg" in fg_p.columns else "playerid"
-    fg_p_cols = [fg_p_id_col,"ERA","FIP","xFIP","K/9","BB/9","HR/9",
-                 "K%","BB%","BABIP","GB%","IP","GS","SwStr%","CSW%","Stuff+"]
-    fg_p = fg_p[[c for c in fg_p_cols if c in fg_p.columns]]
-    fg_p.columns = [c.lower().replace("/","9").replace("%","_pct")
-                      .replace("+","_plus").replace(" ","_")
-                    for c in fg_p.columns]
-    if fg_p_id_col.lower() in fg_p.columns:
-        fg_p = fg_p.rename(columns={fg_p_id_col.lower(): "pit_fg_id"})
-
     df = pg.merge(sv_p, left_on="pitcher", right_on="player_id", how="left")
+    df = df.sort_values(["pitcher", "game_date"])
 
-    # ── Opposing lineup K susceptibility ──────────────────────────────────
-    # Use season-avg batter k_pct and aggregate per game
-    sv_b = sv_bat_lineup[sv_bat_lineup["season"] == season].copy()
-    lineup_k_agg = sv_b.groupby("player_id").agg(
-        batter_k_pct=("k_percent","mean"),
-        batter_xwoba=("est_woba","mean"),
-    ).reset_index()
-    lineup_k_agg["player_id"] = lineup_k_agg["player_id"].astype(int)
-    # We don't have per-game lineup composition without a full roster lookup,
-    # so we approximate using team-level aggregates per game (game_pk + home/away)
-    # This is a reasonable proxy — replace with actual lineup pull in production
-    df["opp_lineup_k_pct_proxy"] = df["sv_k_pct"] * 0.88  # league-avg opponent contact adj
-    df["opp_lineup_xwoba_proxy"] = 0.320  # will be enriched in production
+    if "bf" not in df.columns and "ks" in df.columns:
+        df["bf"] = 18
 
-    # ── Rolling L5 K form ─────────────────────────────────────────────────
-    df = df.sort_values(["pitcher","game_date"])
-    df["l5_ks"]   = (df.groupby("pitcher")["ks"]
-                       .transform(lambda x: x.shift(1).rolling(5, min_periods=1).mean()))
-    df["l5_k_rate"] = (df.groupby("pitcher")["k_over_4.5"]
-                         .transform(lambda x: x.shift(1).rolling(5, min_periods=1).mean()))
-    df["l10_ks"]  = (df.groupby("pitcher")["ks"]
-                       .transform(lambda x: x.shift(1).rolling(10, min_periods=1).mean()))
+    if "outs_recorded" in df.columns:
+        df["ip"] = df["outs_recorded"] / 3.0
+    elif "bf" in df.columns:
+        df["ip"] = np.clip(df["bf"] / 4.2, 0, 9)
+    else:
+        df["ip"] = 5.0
+
+    df["l3_ks"] = df.groupby("pitcher")["ks"].transform(
+        lambda x: x.shift(1).rolling(3, min_periods=1).mean()
+    )
+    df["l5_ks"] = df.groupby("pitcher")["ks"].transform(
+        lambda x: x.shift(1).rolling(5, min_periods=1).mean()
+    )
+    df["l10_ks"] = df.groupby("pitcher")["ks"].transform(
+        lambda x: x.shift(1).rolling(10, min_periods=1).mean()
+    )
+
+    df["l3_ip"] = df.groupby("pitcher")["ip"].transform(
+        lambda x: x.shift(1).rolling(3, min_periods=1).mean()
+    )
+    df["l5_ip"] = df.groupby("pitcher")["ip"].transform(
+        lambda x: x.shift(1).rolling(5, min_periods=1).mean()
+    )
+
+    df["prev_game_date"] = df.groupby("pitcher")["game_date"].shift(1)
+    df["days_rest"] = (
+        pd.to_datetime(df["game_date"]) - pd.to_datetime(df["prev_game_date"])
+    ).dt.days.fillna(5).clip(lower=0, upper=14)
+
+    df["opp_lineup_k_pct_proxy"] = 22.0
+    df["opp_lineup_xwoba_proxy"] = 0.320
 
     df["season"] = season
     return df
+
+
 
 print("\n🔧 Building pitcher feature matrix (2024)...")
 pit_features = build_pitcher_features(
@@ -438,12 +435,20 @@ K_FEATURES_BASE = [
 
 def train_xgb_ks(df, target, label):
     feat_cols = [f for f in K_FEATURES_BASE if f in df.columns]
-    df_model = df[feat_cols + [target]].dropna(subset=[target])
+
+    keep_cols = feat_cols + [target]
+    for extra_col in ["ip", "bf"]:
+        if extra_col in df.columns and extra_col not in keep_cols:
+            keep_cols.append(extra_col)
+
+    df_model = df[keep_cols].dropna(subset=[target]).copy()
     df_model[feat_cols] = df_model[feat_cols].fillna(df_model[feat_cols].median())
 
-    # Filter to starters only (BF >= 12 = at least 4 innings)
-    if "bf" in df_model.columns:
-        df_model = df_model[df_model["bf"] >= 12]
+    # Filter to likely starter outings
+    if "ip" in df_model.columns:
+        df_model = df_model[df_model["ip"] >= 4.0]
+    elif "bf" in df_model.columns:
+        df_model = df_model[df_model["bf"] >= 15]
 
     X = df_model[feat_cols].values
     y = df_model[target].values.astype(int)
@@ -608,9 +613,9 @@ model_registry = {
 # Save .pkl files
 for name, reg in model_registry.items():
     path = f"{OUTPUT_DIR}/xgb_{name}.pkl"
-    joblib.dump({"model": reg["model"], "features": reg["features"],
-                 "meta": {k: v for k, v in reg.items() if k not in ("model","features")}},
-                path)
+    meta = {k: v for k, v in reg.items() if k not in ("model", "features")}
+    meta["xgboost_version"] = xgb.__version__
+    joblib.dump({"model": reg["model"], "features": reg["features"], "meta": meta}, path)
     print(f"✅ Saved: {path}")
 
 # Save metrics summary
@@ -628,24 +633,36 @@ APP_INTEGRATION_CODE = '''
 # Drop into your project root alongside app.py.
 # Loaded once at startup; called inside _project_batter_vs_pitcher()
 # and the pitcher K projection path to REPLACE or AUGMENT formula output.
+#
+# NOTE: This file is generated by xgb_prop_pipeline.py Cell 11 for reference.
+# The canonical production version in the repository root adds richer enrichment,
+# feature fallbacks, and the full public API expected by app.py:
+#   xgb_hit_prob, xgb_k_prob, xgb_ready, enrich_batter, enrich_pitcher
 
 import os, joblib
 import numpy as np
 
 _MODEL_DIR = os.environ.get("XGB_MODEL_DIR", "./models")
 _REGISTRY  = {}
+_LOADED    = False
 
 def _load_models():
     """Load all trained .pkl models from MODEL_DIR at startup."""
-    global _REGISTRY
+    global _REGISTRY, _LOADED
     import glob
     for path in glob.glob(os.path.join(_MODEL_DIR, "xgb_*.pkl")):
         key = os.path.basename(path).replace("xgb_","").replace(".pkl","")
         try:
-            _REGISTRY[key] = joblib.load(path)
+            payload = joblib.load(path)
+            # Support both dict payload (current) and legacy direct-model artifacts.
+            if isinstance(payload, dict) and "model" in payload:
+                _REGISTRY[key] = payload
+            else:
+                _REGISTRY[key] = {"model": payload, "features": []}
             print(f"[xgb] Loaded model: {key}")
         except Exception as e:
             print(f"[xgb] Failed to load {path}: {e}")
+    _LOADED = True
 
 _load_models()
 
@@ -655,6 +672,24 @@ def _safe(v, default=0.0):
         return f if f == f else default  # nan check
     except Exception:
         return default
+
+def xgb_ready(market: str = "hits") -> bool:
+    """Returns True if the requested model family is loaded."""
+    if not _LOADED:
+        _load_models()
+    if market == "hits":
+        return "hits_over_0.5" in _REGISTRY
+    if market == "k":
+        return any(k.startswith("k_over_") for k in _REGISTRY)
+    return False
+
+def enrich_batter(d: dict, **kwargs) -> dict:
+    """Optional enrichment hook — returns input unchanged in this minimal scorer."""
+    return d
+
+def enrich_pitcher(d: dict, **kwargs) -> dict:
+    """Optional enrichment hook — returns input unchanged in this minimal scorer."""
+    return d
 
 def xgb_hit_prob(batter_stats: dict, pitcher_stats: dict) -> float | None:
     """
@@ -688,9 +723,9 @@ def xgb_hit_prob(batter_stats: dict, pitcher_stats: dict) -> float | None:
         "opp_whiff":      _safe(pitcher_stats.get("sv_whiff"),   22.0),
         "bats_L":         1 if str(batter_stats.get("fg_bats","R")).upper() == "L" else 0,
         "throws_R":       1 if str(pitcher_stats.get("pitch_hand","R")).upper() == "R" else 0,
-        "platoon_adv":    0,   # caller should set from matchup context
+        "platoon_adv":    0,   # computed below from bat/throw matchup
         "l7_hits":        _safe(batter_stats.get("l7_hits"),     1.0),
-        "l14_hits":       _safe(batter_stats.get("l14_hits"),    1.0),
+        "l14_hits":       _safe(batter_stats.get("l14_hits"),    2.0),
         "l7_hit_rate":    _safe(batter_stats.get("l7_hit_rate"), 0.65),
     }
     row["platoon_adv"] = int(
@@ -707,12 +742,22 @@ def xgb_k_prob(pitcher_stats: dict, line: float = 4.5) -> float | None:
     """
     Returns calibrated P(Ks >= line + 0.5) for a pitcher.
     line should be 3.5, 4.5, or 5.5.
-    Returns None if model not loaded.
+    Falls back to the nearest available model when the exact line is missing.
+    Returns None if no model is loaded.
     """
-    key_map = {3.5: "k_over_3.5", 4.5: "k_over_4.5", 5.5: "k_over_5.5"}
-    reg = _REGISTRY.get(key_map.get(line, "k_over_4.5"))
-    if not reg:
-        return None
+    line_key = f"k_over_{line}"
+    if line_key not in _REGISTRY:
+        candidates = []
+        for k in _REGISTRY:
+            if k.startswith("k_over_"):
+                try:
+                    candidates.append((abs(float(k[7:]) - line), k))
+                except ValueError:
+                    pass
+        if not candidates:
+            return None
+        line_key = min(candidates)[1]
+    reg = _REGISTRY[line_key]
     feat_cols = reg["features"]
     row = {
         "sv_xera":                 _safe(pitcher_stats.get("sv_xera") or
@@ -725,7 +770,7 @@ def xgb_k_prob(pitcher_stats: dict, line: float = 4.5) -> float | None:
                                          pitcher_stats.get("fg_bbpct"),  0.08),
         "sv_whiff_pct":            _safe(pitcher_stats.get("sv_whiff"),  22.0),
         "l5_ks":                   _safe(pitcher_stats.get("l5_ks"),     4.5),
-        "l5_k_rate":               _safe(pitcher_stats.get("l5_k_rate"), 0.55),
+        "l5_k_rate":               _safe(pitcher_stats.get("l5_k_rate"), 0.22),
         "l10_ks":                  _safe(pitcher_stats.get("l10_ks"),    4.5),
         "opp_lineup_k_pct_proxy":  _safe(pitcher_stats.get("sv_k_pct") or
                                          pitcher_stats.get("fg_kpct"),   0.22) * 0.88,
