@@ -893,13 +893,13 @@ function loadGame(){
   fetch('/api/game-summary/' + GPK).then(function(r){return r.json();}).then(function(d){
     if(!d.success)throw new Error(d.error||'failed');
     if(!d.game)throw new Error('Game not found');
-    GD=d.game;renderHeader();renderEdge();renderWx();renderPark();renderMatchup();populateSels();
+    GD=d.game;renderHeader();renderEdge();renderWx();renderPark();renderMatchup();populateSels();_simReady.game=true;_checkSimButtonReady();
     if(GP_DATA){ renderGameProjection(GP_DATA); }
   }).catch(function(e){document.getElementById('mhTeams').innerHTML='<p style="color:var(--m);font-family:Orbitron;font-size:.85rem">'+e.message+'</p>';});
 }
 function loadPitchers(){
   fetch('/api/pitchers/'+GPK).then(function(r){return r.json();}).then(function(d){
-    PD=d;renderPitchers();populateSels();
+    PD=d;renderPitchers();populateSels();_simReady.pitchers=true;_checkSimButtonReady();
     // Trigger HR picks render now that pitcher data is loaded
     if(typeof renderHRPicksPanel==='function') setTimeout(renderHRPicksPanel,300);
     fetch('/api/pitcher-matchup/'+GPK).then(function(r){return r.json();}).then(function(md){
@@ -932,7 +932,7 @@ function _fetchLineups(){
       setTimeout(_fetchLineups, 8000);
       return;
     }
-    showTab('away');populateSels();
+    showTab('away');populateSels();_simReady.lineups=true;_checkSimButtonReady();
     if(typeof renderHRPicksPanel==='function') setTimeout(renderHRPicksPanel,200);
   }).catch(function(){
     if(_lineupRetries < 2){
@@ -941,6 +941,7 @@ function _fetchLineups(){
       setTimeout(_fetchLineups, 8000);
     } else {
       if(luP) luP.innerHTML='<p class="na">Lineup data unavailable. Try refreshing the page.</p>';
+      _simReady.lineups=true;_checkSimButtonReady();
     }
   });
 }
@@ -1319,6 +1320,7 @@ function addToParlay(playerName, type, idx) {
 }
 
 loadTrackedKeys();
+ensureSimWrap();
 loadGame();loadPitchers();loadLineups();
 
 // ── Phase 3 ───────────────────────────────────────────────────────────────────
@@ -2313,7 +2315,7 @@ function ensureSimWrap(){
   var wrap = document.createElement('div');
   wrap.id = 'simWrap';
   wrap.className = 'pnl fw pnl-src';
-  wrap.innerHTML = '<div class="pt">&#127922; MONTE CARLO SIMULATION <span class="tag-sv">5,000 RUNS</span></div><div id="simPanel"><div class="spinner"></div></div>';
+  wrap.innerHTML = '<div class="pt">&#127922; MONTE CARLO SIMULATION <span class="tag-sv" id="simRunsBadge">5,000 RUNS</span></div><div id="simPanel"><div style="padding:18px 0 10px;text-align:center"><button id="startSimBtn" onclick="loadSimulation()" style="padding:11px 32px;font-family:Orbitron,monospace;font-size:.75rem;letter-spacing:2px;border-radius:999px;border:2px solid rgba(0,229,255,.35);background:rgba(0,229,255,.07);color:var(--c);cursor:pointer;transition:background .3s,border-color .3s,color .3s">&#9654; START SIMULATION</button><div style="margin-top:10px;font-size:.65rem;color:rgba(255,255,255,.35);letter-spacing:1px" id="simReadyLabel">LOADING PAGE DATA…</div></div></div>';
   var dg = document.querySelector('.dg');
   if(dg){
     var projPanel = document.querySelector('#projP');
@@ -2321,6 +2323,30 @@ function ensureSimWrap(){
     else dg.appendChild(wrap);
   }
 }
+
+// ── Sim-button ready state ─────────────────────────────────────────────────────
+var _simReady = {game: false, pitchers: false, lineups: false};
+function _checkSimButtonReady(){
+  ensureSimWrap();
+  var btn = document.getElementById('startSimBtn');
+  var lbl = document.getElementById('simReadyLabel');
+  var all = _simReady.game && _simReady.pitchers && _simReady.lineups;
+  if(!btn) return;
+  if(all){
+    btn.style.borderColor = '#00e676';
+    btn.style.background  = 'rgba(0,230,118,.15)';
+    btn.style.color       = '#00e676';
+    if(lbl) lbl.textContent = 'ALL DATA LOADED — READY';
+    if(lbl) lbl.style.color = 'rgba(0,230,118,.7)';
+  } else {
+    var missing = [];
+    if(!_simReady.game)    missing.push('GAME');
+    if(!_simReady.pitchers) missing.push('PITCHERS');
+    if(!_simReady.lineups)  missing.push('LINEUPS');
+    if(lbl){ lbl.textContent = 'WAITING: '+missing.join(', '); lbl.style.color='rgba(255,255,255,.35)'; }
+  }
+}
+// ──────────────────────────────────────────────────────────────────────────────
 
 function loadPropsProjections(){
   fetch('/api/props/projections/' + GPK)
@@ -2535,8 +2561,8 @@ function loadSimulation(opts){
   opts = opts || {};
   // Reset the handedness retry guard on each fresh (non-retry) load
   if(!opts._handednessRetry) _simHandednessRetried = false;
-  var sims = parseInt(opts.sims || 2500, 10);
-  if(!isFinite(sims)) sims = 2500;
+  var sims = parseInt(opts.sims || 5000, 10);
+  if(!isFinite(sims)) sims = 5000;
   sims = Math.max(1500, Math.min(5000, sims));
   var refresh = opts.refresh ? 1 : 0;
   var highPrecision = !!opts.highPrecision;
@@ -2780,8 +2806,7 @@ renderPropPanel = function(){
     + '<div class="legend"><span style="color:var(--sv)">&#127922; Prop panel now uses 5,000 Monte Carlo simulations instead of lean signals.</span></div>';
 };
 
-// Trigger simulation after lineups/pitchers have had time to load
-setTimeout(loadSimulation, 1800);
+// Props projections still auto-load (fast, used by multiple panels)
 setTimeout(loadPropsProjections, 2500);
 
 
@@ -2895,7 +2920,7 @@ renderPropPanel = function(){
     + '<div class="legend"><span style="color:var(--sv)">&#127922; Phase 5 prop panel uses Monte Carlo distributions with batting-side vs pitch-hand context and team bullpen adjustments.</span></div>';
 };
 
-setTimeout(function(){ if(SIM_DATA && SIM_DATA.success){ renderSimulation(); renderPropPanel(); } else { loadSimulation(); } }, 2600);
+setTimeout(function(){ if(SIM_DATA && SIM_DATA.success){ renderSimulation(); renderPropPanel(); } }, 2600);
 
 
 
@@ -3020,7 +3045,7 @@ renderPropPanel = function(){
     + '</div></div>'
     + '<div class="legend"><span style="color:var(--sv)">&#127922; Phase 6 prop panel adds percentiles and stolen-base probability on top of the matchup-aware simulation.</span></div>';
 };
-setTimeout(function(){ if(SIM_DATA && SIM_DATA.success){ renderSimulation(); renderPropPanel(); } else { loadSimulation(); } }, 3200);
+setTimeout(function(){ if(SIM_DATA && SIM_DATA.success){ renderSimulation(); renderPropPanel(); } }, 3200);
 setTimeout(loadNrfiDeepDive, 2400);
 
 
