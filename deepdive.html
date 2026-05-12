@@ -2535,16 +2535,17 @@ function loadSimulation(opts){
   opts = opts || {};
   // Reset the handedness retry guard on each fresh (non-retry) load
   if(!opts._handednessRetry) _simHandednessRetried = false;
-  var sims = parseInt(opts.sims || 5000, 10);
+  var sims = parseInt(opts.sims || 2500, 10);
   if(!isFinite(sims)) sims = 2500;
-  sims = Math.max(2500, Math.min(5000, sims));
+  sims = Math.max(1500, Math.min(5000, sims));
   var refresh = opts.refresh ? 1 : 0;
   var highPrecision = !!opts.highPrecision;
   ensureSimWrap();
   var panel = document.getElementById('simPanel');
   if(panel) panel.innerHTML = '<div class="spinner"></div>';
   var _simAbort = new AbortController();
-  var _simTimeout = setTimeout(function(){ _simAbort.abort(); }, 90000);
+  // Allow 150s — accounts for cold-cache MLB API hops + 5,000-sim HP mode.
+  var _simTimeout = setTimeout(function(){ _simAbort.abort(); }, 150000);
   function simFallback(msg){
     var away = (GD && GD.awayAbbr) ? GD.awayAbbr : 'AWAY';
     var home = (GD && GD.homeAbbr) ? GD.homeAbbr : 'HOME';
