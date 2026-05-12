@@ -574,6 +574,10 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
             <button class="tabbtn" onclick="loadCacheStatus()">REFRESH</button>
             <span id="cacheReadyBadge" class="settings-msg">—</span>
           </div>
+          <div id="pipelineStuckHint" style="display:none;margin-top:8px;font-size:.65rem;color:var(--mu);line-height:1.5">
+            Pipeline has been building for over 10 minutes — likely stuck on a slow MLB API response.
+            <a href="#" onclick="event.preventDefault();triggerCacheWarm(true);" style="color:#ff9800;text-decoration:underline;cursor:pointer">Force restart</a>
+          </div>
         </div>
 
         <div class="settings-card">
@@ -1951,6 +1955,16 @@ function _fmtCacheTs(iso){
   if(!iso) return '—';
   try{var d=new Date(iso);return d.toLocaleDateString('en-US',{month:'short',day:'numeric'})+' '+d.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});}catch(e){return iso;}
 }
+function _elapsedSinceMs(iso){
+  if(!iso) return null;
+  try{return Date.now()-new Date(iso).getTime();}catch(e){return null;}
+}
+function _fmtElapsed(ms){
+  if(ms==null||ms<0) return '';
+  var s=Math.floor(ms/1000), m=Math.floor(s/60);
+  s=s%60;
+  return m+'m '+s+'s';
+}
 function _deriveCacheState(loader,info){
   if(!info) return 'missing';
   if(loader==='pipeline'){
@@ -1988,11 +2002,19 @@ function loadCacheStatus(){
     var arDetail =d.arsenal && d.arsenal.loaded
       ? (d.arsenal.pitchers||0).toLocaleString()+' pitchers'
       : 'not loaded';
-    var pipDetail=(d.pipeline && d.pipeline.status==='done')
-      ? (d.pipeline.rows||0).toLocaleString()+' rows · '+_fmtCacheTs(d.pipeline.last_run)
-      : (d.pipeline && d.pipeline.status==='running'?'building (~2 min)…'
-         : (d.pipeline && d.pipeline.status==='error'?(d.pipeline.error||'error')
-            : 'not run today'));
+    var pipElapsedMs=d.pipeline?_elapsedSinceMs(d.pipeline.started_at):null;
+    var pipDetail;
+    if(d.pipeline && d.pipeline.status==='done'){
+      pipDetail=(d.pipeline.rows||0).toLocaleString()+' rows · '+_fmtCacheTs(d.pipeline.last_run);
+    } else if(d.pipeline && d.pipeline.status==='running'){
+      pipDetail=pipElapsedMs!=null
+        ? 'building '+_fmtElapsed(pipElapsedMs)+'…'
+        : 'building…';
+    } else if(d.pipeline && d.pipeline.status==='error'){
+      pipDetail=d.pipeline.error||'error';
+    } else {
+      pipDetail='not run today';
+    }
     var rows=[];
     rows.push(_cacheRowHtml('FanGraphs stats',     fgState, fgDetail));
     rows.push(_cacheRowHtml('Baseball Savant',     svState, svDetail));
@@ -2004,18 +2026,25 @@ function loadCacheStatus(){
       else if(fgState==='loading'||svState==='loading'||pipState==='loading') badge.textContent='⟳ WARMING';
       else                                       badge.textContent='○ COLD';
     }
+    // Show "stuck pipeline" hint once a run has been going for >10 min.
+    var hint=document.getElementById('pipelineStuckHint');
+    if(hint){
+      var stuck=(pipState==='loading' && pipElapsedMs!=null && pipElapsedMs>10*60*1000);
+      hint.style.display=stuck?'block':'none';
+    }
     return d;
   }).catch(function(e){
     if(rowsEl) rowsEl.innerHTML='<div style="font-size:.7rem;color:#f44336">⚠ '+e.message+'</div>';
     return null;
   });
 }
-function triggerCacheWarm(){
+function triggerCacheWarm(force){
   var btn=document.getElementById('cacheWarmBtn');
   var badge=document.getElementById('cacheReadyBadge');
   if(btn) btn.disabled=true;
-  if(badge) badge.textContent='Starting…';
-  fetch('/api/cache/warm',{method:'POST'}).then(function(r){return r.json();}).then(function(r){
+  if(badge) badge.textContent=force?'Force-restarting…':'Starting…';
+  var url='/api/cache/warm'+(force?'?force=1':'');
+  fetch(url,{method:'POST'}).then(function(r){return r.json();}).then(function(r){
     var t=(r.triggered||[]).join(', ')||'(all already warming)';
     if(badge) badge.textContent='Started: '+t;
     if(_cachePollTimer) clearInterval(_cachePollTimer);

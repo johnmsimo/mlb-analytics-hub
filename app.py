@@ -3213,7 +3213,16 @@ def api_cache_status():
 def api_cache_warm():
     """Re-trigger every background loader. Non-blocking — returns immediately
     with the list of loaders that were started. Safe to call repeatedly: each
-    loader skips work that's already in progress or up-to-date."""
+    loader skips work that's already in progress or up-to-date.
+
+    Query params:
+        force=1   — force-restart the matchup pipeline even if status is
+                    'running'. Useful when a previous run has stalled on slow
+                    MLB API responses and the user wants to bail out and
+                    start fresh. The orphan thread will continue but its
+                    result is overwritten.
+    """
+    force = str(request.args.get("force", "")).strip().lower() in ("1", "true", "yes")
     triggered = []
     skipped = []
     try:
@@ -3261,11 +3270,17 @@ def api_cache_warm():
     if _PIPELINE_AVAILABLE:
         try:
             ps = get_pipeline_status() or {}
-            if ps.get("status") == "running":
+            if ps.get("status") == "running" and not force:
                 skipped.append("pipeline")
             else:
+                # Force mode: caller has decided the previous run is stuck.
+                # We don't try to cancel the orphan thread (Python lacks a
+                # clean way to interrupt a blocking requests.get), but the
+                # cache fields are owned by whichever run finishes last and
+                # the new run almost always wins because the stuck one is
+                # blocked on I/O.
                 threading.Thread(target=run_pipeline, daemon=True).start()
-                triggered.append("pipeline")
+                triggered.append("pipeline" + (" (force)" if force else ""))
         except Exception as ex:
             logging.warning(f"[cache/warm] pipeline trigger failed: {ex}")
 
