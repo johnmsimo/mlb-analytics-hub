@@ -10527,8 +10527,10 @@ def api_tracker_capture(date_str):
             'message': msg,
         })
     except Exception:
-        print('[tracker_capture]', traceback.format_exc())
-        return jsonify({'success': False, 'error': 'Capture failed — check server logs'}), 500
+        tb = traceback.format_exc()
+        print('[tracker_capture]', tb)
+        return jsonify({'success': False, 'error': 'Capture failed', 'traceback': tb}), 500
+        
 
 
 @app.route('/api/tracker/grade/<date_str>', methods=['POST'])
