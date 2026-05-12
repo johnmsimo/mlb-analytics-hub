@@ -2920,7 +2920,11 @@ function renderSimulation(){
   if(!SIM_DATA || !SIM_DATA.success){ el.innerHTML = '<p class="na">Simulation data unavailable.</p>'; return; }
   var m = SIM_DATA.meta || {}, t = SIM_DATA.team || {}, h = SIM_DATA.handedness || {}, ppx = SIM_DATA.pitcherProps || {}, sp = SIM_DATA.sampleBoxscore || {};
   var awt = ppx.awayBullpenTiers || {}, hmt = ppx.homeBullpenTiers || {};
+  var fallbackBanner = SIM_DATA.fallback
+    ? '<div style="margin-bottom:10px;padding:8px 12px;background:rgba(255,160,0,.08);border:1px solid rgba(255,160,0,.3);border-radius:8px;font-size:.62rem;color:#ffa000">⚠ Sim engine error — showing estimate. Error: '+(SIM_DATA.warning||'unknown').slice(0,150)+'</div>'
+    : '';
   el.innerHTML = ''
+    + fallbackBanner
     + '<div class="mc-grid">'
     + '<div class="mc-card"><div class="mc-v">'+m.awayAbbr+' '+t.away_mean_runs.toFixed(2)+'</div><div class="mc-l">MEAN AWAY RUNS</div></div>'
     + '<div class="mc-card"><div class="mc-v">'+m.homeAbbr+' '+t.home_mean_runs.toFixed(2)+'</div><div class="mc-l">MEAN HOME RUNS</div></div>'

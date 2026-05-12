@@ -568,8 +568,11 @@ BVP_HTML = _read_html_or_fallback('bvp.html')
 VALUE_BETS_HTML = _read_html_or_fallback('value_bets.html')
 NRFI_HTML = _read_html_or_fallback('nrfi.html')
 TOOLS_HTML = _read_html_or_fallback('tools.html')
-DATA_DIR = os.path.join(_HERE, 'data')
+DATA_DIR = os.environ.get('DATA_DIR') or (
+    '/app/data' if os.path.isdir('/app/data') else os.path.join(_HERE, 'data')
+)
 os.makedirs(DATA_DIR, exist_ok=True)
+print(f"[startup] DATA_DIR={DATA_DIR}")
 BRAIN_DATA_DIR = os.path.join(DATA_DIR, 'brain_uploads')
 os.makedirs(BRAIN_DATA_DIR, exist_ok=True)
 BRAIN_UPLOAD_STATE_STORE = os.path.join(DATA_DIR, 'brain_upload_state.json')
@@ -17454,5 +17457,8 @@ if _PIPELINE_AVAILABLE:
 
 
 if __name__ == "__main__":
+    # When running via `python app.py` the gunicorn post_fork hook never fires,
+    # so trigger cache preloading here before accepting requests.
+    _preload_caches()
     port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
