@@ -69,12 +69,23 @@ from mc_upgrades import (
 
 # ── Matchup Pipeline ───────────────────────────────────────────────────────────
 try:
-    from pipeline_scheduler import start_scheduler, get_matchup_df, get_games_df, get_pipeline_status
+    from pipeline_scheduler import (
+        start_scheduler, get_matchup_df, get_games_df,
+        get_pipeline_status, run_pipeline,
+    )
     from pipeline_routes import pipeline_bp
     _PIPELINE_AVAILABLE = True
 except ImportError:
     _PIPELINE_AVAILABLE = False
     logging.warning("[pipeline] pipeline_scheduler or pipeline_routes not found — skipping.")
+
+# Tracks when the most recent matchup-pipeline run was kicked off via
+# /api/cache/warm, so the Cache Status UI can show "building 8m 23s…"
+# and surface a Force Restart hint when a run stalls. We track it here
+# instead of mutating pipeline_scheduler._cache so the scheduler stays
+# decoupled from this UI.
+_pipeline_run_started_at = None
+_pipeline_run_lock = threading.Lock()
 
 
 from brain_merge_patch import (
@@ -3148,6 +3159,143 @@ def api_status():
     })
     logging.info(f"[API] /api/status took {time.time() - t0:.3f}s")
     return resp
+
+
+@app.route("/api/cache/status")
+def api_cache_status():
+    """Aggregated readiness for every background loader the sim depends on.
+    Used by the Cache Status panel in Admin Settings."""
+    today = datetime.now().date()
+    with _fg_lock:
+        fg_state = {
+            "loaded":   bool(_fg_loaded and _fg_load_date == today),
+            "loading":  bool(_fg_loading),
+            "date":     str(_fg_load_date) if _fg_load_date else None,
+            "batters":  len(_fg_bat),
+            "pitchers": len(_fg_pit),
+        }
+    with _sv_lock:
+        sv_state = {
+            "loaded":     bool(_sv_loaded and _sv_load_date == today),
+            "loading":    bool(_sv_loading),
+            "date":       str(_sv_load_date) if _sv_load_date else None,
+            "pit_xstats": len(_sv_pit_xstats),
+            "bat_xstats": len(_sv_bat_xstats),
+            "statcast":   len(_sv_bat_statcast),
+            "arsenals":   len(_sv_arsenal_pct),
+        }
+    with _local_arsenal_lock:
+        ars = _local_arsenal_cache
+    arsenal_state = {
+        "loaded":   ars is not None,
+        "pitchers": (len(ars[0]) if ars else 0),
+    }
+    pipeline_state = None
+    if _PIPELINE_AVAILABLE:
+        try:
+            pipeline_state = get_pipeline_status() or {"status": "idle"}
+            with _pipeline_run_lock:
+                started = _pipeline_run_started_at
+            # Only surface app-side started_at while the pipeline is actually
+            # running; once it's done/idle the timestamp is stale.
+            if started and pipeline_state.get("status") == "running":
+                pipeline_state["started_at"] = datetime.fromtimestamp(started).isoformat()
+        except Exception as ex:
+            pipeline_state = {"status": "error", "error": str(ex)[:200]}
+
+    pipeline_ok = (pipeline_state is None) or (pipeline_state.get("status") == "done")
+    ready = bool(
+        fg_state["loaded"] and sv_state["loaded"]
+        and arsenal_state["loaded"] and pipeline_ok
+    )
+    return jsonify({
+        "ready":    ready,
+        "fg":       fg_state,
+        "savant":   sv_state,
+        "arsenal":  arsenal_state,
+        "pipeline": pipeline_state,
+    })
+
+
+@app.route("/api/cache/warm", methods=["POST"])
+def api_cache_warm():
+    """Re-trigger every background loader. Non-blocking — returns immediately
+    with the list of loaders that were started. Safe to call repeatedly: each
+    loader skips work that's already in progress or up-to-date.
+
+    Query params:
+        force=1   — force-restart the matchup pipeline even if status is
+                    'running'. Useful when a previous run has stalled on
+                    slow MLB API responses. The orphan thread keeps
+                    blocking on its I/O call but its result is overwritten
+                    when the new run finishes.
+    """
+    global _pipeline_run_started_at
+    force = str(request.args.get("force", "")).strip().lower() in ("1", "true", "yes")
+    triggered = []
+    skipped = []
+
+    try:
+        with _fg_lock:
+            fg_busy = _fg_loading or (
+                _fg_loaded and _fg_load_date == datetime.now().date()
+            )
+        if fg_busy:
+            skipped.append("fg")
+        else:
+            _maybe_refresh_fg()
+            triggered.append("fg")
+    except Exception as ex:
+        logging.warning(f"[cache/warm] fg trigger failed: {ex}")
+
+    try:
+        with _sv_lock:
+            sv_busy = _sv_loading or (
+                _sv_loaded and _sv_load_date == datetime.now().date()
+            )
+        if sv_busy:
+            skipped.append("savant")
+        else:
+            _maybe_refresh_savant()
+            triggered.append("savant")
+    except Exception as ex:
+        logging.warning(f"[cache/warm] savant trigger failed: {ex}")
+
+    with _local_arsenal_lock:
+        arsenal_loaded = _local_arsenal_cache is not None
+    if arsenal_loaded:
+        skipped.append("arsenal")
+    else:
+        def _warm_arsenal():
+            global _local_arsenal_cache
+            try:
+                with _local_arsenal_lock:
+                    if _local_arsenal_cache is None:
+                        _local_arsenal_cache = _load_local_pitcher_arsenal()
+            except Exception as ex:
+                logging.warning(f"[cache/warm] arsenal load failed: {ex}")
+        threading.Thread(target=_warm_arsenal, daemon=True).start()
+        triggered.append("arsenal")
+
+    if _PIPELINE_AVAILABLE:
+        try:
+            ps = get_pipeline_status() or {}
+            if ps.get("status") == "running" and not force:
+                skipped.append("pipeline")
+            else:
+                with _pipeline_run_lock:
+                    _pipeline_run_started_at = time.time()
+                threading.Thread(target=run_pipeline, daemon=True).start()
+                triggered.append("pipeline" + (" (force)" if force else ""))
+        except Exception as ex:
+            logging.warning(f"[cache/warm] pipeline trigger failed: {ex}")
+
+    return jsonify({
+        "success":   True,
+        "triggered": triggered,
+        "skipped":   skipped,
+    })
+
 
 @app.route('/health')
 def health_check():
