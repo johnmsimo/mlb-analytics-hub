@@ -7997,10 +7997,8 @@ def api_simulate(game_pk):
         away_pitcher = _pitcher_model(away_p.get('fullName', 'Away SP'), away_p.get('id'), away_team_id)
         home_pitcher = _pitcher_model(home_p.get('fullName', 'Home SP'), home_p.get('id'), home_team_id)
         park = PARK_FACTORS.get(home_team_id, 1.0)
-        away_relief_fatigue_woba = _team_relief_fatigue_woba(home_team_id)
-        home_relief_fatigue_woba = _team_relief_fatigue_woba(away_team_id)
 
-        # ── Fetch weather for BAT X integration ──────────────────────────────
+        # ── Compute venue/time locals needed for weather before parallel block ─
         ven      = g.get('venue', {})
         venue_id = ven.get('id')
         vloc     = ven.get('location', {}) or {}
@@ -8008,22 +8006,38 @@ def api_simulate(game_pk):
         lat      = coords.get('latitude')
         lon      = coords.get('longitude')
         try:
-            from datetime import timedelta
-            dt_utc    = datetime.fromisoformat(g.get('gameDate', '').replace('Z', '+00:00'))
-            utc_off   = VENUE_UTC_OFFSET.get(venue_id, -5)
-            ghour     = (dt_utc + timedelta(hours=utc_off)).hour
+            dt_utc  = datetime.fromisoformat(g.get('gameDate', '').replace('Z', '+00:00'))
+            utc_off = VENUE_UTC_OFFSET.get(venue_id, -5)
+            ghour   = (dt_utc + timedelta(hours=utc_off)).hour
         except Exception:
             ghour = 13
+        game_date_str = (g.get('gameDate') or today).split('T')[0]
+
+        # ── Run all pre-simulation IO in parallel (bullpen × 2, weather, ump) ─
+        with ThreadPoolExecutor(max_workers=4) as _pre_ex:
+            _fat_away_fut = _pre_ex.submit(_team_relief_fatigue_woba, home_team_id)
+            _fat_home_fut = _pre_ex.submit(_team_relief_fatigue_woba, away_team_id)
+            _wx_fut       = _pre_ex.submit(get_weather, lat, lon, ghour, venue_id)
+            _off_fut      = _pre_ex.submit(_fetch_schedule_with_officials,
+                                           game_date_str, game_date_str)
+
         try:
-            wx = get_weather(lat, lon, ghour, venue_id=venue_id)
+            away_relief_fatigue_woba = _fat_away_fut.result()
+        except Exception:
+            away_relief_fatigue_woba = 0.0
+        try:
+            home_relief_fatigue_woba = _fat_home_fut.result()
+        except Exception:
+            home_relief_fatigue_woba = 0.0
+        try:
+            wx = _wx_fut.result() or {}
         except Exception:
             wx = {}
 
         ump_data = None
         try:
-            game_date_str = (g.get('gameDate') or today).split('T')[0]
-            official_games = _fetch_schedule_with_officials(game_date_str, game_date_str)
-            official_game = next((item for item in official_games if item.get('gamePk') == game_pk), None)
+            official_games = _off_fut.result()
+            official_game = next((x for x in official_games if x.get('gamePk') == game_pk), None)
             ump = _get_hp_umpire(official_game or {})
             if ump and ump.get('id'):
                 ump_data = _get_cached_ump(ump.get('id'), ump.get('fullName', ''))
