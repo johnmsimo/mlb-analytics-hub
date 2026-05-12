@@ -2734,7 +2734,8 @@ function renderNrfiDeepDive(){
 }
 
 function renderSampleBox(teamKey, abbr, spName){
-  var box = SIM_DATA.sampleBoxscore[teamKey];
+  var box = (SIM_DATA.sampleBoxscore || {})[teamKey];
+  if(!box) return '<p class="na">Sample boxscore unavailable</p>';
   var rows = (box.batters||[]).map(function(p){
     return '<tr><td>'+p.slot+'</td><td>'+p.name+'</td><td>'+p.pos+'</td><td>'+p.ab+'</td><td>'+p.h+'</td><td>'+p.hr+'</td><td>'+p.rbi+'</td><td>'+p.r+'</td><td>'+p.bb+'</td><td>'+p.k+'</td><td>'+p.tb+'</td></tr>';
   }).join('');
@@ -2949,7 +2950,8 @@ function tierRow(name, t){
   return '<tr><td>'+name+'</td><td>'+pp(t.mean_er)+'</td><td>'+pp(t.mean_k)+'</td><td>'+pp(t.p50_outs)+'</td><td>'+pct(t.p_2plus_er||0)+'</td></tr>';
 }
 function renderSampleBox(teamKey, abbr, spName){
-  var box = SIM_DATA.sampleBoxscore[teamKey];
+  var box = (SIM_DATA.sampleBoxscore || {})[teamKey];
+  if(!box) return '<p class="na">Sample boxscore unavailable</p>';
   var rows = (box.batters||[]).map(function(p){
     return '<tr><td>'+p.slot+'</td><td>'+p.name+'</td><td>'+p.pos+'</td><td>'+p.ab+'</td><td>'+p.h+'</td><td>'+p.hr+'</td><td>'+p.rbi+'</td><td>'+p.r+'</td><td>'+p.bb+'</td><td>'+p.k+'</td><td>'+p.tb+'</td><td>'+p.sb+'</td></tr>';
   }).join('');
