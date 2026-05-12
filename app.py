@@ -6986,87 +6986,99 @@ def _get_team_pitching_rankings(force=False):
     return rows, by_id
 
 
+_pitcher_stats_mlb_cache: dict = {}
+_pitcher_stats_mlb_lock = threading.Lock()
+
 def pitcher_stats_mlb(player_id):
+    today = datetime.now().date().isoformat()
+    cache_key = (player_id, today)
+    with _pitcher_stats_mlb_lock:
+        if cache_key in _pitcher_stats_mlb_cache:
+            return _pitcher_stats_mlb_cache[cache_key]
     try:
         r = requests.get(f"{MLB_API}/people/{player_id}/stats?stats=season&group=pitching&season={datetime.now().year}", timeout=8)
         r.raise_for_status()
         splits = r.json().get("stats", [{}])[0].get("splits", [])
         prof = player_profile(player_id)
         if not splits:
-            return {'pitchHand': prof.get('throws', 'R')}
-        s = splits[0].get("stat", {})
-        return {
-            "era": s.get("era", "N/A"), "whip": s.get("whip", "N/A"),
-            "ip": s.get("inningsPitched", "N/A"),
-            "wins": s.get("wins", 0), "losses": s.get("losses", 0),
-            "g": s.get("gamesPlayed", 0), "gs": s.get("gamesStarted", 0),
-            "k9": round(float(s.get("strikeoutsPer9Inn", 0) or 0), 2),
-            "bb9": round(float(s.get("walksPer9Inn", 0) or 0), 2),
-            "hr9": round(float(s.get("homeRunsPer9", 0) or 0), 2),
-            "pitchHand": prof.get('throws', 'R'),
-        }
+            result = {'pitchHand': prof.get('throws', 'R')}
+        else:
+            s = splits[0].get("stat", {})
+            result = {
+                "era": s.get("era", "N/A"), "whip": s.get("whip", "N/A"),
+                "ip": s.get("inningsPitched", "N/A"),
+                "wins": s.get("wins", 0), "losses": s.get("losses", 0),
+                "g": s.get("gamesPlayed", 0), "gs": s.get("gamesStarted", 0),
+                "k9": round(float(s.get("strikeoutsPer9Inn", 0) or 0), 2),
+                "bb9": round(float(s.get("walksPer9Inn", 0) or 0), 2),
+                "hr9": round(float(s.get("homeRunsPer9", 0) or 0), 2),
+                "pitchHand": prof.get('throws', 'R'),
+            }
     except Exception:
         prof = player_profile(player_id)
-        return {'pitchHand': prof.get('throws', 'R')}
+        result = {'pitchHand': prof.get('throws', 'R')}
+    with _pitcher_stats_mlb_lock:
+        _evict_if_large(_pitcher_stats_mlb_cache, 200)
+        _pitcher_stats_mlb_cache[cache_key] = result
+    return result
+
+
+def _load_local_pitcher_arsenal():
+    """Load pitch arsenal stats from local FanGraphs CSVs into module-level cache.
+
+    Reads fg*_pit*.csv files that contain real pitch-type usage columns.
+    Steamer projection files (which lack these columns) are skipped.
+    Called once at startup via _preload_caches() so _pitcher_model() never
+    has to pay the 20-60s CSV-parse cost on the first request.
+    """
+    PITCH_TYPE_COLS = {
+        'FA%','SI%','FC%','SL%','CU%','CH%','KC%','KN%','EP%','SC%','FO%',
+        'PO%','XX%','CT%','CB%','SF%',
+    }
+    arsenal = {}
+    velo = {}
+    seen: set = set()
+    paths = (
+        _glob.glob(os.path.join("data", "fg*_pit*.csv"))
+        + _glob.glob(os.path.join("data", "fg_pitching_*.csv"))
+    )
+    for path in paths:
+        abs_path = os.path.abspath(path)
+        if abs_path in seen:
+            continue
+        seen.add(abs_path)
+        try:
+            df = pd.read_csv(path)
+            has_arsenal = any(c in PITCH_TYPE_COLS or c.endswith("_Velo") for c in df.columns)
+            if not has_arsenal:
+                continue
+            for _, row in df.iterrows():
+                pname = str(row.get("Name") or row.get("PlayerName") or row.get("player_name") or "").strip()
+                if not pname:
+                    continue
+                key = _sv_key(pname)
+                pitch_pct = {
+                    k.replace("%", "").lower(): float(row[k])
+                    for k in row.keys()
+                    if k in PITCH_TYPE_COLS and pd.notnull(row[k])
+                }
+                pitch_velo = {
+                    k.replace("_Velo", "").lower(): float(row[k])
+                    for k in row.keys()
+                    if k.endswith("_Velo") and pd.notnull(row[k])
+                }
+                if pitch_pct:
+                    arsenal[key] = pitch_pct
+                if pitch_velo:
+                    velo[key] = pitch_velo
+        except Exception as ex:
+            logging.warning(f"[LocalArsenal] Failed to load {path}: {ex}")
+    return arsenal, velo
 
 
 def _pitcher_model(name, pid=None, team_id=None):
     global _local_arsenal_cache
     mlb = pitcher_stats_mlb(pid) if pid else {}
-
-    def _load_local_pitcher_arsenal():
-        """Load and cache pitch arsenal stats from local data/ CSVs.
-
-        Only processes FanGraphs pitching CSV files that contain real pitch-type
-        usage columns (e.g. SL%, CH%, CB%).  Steamer projection files lack these
-        columns and are intentionally skipped to avoid wasted iteration.
-        """
-        # Pitch-type abbreviation columns used by FanGraphs (2-3 letter codes + %)
-        PITCH_TYPE_COLS = {
-            'FA%','SI%','FC%','SL%','CU%','CH%','KC%','KN%','EP%','SC%','FO%',
-            'PO%','XX%','CT%','CB%','SF%',
-        }
-        arsenal = {}
-        velo = {}
-        # Deduplicate paths — fg*_pit*.csv and fg_pitching_*.csv can overlap
-        seen: set = set()
-        paths = (
-            _glob.glob(os.path.join("data", "fg*_pit*.csv"))
-            + _glob.glob(os.path.join("data", "fg_pitching_*.csv"))
-        )
-        for path in paths:
-            abs_path = os.path.abspath(path)
-            if abs_path in seen:
-                continue
-            seen.add(abs_path)
-            try:
-                df = pd.read_csv(path)
-                # Skip files that lack real pitch-type arsenal columns
-                has_arsenal = any(c in PITCH_TYPE_COLS or c.endswith("_Velo") for c in df.columns)
-                if not has_arsenal:
-                    continue
-                for _, row in df.iterrows():
-                    pname = str(row.get("Name") or row.get("PlayerName") or row.get("player_name") or "").strip()
-                    if not pname:
-                        continue
-                    key = _sv_key(pname)
-                    pitch_pct = {
-                        k.replace("%", "").lower(): float(row[k])
-                        for k in row.keys()
-                        if k in PITCH_TYPE_COLS and pd.notnull(row[k])
-                    }
-                    pitch_velo = {
-                        k.replace("_Velo", "").lower(): float(row[k])
-                        for k in row.keys()
-                        if k.endswith("_Velo") and pd.notnull(row[k])
-                    }
-                    if pitch_pct:
-                        arsenal[key] = pitch_pct
-                    if pitch_velo:
-                        velo[key] = pitch_velo
-            except Exception as ex:
-                logging.warning(f"[LocalArsenal] Failed to load {path}: {ex}")
-        return arsenal, velo
 
     # Grab a snapshot of all sv caches under _sv_lock (fast — dicts are already built).
     # The local arsenal load is done OUTSIDE _sv_lock to avoid holding the global
@@ -7996,8 +8008,16 @@ def api_simulate(game_pk):
 
         away_p = g.get('teams', {}).get('away', {}).get('probablePitcher', {})
         home_p = g.get('teams', {}).get('home', {}).get('probablePitcher', {})
-        away_pitcher = _pitcher_model(away_p.get('fullName', 'Away SP'), away_p.get('id'), away_team_id)
-        home_pitcher = _pitcher_model(home_p.get('fullName', 'Home SP'), home_p.get('id'), home_team_id)
+        # _pitcher_model hits pitcher_stats_mlb (MLB API) + local CSV — run in parallel.
+        with ThreadPoolExecutor(max_workers=2) as _pm_ex:
+            _away_pm_fut = _pm_ex.submit(_pitcher_model,
+                                         away_p.get('fullName', 'Away SP'),
+                                         away_p.get('id'), away_team_id)
+            _home_pm_fut = _pm_ex.submit(_pitcher_model,
+                                         home_p.get('fullName', 'Home SP'),
+                                         home_p.get('id'), home_team_id)
+        away_pitcher = _away_pm_fut.result()
+        home_pitcher = _home_pm_fut.result()
         park = PARK_FACTORS.get(home_team_id, 1.0)
 
         # ── Compute venue/time locals needed for weather before parallel block ─
@@ -17420,10 +17440,21 @@ def _preload_caches():
                 pass
         print(f"[STARTUP] Active roster cache preload complete: {loaded}/30 teams")
 
+    def load_arsenal():
+        global _local_arsenal_cache
+        try:
+            with _local_arsenal_lock:
+                if _local_arsenal_cache is None:
+                    _local_arsenal_cache = _load_local_pitcher_arsenal()
+            print("[STARTUP] Local pitcher arsenal cache preload complete")
+        except Exception as ex:
+            print(f"[STARTUP] Local pitcher arsenal cache preload failed: {ex}")
+
     # Start cache loads in parallel background threads
     threading.Thread(target=load_fg, daemon=True).start()
     threading.Thread(target=load_sv, daemon=True).start()
     threading.Thread(target=load_rosters, daemon=True).start()
+    threading.Thread(target=load_arsenal, daemon=True).start()
 
     def _prewarm_when_ready():
         # Wait for FG data to be available before prewarming dependent caches.
