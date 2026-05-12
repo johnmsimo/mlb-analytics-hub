@@ -2557,10 +2557,83 @@ function lookupPitchX(playerName){
 }
 
 var _simHandednessRetried = false;
+var _simPollTimer = null;
+
+function _simFallbackPayload(msg, simsVal){
+  var away = (GD && GD.awayAbbr) ? GD.awayAbbr : 'AWAY';
+  var home = (GD && GD.homeAbbr) ? GD.homeAbbr : 'HOME';
+  var awaySp = (PD && PD.awayPitcher && PD.awayPitcher.name) ? PD.awayPitcher.name : 'Away SP';
+  var homeSp = (PD && PD.homePitcher && PD.homePitcher.name) ? PD.homePitcher.name : 'Home SP';
+  return {
+    success: true, fallback: true,
+    warning: msg || 'Client fallback simulation payload.',
+    meta: { sims: simsVal || 0, awayAbbr: away, homeAbbr: home, parkFactor: 1.0 },
+    team: {
+      away_mean_runs: 4.2, home_mean_runs: 4.3, mean_total: 8.5, median_total: 8.0,
+      p_8plus_total: 0.53, p_9plus_total: 0.46, p_10plus_total: 0.35,
+      away_win_pct: 0.48, home_win_pct: 0.49, tie_pct: 0.03
+    },
+    handedness: { awayLineup:{L:0,R:0,S:0}, homeLineup:{L:0,R:0,S:0}, awayStarterHand:'R', homeStarterHand:'R' },
+    playerProps: { away: [], home: [] },
+    pitcherProps: {
+      awayStarter:{name:awaySp,mean_k:0,mean_outs:0,mean_er:0,mean_h:0,mean_bb:0},
+      homeStarter:{name:homeSp,mean_k:0,mean_outs:0,mean_er:0,mean_h:0,mean_bb:0},
+      awayBullpen:{name:away+' Bullpen',mean_k:0,mean_outs:0,mean_er:0,mean_h:0,mean_bb:0},
+      homeBullpen:{name:home+' Bullpen',mean_k:0,mean_outs:0,mean_er:0,mean_h:0,mean_bb:0},
+      awayBullpenTiers:{closer:{},setup:{},middle:{}},
+      homeBullpenTiers:{closer:{},setup:{},middle:{}}
+    },
+    correlations: [], sampleBoxscore: null
+  };
+}
+
+function _showSimComputing(elapsed, estimatedSeconds){
+  ensureSimWrap();
+  var panel = document.getElementById('simPanel');
+  if(!panel) return;
+  var remaining = Math.max(0, (estimatedSeconds || 90) - (elapsed || 0));
+  panel.innerHTML = '<div style="padding:22px 0;text-align:center">'
+    +'<div class="spinner" style="margin:0 auto 14px"></div>'
+    +'<div style="font-family:Orbitron,monospace;font-size:.68rem;letter-spacing:2px;color:var(--c)">COMPUTING 5,000 SIMULATIONS…</div>'
+    +'<div style="margin-top:8px;font-size:.62rem;color:rgba(255,255,255,.4)">~'+remaining+'s remaining</div>'
+    +'</div>';
+}
+
+function _handleSimResult(d, highPrecision, sims){
+  if(!d || !d.success) d = _simFallbackPayload((d && d.error) || 'Simulation failed', sims);
+  SIM_DATA = d;
+  _buildSimCorrLookup(d.correlations || []);
+  var badge = document.getElementById('simRunsBadge') || document.querySelector('#simWrap .tag-sv');
+  if(badge){
+    var runs = (d.meta && d.meta.sims) ? Number(d.meta.sims).toLocaleString() + (highPrecision ? ' RUNS · HP' : ' RUNS') : 'FALLBACK';
+    badge.textContent = runs;
+  }
+  renderSimulation();
+  renderPropPanel();
+}
+
+function _pollSimulation(sims, highPrecision, attempt){
+  if(attempt > 36) {  // give up after 36 × 5s = 3 min
+    _handleSimResult(_simFallbackPayload('Simulation timed out after 3 minutes'), highPrecision, sims);
+    return;
+  }
+  fetch('/api/simulate/'+GPK+'?sims='+sims)
+    .then(function(r){ return r.json().catch(function(){ return {}; }); })
+    .then(function(d){
+      if(d && d.computing){
+        _showSimComputing(d.elapsed, d.estimatedSeconds);
+        _simPollTimer = setTimeout(function(){ _pollSimulation(sims, highPrecision, attempt+1); }, 5000);
+        return;
+      }
+      _handleSimResult(d, highPrecision, sims);
+    })
+    .catch(function(){ _simPollTimer = setTimeout(function(){ _pollSimulation(sims, highPrecision, attempt+1); }, 5000); });
+}
+
 function loadSimulation(opts){
   opts = opts || {};
-  // Reset the handedness retry guard on each fresh (non-retry) load
   if(!opts._handednessRetry) _simHandednessRetried = false;
+  if(_simPollTimer){ clearTimeout(_simPollTimer); _simPollTimer = null; }
   var sims = parseInt(opts.sims || 5000, 10);
   if(!isFinite(sims)) sims = 5000;
   sims = Math.max(1500, Math.min(5000, sims));
@@ -2569,61 +2642,11 @@ function loadSimulation(opts){
   ensureSimWrap();
   var panel = document.getElementById('simPanel');
   if(panel) panel.innerHTML = '<div class="spinner"></div>';
-  var _simAbort = new AbortController();
-  // Allow 150s — accounts for cold-cache MLB API hops + 5,000-sim HP mode.
-  var _simTimeout = setTimeout(function(){ _simAbort.abort(); }, 150000);
   function simFallback(msg){
-    var away = (GD && GD.awayAbbr) ? GD.awayAbbr : 'AWAY';
-    var home = (GD && GD.homeAbbr) ? GD.homeAbbr : 'HOME';
-    var awaySp = (PD && PD.awayPitcher && PD.awayPitcher.name) ? PD.awayPitcher.name : 'Away SP';
-    var homeSp = (PD && PD.homePitcher && PD.homePitcher.name) ? PD.homePitcher.name : 'Home SP';
-    return {
-      success: true,
-      fallback: true,
-      warning: msg || 'Client fallback simulation payload.',
-      meta: { sims: sims, awayAbbr: away, homeAbbr: home, parkFactor: 1.0 },
-      team: {
-        away_mean_runs: 4.2,
-        home_mean_runs: 4.3,
-        mean_total: 8.5,
-        median_total: 8.0,
-        p_8plus_total: 0.53,
-        p_9plus_total: 0.46,
-        p_10plus_total: 0.35,
-        away_win_pct: 0.48,
-        home_win_pct: 0.49,
-        tie_pct: 0.03
-      },
-      handedness: {
-        awayLineup: {L:0,R:0,S:0},
-        homeLineup: {L:0,R:0,S:0},
-        awayStarterHand: 'R',
-        homeStarterHand: 'R'
-      },
-      playerProps: { away: [], home: [] },
-      pitcherProps: {
-        awayStarter: { name: awaySp, mean_k: 0, mean_outs: 0, mean_er: 0, mean_h: 0, mean_bb: 0 },
-        homeStarter: { name: homeSp, mean_k: 0, mean_outs: 0, mean_er: 0, mean_h: 0, mean_bb: 0 },
-        awayBullpen: { name: away + ' Bullpen', mean_k: 0, mean_outs: 0, mean_er: 0, mean_h: 0, mean_bb: 0 },
-        homeBullpen: { name: home + ' Bullpen', mean_k: 0, mean_outs: 0, mean_er: 0, mean_h: 0, mean_bb: 0 },
-        awayBullpenTiers: { closer: {}, setup: {}, middle: {} },
-        homeBullpenTiers: { closer: {}, setup: {}, middle: {} }
-      },
-      correlations: [],
-      top_sgp_combos: [],
-      sampleBoxscore: {
-        away: { batters: [], runs: 4, hits: 8, bb: 3, k: 8 },
-        home: { batters: [], runs: 4, hits: 8, bb: 3, k: 8 },
-        away_abbr: away,
-        home_abbr: home,
-        away_pitcher: awaySp,
-        home_pitcher: homeSp
-      }
-    };
+    return _simFallbackPayload(msg, sims);
   }
-  fetch('/api/simulate/' + GPK + '?sims=' + sims + (refresh ? '&refresh=1' : ''), {signal: _simAbort.signal})
+  fetch('/api/simulate/' + GPK + '?sims=' + sims + (refresh ? '&refresh=1' : ''))
     .then(function(r){
-      clearTimeout(_simTimeout);
       return r.json().catch(function(){ return {}; }).then(function(body){
         if(!r.ok){
           var msg = (body && body.error) ? body.error : ('Server '+r.status+' — using fallback simulation');
@@ -2634,27 +2657,22 @@ function loadSimulation(opts){
       });
     })
     .then(function(d){
-      if(!d || !d.success) d = simFallback((d && d.error) || 'Simulation failed — using fallback');
-      SIM_DATA = d;
-      _buildSimCorrLookup(d.correlations || []);
-      var badge = document.querySelector('#simWrap .tag-sv');
-      if(badge){
-        var runs = (d.meta && d.meta.sims) ? Number(d.meta.sims).toLocaleString() + (highPrecision ? ' RUNS · HP' : ' RUNS') : 'FALLBACK';
-        badge.textContent = runs;
+      // Server launched background job — start polling
+      if(d && d.computing){
+        _showSimComputing(d.elapsed, d.estimatedSeconds);
+        _simPollTimer = setTimeout(function(){ _pollSimulation(sims, highPrecision, 1); }, 5000);
+        return;
       }
-      renderSimulation();
-      renderPropPanel();
+      _handleSimResult(d, highPrecision, sims);
     })
     .catch(function(e){
-      clearTimeout(_simTimeout);
-      var el = document.getElementById('simPanel');
-      var isTimeout = e.name === 'AbortError';
-      var msg = isTimeout ? 'Simulation timed out — using fallback data' : ('Simulation unavailable: ' + e.message);
-      if(isTimeout){ SIM_DATA = simFallback(msg); renderSimulation(); renderPropPanel(); return; }
-      if(el) el.innerHTML = '<p class="na">'+msg+'</p>'
+      var panel2 = document.getElementById('simPanel');
+      if(panel2) panel2.innerHTML = '<p class="na">Simulation unavailable: '+e.message+'</p>'
         +'<button onclick="loadSimulation()" style="margin-top:10px;padding:6px 16px;border:1px solid rgba(0,229,255,.3);border-radius:999px;background:rgba(0,229,255,.08);color:var(--c);font-family:Orbitron,monospace;font-size:.62rem;letter-spacing:1px;cursor:pointer">&#8635; RETRY</button>';
     });
 }
+
+// ── legacy function bodies replaced above; kept as shims ────────────────────
 
 function refreshSimulation(){
   loadSimulation({refresh:1});

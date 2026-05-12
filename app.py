@@ -7857,15 +7857,11 @@ def _simulation_fallback_payload(game_obj, game_pk, sims=0, warning=''):
 
 
 @app.route('/api/simulate/<int:game_pk>')
-def api_simulate(game_pk):
+def _do_simulate(game_pk, sims):
+    """Core simulation logic, extracted so it can run in a background thread.
+    Returns a plain dict (not a Flask Response)."""
     try:
-        # Default to 2500 sims to stay within client + proxy timeout budgets;
-        # high-precision mode explicitly requests 5000 via ?sims=5000.
-        try:
-            requested_sims = int(request.args.get('sims', 2500) or 2500)
-        except Exception:
-            requested_sims = 2500
-        sims = max(1500, min(5000, requested_sims))
+        sims = max(1500, min(5000, int(sims) if sims else 5000))
 
         # Prefer direct game lookup so deep-dive works for non-today game IDs too.
         g = fetch_schedule_game(game_pk)
@@ -7879,7 +7875,7 @@ def api_simulate(game_pk):
                 sims=sims,
                 warning='Game not found for simulation; returned fallback payload.'
             )
-            return jsonify(fallback)
+            return fallback
         away_team = g.get('teams', {}).get('away', {}).get('team', {})
         home_team = g.get('teams', {}).get('home', {}).get('team', {})
         away_team_id = away_team.get('id')
@@ -7981,7 +7977,7 @@ def api_simulate(game_pk):
             if len(home_lineup) < 5:
                 home_lineup = _roster_lineup(home_team_id)
         if not away_lineup or not home_lineup:
-            return jsonify({'success': False, 'error': 'Lineups unavailable for simulation'}), 400
+            return {'success': False, 'error': 'Lineups unavailable for simulation'}
         # Pre-warm _bio_cache for all lineup players so bats handedness is correct
         # even on a cold server restart (avoids L0/R0/S0 in the handedness block).
         # Parallel fetch to stay within the JS 90s abort timeout.
@@ -7994,14 +7990,12 @@ def api_simulate(game_pk):
             _pid = _b.get('id')
             if _pid and _pid in _bio_cache:
                 _b['bats'] = _bio_cache[_pid].get('bats', _b.get('bats', 'S'))
-        # Keep simulation within Render memory/timeout budget.
         today = datetime.now(ET).strftime('%Y-%m-%d')
         lineup_signature = _game_lineup_signature(g, away_lineup, home_lineup)
         cache_signature = f"{lineup_signature}|sims:{sims}|hand:v2"
-        refresh = request.args.get('refresh') == '1'
         cached = _correlation_cache.get(game_pk)
-        if cached and not refresh and cached.get('date') == today and cached.get('signature') == cache_signature:
-            return jsonify(cached.get('payload') or {'success': False, 'error': 'Cached simulation payload missing'})
+        if cached and cached.get('date') == today and cached.get('signature') == cache_signature:
+            return cached.get('payload') or {'success': False, 'error': 'Cached simulation payload missing'}
 
         away_abbr = away_team.get('abbreviation', 'AWAY')
         home_abbr = home_team.get('abbreviation', 'HOME')
@@ -8348,7 +8342,7 @@ def api_simulate(game_pk):
             'signature': cache_signature,
             'payload': payload,
         }
-        return jsonify(payload)
+        return payload
     except Exception as ex:
         print('[api_simulate]', traceback.format_exc())
         try:
@@ -8359,7 +8353,7 @@ def api_simulate(game_pk):
                 sims=sims,
                 warning=f'Fallback mode: {str(ex) or "simulation error"}'
             )
-            return jsonify(fallback)
+            return fallback
         except Exception as fallback_ex:
             print('[api_simulate:fallback]', traceback.format_exc())
             emergency = _simulation_fallback_payload(
@@ -8368,8 +8362,69 @@ def api_simulate(game_pk):
                 sims=sims,
                 warning=f'Emergency fallback: {str(ex) or "simulation error"}; {str(fallback_ex) or "fallback error"}'
             )
-            return jsonify(emergency)
+            return emergency
 
+
+# ── Background simulation dispatcher ─────────────────────────────────────────
+# Jobs keyed by (game_pk, sims) so that a 5k-sim request and a 2.5k-sim request
+# don't race each other.  Entries: {'status': 'running'|'done', 'started': float,
+# 'payload': dict|None}.
+_sim_bg_jobs: dict = {}
+_sim_bg_lock = threading.Lock()
+
+
+@app.route('/api/simulate/<int:game_pk>')
+def api_simulate(game_pk):
+    try:
+        sims = max(1500, min(5000, int(request.args.get('sims', 5000) or 5000)))
+    except Exception:
+        sims = 5000
+    refresh = request.args.get('refresh') == '1'
+    today = datetime.now(ET).strftime('%Y-%m-%d')
+    job_key = (game_pk, sims)
+
+    # 1. Fast cache hit
+    cached = _correlation_cache.get(game_pk)
+    if cached and not refresh and cached.get('date') == today:
+        return jsonify(cached['payload'])
+
+    # 2. Background job already running or done
+    with _sim_bg_lock:
+        job = _sim_bg_jobs.get(job_key)
+    if job and not refresh:
+        if job['status'] == 'done':
+            return jsonify(job['payload'])
+        elapsed = int(time.time() - job['started'])
+        return jsonify({'computing': True, 'elapsed': elapsed,
+                        'estimatedSeconds': max(5, 90 - elapsed)})
+
+    # 3. Kick off background simulation
+    started = time.time()
+    with _sim_bg_lock:
+        _sim_bg_jobs[job_key] = {'status': 'running', 'started': started, 'payload': None}
+
+    def _run():
+        try:
+            payload = _do_simulate(game_pk, sims)
+        except Exception as exc:
+            g = {}
+            try:
+                g = fetch_schedule_game(game_pk) or {}
+            except Exception:
+                pass
+            payload = _simulation_fallback_payload(g, game_pk, sims=0,
+                                                   warning=str(exc)[:300])
+        with _sim_bg_lock:
+            _sim_bg_jobs[job_key]['status'] = 'done'
+            _sim_bg_jobs[job_key]['payload'] = payload
+        if payload and payload.get('success'):
+            _correlation_cache[game_pk] = {
+                'date': today, 'signature': payload.get('_sig', ''),
+                'payload': payload,
+            }
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({'computing': True, 'elapsed': 0, 'estimatedSeconds': 90})
 
 
 # ── Phase 7 Odds / Lineup / Edge Infrastructure ──────────────────────────────
