@@ -7847,11 +7847,13 @@ def _simulation_fallback_payload(game_obj, game_pk, sims=0, warning=''):
 @app.route('/api/simulate/<int:game_pk>')
 def api_simulate(game_pk):
     try:
+        # Default to 2500 sims to stay within client + proxy timeout budgets;
+        # high-precision mode explicitly requests 5000 via ?sims=5000.
         try:
-            requested_sims = int(request.args.get('sims', 5000) or 5000)
+            requested_sims = int(request.args.get('sims', 2500) or 2500)
         except Exception:
-            requested_sims = 5000
-        sims = max(2500, min(5000, requested_sims))
+            requested_sims = 2500
+        sims = max(1500, min(5000, requested_sims))
 
         # Prefer direct game lookup so deep-dive works for non-today game IDs too.
         g = fetch_schedule_game(game_pk)
@@ -10177,10 +10179,10 @@ def api_tracker_capture(date_str):
         if not sched:
             return jsonify({'success': False, 'error': f'No games found for {date_str}'}), 404
 
-        # Keep request under edge/proxy timeout by enforcing a hard budget.
-        # Capture Closing can fetch lines after this returns.
-        budget_sec = float(os.getenv('TRACKER_CAPTURE_BUDGET_SEC', '240') or 240)
-        deadline = time.time() + max(30.0, min(300.0, budget_sec))
+        # Keep request under Fly.io's ~60s proxy read timeout; remaining
+        # games continue in a background thread (TRACKER_CAPTURE_BACKGROUND).
+        budget_sec = float(os.getenv('TRACKER_CAPTURE_BUDGET_SEC', '45') or 45)
+        deadline = time.time() + max(15.0, min(300.0, budget_sec))
         all_entries = []
         captured_games = 0
         recovered_games = 0
