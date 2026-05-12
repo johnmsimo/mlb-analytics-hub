@@ -79,6 +79,14 @@ except ImportError:
     _PIPELINE_AVAILABLE = False
     logging.warning("[pipeline] pipeline_scheduler or pipeline_routes not found — skipping.")
 
+# Tracks when the most recent matchup-pipeline run was kicked off via
+# /api/cache/warm, so the Cache Status UI can show "building 8m 23s…"
+# and surface a Force Restart hint when a run stalls. We track it here
+# instead of mutating pipeline_scheduler._cache so the scheduler stays
+# decoupled from this UI.
+_pipeline_run_started_at = None
+_pipeline_run_lock = threading.Lock()
+
 
 from brain_merge_patch import (
     load_brain_overlays,
@@ -3152,11 +3160,11 @@ def api_status():
     logging.info(f"[API] /api/status took {time.time() - t0:.3f}s")
     return resp
 
+
 @app.route("/api/cache/status")
 def api_cache_status():
     """Aggregated readiness for every background loader the sim depends on.
-    Used by the Cache Status panel in Settings to tell the user when the
-    app is fully warm after a redeploy."""
+    Used by the Cache Status panel in Admin Settings."""
     today = datetime.now().date()
     with _fg_lock:
         fg_state = {
@@ -3186,13 +3194,14 @@ def api_cache_status():
     if _PIPELINE_AVAILABLE:
         try:
             pipeline_state = get_pipeline_status() or {"status": "idle"}
+            with _pipeline_run_lock:
+                started = _pipeline_run_started_at
+            # Only surface app-side started_at while the pipeline is actually
+            # running; once it's done/idle the timestamp is stale.
+            if started and pipeline_state.get("status") == "running":
+                pipeline_state["started_at"] = datetime.fromtimestamp(started).isoformat()
         except Exception as ex:
             pipeline_state = {"status": "error", "error": str(ex)[:200]}
-    prewarm_state = {"running": False, "done": False}
-    try:
-        prewarm_state = get_prewarm_status() or prewarm_state
-    except Exception:
-        pass
 
     pipeline_ok = (pipeline_state is None) or (pipeline_state.get("status") == "done")
     ready = bool(
@@ -3205,7 +3214,6 @@ def api_cache_status():
         "savant":   sv_state,
         "arsenal":  arsenal_state,
         "pipeline": pipeline_state,
-        "prewarm":  prewarm_state,
     })
 
 
@@ -3217,14 +3225,16 @@ def api_cache_warm():
 
     Query params:
         force=1   — force-restart the matchup pipeline even if status is
-                    'running'. Useful when a previous run has stalled on slow
-                    MLB API responses and the user wants to bail out and
-                    start fresh. The orphan thread will continue but its
-                    result is overwritten.
+                    'running'. Useful when a previous run has stalled on
+                    slow MLB API responses. The orphan thread keeps
+                    blocking on its I/O call but its result is overwritten
+                    when the new run finishes.
     """
+    global _pipeline_run_started_at
     force = str(request.args.get("force", "")).strip().lower() in ("1", "true", "yes")
     triggered = []
     skipped = []
+
     try:
         with _fg_lock:
             fg_busy = _fg_loading or (
@@ -3273,12 +3283,8 @@ def api_cache_warm():
             if ps.get("status") == "running" and not force:
                 skipped.append("pipeline")
             else:
-                # Force mode: caller has decided the previous run is stuck.
-                # We don't try to cancel the orphan thread (Python lacks a
-                # clean way to interrupt a blocking requests.get), but the
-                # cache fields are owned by whichever run finishes last and
-                # the new run almost always wins because the stuck one is
-                # blocked on I/O.
+                with _pipeline_run_lock:
+                    _pipeline_run_started_at = time.time()
                 threading.Thread(target=run_pipeline, daemon=True).start()
                 triggered.append("pipeline" + (" (force)" if force else ""))
         except Exception as ex:

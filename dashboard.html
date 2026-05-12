@@ -564,7 +564,7 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
         <div class="settings-card">
           <div class="settings-title">CACHE STATUS &amp; WARM-UP</div>
           <div style="font-size:.62rem;color:var(--mu);margin-bottom:10px;line-height:1.6">
-            Readiness of background loaders the Monte Carlo sim depends on. After a redeploy, click <b>Warm Up Now</b> and wait until every row is green — cold caches make sims time out.
+            Readiness of background loaders the Monte Carlo sim depends on. After a redeploy, click <b>WARM UP NOW</b> and wait until every row is green — cold caches make sims time out.
           </div>
           <div id="cacheStatusRows" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px">
             <div style="font-size:.7rem;color:var(--mu);padding:6px 0">Loading…</div>
@@ -575,7 +575,7 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
             <span id="cacheReadyBadge" class="settings-msg">—</span>
           </div>
           <div id="pipelineStuckHint" style="display:none;margin-top:8px;font-size:.65rem;color:var(--mu);line-height:1.5">
-            Pipeline has been building for over 10 minutes — likely stuck on a slow MLB API response.
+            Pipeline has been building for over 10 minutes — likely stuck on slow MLB API responses.
             <a href="#" onclick="event.preventDefault();triggerCacheWarm(true);" style="color:#ff9800;text-decoration:underline;cursor:pointer">Force restart</a>
           </div>
         </div>
