@@ -8414,8 +8414,17 @@ def api_simulate(game_pk):
         if job['status'] == 'done':
             return jsonify(job['payload'])
         elapsed = int(time.time() - job['started'])
+        # Warm path finishes in ~90s; cold start (post-redeploy) can run 3-5min
+        # while FG/Savant/pipeline workers compete for CPU. Grow the estimate
+        # past the warm budget so the UI doesn't sit at "5s remaining" forever.
+        if elapsed < 90:
+            est = 90 - elapsed
+        elif elapsed < 240:
+            est = max(20, 240 - elapsed)
+        else:
+            est = max(15, 360 - elapsed)
         return jsonify({'computing': True, 'elapsed': elapsed,
-                        'estimatedSeconds': max(5, 90 - elapsed)})
+                        'estimatedSeconds': est})
 
     # 3. Kick off background simulation
     started = time.time()
