@@ -2591,11 +2591,22 @@ function _showSimComputing(elapsed, estimatedSeconds){
   ensureSimWrap();
   var panel = document.getElementById('simPanel');
   if(!panel) return;
-  var remaining = Math.max(0, (estimatedSeconds || 90) - (elapsed || 0));
+  // After ~90s on a cold dyno, the backend is past its happy-path estimate
+  // but the sim usually finishes within another 2-3 min. Show "warming"
+  // instead of a misleading countdown that hits 0 and stays there.
+  var sub;
+  if((elapsed || 0) > 90){
+    sub = 'warming caches (post-deploy) — ~'
+      + Math.max(15, Math.round(((estimatedSeconds||180) - (elapsed||0))/15)*15)
+      + 's';
+  } else {
+    var remaining = Math.max(5, (estimatedSeconds || 90) - (elapsed || 0));
+    sub = '~'+remaining+'s remaining';
+  }
   panel.innerHTML = '<div style="padding:22px 0;text-align:center">'
     +'<div class="spinner" style="margin:0 auto 14px"></div>'
     +'<div style="font-family:Orbitron,monospace;font-size:.68rem;letter-spacing:2px;color:var(--c)">COMPUTING 5,000 SIMULATIONS…</div>'
-    +'<div style="margin-top:8px;font-size:.62rem;color:rgba(255,255,255,.4)">~'+remaining+'s remaining</div>'
+    +'<div style="margin-top:8px;font-size:.62rem;color:rgba(255,255,255,.4)">'+sub+'</div>'
     +'</div>';
 }
 
@@ -2613,21 +2624,29 @@ function _handleSimResult(d, highPrecision, sims){
 }
 
 function _pollSimulation(sims, highPrecision, attempt){
-  if(attempt > 36) {  // give up after 36 × 5s = 3 min
-    _handleSimResult(_simFallbackPayload('Simulation timed out after 3 minutes'), highPrecision, sims);
+  // Cold-start sims on a freshly redeployed Render dyno commonly take 3-5 min
+  // because the sim thread shares 1 CPU with FG/Savant/pipeline cache loaders.
+  // The backend keeps the job in _sim_bg_jobs and serves it as soon as it
+  // finishes, so polling longer just retrieves the real result.
+  // 72 × 5s = 6 min total before giving up.
+  if(attempt > 72) {
+    _handleSimResult(_simFallbackPayload('Simulation still running — refresh the page in ~30 seconds to retrieve it.'), highPrecision, sims);
     return;
   }
+  // Back off poll interval after the warm-path window to reduce server load
+  // while the cold-start workers compete for CPU.
+  var pollDelay = (attempt > 18) ? 8000 : 5000;
   fetch('/api/simulate/'+GPK+'?sims='+sims)
     .then(function(r){ return r.json().catch(function(){ return {}; }); })
     .then(function(d){
       if(d && d.computing){
         _showSimComputing(d.elapsed, d.estimatedSeconds);
-        _simPollTimer = setTimeout(function(){ _pollSimulation(sims, highPrecision, attempt+1); }, 5000);
+        _simPollTimer = setTimeout(function(){ _pollSimulation(sims, highPrecision, attempt+1); }, pollDelay);
         return;
       }
       _handleSimResult(d, highPrecision, sims);
     })
-    .catch(function(){ _simPollTimer = setTimeout(function(){ _pollSimulation(sims, highPrecision, attempt+1); }, 5000); });
+    .catch(function(){ _simPollTimer = setTimeout(function(){ _pollSimulation(sims, highPrecision, attempt+1); }, pollDelay); });
 }
 
 function loadSimulation(opts){
