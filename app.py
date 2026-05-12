@@ -7719,31 +7719,76 @@ def _simulation_fallback_payload(game_obj, game_pk, sims=0, warning=''):
 
     lineups = g.get('lineups') or {}
 
-    def _sample_batters(hitters):
+    # Try to source actual batters: prefer schedule-hydrated lineups, then active roster.
+    def _from_schedule(hitters):
         out = []
-        for i, p in enumerate(hitters or [], start=1):
+        for p in hitters or []:
+            pid = p.get('id') or p.get('playerId')
             nm = (p.get('fullName') or p.get('name') or '').strip()
-            if not nm:
+            if not pid or not nm:
                 continue
-            out.append({
-                'slot': i,
-                'name': nm,
-                'pos': ((p.get('primaryPosition') or {}).get('abbreviation') or '?'),
-                'ab': 4,
-                'h': 1,
-                'hr': 0,
-                'rbi': 0,
-                'r': 0,
-                'bb': 0,
-                'k': 1,
-                'tb': 1,
-            })
+            out.append({'id': pid, 'name': nm,
+                        'pos': ((p.get('primaryPosition') or {}).get('abbreviation') or '?')})
             if len(out) >= 9:
                 break
         return out
 
-    away_batters = _sample_batters(lineups.get('awayBatters'))
-    home_batters = _sample_batters(lineups.get('homeBatters'))
+    def _from_roster(team_id):
+        out = []
+        if not team_id:
+            return out
+        try:
+            for entry in _get_active_roster(team_id):
+                pos = ((entry.get('position') or {}).get('abbreviation') or '?')
+                if pos in ('P', 'SP', 'RP', 'CP'):
+                    continue
+                person = entry.get('person') or {}
+                pid = person.get('id')
+                nm = (person.get('fullName') or '').strip()
+                if not pid or not nm:
+                    continue
+                out.append({'id': pid, 'name': nm, 'pos': pos})
+                if len(out) >= 9:
+                    break
+        except Exception:
+            pass
+        return out
+
+    away_roster = _from_schedule(lineups.get('awayBatters')) or _from_roster(away_t.get('id'))
+    home_roster = _from_schedule(lineups.get('homeBatters')) or _from_roster(home_t.get('id'))
+
+    # Pre-warm bio cache in parallel so handedness counts reflect real lineup makeup.
+    _missing_pids = [b.get('id') for b in (away_roster + home_roster)
+                     if b.get('id') and b.get('id') not in _bio_cache]
+    if _missing_pids:
+        try:
+            with ThreadPoolExecutor(max_workers=min(len(_missing_pids), 9)) as _pool:
+                list(_pool.map(player_profile, _missing_pids))
+        except Exception:
+            pass
+
+    def _hand_counts(roster):
+        counts = {'L': 0, 'R': 0, 'S': 0}
+        for b in roster:
+            pid = b.get('id')
+            bats = (_bio_cache.get(pid) or {}).get('bats') or 'S'
+            bats = bats if bats in counts else 'S'
+            counts[bats] += 1
+        return counts
+
+    away_hand_counts = _hand_counts(away_roster)
+    home_hand_counts = _hand_counts(home_roster)
+
+    away_batters = [{
+        'slot': i + 1, 'id': b.get('id'), 'name': b.get('name'), 'pos': b.get('pos'),
+        'bats': (_bio_cache.get(b.get('id')) or {}).get('bats', 'S'),
+        'ab': 4, 'h': 1, 'hr': 0, 'rbi': 0, 'r': 0, 'bb': 0, 'k': 1, 'tb': 1,
+    } for i, b in enumerate(away_roster[:9])]
+    home_batters = [{
+        'slot': i + 1, 'id': b.get('id'), 'name': b.get('name'), 'pos': b.get('pos'),
+        'bats': (_bio_cache.get(b.get('id')) or {}).get('bats', 'S'),
+        'ab': 4, 'h': 1, 'hr': 0, 'rbi': 0, 'r': 0, 'bb': 0, 'k': 1, 'tb': 1,
+    } for i, b in enumerate(home_roster[:9])]
 
     return {
         'success': True,
@@ -7769,8 +7814,8 @@ def _simulation_fallback_payload(game_obj, game_pk, sims=0, warning=''):
             'tie_pct': 0.03,
         },
         'handedness': {
-            'awayLineup': {'L': 0, 'R': 0, 'S': 0},
-            'homeLineup': {'L': 0, 'R': 0, 'S': 0},
+            'awayLineup': away_hand_counts,
+            'homeLineup': home_hand_counts,
             'awayStarterHand': 'R',
             'homeStarterHand': 'R',
         },
@@ -13900,11 +13945,13 @@ def _props_fetch_game(game_pk, date_hint=None, gdata_override=None):
                         continue
                     fgb = fg_batter(name)
                     svb = sv_batter(name)
+                    bio = _bio_cache.get(pid) or {}
                     out.append({
                         "slot": len(out) + 1,
                         "id": pid,
                         "name": name,
                         "pos": pos,
+                        "bats": bio.get("bats", "S"),
                         "lineup_status": "pending",
                         "avg": fgb.get("fg_avg", ".---"),
                         "obp": fgb.get("fg_obp", ".---"),
@@ -13940,6 +13987,23 @@ def _props_fetch_game(game_pk, date_hint=None, gdata_override=None):
             away_bats = _roster_fallback(away_team_id)
         if not home_bats:
             home_bats = _roster_fallback(home_team_id)
+
+    # Pre-warm bio cache in parallel so every batter carries a real `bats` value
+    # (lineup section needs this to render handedness correctly).
+    _missing_pids = [b.get("id") for b in (away_bats + home_bats)
+                     if b.get("id") and b.get("id") not in _bio_cache]
+    if _missing_pids:
+        try:
+            with ThreadPoolExecutor(max_workers=min(len(_missing_pids), 9)) as _pool:
+                list(_pool.map(player_profile, _missing_pids))
+        except Exception:
+            pass
+    for b in away_bats + home_bats:
+        pid = b.get("id")
+        if pid and pid in _bio_cache:
+            b["bats"] = _bio_cache[pid].get("bats", b.get("bats") or "S")
+        elif not b.get("bats"):
+            b["bats"] = "S"
 
     return gdata, away_bats, home_bats, away_t, home_t, {"ap": ap_info, "hp": hp_info}
 
