@@ -37,12 +37,19 @@ _load_local_env_file(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.
 
 # XGBoost prop scorer — loaded once at startup; falls back gracefully if models missing
 try:
-    from xgb_prop_scorer import xgb_hit_prob, xgb_k_prob, xgb_ready, enrich_batter, enrich_pitcher
+    from xgb_prop_scorer import (
+        xgb_hit_prob, xgb_k_prob, xgb_ready,
+        xgb_hr_prob, xgb_tb_prob, xgb_rbi_prob,
+        enrich_batter, enrich_pitcher,
+    )
     _XGB_AVAILABLE = True
 except ImportError:
     _XGB_AVAILABLE = False
     def xgb_hit_prob(*a, **k):   return None
     def xgb_k_prob(*a, **k):     return None
+    def xgb_hr_prob(*a, **k):    return None
+    def xgb_tb_prob(*a, **k):    return None
+    def xgb_rbi_prob(*a, **k):   return None
     def xgb_ready(_=None):       return False
     def enrich_batter(d, **k):   return d
     def enrich_pitcher(d, **k):  return d
@@ -4789,6 +4796,23 @@ def api_pitcher_matchup(game_pk):
                 if k not in ("sv_arsenal_pct", "sv_arsenal_velo"):
                     p_stats[k] = v
 
+            # Pre-fetch BvP for all batters in parallel — daily-cached so repeat
+            # loads are O(1); this only pays the latency on first load.
+            bvp_by_bid = {}
+            if pitcher_id:
+                bvp_ids = [b.get("id") for b in opposing_lineup
+                           if b.get("id") and (b.get("pos") or "").upper() not in ("P", "SP", "RP", "CP")]
+                bvp_ids = list({i for i in bvp_ids if i})
+                if bvp_ids:
+                    with ThreadPoolExecutor(max_workers=min(8, len(bvp_ids))) as bex:
+                        futs = {bex.submit(_fetch_bvp, bid, pitcher_id): bid for bid in bvp_ids}
+                        for fut in as_completed(futs, timeout=12):
+                            bid = futs[fut]
+                            try:
+                                bvp_by_bid[bid] = fut.result(timeout=1)
+                            except Exception:
+                                bvp_by_bid[bid] = None
+
             threats = []
             seen = set()
             for b in opposing_lineup:
@@ -4804,6 +4828,7 @@ def api_pitcher_matchup(game_pk):
                 merged = {**fgb, **svb, **b}
                 proj = _project_batter_vs_pitcher(merged, p_stats)
                 score = _damage_score(merged, p_stats)
+                bvp_b = bvp_by_bid.get(merged.get("id")) or {}
                 threats.append({
                     "id":       merged.get("id"),
                     "name":     merged.get("name"),
@@ -4827,6 +4852,17 @@ def api_pitcher_matchup(game_pk):
                     "hh_pct":   merged.get("sv_hh_pct"),
                     "brl_pct":  merged.get("sv_brl_pct"),
                     "score":    score,
+                    "bvp": {
+                        "pa":    bvp_b.get("pa", 0),
+                        "ab":    bvp_b.get("ab", 0),
+                        "h":     bvp_b.get("h",  0),
+                        "hr":    bvp_b.get("hr", 0),
+                        "avg":   bvp_b.get("avg"),
+                        "ops":   bvp_b.get("ops"),
+                        "grade": bvp_b.get("grade"),
+                        "firstSeason": bvp_b.get("first_season"),
+                        "lastSeason":  bvp_b.get("last_season"),
+                    } if bvp_b else None,
                     **proj,
                 })
             threats.sort(key=lambda x: x["score"], reverse=True)
@@ -5650,6 +5686,12 @@ def api_bvp_projection(batter_id, pitcher_id):
         # ── 5. BvP component (already cached) ───────────────────────────────
         bvp_data = _fetch_bvp(batter_id, pitcher_id)
 
+        # ── 5a. Pitch-mix matchup score (career arsenal SLG vs pitcher arsenal)
+        try:
+            mix_score, _mix_rows = _compute_pitch_mix_score(str(pitcher_id), str(batter_id))
+        except Exception:
+            mix_score, _mix_rows = 1.0, []
+
         # ── 5b. Rolling form for batter (daily-cached) ──────────────────────
         batter_form = _fetch_rolling_form(batter_id, False)
 
@@ -5687,13 +5729,36 @@ def api_bvp_projection(batter_id, pitcher_id):
         def _blend_prob(cal, batx_p):
             return round(max(0.01, min(0.99, 0.60 * cal + 0.40 * batx_p)), 3)
 
+        # XGB supplemental probs (auto-active when models loaded; None otherwise).
+        # Used to surface model agreement and improve calibration once trained.
+        _xgb_extras = {}
+        try:
+            _bdict = {**bstats, **fg_bat, **sv_bat, "name": batter_name, "bats": bats_code}
+            _pdict = {**pstats, **fg_pit, **sv_pit, "name": pitcher_name, "pitchHand": pitcher_hand}
+            if xgb_ready("hr"):
+                _xgb_extras["xgbHrProb"]  = xgb_hr_prob(_bdict, _pdict)
+            if xgb_ready("tb"):
+                _xgb_extras["xgbTbProb"]  = xgb_tb_prob(_bdict, _pdict)
+            if xgb_ready("rbi"):
+                _xgb_extras["xgbRbiProb"] = xgb_rbi_prob(_bdict, _pdict)
+        except Exception:
+            pass
+
+        def _blend_with_xgb(blended, xgb_p):
+            if xgb_p is None:
+                return blended
+            return round(max(0.01, min(0.99, 0.6 * xgb_p + 0.4 * blended)), 3)
+
         probs = {
             "hit1": _blend_prob(gp["hitProb"], _poisson_over_prob(hits_m, 0.5)),
-            "tb2":  _blend_prob(gp["tbProb"],  _poisson_over_prob(tb_m,   1.5)),
-            "hr":   _blend_prob(gp["hrProb"],  _poisson_over_prob(hr_m,   0.5)),
-            "rbi1": _blend_prob(gp["rbiProb"], _poisson_over_prob(rbi_m,  0.5)),
+            "tb2":  _blend_with_xgb(_blend_prob(gp["tbProb"],  _poisson_over_prob(tb_m,   1.5)), _xgb_extras.get("xgbTbProb")),
+            "hr":   _blend_with_xgb(_blend_prob(gp["hrProb"],  _poisson_over_prob(hr_m,   0.5)), _xgb_extras.get("xgbHrProb")),
+            "rbi1": _blend_with_xgb(_blend_prob(gp["rbiProb"], _poisson_over_prob(rbi_m,  0.5)), _xgb_extras.get("xgbRbiProb")),
             "r1":   round(_poisson_over_prob(r_m, 0.5), 3),
             "xgbHitProb": gp.get("xgbHitProb"),
+            "xgbHrProb":  _xgb_extras.get("xgbHrProb"),
+            "xgbTbProb":  _xgb_extras.get("xgbTbProb"),
+            "xgbRbiProb": _xgb_extras.get("xgbRbiProb"),
         }
 
         # ── 8. xStats + Statcast quality metrics ─────────────────────────────
@@ -5756,6 +5821,100 @@ def api_bvp_projection(batter_id, pitcher_id):
             "k9":        _safe_f(fg_pit.get("fg_k9"),       None),
         }
 
+        # ── 9. vs-Starter projection: re-scale game-level expecteds to the
+        #     PAs the batter actually sees vs the SP. Apply BET/LEAN/FADE
+        #     verdicts so the user sees a clear directional call.
+        exp_pa_total = float(batx.get("expected_pa") or 4.35)
+        # Try to use the starter's recent TBF for a sharper PA-vs-SP estimate;
+        # otherwise default to 22 (league-average SP workload).
+        starter_tbf = 22.0
+        try:
+            _pit_form = _pitcher_recent_form(pitcher_id) if pitcher_id else None
+            if _pit_form:
+                _avg_ip = _safe_f((_pit_form.get("l5") or _pit_form.get("l3") or {}).get("ip"), None)
+                if _avg_ip and _avg_ip > 0:
+                    # IP per start × ~4.3 batters per inning ≈ TBF/start
+                    starter_tbf = max(15.0, min(28.0, float(_avg_ip) / max(1, (_pit_form.get("l5") or _pit_form.get("l3") or {}).get("games", 1)) * 4.3))
+        except Exception:
+            pass
+
+        pa_vs_sp = _starter_pa_for_slot(lineup_slot, exp_pa_total, starter_tbf)
+
+        # Umpire K-zone tendency: scales the pitcher K projection AND the
+        # batter's K-risk in the vs-SP simulation. 1.0 = neutral.
+        ump_k_mult, ump_meta = _umpire_k_multiplier(game_pk)
+
+        # TTOP boost for the batter (averages multiplier across vs-SP PAs).
+        ttop_batter = _ttop_avg_batter_mult(pa_vs_sp)
+        vs_sp = _vs_sp_projections(batx, exp_pa_total, pa_vs_sp, ttop_boost=ttop_batter)
+
+        def _verdict_block(prob_dict):
+            out = {}
+            for mk in ("hit1", "tb2", "hr", "rbi1"):
+                key, label, cls = _verdict_for(mk, prob_dict.get(mk))
+                out[mk] = {"key": key, "label": label, "cls": cls}
+            return out
+
+        def _verdict_edge_block(prob_dict, neutral):
+            out = {}
+            for mk in ("hit1", "tb2", "hr", "rbi1"):
+                key, label, cls = _verdict_edge(prob_dict.get(mk), (neutral or {}).get(mk))
+                edge = (prob_dict.get(mk) or 0) - ((neutral or {}).get(mk) or 0)
+                out[mk] = {"key": key, "label": label, "cls": cls, "edge": round(edge, 3)}
+            return out
+
+        verdicts_game = _verdict_block(probs)
+        verdicts_sp   = _verdict_edge_block(vs_sp, vs_sp.get("neutral"))
+
+        # ── 10. Pitcher K projection vs the opposing lineup (game-context).
+        #     Lineup is fetched from the boxscore when game_pk is provided.
+        pitcher_k = None
+        if game_pk:
+            try:
+                box = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=6).json().get("teams", {})
+                # Determine which side this pitcher belongs to so we use the
+                # OPPOSING lineup (the one he's actually facing).
+                away_team_id = (((box.get("away") or {}).get("team") or {}).get("id"))
+                home_team_id = (((box.get("home") or {}).get("team") or {}).get("id"))
+                pit_team_id = None
+                for side_key in ("away", "home"):
+                    pmap = ((box.get(side_key) or {}).get("players") or {})
+                    if any(int((p.get("person") or {}).get("id") or 0) == int(pitcher_id) for p in pmap.values()):
+                        pit_team_id = away_team_id if side_key == "away" else home_team_id
+                        break
+                opposing_side = "home" if pit_team_id == away_team_id else "away"
+                opposing_lineup = get_batters_from_boxscore(box.get(opposing_side, {}), opposing_side)
+                pitcher_k = _pitcher_k_projection_vs_lineup(
+                    pitcher_id, pitcher_name, opposing_lineup,
+                    starter_tbf=starter_tbf, ump_k_mult=ump_k_mult,
+                )
+            except Exception as _kex:
+                print(f"[bvp pitcher_k] {_kex}")
+                pitcher_k = None
+
+        # ── 11. Why-this-projection: top BATX drivers (sign + magnitude).
+        drivers = _projection_drivers(batx.get("adjustments") or {})
+
+        # ── 12. XGB-vs-BATX divergence (HIGH/MEDIUM/LOW UNCERTAINTY flag).
+        divergence = _model_divergence(probs, gp, batx, exp_pa_total)
+
+        # ── 13. Monte Carlo distribution over vs-SP PAs (5k sims).
+        try:
+            per_pa = _per_pa_rates_from_batx(batx, fg_bat, exp_pa_total, ttop_boost=ttop_batter)
+            # Bake umpire K factor into the batter's K rate per PA for the sim.
+            per_pa = dict(per_pa)
+            per_pa["k"] = max(0.04, min(0.55, per_pa["k"] * ump_k_mult))
+            mc = _monte_carlo_vs_sp(per_pa, pa_vs_sp, n_sims=4000, rng_seed=batter_id)
+        except Exception as _mcex:
+            print(f"[bvp monte_carlo] {_mcex}")
+            mc = None
+
+        # ── 14. Bullpen-aware slice: PAs vs the relievers after SP exits.
+        try:
+            vs_rp = _vs_rp_projections(batx, exp_pa_total, pa_vs_sp)
+        except Exception:
+            vs_rp = None
+
         return jsonify({
             "success":      True,
             "batterName":   batter_name,
@@ -5777,10 +5936,51 @@ def api_bvp_projection(batter_id, pitcher_id):
                 "expPA":       batx.get("expected_pa", 4.0),
                 "bvpGrade":    (bvp_data or {}).get("grade", "?"),
                 "bvpPA":       (bvp_data or {}).get("pa", 0),
+                "bvpFirstSeason": (bvp_data or {}).get("first_season"),
+                "bvpLastSeason":  (bvp_data or {}).get("last_season"),
+                "bvpSeasons":     (bvp_data or {}).get("seasons", []),
+                "bvpReliability": (bvp_data or {}).get("reliability", 0.0),
+                "bvpWobaEdge":    (bvp_data or {}).get("woba_edge", 0.0),
+                "mixScore":       mix_score,
+                # Composite confidence (0–100): blends BvP sample reliability,
+                # platoon split sample, and pitch-mix data availability.
+                "confidence": _compute_bvp_confidence(
+                    bvp_data, batter_obj, pitcher_hand, mix_score, _mix_rows,
+                ),
             },
             "batterQuality":  batter_quality,
             "pitcherProfile": pitcher_profile,
             "adjustments":    batx.get("adjustments", {}),
+            # Per-PA-vs-starter projection (NEW). Tells the user how the matchup
+            # plays out specifically over the PAs vs THIS pitcher, not the full
+            # game including reliever PAs.
+            "vsStarter": {
+                "paVsSp":   pa_vs_sp,
+                "starterTBF": round(starter_tbf, 1),
+                "probs":    {k: vs_sp[k] for k in ("hit1", "tb2", "hr", "rbi1")},
+                "neutral":  vs_sp.get("neutral", {}),
+                "expected": vs_sp["expected"],
+                "verdicts": verdicts_sp,
+            },
+            # Verdicts on the GAME-level probs too, since prop bets clear on
+            # full-game stats. Frontend can color-code accordingly.
+            "verdicts": verdicts_game,
+            "pitcherKProjection": pitcher_k,
+            # Why this projection? Top BATX components (signed contributions).
+            "drivers": drivers,
+            # Cross-model agreement check (XGB vs rule). Surface uncertainty.
+            "modelDivergence": divergence,
+            # Monte Carlo distribution over vs-SP PAs (P25/P50/P75/P90).
+            "monteCarlo": mc,
+            # PAs vs the bullpen (after SP exits) — useful for spotting late-game
+            # damage opportunities or fades when facing a dominant pen.
+            "vsBullpen": vs_rp,
+            # Game context that shifts the projection.
+            "gameContext": {
+                "ttopBatterMult": round(ttop_batter, 3),
+                "umpireKMult":    ump_k_mult,
+                "umpire":         ump_meta,
+            },
         })
 
     except Exception as ex:
@@ -6577,6 +6777,622 @@ def _fetch_rolling_form(player_id, is_pitcher):
     return result
 
 
+def _compute_bvp_confidence(bvp_data, batter_obj, pitcher_hand, mix_score, mix_rows):
+    """0-100 confidence score for the BvP projection.
+
+    Blends four signals:
+      * H2H sample size (saturates at ~30 PA)
+      * Platoon split sample size for the pitcher's hand
+      * Pitch-mix coverage (how many pitches have batter career data)
+      * Whether Statcast pitch arsenal data is available at all
+    Designed so a fresh matchup with no H2H still scores well when there's
+    strong platoon + arsenal coverage. Returns dict {value, label, basis}.
+    """
+    pa = int((bvp_data or {}).get("pa", 0) or 0)
+    h2h_score = min(1.0, pa / 30.0)                     # 30 PA → fully saturated
+
+    hand = (pitcher_hand or "R").upper()
+    split_pa = int((batter_obj.get("vs_l_pa") if hand == "L" else batter_obj.get("vs_r_pa")) or 0)
+    plat_score = min(1.0, split_pa / 120.0)             # 120 PA platoon → saturated
+
+    if mix_rows:
+        covered = sum(1 for r in mix_rows if r.get("bat_slg") is not None)
+        mix_cov = min(1.0, covered / max(1, len(mix_rows)))
+    else:
+        mix_cov = 0.0
+
+    # Weighted blend; if no data anywhere, falls back to low-but-nonzero score.
+    raw = 0.35 * h2h_score + 0.30 * plat_score + 0.25 * mix_cov + 0.10 * (1.0 if mix_rows else 0.0)
+    value = round(100 * raw, 1)
+
+    if value >= 70:    label = "STRONG"
+    elif value >= 50:  label = "MODERATE"
+    elif value >= 30:  label = "LIMITED"
+    else:              label = "WEAK"
+
+    basis = []
+    if pa > 0:        basis.append(f"{pa} H2H PA")
+    if split_pa > 0:  basis.append(f"{split_pa} PA vs {hand}HP")
+    if mix_rows:      basis.append(f"{len(mix_rows)}-pitch arsenal")
+
+    return {
+        "value":     value,
+        "label":     label,
+        "h2hScore":  round(h2h_score, 3),
+        "platScore": round(plat_score, 3),
+        "mixScore":  round(mix_cov, 3),
+        "basis":     " · ".join(basis) if basis else "no matchup data",
+    }
+
+
+# Verdict thresholds — calibrated to typical sportsbook prop lines so that
+# the model's stated probability is compared against the implied book line.
+# Each entry: (bet_threshold, lean_threshold, fade_threshold).
+_PROP_VERDICTS = {
+    "hit1": (0.70, 0.58, 0.48),   # 1+ Hit  (line ~ -180)
+    "tb2":  (0.45, 0.35, 0.27),   # 2+ TB   (line ~ +160)
+    "hr":   (0.22, 0.14, 0.09),   # HR      (line ~ +450)
+    "rbi1": (0.55, 0.42, 0.33),   # 1+ RBI  (line ~ +110)
+}
+
+
+def _verdict_for(market, prob):
+    """Return (key, label, color_class) for prob+market.
+
+    Keys: 'bet' (green), 'lean' (yellow), 'pass' (neutral), 'fade' (red).
+    """
+    if prob is None:
+        return ("pass", "—", "")
+    bet_t, lean_t, fade_t = _PROP_VERDICTS.get(market, (0.65, 0.55, 0.40))
+    if prob >= bet_t:  return ("bet",  "BET",  "v-bet")
+    if prob >= lean_t: return ("lean", "LEAN", "v-lean")
+    if prob <= fade_t: return ("fade", "FADE", "v-fade")
+    return ("pass", "PASS", "v-pass")
+
+
+def _starter_pa_for_slot(slot, exp_pa_total=None, starter_tbf=22.0):
+    """Expected PAs the batter sees vs the SP only (not full game).
+
+    Heuristic: an SP facing ~22 batters → 22/9 ≈ 2.44 PAs per slot. Top of
+    order may pick up an extra trip when the SP works deep. Capped to
+    [1.2, 3.4] so the result stays plausible across hook scenarios.
+    """
+    slot = max(1, min(9, int(slot or 5)))
+    base = starter_tbf / 9.0
+    # Top of order picks up an extra trip when the SP works past 18 batters.
+    extra_slots = max(0, int(starter_tbf - 18))
+    pa = base + (1.0 if slot <= extra_slots else 0.0)
+    if exp_pa_total is not None:
+        pa = min(pa, max(1.0, float(exp_pa_total) - 0.6))
+    return round(max(1.2, min(3.4, pa)), 2)
+
+
+def _vs_sp_projections(batx, exp_pa_total, exp_pa_vs_sp, ttop_boost=None):
+    """Convert game-level BATX expected values into vs-SP probabilities.
+
+    Treats expected counts as Poisson(mean = batx_value × pa_vs_sp / pa_total
+    × ttop_boost) and returns P(>= line) for each market, plus the rescaled
+    expected values AND a league-neutral baseline for the same PA count.
+
+    The TTOP boost (default = average wOBA multiplier across pa_vs_sp PAs)
+    captures the "third time through the order" effect: each subsequent PA
+    against the starter the batter sees a stale arsenal and performs better.
+    """
+    pa_total = max(0.5, float(exp_pa_total or 4.35))
+    pa_sp    = max(0.5, float(exp_pa_vs_sp or pa_total * 0.6))
+    scale    = pa_sp / pa_total
+    if ttop_boost is None:
+        ttop_boost = _ttop_avg_batter_mult(pa_sp)
+    h_lam    = float(batx.get("hits", 0) or 0) * scale * ttop_boost
+    tb_lam   = float(batx.get("tb",   0) or 0) * scale * ttop_boost
+    hr_lam   = float(batx.get("hr",   0) or 0) * scale * ttop_boost
+    rbi_lam  = float(batx.get("rbi",  0) or 0) * scale * ttop_boost
+
+    # Neutral-batter baseline at the same PA count (league rates).
+    neutral = {
+        "hit1": round(_poisson_over_prob(0.245 * pa_sp, 0.5), 3),
+        "tb2":  round(_poisson_over_prob(0.420 * pa_sp, 1.5), 3),
+        "hr":   round(_poisson_over_prob(0.032 * pa_sp, 0.5), 3),
+        "rbi1": round(_poisson_over_prob(0.115 * pa_sp, 0.5), 3),
+    }
+    return {
+        "hit1": round(_poisson_over_prob(h_lam,   0.5), 3),
+        "tb2":  round(_poisson_over_prob(tb_lam,  1.5), 3),
+        "hr":   round(_poisson_over_prob(hr_lam,  0.5), 3),
+        "rbi1": round(_poisson_over_prob(rbi_lam, 0.5), 3),
+        "neutral": neutral,
+        "expected": {
+            "hits": round(h_lam,  3),
+            "tb":   round(tb_lam, 3),
+            "hr":   round(hr_lam, 4),
+            "rbi":  round(rbi_lam, 3),
+        },
+    }
+
+
+def _verdict_edge(prob, neutral):
+    """Edge-based verdict for vs-SP probs (compare to league neutral baseline)."""
+    if prob is None or neutral is None:
+        return ("pass", "—", "")
+    edge = prob - neutral
+    if edge >= 0.10:  return ("bet",  "STRONG", "v-bet")
+    if edge >= 0.04:  return ("lean", "EDGE",   "v-lean")
+    if edge <= -0.07: return ("fade", "FADE",   "v-fade")
+    return ("pass", "AVG", "v-pass")
+
+
+def _log5_k_rate(batter_k, pitcher_k, league_k=_LEAGUE_KPCT):
+    """Log5 / Bill James formula for K probability per PA in this matchup."""
+    b = max(0.05, min(0.55, float(batter_k or league_k)))
+    p = max(0.10, min(0.45, float(pitcher_k or league_k)))
+    L = max(0.10, min(0.40, float(league_k or 0.225)))
+    num   = (b * p) / L
+    denom = num + ((1 - b) * (1 - p)) / (1 - L)
+    if denom <= 0:
+        return league_k
+    return max(0.04, min(0.55, num / denom))
+
+
+# Times-Through-Order Penalty (TTOP) — well-documented effect:
+# pitcher K% drops and batter wOBA rises each time through the order.
+# Multipliers applied per PA index (1st PA, 2nd PA, 3rd PA vs SP).
+_TTOP_K_MULT     = (1.00, 0.97, 0.92)   # pitcher K rate decay
+_TTOP_BATTER_MULT = (1.00, 1.02, 1.06)   # batter wOBA boost
+
+
+def _ttop_avg_k_mult(pa_count):
+    """Average K-rate multiplier across pa_count PAs (TTOP-weighted)."""
+    if pa_count <= 0:
+        return 1.0
+    n_full = int(pa_count)
+    frac   = pa_count - n_full
+    s = 0.0
+    for i in range(n_full):
+        s += _TTOP_K_MULT[min(i, len(_TTOP_K_MULT) - 1)]
+    if frac > 0:
+        s += frac * _TTOP_K_MULT[min(n_full, len(_TTOP_K_MULT) - 1)]
+    return s / pa_count
+
+
+def _ttop_avg_batter_mult(pa_count):
+    """Average batter wOBA multiplier across pa_count PAs (TTOP-weighted)."""
+    if pa_count <= 0:
+        return 1.0
+    n_full = int(pa_count)
+    frac   = pa_count - n_full
+    s = 0.0
+    for i in range(n_full):
+        s += _TTOP_BATTER_MULT[min(i, len(_TTOP_BATTER_MULT) - 1)]
+    if frac > 0:
+        s += frac * _TTOP_BATTER_MULT[min(n_full, len(_TTOP_BATTER_MULT) - 1)]
+    return s / pa_count
+
+
+def _pitcher_k_projection_vs_lineup(pitcher_id, pitcher_name, opposing_lineup,
+                                     starter_tbf=22.0,
+                                     lines=(4.5, 5.5, 6.5, 7.5, 8.5),
+                                     pitcher_dict=None,
+                                     ump_k_mult=1.0):
+    """Project pitcher K total vs a specific opposing lineup.
+
+    Method:
+      * Per-batter Log5 K rate × slot-aware PAs vs SP, with TTOP penalty
+        applied per PA (each subsequent trip the K rate falls).
+      * Sum into expected K total, derive Poisson P(over line) for each line.
+      * Blend with XGBoost xgb_k_prob() when its model is loaded for the line
+        (60% XGB / 40% Poisson).
+      * Optional umpire K-zone multiplier (`ump_k_mult`) scales total K.
+
+    Returns dict with expectedK, expectedKLog5, expectedKXgb (raw), perBatter
+    list, and per-line over/under verdicts.
+    """
+    if not opposing_lineup:
+        return None
+
+    fg_pit = fg_pitcher(pitcher_name) if pitcher_name else {}
+    pit_kpct = _safe_f(fg_pit.get("fg_kpct"), _LEAGUE_KPCT)
+
+    tbf = max(12.0, min(30.0, float(starter_tbf)))
+    per_slot_pa = tbf / 9.0
+
+    expected_k_log5 = 0.0
+    per_batter = []
+    for i, b in enumerate(opposing_lineup[:9]):
+        name = b.get("name") or ""
+        if not name:
+            continue
+        bat = fg_batter(name) or {}
+        bat_kpct = _safe_f(bat.get("fg_kpct"), _LEAGUE_KPCT)
+        slot = int(b.get("slot") or (i + 1))
+        # Slight slot adjustment so leadoff sees ~+0.2 more PA than #9 vs SP.
+        slot_pa = per_slot_pa + max(0.0, (5 - slot) * 0.04)
+        # TTOP: K rate decays each subsequent PA. Use the average multiplier
+        # across this slot's PAs vs SP.
+        ttop_mult = _ttop_avg_k_mult(slot_pa)
+        k_per_pa = _log5_k_rate(bat_kpct, pit_kpct) * ttop_mult * ump_k_mult
+        k_per_pa = max(0.04, min(0.55, k_per_pa))
+        k_exp    = k_per_pa * slot_pa
+        expected_k_log5 += k_exp
+        per_batter.append({
+            "slot":   slot,
+            "name":   name,
+            "kPerPa": round(k_per_pa, 3),
+            "paVsSp": round(slot_pa,  2),
+            "expK":   round(k_exp,    2),
+            "ttopMult": round(ttop_mult, 3),
+        })
+
+    expected_k_log5 = round(expected_k_log5, 2)
+
+    # XGBoost K-prop ensemble: per-line probability when models loaded.
+    xgb_avail = xgb_ready("k")
+    if xgb_avail and pitcher_dict is None:
+        # Build a minimal pitcher dict the K model can consume.
+        sv_pit = sv_pitcher(pitcher_name) or {}
+        pitcher_dict = {
+            "name":         pitcher_name,
+            "svxera":       _safe_f(sv_pit.get("sv_xera"),      None),
+            "fgera":        _safe_f(fg_pit.get("fg_era"),        None),
+            "fgkpct":       _safe_f(fg_pit.get("fg_kpct"),       None),
+            "fgbbpct":      _safe_f(fg_pit.get("fg_bbpct"),      None),
+            "svwhiffpct":   _safe_f(sv_pit.get("sv_whiff"),      None),
+            "oppKPct":      _safe_f(fg_pit.get("opp_kpct_proxy"), 22.0),
+            "oppWoba":      _safe_f(fg_pit.get("opp_woba_proxy"), 0.320),
+        }
+        # Fold in recent form when available
+        try:
+            rf = _pitcher_recent_form(pitcher_id) if pitcher_id else None
+            if rf:
+                l3 = rf.get("l3") or {}; l5 = rf.get("l5") or {}; l10 = rf.get("l10") or {}
+                pitcher_dict.update({
+                    "l3Ks":      _safe_f(l3.get("k_total"),  4.5),
+                    "l5Ks":      _safe_f(l5.get("k_total"),  4.5),
+                    "l10Ks":     _safe_f(l10.get("k_total"), 4.5),
+                    "l5KRate":   _safe_f(l5.get("kpct"),     0.22),
+                    "l3IP":      _safe_f(l3.get("ip"),       5.0),
+                    "l5IP":      _safe_f(l5.get("ip"),       5.0),
+                    "daysRest":  _safe_f(rf.get("days_rest"), 5.0),
+                })
+        except Exception:
+            pass
+
+    # Blend Log5 expected K with the average of XGB per-line implied means
+    # (so the displayed expected K reflects the ensemble too). When XGB is
+    # unavailable, expected_k = expected_k_log5.
+    expected_k = expected_k_log5
+
+    line_results = []
+    for line in lines:
+        p_over_log5 = _poisson_over_prob(expected_k_log5, line)
+        p_over_xgb = None
+        if xgb_avail:
+            try:
+                p_over_xgb = xgb_k_prob(pitcher_dict, line=float(line))
+            except Exception:
+                p_over_xgb = None
+        if p_over_xgb is not None:
+            p_over = 0.6 * p_over_xgb + 0.4 * p_over_log5
+            method = "ensemble"
+        else:
+            p_over = p_over_log5
+            method = "log5"
+        p_over  = round(max(0.01, min(0.99, p_over)), 3)
+        p_under = round(1.0 - p_over, 3)
+        if p_over >= 0.62:
+            side, verdict, cls = "over",  "BET OVER",   "v-bet"
+        elif p_over >= 0.55:
+            side, verdict, cls = "over",  "LEAN OVER",  "v-lean"
+        elif p_under >= 0.62:
+            side, verdict, cls = "under", "BET UNDER",  "v-bet"
+        elif p_under >= 0.55:
+            side, verdict, cls = "under", "LEAN UNDER", "v-lean"
+        else:
+            side, verdict, cls = "pass",  "PASS",       "v-pass"
+        line_results.append({
+            "line":       line,
+            "pOver":      p_over,
+            "pUnder":     p_under,
+            "pOverLog5":  round(p_over_log5, 3),
+            "pOverXgb":   round(p_over_xgb, 3) if p_over_xgb is not None else None,
+            "method":     method,
+            "side":       side,
+            "verdict":    verdict,
+            "verdictCls": cls,
+        })
+
+    return {
+        "pitcher":      pitcher_name,
+        "expectedK":    round(expected_k, 2),
+        "expectedKLog5": round(expected_k_log5, 2),
+        "expectedTBF":  round(tbf, 1),
+        "umpKMult":     round(ump_k_mult, 3),
+        "xgbAvailable": xgb_avail,
+        "lineupSize":   len(per_batter),
+        "perBatter":    per_batter,
+        "lineProjections": line_results,
+    }
+
+
+def _umpire_k_multiplier(game_pk):
+    """Return a K-rate multiplier in [0.88, 1.12] from cached umpire data.
+
+    Uses zone_rating (0–100, higher = pitcher friendly). 50 = neutral.
+    Returns (mult, ump_meta) where ump_meta is a small dict for surfacing.
+    """
+    if not game_pk:
+        return 1.0, None
+    try:
+        for delta in (0, -1, 1):
+            date_str = (datetime.now(ET) + timedelta(days=delta)).strftime("%Y-%m-%d")
+            games = _fetch_schedule_with_officials(date_str, date_str) if "_fetch_schedule_with_officials" in globals() else []
+            gdata = next((g for g in games if g.get("gamePk") == game_pk), None)
+            if gdata:
+                break
+        if not gdata:
+            return 1.0, None
+        ump = _get_hp_umpire(gdata)
+        ump_id = ump.get("id")
+        if not ump_id:
+            return 1.0, None
+        with _ump_lock:
+            cached = _ump_cache.get(ump_id)
+        if not cached or "data" not in cached:
+            return 1.0, {"name": ump.get("fullName"), "loaded": False}
+        data = cached["data"]
+        zone = float(data.get("zone_rating") or 50)
+        # 50 zone = 1.0×; 65 = 1.075×; 35 = 0.925×; clamp.
+        mult = 1.0 + (zone - 50) * 0.005
+        mult = max(0.88, min(1.12, mult))
+        return round(mult, 3), {
+            "name":       ump.get("fullName"),
+            "zone":       int(zone),
+            "tendency":   data.get("tendency"),
+            "loaded":     True,
+        }
+    except Exception:
+        return 1.0, None
+
+
+def _model_divergence(probs, gp, batx, exp_pa_total):
+    """Surface XGB-vs-BATX divergence and a HIGH UNCERTAINTY flag.
+
+    For 1+ Hit specifically — the only market with an XGB model loaded today.
+    Returns dict with both probs, the absolute divergence, and a flag/label.
+    """
+    xgb_p   = gp.get("xgbHitProb")
+    batx_p  = round(_poisson_over_prob(float(batx.get("hits", 0) or 0), 0.5), 3)
+    blended = probs.get("hit1")
+    if xgb_p is None:
+        return {
+            "available":  False,
+            "blended":    blended,
+            "batx":       batx_p,
+            "xgb":        None,
+            "divergence": None,
+            "flag":       None,
+        }
+    div = round(abs(xgb_p - batx_p), 3)
+    if div >= 0.18:
+        flag = ("high",   "HIGH UNCERTAINTY", "v-fade")
+    elif div >= 0.10:
+        flag = ("medium", "MODELS SPLIT",     "v-lean")
+    else:
+        flag = ("low",    "MODELS AGREE",     "v-bet")
+    return {
+        "available":  True,
+        "blended":    blended,
+        "batx":       batx_p,
+        "xgb":        round(xgb_p, 3),
+        "divergence": div,
+        "flagKey":    flag[0],
+        "flagLabel":  flag[1],
+        "flagCls":    flag[2],
+    }
+
+
+def _projection_drivers(batx_adjustments, top_n=4):
+    """Pick the top-N BATX adjustment components by absolute magnitude.
+
+    Returns ordered list of {component, contribution, direction, label}.
+    `batx_adjustments` is the dict stored in batx['adjustments'] by
+    _project_batter_batx — values are the per-component contributions to
+    the composite multiplier (deltas around zero).
+    """
+    if not batx_adjustments or not isinstance(batx_adjustments, dict):
+        return []
+    pretty = {
+        "contact_contrib":  "Contact (xBA + AVG)",
+        "power_contrib":    "Power (ISO/Brl/EV)",
+        "disc_contrib":     "Discipline (BB/K)",
+        "platoon_contrib":  "Platoon edge",
+        "park_contrib":     "Park factor",
+        "wx_contrib":       "Weather",
+        "pitcher_contrib":  "Pitcher resistance",
+        "form_contrib":     "Recent form (L7)",
+        "bvp_contrib":      "Career BvP",
+    }
+    items = []
+    for k, v in batx_adjustments.items():
+        if not isinstance(v, (int, float)):
+            continue
+        magnitude = abs(float(v))
+        if magnitude < 0.001:
+            continue
+        items.append({
+            "component":    k,
+            "label":        pretty.get(k, k.replace("_contrib", "").replace("_", " ").title()),
+            "contribution": round(float(v), 4),
+            "direction":    "+" if v > 0 else "-",
+            "magnitude":    round(magnitude, 4),
+        })
+    items.sort(key=lambda r: r["magnitude"], reverse=True)
+    return items[:top_n]
+
+
+def _monte_carlo_vs_sp(per_pa_rates, pa_vs_sp, n_sims=4000, rng_seed=None):
+    """Monte Carlo distribution of vs-SP outcomes over `pa_vs_sp` plate appearances.
+
+    per_pa_rates: dict with keys 'k', 'bb', 'hbp', '1b', '2b', '3b', 'hr'.
+    The remaining mass is distributed to outs.
+    Returns percentile bands (P25/P50/P75/P90) for hits, TB, HR, RBI plus
+    the probabilities of clearing standard prop lines.
+    """
+    import random
+    if rng_seed is not None:
+        random.seed(rng_seed)
+
+    n_pa_int  = int(round(max(0.0, pa_vs_sp)))
+    if n_pa_int <= 0:
+        return None
+
+    # Normalize rates and compute outs as residual.
+    r = dict(per_pa_rates)
+    r.setdefault("hbp", 0.005)
+    used = sum(max(0.0, float(v)) for v in r.values())
+    if used > 0.99:
+        scale = 0.99 / used
+        for k in r:
+            r[k] = float(r[k]) * scale
+        used = sum(r.values())
+    out_rate = max(0.001, 1.0 - used)
+
+    # Build a cumulative outcome distribution.
+    outcomes = ["k", "bb", "hbp", "1b", "2b", "3b", "hr", "out"]
+    weights  = [r.get("k", 0), r.get("bb", 0), r.get("hbp", 0),
+                r.get("1b", 0), r.get("2b", 0), r.get("3b", 0),
+                r.get("hr", 0), out_rate]
+
+    sim_hits = []
+    sim_tb   = []
+    sim_hr   = []
+    sim_rbi  = []
+    sim_k    = []
+    sim_bb   = []
+    for _ in range(n_sims):
+        h = tb = hr = rbi = k = bb = 0
+        for _i in range(n_pa_int):
+            outcome = random.choices(outcomes, weights)[0]
+            if outcome == "k":   k += 1
+            elif outcome == "bb": bb += 1
+            elif outcome == "hbp": pass
+            elif outcome == "1b": h += 1; tb += 1; rbi += 1 if random.random() < 0.18 else 0
+            elif outcome == "2b": h += 1; tb += 2; rbi += 1 if random.random() < 0.30 else 0
+            elif outcome == "3b": h += 1; tb += 3; rbi += 1 if random.random() < 0.45 else 0
+            elif outcome == "hr": h += 1; tb += 4; hr += 1; rbi += 1 + (1 if random.random() < 0.50 else 0)
+        sim_hits.append(h)
+        sim_tb.append(tb)
+        sim_hr.append(hr)
+        sim_rbi.append(rbi)
+        sim_k.append(k)
+        sim_bb.append(bb)
+
+    def _pctiles(arr, ps=(25, 50, 75, 90)):
+        s = sorted(arr)
+        n = len(s)
+        return {f"p{p}": s[min(n - 1, int(round(p / 100.0 * (n - 1))))] for p in ps}
+
+    def _gte_prob(arr, threshold):
+        return round(sum(1 for x in arr if x >= threshold) / max(1, len(arr)), 3)
+
+    return {
+        "nSims":  n_sims,
+        "nPa":    n_pa_int,
+        "hits":   {"mean": round(sum(sim_hits) / n_sims, 2), **_pctiles(sim_hits),
+                   "p_ge_1": _gte_prob(sim_hits, 1), "p_ge_2": _gte_prob(sim_hits, 2)},
+        "tb":     {"mean": round(sum(sim_tb)   / n_sims, 2), **_pctiles(sim_tb),
+                   "p_ge_2": _gte_prob(sim_tb, 2),  "p_ge_3": _gte_prob(sim_tb, 3)},
+        "hr":     {"mean": round(sum(sim_hr)   / n_sims, 3), "p_ge_1": _gte_prob(sim_hr, 1)},
+        "rbi":    {"mean": round(sum(sim_rbi)  / n_sims, 2), "p_ge_1": _gte_prob(sim_rbi, 1),
+                   "p_ge_2": _gte_prob(sim_rbi, 2)},
+        "k":      {"mean": round(sum(sim_k)    / n_sims, 2), "p_ge_1": _gte_prob(sim_k, 1)},
+        "bb":     {"mean": round(sum(sim_bb)   / n_sims, 2), "p_ge_1": _gte_prob(sim_bb, 1)},
+    }
+
+
+# Bullpen baseline adjustments vs starters (approximate league-wide diffs).
+#  RP K% ~ +2.5pts, RP wOBA-against ~ -0.012, RP HR/9 ~ -0.10.
+_BULLPEN_VS_SP = {
+    "k_uplift":     +0.025,    # RP K% above SP
+    "woba_offset":  -0.012,    # RP wOBA-against below SP
+    "rate_mult":    0.94,      # batter offensive rate × this in bullpen PAs
+}
+
+
+def _vs_rp_projections(batx, exp_pa_total, exp_pa_vs_sp):
+    """Project the slice of the game vs the BULLPEN (PAs after the SP exits).
+
+    Uses league bullpen baseline adjustments (RP slightly more dominant than
+    SP). When pa_vs_rp is small (≤ 0.5), returns None — projections become
+    unreliable and the UI can simply hide the section.
+    """
+    pa_total = max(0.5, float(exp_pa_total or 4.35))
+    pa_sp    = max(0.0, float(exp_pa_vs_sp or pa_total * 0.6))
+    pa_rp    = max(0.0, pa_total - pa_sp)
+    if pa_rp < 0.5:
+        return None
+
+    scale = pa_rp / pa_total
+    rate_mult = _BULLPEN_VS_SP["rate_mult"]
+    h_lam   = float(batx.get("hits", 0) or 0) * scale * rate_mult
+    tb_lam  = float(batx.get("tb",   0) or 0) * scale * rate_mult
+    hr_lam  = float(batx.get("hr",   0) or 0) * scale * rate_mult
+    rbi_lam = float(batx.get("rbi",  0) or 0) * scale * rate_mult
+    return {
+        "paVsRp": round(pa_rp, 2),
+        "probs": {
+            "hit1": round(_poisson_over_prob(h_lam,   0.5), 3),
+            "tb2":  round(_poisson_over_prob(tb_lam,  1.5), 3),
+            "hr":   round(_poisson_over_prob(hr_lam,  0.5), 3),
+            "rbi1": round(_poisson_over_prob(rbi_lam, 0.5), 3),
+        },
+        "expected": {
+            "hits": round(h_lam,  3),
+            "tb":   round(tb_lam, 3),
+            "hr":   round(hr_lam, 4),
+            "rbi":  round(rbi_lam, 3),
+        },
+        "note": f"~{round(pa_rp,1)} PAs vs RP · bullpen K% +{int(_BULLPEN_VS_SP['k_uplift']*1000)/10:.1f}pts vs SP",
+    }
+
+
+def _per_pa_rates_from_batx(batx, fg_bat, exp_pa_total, ttop_boost=1.0):
+    """Derive per-PA outcome rates (k, bb, hbp, 1b, 2b, 3b, hr) for MC sim.
+
+    Uses BATX expected hits/HR/RBI to anchor average rates and FG K%/BB% for
+    walks/strikeouts. 1B/2B/3B inferred from total bases minus HR contribution.
+    """
+    pa = max(0.5, float(exp_pa_total or 4.35))
+    h_per   = float(batx.get("hits", 0) or 0) / pa * ttop_boost
+    tb_per  = float(batx.get("tb",   0) or 0) / pa * ttop_boost
+    hr_per  = float(batx.get("hr",   0) or 0) / pa * ttop_boost
+    k_per   = max(0.05, min(0.50, _safe_f(fg_bat.get("fg_kpct"),  _LEAGUE_KPCT)))
+    bb_per  = max(0.02, min(0.20, _safe_f(fg_bat.get("fg_bbpct"), 0.082)))
+    hbp_per = 0.011
+
+    # Distribute hits into 1B / 2B / 3B / HR using TB constraint:
+    #  TB = 1B + 2*2B + 3*3B + 4*HR
+    #  H  = 1B + 2B + 3B + HR
+    # Solve for 2B + 3B (extras), holding HR fixed; assume 3B ≈ 6% of XBH.
+    h_remain = max(0.0, h_per - hr_per)
+    tb_remain = max(0.0, tb_per - 4 * hr_per)
+    extras = max(0.0, min(h_remain, tb_remain - h_remain))   # 2B + 3B + (extra TB above singles)
+    # Cap and split
+    extras = min(extras, h_remain * 0.55)
+    triples = extras * 0.06
+    doubles = max(0.0, extras - triples)
+    singles = max(0.0, h_remain - extras)
+
+    return {
+        "k":   k_per,
+        "bb":  bb_per,
+        "hbp": hbp_per,
+        "1b":  singles,
+        "2b":  doubles,
+        "3b":  triples,
+        "hr":  hr_per,
+    }
+
+
 def _fetch_bvp(batter_id, pitcher_id):
     """
     Fetch career batter-vs-pitcher splits from the MLB Stats API.
@@ -6668,19 +7484,47 @@ def _fetch_bvp(batter_id, pitcher_id):
                 "shrunk": {},
             }
         else:
-            s   = splits[0].get("stat", {})
-            ab  = int(s.get("atBats", 0) or 0)
-            h   = int(s.get("hits", 0) or 0)
-            bb  = int(s.get("baseOnBalls", 0) or 0)
-            hbp = int(s.get("hitByPitch", 0) or 0)
-            hr  = int(s.get("homeRuns", 0) or 0)
-            dbl = int(s.get("doubles", 0) or 0)
-            tpl = int(s.get("triples", 0) or 0)
-            so  = int(s.get("strikeOuts", 0) or 0)
-            sf  = int(s.get("sacFlies", 0) or 0)
-            tb  = int(s.get("totalBases", 0) or 0)
+            # MLB Stats API `stats=vsPlayer` returns one split per season the
+            # batter faced this pitcher — aggregate across all seasons for true
+            # career H2H. Also build a per-season breakdown for the UI.
+            ab = h = bb = hbp = hr = dbl = tpl = so = sf = tb = 0
+            seasons = []
+            first_season = last_season = None
+            for sp in splits:
+                stat = sp.get("stat", {}) or {}
+                season_yr = sp.get("season") or stat.get("season")
+                s_ab  = int(stat.get("atBats", 0) or 0)
+                s_h   = int(stat.get("hits", 0) or 0)
+                s_bb  = int(stat.get("baseOnBalls", 0) or 0)
+                s_hbp = int(stat.get("hitByPitch", 0) or 0)
+                s_hr  = int(stat.get("homeRuns", 0) or 0)
+                s_dbl = int(stat.get("doubles", 0) or 0)
+                s_tpl = int(stat.get("triples", 0) or 0)
+                s_so  = int(stat.get("strikeOuts", 0) or 0)
+                s_sf  = int(stat.get("sacFlies", 0) or 0)
+                s_tb  = int(stat.get("totalBases", 0) or 0)
+                s_pa  = s_ab + s_bb + s_hbp + s_sf
+                ab  += s_ab;  h  += s_h;   bb  += s_bb;  hbp += s_hbp
+                hr  += s_hr;  dbl += s_dbl; tpl += s_tpl; so  += s_so
+                sf  += s_sf;  tb += s_tb
+                if s_pa > 0:
+                    try:
+                        yr_int = int(season_yr) if season_yr else None
+                    except (TypeError, ValueError):
+                        yr_int = None
+                    seasons.append({
+                        "season": yr_int,
+                        "pa": s_pa, "ab": s_ab, "h": s_h, "hr": s_hr,
+                        "bb": s_bb, "so": s_so,
+                        "avg": round(s_h / s_ab, 3) if s_ab else 0.0,
+                        "tb":  s_tb,
+                    })
+                    if yr_int is not None:
+                        first_season = yr_int if first_season is None else min(first_season, yr_int)
+                        last_season  = yr_int if last_season  is None else max(last_season,  yr_int)
             singles = max(0, h - dbl - tpl - hr)
             pa  = ab + bb + hbp + sf
+            seasons.sort(key=lambda r: (r["season"] is None, r["season"] or 0), reverse=True)
 
             raw_avg  = round(h / ab, 3) if ab else 0.0
             raw_obp  = round((h + bb + hbp) / pa, 3) if pa else 0.0
@@ -6737,11 +7581,15 @@ def _fetch_bvp(batter_id, pitcher_id):
                 "hr": hr,
                 "bb": bb,
                 "so": so,
+                "tb": tb,
                 "avg": raw_avg,
                 "ops": raw_ops,
                 "season_ops": season_ops,
                 "ops_ratio": ops_ratio,
-                "sample_note": note,
+                "first_season": first_season,
+                "last_season":  last_season,
+                "seasons":      seasons,
+                "sample_note":  note,
                 "raw": {
                     "avg": raw_avg,
                     "obp": raw_obp,
