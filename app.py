@@ -10844,15 +10844,20 @@ def _default_adjustments():
             'pitcher_strikeouts': 1.00,
             'nrfi': 1.00,
             'yrfi': 1.00,
-        }
+        },
+        'blend_weights': {
+            'pitcher_w_recent': 0.40,   # weight on last-5-start form in _project_pitcher
+            'xgb_k_weight': 0.60,       # XGBoost share in K-prop MC+XGB blend
+        },
     }
 
 
 def _get_adjustments():
     obj = _load_json(ADJUST_STORE, _default_adjustments())
     d = _default_adjustments()
-    d.update({k: v for k, v in obj.items() if k != 'market_multipliers'})
+    d.update({k: v for k, v in obj.items() if k not in ('market_multipliers', 'blend_weights')})
     d['market_multipliers'].update(obj.get('market_multipliers', {}))
+    d['blend_weights'].update(obj.get('blend_weights', {}))
     return d
 
 
@@ -11148,10 +11153,13 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                 raw_prob = float(sp.get(prob_field, 0) or 0)
             else:
                 raw_prob = _poisson_over_prob(mean_k, line)
-            # XGBoost blend for K props (60% XGB / 40% Monte Carlo when model loaded)
+            # XGBoost blend for K props — weight from model_adjustments blend_weights
             _xgb_k = xgb_k_prob(sp, line=line) if k_xgb_ready else None
+            _mc_k_prob = raw_prob  # pure MC prob before any blend
             if _xgb_k is not None:
-                raw_prob = max(0.0, min(1.0, 0.40 * raw_prob + 0.60 * _xgb_k))
+                _xgb_w = float((adjustments.get('blend_weights') or {}).get('xgb_k_weight', 0.60))
+                _mc_w  = round(1.0 - _xgb_w, 4)
+                raw_prob = max(0.0, min(1.0, _mc_w * raw_prob + _xgb_w * _xgb_k))
             if raw_prob < 0.12:
                 continue
             raw_mult_prob = _clamp01(raw_prob * _market_mult('pitcher_strikeouts', adjustments))
@@ -11171,7 +11179,7 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
             ev_pct = round(adj_prob / mi - 1, 4) if mi and mi > 0 else None
             temp_row = {
                 'date': capture_date, 'gamePk': game_pk, 'team': team_abbr, 'player': sp.get('name'), 'playerId': sp.get('id'), 'marketKey': 'pitcher_strikeouts', 'line': line, 'recommendedSide': 'Over',
-                'rawProb': round(raw_prob, 4), 'rawMultProb': round(raw_mult_prob, 4), 'adjProb': round(adj_prob, 4), 'modelMean': round(float(sp.get('mean_k', 0) or 0), 3), 'edge': round(edge, 4) if edge is not None else None, 'xgbKProb': round(_xgb_k, 4) if _xgb_k is not None else None,
+                'rawProb': round(raw_prob, 4), 'rawMultProb': round(raw_mult_prob, 4), 'adjProb': round(adj_prob, 4), 'modelMean': round(float(sp.get('mean_k', 0) or 0), 3), 'edge': round(edge, 4) if edge is not None else None, 'xgbKProb': round(_xgb_k, 4) if _xgb_k is not None else None, 'mcKProb': round(_mc_k_prob, 4) if _xgb_k is not None else None,
                 'bookmaker': msum.get('market_bookmaker'), 'marketPrice': msum.get('best_over_price'), 'marketImplied': market_implied,
                 'bestAvailablePrice': msum.get('best_over_price'), 'bestAvailableBook': msum.get('best_over_book'),
                 'bestOverPrice': msum.get('best_over_price'), 'bestOverBook': msum.get('best_over_book'),
@@ -11720,6 +11728,145 @@ def _market_calibration(entries, current_adj):
         })
     out.sort(key=lambda x: (x['action'] == 'hold', -x['graded'], x['marketKey']))
     return out
+
+
+# ── Brier Score Feedback Loop ─────────────────────────────────────────────────
+
+def _compute_brier_stats(entries):
+    """
+    Compute per-market Brier scores from graded tracker entries.
+    For pitcher_strikeouts entries that stored mcKProb + xgbKProb, also compute
+    optimal XGB blend weight that minimises Brier over the sample.
+    """
+    by_market = {}
+    for row in entries:
+        if row.get('grade') not in ('win', 'loss'):
+            continue
+        mk = row.get('marketKey')
+        if not mk:
+            continue
+        p = float(row.get('adjProb') or 0)
+        if p <= 0:
+            continue
+        outcome = 1.0 if row.get('grade') == 'win' else 0.0
+        rec = {'outcome': outcome, 'adjProb': p}
+        if row.get('xgbKProb') is not None:
+            rec['xgbKProb'] = float(row['xgbKProb'])
+        if row.get('mcKProb') is not None:
+            rec['mcKProb'] = float(row['mcKProb'])
+        by_market.setdefault(mk, []).append(rec)
+
+    results = {}
+    for mk, rows in by_market.items():
+        n = len(rows)
+        if n == 0:
+            continue
+        brier = sum((r['adjProb'] - r['outcome']) ** 2 for r in rows) / n
+        # Brier Skill Score vs coin-flip baseline (0.25)
+        skill_score = round(1.0 - brier / 0.25, 4)
+        entry = {
+            'marketKey': mk,
+            'graded': n,
+            'brier_score': round(brier, 5),
+            'skill_score': skill_score,
+            'baseline_brier': 0.25,
+            'confidence': 'HIGH' if n >= 30 else ('MEDIUM' if n >= 15 else 'LOW'),
+        }
+
+        # K-prop blend optimisation: find XGB weight that minimises Brier
+        if mk == 'pitcher_strikeouts':
+            blend_rows = [r for r in rows if 'xgbKProb' in r and 'mcKProb' in r]
+            if blend_rows:
+                nb = len(blend_rows)
+                brier_xgb  = sum((r['xgbKProb'] - r['outcome']) ** 2 for r in blend_rows) / nb
+                brier_mc   = sum((r['mcKProb']  - r['outcome']) ** 2 for r in blend_rows) / nb
+                # Grid-search over XGB weight in [0, 1] step 0.05
+                best_w, best_bs = 0.60, float('inf')
+                for step in range(21):
+                    w = round(step / 20, 2)
+                    bs = sum((w * r['xgbKProb'] + (1 - w) * r['mcKProb'] - r['outcome']) ** 2
+                             for r in blend_rows) / nb
+                    if bs < best_bs:
+                        best_bs, best_w = bs, w
+                entry.update({
+                    'xgb_brier': round(brier_xgb, 5),
+                    'mc_brier':  round(brier_mc,  5),
+                    'optimal_xgb_weight': best_w,
+                    'optimal_brier': round(best_bs, 5),
+                    'blend_sample_n': nb,
+                })
+
+        results[mk] = entry
+    return results
+
+
+def _brier_blend_calibration(entries, current_adj):
+    """
+    Suggest updated blend_weights based on Brier-score analysis.
+
+    Logic:
+    - pitcher_strikeouts  → optimise xgb_k_weight via grid search
+    - All other markets   → no blend component to tune here (multiplier handles them)
+
+    Returns a list of suggestion dicts (same shape as _market_calibration output)
+    plus a top-level 'suggested_blend_weights' dict.
+    """
+    stats = _compute_brier_stats(entries)
+    current_bw = (current_adj.get('blend_weights') or {})
+    suggestions = []
+
+    # ── XGB K-prop weight ──────────────────────────────────────────────────────
+    k_stat = stats.get('pitcher_strikeouts')
+    current_xgb_w = float(current_bw.get('xgb_k_weight', 0.60))
+    if k_stat and k_stat.get('blend_sample_n', 0) >= 8:
+        opt_w   = k_stat['optimal_xgb_weight']
+        # Dampen the shift: move at most 0.10 toward optimal per calibration cycle
+        shift   = _clamp(opt_w - current_xgb_w, -0.10, 0.10)
+        new_w   = round(_clamp(current_xgb_w + shift, 0.20, 0.80), 2)
+        action  = ('increase' if new_w > current_xgb_w + 0.01
+                   else 'decrease' if new_w < current_xgb_w - 0.01
+                   else 'hold')
+        suggestions.append({
+            'param': 'xgb_k_weight',
+            'label': 'XGBoost K-prop weight',
+            'current': current_xgb_w,
+            'suggested': new_w,
+            'optimal_from_data': opt_w,
+            'action': action,
+            'confidence': k_stat['confidence'],
+            'brier_current': k_stat.get('blended_brier', k_stat['brier_score']),
+            'brier_optimal': k_stat.get('optimal_brier'),
+            'sample_n': k_stat['blend_sample_n'],
+            'rationale': (
+                f"XGB Brier {k_stat.get('xgb_brier','?'):.5f}, "
+                f"MC Brier {k_stat.get('mc_brier','?'):.5f} over {k_stat['blend_sample_n']} graded K picks. "
+                f"Optimal XGB weight from data: {opt_w:.2f} (current {current_xgb_w:.2f})."
+            ),
+        })
+    else:
+        suggestions.append({
+            'param': 'xgb_k_weight',
+            'label': 'XGBoost K-prop weight',
+            'current': current_xgb_w,
+            'suggested': current_xgb_w,
+            'action': 'hold',
+            'confidence': 'LOW SAMPLE',
+            'sample_n': (k_stat or {}).get('blend_sample_n', 0),
+            'rationale': 'Fewer than 8 graded K-prop picks with both MC and XGB probabilities stored.',
+        })
+
+    # Build suggested_blend_weights dict (apply only non-hold suggestions)
+    suggested_bw = dict(current_bw)
+    for s in suggestions:
+        if s['action'] != 'hold':
+            suggested_bw[s['param']] = s['suggested']
+
+    return {
+        'brier_stats': stats,
+        'suggestions': suggestions,
+        'current_blend_weights': current_bw,
+        'suggested_blend_weights': suggested_bw,
+    }
 
 
 def _overall_window_summary(entries):
@@ -12760,6 +12907,106 @@ def api_tracker_calibration_apply():
     _append_calibration_history('auto_apply', current, {'date': date_str, 'window': window, 'applied': chosen, 'note': 'Auto-calibration apply'})
     return jsonify({'success': True, 'applied': chosen, 'adjustments': current, 'window': window, 'date': date_str})
 
+
+# ── Brier Score Feedback Loop endpoints ───────────────────────────────────────
+
+@app.route('/api/tracker/brier/<date_str>')
+def api_tracker_brier(date_str):
+    """
+    Return per-market Brier scores and blend-weight suggestions for a window
+    ending on date_str.  Query param ?window=N (default 30).
+    """
+    window = int(request.args.get('window', 30) or 30)
+    entries = _collect_window_entries(date_str, window)
+    adjustments = _get_adjustments()
+    brier_stats = _compute_brier_stats(entries)
+    calibration = _brier_blend_calibration(entries, adjustments)
+    return jsonify({
+        'success': True,
+        'date': date_str,
+        'window': window,
+        'total_entries': len(entries),
+        'graded_entries': sum(1 for e in entries if e.get('grade') in ('win', 'loss')),
+        'brier_stats': brier_stats,
+        'suggestions': calibration['suggestions'],
+        'current_blend_weights': calibration['current_blend_weights'],
+        'suggested_blend_weights': calibration['suggested_blend_weights'],
+        'adjustments': adjustments,
+    })
+
+
+@app.route('/api/tracker/brier/apply', methods=['POST'])
+def api_tracker_brier_apply():
+    """
+    Apply Brier-optimised blend weights to model_adjustments.json.
+
+    POST body (all optional):
+      date    – window end date (default today)
+      window  – look-back days (default 30)
+      params  – list of param names to apply; omit to apply all non-hold suggestions
+      weights – dict of {param: value} to apply directly (overrides computed suggestions)
+    """
+    denied = _check_admin_auth()
+    if denied:
+        return denied
+    payload = request.get_json(silent=True) or {}
+    date_str = payload.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
+    window   = int(payload.get('window', 30) or 30)
+    entries  = _collect_window_entries(date_str, window)
+    current  = _get_adjustments()
+    calibration = _brier_blend_calibration(entries, current)
+
+    # Allow caller to supply explicit weights (e.g. from UI slider)
+    explicit = payload.get('weights') or {}
+    selected_params = payload.get('params') or []
+
+    applied = []
+    new_bw = dict(current.get('blend_weights') or {})
+
+    if explicit:
+        # Direct override — validate keys against known blend_weights
+        defaults = _default_adjustments()['blend_weights']
+        for k, v in explicit.items():
+            if k not in defaults:
+                continue
+            v = float(v)
+            lo, hi = (0.20, 0.80) if 'weight' in k else (0.10, 0.90)
+            v = round(_clamp(v, lo, hi), 4)
+            old_v = new_bw.get(k, defaults[k])
+            new_bw[k] = v
+            applied.append({'param': k, 'old': old_v, 'new': v, 'source': 'explicit'})
+    else:
+        # Apply computed suggestions (filtered by selected_params if provided)
+        for s in calibration['suggestions']:
+            if s['action'] == 'hold':
+                continue
+            if selected_params and s['param'] not in selected_params:
+                continue
+            old_v = new_bw.get(s['param'], s['current'])
+            new_bw[s['param']] = s['suggested']
+            applied.append({'param': s['param'], 'old': old_v, 'new': s['suggested'], 'source': 'brier'})
+
+    current['blend_weights'] = new_bw
+    _save_json(ADJUST_STORE, current)
+    _append_calibration_history(
+        'brier_apply',
+        current,
+        {
+            'date': date_str,
+            'window': window,
+            'applied': applied,
+            'note': f"Brier blend-weight update ({len(applied)} params)",
+        },
+    )
+    return jsonify({
+        'success': True,
+        'applied': applied,
+        'blend_weights': new_bw,
+        'adjustments': current,
+        'window': window,
+        'date': date_str,
+        'suggestions': calibration['suggestions'],
+    })
 
 
 # ── Phase 14 Closing-Line Value + ROI Simulation ──────────────────────────────
@@ -15765,7 +16012,7 @@ def _pitcher_recent_form(pitcher_id, n_starts=5):
 
 # ── Pitcher projection engine (v2 — recent form weighted) ────────────────────
 def _project_pitcher(pitcher_name, pitcher_id, pitcher_fg, pitcher_sv, pitcher_stats,
-                     opp_batters, park_factor, weather):
+                     opp_batters, park_factor, weather, blend_weights=None):
     fg   = pitcher_fg
     sv   = pitcher_sv
 
@@ -15776,10 +16023,11 @@ def _project_pitcher(pitcher_name, pitcher_id, pitcher_fg, pitcher_sv, pitcher_s
     whip_season = _safe_f(fg.get("fg_whip") or pitcher_stats.get("whip"), 1.28)
     kpct        = _safe_f(fg.get("fg_kpct") or sv.get("sv_k_pct"), 0.22)
 
-    # ── Recent form (last 3-5 starts) — 40% weight ────────────────────────────
+    # ── Recent form (last 3-5 starts) — weight from blend_weights or default 0.40
     recent = _pitcher_recent_form(pitcher_id, n_starts=5)
     if recent:
-        W_RECENT = 0.40;  W_SEASON = 0.60
+        W_RECENT = float((blend_weights or {}).get('pitcher_w_recent', 0.40))
+        W_SEASON = round(1.0 - W_RECENT, 4)
         era  = W_SEASON * era_season  + W_RECENT * recent["era_recent"]
         k9   = W_SEASON * k9_season   + W_RECENT * recent["k9_recent"]
         bb9  = W_SEASON * bb9_season  + W_RECENT * recent["bb9_recent"]
@@ -16127,7 +16375,8 @@ def api_props_projections(game_pk):
             if pname == "TBD":
                 continue
             pinj = _get_player_injury(pid) if pid else None
-            proj = _project_pitcher(pname, pid, pfg, psv, pst, opp_bats, pf, wx)
+            proj = _project_pitcher(pname, pid, pfg, psv, pst, opp_bats, pf, wx,
+                                    blend_weights=_get_adjustments().get('blend_weights'))
             pitchers_out.append({
                 "name":        pname,
                 "team":        pabbr,
