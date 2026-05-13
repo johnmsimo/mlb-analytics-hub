@@ -5791,6 +5791,69 @@ def api_bvp_projection(batter_id, pitcher_id):
             "k9":        _safe_f(fg_pit.get("fg_k9"),       None),
         }
 
+        # ── 9. vs-Starter projection: re-scale game-level expecteds to the
+        #     PAs the batter actually sees vs the SP. Apply BET/LEAN/FADE
+        #     verdicts so the user sees a clear directional call.
+        exp_pa_total = float(batx.get("expected_pa") or 4.35)
+        # Try to use the starter's recent TBF for a sharper PA-vs-SP estimate;
+        # otherwise default to 22 (league-average SP workload).
+        starter_tbf = 22.0
+        try:
+            _pit_form = _pitcher_recent_form(pitcher_id) if pitcher_id else None
+            if _pit_form:
+                _avg_ip = _safe_f((_pit_form.get("l5") or _pit_form.get("l3") or {}).get("ip"), None)
+                if _avg_ip and _avg_ip > 0:
+                    # IP per start × ~4.3 batters per inning ≈ TBF/start
+                    starter_tbf = max(15.0, min(28.0, float(_avg_ip) / max(1, (_pit_form.get("l5") or _pit_form.get("l3") or {}).get("games", 1)) * 4.3))
+        except Exception:
+            pass
+
+        pa_vs_sp = _starter_pa_for_slot(lineup_slot, exp_pa_total, starter_tbf)
+        vs_sp = _vs_sp_projections(batx, exp_pa_total, pa_vs_sp)
+
+        def _verdict_block(prob_dict):
+            out = {}
+            for mk in ("hit1", "tb2", "hr", "rbi1"):
+                key, label, cls = _verdict_for(mk, prob_dict.get(mk))
+                out[mk] = {"key": key, "label": label, "cls": cls}
+            return out
+
+        def _verdict_edge_block(prob_dict, neutral):
+            out = {}
+            for mk in ("hit1", "tb2", "hr", "rbi1"):
+                key, label, cls = _verdict_edge(prob_dict.get(mk), (neutral or {}).get(mk))
+                edge = (prob_dict.get(mk) or 0) - ((neutral or {}).get(mk) or 0)
+                out[mk] = {"key": key, "label": label, "cls": cls, "edge": round(edge, 3)}
+            return out
+
+        verdicts_game = _verdict_block(probs)
+        verdicts_sp   = _verdict_edge_block(vs_sp, vs_sp.get("neutral"))
+
+        # ── 10. Pitcher K projection vs the opposing lineup (game-context).
+        #     Lineup is fetched from the boxscore when game_pk is provided.
+        pitcher_k = None
+        if game_pk:
+            try:
+                box = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=6).json().get("teams", {})
+                # Determine which side this pitcher belongs to so we use the
+                # OPPOSING lineup (the one he's actually facing).
+                away_team_id = (((box.get("away") or {}).get("team") or {}).get("id"))
+                home_team_id = (((box.get("home") or {}).get("team") or {}).get("id"))
+                pit_team_id = None
+                for side_key in ("away", "home"):
+                    pmap = ((box.get(side_key) or {}).get("players") or {})
+                    if any(int((p.get("person") or {}).get("id") or 0) == int(pitcher_id) for p in pmap.values()):
+                        pit_team_id = away_team_id if side_key == "away" else home_team_id
+                        break
+                opposing_side = "home" if pit_team_id == away_team_id else "away"
+                opposing_lineup = get_batters_from_boxscore(box.get(opposing_side, {}), opposing_side)
+                pitcher_k = _pitcher_k_projection_vs_lineup(
+                    pitcher_id, pitcher_name, opposing_lineup, starter_tbf=starter_tbf,
+                )
+            except Exception as _kex:
+                print(f"[bvp pitcher_k] {_kex}")
+                pitcher_k = None
+
         return jsonify({
             "success":      True,
             "batterName":   batter_name,
@@ -5827,6 +5890,21 @@ def api_bvp_projection(batter_id, pitcher_id):
             "batterQuality":  batter_quality,
             "pitcherProfile": pitcher_profile,
             "adjustments":    batx.get("adjustments", {}),
+            # Per-PA-vs-starter projection (NEW). Tells the user how the matchup
+            # plays out specifically over the PAs vs THIS pitcher, not the full
+            # game including reliever PAs.
+            "vsStarter": {
+                "paVsSp":   pa_vs_sp,
+                "starterTBF": round(starter_tbf, 1),
+                "probs":    {k: vs_sp[k] for k in ("hit1", "tb2", "hr", "rbi1")},
+                "neutral":  vs_sp.get("neutral", {}),
+                "expected": vs_sp["expected"],
+                "verdicts": verdicts_sp,
+            },
+            # Verdicts on the GAME-level probs too, since prop bets clear on
+            # full-game stats. Frontend can color-code accordingly.
+            "verdicts": verdicts_game,
+            "pitcherKProjection": pitcher_k,
         })
 
     except Exception as ex:
@@ -6668,6 +6746,183 @@ def _compute_bvp_confidence(bvp_data, batter_obj, pitcher_hand, mix_score, mix_r
         "platScore": round(plat_score, 3),
         "mixScore":  round(mix_cov, 3),
         "basis":     " · ".join(basis) if basis else "no matchup data",
+    }
+
+
+# Verdict thresholds — calibrated to typical sportsbook prop lines so that
+# the model's stated probability is compared against the implied book line.
+# Each entry: (bet_threshold, lean_threshold, fade_threshold).
+_PROP_VERDICTS = {
+    "hit1": (0.70, 0.58, 0.48),   # 1+ Hit  (line ~ -180)
+    "tb2":  (0.45, 0.35, 0.27),   # 2+ TB   (line ~ +160)
+    "hr":   (0.22, 0.14, 0.09),   # HR      (line ~ +450)
+    "rbi1": (0.55, 0.42, 0.33),   # 1+ RBI  (line ~ +110)
+}
+
+
+def _verdict_for(market, prob):
+    """Return (key, label, color_class) for prob+market.
+
+    Keys: 'bet' (green), 'lean' (yellow), 'pass' (neutral), 'fade' (red).
+    """
+    if prob is None:
+        return ("pass", "—", "")
+    bet_t, lean_t, fade_t = _PROP_VERDICTS.get(market, (0.65, 0.55, 0.40))
+    if prob >= bet_t:  return ("bet",  "BET",  "v-bet")
+    if prob >= lean_t: return ("lean", "LEAN", "v-lean")
+    if prob <= fade_t: return ("fade", "FADE", "v-fade")
+    return ("pass", "PASS", "v-pass")
+
+
+def _starter_pa_for_slot(slot, exp_pa_total=None, starter_tbf=22.0):
+    """Expected PAs the batter sees vs the SP only (not full game).
+
+    Heuristic: an SP facing ~22 batters → 22/9 ≈ 2.44 PAs per slot. Top of
+    order may pick up an extra trip when the SP works deep. Capped to
+    [1.2, 3.4] so the result stays plausible across hook scenarios.
+    """
+    slot = max(1, min(9, int(slot or 5)))
+    base = starter_tbf / 9.0
+    # Top of order picks up an extra trip when the SP works past 18 batters.
+    extra_slots = max(0, int(starter_tbf - 18))
+    pa = base + (1.0 if slot <= extra_slots else 0.0)
+    if exp_pa_total is not None:
+        pa = min(pa, max(1.0, float(exp_pa_total) - 0.6))
+    return round(max(1.2, min(3.4, pa)), 2)
+
+
+def _vs_sp_projections(batx, exp_pa_total, exp_pa_vs_sp):
+    """Convert game-level BATX expected values into vs-SP probabilities.
+
+    Treats expected counts as Poisson(mean = batx_value × pa_vs_sp / pa_total)
+    and returns P(>= line) for each market, plus the rescaled expected values
+    AND a league-neutral baseline for the same PA count so the frontend can
+    compute a true matchup edge instead of comparing vs-SP probs to absolute
+    book-line thresholds.
+    """
+    pa_total = max(0.5, float(exp_pa_total or 4.35))
+    pa_sp    = max(0.5, float(exp_pa_vs_sp or pa_total * 0.6))
+    scale    = pa_sp / pa_total
+    h_lam    = float(batx.get("hits", 0) or 0) * scale
+    tb_lam   = float(batx.get("tb",   0) or 0) * scale
+    hr_lam   = float(batx.get("hr",   0) or 0) * scale
+    rbi_lam  = float(batx.get("rbi",  0) or 0) * scale
+
+    # Neutral-batter baseline at the same PA count (league rates).
+    neutral = {
+        "hit1": round(_poisson_over_prob(0.245 * pa_sp, 0.5), 3),
+        "tb2":  round(_poisson_over_prob(0.420 * pa_sp, 1.5), 3),
+        "hr":   round(_poisson_over_prob(0.032 * pa_sp, 0.5), 3),
+        "rbi1": round(_poisson_over_prob(0.115 * pa_sp, 0.5), 3),
+    }
+    return {
+        "hit1": round(_poisson_over_prob(h_lam,   0.5), 3),
+        "tb2":  round(_poisson_over_prob(tb_lam,  1.5), 3),
+        "hr":   round(_poisson_over_prob(hr_lam,  0.5), 3),
+        "rbi1": round(_poisson_over_prob(rbi_lam, 0.5), 3),
+        "neutral": neutral,
+        "expected": {
+            "hits": round(h_lam,  3),
+            "tb":   round(tb_lam, 3),
+            "hr":   round(hr_lam, 4),
+            "rbi":  round(rbi_lam, 3),
+        },
+    }
+
+
+def _verdict_edge(prob, neutral):
+    """Edge-based verdict for vs-SP probs (compare to league neutral baseline)."""
+    if prob is None or neutral is None:
+        return ("pass", "—", "")
+    edge = prob - neutral
+    if edge >= 0.10:  return ("bet",  "STRONG", "v-bet")
+    if edge >= 0.04:  return ("lean", "EDGE",   "v-lean")
+    if edge <= -0.07: return ("fade", "FADE",   "v-fade")
+    return ("pass", "AVG", "v-pass")
+
+
+def _log5_k_rate(batter_k, pitcher_k, league_k=_LEAGUE_KPCT):
+    """Log5 / Bill James formula for K probability per PA in this matchup."""
+    b = max(0.05, min(0.55, float(batter_k or league_k)))
+    p = max(0.10, min(0.45, float(pitcher_k or league_k)))
+    L = max(0.10, min(0.40, float(league_k or 0.225)))
+    num   = (b * p) / L
+    denom = num + ((1 - b) * (1 - p)) / (1 - L)
+    if denom <= 0:
+        return league_k
+    return max(0.04, min(0.55, num / denom))
+
+
+def _pitcher_k_projection_vs_lineup(pitcher_id, pitcher_name, opposing_lineup,
+                                     starter_tbf=22.0,
+                                     lines=(4.5, 5.5, 6.5, 7.5, 8.5)):
+    """Project pitcher K total vs a specific opposing lineup.
+
+    Returns dict with expectedK, expectedTBF, perBatter list, and per-line
+    over/under verdicts. opposing_lineup: list of dicts with 'name' (and optional 'slot').
+    """
+    if not opposing_lineup:
+        return None
+
+    fg_pit = fg_pitcher(pitcher_name) if pitcher_name else {}
+    pit_kpct = _safe_f(fg_pit.get("fg_kpct"), _LEAGUE_KPCT)
+
+    tbf = max(12.0, min(30.0, float(starter_tbf)))
+    per_slot_pa = tbf / 9.0
+
+    expected_k = 0.0
+    per_batter = []
+    for i, b in enumerate(opposing_lineup[:9]):
+        name = b.get("name") or ""
+        if not name:
+            continue
+        bat = fg_batter(name) or {}
+        bat_kpct = _safe_f(bat.get("fg_kpct"), _LEAGUE_KPCT)
+        slot = int(b.get("slot") or (i + 1))
+        # Slight slot adjustment so leadoff sees ~+0.2 more PA than #9 vs SP.
+        slot_pa = per_slot_pa + max(0.0, (5 - slot) * 0.04)
+        k_per_pa = _log5_k_rate(bat_kpct, pit_kpct)
+        k_exp    = k_per_pa * slot_pa
+        expected_k += k_exp
+        per_batter.append({
+            "slot":   slot,
+            "name":   name,
+            "kPerPa": round(k_per_pa, 3),
+            "paVsSp": round(slot_pa,  2),
+            "expK":   round(k_exp,    2),
+        })
+
+    expected_k = round(expected_k, 2)
+    line_results = []
+    for line in lines:
+        p_over  = round(_poisson_over_prob(expected_k, line), 3)
+        p_under = round(1.0 - p_over, 3)
+        if p_over >= 0.62:
+            side, verdict, cls = "over",  "BET OVER",   "v-bet"
+        elif p_over >= 0.55:
+            side, verdict, cls = "over",  "LEAN OVER",  "v-lean"
+        elif p_under >= 0.62:
+            side, verdict, cls = "under", "BET UNDER",  "v-bet"
+        elif p_under >= 0.55:
+            side, verdict, cls = "under", "LEAN UNDER", "v-lean"
+        else:
+            side, verdict, cls = "pass",  "PASS",       "v-pass"
+        line_results.append({
+            "line":       line,
+            "pOver":      p_over,
+            "pUnder":     p_under,
+            "side":       side,
+            "verdict":    verdict,
+            "verdictCls": cls,
+        })
+
+    return {
+        "pitcher":     pitcher_name,
+        "expectedK":   expected_k,
+        "expectedTBF": round(tbf, 1),
+        "lineupSize":  len(per_batter),
+        "perBatter":   per_batter,
+        "lineProjections": line_results,
     }
 
 

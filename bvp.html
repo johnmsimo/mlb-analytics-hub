@@ -76,9 +76,30 @@
     /* Projection probs */
     .prob-row{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:16px}
     @media(max-width:600px){.prob-row{grid-template-columns:repeat(2,1fr)}}
-    .prob-box{background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.15);border-radius:10px;padding:10px;text-align:center}
+    .prob-box{background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.15);border-radius:10px;padding:10px;text-align:center;position:relative}
     .prob-val{font-size:1rem;font-weight:700;color:var(--t)}
     .prob-lbl{font-size:.62rem;letter-spacing:.06em;text-transform:uppercase;color:var(--mu);margin-top:3px}
+    /* Bet/Lean/Fade verdict pill */
+    .verdict-pill{display:inline-block;font-size:.56rem;font-weight:800;letter-spacing:.08em;padding:2px 6px;border-radius:8px;margin-top:6px;text-transform:uppercase}
+    .v-bet  {color:var(--g);background:rgba(0,230,118,.14);border:1px solid rgba(0,230,118,.4)}
+    .v-lean {color:var(--y);background:rgba(245,197,66,.12);border:1px solid rgba(245,197,66,.4)}
+    .v-pass {color:var(--mu);background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.10)}
+    .v-fade {color:var(--r);background:rgba(255,82,82,.10);border:1px solid rgba(255,82,82,.35)}
+    .prob-box.bet  {border-color:rgba(0,230,118,.45);background:rgba(0,230,118,.05)}
+    .prob-box.lean {border-color:rgba(245,197,66,.45);background:rgba(245,197,66,.05)}
+    .prob-box.fade {border-color:rgba(255,82,82,.40);background:rgba(255,82,82,.04)}
+    /* Pitcher K projection panel */
+    .pk-panel{background:rgba(0,229,255,.03);border:1px solid rgba(0,229,255,.18);border-radius:10px;padding:12px;margin:12px 0}
+    .pk-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
+    .pk-head .ek{font-size:1.4rem;font-weight:800;color:var(--c)}
+    .pk-lines{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}
+    @media(max-width:600px){.pk-lines{grid-template-columns:repeat(3,1fr)}}
+    .pk-line{background:rgba(0,0,0,.18);border-radius:8px;padding:6px;text-align:center;border:1px solid transparent}
+    .pk-line.bet  {border-color:rgba(0,230,118,.45);background:rgba(0,230,118,.06)}
+    .pk-line.lean {border-color:rgba(245,197,66,.45);background:rgba(245,197,66,.06)}
+    .pk-line .lv{font-size:.95rem;font-weight:800;color:var(--t)}
+    .pk-line .lp{font-size:.62rem;color:var(--mu);margin-top:2px}
+    .pk-line .lb{font-size:.55rem;font-weight:800;letter-spacing:.06em;margin-top:3px}
 
     /* Sample note */
     .sample-note{font-size:.75rem;color:var(--mu);background:rgba(255,255,255,.03);border-radius:8px;padding:8px 12px;margin-bottom:14px;border-left:3px solid rgba(0,229,255,.25)}
@@ -652,30 +673,83 @@ function renderDetail(data) {
       ${mc.platoonNote ? `<span style="margin-left:8px;color:var(--y)">${mc.platoonNote}</span>` : ''}
     </div>` : '';
 
-  // ── Projected probs section (Feature #1) ──────────────────────────────────
+  // ── Projected probs section ───────────────────────────────────────────────
+  // Renders BOTH game-level probabilities (what props clear on) and the
+  // PA-vs-this-starter slice (what truly reflects this matchup). Each tile
+  // is colored by Bet/Lean/Pass/Fade verdict.
+  const verdicts = (proj && proj.verdicts) || {};
+  const vsSP     = (proj && proj.vsStarter) || null;
+
+  function probTile(prob, evVal, evSuffix, label, market, verdict) {
+    if (prob == null) return '';
+    const v = verdict || {key:'pass', label:'—', cls:''};
+    const tone = v.key === 'bet' ? 'bet' : v.key === 'lean' ? 'lean' : v.key === 'fade' ? 'fade' : '';
+    const valColor = v.key === 'bet' ? 'good' : v.key === 'fade' ? 'bad' : v.key === 'lean' ? 'warn' : '';
+    return `<div class="prob-box ${tone}">
+      <div class="prob-val ${valColor}">${fmtPct2(prob)}</div>
+      <div class="prob-lbl">${label}</div>
+      ${evVal != null ? `<div style="font-size:.58rem;color:var(--mu);margin-top:2px">E: ${Number(evVal).toFixed(market==='hr'?3:2)}${evSuffix?' '+evSuffix:''}</div>` : ''}
+      ${v.label && v.label !== '—' ? `<div class="verdict-pill ${v.cls}">${v.label}</div>` : ''}
+    </div>`;
+  }
+
   const probHtml = probs ? `
-    <div class="section-label">Model Projections <span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— BATX engine · platoon + BvP adjusted</span></div>
+    <div class="section-label">Game-Total Projection <span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— full game · BATX engine · how the prop clears</span></div>
     <div class="prob-row">
-      <div class="prob-box">
-        <div class="prob-val ${probs.hit1>=0.60?'good':probs.hit1<0.42?'bad':''}">${fmtPct2(probs.hit1)}</div>
-        <div class="prob-lbl">1+ Hit</div>
-        ${ev.hits != null ? `<div style="font-size:.58rem;color:var(--mu);margin-top:2px">E: ${ev.hits.toFixed(2)} H</div>` : ''}
+      ${probTile(probs.hit1, ev.hits, 'H',   '1+ Hit',   'hit1', verdicts.hit1)}
+      ${probTile(probs.tb2,  ev.tb,   'TB',  '2+ TB',    'tb2',  verdicts.tb2)}
+      ${probTile(probs.hr,   ev.hr,   'HR',  'Home Run', 'hr',   verdicts.hr)}
+      ${probTile(probs.rbi1, ev.rbi,  'RBI', '1+ RBI',   'rbi1', verdicts.rbi1)}
+    </div>` : '';
+
+  // PA vs This Pitcher (Starter only) — shows the slice of the game that
+  // actually pits this batter against this pitcher.
+  const vsSpHtml = (vsSP && vsSP.probs) ? `
+    <div class="section-label">vs ${pitcherName||'Starter'} <span style="font-size:.58rem;color:var(--c);font-weight:400;text-transform:none;letter-spacing:0">— ${vsSP.paVsSp} PAs vs SP only · ~${vsSP.starterTBF} TBF</span></div>
+    <div class="prob-row">
+      ${probTile(vsSP.probs.hit1, vsSP.expected?.hits, 'H',   '1+ Hit',   'hit1', vsSP.verdicts?.hit1)}
+      ${probTile(vsSP.probs.tb2,  vsSP.expected?.tb,   'TB',  '2+ TB',    'tb2',  vsSP.verdicts?.tb2)}
+      ${probTile(vsSP.probs.hr,   vsSP.expected?.hr,   'HR',  'Home Run', 'hr',   vsSP.verdicts?.hr)}
+      ${probTile(vsSP.probs.rbi1, vsSP.expected?.rbi,  'RBI', '1+ RBI',   'rbi1', vsSP.verdicts?.rbi1)}
+    </div>` : '';
+
+  // Pitcher K total vs the actual lineup he's facing today.
+  const pkProj = (proj && proj.pitcherKProjection) || null;
+  const pkHtml = pkProj ? `
+    <div class="section-label">Pitcher K's vs Lineup <span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— Log5 matchup · ${pkProj.lineupSize}-man lineup · ~${pkProj.expectedTBF} TBF</span></div>
+    <div class="pk-panel">
+      <div class="pk-head">
+        <div><span style="font-size:.66rem;color:var(--mu);text-transform:uppercase;letter-spacing:.08em">Projected K Total</span></div>
+        <div class="ek">${pkProj.expectedK.toFixed(1)}</div>
       </div>
-      <div class="prob-box">
-        <div class="prob-val">${fmtPct2(probs.tb2)}</div>
-        <div class="prob-lbl">2+ TB</div>
-        ${ev.tb != null ? `<div style="font-size:.58rem;color:var(--mu);margin-top:2px">E: ${ev.tb.toFixed(2)} TB</div>` : ''}
+      <div class="pk-lines">
+        ${(pkProj.lineProjections||[]).map(l => {
+          const tone = l.verdictCls === 'v-bet' ? 'bet' : l.verdictCls === 'v-lean' ? 'lean' : '';
+          const sideArrow = l.side === 'over' ? '▲' : l.side === 'under' ? '▼' : '·';
+          const sideProb = l.side === 'over' ? l.pOver : l.side === 'under' ? l.pUnder : Math.max(l.pOver,l.pUnder);
+          return `<div class="pk-line ${tone}">
+            <div class="lv">${l.line.toFixed(1)}</div>
+            <div class="lp">O ${(l.pOver*100).toFixed(0)}% · U ${(l.pUnder*100).toFixed(0)}%</div>
+            <div class="lb ${l.verdictCls}">${sideArrow} ${l.verdict}</div>
+          </div>`;
+        }).join('')}
       </div>
-      <div class="prob-box">
-        <div class="prob-val ${probs.hr>=0.12?'good':''}">${fmtPct2(probs.hr)}</div>
-        <div class="prob-lbl">Home Run</div>
-        ${ev.hr != null ? `<div style="font-size:.58rem;color:var(--mu);margin-top:2px">E: ${ev.hr.toFixed(3)} HR</div>` : ''}
-      </div>
-      <div class="prob-box">
-        <div class="prob-val">${fmtPct2(probs.rbi1)}</div>
-        <div class="prob-lbl">1+ RBI</div>
-        ${ev.rbi != null ? `<div style="font-size:.58rem;color:var(--mu);margin-top:2px">E: ${ev.rbi.toFixed(2)} RBI</div>` : ''}
-      </div>
+      ${pkProj.perBatter && pkProj.perBatter.length ? `
+        <details style="margin-top:8px">
+          <summary style="cursor:pointer;color:var(--mu);font-size:.6rem;text-transform:uppercase;letter-spacing:.08em">Per-batter breakdown</summary>
+          <div style="margin-top:6px;display:grid;grid-template-columns:24px 1fr 50px 60px;gap:2px 8px;font-size:.66rem">
+            <span style="color:var(--mu);font-size:.55rem">#</span>
+            <span style="color:var(--mu);font-size:.55rem">Batter</span>
+            <span style="color:var(--mu);font-size:.55rem">K%/PA</span>
+            <span style="color:var(--mu);font-size:.55rem">xK</span>
+            ${pkProj.perBatter.map(b => `
+              <span>${b.slot}</span>
+              <span style="color:var(--t)">${b.name}</span>
+              <span>${(b.kPerPa*100).toFixed(1)}%</span>
+              <span style="color:var(--c)">${b.expK.toFixed(2)}</span>
+            `).join('')}
+          </div>
+        </details>` : ''}
     </div>` : '';
 
   // Render layout
@@ -743,7 +817,11 @@ function renderDetail(data) {
 
     ${pitProfileHtml}
 
+    ${vsSpHtml}
+
     ${probHtml}
+
+    ${pkHtml}
 
     <div class="section-label">Recent Form & Matchup Context</div>
     <div class="context-grid" id="contextGrid">
