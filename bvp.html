@@ -100,6 +100,25 @@
     .pk-line .lv{font-size:.95rem;font-weight:800;color:var(--t)}
     .pk-line .lp{font-size:.62rem;color:var(--mu);margin-top:2px}
     .pk-line .lb{font-size:.55rem;font-weight:800;letter-spacing:.06em;margin-top:3px}
+    /* Drivers + divergence + MC + game context strip */
+    .driver-row{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 10px}
+    .driver-pill{font-size:.62rem;padding:3px 8px;border-radius:8px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);color:var(--t);display:inline-flex;align-items:center;gap:4px}
+    .driver-pill .arrow{font-weight:800}
+    .driver-pill.pos .arrow{color:var(--g)}
+    .driver-pill.neg .arrow{color:var(--r)}
+    .div-bar{display:grid;grid-template-columns:60px 1fr 60px;gap:8px;align-items:center;background:rgba(0,0,0,.18);border-radius:8px;padding:8px 10px;margin:8px 0}
+    .div-bar .lbl{font-size:.6rem;color:var(--mu);text-transform:uppercase}
+    .div-bar .val{font-size:.85rem;font-weight:800;color:var(--t)}
+    .div-bar .mid{height:6px;border-radius:3px;background:linear-gradient(to right,var(--c),rgba(255,255,255,.15),var(--y));position:relative}
+    .div-bar .mid .marker{position:absolute;top:-3px;width:2px;height:12px;background:var(--t)}
+    .mc-strip{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:6px 0 12px}
+    .mc-cell{background:rgba(0,0,0,.20);border-radius:8px;padding:6px 8px;text-align:center;border:1px solid rgba(255,255,255,.06)}
+    .mc-cell .v{font-size:.85rem;font-weight:800;color:var(--t)}
+    .mc-cell .l{font-size:.55rem;color:var(--mu);letter-spacing:.06em;text-transform:uppercase;margin-top:2px}
+    .mc-cell .b{font-size:.55rem;color:var(--c);margin-top:2px}
+    .ctx-strip{display:flex;flex-wrap:wrap;gap:6px;font-size:.62rem;color:var(--mu);margin:0 0 12px}
+    .ctx-chip{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);border-radius:6px;padding:2px 8px;color:var(--mu)}
+    .ctx-chip strong{color:var(--c);font-weight:700}
 
     /* Sample note */
     .sample-note{font-size:.75rem;color:var(--mu);background:rgba(255,255,255,.03);border-radius:8px;padding:8px 12px;margin-bottom:14px;border-left:3px solid rgba(0,229,255,.25)}
@@ -752,6 +771,94 @@ function renderDetail(data) {
         </details>` : ''}
     </div>` : '';
 
+  // ── Game-context strip: TTOP, umpire, park ────────────────────────────────
+  const gctx = (proj && proj.gameContext) || {};
+  const ctxChips = [];
+  if (gctx.ttopBatterMult != null && gctx.ttopBatterMult !== 1) {
+    const pct = ((gctx.ttopBatterMult - 1) * 100).toFixed(1);
+    ctxChips.push(`<span class="ctx-chip">TTOP <strong>${pct >= 0 ? '+' : ''}${pct}%</strong> wOBA boost</span>`);
+  }
+  if (gctx.umpire && gctx.umpire.name) {
+    const ump = gctx.umpire;
+    const tendency = ump.tendency || (ump.zone >= 60 ? 'PITCHER' : ump.zone <= 40 ? 'HITTER' : 'NEUTRAL');
+    const kpct = gctx.umpireKMult != null ? ` · K×${gctx.umpireKMult.toFixed(2)}` : '';
+    ctxChips.push(`<span class="ctx-chip">HP Ump: <strong>${ump.name||''}</strong> ${ump.zone!=null?`(${tendency} ${ump.zone})`:''}${kpct}</span>`);
+  }
+  if (proj && proj.parkFactor != null && proj.parkFactor !== 1) {
+    const pf = proj.parkFactor;
+    const dir = pf > 1 ? '+' : '';
+    ctxChips.push(`<span class="ctx-chip">Park <strong>${dir}${((pf-1)*100).toFixed(1)}%</strong></span>`);
+  }
+  const ctxStripHtml = ctxChips.length ? `<div class="ctx-strip">${ctxChips.join('')}</div>` : '';
+
+  // ── Why-this-projection drivers (top BATX components) ─────────────────────
+  const drivers = (proj && Array.isArray(proj.drivers)) ? proj.drivers : [];
+  const driversHtml = drivers.length ? `
+    <div class="section-label">Why This Projection <span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— top contributing factors</span></div>
+    <div class="driver-row">
+      ${drivers.map(d => {
+        const tone = d.contribution > 0 ? 'pos' : 'neg';
+        const arrow = d.contribution > 0 ? '▲' : '▼';
+        return `<span class="driver-pill ${tone}"><span class="arrow">${arrow}</span>${d.label} <span style="opacity:.7">${(d.contribution*100).toFixed(1)}%</span></span>`;
+      }).join('')}
+    </div>` : '';
+
+  // ── Model divergence (XGB vs BATX) ────────────────────────────────────────
+  const md = (proj && proj.modelDivergence) || {};
+  const divergenceHtml = md.available ? `
+    <div class="div-bar">
+      <div>
+        <div class="lbl">XGB</div>
+        <div class="val">${(md.xgb*100).toFixed(0)}%</div>
+      </div>
+      <div>
+        <div class="lbl" style="text-align:center;margin-bottom:4px">1+ Hit Models · <span class="${md.flagCls}">${md.flagLabel}</span> (Δ${(md.divergence*100).toFixed(0)}pts)</div>
+        <div class="mid"><div class="marker" style="left:${Math.min(100,Math.max(0,md.blended*100))}%"></div></div>
+      </div>
+      <div style="text-align:right">
+        <div class="lbl">BATX</div>
+        <div class="val">${(md.batx*100).toFixed(0)}%</div>
+      </div>
+    </div>` : '';
+
+  // ── Monte Carlo distribution bands ────────────────────────────────────────
+  const mcSim = (proj && proj.monteCarlo) || null;
+  const mcHtml = mcSim ? `
+    <div class="section-label">Monte Carlo · ${mcSim.nPa} PAs vs SP <span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— ${(mcSim.nSims/1000).toFixed(0)}k sims · 50/75/90 percentile</span></div>
+    <div class="mc-strip">
+      <div class="mc-cell">
+        <div class="v">${mcSim.hits.p50}–${mcSim.hits.p90}</div>
+        <div class="l">Hits range</div>
+        <div class="b">μ ${mcSim.hits.mean} · P(2+H) ${(mcSim.hits.p_ge_2*100).toFixed(0)}%</div>
+      </div>
+      <div class="mc-cell">
+        <div class="v">${mcSim.tb.p50}–${mcSim.tb.p90}</div>
+        <div class="l">TB range</div>
+        <div class="b">μ ${mcSim.tb.mean} · P(3+TB) ${(mcSim.tb.p_ge_3*100).toFixed(0)}%</div>
+      </div>
+      <div class="mc-cell">
+        <div class="v">${(mcSim.hr.p_ge_1*100).toFixed(1)}%</div>
+        <div class="l">Any HR</div>
+        <div class="b">μ ${mcSim.hr.mean.toFixed(2)} HR</div>
+      </div>
+      <div class="mc-cell">
+        <div class="v">${mcSim.k.p_ge_1*100|0}% / ${mcSim.bb.p_ge_1*100|0}%</div>
+        <div class="l">K / BB risk</div>
+        <div class="b">μ ${mcSim.k.mean.toFixed(2)} K · ${mcSim.bb.mean.toFixed(2)} BB</div>
+      </div>
+    </div>` : '';
+
+  // ── vs Bullpen slice ──────────────────────────────────────────────────────
+  const vsRP = (proj && proj.vsBullpen) || null;
+  const vsRpHtml = vsRP ? `
+    <div class="section-label">vs Bullpen <span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— ${vsRP.note}</span></div>
+    <div class="prob-row">
+      ${probTile(vsRP.probs.hit1, vsRP.expected?.hits, 'H',   '1+ Hit',   'hit1', null)}
+      ${probTile(vsRP.probs.tb2,  vsRP.expected?.tb,   'TB',  '2+ TB',    'tb2',  null)}
+      ${probTile(vsRP.probs.hr,   vsRP.expected?.hr,   'HR',  'Home Run', 'hr',   null)}
+      ${probTile(vsRP.probs.rbi1, vsRP.expected?.rbi,  'RBI', '1+ RBI',   'rbi1', null)}
+    </div>` : '';
+
   // Render layout
   document.getElementById('detailPanel').innerHTML = `
     <div class="bvp-header">
@@ -817,9 +924,19 @@ function renderDetail(data) {
 
     ${pitProfileHtml}
 
+    ${ctxStripHtml}
+
     ${vsSpHtml}
 
+    ${vsRpHtml}
+
     ${probHtml}
+
+    ${divergenceHtml}
+
+    ${mcHtml}
+
+    ${driversHtml}
 
     ${pkHtml}
 
