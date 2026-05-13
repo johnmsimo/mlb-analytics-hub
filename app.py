@@ -646,10 +646,20 @@ def _save_json(path, payload):
         parent = os.path.dirname(path)
         if parent:
             os.makedirs(parent, exist_ok=True)
-        with open(path, 'w', encoding='utf-8') as f:
+        # Atomic write: tmp file → fsync → rename. Prevents truncated/empty
+        # JSON when the process is killed mid-write.
+        tmp = f"{path}.tmp"
+        with open(tmp, 'w', encoding='utf-8') as f:
             json.dump(payload, f, indent=2)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+        os.replace(tmp, path)
         return True
-    except Exception:
+    except Exception as ex:
+        print(f'[_save_json] FAILED to write {path}: {ex}')
         return False
 
 
@@ -11456,7 +11466,11 @@ def api_tracker_capture(date_str):
         captured_games = 0
         recovered_games = 0
         failed_games = []
-        include_odds = str(os.getenv('TRACKER_CAPTURE_INCLUDE_ODDS', '0')).strip().lower() in ('1', 'true', 'yes')
+        # Default ON: without odds, captures produce empty PRICE SHOP / EV / edge
+        # columns, which makes the tracker page look broken to the user. The
+        # in-memory + on-disk odds cache (data/odds_cache.json) keeps API usage
+        # low; set TRACKER_CAPTURE_INCLUDE_ODDS=0 to opt out.
+        include_odds = str(os.getenv('TRACKER_CAPTURE_INCLUDE_ODDS', '1')).strip().lower() in ('1', 'true', 'yes')
 
         # Parallelise I/O-bound boxscore/roster fetches across games.
         # cap workers at 4 to stay within the single-Gunicorn-worker memory budget.
@@ -11503,7 +11517,15 @@ def api_tracker_capture(date_str):
         entries = _merge_tracker_entries(day.get('entries', []), _recalc_tracker_entries(all_entries))
         entries.sort(key=lambda x: x.get('score', 0), reverse=True)
         store[date_str] = {'capturedAt': datetime.now().isoformat(), 'gradedAt': None, 'closingCapturedAt': None, 'entries': entries}
-        _save_json(TRACKER_STORE, store)
+        # Without this check, a failed disk write silently returns 210 picks to
+        # the user — then "Capture Closing" 404s because the day isn't on disk.
+        if not _save_json(TRACKER_STORE, store):
+            return jsonify({
+                'success': False,
+                'error': f'Captured {len(entries)} entries but failed to persist to disk. Check server logs and DATA_DIR permissions.',
+                'capturedGames': captured_games,
+                'totalGames': len(sched),
+            }), 500
         timed_out = bool(games_timed_out)
         remaining_games = games_timed_out if timed_out else []
         background_started = False
@@ -11559,7 +11581,12 @@ def api_tracker_grade(date_str):
     store = _load_json(TRACKER_STORE, {})
     raw_day = store.get(date_str)
     if raw_day is None:
-        return jsonify({'success': False, 'error': 'No captured tracker data for this date'}), 404
+        return jsonify({
+            'success': False,
+            'error': f'No saved picks for {date_str}. Click "Capture Slate" first to load picks for this date.',
+            'needsCapture': True,
+            'date': date_str,
+        }), 409
     day = _normalize_tracker_day(raw_day)
     sched = fetch_schedule(date_str)
     games = {g.get('gamePk'): g for g in sched}
@@ -13036,7 +13063,12 @@ def api_tracker_close(date_str):
     store = _tracker_store()
     raw_day = store.get(date_str)
     if raw_day is None:
-        return jsonify({'success': False, 'error': 'No captured tracker data for this date'}), 404
+        return jsonify({
+            'success': False,
+            'error': f'No saved picks for {date_str}. Click "Capture Slate" first to load picks for this date.',
+            'needsCapture': True,
+            'date': date_str,
+        }), 409
     day = _normalize_tracker_day(raw_day)
     entries = day.get('entries', [])
     by_game = {}
