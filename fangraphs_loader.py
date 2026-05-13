@@ -11,10 +11,66 @@ BAT_PATH      = os.path.join(DATA_DIR, "fg_batting_2026.csv")
 PIT_PATH      = os.path.join(DATA_DIR, "fg_pitching_2026.csv")
 BAT_PATH_2025 = os.path.join(DATA_DIR, "fg_batting_2025.csv")
 PIT_PATH_2025 = os.path.join(DATA_DIR, "fg_pitching_2025.csv")
+BAT_PATH_2024 = os.path.join(DATA_DIR, "fg_batting_2024.csv")
+PIT_PATH_2024 = os.path.join(DATA_DIR, "fg_pitching_2024.csv")
+BAT_PATH_2023 = os.path.join(DATA_DIR, "fg_batting_2023.csv")
+PIT_PATH_2023 = os.path.join(DATA_DIR, "fg_pitching_2023.csv")
+BAT_PATH_2022 = os.path.join(DATA_DIR, "fg_batting_2022.csv")
+PIT_PATH_2022 = os.path.join(DATA_DIR, "fg_pitching_2022.csv")
+BAT_PATH_2021 = os.path.join(DATA_DIR, "fg_batting_2021.csv")
+PIT_PATH_2021 = os.path.join(DATA_DIR, "fg_pitching_2021.csv")
+
 PROJ_BAT_PATH  = os.path.join(DATA_DIR, "fg_steamer_bat_2026.csv")
 PROJ_PIT_PATH  = os.path.join(DATA_DIR, "fg_steamer_pit_2026.csv")
 PROJ_BAT_PATH2 = os.path.join(DATA_DIR, "fg_proj_bat_2026.csv")
 PROJ_PIT_PATH2 = os.path.join(DATA_DIR, "fg_proj_pit_2026.csv")
+
+PROJ_BAT_PATH_2025  = os.path.join(DATA_DIR, "fg_steamer_bat_2025.csv")
+PROJ_PIT_PATH_2025  = os.path.join(DATA_DIR, "fg_steamer_pit_2025.csv")
+PROJ_BAT_PATH_2024  = os.path.join(DATA_DIR, "fg_steamer_bat_2024.csv")
+PROJ_PIT_PATH_2024  = os.path.join(DATA_DIR, "fg_steamer_pit_2024.csv")
+PROJ_BAT_PATH_2023  = os.path.join(DATA_DIR, "fg_steamer_bat_2023.csv")
+PROJ_PIT_PATH_2023  = os.path.join(DATA_DIR, "fg_steamer_pit_2023.csv")
+PROJ_BAT_PATH_2022  = os.path.join(DATA_DIR, "fg_steamer_bat_2022.csv")
+PROJ_PIT_PATH_2022  = os.path.join(DATA_DIR, "fg_steamer_pit_2022.csv")
+PROJ_BAT_PATH_2021  = os.path.join(DATA_DIR, "fg_steamer_bat_2021.csv")
+PROJ_PIT_PATH_2021  = os.path.join(DATA_DIR, "fg_steamer_pit_2021.csv")
+
+# Ordered fallback chains: most recent -> oldest
+BAT_SEASON_PATHS = [
+    ("bat",      BAT_PATH,      "bat_2026"),
+    ("bat_2025", BAT_PATH_2025, "bat_2025"),
+    ("bat_2024", BAT_PATH_2024, "bat_2024"),
+    ("bat_2023", BAT_PATH_2023, "bat_2023"),
+    ("bat_2022", BAT_PATH_2022, "bat_2022"),
+    ("bat_2021", BAT_PATH_2021, "bat_2021"),
+]
+PIT_SEASON_PATHS = [
+    ("pit",      PIT_PATH,      "pit_2026"),
+    ("pit_2025", PIT_PATH_2025, "pit_2025"),
+    ("pit_2024", PIT_PATH_2024, "pit_2024"),
+    ("pit_2023", PIT_PATH_2023, "pit_2023"),
+    ("pit_2022", PIT_PATH_2022, "pit_2022"),
+    ("pit_2021", PIT_PATH_2021, "pit_2021"),
+]
+
+# Steamer projection fallback chains: most recent -> oldest
+PROJ_BAT_PATHS = [
+    ("proj_bat",      PROJ_BAT_PATH,      PROJ_BAT_PATH2,      "proj_bat_2026"),
+    ("proj_bat_2025", PROJ_BAT_PATH_2025, None,                 "proj_bat_2025"),
+    ("proj_bat_2024", PROJ_BAT_PATH_2024, None,                 "proj_bat_2024"),
+    ("proj_bat_2023", PROJ_BAT_PATH_2023, None,                 "proj_bat_2023"),
+    ("proj_bat_2022", PROJ_BAT_PATH_2022, None,                 "proj_bat_2022"),
+    ("proj_bat_2021", PROJ_BAT_PATH_2021, None,                 "proj_bat_2021"),
+]
+PROJ_PIT_PATHS = [
+    ("proj_pit",      PROJ_PIT_PATH,      PROJ_PIT_PATH2,      "proj_pit_2026"),
+    ("proj_pit_2025", PROJ_PIT_PATH_2025, None,                 "proj_pit_2025"),
+    ("proj_pit_2024", PROJ_PIT_PATH_2024, None,                 "proj_pit_2024"),
+    ("proj_pit_2023", PROJ_PIT_PATH_2023, None,                 "proj_pit_2023"),
+    ("proj_pit_2022", PROJ_PIT_PATH_2022, None,                 "proj_pit_2022"),
+    ("proj_pit_2021", PROJ_PIT_PATH_2021, None,                 "proj_pit_2021"),
+]
 
 MIN_IP = 5.0
 MIN_PA = 20
@@ -26,7 +82,7 @@ def _clean_name_html(df, col="Name"):
     if col in df.columns:
         df[col] = df[col].apply(
             lambda x: re.sub(r"<[^>]+>", "", str(x)).strip() if pd.notna(x) else x
-        )  # FIX: was missing closing ) on .apply(
+        )
     return df
 
 
@@ -50,7 +106,7 @@ def _try_load(path, key):
 def _find_proj_path(primary, fallback):
     if os.path.exists(primary):
         return primary
-    if os.path.exists(fallback):
+    if fallback and os.path.exists(fallback):
         return fallback
     return primary
 
@@ -58,14 +114,16 @@ def _find_proj_path(primary, fallback):
 def _load_all():
     if _cache:
         return
-    _cache["bat"]      = _try_load(BAT_PATH,      "bat_2026")
-    _cache["pit"]      = _try_load(PIT_PATH,      "pit_2026")
-    _cache["bat_2025"] = _try_load(BAT_PATH_2025, "bat_2025")
-    _cache["pit_2025"] = _try_load(PIT_PATH_2025, "pit_2025")
-    proj_bat = _find_proj_path(PROJ_BAT_PATH, PROJ_BAT_PATH2)
-    proj_pit = _find_proj_path(PROJ_PIT_PATH, PROJ_PIT_PATH2)
-    _cache["proj_bat"] = _try_load(proj_bat, "proj_bat")
-    _cache["proj_pit"] = _try_load(proj_pit, "proj_pit")
+    for cache_key, path, label in BAT_SEASON_PATHS:
+        _cache[cache_key] = _try_load(path, label)
+    for cache_key, path, label in PIT_SEASON_PATHS:
+        _cache[cache_key] = _try_load(path, label)
+    for cache_key, primary, fallback, label in PROJ_BAT_PATHS:
+        path = _find_proj_path(primary, fallback)
+        _cache[cache_key] = _try_load(path, label)
+    for cache_key, primary, fallback, label in PROJ_PIT_PATHS:
+        path = _find_proj_path(primary, fallback)
+        _cache[cache_key] = _try_load(path, label)
 
 
 def _name_col(df):
@@ -133,10 +191,12 @@ def get_all_projections_pit():
 
 def find_player_id(name, player_type="bat"):
     _load_all()
-    for key in (
-        ("bat" if player_type == "bat" else "pit"),
-        ("bat_2025" if player_type == "bat" else "pit_2025"),
-    ):
+    season_keys = (
+        [k for k, _, _ in BAT_SEASON_PATHS]
+        if player_type == "bat"
+        else [k for k, _, _ in PIT_SEASON_PATHS]
+    )
+    for key in season_keys:
         df = _cache.get(key, pd.DataFrame())
         row = _find_row(df, name=name)
         if not row.empty and "playerid" in row.columns:
@@ -144,56 +204,59 @@ def find_player_id(name, player_type="bat"):
     return None
 
 
+def _get_stats_with_fallback(cache_season_keys, ptype, player_id=None, name=None):
+    """Walk through season cache keys newest->oldest, return first row with enough sample."""
+    first_row = None
+    for key in cache_season_keys:
+        df = _cache.get(key, pd.DataFrame())
+        row = _find_row(df, player_id=player_id, name=name)
+        if row.empty:
+            continue
+        r = row.iloc[0]
+        if first_row is None:
+            first_row = r
+        if _has_enough_sample(r, ptype):
+            # Merge: older season as base, newer season on top (newer wins conflicts)
+            if first_row is not r:
+                return {**r.to_dict(), **first_row.to_dict()}
+            return r.to_dict()
+    if first_row is not None:
+        return first_row.to_dict()
+    return {}
+
+
+def _get_proj_with_fallback(proj_cache_keys, player_id=None, name=None):
+    """Walk projection cache keys newest->oldest, return first match found."""
+    for key in proj_cache_keys:
+        df = _cache.get(key, pd.DataFrame())
+        row = _find_row(df, player_id=player_id, name=name)
+        if not row.empty:
+            return row.iloc[0].to_dict()
+    return {}
+
+
 def get_batter_stats(player_id=None, name=None):
     _load_all()
-    row26 = _find_row(_cache["bat"], player_id=player_id, name=name)
-    if not row26.empty:
-        r = row26.iloc[0]
-        if _has_enough_sample(r, "bat"):
-            return r.to_dict()
-        row25 = _find_row(_cache["bat_2025"], player_id=player_id, name=name)
-        if not row25.empty:
-            return {**row25.iloc[0].to_dict(), **r.to_dict()}
-        return r.to_dict()
-    row25 = _find_row(_cache["bat_2025"], player_id=player_id, name=name)
-    if not row25.empty:
-        return row25.iloc[0].to_dict()
-    return {}
+    bat_keys = [k for k, _, _ in BAT_SEASON_PATHS]
+    return _get_stats_with_fallback(bat_keys, "bat", player_id=player_id, name=name)
 
 
 def get_pitcher_stats(player_id=None, name=None):
     _load_all()
-    row26 = _find_row(_cache["pit"], player_id=player_id, name=name)
-    if not row26.empty:
-        r = row26.iloc[0]
-        if _has_enough_sample(r, "pit"):
-            return r.to_dict()
-        row25 = _find_row(_cache["pit_2025"], player_id=player_id, name=name)
-        if not row25.empty:
-            return {**row25.iloc[0].to_dict(), **r.to_dict()}
-        return r.to_dict()
-    row25 = _find_row(_cache["pit_2025"], player_id=player_id, name=name)
-    if not row25.empty:
-        return row25.iloc[0].to_dict()
-    return {}
+    pit_keys = [k for k, _, _ in PIT_SEASON_PATHS]
+    return _get_stats_with_fallback(pit_keys, "pit", player_id=player_id, name=name)
 
 
 def get_batter_projection(player_id=None, name=None):
     _load_all()
-    df = _cache["proj_bat"]
-    if df.empty:
-        return {}
-    row = _find_row(df, player_id=player_id, name=name)
-    return row.iloc[0].to_dict() if not row.empty else {}
+    proj_keys = [k for k, _, _, _ in PROJ_BAT_PATHS]
+    return _get_proj_with_fallback(proj_keys, player_id=player_id, name=name)
 
 
 def get_pitcher_projection(player_id=None, name=None):
     _load_all()
-    df = _cache["proj_pit"]
-    if df.empty:
-        return {}
-    row = _find_row(df, player_id=player_id, name=name)
-    return row.iloc[0].to_dict() if not row.empty else {}
+    proj_keys = [k for k, _, _, _ in PROJ_PIT_PATHS]
+    return _get_proj_with_fallback(proj_keys, player_id=player_id, name=name)
 
 
 def get_key_batter_features(player_id=None, name=None):
@@ -205,7 +268,7 @@ def get_key_batter_features(player_id=None, name=None):
         "sv_xwoba":     stats.get("xwOBA",       0.320),
         "sv_xslg":      stats.get("xSLG",        0.400),
         "sv_ev":        stats.get("EV",           88.0),
-        "sv_brl_pct":   stats.get("Barrel%",      4.0),  # FIX: 'Barrels' -> 'Barrel%'
+        "sv_brl_pct":   stats.get("Barrel%",      4.0),
         "sv_hh_pct":    stats.get("HardHit%",     35.0),
         "sv_ss_pct":    stats.get("SwStr%",       10.0),
         "sv_la":        stats.get("LA",           12.0),
@@ -216,51 +279,4 @@ def get_key_batter_features(player_id=None, name=None):
         "sv_iso":       stats.get("ISO",           0.150),
         "sv_babip":     stats.get("BABIP",         0.300),
         "sv_o_swing":   stats.get("O-Swing%",      30.0),
-        "sv_z_contact": stats.get("Z-Contact%",    85.0),
-        "sv_pull_pct":  stats.get("Pull%",         40.0),
-        "sv_hard_pct":  stats.get("Hard%",         35.0),
-    }  # FIX: was missing closing }
-
-
-def get_key_pitcher_features(player_id=None, name=None):
-    stats = get_pitcher_stats(player_id=player_id, name=name)
-    if not stats:
-        return {}
-    return {
-        "opp_xera":   stats.get("xERA",   4.50),
-        "opp_era":    stats.get("ERA",     4.50),
-        "opp_k_pct":  stats.get("K%",     22.0),
-        "opp_bb_pct": stats.get("BB%",      8.0),
-        "opp_whiff":  stats.get("SwStr%",  24.0),
-        "opp_fip":    stats.get("FIP",     4.20),
-        "opp_xfip":   stats.get("xFIP",    4.20),
-        "opp_siera":  stats.get("SIERA",   4.20),
-        "opp_hr_fb":  stats.get("HR/FB",   12.0),
-        "opp_gb_pct": stats.get("GB%",     45.0),
-    }  # FIX: was missing closing }
-
-
-def get_platoon_stats(batter_name, pitcher_hand):
-    stats = get_batter_stats(name=batter_name)
-    if not stats:
-        return {}
-    batter_hand = str(stats.get("Bats", "R")).strip()
-    platoon_advantage = (
-        (batter_hand == "L" and pitcher_hand == "R") or
-        (batter_hand == "R" and pitcher_hand == "L")
-    )  # FIX: was missing closing ) on tuple
-    return {
-        **get_key_batter_features(name=batter_name),
-        "bats_L":      1 if batter_hand == "L" else 0,
-        "throws_R":    1 if pitcher_hand == "R" else 0,
-        "platoon_adv": 1 if platoon_advantage else 0,
-    }  # FIX: was missing closing }
-
-
-def reload_data():
-    _cache.clear()
-    _load_all()
-    return {"status": "ok", "rows": {k: len(v) for k, v in _cache.items()}}
-
-
-_load_all()
+        "sv_z_cont
