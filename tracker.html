@@ -754,8 +754,16 @@ async function api(url, opts={}) {
   const r = await fetch(url, {headers, ...opts});
   if (!r.ok) {
     let errMsg = `${r.status} ${r.statusText}`;
-    try { const j = await r.json(); if(j.error) errMsg = j.error; } catch{}
-    throw new Error(errMsg);
+    let needsCapture = false;
+    try {
+      const j = await r.json();
+      if (j.error) errMsg = j.error;
+      if (j.needsCapture) needsCapture = true;
+    } catch{}
+    const err = new Error(errMsg);
+    err.status = r.status;
+    err.needsCapture = needsCapture;
+    throw err;
   }
   return r.json();
 }
@@ -964,7 +972,13 @@ async function captureClose() {
     const upd = d.updated || 0;
     $('datePill').textContent = upd > 0 ? `Closing captured · ${upd} updated` : 'Closing captured · 0 updated';
     status(upd > 0 ? `Closing captured · ${upd} entries updated at ${ts(d.closingCapturedAt||'')}` : 'Closing captured, but no entries were updated', upd === 0);
-  } catch(e) { status(e.message, true); }
+  } catch(e) {
+    if (e.needsCapture) {
+      status('No saved picks yet — run Capture Slate before Capture Closing.', true);
+    } else {
+      status(e.message, true);
+    }
+  }
 }
 
 async function gradeDay() {
@@ -977,7 +991,13 @@ async function gradeDay() {
     renderMarketTable(d);
     renderBoard();
     status(`Graded ${ts(d.gradedAt||'')}`);
-  } catch(e) { status(e.message, true); }
+  } catch(e) {
+    if (e.needsCapture) {
+      status('No saved picks yet — run Capture Slate before Grade Day.', true);
+    } else {
+      status(e.message, true);
+    }
+  }
 }
 
 // ── Hero summary ──────────────────────────────────────────────────────────────
