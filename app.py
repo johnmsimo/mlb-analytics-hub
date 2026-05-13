@@ -4549,10 +4549,19 @@ def _project_batter_vs_pitcher(batter_stats, pitcher_stats):
 
     hit_prob = _game_prob(p_hit)
     _xgb_hit = None
+    _xgb_cov = 0.0
     if xgb_ready('hits'):
         _xgb_hit = xgb_hit_prob(batter_stats, pitcher_stats)
         if _xgb_hit is not None:
-            hit_prob = round(_clamp(0.40 * hit_prob + 0.60 * _xgb_hit, 0.03, 0.97), 3)
+            # Gate by input coverage: full XGB weight (0.60) only when inputs
+            # are well-populated; below 0.40 coverage the model is suppressed.
+            _xgb_cov = _xgb_hit_coverage(batter_stats, pitcher_stats)
+            if _xgb_cov < 0.40:
+                _xgb_hit = None
+            else:
+                w_xgb = 0.60 * max(0.0, min(1.0, (_xgb_cov - 0.40) / 0.40))
+                hit_prob = round(_clamp((1 - w_xgb) * hit_prob + w_xgb * _xgb_hit,
+                                        0.03, 0.97), 3)
 
     return {
         "hitProb":  hit_prob,
@@ -4563,7 +4572,8 @@ def _project_batter_vs_pitcher(batter_stats, pitcher_stats):
         "projTB":   round(p_tb  * pa, 2),
         "projHR":   round(p_hr  * pa, 2),
         "projRBI":  round(p_rbi * pa, 2),
-        "xgbHitProb": round(_xgb_hit, 4) if _xgb_hit is not None else None,
+        "xgbHitProb":     round(_xgb_hit, 4) if _xgb_hit is not None else None,
+        "xgbHitCoverage": round(_xgb_cov, 3),
     }
 
 
@@ -5749,17 +5759,31 @@ def api_bvp_projection(batter_id, pitcher_id):
                 return blended
             return round(max(0.01, min(0.99, 0.6 * xgb_p + 0.4 * blended)), 3)
 
+        # 1+ hit uses binomial across expected PAs (Poisson over-states for
+        # high-λ batters and under-states for low-λ ones — that mismatch was
+        # the dominant source of false "HIGH UNCERTAINTY" flags between XGB
+        # and BATX).
+        _exp_pa_for_hit = float(batx.get("expected_pa") or 4.2)
+        batx_hit1_p     = _binomial_over_zero(hits_m, _exp_pa_for_hit)
+
         probs = {
-            "hit1": _blend_prob(gp["hitProb"], _poisson_over_prob(hits_m, 0.5)),
+            "hit1": _blend_prob(gp["hitProb"], batx_hit1_p),
             "tb2":  _blend_with_xgb(_blend_prob(gp["tbProb"],  _poisson_over_prob(tb_m,   1.5)), _xgb_extras.get("xgbTbProb")),
             "hr":   _blend_with_xgb(_blend_prob(gp["hrProb"],  _poisson_over_prob(hr_m,   0.5)), _xgb_extras.get("xgbHrProb")),
             "rbi1": _blend_with_xgb(_blend_prob(gp["rbiProb"], _poisson_over_prob(rbi_m,  0.5)), _xgb_extras.get("xgbRbiProb")),
             "r1":   round(_poisson_over_prob(r_m, 0.5), 3),
-            "xgbHitProb": gp.get("xgbHitProb"),
-            "xgbHrProb":  _xgb_extras.get("xgbHrProb"),
-            "xgbTbProb":  _xgb_extras.get("xgbTbProb"),
-            "xgbRbiProb": _xgb_extras.get("xgbRbiProb"),
+            "xgbHitProb":     gp.get("xgbHitProb"),
+            "xgbHitCoverage": gp.get("xgbHitCoverage"),
+            "xgbHrProb":      _xgb_extras.get("xgbHrProb"),
+            "xgbTbProb":      _xgb_extras.get("xgbTbProb"),
+            "xgbRbiProb":     _xgb_extras.get("xgbRbiProb"),
         }
+
+        # Apply shrink-to-prior to hit1 BEFORE verdicts, so the per-market tile
+        # and the divergence bar marker stay in sync.
+        _early_div = _model_divergence(probs, gp, batx, _exp_pa_for_hit)
+        if _early_div.get("available") and _early_div.get("blended") is not None:
+            probs["hit1"] = _early_div["blended"]
 
         # ── 8. xStats + Statcast quality metrics ─────────────────────────────
         sv_xba   = _safe_f(sv_bat.get("sv_xba"),    None)
@@ -5895,8 +5919,9 @@ def api_bvp_projection(batter_id, pitcher_id):
         # ── 11. Why-this-projection: top BATX drivers (sign + magnitude).
         drivers = _projection_drivers(batx.get("adjustments") or {})
 
-        # ── 12. XGB-vs-BATX divergence (HIGH/MEDIUM/LOW UNCERTAINTY flag).
-        divergence = _model_divergence(probs, gp, batx, exp_pa_total)
+        # ── 12. XGB-vs-BATX divergence (computed above on raw blend, before
+        # shrink was applied to probs["hit1"]).
+        divergence = _early_div
 
         # ── 13. Monte Carlo distribution over vs-SP PAs (5k sims).
         try:
@@ -7154,39 +7179,89 @@ def _umpire_k_multiplier(game_pk):
 
 
 def _model_divergence(probs, gp, batx, exp_pa_total):
-    """Surface XGB-vs-BATX divergence and a HIGH UNCERTAINTY flag.
+    """Surface XGB-vs-BATX divergence and a HIGH/MEDIUM/LOW UNCERTAINTY flag.
 
     For 1+ Hit specifically — the only market with an XGB model loaded today.
-    Returns dict with both probs, the absolute divergence, and a flag/label.
+    Returns:
+        xgb / batx       — each model's 1+ hit probability
+        divergence       — raw absolute Δ (probability points)
+        divergenceLogit  — variance-aware Δ on the logit scale
+        flagKey/Label    — bucketed reliability category
+        blended          — final shrink-to-prior reconciled probability
+        reliability      — 0..1 confidence score combining coverage + divergence
+        coverage         — XGB input coverage (0..1) when XGB is active
     """
-    xgb_p   = gp.get("xgbHitProb")
-    batx_p  = round(_poisson_over_prob(float(batx.get("hits", 0) or 0), 0.5), 3)
-    blended = probs.get("hit1")
+    xgb_p     = gp.get("xgbHitProb")
+    coverage  = float(gp.get("xgbHitCoverage") or 0.0)
+    exp_pa    = max(1.0, float(exp_pa_total or 4.2))
+    # BATX 1+ hit prob via binomial across expected PA — must match the route
+    # so the bar isn't comparing apples to oranges.
+    batx_hits = float(batx.get("hits", 0) or 0)
+    batx_p    = round(_binomial_over_zero(batx_hits, exp_pa), 3)
+    raw_blend = probs.get("hit1")
+
     if xgb_p is None:
         return {
-            "available":  False,
-            "blended":    blended,
-            "batx":       batx_p,
-            "xgb":        None,
-            "divergence": None,
-            "flag":       None,
+            "available":      False,
+            "blended":        raw_blend,
+            "batx":           batx_p,
+            "xgb":            None,
+            "coverage":       round(coverage, 3),
+            "divergence":     None,
+            "divergenceLogit": None,
+            "reliability":    round(0.30 + 0.30 * min(1.0, exp_pa / 4.5), 3),
+            "flagKey":        "thin",
+            "flagLabel":      "XGB UNAVAILABLE",
+            "flagCls":        "v-pass",
         }
-    div = round(abs(xgb_p - batx_p), 3)
-    if div >= 0.18:
+
+    div     = round(abs(xgb_p - batx_p), 3)
+    div_lgt = round(_logit_divergence(xgb_p, batx_p), 3)
+
+    # Variance-aware thresholds:
+    #   • Δ near p=0.5 → ~0.4 logit-nats per 10 prob-pts
+    #   • Δ near p=0.9 → ~0.7 logit-nats per 10 prob-pts
+    # Using logit nats means a 20pt gap at 90%/70% (≈0.97 nats) is flagged
+    # MORE strongly than a 20pt gap at 50%/30% (≈0.85 nats), which matches
+    # bookmaker behaviour around the tails.
+    if   div_lgt >= 1.10:
         flag = ("high",   "HIGH UNCERTAINTY", "v-fade")
-    elif div >= 0.10:
+    elif div_lgt >= 0.55:
         flag = ("medium", "MODELS SPLIT",     "v-lean")
     else:
         flag = ("low",    "MODELS AGREE",     "v-bet")
+
+    # Shrink-to-prior: when models disagree, fade the blended probability
+    # toward a league-typical 1+ hit baseline (~0.66 for a starter slot)
+    # weighted by both divergence magnitude AND coverage (we trust XGB less
+    # when its inputs are thin, so we shrink more in that case).
+    LEAGUE_PRIOR_HIT1 = 0.66
+    div_shrink   = max(0.0, min(0.50, (div_lgt - 0.55) * 0.40))  # 0 at 0.55, ~0.22 at 1.10
+    cov_shrink   = max(0.0, 0.40 - coverage) * 0.50              # ramps up when coverage < 0.40
+    shrink_w     = max(0.0, min(0.60, div_shrink + cov_shrink))
+    blended      = round(_shrink_to_prior(raw_blend, LEAGUE_PRIOR_HIT1, shrink_w), 3)
+
+    # Reliability: starts at 1.0, penalised by divergence (logit-scale) and by
+    # missing coverage. Capped at [0.20, 1.0] so the UI never shows 0%.
+    rel = 1.0
+    rel -= min(0.55, max(0.0, (div_lgt - 0.30) * 0.45))
+    rel -= 0.30 * max(0.0, 1.0 - coverage)
+    reliability = round(max(0.20, min(1.0, rel)), 3)
+
     return {
-        "available":  True,
-        "blended":    blended,
-        "batx":       batx_p,
-        "xgb":        round(xgb_p, 3),
-        "divergence": div,
-        "flagKey":    flag[0],
-        "flagLabel":  flag[1],
-        "flagCls":    flag[2],
+        "available":       True,
+        "blended":         blended,
+        "blendedRaw":      raw_blend,
+        "batx":            batx_p,
+        "xgb":             round(xgb_p, 3),
+        "coverage":        round(coverage, 3),
+        "divergence":      div,
+        "divergenceLogit": div_lgt,
+        "shrinkApplied":   round(shrink_w, 3),
+        "reliability":     reliability,
+        "flagKey":         flag[0],
+        "flagLabel":       flag[1],
+        "flagCls":         flag[2],
     }
 
 
@@ -10021,6 +10096,93 @@ def _poisson_over_prob(mean, line):
         log_p += math.log(lam) - math.log(x)
         cdf += math.exp(log_p)
     return max(0.0, min(1.0, 1.0 - cdf))
+
+
+# Binomial 1+ probability for low-count, low-trial outcomes (hit/PA).
+# Removes the structural bias of Poisson(λ=expected_count) for 1+ hit, where
+# events aren't rare and the trial count (PA) is small.
+def _binomial_over_zero(mean_count, expected_n):
+    try:
+        m = float(mean_count or 0)
+        n = float(expected_n or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if m <= 0 or n <= 0:
+        return 0.0
+    p = max(0.0, min(0.95, m / n))
+    return max(0.0, min(1.0, 1.0 - (1.0 - p) ** n))
+
+
+def _logit(p):
+    p = max(1e-4, min(1 - 1e-4, float(p)))
+    return math.log(p / (1.0 - p))
+
+
+def _logit_divergence(p_a, p_b):
+    """Absolute divergence on the logit scale — variance-aware: a 22pt gap near
+    p=0.5 yields ~0.9 nats, while the same gap near p=0.9 yields ~1.6 nats.
+    """
+    return abs(_logit(p_a) - _logit(p_b))
+
+
+def _shrink_to_prior(p, prior, weight):
+    """Linear blend p toward prior. weight=0 → no shrinkage, weight=1 → prior."""
+    w = max(0.0, min(1.0, float(weight)))
+    return (1.0 - w) * float(p) + w * float(prior)
+
+
+# Per-projection coverage score for the XGB hit model. Returns 0..1 — 1 means
+# all key Statcast + FanGraphs inputs are populated, 0 means inputs are too
+# thin to trust the XGB output. Drives both blend weight and reliability flag.
+_XGB_HIT_COVERAGE_KEYS = (
+    # batter
+    ("b", "sv_xba",     0.245, 0.260),   # league-average xBA ≈ 0.250
+    ("b", "sv_xwoba",   0.305, 0.335),
+    ("b", "sv_brl_pct", 3.5,   8.5),
+    ("b", "fg_pa",      30,    None),     # at least 30 PA on the season
+    # pitcher
+    ("p", "fg_kpct",    0.18,  0.28),
+    ("p", "fg_fip",     3.50,  5.20),
+)
+
+
+def _xgb_hit_coverage(batter_stats, pitcher_stats):
+    """Score 0..1 for how well-populated the XGB hit-model inputs are.
+
+    Each key contributes 1/N if present and inside a plausible band, 0.5/N if
+    present but at a default fallback (i.e. signal-less), 0 if missing.
+    """
+    if not batter_stats and not pitcher_stats:
+        return 0.0
+    b = batter_stats or {}
+    p = pitcher_stats or {}
+    total = len(_XGB_HIT_COVERAGE_KEYS)
+    score = 0.0
+    for side, key, lo, hi in _XGB_HIT_COVERAGE_KEYS:
+        src = b if side == "b" else p
+        v = src.get(key)
+        if v is None:
+            continue
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            continue
+        if f == 0:
+            continue
+        if hi is None:
+            # one-sided threshold (e.g. minimum PA)
+            if f >= lo:
+                score += 1.0
+            else:
+                score += 0.5 * (f / lo)
+            continue
+        mid = (lo + hi) / 2.0
+        # Penalise values that look like the default fallback (mid of the band).
+        if abs(f - mid) < (hi - lo) * 0.05:
+            score += 0.5
+        else:
+            score += 1.0
+    return max(0.0, min(1.0, score / total))
 
 
 def _market_lines_for_player(market_props, player, mk):
