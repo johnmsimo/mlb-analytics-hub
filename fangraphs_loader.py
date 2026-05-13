@@ -273,10 +273,49 @@ def get_key_batter_features(player_id=None, name=None):
         "sv_ss_pct":    stats.get("SwStr%",       10.0),
         "sv_la":        stats.get("LA",           12.0),
         "sv_k_pct":     stats.get("K%",           22.0),
-        "sv_bb_pct":    stats.get("BB%",           8.0),
+        "sv_bb_pct":    stats.get("BB%",            8.0),
         "sv_woba":      stats.get("wOBA",          0.320),
         "sv_wrc_plus":  stats.get("wRC+",         100.0),
         "sv_iso":       stats.get("ISO",           0.150),
         "sv_babip":     stats.get("BABIP",         0.300),
         "sv_o_swing":   stats.get("O-Swing%",      30.0),
-        "sv_z_cont
+        "sv_z_contact": stats.get("Z-Contact%",    85.0),
+        "sv_o_contact": stats.get("O-Contact%",    65.0),
+        "sv_f_strike":  stats.get("F-Strike%",     60.0),
+        "sv_pull_pct":  stats.get("Pull%",         40.0),
+        "sv_cent_pct":  stats.get("Cent%",         35.0),
+        "sv_oppo_pct":  stats.get("Oppo%",         25.0),
+        "sv_gb_pct":    stats.get("GB%",           45.0),
+        "sv_fb_pct":    stats.get("FB%",           35.0),
+        "sv_ld_pct":    stats.get("LD%",           20.0),
+        "sv_sprint":    stats.get("Sprint Speed",  27.0),
+        "sv_pa":        stats.get("PA",             0),
+    }
+
+
+def get_key_pitcher_features(player_id=None, name=None):
+    stats = get_pitcher_stats(player_id=player_id, name=name)
+    if not stats:
+        return {}
+    return {
+        "sv_era":       stats.get("ERA",        4.00),
+        "sv_fip":       stats.get("FIP",        4.00),
+        "sv_xfip":      stats.get("xFIP",       4.00),
+        "sv_k_pct":     stats.get("K%",         20.0),
+        "sv_bb_pct":    stats.get("BB%",          8.0),
+        "sv_hr9":       stats.get("HR/9",         1.2),
+        "sv_lob_pct":   stats.get("LOB%",        72.0),
+        "sv_gb_pct":    stats.get("GB%",         45.0),
+        "sv_fb_pct":    stats.get("FB%",         35.0),
+        "sv_ld_pct":    stats.get("LD%",         20.0),
+        "sv_babip":     stats.get("BABIP",        0.300),
+        "sv_woba":      stats.get("wOBA",         0.320),
+        "sv_xwoba":     stats.get("xwOBA",        0.320),
+        "sv_ip":        stats.get("IP",            0),
+        "sv_swstr_pct": stats.get("SwStr%",       10.0),
+        "sv_f_strike":  stats.get("F-Strike%",    60.0),
+        "sv_o_swing":   stats.get("O-Swing%",     30.0),
+        "sv_z_contact": stats.get("Z-Contact%",   85.0),
+        "sv_velocity":  stats.get("vFB",           93.0),
+        "sv_spin":      stats.get("Spin Rate",   2200.0),
+    }
