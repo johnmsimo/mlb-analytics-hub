@@ -805,21 +805,38 @@ function renderDetail(data) {
 
   // ── Model divergence (XGB vs BATX) ────────────────────────────────────────
   const md = (proj && proj.modelDivergence) || {};
+  const _relPct  = md.reliability != null ? Math.round(md.reliability * 100) : null;
+  const _covPct  = md.coverage    != null ? Math.round(md.coverage    * 100) : null;
+  const _relCls  = _relPct == null ? ''
+                   : (_relPct >= 75 ? 'v-bet' : (_relPct >= 50 ? 'v-lean' : 'v-fade'));
+  const _shrTxt  = (md.shrinkApplied && md.shrinkApplied > 0.02)
+                   ? ` · <span class="lbl" title="Blended pulled toward league prior because models disagreed or XGB inputs were thin">↘ shrink ${Math.round(md.shrinkApplied*100)}%</span>`
+                   : '';
+  const _covTxt  = _covPct == null ? '' : ` · <span class="lbl" title="XGB input coverage — % of key Statcast/FG fields populated">cov ${_covPct}%</span>`;
   const divergenceHtml = md.available ? `
-    <div class="div-bar">
+    <div class="div-bar" title="Reliability ${_relPct}% — combines model agreement and XGB input coverage">
       <div>
         <div class="lbl">XGB</div>
         <div class="val">${(md.xgb*100).toFixed(0)}%</div>
       </div>
       <div>
-        <div class="lbl" style="text-align:center;margin-bottom:4px">1+ Hit Models · <span class="${md.flagCls}">${md.flagLabel}</span> (Δ${(md.divergence*100).toFixed(0)}pts)</div>
+        <div class="lbl" style="text-align:center;margin-bottom:4px">1+ Hit Models · <span class="${md.flagCls}">${md.flagLabel}</span> (Δ${(md.divergence*100).toFixed(0)}pts)${_covTxt}${_shrTxt}</div>
         <div class="mid"><div class="marker" style="left:${Math.min(100,Math.max(0,md.blended*100))}%"></div></div>
+        ${_relPct != null ? `<div class="lbl" style="text-align:center;margin-top:4px">Reliability <span class="${_relCls}">${_relPct}%</span></div>` : ''}
       </div>
       <div style="text-align:right">
         <div class="lbl">BATX</div>
         <div class="val">${(md.batx*100).toFixed(0)}%</div>
       </div>
-    </div>` : '';
+    </div>` : (md.batx != null ? `
+    <div class="div-bar" title="XGB hit model unavailable — showing BATX only">
+      <div><div class="lbl">XGB</div><div class="val" style="opacity:.4">—</div></div>
+      <div>
+        <div class="lbl" style="text-align:center;margin-bottom:4px">1+ Hit Models · <span class="v-pass">${md.flagLabel || 'XGB UNAVAILABLE'}</span></div>
+        <div class="mid"><div class="marker" style="left:${Math.min(100,Math.max(0,(md.blended||md.batx)*100))}%"></div></div>
+      </div>
+      <div style="text-align:right"><div class="lbl">BATX</div><div class="val">${(md.batx*100).toFixed(0)}%</div></div>
+    </div>` : '');
 
   // ── Monte Carlo distribution bands ────────────────────────────────────────
   const mcSim = (proj && proj.monteCarlo) || null;
