@@ -694,7 +694,22 @@ function renderDetail(data) {
 
     ${summary.sample_note ? `<div class="sample-note">${summary.sample_note}</div>` : ''}
 
-    <div class="section-label">Career H2H Stats</div>
+    ${(() => {
+      const conf = mc.confidence || {};
+      if (conf.value == null) return '';
+      const confCls = conf.value >= 70 ? 'good' : conf.value >= 40 ? '' : 'bad';
+      return `<div style="display:flex;justify-content:space-between;align-items:center;margin:4px 0 8px;font-size:.66rem;color:var(--mu)">
+        <span><strong style="color:var(--c)">Confidence:</strong> <span class="${confCls}">${conf.label||'—'} ${conf.value}/100</span></span>
+        <span style="font-size:.6rem">${conf.basis||''}</span>
+      </div>`;
+    })()}
+
+    <div class="section-label">
+      Career H2H Stats
+      ${(mc.bvpFirstSeason && mc.bvpLastSeason)
+        ? `<span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">${mc.bvpFirstSeason === mc.bvpLastSeason ? mc.bvpFirstSeason : mc.bvpFirstSeason + '–' + mc.bvpLastSeason}</span>`
+        : ''}
+    </div>
     <div class="stat-row">
       <div class="stat-box"><div class="stat-val">${pa}</div><div class="stat-lbl">PA</div></div>
       <div class="stat-box"><div class="stat-val">${fmtAvg(summary.avg)}</div><div class="stat-lbl">AVG</div></div>
@@ -702,6 +717,27 @@ function renderDetail(data) {
       <div class="stat-box"><div class="stat-val">${summary.hr??'—'}</div><div class="stat-lbl">HR</div></div>
       <div class="stat-box"><div class="stat-val" ${ratioColor(summary.ops_ratio)}>${summary.ops_ratio!=null ? Number(summary.ops_ratio).toFixed(2)+'x' : '—'}</div><div class="stat-lbl">OPS Ratio</div></div>
     </div>
+
+    ${(Array.isArray(mc.bvpSeasons) && mc.bvpSeasons.length > 1) ? `
+      <details style="margin:6px 0 10px;font-size:.7rem">
+        <summary style="cursor:pointer;color:var(--mu);font-size:.62rem;text-transform:uppercase;letter-spacing:.08em">Season breakdown</summary>
+        <div style="margin-top:6px;display:grid;grid-template-columns:48px repeat(5,1fr);gap:2px 8px;padding:6px 8px;background:rgba(0,0,0,.18);border-radius:6px">
+          <span style="font-size:.6rem;color:var(--mu)">Year</span>
+          <span style="font-size:.6rem;color:var(--mu)">PA</span>
+          <span style="font-size:.6rem;color:var(--mu)">AB/H</span>
+          <span style="font-size:.6rem;color:var(--mu)">HR</span>
+          <span style="font-size:.6rem;color:var(--mu)">BB/K</span>
+          <span style="font-size:.6rem;color:var(--mu)">AVG</span>
+          ${mc.bvpSeasons.map(s => `
+            <span>${s.season ?? '—'}</span>
+            <span>${s.pa}</span>
+            <span>${s.ab}/${s.h}</span>
+            <span>${s.hr}</span>
+            <span>${s.bb}/${s.so}</span>
+            <span>${(s.avg!=null ? s.avg.toFixed(3).replace(/^0/,'') : '—')}</span>
+          `).join('')}
+        </div>
+      </details>` : ''}
 
     ${xstatsHtml}
 
@@ -886,8 +922,8 @@ async function loadContextData(batterId, pitcherId, proj) {
     // Card 4: Quality Metrics (from projection endpoint)
     const bq = (proj && proj.batterQuality) || {};
     const evVal   = bq.ev    != null ? bq.ev.toFixed(1)    : null;
-    const brlVal  = bq.brl_pct != null ? (bq.brl_pct * 100).toFixed(1) : null;
-    const hhVal   = bq.hh_pct  != null ? (bq.hh_pct  * 100).toFixed(1) : null;
+    const brlVal  = bq.brl_pct != null ? bq.brl_pct.toFixed(1) : null;
+    const hhVal   = bq.hh_pct  != null ? bq.hh_pct.toFixed(1)  : null;
     const xwobaVal = bq.xwoba  != null ? bq.xwoba.toFixed(3)           : null;
 
     function qualRow(label, val, suffix, pctRank) {

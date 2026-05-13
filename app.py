@@ -4789,6 +4789,23 @@ def api_pitcher_matchup(game_pk):
                 if k not in ("sv_arsenal_pct", "sv_arsenal_velo"):
                     p_stats[k] = v
 
+            # Pre-fetch BvP for all batters in parallel — daily-cached so repeat
+            # loads are O(1); this only pays the latency on first load.
+            bvp_by_bid = {}
+            if pitcher_id:
+                bvp_ids = [b.get("id") for b in opposing_lineup
+                           if b.get("id") and (b.get("pos") or "").upper() not in ("P", "SP", "RP", "CP")]
+                bvp_ids = list({i for i in bvp_ids if i})
+                if bvp_ids:
+                    with ThreadPoolExecutor(max_workers=min(8, len(bvp_ids))) as bex:
+                        futs = {bex.submit(_fetch_bvp, bid, pitcher_id): bid for bid in bvp_ids}
+                        for fut in as_completed(futs, timeout=12):
+                            bid = futs[fut]
+                            try:
+                                bvp_by_bid[bid] = fut.result(timeout=1)
+                            except Exception:
+                                bvp_by_bid[bid] = None
+
             threats = []
             seen = set()
             for b in opposing_lineup:
@@ -4804,6 +4821,7 @@ def api_pitcher_matchup(game_pk):
                 merged = {**fgb, **svb, **b}
                 proj = _project_batter_vs_pitcher(merged, p_stats)
                 score = _damage_score(merged, p_stats)
+                bvp_b = bvp_by_bid.get(merged.get("id")) or {}
                 threats.append({
                     "id":       merged.get("id"),
                     "name":     merged.get("name"),
@@ -4827,6 +4845,17 @@ def api_pitcher_matchup(game_pk):
                     "hh_pct":   merged.get("sv_hh_pct"),
                     "brl_pct":  merged.get("sv_brl_pct"),
                     "score":    score,
+                    "bvp": {
+                        "pa":    bvp_b.get("pa", 0),
+                        "ab":    bvp_b.get("ab", 0),
+                        "h":     bvp_b.get("h",  0),
+                        "hr":    bvp_b.get("hr", 0),
+                        "avg":   bvp_b.get("avg"),
+                        "ops":   bvp_b.get("ops"),
+                        "grade": bvp_b.get("grade"),
+                        "firstSeason": bvp_b.get("first_season"),
+                        "lastSeason":  bvp_b.get("last_season"),
+                    } if bvp_b else None,
                     **proj,
                 })
             threats.sort(key=lambda x: x["score"], reverse=True)
@@ -5650,6 +5679,12 @@ def api_bvp_projection(batter_id, pitcher_id):
         # ── 5. BvP component (already cached) ───────────────────────────────
         bvp_data = _fetch_bvp(batter_id, pitcher_id)
 
+        # ── 5a. Pitch-mix matchup score (career arsenal SLG vs pitcher arsenal)
+        try:
+            mix_score, _mix_rows = _compute_pitch_mix_score(str(pitcher_id), str(batter_id))
+        except Exception:
+            mix_score, _mix_rows = 1.0, []
+
         # ── 5b. Rolling form for batter (daily-cached) ──────────────────────
         batter_form = _fetch_rolling_form(batter_id, False)
 
@@ -5777,6 +5812,17 @@ def api_bvp_projection(batter_id, pitcher_id):
                 "expPA":       batx.get("expected_pa", 4.0),
                 "bvpGrade":    (bvp_data or {}).get("grade", "?"),
                 "bvpPA":       (bvp_data or {}).get("pa", 0),
+                "bvpFirstSeason": (bvp_data or {}).get("first_season"),
+                "bvpLastSeason":  (bvp_data or {}).get("last_season"),
+                "bvpSeasons":     (bvp_data or {}).get("seasons", []),
+                "bvpReliability": (bvp_data or {}).get("reliability", 0.0),
+                "bvpWobaEdge":    (bvp_data or {}).get("woba_edge", 0.0),
+                "mixScore":       mix_score,
+                # Composite confidence (0–100): blends BvP sample reliability,
+                # platoon split sample, and pitch-mix data availability.
+                "confidence": _compute_bvp_confidence(
+                    bvp_data, batter_obj, pitcher_hand, mix_score, _mix_rows,
+                ),
             },
             "batterQuality":  batter_quality,
             "pitcherProfile": pitcher_profile,
@@ -6577,6 +6623,54 @@ def _fetch_rolling_form(player_id, is_pitcher):
     return result
 
 
+def _compute_bvp_confidence(bvp_data, batter_obj, pitcher_hand, mix_score, mix_rows):
+    """0-100 confidence score for the BvP projection.
+
+    Blends four signals:
+      * H2H sample size (saturates at ~30 PA)
+      * Platoon split sample size for the pitcher's hand
+      * Pitch-mix coverage (how many pitches have batter career data)
+      * Whether Statcast pitch arsenal data is available at all
+    Designed so a fresh matchup with no H2H still scores well when there's
+    strong platoon + arsenal coverage. Returns dict {value, label, basis}.
+    """
+    pa = int((bvp_data or {}).get("pa", 0) or 0)
+    h2h_score = min(1.0, pa / 30.0)                     # 30 PA → fully saturated
+
+    hand = (pitcher_hand or "R").upper()
+    split_pa = int((batter_obj.get("vs_l_pa") if hand == "L" else batter_obj.get("vs_r_pa")) or 0)
+    plat_score = min(1.0, split_pa / 120.0)             # 120 PA platoon → saturated
+
+    if mix_rows:
+        covered = sum(1 for r in mix_rows if r.get("bat_slg") is not None)
+        mix_cov = min(1.0, covered / max(1, len(mix_rows)))
+    else:
+        mix_cov = 0.0
+
+    # Weighted blend; if no data anywhere, falls back to low-but-nonzero score.
+    raw = 0.35 * h2h_score + 0.30 * plat_score + 0.25 * mix_cov + 0.10 * (1.0 if mix_rows else 0.0)
+    value = round(100 * raw, 1)
+
+    if value >= 70:    label = "STRONG"
+    elif value >= 50:  label = "MODERATE"
+    elif value >= 30:  label = "LIMITED"
+    else:              label = "WEAK"
+
+    basis = []
+    if pa > 0:        basis.append(f"{pa} H2H PA")
+    if split_pa > 0:  basis.append(f"{split_pa} PA vs {hand}HP")
+    if mix_rows:      basis.append(f"{len(mix_rows)}-pitch arsenal")
+
+    return {
+        "value":     value,
+        "label":     label,
+        "h2hScore":  round(h2h_score, 3),
+        "platScore": round(plat_score, 3),
+        "mixScore":  round(mix_cov, 3),
+        "basis":     " · ".join(basis) if basis else "no matchup data",
+    }
+
+
 def _fetch_bvp(batter_id, pitcher_id):
     """
     Fetch career batter-vs-pitcher splits from the MLB Stats API.
@@ -6668,19 +6762,47 @@ def _fetch_bvp(batter_id, pitcher_id):
                 "shrunk": {},
             }
         else:
-            s   = splits[0].get("stat", {})
-            ab  = int(s.get("atBats", 0) or 0)
-            h   = int(s.get("hits", 0) or 0)
-            bb  = int(s.get("baseOnBalls", 0) or 0)
-            hbp = int(s.get("hitByPitch", 0) or 0)
-            hr  = int(s.get("homeRuns", 0) or 0)
-            dbl = int(s.get("doubles", 0) or 0)
-            tpl = int(s.get("triples", 0) or 0)
-            so  = int(s.get("strikeOuts", 0) or 0)
-            sf  = int(s.get("sacFlies", 0) or 0)
-            tb  = int(s.get("totalBases", 0) or 0)
+            # MLB Stats API `stats=vsPlayer` returns one split per season the
+            # batter faced this pitcher — aggregate across all seasons for true
+            # career H2H. Also build a per-season breakdown for the UI.
+            ab = h = bb = hbp = hr = dbl = tpl = so = sf = tb = 0
+            seasons = []
+            first_season = last_season = None
+            for sp in splits:
+                stat = sp.get("stat", {}) or {}
+                season_yr = sp.get("season") or stat.get("season")
+                s_ab  = int(stat.get("atBats", 0) or 0)
+                s_h   = int(stat.get("hits", 0) or 0)
+                s_bb  = int(stat.get("baseOnBalls", 0) or 0)
+                s_hbp = int(stat.get("hitByPitch", 0) or 0)
+                s_hr  = int(stat.get("homeRuns", 0) or 0)
+                s_dbl = int(stat.get("doubles", 0) or 0)
+                s_tpl = int(stat.get("triples", 0) or 0)
+                s_so  = int(stat.get("strikeOuts", 0) or 0)
+                s_sf  = int(stat.get("sacFlies", 0) or 0)
+                s_tb  = int(stat.get("totalBases", 0) or 0)
+                s_pa  = s_ab + s_bb + s_hbp + s_sf
+                ab  += s_ab;  h  += s_h;   bb  += s_bb;  hbp += s_hbp
+                hr  += s_hr;  dbl += s_dbl; tpl += s_tpl; so  += s_so
+                sf  += s_sf;  tb += s_tb
+                if s_pa > 0:
+                    try:
+                        yr_int = int(season_yr) if season_yr else None
+                    except (TypeError, ValueError):
+                        yr_int = None
+                    seasons.append({
+                        "season": yr_int,
+                        "pa": s_pa, "ab": s_ab, "h": s_h, "hr": s_hr,
+                        "bb": s_bb, "so": s_so,
+                        "avg": round(s_h / s_ab, 3) if s_ab else 0.0,
+                        "tb":  s_tb,
+                    })
+                    if yr_int is not None:
+                        first_season = yr_int if first_season is None else min(first_season, yr_int)
+                        last_season  = yr_int if last_season  is None else max(last_season,  yr_int)
             singles = max(0, h - dbl - tpl - hr)
             pa  = ab + bb + hbp + sf
+            seasons.sort(key=lambda r: (r["season"] is None, r["season"] or 0), reverse=True)
 
             raw_avg  = round(h / ab, 3) if ab else 0.0
             raw_obp  = round((h + bb + hbp) / pa, 3) if pa else 0.0
@@ -6737,11 +6859,15 @@ def _fetch_bvp(batter_id, pitcher_id):
                 "hr": hr,
                 "bb": bb,
                 "so": so,
+                "tb": tb,
                 "avg": raw_avg,
                 "ops": raw_ops,
                 "season_ops": season_ops,
                 "ops_ratio": ops_ratio,
-                "sample_note": note,
+                "first_season": first_season,
+                "last_season":  last_season,
+                "seasons":      seasons,
+                "sample_note":  note,
                 "raw": {
                     "avg": raw_avg,
                     "obp": raw_obp,
