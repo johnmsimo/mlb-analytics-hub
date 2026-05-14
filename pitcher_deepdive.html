@@ -1092,6 +1092,16 @@ function buildThreatsPane(pitcherId){
           ${b.iso?`<span>ISO <strong>${fmtNum(b.iso)}</strong></span>`:''}
           ${b.brl_pct?`<span>Barrel% <strong>${fmtNum(b.brl_pct,1)}%</strong></span>`:''}
           ${b.ev?`<span>EV <strong>${fmtNum(b.ev,1)}</strong></span>`:''}
+          ${(() => {
+            const bvp = b.bvp;
+            if (!bvp || !bvp.pa) return '';
+            const avg = bvp.avg != null ? Number(bvp.avg).toFixed(3).replace(/^0/, '') : '—';
+            const cls = bvp.pa >= 10 ? (bvp.avg >= 0.300 ? 'class="good"' : bvp.avg <= 0.200 ? 'class="bad"' : '') : '';
+            const yrs = bvp.firstSeason && bvp.lastSeason
+              ? (bvp.firstSeason === bvp.lastSeason ? `'${String(bvp.firstSeason).slice(-2)}` : `'${String(bvp.firstSeason).slice(-2)}–'${String(bvp.lastSeason).slice(-2)}`)
+              : '';
+            return `<span ${cls} title="Career H2H${yrs?' '+yrs:''}">H2H <strong>${bvp.h}/${bvp.ab} ${avg}</strong>${bvp.hr?` · ${bvp.hr}HR`:''} <span style="opacity:.6">(${bvp.pa}PA)</span></span>`;
+          })()}
         </div>
       </div>
       <div class="th-score">

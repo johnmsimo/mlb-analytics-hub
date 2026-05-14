@@ -799,7 +799,7 @@ function toggleLineup(e, pk){
   var open=el.classList.toggle('open');
   btn.textContent=open?'\u2715 HIDE LINEUP':'\u2261 SHOW LINEUP';
   if(open){
-    if(LINEUPS[pk]){
+    if(LINEUPS[pk] && LINEUPS[pk].awayConfirmed && LINEUPS[pk].homeConfirmed){
       renderCardLineup(pk, LINEUPS[pk]);
       return;
     }

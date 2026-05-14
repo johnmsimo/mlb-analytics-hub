@@ -441,35 +441,27 @@ details[open] summary::before{transform:rotate(90deg)}
           <div class="mult-row"><label>H+R+RBI</label><input id="m_batter_hits_runs_rbis" type="number" step="0.01" value="1.00"></div>
           <div class="mult-row"><label>Stolen Bases</label><input id="m_batter_stolen_bases" type="number" step="0.01" value="1.00"></div>
 
-      <!-- ── Pipeline Scheduler ── -->
-      <details id="pipelineDetails" style="margin-top:14px;border-top:1px solid var(--line2);padding-top:12px">
+      <!-- ── Cache Status (post-deploy warm-up panel) ── -->
+      <details id="cacheStatusDetails" style="margin-top:14px;border-top:1px solid var(--line2);padding-top:12px">
         <summary style="font-size:.78rem;font-weight:600;color:var(--mu);letter-spacing:.05em;text-transform:uppercase;cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px">
-          ▸ Lineup Pipeline
-          <span id="pipelineBadge" class="pill" style="font-size:.62rem;padding:2px 8px">—</span>
+          ▸ Cache Status
+          <span id="cacheReadyBadge" class="pill" style="font-size:.62rem;padding:2px 8px">—</span>
         </summary>
-        <div style="margin-top:10px;display:flex;flex-direction:column;gap:8px">
-
-          <!-- last run info -->
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
-            <div class="field" style="margin:0">
-              <label style="font-size:.67rem">Last Run</label>
-              <div id="pipelineLastRun" style="font-size:.75rem;color:var(--txt);padding:4px 0">—</div>
-            </div>
-            <div class="field" style="margin:0">
-              <label style="font-size:.67rem">Rows Built</label>
-              <div id="pipelineRows" style="font-size:.75rem;color:var(--txt);padding:4px 0">—</div>
-            </div>
+        <div style="margin-top:10px;display:flex;flex-direction:column;gap:10px">
+          <div style="font-size:.7rem;color:var(--mu);line-height:1.4">
+            Shows readiness of every background loader the Monte Carlo sim and projections depend on. After a redeploy, click <b>Warm Up Now</b> and wait until every row is green before running a sim — cold caches make the sim time out.
           </div>
 
-          <!-- status message -->
-          <div id="pipelineMsg" style="font-size:.71rem;color:var(--mu);min-height:16px"></div>
+          <div id="cacheRows" style="display:flex;flex-direction:column;gap:4px">
+            <div style="font-size:.71rem;color:var(--mu);padding:6px 0">Loading…</div>
+          </div>
 
-          <!-- action row -->
+          <div id="cacheStatusMsg" style="font-size:.71rem;color:var(--mu);min-height:16px"></div>
+
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-            <button class="btn green sm" id="pipelineRefreshBtn" onclick="triggerPipelineRefresh()">↺ Refresh Lineups</button>
-            <button class="btn sm" onclick="loadPipelineStatus()">Check Status</button>
+            <button class="btn green sm" id="cacheWarmBtn" onclick="triggerCacheWarm()">↺ Warm Up Now</button>
+            <button class="btn sm" onclick="loadCacheStatus()">Check Status</button>
           </div>
-
         </div>
       </details>
           <div class="mult-row"><label>Strikeouts</label><input id="m_pitcher_strikeouts" type="number" step="0.01" value="1.00"></div>
@@ -762,8 +754,16 @@ async function api(url, opts={}) {
   const r = await fetch(url, {headers, ...opts});
   if (!r.ok) {
     let errMsg = `${r.status} ${r.statusText}`;
-    try { const j = await r.json(); if(j.error) errMsg = j.error; } catch{}
-    throw new Error(errMsg);
+    let needsCapture = false;
+    try {
+      const j = await r.json();
+      if (j.error) errMsg = j.error;
+      if (j.needsCapture) needsCapture = true;
+    } catch{}
+    const err = new Error(errMsg);
+    err.status = r.status;
+    err.needsCapture = needsCapture;
+    throw err;
   }
   return r.json();
 }
@@ -972,7 +972,13 @@ async function captureClose() {
     const upd = d.updated || 0;
     $('datePill').textContent = upd > 0 ? `Closing captured · ${upd} updated` : 'Closing captured · 0 updated';
     status(upd > 0 ? `Closing captured · ${upd} entries updated at ${ts(d.closingCapturedAt||'')}` : 'Closing captured, but no entries were updated', upd === 0);
-  } catch(e) { status(e.message, true); }
+  } catch(e) {
+    if (e.needsCapture) {
+      status('No saved picks yet — run Capture Slate before Capture Closing.', true);
+    } else {
+      status(e.message, true);
+    }
+  }
 }
 
 async function gradeDay() {
@@ -985,7 +991,13 @@ async function gradeDay() {
     renderMarketTable(d);
     renderBoard();
     status(`Graded ${ts(d.gradedAt||'')}`);
-  } catch(e) { status(e.message, true); }
+  } catch(e) {
+    if (e.needsCapture) {
+      status('No saved picks yet — run Capture Slate before Grade Day.', true);
+    } else {
+      status(e.message, true);
+    }
+  }
 }
 
 // ── Hero summary ──────────────────────────────────────────────────────────────
@@ -1795,16 +1807,22 @@ async function boot() {
 boot();
 
 // ── Pipeline scheduler ────────────────────────────────────────────────────────
-let _pipelinePollTimer = null;
+let _cachePollTimer = null;
 
-function _pipelineStatusColor(s) {
-  if (s === 'done')    return 'color:var(--g)';
-  if (s === 'running') return 'color:var(--y)';
-  if (s === 'error')   return 'color:var(--r)';
+function _cacheStatusColor(state) {
+  // state: 'ready' | 'loading' | 'missing' | 'error'
+  if (state === 'ready')   return 'color:var(--g)';
+  if (state === 'loading') return 'color:var(--y)';
+  if (state === 'error')   return 'color:var(--r)';
   return 'color:var(--mu)';
 }
 
-function _fmtPipelineTs(iso) {
+function _cacheDot(state) {
+  const map = { ready:'●', loading:'◐', missing:'○', error:'✗' };
+  return map[state] || '○';
+}
+
+function _fmtCacheTs(iso) {
   if (!iso) return '—';
   try {
     const d = new Date(iso);
@@ -1813,61 +1831,128 @@ function _fmtPipelineTs(iso) {
   } catch { return iso; }
 }
 
-async function loadPipelineStatus() {
+function _deriveCacheState(loader, info) {
+  if (!info) return 'missing';
+  if (loader === 'pipeline') {
+    if (info.status === 'done')    return 'ready';
+    if (info.status === 'running') return 'loading';
+    if (info.status === 'error')   return 'error';
+    return 'missing';
+  }
+  if (info.loaded)  return 'ready';
+  if (info.loading) return 'loading';
+  return 'missing';
+}
+
+function _cacheRowHtml(label, state, detail) {
+  const css = _cacheStatusColor(state);
+  return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;'
+    +    'border-bottom:1px solid var(--line2);font-size:.74rem">'
+    +    '<span style="width:14px;'+css+';font-size:.9rem">'+_cacheDot(state)+'</span>'
+    +    '<span style="flex:1;color:var(--txt)">'+label+'</span>'
+    +    '<span style="color:var(--mu);font-size:.68rem">'+(detail||'')+'</span>'
+    + '</div>';
+}
+
+async function loadCacheStatus() {
+  const rowsEl  = document.getElementById('cacheRows');
+  const badgeEl = document.getElementById('cacheReadyBadge');
+  const msgEl   = document.getElementById('cacheStatusMsg');
   try {
-    const d = await api('/api/pipeline/status');
-    const badge = document.getElementById('pipelineBadge');
-    const lastRun = document.getElementById('pipelineLastRun');
-    const rows = document.getElementById('pipelineRows');
-    const msg = document.getElementById('pipelineMsg');
-    const btn = document.getElementById('pipelineRefreshBtn');
+    const d = await api('/api/cache/status');
 
-    if (badge) { badge.textContent = d.status || '—'; badge.style = _pipelineStatusColor(d.status); }
-    if (lastRun) lastRun.textContent = _fmtPipelineTs(d.last_run);
-    if (rows) rows.textContent = d.rows != null ? d.rows.toLocaleString() + ' matchup rows' : '—';
-    if (msg) {
-      if (d.status === 'error') msg.textContent = '⚠ ' + (d.error || 'Unknown error');
-      else if (d.status === 'running') msg.textContent = 'Building matchup data — this takes ~2 min…';
-      else if (d.status === 'done') msg.textContent = 'Lineups loaded. All pages will use updated data.';
-      else msg.textContent = 'Pipeline has not run today yet.';
+    const fgState  = _deriveCacheState('fg',       d.fg);
+    const svState  = _deriveCacheState('savant',   d.savant);
+    const arState  = _deriveCacheState('arsenal',  d.arsenal);
+    const pipState = d.pipeline ? _deriveCacheState('pipeline', d.pipeline) : null;
+
+    const fgDetail = d.fg && d.fg.loaded
+      ? (d.fg.batters||0).toLocaleString()+' batters · '+(d.fg.pitchers||0).toLocaleString()+' pitchers'
+      : (d.fg && d.fg.loading ? 'loading…' : 'not loaded');
+    const svDetail = d.savant && d.savant.loaded
+      ? (d.savant.pit_xstats||0).toLocaleString()+' pit · '+(d.savant.bat_xstats||0).toLocaleString()+' bat'
+      : (d.savant && d.savant.loading ? 'loading…' : 'not loaded');
+    const arDetail = d.arsenal && d.arsenal.loaded
+      ? (d.arsenal.pitchers||0).toLocaleString()+' pitchers'
+      : 'not loaded';
+    const pipDetail = (d.pipeline && d.pipeline.status === 'done')
+      ? (d.pipeline.rows||0).toLocaleString()+' rows · '+_fmtCacheTs(d.pipeline.last_run)
+      : (d.pipeline && d.pipeline.status === 'running' ? 'building (~2 min)…'
+         : (d.pipeline && d.pipeline.status === 'error' ? (d.pipeline.error||'error')
+            : 'not run today'));
+
+    const rows = [];
+    rows.push(_cacheRowHtml('FanGraphs stats',     fgState, fgDetail));
+    rows.push(_cacheRowHtml('Baseball Savant',     svState, svDetail));
+    rows.push(_cacheRowHtml('Pitcher arsenal CSV', arState, arDetail));
+    if (pipState !== null) {
+      rows.push(_cacheRowHtml('Lineup pipeline',   pipState, pipDetail));
     }
-    if (btn) btn.disabled = d.status === 'running';
+    if (rowsEl) rowsEl.innerHTML = rows.join('');
 
-    return d.status;
+    if (badgeEl) {
+      if (d.ready)         { badgeEl.textContent = 'READY';   badgeEl.style = _cacheStatusColor('ready'); }
+      else if (d.fg && d.fg.loading || d.savant && d.savant.loading
+               || (d.pipeline && d.pipeline.status === 'running')) {
+        badgeEl.textContent = 'WARMING'; badgeEl.style = _cacheStatusColor('loading');
+      }
+      else                 { badgeEl.textContent = 'COLD';    badgeEl.style = _cacheStatusColor('missing'); }
+    }
+
+    if (msgEl) {
+      if (d.ready) {
+        msgEl.textContent = '✓ All caches ready — safe to run Monte Carlo sims.';
+      } else {
+        const waiting = [];
+        if (!fgState  || fgState  !== 'ready') waiting.push('FG');
+        if (!svState  || svState  !== 'ready') waiting.push('Savant');
+        if (!arState  || arState  !== 'ready') waiting.push('arsenal');
+        if (pipState && pipState !== 'ready')  waiting.push('pipeline');
+        msgEl.textContent = waiting.length
+          ? 'Waiting on: ' + waiting.join(', ') + '. Sims may time out until ready.'
+          : '';
+      }
+    }
+
+    return d;
   } catch(e) {
-    const msg = document.getElementById('pipelineMsg');
-    if (msg) msg.textContent = '⚠ Could not reach pipeline: ' + e.message;
+    if (msgEl) msgEl.textContent = '⚠ Could not reach cache status: ' + e.message;
     return null;
   }
 }
 
-async function triggerPipelineRefresh() {
-  const btn = document.getElementById('pipelineRefreshBtn');
-  const msg = document.getElementById('pipelineMsg');
+async function triggerCacheWarm() {
+  const btn = document.getElementById('cacheWarmBtn');
+  const msg = document.getElementById('cacheStatusMsg');
   try {
     if (btn) btn.disabled = true;
-    if (msg) msg.textContent = 'Triggering lineup refresh…';
-    await api('/api/pipeline/run', {method:'POST'});
-    if (msg) msg.textContent = 'Pipeline started — building matchup data (~2 min). Status will update automatically.';
-    // Poll every 10 s until done or error
-    if (_pipelinePollTimer) clearInterval(_pipelinePollTimer);
-    _pipelinePollTimer = setInterval(async () => {
-      const s = await loadPipelineStatus();
-      if (s === 'done' || s === 'error' || s === null) {
-        clearInterval(_pipelinePollTimer);
-        _pipelinePollTimer = null;
+    if (msg) msg.textContent = 'Triggering warm-up…';
+    const r = await api('/api/cache/warm', {method:'POST'});
+    const t = (r.triggered || []).join(', ') || '(none — all already warming)';
+    if (msg) msg.textContent = 'Started: ' + t + '. Polling every 5 s until ready.';
+    // Poll until ready (or 5 min cap so this never spins forever)
+    if (_cachePollTimer) clearInterval(_cachePollTimer);
+    let polls = 0;
+    _cachePollTimer = setInterval(async () => {
+      polls++;
+      const d = await loadCacheStatus();
+      if (!d || d.ready || polls > 60) {
+        clearInterval(_cachePollTimer);
+        _cachePollTimer = null;
+        if (btn) btn.disabled = false;
+        if (msg && d && d.ready) msg.textContent = '✓ All caches ready — safe to run Monte Carlo sims.';
       }
-    }, 10000);
+    }, 5000);
   } catch(e) {
     if (btn) btn.disabled = false;
     if (msg) msg.textContent = '⚠ ' + e.message;
   }
 }
 
-// Load pipeline status whenever the details block is opened
+// Load cache status whenever the details block is opened
 document.addEventListener('DOMContentLoaded', () => {
-  const det = document.getElementById('pipelineDetails');
-  if (det) det.addEventListener('toggle', () => { if (det.open) loadPipelineStatus(); });
+  const det = document.getElementById('cacheStatusDetails');
+  if (det) det.addEventListener('toggle', () => { if (det.open) loadCacheStatus(); });
 });
 
 // Global error fallback — surfaces any JS crash in the status bar

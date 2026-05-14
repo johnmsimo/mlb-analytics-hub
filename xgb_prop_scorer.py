@@ -46,10 +46,14 @@ _MODEL_DIR = os.path.join(_HERE, "models")
 _FEAT_FILE = os.path.join(_MODEL_DIR, "xgb_feature_cols.json")
 
 _MODEL_PATHS = {
-    "hits": os.path.join(_MODEL_DIR, "xgb_hits_over_0.5.pkl"),
+    "hits":  os.path.join(_MODEL_DIR, "xgb_hits_over_0.5.pkl"),
     "k_3.5": os.path.join(_MODEL_DIR, "xgb_k_over_3.5.pkl"),
     "k_4.5": os.path.join(_MODEL_DIR, "xgb_k_over_4.5.pkl"),
     "k_5.5": os.path.join(_MODEL_DIR, "xgb_k_over_5.5.pkl"),
+    # Auto-loaded when artifacts exist on disk. Train via xgb_training_pipeline.py.
+    "hr":    os.path.join(_MODEL_DIR, "xgb_hr_over_0.5.pkl"),
+    "tb":    os.path.join(_MODEL_DIR, "xgb_tb_over_1.5.pkl"),
+    "rbi":   os.path.join(_MODEL_DIR, "xgb_rbi_over_0.5.pkl"),
 }
 
 _lock = threading.Lock()
@@ -105,6 +109,8 @@ def xgb_ready(market: str = "hits") -> bool:
         return "hits" in _models
     if market == "k":
         return any(k.startswith("k_") for k in _models)
+    if market in ("hr", "tb", "rbi"):
+        return market in _models
     return False
 
 
@@ -405,6 +411,46 @@ def xgb_hit_prob_bulk(batters: list, pitcher: dict) -> dict:
         return {name: round(min(0.97, max(0.03, float(p))), 4) for name, p in zip(names, probs)}
     except Exception:
         return {}
+
+
+def _predict_batter_market(market_key: str, batter: dict, pitcher: dict) -> Optional[float]:
+    """Generic batter-vs-pitcher predictor for HR / TB / RBI markets.
+
+    Reuses the same feature builder as the hits model — once the corresponding
+    artifact is on disk (xgb_hr_over_0.5.pkl etc.), this function activates
+    automatically without additional wiring.
+    """
+    if not _loaded:
+        _load_models()
+    model = _models.get(market_key)
+    if model is None:
+        return None
+    try:
+        batter_enriched  = _enrich_batter_from_fg(batter)
+        pitcher_enriched = _enrich_pitcher_from_fg(pitcher)
+        feat_order = _feat_cols.get(market_key, [])
+        X = _build_hit_features(batter_enriched, pitcher_enriched, feat_order)
+        if X is None:
+            return None
+        prob = float(model.predict_proba(X)[0, 1])
+        return round(min(0.97, max(0.03, prob)), 4)
+    except Exception:
+        return None
+
+
+def xgb_hr_prob(batter: dict, pitcher: dict) -> Optional[float]:
+    """P(>= 1 HR in game). Returns None when no model artifact is loaded."""
+    return _predict_batter_market("hr", batter, pitcher)
+
+
+def xgb_tb_prob(batter: dict, pitcher: dict) -> Optional[float]:
+    """P(>= 2 TB in game). Returns None when no model artifact is loaded."""
+    return _predict_batter_market("tb", batter, pitcher)
+
+
+def xgb_rbi_prob(batter: dict, pitcher: dict) -> Optional[float]:
+    """P(>= 1 RBI in game). Returns None when no model artifact is loaded."""
+    return _predict_batter_market("rbi", batter, pitcher)
 
 
 enrich_batter = _enrich_batter_from_fg

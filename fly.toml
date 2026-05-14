@@ -4,7 +4,7 @@
 #
 
 app = 'mlb-analytics-hub'
-primary_region = 'ord'
+primary_region = 'EWR'
 
 [build]
 
@@ -33,6 +33,6 @@ primary_region = 'ord'
     path = '/health'
 
 [[vm]]
-  memory = '2gb'
+  memory = '4gb'
   cpu_kind = 'shared'
-  cpus = 1
+  cpus = 2
