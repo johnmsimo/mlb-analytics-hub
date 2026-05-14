@@ -1225,14 +1225,23 @@ _fg_loading = False
 
 
 def _load_fg_data():
-    global _fg_loaded, _fg_load_date
-    logging.info("[FG] _load_fg_data: starting MLB-API-derived load…")
-    _load_fg_data_from_mlb_api()
-    with _fg_lock:
-        has_data = bool(_fg_pit) or bool(_fg_bat)
-        _fg_loaded = has_data
-        _fg_load_date = datetime.now().date() if has_data else None
-    logging.info(f"[FG] _load_fg_data done: loaded={_fg_loaded} pit={len(_fg_pit)} bat={len(_fg_bat)}")
+    global _fg_loaded, _fg_load_date, _fg_loading
+    with _fg_cond:
+        if _fg_loading or (_fg_loaded and _fg_load_date == datetime.now().date()):
+            return
+        _fg_loading = True
+    try:
+        logging.info("[FG] _load_fg_data: starting MLB-API-derived load…")
+        _load_fg_data_from_mlb_api()
+        with _fg_cond:
+            has_data = bool(_fg_pit) or bool(_fg_bat)
+            _fg_loaded = has_data
+            _fg_load_date = datetime.now().date() if has_data else None
+        logging.info(f"[FG] _load_fg_data done: loaded={_fg_loaded} pit={len(_fg_pit)} bat={len(_fg_bat)}")
+    finally:
+        with _fg_cond:
+            _fg_loading = False
+            _fg_cond.notify_all()
 
 
 def _safe_num(v, default=0.0):
