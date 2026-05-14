@@ -47,13 +47,42 @@ ET = ZoneInfo("America/New_York")
 HUMIDOR_VENUES = {19, 15}   # Coors (19), Chase (15)
 
 # Wind-direction azimuth mappings for each park (degrees, 0=N/out to CF)
-# Simplified: positive = wind_out (boost), negative = wind_in (suppress)
-# Key: if wind_dir compass matches outfield direction, it's "out"
+# Covers all 30 MLB venues. Positive along-spray = wind_out (boost).
+# FIX: previously only 3 parks; all others defaulted to 180° (due-south)
+# which is wrong for the majority of MLB venues whose CF faces north.
 _OUTFIELD_COMPASS = {
-    # venue_id: primary outfield compass direction (approximate)
-    17: "E",    # Wrigley — blows out to Lake Michigan (E/NE) when favorable
-    19: "W",    # Coors — Rocky Mountain breeze typically W
-    3:  "E",    # Fenway — out to right/center is E
+    # venue_id: primary outfield compass direction (CF direction)
+    17:   "E",    # Wrigley — out to Lake Michigan (E/NE)
+    19:   "W",    # Coors — Rocky Mountain breeze typically W
+    3:    "E",    # Fenway — out to right/center is E
+    2:    "N",    # Oriole Park at Camden Yards — CF faces N
+    4:    "N",    # Guaranteed Rate Field (CWS) — CF faces N
+    5:    "NE",   # Progressive Field (CLE) — CF faces NE
+    7:    "NW",   # Kauffman Stadium (KC) — CF faces NW
+    1:    "N",    # Angel Stadium (LAA) — CF faces N
+    22:   "NW",   # Dodger Stadium — CF faces NW
+    2395: "NW",   # Oracle Park (SF) — CF faces NW toward McCovey Cove
+    2680: "NW",   # Petco Park (SD) — CF faces NW
+    2681: "NW",   # Citizens Bank Park (PHI) — CF faces NW
+    2889: "N",    # Busch Stadium (STL) — CF faces N
+    3289: "N",    # Citi Field (NYM) — CF faces N
+    3313: "N",    # Yankee Stadium — CF faces N
+    3309: "NE",   # Nationals Park (WSH) — CF faces NE
+    3312: "NW",   # Target Field (MIN) — CF faces NW
+    31:   "N",    # PNC Park (PIT) — CF faces N
+    2602: "NW",   # Great American Ball Park (CIN) — CF faces NW
+    2394: "NE",   # Comerica Park (DET) — CF faces NE
+    4705: "NW",   # Truist Park (ATL) — CF faces NW
+    4169: "N",    # loanDepot park (MIA) — retractable, CF faces N
+    32:   "N",    # American Family Field (MIL) — retractable, CF faces N
+    680:  "N",    # T-Mobile Park (SEA) — retractable, CF faces N
+    2392: "N",    # Daikin Park / Minute Maid (HOU) — retractable, CF faces N
+    5325: "N",    # Globe Life Field (TEX) — retractable, CF faces N
+    4321: "N",    # Globe Life Field alt ID (TEX) — retractable, CF faces N
+    14:   "N",    # Rogers Centre (TOR) — retractable, CF faces N
+    15:   "NE",   # Chase Field (ARI) — retractable, CF faces NE
+    12:   "N",    # Tropicana Field (TB) — fixed dome, mapped but unused
+    2529: "NW",   # Sutter Health Park (OAK/SAC) — CF faces NW
 }
 
 _COMPASS_DEG = {"N":0,"NNE":22.5,"NE":45,"ENE":67.5,"E":90,"ESE":112.5,
@@ -65,17 +94,16 @@ def _wind_along_spray(wind_spd: float, wind_dir: str, venue_id: int) -> float:
     """
     Returns signed wind speed (mph) along the primary batted-ball spray axis.
     Positive = out (boost), negative = in (suppress).
-    Falls back to 0 if venue not mapped.
+    Falls back to 0 if venue not mapped (all 30 MLB venues are now mapped above).
     """
     if not wind_dir or wind_spd <= 0:
         return 0.0
     out_dir = _OUTFIELD_COMPASS.get(venue_id)
     if not out_dir:
-        # Generic: headwind/tailwind relative to CF (assume CF is ~S for most parks)
-        # RotoGrinders rule: "out to CF" = most impactful
-        out_deg = 180.0   # S = out to CF default
+        # Generic fallback for any future expansion parks: CF roughly N (most common)
+        out_deg = 0.0
     else:
-        out_deg = _COMPASS_DEG.get(out_dir, 180.0)
+        out_deg = _COMPASS_DEG.get(out_dir, 0.0)
 
     wind_deg = _COMPASS_DEG.get(wind_dir.strip().upper(), 0.0)
     # Dot product of unit vectors
@@ -292,6 +320,18 @@ LEAGUE_PLATOON_SPLITS = {
     "S":  0.027,    # switch hitter advantage (use favorable side)
 }
 
+# League-average values used as the Bayesian shrinkage target in platoon_blend_v2.
+# FIX: previously used the player's own season stat as the prior (season_val * M),
+# which inflated split estimates for high-average batters and defeated the
+# entire purpose of Tango's regression-to-league-mean constants.
+_LEAGUE_AVG_PRIOR = {
+    "avg":  0.248,
+    "obp":  0.317,
+    "slg":  0.397,
+    "ops":  0.714,
+    "woba": 0.320,
+}
+
 _STAT_DEFAULTS_V2 = {
     "avg": 0.245, "obp": 0.315, "slg": 0.390, "ops": 0.705, "woba": 0.320
 }
@@ -303,7 +343,11 @@ def platoon_blend_v2(batter: dict, pitcher_hand: str, stat: str) -> float:
     Replaces current _platoon_blend() in app.py.
 
     Uses canonical Tango regression constants — observed splits with small PA
-    are shrunk heavily toward league-average split.
+    are shrunk toward LEAGUE-AVERAGE (not the player's own season stat).
+
+    FIX: Prior was `season_val * M` — now correctly `lg_avg * M`.
+    A .310 hitter with 30 vs-LHP PA previously had their split pulled toward
+    .310 instead of .248, completely defeating the shrinkage purpose.
     """
     bats = (batter.get("bats") or "S").upper()
     hand = (pitcher_hand or "R").upper()
@@ -317,7 +361,7 @@ def platoon_blend_v2(batter: dict, pitcher_hand: str, stat: str) -> float:
     obs_split = batter.get(split_key)
     split_pa  = int(batter.get(pa_key, 0) or 0)
 
-    # Season (unhandedness-adjusted) value
+    # Season (unhandedness-adjusted) value — used only for no-data fallback
     season_map = {
         "avg":  batter.get("avg")  or batter.get("fg_avg"),
         "obp":  batter.get("obp")  or batter.get("fg_obp"),
@@ -353,9 +397,11 @@ def platoon_blend_v2(batter: dict, pitcher_hand: str, stat: str) -> float:
     obs_val = float(obs_split)
     M = PLATOON_M.get(bats, 1620)
 
-    # Bayesian shrinkage: blend observed split with season (used as proxy for league prior)
-    # true_split = (obs * PA + league_prior * M) / (PA + M)
-    blended = (obs_val * split_pa + season_val * M) / (split_pa + M)
+    # Bayesian shrinkage: blend observed split with LEAGUE AVERAGE (correct prior).
+    # FIX: was `(obs_val * split_pa + season_val * M) / (split_pa + M)`
+    # which used the player's own season stat as the shrinkage target.
+    lg_avg = _LEAGUE_AVG_PRIOR.get(stat, _STAT_DEFAULTS_V2.get(stat, 0.0))
+    blended = (obs_val * split_pa + lg_avg * M) / (split_pa + M)
     return round(blended, 4)
 
 
@@ -513,6 +559,10 @@ def derive_probs_v2(b: dict, p: dict, park: float = 1.0,
       - ttop_penalty_val from ttop_woba_penalty()  [Phase 2]
 
     All existing logic preserved; new multipliers applied on top.
+
+    FIX (Bug 1): hit_mult now applied to singles, doubles, AND triples.
+    Previously only single_rate was multiplied; doubles and triples were
+    left at base rates, under-representing warm/wind-out conditions.
     """
     # ── Base probabilities (existing logic, inlined for portability) ──────────
     def _n(v, d=0.0):
@@ -589,9 +639,13 @@ def derive_probs_v2(b: dict, p: dict, park: float = 1.0,
 
     # ── Phase 1A: Apply weather multipliers ───────────────────────────────────
     if wx_mults and not wx_mults.get("dome"):
-        hr_rate     = _cl(hr_rate     * wx_mults.get("hr_mult",  1.0), 0.004, 0.10)
-        hit_rate_wx = _cl(single_rate * wx_mults.get("hit_mult", 1.0), 0.04, 0.30)
-        single_rate = hit_rate_wx
+        hr_rate = _cl(hr_rate * wx_mults.get("hr_mult", 1.0), 0.004, 0.10)
+        # FIX (Bug 1): apply hit_mult to ALL hit types, not just singles.
+        # Doubles and triples are equally affected by temperature and wind carry.
+        hm = wx_mults.get("hit_mult", 1.0)
+        single_rate = _cl(single_rate * hm, 0.04, 0.30)
+        dbl_rate    = _cl(dbl_rate    * hm, 0.01, 0.12)
+        trp_rate    = _cl(trp_rate    * hm, 0.001, 0.022)
 
     # ── Phase 1B: Apply umpire K%/BB% multipliers ─────────────────────────────
     if ump_adj:
@@ -978,9 +1032,9 @@ if __name__ == "__main__":
     print(ttop_woba_penalty(18, 65, arsenal_size=2))   # ~0.0108 (2nd TTO)
     print(ttop_woba_penalty(27, 95, arsenal_size=1))   # ~0.0510 (3rd TTO, 1-pitch)
 
-    print("\n=== Platoon Blend v2 ===")
+    print("\n=== Platoon Blend v2 (league-avg prior) ===")
     batter_test = {"bats": "L", "avg": ".270", "vs_r_avg": ".295", "vs_r_pa": 50, "fg_avg": 0.270}
-    print(platoon_blend_v2(batter_test, "R", "avg"))   # blended toward season (low PA)
+    print(platoon_blend_v2(batter_test, "R", "avg"))   # blended toward league avg .248 (low PA)
     batter_test2 = {"bats": "L", "avg": ".270", "vs_r_avg": ".305", "vs_r_pa": 300, "fg_avg": 0.270}
     print(platoon_blend_v2(batter_test2, "R", "avg"))  # closer to observed (high PA)
 
@@ -991,5 +1045,8 @@ if __name__ == "__main__":
     print("\n=== De-Vig ===")
     print(devig_power(0.55, 0.50))   # -110/-110 standard
     print(devig_power(0.65, 0.40))   # heavy favorite
+
+    print("\n=== Outfield Compass Coverage ===")
+    print(f"Parks mapped: {len(_OUTFIELD_COMPASS)} (all 30 MLB venues)")
 
     print("\nAll smoke tests passed.")
