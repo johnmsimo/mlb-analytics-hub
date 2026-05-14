@@ -6,7 +6,7 @@ exposed by pipeline_scheduler:
     get_pipeline_status()  →  GET  /api/pipeline/status
     get_matchup_df()       →  GET  /api/pipeline/matchup
     get_games_df()         →  GET  /api/pipeline/games
-    run_pipeline()         →  POST /api/pipeline/run   (admin-token protected)
+    run_pipeline()         →  POST /api/pipeline/run   (admin-token protected + rate limited)
 """
 
 import os
@@ -14,6 +14,8 @@ import threading
 import logging
 
 from flask import Blueprint, jsonify, request
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 from pipeline_scheduler import (
     get_matchup_df,
@@ -24,6 +26,19 @@ from pipeline_scheduler import (
 
 pipeline_bp = Blueprint("pipeline", __name__, url_prefix="/api/pipeline")
 log = logging.getLogger(__name__)
+
+# ── Rate limiter ──────────────────────────────────────────────────────────────
+# Uses Redis when REDIS_URL is set; falls back to in-memory (dev/test).
+# Attach to the app via limiter.init_app(app) in app.py after blueprint
+# registration, or leave as a standalone limiter bound to this blueprint.
+_REDIS_URL = os.getenv("REDIS_URL", "")
+
+limiter = Limiter(
+    key_func=get_remote_address,
+    storage_uri=_REDIS_URL if _REDIS_URL else "memory://",
+    default_limits=[],          # no default limits on read-only routes
+    headers_enabled=True,       # exposes X-RateLimit-* headers for visibility
+)
 
 # Read once at import time; same variable the rest of app.py uses.
 _ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "").strip()
@@ -99,10 +114,12 @@ def pipeline_matchup():
 
 
 @pipeline_bp.route("/run", methods=["POST"])
+@limiter.limit("3 per minute; 10 per hour")
 def pipeline_run():
     """
     Manually trigger a pipeline run in a background thread.
     Protected by ADMIN_TOKEN when that env var is set.
+    Rate-limited to 3/min and 10/hr per IP (via Flask-Limiter).
     Safe to call while a run is already in progress (noop if already running).
     """
     auth_err = _check_admin_auth()
