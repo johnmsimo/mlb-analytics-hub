@@ -22,11 +22,14 @@ log = logging.getLogger(__name__)
 
 MLB_API = "https://statsapi.mlb.com/api/v1"
 
-# ── Run time config ────────────────────────────────────────────────────────────
+# ── Run time config ────────────────────────────────────────────────────────────────
 RUN_HOUR_ET   = 9
 RUN_MINUTE_ET = 0
 
-# ── In-memory cache ────────────────────────────────────────────────────────────
+# ── In-memory cache ────────────────────────────────────────────────────────────────────
+# RLock (re-entrant) because run_pipeline() calls get_pipeline_status() internally.
+_cache_lock = threading.RLock()
+
 _cache = {
     "matchup_df": None,
     "games_df":   None,
@@ -36,7 +39,7 @@ _cache = {
     "error_msg":  None,
 }
 
-# ── Lazy imports from your existing modules ────────────────────────────────────
+# ── Lazy imports from your existing modules ────────────────────────────────────────────
 # Imported inside run_pipeline() to avoid circular import at module load time.
 
 def _import_app_modules():
@@ -52,7 +55,7 @@ def _import_app_modules():
     return fetch_schedule, _sv_batter, _sv_pitcher
 
 
-# ── 1. Today's Games (uses your fetch_schedule) ────────────────────────────────
+# ── 1. Today's Games (uses your fetch_schedule) ────────────────────────────────────────────
 def _build_games_df(fetch_schedule):
     today_str = datetime.now(ET).strftime("%m/%d/%Y")
     try:
@@ -81,7 +84,7 @@ def _build_games_df(fetch_schedule):
     return pd.DataFrame(rows)
 
 
-# ── 2. Active Roster (uses your _get_active_roster cache) ─────────────────────
+# ── 2. Active Roster (uses your _get_active_roster cache) ───────────────────────────────────
 def _get_position_player_ids(team_id):
     """
     Uses your existing _get_active_roster() which already caches for 30 min.
@@ -102,7 +105,7 @@ def _get_position_player_ids(team_id):
         return []
 
 
-# ── 3. BvP H2H ────────────────────────────────────────────────────────────────
+# ── 3. BvP H2H ────────────────────────────────────────────────────────────────────────────────────
 def _get_bvp(batter_id, pitcher_id):
     season = datetime.now(ET).year
     url = f"{MLB_API}/people"
@@ -131,7 +134,7 @@ def _get_bvp(batter_id, pitcher_id):
             "bvp_k": 0, "bvp_bb": 0, "bvp_avg": ".000", "bvp_ops": ".000"}
 
 
-# ── 4. Platoon Splits ──────────────────────────────────────────────────────────
+# ── 4. Platoon Splits ────────────────────────────────────────────────────────────────────────────────
 def _get_platoon_splits(player_id, group="hitting"):
     season = datetime.now(ET).year
     url = f"{MLB_API}/people/{player_id}/stats"
@@ -164,7 +167,7 @@ def _get_platoon_splits(player_id, group="hitting"):
     return result
 
 
-# ── 5. Statcast via your sv_batter / sv_pitcher ────────────────────────────────
+# ── 5. Statcast via your sv_batter / sv_pitcher ────────────────────────────────────────────────
 def _extract_batter_statcast(sv_batter_fn, player_name):
     """
     Pulls from your existing sv_batter() cache — same data source your
@@ -199,7 +202,7 @@ def _extract_pitcher_statcast(sv_pitcher_fn, pitcher_name):
     }
 
 
-# ── 6. Build Full Matchup DataFrame ───────────────────────────────────────────
+# ── 6. Build Full Matchup DataFrame ──────────────────────────────────────────────────────────────────────
 def _fetch_batter_row(batter_id, pitcher_id, pitcher_name, game_meta,
                       pitcher_splits, pitcher_statcast, sv_batter_fn):
     """Fetch all per-batter data in one call (runs inside a thread pool)."""
@@ -276,12 +279,13 @@ def _build_matchup_df(games_df, sv_batter_fn, sv_pitcher_fn):
     return pd.DataFrame(rows)
 
 
-# ── 7. Main Pipeline Run ───────────────────────────────────────────────────────
+# ── 7. Main Pipeline Run ───────────────────────────────────────────────────────────────────────────────────
 def run_pipeline():
-    global _cache
-    _cache["status"]     = "running"
-    _cache["error_msg"]  = None
-    _cache["started_at"] = datetime.now().isoformat()
+    # Mark running — lock protects the status flag write
+    with _cache_lock:
+        _cache["status"]     = "running"
+        _cache["error_msg"]  = None
+        _cache["started_at"] = datetime.now().isoformat()
     log.info("[pipeline] Run started.")
 
     try:
@@ -294,18 +298,22 @@ def run_pipeline():
 
         if games_df.empty:
             log.info("[pipeline] No games today.")
-            _cache.update({"games_df": games_df, "matchup_df": pd.DataFrame(),
-                           "last_run": datetime.now().isoformat(), "status": "done"})
+            with _cache_lock:
+                _cache.update({"games_df": games_df, "matchup_df": pd.DataFrame(),
+                               "last_run": datetime.now().isoformat(), "status": "done"})
             return
 
+        # All the slow I/O happens OUTSIDE the lock so reads are never blocked
         matchup_df = _build_matchup_df(games_df, sv_batter_fn, sv_pitcher_fn)
 
-        _cache.update({
-            "games_df":   games_df,
-            "matchup_df": matchup_df,
-            "last_run":   datetime.now().isoformat(),
-            "status":     "done",
-        })
+        # Atomic swap — all keys updated while the lock is held
+        with _cache_lock:
+            _cache.update({
+                "games_df":   games_df,
+                "matchup_df": matchup_df,
+                "last_run":   datetime.now().isoformat(),
+                "status":     "done",
+            })
 
         # Persist to disk for Fly.io restart recovery
         out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
@@ -315,12 +323,13 @@ def run_pipeline():
         log.info(f"[pipeline] Done — {len(matchup_df)} rows → {out_path}")
 
     except Exception as e:
-        _cache["status"]    = "error"
-        _cache["error_msg"] = str(e)
+        with _cache_lock:
+            _cache["status"]    = "error"
+            _cache["error_msg"] = str(e)
         log.error(f"[pipeline] Error: {e}", exc_info=True)
 
 
-# ── 8. Daily Scheduler Loop ────────────────────────────────────────────────────
+# ── 8. Daily Scheduler Loop ────────────────────────────────────────────────────────────────────────────────
 def _scheduler_loop():
     log.info(f"[pipeline] Scheduler armed — fires {RUN_HOUR_ET:02d}:{RUN_MINUTE_ET:02d} ET daily.")
     last_run_date = None
@@ -343,10 +352,11 @@ def start_scheduler():
     if os.path.exists(out_path):
         log.info(f"[pipeline] Cold-start: loading {out_path} from disk.")
         try:
-            _cache["matchup_df"] = pd.read_csv(out_path)
-            _cache["status"]     = "done"
-            _cache["last_run"]   = datetime.fromtimestamp(
-                os.path.getmtime(out_path)).isoformat()
+            with _cache_lock:
+                _cache["matchup_df"] = pd.read_csv(out_path)
+                _cache["status"]     = "done"
+                _cache["last_run"]   = datetime.fromtimestamp(
+                    os.path.getmtime(out_path)).isoformat()
         except Exception as e:
             log.warning(f"[pipeline] Disk load failed: {e}. Fetching fresh.")
             threading.Thread(target=run_pipeline, daemon=True).start()
@@ -356,20 +366,26 @@ def start_scheduler():
     threading.Thread(target=_scheduler_loop, daemon=True).start()
 
 
-# ── Public accessors (used by pipeline_routes.py) ─────────────────────────────
+# ── Public accessors (used by pipeline_routes.py) ─────────────────────────────────────────────────
 def get_matchup_df() -> pd.DataFrame:
-    return _cache["matchup_df"] if _cache["matchup_df"] is not None else pd.DataFrame()
+    with _cache_lock:
+        df = _cache["matchup_df"]
+    return df if df is not None else pd.DataFrame()
 
 def get_games_df() -> pd.DataFrame:
-    return _cache["games_df"] if _cache["games_df"] is not None else pd.DataFrame()
+    with _cache_lock:
+        df = _cache["games_df"]
+    return df if df is not None else pd.DataFrame()
 
 def get_pipeline_status() -> dict:
-    df = _cache["matchup_df"]
-    return {
-        "status":     _cache["status"],
-        "last_run":   _cache["last_run"],
-        "started_at": _cache["started_at"],
-        "rows":       len(df) if df is not None else 0,
-        "games":      len(_cache["games_df"]) if _cache["games_df"] is not None else 0,
-        "error":      _cache["error_msg"],
-    }
+    with _cache_lock:
+        df  = _cache["matchup_df"]
+        gdf = _cache["games_df"]
+        return {
+            "status":     _cache["status"],
+            "last_run":   _cache["last_run"],
+            "started_at": _cache["started_at"],
+            "rows":       len(df)  if df  is not None else 0,
+            "games":      len(gdf) if gdf is not None else 0,
+            "error":      _cache["error_msg"],
+        }
