@@ -3,6 +3,7 @@ fangraphs_loader.py — Single FanGraphs data layer for MLB Analytics Hub.
 """
 
 import os, re
+import threading
 import pandas as pd
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
@@ -76,6 +77,7 @@ MIN_IP = 5.0
 MIN_PA = 20
 
 _cache: dict = {}
+_load_lock = threading.Lock()
 
 
 def _clean_name_html(df, col="Name"):
@@ -112,18 +114,23 @@ def _find_proj_path(primary, fallback):
 
 
 def _load_all():
+    # Fast path — no lock needed; dict bool check is atomic in CPython
     if _cache:
         return
-    for cache_key, path, label in BAT_SEASON_PATHS:
-        _cache[cache_key] = _try_load(path, label)
-    for cache_key, path, label in PIT_SEASON_PATHS:
-        _cache[cache_key] = _try_load(path, label)
-    for cache_key, primary, fallback, label in PROJ_BAT_PATHS:
-        path = _find_proj_path(primary, fallback)
-        _cache[cache_key] = _try_load(path, label)
-    for cache_key, primary, fallback, label in PROJ_PIT_PATHS:
-        path = _find_proj_path(primary, fallback)
-        _cache[cache_key] = _try_load(path, label)
+    with _load_lock:
+        # Double-checked: another thread may have loaded while we waited
+        if _cache:
+            return
+        for cache_key, path, label in BAT_SEASON_PATHS:
+            _cache[cache_key] = _try_load(path, label)
+        for cache_key, path, label in PIT_SEASON_PATHS:
+            _cache[cache_key] = _try_load(path, label)
+        for cache_key, primary, fallback, label in PROJ_BAT_PATHS:
+            path = _find_proj_path(primary, fallback)
+            _cache[cache_key] = _try_load(path, label)
+        for cache_key, primary, fallback, label in PROJ_PIT_PATHS:
+            path = _find_proj_path(primary, fallback)
+            _cache[cache_key] = _try_load(path, label)
 
 
 def _name_col(df):

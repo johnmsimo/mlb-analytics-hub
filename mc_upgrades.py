@@ -134,7 +134,7 @@ def build_weather_multipliers(wx: dict, venue_id: int, park_factor: float) -> di
         return {"hr_mult": 1.0, "hit_mult": 1.0, "run_mult": 1.0,
                 "carry_ft": 0.0, "dome": True}
 
-    # ── Temperature (delta from 70°F park-average baseline) ──────────────────
+    # ── Temperature (delta from 70°F park-average baseline) ────────────────────
     try:
         temp_f = float(wx.get("temp", 70))
     except (TypeError, ValueError):
@@ -147,7 +147,7 @@ def build_weather_multipliers(wx: dict, venue_id: int, park_factor: float) -> di
     # Run scoring: more muted
     run_temp_mult = 1.0 + temp_delta * 0.004
 
-    # ── Wind (along-spray component) ─────────────────────────────────────────
+    # ── Wind (along-spray component) ────────────────────────────────────────
     try:
         wind_spd = float(wx.get("wind_speed", 0) or 0)
     except (TypeError, ValueError):
@@ -164,7 +164,7 @@ def build_weather_multipliers(wx: dict, venue_id: int, park_factor: float) -> di
     # ── Humidor correction (suppresses HR ~20-25% beyond altitude) ───────────
     humidor_mult = 0.97 if venue_id in HUMIDOR_VENUES else 1.0
 
-    # ── Combine ──────────────────────────────────────────────────────────────
+    # ── Combine ───────────────────────────────────────────────────────────────────
     hr_mult  = max(0.75, min(1.35, hr_temp_mult * hr_wind_mult * humidor_mult))
     hit_mult = max(0.92, min(1.08, 1.0 + temp_delta * 0.002))  # hits much less sensitive
     run_mult = max(0.88, min(1.12, run_temp_mult * (1.0 + along * 0.002)))
@@ -261,7 +261,7 @@ def ttop_woba_penalty(batters_faced: int,
     arsenal_size: number of distinct pitch types (1=1-pitch, 4+=multi-arsenal)
     """
     # Smooth TTOP: quadratic in batters_faced
-    # 0 BF=0, 9 BF≈+3 pts, 18 BF≈+9 pts, 27 BF≈+17 pts
+    # 0 BF=0, 9 BF≈10 pts, 18 BF≈17 pts, 27 BF≈25 pts
     ttop_base = min(0.030, (batters_faced / 27.0) ** 1.4 * 0.030)
 
     # Arsenal scale
@@ -564,7 +564,7 @@ def derive_probs_v2(b: dict, p: dict, park: float = 1.0,
     Previously only single_rate was multiplied; doubles and triples were
     left at base rates, under-representing warm/wind-out conditions.
     """
-    # ── Base probabilities (existing logic, inlined for portability) ──────────
+    # ── Base probabilities (existing logic, inlined for portability) ───────────
     def _n(v, d=0.0):
         try:
             f = float(v)
@@ -637,7 +637,9 @@ def derive_probs_v2(b: dict, p: dict, park: float = 1.0,
         out_rate = 1.0-(walk_rate+single_rate+dbl_rate+trp_rate+hr_rate)
     k_share = _cl(k_rate / max(out_rate, 0.001), 0.18, 0.72)
 
-    # ── Phase 1A: Apply weather multipliers ───────────────────────────────────
+    # ── Phase 1A: Apply weather multipliers ────────────────────────────────
+    # Bug 1 fix: apply hit_mult to ALL batted-ball hit types, not just singles.
+    # Doubles and triples are equally affected by temperature/wind carry.
     if wx_mults and not wx_mults.get("dome"):
         hr_rate = _cl(hr_rate * wx_mults.get("hr_mult", 1.0), 0.004, 0.10)
         # FIX (Bug 1): apply hit_mult to ALL hit types, not just singles.
@@ -647,12 +649,12 @@ def derive_probs_v2(b: dict, p: dict, park: float = 1.0,
         dbl_rate    = _cl(dbl_rate    * hm, 0.01, 0.12)
         trp_rate    = _cl(trp_rate    * hm, 0.001, 0.022)
 
-    # ── Phase 1B: Apply umpire K%/BB% multipliers ─────────────────────────────
+    # ── Phase 1B: Apply umpire K%/BB% multipliers ──────────────────────────
     if ump_adj:
         k_share  = _cl(k_share  * ump_adj.get("k_mult",  1.0), 0.15, 0.78)
         walk_rate = _cl(walk_rate * ump_adj.get("bb_mult", 1.0), 0.035, 0.16)
 
-    # ── BatX integration (existing logic preserved) ───────────────────────────
+    # ── BatX integration (existing logic preserved) ─────────────────────────
     if batx:
         hit_m  = batx.get("hit_mult",  1.0)
         hr_m   = batx.get("hr_mult",   1.0)
