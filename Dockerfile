@@ -6,7 +6,10 @@ FROM python:3.11-slim AS build
 WORKDIR /usr/src/app
 
 # Install system dependencies needed for building Python packages
-RUN apt-get update && apt-get install -y --no-install-recommends     build-essential     gcc     && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        gcc \
+    && rm -rf /var/lib/apt/lists/*
 
 # Create a virtual environment
 RUN python -m venv /opt/venv
@@ -16,7 +19,10 @@ ENV PATH="/opt/venv/bin:$PATH"
 COPY requirements.tx[t] ./requirements.txt
 
 # Install Python dependencies only if requirements.txt exists
-RUN pip install --upgrade pip &&     if [ -f requirements.txt ]; then         pip install -r requirements.txt;     fi
+RUN pip install --upgrade pip && \
+    if [ -f requirements.txt ]; then \
+        pip install -r requirements.txt; \
+    fi
 
 # Copy the rest of the application source code
 COPY . .
@@ -59,15 +65,13 @@ EXPOSE $PORT
 # connect to the external URL instead.
 ENV REDIS_URL=redis://localhost:6379
 
-# Start Redis (daemonised, no persistence, writes to /tmp so appuser can write),
-# then poll redis-cli until Redis is actually accepting connections before
-# starting the app.  The bare "&&" only waits for redis-server to *daemonise*
-# (i.e. the parent process exits), NOT for Redis to be ready — so without the
-# readiness loop, redis_client.py's ping() can race and permanently fall back
-# to the in-memory client for the container's lifetime.
+# Start Redis, wait until it is actually ready to accept connections (not just
+# daemonised), then start the app.  Without the readiness loop the app can
+# reach redis_client.py before Redis has bound its socket and permanently fall
+# back to in-memory mode for the container lifetime.
 CMD redis-server --daemonize yes \
         --dir /tmp \
         --save "" \
         --loglevel warning \
-    && until redis-cli -e ping 2>/dev/null; do sleep 0.1; done \
+    && until redis-cli ping 2>/dev/null | grep -q PONG; do sleep 0.1; done \
     && python app.py

@@ -6,9 +6,10 @@ exposed by pipeline_scheduler:
     get_pipeline_status()  →  GET  /api/pipeline/status
     get_matchup_df()       →  GET  /api/pipeline/matchup
     get_games_df()         →  GET  /api/pipeline/games
-    run_pipeline()         →  POST /api/pipeline/run
+    run_pipeline()         →  POST /api/pipeline/run   (admin-token protected)
 """
 
+import os
 import threading
 import logging
 
@@ -23,6 +24,31 @@ from pipeline_scheduler import (
 
 pipeline_bp = Blueprint("pipeline", __name__, url_prefix="/api/pipeline")
 log = logging.getLogger(__name__)
+
+# Read once at import time; same variable the rest of app.py uses.
+_ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "").strip()
+
+
+def _check_admin_auth():
+    """Return None if auth passes (or ADMIN_TOKEN is unset), else a 401 Response.
+
+    Accepts the token via:
+      Authorization: Bearer <token>
+      X-Admin-Token: <token>
+    """
+    if not _ADMIN_TOKEN:
+        return None  # auth disabled — open access
+    auth_header  = request.headers.get("Authorization", "")
+    token_header = request.headers.get("X-Admin-Token", "")
+    bearer = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.startswith("Bearer ")
+        else ""
+    )
+    provided = bearer or token_header.strip()
+    if provided == _ADMIN_TOKEN:
+        return None
+    return jsonify({"success": False, "error": "Unauthorized"}), 401
 
 
 @pipeline_bp.route("/status")
@@ -76,8 +102,13 @@ def pipeline_matchup():
 def pipeline_run():
     """
     Manually trigger a pipeline run in a background thread.
+    Protected by ADMIN_TOKEN when that env var is set.
     Safe to call while a run is already in progress (noop if already running).
     """
+    auth_err = _check_admin_auth()
+    if auth_err is not None:
+        return auth_err
+
     status = get_pipeline_status()
     if status.get("status") == "running":
         return jsonify({"success": False, "error": "Pipeline already running"}), 409
