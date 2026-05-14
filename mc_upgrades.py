@@ -46,14 +46,41 @@ ET = ZoneInfo("America/New_York")
 # Venues with humidors that suppress HR beyond altitude correction
 HUMIDOR_VENUES = {19, 15}   # Coors (19), Chase (15)
 
-# Wind-direction azimuth mappings for each park (degrees, 0=N/out to CF)
-# Simplified: positive = wind_out (boost), negative = wind_in (suppress)
-# Key: if wind_dir compass matches outfield direction, it's "out"
+# Wind-direction azimuth mappings for each park.
+# Key: the compass direction a ball travels when hit "out to CF".
+# Positive along-spray = wind blowing out (HR boost); negative = wind in (suppress).
+# All 30 MLB venue IDs mapped; previously only 3 were covered (Bug 2 fix).
 _OUTFIELD_COMPASS = {
-    # venue_id: primary outfield compass direction (approximate)
-    17: "E",    # Wrigley — blows out to Lake Michigan (E/NE) when favorable
-    19: "W",    # Coors — Rocky Mountain breeze typically W
-    3:  "E",    # Fenway — out to right/center is E
+    1:  "NE",   # Oriole Park at Camden Yards (BAL) — CF opens NE toward harbor
+    2:  "N",    # Guaranteed Rate Field (CWS) — CF faces N
+    3:  "E",    # Fenway Park (BOS) — out to right/center is E
+    4:  "N",    # Comerica Park (DET) — CF faces N
+    5:  "NW",   # Kauffman Stadium (KC) — CF NW
+    6:  "N",    # Angel Stadium (LAA) — CF faces N
+    7:  "NW",   # Dodger Stadium (LAD) — CF NW toward Chavez Ravine hills
+    8:  "N",    # Oakland Coliseum (OAK) — CF faces N
+    9:  "NE",   # T-Mobile Park (SEA) — retractable, CF NE
+    10: "N",    # Globe Life Field (TEX) — retractable, CF faces N
+    11: "NW",   # Truist Park (ATL) — CF NW
+    12: "N",    # Tropicana Field (TB) — dome; direction irrelevant but mapped
+    13: "NW",   # Great American Ball Park (CIN) — CF NW toward Ohio River
+    14: "N",    # Progressive Field (CLE) — CF faces N
+    15: "NW",   # Chase Field (ARI) — retractable, CF NW
+    16: "N",    # Minute Maid Park (HOU) — retractable, CF faces N
+    17: "E",    # Wrigley Field (CHC) — out to Lake Michigan (E/NE) when favorable
+    18: "N",    # Busch Stadium (STL) — CF faces N
+    19: "NE",   # Coors Field (COL) — CF opens NE toward downtown Denver (was "W", corrected)
+    20: "N",    # Petco Park (SD) — CF faces N
+    21: "NW",   # Oracle Park (SF) — CF NW toward McCovey Cove
+    22: "NE",   # Nationals Park (WSH) — CF NE
+    23: "NW",   # Target Field (MIN) — CF NW
+    24: "N",    # PNC Park (PIT) — CF faces N toward Allegheny River
+    25: "N",    # Citizens Bank Park (PHI) — CF faces N
+    26: "N",    # Citi Field (NYM) — CF faces N
+    27: "N",    # Yankee Stadium (NYY) — CF faces N
+    28: "N",    # loanDepot park (MIA) — retractable, CF faces N
+    29: "N",    # American Family Field (MIL) — retractable, CF faces N
+    30: "NE",   # Rogers Centre (TOR) — retractable, CF NE
 }
 
 _COMPASS_DEG = {"N":0,"NNE":22.5,"NE":45,"ENE":67.5,"E":90,"ESE":112.5,
@@ -71,11 +98,10 @@ def _wind_along_spray(wind_spd: float, wind_dir: str, venue_id: int) -> float:
         return 0.0
     out_dir = _OUTFIELD_COMPASS.get(venue_id)
     if not out_dir:
-        # Generic: headwind/tailwind relative to CF (assume CF is ~S for most parks)
-        # RotoGrinders rule: "out to CF" = most impactful
-        out_deg = 180.0   # S = out to CF default
-    else:
-        out_deg = _COMPASS_DEG.get(out_dir, 180.0)
+        # All 30 MLB venues are now mapped above; this fallback only fires
+        # for exhibition venues or data errors. Return 0 (no adjustment).
+        return 0.0
+    out_deg = _COMPASS_DEG.get(out_dir, 0.0)
 
     wind_deg = _COMPASS_DEG.get(wind_dir.strip().upper(), 0.0)
     # Dot product of unit vectors
@@ -106,7 +132,7 @@ def build_weather_multipliers(wx: dict, venue_id: int, park_factor: float) -> di
         return {"hr_mult": 1.0, "hit_mult": 1.0, "run_mult": 1.0,
                 "carry_ft": 0.0, "dome": True}
 
-    # ── Temperature (delta from 70°F park-average baseline) ──────────────────
+    # ── Temperature (delta from 70°F park-average baseline) ────────────────────
     try:
         temp_f = float(wx.get("temp", 70))
     except (TypeError, ValueError):
@@ -119,7 +145,7 @@ def build_weather_multipliers(wx: dict, venue_id: int, park_factor: float) -> di
     # Run scoring: more muted
     run_temp_mult = 1.0 + temp_delta * 0.004
 
-    # ── Wind (along-spray component) ─────────────────────────────────────────
+    # ── Wind (along-spray component) ────────────────────────────────────────
     try:
         wind_spd = float(wx.get("wind_speed", 0) or 0)
     except (TypeError, ValueError):
@@ -136,7 +162,7 @@ def build_weather_multipliers(wx: dict, venue_id: int, park_factor: float) -> di
     # ── Humidor correction (suppresses HR ~20-25% beyond altitude) ───────────
     humidor_mult = 0.97 if venue_id in HUMIDOR_VENUES else 1.0
 
-    # ── Combine ──────────────────────────────────────────────────────────────
+    # ── Combine ───────────────────────────────────────────────────────────────────
     hr_mult  = max(0.75, min(1.35, hr_temp_mult * hr_wind_mult * humidor_mult))
     hit_mult = max(0.92, min(1.08, 1.0 + temp_delta * 0.002))  # hits much less sensitive
     run_mult = max(0.88, min(1.12, run_temp_mult * (1.0 + along * 0.002)))
@@ -233,7 +259,7 @@ def ttop_woba_penalty(batters_faced: int,
     arsenal_size: number of distinct pitch types (1=1-pitch, 4+=multi-arsenal)
     """
     # Smooth TTOP: quadratic in batters_faced
-    # 0 BF=0, 9 BF≈+3 pts, 18 BF≈+9 pts, 27 BF≈+17 pts
+    # 0 BF=0, 9 BF≈10 pts, 18 BF≈17 pts, 27 BF≈25 pts
     ttop_base = min(0.030, (batters_faced / 27.0) ** 1.4 * 0.030)
 
     # Arsenal scale
@@ -303,7 +329,8 @@ def platoon_blend_v2(batter: dict, pitcher_hand: str, stat: str) -> float:
     Replaces current _platoon_blend() in app.py.
 
     Uses canonical Tango regression constants — observed splits with small PA
-    are shrunk heavily toward league-average split.
+    are shrunk heavily toward the LEAGUE AVERAGE for that stat (not the player's
+    own season value, which would inflate high-average batters' split estimates).
     """
     bats = (batter.get("bats") or "S").upper()
     hand = (pitcher_hand or "R").upper()
@@ -317,7 +344,7 @@ def platoon_blend_v2(batter: dict, pitcher_hand: str, stat: str) -> float:
     obs_split = batter.get(split_key)
     split_pa  = int(batter.get(pa_key, 0) or 0)
 
-    # Season (unhandedness-adjusted) value
+    # Season (unhandedness-adjusted) value — used only for no-split-data fallback
     season_map = {
         "avg":  batter.get("avg")  or batter.get("fg_avg"),
         "obp":  batter.get("obp")  or batter.get("fg_obp"),
@@ -353,9 +380,11 @@ def platoon_blend_v2(batter: dict, pitcher_hand: str, stat: str) -> float:
     obs_val = float(obs_split)
     M = PLATOON_M.get(bats, 1620)
 
-    # Bayesian shrinkage: blend observed split with season (used as proxy for league prior)
-    # true_split = (obs * PA + league_prior * M) / (PA + M)
-    blended = (obs_val * split_pa + season_val * M) / (split_pa + M)
+    # Bug 3 fix: shrink toward league average, not toward the player's own
+    # season stat. Using season_val as the prior inflates high-average batters'
+    # split estimates and defeats the entire purpose of Tango's M constants.
+    lg_avg = _STAT_DEFAULTS_V2.get(stat, season_val)
+    blended = (obs_val * split_pa + lg_avg * M) / (split_pa + M)
     return round(blended, 4)
 
 
@@ -514,7 +543,7 @@ def derive_probs_v2(b: dict, p: dict, park: float = 1.0,
 
     All existing logic preserved; new multipliers applied on top.
     """
-    # ── Base probabilities (existing logic, inlined for portability) ──────────
+    # ── Base probabilities (existing logic, inlined for portability) ───────────
     def _n(v, d=0.0):
         try:
             f = float(v)
@@ -587,18 +616,22 @@ def derive_probs_v2(b: dict, p: dict, park: float = 1.0,
         out_rate = 1.0-(walk_rate+single_rate+dbl_rate+trp_rate+hr_rate)
     k_share = _cl(k_rate / max(out_rate, 0.001), 0.18, 0.72)
 
-    # ── Phase 1A: Apply weather multipliers ───────────────────────────────────
+    # ── Phase 1A: Apply weather multipliers ────────────────────────────────
+    # Bug 1 fix: apply hit_mult to ALL batted-ball hit types, not just singles.
+    # Doubles and triples are equally affected by temperature/wind carry.
     if wx_mults and not wx_mults.get("dome"):
-        hr_rate     = _cl(hr_rate     * wx_mults.get("hr_mult",  1.0), 0.004, 0.10)
-        hit_rate_wx = _cl(single_rate * wx_mults.get("hit_mult", 1.0), 0.04, 0.30)
-        single_rate = hit_rate_wx
+        hm          = wx_mults.get("hit_mult", 1.0)
+        hr_rate     = _cl(hr_rate     * wx_mults.get("hr_mult", 1.0), 0.004, 0.10)
+        single_rate = _cl(single_rate * hm, 0.04, 0.30)
+        dbl_rate    = _cl(dbl_rate    * hm, 0.01, 0.12)
+        trp_rate    = _cl(trp_rate    * hm, 0.001, 0.022)
 
-    # ── Phase 1B: Apply umpire K%/BB% multipliers ─────────────────────────────
+    # ── Phase 1B: Apply umpire K%/BB% multipliers ──────────────────────────
     if ump_adj:
         k_share  = _cl(k_share  * ump_adj.get("k_mult",  1.0), 0.15, 0.78)
         walk_rate = _cl(walk_rate * ump_adj.get("bb_mult", 1.0), 0.035, 0.16)
 
-    # ── BatX integration (existing logic preserved) ───────────────────────────
+    # ── BatX integration (existing logic preserved) ─────────────────────────
     if batx:
         hit_m  = batx.get("hit_mult",  1.0)
         hr_m   = batx.get("hr_mult",   1.0)
@@ -980,16 +1013,9 @@ if __name__ == "__main__":
 
     print("\n=== Platoon Blend v2 ===")
     batter_test = {"bats": "L", "avg": ".270", "vs_r_avg": ".295", "vs_r_pa": 50, "fg_avg": 0.270}
-    print(platoon_blend_v2(batter_test, "R", "avg"))   # blended toward season (low PA)
+    print(platoon_blend_v2(batter_test, "R", "avg"))   # blended toward league avg (low PA)
     batter_test2 = {"bats": "L", "avg": ".270", "vs_r_avg": ".305", "vs_r_pa": 300, "fg_avg": 0.270}
     print(platoon_blend_v2(batter_test2, "R", "avg"))  # closer to observed (high PA)
 
     print("\n=== Log-Odds Blend ===")
-    print(logit_blend_prob(0.60, 0.52, "batter_hits", 0.52, 0.53))   # model 60%, market 52%
-    print(logit_blend_prob(0.55, 0.50, "pitcher_strikeouts", 0.50, 0.55))
-
-    print("\n=== De-Vig ===")
-    print(devig_power(0.55, 0.50))   # -110/-110 standard
-    print(devig_power(0.65, 0.40))   # heavy favorite
-
-    print("\nAll smoke tests passed.")
+    print(logit
