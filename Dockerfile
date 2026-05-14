@@ -59,10 +59,15 @@ EXPOSE $PORT
 # connect to the external URL instead.
 ENV REDIS_URL=redis://localhost:6379
 
-# Start Redis (daemonised, no persistence, writes to /tmp so appuser can write)
-# then start the app.  Using && ensures Redis is up before the app starts.
+# Start Redis (daemonised, no persistence, writes to /tmp so appuser can write),
+# then poll redis-cli until Redis is actually accepting connections before
+# starting the app.  The bare "&&" only waits for redis-server to *daemonise*
+# (i.e. the parent process exits), NOT for Redis to be ready — so without the
+# readiness loop, redis_client.py's ping() can race and permanently fall back
+# to the in-memory client for the container's lifetime.
 CMD redis-server --daemonize yes \
         --dir /tmp \
         --save "" \
         --loglevel warning \
+    && until redis-cli -e ping 2>/dev/null; do sleep 0.1; done \
     && python app.py
