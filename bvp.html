@@ -682,15 +682,24 @@ function buildReasoningSummary(proj, summary, batterName, pitcherName) {
   bets.sort((a,b) => b.prob - a.prob);
   leans.sort((a,b) => b.prob - a.prob);
 
-  // Lead headline
+  // Lead headline — tone down if quality/H2H/pitcher context conflicts with verdicts
+  const weakQuality = bq.xwoba_pct != null && bq.xwoba_pct <= 35;
+  const weakH2H     = summary && summary.avg != null && summary.avg <= 0.240 && (summary.pa || 0) >= 15;
+  const elitePitcher= pp.xera != null && pp.xera <= 3.10;
+  const badPlatoon  = mc.platoonNote && mc.platoonNote.includes('(—)');
+  const cautionFlags = (weakQuality ? 1 : 0) + (weakH2H ? 1 : 0) + (elitePitcher ? 1 : 0) + (badPlatoon ? 1 : 0);
+  const shouldTemper = cautionFlags >= 2 || (weakH2H && bets.length <= 1);
+
   let lead, leadCls = '';
-  if (bets.length >= 3)      { lead = `Smash spot — ${bets.length} BET-grade markets for ${batterName}.`; leadCls = 'good'; }
-  else if (bets.length === 2){ lead = `Strong spot — multi-market edge on ${batterName}.`; leadCls = 'good'; }
-  else if (bets.length === 1){ lead = `Targeted play — ${bets[0].market} stands out.`; leadCls = 'good'; }
-  else if (leans.length >= 2){ lead = `Lean spot — moderate edges, not a hammer.`; leadCls = 'warn'; }
-  else if (fades.length >= 2){ lead = `Tough matchup — multiple fades indicated.`; leadCls = 'bad'; }
-  else if (fades.length === 1){ lead = `Mixed signals — one fade, no clear bet.`; leadCls = 'warn'; }
-  else                       { lead = `Neutral spot — no clear edge identified.`; leadCls = ''; }
+  if (bets.length >= 3 && !shouldTemper)      { lead = `Smash spot — ${bets.length} BET-grade markets for ${batterName}.`; leadCls = 'good'; }
+  else if (bets.length >= 2 && !shouldTemper) { lead = `Strong spot — multi-market edge on ${batterName}.`; leadCls = 'good'; }
+  else if (bets.length >= 2 && shouldTemper)  { lead = `Lean opp. — BET markets identified, but quality/matchup context is mixed.`; leadCls = 'warn'; }
+  else if (bets.length === 1 && !shouldTemper){ lead = `Targeted play — ${bets[0].market} stands out.`; leadCls = 'good'; }
+  else if (bets.length === 1 && shouldTemper) { lead = `Lean angle — projection edge, but recency/quality tempers.`; leadCls = 'warn'; }
+  else if (leans.length >= 2)                 { lead = `Lean spot — moderate edges, not a hammer.`; leadCls = 'warn'; }
+  else if (fades.length >= 2)                 { lead = `Tough matchup — multiple fades indicated.`; leadCls = 'bad'; }
+  else if (fades.length === 1)                { lead = `Mixed signals — one fade, no clear bet.`; leadCls = 'warn'; }
+  else                                        { lead = `Neutral spot — no clear edge identified.`; leadCls = 'warn'; }
 
   // Action lines (BEST / LEAN / AVOID)
   const actions = [];
@@ -723,7 +732,7 @@ function buildReasoningSummary(proj, summary, batterName, pitcherName) {
   const whys = [];
   if (bq.xwoba_pct != null && bq.xwoba_pct >= 75) {
     whys.push(`<span class="why-chip pos">Elite quality — <strong>${bq.xwoba_pct}th</strong> xwOBA</span>`);
-  } else if (bq.xwoba_pct != null && bq.xwoba_pct <= 30) {
+  } else if (bq.xwoba_pct != null && bq.xwoba_pct <= 35) {
     whys.push(`<span class="why-chip neg">Below-avg quality — <strong>${bq.xwoba_pct}th</strong> xwOBA</span>`);
   }
   if (adj.pitch_mix != null && adj.pitch_mix > 0.01) {
@@ -732,10 +741,13 @@ function buildReasoningSummary(proj, summary, batterName, pitcherName) {
     whys.push(`<span class="why-chip neg">Unfavorable arsenal <strong>${(adj.pitch_mix*100).toFixed(1)}%</strong></span>`);
   }
   if (pp.xera != null) {
-    if (pp.xera <= 3.20)      whys.push(`<span class="why-chip neg">Tough SP — xERA <strong>${pp.xera.toFixed(2)}</strong></span>`);
+    if (pp.xera <= 3.10)      whys.push(`<span class="why-chip neg">Elite SP — xERA <strong>${pp.xera.toFixed(2)}</strong></span>`);
     else if (pp.xera >= 4.50) whys.push(`<span class="why-chip pos">Hittable SP — xERA <strong>${pp.xera.toFixed(2)}</strong></span>`);
   }
-  if (mc.platoonNote) whys.push(`<span class="why-chip">${mc.platoonNote}</span>`);
+  if (mc.platoonNote) {
+    const cls = mc.platoonNote.includes('(—)') ? 'neg' : '';
+    whys.push(`<span class="why-chip ${cls}">${mc.platoonNote}</span>`);
+  }
   if (gctx.ttopBatterMult != null && gctx.ttopBatterMult > 1.01) {
     whys.push(`<span class="why-chip pos">TTOP boost <strong>+${((gctx.ttopBatterMult-1)*100).toFixed(1)}%</strong></span>`);
   }
@@ -744,11 +756,9 @@ function buildReasoningSummary(proj, summary, batterName, pitcherName) {
     if (t === 'HITTER')       whys.push(`<span class="why-chip pos">Hitter-friendly ump</span>`);
     else if (t === 'PITCHER') whys.push(`<span class="why-chip neg">Pitcher-friendly ump</span>`);
   }
-  if (summary && summary.recent_pa != null && summary.recent_pa >= 5) {
-    const avg = summary.avg != null ? Number(summary.avg).toFixed(3) : '—';
-    const cls = (summary.ops_ratio != null && summary.ops_ratio >= 1.10) ? 'pos'
-              : (summary.ops_ratio != null && summary.ops_ratio <= 0.85) ? 'neg' : '';
-    whys.push(`<span class="why-chip ${cls}">${summary.recent_pa} PA H2H · <strong>${avg}</strong> AVG</span>`);
+  if (summary && summary.avg != null && (summary.pa || 0) >= 15) {
+    const avgClass = summary.avg <= 0.240 ? 'neg' : summary.avg >= 0.300 ? 'pos' : '';
+    whys.push(`<span class="why-chip ${avgClass}">Career H2H <strong>${summary.avg.toFixed(3)}</strong> (${summary.pa} PA)</span>`);
   }
   if (vsSP && vsSP.paVsSp != null) {
     // Only surface this when game-total and starter-only meaningfully diverge.
