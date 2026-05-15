@@ -1412,7 +1412,7 @@ function buildPropsPicksPanel(d) {
   }
   wrap.style.display = '';
 
-  const COMP_LABELS = {contact:'contact quality',power:'raw power',discipline:'plate discipline',platoon:'platoon edge',park:'park factor',weather:'weather',pitcher:'pitcher matchup',form:'recent form',bvp:'BvP history'};
+  const COMP_LABELS = {contact:'contact quality',power:'raw power',discipline:'plate discipline',platoon:'platoon edge',park:'park factor',weather:'weather',pitcher:'pitcher matchup',form:'recent form',bvp:'BvP history',pitch_mix:'pitch-mix matchup'};
   const candidates = [];
 
   batters.forEach(b => {
@@ -1676,7 +1676,7 @@ function batxCompBar(val) {
 
 function batxOUPicks(p, adj) {
   if (!p || !adj) return '';
-  const COMP_LABELS = {contact:'contact quality',power:'raw power',discipline:'plate discipline',platoon:'platoon edge',park:'park factor',weather:'weather',pitcher:'pitcher matchup',form:'recent form',bvp:'BvP history'};
+  const COMP_LABELS = {contact:'contact quality',power:'raw power',discipline:'plate discipline',platoon:'platoon edge',park:'park factor',weather:'weather',pitcher:'pitcher matchup',form:'recent form',bvp:'BvP history',pitch_mix:'pitch-mix matchup'};
   // Build reasoning from top movers
   const keys = Object.keys(adj).filter(k => COMP_LABELS[k] && adj[k] != null);
   keys.sort((a,b) => Math.abs(adj[b]) - Math.abs(adj[a]));
@@ -2331,8 +2331,8 @@ function batterCard(b) {
     const comp = p.composite;
     const compSign = comp >= 1 ? '+' : '';
     const compColor = comp >= 1.05 ? 'var(--g)' : comp <= 0.95 ? 'var(--r)' : 'var(--c)';
-    const components = ['contact','power','discipline','platoon','park','weather','pitcher','form','bvp'];
-    const compLabels = {contact:'Contact',power:'Power',discipline:'Discipline',platoon:'Platoon',park:'Park',weather:'Wx',pitcher:'Pitcher',form:'Form',bvp:'BvP'};
+    const components = ['contact','power','discipline','platoon','park','weather','pitcher','form','bvp','pitch_mix'];
+    const compLabels = {contact:'Contact',power:'Power',discipline:'Discipline',platoon:'Platoon',park:'Park',weather:'Wx',pitcher:'Pitcher',form:'Form',bvp:'BvP',pitch_mix:'Pitch Mix'};
     const rows = components.map(k => adj[k] != null
       ? `<span style="font-size:.58rem;color:var(--mu);letter-spacing:.8px">${compLabels[k]}</span><span>${batxCompBar(adj[k])}</span>`
       : '').filter(Boolean).join('');
@@ -2340,7 +2340,7 @@ function batterCard(b) {
     batxHtml = `<div class="batx-panel">
       <div class="batx-hd">BAT X &nbsp;<span style="font-family:Orbitron,monospace;font-size:.72rem;color:${compColor}">${compSign}${((comp-1)*100).toFixed(1)}% <span style="font-size:.58rem;color:var(--mu)">×${comp?.toFixed(3)}</span></span></div>
       <div class="batx-grid">${rows}</div>
-      ${adj.form_note && adj.form_note !== 'no data' ? `<div class="batx-note">Form: ${adj.form_note}${adj.bvp_note && adj.bvp_note !== 'no data' ? ' · BvP: '+adj.bvp_note : ''}</div>` : ''}
+      ${adj.form_note && adj.form_note !== 'no data' ? `<div class="batx-note">Form: ${adj.form_note}${adj.bvp_note && adj.bvp_note !== 'no data' ? ' · BvP: '+adj.bvp_note : ''}${adj.pitch_mix_note && adj.pitch_mix_note !== 'no data' ? ' · Mix: '+adj.pitch_mix_note : ''}</div>` : (adj.pitch_mix_note && adj.pitch_mix_note !== 'no data' ? `<div class="batx-note">Mix: ${adj.pitch_mix_note}</div>` : '')}
       ${ouHtml}
     </div>`;
   }

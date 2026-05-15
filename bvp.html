@@ -122,6 +122,7 @@
 
     /* Sample note */
     .sample-note{font-size:.75rem;color:var(--mu);background:rgba(255,255,255,.03);border-radius:8px;padding:8px 12px;margin-bottom:14px;border-left:3px solid rgba(0,229,255,.25)}
+    .sample-note.stale-note{border-left-color:rgba(255,152,0,.55);color:rgba(255,172,50,.9);background:rgba(255,152,0,.04)}
 
     /* ── Context Sections (Last 10, Splits, Arsenal) ────────────────────── */
     .context-grid {
@@ -613,10 +614,12 @@ function renderDetail(data) {
     return 'class="bad"';
   };
 
-  // Grade basis label
-  const gradeBasis = summary.grade_basis === 'platoon'
+  // Grade basis label — append staleness indicator when data is old
+  const _staleCapped = summary.is_stale && (summary.grade === 'B') && pa >= 10;
+  const gradeBasis = (summary.grade_basis === 'platoon'
     ? `vs ${summary.pitcher_hand === 'L' ? 'LHP' : 'RHP'}`
-    : (pa >= 10 ? 'H2H' : pa > 0 ? 'H2H*' : 'vs RHP/LHP');
+    : (pa >= 10 ? 'H2H' : pa > 0 ? 'H2H*' : 'vs RHP/LHP'))
+    + (_staleCapped ? ' · capped' : (summary.is_stale && pa > 0 ? ' · stale' : ''));
 
   const gameRows = games.slice(0, 10).map(g => {
     const hitColor = g.hits >= 1 ? 'class="good"' : 'class="bad"';
@@ -791,6 +794,64 @@ function renderDetail(data) {
   }
   const ctxStripHtml = ctxChips.length ? `<div class="ctx-strip">${ctxChips.join('')}</div>` : '';
 
+  // ── Pitch-mix adjustment panel ────────────────────────────────────────────
+  const _adjt = (proj && proj.adjustments) || {};
+  const _pmCtx = (proj && proj.matchupContext) || {};
+  const pitchMixHtml = (() => {
+    const pm     = _adjt.pitch_mix;
+    const pmNote = _adjt.pitch_mix_note;
+    const fgScore = _pmCtx.mixScoreFg;
+    const svScore = _pmCtx.mixScoreSv;
+    const blended = _pmCtx.mixScore;
+    const fgRows  = Array.isArray(_pmCtx.mixRowsFg) ? _pmCtx.mixRowsFg : [];
+    if (pm == null && fgScore == null) return '';
+    const sign  = (pm ?? 0) >= 0 ? '+' : '';
+    const col   = (pm ?? 0) > 0.002 ? 'var(--g)' : (pm ?? 0) < -0.002 ? '#ff7070' : 'var(--mu)';
+    const label = (pm ?? 0) > 0.005 ? 'Favorable' : (pm ?? 0) < -0.005 ? 'Unfavorable' : 'Neutral';
+
+    // Per-pitch FG RV/100 rows
+    const fgRowsHtml = fgRows.length ? `
+      <div style="margin-top:8px;padding-top:6px;border-top:1px solid rgba(255,255,255,.06)">
+        <div style="font-size:.6rem;color:var(--mu);letter-spacing:.06em;margin-bottom:4px">PITCH-BY-PITCH RV/100 (FanGraphs)</div>
+        <div style="display:grid;grid-template-columns:60px 1fr 55px;gap:3px 8px;align-items:center">
+          <span style="font-size:.58rem;color:var(--dim)">Pitch</span>
+          <span style="font-size:.58rem;color:var(--dim)">Usage</span>
+          <span style="font-size:.58rem;color:var(--dim);text-align:right">RV/100</span>
+          ${fgRows.map(r => {
+            const rv = r.batter_rv100 ?? 0;
+            const rvCol = rv > 1 ? 'var(--g)' : rv < -1 ? '#ff7070' : 'var(--mu)';
+            const barW = Math.min(60, Math.abs(rv) * 10);
+            const barCol = rv >= 0 ? 'rgba(0,229,255,.45)' : 'rgba(255,80,80,.45)';
+            return `<span style="font-size:.68rem;color:var(--t)">${r.pitch}</span>
+              <span style="display:flex;align-items:center;gap:4px">
+                <span style="font-size:.64rem;color:var(--dim)">${r.usage_pct}%</span>
+                <span style="display:inline-block;width:${barW}px;height:4px;border-radius:2px;background:${barCol}"></span>
+              </span>
+              <span style="font-size:.7rem;color:${rvCol};text-align:right;font-family:Orbitron,monospace">${rv >= 0 ? '+' : ''}${rv.toFixed(1)}</span>`;
+          }).join('')}
+        </div>
+      </div>` : '';
+
+    const scoresHtml = (fgScore != null || svScore != null) ? `
+      <div style="margin-top:6px;display:flex;gap:10px;font-size:.66rem;color:var(--mu)">
+        ${fgScore != null ? `<span>FG RV: <strong style="color:${fgScore>=1?'var(--g)':'#ff7070'}">${fgScore.toFixed(3)}</strong></span>` : ''}
+        ${svScore != null ? `<span>SV SLG: <strong style="color:${svScore>=1?'var(--g)':'#ff7070'}">${svScore.toFixed(3)}</strong></span>` : ''}
+        ${blended != null ? `<span style="opacity:.6">→ blended ${blended.toFixed(3)}</span>` : ''}
+      </div>` : '';
+
+    return `
+    <div class="section-label">Pitch-Mix Matchup <span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— arsenal-weighted RV/100</span></div>
+    <div style="background:rgba(0,229,255,.03);border:1px solid rgba(0,229,255,.1);border-left:3px solid ${col};border-radius:8px;padding:10px 12px;margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <span style="font-size:.74rem;color:var(--mu)">${label} arsenal matchup</span>
+        ${pm != null ? `<span style="font-family:Orbitron,monospace;font-size:.8rem;color:${col}">${sign}${((pm)*100).toFixed(1)}%</span>` : ''}
+      </div>
+      ${scoresHtml}
+      ${pmNote && pmNote !== 'no data' ? `<div style="margin-top:4px;font-size:.64rem;color:var(--mu)">${pmNote}</div>` : ''}
+      ${fgRowsHtml}
+    </div>`;
+  })();
+
   // ── Why-this-projection drivers (top BATX components) ─────────────────────
   const drivers = (proj && Array.isArray(proj.drivers)) ? proj.drivers : [];
   const driversHtml = drivers.length ? `
@@ -890,7 +951,7 @@ function renderDetail(data) {
       </div>
     </div>
 
-    ${summary.sample_note ? `<div class="sample-note">${summary.sample_note}</div>` : ''}
+    ${summary.sample_note ? `<div class="sample-note${summary.is_stale ? ' stale-note' : ''}">${summary.sample_note}</div>` : ''}
 
     ${(() => {
       const conf = mc.confidence || {};
@@ -908,8 +969,9 @@ function renderDetail(data) {
         ? `<span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">${mc.bvpFirstSeason === mc.bvpLastSeason ? mc.bvpFirstSeason : mc.bvpFirstSeason + '–' + mc.bvpLastSeason}</span>`
         : ''}
     </div>
-    <div class="stat-row">
-      <div class="stat-box"><div class="stat-val">${pa}</div><div class="stat-lbl">PA</div></div>
+    <div class="stat-row" style="grid-template-columns:repeat(6,1fr)">
+      <div class="stat-box"><div class="stat-val">${pa}</div><div class="stat-lbl">Career PA</div></div>
+      <div class="stat-box"><div class="stat-val ${(summary.recent_pa??0) >= 5 ? '' : 'bad'}">${summary.recent_pa??0}</div><div class="stat-lbl">Recent PA</div></div>
       <div class="stat-box"><div class="stat-val">${fmtAvg(summary.avg)}</div><div class="stat-lbl">AVG</div></div>
       <div class="stat-box"><div class="stat-val">${fmtOps(summary.ops)}</div><div class="stat-lbl">OPS</div></div>
       <div class="stat-box"><div class="stat-val">${summary.hr??'—'}</div><div class="stat-lbl">HR</div></div>
@@ -954,6 +1016,8 @@ function renderDetail(data) {
     ${mcHtml}
 
     ${driversHtml}
+
+    ${pitchMixHtml}
 
     ${pkHtml}
 
@@ -1081,11 +1145,16 @@ async function loadContextData(batterId, pitcherId, proj) {
     `;
 
     // Card 3: Pitch Arsenal Breakdown
-    const pitches = arsenal.pitches || [];
-    const mixScore = arsenal.mixScore || 1.0;
+    // Prefer blended mix score from projection endpoint when available
+    const pitches     = arsenal.pitches || [];
     const primaryPitch = arsenal.primaryPitch || '—';
-    const mixCls = mixScore >= 1.15 ? 'good' : mixScore <= 0.87 ? 'bad' : '';
-    const mixLbl = mixScore >= 1.15 ? 'Favorable' : mixScore <= 0.87 ? 'Unfavorable' : 'Neutral';
+    const projMC      = (proj && proj.matchupContext) || {};
+    const mixScore    = projMC.mixScore || arsenal.mixScore || 1.0;
+    const mixScoreFg  = projMC.mixScoreFg;
+    const mixScoreSv  = projMC.mixScoreSv;
+    const mixRowsFg   = Array.isArray(projMC.mixRowsFg) ? projMC.mixRowsFg : [];
+    const mixCls = mixScore >= 1.10 ? 'good' : mixScore <= 0.91 ? 'bad' : '';
+    const mixLbl = mixScore >= 1.10 ? 'Favorable' : mixScore <= 0.91 ? 'Unfavorable' : 'Neutral';
 
     function fmtStat(v, dec) {
       if (v == null) return '—';
@@ -1111,12 +1180,36 @@ async function loadContextData(batterId, pitcherId, proj) {
       </div>`;
     }).join('');
 
+    // Sub-scores line (FG RV + Statcast SLG)
+    const mixSubHtml = (mixScoreFg != null || mixScoreSv != null) ? `
+      <div style="display:flex;gap:8px;font-size:.62rem;color:var(--dim);margin-bottom:6px;flex-wrap:wrap">
+        ${mixScoreFg != null ? `<span>FG RV: <strong style="color:${mixScoreFg>=1?'var(--g)':'#ff7070'}">${mixScoreFg.toFixed(3)}</strong></span>` : ''}
+        ${mixScoreSv != null ? `<span>SV SLG: <strong style="color:${mixScoreSv>=1?'var(--g)':'#ff7070'}">${mixScoreSv.toFixed(3)}</strong></span>` : ''}
+        <span style="opacity:.5">blended ${mixScore.toFixed(3)}</span>
+      </div>` : '';
+
+    // FG per-pitch RV/100 mini table
+    const fgCard3Rows = mixRowsFg.length ? `
+      <div style="margin-top:8px;padding-top:6px;border-top:1px solid rgba(255,255,255,.06)">
+        <div style="font-size:.58rem;color:var(--dim);letter-spacing:.05em;margin-bottom:3px">RV/100 vs PITCH TYPE (FanGraphs)</div>
+        ${mixRowsFg.map(r => {
+          const rv = r.batter_rv100 ?? 0;
+          const rvCol = rv > 1.5 ? 'var(--g)' : rv < -1.5 ? '#ff7070' : 'var(--mu)';
+          return `<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;border-bottom:1px solid rgba(255,255,255,.04)">
+            <span style="font-size:.66rem;color:var(--t)">${r.pitch}</span>
+            <span style="font-size:.6rem;color:var(--dim)">${r.usage_pct}%</span>
+            <span style="font-size:.66rem;font-family:Orbitron,monospace;color:${rvCol}">${rv>=0?'+':''}${rv.toFixed(1)}</span>
+          </div>`;
+        }).join('')}
+      </div>` : '';
+
     const card3 = `
       <div class="context-card">
         <div class="context-card-header">
           <span>Pitch Arsenal</span>
-          <span class="context-badge ${mixCls}">${mixLbl}</span>
+          <span class="context-badge ${mixCls}">${mixLbl} ${mixScore.toFixed(3)}</span>
         </div>
+        ${mixSubHtml}
         ${pitches.length ? `
           <div style="display:grid;grid-template-columns:1fr 28px 42px 44px 44px;gap:2px 4px;padding:2px 0 4px;border-bottom:1px solid rgba(255,255,255,.12)">
             <span style="font-size:.62rem;color:var(--dim)">Pitch</span>
@@ -1126,8 +1219,9 @@ async function loadContextData(batterId, pitcherId, proj) {
             <span style="font-size:.62rem;color:var(--dim)">Whiff%</span>
           </div>
           ${pitchRows}
-          <div style="font-size:.64rem;color:var(--dim);margin-top:6px">wOBA/Whiff% = batter vs pitch type</div>
-        ` : `<div class="context-stat-row" style="color:var(--dim);font-size:.75rem;padding:8px 0">No arsenal data available</div>`}
+          <div style="font-size:.64rem;color:var(--dim);margin-top:6px">wOBA/Whiff% = batter vs pitch type (Statcast)</div>
+        ` : `<div class="context-stat-row" style="color:var(--dim);font-size:.75rem;padding:8px 0">No Statcast arsenal data</div>`}
+        ${fgCard3Rows}
       </div>
     `;
 

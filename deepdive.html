@@ -2507,7 +2507,7 @@ function buildBatX(batterName){
   if(!PROPS_DATA) return '<div style="margin-top:14px;padding:10px 12px;background:rgba(0,229,255,.03);border:1px solid rgba(0,229,255,.12);border-radius:9px"><div style="font-family:Orbitron,monospace;font-size:.58rem;letter-spacing:1.5px;color:var(--mu)">BAT X ENGINE</div><p style="font-size:.64rem;color:var(--mu);margin-top:6px">BAT X data loading…</p></div>';
   if(!bp) return '<div style="margin-top:14px;padding:10px 12px;background:rgba(0,229,255,.03);border:1px solid rgba(0,229,255,.12);border-radius:9px"><div style="font-family:Orbitron,monospace;font-size:.58rem;letter-spacing:1.5px;color:var(--mu)">BAT X ENGINE</div><p style="font-size:.64rem;color:var(--mu);margin-top:6px">No BAT X projection for '+batterName+'.</p></div>';
   var adj = bp.adjustments || {};
-  var compLabels = {contact:'Contact',power:'Power',discipline:'Discipline',platoon:'Platoon',park:'Park',weather:'Weather',pitcher:'Pitcher',form:'Form (L7)',bvp:'BvP'};
+  var compLabels = {contact:'Contact',power:'Power',discipline:'Discipline',platoon:'Platoon',park:'Park',weather:'Weather',pitcher:'Pitcher',form:'Form (L7)',bvp:'BvP',pitch_mix:'Pitch Mix'};
   var compSign = (bp.composite >= 1 ? '+' : '') + ((bp.composite - 1) * 100).toFixed(1) + '%';
 
   // Proj lines (HR thresholds like Pitch X does for K)
@@ -2531,7 +2531,7 @@ function buildBatX(batterName){
 
   // Adjustment bars
   var adjRows = '';
-  ['contact','power','discipline','platoon','park','weather','pitcher','form','bvp'].forEach(function(k){
+  ['contact','power','discipline','platoon','park','weather','pitcher','form','bvp','pitch_mix'].forEach(function(k){
     if(adj[k] == null) return;
     var val = adj[k];
     var pct = Math.round(Math.min(Math.abs(val)*400, 100));
@@ -2542,8 +2542,12 @@ function buildBatX(batterName){
   });
 
   var formNote = '';
-  if(adj.form_note && adj.form_note !== 'no data'){
-    formNote = '<div style="margin-top:7px;font-size:.61rem;color:var(--mu)">'+adj.form_note+(adj.bvp_note && adj.bvp_note !== 'no data' ? ' &nbsp;|&nbsp; BvP: '+adj.bvp_note : '')+'</div>';
+  var noteParts = [];
+  if(adj.form_note && adj.form_note !== 'no data') noteParts.push(adj.form_note);
+  if(adj.bvp_note && adj.bvp_note !== 'no data') noteParts.push('BvP: '+adj.bvp_note);
+  if(adj.pitch_mix_note && adj.pitch_mix_note !== 'no data') noteParts.push('Mix: '+adj.pitch_mix_note);
+  if(noteParts.length){
+    formNote = '<div style="margin-top:7px;font-size:.61rem;color:var(--mu)">'+noteParts.join(' &nbsp;|&nbsp; ')+'</div>';
   }
 
   return '<div style="margin-top:14px;padding:10px 12px;background:rgba(0,229,255,.03);border:1px solid rgba(0,229,255,.12);border-radius:9px">'    +'<div style="font-family:Orbitron,monospace;font-size:.58rem;letter-spacing:1.5px;color:var(--mu);margin-bottom:8px">BAT X ENGINE</div>'    +'<div style="margin-bottom:6px;font-size:.68rem">Proj <strong style="color:var(--c);font-family:Orbitron,monospace">'+fmt2(hitProj)+' H</strong> &nbsp;&middot;&nbsp; <strong style="color:var(--c);font-family:Orbitron,monospace">'+fmt2(tbProj)+' TB</strong> &nbsp;&middot;&nbsp; <strong style="color:var(--c);font-family:Orbitron,monospace">'+fmt2(hrProj)+' HR</strong> &nbsp;&middot;&nbsp; Composite <strong style="color:var(--c)">'+compSign+'</strong></div>'    +'<div style="margin-bottom:6px">'+pills+'</div>'    +'<div style="display:grid;grid-template-columns:90px 1fr;gap:4px 8px;align-items:center;margin-bottom:4px">'+adjRows+'</div>'    +formNote    +(bp.platoon_note ? '<div style="margin-top:5px;font-size:.60rem;color:var(--mu)">'+bp.platoon_note+'</div>' : '')    +'</div>';
@@ -3435,8 +3439,8 @@ function renderProjectionDetail(){
     } else if(!bp){
       batxHtml = '<p class="na" style="font-size:.65rem">BAT X projection not found for '+r.player+'.</p>';
     } else {
-      var components = ['contact','power','discipline','platoon','park','weather','pitcher','form','bvp'];
-      var compLabels = {contact:'Contact',power:'Power',discipline:'Discipline',platoon:'Platoon',park:'Park',weather:'Weather',pitcher:'Pitcher',form:'Form (L7)',bvp:'BvP'};
+      var components = ['contact','power','discipline','platoon','park','weather','pitcher','form','bvp','pitch_mix'];
+      var compLabels = {contact:'Contact',power:'Power',discipline:'Discipline',platoon:'Platoon',park:'Park',weather:'Weather',pitcher:'Pitcher',form:'Form (L7)',bvp:'BvP',pitch_mix:'Pitch Mix'};
       batxHtml = '<div class="statline" style="margin-bottom:10px"><span style="font-size:.7rem">Composite multiplier</span><span style="font-size:.85rem;color:var(--c);font-family:Orbitron,monospace">'+(bp.composite>=1?'+':'')+((bp.composite-1)*100).toFixed(1)+'% &nbsp;<span style="font-size:.65rem;color:var(--mu)">( ×'+bp.composite.toFixed(3)+' )</span></span></div>'
         + '<div style="display:grid;grid-template-columns:90px 1fr;gap:4px 8px;align-items:center">';
       components.forEach(function(k){
@@ -3445,8 +3449,13 @@ function renderProjectionDetail(){
           + '<span>'+compBar(adj[k])+'</span>';
       });
       batxHtml += '</div>';
-      if(adj && adj.form_note && adj.form_note !== 'no data')
-        batxHtml += '<div style="margin-top:7px;font-size:.61rem;color:var(--mu)">Form: '+adj.form_note+(adj.bvp_note&&adj.bvp_note!=='no data'?' &nbsp;|&nbsp; BvP: '+adj.bvp_note:'')+'</div>';
+      if(adj){
+        var np2=[];
+        if(adj.form_note&&adj.form_note!=='no data') np2.push(adj.form_note);
+        if(adj.bvp_note&&adj.bvp_note!=='no data') np2.push('BvP: '+adj.bvp_note);
+        if(adj.pitch_mix_note&&adj.pitch_mix_note!=='no data') np2.push('Mix: '+adj.pitch_mix_note);
+        if(np2.length) batxHtml += '<div style="margin-top:7px;font-size:.61rem;color:var(--mu)">'+np2.join(' &nbsp;|&nbsp; ')+'</div>';
+      }
       batxHtml += '<div style="margin-top:8px;font-size:.62rem;color:var(--mu)">Proj: H '+fmt2(bp.hits)+' &nbsp;TB '+fmt2(bp.tb)+' &nbsp;HR '+fmt2(bp.hr)+' &nbsp;RBI '+fmt2(bp.rbi)+' &nbsp;R '+fmt2(bp.r)+' &nbsp;|&nbsp; '+bp.platoon_note+'</div>';
       // ── O/U picks ────────────────────────────────────────────────────────
       var ouLines = [
@@ -3465,12 +3474,12 @@ function renderProjectionDetail(){
         return '<span style="display:inline-block;padding:3px 7px;border-radius:5px;font-family:Orbitron,monospace;font-size:.52rem;letter-spacing:.8px;border:1px solid '+bor+';background:'+bg+';color:'+col+';margin-right:4px;margin-bottom:4px">'+def.label+' <strong>'+dir+'</strong> <span style="opacity:.6;font-size:.46rem">'+(edge>=0?'+':'')+edge.toFixed(2)+'</span></span>';
       }).join('');
       // Reasoning from top components
-      var sortedKeys = ['contact','power','discipline','platoon','pitcher','form','bvp','park','weather']
+      var sortedKeys = ['contact','power','discipline','platoon','pitcher','form','bvp','pitch_mix','park','weather']
         .filter(function(k){ return adj[k]!=null; })
         .sort(function(a,b){ return Math.abs(adj[b])-Math.abs(adj[a]); });
       var topPos2 = sortedKeys.filter(function(k){ return adj[k]>0.005; }).slice(0,2);
       var topNeg2 = sortedKeys.filter(function(k){ return adj[k]<-0.005; }).slice(0,1);
-      var compLbls2 = {contact:'contact quality',power:'raw power',discipline:'plate discipline',platoon:'platoon edge',park:'park factor',weather:'weather',pitcher:'pitcher matchup',form:'recent form',bvp:'BvP history'};
+      var compLbls2 = {contact:'contact quality',power:'raw power',discipline:'plate discipline',platoon:'platoon edge',park:'park factor',weather:'weather',pitcher:'pitcher matchup',form:'recent form',bvp:'BvP history',pitch_mix:'pitch-mix matchup'};
       var reasonParts2 = [];
       if(topPos2.length) reasonParts2.push('boosted by '+topPos2.map(function(k){return compLbls2[k];}).join(' & '));
       if(topNeg2.length) reasonParts2.push('limited by '+topNeg2.map(function(k){return compLbls2[k];}).join(' & '));
