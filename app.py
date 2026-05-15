@@ -5656,6 +5656,7 @@ def api_bvp_projection(batter_id, pitcher_id):
 
         batter_obj = {
             "name":     batter_name,
+            "id":       batter_id,
             "bats":     bats_code,
             "slot":     lineup_slot,
             "avg":      _safe_f(fg_bat.get("fg_avg"),  0.245),
@@ -7634,19 +7635,32 @@ def _fetch_bvp(batter_id, pitcher_id):
             shrunk_kpct  = _shrink(raw_kpct,  pa, _LEAGUE_KPCT,  _SHRINK_PA_BVP)
             shrunk_bbpct = _shrink(raw_bbpct, pa, _LEAGUE_BBPCT, _SHRINK_PA_BVP)
 
-            # Reliability score 0-1 (saturates at 50 PA)
-            reliability = round(min(1.0, pa / 50.0), 3)
+            # Recency-based reliability: only recent seasons (last 2 full years) count.
+            # A batter's performance against a pitcher 3+ years ago (with a different
+            # arsenal) is unreliable; recency-weighted PA drives how much we trust the edge.
+            _cur_yr = datetime.now().year
+            recent_pa = sum(
+                s["pa"] for s in seasons
+                if (s.get("season") or 0) >= _cur_yr - 1
+            )
+            is_stale = (last_season is not None and last_season < _cur_yr - 2)
+            # Hard floor at 5 recent PA; saturates at 50
+            reliability = 0.0 if recent_pa < 5 else round(min(1.0, recent_pa / 50.0), 3)
 
             # Edge signal: how much does Bayesian wOBA deviate from league?
             woba_edge = round(shrunk_woba - _LEAGUE_WOBA, 4)
             if pa == 0:
                 note = "No career H2H; league average assumed."
+            elif recent_pa < 5 and pa >= 5:
+                note = f"{pa} PA career H2H ({recent_pa} PA recent) — too stale to weight."
             elif pa < 10:
                 note = f"Only {pa} PA — insufficient sample."
             elif pa < 20:
                 note = f"{pa} PA career H2H — moderate sample."
             else:
                 note = f"{pa} PA career H2H — strong sample."
+            if is_stale:
+                note += f" Data through {last_season} only."
 
             temp = {
                 "success": True,
@@ -7681,6 +7695,8 @@ def _fetch_bvp(batter_id, pitcher_id):
                     "bbpct": shrunk_bbpct,
                 },
                 "reliability": reliability,
+                "recent_pa": recent_pa,
+                "is_stale": is_stale,
                 "woba_edge": woba_edge,
                 "note": note,
             }
@@ -8795,15 +8811,15 @@ def platoon_blend_v2(batter: dict, pitcher_hand: str, stat: str) -> float:
 
 BATX_WEIGHTS_V2 = {
     "contact":    0.26,   # platoon-blended AVG + xBA  (unchanged)
-    "power":      0.22,   # ISO, brl%, EV, xSLG        (+0.04 — most predictive for HR/TB)
+    "power":      0.22,   # ISO, brl%, EV, xSLG        (unchanged — most predictive for HR/TB)
     "discipline": 0.12,   # BB%, K%, xwOBA             (unchanged)
-    "platoon":    0.10,   # hand matchup edge           (unchanged)
+    "platoon":    0.11,   # hand matchup edge           (+0.01 — most reliable split predictor)
     "park":       0.07,   # park factor                 (unchanged)
     "weather":    0.05,   # temp/wind                   (unchanged)
-    "pitcher":    0.11,   # FIP/xERA/K% + recent form   (-0.01 from 0.12)
-    "form":       0.07,   # L7 wOBA edge vs league      (+0.02 — more meaningful)
-    "bvp":        0.02,   # BvP shrunk wOBA × reliability (-0.01 — too noisy)
-    # NEW: recent form explicitly wired into pitcher component below
+    "pitcher":    0.11,   # FIP/xERA/K% + recent form   (unchanged)
+    "form":       0.07,   # L7 wOBA edge vs league      (unchanged)
+    "bvp":        0.01,   # BvP shrunk wOBA × recency-reliability (-0.01 — small-sample H2H too noisy)
+    "pitch_mix":  0.04,   # arsenal-weighted SLG matchup score (NEW — granular skill-based signal)
 }
 
 
@@ -14444,6 +14460,8 @@ def _compute_bvp_grade(bvp_data):
     """
     Grade batter vs pitcher matchup based on Sprint 2.1 rules.
     Uses OPS ratio vs batter season OPS with PA thresholds.
+    Stale data (last_season > 2 years ago) is capped at 'B' — old matchup
+    history against a pitcher's previous arsenal is unreliable.
     """
     if not bvp_data or not bvp_data.get('success'):
         return 'D'
@@ -14454,14 +14472,20 @@ def _compute_bvp_grade(bvp_data):
         return 'D'
 
     if ratio >= 1.40 and pa >= 20:
-        return 'A+'
-    if ratio >= 1.20 and pa >= 15:
-        return 'A'
-    if ratio >= 1.05 and pa >= 10:
-        return 'B'
-    if ratio >= 0.85:
-        return 'C'
-    return 'D'
+        grade = 'A+'
+    elif ratio >= 1.20 and pa >= 15:
+        grade = 'A'
+    elif ratio >= 1.05 and pa >= 10:
+        grade = 'B'
+    elif ratio >= 0.85:
+        grade = 'C'
+    else:
+        grade = 'D'
+
+    # Cap stale H2H data — pitcher arsenals change year to year
+    if bvp_data.get('is_stale') and grade in ('A+', 'A'):
+        grade = 'B'
+    return grade
 
 
 def _cheatsheet_matchup_grade(score_tier, pitch_adv=None, bvp_grade=None, bvp_pa=0):
@@ -16888,21 +16912,38 @@ def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_s
             form_label = f"L7 wOBA {rw:.3f}"
     form_contrib = form_edge * W["form"]
 
-    # ── COMPONENT 9: BvP (Phase 1) ───────────────────────────────────────────
+    # ── COMPONENT 9: BvP (recency-weighted H2H) ──────────────────────────────
     bvp_edge    = 0.0
     bvp_label   = "no data"
     if bvp and isinstance(bvp, dict) and bvp.get("success"):
         reliability = _safe_f(bvp.get("reliability"), 0.0)
         we          = _safe_f(bvp.get("woba_edge"),    0.0)
         bvp_edge    = _clamp(we * reliability, -0.20, 0.20)
-        bvp_label   = f"woba_edge {we:.3f} × rel {reliability:.2f}"
-    bvp_contrib  = bvp_edge * W["bvp"]
+        recent_pa   = bvp.get("recent_pa", 0)
+        bvp_label   = f"woba_edge {we:.3f} × rel {reliability:.2f} (recent_pa={recent_pa})"
+    bvp_contrib  = bvp_edge * W.get("bvp", 0.01)
+
+    # ── COMPONENT 10: Pitch-mix score (arsenal SLG matchup) ──────────────────
+    # Uses Statcast per-pitch SLG to score how well the batter matches up against
+    # this pitcher's specific arsenal — more predictive than raw H2H count.
+    pitch_mix_score  = 1.0
+    pitch_mix_label  = "no data"
+    bat_mlb_id = batter.get("id") or batter.get("mlb_id")
+    if opp_pitcher_id and bat_mlb_id:
+        try:
+            pm_score, _ = _compute_pitch_mix_score(str(opp_pitcher_id), str(bat_mlb_id))
+            pitch_mix_score = pm_score
+            pitch_mix_label = f"mix_score {pm_score:.3f}"
+        except Exception:
+            pass
+    pitch_mix_edge    = _clamp(pitch_mix_score - 1.0, -0.30, 0.30)
+    pitch_mix_contrib = pitch_mix_edge * W.get("pitch_mix", 0.04)
 
     # ── Composite multiplier ─────────────────────────────────────────────────
     # Sum contributions; each is a %-point delta weighted by its component weight.
     delta = (contact_contrib + power_contrib + disc_contrib + platoon_contrib
              + park_contrib + wx_contrib + pitcher_contrib
-             + form_contrib + bvp_contrib)
+             + form_contrib + bvp_contrib + pitch_mix_contrib)
     composite = _clamp(1.0 + delta, 0.55, 1.55)
 
     # ── Projections ──────────────────────────────────────────────────────────
@@ -16945,18 +16986,20 @@ def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_s
         # BAT X diagnostics
         "composite":   round(composite, 4),
         "adjustments": {
-            "contact":    round(contact_contrib,  4),
-            "power":      round(power_contrib,     4),
-            "pull_air":   round(pull_edge * 0.10 * W["power"], 4),
-            "discipline": round(disc_contrib,      4),
-            "platoon":    round(platoon_contrib,   4),
-            "park":       round(park_contrib,      4),
-            "weather":    round(wx_contrib,        4),
-            "pitcher":    round(pitcher_contrib,   4),
-            "form":       round(form_contrib,      4),
-            "bvp":        round(bvp_contrib,       4),
-            "form_note":  form_label,
-            "bvp_note":   bvp_label,
+            "contact":         round(contact_contrib,    4),
+            "power":           round(power_contrib,      4),
+            "pull_air":        round(pull_edge * 0.10 * W["power"], 4),
+            "discipline":      round(disc_contrib,       4),
+            "platoon":         round(platoon_contrib,    4),
+            "park":            round(park_contrib,       4),
+            "weather":         round(wx_contrib,         4),
+            "pitcher":         round(pitcher_contrib,    4),
+            "form":            round(form_contrib,       4),
+            "bvp":             round(bvp_contrib,        4),
+            "pitch_mix":       round(pitch_mix_contrib,  4),
+            "form_note":       form_label,
+            "bvp_note":        bvp_label,
+            "pitch_mix_note":  pitch_mix_label,
         },
     }
 
