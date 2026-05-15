@@ -721,6 +721,130 @@ function pctBadge(pct) {
   return `<span style="font-size:.58rem;margin-left:4px;color:var(--${cls==='good'?'g':cls==='bad'?'r':'mu'})">${pct}th</span>`;
 }
 
+// ── Phase 4 helpers ───────────────────────────────────────────────────────
+
+// Detect trend direction across season OPS values. Returns a {dir, strength}
+// pair where dir is "up"/"down"/"flat" and strength is how confident we are.
+// Only meaningful when career PA >= 30 across at least 3 seasons.
+function detectSeasonTrend(seasons, careerPA) {
+  if (!Array.isArray(seasons) || seasons.length < 3 || careerPA < 30) return null;
+  // Filter seasons with enough sample to matter (>=5 PA) and an OPS value
+  const valid = seasons.filter(s => s.ops != null && (s.pa || 0) >= 5);
+  if (valid.length < 3) return null;
+  // Compute simple linear regression slope on (year, ops)
+  const n = valid.length;
+  const years = valid.map(s => Number(s.season) || 0);
+  const opses = valid.map(s => Number(s.ops));
+  const yMean = years.reduce((a,b) => a+b, 0) / n;
+  const oMean = opses.reduce((a,b) => a+b, 0) / n;
+  let num = 0, den = 0;
+  for (let i = 0; i < n; i++) {
+    num += (years[i] - yMean) * (opses[i] - oMean);
+    den += (years[i] - yMean) * (years[i] - yMean);
+  }
+  if (den === 0) return null;
+  const slope = num / den; // OPS change per year
+  const dir = slope > 0.020 ? 'up' : slope < -0.020 ? 'down' : 'flat';
+  const strength = Math.abs(slope);
+  return { dir, strength, slope, latest: opses[opses.length - 1], oldest: opses[0] };
+}
+
+// Render the seasonal trend section: sparkline + table + trend chip.
+// Falls back gracefully when sample is too small for meaningful trend.
+function seasonalTrendHtml(seasons, careerPA) {
+  if (!Array.isArray(seasons) || seasons.length === 0) return '';
+  // Build sparkline of season OPS (when >=2 seasons)
+  let sparkline = '';
+  if (seasons.length >= 2) {
+    const valid = seasons.filter(s => s.ops != null && (s.pa || 0) >= 1);
+    if (valid.length >= 2) {
+      const opses = valid.map(s => Number(s.ops));
+      const minV = Math.min(...opses, 0.300);
+      const maxV = Math.max(...opses, 1.000);
+      const range = maxV - minV || 1;
+      const w = 200, h = 32, pad = 2;
+      const xStep = (w - 2*pad) / (valid.length - 1 || 1);
+      const points = valid.map((s, i) => {
+        const x = pad + i * xStep;
+        const y = h - pad - ((Number(s.ops) - minV) / range) * (h - 2*pad);
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      });
+      const dots = valid.map((s, i) => {
+        const x = pad + i * xStep;
+        const y = h - pad - ((Number(s.ops) - minV) / range) * (h - 2*pad);
+        const ops = Number(s.ops);
+        const col = ops >= 0.800 ? 'var(--g)' : ops >= 0.700 ? 'var(--c)' : ops >= 0.600 ? 'var(--y)' : 'var(--r)';
+        return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3" fill="${col}"><title>${s.season}: ${ops.toFixed(3)} OPS · ${s.pa} PA</title></circle>`;
+      }).join('');
+      sparkline = `
+        <svg viewBox="0 0 ${w} ${h}" style="width:100%;max-width:240px;height:${h}px;display:block;margin:6px 0 4px">
+          <polyline points="${points.join(' ')}" fill="none" stroke="rgba(0,229,255,.55)" stroke-width="1.5"/>
+          ${dots}
+        </svg>`;
+    }
+  }
+  // Trend chip
+  const trend = detectSeasonTrend(seasons, careerPA);
+  let trendChip = '';
+  if (trend) {
+    const cls = trend.dir === 'up' ? 'good' : trend.dir === 'down' ? 'bad' : '';
+    const lbl = trend.dir === 'up' ? `↗ Improving (${(trend.slope*1000).toFixed(0)} OPS/yr)`
+              : trend.dir === 'down' ? `↘ Declining (${(trend.slope*1000).toFixed(0)} OPS/yr)`
+              : '→ Consistent';
+    trendChip = `<span class="context-badge ${cls}" style="margin-left:6px">${lbl}</span>`;
+  }
+  // Table only renders when multiple seasons (matches prior behavior).
+  const tableHtml = (seasons.length > 1) ? `
+    <details style="margin:4px 0 10px;font-size:.7rem">
+      <summary style="cursor:pointer;color:var(--mu);font-size:.62rem;text-transform:uppercase;letter-spacing:.08em">Season-by-season table</summary>
+      <div style="margin-top:6px;display:grid;grid-template-columns:48px repeat(5,1fr);gap:2px 8px;padding:6px 8px;background:rgba(0,0,0,.18);border-radius:6px">
+        <span style="font-size:.6rem;color:var(--mu)">Year</span>
+        <span style="font-size:.6rem;color:var(--mu)">PA</span>
+        <span style="font-size:.6rem;color:var(--mu)">AB/H</span>
+        <span style="font-size:.6rem;color:var(--mu)">HR</span>
+        <span style="font-size:.6rem;color:var(--mu)">BB/K</span>
+        <span style="font-size:.6rem;color:var(--mu)">AVG</span>
+        ${seasons.map(s => `
+          <span>${s.season ?? '—'}</span>
+          <span>${s.pa}</span>
+          <span>${s.ab}/${s.h}</span>
+          <span>${s.hr}</span>
+          <span>${s.bb}/${s.so}</span>
+          <span>${(s.avg!=null ? s.avg.toFixed(3).replace(/^0/,'') : '—')}</span>
+        `).join('')}
+      </div>
+    </details>` : '';
+  return `
+    <div style="display:flex;align-items:center;gap:8px;margin:4px 0 2px">
+      <div style="font-size:.62rem;color:var(--mu);letter-spacing:.08em;text-transform:uppercase">Career trend vs pitcher</div>
+      ${trendChip}
+    </div>
+    ${sparkline}
+    ${tableHtml}`;
+}
+
+// Estimate per-prop impact from umpire zone tendency. Zone <40 = hitter
+// friendly (suppresses K, helps BB/HR/TB); zone >60 = pitcher friendly.
+// Returns array of impact strings for tooltip/display.
+function umpireImpacts(umpire, umpireKMult) {
+  if (!umpire || umpire.zone == null) return [];
+  const z = umpire.zone;
+  const impacts = [];
+  if (umpireKMult != null && umpireKMult !== 1) {
+    const pct = ((umpireKMult - 1) * 100).toFixed(0);
+    impacts.push(`K rate ${pct > 0 ? '+' : ''}${pct}%`);
+  }
+  // Symmetric BB effect (tighter zone = more BB)
+  const bbDelta = ((50 - z) * 0.6).toFixed(0);
+  if (Math.abs(bbDelta) >= 2) impacts.push(`BB rate ${bbDelta > 0 ? '+' : ''}${bbDelta}%`);
+  // HR/TB indirect effect via more pitches in the zone
+  if (z >= 58 || z <= 42) {
+    const tbDelta = ((50 - z) * 0.15).toFixed(1);
+    if (Math.abs(tbDelta) >= 0.5) impacts.push(`HR/TB ${tbDelta > 0 ? '+' : ''}${tbDelta}%`);
+  }
+  return impacts;
+}
+
 // ── Phase 2 helpers ───────────────────────────────────────────────────────
 
 // Score weather impact on HR/TB props. Returns {label, score, direction}
@@ -934,6 +1058,29 @@ function buildReasoningSummary(proj, summary, batterName, pitcherName, batterInj
   if (gctx.parkFactor != null) {
     if (gctx.parkFactor >= 1.06) whys.push(`<span class="why-chip pos">Hitter park <strong>+${((gctx.parkFactor-1)*100).toFixed(1)}%</strong></span>`);
     else if (gctx.parkFactor <= 0.94) whys.push(`<span class="why-chip neg">Pitcher park <strong>${((gctx.parkFactor-1)*100).toFixed(1)}%</strong></span>`);
+  }
+  // Park × Power chip (Phase 4): hitter parks amplify power for power batters
+  if (gctx.parkFactor != null && gctx.parkFactor >= 1.05 && bq.brl_pct != null && bq.brl_pct >= 10) {
+    const amp = ((gctx.parkFactor - 1) * 100).toFixed(1);
+    whys.push(`<span class="why-chip pos">Park × Power amplifier <strong>+${amp}%</strong> HR carry</span>`);
+  } else if (gctx.parkFactor != null && gctx.parkFactor <= 0.95 && bq.brl_pct != null && bq.brl_pct >= 10) {
+    const supp = ((1 - gctx.parkFactor) * 100).toFixed(1);
+    whys.push(`<span class="why-chip neg">Power-suppressing park <strong>-${supp}%</strong> for power bats</span>`);
+  }
+  // Seasonal trend chip (Phase 4) — only when sample is meaningful
+  const _bvpSeasons = Array.isArray(mc.bvpSeasons) ? mc.bvpSeasons : [];
+  const _trend = detectSeasonTrend(_bvpSeasons, summary?.pa || 0);
+  if (_trend && _trend.dir !== 'flat') {
+    const cls = _trend.dir === 'up' ? 'pos' : 'neg';
+    const arrow = _trend.dir === 'up' ? '↗' : '↘';
+    const lbl = _trend.dir === 'up' ? 'Improving H2H' : 'Declining H2H';
+    whys.push(`<span class="why-chip ${cls}">${arrow} ${lbl} <strong>${(_trend.slope*1000).toFixed(0)} OPS/yr</strong></span>`);
+  }
+  // Umpire impact chips (Phase 4) — surface concrete K/BB deltas
+  const _umpImpacts = umpireImpacts(gctx.umpire, gctx.umpireKMult);
+  if (_umpImpacts.length && gctx.umpire && (gctx.umpire.zone <= 42 || gctx.umpire.zone >= 58)) {
+    const ttl = gctx.umpire.tendency === 'HITTER' ? 'pos' : gctx.umpire.tendency === 'PITCHER' ? 'neg' : '';
+    whys.push(`<span class="why-chip ${ttl}">Ump → ${_umpImpacts.join(' · ')}</span>`);
   }
   if (summary && summary.avg != null && (summary.pa || 0) >= 15) {
     const avgClass = summary.avg <= 0.240 ? 'neg' : summary.avg >= 0.300 ? 'pos' : '';
@@ -1175,8 +1322,10 @@ function renderDetail(data) {
   if (gctx.umpire && gctx.umpire.name) {
     const ump = gctx.umpire;
     const tendency = ump.tendency || (ump.zone >= 60 ? 'PITCHER' : ump.zone <= 40 ? 'HITTER' : 'NEUTRAL');
+    const impacts = umpireImpacts(ump, gctx.umpireKMult);
+    const tipText = impacts.length ? `Estimated impact: ${impacts.join(' · ')}` : `Zone ${ump.zone} = ${tendency.toLowerCase()}-friendly`;
     const kpct = gctx.umpireKMult != null ? ` · K×${gctx.umpireKMult.toFixed(2)}` : '';
-    ctxChips.push(`<span class="ctx-chip">HP Ump: <strong>${ump.name||''}</strong> ${ump.zone!=null?`(${tendency} ${ump.zone})`:''}${kpct}</span>`);
+    ctxChips.push(`<span class="ctx-chip" title="${tipText.replace(/"/g,'&quot;')}">HP Ump: <strong>${ump.name||''}</strong> ${ump.zone!=null?`(${tendency} ${ump.zone})`:''}${kpct}</span>`);
   }
   if (proj && proj.parkFactor != null && proj.parkFactor !== 1) {
     const pf = proj.parkFactor;
@@ -1389,26 +1538,7 @@ function renderDetail(data) {
       <div class="stat-box"><div class="stat-val" ${ratioColor(summary.ops_ratio)}>${summary.ops_ratio!=null ? Number(summary.ops_ratio).toFixed(2)+'x' : '—'}</div><div class="stat-lbl">OPS Ratio</div></div>
     </div>
 
-    ${(Array.isArray(mc.bvpSeasons) && mc.bvpSeasons.length > 1) ? `
-      <details style="margin:6px 0 10px;font-size:.7rem">
-        <summary style="cursor:pointer;color:var(--mu);font-size:.62rem;text-transform:uppercase;letter-spacing:.08em">Season breakdown</summary>
-        <div style="margin-top:6px;display:grid;grid-template-columns:48px repeat(5,1fr);gap:2px 8px;padding:6px 8px;background:rgba(0,0,0,.18);border-radius:6px">
-          <span style="font-size:.6rem;color:var(--mu)">Year</span>
-          <span style="font-size:.6rem;color:var(--mu)">PA</span>
-          <span style="font-size:.6rem;color:var(--mu)">AB/H</span>
-          <span style="font-size:.6rem;color:var(--mu)">HR</span>
-          <span style="font-size:.6rem;color:var(--mu)">BB/K</span>
-          <span style="font-size:.6rem;color:var(--mu)">AVG</span>
-          ${mc.bvpSeasons.map(s => `
-            <span>${s.season ?? '—'}</span>
-            <span>${s.pa}</span>
-            <span>${s.ab}/${s.h}</span>
-            <span>${s.hr}</span>
-            <span>${s.bb}/${s.so}</span>
-            <span>${(s.avg!=null ? s.avg.toFixed(3).replace(/^0/,'') : '—')}</span>
-          `).join('')}
-        </div>
-      </details>` : ''}
+    ${seasonalTrendHtml(mc.bvpSeasons, summary.pa || 0)}
 
     ${xstatsHtml}
 
