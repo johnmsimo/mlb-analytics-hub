@@ -372,6 +372,40 @@
     .sig-lean   { color: var(--y); }
     .sig-fade   { color: var(--r); }
 
+    /* Injury indicators (Phase 1) */
+    .inj-badge{display:inline-block;font-size:.55rem;font-weight:800;letter-spacing:.05em;padding:1px 5px;border-radius:4px;margin-left:6px;vertical-align:middle;text-transform:uppercase}
+    .inj-il60{background:rgba(255,82,82,.18);color:var(--r);border:1px solid rgba(255,82,82,.45)}
+    .inj-il10{background:rgba(255,82,82,.12);color:var(--r);border:1px solid rgba(255,82,82,.35)}
+    .inj-dtd {background:rgba(255,152,0,.14);color:var(--o);border:1px solid rgba(255,152,0,.4)}
+    .inj-gtd {background:rgba(245,197,66,.12);color:var(--y);border:1px solid rgba(245,197,66,.4)}
+    .injury-alert{background:rgba(255,82,82,.06);border:1px solid rgba(255,82,82,.3);border-left:3px solid var(--r);border-radius:8px;padding:9px 12px;margin:6px 0 14px;font-size:.78rem;color:rgba(255,200,200,.95)}
+    .injury-alert strong{color:var(--r);font-weight:800}
+    .injury-alert.gtd{border-left-color:var(--y);border-color:rgba(245,197,66,.3);background:rgba(245,197,66,.05);color:rgba(245,220,150,.95)}
+    .injury-alert.gtd strong{color:var(--y)}
+    .injury-alert.dtd{border-left-color:var(--o);border-color:rgba(255,152,0,.3);background:rgba(255,152,0,.05);color:rgba(255,210,150,.95)}
+    .injury-alert.dtd strong{color:var(--o)}
+
+    /* Sample size warning (Phase 1) */
+    .h2h-sample-warn{background:rgba(245,197,66,.05);border:1px solid rgba(245,197,66,.25);border-left:3px solid var(--y);border-radius:8px;padding:8px 12px;margin:0 0 12px;font-size:.74rem;color:rgba(245,220,150,.95);display:flex;align-items:baseline;gap:8px}
+    .h2h-sample-warn .warn-icon{font-size:.9rem;color:var(--y)}
+    .h2h-sample-warn strong{color:var(--y);font-weight:700}
+
+    /* Ensemble model agreement grid (Phase 2) */
+    .ensemble-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:14px}
+    @media(max-width:600px){.ensemble-grid{grid-template-columns:repeat(2,1fr)}}
+    .ensemble-cell{background:rgba(0,0,0,.18);border:1px solid var(--b);border-radius:8px;padding:7px 8px;text-align:center}
+    .ensemble-cell.agree{border-color:rgba(0,230,118,.35);background:rgba(0,230,118,.04)}
+    .ensemble-cell.mixed{border-color:rgba(245,197,66,.35);background:rgba(245,197,66,.04)}
+    .ensemble-cell.split{border-color:rgba(255,82,82,.35);background:rgba(255,82,82,.04)}
+    .ec-market{font-size:.64rem;letter-spacing:.06em;text-transform:uppercase;color:var(--mu);font-weight:700;margin-bottom:3px}
+    .ec-vals{font-size:.7rem;color:var(--t);display:flex;justify-content:center;gap:4px;align-items:baseline}
+    .ec-arrow{color:var(--mu);font-size:.7rem}
+    .ec-flag{font-size:.58rem;font-weight:800;letter-spacing:.06em;margin-top:3px;padding:1px 5px;border-radius:4px;display:inline-block}
+
+    /* Weather chip variants */
+    .ctx-chip strong.good{color:var(--g)}
+    .ctx-chip strong.bad{color:var(--r)}
+
     /* Lineup star rating */
     .b-stars{display:inline-block;font-size:.7rem;letter-spacing:1px;color:var(--y);line-height:1;margin-top:3px}
     .b-stars .empty{color:rgba(255,255,255,.12)}
@@ -532,6 +566,26 @@ function starsHtml(g) {
   return `<span class="b-stars s${s.n}" title="${s.label}">${filled}${empty}</span>`;
 }
 
+// Injury badge for the lineup panel (compact, color-coded by severity).
+function injuryBadgeHtml(injury) {
+  if (!injury || !injury.status) return '';
+  const cls = ({ IL_60:'inj-il60', IL_10:'inj-il10', DTD:'inj-dtd', GTD:'inj-gtd' })[injury.status] || 'inj-dtd';
+  const lbl = ({ IL_60:'IL-60', IL_10:'IL', DTD:'DTD', GTD:'GTD' })[injury.status] || injury.status;
+  const ttl = (injury.description || injury.type || injury.status).replace(/"/g,'&quot;');
+  return `<span class="inj-badge ${cls}" title="${ttl}">${lbl}</span>`;
+}
+
+// Full injury alert for the detail panel header (more verbose).
+function injuryAlertHtml(injury, playerLabel) {
+  if (!injury || !injury.status) return '';
+  const cls  = ({ IL_60:'', IL_10:'', DTD:'dtd', GTD:'gtd' })[injury.status] || 'dtd';
+  const lbl  = ({ IL_60:'60-DAY IL', IL_10:'INJURED LIST', DTD:'DAY-TO-DAY', GTD:'GAME-TIME DECISION' })[injury.status] || injury.status;
+  const desc = (injury.description || injury.type || '').trim();
+  return `<div class="injury-alert ${cls}">
+    ⚠ <strong>${playerLabel} — ${lbl}</strong>${desc ? ` · ${desc}` : ''}
+  </div>`;
+}
+
 function renderLineup() {
   const { lineup, pitchers } = currentLineup;
   const g = currentGame;
@@ -546,7 +600,7 @@ function renderLineup() {
     return `<div class="batter-row" id="br_${b.id}_${oppPitcherId}" onclick="selectBatter(${b.id},'${esc(b.name)}',${oppPitcherId},'${esc((oppPitcherId === awayP.id ? awayP.name : homeP.name) || '')}')">
       <span class="b-slot">${b.slot||'?'}</span>
       <span class="b-name">
-        ${b.name}
+        ${b.name}${injuryBadgeHtml(b.injury)}
         <span id="stars_${b.id}_${oppPitcherId}">${starsHtml(grade)}</span>
         <div class="badge-row" id="badges_${b.id}"></div>
       </span>
@@ -558,10 +612,10 @@ function renderLineup() {
   document.getElementById('lineupPanel').innerHTML = `
     <div class="lp-header"><span>${g.awayAbbr} @ ${g.homeAbbr}</span><span class="pill">${g.gameTime||''}</span></div>
     <div class="lp-team">${g.awayAbbr} BATTERS</div>
-    <div class="lp-pitcher" id="pitcher_away">vs ${homeP.name || g.homePitcher || 'TBD'}</div>
+    <div class="lp-pitcher" id="pitcher_away">vs ${homeP.name || g.homePitcher || 'TBD'}${injuryBadgeHtml(homeP.injury)}</div>
     ${makeRows(away, homeP.id)}
     <div class="lp-team" style="margin-top:12px">${g.homeAbbr} BATTERS</div>
-    <div class="lp-pitcher" id="pitcher_home">vs ${awayP.name || g.awayPitcher || 'TBD'}</div>
+    <div class="lp-pitcher" id="pitcher_home">vs ${awayP.name || g.awayPitcher || 'TBD'}${injuryBadgeHtml(awayP.injury)}</div>
     ${makeRows(home, awayP.id)}
   `;
 
@@ -607,6 +661,18 @@ async function selectBatter(batterId, batterName, pitcherId, pitcherName) {
   const el = document.getElementById(`br_${batterId}_${pitcherId}`);
   if (el) el.classList.add('sel');
 
+  // Look up injury info from the cached lineup so we can surface it
+  // immediately without re-fetching.
+  let batterInjury = null, pitcherInjury = null;
+  if (currentLineup) {
+    const allBatters = [...(currentLineup.lineup?.away || []), ...(currentLineup.lineup?.home || [])];
+    const b = allBatters.find(x => x.id === batterId);
+    if (b && b.injury) batterInjury = b.injury;
+    const ps = currentLineup.pitchers || {};
+    if (ps.awayPitcher && ps.awayPitcher.id === pitcherId) pitcherInjury = ps.awayPitcher.injury || null;
+    else if (ps.homePitcher && ps.homePitcher.id === pitcherId) pitcherInjury = ps.homePitcher.injury || null;
+  }
+
   const dp = document.getElementById('detailPanel');
   dp.innerHTML = '<div class="loading-row"><div class="spinner" style="margin:auto"></div><div style="margin-top:8px;color:var(--mu);font-size:.8rem">Loading BvP data…</div></div>';
 
@@ -620,7 +686,7 @@ async function selectBatter(batterId, batterName, pitcherId, pitcherName) {
       fetch(`/api/player/${batterId}/bvp/${pitcherId}`).then(r => r.json()).catch(() => ({})),
       fetch(`/api/bvp/${batterId}/${pitcherId}/projection${gamePk ? '?game_pk='+gamePk : ''}`).then(r => r.json()).catch(() => ({}))
     ]);
-    const data = { summary: summaryRes, logs: logsRes, proj: projRes, batterName, pitcherName };
+    const data = { summary: summaryRes, logs: logsRes, proj: projRes, batterName, pitcherName, batterInjury, pitcherInjury };
     bvpCache[cKey] = data;
     renderDetail(data);
   } catch(e) {
@@ -655,9 +721,204 @@ function pctBadge(pct) {
   return `<span style="font-size:.58rem;margin-left:4px;color:var(--${cls==='good'?'g':cls==='bad'?'r':'mu'})">${pct}th</span>`;
 }
 
+// ── Phase 4 helpers ───────────────────────────────────────────────────────
+
+// Detect trend direction across season OPS values. Returns a {dir, strength}
+// pair where dir is "up"/"down"/"flat" and strength is how confident we are.
+// Only meaningful when career PA >= 30 across at least 3 seasons.
+function detectSeasonTrend(seasons, careerPA) {
+  if (!Array.isArray(seasons) || seasons.length < 3 || careerPA < 30) return null;
+  // Filter seasons with enough sample to matter (>=5 PA) and an OPS value
+  const valid = seasons.filter(s => s.ops != null && (s.pa || 0) >= 5);
+  if (valid.length < 3) return null;
+  // Compute simple linear regression slope on (year, ops)
+  const n = valid.length;
+  const years = valid.map(s => Number(s.season) || 0);
+  const opses = valid.map(s => Number(s.ops));
+  const yMean = years.reduce((a,b) => a+b, 0) / n;
+  const oMean = opses.reduce((a,b) => a+b, 0) / n;
+  let num = 0, den = 0;
+  for (let i = 0; i < n; i++) {
+    num += (years[i] - yMean) * (opses[i] - oMean);
+    den += (years[i] - yMean) * (years[i] - yMean);
+  }
+  if (den === 0) return null;
+  const slope = num / den; // OPS change per year
+  const dir = slope > 0.020 ? 'up' : slope < -0.020 ? 'down' : 'flat';
+  const strength = Math.abs(slope);
+  return { dir, strength, slope, latest: opses[opses.length - 1], oldest: opses[0] };
+}
+
+// Render the seasonal trend section: sparkline + table + trend chip.
+// Falls back gracefully when sample is too small for meaningful trend.
+function seasonalTrendHtml(seasons, careerPA) {
+  if (!Array.isArray(seasons) || seasons.length === 0) return '';
+  // Build sparkline of season OPS (when >=2 seasons)
+  let sparkline = '';
+  if (seasons.length >= 2) {
+    const valid = seasons.filter(s => s.ops != null && (s.pa || 0) >= 1);
+    if (valid.length >= 2) {
+      const opses = valid.map(s => Number(s.ops));
+      const minV = Math.min(...opses, 0.300);
+      const maxV = Math.max(...opses, 1.000);
+      const range = maxV - minV || 1;
+      const w = 200, h = 32, pad = 2;
+      const xStep = (w - 2*pad) / (valid.length - 1 || 1);
+      const points = valid.map((s, i) => {
+        const x = pad + i * xStep;
+        const y = h - pad - ((Number(s.ops) - minV) / range) * (h - 2*pad);
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      });
+      const dots = valid.map((s, i) => {
+        const x = pad + i * xStep;
+        const y = h - pad - ((Number(s.ops) - minV) / range) * (h - 2*pad);
+        const ops = Number(s.ops);
+        const col = ops >= 0.800 ? 'var(--g)' : ops >= 0.700 ? 'var(--c)' : ops >= 0.600 ? 'var(--y)' : 'var(--r)';
+        return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3" fill="${col}"><title>${s.season}: ${ops.toFixed(3)} OPS · ${s.pa} PA</title></circle>`;
+      }).join('');
+      sparkline = `
+        <svg viewBox="0 0 ${w} ${h}" style="width:100%;max-width:240px;height:${h}px;display:block;margin:6px 0 4px">
+          <polyline points="${points.join(' ')}" fill="none" stroke="rgba(0,229,255,.55)" stroke-width="1.5"/>
+          ${dots}
+        </svg>`;
+    }
+  }
+  // Trend chip
+  const trend = detectSeasonTrend(seasons, careerPA);
+  let trendChip = '';
+  if (trend) {
+    const cls = trend.dir === 'up' ? 'good' : trend.dir === 'down' ? 'bad' : '';
+    const lbl = trend.dir === 'up' ? `↗ Improving (${(trend.slope*1000).toFixed(0)} OPS/yr)`
+              : trend.dir === 'down' ? `↘ Declining (${(trend.slope*1000).toFixed(0)} OPS/yr)`
+              : '→ Consistent';
+    trendChip = `<span class="context-badge ${cls}" style="margin-left:6px">${lbl}</span>`;
+  }
+  // Table only renders when multiple seasons (matches prior behavior).
+  const tableHtml = (seasons.length > 1) ? `
+    <details style="margin:4px 0 10px;font-size:.7rem">
+      <summary style="cursor:pointer;color:var(--mu);font-size:.62rem;text-transform:uppercase;letter-spacing:.08em">Season-by-season table</summary>
+      <div style="margin-top:6px;display:grid;grid-template-columns:48px repeat(5,1fr);gap:2px 8px;padding:6px 8px;background:rgba(0,0,0,.18);border-radius:6px">
+        <span style="font-size:.6rem;color:var(--mu)">Year</span>
+        <span style="font-size:.6rem;color:var(--mu)">PA</span>
+        <span style="font-size:.6rem;color:var(--mu)">AB/H</span>
+        <span style="font-size:.6rem;color:var(--mu)">HR</span>
+        <span style="font-size:.6rem;color:var(--mu)">BB/K</span>
+        <span style="font-size:.6rem;color:var(--mu)">AVG</span>
+        ${seasons.map(s => `
+          <span>${s.season ?? '—'}</span>
+          <span>${s.pa}</span>
+          <span>${s.ab}/${s.h}</span>
+          <span>${s.hr}</span>
+          <span>${s.bb}/${s.so}</span>
+          <span>${(s.avg!=null ? s.avg.toFixed(3).replace(/^0/,'') : '—')}</span>
+        `).join('')}
+      </div>
+    </details>` : '';
+  return `
+    <div style="display:flex;align-items:center;gap:8px;margin:4px 0 2px">
+      <div style="font-size:.62rem;color:var(--mu);letter-spacing:.08em;text-transform:uppercase">Career trend vs pitcher</div>
+      ${trendChip}
+    </div>
+    ${sparkline}
+    ${tableHtml}`;
+}
+
+// Estimate per-prop impact from umpire zone tendency. Zone <40 = hitter
+// friendly (suppresses K, helps BB/HR/TB); zone >60 = pitcher friendly.
+// Returns array of impact strings for tooltip/display.
+function umpireImpacts(umpire, umpireKMult) {
+  if (!umpire || umpire.zone == null) return [];
+  const z = umpire.zone;
+  const impacts = [];
+  if (umpireKMult != null && umpireKMult !== 1) {
+    const pct = ((umpireKMult - 1) * 100).toFixed(0);
+    impacts.push(`K rate ${pct > 0 ? '+' : ''}${pct}%`);
+  }
+  // Symmetric BB effect (tighter zone = more BB)
+  const bbDelta = ((50 - z) * 0.6).toFixed(0);
+  if (Math.abs(bbDelta) >= 2) impacts.push(`BB rate ${bbDelta > 0 ? '+' : ''}${bbDelta}%`);
+  // HR/TB indirect effect via more pitches in the zone
+  if (z >= 58 || z <= 42) {
+    const tbDelta = ((50 - z) * 0.15).toFixed(1);
+    if (Math.abs(tbDelta) >= 0.5) impacts.push(`HR/TB ${tbDelta > 0 ? '+' : ''}${tbDelta}%`);
+  }
+  return impacts;
+}
+
+// ── Phase 2 helpers ───────────────────────────────────────────────────────
+
+// Score weather impact on HR/TB props. Returns {label, score, direction}
+// where score is the multiplier (1.0 = neutral, >1 favors hitters).
+// Research: <55°F = -% carry; 65-75°F neutral; >80°F +% carry; wind 10+mph
+// in/out is one of the strongest predictors in MLB betting.
+function scoreWeather(wx, parkFactor) {
+  if (!wx || typeof wx !== 'object') return null;
+  if (wx.dome) return { label: '<strong>Dome</strong> · neutral conditions', score: 1.0 };
+  const temp = (typeof wx.temp === 'number') ? wx.temp : null;
+  const wind = (typeof wx.wind_speed === 'number') ? wx.wind_speed : null;
+  const dir  = (wx.wind_dir || '').toUpperCase();
+  if (temp == null && wind == null) return null;
+
+  // Temperature multiplier on carry distance
+  let tempMult = 1.0;
+  if (temp != null) {
+    if (temp < 50)      tempMult = 0.93;
+    else if (temp < 60) tempMult = 0.97;
+    else if (temp < 75) tempMult = 1.00;
+    else if (temp < 85) tempMult = 1.03;
+    else                tempMult = 1.06;
+  }
+  // Wind multiplier (crude — only the outfield direction matters most)
+  // 'Out' winds (S/SW/SE typically for many parks) boost HR; 'In' wind suppresses.
+  // We treat NE/N/NW as headwind, S/SE/SW as tailwind, others neutral.
+  let windMult = 1.0;
+  let windHint = '';
+  if (wind != null && wind >= 8) {
+    if (/^S/.test(dir))      { windMult = 1.0 + Math.min(0.18, wind * 0.013); windHint = ' out'; }
+    else if (/^N/.test(dir)) { windMult = 1.0 - Math.min(0.18, wind * 0.013); windHint = ' in'; }
+  }
+  const combined = tempMult * windMult;
+  const pct = (combined - 1) * 100;
+  // Build chip label
+  const parts = [];
+  if (temp != null) parts.push(`${temp}°F`);
+  if (wind != null && wind >= 1) parts.push(`${wind}mph ${dir || ''}${windHint}`.trim());
+  if (wx.condition && wx.condition !== 'N/A') parts.push(wx.condition);
+  const tone = pct >= 2.5 ? 'good' : pct <= -2.5 ? 'bad' : '';
+  const tag  = Math.abs(pct) >= 1 ? `<strong class="${tone}">${pct > 0 ? '+' : ''}${pct.toFixed(1)}%</strong>` : '<strong>neutral</strong>';
+  const label = `Wx: ${parts.join(' · ')} → ${tag} carry`;
+  return { label, score: combined, direction: pct };
+}
+
+// Compute per-market ensemble agreement between XGB and the blended projection.
+// Returns array of {market, label, blended, xgb, divergence, flag, flagCls}.
+// flag: 'AGREE' (Δ<8pts), 'MIXED' (Δ8-15pts), 'SPLIT' (Δ>15pts).
+function computeEnsembleAgreement(probs) {
+  if (!probs) return [];
+  const rows = [];
+  const markets = [
+    { key: 'hit1', label: '1+ Hit', xgbKey: 'xgbHitProb' },
+    { key: 'tb2',  label: '2+ TB',  xgbKey: 'xgbTbProb' },
+    { key: 'hr',   label: 'HR',     xgbKey: 'xgbHrProb' },
+    { key: 'rbi1', label: '1+ RBI', xgbKey: 'xgbRbiProb' },
+  ];
+  for (const m of markets) {
+    const blended = probs[m.key];
+    const xgb     = probs[m.xgbKey];
+    if (blended == null || xgb == null) continue;
+    const div = Math.abs(blended - xgb);
+    let flag, flagCls;
+    if (div < 0.08)      { flag = 'AGREE'; flagCls = 'v-bet'; }
+    else if (div < 0.15) { flag = 'MIXED'; flagCls = 'v-lean'; }
+    else                 { flag = 'SPLIT'; flagCls = 'v-fade'; }
+    rows.push({ market: m.label, blended, xgb, divergence: div, flag, flagCls });
+  }
+  return rows;
+}
+
 // Synthesizes BET/LEAN/FADE verdicts + drivers + context into a 1-glance
 // "Quick Take" panel that tells the user which props to play and why.
-function buildReasoningSummary(proj, summary, batterName, pitcherName) {
+function buildReasoningSummary(proj, summary, batterName, pitcherName, batterInjury, pitcherInjury) {
   if (!proj) return '';
   const verdicts = proj.verdicts || {};
   const probs    = proj.projectedProbs || {};
@@ -668,6 +929,15 @@ function buildReasoningSummary(proj, summary, batterName, pitcherName) {
   const adj      = proj.adjustments    || {};
   const gctx     = proj.gameContext    || {};
   const vsSP     = proj.vsStarter || null;
+
+  // Injury severity: IL_60 / IL_10 = blocking, DTD = warning, GTD = caution
+  const batterIlBlocking = batterInjury && (batterInjury.status === 'IL_60' || batterInjury.status === 'IL_10');
+  const pitcherIlBlocking = pitcherInjury && (pitcherInjury.status === 'IL_60' || pitcherInjury.status === 'IL_10');
+  const anyInjuryWarning = !!(batterInjury || pitcherInjury);
+
+  // H2H sample-size unreliability flag
+  const careerPA = (summary && summary.pa) || 0;
+  const smallSample = careerPA > 0 && careerPA < 50;
 
   const labels = { hit1:'1+ Hit', tb2:'2+ TB', hr:'Home Run', rbi1:'1+ RBI' };
   const bets = [], leans = [], fades = [];
@@ -688,14 +958,21 @@ function buildReasoningSummary(proj, summary, batterName, pitcherName) {
   const elitePitcher= pp.xera != null && pp.xera <= 3.10;
   const badPlatoon  = mc.platoonNote && mc.platoonNote.includes('(—)');
   const cautionFlags = (weakQuality ? 1 : 0) + (weakH2H ? 1 : 0) + (elitePitcher ? 1 : 0) + (badPlatoon ? 1 : 0);
-  const shouldTemper = cautionFlags >= 2 || (weakH2H && bets.length <= 1);
+  const shouldTemper = cautionFlags >= 2 || (weakH2H && bets.length <= 1) || smallSample;
 
   let lead, leadCls = '';
-  if (bets.length >= 3 && !shouldTemper)      { lead = `Smash spot — ${bets.length} BET-grade markets for ${batterName}.`; leadCls = 'good'; }
+  // Injury blocking takes precedence over all other signals
+  if (batterIlBlocking) {
+    lead = `Avoid — ${batterName} on the IL. Bet not playable.`;
+    leadCls = 'bad';
+  } else if (pitcherIlBlocking) {
+    lead = `Pitcher matchup invalid — ${pitcherName} on the IL. Wait for confirmed SP.`;
+    leadCls = 'bad';
+  } else if (bets.length >= 3 && !shouldTemper)      { lead = `Smash spot — ${bets.length} BET-grade markets for ${batterName}.`; leadCls = 'good'; }
   else if (bets.length >= 2 && !shouldTemper) { lead = `Strong spot — multi-market edge on ${batterName}.`; leadCls = 'good'; }
   else if (bets.length >= 2 && shouldTemper)  { lead = `Lean opp. — BET markets identified, but quality/matchup context is mixed.`; leadCls = 'warn'; }
   else if (bets.length === 1 && !shouldTemper){ lead = `Targeted play — ${bets[0].market} stands out.`; leadCls = 'good'; }
-  else if (bets.length === 1 && shouldTemper) { lead = `Lean angle — projection edge, but recency/quality tempers.`; leadCls = 'warn'; }
+  else if (bets.length === 1 && shouldTemper) { lead = `Lean angle — projection edge, but sample/quality tempers.`; leadCls = 'warn'; }
   else if (leans.length >= 2)                 { lead = `Lean spot — moderate edges, not a hammer.`; leadCls = 'warn'; }
   else if (fades.length >= 2)                 { lead = `Tough matchup — multiple fades indicated.`; leadCls = 'bad'; }
   else if (fades.length === 1)                { lead = `Mixed signals — one fade, no clear bet.`; leadCls = 'warn'; }
@@ -730,6 +1007,20 @@ function buildReasoningSummary(proj, summary, batterName, pitcherName) {
 
   // Context "why" chips — pull from drivers, quality, pitcher, platoon, form
   const whys = [];
+
+  // Injury chips first so they're visible at the top of the chip strip
+  if (batterInjury && !batterIlBlocking) {
+    whys.push(`<span class="why-chip neg">⚠ ${batterName.split(' ').pop()} ${batterInjury.status === 'GTD' ? 'GTD' : 'DTD'}</span>`);
+  }
+  if (pitcherInjury && !pitcherIlBlocking) {
+    whys.push(`<span class="why-chip neg">⚠ Pitcher ${pitcherInjury.status === 'GTD' ? 'GTD' : 'DTD'}</span>`);
+  }
+
+  // Small sample warning chip
+  if (smallSample) {
+    whys.push(`<span class="why-chip neg">Small H2H sample — <strong>${careerPA} PA</strong></span>`);
+  }
+
   if (bq.xwoba_pct != null && bq.xwoba_pct >= 75) {
     whys.push(`<span class="why-chip pos">Elite quality — <strong>${bq.xwoba_pct}th</strong> xwOBA</span>`);
   } else if (bq.xwoba_pct != null && bq.xwoba_pct <= 35) {
@@ -755,6 +1046,41 @@ function buildReasoningSummary(proj, summary, batterName, pitcherName) {
     const t = gctx.umpire.tendency;
     if (t === 'HITTER')       whys.push(`<span class="why-chip pos">Hitter-friendly ump</span>`);
     else if (t === 'PITCHER') whys.push(`<span class="why-chip neg">Pitcher-friendly ump</span>`);
+  }
+  // Weather impact chip — surface when materially affecting carry
+  const wxImpact = scoreWeather(gctx.weather, gctx.parkFactor);
+  if (wxImpact && Math.abs(wxImpact.direction) >= 2.5) {
+    const cls = wxImpact.direction > 0 ? 'pos' : 'neg';
+    const dir = wxImpact.direction > 0 ? '+' : '';
+    whys.push(`<span class="why-chip ${cls}">Weather <strong>${dir}${wxImpact.direction.toFixed(1)}%</strong> HR/TB carry</span>`);
+  }
+  // Park favorability chip (extreme parks only — Coors / pitcher parks)
+  if (gctx.parkFactor != null) {
+    if (gctx.parkFactor >= 1.06) whys.push(`<span class="why-chip pos">Hitter park <strong>+${((gctx.parkFactor-1)*100).toFixed(1)}%</strong></span>`);
+    else if (gctx.parkFactor <= 0.94) whys.push(`<span class="why-chip neg">Pitcher park <strong>${((gctx.parkFactor-1)*100).toFixed(1)}%</strong></span>`);
+  }
+  // Park × Power chip (Phase 4): hitter parks amplify power for power batters
+  if (gctx.parkFactor != null && gctx.parkFactor >= 1.05 && bq.brl_pct != null && bq.brl_pct >= 10) {
+    const amp = ((gctx.parkFactor - 1) * 100).toFixed(1);
+    whys.push(`<span class="why-chip pos">Park × Power amplifier <strong>+${amp}%</strong> HR carry</span>`);
+  } else if (gctx.parkFactor != null && gctx.parkFactor <= 0.95 && bq.brl_pct != null && bq.brl_pct >= 10) {
+    const supp = ((1 - gctx.parkFactor) * 100).toFixed(1);
+    whys.push(`<span class="why-chip neg">Power-suppressing park <strong>-${supp}%</strong> for power bats</span>`);
+  }
+  // Seasonal trend chip (Phase 4) — only when sample is meaningful
+  const _bvpSeasons = Array.isArray(mc.bvpSeasons) ? mc.bvpSeasons : [];
+  const _trend = detectSeasonTrend(_bvpSeasons, summary?.pa || 0);
+  if (_trend && _trend.dir !== 'flat') {
+    const cls = _trend.dir === 'up' ? 'pos' : 'neg';
+    const arrow = _trend.dir === 'up' ? '↗' : '↘';
+    const lbl = _trend.dir === 'up' ? 'Improving H2H' : 'Declining H2H';
+    whys.push(`<span class="why-chip ${cls}">${arrow} ${lbl} <strong>${(_trend.slope*1000).toFixed(0)} OPS/yr</strong></span>`);
+  }
+  // Umpire impact chips (Phase 4) — surface concrete K/BB deltas
+  const _umpImpacts = umpireImpacts(gctx.umpire, gctx.umpireKMult);
+  if (_umpImpacts.length && gctx.umpire && (gctx.umpire.zone <= 42 || gctx.umpire.zone >= 58)) {
+    const ttl = gctx.umpire.tendency === 'HITTER' ? 'pos' : gctx.umpire.tendency === 'PITCHER' ? 'neg' : '';
+    whys.push(`<span class="why-chip ${ttl}">Ump → ${_umpImpacts.join(' · ')}</span>`);
   }
   if (summary && summary.avg != null && (summary.pa || 0) >= 15) {
     const avgClass = summary.avg <= 0.240 ? 'neg' : summary.avg >= 0.300 ? 'pos' : '';
@@ -789,7 +1115,7 @@ function buildReasoningSummary(proj, summary, batterName, pitcherName) {
 }
 
 function renderDetail(data) {
-  const { summary, logs, proj, batterName, pitcherName } = data;
+  const { summary, logs, proj, batterName, pitcherName, batterInjury, pitcherInjury } = data;
   const { batterId, pitcherId } = selectedBatter;
   const grade   = summary.grade || '?';
   const gbClass = 'gb-' + grade.replace('+','\\+');
@@ -920,6 +1246,22 @@ function renderDetail(data) {
       ${probTile(probs.rbi1, ev.rbi,  'RBI', '1+ RBI',   'rbi1', verdicts.rbi1)}
     </div>` : '';
 
+  // ── Ensemble model agreement panel (Phase 2) ─────────────────────────────
+  // Show XGB vs Blended agreement per market so users can spot when models
+  // disagree (i.e., the projection is less reliable).
+  const ensembleRows = computeEnsembleAgreement(probs);
+  const agreeCount = ensembleRows.filter(r => r.flag === 'AGREE').length;
+  const ensembleHtml = ensembleRows.length ? `
+    <div class="section-label">Ensemble Model Agreement <span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— XGB vs Blended · ${agreeCount}/${ensembleRows.length} markets agree</span></div>
+    <div class="ensemble-grid">
+      ${ensembleRows.map(r => `
+        <div class="ensemble-cell ${r.flag.toLowerCase()}">
+          <div class="ec-market">${r.market}</div>
+          <div class="ec-vals"><span>XGB ${(r.xgb*100).toFixed(0)}%</span><span class="ec-arrow">↔</span><span>Blend ${(r.blended*100).toFixed(0)}%</span></div>
+          <div class="ec-flag ${r.flagCls}">${r.flag} · Δ${(r.divergence*100).toFixed(0)}pts</div>
+        </div>`).join('')}
+    </div>` : '';
+
   // PA vs This Pitcher (Starter only) — shows the slice of the game that
   // actually pits this batter against this pitcher.
   const vsSpHtml = (vsSP && vsSP.probs) ? `
@@ -970,7 +1312,7 @@ function renderDetail(data) {
         </details>` : ''}
     </div>` : '';
 
-  // ── Game-context strip: TTOP, umpire, park ────────────────────────────────
+  // ── Game-context strip: TTOP, umpire, park, weather (Phase 2) ─────────────
   const gctx = (proj && proj.gameContext) || {};
   const ctxChips = [];
   if (gctx.ttopBatterMult != null && gctx.ttopBatterMult !== 1) {
@@ -980,13 +1322,20 @@ function renderDetail(data) {
   if (gctx.umpire && gctx.umpire.name) {
     const ump = gctx.umpire;
     const tendency = ump.tendency || (ump.zone >= 60 ? 'PITCHER' : ump.zone <= 40 ? 'HITTER' : 'NEUTRAL');
+    const impacts = umpireImpacts(ump, gctx.umpireKMult);
+    const tipText = impacts.length ? `Estimated impact: ${impacts.join(' · ')}` : `Zone ${ump.zone} = ${tendency.toLowerCase()}-friendly`;
     const kpct = gctx.umpireKMult != null ? ` · K×${gctx.umpireKMult.toFixed(2)}` : '';
-    ctxChips.push(`<span class="ctx-chip">HP Ump: <strong>${ump.name||''}</strong> ${ump.zone!=null?`(${tendency} ${ump.zone})`:''}${kpct}</span>`);
+    ctxChips.push(`<span class="ctx-chip" title="${tipText.replace(/"/g,'&quot;')}">HP Ump: <strong>${ump.name||''}</strong> ${ump.zone!=null?`(${tendency} ${ump.zone})`:''}${kpct}</span>`);
   }
   if (proj && proj.parkFactor != null && proj.parkFactor !== 1) {
     const pf = proj.parkFactor;
     const dir = pf > 1 ? '+' : '';
     ctxChips.push(`<span class="ctx-chip">Park <strong>${dir}${((pf-1)*100).toFixed(1)}%</strong></span>`);
+  }
+  // Weather chip — temperature + wind direction/speed with implied carry effect
+  const wxScore = scoreWeather(gctx.weather, proj && proj.parkFactor);
+  if (wxScore && wxScore.label) {
+    ctxChips.push(`<span class="ctx-chip">${wxScore.label}</span>`);
   }
   const ctxStripHtml = ctxChips.length ? `<div class="ctx-strip">${ctxChips.join('')}</div>` : '';
 
@@ -1159,7 +1508,20 @@ function renderDetail(data) {
       </div>`;
     })()}
 
-    ${buildReasoningSummary(proj, summary, batterName, pitcherName)}
+    ${injuryAlertHtml(batterInjury, batterName)}
+    ${injuryAlertHtml(pitcherInjury, pitcherName)}
+
+    ${(() => {
+      // H2H sample-size warning: <50 career PA is statistically unreliable.
+      // Research: industry threshold is 50–100 PA before BvP is signal vs noise.
+      if (pa <= 0 || pa >= 50) return '';
+      return `<div class="h2h-sample-warn">
+        <span class="warn-icon">⚠</span>
+        <span><strong>Small H2H sample (${pa} PA)</strong> — below the 50-PA reliability threshold. Lean on platoon splits (vs ${summary.pitcher_hand === 'L' ? 'LHP' : 'RHP'}) and Statcast quality metrics instead of H2H stats.</span>
+      </div>`;
+    })()}
+
+    ${buildReasoningSummary(proj, summary, batterName, pitcherName, batterInjury, pitcherInjury)}
 
     <div class="section-label">
       Career H2H Stats
@@ -1176,26 +1538,7 @@ function renderDetail(data) {
       <div class="stat-box"><div class="stat-val" ${ratioColor(summary.ops_ratio)}>${summary.ops_ratio!=null ? Number(summary.ops_ratio).toFixed(2)+'x' : '—'}</div><div class="stat-lbl">OPS Ratio</div></div>
     </div>
 
-    ${(Array.isArray(mc.bvpSeasons) && mc.bvpSeasons.length > 1) ? `
-      <details style="margin:6px 0 10px;font-size:.7rem">
-        <summary style="cursor:pointer;color:var(--mu);font-size:.62rem;text-transform:uppercase;letter-spacing:.08em">Season breakdown</summary>
-        <div style="margin-top:6px;display:grid;grid-template-columns:48px repeat(5,1fr);gap:2px 8px;padding:6px 8px;background:rgba(0,0,0,.18);border-radius:6px">
-          <span style="font-size:.6rem;color:var(--mu)">Year</span>
-          <span style="font-size:.6rem;color:var(--mu)">PA</span>
-          <span style="font-size:.6rem;color:var(--mu)">AB/H</span>
-          <span style="font-size:.6rem;color:var(--mu)">HR</span>
-          <span style="font-size:.6rem;color:var(--mu)">BB/K</span>
-          <span style="font-size:.6rem;color:var(--mu)">AVG</span>
-          ${mc.bvpSeasons.map(s => `
-            <span>${s.season ?? '—'}</span>
-            <span>${s.pa}</span>
-            <span>${s.ab}/${s.h}</span>
-            <span>${s.hr}</span>
-            <span>${s.bb}/${s.so}</span>
-            <span>${(s.avg!=null ? s.avg.toFixed(3).replace(/^0/,'') : '—')}</span>
-          `).join('')}
-        </div>
-      </details>` : ''}
+    ${seasonalTrendHtml(mc.bvpSeasons, summary.pa || 0)}
 
     ${xstatsHtml}
 
@@ -1208,6 +1551,8 @@ function renderDetail(data) {
     ${vsRpHtml}
 
     ${probHtml}
+
+    ${ensembleHtml}
 
     ${divergenceHtml}
 
@@ -1246,16 +1591,26 @@ function renderDetail(data) {
     </div>
   `;
 
-  // Fetch context cards + prop signals (pass proj for quality card)
-  loadContextData(batterId, pitcherId, proj);
+  // Fetch context cards + prop signals (pass proj for quality card).
+  // Pass game_pk so we can fetch bullpen fatigue for the opposing team.
+  const gamePk = currentGame ? currentGame.gamePk : null;
+  // Determine which side the pitcher is on so we know which bullpen the
+  // batter will face after the SP exits.
+  let pitcherSide = null;
+  if (currentLineup && currentLineup.pitchers) {
+    if ((currentLineup.pitchers.awayPitcher || {}).id === pitcherId) pitcherSide = 'away';
+    else if ((currentLineup.pitchers.homePitcher || {}).id === pitcherId) pitcherSide = 'home';
+  }
+  loadContextData(batterId, pitcherId, proj, gamePk, pitcherSide);
 }
 
-async function loadContextData(batterId, pitcherId, proj) {
+async function loadContextData(batterId, pitcherId, proj, gamePk, pitcherSide) {
   try {
-    const [recent, splits, arsenal] = await Promise.all([
+    const [recent, splits, arsenal, bullpen] = await Promise.all([
       fetch(`/api/player/${batterId}/recent-games`).then(r => r.json()),
       fetch(`/api/player/${batterId}/platoon-splits`).then(r => r.json()),
-      fetch(`/api/bvp/${batterId}/${pitcherId}/arsenal`).then(r => r.json()).catch(() => ({}))
+      fetch(`/api/bvp/${batterId}/${pitcherId}/arsenal`).then(r => r.json()).catch(() => ({})),
+      gamePk ? fetch(`/api/bullpen/fatigue/${gamePk}`).then(r => r.json()).catch(() => ({})) : Promise.resolve({})
     ]);
 
     const contextGrid = document.getElementById('contextGrid');
@@ -1363,18 +1718,66 @@ async function loadContextData(batterId, pitcherId, proj) {
       return r >= 1.15 ? 'good' : r <= 0.85 ? 'bad' : '';
     }
 
+    // Pitch-type heatmap (Phase 3): color-code wOBA + Whiff% cells and
+    // derive a per-pitch verdict that combines effectiveness × usage.
+    // High-usage favorable pitches get EDGE; high-usage unfavorable get RISK.
+    function wobaHeatBg(v) {
+      if (v == null) return 'transparent';
+      if (v >= 0.380) return 'rgba(0,230,118,.22)';   // batter crushes
+      if (v >= 0.330) return 'rgba(0,229,255,.16)';   // above-avg
+      if (v >= 0.290) return 'rgba(255,255,255,.04)'; // neutral
+      if (v >= 0.260) return 'rgba(245,197,66,.14)';  // below-avg
+      return 'rgba(255,82,82,.16)';                    // batter struggles
+    }
+    function whiffHeatBg(v) {
+      // For batter: low whiff = contact-friendly = good for hits. High whiff = K risk.
+      if (v == null) return 'transparent';
+      if (v <= 15) return 'rgba(0,230,118,.18)';
+      if (v <= 22) return 'rgba(0,229,255,.12)';
+      if (v <= 28) return 'rgba(255,255,255,.04)';
+      if (v <= 34) return 'rgba(245,197,66,.14)';
+      return 'rgba(255,82,82,.18)';
+    }
+    function pitchVerdict(p) {
+      // No batter sample for this pitch → use pitcher's overall effectiveness
+      // with the pitch as a coarse fallback; otherwise mark "—".
+      const usage = (p.usage || 0);
+      const w = p.bat_woba, whiff = p.bat_whiff;
+      if (w == null && whiff == null) {
+        if (p.pit_woba != null && p.pit_woba >= 0.350 && usage >= 15) return { lbl:'EDGE',  cls:'v-bet' };
+        if (p.pit_woba != null && p.pit_woba <= 0.270 && usage >= 15) return { lbl:'RISK',  cls:'v-fade' };
+        return { lbl:'—', cls:'' };
+      }
+      // Combined score: wOBA edge + low whiff (good for batter)
+      let score = 0;
+      if (w != null)     score += (w - 0.310) * 2.5;       // wOBA delta vs lg avg
+      if (whiff != null) score += (22 - whiff) * 0.012;    // sub-22% whiff is good
+      const usageWeight = Math.min(1.0, usage / 25);       // heavier impact at higher usage
+      const weighted = score * usageWeight;
+      if (weighted >=  0.10) return { lbl:'EDGE',  cls:'v-bet' };
+      if (weighted >=  0.03) return { lbl:'LEAN',  cls:'v-lean' };
+      if (weighted <= -0.10) return { lbl:'RISK',  cls:'v-fade' };
+      if (weighted <= -0.03) return { lbl:'FADE',  cls:'v-lean' };
+      return { lbl:'—', cls:'' };
+    }
+
     const pitchRows = pitches.slice(0, 5).map(p => {
       const usagePct = p.usage != null ? Math.round(p.usage) + '%' : '—';
       const veloStr  = p.velo  != null ? p.velo.toFixed(1)         : '—';
       const batWoba  = p.bat_woba != null ? fmtStat(p.bat_woba) : (p.pit_woba != null ? `<span style="color:var(--dim)">${fmtStat(p.pit_woba)}</span>` : '—');
       const whiffStr = p.bat_whiff != null ? Math.round(p.bat_whiff) + '%' : (p.pit_whiff != null ? `<span style="color:var(--dim)">${Math.round(p.pit_whiff)}%</span>` : '—');
-      const rCls = pitchRatioClass(p.ratio);
-      return `<div style="display:grid;grid-template-columns:1fr 28px 42px 44px 44px;gap:2px 4px;align-items:center;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.05)">
+      const wobaBg   = wobaHeatBg(p.bat_woba);
+      const whiffBg  = whiffHeatBg(p.bat_whiff);
+      const verdict  = pitchVerdict(p);
+      // High-usage pitches highlight bolder
+      const usageEmph = (p.usage || 0) >= 25 ? 'color:var(--t);font-weight:700' : 'color:var(--dim)';
+      return `<div style="display:grid;grid-template-columns:1fr 30px 40px 46px 42px 42px;gap:2px 4px;align-items:center;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.05)">
         <span style="font-size:.72rem;color:var(--t)">${p.label}</span>
-        <span style="font-size:.68rem;color:var(--dim)">${usagePct}</span>
+        <span style="font-size:.68rem;${usageEmph}">${usagePct}</span>
         <span style="font-size:.68rem;color:var(--dim)">${veloStr}</span>
-        <span style="font-size:.72rem;color:var(--t)">${batWoba}</span>
-        <span style="font-size:.72rem;color:var(--t)" class="${rCls}">${whiffStr}</span>
+        <span style="font-size:.72rem;color:var(--t);background:${wobaBg};border-radius:3px;padding:1px 4px;text-align:center">${batWoba}</span>
+        <span style="font-size:.72rem;color:var(--t);background:${whiffBg};border-radius:3px;padding:1px 4px;text-align:center">${whiffStr}</span>
+        <span class="verdict-pill ${verdict.cls}" style="margin:0;font-size:.5rem">${verdict.lbl}</span>
       </div>`;
     }).join('');
 
@@ -1409,15 +1812,16 @@ async function loadContextData(batterId, pitcherId, proj) {
         </div>
         ${mixSubHtml}
         ${pitches.length ? `
-          <div style="display:grid;grid-template-columns:1fr 28px 42px 44px 44px;gap:2px 4px;padding:2px 0 4px;border-bottom:1px solid rgba(255,255,255,.12)">
+          <div style="display:grid;grid-template-columns:1fr 30px 40px 46px 42px 42px;gap:2px 4px;padding:2px 0 4px;border-bottom:1px solid rgba(255,255,255,.12)">
             <span style="font-size:.62rem;color:var(--dim)">Pitch</span>
             <span style="font-size:.62rem;color:var(--dim)">Use%</span>
             <span style="font-size:.62rem;color:var(--dim)">Velo</span>
             <span style="font-size:.62rem;color:var(--dim)">wOBA</span>
             <span style="font-size:.62rem;color:var(--dim)">Whiff%</span>
+            <span style="font-size:.62rem;color:var(--dim);text-align:center">Verdict</span>
           </div>
           ${pitchRows}
-          <div style="font-size:.64rem;color:var(--dim);margin-top:6px">wOBA/Whiff% = batter vs pitch type (Statcast)</div>
+          <div style="font-size:.6rem;color:var(--dim);margin-top:6px;line-height:1.4">wOBA/Whiff% = batter vs pitch type (Statcast). <strong style="color:var(--mu)">Verdict</strong> blends effectiveness × usage.</div>
         ` : `<div class="context-stat-row" style="color:var(--dim);font-size:.75rem;padding:8px 0">No Statcast arsenal data</div>`}
         ${fgCard3Rows}
       </div>
@@ -1496,7 +1900,53 @@ async function loadContextData(batterId, pitcherId, proj) {
         </div>`;
     }
 
-    contextGrid.innerHTML = card1 + card2 + card3 + card4;
+    // Card 5: Bullpen Fatigue (Phase 3)
+    // The batter will face the opposing team's bullpen after the SP exits.
+    // pitcherSide=away means the SP is the away team's, so the relevant
+    // bullpen the batter is facing is the AWAY bullpen.
+    let card5 = '';
+    const bpSide = (typeof pitcherSide === 'string') ? (bullpen[pitcherSide] || null) : null;
+    if (bpSide && bpSide.stress_label) {
+      const stressCls = bpSide.stress_label === 'HIGH' ? 'bad' : bpSide.stress_label === 'MODERATE' ? 'warn' : 'good';
+      const stressColor = stressCls === 'good' ? 'var(--g)' : stressCls === 'warn' ? 'var(--y)' : 'var(--r)';
+      const relievers = (bpSide.relievers || []).slice(0, 5);
+      const relRows = relievers.map(r => {
+        const sCol = r.status === 'GASSED' ? 'var(--r)' : r.status === 'TIRED' ? 'var(--o)' : r.status === 'LIGHT' ? 'var(--y)' : r.status === 'OK' ? 'var(--c)' : 'var(--g)';
+        return `<div style="display:grid;grid-template-columns:1fr 38px 60px;gap:4px;align-items:center;padding:2px 0;border-bottom:1px solid rgba(255,255,255,.04)">
+          <span style="font-size:.7rem;color:var(--t)">${r.name}</span>
+          <span style="font-size:.65rem;color:var(--dim)">${r.pitches_total}p</span>
+          <span style="font-size:.6rem;font-weight:800;letter-spacing:.05em;color:${sCol};text-align:right">${r.status}</span>
+        </div>`;
+      }).join('') || '<div style="font-size:.7rem;color:var(--dim);padding:6px 0">No reliever appearances in last 3 games</div>';
+      card5 = `
+        <div class="context-card">
+          <div class="context-card-header">
+            <span>Bullpen Fatigue <span style="color:var(--dim);font-weight:400;text-transform:none;letter-spacing:0">— ${bpSide.team_abbr || ''}</span></span>
+            <span class="context-badge ${stressCls}" style="color:${stressColor};border-color:${stressColor}">${bpSide.stress_label} ${bpSide.stress_score}</span>
+          </div>
+          ${relRows}
+          <div style="font-size:.58rem;color:var(--dim);margin-top:6px">Sampled ${bpSide.games_sampled || 3} games · GASSED=high stress, FRESH=available</div>
+        </div>`;
+    }
+
+    contextGrid.innerHTML = card1 + card2 + card3 + card4 + card5;
+
+    // Phase 3: Augment Quick Take with bullpen chip once async data is ready.
+    // Tired bullpens → bet edge late-game; fresh bullpens → expect tougher RP.
+    try {
+      const whyContainer = document.querySelector('.reasoning-summary .reasoning-why');
+      if (bpSide && bpSide.stress_label && whyContainer) {
+        const sl = bpSide.stress_label;
+        const tag = sl === 'HIGH' ? 'pos' : sl === 'FRESH' ? 'neg' : '';
+        const lbl = sl === 'HIGH' ? `Tired ${bpSide.team_abbr||''} pen — late-game edge`
+                  : sl === 'FRESH' ? `Fresh ${bpSide.team_abbr||''} pen — tougher RP`
+                  : `Moderate ${bpSide.team_abbr||''} pen stress`;
+        const chip = document.createElement('span');
+        chip.className = `why-chip ${tag}`;
+        chip.innerHTML = lbl + ` <strong>${bpSide.stress_score}</strong>`;
+        whyContainer.appendChild(chip);
+      }
+    } catch (e) { /* non-fatal */ }
 
     // ── Prop Signals ────────────────────────────────────────────────────────
     const propGrid = document.getElementById('propSignalGrid');
