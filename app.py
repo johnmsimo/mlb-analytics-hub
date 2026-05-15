@@ -1204,6 +1204,20 @@ _fg_loaded = False
 _fg_load_date = None
 _fg_loading = False
 
+# ── Historical FG + daily matchup caches ─────────────────────────────────────
+# Keyed by MLBAM int ID → {year → {stat_key → value}}
+_fg_hist_lock = threading.Lock()
+_fg_bat_hist: dict = {}
+_fg_pit_hist: dict = {}
+_fg_hist_loaded = False
+
+# Daily pre-computed matchup rows keyed by (batter_id_str, pitcher_id_str)
+_matchup_lock_local = threading.Lock()
+_matchup_cache: dict = {}
+_matchup_date_loaded = None
+
+_HTML_TAG_RE = re.compile(r'<[^>]+>')
+
 
 def _load_fg_data():
     global _fg_loaded, _fg_load_date, _fg_loading
@@ -1488,6 +1502,261 @@ def _maybe_refresh_fg():
                 _fg_loading = False
                 _fg_cond.notify_all()
     threading.Thread(target=_runner, daemon=True).start()
+
+
+# ── Pitch-type key mapping: FG pitching arsenal → FG batting run values ───────
+# Each tuple is (pitcher_pct_col, batter_rv100_col)
+_PITCH_FG_PAIRS = [
+    ('pct_fa',  'rv_fa'),   # 4-seam fastball
+    ('pct_ft',  'rv_ft'),   # 2-seam fastball
+    ('pct_si',  'rv_si'),   # sinker
+    ('pct_fc',  'rv_fc'),   # cutter
+    ('pct_sl',  'rv_sl'),   # slider
+    ('pct_st',  'rv_st'),   # sweeper
+    ('pct_slo', 'rv_slo'),  # slurve
+    ('pct_cu',  'rv_cu'),   # curveball
+    ('pct_kc',  'rv_kc'),   # knuckle-curve
+    ('pct_ch',  'rv_ch'),   # changeup
+    ('pct_fs',  'rv_fs'),   # splitter
+]
+
+
+def _load_fg_historical():
+    """
+    Load all fg_batting_YYYY.csv and fg_pitching_YYYY.csv files from data/.
+    Builds per-player-per-year stat records keyed by MLBAM int ID.
+    Called once at startup in a background thread.
+    """
+    global _fg_bat_hist, _fg_pit_hist, _fg_hist_loaded
+
+    data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+
+    def _sf(v):
+        try:
+            f = float(v)
+            return None if (f != f) else f   # NaN → None
+        except (TypeError, ValueError):
+            return None
+
+    def _strip(s):
+        return _HTML_TAG_RE.sub('', s or '').strip()
+
+    bat_hist = {}
+    for path in sorted(_glob.glob(os.path.join(data_dir, 'fg_batting_*.csv'))):
+        try:
+            with open(path, newline='', encoding='utf-8-sig') as f:
+                for row in csvmod.DictReader(f):
+                    try:
+                        mid = int(float(row['xMLBAMID']))
+                        yr  = int(float(row['Season']))
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    if mid not in bat_hist:
+                        bat_hist[mid] = {}
+                    bat_hist[mid][yr] = {
+                        'name':    _strip(row.get('Name', '')),
+                        'pa':      _sf(row.get('PA')),
+                        'woba':    _sf(row.get('wOBA')),
+                        'xwoba':   _sf(row.get('xwOBA')),
+                        'avg':     _sf(row.get('AVG')),
+                        'obp':     _sf(row.get('OBP')),
+                        'slg':     _sf(row.get('SLG')),
+                        'iso':     _sf(row.get('ISO')),
+                        'kpct':    _sf(row.get('K%')),
+                        'bbpct':   _sf(row.get('BB%')),
+                        'hard_pct':_sf(row.get('Hard%')),
+                        'wrc_plus':_sf(row.get('wRC+')),
+                        # Per-pitch RV/100 (positive = batter above avg on that pitch)
+                        'rv_fa':   _sf(row.get('pfxwFA/C')),
+                        'rv_ft':   _sf(row.get('pfxwFT/C')),
+                        'rv_si':   _sf(row.get('pfxwSI/C')),
+                        'rv_fc':   _sf(row.get('pfxwFC/C')),
+                        'rv_sl':   _sf(row.get('pfxwSL/C')),
+                        'rv_st':   _sf(row.get('pfxwST/C')),
+                        'rv_slo':  _sf(row.get('pfxwSLO/C')),
+                        'rv_cu':   _sf(row.get('pfxwCU/C')),
+                        'rv_kc':   _sf(row.get('pfxwKC/C')),
+                        'rv_ch':   _sf(row.get('pfxwCH/C')),
+                        'rv_fs':   _sf(row.get('pfxwFS/C')),
+                    }
+        except Exception as exc:
+            logging.warning(f"[FG hist] batting load error {path}: {exc}")
+
+    pit_hist = {}
+    for path in sorted(_glob.glob(os.path.join(data_dir, 'fg_pitching_*.csv'))):
+        try:
+            with open(path, newline='', encoding='utf-8-sig') as f:
+                for row in csvmod.DictReader(f):
+                    try:
+                        mid = int(float(row['xMLBAMID']))
+                        yr  = int(float(row['Season']))
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    if mid not in pit_hist:
+                        pit_hist[mid] = {}
+                    pit_hist[mid][yr] = {
+                        'name':    _strip(row.get('Name', '')),
+                        'ip':      _sf(row.get('IP')),
+                        'era':     _sf(row.get('ERA')),
+                        'fip':     _sf(row.get('FIP')),
+                        'xfip':    _sf(row.get('xFIP')),
+                        'xera':    _sf(row.get('xERA')),
+                        'kpct':    _sf(row.get('K%')),
+                        'bbpct':   _sf(row.get('BB%')),
+                        # Arsenal mix (fractions 0–1)
+                        'pct_fa':  _sf(row.get('pfxFA%')),
+                        'pct_ft':  _sf(row.get('pfxFT%')),
+                        'pct_si':  _sf(row.get('pfxSI%')),
+                        'pct_fc':  _sf(row.get('pfxFC%')),
+                        'pct_sl':  _sf(row.get('pfxSL%')),
+                        'pct_st':  _sf(row.get('pfxST%')),
+                        'pct_slo': _sf(row.get('pfxSLO%')),
+                        'pct_cu':  _sf(row.get('pfxCU%')),
+                        'pct_kc':  _sf(row.get('pfxKC%')),
+                        'pct_ch':  _sf(row.get('pfxCH%')),
+                        'pct_fs':  _sf(row.get('pfxFS%')),
+                        # Velocities
+                        'velo_fa': _sf(row.get('pfxvFA')),
+                        'velo_sl': _sf(row.get('pfxvSL')),
+                        'velo_st': _sf(row.get('pfxvST')),
+                        'velo_si': _sf(row.get('pfxvSI')),
+                    }
+        except Exception as exc:
+            logging.warning(f"[FG hist] pitching load error {path}: {exc}")
+
+    with _fg_hist_lock:
+        _fg_bat_hist.update(bat_hist)
+        _fg_pit_hist.update(pit_hist)
+        _fg_hist_loaded = True
+    logging.info(f"[FG hist] {len(bat_hist)} batters / {len(pit_hist)} pitchers loaded from CSVs")
+
+
+def _load_matchup_files():
+    """
+    Load the most recent mlb_matchups_YYYYMMDD.csv from data/.
+    Indexes rows by (batter_id_str, pitcher_id_str) for O(1) lookup.
+    Provides platoon splits + BvP H2H + batter quality metrics without API calls.
+    """
+    global _matchup_cache, _matchup_date_loaded
+
+    data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+    files = sorted(_glob.glob(os.path.join(data_dir, 'mlb_matchups_*.csv')), reverse=True)
+    if not files:
+        return
+
+    cache = {}
+    for path in files[:2]:   # load the two most recent days
+        try:
+            with open(path, newline='', encoding='utf-8-sig') as f:
+                for row in csvmod.DictReader(f):
+                    bid = (row.get('batter_id') or '').strip()
+                    pid = (row.get('pitcher_id') or '').strip()
+                    if bid and pid:
+                        cache.setdefault((bid, pid), row)   # earlier file wins on conflict
+        except Exception as exc:
+            logging.warning(f"[Matchup] load error {path}: {exc}")
+
+    with _matchup_lock_local:
+        _matchup_cache.clear()
+        _matchup_cache.update(cache)
+        _matchup_date_loaded = datetime.now().date()
+    logging.info(f"[Matchup] {len(cache)} matchup rows loaded")
+
+
+def _matchup_row(batter_id, pitcher_id):
+    """Return the pre-computed matchup row for (batter_id, pitcher_id), or None."""
+    key = (str(batter_id), str(pitcher_id))
+    with _matchup_lock_local:
+        return _matchup_cache.get(key)
+
+
+def _fg_pitch_matchup_score(batter_mlbam, pitcher_mlbam):
+    """
+    Arsenal-based matchup score using FG per-pitch run-value data.
+
+    Uses the pitcher's most recent-season pitch mix and a recency-weighted
+    (2-year half-life) average of the batter's RV/100 against each pitch type.
+
+    Returns (score_mult, breakdown):
+        score_mult: 1.0 = league avg, >1.0 = batter-favorable
+        breakdown: sorted list of {pitch, usage_pct, batter_rv100}
+    """
+    if not _fg_hist_loaded:
+        return 1.0, []
+    try:
+        bid = int(batter_mlbam)
+        pid = int(pitcher_mlbam)
+    except (TypeError, ValueError):
+        return 1.0, []
+
+    with _fg_hist_lock:
+        bat_years = dict(_fg_bat_hist.get(bid, {}))
+        pit_years = dict(_fg_pit_hist.get(pid, {}))
+
+    if not bat_years or not pit_years:
+        return 1.0, []
+
+    cur_year = datetime.now().year
+
+    # Pitcher: use most recent season with ≥20 IP
+    pit_entry = None
+    for yr in sorted(pit_years.keys(), reverse=True):
+        e = pit_years[yr]
+        if (e.get('ip') or 0) >= 20:
+            pit_entry = e
+            break
+    if not pit_entry:
+        return 1.0, []
+
+    # Batter: recency-weighted RV/100 per pitch type (2-year half-life, ≥50 PA)
+    rv_num = {}
+    rv_den = {}
+    for yr, entry in bat_years.items():
+        if (entry.get('pa') or 0) < 50:
+            continue
+        years_ago = max(0, cur_year - yr)
+        if years_ago > 4:
+            continue
+        decay = 0.5 ** (years_ago / 2.0)
+        for _, rv_key in _PITCH_FG_PAIRS:
+            val = entry.get(rv_key)
+            if val is not None:
+                rv_num[rv_key] = rv_num.get(rv_key, 0.0) + val * decay
+                rv_den[rv_key] = rv_den.get(rv_key, 0.0) + decay
+
+    bat_rv = {k: rv_num[k] / rv_den[k] for k in rv_num if rv_den.get(k)}
+    if not bat_rv:
+        return 1.0, []
+
+    # Weighted score: sum(pitcher_pct × batter_rv100) across arsenal
+    total_rv  = 0.0
+    total_pct = 0.0
+    breakdown = []
+    for pct_key, rv_key in _PITCH_FG_PAIRS:
+        pct = pit_entry.get(pct_key) or 0.0
+        if pct < 0.02:
+            continue
+        rv = bat_rv.get(rv_key, 0.0)   # missing → assume league avg (0)
+        total_rv  += pct * rv
+        total_pct += pct
+        breakdown.append({
+            'pitch':        pct_key.replace('pct_', '').upper(),
+            'usage_pct':    round(pct * 100, 1),
+            'batter_rv100': round(rv, 2),
+        })
+
+    if total_pct < 0.10:
+        return 1.0, []
+
+    # Convert weighted RV/100 to a multiplier.
+    # Dividing by 25 maps a ±3.0 RV score to a ±12 % swing — conservative but meaningful.
+    score_mult = max(0.70, min(1.30, 1.0 + total_rv / 25.0))
+    return round(score_mult, 3), sorted(breakdown, key=lambda x: x['usage_pct'], reverse=True)
+
+
+# Launch historical data loaders at startup (after function definitions)
+threading.Thread(target=_load_fg_historical, daemon=True).start()
+threading.Thread(target=_load_matchup_files, daemon=True).start()
 
 
 def _wait_for_fg_data(timeout_sec=30):
@@ -5656,6 +5925,7 @@ def api_bvp_projection(batter_id, pitcher_id):
 
         batter_obj = {
             "name":     batter_name,
+            "id":       batter_id,
             "bats":     bats_code,
             "slot":     lineup_slot,
             "avg":      _safe_f(fg_bat.get("fg_avg"),  0.245),
@@ -5696,11 +5966,24 @@ def api_bvp_projection(batter_id, pitcher_id):
         # ── 5. BvP component (already cached) ───────────────────────────────
         bvp_data = _fetch_bvp(batter_id, pitcher_id)
 
-        # ── 5a. Pitch-mix matchup score (career arsenal SLG vs pitcher arsenal)
+        # ── 5a. Pitch-mix matchup scores (Statcast SLG + FG RV/100 blended)
         try:
-            mix_score, _mix_rows = _compute_pitch_mix_score(str(pitcher_id), str(batter_id))
+            sv_mix_score, _mix_rows = _compute_pitch_mix_score(str(pitcher_id), str(batter_id))
         except Exception:
-            mix_score, _mix_rows = 1.0, []
+            sv_mix_score, _mix_rows = 1.0, []
+        try:
+            fg_mix_score, fg_mix_rows = _fg_pitch_matchup_score(batter_id, pitcher_id)
+        except Exception:
+            fg_mix_score, fg_mix_rows = 1.0, []
+        # Blend: FG RV/100 (more direct) + Statcast SLG ratio
+        _fg_has = (fg_mix_score != 1.0)
+        _sv_has = (sv_mix_score != 1.0)
+        if _fg_has and _sv_has:
+            mix_score = fg_mix_score * 0.60 + sv_mix_score * 0.40
+        elif _fg_has:
+            mix_score = fg_mix_score
+        else:
+            mix_score = sv_mix_score
 
         # ── 5b. Rolling form for batter (daily-cached) ──────────────────────
         batter_form = _fetch_rolling_form(batter_id, False)
@@ -5967,6 +6250,9 @@ def api_bvp_projection(batter_id, pitcher_id):
                 "bvpReliability": (bvp_data or {}).get("reliability", 0.0),
                 "bvpWobaEdge":    (bvp_data or {}).get("woba_edge", 0.0),
                 "mixScore":       mix_score,
+                "mixScoreFg":     fg_mix_score,
+                "mixScoreSv":     sv_mix_score,
+                "mixRowsFg":      fg_mix_rows,
                 # Composite confidence (0–100): blends BvP sample reliability,
                 # platoon split sample, and pitch-mix data availability.
                 "confidence": _compute_bvp_confidence(
@@ -7285,6 +7571,7 @@ def _projection_drivers(batx_adjustments, top_n=4):
         "pitcher_contrib":  "Pitcher resistance",
         "form_contrib":     "Recent form (L7)",
         "bvp_contrib":      "Career BvP",
+        "pitch_mix":        "Pitch-mix matchup",
     }
     items = []
     for k, v in batx_adjustments.items():
@@ -7496,49 +7783,89 @@ def _fetch_bvp(batter_id, pitcher_id):
         r.raise_for_status()
         splits = (r.json().get("stats") or [{}])[0].get("splits", [])
         if not splits:
-            # No career H2H — grade based on batter's platoon split vs pitcher handedness
+            # No career H2H — grade from platoon splits.
+            # Primary: daily matchup CSV (pre-computed, no API call needed).
+            # Fallback: MLB Stats API statSplits.
             platoon_grade = "C"
             platoon_ops = None
             pitcher_hand = "R"
             grade_basis = "platoon"
-            try:
-                pr = requests.get(f"{MLB_API}/people/{pitcher_id}", timeout=6)
-                if pr.ok:
-                    ppeople = pr.json().get("people", [{}])
-                    pitcher_hand = ((ppeople[0].get("pitchHand") or {}).get("code") or "R")
-            except Exception:
-                pass
-            try:
-                year_now = datetime.now().year
-                sit_code = "l" if pitcher_hand == "L" else "r"
-                sr = requests.get(
-                    f"{MLB_API}/people/{batter_id}/stats",
-                    params={"stats": "statSplits", "group": "hitting",
-                            "sitCodes": sit_code, "season": year_now, "sportId": 1},
-                    timeout=8,
-                )
-                if sr.ok:
-                    for sg in sr.json().get("stats", []):
-                        for sp in sg.get("splits", []):
-                            if (sp.get("split") or {}).get("code") == sit_code:
-                                raw = sp.get("stat", {})
-                                platoon_ops = _safe_f(raw.get("ops"), None)
-                                break
-                        if platoon_ops is not None:
-                            break
-                if platoon_ops is not None:
-                    if platoon_ops >= 0.950:
-                        platoon_grade = "A+"
-                    elif platoon_ops >= 0.850:
-                        platoon_grade = "A"
-                    elif platoon_ops >= 0.750:
-                        platoon_grade = "B"
-                    elif platoon_ops >= 0.650:
-                        platoon_grade = "C"
+
+            # Try matchup cache first for pitcher hand + batter platoon stats
+            mrow = _matchup_row(batter_id, pitcher_id)
+            if mrow:
+                bh = (mrow.get('batter_hand') or 'R').upper()
+                # Infer pitcher hand from which split has more AB
+                # (matchup file stores batter hand, not pitcher hand explicitly)
+                # Use vsL vs vsR to determine which split is relevant
+                # vsL = batter vs LHP, vsR = batter vs RHP
+                pitcher_hand = "R"   # default; refined below
+                # Use batter_hand to pick the right split key
+                if bh == 'L':
+                    # LHB: favorable split is vsR (vs RHP)
+                    vs_ops = _safe_f(mrow.get('vsR_ops') or None, None)
+                    if vs_ops:
+                        platoon_ops = vs_ops
+                        pitcher_hand = "R"
                     else:
-                        platoon_grade = "D"
-            except Exception:
-                pass
+                        vs_ops = _safe_f(mrow.get('vsL_ops') or None, None)
+                        if vs_ops:
+                            platoon_ops = vs_ops
+                            pitcher_hand = "L"
+                else:
+                    # RHB/switch: use vsL (vs LHP)
+                    vs_ops = _safe_f(mrow.get('vsL_ops') or None, None)
+                    if vs_ops:
+                        platoon_ops = vs_ops
+                        pitcher_hand = "L"
+                    else:
+                        vs_ops = _safe_f(mrow.get('vsR_ops') or None, None)
+                        if vs_ops:
+                            platoon_ops = vs_ops
+                            pitcher_hand = "R"
+
+            if platoon_ops is None:
+                # Fallback: MLB API for pitcher hand, then batter platoon split
+                try:
+                    pr = requests.get(f"{MLB_API}/people/{pitcher_id}", timeout=6)
+                    if pr.ok:
+                        ppeople = pr.json().get("people", [{}])
+                        pitcher_hand = ((ppeople[0].get("pitchHand") or {}).get("code") or "R")
+                except Exception:
+                    pass
+                try:
+                    year_now = datetime.now().year
+                    sit_code = "l" if pitcher_hand == "L" else "r"
+                    sr = requests.get(
+                        f"{MLB_API}/people/{batter_id}/stats",
+                        params={"stats": "statSplits", "group": "hitting",
+                                "sitCodes": sit_code, "season": year_now, "sportId": 1},
+                        timeout=8,
+                    )
+                    if sr.ok:
+                        for sg in sr.json().get("stats", []):
+                            for sp in sg.get("splits", []):
+                                if (sp.get("split") or {}).get("code") == sit_code:
+                                    raw = sp.get("stat", {})
+                                    platoon_ops = _safe_f(raw.get("ops"), None)
+                                    break
+                            if platoon_ops is not None:
+                                break
+                except Exception:
+                    pass
+
+            if platoon_ops is not None:
+                if platoon_ops >= 0.950:
+                    platoon_grade = "A+"
+                elif platoon_ops >= 0.850:
+                    platoon_grade = "A"
+                elif platoon_ops >= 0.750:
+                    platoon_grade = "B"
+                elif platoon_ops >= 0.650:
+                    platoon_grade = "C"
+                else:
+                    platoon_grade = "D"
+
             result = {
                 "success": True,
                 "pa": 0,
@@ -7634,19 +7961,32 @@ def _fetch_bvp(batter_id, pitcher_id):
             shrunk_kpct  = _shrink(raw_kpct,  pa, _LEAGUE_KPCT,  _SHRINK_PA_BVP)
             shrunk_bbpct = _shrink(raw_bbpct, pa, _LEAGUE_BBPCT, _SHRINK_PA_BVP)
 
-            # Reliability score 0-1 (saturates at 50 PA)
-            reliability = round(min(1.0, pa / 50.0), 3)
+            # Recency-based reliability: only recent seasons (last 2 full years) count.
+            # A batter's performance against a pitcher 3+ years ago (with a different
+            # arsenal) is unreliable; recency-weighted PA drives how much we trust the edge.
+            _cur_yr = datetime.now().year
+            recent_pa = sum(
+                s["pa"] for s in seasons
+                if (s.get("season") or 0) >= _cur_yr - 1
+            )
+            is_stale = (last_season is not None and last_season < _cur_yr - 2)
+            # Hard floor at 5 recent PA; saturates at 50
+            reliability = 0.0 if recent_pa < 5 else round(min(1.0, recent_pa / 50.0), 3)
 
             # Edge signal: how much does Bayesian wOBA deviate from league?
             woba_edge = round(shrunk_woba - _LEAGUE_WOBA, 4)
             if pa == 0:
                 note = "No career H2H; league average assumed."
+            elif recent_pa < 5 and pa >= 5:
+                note = f"{pa} PA career H2H ({recent_pa} PA recent) — too stale to weight."
             elif pa < 10:
                 note = f"Only {pa} PA — insufficient sample."
             elif pa < 20:
                 note = f"{pa} PA career H2H — moderate sample."
             else:
                 note = f"{pa} PA career H2H — strong sample."
+            if is_stale:
+                note += f" Data through {last_season} only."
 
             temp = {
                 "success": True,
@@ -7681,6 +8021,8 @@ def _fetch_bvp(batter_id, pitcher_id):
                     "bbpct": shrunk_bbpct,
                 },
                 "reliability": reliability,
+                "recent_pa": recent_pa,
+                "is_stale": is_stale,
                 "woba_edge": woba_edge,
                 "note": note,
             }
@@ -8795,15 +9137,15 @@ def platoon_blend_v2(batter: dict, pitcher_hand: str, stat: str) -> float:
 
 BATX_WEIGHTS_V2 = {
     "contact":    0.26,   # platoon-blended AVG + xBA  (unchanged)
-    "power":      0.22,   # ISO, brl%, EV, xSLG        (+0.04 — most predictive for HR/TB)
+    "power":      0.22,   # ISO, brl%, EV, xSLG        (unchanged — most predictive for HR/TB)
     "discipline": 0.12,   # BB%, K%, xwOBA             (unchanged)
-    "platoon":    0.10,   # hand matchup edge           (unchanged)
+    "platoon":    0.11,   # hand matchup edge           (+0.01 — most reliable split predictor)
     "park":       0.07,   # park factor                 (unchanged)
     "weather":    0.05,   # temp/wind                   (unchanged)
-    "pitcher":    0.11,   # FIP/xERA/K% + recent form   (-0.01 from 0.12)
-    "form":       0.07,   # L7 wOBA edge vs league      (+0.02 — more meaningful)
-    "bvp":        0.02,   # BvP shrunk wOBA × reliability (-0.01 — too noisy)
-    # NEW: recent form explicitly wired into pitcher component below
+    "pitcher":    0.11,   # FIP/xERA/K% + recent form   (unchanged)
+    "form":       0.07,   # L7 wOBA edge vs league      (unchanged)
+    "bvp":        0.01,   # BvP shrunk wOBA × recency-reliability (-0.01 — small-sample H2H too noisy)
+    "pitch_mix":  0.04,   # arsenal-weighted SLG matchup score (NEW — granular skill-based signal)
 }
 
 
@@ -14444,6 +14786,8 @@ def _compute_bvp_grade(bvp_data):
     """
     Grade batter vs pitcher matchup based on Sprint 2.1 rules.
     Uses OPS ratio vs batter season OPS with PA thresholds.
+    Stale data (last_season > 2 years ago) is capped at 'B' — old matchup
+    history against a pitcher's previous arsenal is unreliable.
     """
     if not bvp_data or not bvp_data.get('success'):
         return 'D'
@@ -14454,14 +14798,20 @@ def _compute_bvp_grade(bvp_data):
         return 'D'
 
     if ratio >= 1.40 and pa >= 20:
-        return 'A+'
-    if ratio >= 1.20 and pa >= 15:
-        return 'A'
-    if ratio >= 1.05 and pa >= 10:
-        return 'B'
-    if ratio >= 0.85:
-        return 'C'
-    return 'D'
+        grade = 'A+'
+    elif ratio >= 1.20 and pa >= 15:
+        grade = 'A'
+    elif ratio >= 1.05 and pa >= 10:
+        grade = 'B'
+    elif ratio >= 0.85:
+        grade = 'C'
+    else:
+        grade = 'D'
+
+    # Cap stale H2H data — pitcher arsenals change year to year
+    if bvp_data.get('is_stale') and grade in ('A+', 'A'):
+        grade = 'B'
+    return grade
 
 
 def _cheatsheet_matchup_grade(score_tier, pitch_adv=None, bvp_grade=None, bvp_pa=0):
@@ -16888,21 +17238,51 @@ def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_s
             form_label = f"L7 wOBA {rw:.3f}"
     form_contrib = form_edge * W["form"]
 
-    # ── COMPONENT 9: BvP (Phase 1) ───────────────────────────────────────────
+    # ── COMPONENT 9: BvP (recency-weighted H2H) ──────────────────────────────
     bvp_edge    = 0.0
     bvp_label   = "no data"
     if bvp and isinstance(bvp, dict) and bvp.get("success"):
         reliability = _safe_f(bvp.get("reliability"), 0.0)
         we          = _safe_f(bvp.get("woba_edge"),    0.0)
         bvp_edge    = _clamp(we * reliability, -0.20, 0.20)
-        bvp_label   = f"woba_edge {we:.3f} × rel {reliability:.2f}"
-    bvp_contrib  = bvp_edge * W["bvp"]
+        recent_pa   = bvp.get("recent_pa", 0)
+        bvp_label   = f"woba_edge {we:.3f} × rel {reliability:.2f} (recent_pa={recent_pa})"
+    bvp_contrib  = bvp_edge * W.get("bvp", 0.01)
+
+    # ── COMPONENT 10: Pitch-mix score (arsenal matchup) ──────────────────────
+    # Blends two complementary signals:
+    #   (a) FG per-pitch RV/100 — batter's run value against each pitch type, weighted
+    #       by pitcher's current arsenal mix.  Uses recency-weighted 2021-2026 FG data.
+    #   (b) Statcast SLG ratio — batter SLG vs each pitch ÷ league baseline.
+    # If both signals are available, blend 60/40 (FG RV is more direct).
+    pitch_mix_score  = 1.0
+    pitch_mix_label  = "no data"
+    bat_mlb_id = batter.get("id") or batter.get("mlb_id")
+    if opp_pitcher_id and bat_mlb_id:
+        try:
+            fg_pm_score,  _ = _fg_pitch_matchup_score(bat_mlb_id, opp_pitcher_id)
+            sv_pm_score,  _ = _compute_pitch_mix_score(str(opp_pitcher_id), str(bat_mlb_id))
+            fg_has_data = (fg_pm_score != 1.0)
+            sv_has_data = (sv_pm_score != 1.0)
+            if fg_has_data and sv_has_data:
+                pitch_mix_score = fg_pm_score * 0.60 + sv_pm_score * 0.40
+                pitch_mix_label = f"fg_rv {fg_pm_score:.3f} + sv_slg {sv_pm_score:.3f} → {pitch_mix_score:.3f}"
+            elif fg_has_data:
+                pitch_mix_score = fg_pm_score
+                pitch_mix_label = f"fg_rv {fg_pm_score:.3f}"
+            elif sv_has_data:
+                pitch_mix_score = sv_pm_score
+                pitch_mix_label = f"sv_slg {sv_pm_score:.3f}"
+        except Exception:
+            pass
+    pitch_mix_edge    = _clamp(pitch_mix_score - 1.0, -0.30, 0.30)
+    pitch_mix_contrib = pitch_mix_edge * W.get("pitch_mix", 0.04)
 
     # ── Composite multiplier ─────────────────────────────────────────────────
     # Sum contributions; each is a %-point delta weighted by its component weight.
     delta = (contact_contrib + power_contrib + disc_contrib + platoon_contrib
              + park_contrib + wx_contrib + pitcher_contrib
-             + form_contrib + bvp_contrib)
+             + form_contrib + bvp_contrib + pitch_mix_contrib)
     composite = _clamp(1.0 + delta, 0.55, 1.55)
 
     # ── Projections ──────────────────────────────────────────────────────────
@@ -16945,18 +17325,20 @@ def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_s
         # BAT X diagnostics
         "composite":   round(composite, 4),
         "adjustments": {
-            "contact":    round(contact_contrib,  4),
-            "power":      round(power_contrib,     4),
-            "pull_air":   round(pull_edge * 0.10 * W["power"], 4),
-            "discipline": round(disc_contrib,      4),
-            "platoon":    round(platoon_contrib,   4),
-            "park":       round(park_contrib,      4),
-            "weather":    round(wx_contrib,        4),
-            "pitcher":    round(pitcher_contrib,   4),
-            "form":       round(form_contrib,      4),
-            "bvp":        round(bvp_contrib,       4),
-            "form_note":  form_label,
-            "bvp_note":   bvp_label,
+            "contact":         round(contact_contrib,    4),
+            "power":           round(power_contrib,      4),
+            "pull_air":        round(pull_edge * 0.10 * W["power"], 4),
+            "discipline":      round(disc_contrib,       4),
+            "platoon":         round(platoon_contrib,    4),
+            "park":            round(park_contrib,       4),
+            "weather":         round(wx_contrib,         4),
+            "pitcher":         round(pitcher_contrib,    4),
+            "form":            round(form_contrib,       4),
+            "bvp":             round(bvp_contrib,        4),
+            "pitch_mix":       round(pitch_mix_contrib,  4),
+            "form_note":       form_label,
+            "bvp_note":        bvp_label,
+            "pitch_mix_note":  pitch_mix_label,
         },
     }
 
