@@ -372,6 +372,24 @@
     .sig-lean   { color: var(--y); }
     .sig-fade   { color: var(--r); }
 
+    /* Injury indicators (Phase 1) */
+    .inj-badge{display:inline-block;font-size:.55rem;font-weight:800;letter-spacing:.05em;padding:1px 5px;border-radius:4px;margin-left:6px;vertical-align:middle;text-transform:uppercase}
+    .inj-il60{background:rgba(255,82,82,.18);color:var(--r);border:1px solid rgba(255,82,82,.45)}
+    .inj-il10{background:rgba(255,82,82,.12);color:var(--r);border:1px solid rgba(255,82,82,.35)}
+    .inj-dtd {background:rgba(255,152,0,.14);color:var(--o);border:1px solid rgba(255,152,0,.4)}
+    .inj-gtd {background:rgba(245,197,66,.12);color:var(--y);border:1px solid rgba(245,197,66,.4)}
+    .injury-alert{background:rgba(255,82,82,.06);border:1px solid rgba(255,82,82,.3);border-left:3px solid var(--r);border-radius:8px;padding:9px 12px;margin:6px 0 14px;font-size:.78rem;color:rgba(255,200,200,.95)}
+    .injury-alert strong{color:var(--r);font-weight:800}
+    .injury-alert.gtd{border-left-color:var(--y);border-color:rgba(245,197,66,.3);background:rgba(245,197,66,.05);color:rgba(245,220,150,.95)}
+    .injury-alert.gtd strong{color:var(--y)}
+    .injury-alert.dtd{border-left-color:var(--o);border-color:rgba(255,152,0,.3);background:rgba(255,152,0,.05);color:rgba(255,210,150,.95)}
+    .injury-alert.dtd strong{color:var(--o)}
+
+    /* Sample size warning (Phase 1) */
+    .h2h-sample-warn{background:rgba(245,197,66,.05);border:1px solid rgba(245,197,66,.25);border-left:3px solid var(--y);border-radius:8px;padding:8px 12px;margin:0 0 12px;font-size:.74rem;color:rgba(245,220,150,.95);display:flex;align-items:baseline;gap:8px}
+    .h2h-sample-warn .warn-icon{font-size:.9rem;color:var(--y)}
+    .h2h-sample-warn strong{color:var(--y);font-weight:700}
+
     /* Lineup star rating */
     .b-stars{display:inline-block;font-size:.7rem;letter-spacing:1px;color:var(--y);line-height:1;margin-top:3px}
     .b-stars .empty{color:rgba(255,255,255,.12)}
@@ -532,6 +550,26 @@ function starsHtml(g) {
   return `<span class="b-stars s${s.n}" title="${s.label}">${filled}${empty}</span>`;
 }
 
+// Injury badge for the lineup panel (compact, color-coded by severity).
+function injuryBadgeHtml(injury) {
+  if (!injury || !injury.status) return '';
+  const cls = ({ IL_60:'inj-il60', IL_10:'inj-il10', DTD:'inj-dtd', GTD:'inj-gtd' })[injury.status] || 'inj-dtd';
+  const lbl = ({ IL_60:'IL-60', IL_10:'IL', DTD:'DTD', GTD:'GTD' })[injury.status] || injury.status;
+  const ttl = (injury.description || injury.type || injury.status).replace(/"/g,'&quot;');
+  return `<span class="inj-badge ${cls}" title="${ttl}">${lbl}</span>`;
+}
+
+// Full injury alert for the detail panel header (more verbose).
+function injuryAlertHtml(injury, playerLabel) {
+  if (!injury || !injury.status) return '';
+  const cls  = ({ IL_60:'', IL_10:'', DTD:'dtd', GTD:'gtd' })[injury.status] || 'dtd';
+  const lbl  = ({ IL_60:'60-DAY IL', IL_10:'INJURED LIST', DTD:'DAY-TO-DAY', GTD:'GAME-TIME DECISION' })[injury.status] || injury.status;
+  const desc = (injury.description || injury.type || '').trim();
+  return `<div class="injury-alert ${cls}">
+    ⚠ <strong>${playerLabel} — ${lbl}</strong>${desc ? ` · ${desc}` : ''}
+  </div>`;
+}
+
 function renderLineup() {
   const { lineup, pitchers } = currentLineup;
   const g = currentGame;
@@ -546,7 +584,7 @@ function renderLineup() {
     return `<div class="batter-row" id="br_${b.id}_${oppPitcherId}" onclick="selectBatter(${b.id},'${esc(b.name)}',${oppPitcherId},'${esc((oppPitcherId === awayP.id ? awayP.name : homeP.name) || '')}')">
       <span class="b-slot">${b.slot||'?'}</span>
       <span class="b-name">
-        ${b.name}
+        ${b.name}${injuryBadgeHtml(b.injury)}
         <span id="stars_${b.id}_${oppPitcherId}">${starsHtml(grade)}</span>
         <div class="badge-row" id="badges_${b.id}"></div>
       </span>
@@ -558,10 +596,10 @@ function renderLineup() {
   document.getElementById('lineupPanel').innerHTML = `
     <div class="lp-header"><span>${g.awayAbbr} @ ${g.homeAbbr}</span><span class="pill">${g.gameTime||''}</span></div>
     <div class="lp-team">${g.awayAbbr} BATTERS</div>
-    <div class="lp-pitcher" id="pitcher_away">vs ${homeP.name || g.homePitcher || 'TBD'}</div>
+    <div class="lp-pitcher" id="pitcher_away">vs ${homeP.name || g.homePitcher || 'TBD'}${injuryBadgeHtml(homeP.injury)}</div>
     ${makeRows(away, homeP.id)}
     <div class="lp-team" style="margin-top:12px">${g.homeAbbr} BATTERS</div>
-    <div class="lp-pitcher" id="pitcher_home">vs ${awayP.name || g.awayPitcher || 'TBD'}</div>
+    <div class="lp-pitcher" id="pitcher_home">vs ${awayP.name || g.awayPitcher || 'TBD'}${injuryBadgeHtml(awayP.injury)}</div>
     ${makeRows(home, awayP.id)}
   `;
 
@@ -607,6 +645,18 @@ async function selectBatter(batterId, batterName, pitcherId, pitcherName) {
   const el = document.getElementById(`br_${batterId}_${pitcherId}`);
   if (el) el.classList.add('sel');
 
+  // Look up injury info from the cached lineup so we can surface it
+  // immediately without re-fetching.
+  let batterInjury = null, pitcherInjury = null;
+  if (currentLineup) {
+    const allBatters = [...(currentLineup.lineup?.away || []), ...(currentLineup.lineup?.home || [])];
+    const b = allBatters.find(x => x.id === batterId);
+    if (b && b.injury) batterInjury = b.injury;
+    const ps = currentLineup.pitchers || {};
+    if (ps.awayPitcher && ps.awayPitcher.id === pitcherId) pitcherInjury = ps.awayPitcher.injury || null;
+    else if (ps.homePitcher && ps.homePitcher.id === pitcherId) pitcherInjury = ps.homePitcher.injury || null;
+  }
+
   const dp = document.getElementById('detailPanel');
   dp.innerHTML = '<div class="loading-row"><div class="spinner" style="margin:auto"></div><div style="margin-top:8px;color:var(--mu);font-size:.8rem">Loading BvP data…</div></div>';
 
@@ -620,7 +670,7 @@ async function selectBatter(batterId, batterName, pitcherId, pitcherName) {
       fetch(`/api/player/${batterId}/bvp/${pitcherId}`).then(r => r.json()).catch(() => ({})),
       fetch(`/api/bvp/${batterId}/${pitcherId}/projection${gamePk ? '?game_pk='+gamePk : ''}`).then(r => r.json()).catch(() => ({}))
     ]);
-    const data = { summary: summaryRes, logs: logsRes, proj: projRes, batterName, pitcherName };
+    const data = { summary: summaryRes, logs: logsRes, proj: projRes, batterName, pitcherName, batterInjury, pitcherInjury };
     bvpCache[cKey] = data;
     renderDetail(data);
   } catch(e) {
@@ -657,7 +707,7 @@ function pctBadge(pct) {
 
 // Synthesizes BET/LEAN/FADE verdicts + drivers + context into a 1-glance
 // "Quick Take" panel that tells the user which props to play and why.
-function buildReasoningSummary(proj, summary, batterName, pitcherName) {
+function buildReasoningSummary(proj, summary, batterName, pitcherName, batterInjury, pitcherInjury) {
   if (!proj) return '';
   const verdicts = proj.verdicts || {};
   const probs    = proj.projectedProbs || {};
@@ -668,6 +718,15 @@ function buildReasoningSummary(proj, summary, batterName, pitcherName) {
   const adj      = proj.adjustments    || {};
   const gctx     = proj.gameContext    || {};
   const vsSP     = proj.vsStarter || null;
+
+  // Injury severity: IL_60 / IL_10 = blocking, DTD = warning, GTD = caution
+  const batterIlBlocking = batterInjury && (batterInjury.status === 'IL_60' || batterInjury.status === 'IL_10');
+  const pitcherIlBlocking = pitcherInjury && (pitcherInjury.status === 'IL_60' || pitcherInjury.status === 'IL_10');
+  const anyInjuryWarning = !!(batterInjury || pitcherInjury);
+
+  // H2H sample-size unreliability flag
+  const careerPA = (summary && summary.pa) || 0;
+  const smallSample = careerPA > 0 && careerPA < 50;
 
   const labels = { hit1:'1+ Hit', tb2:'2+ TB', hr:'Home Run', rbi1:'1+ RBI' };
   const bets = [], leans = [], fades = [];
@@ -688,14 +747,21 @@ function buildReasoningSummary(proj, summary, batterName, pitcherName) {
   const elitePitcher= pp.xera != null && pp.xera <= 3.10;
   const badPlatoon  = mc.platoonNote && mc.platoonNote.includes('(—)');
   const cautionFlags = (weakQuality ? 1 : 0) + (weakH2H ? 1 : 0) + (elitePitcher ? 1 : 0) + (badPlatoon ? 1 : 0);
-  const shouldTemper = cautionFlags >= 2 || (weakH2H && bets.length <= 1);
+  const shouldTemper = cautionFlags >= 2 || (weakH2H && bets.length <= 1) || smallSample;
 
   let lead, leadCls = '';
-  if (bets.length >= 3 && !shouldTemper)      { lead = `Smash spot — ${bets.length} BET-grade markets for ${batterName}.`; leadCls = 'good'; }
+  // Injury blocking takes precedence over all other signals
+  if (batterIlBlocking) {
+    lead = `Avoid — ${batterName} on the IL. Bet not playable.`;
+    leadCls = 'bad';
+  } else if (pitcherIlBlocking) {
+    lead = `Pitcher matchup invalid — ${pitcherName} on the IL. Wait for confirmed SP.`;
+    leadCls = 'bad';
+  } else if (bets.length >= 3 && !shouldTemper)      { lead = `Smash spot — ${bets.length} BET-grade markets for ${batterName}.`; leadCls = 'good'; }
   else if (bets.length >= 2 && !shouldTemper) { lead = `Strong spot — multi-market edge on ${batterName}.`; leadCls = 'good'; }
   else if (bets.length >= 2 && shouldTemper)  { lead = `Lean opp. — BET markets identified, but quality/matchup context is mixed.`; leadCls = 'warn'; }
   else if (bets.length === 1 && !shouldTemper){ lead = `Targeted play — ${bets[0].market} stands out.`; leadCls = 'good'; }
-  else if (bets.length === 1 && shouldTemper) { lead = `Lean angle — projection edge, but recency/quality tempers.`; leadCls = 'warn'; }
+  else if (bets.length === 1 && shouldTemper) { lead = `Lean angle — projection edge, but sample/quality tempers.`; leadCls = 'warn'; }
   else if (leans.length >= 2)                 { lead = `Lean spot — moderate edges, not a hammer.`; leadCls = 'warn'; }
   else if (fades.length >= 2)                 { lead = `Tough matchup — multiple fades indicated.`; leadCls = 'bad'; }
   else if (fades.length === 1)                { lead = `Mixed signals — one fade, no clear bet.`; leadCls = 'warn'; }
@@ -730,6 +796,20 @@ function buildReasoningSummary(proj, summary, batterName, pitcherName) {
 
   // Context "why" chips — pull from drivers, quality, pitcher, platoon, form
   const whys = [];
+
+  // Injury chips first so they're visible at the top of the chip strip
+  if (batterInjury && !batterIlBlocking) {
+    whys.push(`<span class="why-chip neg">⚠ ${batterName.split(' ').pop()} ${batterInjury.status === 'GTD' ? 'GTD' : 'DTD'}</span>`);
+  }
+  if (pitcherInjury && !pitcherIlBlocking) {
+    whys.push(`<span class="why-chip neg">⚠ Pitcher ${pitcherInjury.status === 'GTD' ? 'GTD' : 'DTD'}</span>`);
+  }
+
+  // Small sample warning chip
+  if (smallSample) {
+    whys.push(`<span class="why-chip neg">Small H2H sample — <strong>${careerPA} PA</strong></span>`);
+  }
+
   if (bq.xwoba_pct != null && bq.xwoba_pct >= 75) {
     whys.push(`<span class="why-chip pos">Elite quality — <strong>${bq.xwoba_pct}th</strong> xwOBA</span>`);
   } else if (bq.xwoba_pct != null && bq.xwoba_pct <= 35) {
@@ -789,7 +869,7 @@ function buildReasoningSummary(proj, summary, batterName, pitcherName) {
 }
 
 function renderDetail(data) {
-  const { summary, logs, proj, batterName, pitcherName } = data;
+  const { summary, logs, proj, batterName, pitcherName, batterInjury, pitcherInjury } = data;
   const { batterId, pitcherId } = selectedBatter;
   const grade   = summary.grade || '?';
   const gbClass = 'gb-' + grade.replace('+','\\+');
@@ -1159,7 +1239,20 @@ function renderDetail(data) {
       </div>`;
     })()}
 
-    ${buildReasoningSummary(proj, summary, batterName, pitcherName)}
+    ${injuryAlertHtml(batterInjury, batterName)}
+    ${injuryAlertHtml(pitcherInjury, pitcherName)}
+
+    ${(() => {
+      // H2H sample-size warning: <50 career PA is statistically unreliable.
+      // Research: industry threshold is 50–100 PA before BvP is signal vs noise.
+      if (pa <= 0 || pa >= 50) return '';
+      return `<div class="h2h-sample-warn">
+        <span class="warn-icon">⚠</span>
+        <span><strong>Small H2H sample (${pa} PA)</strong> — below the 50-PA reliability threshold. Lean on platoon splits (vs ${summary.pitcher_hand === 'L' ? 'LHP' : 'RHP'}) and Statcast quality metrics instead of H2H stats.</span>
+      </div>`;
+    })()}
+
+    ${buildReasoningSummary(proj, summary, batterName, pitcherName, batterInjury, pitcherInjury)}
 
     <div class="section-label">
       Career H2H Stats

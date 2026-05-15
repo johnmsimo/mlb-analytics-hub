@@ -4608,6 +4608,17 @@ def api_pitchers(game_pk):
             _trigger_zonechart_prefetch_async(ap.get("id"))
             _trigger_zonechart_prefetch_async(hp.get("id"))
 
+            # Pitcher injury enrichment (Phase 1: surface IL/DTD/GTD status)
+            try:
+                _fetch_injury_status(force=False)
+            except Exception:
+                pass
+            def _pitcher_injury_dict(pid):
+                inj = _get_player_injury(pid) if pid else None
+                if not inj:
+                    return None
+                return {"status": inj.get("status"), "type": inj.get("type"), "description": inj.get("description")}
+
             return jsonify({
                 "success": True,
                 "awayPitcher": {
@@ -4615,12 +4626,14 @@ def api_pitchers(game_pk):
                     "name": an,
                     "stats": build_pitcher_stats(an, ap.get("id")),
                     "vulnerability": _pitcher_prop_vulnerability(ap.get("id"), game_pk),
+                    "injury": _pitcher_injury_dict(ap.get("id")),
                 },
                 "homePitcher": {
                     "id": hp.get("id"),
                     "name": hn,
                     "stats": build_pitcher_stats(hn, hp.get("id")),
                     "vulnerability": _pitcher_prop_vulnerability(hp.get("id"), game_pk),
+                    "injury": _pitcher_injury_dict(hp.get("id")),
                 },
             })
         return jsonify({"success":False,"error":"Game not found","awayPitcher":{},"homePitcher":{}})
@@ -16070,6 +16083,22 @@ def api_lineup(game_pk):
                     if home: home_source = 'roster'
             except Exception:
                 pass
+
+        # ── Enrich batters with injury status for BvP injury alerts ───────────
+        try:
+            _fetch_injury_status(force=False)
+            for b in (away[:9] + home[:9]):
+                bid = b.get('id')
+                if bid:
+                    inj = _get_player_injury(bid)
+                    if inj:
+                        b['injury'] = {
+                            'status': inj.get('status'),
+                            'type': inj.get('type'),
+                            'description': inj.get('description'),
+                        }
+        except Exception:
+            pass
 
         return jsonify({
             'success': True, 'gamePk': game_pk,
