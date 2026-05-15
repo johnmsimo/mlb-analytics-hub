@@ -1461,16 +1461,26 @@ function renderDetail(data) {
     </div>
   `;
 
-  // Fetch context cards + prop signals (pass proj for quality card)
-  loadContextData(batterId, pitcherId, proj);
+  // Fetch context cards + prop signals (pass proj for quality card).
+  // Pass game_pk so we can fetch bullpen fatigue for the opposing team.
+  const gamePk = currentGame ? currentGame.gamePk : null;
+  // Determine which side the pitcher is on so we know which bullpen the
+  // batter will face after the SP exits.
+  let pitcherSide = null;
+  if (currentLineup && currentLineup.pitchers) {
+    if ((currentLineup.pitchers.awayPitcher || {}).id === pitcherId) pitcherSide = 'away';
+    else if ((currentLineup.pitchers.homePitcher || {}).id === pitcherId) pitcherSide = 'home';
+  }
+  loadContextData(batterId, pitcherId, proj, gamePk, pitcherSide);
 }
 
-async function loadContextData(batterId, pitcherId, proj) {
+async function loadContextData(batterId, pitcherId, proj, gamePk, pitcherSide) {
   try {
-    const [recent, splits, arsenal] = await Promise.all([
+    const [recent, splits, arsenal, bullpen] = await Promise.all([
       fetch(`/api/player/${batterId}/recent-games`).then(r => r.json()),
       fetch(`/api/player/${batterId}/platoon-splits`).then(r => r.json()),
-      fetch(`/api/bvp/${batterId}/${pitcherId}/arsenal`).then(r => r.json()).catch(() => ({}))
+      fetch(`/api/bvp/${batterId}/${pitcherId}/arsenal`).then(r => r.json()).catch(() => ({})),
+      gamePk ? fetch(`/api/bullpen/fatigue/${gamePk}`).then(r => r.json()).catch(() => ({})) : Promise.resolve({})
     ]);
 
     const contextGrid = document.getElementById('contextGrid');
@@ -1578,18 +1588,66 @@ async function loadContextData(batterId, pitcherId, proj) {
       return r >= 1.15 ? 'good' : r <= 0.85 ? 'bad' : '';
     }
 
+    // Pitch-type heatmap (Phase 3): color-code wOBA + Whiff% cells and
+    // derive a per-pitch verdict that combines effectiveness × usage.
+    // High-usage favorable pitches get EDGE; high-usage unfavorable get RISK.
+    function wobaHeatBg(v) {
+      if (v == null) return 'transparent';
+      if (v >= 0.380) return 'rgba(0,230,118,.22)';   // batter crushes
+      if (v >= 0.330) return 'rgba(0,229,255,.16)';   // above-avg
+      if (v >= 0.290) return 'rgba(255,255,255,.04)'; // neutral
+      if (v >= 0.260) return 'rgba(245,197,66,.14)';  // below-avg
+      return 'rgba(255,82,82,.16)';                    // batter struggles
+    }
+    function whiffHeatBg(v) {
+      // For batter: low whiff = contact-friendly = good for hits. High whiff = K risk.
+      if (v == null) return 'transparent';
+      if (v <= 15) return 'rgba(0,230,118,.18)';
+      if (v <= 22) return 'rgba(0,229,255,.12)';
+      if (v <= 28) return 'rgba(255,255,255,.04)';
+      if (v <= 34) return 'rgba(245,197,66,.14)';
+      return 'rgba(255,82,82,.18)';
+    }
+    function pitchVerdict(p) {
+      // No batter sample for this pitch → use pitcher's overall effectiveness
+      // with the pitch as a coarse fallback; otherwise mark "—".
+      const usage = (p.usage || 0);
+      const w = p.bat_woba, whiff = p.bat_whiff;
+      if (w == null && whiff == null) {
+        if (p.pit_woba != null && p.pit_woba >= 0.350 && usage >= 15) return { lbl:'EDGE',  cls:'v-bet' };
+        if (p.pit_woba != null && p.pit_woba <= 0.270 && usage >= 15) return { lbl:'RISK',  cls:'v-fade' };
+        return { lbl:'—', cls:'' };
+      }
+      // Combined score: wOBA edge + low whiff (good for batter)
+      let score = 0;
+      if (w != null)     score += (w - 0.310) * 2.5;       // wOBA delta vs lg avg
+      if (whiff != null) score += (22 - whiff) * 0.012;    // sub-22% whiff is good
+      const usageWeight = Math.min(1.0, usage / 25);       // heavier impact at higher usage
+      const weighted = score * usageWeight;
+      if (weighted >=  0.10) return { lbl:'EDGE',  cls:'v-bet' };
+      if (weighted >=  0.03) return { lbl:'LEAN',  cls:'v-lean' };
+      if (weighted <= -0.10) return { lbl:'RISK',  cls:'v-fade' };
+      if (weighted <= -0.03) return { lbl:'FADE',  cls:'v-lean' };
+      return { lbl:'—', cls:'' };
+    }
+
     const pitchRows = pitches.slice(0, 5).map(p => {
       const usagePct = p.usage != null ? Math.round(p.usage) + '%' : '—';
       const veloStr  = p.velo  != null ? p.velo.toFixed(1)         : '—';
       const batWoba  = p.bat_woba != null ? fmtStat(p.bat_woba) : (p.pit_woba != null ? `<span style="color:var(--dim)">${fmtStat(p.pit_woba)}</span>` : '—');
       const whiffStr = p.bat_whiff != null ? Math.round(p.bat_whiff) + '%' : (p.pit_whiff != null ? `<span style="color:var(--dim)">${Math.round(p.pit_whiff)}%</span>` : '—');
-      const rCls = pitchRatioClass(p.ratio);
-      return `<div style="display:grid;grid-template-columns:1fr 28px 42px 44px 44px;gap:2px 4px;align-items:center;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.05)">
+      const wobaBg   = wobaHeatBg(p.bat_woba);
+      const whiffBg  = whiffHeatBg(p.bat_whiff);
+      const verdict  = pitchVerdict(p);
+      // High-usage pitches highlight bolder
+      const usageEmph = (p.usage || 0) >= 25 ? 'color:var(--t);font-weight:700' : 'color:var(--dim)';
+      return `<div style="display:grid;grid-template-columns:1fr 30px 40px 46px 42px 42px;gap:2px 4px;align-items:center;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.05)">
         <span style="font-size:.72rem;color:var(--t)">${p.label}</span>
-        <span style="font-size:.68rem;color:var(--dim)">${usagePct}</span>
+        <span style="font-size:.68rem;${usageEmph}">${usagePct}</span>
         <span style="font-size:.68rem;color:var(--dim)">${veloStr}</span>
-        <span style="font-size:.72rem;color:var(--t)">${batWoba}</span>
-        <span style="font-size:.72rem;color:var(--t)" class="${rCls}">${whiffStr}</span>
+        <span style="font-size:.72rem;color:var(--t);background:${wobaBg};border-radius:3px;padding:1px 4px;text-align:center">${batWoba}</span>
+        <span style="font-size:.72rem;color:var(--t);background:${whiffBg};border-radius:3px;padding:1px 4px;text-align:center">${whiffStr}</span>
+        <span class="verdict-pill ${verdict.cls}" style="margin:0;font-size:.5rem">${verdict.lbl}</span>
       </div>`;
     }).join('');
 
@@ -1624,15 +1682,16 @@ async function loadContextData(batterId, pitcherId, proj) {
         </div>
         ${mixSubHtml}
         ${pitches.length ? `
-          <div style="display:grid;grid-template-columns:1fr 28px 42px 44px 44px;gap:2px 4px;padding:2px 0 4px;border-bottom:1px solid rgba(255,255,255,.12)">
+          <div style="display:grid;grid-template-columns:1fr 30px 40px 46px 42px 42px;gap:2px 4px;padding:2px 0 4px;border-bottom:1px solid rgba(255,255,255,.12)">
             <span style="font-size:.62rem;color:var(--dim)">Pitch</span>
             <span style="font-size:.62rem;color:var(--dim)">Use%</span>
             <span style="font-size:.62rem;color:var(--dim)">Velo</span>
             <span style="font-size:.62rem;color:var(--dim)">wOBA</span>
             <span style="font-size:.62rem;color:var(--dim)">Whiff%</span>
+            <span style="font-size:.62rem;color:var(--dim);text-align:center">Verdict</span>
           </div>
           ${pitchRows}
-          <div style="font-size:.64rem;color:var(--dim);margin-top:6px">wOBA/Whiff% = batter vs pitch type (Statcast)</div>
+          <div style="font-size:.6rem;color:var(--dim);margin-top:6px;line-height:1.4">wOBA/Whiff% = batter vs pitch type (Statcast). <strong style="color:var(--mu)">Verdict</strong> blends effectiveness × usage.</div>
         ` : `<div class="context-stat-row" style="color:var(--dim);font-size:.75rem;padding:8px 0">No Statcast arsenal data</div>`}
         ${fgCard3Rows}
       </div>
@@ -1711,7 +1770,53 @@ async function loadContextData(batterId, pitcherId, proj) {
         </div>`;
     }
 
-    contextGrid.innerHTML = card1 + card2 + card3 + card4;
+    // Card 5: Bullpen Fatigue (Phase 3)
+    // The batter will face the opposing team's bullpen after the SP exits.
+    // pitcherSide=away means the SP is the away team's, so the relevant
+    // bullpen the batter is facing is the AWAY bullpen.
+    let card5 = '';
+    const bpSide = (typeof pitcherSide === 'string') ? (bullpen[pitcherSide] || null) : null;
+    if (bpSide && bpSide.stress_label) {
+      const stressCls = bpSide.stress_label === 'HIGH' ? 'bad' : bpSide.stress_label === 'MODERATE' ? 'warn' : 'good';
+      const stressColor = stressCls === 'good' ? 'var(--g)' : stressCls === 'warn' ? 'var(--y)' : 'var(--r)';
+      const relievers = (bpSide.relievers || []).slice(0, 5);
+      const relRows = relievers.map(r => {
+        const sCol = r.status === 'GASSED' ? 'var(--r)' : r.status === 'TIRED' ? 'var(--o)' : r.status === 'LIGHT' ? 'var(--y)' : r.status === 'OK' ? 'var(--c)' : 'var(--g)';
+        return `<div style="display:grid;grid-template-columns:1fr 38px 60px;gap:4px;align-items:center;padding:2px 0;border-bottom:1px solid rgba(255,255,255,.04)">
+          <span style="font-size:.7rem;color:var(--t)">${r.name}</span>
+          <span style="font-size:.65rem;color:var(--dim)">${r.pitches_total}p</span>
+          <span style="font-size:.6rem;font-weight:800;letter-spacing:.05em;color:${sCol};text-align:right">${r.status}</span>
+        </div>`;
+      }).join('') || '<div style="font-size:.7rem;color:var(--dim);padding:6px 0">No reliever appearances in last 3 games</div>';
+      card5 = `
+        <div class="context-card">
+          <div class="context-card-header">
+            <span>Bullpen Fatigue <span style="color:var(--dim);font-weight:400;text-transform:none;letter-spacing:0">— ${bpSide.team_abbr || ''}</span></span>
+            <span class="context-badge ${stressCls}" style="color:${stressColor};border-color:${stressColor}">${bpSide.stress_label} ${bpSide.stress_score}</span>
+          </div>
+          ${relRows}
+          <div style="font-size:.58rem;color:var(--dim);margin-top:6px">Sampled ${bpSide.games_sampled || 3} games · GASSED=high stress, FRESH=available</div>
+        </div>`;
+    }
+
+    contextGrid.innerHTML = card1 + card2 + card3 + card4 + card5;
+
+    // Phase 3: Augment Quick Take with bullpen chip once async data is ready.
+    // Tired bullpens → bet edge late-game; fresh bullpens → expect tougher RP.
+    try {
+      const whyContainer = document.querySelector('.reasoning-summary .reasoning-why');
+      if (bpSide && bpSide.stress_label && whyContainer) {
+        const sl = bpSide.stress_label;
+        const tag = sl === 'HIGH' ? 'pos' : sl === 'FRESH' ? 'neg' : '';
+        const lbl = sl === 'HIGH' ? `Tired ${bpSide.team_abbr||''} pen — late-game edge`
+                  : sl === 'FRESH' ? `Fresh ${bpSide.team_abbr||''} pen — tougher RP`
+                  : `Moderate ${bpSide.team_abbr||''} pen stress`;
+        const chip = document.createElement('span');
+        chip.className = `why-chip ${tag}`;
+        chip.innerHTML = lbl + ` <strong>${bpSide.stress_score}</strong>`;
+        whyContainer.appendChild(chip);
+      }
+    } catch (e) { /* non-fatal */ }
 
     // ── Prop Signals ────────────────────────────────────────────────────────
     const propGrid = document.getElementById('propSignalGrid');
