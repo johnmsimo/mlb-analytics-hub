@@ -19205,13 +19205,19 @@ def api_f5_model(game_pk):
         hp_st = pitcher_stats_mlb(hp_id) if hp_id else {}
 
         def best_era(sv, fg, mlb):
-            for v in [sv.get("sv_xera"), fg.get("fg_era"), mlb.get("era")]:
+            xera = sv.get("sv_xera")
+            ip = fg.get("fg_ip", 0) or 0
+            if xera and float(ip or 0) >= 15:
+                try:
+                    f = float(xera)
+                    if 0 < f < 12: return f
+                except Exception: pass
+            for v in [fg.get("fg_era"), mlb.get("era")]:
                 try:
                     f = float(v)
                     if 0 < f < 12: return f
-                except Exception:
-                    pass
-            return 4.20
+                except Exception: pass
+            return 4.50
 
         def best_fip(fg, fallback):
             try:
@@ -19277,8 +19283,8 @@ def api_f5_model(game_pk):
         # Park factor muted for F5 (less variance in 5 innings)
         pf_f5     = 1.0 + (pf - 1.0) * 0.65
 
-        away_f5   = 4.50 * (4.20 / away_blend) * (away_xwoba / 0.320) * pf_f5 * f5_scale
-        home_f5   = 4.50 * (4.20 / home_blend) * (home_xwoba / 0.320) * pf_f5 * f5_scale
+        away_f5   = 4.50 * (away_blend / 4.50) * (away_xwoba / 0.320) * pf_f5 * f5_scale
+        home_f5   = 4.50 * (home_blend / 4.50) * (home_xwoba / 0.320) * pf_f5 * f5_scale
 
         # Weather adj (muted for F5)
         wx_adj = 0.0
