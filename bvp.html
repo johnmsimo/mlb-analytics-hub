@@ -371,6 +371,46 @@
     .sig-mod    { color: var(--c); }
     .sig-lean   { color: var(--y); }
     .sig-fade   { color: var(--r); }
+
+    /* Lineup star rating */
+    .b-stars{display:inline-block;font-size:.7rem;letter-spacing:1px;color:var(--y);line-height:1;margin-top:3px}
+    .b-stars .empty{color:rgba(255,255,255,.12)}
+    .b-stars.s5{color:var(--g)}
+    .b-stars.s4{color:var(--c)}
+    .b-stars.s3{color:var(--y)}
+    .b-stars.s2{color:var(--o)}
+    .b-stars.s1{color:var(--r)}
+    .b-stars.s0{color:rgba(255,255,255,.25)}
+
+    /* Quick Take reasoning summary */
+    .reasoning-summary{
+      background:linear-gradient(135deg,rgba(0,229,255,.06),rgba(0,230,118,.03));
+      border:1px solid rgba(0,229,255,.2);
+      border-left:3px solid var(--c);
+      border-radius:10px;
+      padding:11px 14px;
+      margin:6px 0 14px;
+    }
+    .reasoning-header{display:flex;align-items:baseline;gap:10px;margin-bottom:8px;flex-wrap:wrap}
+    .reasoning-title{font-size:.6rem;font-weight:800;letter-spacing:.12em;color:var(--c);text-transform:uppercase}
+    .reasoning-lead{font-size:.85rem;font-weight:700;color:var(--t);flex:1}
+    .reasoning-lead.good{color:var(--g)}
+    .reasoning-lead.warn{color:var(--y)}
+    .reasoning-lead.bad{color:var(--r)}
+    .reasoning-body{display:flex;flex-direction:column;gap:5px}
+    .reasoning-line{display:flex;align-items:baseline;gap:8px;font-size:.78rem;line-height:1.35}
+    .reasoning-icon{font-weight:800;font-size:.95rem;min-width:14px;text-align:center}
+    .reasoning-icon.good{color:var(--g)}
+    .reasoning-icon.warn{color:var(--y)}
+    .reasoning-icon.bad{color:var(--r)}
+    .reasoning-icon.mu{color:var(--mu)}
+    .reasoning-label{font-weight:800;font-size:.66rem;letter-spacing:.07em;color:var(--mu);text-transform:uppercase;min-width:75px}
+    .reasoning-detail{color:var(--t);flex:1}
+    .reasoning-why{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px;padding-top:8px;border-top:1px solid rgba(255,255,255,.06)}
+    .why-chip{font-size:.66rem;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.08);border-radius:6px;padding:2px 8px;color:var(--mu)}
+    .why-chip strong{color:var(--c);font-weight:700}
+    .why-chip.pos{border-color:rgba(0,230,118,.25);color:rgba(170,240,200,.95)}
+    .why-chip.neg{border-color:rgba(255,82,82,.25);color:rgba(255,180,180,.95)}
   </style>
 </head>
 <body>
@@ -472,6 +512,26 @@ function gradeClass(g) {
   return 'grade-' + g.replace('+','\\+');
 }
 
+// Map matchup grade letter to a 1–5 star rating for the lineup panel.
+// 5★ = elite spot, 1★ = avoid. Returns {stars, label} for tooltip + class.
+function gradeToStars(g) {
+  if (!g || g === '?') return { n: 0, label: 'No data' };
+  const up = String(g).toUpperCase();
+  if (up === 'A+' || up === 'A') return { n: 5, label: 'Elite matchup' };
+  if (up === 'B+' || up === 'B') return { n: 4, label: 'Strong matchup' };
+  if (up === 'C+' || up === 'C') return { n: 3, label: 'Average matchup' };
+  if (up === 'D+' || up === 'D') return { n: 2, label: 'Weak matchup' };
+  if (up === 'F'  || up === 'E') return { n: 1, label: 'Avoid — poor matchup' };
+  return { n: 0, label: 'No data' };
+}
+
+function starsHtml(g) {
+  const s = gradeToStars(g);
+  const filled = '★'.repeat(s.n);
+  const empty  = '<span class="empty">' + '☆'.repeat(5 - s.n) + '</span>';
+  return `<span class="b-stars s${s.n}" title="${s.label}">${filled}${empty}</span>`;
+}
+
 function renderLineup() {
   const { lineup, pitchers } = currentLineup;
   const g = currentGame;
@@ -487,6 +547,7 @@ function renderLineup() {
       <span class="b-slot">${b.slot||'?'}</span>
       <span class="b-name">
         ${b.name}
+        <span id="stars_${b.id}_${oppPitcherId}">${starsHtml(grade)}</span>
         <div class="badge-row" id="badges_${b.id}"></div>
       </span>
       <span class="b-ops">${b.ops||'—'}</span>
@@ -532,6 +593,8 @@ async function prefetchGrades(batters, pitcherId) {
           span.className = `b-grade ${gradeClass(d.grade || '?')}`;
           span.textContent = d.grade || '?';
         }
+        const starEl = document.getElementById(`stars_${b.id}_${pitcherId}`);
+        if (starEl) starEl.innerHTML = starsHtml(d.grade || '?');
       }
     } catch(e) { gradeCache[cKey] = '?'; }
   }
@@ -590,6 +653,129 @@ function pctBadge(pct) {
   if (pct == null) return '';
   const cls = pctColor(pct);
   return `<span style="font-size:.58rem;margin-left:4px;color:var(--${cls==='good'?'g':cls==='bad'?'r':'mu'})">${pct}th</span>`;
+}
+
+// Synthesizes BET/LEAN/FADE verdicts + drivers + context into a 1-glance
+// "Quick Take" panel that tells the user which props to play and why.
+function buildReasoningSummary(proj, summary, batterName, pitcherName) {
+  if (!proj) return '';
+  const verdicts = proj.verdicts || {};
+  const probs    = proj.projectedProbs || {};
+  const drivers  = Array.isArray(proj.drivers) ? proj.drivers : [];
+  const mc       = proj.matchupContext || {};
+  const pp       = proj.pitcherProfile || {};
+  const bq       = proj.batterQuality  || {};
+  const adj      = proj.adjustments    || {};
+  const gctx     = proj.gameContext    || {};
+  const vsSP     = proj.vsStarter || null;
+
+  const labels = { hit1:'1+ Hit', tb2:'2+ TB', hr:'Home Run', rbi1:'1+ RBI' };
+  const bets = [], leans = [], fades = [];
+  for (const k of ['hit1','tb2','hr','rbi1']) {
+    const v = verdicts[k], p = probs[k];
+    if (!v || p == null) continue;
+    const tile = { market: labels[k], prob: p };
+    if (v.key === 'bet')       bets.push(tile);
+    else if (v.key === 'lean') leans.push(tile);
+    else if (v.key === 'fade') fades.push(tile);
+  }
+  bets.sort((a,b) => b.prob - a.prob);
+  leans.sort((a,b) => b.prob - a.prob);
+
+  // Lead headline
+  let lead, leadCls = '';
+  if (bets.length >= 3)      { lead = `Smash spot — ${bets.length} BET-grade markets for ${batterName}.`; leadCls = 'good'; }
+  else if (bets.length === 2){ lead = `Strong spot — multi-market edge on ${batterName}.`; leadCls = 'good'; }
+  else if (bets.length === 1){ lead = `Targeted play — ${bets[0].market} stands out.`; leadCls = 'good'; }
+  else if (leans.length >= 2){ lead = `Lean spot — moderate edges, not a hammer.`; leadCls = 'warn'; }
+  else if (fades.length >= 2){ lead = `Tough matchup — multiple fades indicated.`; leadCls = 'bad'; }
+  else if (fades.length === 1){ lead = `Mixed signals — one fade, no clear bet.`; leadCls = 'warn'; }
+  else                       { lead = `Neutral spot — no clear edge identified.`; leadCls = ''; }
+
+  // Action lines (BEST / LEAN / AVOID)
+  const actions = [];
+  if (bets.length) actions.push({
+    icon:'✓', cls:'good', label:'Best Plays',
+    detail: bets.map(b => `<strong>${b.market}</strong> (${(b.prob*100).toFixed(0)}%)`).join(' · ')
+  });
+  if (leans.length) actions.push({
+    icon:'○', cls:'warn', label:'Lean',
+    detail: leans.map(l => `${l.market} (${(l.prob*100).toFixed(0)}%)`).join(' · ')
+  });
+  if (fades.length) actions.push({
+    icon:'✗', cls:'bad', label:'Avoid',
+    detail: fades.map(f => `${f.market} (${(f.prob*100).toFixed(0)}%)`).join(' · ')
+  });
+  if (!actions.length) actions.push({
+    icon:'·', cls:'mu', label:'Pass',
+    detail: 'No graded edges — better spots elsewhere on the slate.'
+  });
+
+  const actionsHtml = actions.map(a =>
+    `<div class="reasoning-line">
+       <span class="reasoning-icon ${a.cls}">${a.icon}</span>
+       <span class="reasoning-label">${a.label}</span>
+       <span class="reasoning-detail">${a.detail}</span>
+     </div>`
+  ).join('');
+
+  // Context "why" chips — pull from drivers, quality, pitcher, platoon, form
+  const whys = [];
+  if (bq.xwoba_pct != null && bq.xwoba_pct >= 75) {
+    whys.push(`<span class="why-chip pos">Elite quality — <strong>${bq.xwoba_pct}th</strong> xwOBA</span>`);
+  } else if (bq.xwoba_pct != null && bq.xwoba_pct <= 30) {
+    whys.push(`<span class="why-chip neg">Below-avg quality — <strong>${bq.xwoba_pct}th</strong> xwOBA</span>`);
+  }
+  if (adj.pitch_mix != null && adj.pitch_mix > 0.01) {
+    whys.push(`<span class="why-chip pos">Favorable arsenal <strong>+${(adj.pitch_mix*100).toFixed(1)}%</strong></span>`);
+  } else if (adj.pitch_mix != null && adj.pitch_mix < -0.01) {
+    whys.push(`<span class="why-chip neg">Unfavorable arsenal <strong>${(adj.pitch_mix*100).toFixed(1)}%</strong></span>`);
+  }
+  if (pp.xera != null) {
+    if (pp.xera <= 3.20)      whys.push(`<span class="why-chip neg">Tough SP — xERA <strong>${pp.xera.toFixed(2)}</strong></span>`);
+    else if (pp.xera >= 4.50) whys.push(`<span class="why-chip pos">Hittable SP — xERA <strong>${pp.xera.toFixed(2)}</strong></span>`);
+  }
+  if (mc.platoonNote) whys.push(`<span class="why-chip">${mc.platoonNote}</span>`);
+  if (gctx.ttopBatterMult != null && gctx.ttopBatterMult > 1.01) {
+    whys.push(`<span class="why-chip pos">TTOP boost <strong>+${((gctx.ttopBatterMult-1)*100).toFixed(1)}%</strong></span>`);
+  }
+  if (gctx.umpire && gctx.umpire.tendency) {
+    const t = gctx.umpire.tendency;
+    if (t === 'HITTER')       whys.push(`<span class="why-chip pos">Hitter-friendly ump</span>`);
+    else if (t === 'PITCHER') whys.push(`<span class="why-chip neg">Pitcher-friendly ump</span>`);
+  }
+  if (summary && summary.recent_pa != null && summary.recent_pa >= 5) {
+    const avg = summary.avg != null ? Number(summary.avg).toFixed(3) : '—';
+    const cls = (summary.ops_ratio != null && summary.ops_ratio >= 1.10) ? 'pos'
+              : (summary.ops_ratio != null && summary.ops_ratio <= 0.85) ? 'neg' : '';
+    whys.push(`<span class="why-chip ${cls}">${summary.recent_pa} PA H2H · <strong>${avg}</strong> AVG</span>`);
+  }
+  if (vsSP && vsSP.paVsSp != null) {
+    // Only surface this when game-total and starter-only meaningfully diverge.
+    const gameHit = probs.hit1, spHit = vsSP.probs && vsSP.probs.hit1;
+    if (gameHit != null && spHit != null && Math.abs(gameHit - spHit) >= 0.08) {
+      const dir = spHit > gameHit ? 'pos' : 'neg';
+      whys.push(`<span class="why-chip ${dir}">SP-only 1+H <strong>${(spHit*100).toFixed(0)}%</strong> vs game ${(gameHit*100).toFixed(0)}%</span>`);
+    }
+  }
+  // Top driver bullets (if anything is left to add)
+  drivers.slice(0,2).forEach(d => {
+    const cls = d.contribution > 0 ? 'pos' : 'neg';
+    const arrow = d.contribution > 0 ? '▲' : '▼';
+    whys.push(`<span class="why-chip ${cls}">${arrow} ${d.label} <strong>${(d.contribution*100).toFixed(1)}%</strong></span>`);
+  });
+
+  const whysHtml = whys.length ? `<div class="reasoning-why">${whys.join('')}</div>` : '';
+
+  return `
+    <div class="reasoning-summary">
+      <div class="reasoning-header">
+        <span class="reasoning-title">Quick Take</span>
+        <span class="reasoning-lead ${leadCls}">${lead}</span>
+      </div>
+      <div class="reasoning-body">${actionsHtml}</div>
+      ${whysHtml}
+    </div>`;
 }
 
 function renderDetail(data) {
@@ -962,6 +1148,8 @@ function renderDetail(data) {
         <span style="font-size:.6rem">${conf.basis||''}</span>
       </div>`;
     })()}
+
+    ${buildReasoningSummary(proj, summary, batterName, pitcherName)}
 
     <div class="section-label">
       Career H2H Stats
