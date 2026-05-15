@@ -12276,7 +12276,7 @@ def _pdf_wrap_lines(lines, width=96):
     return wrapped
 
 
-def _simple_pdf_bytes(lines):
+def _simple_pdf_bytes(lines, title=None, subtitle=None):
     wrapped = _pdf_wrap_lines(lines)
     lines_per_page = 44
     page_chunks = [wrapped[i:i + lines_per_page] for i in range(0, len(wrapped), lines_per_page)] or [[]]
