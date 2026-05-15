@@ -60,6 +60,9 @@ from mc_upgrades import (
     LEAGUE_PLATOON_SPLITS,
     MARKET_MODEL_WEIGHTS,
     PLATOON_M,
+    advance_runners_markov,
+    apply_base_state_mult,
+    base_state_pa_mult,
     build_ump_sim_adjustments,
     build_weather_multipliers,
     devig_power,
@@ -8668,6 +8671,7 @@ def _simulate_offense(lineup, opp_starter, opp_team_id, park, rng, batx_map=None
                 pl = relief_lines[pm['name']]
             bx = batx_map.get(batter_ptr) if batx_map else None
             probs = _pa_probs(b, pm, bx, is_relief=not use_starter)
+            probs = apply_base_state_mult(probs, base_state_pa_mult(bases, outs))
             probs_cache[batter_ptr] = probs
             ev = _pick_event(probs, rng)
             s['pa'] += 1
@@ -8680,7 +8684,7 @@ def _simulate_offense(lineup, opp_starter, opp_team_id, park, rng, batx_map=None
                 elif ev == '2b': s['2b'] += 1; s['tb'] += 2
                 elif ev == '3b': s['3b'] += 1; s['tb'] += 3
                 elif ev == 'hr': s['hr'] += 1; s['tb'] += 4; pl['hr'] += 1
-                runs += _advance_hit(ev, bases, batter_ptr, stats, pl, rng, outs)
+                runs += advance_runners_markov(ev, bases, batter_ptr, stats, pl, rng, outs)
             else:
                 s['ab'] += 1; outs += 1; pl['outs'] += 1
                 if ev == 'k': s['k'] += 1; pl['k'] += 1
