@@ -390,6 +390,22 @@
     .h2h-sample-warn .warn-icon{font-size:.9rem;color:var(--y)}
     .h2h-sample-warn strong{color:var(--y);font-weight:700}
 
+    /* Ensemble model agreement grid (Phase 2) */
+    .ensemble-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:14px}
+    @media(max-width:600px){.ensemble-grid{grid-template-columns:repeat(2,1fr)}}
+    .ensemble-cell{background:rgba(0,0,0,.18);border:1px solid var(--b);border-radius:8px;padding:7px 8px;text-align:center}
+    .ensemble-cell.agree{border-color:rgba(0,230,118,.35);background:rgba(0,230,118,.04)}
+    .ensemble-cell.mixed{border-color:rgba(245,197,66,.35);background:rgba(245,197,66,.04)}
+    .ensemble-cell.split{border-color:rgba(255,82,82,.35);background:rgba(255,82,82,.04)}
+    .ec-market{font-size:.64rem;letter-spacing:.06em;text-transform:uppercase;color:var(--mu);font-weight:700;margin-bottom:3px}
+    .ec-vals{font-size:.7rem;color:var(--t);display:flex;justify-content:center;gap:4px;align-items:baseline}
+    .ec-arrow{color:var(--mu);font-size:.7rem}
+    .ec-flag{font-size:.58rem;font-weight:800;letter-spacing:.06em;margin-top:3px;padding:1px 5px;border-radius:4px;display:inline-block}
+
+    /* Weather chip variants */
+    .ctx-chip strong.good{color:var(--g)}
+    .ctx-chip strong.bad{color:var(--r)}
+
     /* Lineup star rating */
     .b-stars{display:inline-block;font-size:.7rem;letter-spacing:1px;color:var(--y);line-height:1;margin-top:3px}
     .b-stars .empty{color:rgba(255,255,255,.12)}
@@ -705,6 +721,77 @@ function pctBadge(pct) {
   return `<span style="font-size:.58rem;margin-left:4px;color:var(--${cls==='good'?'g':cls==='bad'?'r':'mu'})">${pct}th</span>`;
 }
 
+// ── Phase 2 helpers ───────────────────────────────────────────────────────
+
+// Score weather impact on HR/TB props. Returns {label, score, direction}
+// where score is the multiplier (1.0 = neutral, >1 favors hitters).
+// Research: <55°F = -% carry; 65-75°F neutral; >80°F +% carry; wind 10+mph
+// in/out is one of the strongest predictors in MLB betting.
+function scoreWeather(wx, parkFactor) {
+  if (!wx || typeof wx !== 'object') return null;
+  if (wx.dome) return { label: '<strong>Dome</strong> · neutral conditions', score: 1.0 };
+  const temp = (typeof wx.temp === 'number') ? wx.temp : null;
+  const wind = (typeof wx.wind_speed === 'number') ? wx.wind_speed : null;
+  const dir  = (wx.wind_dir || '').toUpperCase();
+  if (temp == null && wind == null) return null;
+
+  // Temperature multiplier on carry distance
+  let tempMult = 1.0;
+  if (temp != null) {
+    if (temp < 50)      tempMult = 0.93;
+    else if (temp < 60) tempMult = 0.97;
+    else if (temp < 75) tempMult = 1.00;
+    else if (temp < 85) tempMult = 1.03;
+    else                tempMult = 1.06;
+  }
+  // Wind multiplier (crude — only the outfield direction matters most)
+  // 'Out' winds (S/SW/SE typically for many parks) boost HR; 'In' wind suppresses.
+  // We treat NE/N/NW as headwind, S/SE/SW as tailwind, others neutral.
+  let windMult = 1.0;
+  let windHint = '';
+  if (wind != null && wind >= 8) {
+    if (/^S/.test(dir))      { windMult = 1.0 + Math.min(0.18, wind * 0.013); windHint = ' out'; }
+    else if (/^N/.test(dir)) { windMult = 1.0 - Math.min(0.18, wind * 0.013); windHint = ' in'; }
+  }
+  const combined = tempMult * windMult;
+  const pct = (combined - 1) * 100;
+  // Build chip label
+  const parts = [];
+  if (temp != null) parts.push(`${temp}°F`);
+  if (wind != null && wind >= 1) parts.push(`${wind}mph ${dir || ''}${windHint}`.trim());
+  if (wx.condition && wx.condition !== 'N/A') parts.push(wx.condition);
+  const tone = pct >= 2.5 ? 'good' : pct <= -2.5 ? 'bad' : '';
+  const tag  = Math.abs(pct) >= 1 ? `<strong class="${tone}">${pct > 0 ? '+' : ''}${pct.toFixed(1)}%</strong>` : '<strong>neutral</strong>';
+  const label = `Wx: ${parts.join(' · ')} → ${tag} carry`;
+  return { label, score: combined, direction: pct };
+}
+
+// Compute per-market ensemble agreement between XGB and the blended projection.
+// Returns array of {market, label, blended, xgb, divergence, flag, flagCls}.
+// flag: 'AGREE' (Δ<8pts), 'MIXED' (Δ8-15pts), 'SPLIT' (Δ>15pts).
+function computeEnsembleAgreement(probs) {
+  if (!probs) return [];
+  const rows = [];
+  const markets = [
+    { key: 'hit1', label: '1+ Hit', xgbKey: 'xgbHitProb' },
+    { key: 'tb2',  label: '2+ TB',  xgbKey: 'xgbTbProb' },
+    { key: 'hr',   label: 'HR',     xgbKey: 'xgbHrProb' },
+    { key: 'rbi1', label: '1+ RBI', xgbKey: 'xgbRbiProb' },
+  ];
+  for (const m of markets) {
+    const blended = probs[m.key];
+    const xgb     = probs[m.xgbKey];
+    if (blended == null || xgb == null) continue;
+    const div = Math.abs(blended - xgb);
+    let flag, flagCls;
+    if (div < 0.08)      { flag = 'AGREE'; flagCls = 'v-bet'; }
+    else if (div < 0.15) { flag = 'MIXED'; flagCls = 'v-lean'; }
+    else                 { flag = 'SPLIT'; flagCls = 'v-fade'; }
+    rows.push({ market: m.label, blended, xgb, divergence: div, flag, flagCls });
+  }
+  return rows;
+}
+
 // Synthesizes BET/LEAN/FADE verdicts + drivers + context into a 1-glance
 // "Quick Take" panel that tells the user which props to play and why.
 function buildReasoningSummary(proj, summary, batterName, pitcherName, batterInjury, pitcherInjury) {
@@ -835,6 +922,18 @@ function buildReasoningSummary(proj, summary, batterName, pitcherName, batterInj
     const t = gctx.umpire.tendency;
     if (t === 'HITTER')       whys.push(`<span class="why-chip pos">Hitter-friendly ump</span>`);
     else if (t === 'PITCHER') whys.push(`<span class="why-chip neg">Pitcher-friendly ump</span>`);
+  }
+  // Weather impact chip — surface when materially affecting carry
+  const wxImpact = scoreWeather(gctx.weather, gctx.parkFactor);
+  if (wxImpact && Math.abs(wxImpact.direction) >= 2.5) {
+    const cls = wxImpact.direction > 0 ? 'pos' : 'neg';
+    const dir = wxImpact.direction > 0 ? '+' : '';
+    whys.push(`<span class="why-chip ${cls}">Weather <strong>${dir}${wxImpact.direction.toFixed(1)}%</strong> HR/TB carry</span>`);
+  }
+  // Park favorability chip (extreme parks only — Coors / pitcher parks)
+  if (gctx.parkFactor != null) {
+    if (gctx.parkFactor >= 1.06) whys.push(`<span class="why-chip pos">Hitter park <strong>+${((gctx.parkFactor-1)*100).toFixed(1)}%</strong></span>`);
+    else if (gctx.parkFactor <= 0.94) whys.push(`<span class="why-chip neg">Pitcher park <strong>${((gctx.parkFactor-1)*100).toFixed(1)}%</strong></span>`);
   }
   if (summary && summary.avg != null && (summary.pa || 0) >= 15) {
     const avgClass = summary.avg <= 0.240 ? 'neg' : summary.avg >= 0.300 ? 'pos' : '';
@@ -1000,6 +1099,22 @@ function renderDetail(data) {
       ${probTile(probs.rbi1, ev.rbi,  'RBI', '1+ RBI',   'rbi1', verdicts.rbi1)}
     </div>` : '';
 
+  // ── Ensemble model agreement panel (Phase 2) ─────────────────────────────
+  // Show XGB vs Blended agreement per market so users can spot when models
+  // disagree (i.e., the projection is less reliable).
+  const ensembleRows = computeEnsembleAgreement(probs);
+  const agreeCount = ensembleRows.filter(r => r.flag === 'AGREE').length;
+  const ensembleHtml = ensembleRows.length ? `
+    <div class="section-label">Ensemble Model Agreement <span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— XGB vs Blended · ${agreeCount}/${ensembleRows.length} markets agree</span></div>
+    <div class="ensemble-grid">
+      ${ensembleRows.map(r => `
+        <div class="ensemble-cell ${r.flag.toLowerCase()}">
+          <div class="ec-market">${r.market}</div>
+          <div class="ec-vals"><span>XGB ${(r.xgb*100).toFixed(0)}%</span><span class="ec-arrow">↔</span><span>Blend ${(r.blended*100).toFixed(0)}%</span></div>
+          <div class="ec-flag ${r.flagCls}">${r.flag} · Δ${(r.divergence*100).toFixed(0)}pts</div>
+        </div>`).join('')}
+    </div>` : '';
+
   // PA vs This Pitcher (Starter only) — shows the slice of the game that
   // actually pits this batter against this pitcher.
   const vsSpHtml = (vsSP && vsSP.probs) ? `
@@ -1050,7 +1165,7 @@ function renderDetail(data) {
         </details>` : ''}
     </div>` : '';
 
-  // ── Game-context strip: TTOP, umpire, park ────────────────────────────────
+  // ── Game-context strip: TTOP, umpire, park, weather (Phase 2) ─────────────
   const gctx = (proj && proj.gameContext) || {};
   const ctxChips = [];
   if (gctx.ttopBatterMult != null && gctx.ttopBatterMult !== 1) {
@@ -1067,6 +1182,11 @@ function renderDetail(data) {
     const pf = proj.parkFactor;
     const dir = pf > 1 ? '+' : '';
     ctxChips.push(`<span class="ctx-chip">Park <strong>${dir}${((pf-1)*100).toFixed(1)}%</strong></span>`);
+  }
+  // Weather chip — temperature + wind direction/speed with implied carry effect
+  const wxScore = scoreWeather(gctx.weather, proj && proj.parkFactor);
+  if (wxScore && wxScore.label) {
+    ctxChips.push(`<span class="ctx-chip">${wxScore.label}</span>`);
   }
   const ctxStripHtml = ctxChips.length ? `<div class="ctx-strip">${ctxChips.join('')}</div>` : '';
 
@@ -1301,6 +1421,8 @@ function renderDetail(data) {
     ${vsRpHtml}
 
     ${probHtml}
+
+    ${ensembleHtml}
 
     ${divergenceHtml}
 

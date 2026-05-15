@@ -5953,14 +5953,14 @@ def api_bvp_projection(batter_id, pitcher_id):
             "vs_r_pa":  vr.get("pa",  0),
         }
 
-        # ── 4. Game context: park factor + dome ──────────────────────────────
+        # ── 4. Game context: park factor + dome + live weather ────────────────
         park_factor = 1.0
         weather     = {}
         if game_pk:
             try:
                 sr = requests.get(
                     f"{MLB_API}/schedule",
-                    params={"gamePk": game_pk, "hydrate": "team,venue", "sportId": 1},
+                    params={"gamePk": game_pk, "hydrate": "team,venue(location)", "sportId": 1},
                     timeout=6,
                 )
                 if sr.ok:
@@ -5970,9 +5970,25 @@ def api_bvp_projection(batter_id, pitcher_id):
                         home_id = (((gm.get("teams") or {}).get("home") or {}).get("team") or {}).get("id")
                         if home_id:
                             park_factor = PARK_FACTORS.get(home_id, 1.0)
-                        venue_id = (gm.get("venue") or {}).get("id")
+                        venue   = gm.get("venue") or {}
+                        venue_id = venue.get("id")
+                        # Pull lat/lon and game hour for live weather lookup
+                        loc      = venue.get("location") or {}
+                        lat      = loc.get("latitude")
+                        lon      = loc.get("longitude")
+                        game_hour = 19  # default 7pm ET
+                        try:
+                            gd_utc = datetime.fromisoformat(gm.get("gameDate","").replace("Z","+00:00"))
+                            game_hour = gd_utc.astimezone(ET).hour
+                        except Exception:
+                            pass
                         if venue_id and venue_id in DOME_VENUES:
-                            weather = {"dome": True, "temp": 72, "wind_speed": 0}
+                            weather = {"dome": True, "temp": 72, "wind_speed": 0, "condition": "Dome"}
+                        else:
+                            try:
+                                weather = get_weather(lat, lon, game_hour, venue_id=venue_id) or {}
+                            except Exception:
+                                weather = {}
             except Exception:
                 pass
 
@@ -6304,6 +6320,8 @@ def api_bvp_projection(batter_id, pitcher_id):
                 "ttopBatterMult": round(ttop_batter, 3),
                 "umpireKMult":    ump_k_mult,
                 "umpire":         ump_meta,
+                "weather":        weather or {},
+                "parkFactor":     round(float(park_factor), 3),
             },
         })
 
