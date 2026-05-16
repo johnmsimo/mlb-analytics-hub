@@ -179,22 +179,35 @@ def _tier_for(p: float) -> tuple[str, str, str]:
     return "STRONG_FADE", "STRONG FADE", "red"
 
 
-def _demote_if_wide_ci(p: float, ci_lo: float, ci_hi: float) -> tuple[str, str, str]:
-    """Demote the verdict when the CI says we can't commit.
+def _demote_if_wide_ci(p: float, ci_lo: float, ci_hi: float,
+                       confidence: float) -> tuple[str, str, str]:
+    """Demote the verdict when the data says we can't commit at full strength.
 
     The only boundary that flips the bet is 50% (Over vs Under). Inner tier
     boundaries (LEAN_OVER ↔ STRONG_BET, etc.) are nuance, not a wrong call —
     so we don't PASS on those.
 
-      • CI straddles 50%        → PASS, we can't pick a side.
-      • CI is very wide (>35pt) → step one tier toward PASS, keep the side.
-      • Otherwise               → return the base tier.
+      • CI straddles 50%         → PASS, we can't pick a side.
+      • Low confidence (<0.55)   → step STRONG → LEAN, keep the side.
+      • Very wide CI (>35pt)     → step STRONG → LEAN, keep the side.
+      • Otherwise                → return the base tier.
+
+    "Low confidence" is the union of: models disagree a lot (wide CI), XGB
+    coverage is thin, or BvP sample is small. A STRONG bet should require
+    both component models to agree strongly — when one is wobbly, we step
+    down to LEAN rather than overstate certainty.
     """
     ci_width = ci_hi - ci_lo
     base_key, base_label, base_color = _tier_for(p)
 
     if ci_lo < 0.50 < ci_hi and base_key != "PASS":
         return "PASS", "PASS · STRADDLES 50%", "gray"
+
+    if confidence < 0.55:
+        if base_key == "STRONG_BET":
+            return "LEAN_OVER", "LEAN OVER · LOW CONF", "teal"
+        if base_key == "STRONG_FADE":
+            return "LEAN_UNDER", "LEAN UNDER · LOW CONF", "amber"
 
     if ci_width >= WIDE_CI_THRESHOLD:
         if base_key == "STRONG_BET":
@@ -255,7 +268,7 @@ def calibrate(xgb_p: Optional[float], batx_p: Optional[float], *,
     sample_conf = _clamp(bvp_pa / 80.0, 0.0, 1.0)
     confidence = round(0.55 * width_conf + 0.30 * cov_conf + 0.15 * sample_conf, 3)
 
-    tier_key, tier_label, tier_color = _demote_if_wide_ci(blended, ci_lo, ci_hi)
+    tier_key, tier_label, tier_color = _demote_if_wide_ci(blended, ci_lo, ci_hi, confidence)
 
     return {
         "probability":   round(blended, 3),
