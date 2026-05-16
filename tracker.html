@@ -293,6 +293,7 @@ details[open] summary::before{transform:rotate(90deg)}
           <div class="panel-sub" id="boardSub">Live tracked picks saved from props, cheatsheets, and manual adds</div>
         </div>
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          <select id="fGame" class="btn sm" style="min-width:160px" aria-label="Filter game"><option value="">All Games</option></select>
           <select id="fMkt" class="btn sm" style="min-width:130px" aria-label="Filter market"><option value="">All Markets</option></select>
           <select id="fRes" class="btn sm" style="min-width:120px" aria-label="Filter result">
             <option value="">All Results</option>
@@ -324,6 +325,7 @@ details[open] summary::before{transform:rotate(90deg)}
         <span class="chip" id="evOnlyChip" onclick="toggleEvOnly()">⚡ +EV Only</span>
         <span class="chip" id="pendingChip" onclick="togglePending()">⏳ Pending Only</span>
         <span class="chip" id="coreChip" onclick="toggleCore()">⭐ Core Only (A/B)</span>
+        <input id="fPlayer" class="btn sm" type="search" placeholder="🔍 Search player…" style="min-width:180px;margin-left:6px">
       </div>
 
       <div class="tw">
@@ -703,7 +705,8 @@ const MARKET_LABELS = {
   batter_hits:'Hits', batter_total_bases:'Total Bases',
   batter_home_runs:'Home Runs', batter_rbis:'RBIs',
   batter_runs_scored:'Runs', batter_hits_runs_rbis:'H+R+RBI', batter_stolen_bases:'Stolen Bases',
-  pitcher_strikeouts:'Strikeouts', nrfi:'NRFI', yrfi:'YRFI'
+  pitcher_strikeouts:'Strikeouts', nrfi:'NRFI', yrfi:'YRFI',
+  h2h:'Moneyline', totals:'Total O/U', f5_h2h:'F5 Moneyline', f5_totals:'F5 Total'
 };
 
 const st = {
@@ -912,7 +915,7 @@ async function loadDay() {
     st.day = d;
     renderSummary(d);
     renderMarketTable(d);
-    populateMktFilter(entries);
+    populateMktFilter(entries); populateGameFilter(entries);
     renderBoard();
     renderParlayBuilder();
     $('datePill').textContent = d.capturedAt ? `Live ${date} · synced ${ts(d.capturedAt)}` : `Live ${date} · no saved picks yet`;
@@ -944,7 +947,7 @@ async function captureDay() {
     st.day = d;
     renderSummary(d);
     renderMarketTable(d);
-    populateMktFilter(d.entries||[]);
+    populateMktFilter(d.entries||[]); populateGameFilter(d.entries||[]);
     renderBoard();
     const gameMsg = (d.capturedGames!=null && d.totalGames!=null) ? ` · ${d.capturedGames}/${d.totalGames} games` : '';
     $('datePill').textContent = `${d.entries?.length||0} entries captured${gameMsg}`;
@@ -1066,6 +1069,41 @@ function populateMktFilter(entries) {
   if (mks.includes(cur)) sel.value = cur;
 }
 
+// ── Populate game filter ──────────────────────────────────────────────────────
+function populateGameFilter(entries) {
+  const sel = $('fGame');
+  if (!sel) return;
+  const cur = sel.value;
+  // For each gamePk, collect the set of team abbreviations from picks (batter team + opp).
+  // Team-market rows where player looks like "AWAY@HOME" are preferred for labeling.
+  const byGame = new Map();
+  (entries || []).forEach(e => {
+    const gpk = e && e.gamePk;
+    if (!gpk) return;
+    const key = String(gpk);
+    if (!byGame.has(key)) byGame.set(key, { gamePk: key, teams: new Set(), label: '' });
+    const g = byGame.get(key);
+    if (e.team) g.teams.add(e.team);
+    if (e.opp)  g.teams.add(e.opp);
+    // Prefer the "AWAY@HOME" label from team-market rows when available.
+    if (!g.label && typeof e.player === 'string' && /^[A-Z]{2,4}@[A-Z]{2,4}$/.test(e.player)) {
+      g.label = e.player.replace('@', ' @ ');
+    }
+  });
+  const games = [...byGame.values()].map(g => {
+    if (!g.label) g.label = [...g.teams].sort().join(' vs ');
+    return g;
+  }).sort((a, b) => a.label.localeCompare(b.label));
+  sel.innerHTML = '<option value="">All Games</option>';
+  games.forEach(g => {
+    const o = document.createElement('option');
+    o.value = g.gamePk;
+    o.textContent = g.label || g.gamePk;
+    sel.appendChild(o);
+  });
+  if (games.some(g => g.gamePk === cur)) sel.value = cur;
+}
+
 // ── Working board ─────────────────────────────────────────────────────────────
 function renderBoard() {
   try {
@@ -1075,10 +1113,14 @@ function renderBoard() {
     const res = $('fRes').value;
     const tier= $('fTier').value;
     const srt = $('fSort').value;
+    const gpk = $('fGame') ? $('fGame').value : '';
+    const q   = $('fPlayer') ? ($('fPlayer').value || '').trim().toLowerCase() : '';
     const {evOnly, pendingOnly, coreOnly} = st.flags;
-    console.log('[renderBoard] filters:', {mkt, res, tier, evOnly, pendingOnly, coreOnly});
+    console.log('[renderBoard] filters:', {mkt, res, tier, gpk, q, evOnly, pendingOnly, coreOnly});
 
     let rows = entries.filter(r => {
+      if (gpk && String(r.gamePk||'') !== gpk) return false;
+      if (q && !((r.player||'').toLowerCase().includes(q))) return false;
       if (mkt && r.marketKey !== mkt) return false;
       if (res && (r.grade||'pending') !== res) return false;
       if (tier && r.confidenceTier !== tier) return false;
@@ -1244,7 +1286,7 @@ async function removePick(pickId) {
     st.parlay = st.parlay.filter(id => id !== pickId);
     renderSummary(st.day);
     renderMarketTable(st.day);
-    populateMktFilter(st.day.entries||[]);
+    populateMktFilter(st.day.entries||[]); populateGameFilter(st.day.entries||[]);
     renderBoard();
     renderParlayBuilder();
     status('Pick removed');
@@ -1264,7 +1306,7 @@ async function updatePickField(pickId, key, rawValue) {
     st.day = d.today;
     renderSummary(st.day);
     renderMarketTable(st.day);
-    populateMktFilter(st.day.entries||[]);
+    populateMktFilter(st.day.entries||[]); populateGameFilter(st.day.entries||[]);
     renderBoard();
     renderParlayBuilder();
     status('Pick updated');
@@ -1477,7 +1519,7 @@ async function saveManualPick() {
   try {
     const d = await api('/api/tracker/pick', {method:'POST', body:JSON.stringify(payload)});
     st.day = d.today;
-    populateMktFilter(st.day.entries||[]);
+    populateMktFilter(st.day.entries||[]); populateGameFilter(st.day.entries||[]);
     renderSummary(st.day);
     renderMarketTable(st.day);
     renderBoard();
@@ -1507,7 +1549,7 @@ async function saveParlay() {
     const d = await api('/api/tracker/parlay', {method:'POST', body:JSON.stringify(payload)});
     st.day = d.today;
     st.parlay = [];
-    populateMktFilter(st.day.entries||[]);
+    populateMktFilter(st.day.entries||[]); populateGameFilter(st.day.entries||[]);
     renderSummary(st.day);
     renderMarketTable(st.day);
     renderBoard();
@@ -1785,7 +1827,8 @@ function wire() {
       } catch(e) { status(e.message||String(e),true); console.error(id,e); }
     });
   });
-  ['fMkt','fRes','fTier','fSort'].forEach(id=>$(id)?.addEventListener('change',renderBoard));
+  ['fMkt','fRes','fTier','fSort','fGame'].forEach(id=>$(id)?.addEventListener('change',renderBoard));
+  $('fPlayer')?.addEventListener('input', renderBoard);
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
