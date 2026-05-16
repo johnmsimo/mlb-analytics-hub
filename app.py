@@ -12425,8 +12425,13 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
     away_pitcher = _pitcher_model(away_p.get('fullName', 'Away SP'), away_p.get('id'), away_team_id)
     home_pitcher = _pitcher_model(home_p.get('fullName', 'Home SP'), home_p.get('id'), home_team_id)
 
-    sims = int(os.getenv('TRACKER_SIMS', '700') or 700)
-    sims = max(300, min(5000, sims))
+    # 700 sims × 9 innings × ~50 PA × (lineups+pitchers) ≈ 25K simulated PAs
+    # per game — too slow under the tracker capture budget on Fly's single
+    # Python worker (the user was seeing 0/15 games complete in 45s). 250
+    # sims still gives ~3% std error on the binary "over/under" probabilities,
+    # which is tighter than the modelling noise itself.
+    sims = int(os.getenv('TRACKER_SIMS', '250') or 250)
+    sims = max(100, min(5000, sims))
     rng = random.Random(game_pk + int(capture_date.replace('-', '')) + 10)
     away_store = {i: [] for i in range(len(away_lineup))}
     home_store = {i: [] for i in range(len(home_lineup))}
@@ -12841,7 +12846,7 @@ def api_tracker_capture(date_str):
 
         # Keep request under Fly.io's ~60s proxy read timeout; remaining
         # games continue in a background thread (TRACKER_CAPTURE_BACKGROUND).
-        budget_sec = float(os.getenv('TRACKER_CAPTURE_BUDGET_SEC', '45') or 45)
+        budget_sec = float(os.getenv('TRACKER_CAPTURE_BUDGET_SEC', '55') or 55)
         deadline = time.time() + max(15.0, min(300.0, budget_sec))
         all_entries = []
         captured_games = 0
@@ -12927,9 +12932,12 @@ def api_tracker_capture(date_str):
         timed_out = bool(games_timed_out)
         remaining_games = games_timed_out if timed_out else []
         background_started = False
+        background_already_running = False
         if remaining_games and str(os.getenv('TRACKER_CAPTURE_BACKGROUND', '1')).strip().lower() in ('1', 'true', 'yes'):
             with _TRACKER_CAPTURE_LOCK:
-                if date_str not in _TRACKER_CAPTURE_JOBS:
+                if date_str in _TRACKER_CAPTURE_JOBS:
+                    background_already_running = True
+                else:
                     t = threading.Thread(
                         target=_tracker_capture_continue_bg,
                         args=(date_str, remaining_games, sched, adjustments, include_odds),
@@ -12941,7 +12949,9 @@ def api_tracker_capture(date_str):
         msg = None
         if timed_out:
             if background_started:
-                msg = f'Partial capture: {captured_games}/{len(sched)} games processed. Continuing {len(remaining_games)} game(s) in background.'
+                msg = f'Partial capture: {captured_games}/{len(sched)} games processed. Continuing {len(remaining_games)} game(s) in background — reload in ~30s.'
+            elif background_already_running:
+                msg = f'Partial capture: {captured_games}/{len(sched)} games processed. Background continuation already running — reload in ~30s.'
             else:
                 msg = f'Partial capture: {captured_games}/{len(sched)} games processed in time budget.'
         elif not entries:
