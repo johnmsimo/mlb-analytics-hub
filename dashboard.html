@@ -566,6 +566,11 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
           <div style="font-size:.62rem;color:var(--mu);margin-bottom:10px;line-height:1.6">
             Readiness of background loaders the Monte Carlo sim depends on. After a redeploy, click <b>WARM UP NOW</b> and wait until every row is green — cold caches make sims time out.
           </div>
+          <div style="margin-bottom:10px">
+            <label for="cacheWarmDate" style="font-size:.7rem;color:var(--mu);margin-right:8px">Select Date:</label>
+            <input type="date" id="cacheWarmDate" style="font-size:.9rem;padding:2px 8px;border-radius:5px;border:1px solid var(--b);background:var(--card);color:var(--t)" value="">
+            <span style="font-size:.6rem;color:var(--mu);margin-left:8px">slate the lineup pipeline will build</span>
+          </div>
           <div id="cacheStatusRows" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px">
             <div style="font-size:.7rem;color:var(--mu);padding:6px 0">Loading…</div>
           </div>
@@ -2038,15 +2043,40 @@ function loadCacheStatus(){
     return null;
   });
 }
+// Today in America/New_York as YYYY-MM-DD — baseball schedule pivots on ET, so
+// the warm-up date picker should default to the slate the books are listing
+// even if the user's browser is on PT/MT/CT.
+function _todayET_YMD(){
+  try{
+    var parts=new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());
+    var y='',m='',d='';
+    parts.forEach(function(p){if(p.type==='year')y=p.value;else if(p.type==='month')m=p.value;else if(p.type==='day')d=p.value;});
+    if(y&&m&&d) return y+'-'+m+'-'+d;
+  }catch(e){}
+  return new Date().toISOString().slice(0,10);
+}
+function _getSelectedWarmDate(){
+  var inp=document.getElementById('cacheWarmDate');
+  return inp&&inp.value?inp.value:_todayET_YMD();
+}
+function _ensureWarmDateDefault(){
+  var inp=document.getElementById('cacheWarmDate');
+  if(inp&&!inp.value) inp.value=_todayET_YMD();
+}
 function triggerCacheWarm(force){
   var btn=document.getElementById('cacheWarmBtn');
   var badge=document.getElementById('cacheReadyBadge');
   if(btn) btn.disabled=true;
   if(badge) badge.textContent=force?'Force-restarting…':'Starting…';
-  var url='/api/cache/warm'+(force?'?force=1':'');
+  _ensureWarmDateDefault();
+  var dateStr=_getSelectedWarmDate();
+  var qs=[];
+  if(force) qs.push('force=1');
+  if(dateStr) qs.push('date='+encodeURIComponent(dateStr));
+  var url='/api/cache/warm'+(qs.length?('?'+qs.join('&')):'');
   fetch(url,{method:'POST'}).then(function(r){return r.json();}).then(function(r){
     var t=(r.triggered||[]).join(', ')||'(all already warming)';
-    if(badge) badge.textContent='Started: '+t;
+    if(badge) badge.textContent='Started '+dateStr+': '+t;
     if(_cachePollTimer) clearInterval(_cachePollTimer);
     var polls=0;
     _cachePollTimer=setInterval(function(){
@@ -2125,6 +2155,7 @@ function initSettingsView(){
   loadTrackerSettings();
   refreshSettingsPanel();
   loadComprehensiveSettings();
+  _ensureWarmDateDefault();
   loadCacheStatus();
   loadUploadedFiles();
   refreshBrainStatus();
