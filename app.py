@@ -54,6 +54,16 @@ except ImportError:
     def enrich_batter(d, **k):   return d
     def enrich_pitcher(d, **k):  return d
 
+# Stacked calibrator — combines XGB+BATX into a single verdict + 95% CI.
+# Graceful fallback to deterministic logistic blend when no trained isotonic
+# is on disk (typical until enough graded picks accumulate).
+try:
+    from stacked_calibrator import calibrate as stacked_calibrate
+    _STACK_AVAILABLE = True
+except ImportError:
+    _STACK_AVAILABLE = False
+    def stacked_calibrate(*a, **k): return None
+
 
 # ── Matchup Pipeline ───────────────────────────────────────────────────────────
 try:
@@ -4637,6 +4647,7 @@ def api_pitchers(game_pk):
                 "awayPitcher": {
                     "id": ap.get("id"),
                     "name": an,
+                    "throws": player_profile(ap.get("id")).get("throws", "R") if ap.get("id") else "R",
                     "stats": build_pitcher_stats(an, ap.get("id")),
                     "vulnerability": _pitcher_prop_vulnerability(ap.get("id"), game_pk),
                     "injury": _pitcher_injury_dict(ap.get("id")),
@@ -4644,6 +4655,7 @@ def api_pitchers(game_pk):
                 "homePitcher": {
                     "id": hp.get("id"),
                     "name": hn,
+                    "throws": player_profile(hp.get("id")).get("throws", "R") if hp.get("id") else "R",
                     "stats": build_pitcher_stats(hn, hp.get("id")),
                     "vulnerability": _pitcher_prop_vulnerability(hp.get("id"), game_pk),
                     "injury": _pitcher_injury_dict(hp.get("id")),
@@ -6106,7 +6118,15 @@ def api_bvp_projection(batter_id, pitcher_id):
 
         # Apply shrink-to-prior to hit1 BEFORE verdicts, so the per-market tile
         # and the divergence bar marker stay in sync.
-        _early_div = _model_divergence(probs, gp, batx, _exp_pa_for_hit)
+        _bvp_pa_n = 0
+        try:
+            _bvp_pa_n = int((bvp_data or {}).get("pa") or 0)
+        except (TypeError, ValueError):
+            _bvp_pa_n = 0
+        _early_div = _model_divergence(
+            probs, gp, batx, _exp_pa_for_hit,
+            bvp_pa=_bvp_pa_n, park_factor=park_factor,
+        )
         if _early_div.get("available") and _early_div.get("blended") is not None:
             probs["hit1"] = _early_div["blended"]
 
@@ -6214,6 +6234,14 @@ def api_bvp_projection(batter_id, pitcher_id):
 
         verdicts_game = _verdict_block(probs)
         verdicts_sp   = _verdict_edge_block(vs_sp, vs_sp.get("neutral"))
+
+        # When the stacked calibrator demoted to PASS (wide CI / straddles 50%),
+        # force the per-market verdict tile to PASS too — otherwise the
+        # headline verdict and the per-market chip contradict each other
+        # (the dual-model UX problem we're trying to eliminate).
+        _v = (_early_div or {}).get("verdict") or {}
+        if _v.get("tier") == "PASS" and "hit1" in verdicts_game:
+            verdicts_game["hit1"] = {"key": "pass", "label": "PASS", "cls": "v-pass"}
 
         # ── 10. Pitcher K projection vs the opposing lineup (game-context).
         #     Lineup is fetched from the boxscore when game_pk is provided.
@@ -7508,7 +7536,7 @@ def _umpire_k_multiplier(game_pk):
         return 1.0, None
 
 
-def _model_divergence(probs, gp, batx, exp_pa_total):
+def _model_divergence(probs, gp, batx, exp_pa_total, *, bvp_pa=0, park_factor=1.0):
     """Surface XGB-vs-BATX divergence and a HIGH/MEDIUM/LOW UNCERTAINTY flag.
 
     For 1+ Hit specifically — the only market with an XGB model loaded today.
@@ -7548,12 +7576,53 @@ def _model_divergence(probs, gp, batx, exp_pa_total):
     div     = round(abs(xgb_p - batx_p), 3)
     div_lgt = round(_logit_divergence(xgb_p, batx_p), 3)
 
-    # Variance-aware thresholds:
-    #   • Δ near p=0.5 → ~0.4 logit-nats per 10 prob-pts
-    #   • Δ near p=0.9 → ~0.7 logit-nats per 10 prob-pts
-    # Using logit nats means a 20pt gap at 90%/70% (≈0.97 nats) is flagged
-    # MORE strongly than a 20pt gap at 50%/30% (≈0.85 nats), which matches
-    # bookmaker behaviour around the tails.
+    # ── Stacked calibrator: replaces the "HIGH UNCERTAINTY" dual-bar UX with a
+    #    single calibrated probability + 95% CI + decisive verdict tier.
+    #    Falls back to the legacy shrink-to-prior path if the calibrator
+    #    module isn't importable.
+    stack = None
+    if _STACK_AVAILABLE:
+        try:
+            stack = stacked_calibrate(
+                xgb_p, batx_p,
+                coverage=coverage,
+                exp_pa=exp_pa,
+                bvp_pa=bvp_pa,
+                park_factor=park_factor,
+            )
+        except Exception:
+            stack = None
+
+    if stack:
+        # The stacked verdict is the single source of truth for the UI.
+        return {
+            "available":       True,
+            "blended":         stack["probability"],
+            "blendedRaw":      raw_blend,
+            "batx":            batx_p,
+            "xgb":             round(xgb_p, 3),
+            "coverage":        round(coverage, 3),
+            "divergence":      div,
+            "divergenceLogit": div_lgt,
+            "shrinkApplied":   0.0,
+            "reliability":     stack["confidence"],
+            "flagKey":         stack["verdict"].lower(),
+            "flagLabel":       stack["verdict_label"],
+            "flagCls":         _stack_color_to_class(stack["verdict_color"]),
+            # Verdict-tier output (new): the single-glance decision.
+            "verdict": {
+                "tier":         stack["verdict"],
+                "label":        stack["verdict_label"],
+                "color":        stack["verdict_color"],
+                "probability":  stack["probability"],
+                "ci_lo":        stack["ci_lo"],
+                "ci_hi":        stack["ci_hi"],
+                "confidence":   stack["confidence"],
+                "source":       stack["source"],
+            },
+        }
+
+    # ── Legacy fallback (only when stacked_calibrator import failed) ────────
     if   div_lgt >= 1.10:
         flag = ("high",   "HIGH UNCERTAINTY", "v-fade")
     elif div_lgt >= 0.55:
@@ -7561,18 +7630,12 @@ def _model_divergence(probs, gp, batx, exp_pa_total):
     else:
         flag = ("low",    "MODELS AGREE",     "v-bet")
 
-    # Shrink-to-prior: when models disagree, fade the blended probability
-    # toward a league-typical 1+ hit baseline (~0.66 for a starter slot)
-    # weighted by both divergence magnitude AND coverage (we trust XGB less
-    # when its inputs are thin, so we shrink more in that case).
     LEAGUE_PRIOR_HIT1 = 0.66
-    div_shrink   = max(0.0, min(0.50, (div_lgt - 0.55) * 0.40))  # 0 at 0.55, ~0.22 at 1.10
-    cov_shrink   = max(0.0, 0.40 - coverage) * 0.50              # ramps up when coverage < 0.40
+    div_shrink   = max(0.0, min(0.50, (div_lgt - 0.55) * 0.40))
+    cov_shrink   = max(0.0, 0.40 - coverage) * 0.50
     shrink_w     = max(0.0, min(0.60, div_shrink + cov_shrink))
     blended      = round(_shrink_to_prior(raw_blend, LEAGUE_PRIOR_HIT1, shrink_w), 3)
 
-    # Reliability: starts at 1.0, penalised by divergence (logit-scale) and by
-    # missing coverage. Capped at [0.20, 1.0] so the UI never shows 0%.
     rel = 1.0
     rel -= min(0.55, max(0.0, (div_lgt - 0.30) * 0.45))
     rel -= 0.30 * max(0.0, 1.0 - coverage)
@@ -7593,6 +7656,17 @@ def _model_divergence(probs, gp, batx, exp_pa_total):
         "flagLabel":       flag[1],
         "flagCls":         flag[2],
     }
+
+
+def _stack_color_to_class(color: str) -> str:
+    """Map stacked-calibrator verdict color → existing bvp.html CSS class."""
+    return {
+        "green": "v-bet",   # STRONG_BET
+        "teal":  "v-bet",   # LEAN_OVER
+        "gray":  "v-pass",  # PASS
+        "amber": "v-lean",  # LEAN_UNDER
+        "red":   "v-fade",  # STRONG_FADE
+    }.get(color, "v-pass")
 
 
 def _projection_drivers(batx_adjustments, top_n=4):
@@ -16137,6 +16211,21 @@ def api_lineup(game_pk):
                     if home: home_source = 'roster'
             except Exception:
                 pass
+
+        # ── Pre-warm _bio_cache so bats handedness is always real (not the
+        #    "R" default) for every batter rendered on the BvP page. ──────────
+        try:
+            _missing_pids = [b.get('id') for b in (away[:9] + home[:9])
+                             if b.get('id') and b.get('id') not in _bio_cache]
+            if _missing_pids:
+                with ThreadPoolExecutor(max_workers=min(len(_missing_pids), 9)) as _pool:
+                    list(_pool.map(player_profile, _missing_pids))
+            for b in (away[:9] + home[:9]):
+                pid = b.get('id')
+                if pid and pid in _bio_cache:
+                    b['bats'] = _bio_cache[pid].get('bats', b.get('bats', 'S'))
+        except Exception:
+            pass
 
         # ── Enrich batters with injury status for BvP injury alerts ───────────
         try:

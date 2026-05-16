@@ -29,6 +29,11 @@ HITS_FEATURES = [
     'opp_xera', 'opp_k_pct', 'opp_bb_pct', 'opp_whiff',
     'bats_L', 'throws_R', 'platoon_adv',
     'l7_hits', 'l7_hit_rate',
+    # v2 features (BATX-parity): give XGB the same context BATX uses so the
+    # two models can no longer disagree because of missing inputs.
+    'park_factor', 'wx_temp_mult', 'wx_wind_mult',
+    'pitch_mix_slg_edge', 'bvp_woba_edge_shrunk',
+    'split_ops_edge', 'expected_pa',
 ]
 
 K_FEATURES = [
