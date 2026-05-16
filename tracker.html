@@ -955,7 +955,10 @@ async function captureDay() {
     } else {
       status(d.message || `Captured ${n} entries${gameMsg}`);
     }
-    if (d.backgroundStarted) {
+    // Auto-reload whenever a partial capture is in flight — a background
+    // continuation may already be running from a prior click even if this
+    // call didn't start one itself.
+    if (d.backgroundStarted || d.timedOut) {
       setTimeout(() => { loadDay().catch(() => {}); }, 12000);
     }
   } catch(e) { status(e.message, true); }

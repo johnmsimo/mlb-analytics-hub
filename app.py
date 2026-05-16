@@ -12927,9 +12927,12 @@ def api_tracker_capture(date_str):
         timed_out = bool(games_timed_out)
         remaining_games = games_timed_out if timed_out else []
         background_started = False
+        background_already_running = False
         if remaining_games and str(os.getenv('TRACKER_CAPTURE_BACKGROUND', '1')).strip().lower() in ('1', 'true', 'yes'):
             with _TRACKER_CAPTURE_LOCK:
-                if date_str not in _TRACKER_CAPTURE_JOBS:
+                if date_str in _TRACKER_CAPTURE_JOBS:
+                    background_already_running = True
+                else:
                     t = threading.Thread(
                         target=_tracker_capture_continue_bg,
                         args=(date_str, remaining_games, sched, adjustments, include_odds),
@@ -12941,7 +12944,9 @@ def api_tracker_capture(date_str):
         msg = None
         if timed_out:
             if background_started:
-                msg = f'Partial capture: {captured_games}/{len(sched)} games processed. Continuing {len(remaining_games)} game(s) in background.'
+                msg = f'Partial capture: {captured_games}/{len(sched)} games processed. Continuing {len(remaining_games)} game(s) in background — reload in ~30s.'
+            elif background_already_running:
+                msg = f'Partial capture: {captured_games}/{len(sched)} games processed. Background continuation already running — reload in ~30s.'
             else:
                 msg = f'Partial capture: {captured_games}/{len(sched)} games processed in time budget.'
         elif not entries:
