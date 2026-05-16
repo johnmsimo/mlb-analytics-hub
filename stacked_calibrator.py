@@ -53,7 +53,7 @@ _loaded = False
 
 # ─── League priors used in the deterministic fallback ───────────────────────
 LEAGUE_PRIOR_HIT1 = 0.66    # Typical 1+ hit probability for a starter
-WIDE_CI_THRESHOLD = 0.20    # CI wider than 20pts → demote tier toward PASS
+WIDE_CI_THRESHOLD = 0.35    # CI wider than 35pts → step one tier toward PASS
 
 
 def load_calibrator() -> bool:
@@ -139,20 +139,22 @@ def _analytic_ci(xgb_p: float, batx_p: float,
     """Approximate 95% CI for the blended probability.
 
     Three uncertainty sources, combined in quadrature on the logit scale:
-      • model disagreement (|logit(xgb) - logit(batx)|)
+      • model disagreement (|logit(xgb) - logit(batx)|), scaled down because
+        XGB and BATX are correlated estimators of the same probability —
+        their gap is an informative signal but is NOT 1σ of independent noise.
       • coverage shortfall (XGB inputs missing → wider band)
       • expected-PA deviation from the typical 4-5 range
     """
     div_logit = abs(_logit(xgb_p) - _logit(batx_p))
-    cov_unc   = max(0.0, 0.50 - coverage) * 0.80
-    pa_unc    = _exp_pa_uncertainty(exp_pa) * 3.0
+    cov_unc   = max(0.0, 0.50 - coverage) * 0.60
+    pa_unc    = _exp_pa_uncertainty(exp_pa) * 2.0
 
     sigma_logit = math.sqrt(
-        (div_logit * 0.45) ** 2 +
+        (div_logit * 0.18) ** 2 +
         cov_unc ** 2 +
         pa_unc ** 2
     )
-    sigma_logit = _clamp(sigma_logit, 0.10, 1.80)
+    sigma_logit = _clamp(sigma_logit, 0.08, 0.55)
 
     z = _logit(blended)
     lo = _sigmoid(z - 1.96 * sigma_logit)
@@ -178,24 +180,27 @@ def _tier_for(p: float) -> tuple[str, str, str]:
 
 
 def _demote_if_wide_ci(p: float, ci_lo: float, ci_hi: float) -> tuple[str, str, str]:
-    """If the CI straddles a tier boundary, demote to the safer call.
+    """Demote the verdict when the CI says we can't commit.
 
-    Width > WIDE_CI_THRESHOLD AND CI spans a boundary → PASS, full stop.
-    Narrow CI but spans boundary → demote one tier toward PASS.
+    The only boundary that flips the bet is 50% (Over vs Under). Inner tier
+    boundaries (LEAN_OVER ↔ STRONG_BET, etc.) are nuance, not a wrong call —
+    so we don't PASS on those.
+
+      • CI straddles 50%        → PASS, we can't pick a side.
+      • CI is very wide (>35pt) → step one tier toward PASS, keep the side.
+      • Otherwise               → return the base tier.
     """
     ci_width = ci_hi - ci_lo
     base_key, base_label, base_color = _tier_for(p)
 
-    lo_key, _, _ = _tier_for(ci_lo)
-    hi_key, _, _ = _tier_for(ci_hi)
+    if ci_lo < 0.50 < ci_hi and base_key != "PASS":
+        return "PASS", "PASS · STRADDLES 50%", "gray"
 
-    if ci_width >= WIDE_CI_THRESHOLD and lo_key != hi_key:
-        return "PASS", "PASS · WIDE CI", "gray"
-
-    # If CI crosses 50% in either direction we can't commit to an Over/Under
-    if (ci_lo < 0.50 < ci_hi) and base_key not in ("PASS",):
-        if base_key in ("STRONG_BET", "LEAN_OVER", "STRONG_FADE", "LEAN_UNDER"):
-            return "PASS", "PASS · STRADDLES 50%", "gray"
+    if ci_width >= WIDE_CI_THRESHOLD:
+        if base_key == "STRONG_BET":
+            return "LEAN_OVER", "LEAN OVER · WIDE CI", "teal"
+        if base_key == "STRONG_FADE":
+            return "LEAN_UNDER", "LEAN UNDER · WIDE CI", "amber"
 
     return base_key, base_label, base_color
 
