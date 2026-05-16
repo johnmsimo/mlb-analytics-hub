@@ -12153,6 +12153,298 @@ def api_nrfi(game_pk):
         return jsonify({'success': False, 'error': str(ex)}), 500
 
 
+def _compute_f5(game_pk):
+    """Projects runs scored in the first 5 innings for each team."""
+    try:
+        _maybe_refresh_fg()
+        _maybe_refresh_savant()
+
+        gdata = None
+        for delta in (0, -1, 1):
+            ds    = (datetime.now(ET) + timedelta(days=delta)).strftime("%Y-%m-%d")
+            raw   = fetch_schedule(ds)
+            gdata = next((g for g in raw if g.get("gamePk") == game_pk), None)
+            if gdata:
+                break
+        if not gdata:
+            return {"success": False, "error": "Game not found"}
+
+        away_t  = gdata["teams"]["away"]
+        home_t  = gdata["teams"]["home"]
+        home_id = home_t["team"]["id"]
+        pf      = PARK_FACTORS.get(home_id, 1.0)
+
+        ap_info = away_t.get("probablePitcher", {})
+        hp_info = home_t.get("probablePitcher", {})
+        ap_name = ap_info.get("fullName", "TBD")
+        hp_name = hp_info.get("fullName", "TBD")
+        ap_id   = ap_info.get("id");  hp_id = hp_info.get("id")
+
+        ap_fg = fg_pitcher(ap_name); hp_fg = fg_pitcher(hp_name)
+        ap_sv = sv_pitcher(ap_name); hp_sv = sv_pitcher(hp_name)
+        ap_st = pitcher_stats_mlb(ap_id) if ap_id else {}
+        hp_st = pitcher_stats_mlb(hp_id) if hp_id else {}
+
+        def best_era(sv, fg, mlb):
+            xera = sv.get("sv_xera")
+            ip = fg.get("fg_ip", 0) or 0
+            if xera and float(ip or 0) >= 15:
+                try:
+                    f = float(xera)
+                    if 0 < f < 12: return f
+                except Exception: pass
+            for v in [fg.get("fg_era"), mlb.get("era")]:
+                try:
+                    f = float(v)
+                    if 0 < f < 12: return f
+                except Exception: pass
+            return 4.50
+
+        def best_fip(fg, fallback):
+            try:
+                f = float(fg.get("fg_fip", 0))
+                if 0 < f < 12: return f
+            except Exception:
+                pass
+            return fallback
+
+        ap_era = best_era(ap_sv, ap_fg, ap_st)
+        hp_era = best_era(hp_sv, hp_fg, hp_st)
+        ap_fip = best_fip(ap_fg, ap_era)
+        hp_fip = best_fip(hp_fg, hp_era)
+
+        try:
+            r = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=8)
+            r.raise_for_status()
+            box       = r.json().get("teams", {})
+            away_bats = get_batters_from_boxscore(box.get("away", {}), "away")
+            home_bats = get_batters_from_boxscore(box.get("home", {}), "home")
+        except Exception:
+            away_bats = []; home_bats = []
+
+        def lu_xwoba(bats):
+            vals = []
+            for b in bats:
+                for k in ["sv_xwoba", "fg_woba"]:
+                    try:
+                        f = float(b.get(k, 0))
+                        if 0.1 < f < 0.6:
+                            vals.append(f); break
+                    except Exception:
+                        pass
+                else:
+                    vals.append(0.320)
+            return round(sum(vals) / len(vals), 3) if vals else 0.320
+
+        away_xwoba = lu_xwoba(away_bats)
+        home_xwoba = lu_xwoba(home_bats)
+
+        ven   = gdata.get("venue", {})
+        vid   = ven.get("id")
+        vloc  = (ven.get("location") or {})
+        coord = (vloc.get("defaultCoordinates") or {})
+        lat   = coord.get("latitude"); lon = coord.get("longitude")
+        try:
+            dt_utc = datetime.fromisoformat(gdata.get("gameDate", "").replace("Z", "+00:00"))
+            ghour  = dt_utc.astimezone(ET).hour
+        except Exception:
+            ghour  = 13
+        wx = get_weather(lat, lon, ghour, venue_id=vid)
+
+        away_blend = 0.6 * hp_era + 0.4 * hp_fip
+        home_blend = 0.6 * ap_era + 0.4 * ap_fip
+
+        f5_scale  = 5.0 / 9.0
+        pf_f5     = 1.0 + (pf - 1.0) * 0.65
+
+        away_f5   = 4.50 * (away_blend / 4.50) * (away_xwoba / 0.320) * pf_f5 * f5_scale
+        home_f5   = 4.50 * (home_blend / 4.50) * (home_xwoba / 0.320) * pf_f5 * f5_scale
+
+        wx_adj = 0.0
+        if not wx.get("dome"):
+            try:
+                t = float(wx.get("temp", 70))
+                if t > 82:   wx_adj =  0.08
+                elif t > 76: wx_adj =  0.04
+                elif t < 48: wx_adj = -0.08
+                elif t < 56: wx_adj = -0.04
+            except Exception:
+                pass
+
+        away_f5 = round(max(0.8, away_f5 + wx_adj), 2)
+        home_f5 = round(max(0.8, home_f5 + wx_adj), 2)
+        total_f5 = round(away_f5 + home_f5, 2)
+
+        if total_f5 >= 5.0:
+            signal = "LEAN OVER"; sig_col = "#00e676"
+        elif total_f5 >= 4.5:
+            signal = "SLIGHT OVER"; sig_col = "#76ff03"
+        elif total_f5 <= 3.2:
+            signal = "LEAN UNDER"; sig_col = "#f44336"
+        elif total_f5 <= 3.7:
+            signal = "SLIGHT UNDER"; sig_col = "#ff9800"
+        else:
+            signal = "NEUTRAL"; sig_col = "#6a8db0"
+
+        diff = home_f5 - away_f5
+        if abs(diff) > 0.25:
+            fav     = home_t["team"].get("abbreviation","HOME") if diff > 0 else away_t["team"].get("abbreviation","AWAY")
+            fav_col = "#00e5ff"
+        else:
+            fav = "EVEN"; fav_col = "#6a8db0"
+
+        return {
+            "success":      True,
+            "gamePk":       game_pk,
+            "awayAbbr":     away_t["team"].get("abbreviation","AWAY"),
+            "homeAbbr":     home_t["team"].get("abbreviation","HOME"),
+            "awayPitcher":  hp_name,
+            "homePitcher":  ap_name,
+            "awayF5":       away_f5,
+            "homeF5":       home_f5,
+            "totalF5":      total_f5,
+            "signal":       signal,
+            "signalColor":  sig_col,
+            "f5Favorite":   fav,
+            "favColor":     fav_col,
+            "awayEra":      round(hp_era, 2),
+            "homeEra":      round(ap_era, 2),
+            "awayXwoba":    away_xwoba,
+            "homeXwoba":    home_xwoba,
+            "parkFactor":   pf,
+            "wxAdj":        wx_adj,
+            "dome":         wx.get("dome", False),
+        }
+
+    except Exception as ex:
+        print(f"[_compute_f5] {traceback.format_exc()}")
+        return {"success": False, "error": str(ex)}
+
+
+def _compute_game_projection_core(game_pk):
+    """Numeric game projection: runs, total, favorite, win probabilities.
+    Returns same numeric fields as /api/game-projection/ but without Claude AI insights."""
+    try:
+        _maybe_refresh_fg()
+        _maybe_refresh_savant()
+        gdata = fetch_schedule_game(game_pk)
+        if not gdata:
+            return {"success": False, "error": "Game not found"}
+        away_t = gdata.get("teams",{}).get("away",{})
+        home_t = gdata.get("teams",{}).get("home",{})
+        ap = away_t.get("probablePitcher",{}); hp = home_t.get("probablePitcher",{})
+        ap_n = ap.get("fullName","TBD"); hp_n = hp.get("fullName","TBD")
+        hid = home_t.get("team",{}).get("id")
+        pf = PARK_FACTORS.get(hid, 1.0)
+        ap_mlb = pitcher_stats_mlb(ap.get("id")) if ap.get("id") else {}
+        hp_mlb = pitcher_stats_mlb(hp.get("id")) if hp.get("id") else {}
+        ap_fg = fg_pitcher(ap_n); hp_fg = fg_pitcher(hp_n)
+        ap_sv = sv_pitcher(ap_n); hp_sv = sv_pitcher(hp_n)
+        def best_era(sv, fg, mlb):
+            xera = sv.get("sv_xera")
+            ip = fg.get("fg_ip", 0) or 0
+            if xera and float(ip or 0) >= 15:
+                try:
+                    f = float(xera)
+                    if 0 < f < 12: return f
+                except Exception: pass
+            for v in [fg.get("fg_era"), mlb.get("era")]:
+                try:
+                    f = float(v)
+                    if 0 < f < 12: return f
+                except Exception: pass
+            return 4.50
+        def best_fip(fg, fallback):
+            try:
+                f = float(fg.get("fg_fip",0))
+                if 0 < f < 12: return f
+            except Exception: pass
+            return fallback
+        away_pit_era = best_era(hp_sv, hp_fg, hp_mlb)
+        home_pit_era = best_era(ap_sv, ap_fg, ap_mlb)
+        away_pit_fip = best_fip(hp_fg, away_pit_era)
+        home_pit_fip = best_fip(ap_fg, home_pit_era)
+        try:
+            r = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=10)
+            r.raise_for_status()
+            box = r.json().get("teams",{})
+            away_bats = get_batters_from_boxscore(box.get("away",{}), "away")
+            home_bats = get_batters_from_boxscore(box.get("home",{}), "home")
+        except Exception:
+            away_bats = []; home_bats = []
+        def lineup_xwoba(bats):
+            vals = []
+            for b in bats:
+                for k in ["sv_xwoba","fg_woba"]:
+                    try:
+                        f = float(b.get(k,0))
+                        if 0.1 < f < 0.6: vals.append(f); break
+                    except Exception: pass
+                else:
+                    vals.append(0.320)
+            return round(sum(vals)/len(vals), 3) if vals else 0.320
+        away_xwoba = lineup_xwoba(away_bats)
+        home_xwoba = lineup_xwoba(home_bats)
+        away_blend = 0.6*away_pit_era + 0.4*away_pit_fip
+        home_blend = 0.6*home_pit_era + 0.4*home_pit_fip
+        away_runs = 4.50 * (away_blend/4.50) * (away_xwoba/0.320) * pf
+        home_runs = 4.50 * (home_blend/4.50) * (home_xwoba/0.320) * pf
+        ven = gdata.get("venue", {})
+        venue_id_wx = ven.get("id")
+        vloc = ven.get("location", {}) or {}
+        coords = vloc.get("defaultCoordinates", {}) or {}
+        lat = coords.get("latitude")
+        lon = coords.get("longitude")
+        try:
+            dt_utc_wx = datetime.fromisoformat(gdata.get("gameDate","").replace("Z","+00:00"))
+            proj_hour = dt_utc_wx.astimezone(ET).hour
+        except Exception:
+            proj_hour = 13
+        wx = get_weather(lat, lon, proj_hour, venue_id=venue_id_wx)
+        wx_adj = 0.0
+        if not wx.get("dome"):
+            try:
+                t = float(wx.get("temp","70"))
+                if t > 82: wx_adj = 0.20
+                elif t > 76: wx_adj = 0.10
+                elif t < 48: wx_adj = -0.20
+                elif t < 56: wx_adj = -0.10
+            except Exception: pass
+        away_runs = round(away_runs + wx_adj, 1)
+        home_runs = round(home_runs + wx_adj, 1)
+        total = round(away_runs + home_runs, 1)
+        at_abbr = away_t.get("team",{}).get("abbreviation","AWAY")
+        ht_abbr = home_t.get("team",{}).get("abbreviation","HOME")
+        diff = home_runs - away_runs
+        if abs(diff) > 0.7:
+            fav = ht_abbr if diff > 0 else at_abbr
+        else:
+            fav = "EVEN"
+        # Win probability from run differential (logistic mapping)
+        try:
+            home_win_prob = 1.0 / (1.0 + math.exp(-0.5 * diff))
+        except Exception:
+            home_win_prob = 0.5
+        away_win_prob = round(1.0 - home_win_prob, 4)
+        home_win_prob = round(home_win_prob, 4)
+        return {
+            "success": True,
+            "gamePk": game_pk,
+            "awayAbbr": at_abbr, "homeAbbr": ht_abbr,
+            "awayRuns": away_runs, "homeRuns": home_runs,
+            "total": total, "favorite": fav,
+            "awayWinProb": away_win_prob, "homeWinProb": home_win_prob,
+            "awayXwoba": away_xwoba, "homeXwoba": home_xwoba,
+            "awayPitcherEra": round(away_pit_era,2),
+            "homePitcherEra": round(home_pit_era,2),
+            "awayPitcherFip": round(away_pit_fip,2),
+            "homePitcherFip": round(home_pit_fip,2),
+            "parkFactor": pf, "wxAdj": wx_adj,
+        }
+    except Exception as ex:
+        print(f"[_compute_game_projection_core] {traceback.format_exc()}")
+        return {"success": False, "error": str(ex)}
+
 
 @app.route('/api/market/<int:game_pk>')
 def api_market(game_pk):
@@ -12286,7 +12578,7 @@ def _multiplier_history(end_date_str, window_days, market_key):
 
 def _default_adjustments():
     return {
-        'captured_per_game': 14,
+        'captured_per_game': 25,
         'best_edge_threshold': 0.03,
         'best_prob_threshold': 0.58,
         'bankroll': 1000.0,
@@ -12308,6 +12600,10 @@ def _default_adjustments():
             'pitcher_strikeouts': 1.00,
             'nrfi': 1.00,
             'yrfi': 1.00,
+            'h2h': 1.00,
+            'totals': 1.00,
+            'f5_h2h': 1.00,
+            'f5_totals': 1.00,
         },
         'blend_weights': {
             'pitcher_w_recent': 0.40,   # weight on last-5-start form in _project_pitcher
@@ -12395,6 +12691,209 @@ def _projection_reason_short(player, market_key, adj_prob, edge, opp_name=''):
     if opp_name:
         return f"{player} rates well for {lbl}; model {adj_prob:.1%} against {opp_name}."
     return f"{player} rates well for {lbl}; model probability {adj_prob:.1%}."
+
+
+def _build_team_market_rows(game_pk, capture_date, away_abbr, home_abbr,
+                            away_name, home_name, adjustments):
+    """Generates tracker rows for team-level / game-level markets:
+    h2h (moneyline), totals (game O/U), f5_h2h, f5_totals, nrfi, yrfi.
+
+    Each row matches the schema of the batter/pitcher rows in
+    _build_tracker_rows_for_game so the tracker UI, grading, parlay builder,
+    and bet slip all work unchanged.
+    """
+    rows = []
+    label = f"{away_abbr}@{home_abbr}"
+    proj = _compute_game_projection_core(game_pk)
+    f5   = _compute_f5(game_pk)
+
+    # Odds lookup
+    ml = {'away': None, 'home': None}
+    tot = None
+    try:
+        event, _ = _find_odds_event(away_name, home_name)
+        if event and event.get('id'):
+            books = _load_event_odds(event.get('id'), featured_only=False) or []
+            ml = _best_moneyline(books, away_name, home_name) or ml
+            tot = _best_total(books)
+    except Exception as ex:
+        print(f"[_build_team_market_rows] odds fetch failed for {game_pk}: {ex}")
+
+    # NRFI/YRFI implied prices
+    try:
+        nrfi_snap = _nrfi_market_snapshot(away_name, home_name) or {}
+    except Exception:
+        nrfi_snap = {}
+
+    def _finalize_row(row):
+        """Apply common metadata + schema fields to every team-market row."""
+        row['id'] = str(uuid4())
+        row['savedAt'] = datetime.now(ET).isoformat()
+        row['source'] = 'team_market'
+        row['status'] = 'pending'
+        row['actual'] = None
+        row['grade'] = 'pending'
+        row['parlayId'] = None
+        row['parlayLeg'] = None
+        row['closingPrice'] = None
+        row['closingImplied'] = None
+        row['closingBookmaker'] = None
+        row['closingCapturedAt'] = None
+        row['clvEdge'] = None
+        row['profitUnits'] = None
+        row['profitDollars'] = None
+        row['bvpGrade'] = None
+        row['date'] = capture_date
+        row['gamePk'] = game_pk
+        stake_profile = _stake_profile(row, adjustments)
+        row['stakeDollars'] = stake_profile.get('stake_dollars')
+        row['confidenceTier'] = _confidence_tier(row)
+        return row
+
+    def _emit(market_key, side, line, raw_prob, market_implied, market_price,
+              bookmaker, opp_book_price, opp_book_name, team, reason):
+        """Build a single row and append to rows."""
+        raw_mult_prob = _clamp01(raw_prob * _market_mult(market_key, adjustments))
+        adj_prob = raw_mult_prob
+        edge = (adj_prob - market_implied) if market_implied is not None else None
+        score = (edge * 100.0 if edge is not None else 0) + adj_prob
+        hub = _hub_rating(adj_prob, edge or 0)
+        ev_pct = round(adj_prob / market_implied - 1, 4) if market_implied and market_implied > 0 else None
+        row = {
+            'team': team,
+            'player': label,
+            'playerId': None,
+            'marketKey': market_key,
+            'line': line,
+            'recommendedSide': side,
+            'sideLabel': side,
+            'rawProb': round(raw_prob, 4),
+            'rawMultProb': round(raw_mult_prob, 4),
+            'adjProb': round(adj_prob, 4),
+            'modelMean': None,
+            'edge': round(edge, 4) if edge is not None else None,
+            'bookmaker': bookmaker,
+            'marketPrice': market_price,
+            'marketImplied': market_implied,
+            'bestAvailablePrice': market_price,
+            'bestAvailableBook': bookmaker,
+            'bestOverPrice': market_price,
+            'bestOverBook': bookmaker,
+            'bestUnderPrice': opp_book_price,
+            'bestUnderBook': opp_book_name,
+            'best_over_price': market_price,
+            'best_over_book': bookmaker,
+            'best_under_price': opp_book_price,
+            'best_under_book': opp_book_name,
+            'lineRange': None,
+            'bookCount': 1 if bookmaker else 0,
+            'lineVaries': False,
+            'line_range': None,
+            'book_count': 1 if bookmaker else 0,
+            'line_varies': False,
+            'score': round(score, 4),
+            'hubRating': hub,
+            'evPct': ev_pct,
+            'opp': home_abbr if team == away_abbr else away_abbr,
+            'reason': reason,
+            'openingPrice': market_price,
+            'openingImplied': market_implied,
+        }
+        rows.append(_finalize_row(row))
+
+    # ── Moneyline (h2h) ─────────────────────────────────────────────────────
+    if proj.get('success'):
+        away_wp = float(proj.get('awayWinProb') or 0.5)
+        home_wp = float(proj.get('homeWinProb') or 0.5)
+        if away_wp >= home_wp:
+            side, side_wp, opp_wp = away_abbr, away_wp, home_wp
+            side_ml, opp_ml = (ml or {}).get('away'), (ml or {}).get('home')
+            team = away_abbr
+        else:
+            side, side_wp, opp_wp = home_abbr, home_wp, away_wp
+            side_ml, opp_ml = (ml or {}).get('home'), (ml or {}).get('away')
+            team = home_abbr
+        mi = side_ml.get('implied') if side_ml else None
+        mp = side_ml.get('price') if side_ml else None
+        bk = side_ml.get('bookmaker') if side_ml else None
+        opp_price = opp_ml.get('price') if opp_ml else None
+        opp_book = opp_ml.get('bookmaker') if opp_ml else None
+        _emit('h2h', side, 0, side_wp, mi, mp, bk, opp_price, opp_book, team,
+              f"Model favors {side} ({side_wp:.1%} win prob) — {away_abbr} {proj.get('awayRuns')} / {home_abbr} {proj.get('homeRuns')}.")
+
+    # ── Game Total Over/Under (totals) ──────────────────────────────────────
+    if proj.get('success'):
+        line = float(tot.get('line')) if tot and tot.get('line') is not None else 8.5
+        model_total = float(proj.get('total') or 0)
+        raw_prob = _poisson_over_prob(model_total, line)
+        if raw_prob >= 0.5:
+            side = 'Over'
+            mi = tot.get('over_implied') if tot else None
+            mp = tot.get('over_price') if tot else None
+            opp_price = tot.get('under_price') if tot else None
+        else:
+            side = 'Under'
+            raw_prob = 1.0 - raw_prob
+            mi = tot.get('under_implied') if tot else None
+            mp = tot.get('under_price') if tot else None
+            opp_price = tot.get('over_price') if tot else None
+        bk = tot.get('bookmaker') if tot else None
+        _emit('totals', side, line, raw_prob, mi, mp, bk, opp_price, bk, home_abbr,
+              f"Model total {model_total:.1f} vs line {line:.1f} — leans {side}.")
+
+    # ── F5 Moneyline ────────────────────────────────────────────────────────
+    if f5.get('success'):
+        away_f5 = float(f5.get('awayF5') or 0)
+        home_f5 = float(f5.get('homeF5') or 0)
+        diff = home_f5 - away_f5
+        try:
+            home_wp_f5 = 1.0 / (1.0 + math.exp(-0.6 * diff))
+        except Exception:
+            home_wp_f5 = 0.5
+        away_wp_f5 = 1.0 - home_wp_f5
+        if away_wp_f5 >= home_wp_f5:
+            side, side_wp, team = away_abbr, away_wp_f5, away_abbr
+        else:
+            side, side_wp, team = home_abbr, home_wp_f5, home_abbr
+        _emit('f5_h2h', side, 0, side_wp, None, None, None, None, None, team,
+              f"F5 model favors {side} ({side_wp:.1%}) — {away_abbr} {away_f5:.2f} / {home_abbr} {home_f5:.2f}.")
+
+    # ── F5 Total ────────────────────────────────────────────────────────────
+    if f5.get('success'):
+        total_f5 = float(f5.get('totalF5') or 0)
+        line = 4.5
+        raw_prob = _poisson_over_prob(total_f5, line)
+        if raw_prob >= 0.5:
+            side = 'Over'
+        else:
+            side = 'Under'
+            raw_prob = 1.0 - raw_prob
+        _emit('f5_totals', side, line, raw_prob, None, None, None, None, None, home_abbr,
+              f"F5 model total {total_f5:.2f} vs line {line:.1f} — leans {side}.")
+
+    # ── NRFI / YRFI ─────────────────────────────────────────────────────────
+    nrfi_imp = nrfi_snap.get('nrfi_implied')
+    yrfi_imp = nrfi_snap.get('yrfi_implied')
+    try:
+        nrfi_model = _compute_nrfi(game_pk) if (nrfi_imp is not None or yrfi_imp is not None) else None
+    except Exception:
+        nrfi_model = None
+    if nrfi_model and nrfi_model.get('success'):
+        nrfi_prob = float(nrfi_model.get('nrfi_prob') or nrfi_model.get('nrfiProb') or 0)
+        yrfi_prob = float(nrfi_model.get('yrfi_prob') or nrfi_model.get('yrfiProb') or (1.0 - nrfi_prob))
+        nrfi_edge = (nrfi_prob - nrfi_imp) if nrfi_imp is not None else None
+        yrfi_edge = (yrfi_prob - yrfi_imp) if yrfi_imp is not None else None
+        # Emit only the side with positive edge (if any). Skip both if neither has edge.
+        if nrfi_edge is not None and nrfi_edge > 0 and (yrfi_edge is None or nrfi_edge >= yrfi_edge):
+            _emit('nrfi', 'NRFI', 0, nrfi_prob, nrfi_imp, nrfi_snap.get('nrfi_price'),
+                  nrfi_snap.get('nrfi_book'), nrfi_snap.get('yrfi_price'), nrfi_snap.get('yrfi_book'),
+                  home_abbr, f"NRFI model {nrfi_prob:.1%} vs market {nrfi_imp:.1%}.")
+        elif yrfi_edge is not None and yrfi_edge > 0:
+            _emit('yrfi', 'YRFI', 0, yrfi_prob, yrfi_imp, nrfi_snap.get('yrfi_price'),
+                  nrfi_snap.get('yrfi_book'), nrfi_snap.get('nrfi_price'), nrfi_snap.get('nrfi_book'),
+                  home_abbr, f"YRFI model {yrfi_prob:.1%} vs market {yrfi_imp:.1%}.")
+
+    return rows
 
 
 def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched=None, include_odds=False):
@@ -12671,8 +13170,16 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                 temp_row['bvpGrade'] = None
             rows.append(temp_row)
 
+    # ── Team / game-level markets (h2h, totals, F5, NRFI/YRFI) ──────────────
+    try:
+        rows.extend(_build_team_market_rows(
+            game_pk, capture_date, away_abbr, home_abbr,
+            away_team.get('name', ''), home_team.get('name', ''), adjustments))
+    except Exception as ex:
+        print(f"[_build_tracker_rows_for_game] team_market build failed for {game_pk}: {ex}")
+
     rows.sort(key=lambda x: x.get('score', 0), reverse=True)
-    keep = int((adjustments or {}).get('captured_per_game', 14) or 14)
+    keep = int((adjustments or {}).get('captured_per_game', 25) or 25)
     return rows[:keep]
 
 
@@ -12771,7 +13278,7 @@ def _build_tracker_rows_quick(game_obj, capture_date, adjustments=None):
     _emit(away_hitters, away_abbr)
     _emit(home_hitters, home_abbr)
     rows.sort(key=lambda x: x.get('score', 0), reverse=True)
-    keep = int((adjustments or {}).get('captured_per_game', 14) or 14)
+    keep = int((adjustments or {}).get('captured_per_game', 25) or 25)
     return rows[:keep]
 
 
@@ -13087,6 +13594,51 @@ def api_tracker_grade(date_str):
                 row['grade'] = _grade_side(actual, row.get('line', 0.5), 'Under' if mk == 'nrfi' else 'Over')
                 row['status'] = 'graded'
                 continue
+            if mk in ('h2h', 'totals', 'f5_h2h', 'f5_totals'):
+                ls = (g.get('linescore') or {})
+                teams_ls = ls.get('teams') or {}
+                inns = ls.get('innings') or []
+                away_abbr = (g.get('teams') or {}).get('away', {}).get('team', {}).get('abbreviation', 'AWAY')
+                home_abbr = (g.get('teams') or {}).get('home', {}).get('team', {}).get('abbreviation', 'HOME')
+                if mk == 'h2h':
+                    a_runs = int((teams_ls.get('away') or {}).get('runs') or 0)
+                    h_runs = int((teams_ls.get('home') or {}).get('runs') or 0)
+                    winner = away_abbr if a_runs > h_runs else (home_abbr if h_runs > a_runs else None)
+                    row['actual'] = winner
+                    if winner is None:
+                        row['grade'] = 'push'
+                    else:
+                        row['grade'] = 'win' if winner == row.get('recommendedSide') else 'loss'
+                    row['status'] = 'graded'
+                    continue
+                if mk == 'totals':
+                    a_runs = int((teams_ls.get('away') or {}).get('runs') or 0)
+                    h_runs = int((teams_ls.get('home') or {}).get('runs') or 0)
+                    actual = a_runs + h_runs
+                    row['actual'] = actual
+                    row['grade'] = _grade_side(actual, row.get('line'), row.get('recommendedSide') or 'Over')
+                    row['status'] = 'graded'
+                    continue
+                # F5 markets: require at least 5 completed innings
+                if len(inns) < 5:
+                    continue
+                a_f5 = sum(int((((inn.get('away') or {}).get('runs')) or 0)) for inn in inns[:5])
+                h_f5 = sum(int((((inn.get('home') or {}).get('runs')) or 0)) for inn in inns[:5])
+                if mk == 'f5_h2h':
+                    winner = away_abbr if a_f5 > h_f5 else (home_abbr if h_f5 > a_f5 else None)
+                    row['actual'] = winner
+                    if winner is None:
+                        row['grade'] = 'push'
+                    else:
+                        row['grade'] = 'win' if winner == row.get('recommendedSide') else 'loss'
+                    row['status'] = 'graded'
+                    continue
+                if mk == 'f5_totals':
+                    actual = a_f5 + h_f5
+                    row['actual'] = actual
+                    row['grade'] = _grade_side(actual, row.get('line'), row.get('recommendedSide') or 'Over')
+                    row['status'] = 'graded'
+                    continue
             box = requests.get(f"{MLB_API}/game/{gpk}/boxscore", timeout=10).json().get('teams', {})
             players = {}
             for side in ['away', 'home']:
@@ -13125,6 +13677,10 @@ CALIBRATION_TARGETS = {
     'pitcher_strikeouts': 0.55,
     'nrfi': 0.53,
     'yrfi': 0.50,
+    'h2h': 0.52,
+    'totals': 0.52,
+    'f5_h2h': 0.52,
+    'f5_totals': 0.52,
 }
 
 
@@ -19341,185 +19897,11 @@ def api_bullpen_fatigue(game_pk):
 # ── Route: First 5 Innings (F5) Model ────────────────────────────────────────
 @app.route("/api/f5/<int:game_pk>")
 def api_f5_model(game_pk):
-    """
-    Projects runs scored in the first 5 innings for each team.
-    Uses starter ERA/FIP/xERA + lineup xwOBA + park factor + weather.
-    """
-    try:
-        _maybe_refresh_fg()
-        _maybe_refresh_savant()
+    """Projects runs scored in the first 5 innings for each team."""
+    out = _compute_f5(game_pk)
+    status = 200 if out.get("success") else (404 if out.get("error") == "Game not found" else 500)
+    return jsonify(out), status
 
-        gdata = None
-        for delta in (0, -1, 1):
-            ds    = (datetime.now(ET) + timedelta(days=delta)).strftime("%Y-%m-%d")
-            raw   = fetch_schedule(ds)
-            gdata = next((g for g in raw if g.get("gamePk") == game_pk), None)
-            if gdata:
-                break
-        if not gdata:
-            return jsonify({"success": False, "error": "Game not found"}), 404
-
-        away_t  = gdata["teams"]["away"]
-        home_t  = gdata["teams"]["home"]
-        home_id = home_t["team"]["id"]
-        pf      = PARK_FACTORS.get(home_id, 1.0)
-
-        # Starters
-        ap_info = away_t.get("probablePitcher", {})
-        hp_info = home_t.get("probablePitcher", {})
-        ap_name = ap_info.get("fullName", "TBD")
-        hp_name = hp_info.get("fullName", "TBD")
-        ap_id   = ap_info.get("id");  hp_id = hp_info.get("id")
-
-        ap_fg = fg_pitcher(ap_name); hp_fg = fg_pitcher(hp_name)
-        ap_sv = sv_pitcher(ap_name); hp_sv = sv_pitcher(hp_name)
-        ap_st = pitcher_stats_mlb(ap_id) if ap_id else {}
-        hp_st = pitcher_stats_mlb(hp_id) if hp_id else {}
-
-        def best_era(sv, fg, mlb):
-            xera = sv.get("sv_xera")
-            ip = fg.get("fg_ip", 0) or 0
-            if xera and float(ip or 0) >= 15:
-                try:
-                    f = float(xera)
-                    if 0 < f < 12: return f
-                except Exception: pass
-            for v in [fg.get("fg_era"), mlb.get("era")]:
-                try:
-                    f = float(v)
-                    if 0 < f < 12: return f
-                except Exception: pass
-            return 4.50
-
-        def best_fip(fg, fallback):
-            try:
-                f = float(fg.get("fg_fip", 0))
-                if 0 < f < 12: return f
-            except Exception:
-                pass
-            return fallback
-
-        ap_era = best_era(ap_sv, ap_fg, ap_st)
-        hp_era = best_era(hp_sv, hp_fg, hp_st)
-        ap_fip = best_fip(ap_fg, ap_era)
-        hp_fip = best_fip(hp_fg, hp_era)
-
-        # Lineup quality from boxscore
-        try:
-            r = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=8)
-            r.raise_for_status()
-            box       = r.json().get("teams", {})
-            away_bats = get_batters_from_boxscore(box.get("away", {}), "away")
-            home_bats = get_batters_from_boxscore(box.get("home", {}), "home")
-        except Exception:
-            away_bats = []; home_bats = []
-
-        def lu_xwoba(bats):
-            vals = []
-            for b in bats:
-                for k in ["sv_xwoba", "fg_woba"]:
-                    try:
-                        f = float(b.get(k, 0))
-                        if 0.1 < f < 0.6:
-                            vals.append(f); break
-                    except Exception:
-                        pass
-                else:
-                    vals.append(0.320)
-            return round(sum(vals) / len(vals), 3) if vals else 0.320
-
-        away_xwoba = lu_xwoba(away_bats)
-        home_xwoba = lu_xwoba(home_bats)
-
-        # Weather
-        ven   = gdata.get("venue", {})
-        vid   = ven.get("id")
-        vloc  = (ven.get("location") or {})
-        coord = (vloc.get("defaultCoordinates") or {})
-        lat   = coord.get("latitude"); lon = coord.get("longitude")
-        try:
-            dt_utc = datetime.fromisoformat(gdata.get("gameDate", "").replace("Z", "+00:00"))
-            ghour  = dt_utc.astimezone(ET).hour
-        except Exception:
-            ghour  = 13
-        wx = get_weather(lat, lon, ghour, venue_id=vid)
-
-        # F5 uses only first 5 innings (5/9 of full-game projection)
-        # Blended ERA: 60% (xERA/ERA) + 40% FIP
-        # away team faces home pitcher (hp)
-        away_blend = 0.6 * hp_era + 0.4 * hp_fip
-        home_blend = 0.6 * ap_era + 0.4 * ap_fip
-
-        # Base runs model: 4.50 R/G avg, scaled to 5 innings (5/9)
-        f5_scale  = 5.0 / 9.0
-        # Park factor muted for F5 (less variance in 5 innings)
-        pf_f5     = 1.0 + (pf - 1.0) * 0.65
-
-        away_f5   = 4.50 * (away_blend / 4.50) * (away_xwoba / 0.320) * pf_f5 * f5_scale
-        home_f5   = 4.50 * (home_blend / 4.50) * (home_xwoba / 0.320) * pf_f5 * f5_scale
-
-        # Weather adj (muted for F5)
-        wx_adj = 0.0
-        if not wx.get("dome"):
-            try:
-                t = float(wx.get("temp", 70))
-                if t > 82:   wx_adj =  0.08
-                elif t > 76: wx_adj =  0.04
-                elif t < 48: wx_adj = -0.08
-                elif t < 56: wx_adj = -0.04
-            except Exception:
-                pass
-
-        away_f5 = round(max(0.8, away_f5 + wx_adj), 2)
-        home_f5 = round(max(0.8, home_f5 + wx_adj), 2)
-        total_f5 = round(away_f5 + home_f5, 2)
-
-        # Signal
-        if total_f5 >= 5.0:
-            signal = "LEAN OVER"; sig_col = "#00e676"
-        elif total_f5 >= 4.5:
-            signal = "SLIGHT OVER"; sig_col = "#76ff03"
-        elif total_f5 <= 3.2:
-            signal = "LEAN UNDER"; sig_col = "#f44336"
-        elif total_f5 <= 3.7:
-            signal = "SLIGHT UNDER"; sig_col = "#ff9800"
-        else:
-            signal = "NEUTRAL"; sig_col = "#6a8db0"
-
-        # F5 favorite
-        diff = home_f5 - away_f5
-        if abs(diff) > 0.25:
-            fav     = home_t["team"].get("abbreviation","HOME") if diff > 0 else away_t["team"].get("abbreviation","AWAY")
-            fav_col = "#00e5ff"
-        else:
-            fav = "EVEN"; fav_col = "#6a8db0"
-
-        return jsonify({
-            "success":      True,
-            "gamePk":       game_pk,
-            "awayAbbr":     away_t["team"].get("abbreviation","AWAY"),
-            "homeAbbr":     home_t["team"].get("abbreviation","HOME"),
-            "awayPitcher":  hp_name,   # home pitcher faces away batters
-            "homePitcher":  ap_name,
-            "awayF5":       away_f5,
-            "homeF5":       home_f5,
-            "totalF5":      total_f5,
-            "signal":       signal,
-            "signalColor":  sig_col,
-            "f5Favorite":   fav,
-            "favColor":     fav_col,
-            "awayEra":      round(hp_era, 2),
-            "homeEra":      round(ap_era, 2),
-            "awayXwoba":    away_xwoba,
-            "homeXwoba":    home_xwoba,
-            "parkFactor":   pf,
-            "wxAdj":        wx_adj,
-            "dome":         wx.get("dome", False),
-        })
-
-    except Exception as ex:
-        print(f"[api_f5_model] {traceback.format_exc()}")
-        return jsonify({"success": False, "error": str(ex)}), 500
 
 # ── Lineup snapshot cache (for change detection) ─────────────────────────────
 # Stores the first confirmed lineup seen per gamePk so later polls can diff it
