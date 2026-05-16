@@ -1221,9 +1221,14 @@ _HTML_TAG_RE = re.compile(r'<[^>]+>')
 
 def _load_fg_data():
     global _fg_loaded, _fg_load_date, _fg_loading
+    # Do NOT check _fg_loading here — _maybe_refresh_fg pre-sets it before
+    # spawning this function in a thread.  Checking it would cause the load
+    # to exit immediately, leaving FG data permanently stale.
+    # De-duplication is the caller's responsibility (_maybe_refresh_fg uses
+    # _fg_lock to ensure only one thread is spawned at a time).
     with _fg_cond:
-        if _fg_loading or (_fg_loaded and _fg_load_date == datetime.now().date()):
-            return
+        if _fg_loaded and _fg_load_date == datetime.now().date():
+            return  # already loaded today — skip
         _fg_loading = True
     try:
         logging.info("[FG] _load_fg_data: starting MLB-API-derived load…")
@@ -12453,7 +12458,7 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
 
     rows = []
 
-    def process_hitters(arr, team_abbr, opp_name):
+    def process_hitters(arr, team_abbr, opp_name, opp_pitcher):
         for p in arr:
             player_name = p.get('name')
             for mk, mean_field in _BATTER_MEAN_FIELD_FOR_MK.items():
@@ -12505,15 +12510,16 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                     temp_row['stakeDollars'] = stake_profile.get('stake_dollars')
                     # Phase 2: Add tier and BvP grade
                     temp_row['confidenceTier'] = _confidence_tier(temp_row)
-                    if home_pitcher and home_pitcher.get('id'):
-                        bvp_data = _fetch_bvp(p.get('id'), home_pitcher.get('id'))
+                    if opp_pitcher and opp_pitcher.get('id'):
+                        bvp_data = _fetch_bvp(p.get('id'), opp_pitcher.get('id'))
                         temp_row['bvpGrade'] = _compute_bvp_grade(bvp_data)
                     else:
                         temp_row['bvpGrade'] = None
                     rows.append(temp_row)
 
-    process_hitters(away_props, away_abbr, home_pitcher.get('name'))
-    process_hitters(home_props, home_abbr, away_pitcher.get('name'))
+    # Away batters face the home pitcher; home batters face the away pitcher.
+    process_hitters(away_props, away_abbr, home_pitcher.get('name'), home_pitcher)
+    process_hitters(home_props, home_abbr, away_pitcher.get('name'), away_pitcher)
 
     k_xgb_ready = xgb_ready('k')
     for sp, team_abbr in [(away_sp, away_abbr), (home_sp, home_abbr)]:
