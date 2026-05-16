@@ -3510,9 +3510,12 @@ def api_cache_warm():
                     slow MLB API responses. The orphan thread keeps
                     blocking on its I/O call but its result is overwritten
                     when the new run finishes.
+        date=YYYY-MM-DD — warm the lineup pipeline for a specific slate
+                    instead of today. Defaults to today in ET.
     """
     global _pipeline_run_started_at
     force = str(request.args.get("force", "")).strip().lower() in ("1", "true", "yes")
+    target_date = (request.args.get("date") or "").strip() or None
     triggered = []
     skipped = []
 
@@ -3566,15 +3569,20 @@ def api_cache_warm():
             else:
                 with _pipeline_run_lock:
                     _pipeline_run_started_at = time.time()
-                threading.Thread(target=run_pipeline, daemon=True).start()
+                threading.Thread(
+                    target=run_pipeline,
+                    kwargs={"target_date": target_date},
+                    daemon=True,
+                ).start()
                 triggered.append("pipeline" + (" (force)" if force else ""))
         except Exception as ex:
             logging.warning(f"[cache/warm] pipeline trigger failed: {ex}")
 
     return jsonify({
-        "success":   True,
-        "triggered": triggered,
-        "skipped":   skipped,
+        "success":     True,
+        "triggered":   triggered,
+        "skipped":     skipped,
+        "target_date": target_date,
     })
 
 

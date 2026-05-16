@@ -31,12 +31,13 @@ RUN_MINUTE_ET = 0
 _cache_lock = threading.RLock()
 
 _cache = {
-    "matchup_df": None,
-    "games_df":   None,
-    "last_run":   None,
-    "started_at": None,      # set when a run begins; cleared when it finishes
-    "status":     "idle",   # idle | running | done | error
-    "error_msg":  None,
+    "matchup_df":  None,
+    "games_df":    None,
+    "last_run":    None,
+    "started_at":  None,      # set when a run begins; cleared when it finishes
+    "status":      "idle",   # idle | running | done | error
+    "error_msg":   None,
+    "target_date": None,      # ISO date the most recent run was built for
 }
 
 # ── Lazy imports from your existing modules ────────────────────────────────────────────
@@ -56,10 +57,14 @@ def _import_app_modules():
 
 
 # ── 1. Today's Games (uses your fetch_schedule) ────────────────────────────────────────────
-def _build_games_df(fetch_schedule):
-    today_str = datetime.now(ET).strftime("%m/%d/%Y")
+def _build_games_df(fetch_schedule, target_date=None):
+    """target_date: optional 'YYYY-MM-DD' or 'MM/DD/YYYY' string. Defaults to today ET."""
+    if target_date:
+        date_str = target_date
+    else:
+        date_str = datetime.now(ET).strftime("%m/%d/%Y")
     try:
-        games_raw = fetch_schedule(today_str)
+        games_raw = fetch_schedule(date_str)
     except Exception as e:
         log.error(f"[pipeline] fetch_schedule failed: {e}")
         return pd.DataFrame()
@@ -280,13 +285,34 @@ def _build_matchup_df(games_df, sv_batter_fn, sv_pitcher_fn):
 
 
 # ── 7. Main Pipeline Run ───────────────────────────────────────────────────────────────────────────────────
-def run_pipeline():
+def _resolve_target_date(target_date):
+    """Return (date_obj, fetch_date_str). Accepts 'YYYY-MM-DD' or 'MM/DD/YYYY'."""
+    if not target_date:
+        d = datetime.now(ET).date()
+        return d, d.strftime("%m/%d/%Y")
+    s = str(target_date).strip()
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y"):
+        try:
+            d = datetime.strptime(s, fmt).date()
+            return d, s
+        except ValueError:
+            continue
+    # Unparseable — fall back to today ET
+    d = datetime.now(ET).date()
+    return d, d.strftime("%m/%d/%Y")
+
+
+def run_pipeline(target_date=None):
+    """target_date: optional 'YYYY-MM-DD' or 'MM/DD/YYYY' to warm a specific slate."""
+    resolved_date, fetch_date_str = _resolve_target_date(target_date)
+
     # Mark running — lock protects the status flag write
     with _cache_lock:
-        _cache["status"]     = "running"
-        _cache["error_msg"]  = None
-        _cache["started_at"] = datetime.now().isoformat()
-    log.info("[pipeline] Run started.")
+        _cache["status"]      = "running"
+        _cache["error_msg"]   = None
+        _cache["started_at"]  = datetime.now(ET).isoformat()
+        _cache["target_date"] = resolved_date.isoformat()
+    log.info(f"[pipeline] Run started for {fetch_date_str}.")
 
     try:
         fetch_schedule, sv_batter_fn, sv_pitcher_fn = _import_app_modules()
@@ -294,13 +320,13 @@ def run_pipeline():
         if fetch_schedule is None:
             raise ImportError("fetch_schedule not found in schedule_collector")
 
-        games_df = _build_games_df(fetch_schedule)
+        games_df = _build_games_df(fetch_schedule, target_date=fetch_date_str)
 
         if games_df.empty:
-            log.info("[pipeline] No games today.")
+            log.info(f"[pipeline] No games for {fetch_date_str}.")
             with _cache_lock:
                 _cache.update({"games_df": games_df, "matchup_df": pd.DataFrame(),
-                               "last_run": datetime.now().isoformat(), "status": "done"})
+                               "last_run": datetime.now(ET).isoformat(), "status": "done"})
             return
 
         # All the slow I/O happens OUTSIDE the lock so reads are never blocked
@@ -311,14 +337,14 @@ def run_pipeline():
             _cache.update({
                 "games_df":   games_df,
                 "matchup_df": matchup_df,
-                "last_run":   datetime.now().isoformat(),
+                "last_run":   datetime.now(ET).isoformat(),
                 "status":     "done",
             })
 
         # Persist to disk for Fly.io restart recovery
         out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
         os.makedirs(out_dir, exist_ok=True)
-        out_path = os.path.join(out_dir, f"mlb_matchups_{datetime.now(ET).date().strftime('%Y%m%d')}.csv")
+        out_path = os.path.join(out_dir, f"mlb_matchups_{resolved_date.strftime('%Y%m%d')}.csv")
         matchup_df.to_csv(out_path, index=False)
         log.info(f"[pipeline] Done — {len(matchup_df)} rows → {out_path}")
 
@@ -382,10 +408,11 @@ def get_pipeline_status() -> dict:
         df  = _cache["matchup_df"]
         gdf = _cache["games_df"]
         return {
-            "status":     _cache["status"],
-            "last_run":   _cache["last_run"],
-            "started_at": _cache["started_at"],
-            "rows":       len(df)  if df  is not None else 0,
-            "games":      len(gdf) if gdf is not None else 0,
-            "error":      _cache["error_msg"],
+            "status":      _cache["status"],
+            "last_run":    _cache["last_run"],
+            "started_at":  _cache["started_at"],
+            "rows":        len(df)  if df  is not None else 0,
+            "games":       len(gdf) if gdf is not None else 0,
+            "error":       _cache["error_msg"],
+            "target_date": _cache.get("target_date"),
         }
