@@ -12871,14 +12871,31 @@ def api_tracker_capture(date_str):
                 except Exception as ex2:
                     return gpk, [], str(ex)[:140], False
 
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        # NOTE: Don't use `with ThreadPoolExecutor(...) as pool:` here — its
+        # __exit__ blocks on shutdown(wait=True), which would force the response
+        # to wait for every in-flight game to finish even after the time budget
+        # has expired (defeating the whole point of the budget). Instead we
+        # shutdown(wait=False) and let _tracker_capture_continue_bg re-run any
+        # game that didn't complete in time.
+        pool = ThreadPoolExecutor(max_workers=max_workers)
+        try:
             futures = {pool.submit(_capture_one, g): g for g in sched}
             games_within_budget = []
             games_timed_out = []
-            for fut in as_completed(futures, timeout=time_limit):
-                games_within_budget.append(fut)
+            try:
+                for fut in as_completed(futures, timeout=time_limit):
+                    games_within_budget.append(fut)
+            except TimeoutError:
+                # Time budget exhausted before every game finished — the
+                # remaining games are handed off to the background helper
+                # below. Without this except, the bare TimeoutError bubbles
+                # up to the outer handler and the user sees "Capture failed"
+                # with zero entries persisted.
+                pass
             timed_out_futures = [f for f in futures if f not in set(games_within_budget)]
             games_timed_out = [futures[f] for f in timed_out_futures]
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
 
         for fut in games_within_budget:
             try:
