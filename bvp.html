@@ -44,6 +44,9 @@
     .b-name{font-size:.82rem;font-weight:600;flex:1}
     .b-ops{font-size:.7rem;color:var(--mu)}
     .b-grade{font-size:.65rem;font-weight:700;padding:1px 5px;border-radius:5px;min-width:22px;text-align:center}
+    .bat-tag{font-size:.6rem;font-weight:700;padding:1px 4px;border-radius:4px;min-width:14px;text-align:center;display:inline-block;background:rgba(255,255,255,.04);color:var(--mu);border:1px solid rgba(255,255,255,.12);letter-spacing:.5px;margin-right:4px}
+    .bat-tag.fav{background:rgba(0,230,118,.12);color:var(--g);border-color:rgba(0,230,118,.35)}
+    .bat-tag.unfav{background:rgba(255,82,82,.10);color:var(--r);border-color:rgba(255,82,82,.30)}
     .grade-A\+,.grade-A{background:rgba(0,230,118,.15);color:var(--g);border:1px solid rgba(0,230,118,.3)}
     .grade-B{background:rgba(0,229,255,.12);color:var(--c);border:1px solid rgba(0,229,255,.3)}
     .grade-C{background:rgba(245,197,66,.12);color:var(--y);border:1px solid rgba(245,197,66,.3)}
@@ -111,6 +114,30 @@
     .div-bar .val{font-size:.85rem;font-weight:800;color:var(--t)}
     .div-bar .mid{height:6px;border-radius:3px;background:linear-gradient(to right,var(--c),rgba(255,255,255,.15),var(--y));position:relative}
     .div-bar .mid .marker{position:absolute;top:-3px;width:2px;height:12px;background:var(--t)}
+    /* Single-verdict block — replaces "models disagree, you guess" UX */
+    .verdict-card{display:grid;grid-template-columns:1fr 110px;gap:12px;align-items:center;background:rgba(0,0,0,.20);border-radius:10px;padding:10px 12px;margin:8px 0;border:1px solid rgba(255,255,255,.06)}
+    .verdict-card.vc-strong_bet{border-color:rgba(0,230,118,.45);background:linear-gradient(135deg,rgba(0,230,118,.10),rgba(0,0,0,.20))}
+    .verdict-card.vc-lean_over{border-color:rgba(0,229,255,.40);background:linear-gradient(135deg,rgba(0,229,255,.08),rgba(0,0,0,.20))}
+    .verdict-card.vc-pass{border-color:rgba(255,255,255,.12)}
+    .verdict-card.vc-lean_under{border-color:rgba(245,197,66,.40);background:linear-gradient(135deg,rgba(245,197,66,.08),rgba(0,0,0,.20))}
+    .verdict-card.vc-strong_fade{border-color:rgba(255,82,82,.45);background:linear-gradient(135deg,rgba(255,82,82,.10),rgba(0,0,0,.20))}
+    .verdict-card .vc-left{display:flex;flex-direction:column;gap:4px}
+    .verdict-card .vc-tier{font-size:.95rem;font-weight:800;letter-spacing:.04em;text-transform:uppercase}
+    .verdict-card .vc-prob{font-size:1.5rem;font-weight:900;color:var(--t);line-height:1}
+    .verdict-card .vc-prob .vc-unit{font-size:.85rem;color:var(--mu);font-weight:700}
+    .verdict-card .vc-ci{font-size:.62rem;color:var(--mu);letter-spacing:.04em}
+    .verdict-card .vc-ci-bar{position:relative;height:6px;border-radius:3px;background:rgba(255,255,255,.08);overflow:hidden;margin-top:3px}
+    .verdict-card .vc-ci-fill{position:absolute;top:0;bottom:0;background:linear-gradient(to right,rgba(0,229,255,.4),rgba(0,230,118,.45));border-radius:3px}
+    .verdict-card .vc-ci-marker{position:absolute;top:-2px;width:2px;height:10px;background:var(--t)}
+    .verdict-card .vc-right{display:flex;flex-direction:column;align-items:flex-end;gap:3px}
+    .verdict-card .vc-conf{font-size:.62rem;color:var(--mu);text-transform:uppercase;letter-spacing:.06em}
+    .verdict-card .vc-conf-val{font-size:.95rem;font-weight:800}
+    .verdict-card .vc-components{font-size:.55rem;color:var(--mu);font-family:ui-monospace,monospace}
+    .vc-strong_bet .vc-tier{color:var(--g)}
+    .vc-lean_over  .vc-tier{color:var(--c)}
+    .vc-pass       .vc-tier{color:var(--mu)}
+    .vc-lean_under .vc-tier{color:var(--y)}
+    .vc-strong_fade .vc-tier{color:var(--r)}
     .mc-strip{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:6px 0 12px}
     .mc-cell{background:rgba(0,0,0,.20);border-radius:8px;padding:6px 8px;text-align:center;border:1px solid rgba(255,255,255,.06)}
     .mc-cell .v{font-size:.85rem;font-weight:800;color:var(--t)}
@@ -594,13 +621,21 @@ function renderLineup() {
   const awayP = pitchers.awayPitcher || {};
   const homeP = pitchers.homePitcher || {};
 
-  const makeRows = (batters, oppPitcherId) => batters.map(b => {
+  const makeRows = (batters, oppPitcherId, oppHand) => batters.map(b => {
     const cKey = `${b.id}_${oppPitcherId}`;
     const grade = gradeCache[cKey] || '?';
+    const bats = (b.bats || 'S').toUpperCase();
+    const oh = (oppHand || 'R').toUpperCase();
+    const fav = (bats === 'L' && oh === 'R') || (bats === 'R' && oh === 'L');
+    const unfav = bats !== 'S' && bats === oh;
+    const tagCls = fav ? 'bat-tag fav' : unfav ? 'bat-tag unfav' : 'bat-tag';
+    const tagTitle = fav ? `Favorable platoon: ${bats}-bat vs ${oh}HP`
+                   : unfav ? `Same-side: ${bats}-bat vs ${oh}HP`
+                   : `Switch hitter vs ${oh}HP`;
     return `<div class="batter-row" id="br_${b.id}_${oppPitcherId}" onclick="selectBatter(${b.id},'${esc(b.name)}',${oppPitcherId},'${esc((oppPitcherId === awayP.id ? awayP.name : homeP.name) || '')}')">
       <span class="b-slot">${b.slot||'?'}</span>
       <span class="b-name">
-        ${b.name}${injuryBadgeHtml(b.injury)}
+        <span class="${tagCls}" title="${tagTitle}">${bats}</span>${b.name}${injuryBadgeHtml(b.injury)}
         <span id="stars_${b.id}_${oppPitcherId}">${starsHtml(grade)}</span>
         <div class="badge-row" id="badges_${b.id}"></div>
       </span>
@@ -613,10 +648,10 @@ function renderLineup() {
     <div class="lp-header"><span>${g.awayAbbr} @ ${g.homeAbbr}</span><span class="pill">${g.gameTime||''}</span></div>
     <div class="lp-team">${g.awayAbbr} BATTERS</div>
     <div class="lp-pitcher" id="pitcher_away">vs ${homeP.name || g.homePitcher || 'TBD'}${injuryBadgeHtml(homeP.injury)}</div>
-    ${makeRows(away, homeP.id)}
+    ${makeRows(away, homeP.id, homeP.throws || homeP.pitchHand)}
     <div class="lp-team" style="margin-top:12px">${g.homeAbbr} BATTERS</div>
     <div class="lp-pitcher" id="pitcher_home">vs ${awayP.name || g.awayPitcher || 'TBD'}${injuryBadgeHtml(awayP.injury)}</div>
-    ${makeRows(home, awayP.id)}
+    ${makeRows(home, awayP.id, awayP.throws || awayP.pitchHand)}
   `;
 
   prefetchGrades(away, homeP.id || null);
@@ -1252,7 +1287,7 @@ function renderDetail(data) {
   const ensembleRows = computeEnsembleAgreement(probs);
   const agreeCount = ensembleRows.filter(r => r.flag === 'AGREE').length;
   const ensembleHtml = ensembleRows.length ? `
-    <div class="section-label">Ensemble Model Agreement <span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— XGB vs Blended · ${agreeCount}/${ensembleRows.length} markets agree</span></div>
+    <div class="section-label">Component Models <span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— diagnostic · ${agreeCount}/${ensembleRows.length} markets agree</span></div>
     <div class="ensemble-grid">
       ${ensembleRows.map(r => `
         <div class="ensemble-cell ${r.flag.toLowerCase()}">
@@ -1409,40 +1444,55 @@ function renderDetail(data) {
       }).join('')}
     </div>` : '';
 
-  // ── Model divergence (XGB vs BATX) ────────────────────────────────────────
+  // ── 1+ Hit verdict (single calibrated probability + 95% CI + tier) ────────
+  // Replaces the legacy XGB-vs-BATX divergence bar so the user gets a definite
+  // answer instead of "models disagree, you decide". Component models are kept
+  // visible underneath for trust/diagnostics, but the verdict is the answer.
   const md = (proj && proj.modelDivergence) || {};
-  const _relPct  = md.reliability != null ? Math.round(md.reliability * 100) : null;
-  const _covPct  = md.coverage    != null ? Math.round(md.coverage    * 100) : null;
-  const _relCls  = _relPct == null ? ''
-                   : (_relPct >= 75 ? 'v-bet' : (_relPct >= 50 ? 'v-lean' : 'v-fade'));
-  const _shrTxt  = (md.shrinkApplied && md.shrinkApplied > 0.02)
-                   ? ` · <span class="lbl" title="Blended pulled toward league prior because models disagreed or XGB inputs were thin">↘ shrink ${Math.round(md.shrinkApplied*100)}%</span>`
-                   : '';
-  const _covTxt  = _covPct == null ? '' : ` · <span class="lbl" title="XGB input coverage — % of key Statcast/FG fields populated">cov ${_covPct}%</span>`;
-  const divergenceHtml = md.available ? `
-    <div class="div-bar" title="Reliability ${_relPct}% — combines model agreement and XGB input coverage">
-      <div>
-        <div class="lbl">XGB</div>
-        <div class="val">${(md.xgb*100).toFixed(0)}%</div>
-      </div>
-      <div>
-        <div class="lbl" style="text-align:center;margin-bottom:4px">1+ Hit Models · <span class="${md.flagCls}">${md.flagLabel}</span> (Δ${(md.divergence*100).toFixed(0)}pts)${_covTxt}${_shrTxt}</div>
-        <div class="mid"><div class="marker" style="left:${Math.min(100,Math.max(0,md.blended*100))}%"></div></div>
-        ${_relPct != null ? `<div class="lbl" style="text-align:center;margin-top:4px">Reliability <span class="${_relCls}">${_relPct}%</span></div>` : ''}
-      </div>
-      <div style="text-align:right">
-        <div class="lbl">BATX</div>
-        <div class="val">${(md.batx*100).toFixed(0)}%</div>
-      </div>
-    </div>` : (md.batx != null ? `
-    <div class="div-bar" title="XGB hit model unavailable — showing BATX only">
-      <div><div class="lbl">XGB</div><div class="val" style="opacity:.4">—</div></div>
-      <div>
-        <div class="lbl" style="text-align:center;margin-bottom:4px">1+ Hit Models · <span class="v-pass">${md.flagLabel || 'XGB UNAVAILABLE'}</span></div>
-        <div class="mid"><div class="marker" style="left:${Math.min(100,Math.max(0,(md.blended||md.batx)*100))}%"></div></div>
-      </div>
-      <div style="text-align:right"><div class="lbl">BATX</div><div class="val">${(md.batx*100).toFixed(0)}%</div></div>
-    </div>` : '');
+  const vdt = md.verdict || null;
+  let verdictHtml = '';
+  if (vdt && vdt.probability != null) {
+    const pct = (vdt.probability * 100).toFixed(0);
+    const loPct = (vdt.ci_lo * 100).toFixed(0);
+    const hiPct = (vdt.ci_hi * 100).toFixed(0);
+    const conf = Math.round((vdt.confidence || 0) * 100);
+    const tierCls = `vc-${(vdt.tier || 'pass').toLowerCase()}`;
+    const ciFillStyle = `left:${loPct}%;width:${Math.max(2, hiPct - loPct)}%`;
+    const markerStyle = `left:${pct}%`;
+    const compTxt = (md.xgb != null && md.batx != null)
+      ? `XGB ${(md.xgb*100).toFixed(0)}% · BATX ${(md.batx*100).toFixed(0)}% · Δ${(md.divergence*100).toFixed(0)}pts`
+      : (md.batx != null ? `BATX ${(md.batx*100).toFixed(0)}% (XGB unavailable)` : '');
+    verdictHtml = `
+      <div class="section-label">1+ Hit Verdict <span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— single calibrated probability + 95% CI</span></div>
+      <div class="verdict-card ${tierCls}" title="${vdt.source === 'isotonic' ? 'Trained on historical outcomes' : 'Logistic blend of XGB + BATX with coverage- and sample-aware weights'}">
+        <div class="vc-left">
+          <div class="vc-tier">${vdt.label}</div>
+          <div class="vc-prob">${pct}<span class="vc-unit">%</span></div>
+          <div class="vc-ci">95% CI ${loPct}–${hiPct}%</div>
+          <div class="vc-ci-bar">
+            <div class="vc-ci-fill" style="${ciFillStyle}"></div>
+            <div class="vc-ci-marker" style="${markerStyle}"></div>
+          </div>
+          <div class="vc-components">${compTxt}</div>
+        </div>
+        <div class="vc-right">
+          <div class="vc-conf">Confidence</div>
+          <div class="vc-conf-val ${conf >= 70 ? 'v-bet' : conf >= 45 ? 'v-lean' : 'v-fade'}" style="padding:2px 8px;border-radius:5px">${conf}%</div>
+        </div>
+      </div>`;
+  } else if (md.batx != null) {
+    // No verdict produced — surface BATX alone as a fallback bar.
+    verdictHtml = `
+      <div class="div-bar" title="Verdict unavailable — showing BATX only">
+        <div><div class="lbl">BATX</div><div class="val">${(md.batx*100).toFixed(0)}%</div></div>
+        <div>
+          <div class="lbl" style="text-align:center;margin-bottom:4px">1+ Hit · <span class="v-pass">PROJECTION ONLY</span></div>
+          <div class="mid"><div class="marker" style="left:${Math.min(100,Math.max(0,(md.blended||md.batx)*100))}%"></div></div>
+        </div>
+        <div></div>
+      </div>`;
+  }
+  const divergenceHtml = verdictHtml;
 
   // ── Monte Carlo distribution bands ────────────────────────────────────────
   const mcSim = (proj && proj.monteCarlo) || null;
@@ -1552,9 +1602,9 @@ function renderDetail(data) {
 
     ${probHtml}
 
-    ${ensembleHtml}
-
     ${divergenceHtml}
+
+    ${ensembleHtml}
 
     ${mcHtml}
 

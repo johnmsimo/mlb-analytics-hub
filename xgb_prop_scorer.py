@@ -270,6 +270,15 @@ def _build_hit_features(batter: dict, pitcher: dict, feat_order: list) -> Option
         "l7_hits": _sf(batter, "l7Hits", "l7hits", default=1.5),
         "l14_hits": _sf(batter, "l14Hits", "l14hits", default=3.0),
         "l7_hit_rate": _sf(batter, "l7HitRate", "l7hitrate", default=0.50),
+        # ── BATX-parity features (v2). Defaults are league-neutral so v1 models
+        #    keep working until v2 model artifact is trained. ──────────────────
+        "park_factor":          _sf(batter, "parkFactor", "park_factor", default=1.00),
+        "wx_temp_mult":         _sf(batter, "wxTempMult", "wx_temp_mult", default=1.00),
+        "wx_wind_mult":         _sf(batter, "wxWindMult", "wx_wind_mult", default=1.00),
+        "pitch_mix_slg_edge":   _sf(batter, "pitchMixSlgEdge", "pitch_mix_slg_edge", default=0.00),
+        "bvp_woba_edge_shrunk": _sf(batter, "bvpWobaEdge", "bvp_woba_edge_shrunk", default=0.00),
+        "split_ops_edge":       _sf(batter, "splitOpsEdge", "split_ops_edge", default=0.00),
+        "expected_pa":          _sf(batter, "expectedPa", "expected_pa", default=4.20),
     }
 
     for pct_key in ("sv_k_pct", "sv_bb_pct", "opp_k_pct", "opp_bb_pct"):
@@ -288,6 +297,9 @@ def _build_hit_features(batter: dict, pitcher: dict, feat_order: list) -> Option
         "opp_xera", "opp_k_pct", "opp_bb_pct", "opp_whiff",
         "bats_L", "throws_R", "platoon_adv",
         "l7_hits", "l14_hits", "l7_hit_rate",
+        "park_factor", "wx_temp_mult", "wx_wind_mult",
+        "pitch_mix_slg_edge", "bvp_woba_edge_shrunk",
+        "split_ops_edge", "expected_pa",
     ]
     return np.array([[raw[c] for c in hits_features]], dtype=np.float32)
 
