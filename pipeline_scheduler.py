@@ -318,7 +318,7 @@ def run_pipeline():
         # Persist to disk for Fly.io restart recovery
         out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
         os.makedirs(out_dir, exist_ok=True)
-        out_path = os.path.join(out_dir, f"mlb_matchups_{date.today().strftime('%Y%m%d')}.csv")
+        out_path = os.path.join(out_dir, f"mlb_matchups_{datetime.now(ET).date().strftime('%Y%m%d')}.csv")
         matchup_df.to_csv(out_path, index=False)
         log.info(f"[pipeline] Done — {len(matchup_df)} rows → {out_path}")
 
@@ -347,7 +347,7 @@ def start_scheduler():
     # Boot run — load from disk if today's CSV exists, else fetch fresh
     out_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
-        "data", f"mlb_matchups_{date.today().strftime('%Y%m%d')}.csv"
+        "data", f"mlb_matchups_{datetime.now(ET).date().strftime('%Y%m%d')}.csv"
     )
     if os.path.exists(out_path):
         log.info(f"[pipeline] Cold-start: loading {out_path} from disk.")
