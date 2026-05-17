@@ -21131,6 +21131,48 @@ def _preload_caches():
 # unchanged so the UI keeps working; the new endpoints are the migration
 # target as the BigQuery schema and Vertex throughput are validated.
 
+def _normalize_matchup_row(raw, source):
+    """Map a CSV or BQ matchup row to the canonical BvP schema.
+
+    BQ rows already use {pa, ab, h, hr, bb, k, avg, slg, woba, xwoba,
+    batter_name, bats, pitcher_name, throws}. CSV rows from
+    data/mlb_matchups_*.csv use bvp_* prefixed keys plus a much wider
+    set of platoon-split and Statcast quality columns — without remapping,
+    _bvp_row_to_pa_rates reads None for every count and the Monte Carlo
+    silently runs on all-zero rates.
+
+    For CSV rows we promote the bvp_* counts to canonical keys, derive PA
+    from AB+BB (the CSV doesn't track HBP/SF), and preserve every other
+    column under `context` so the Gemini prompt sees the richer signal.
+    """
+    if not raw:
+        return raw
+    if source != "csv_fallback":
+        return dict(raw)
+    r = dict(raw)
+    ab = int(_num(r.get("bvp_ab")) or 0)
+    bb = int(_num(r.get("bvp_bb")) or 0)
+    canonical = {
+        "pa":           ab + bb,
+        "ab":           ab,
+        "h":            int(_num(r.get("bvp_h"))  or 0),
+        "hr":           int(_num(r.get("bvp_hr")) or 0),
+        "bb":           bb,
+        "k":            int(_num(r.get("bvp_k"))  or 0),
+        "avg":          _num(r.get("bvp_avg")) or None,
+        "ops":          _num(r.get("bvp_ops")) or None,
+        "xwoba":        _num(r.get("batter_xwoba")) or None,
+        "batter_name":  r.get("batter_name"),
+        "bats":         r.get("batter_hand"),
+        "pitcher_name": r.get("pitcher_name"),
+    }
+    extras = {k: v for k, v in r.items()
+              if k not in canonical and v not in ("", None)}
+    if extras:
+        canonical["context"] = extras
+    return canonical
+
+
 def _bvp_row_to_pa_rates(row):
     """Convert a BvP situational stat row (BQ or CSV) into per-PA outcome rates.
 
@@ -21204,7 +21246,7 @@ def api_matchup_vertex():
         if bq_stats is None:
             csv_row = _matchup_row(batter_id, pitcher_id)
             if csv_row:
-                bq_stats = dict(csv_row)
+                bq_stats = csv_row
                 source = "csv_fallback"
 
         if not bq_stats:
@@ -21218,6 +21260,7 @@ def api_matchup_vertex():
                 "source": "no_data",
             })
 
+        bq_stats = _normalize_matchup_row(bq_stats, source)
         per_pa = _bvp_row_to_pa_rates(bq_stats)
         mc = _monte_carlo_vs_sp(per_pa, pa_vs_sp, n_sims=4000, rng_seed=batter_id * 1000 + pitcher_id)
 
