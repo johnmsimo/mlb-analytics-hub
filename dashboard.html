@@ -522,7 +522,7 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
           <div class="settings-title">INTELLIGENCE & AI</div>
           <div class="settings-two">
             <div class="settings-row"><label>Enable AI</label><select id="intEnableAI" class="select"><option value="true">Enabled</option><option value="false">Disabled</option></select></div>
-            <div class="settings-row"><label>Claude Model</label><input id="intModel" class="settings-input" placeholder="claude-sonnet-4-20250514"></div>
+            <div class="settings-row"><label>AI Model</label><input id="intModel" class="settings-input" placeholder="gemini-2.5-pro"></div>
             <div class="settings-row"><label>Insight Style</label><select id="intStyle" class="select"><option value="detailed">Detailed</option><option value="concise">Concise</option><option value="technical">Technical</option></select></div>
           </div>
           <div class="settings-row"><label>Park Factor Weight</label><input id="intParkFactor" class="settings-input" type="number" step="0.01" min="0" max="1"></div>
@@ -1895,7 +1895,7 @@ function loadComprehensiveSettings(){
     var s=d.settings||{};
     var intSettings=s.intelligence||{};
     document.getElementById('intEnableAI').value=String(intSettings.enableAI);
-    document.getElementById('intModel').value=intSettings.claudeModel||'';
+    document.getElementById('intModel').value=intSettings.aiModel||intSettings.claudeModel||'';
     document.getElementById('intStyle').value=intSettings.insightStyle||'detailed';
     document.getElementById('intParkFactor').value=intSettings.parkFactorWeight||0.30;
     document.getElementById('intWeather').value=intSettings.weatherWeight||0.20;
@@ -1928,7 +1928,7 @@ function loadComprehensiveSettings(){
 }
 
 function saveIntelligenceSettings(){
-  var payload={intelligence:{enableAI:document.getElementById('intEnableAI').value==='true',claudeModel:document.getElementById('intModel').value||'claude-sonnet-4-20250514',insightStyle:document.getElementById('intStyle').value||'detailed',parkFactorWeight:parseFloat(document.getElementById('intParkFactor').value||0.30),weatherWeight:parseFloat(document.getElementById('intWeather').value||0.20),opponentWeight:parseFloat(document.getElementById('intOpponent').value||0.25)}};
+  var payload={intelligence:{enableAI:document.getElementById('intEnableAI').value==='true',aiModel:document.getElementById('intModel').value||'gemini-2.5-pro',insightStyle:document.getElementById('intStyle').value||'detailed',parkFactorWeight:parseFloat(document.getElementById('intParkFactor').value||0.30),weatherWeight:parseFloat(document.getElementById('intWeather').value||0.20),opponentWeight:parseFloat(document.getElementById('intOpponent').value||0.25)}};
   fetch('/api/app-settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(function(r){return r.json();}).then(function(d){if(!d||!d.success) throw new Error(d.error||'Save failed');setText('intMsg','Saved');}).catch(function(e){setText('intMsg',e.message||'Save failed',true);});
 }
 

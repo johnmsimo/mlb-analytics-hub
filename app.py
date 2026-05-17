@@ -113,38 +113,32 @@ def _add_request_id_header(response):
     return response
 
 
-# ── LLM clients (Gemini via API key, Claude via direct Anthropic API) ────────
-# Multi-model orchestration: Gemini Flash-Lite for high-volume short text,
-# Gemini Pro for numerical/MC reasoning, Claude Sonnet for narrative, Claude
-# Opus for premium full-boxscore output.
+# ── LLM clients (Gemini via API key — Anthropic removed) ─────────────────────
+# Single LLM provider: Gemini via google-genai SDK, authenticated by
+# GOOGLE_CLOUD_API_KEY. Anthropic/Claude was removed because every Claude-
+# backed surface in production was falling through to a deterministic
+# template (the AI badges were performative, not functional). Routing every
+# "AI" surface through Gemini means one auth, one rate-limit pool, and a
+# real LLM response in every place the UI promises AI.
 #
-# Auth note: this Fly.io project has the GCP org policy
-# `constraints/iam.disableServiceAccountKeyCreation` active, which blocks
-# downloading service account JSON keys. Because BigQuery and AnthropicVertex
-# both require OAuth2 / ADC (no API key path exists for either), we use:
-#   - Gemini  -> google-genai SDK with GOOGLE_CLOUD_API_KEY (Developer API
-#                endpoint, not the Vertex Model Garden surface).
-#   - Claude  -> direct anthropic.Anthropic with ANTHROPIC_API_KEY (same
-#                path the legacy /api/ai-boxscore route already uses).
-#   - BigQuery-> probed at boot; only initializes if ADC credentials happen
-#                to be present (Workload Identity, gcloud auth, etc.). When
-#                absent, routes fall through to the existing CSV path.
+# Tier mapping (env-overridable so model swaps don't need a deploy):
+#   fast       -> gemini-2.5-flash-lite  (high-volume short text)
+#   reasoning  -> gemini-2.5-pro          (analytical verdicts)
+#   narrative  -> gemini-2.5-pro          (storylines, was Claude Sonnet)
+#   premium    -> gemini-2.5-pro          (full boxscores, was Claude Opus)
 #
-# Model IDs are all env-overridable so swapping doesn't need a deploy.
-_vertex_available    = False    # umbrella flag: at least one LLM responded
+# BigQuery probe stays (only initializes if ADC happens to be available);
+# routes fall back to CSV when no ADC, same as before.
+_vertex_available    = False    # umbrella flag: Gemini initialized
 _gemini_available    = False
-_claude_available    = False
 _bigquery_available  = False
 _gemini_client       = None
-_anthropic_client    = None
 _bq_client           = None
 VERTEX_MODELS = {
-    "fast":      os.environ.get("VERTEX_MODEL_FAST",   "gemini-2.5-flash-lite"),
-    "reasoning": os.environ.get("VERTEX_MODEL_PRO",    "gemini-2.5-pro"),
-    # Defaults track the latest Claude 4.x family; override via env if your
-    # Anthropic account requires a specific date-suffixed snapshot.
-    "narrative": os.environ.get("VERTEX_MODEL_SONNET", "claude-sonnet-4-6"),
-    "premium":   os.environ.get("VERTEX_MODEL_OPUS",   "claude-opus-4-7"),
+    "fast":      os.environ.get("VERTEX_MODEL_FAST",      "gemini-2.5-flash-lite"),
+    "reasoning": os.environ.get("VERTEX_MODEL_PRO",       "gemini-2.5-pro"),
+    "narrative": os.environ.get("VERTEX_MODEL_NARRATIVE", "gemini-2.5-pro"),
+    "premium":   os.environ.get("VERTEX_MODEL_PREMIUM",   "gemini-2.5-pro"),
 }
 BQ_DATASET    = os.environ.get("BQ_DATASET",    "mlb")
 BQ_BATTERS    = os.environ.get("BQ_BATTERS",    f"{BQ_DATASET}.batters")
@@ -160,29 +154,14 @@ try:
         _gemini_client = _genai.Client(api_key=_gemini_key)
         _gemini_available = True
         app.logger.info(
-            "[gemini] initialized via API key — fast=%s reasoning=%s",
+            "[gemini] initialized via API key — fast=%s reasoning=%s narrative=%s premium=%s",
             VERTEX_MODELS["fast"], VERTEX_MODELS["reasoning"],
-        )
-    else:
-        app.logger.info("[gemini] no API key — Gemini routes will fall back")
-except Exception as _gemini_init_err:
-    app.logger.warning(f"[gemini] init failed: {_gemini_init_err}")
-
-# Claude via direct Anthropic API (AnthropicVertex needs ADC which we don't have)
-try:
-    _claude_key = os.environ.get("ANTHROPIC_API_KEY")
-    if _claude_key:
-        import anthropic as _anthropic_mod
-        _anthropic_client = _anthropic_mod.Anthropic(api_key=_claude_key)
-        _claude_available = True
-        app.logger.info(
-            "[claude] initialized via Anthropic API — narrative=%s premium=%s",
             VERTEX_MODELS["narrative"], VERTEX_MODELS["premium"],
         )
     else:
-        app.logger.info("[claude] ANTHROPIC_API_KEY unset — Claude routes will fall back")
-except Exception as _claude_init_err:
-    app.logger.warning(f"[claude] init failed: {_claude_init_err}")
+        app.logger.info("[gemini] no API key — all AI surfaces will use deterministic fallbacks")
+except Exception as _gemini_init_err:
+    app.logger.warning(f"[gemini] init failed: {_gemini_init_err}")
 
 # BigQuery requires OAuth2 / ADC and has no API key path. Probe for ADC; if
 # none, leave disabled and let routes use the CSV fallback. The bq_etl.py
@@ -204,7 +183,7 @@ except Exception as _bq_init_err:
         type(_bq_init_err).__name__,
     )
 
-_vertex_available = _gemini_available or _claude_available
+_vertex_available = _gemini_available
 
 
 def _extract_json_block(txt):
@@ -249,26 +228,41 @@ def _vertex_gemini_json(model_key, prompt, system=None, max_tokens=1024, tempera
         return None, str(ex)
 
 
+# Backwards-compatible alias: every caller that used to hit Claude now
+# transparently routes through Gemini. Kept under the old name so route
+# definitions and the deepdive insights helper don't need touch-ups.
 def _vertex_claude_json(model_key, prompt, system, max_tokens=2000, temperature=0.4):
-    """Call a Claude model (direct Anthropic API) and return parsed JSON."""
-    if not _claude_available or _anthropic_client is None:
-        return None, "claude_unavailable"
+    """Legacy name; now a thin wrapper that calls Gemini under the hood."""
+    return _vertex_gemini_json(model_key, prompt, system=system,
+                               max_tokens=max_tokens, temperature=temperature)
+
+
+def _vertex_gemini_text(model_key, prompt, system=None, max_tokens=600, temperature=0.5):
+    """Call Gemini and return the plain text response (not JSON).
+
+    Used by paragraph-form surfaces — HR scouting writeups, single-bullet
+    summaries — where forcing application/json would just wrap the text in
+    a wrapper key. Returns (text_str_or_None, error_str_or_None).
+    """
+    if not _gemini_available or _gemini_client is None:
+        return None, "gemini_unavailable"
     try:
         model_id = VERTEX_MODELS.get(model_key)
         if not model_id:
             return None, f"unknown_model_key:{model_key}"
-        resp = _anthropic_client.messages.create(
+        resp = _gemini_client.models.generate_content(
             model=model_id,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            system=system,
-            messages=[{"role": "user", "content": prompt}],
+            contents=prompt,
+            config={
+                "system_instruction": system or "You are an expert MLB betting analyst.",
+                "max_output_tokens":  max_tokens,
+                "temperature":        temperature,
+            },
         )
-        txt = (resp.content[0].text or "") if resp.content else ""
-        parsed = _extract_json_block(txt)
-        if parsed is None:
-            return None, "json_parse_failed"
-        return parsed, None
+        txt = (getattr(resp, "text", None) or "").strip()
+        if not txt:
+            return None, "empty_response"
+        return txt, None
     except Exception as ex:
         return None, str(ex)
 
@@ -1183,7 +1177,7 @@ def _app_settings_default():
     return {
         "intelligence": {
             "enableAI": True,
-            "claudeModel": "claude-sonnet-4-20250514",
+            "aiModel": "gemini-2.5-pro",
             "insightStyle": "detailed",
             "parkFactorWeight": 0.30,
             "weatherWeight": 0.20,
@@ -3907,12 +3901,9 @@ def api_status():
         "mlbMemory": _mlb_memory_status_payload(),
         "ai": {
             "gemini": {
-                "available": _gemini_available,
+                "available":       _gemini_available,
                 "fast_model":      VERTEX_MODELS["fast"],
                 "reasoning_model": VERTEX_MODELS["reasoning"],
-            },
-            "claude": {
-                "available": _claude_available,
                 "narrative_model": VERTEX_MODELS["narrative"],
                 "premium_model":   VERTEX_MODELS["premium"],
             },
@@ -5756,45 +5747,31 @@ def _fallback_matchup_insights(gdata, away_abbr, home_abbr, total_runs, run_env,
 
 
 def _claude_matchup_insights(context_payload):
-    """Generate 3-5 plain-language matchup bullets via Claude."""
-    try:
-        import anthropic
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if not api_key:
-            return None, "ANTHROPIC_API_KEY not configured"
+    """Generate 3-5 plain-language matchup bullets via Gemini.
 
-        client = anthropic.Anthropic(api_key=api_key)
+    Function name kept for call-site compatibility; underlying model is
+    now Gemini Pro (Anthropic SDK removed).
+    """
+    try:
         prompt = (
             "Generate 3 to 5 concise MLB matchup storyline bullets for today's game. "
             "Use only the provided context. Prioritize actionable prop-betting context. "
-            "Output JSON only with key matchup_insights as an array of strings.\n\n"
+            "Output strict JSON with one key, `matchup_insights`, as an array of strings.\n\n"
             f"Context JSON:\n{json.dumps(context_payload, ensure_ascii=True)}"
         )
-
-        response = client.messages.create(
-            model=VERTEX_MODELS["narrative"],
-            max_tokens=500,
-            temperature=0.4,
-            system=(
-                "You are an expert MLB betting analyst. "
-                "Respond with raw JSON only, no markdown, no backticks."
-            ),
-            messages=[{"role": "user", "content": prompt}],
+        payload, err = _vertex_gemini_json(
+            "narrative", prompt,
+            system="You are an expert MLB betting analyst. Respond with raw JSON only.",
+            max_tokens=500, temperature=0.4,
         )
-
-        txt = (response.content[0].text or "").strip()
-        clean = txt.lstrip("```json").lstrip("```").rstrip("```").strip()
-        j0 = clean.find("{")
-        j1 = clean.rfind("}") + 1
-        if j0 < 0 or j1 <= j0:
-            return None, "Unable to parse Claude storyline JSON"
-        payload = json.loads(clean[j0:j1])
+        if payload is None:
+            return None, err or "Gemini storyline call failed"
         items = payload.get("matchup_insights") if isinstance(payload, dict) else None
         if not isinstance(items, list):
-            return None, "Claude response missing matchup_insights[]"
+            return None, "Gemini response missing matchup_insights[]"
         out = [str(x).strip() for x in items if str(x).strip()]
         if not out:
-            return None, "Claude storyline list empty"
+            return None, "Gemini storyline list empty"
         return out[:5], None
     except Exception as ex:
         return None, str(ex)
@@ -17868,45 +17845,26 @@ def api_ai_boxscore(game_pk):
         }
 
         ai_projections = None
-        claude_error = None
-        try:
-            import anthropic
-            api_key = os.environ.get('ANTHROPIC_API_KEY')
-            if api_key:
-                client = anthropic.Anthropic(api_key=api_key)
-                prompt = (
-                    f"Game: {context['away_team']} ({context['away_pitcher']['name']}, ERA {context['away_pitcher']['era']}) "
-                    f"at {context['home_team']} ({context['home_pitcher']['name']}, ERA {context['home_pitcher']['era']}).\n"
-                    f"Venue: {context['venue']['name']} (park factor {context['venue']['park_factor']}).\n"
-                    f"Weather: {context['weather']['temp']}°F, {context['weather']['condition']}, wind {context['weather']['wind']}.\n"
-                    f"Away lineup xwOBA top 3: " +
-                    ", ".join(f"{b['name']} {b.get('xwoba','N/A')}" for b in context['away_lineup'][:3]) + ".\n"
-                    f"Home lineup xwOBA top 3: " +
-                    ", ".join(f"{b['name']} {b.get('xwoba','N/A')}" for b in context['home_lineup'][:3]) + ".\n"
-                    "Return JSON with keys: away_runs (int), home_runs (int), away_hits (int), home_hits (int), "
-                    "total_runs (int), away_reasoning (str), home_reasoning (str), key_factors (list of str), "
-                    "confidence (HIGH|MEDIUM|LOW), notable_props (list of {player, prop, projection, reasoning})."
-                )
-                response = client.messages.create(
-                    model=VERTEX_MODELS["narrative"],
-                    max_tokens=2000,
-                    temperature=0.7,
-                    system="You are an expert MLB analyst providing detailed game and player projections based on comprehensive statistical analysis. Respond ONLY with valid JSON. No preamble, no markdown, no backticks — raw JSON only.",
-                    messages=[{"role": "user", "content": prompt}]
-                )
-                response_text = response.content[0].text
-                import json as json_lib
-                clean = response_text.strip().lstrip('```json').lstrip('```').rstrip('```').strip()
-                json_start = clean.find('{')
-                json_end = clean.rfind('}') + 1
-                if json_start >= 0 and json_end > json_start:
-                    ai_projections = json_lib.loads(clean[json_start:json_end])
-                else:
-                    raise ValueError('Unable to parse Claude JSON response')
-            else:
-                claude_error = 'ANTHROPIC_API_KEY not configured'
-        except Exception as ex:
-            claude_error = str(ex)
+        ai_error = None
+        prompt = (
+            f"Game: {context['away_team']} ({context['away_pitcher']['name']}, ERA {context['away_pitcher']['era']}) "
+            f"at {context['home_team']} ({context['home_pitcher']['name']}, ERA {context['home_pitcher']['era']}).\n"
+            f"Venue: {context['venue']['name']} (park factor {context['venue']['park_factor']}).\n"
+            f"Weather: {context['weather']['temp']}°F, {context['weather']['condition']}, wind {context['weather']['wind']}.\n"
+            f"Away lineup xwOBA top 3: " +
+            ", ".join(f"{b['name']} {b.get('xwoba','N/A')}" for b in context['away_lineup'][:3]) + ".\n"
+            f"Home lineup xwOBA top 3: " +
+            ", ".join(f"{b['name']} {b.get('xwoba','N/A')}" for b in context['home_lineup'][:3]) + ".\n"
+            "Return JSON with keys: away_runs (int), home_runs (int), away_hits (int), home_hits (int), "
+            "total_runs (int), away_reasoning (str), home_reasoning (str), key_factors (list of str), "
+            "confidence (HIGH|MEDIUM|LOW), notable_props (list of {player, prop, projection, reasoning})."
+        )
+        ai_projections, ai_error = _vertex_gemini_json(
+            "narrative", prompt,
+            system="You are an expert MLB analyst providing detailed game and player projections "
+                   "based on comprehensive statistical analysis. Respond with raw JSON only.",
+            max_tokens=2000, temperature=0.7,
+        )
 
         if ai_projections is None:
             ai_projections = _local_boxscore_projections(
@@ -17915,7 +17873,7 @@ def api_ai_boxscore(game_pk):
                 away_t, home_t
             )
             ai_projections['source'] = 'local_fallback'
-            ai_projections['fallback_reason'] = claude_error or 'Claude unavailable'
+            ai_projections['fallback_reason'] = ai_error or 'Gemini unavailable'
         
         return jsonify({
             'success': True,
@@ -20993,34 +20951,32 @@ def _build_scouting_payload(inputs, bvp, p_per_ab, prob_any, score):
 
 
 def _call_claude_scouting_report(payload):
-    """Call Claude to generate a HR scouting report. Returns text or None."""
-    import anthropic
-    api_key = os.getenv("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        return None
-    client = anthropic.Anthropic(api_key=api_key)
-    batter = payload["batter"]["name"]
+    """Generate an HR scouting paragraph via Gemini.
+
+    Function name kept for call-site compatibility; underlying model is
+    now Gemini Pro (Anthropic SDK removed). Returns the paragraph text
+    or None on failure — callers downstream already gate on truthiness.
+    """
+    batter  = payload["batter"]["name"]
     pitcher = payload["pitcher"]["name"]
     park    = payload["park"]["name"]
     prompt = (
-        f"You are an MLB advance-scouting analyst. Write a 120-150 word scouting paragraph "
-        f"for a Home Run prop bet on {batter} vs {pitcher} at {park} today. "
+        f"Write a 120-150 word scouting paragraph for a Home Run prop bet on "
+        f"{batter} vs {pitcher} at {park} today. "
         f"Lead with the bottom line (BET / LEAN / PASS), then justify with the data. "
         f"Cite specific numbers from the DATA block. Do not invent stats. "
         f"Style: confident analyst, no hedging adverbs. Mention park factor and platoon "
         f"only if they materially move the number.\n\nDATA:\n"
         + json.dumps(payload, indent=2)
     )
-    try:
-        resp = client.messages.create(
-            model=VERTEX_MODELS["narrative"],
-            max_tokens=400,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return (resp.content[0].text or "").strip()
-    except Exception as ex:
-        print(f"[HR scouting] Claude call failed: {ex}")
-        return None
+    text, err = _vertex_gemini_text(
+        "narrative", prompt,
+        system="You are an expert MLB advance-scouting analyst writing crisp prop-bet writeups.",
+        max_tokens=400, temperature=0.5,
+    )
+    if err and not text:
+        print(f"[HR scouting] Gemini call failed: {err}")
+    return text
 
 
 # ── HR Analytics routes ───────────────────────────────────────────────────────
@@ -22475,12 +22431,11 @@ def _build_insights_context(game_pk):
 
 @app.route("/api/insights/<int:game_pk>")
 def api_insights_vertex(game_pk):
-    """Claude Sonnet (direct Anthropic API) matchup insights for a game.
+    """Gemini Pro matchup insights for a game.
 
-    Parallel to the existing /api/game-projection storyline. Uses the direct
-    Anthropic API (Vertex Model Garden would require ADC, blocked by the
-    org policy on this project). Falls back to the existing deterministic
-    _fallback_matchup_insights() output when Claude is down.
+    Parallel to the existing /api/game-projection storyline. Routes through
+    the narrative tier (Gemini Pro by default). Falls back to the existing
+    deterministic _fallback_matchup_insights() output when Gemini is down.
     """
     try:
         _maybe_refresh_fg()
@@ -22490,7 +22445,7 @@ def api_insights_vertex(game_pk):
 
         insights = None
         err = None
-        if _claude_available:
+        if _gemini_available:
             prompt = (
                 "Generate 3 to 5 concise MLB matchup storyline bullets for today's game. "
                 "Use only the provided context. Prioritize actionable prop-betting context. "
@@ -22548,7 +22503,7 @@ def api_insights_vertex(game_pk):
 
 @app.route("/api/projected-boxscore/<int:game_pk>")
 def api_projected_boxscore_vertex(game_pk):
-    """Claude Opus (direct Anthropic API) full projected boxscore.
+    """Gemini Pro full projected boxscore (premium tier).
 
     Mirror of /api/ai-boxscore that uses the premium model tier; falls back
     to the existing _local_boxscore_projections() helper on any failure.
@@ -22631,8 +22586,8 @@ def api_projected_boxscore_vertex(game_pk):
         }
 
         ai_projections = None
-        claude_error = None
-        if _claude_available:
+        ai_error = None
+        if _gemini_available:
             prompt = (
                 f"Game: {context['away_team']} ({context['away_pitcher']['name']}, "
                 f"ERA {context['away_pitcher']['era']}) at {context['home_team']} "
@@ -22649,7 +22604,7 @@ def api_projected_boxscore_vertex(game_pk):
                 "key_factors (list of str), confidence (HIGH|MEDIUM|LOW), "
                 "notable_props (list of {player, prop, projection, reasoning})."
             )
-            ai_projections, claude_error = _vertex_claude_json(
+            ai_projections, ai_error = _vertex_claude_json(
                 "premium", prompt,
                 system="You are an expert MLB analyst providing detailed game and player "
                        "projections. Respond ONLY with valid JSON — no preamble, no markdown.",
@@ -22665,7 +22620,7 @@ def api_projected_boxscore_vertex(game_pk):
             )
             source = "local_fallback"
             ai_projections["source"] = source
-            ai_projections["fallback_reason"] = claude_error or "Claude unavailable"
+            ai_projections["fallback_reason"] = ai_error or "Gemini unavailable"
         else:
             ai_projections["source"] = source
             ai_projections["model"] = VERTEX_MODELS["premium"]

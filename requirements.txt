@@ -4,7 +4,6 @@ requests>=2.31
 gunicorn>=21.2
 pybaseball>=2.2.7
 pandas>=2.0
-anthropic>=0.40.0
 numpy>=1.24
 scipy>=1.11
 fuzzywuzzy>=0.18
