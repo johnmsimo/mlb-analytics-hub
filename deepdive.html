@@ -5715,8 +5715,23 @@ function priorPanelsHtml(mp){
     }).join(' · ');
     var weight = '';
     if(p.blend_audit && p.blend_audit.weights){
-      var ws = p.blend_audit.weights.map(function(w){ return (w.weight*100).toFixed(0)+'%'; }).join(' / ');
-      weight = '<div style="font-size:.55rem;color:var(--mu);padding-top:2px">blend weights (direct · b-prior · p-prior): '+ws+'</div>';
+      // The blender drops zero-PA sources so the weights array can be 1-3
+      // entries. Map them back to the (direct / b-prior / p-prior) slots so
+      // the label always matches what's shown, instead of leaving a "44/56"
+      // under a three-slot legend.
+      var direct_pa = (mp.stats && +mp.stats.pa) || 0;
+      var b_pa = (mp.arsenal_prior && mp.arsenal_prior.prior_counts && +mp.arsenal_prior.prior_counts.pa) || 0;
+      var p_pa = (mp.pitcher_batter_prior && mp.pitcher_batter_prior.prior_counts && +mp.pitcher_batter_prior.prior_counts.pa) || 0;
+      var src = ['direct','b-prior','p-prior'];
+      var pas = [direct_pa, b_pa, p_pa];
+      var aud = p.blend_audit.weights.slice();
+      var slotPct = ['0%','0%','0%'];
+      for(var si=0; si<3; si++){
+        if(pas[si] > 0 && aud.length){
+          slotPct[si] = (aud.shift().weight*100).toFixed(0)+'%';
+        }
+      }
+      weight = '<div style="font-size:.55rem;color:var(--mu);padding-top:2px">blend weights ('+src.join(' · ')+'): '+slotPct.join(' / ')+'</div>';
     }
     return head
          + '<div style="font-size:.62rem;color:#e5e7eb;padding:4px 0">'+stat+'</div>'

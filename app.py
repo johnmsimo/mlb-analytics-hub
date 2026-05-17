@@ -141,8 +141,10 @@ _bq_client           = None
 VERTEX_MODELS = {
     "fast":      os.environ.get("VERTEX_MODEL_FAST",   "gemini-2.5-flash-lite"),
     "reasoning": os.environ.get("VERTEX_MODEL_PRO",    "gemini-2.5-pro"),
-    "narrative": os.environ.get("VERTEX_MODEL_SONNET", "claude-sonnet-4-5"),
-    "premium":   os.environ.get("VERTEX_MODEL_OPUS",   "claude-opus-4-1"),
+    # Defaults track the latest Claude 4.x family; override via env if your
+    # Anthropic account requires a specific date-suffixed snapshot.
+    "narrative": os.environ.get("VERTEX_MODEL_SONNET", "claude-sonnet-4-6"),
+    "premium":   os.environ.get("VERTEX_MODEL_OPUS",   "claude-opus-4-7"),
 }
 BQ_DATASET    = os.environ.get("BQ_DATASET",    "mlb")
 BQ_BATTERS    = os.environ.get("BQ_BATTERS",    f"{BQ_DATASET}.batters")
@@ -2385,6 +2387,16 @@ def _sv_f(val):
     try: return round(float(val), 2)
     except Exception: return "N/A"
 
+
+def _sv_f3(val):
+    """Same as _sv_f but preserves 3dp precision. Used for xwOBA in
+    similarity comparisons where 2dp coarseness collapses distinct
+    batters (e.g. .342 and .349 both round to 0.34, falsely matching
+    Xavier Edwards and Bryan Reynolds).
+    """
+    try: return round(float(val), 3)
+    except Exception: return None
+
 def _fetch_sv_csv(url):
     """Fetch a Baseball Savant CSV with realistic browser headers and retry logic.
 
@@ -2482,6 +2494,7 @@ def _load_savant_data():
                 "sv_xba":   _sv_f(row.get("est_ba")),
                 "sv_xslg":  _sv_f(row.get("est_slg")),
                 "sv_xwoba": _sv_f(row.get("est_woba")),
+                "sv_xwoba_p3": _sv_f3(row.get("est_woba")),  # 3dp for similarity math
                 "sv_k_pct": _sv_f(row.get("k_percent")),
                 "sv_bb_pct":_sv_f(row.get("bb_percent")),
                 "sv_pid":   row.get("player_id",""),
@@ -2754,6 +2767,7 @@ def _fetch_savant_player_batter(player_id, year):
                 "sv_xba":   _sv_f(row.get("est_ba")),
                 "sv_xslg":  _sv_f(row.get("est_slg")),
                 "sv_xwoba": _sv_f(row.get("est_woba")),
+                "sv_xwoba_p3": _sv_f3(row.get("est_woba")),  # 3dp for similarity math
                 "sv_k_pct": _sv_f(row.get("k_percent")),
                 "sv_bb_pct":_sv_f(row.get("bb_percent")),
             })
@@ -3878,10 +3892,38 @@ def api_status():
     with _sv_lock:
         svl, svd = _sv_loaded, _sv_load_date
         svpi, svbi, svsc, svar = len(_sv_pit_xstats), len(_sv_bat_xstats), len(_sv_bat_statcast), len(_sv_arsenal_pct)
+    with _pitcher_name_to_mlbam_lock:
+        nm_count = len(_pitcher_name_to_mlbam)
+    with _batter_profiles_lock:
+        bp_count = len(_batter_profiles)
+    with _batter_statcast_lock:
+        bs_count = sum(1 for v in _batter_statcast_cache.values() if v is not None)
+    with _pitcher_statcast_lock:
+        ps_count = sum(1 for v in _pitcher_statcast_cache.values() if v is not None)
+
     resp = jsonify({
         "fangraphs": {"loaded":fgl,"date":str(fgd),"batters":fgb,"pitchers":fgp},
         "savant":    {"loaded":svl,"date":str(svd),"pit_xstats":svpi,"bat_xstats":svbi,"statcast":svsc,"arsenals":svar},
         "mlbMemory": _mlb_memory_status_payload(),
+        "ai": {
+            "gemini": {
+                "available": _gemini_available,
+                "fast_model":      VERTEX_MODELS["fast"],
+                "reasoning_model": VERTEX_MODELS["reasoning"],
+            },
+            "claude": {
+                "available": _claude_available,
+                "narrative_model": VERTEX_MODELS["narrative"],
+                "premium_model":   VERTEX_MODELS["premium"],
+            },
+            "bigquery": {"available": _bigquery_available},
+        },
+        "arsenalPrior": {
+            "name_to_mlbam":   nm_count,
+            "batter_profiles": bp_count,
+            "batter_statcast_hot":  bs_count,
+            "pitcher_statcast_hot": ps_count,
+        },
     })
     logging.info(f"[API] /api/status took {time.time() - t0:.3f}s")
     return resp
@@ -5730,7 +5772,7 @@ def _claude_matchup_insights(context_payload):
         )
 
         response = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=VERTEX_MODELS["narrative"],
             max_tokens=500,
             temperature=0.4,
             system=(
@@ -17846,7 +17888,7 @@ def api_ai_boxscore(game_pk):
                     "confidence (HIGH|MEDIUM|LOW), notable_props (list of {player, prop, projection, reasoning})."
                 )
                 response = client.messages.create(
-                    model="claude-sonnet-4-20250514",
+                    model=VERTEX_MODELS["narrative"],
                     max_tokens=2000,
                     temperature=0.7,
                     system="You are an expert MLB analyst providing detailed game and player projections based on comprehensive statistical analysis. Respond ONLY with valid JSON. No preamble, no markdown, no backticks — raw JSON only.",
@@ -20971,7 +21013,7 @@ def _call_claude_scouting_report(payload):
     )
     try:
         resp = client.messages.create(
-            model="claude-sonnet-4-6",
+            model=VERTEX_MODELS["narrative"],
             max_tokens=400,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -21781,11 +21823,16 @@ def _similar_batters_for(batter_id, batter_name_hint=None):
     target_entry = xs_idx.get(target_key) or xs_idx.get(_sv_key(_ascii_fold(target_name)))
     target_xwoba = None
     if target_entry:
-        v = target_entry.get("sv_xwoba")
-        try:
-            target_xwoba = float(v) if v not in (None, "N/A", "") else None
-        except Exception:
-            target_xwoba = None
+        # Prefer the 3dp value; the 2dp legacy field rounds .342 and .349 to
+        # 0.34 and falsely matches Xavier Edwards with Bryan Reynolds.
+        for fld in ("sv_xwoba_p3", "sv_xwoba"):
+            v = target_entry.get(fld)
+            if v in (None, "N/A", ""):
+                continue
+            try:
+                target_xwoba = float(v); break
+            except Exception:
+                pass
     if target_xwoba is None:
         return [], {"reason": "target_xwoba_unknown", "name": target_name, "bats": target_bats}
 
@@ -21815,17 +21862,26 @@ def _similar_batters_for(batter_id, batter_name_hint=None):
         cand_bats = cand_prof.get("bats")
         if cand_bats not in accepted_bats:
             continue
-        try:
-            cand_xwoba = float(entry.get("sv_xwoba")) if entry.get("sv_xwoba") not in (None, "N/A", "") else None
-        except Exception:
-            cand_xwoba = None
+        cand_xwoba = None
+        for fld in ("sv_xwoba_p3", "sv_xwoba"):
+            v = entry.get(fld)
+            if v in (None, "N/A", ""):
+                continue
+            try:
+                cand_xwoba = float(v); break
+            except Exception:
+                pass
         if cand_xwoba is None:
             continue
         delta = abs(cand_xwoba - target_xwoba)
-        if delta > ARSENAL_PRIOR_XWOBA_WINDOW:
+        # Strict < (not <=) so candidates at the exact window edge — which
+        # would compute to similarity 0.0 — get dropped instead of polluting
+        # the top-N with zero-weight entries.
+        if delta >= ARSENAL_PRIOR_XWOBA_WINDOW:
             continue
-        # similarity in 0..1 — full credit at delta=0, zero at the window edge
         sim = round(1.0 - (delta / ARSENAL_PRIOR_XWOBA_WINDOW), 3) if ARSENAL_PRIOR_XWOBA_WINDOW else 1.0
+        if sim <= 0.05:   # extra floor for paranoia
+            continue
         candidates.append({
             "batter_id": int(mid),
             "name":      cand_prof.get("name") or name_key,
