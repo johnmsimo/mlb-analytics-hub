@@ -113,6 +113,179 @@ def _add_request_id_header(response):
     return response
 
 
+# ── LLM clients (Gemini via API key, Claude via direct Anthropic API) ────────
+# Multi-model orchestration: Gemini Flash-Lite for high-volume short text,
+# Gemini Pro for numerical/MC reasoning, Claude Sonnet for narrative, Claude
+# Opus for premium full-boxscore output.
+#
+# Auth note: this Fly.io project has the GCP org policy
+# `constraints/iam.disableServiceAccountKeyCreation` active, which blocks
+# downloading service account JSON keys. Because BigQuery and AnthropicVertex
+# both require OAuth2 / ADC (no API key path exists for either), we use:
+#   - Gemini  -> google-genai SDK with GOOGLE_CLOUD_API_KEY (Developer API
+#                endpoint, not the Vertex Model Garden surface).
+#   - Claude  -> direct anthropic.Anthropic with ANTHROPIC_API_KEY (same
+#                path the legacy /api/ai-boxscore route already uses).
+#   - BigQuery-> probed at boot; only initializes if ADC credentials happen
+#                to be present (Workload Identity, gcloud auth, etc.). When
+#                absent, routes fall through to the existing CSV path.
+#
+# Model IDs are all env-overridable so swapping doesn't need a deploy.
+_vertex_available    = False    # umbrella flag: at least one LLM responded
+_gemini_available    = False
+_claude_available    = False
+_bigquery_available  = False
+_gemini_client       = None
+_anthropic_client    = None
+_bq_client           = None
+VERTEX_MODELS = {
+    "fast":      os.environ.get("VERTEX_MODEL_FAST",   "gemini-2.5-flash-lite"),
+    "reasoning": os.environ.get("VERTEX_MODEL_PRO",    "gemini-2.5-pro"),
+    "narrative": os.environ.get("VERTEX_MODEL_SONNET", "claude-sonnet-4-5"),
+    "premium":   os.environ.get("VERTEX_MODEL_OPUS",   "claude-opus-4-1"),
+}
+BQ_DATASET    = os.environ.get("BQ_DATASET",    "mlb")
+BQ_BATTERS    = os.environ.get("BQ_BATTERS",    f"{BQ_DATASET}.batters")
+BQ_PITCHERS   = os.environ.get("BQ_PITCHERS",   f"{BQ_DATASET}.pitchers")
+BQ_BVP_TABLE  = os.environ.get("BQ_BVP_TABLE",  f"{BQ_DATASET}.bvp_situational")
+BQ_SLATE_VIEW = os.environ.get("BQ_SLATE_VIEW", f"{BQ_DATASET}.daily_slate_view")
+
+# Gemini via API key (google-genai Developer API endpoint)
+try:
+    _gemini_key = os.environ.get("GOOGLE_CLOUD_API_KEY") or os.environ.get("GEMINI_API_KEY")
+    if _gemini_key:
+        from google import genai as _genai
+        _gemini_client = _genai.Client(api_key=_gemini_key)
+        _gemini_available = True
+        app.logger.info(
+            "[gemini] initialized via API key — fast=%s reasoning=%s",
+            VERTEX_MODELS["fast"], VERTEX_MODELS["reasoning"],
+        )
+    else:
+        app.logger.info("[gemini] no API key — Gemini routes will fall back")
+except Exception as _gemini_init_err:
+    app.logger.warning(f"[gemini] init failed: {_gemini_init_err}")
+
+# Claude via direct Anthropic API (AnthropicVertex needs ADC which we don't have)
+try:
+    _claude_key = os.environ.get("ANTHROPIC_API_KEY")
+    if _claude_key:
+        import anthropic as _anthropic_mod
+        _anthropic_client = _anthropic_mod.Anthropic(api_key=_claude_key)
+        _claude_available = True
+        app.logger.info(
+            "[claude] initialized via Anthropic API — narrative=%s premium=%s",
+            VERTEX_MODELS["narrative"], VERTEX_MODELS["premium"],
+        )
+    else:
+        app.logger.info("[claude] ANTHROPIC_API_KEY unset — Claude routes will fall back")
+except Exception as _claude_init_err:
+    app.logger.warning(f"[claude] init failed: {_claude_init_err}")
+
+# BigQuery requires OAuth2 / ADC and has no API key path. Probe for ADC; if
+# none, leave disabled and let routes use the CSV fallback. The bq_etl.py
+# scheduler runs the same probe and no-ops cleanly when ADC is absent.
+try:
+    _gcp_project = os.environ.get("GOOGLE_CLOUD_PROJECT")
+    if _gcp_project:
+        from google.cloud import bigquery as _bq_mod
+        import google.auth as _g_auth
+        _g_auth.default()  # raises DefaultCredentialsError when no ADC present
+        _bq_client = _bq_mod.Client(project=_gcp_project)
+        _bigquery_available = True
+        app.logger.info("[bigquery] initialized project=%s", _gcp_project)
+    else:
+        app.logger.info("[bigquery] GOOGLE_CLOUD_PROJECT unset — BQ disabled")
+except Exception as _bq_init_err:
+    app.logger.info(
+        "[bigquery] no ADC credentials available — falling back to CSV (%s)",
+        type(_bq_init_err).__name__,
+    )
+
+_vertex_available = _gemini_available or _claude_available
+
+
+def _extract_json_block(txt):
+    """Strip markdown fences and parse the first JSON object in the text."""
+    if not txt:
+        return None
+    clean = txt.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+    j0 = clean.find("{")
+    j1 = clean.rfind("}") + 1
+    if j0 < 0 or j1 <= j0:
+        return None
+    try:
+        return json.loads(clean[j0:j1])
+    except Exception:
+        return None
+
+
+def _vertex_gemini_json(model_key, prompt, system=None, max_tokens=1024, temperature=0.3):
+    """Call a Gemini model (google-genai SDK, API key auth) and return parsed JSON."""
+    if not _gemini_available or _gemini_client is None:
+        return None, "gemini_unavailable"
+    try:
+        model_id = VERTEX_MODELS.get(model_key)
+        if not model_id:
+            return None, f"unknown_model_key:{model_key}"
+        resp = _gemini_client.models.generate_content(
+            model=model_id,
+            contents=prompt,
+            config={
+                "system_instruction": system or "Respond with raw JSON only — no markdown, no backticks.",
+                "max_output_tokens": max_tokens,
+                "temperature": temperature,
+                "response_mime_type": "application/json",
+            },
+        )
+        txt = getattr(resp, "text", None) or ""
+        parsed = _extract_json_block(txt)
+        if parsed is None:
+            return None, "json_parse_failed"
+        return parsed, None
+    except Exception as ex:
+        return None, str(ex)
+
+
+def _vertex_claude_json(model_key, prompt, system, max_tokens=2000, temperature=0.4):
+    """Call a Claude model (direct Anthropic API) and return parsed JSON."""
+    if not _claude_available or _anthropic_client is None:
+        return None, "claude_unavailable"
+    try:
+        model_id = VERTEX_MODELS.get(model_key)
+        if not model_id:
+            return None, f"unknown_model_key:{model_key}"
+        resp = _anthropic_client.messages.create(
+            model=model_id,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            system=system,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        txt = (resp.content[0].text or "") if resp.content else ""
+        parsed = _extract_json_block(txt)
+        if parsed is None:
+            return None, "json_parse_failed"
+        return parsed, None
+    except Exception as ex:
+        return None, str(ex)
+
+
+def _bq_query_rows(sql, params=None, timeout=15):
+    """Execute a parameterized BigQuery SELECT and return list of dict rows."""
+    if not _bigquery_available or _bq_client is None:
+        return None
+    try:
+        from google.cloud import bigquery as _bq_mod
+        job_config = _bq_mod.QueryJobConfig(query_parameters=params or [])
+        job = _bq_client.query(sql, job_config=job_config)
+        rows = job.result(timeout=timeout)
+        return [dict(r.items()) for r in rows]
+    except Exception as ex:
+        app.logger.warning(f"[bq] query failed: {ex}")
+        return None
+
+
 from nrfi_odds_routes import register_nrfi_odds_routes
 register_nrfi_odds_routes(app)
 
@@ -20952,6 +21125,456 @@ def _preload_caches():
 # _preload_caches() is now triggered via the gunicorn post_fork hook in gunicorn_conf.py
 # so that port 8080 is bound before any heavy network I/O begins.
 
+# ── Vertex AI + BigQuery routes (multi-model orchestration) ──────────────────
+# These routes coexist alongside the existing /api/cheatsheets/today,
+# /api/game-projection/<pk>, /api/ai-boxscore/<pk>. Existing endpoints are
+# unchanged so the UI keeps working; the new endpoints are the migration
+# target as the BigQuery schema and Vertex throughput are validated.
+
+def _bvp_row_to_pa_rates(row):
+    """Convert a BvP situational stat row (BQ or CSV) into per-PA outcome rates.
+
+    Expected row keys: pa, ab, h, hr, bb, k (the schema also has avg/slg/woba
+    but we only need counts). Returns a rates dict matching the contract of
+    _monte_carlo_vs_sp at app.py:7712.
+
+    Singles/doubles/triples are split from (h - hr) using league-average splits
+    because the BvP table doesn't carry per-hit-type counts.
+    """
+    pa = max(1, int(row.get("pa") or 0))
+    h  = int(row.get("h")  or 0)
+    hr = int(row.get("hr") or 0)
+    bb = int(row.get("bb") or 0)
+    k  = int(row.get("k")  or 0)
+    non_hr_h = max(0, h - hr)
+    return {
+        "k":   k / pa,
+        "bb":  bb / pa,
+        "hbp": 0.005,
+        "1b":  (non_hr_h * 0.755) / pa,
+        "2b":  (non_hr_h * 0.205) / pa,
+        "3b":  (non_hr_h * 0.040) / pa,
+        "hr":  hr / pa,
+    }
+
+
+@app.route("/api/matchup")
+def api_matchup_vertex():
+    """BigQuery + Monte Carlo + Gemini Pro batter-vs-pitcher matchup endpoint.
+
+    Query: GET /api/matchup?batter_id=<int>&pitcher_id=<int>&pa=<float optional>
+
+    Pipeline:
+      1. BigQuery pull from BQ_BVP_TABLE joined with BQ_BATTERS / BQ_PITCHERS.
+      2. Feed per-PA rates into existing _monte_carlo_vs_sp() (no reimpl).
+      3. Send {bq_stats, mc_percentiles, park context} to gemini-2.5-pro for
+         a finalized analytical block.
+
+    Fallbacks: BQ unavailable -> _matchup_row() CSV cache; Gemini fails ->
+    return stats + MC with analysis=null and source='stats_only'.
+    """
+    try:
+        batter_id  = request.args.get("batter_id", type=int)
+        pitcher_id = request.args.get("pitcher_id", type=int)
+        pa_vs_sp   = request.args.get("pa", type=float) or 3.0
+        if not batter_id or not pitcher_id:
+            return jsonify({"success": False, "error": "batter_id and pitcher_id required"}), 400
+
+        bq_stats = None
+        source = "vertex"
+        if _bigquery_available:
+            from google.cloud import bigquery as _bq_mod
+            sql = (
+                f"SELECT bvp.batter_id, bvp.pitcher_id, bvp.pa, bvp.ab, bvp.h, bvp.hr, "
+                f"bvp.bb, bvp.k, bvp.avg, bvp.slg, bvp.woba, bvp.xwoba, "
+                f"b.name AS batter_name, b.bats, p.name AS pitcher_name, p.throws "
+                f"FROM `{BQ_BVP_TABLE}` bvp "
+                f"LEFT JOIN `{BQ_BATTERS}`  b ON b.player_id  = bvp.batter_id "
+                f"LEFT JOIN `{BQ_PITCHERS}` p ON p.player_id  = bvp.pitcher_id "
+                f"WHERE bvp.batter_id = @bid AND bvp.pitcher_id = @pid "
+                f"ORDER BY bvp.updated_at DESC LIMIT 1"
+            )
+            rows = _bq_query_rows(sql, params=[
+                _bq_mod.ScalarQueryParameter("bid", "INT64", batter_id),
+                _bq_mod.ScalarQueryParameter("pid", "INT64", pitcher_id),
+            ])
+            if rows:
+                bq_stats = rows[0]
+
+        if bq_stats is None:
+            csv_row = _matchup_row(batter_id, pitcher_id)
+            if csv_row:
+                bq_stats = dict(csv_row)
+                source = "csv_fallback"
+
+        if not bq_stats:
+            return jsonify({
+                "success": True,
+                "batter_id": batter_id,
+                "pitcher_id": pitcher_id,
+                "stats": None,
+                "monte_carlo": None,
+                "analysis": None,
+                "source": "no_data",
+            })
+
+        per_pa = _bvp_row_to_pa_rates(bq_stats)
+        mc = _monte_carlo_vs_sp(per_pa, pa_vs_sp, n_sims=4000, rng_seed=batter_id * 1000 + pitcher_id)
+
+        analysis = None
+        analysis_error = None
+        if _gemini_available and mc:
+            prompt = (
+                "You are evaluating a batter-vs-pitcher prop matchup for MLB betting. "
+                "Use only the provided statistical context. Output strict JSON with keys: "
+                "`verdict` (one of OVER|UNDER|PASS for each of hits/tb/hr), "
+                "`confidence` (0-100 int), `key_factors` (array of <=4 short strings), "
+                "`risk` (string), `summary` (one paragraph, <=80 words).\n\n"
+                f"Stats:\n{json.dumps(bq_stats, default=str, ensure_ascii=True)}\n\n"
+                f"Monte Carlo ({mc.get('nSims')} sims, {mc.get('nPa')} PA):\n"
+                f"{json.dumps(mc, default=str, ensure_ascii=True)}"
+            )
+            analysis, analysis_error = _vertex_gemini_json(
+                "reasoning", prompt,
+                system="You are an expert MLB betting analyst. Respond with raw JSON only.",
+                max_tokens=600, temperature=0.3,
+            )
+
+        if analysis is None and source == "vertex":
+            source = "stats_only"
+
+        return jsonify({
+            "success": True,
+            "batter_id": batter_id,
+            "pitcher_id": pitcher_id,
+            "stats": bq_stats,
+            "monte_carlo": mc,
+            "analysis": analysis,
+            "analysis_error": analysis_error,
+            "source": source,
+            "model": VERTEX_MODELS["reasoning"] if analysis else None,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as ex:
+        app.logger.error(f"[api_matchup_vertex] {traceback.format_exc()}")
+        return jsonify({"success": False, "error": str(ex)}), 500
+
+
+def _vertex_cheatsheet_enrich(payload):
+    """Add Gemini Flash-Lite ai_blurbs to a cheatsheet payload in place.
+
+    Iterates the existing hitsBoard / pitcherWeakspots rows (capped) and asks
+    Gemini for a one-sentence blurb per item. Non-invasive: the original
+    fields remain untouched so the UI keeps rendering even if Gemini fails.
+    """
+    if not _gemini_available or not isinstance(payload, dict):
+        payload["aiEnriched"] = False
+        return payload
+
+    try:
+        hits_rows = (payload.get("hitsBoard") or {}).get("rows") or []
+        weakspots = (payload.get("pitcherWeakspots") or {}).get("cards") or []
+        # Cap inputs so a 15-game slate stays well under a couple seconds total.
+        sample = {
+            "top_hitters": [
+                {"name": r.get("name"), "team": r.get("team"), "matchup": r.get("matchup"),
+                 "l10HitPct": r.get("l10HitPct"), "score": r.get("score")}
+                for r in hits_rows[:12]
+            ],
+            "weakspot_pitchers": [
+                {"pitcher": c.get("pitcherName"), "form": c.get("formLabel"),
+                 "vuln": c.get("pitchVulnerability"), "rec": c.get("recommendation")}
+                for c in weakspots[:8]
+            ],
+        }
+        if not sample["top_hitters"] and not sample["weakspot_pitchers"]:
+            payload["aiEnriched"] = False
+            return payload
+
+        prompt = (
+            "For each item below, write one concise (<=20 words) prop-betting blurb. "
+            "Return JSON {top_hitter_blurbs: {name: blurb,...}, "
+            "weakspot_blurbs: {pitcher: blurb,...}}.\n\n"
+            f"{json.dumps(sample, ensure_ascii=True)}"
+        )
+        result, err = _vertex_gemini_json(
+            "fast", prompt,
+            system="You are a sharp MLB prop analyst. Be specific, no fluff. Raw JSON only.",
+            max_tokens=1200, temperature=0.4,
+        )
+        if result:
+            payload["aiBlurbs"] = result
+            payload["aiEnriched"] = True
+            payload["aiModel"] = VERTEX_MODELS["fast"]
+        else:
+            payload["aiEnriched"] = False
+            payload["aiError"] = err
+    except Exception as ex:
+        app.logger.warning(f"[cheatsheet_vertex] enrich failed: {ex}")
+        payload["aiEnriched"] = False
+        payload["aiError"] = str(ex)
+    return payload
+
+
+@app.route("/api/cheatsheet")
+def api_cheatsheet_vertex():
+    """Vertex-enriched cheatsheet alias for /api/cheatsheets/today.
+
+    Reuses the existing _cheatsheet_cache + daemon-thread refresh machinery
+    (no new async layer). When ai=1 (default) and Vertex is available, the
+    cached payload is enriched with Gemini Flash-Lite blurbs before return.
+    Existing /api/cheatsheets/today is unchanged.
+    """
+    try:
+        force = request.args.get("refresh") == "1"
+        want_ai = request.args.get("ai", "1") != "0"
+        payload = _get_cheatsheets_today(force=force)
+        if want_ai and not payload.get("computing"):
+            payload = _vertex_cheatsheet_enrich(payload)
+        return jsonify(payload)
+    except Exception as ex:
+        app.logger.error(f"[api_cheatsheet_vertex] {traceback.format_exc()}")
+        return jsonify({"success": False, "error": str(ex)}), 500
+
+
+def _build_insights_context(game_pk):
+    """Build a compact storyline context dict from a game_pk for Vertex insights."""
+    gdata = fetch_schedule_game(game_pk)
+    if not gdata:
+        return None
+    away_t = gdata.get("teams", {}).get("away", {})
+    home_t = gdata.get("teams", {}).get("home", {})
+    ap = away_t.get("probablePitcher", {}); hp = home_t.get("probablePitcher", {})
+    ap_name = ap.get("fullName", "TBD");    hp_name = hp.get("fullName", "TBD")
+    ap_fg = fg_pitcher(ap_name) or {};      hp_fg = fg_pitcher(hp_name) or {}
+    hid = home_t.get("team", {}).get("id")
+    pf = PARK_FACTORS.get(hid, 1.0)
+    ven = gdata.get("venue", {}) or {}
+    return {
+        "matchup": f"{away_t.get('team',{}).get('abbreviation','AWAY')} @ "
+                   f"{home_t.get('team',{}).get('abbreviation','HOME')}",
+        "venue": ven.get("name"),
+        "park_factor": pf,
+        "away_pitcher": {"name": ap_name, "era": ap_fg.get("fg_era"), "k9": ap_fg.get("fg_k9")},
+        "home_pitcher": {"name": hp_name, "era": hp_fg.get("fg_era"), "k9": hp_fg.get("fg_k9")},
+        "weather": gdata.get("weather") or {},
+        "series": {"game": gdata.get("seriesGame"), "total": gdata.get("seriesTotal")},
+    }
+
+
+@app.route("/api/insights/<int:game_pk>")
+def api_insights_vertex(game_pk):
+    """Claude Sonnet (direct Anthropic API) matchup insights for a game.
+
+    Parallel to the existing /api/game-projection storyline. Uses the direct
+    Anthropic API (Vertex Model Garden would require ADC, blocked by the
+    org policy on this project). Falls back to the existing deterministic
+    _fallback_matchup_insights() output when Claude is down.
+    """
+    try:
+        _maybe_refresh_fg()
+        ctx = _build_insights_context(game_pk)
+        if not ctx:
+            return jsonify({"success": False, "error": "Game not found"}), 404
+
+        insights = None
+        err = None
+        if _claude_available:
+            prompt = (
+                "Generate 3 to 5 concise MLB matchup storyline bullets for today's game. "
+                "Use only the provided context. Prioritize actionable prop-betting context. "
+                "Output JSON only with key `matchup_insights` as an array of strings.\n\n"
+                f"Context JSON:\n{json.dumps(ctx, default=str, ensure_ascii=True)}"
+            )
+            parsed, err = _vertex_claude_json(
+                "narrative", prompt,
+                system="You are an expert MLB betting analyst. Respond with raw JSON only, no markdown.",
+                max_tokens=600, temperature=0.4,
+            )
+            if isinstance(parsed, dict):
+                items = parsed.get("matchup_insights")
+                if isinstance(items, list):
+                    insights = [str(x).strip() for x in items if str(x).strip()][:5]
+
+        source = "vertex"
+        if not insights:
+            try:
+                gdata = fetch_schedule_game(game_pk) or {}
+                away_t = gdata.get("teams", {}).get("away", {})
+                home_t = gdata.get("teams", {}).get("home", {})
+                ap = away_t.get("probablePitcher", {}); hp = home_t.get("probablePitcher", {})
+                insights = _fallback_matchup_insights(
+                    gdata,
+                    away_t.get("team", {}).get("abbreviation", "AWAY"),
+                    home_t.get("team", {}).get("abbreviation", "HOME"),
+                    8.5,
+                    "MED",
+                    "EVEN",
+                    ap.get("fullName", "TBD"), hp.get("fullName", "TBD"),
+                    float((fg_pitcher(ap.get("fullName", "")) or {}).get("fg_era") or 4.2),
+                    float((fg_pitcher(hp.get("fullName", "")) or {}).get("fg_era") or 4.2),
+                    ctx.get("weather") or {},
+                )
+                source = "fallback"
+            except Exception as fex:
+                err = f"vertex={err}; fallback={fex}"
+                insights = []
+
+        return jsonify({
+            "success": True,
+            "gamePk": game_pk,
+            "matchup_insights": insights,
+            "source": source,
+            "model": VERTEX_MODELS["narrative"] if source == "vertex" else None,
+            "fallback_reason": err if source == "fallback" else None,
+            "context": ctx,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as ex:
+        app.logger.error(f"[api_insights_vertex] {game_pk}: {traceback.format_exc()}")
+        return jsonify({"success": False, "error": str(ex)}), 500
+
+
+@app.route("/api/projected-boxscore/<int:game_pk>")
+def api_projected_boxscore_vertex(game_pk):
+    """Claude Opus (direct Anthropic API) full projected boxscore.
+
+    Mirror of /api/ai-boxscore that uses the premium model tier; falls back
+    to the existing _local_boxscore_projections() helper on any failure.
+    """
+    try:
+        _maybe_refresh_fg()
+        _maybe_refresh_savant()
+        gdata = fetch_schedule_game(game_pk)
+        if not gdata:
+            return jsonify({"success": False, "error": "Game not found"}), 404
+
+        away_t = gdata.get("teams", {}).get("away", {})
+        home_t = gdata.get("teams", {}).get("home", {})
+        away_name = away_t.get("team", {}).get("name", "Unknown")
+        home_name = home_t.get("team", {}).get("name", "Unknown")
+        away_abbr = away_t.get("team", {}).get("abbreviation", "AWAY")
+        home_abbr = home_t.get("team", {}).get("abbreviation", "HOME")
+        ap = away_t.get("probablePitcher", {}); hp = home_t.get("probablePitcher", {})
+        ap_name = ap.get("fullName", "TBD"); hp_name = hp.get("fullName", "TBD")
+        ap_id = ap.get("id"); hp_id = hp.get("id")
+        ap_stats = pitcher_stats_mlb(ap_id) if ap_id else {}
+        hp_stats = pitcher_stats_mlb(hp_id) if hp_id else {}
+        ap_fg = fg_pitcher(ap_name) or {}; hp_fg = fg_pitcher(hp_name) or {}
+        ap_sv = sv_pitcher(ap_name) or {}; hp_sv = sv_pitcher(hp_name) or {}
+
+        ven = gdata.get("venue", {}) or {}
+        venue_name = ven.get("name", "Unknown")
+        venue_id = ven.get("id")
+        vloc = ven.get("location", {}) or {}
+        coords = vloc.get("defaultCoordinates", {}) or {}
+        lat = coords.get("latitude"); lon = coords.get("longitude")
+        try:
+            dt_utc_wx = datetime.fromisoformat(gdata.get("gameDate", "").replace("Z", "+00:00"))
+            game_hour = dt_utc_wx.astimezone(ET).hour
+        except Exception:
+            game_hour = 13
+        wx = get_weather(lat, lon, game_hour, venue_id=venue_id)
+        if wx.get("temp") in (None, "N/A"):
+            raw_wx = gdata.get("weather", {}) or {}
+            if raw_wx:
+                wx = {"temp": raw_wx.get("temp", "N/A"),
+                      "condition": raw_wx.get("condition", "N/A"),
+                      "wind": raw_wx.get("wind", "N/A")}
+
+        try:
+            r = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=10)
+            r.raise_for_status()
+            box = r.json().get("teams", {})
+            away_bats = get_batters_from_boxscore(box.get("away", {}), "away")
+            home_bats = get_batters_from_boxscore(box.get("home", {}), "home")
+        except Exception:
+            away_bats = []; home_bats = []
+
+        hid = home_t.get("team", {}).get("id")
+        pf = PARK_FACTORS.get(hid, 1.0)
+
+        context = {
+            "away_team": away_name, "away_abbr": away_abbr,
+            "home_team": home_name, "home_abbr": home_abbr,
+            "weather": {"temp": wx.get("temp", "N/A"),
+                         "condition": wx.get("condition", ""),
+                         "wind": wx.get("wind", "N/A")},
+            "venue": {"name": venue_name, "park_factor": pf},
+            "away_pitcher": {"name": ap_name,
+                              "era":  ap_fg.get("fg_era")  or ap_stats.get("era",  "N/A"),
+                              "whip": ap_fg.get("fg_whip") or ap_stats.get("whip", "N/A"),
+                              "k9":   ap_fg.get("fg_k9")   or ap_stats.get("k9",   "N/A"),
+                              "xera": ap_sv.get("sv_xera", "N/A")},
+            "home_pitcher": {"name": hp_name,
+                              "era":  hp_fg.get("fg_era")  or hp_stats.get("era",  "N/A"),
+                              "whip": hp_fg.get("fg_whip") or hp_stats.get("whip", "N/A"),
+                              "k9":   hp_fg.get("fg_k9")   or hp_stats.get("k9",   "N/A"),
+                              "xera": hp_sv.get("sv_xera", "N/A")},
+            "away_lineup": [{"slot": b.get("slot"), "name": b.get("name"),
+                              "avg": b.get("avg"), "xwoba": b.get("sv_xwoba"),
+                              "hr": b.get("hr")} for b in away_bats[:9]],
+            "home_lineup": [{"slot": b.get("slot"), "name": b.get("name"),
+                              "avg": b.get("avg"), "xwoba": b.get("sv_xwoba"),
+                              "hr": b.get("hr")} for b in home_bats[:9]],
+        }
+
+        ai_projections = None
+        claude_error = None
+        if _claude_available:
+            prompt = (
+                f"Game: {context['away_team']} ({context['away_pitcher']['name']}, "
+                f"ERA {context['away_pitcher']['era']}) at {context['home_team']} "
+                f"({context['home_pitcher']['name']}, ERA {context['home_pitcher']['era']}).\n"
+                f"Venue: {context['venue']['name']} (park factor {context['venue']['park_factor']}).\n"
+                f"Weather: {context['weather']['temp']}°F, {context['weather']['condition']}, "
+                f"wind {context['weather']['wind']}.\n"
+                "Away lineup xwOBA top 3: " +
+                ", ".join(f"{b['name']} {b.get('xwoba','N/A')}" for b in context["away_lineup"][:3]) + ".\n"
+                "Home lineup xwOBA top 3: " +
+                ", ".join(f"{b['name']} {b.get('xwoba','N/A')}" for b in context["home_lineup"][:3]) + ".\n"
+                "Return JSON with keys: away_runs (int), home_runs (int), away_hits (int), "
+                "home_hits (int), total_runs (int), away_reasoning (str), home_reasoning (str), "
+                "key_factors (list of str), confidence (HIGH|MEDIUM|LOW), "
+                "notable_props (list of {player, prop, projection, reasoning})."
+            )
+            ai_projections, claude_error = _vertex_claude_json(
+                "premium", prompt,
+                system="You are an expert MLB analyst providing detailed game and player "
+                       "projections. Respond ONLY with valid JSON — no preamble, no markdown.",
+                max_tokens=4000, temperature=0.7,
+            )
+
+        source = "vertex"
+        if ai_projections is None:
+            ai_projections = _local_boxscore_projections(
+                game_pk, context, away_bats, home_bats, ap_name, hp_name,
+                ap_fg, hp_fg, ap_sv, hp_sv, ap_stats, hp_stats, pf, wx,
+                away_t, home_t,
+            )
+            source = "local_fallback"
+            ai_projections["source"] = source
+            ai_projections["fallback_reason"] = claude_error or "Claude unavailable"
+        else:
+            ai_projections["source"] = source
+            ai_projections["model"] = VERTEX_MODELS["premium"]
+
+        return jsonify({
+            "success": True,
+            "gamePk": game_pk,
+            "matchup": f"{away_abbr} vs {home_abbr}",
+            "weather": context["weather"],
+            "venue": context["venue"],
+            "pitching_matchup": {"away_pitcher": context["away_pitcher"],
+                                  "home_pitcher": context["home_pitcher"]},
+            "projections": ai_projections,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as ex:
+        app.logger.error(f"[api_projected_boxscore_vertex] {game_pk}: {traceback.format_exc()}")
+        return jsonify({"success": False, "error": str(ex)}), 500
+
+
 # Start hourly injury refresh worker once routes/helpers are loaded.
 _start_injury_worker()
 _start_tracker_auto_sync_worker()
@@ -20961,6 +21584,15 @@ _start_mlb_memory_worker()
 if _PIPELINE_AVAILABLE:
     start_scheduler()
     logging.info("[pipeline] Scheduler armed — fires at 09:00 ET daily.")
+
+# Start BigQuery ETL scheduler: one boot refresh + daily at 09:30 ET (30 min
+# after the matchup pipeline so today's BvP CSV exists before we upload it).
+# No-ops if GOOGLE_CLOUD_PROJECT is unset or google-cloud-bigquery is missing.
+try:
+    from bq_etl import start_bq_scheduler
+    start_bq_scheduler()
+except Exception as _bq_sched_err:
+    logging.warning(f"[bq_etl] scheduler not started: {_bq_sched_err}")
 
 
 if __name__ == "__main__":
