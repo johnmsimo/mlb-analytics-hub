@@ -467,15 +467,55 @@ def api_player_arsenal_matchup(batter_id, pitcher_id):
         
         similar_pitchers.sort(key=lambda x: x["similarity"], reverse=True)
         similar_pitchers = similar_pitchers[:10]
-        
-        aggregate_stats = {
-            "pitchers": len(similar_pitchers),
-            "pa": 0,
-            "avg": 0.000,
-            "ops": 0.000,
-            "hr": 0,
-            "message": f"Found {len(similar_pitchers)} pitchers with similar arsenal ({PITCH_LABELS.get(primary_pitch, primary_pitch)}-primary)"
-        }
+
+        # Real aggregation: pull batter's PA log via pybaseball and tally
+        # outcomes vs the resolved similar-pitcher MLBAM IDs. Was hardcoded
+        # zeros prior to the arsenal-prior feature landing.
+        similar_names = [p["name"] for p in similar_pitchers]
+        prior_counts, prior_audit = _aggregate_vs_similar_pitchers(batter_id, similar_names)
+        if prior_counts and prior_counts.get("pa", 0) > 0:
+            pa  = int(prior_counts["pa"])
+            ab  = max(int(prior_counts.get("ab") or 0), 1)
+            h   = int(prior_counts.get("h") or 0)
+            hr  = int(prior_counts.get("hr") or 0)
+            bb  = int(prior_counts.get("bb") or 0)
+            tb  = (int(prior_counts.get("1b") or 0)
+                   + 2 * int(prior_counts.get("2b") or 0)
+                   + 3 * int(prior_counts.get("3b") or 0)
+                   + 4 * hr)
+            avg = h / ab
+            obp_denom = max(pa, 1)
+            obp = (h + bb) / obp_denom
+            slg = tb / ab
+            aggregate_stats = {
+                "pitchers": len(similar_pitchers),
+                "pa":  pa,
+                "ab":  ab,
+                "h":   h,
+                "hr":  hr,
+                "bb":  bb,
+                "k":   int(prior_counts.get("k") or 0),
+                "avg": round(avg, 3),
+                "obp": round(obp, 3),
+                "slg": round(slg, 3),
+                "ops": round(obp + slg, 3),
+                "audit": prior_audit,
+                "message": (
+                    f"Aggregated {pa} PA across {prior_audit.get('similar_pitchers_resolved', len(similar_pitchers))} "
+                    f"{PITCH_LABELS.get(primary_pitch, primary_pitch)}-primary pitchers"
+                ),
+            }
+        else:
+            aggregate_stats = {
+                "pitchers": len(similar_pitchers),
+                "pa": 0, "ab": 0, "h": 0, "hr": 0, "bb": 0, "k": 0,
+                "avg": 0.000, "obp": 0.000, "slg": 0.000, "ops": 0.000,
+                "audit": prior_audit,
+                "message": (
+                    f"No prior PAs aggregated ({prior_audit.get('reason') or 'unknown'}); "
+                    f"{len(similar_pitchers)} similar pitchers identified"
+                ),
+            }
         
         return jsonify({
             "pitcherName": pitcher_name,
@@ -1942,9 +1982,81 @@ def _fg_pitch_matchup_score(batter_mlbam, pitcher_mlbam):
     return round(score_mult, 3), sorted(breakdown, key=lambda x: x['usage_pct'], reverse=True)
 
 
+# Pitcher name -> MLBAM ID lookup, used by the arsenal-similarity BvP prior
+# (_aggregate_vs_similar_pitchers) to convert "similar pitcher" names from
+# _sv_arsenal_pct into the MLBAM IDs that pybaseball Statcast logs key on.
+_pitcher_name_to_mlbam: dict = {}
+_pitcher_name_to_mlbam_lock = threading.Lock()
+_pitcher_name_to_mlbam_loaded = False
+
+_FG_NAME_HTML_RE = re.compile(r"<[^>]+>")
+
+
+def _ascii_fold(s):
+    """Strip accents (Sánchez -> Sanchez) so name keys match across sources."""
+    if not s:
+        return s
+    return "".join(
+        c for c in unicodedata.normalize("NFKD", s)
+        if not unicodedata.combining(c)
+    )
+
+
+def _load_pitcher_name_to_mlbam():
+    """Build name -> MLBAM ID map from every fg_pitching_*.csv on disk.
+
+    Scans all seasons because the current-year file is mid-season and may
+    miss low-IP pitchers; older seasons fill those gaps. Newer seasons win
+    on conflict (handles ID reuse / name changes).
+
+    Registers BOTH the bare HTML-stripped Name (matches Savant ASCII keys)
+    and the PlayerName (may carry accents) under _sv_key()-normalized
+    lowercase keys, plus an ASCII-folded variant of each, so lookups work
+    regardless of which spelling the caller passes.
+    """
+    global _pitcher_name_to_mlbam_loaded
+    data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+    files = sorted(_glob.glob(os.path.join(data_dir, 'fg_pitching_*.csv')))  # oldest first
+    if not files:
+        logging.warning("[NameMap] no fg_pitching_*.csv files; arsenal prior disabled")
+        return
+    out = {}
+    for path in files:
+        try:
+            with open(path, newline='', encoding='utf-8-sig') as f:
+                for row in csvmod.DictReader(f):
+                    mlbam = (row.get("xMLBAMID") or "").strip()
+                    if not mlbam:
+                        continue
+                    try:
+                        mid = int(mlbam)
+                    except ValueError:
+                        continue
+                    # Name column is HTML-wrapped ("<a ...>Cameron Schlittler</a>");
+                    # PlayerName is bare but may carry accents.
+                    html_name = _FG_NAME_HTML_RE.sub("", row.get("Name") or "").strip()
+                    player_name = (row.get("PlayerName") or "").strip()
+                    for nm in {html_name, player_name}:
+                        if not nm:
+                            continue
+                        # Newer files overwrite older ones (oldest scanned first).
+                        out[_sv_key(nm)] = mid
+                        out[_sv_key(_ascii_fold(nm))] = mid
+        except Exception as ex:
+            logging.warning(f"[NameMap] load error {os.path.basename(path)}: {ex}")
+    if not out:
+        return
+    with _pitcher_name_to_mlbam_lock:
+        _pitcher_name_to_mlbam.clear()
+        _pitcher_name_to_mlbam.update(out)
+        _pitcher_name_to_mlbam_loaded = True
+    logging.info(f"[NameMap] {len(out)} pitcher name->MLBAM entries from {len(files)} season files")
+
+
 # Launch historical data loaders at startup (after function definitions)
 threading.Thread(target=_load_fg_historical, daemon=True).start()
 threading.Thread(target=_load_matchup_files, daemon=True).start()
+threading.Thread(target=_load_pitcher_name_to_mlbam, daemon=True).start()
 
 
 def _wait_for_fg_data(timeout_sec=30):
@@ -21131,6 +21243,301 @@ def _preload_caches():
 # unchanged so the UI keeps working; the new endpoints are the migration
 # target as the BigQuery schema and Vertex throughput are validated.
 
+# ── Arsenal-similarity BvP prior ──────────────────────────────────────────────
+# Direct BvP samples are tiny (typically 3-15 PAs). We enrich them by pulling
+# the batter's PA-by-PA Statcast log (last 2 seasons via pybaseball, cached on
+# disk by PYBASEBALL_CACHE=1) and aggregating only the PAs against pitchers
+# whose arsenal cosine-similarity to the target pitcher is >= 0.70. The direct
+# BvP rates and the similar-pitcher prior rates are then Bayesian-blended by
+# sample size — a 5-PA direct sample with a 300-PA prior leans heavily on the
+# prior; a 100-PA direct sample dominates it.
+
+ARSENAL_PRIOR_SEASONS    = int(os.environ.get("ARSENAL_PRIOR_SEASONS",   "2"))
+ARSENAL_PRIOR_STRENGTH   = int(os.environ.get("ARSENAL_PRIOR_STRENGTH", "20"))
+ARSENAL_PRIOR_SIM_FLOOR  = float(os.environ.get("ARSENAL_PRIOR_SIM_FLOOR", "0.70"))
+ARSENAL_PRIOR_TOPN       = int(os.environ.get("ARSENAL_PRIOR_TOPN",     "10"))
+ARSENAL_PRIOR_TIMEOUT_S  = float(os.environ.get("ARSENAL_PRIOR_TIMEOUT_S", "8.0"))
+
+# In-memory cache for the batter Statcast DataFrame, keyed by
+# (batter_id, today_date_str). Holds only the 4 columns we filter on
+# (pitcher, events, game_date, pitch_type) to keep memory bounded.
+_batter_statcast_cache: dict = {}
+_batter_statcast_lock = threading.Lock()
+
+# Event classification for per-PA rate derivation.
+_BVP_HIT_EVENTS    = {"single", "double", "triple", "home_run"}
+_BVP_K_EVENTS      = {"strikeout", "strikeout_double_play"}
+_BVP_BB_EVENTS     = {"walk"}
+_BVP_HBP_EVENTS    = {"hit_by_pitch"}
+_BVP_SAC_EVENTS    = {"sac_fly", "sac_fly_double_play", "sac_bunt", "sac_bunt_double_play"}
+
+
+def _resolve_similar_pitcher_ids(names):
+    """Map a list of pitcher names to MLBAM IDs via the boot-time cache.
+
+    Returns {mlbam_id: name} dict so callers can audit which pitchers
+    contributed to the aggregate. Names that don't resolve are dropped
+    silently (logged at debug only — unmapped names are usually accent
+    variants or minor leaguers not in the FG file).
+    """
+    if not names:
+        return {}
+    with _pitcher_name_to_mlbam_lock:
+        idx = dict(_pitcher_name_to_mlbam)
+    out = {}
+    for nm in names:
+        if not nm:
+            continue
+        mid = idx.get(_sv_key(nm)) or idx.get(_sv_key(_ascii_fold(nm)))
+        if mid:
+            out[mid] = nm
+    return out
+
+
+def _load_batter_statcast(batter_id, seasons=None):
+    """Pull the batter's PA-by-PA Statcast log for the last N seasons.
+
+    Returns a pandas DataFrame with columns (pitcher, events, game_date,
+    pitch_type) restricted to rows where `events` is non-null (PA boundaries).
+    Cached per (batter_id, today) so repeat lookups within the day are free.
+
+    Returns None on any pybaseball failure or if PYBASEBALL_CACHE is off
+    and we're rate-limited.
+    """
+    seasons = seasons or ARSENAL_PRIOR_SEASONS
+    today = datetime.now().strftime("%Y-%m-%d")
+    cache_key = (int(batter_id), today, seasons)
+    with _batter_statcast_lock:
+        cached = _batter_statcast_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+    try:
+        import pybaseball as pb
+    except Exception as ex:
+        logging.warning(f"[ArsenalPrior] pybaseball import failed: {ex}")
+        return None
+
+    current_year = datetime.now().year
+    season_years = list(range(current_year - seasons + 1, current_year + 1))
+
+    def _pull_one(yr):
+        try:
+            start = f"{yr}-03-01"
+            end = today if yr == current_year else f"{yr}-11-30"
+            df = pb.statcast_batter(start_dt=start, end_dt=end, player_id=int(batter_id))
+            if df is None or df.empty:
+                return None
+            # Keep only PA boundaries and the columns we need.
+            keep = [c for c in ("pitcher", "events", "game_date", "pitch_type") if c in df.columns]
+            if "events" not in keep:
+                return None
+            sub = df[keep].dropna(subset=["events"])
+            return sub
+        except Exception as ex:
+            logging.warning(f"[ArsenalPrior] statcast pull failed bid={batter_id} yr={yr}: {ex}")
+            return None
+
+    frames = []
+    with ThreadPoolExecutor(max_workers=min(seasons, 4)) as ex:
+        futures = {ex.submit(_pull_one, yr): yr for yr in season_years}
+        for fut in as_completed(futures):
+            df = fut.result()
+            if df is not None and not df.empty:
+                frames.append(df)
+
+    if not frames:
+        with _batter_statcast_lock:
+            _batter_statcast_cache[cache_key] = None
+        return None
+
+    combined = pd.concat(frames, ignore_index=True)
+    with _batter_statcast_lock:
+        _batter_statcast_cache[cache_key] = combined
+    return combined
+
+
+def _aggregate_pa_outcomes(df):
+    """Tally Statcast events into the canonical BvP counts schema.
+
+    Returns {pa, ab, h, hr, bb, k, '1b', '2b', '3b', hbp} ints. Used by
+    both the arsenal prior aggregation and (potentially) for direct BvP
+    derivation once we have Statcast pulls for the pitcher too.
+    """
+    if df is None or df.empty:
+        return None
+    counts = {"pa": 0, "ab": 0, "h": 0, "hr": 0, "bb": 0, "k": 0,
+              "1b": 0, "2b": 0, "3b": 0, "hbp": 0}
+    for ev in df["events"].tolist():
+        if ev is None or (isinstance(ev, float) and pd.isna(ev)):
+            continue
+        e = str(ev).lower().strip()
+        counts["pa"] += 1
+        if e in _BVP_HIT_EVENTS:
+            counts["h"] += 1
+            if e == "single":     counts["1b"] += 1
+            elif e == "double":   counts["2b"] += 1
+            elif e == "triple":   counts["3b"] += 1
+            elif e == "home_run": counts["hr"] += 1
+            counts["ab"] += 1
+        elif e in _BVP_K_EVENTS:
+            counts["k"] += 1
+            counts["ab"] += 1
+        elif e in _BVP_BB_EVENTS:
+            counts["bb"] += 1
+        elif e in _BVP_HBP_EVENTS:
+            counts["hbp"] += 1
+        elif e in _BVP_SAC_EVENTS:
+            pass  # not an AB, not a BB/K/HBP
+        else:
+            # field_out, force_out, grounded_into_double_play, fielders_choice,
+            # double_play, triple_play, etc.
+            counts["ab"] += 1
+    return counts if counts["pa"] else None
+
+
+def _similar_pitchers_for(pitcher_name, top_n=None, sim_floor=None):
+    """Return list of {name, similarity, primary_pitch} for similar arsenals.
+
+    Mirrors the logic in /api/player/<bid>/arsenal-matchup/<pid> at app.py:455
+    (primary-pitch gate + cosine >= threshold) so both surfaces stay aligned.
+    """
+    top_n = top_n or ARSENAL_PRIOR_TOPN
+    sim_floor = sim_floor if sim_floor is not None else ARSENAL_PRIOR_SIM_FLOOR
+    target = sv_pitcher(pitcher_name).get("sv_arsenal_pct", {})
+    if not target:
+        return [], None
+    primary = max(target.items(), key=lambda x: x[1])[0]
+    with _sv_lock:
+        arsenal_idx = dict(_sv_arsenal_pct)
+    out = []
+    for name, arsenal in arsenal_idx.items():
+        if not arsenal or name.lower() == pitcher_name.lower():
+            continue
+        other_primary = max(arsenal.items(), key=lambda x: x[1])[0]
+        if other_primary != primary:
+            continue
+        sim = _arsenal_similarity(target, arsenal)
+        if sim >= sim_floor:
+            out.append({"name": name, "similarity": round(sim, 3),
+                        "primary_pitch": other_primary})
+    out.sort(key=lambda x: x["similarity"], reverse=True)
+    return out[:top_n], primary
+
+
+def _aggregate_vs_similar_pitchers(batter_id, similar_pitcher_names):
+    """Pull batter Statcast, filter to PAs vs similar pitchers, tally counts.
+
+    Returns (counts_dict, audit_dict) or (None, audit_dict_with_reason).
+    audit_dict always includes the resolved similar-pitcher list and the
+    PAs each contributed, so the response is fully traceable.
+    """
+    audit = {
+        "similar_pitchers_in":  len(similar_pitcher_names),
+        "similar_pitchers_resolved": 0,
+        "per_pitcher_pa": {},
+        "reason": None,
+    }
+    id_to_name = _resolve_similar_pitcher_ids(similar_pitcher_names)
+    audit["similar_pitchers_resolved"] = len(id_to_name)
+    if not id_to_name:
+        audit["reason"] = "no_pitcher_ids_resolved"
+        return None, audit
+
+    df = _load_batter_statcast(batter_id)
+    if df is None or df.empty:
+        audit["reason"] = "no_batter_statcast"
+        return None, audit
+    if "pitcher" not in df.columns:
+        audit["reason"] = "no_pitcher_column"
+        return None, audit
+
+    try:
+        df["pitcher"] = pd.to_numeric(df["pitcher"], errors="coerce")
+    except Exception:
+        pass
+    matched = df[df["pitcher"].isin(list(id_to_name.keys()))]
+    if matched.empty:
+        audit["reason"] = "no_pa_against_similar_pitchers"
+        return None, audit
+
+    # Per-pitcher PA breakdown for audit.
+    try:
+        per_pitcher = matched.groupby("pitcher").size().to_dict()
+        audit["per_pitcher_pa"] = {
+            id_to_name.get(int(pid), str(int(pid))): int(pa)
+            for pid, pa in per_pitcher.items()
+        }
+    except Exception:
+        pass
+
+    counts = _aggregate_pa_outcomes(matched)
+    if not counts:
+        audit["reason"] = "events_unparseable"
+        return None, audit
+    return counts, audit
+
+
+def _counts_to_pa_rates(counts):
+    """Same shape as _bvp_row_to_pa_rates output, derived from real counts."""
+    pa = max(1, int(counts.get("pa") or 0))
+    one_b = int(counts.get("1b") or 0)
+    two_b = int(counts.get("2b") or 0)
+    three_b = int(counts.get("3b") or 0)
+    hr = int(counts.get("hr") or 0)
+    bb = int(counts.get("bb") or 0)
+    k = int(counts.get("k") or 0)
+    hbp = int(counts.get("hbp") or 0)
+    return {
+        "k":   k / pa,
+        "bb":  bb / pa,
+        "hbp": hbp / pa if hbp else 0.005,
+        "1b":  one_b / pa,
+        "2b":  two_b / pa,
+        "3b":  three_b / pa,
+        "hr":  hr / pa,
+    }
+
+
+def _blend_bvp_with_prior(direct_rates, direct_pa, prior_rates, prior_pa,
+                          prior_strength=None):
+    """Bayesian shrinkage: small direct samples lean on the prior.
+
+    effective_prior_pa = min(prior_pa, prior_strength) caps the prior so a
+    huge prior can't completely override a meaningful direct sample.
+    Returns (blended_rates, weight_dict) where weight_dict.prior_weight
+    is the share of the blended rate that came from the prior.
+    """
+    if not direct_rates and not prior_rates:
+        return None, {"prior_weight": 0.0, "direct_pa": 0, "prior_pa": 0}
+    if not prior_rates:
+        return direct_rates, {"prior_weight": 0.0, "direct_pa": direct_pa, "prior_pa": 0}
+    if not direct_rates or direct_pa <= 0:
+        return prior_rates, {"prior_weight": 1.0, "direct_pa": 0, "prior_pa": prior_pa}
+
+    strength = prior_strength if prior_strength is not None else ARSENAL_PRIOR_STRENGTH
+    eff_prior_pa = min(int(prior_pa), int(strength))
+    total = float(direct_pa + eff_prior_pa)
+    if total <= 0:
+        return direct_rates, {"prior_weight": 0.0, "direct_pa": direct_pa, "prior_pa": prior_pa}
+    prior_w = eff_prior_pa / total
+    direct_w = direct_pa / total
+    keys = set(direct_rates.keys()) | set(prior_rates.keys())
+    blended = {
+        k: direct_w * float(direct_rates.get(k, 0.0))
+           + prior_w * float(prior_rates.get(k, 0.0))
+        for k in keys
+    }
+    return blended, {
+        "prior_weight":  round(prior_w, 3),
+        "direct_weight": round(direct_w, 3),
+        "direct_pa":     int(direct_pa),
+        "prior_pa":      int(prior_pa),
+        "effective_prior_pa": int(eff_prior_pa),
+        "prior_strength": int(strength),
+    }
+
+
 def _normalize_matchup_row(raw, source):
     """Map a CSV or BQ matchup row to the canonical BvP schema.
 
@@ -21261,8 +21668,66 @@ def api_matchup_vertex():
             })
 
         bq_stats = _normalize_matchup_row(bq_stats, source)
-        per_pa = _bvp_row_to_pa_rates(bq_stats)
-        mc = _monte_carlo_vs_sp(per_pa, pa_vs_sp, n_sims=4000, rng_seed=batter_id * 1000 + pitcher_id)
+        direct_rates = _bvp_row_to_pa_rates(bq_stats)
+        direct_pa = int(bq_stats.get("pa") or 0)
+
+        # Arsenal-similarity prior: pull batter's PA log vs pitchers with
+        # similar arsenals (cosine >= ARSENAL_PRIOR_SIM_FLOOR), aggregate
+        # the real outcomes, blend with the direct sample by sample size.
+        # Hard-bounded by ARSENAL_PRIOR_TIMEOUT_S so cold pybaseball pulls
+        # never block /api/matchup beyond that budget.
+        prior_block = {"status": "skipped", "reason": None}
+        per_pa = direct_rates
+        try:
+            pitcher_name = bq_stats.get("pitcher_name") or ""
+            if not pitcher_name:
+                prior_block.update(status="skipped", reason="no_pitcher_name")
+            else:
+                similar, primary = _similar_pitchers_for(pitcher_name)
+                prior_block["target_pitcher"] = pitcher_name
+                prior_block["primary_pitch"]  = primary
+                prior_block["similar_count"]  = len(similar)
+                prior_block["similar"] = [
+                    {"name": s["name"], "similarity": s["similarity"]}
+                    for s in similar
+                ]
+                if not similar:
+                    prior_block.update(status="skipped", reason="no_similar_arsenals")
+                else:
+                    similar_names = [s["name"] for s in similar]
+                    fut_pool = ThreadPoolExecutor(max_workers=1)
+                    try:
+                        fut = fut_pool.submit(_aggregate_vs_similar_pitchers,
+                                              batter_id, similar_names)
+                        prior_counts, audit = fut.result(timeout=ARSENAL_PRIOR_TIMEOUT_S)
+                    except Exception as tex:
+                        prior_counts, audit = None, {"reason": f"timeout_or_error: {tex.__class__.__name__}"}
+                    finally:
+                        fut_pool.shutdown(wait=False)
+
+                    prior_block["audit"] = audit
+                    if prior_counts and prior_counts.get("pa", 0) > 0:
+                        prior_rates = _counts_to_pa_rates(prior_counts)
+                        blended, weights = _blend_bvp_with_prior(
+                            direct_rates, direct_pa,
+                            prior_rates,  int(prior_counts["pa"]),
+                        )
+                        per_pa = blended or direct_rates
+                        prior_block["status"] = "blended"
+                        prior_block["prior_counts"] = prior_counts
+                        prior_block["weights"] = weights
+                        prior_block["confidence"] = (
+                            "low" if int(prior_counts["pa"]) < 15 else "ok"
+                        )
+                    else:
+                        prior_block["status"] = "no_prior_data"
+                        prior_block["reason"] = audit.get("reason")
+        except Exception as ex:
+            prior_block.update(status="error", reason=str(ex))
+            app.logger.warning(f"[arsenal_prior] {ex}")
+
+        mc = _monte_carlo_vs_sp(per_pa, pa_vs_sp, n_sims=4000,
+                                rng_seed=batter_id * 1000 + pitcher_id)
 
         analysis = None
         analysis_error = None
@@ -21274,6 +21739,7 @@ def api_matchup_vertex():
                 "`confidence` (0-100 int), `key_factors` (array of <=4 short strings), "
                 "`risk` (string), `summary` (one paragraph, <=80 words).\n\n"
                 f"Stats:\n{json.dumps(bq_stats, default=str, ensure_ascii=True)}\n\n"
+                f"Arsenal-similarity prior:\n{json.dumps(prior_block, default=str, ensure_ascii=True)}\n\n"
                 f"Monte Carlo ({mc.get('nSims')} sims, {mc.get('nPa')} PA):\n"
                 f"{json.dumps(mc, default=str, ensure_ascii=True)}"
             )
@@ -21292,6 +21758,7 @@ def api_matchup_vertex():
             "pitcher_id": pitcher_id,
             "stats": bq_stats,
             "monte_carlo": mc,
+            "arsenal_prior": prior_block,
             "analysis": analysis,
             "analysis_error": analysis_error,
             "source": source,
