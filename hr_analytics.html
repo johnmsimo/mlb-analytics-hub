@@ -56,6 +56,8 @@ a{color:var(--cold);text-decoration:none}
 .batter-meta{font-size:11px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .batter-stats{font-size:11px;color:var(--muted);margin-top:3px}
 .batter-stats span{margin-right:8px}
+.ai-blurb{font-size:11.5px;line-height:1.4;color:#cfd6dd;margin-top:6px;padding:6px 8px;background:rgba(127,156,255,0.08);border-left:2px solid var(--accent2);border-radius:3px;white-space:normal}
+.ai-tag{display:inline-block;font-size:9px;font-weight:700;color:var(--accent2);background:rgba(127,156,255,0.18);padding:1px 5px;border-radius:3px;margin-right:6px;vertical-align:middle;letter-spacing:0.5px}
 
 .score-block{text-align:center;flex-shrink:0}
 .score-val{font-size:22px;font-weight:800;line-height:1}
@@ -255,6 +257,7 @@ async function renderMajorMarketsPanelHR(gamePk) {
 <script>
 const API = '';
 let allScores = [];
+let aiBlurbs = {};
 let selectedBatter = null;
 let activeGameFilter = 'all';
 let scoutingLoading = false;
@@ -290,6 +293,15 @@ function probPct(p) {
   return (p * 100).toFixed(1) + '%';
 }
 
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function setHeaderDate() {
   const now = new Date();
   document.getElementById('headerDate').textContent =
@@ -314,6 +326,7 @@ async function loadDailyScores(force=false) {
     }
 
     allScores = d.scores;
+    aiBlurbs  = d.ai_blurbs || {};
     document.getElementById('lastRefreshed').textContent =
       d.cached ? 'cached' : 'live';
 
@@ -370,6 +383,10 @@ function renderLeaderboard(scores) {
     const rankClass = rank === 1 ? 'rank-1' : rank === 2 ? 'rank-2' : rank === 3 ? 'rank-3' : 'rank-other';
     const sc = scoreClass(s.score);
     const selected = selectedBatter && selectedBatter.batter_id === s.batter_id && selectedBatter.pitcher_id === s.pitcher_id ? ' selected' : '';
+    const blurb    = aiBlurbs[String(s.batter_id)] || '';
+    const blurbRow = blurb
+      ? `<div class="ai-blurb"><span class="ai-tag">AI</span>${escapeHtml(blurb)}</div>`
+      : '';
     return `
     <div class="batter-card${selected}" onclick="selectBatter(${JSON.stringify(s).replace(/"/g,'&quot;')})">
       <div class="rank-badge ${rankClass}">#${rank}</div>
@@ -382,6 +399,7 @@ function renderLeaderboard(scores) {
           <span>HH% ${fmtPct(s.hh_pct)}</span>
           <span>PkHR ${s.park_hr_idx}</span>
         </div>
+        ${blurbRow}
       </div>
       <div class="score-block">
         <div class="score-val ${sc}">${s.score.toFixed(0)}</div>

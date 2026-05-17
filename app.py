@@ -21165,8 +21165,11 @@ def api_hr_daily_scores():
                 return jsonify({
                     "success": True,
                     "date": date_str,
-                    "scores": _hr_daily_cache["scores"],
-                    "cached": True,
+                    "scores":      _hr_daily_cache["scores"],
+                    "ai_blurbs":   _hr_daily_cache.get("ai_blurbs") or {},
+                    "ai_enriched": bool(_hr_daily_cache.get("ai_blurbs")),
+                    "ai_model":    _hr_daily_cache.get("ai_model"),
+                    "cached":      True,
                 })
 
         _maybe_refresh_fg()
@@ -21282,15 +21285,24 @@ def api_hr_daily_scores():
 
         scores.sort(key=lambda x: x["score"], reverse=True)
 
+        ai_blurbs, ai_err = _vertex_hr_pick_blurbs(scores, top_n=20)
+
         with _hr_daily_lock:
-            _hr_daily_cache["date"]   = date_str
-            _hr_daily_cache["scores"] = scores
+            _hr_daily_cache["date"]      = date_str
+            _hr_daily_cache["scores"]    = scores
+            _hr_daily_cache["ai_blurbs"] = ai_blurbs
+            _hr_daily_cache["ai_model"]  = VERTEX_MODELS.get("fast") if ai_blurbs else None
+            _hr_daily_cache["ai_error"]  = ai_err
 
         return jsonify({
             "success": True,
             "date": date_str,
-            "scores": scores,
-            "cached": False,
+            "scores":      scores,
+            "ai_blurbs":   ai_blurbs,
+            "ai_enriched": bool(ai_blurbs),
+            "ai_model":    VERTEX_MODELS.get("fast") if ai_blurbs else None,
+            "ai_error":    ai_err,
+            "cached":      False,
         })
     except Exception as ex:
         print(f"[api_hr_daily_scores] {traceback.format_exc()}")
@@ -22381,6 +22393,57 @@ def _vertex_cheatsheet_enrich(payload):
         payload["aiEnriched"] = False
         payload["aiError"] = str(ex)
     return payload
+
+
+def _vertex_hr_pick_blurbs(scores, top_n=20):
+    """Generate one short Gemini Flash-Lite blurb per top HR pick.
+
+    Returns a dict keyed by batter_id (string) -> blurb (string). The whole
+    top-N batch is sent in a single Gemini call so a 20-pick slate costs
+    one request and produces specific, factor-aware commentary on every
+    card without the user having to drill into the AI Report tab.
+    """
+    if not _gemini_available or not scores:
+        return {}, "gemini_unavailable"
+    try:
+        sample = [
+            {
+                "id":          s.get("batter_id"),
+                "batter":      s.get("batter"),
+                "pitcher":     s.get("pitcher"),
+                "park_hr_idx": s.get("park_hr_idx"),
+                "iso":         s.get("iso"),
+                "barrel_pct":  s.get("barrel_pct"),
+                "hh_pct":      s.get("hh_pct"),
+                "hr9_vs_hand": s.get("hr9_vs_hand"),
+                "score":       s.get("score"),
+                "prob_hr":     s.get("prob_hr"),
+            }
+            for s in (scores or [])[:top_n]
+        ]
+        if not sample:
+            return {}, None
+        prompt = (
+            "For each HR pick below, write ONE concise (<=22 words) blurb that "
+            "names the single strongest factor (park, barrel rate, pitcher HR9, "
+            "platoon, ISO, etc.). No fluff, no hype words. "
+            "Return JSON {blurbs: {id: blurb, ...}} where id is the batter id as a string.\n\n"
+            f"{json.dumps(sample, ensure_ascii=True)}"
+        )
+        result, err = _vertex_gemini_json(
+            "fast", prompt,
+            system="You are a sharp MLB HR-prop analyst. Be specific, evidence-first. Raw JSON only.",
+            max_tokens=1600, temperature=0.4,
+        )
+        if not result:
+            return {}, err
+        raw = result.get("blurbs") or {}
+        # Normalize keys to strings so the frontend lookup works regardless
+        # of whether the model returned ints or strings as the JSON key.
+        return {str(k): v for k, v in raw.items() if v}, None
+    except Exception as ex:
+        app.logger.warning(f"[hr_picks_vertex] enrich failed: {ex}")
+        return {}, str(ex)
 
 
 @app.route("/api/cheatsheet")
