@@ -22068,16 +22068,43 @@ def api_matchup_vertex():
                 bq_stats = csv_row
                 source = "csv_fallback"
 
+        # No direct BvP sample is the case the arsenal-similarity priors
+        # were *built for*. Synthesize a zero-PA stats dict carrying just
+        # the names + handedness needed by the prior helpers; the blender
+        # filters pa<=0 sources, so direct contributes nothing and the
+        # priors stand alone.
         if not bq_stats:
-            return jsonify({
-                "success": True,
-                "batter_id": batter_id,
-                "pitcher_id": pitcher_id,
-                "stats": None,
-                "monte_carlo": None,
-                "analysis": None,
-                "source": "no_data",
-            })
+            batter_prof = {}
+            with _batter_profiles_lock:
+                batter_prof = dict(_batter_profiles.get(int(batter_id)) or {})
+            batter_name = batter_prof.get("name") or ""
+            bats        = batter_prof.get("bats")  or ""
+
+            # Pitcher name: try the reverse of _pitcher_name_to_mlbam first
+            # (in-memory, instant); fall back to MLB Stats API people lookup.
+            pitcher_name = ""
+            with _pitcher_name_to_mlbam_lock:
+                for nm_key, mid in _pitcher_name_to_mlbam.items():
+                    if int(mid) == int(pitcher_id):
+                        pitcher_name = nm_key
+                        break
+            if not pitcher_name:
+                try:
+                    r = requests.get(f"{MLB_API}/people/{pitcher_id}", timeout=5)
+                    r.raise_for_status()
+                    people = r.json().get("people", [])
+                    if people:
+                        pitcher_name = people[0].get("fullName", "")
+                except Exception:
+                    pass
+
+            bq_stats = {
+                "pa": 0, "ab": 0, "h": 0, "hr": 0, "bb": 0, "k": 0,
+                "batter_name":  batter_name,
+                "bats":         bats,
+                "pitcher_name": pitcher_name,
+            }
+            source = "no_direct_bvp"
 
         bq_stats = _normalize_matchup_row(bq_stats, source)
         direct_rates = _bvp_row_to_pa_rates(bq_stats)
@@ -22220,6 +22247,25 @@ def api_matchup_vertex():
         except Exception as ex:
             prior_block.update(status="error", reason=str(ex))
             app.logger.warning(f"[arsenal_prior] {ex}")
+
+        # Genuinely no signal: direct empty AND both priors empty. Return
+        # cleanly instead of running MC on all-zero rates.
+        has_direct  = direct_pa > 0
+        has_b_prior = bool(prior_counts and prior_counts.get("pa", 0) > 0)
+        has_p_prior = bool(pitcher_prior_counts and pitcher_prior_counts.get("pa", 0) > 0)
+        if not (has_direct or has_b_prior or has_p_prior):
+            return jsonify({
+                "success": True,
+                "batter_id": batter_id,
+                "pitcher_id": pitcher_id,
+                "stats":                bq_stats,
+                "monte_carlo":          None,
+                "analysis":             None,
+                "source":               "no_data",
+                "arsenal_prior":        prior_block,
+                "pitcher_batter_prior": pitcher_prior_block,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
 
         mc = _monte_carlo_vs_sp(per_pa, pa_vs_sp, n_sims=4000,
                                 rng_seed=batter_id * 1000 + pitcher_id)
