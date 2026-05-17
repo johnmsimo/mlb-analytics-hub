@@ -21555,6 +21555,15 @@ if _PIPELINE_AVAILABLE:
     start_scheduler()
     logging.info("[pipeline] Scheduler armed — fires at 09:00 ET daily.")
 
+# Start BigQuery ETL scheduler: one boot refresh + daily at 09:30 ET (30 min
+# after the matchup pipeline so today's BvP CSV exists before we upload it).
+# No-ops if GOOGLE_CLOUD_PROJECT is unset or google-cloud-bigquery is missing.
+try:
+    from bq_etl import start_bq_scheduler
+    start_bq_scheduler()
+except Exception as _bq_sched_err:
+    logging.warning(f"[bq_etl] scheduler not started: {_bq_sched_err}")
+
 
 if __name__ == "__main__":
     # When running via `python app.py` the gunicorn post_fork hook never fires,

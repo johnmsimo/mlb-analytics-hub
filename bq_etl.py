@@ -368,36 +368,113 @@ def apply_slate_view(client):
 
 
 # ── Entry ─────────────────────────────────────────────────────────────────────
-def main():
-    ap = argparse.ArgumentParser(description="MLB Analytics Hub — BigQuery ETL")
-    ap.add_argument("--refresh", default="all",
-                    choices=["batters", "pitchers", "bvp", "view", "all"],
-                    help="which slice to refresh")
-    args = ap.parse_args()
+def run_all(refresh="all"):
+    """Programmatic entry — same effect as `python bq_etl.py --refresh <refresh>`.
 
+    Returns a dict summary. Idempotent: WRITE_TRUNCATE for batters/pitchers,
+    WRITE_APPEND with daily partitions for bvp_situational. Safe to call from
+    background daemons; the BQ client + dataset are created on demand.
+    """
     project = os.environ.get("GOOGLE_CLOUD_PROJECT")
     if not project:
-        log.error("GOOGLE_CLOUD_PROJECT is required")
-        sys.exit(1)
+        return {"ok": False, "reason": "GOOGLE_CLOUD_PROJECT_unset"}
 
     bq = _bq()
     client = bq.Client(project=project)
     ensure_dataset(client)
 
     started = time.time()
-    if args.refresh in ("batters", "all"):
-        load_df(client, build_batters_df(), f"{DATASET}.batters",
-                batters_schema(), bq.WriteDisposition.WRITE_TRUNCATE)
-    if args.refresh in ("pitchers", "all"):
-        load_df(client, build_pitchers_df(), f"{DATASET}.pitchers",
-                pitchers_schema(), bq.WriteDisposition.WRITE_TRUNCATE)
-    if args.refresh in ("bvp", "all"):
-        load_df(client, build_bvp_df(), f"{DATASET}.bvp_situational",
-                bvp_schema(), bq.WriteDisposition.WRITE_APPEND,
-                partition_field="updated_at")
-    if args.refresh in ("view", "all"):
-        apply_slate_view(client)
-    log.info("[done] elapsed=%.1fs", time.time() - started)
+    summary = {"ok": True, "project": project, "refresh": refresh, "tables": {}}
+    try:
+        if refresh in ("batters", "all"):
+            df = build_batters_df()
+            load_df(client, df, f"{DATASET}.batters",
+                    batters_schema(), bq.WriteDisposition.WRITE_TRUNCATE)
+            summary["tables"]["batters"] = len(df) if df is not None else 0
+        if refresh in ("pitchers", "all"):
+            df = build_pitchers_df()
+            load_df(client, df, f"{DATASET}.pitchers",
+                    pitchers_schema(), bq.WriteDisposition.WRITE_TRUNCATE)
+            summary["tables"]["pitchers"] = len(df) if df is not None else 0
+        if refresh in ("bvp", "all"):
+            df = build_bvp_df()
+            load_df(client, df, f"{DATASET}.bvp_situational",
+                    bvp_schema(), bq.WriteDisposition.WRITE_APPEND,
+                    partition_field="updated_at")
+            summary["tables"]["bvp_situational"] = len(df) if df is not None else 0
+        if refresh in ("view", "all"):
+            apply_slate_view(client)
+            summary["tables"]["daily_slate_view"] = "applied"
+    except Exception as ex:
+        summary["ok"] = False
+        summary["error"] = str(ex)
+        log.error("[run_all] failed: %s", ex)
+    summary["elapsed_sec"] = round(time.time() - started, 2)
+    return summary
+
+
+# ── Daemon scheduler (called from app.py) ────────────────────────────────────
+import threading as _threading
+
+_SCHED_RUN_HOUR_ET   = int(os.environ.get("BQ_ETL_HOUR_ET",   "9"))
+_SCHED_RUN_MINUTE_ET = int(os.environ.get("BQ_ETL_MINUTE_ET", "30"))
+
+
+def start_bq_scheduler():
+    """Daemon: one boot refresh + daily refresh at BQ_ETL_HOUR/MINUTE_ET.
+
+    Designed to be called once from app.py after Flask boot. Never blocks the
+    main thread. Silently no-ops when google-cloud-bigquery is unavailable or
+    GOOGLE_CLOUD_PROJECT is unset.
+    """
+    if not os.environ.get("GOOGLE_CLOUD_PROJECT"):
+        log.info("[bq_etl] GOOGLE_CLOUD_PROJECT unset — scheduler not armed")
+        return
+
+    def _runner():
+        from datetime import datetime as _dt
+        from zoneinfo import ZoneInfo as _ZI
+        ET_TZ = _ZI("America/New_York")
+
+        try:
+            log.info("[bq_etl] boot refresh starting")
+            summary = run_all("all")
+            log.info("[bq_etl] boot refresh complete: %s", summary)
+        except Exception as ex:
+            log.warning("[bq_etl] boot refresh failed: %s", ex)
+
+        last_run_date = None
+        while True:
+            try:
+                now = _dt.now(ET_TZ)
+                if (now.hour == _SCHED_RUN_HOUR_ET
+                        and now.minute == _SCHED_RUN_MINUTE_ET
+                        and now.date() != last_run_date):
+                    last_run_date = now.date()
+                    log.info("[bq_etl] daily refresh starting")
+                    summary = run_all("all")
+                    log.info("[bq_etl] daily refresh complete: %s", summary)
+            except Exception as ex:
+                log.warning("[bq_etl] scheduler tick failed: %s", ex)
+            time.sleep(30)
+
+    t = _threading.Thread(target=_runner, daemon=True, name="bq_etl_scheduler")
+    t.start()
+    log.info("[bq_etl] scheduler armed — daily refresh at %02d:%02d ET",
+             _SCHED_RUN_HOUR_ET, _SCHED_RUN_MINUTE_ET)
+
+
+def main():
+    ap = argparse.ArgumentParser(description="MLB Analytics Hub — BigQuery ETL")
+    ap.add_argument("--refresh", default="all",
+                    choices=["batters", "pitchers", "bvp", "view", "all"],
+                    help="which slice to refresh")
+    args = ap.parse_args()
+    summary = run_all(args.refresh)
+    if not summary.get("ok"):
+        log.error("[main] failed: %s", summary)
+        sys.exit(1)
+    log.info("[done] %s", summary)
 
 
 if __name__ == "__main__":
