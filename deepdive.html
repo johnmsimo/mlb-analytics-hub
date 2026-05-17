@@ -5658,25 +5658,73 @@ function renderH2H(){
       '<p style="font-size:.62rem;color:var(--mu);padding:12px 0">⏳ Loading BvP data…</p>'
     );
 
-    // Fetch EV game log
-    fetch('/api/player/'+bid+'/bvp/'+pid)
-      .then(function(r){ return r.json(); })
-      .then(function(d){
-        var games = d.games || d.data || d.logs || [];
-        // Try to get better KPI values from BvP summary
-        var bvpEv  = parseFloat((d.avg_ev||d.ev)||0);
-        var bvpBrl = parseFloat((d.barrel_pct||d.brl)||0);
-        if(bvpEv  > 70) ev26   = bvpEv;
-        if(bvpBrl >  0) brl26  = bvpBrl;
-        el.innerHTML = buildShell(kpiRow(ev, barrel, ev26, brl26), evTableHtml(games));
-      })
-      .catch(function(){
-        el.innerHTML = buildShell(kpiRow(ev, barrel, ev26, brl26), evTableHtml([]));
-      });
+    // Fetch in parallel: BvP game log + arsenal-similarity priors (/api/matchup).
+    var pBvP = fetch('/api/player/'+bid+'/bvp/'+pid).then(function(r){ return r.json(); }).catch(function(){ return null; });
+    var pPrior = fetch('/api/matchup?batter_id='+bid+'&pitcher_id='+pid).then(function(r){ return r.json(); }).catch(function(){ return null; });
+
+    Promise.all([pBvP, pPrior]).then(function(results){
+      var d = results[0] || {};
+      var mp = results[1] || {};
+      var games = d.games || d.data || d.logs || [];
+      var bvpEv  = parseFloat((d.avg_ev||d.ev)||0);
+      var bvpBrl = parseFloat((d.barrel_pct||d.brl)||0);
+      if(bvpEv  > 70) ev26   = bvpEv;
+      if(bvpBrl >  0) brl26  = bvpBrl;
+      el.innerHTML = buildShell(kpiRow(ev, barrel, ev26, brl26),
+                                evTableHtml(games) + priorPanelsHtml(mp));
+    });
   } else {
     // No IDs available — show Savant stats we have on the batter object
     el.innerHTML = buildShell(kpiRow(ev, barrel, ev26, brl26), evTableHtml([]));
   }
+}
+
+// ── Arsenal-similarity prior panels ──────────────────────────────────
+// Renders the two prior blocks returned by /api/matchup:
+//   arsenal_prior         : batter's outcomes vs pitchers with similar arsenals
+//   pitcher_batter_prior  : pitcher's outcomes vs batters with similar profiles
+// Both fall back to a "status: skipped/no_prior_data" notice instead of an
+// empty panel so users can see why a prior wasn't applied.
+function priorPanelsHtml(mp){
+  if(!mp || (!mp.arsenal_prior && !mp.pitcher_batter_prior)) return '';
+  function statLine(c){
+    if(!c) return '';
+    var pa = +c.pa||0, ab = +c.ab||1, h = +c.h||0, bb = +c.bb||0;
+    var tb = (+c['1b']||0) + 2*(+c['2b']||0) + 3*(+c['3b']||0) + 4*(+c.hr||0);
+    var avg = h/Math.max(ab,1);
+    var obp = (h+bb)/Math.max(pa,1);
+    var slg = tb/Math.max(ab,1);
+    function f3(x){ return (x).toFixed(3).replace(/^0/, ''); }
+    return pa+' PA · '+f3(avg)+'/'+f3(obp)+'/'+f3(slg)+' · '+(+c.hr||0)+' HR · '+(+c.k||0)+' K';
+  }
+  function panel(title, p){
+    if(!p) return '';
+    var status = p.status || 'unknown';
+    var color  = (status === 'blended') ? '#67e8f9' : (status === 'ready' ? '#9ca3af' : '#f59e0b');
+    var head   = '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-top:14px">'
+               + '<div style="font-size:.68rem;font-weight:600;color:var(--t)">'+title+'</div>'
+               + '<div style="font-size:.55rem;color:'+color+';text-transform:uppercase;letter-spacing:.5px">'+status+'</div>'
+               + '</div>';
+    if(!p.prior_counts){
+      var reason = p.reason || (p.audit && p.audit.reason) || 'no data';
+      return head + '<div style="font-size:.6rem;color:var(--mu);padding:4px 0 8px">— '+reason+'</div>';
+    }
+    var stat = statLine(p.prior_counts);
+    var sim  = (p.similar||[]).slice(0, 5).map(function(s){
+      return s.name + ' (' + (s.similarity!=null ? (s.similarity*100).toFixed(0)+'%' : '?') + ')';
+    }).join(' · ');
+    var weight = '';
+    if(p.blend_audit && p.blend_audit.weights){
+      var ws = p.blend_audit.weights.map(function(w){ return (w.weight*100).toFixed(0)+'%'; }).join(' / ');
+      weight = '<div style="font-size:.55rem;color:var(--mu);padding-top:2px">blend weights (direct · b-prior · p-prior): '+ws+'</div>';
+    }
+    return head
+         + '<div style="font-size:.62rem;color:#e5e7eb;padding:4px 0">'+stat+'</div>'
+         + (sim ? '<div style="font-size:.55rem;color:var(--mu);padding-bottom:2px">via: '+sim+'</div>' : '')
+         + weight;
+  }
+  return panel('Batter vs similar-arsenal pitchers',  mp.arsenal_prior)
+       + panel('Pitcher vs similar-profile batters',  mp.pitcher_batter_prior);
 }
 
 // ── HR SIMULATOR ────────────────────────────────────────────────

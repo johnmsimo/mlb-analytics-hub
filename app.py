@@ -2053,10 +2053,110 @@ def _load_pitcher_name_to_mlbam():
     logging.info(f"[NameMap] {len(out)} pitcher name->MLBAM entries from {len(files)} season files")
 
 
+# Batter profile lookup (mlbam_id -> {bats, name}) for the similar-batters
+# pitcher-side prior. Loaded from fg_batting_*.csv (same multi-season scan
+# pattern as the pitcher map above).
+_batter_profiles: dict = {}
+_batter_profiles_lock = threading.Lock()
+_batter_profiles_loaded = False
+
+
+def _load_batter_profiles():
+    """Build mlbam_id -> {bats, name} map from fg_batting_*.csv files."""
+    global _batter_profiles_loaded
+    data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+    files = sorted(_glob.glob(os.path.join(data_dir, 'fg_batting_*.csv')))  # oldest first
+    if not files:
+        logging.warning("[BatterProfiles] no fg_batting_*.csv; pitcher-side prior disabled")
+        return
+    out = {}
+    for path in files:
+        try:
+            with open(path, newline='', encoding='utf-8-sig') as f:
+                for row in csvmod.DictReader(f):
+                    mlbam = (row.get("xMLBAMID") or "").strip()
+                    if not mlbam:
+                        continue
+                    try:
+                        mid = int(mlbam)
+                    except ValueError:
+                        continue
+                    bats = (row.get("Bats") or "").strip().upper() or None
+                    name = (row.get("PlayerName") or "").strip()
+                    if not name:
+                        name = _FG_NAME_HTML_RE.sub("", row.get("Name") or "").strip()
+                    if not name:
+                        continue
+                    # Newest file wins on conflict (handles handedness changes,
+                    # e.g. switch hitters reclassified).
+                    out[mid] = {"bats": bats, "name": name}
+        except Exception as ex:
+            logging.warning(f"[BatterProfiles] load error {os.path.basename(path)}: {ex}")
+    if not out:
+        return
+    with _batter_profiles_lock:
+        _batter_profiles.clear()
+        _batter_profiles.update(out)
+        _batter_profiles_loaded = True
+    logging.info(f"[BatterProfiles] {len(out)} batter profiles from {len(files)} season files")
+
+
+def _prewarm_arsenal_priors():
+    """After boot, warm pybaseball Statcast cache for today's slate batters.
+
+    Idea: the first /api/matchup request per batter has to wait 4-8s for the
+    cold pybaseball pull. By front-running these pulls in a background thread
+    after boot, the user-facing latency drops to ~50ms (in-memory filter).
+
+    Waits up to 60s for _matchup_cache to populate (the matchup CSV loader
+    runs in its own boot thread), then dispatches the pulls 6-wide.
+    """
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        with _matchup_lock_local:
+            ready = bool(_matchup_cache)
+        if ready:
+            break
+        time.sleep(2)
+    with _matchup_lock_local:
+        rows = list(_matchup_cache.values())
+    batter_ids = set()
+    for r in rows:
+        bid_raw = (r.get('batter_id') or '').strip() if isinstance(r, dict) else ''
+        if bid_raw and bid_raw.isdigit():
+            batter_ids.add(int(bid_raw))
+    if not batter_ids:
+        logging.info("[ArsenalPriorWarm] no batter IDs in matchup cache; skipping")
+        return
+    logging.info(f"[ArsenalPriorWarm] warming Statcast cache for {len(batter_ids)} batters")
+    done = 0
+    failed = 0
+    # We deliberately call the lazy loader here rather than touching the cache
+    # dict directly — it handles disk-cache reuse via PYBASEBALL_CACHE=1 and
+    # populates _batter_statcast_cache atomically.
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        futures = {ex.submit(_load_batter_statcast, bid): bid for bid in batter_ids}
+        for fut in as_completed(futures):
+            try:
+                df = fut.result()
+                if df is None or (hasattr(df, "empty") and df.empty):
+                    failed += 1
+                else:
+                    done += 1
+            except Exception:
+                failed += 1
+            total = done + failed
+            if total % 50 == 0:
+                logging.info(f"[ArsenalPriorWarm] {total}/{len(batter_ids)} ({done} hit, {failed} miss)")
+    logging.info(f"[ArsenalPriorWarm] complete: {done} hit, {failed} miss out of {len(batter_ids)}")
+
+
 # Launch historical data loaders at startup (after function definitions)
 threading.Thread(target=_load_fg_historical, daemon=True).start()
 threading.Thread(target=_load_matchup_files, daemon=True).start()
 threading.Thread(target=_load_pitcher_name_to_mlbam, daemon=True).start()
+threading.Thread(target=_load_batter_profiles, daemon=True).start()
+threading.Thread(target=_prewarm_arsenal_priors, daemon=True).start()
 
 
 def _wait_for_fg_data(timeout_sec=30):
@@ -21538,6 +21638,268 @@ def _blend_bvp_with_prior(direct_rates, direct_pa, prior_rates, prior_pa,
     }
 
 
+def _blend_multi(sources, total_strength_cap=None):
+    """Blend N rate dicts by sample-size weights.
+
+    `sources` is a list of (rates_dict, pa_count, per_source_strength_cap).
+    Each source contributes its weight = min(pa_count, per_source_cap); the
+    blended rate for each key is a weighted average. Empty sources skipped.
+
+    `total_strength_cap` (optional) caps the *sum* of effective weights so
+    no combined prior can completely override a real-sized direct sample.
+    """
+    cleaned = []
+    for entry in sources:
+        if not entry:
+            continue
+        rates, pa, cap = entry
+        if not rates or pa is None or pa <= 0:
+            continue
+        eff = int(min(int(pa), int(cap))) if cap is not None else int(pa)
+        if eff <= 0:
+            continue
+        cleaned.append((rates, eff, int(pa)))
+    if not cleaned:
+        return None, {"weights": [], "total_effective_pa": 0}
+    total_w = sum(w for _, w, _ in cleaned)
+    if total_strength_cap is not None and total_w > total_strength_cap:
+        # Scale down proportionally so the cap is respected.
+        scale = total_strength_cap / total_w
+        cleaned = [(r, max(1, int(round(w * scale))), p) for r, w, p in cleaned]
+        total_w = sum(w for _, w, _ in cleaned)
+    keys = set()
+    for r, _, _ in cleaned:
+        keys.update(r.keys())
+    blended = {
+        k: sum(w * float(r.get(k, 0.0)) for r, w, _ in cleaned) / float(total_w)
+        for k in keys
+    }
+    weights_audit = [
+        {"effective_pa": w, "raw_pa": p, "weight": round(w / float(total_w), 3)}
+        for _, w, p in cleaned
+    ]
+    return blended, {
+        "weights": weights_audit,
+        "total_effective_pa": int(total_w),
+    }
+
+
+# ── Pitcher-side prior: similar batters ────────────────────────────────────
+# Mirror of the batter-arsenal prior, applied to the other side of the
+# matchup. For a given (batter, pitcher) we ask: how has THIS PITCHER fared
+# against batters with profile similar to THIS BATTER? "Similar batter" is
+# defined as same handedness AND xwOBA within ARSENAL_PRIOR_XWOBA_WINDOW
+# (sorted by xwOBA closeness, capped at ARSENAL_PRIOR_TOPN_BATTERS). The
+# pitcher's PA-by-PA Statcast log is then filtered to those batter IDs and
+# tallied into the same counts schema.
+
+ARSENAL_PRIOR_XWOBA_WINDOW    = float(os.environ.get("ARSENAL_PRIOR_XWOBA_WINDOW",   "0.020"))
+ARSENAL_PRIOR_TOPN_BATTERS    = int(os.environ.get("ARSENAL_PRIOR_TOPN_BATTERS",     "30"))
+ARSENAL_PRIOR_PITCHER_STRENGTH = int(os.environ.get("ARSENAL_PRIOR_PITCHER_STRENGTH", "20"))
+
+# In-memory cache for pitcher Statcast logs, mirror of _batter_statcast_cache.
+_pitcher_statcast_cache: dict = {}
+_pitcher_statcast_lock = threading.Lock()
+
+
+def _similar_batters_for(batter_id, batter_name_hint=None):
+    """Find batters with similar handedness + xwOBA to the target.
+
+    Returns ([{batter_id, name, bats, xwoba, similarity}, ...], target_meta)
+    where target_meta is the resolved {bats, xwoba} for the target so the
+    caller can report it.
+
+    Uses _batter_profiles (mlbam -> bats/name) and _sv_bat_xstats (name ->
+    xwoba). Skips silently if either cache is empty or the target is
+    unresolvable.
+    """
+    with _batter_profiles_lock:
+        prof_idx = dict(_batter_profiles)
+    target_prof = prof_idx.get(int(batter_id))
+    if not target_prof:
+        return [], {"reason": "target_not_in_profiles"}
+
+    target_bats = target_prof.get("bats")
+    target_name = batter_name_hint or target_prof.get("name") or ""
+    if not target_bats:
+        return [], {"reason": "target_handedness_unknown", "name": target_name}
+
+    with _sv_lock:
+        xs_idx = dict(_sv_bat_xstats)
+
+    target_key = _sv_key(target_name)
+    target_entry = xs_idx.get(target_key) or xs_idx.get(_sv_key(_ascii_fold(target_name)))
+    target_xwoba = None
+    if target_entry:
+        v = target_entry.get("sv_xwoba")
+        try:
+            target_xwoba = float(v) if v not in (None, "N/A", "") else None
+        except Exception:
+            target_xwoba = None
+    if target_xwoba is None:
+        return [], {"reason": "target_xwoba_unknown", "name": target_name, "bats": target_bats}
+
+    # Switch hitters: match both L and R candidates (they see both sides
+    # depending on pitcher, so pooling is appropriate).
+    accepted_bats = {target_bats}
+    if target_bats == "S":
+        accepted_bats = {"L", "R", "S"}
+
+    # Build reverse lookup name -> mlbam from _batter_profiles.
+    name_to_mlbam = {}
+    for mid, prof in prof_idx.items():
+        nm = (prof.get("name") or "").strip()
+        if not nm:
+            continue
+        name_to_mlbam.setdefault(_sv_key(nm), mid)
+        name_to_mlbam.setdefault(_sv_key(_ascii_fold(nm)), mid)
+
+    candidates = []
+    for name_key, entry in xs_idx.items():
+        if name_key == target_key:
+            continue
+        mid = name_to_mlbam.get(name_key)
+        if not mid:
+            continue
+        cand_prof = prof_idx.get(mid) or {}
+        cand_bats = cand_prof.get("bats")
+        if cand_bats not in accepted_bats:
+            continue
+        try:
+            cand_xwoba = float(entry.get("sv_xwoba")) if entry.get("sv_xwoba") not in (None, "N/A", "") else None
+        except Exception:
+            cand_xwoba = None
+        if cand_xwoba is None:
+            continue
+        delta = abs(cand_xwoba - target_xwoba)
+        if delta > ARSENAL_PRIOR_XWOBA_WINDOW:
+            continue
+        # similarity in 0..1 — full credit at delta=0, zero at the window edge
+        sim = round(1.0 - (delta / ARSENAL_PRIOR_XWOBA_WINDOW), 3) if ARSENAL_PRIOR_XWOBA_WINDOW else 1.0
+        candidates.append({
+            "batter_id": int(mid),
+            "name":      cand_prof.get("name") or name_key,
+            "bats":      cand_bats,
+            "xwoba":     cand_xwoba,
+            "similarity": sim,
+        })
+    candidates.sort(key=lambda c: c["similarity"], reverse=True)
+    return candidates[:ARSENAL_PRIOR_TOPN_BATTERS], {
+        "name":   target_name,
+        "bats":   target_bats,
+        "xwoba":  target_xwoba,
+        "window": ARSENAL_PRIOR_XWOBA_WINDOW,
+    }
+
+
+def _load_pitcher_statcast(pitcher_id, seasons=None):
+    """Pull the pitcher's PA-by-PA Statcast log via pybaseball.
+
+    Mirror of _load_batter_statcast — same caching pattern, same column
+    pruning. The DataFrame returned has the `batter` column populated with
+    MLBAM IDs, which we filter against the similar-batter list.
+    """
+    seasons = seasons or ARSENAL_PRIOR_SEASONS
+    today = datetime.now().strftime("%Y-%m-%d")
+    cache_key = (int(pitcher_id), today, seasons)
+    with _pitcher_statcast_lock:
+        cached = _pitcher_statcast_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+    try:
+        import pybaseball as pb
+    except Exception as ex:
+        logging.warning(f"[ArsenalPriorPitcher] pybaseball import failed: {ex}")
+        return None
+
+    current_year = datetime.now().year
+    season_years = list(range(current_year - seasons + 1, current_year + 1))
+
+    def _pull_one(yr):
+        try:
+            start = f"{yr}-03-01"
+            end = today if yr == current_year else f"{yr}-11-30"
+            df = pb.statcast_pitcher(start_dt=start, end_dt=end, player_id=int(pitcher_id))
+            if df is None or df.empty:
+                return None
+            keep = [c for c in ("batter", "events", "game_date", "pitch_type") if c in df.columns]
+            if "events" not in keep:
+                return None
+            return df[keep].dropna(subset=["events"])
+        except Exception as ex:
+            logging.warning(f"[ArsenalPriorPitcher] statcast pull failed pid={pitcher_id} yr={yr}: {ex}")
+            return None
+
+    frames = []
+    with ThreadPoolExecutor(max_workers=min(seasons, 4)) as ex:
+        futures = {ex.submit(_pull_one, yr): yr for yr in season_years}
+        for fut in as_completed(futures):
+            df = fut.result()
+            if df is not None and not df.empty:
+                frames.append(df)
+
+    if not frames:
+        with _pitcher_statcast_lock:
+            _pitcher_statcast_cache[cache_key] = None
+        return None
+
+    combined = pd.concat(frames, ignore_index=True)
+    with _pitcher_statcast_lock:
+        _pitcher_statcast_cache[cache_key] = combined
+    return combined
+
+
+def _aggregate_pitcher_vs_similar_batters(pitcher_id, similar_batter_ids):
+    """Filter pitcher's PA log to similar-batter IDs and tally outcomes.
+
+    Returns (counts_dict, audit_dict) or (None, audit_dict_with_reason).
+    Symmetric to _aggregate_vs_similar_pitchers — same audit shape.
+    """
+    audit = {
+        "similar_batters_in":       len(similar_batter_ids),
+        "similar_batters_resolved": 0,
+        "per_batter_pa":            {},
+        "reason":                   None,
+    }
+    if not similar_batter_ids:
+        audit["reason"] = "no_similar_batter_ids"
+        return None, audit
+
+    df = _load_pitcher_statcast(pitcher_id)
+    if df is None or df.empty:
+        audit["reason"] = "no_pitcher_statcast"
+        return None, audit
+    if "batter" not in df.columns:
+        audit["reason"] = "no_batter_column"
+        return None, audit
+
+    try:
+        df["batter"] = pd.to_numeric(df["batter"], errors="coerce")
+    except Exception:
+        pass
+    id_set = set(int(x) for x in similar_batter_ids)
+    matched = df[df["batter"].isin(list(id_set))]
+    if matched.empty:
+        audit["reason"] = "no_pa_against_similar_batters"
+        return None, audit
+
+    try:
+        per_batter = matched.groupby("batter").size().to_dict()
+        # Limit audit to top-5 contributors to keep response payload small.
+        sorted_pb = sorted(per_batter.items(), key=lambda kv: kv[1], reverse=True)[:5]
+        audit["per_batter_pa"] = {int(bid): int(pa) for bid, pa in sorted_pb}
+        audit["similar_batters_resolved"] = len(per_batter)
+    except Exception:
+        pass
+
+    counts = _aggregate_pa_outcomes(matched)
+    if not counts:
+        audit["reason"] = "events_unparseable"
+        return None, audit
+    return counts, audit
+
+
 def _normalize_matchup_row(raw, source):
     """Map a CSV or BQ matchup row to the canonical BvP schema.
 
@@ -21671,15 +22033,30 @@ def api_matchup_vertex():
         direct_rates = _bvp_row_to_pa_rates(bq_stats)
         direct_pa = int(bq_stats.get("pa") or 0)
 
-        # Arsenal-similarity prior: pull batter's PA log vs pitchers with
-        # similar arsenals (cosine >= ARSENAL_PRIOR_SIM_FLOOR), aggregate
-        # the real outcomes, blend with the direct sample by sample size.
-        # Hard-bounded by ARSENAL_PRIOR_TIMEOUT_S so cold pybaseball pulls
-        # never block /api/matchup beyond that budget.
-        prior_block = {"status": "skipped", "reason": None}
+        # ──────────────────────────────────────────────────────────────────
+        # Arsenal-similarity priors. We compute two of them in parallel and
+        # then blend all three sources (direct BvP + batter-side + pitcher-
+        # side) with _blend_multi:
+        #
+        #   batter-side prior  : batter's outcomes vs pitchers with arsenal
+        #                        similar to the target pitcher
+        #   pitcher-side prior : pitcher's outcomes vs batters with profile
+        #                        (handedness + xwOBA) similar to the target
+        #                        batter
+        #
+        # Both are hard-bounded by ARSENAL_PRIOR_TIMEOUT_S as a combined
+        # budget so a cold cache never blocks /api/matchup past that limit.
+        # ──────────────────────────────────────────────────────────────────
+        prior_block         = {"status": "skipped", "reason": None}
+        pitcher_prior_block = {"status": "skipped", "reason": None}
         per_pa = direct_rates
         try:
             pitcher_name = bq_stats.get("pitcher_name") or ""
+
+            # ── Batter-side prior setup ──────────────────────────────────
+            similar = []
+            similar_names = []
+            primary = None
             if not pitcher_name:
                 prior_block.update(status="skipped", reason="no_pitcher_name")
             else:
@@ -21695,33 +22072,101 @@ def api_matchup_vertex():
                     prior_block.update(status="skipped", reason="no_similar_arsenals")
                 else:
                     similar_names = [s["name"] for s in similar]
-                    fut_pool = ThreadPoolExecutor(max_workers=1)
-                    try:
-                        fut = fut_pool.submit(_aggregate_vs_similar_pitchers,
-                                              batter_id, similar_names)
-                        prior_counts, audit = fut.result(timeout=ARSENAL_PRIOR_TIMEOUT_S)
-                    except Exception as tex:
-                        prior_counts, audit = None, {"reason": f"timeout_or_error: {tex.__class__.__name__}"}
-                    finally:
-                        fut_pool.shutdown(wait=False)
 
-                    prior_block["audit"] = audit
-                    if prior_counts and prior_counts.get("pa", 0) > 0:
-                        prior_rates = _counts_to_pa_rates(prior_counts)
-                        blended, weights = _blend_bvp_with_prior(
-                            direct_rates, direct_pa,
-                            prior_rates,  int(prior_counts["pa"]),
-                        )
-                        per_pa = blended or direct_rates
-                        prior_block["status"] = "blended"
-                        prior_block["prior_counts"] = prior_counts
-                        prior_block["weights"] = weights
-                        prior_block["confidence"] = (
-                            "low" if int(prior_counts["pa"]) < 15 else "ok"
-                        )
+            # ── Pitcher-side prior setup ─────────────────────────────────
+            similar_batters = []
+            similar_batter_ids = []
+            batter_name = bq_stats.get("batter_name") or ""
+            similar_batters, target_meta = _similar_batters_for(batter_id, batter_name)
+            pitcher_prior_block["target_batter"] = target_meta.get("name") or batter_name
+            pitcher_prior_block["target_meta"]   = target_meta
+            pitcher_prior_block["similar_count"] = len(similar_batters)
+            pitcher_prior_block["similar"] = [
+                {"name": s["name"], "bats": s["bats"], "xwoba": s["xwoba"],
+                 "similarity": s["similarity"]}
+                for s in similar_batters[:10]   # truncate audit payload
+            ]
+            if not similar_batters:
+                pitcher_prior_block.update(status="skipped",
+                                           reason=target_meta.get("reason") or "no_similar_batters")
+            similar_batter_ids = [s["batter_id"] for s in similar_batters]
+
+            # ── Run both pulls in parallel under a shared time budget ────
+            prior_counts = None
+            prior_audit  = {}
+            pitcher_prior_counts = None
+            pitcher_prior_audit  = {}
+            pulls_pool = ThreadPoolExecutor(max_workers=2)
+            try:
+                pending = {}
+                if similar_names:
+                    pending["batter_side"] = pulls_pool.submit(
+                        _aggregate_vs_similar_pitchers, batter_id, similar_names
+                    )
+                if similar_batter_ids:
+                    pending["pitcher_side"] = pulls_pool.submit(
+                        _aggregate_pitcher_vs_similar_batters, pitcher_id, similar_batter_ids
+                    )
+                deadline = time.time() + ARSENAL_PRIOR_TIMEOUT_S
+                for label, fut in pending.items():
+                    remaining = max(0.1, deadline - time.time())
+                    try:
+                        counts, audit = fut.result(timeout=remaining)
+                    except Exception as tex:
+                        counts, audit = None, {"reason": f"timeout_or_error: {tex.__class__.__name__}"}
+                    if label == "batter_side":
+                        prior_counts, prior_audit = counts, audit
                     else:
-                        prior_block["status"] = "no_prior_data"
-                        prior_block["reason"] = audit.get("reason")
+                        pitcher_prior_counts, pitcher_prior_audit = counts, audit
+            finally:
+                pulls_pool.shutdown(wait=False)
+
+            # ── Resolve batter-side ──────────────────────────────────────
+            if similar_names:
+                prior_block["audit"] = prior_audit
+                if prior_counts and prior_counts.get("pa", 0) > 0:
+                    prior_block["status"]       = "ready"
+                    prior_block["prior_counts"] = prior_counts
+                    prior_block["confidence"]   = "low" if int(prior_counts["pa"]) < 15 else "ok"
+                else:
+                    prior_block["status"] = "no_prior_data"
+                    prior_block["reason"] = (prior_audit or {}).get("reason")
+
+            # ── Resolve pitcher-side ─────────────────────────────────────
+            if similar_batter_ids:
+                pitcher_prior_block["audit"] = pitcher_prior_audit
+                if pitcher_prior_counts and pitcher_prior_counts.get("pa", 0) > 0:
+                    pitcher_prior_block["status"]       = "ready"
+                    pitcher_prior_block["prior_counts"] = pitcher_prior_counts
+                    pitcher_prior_block["confidence"]   = "low" if int(pitcher_prior_counts["pa"]) < 30 else "ok"
+                else:
+                    pitcher_prior_block["status"] = "no_prior_data"
+                    pitcher_prior_block["reason"] = (pitcher_prior_audit or {}).get("reason")
+
+            # ── 3-way blend ──────────────────────────────────────────────
+            sources = [(direct_rates, direct_pa, None)]  # direct has no cap
+            if prior_counts and prior_counts.get("pa", 0) > 0:
+                sources.append((
+                    _counts_to_pa_rates(prior_counts),
+                    int(prior_counts["pa"]),
+                    ARSENAL_PRIOR_STRENGTH,
+                ))
+            if pitcher_prior_counts and pitcher_prior_counts.get("pa", 0) > 0:
+                sources.append((
+                    _counts_to_pa_rates(pitcher_prior_counts),
+                    int(pitcher_prior_counts["pa"]),
+                    ARSENAL_PRIOR_PITCHER_STRENGTH,
+                ))
+            if len(sources) > 1:
+                blended, blend_audit = _blend_multi(sources)
+                if blended:
+                    per_pa = blended
+                    if prior_block.get("status") == "ready":
+                        prior_block["status"] = "blended"
+                    if pitcher_prior_block.get("status") == "ready":
+                        pitcher_prior_block["status"] = "blended"
+                    prior_block["blend_audit"]         = blend_audit
+                    pitcher_prior_block["blend_audit"] = blend_audit
         except Exception as ex:
             prior_block.update(status="error", reason=str(ex))
             app.logger.warning(f"[arsenal_prior] {ex}")
@@ -21739,7 +22184,10 @@ def api_matchup_vertex():
                 "`confidence` (0-100 int), `key_factors` (array of <=4 short strings), "
                 "`risk` (string), `summary` (one paragraph, <=80 words).\n\n"
                 f"Stats:\n{json.dumps(bq_stats, default=str, ensure_ascii=True)}\n\n"
-                f"Arsenal-similarity prior:\n{json.dumps(prior_block, default=str, ensure_ascii=True)}\n\n"
+                f"Arsenal-similarity prior (batter vs similar-arsenal pitchers):\n"
+                f"{json.dumps(prior_block, default=str, ensure_ascii=True)}\n\n"
+                f"Similar-batter prior (pitcher vs similar-profile batters):\n"
+                f"{json.dumps(pitcher_prior_block, default=str, ensure_ascii=True)}\n\n"
                 f"Monte Carlo ({mc.get('nSims')} sims, {mc.get('nPa')} PA):\n"
                 f"{json.dumps(mc, default=str, ensure_ascii=True)}"
             )
@@ -21758,7 +22206,8 @@ def api_matchup_vertex():
             "pitcher_id": pitcher_id,
             "stats": bq_stats,
             "monte_carlo": mc,
-            "arsenal_prior": prior_block,
+            "arsenal_prior":         prior_block,
+            "pitcher_batter_prior":  pitcher_prior_block,
             "analysis": analysis,
             "analysis_error": analysis_error,
             "source": source,
