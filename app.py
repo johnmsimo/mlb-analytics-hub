@@ -2101,6 +2101,55 @@ def _load_batter_profiles():
     logging.info(f"[BatterProfiles] {len(out)} batter profiles from {len(files)} season files")
 
 
+def _prewarm_pitcher_statcast():
+    """Warm pybaseball Statcast cache for every probable starter today.
+
+    The matchup CSV only contains pitchers with prior BvP history (~10 per
+    slate); the full slate has ~30 probable starters. Pulling all of them
+    up front means /api/matchup is hot for any (batter, pitcher) combo a
+    user clicks into, not just the BvP-history pairs.
+
+    Uses fetch_schedule() which already hydrates probablePitcher, so this
+    is one MLB Stats API call to enumerate plus N pybaseball pulls (cached
+    on disk via PYBASEBALL_CACHE=1).
+    """
+    try:
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        games = fetch_schedule(today_str)
+    except Exception as ex:
+        logging.warning(f"[PitcherPriorWarm] schedule fetch failed: {ex}")
+        return
+    pitcher_ids = set()
+    for g in games or []:
+        teams = (g.get("teams") or {})
+        for side in ("away", "home"):
+            pp = ((teams.get(side) or {}).get("probablePitcher") or {})
+            pid = pp.get("id")
+            if pid:
+                try:
+                    pitcher_ids.add(int(pid))
+                except (TypeError, ValueError):
+                    pass
+    if not pitcher_ids:
+        logging.info("[PitcherPriorWarm] no probable starters; skipping")
+        return
+    logging.info(f"[PitcherPriorWarm] warming Statcast cache for {len(pitcher_ids)} starters")
+    done = 0
+    failed = 0
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        futures = {ex.submit(_load_pitcher_statcast, pid): pid for pid in pitcher_ids}
+        for fut in as_completed(futures):
+            try:
+                df = fut.result()
+                if df is None or (hasattr(df, "empty") and df.empty):
+                    failed += 1
+                else:
+                    done += 1
+            except Exception:
+                failed += 1
+    logging.info(f"[PitcherPriorWarm] complete: {done} hit, {failed} miss out of {len(pitcher_ids)}")
+
+
 def _prewarm_arsenal_priors():
     """After boot, warm pybaseball Statcast cache for today's slate batters.
 
@@ -2156,7 +2205,8 @@ threading.Thread(target=_load_fg_historical, daemon=True).start()
 threading.Thread(target=_load_matchup_files, daemon=True).start()
 threading.Thread(target=_load_pitcher_name_to_mlbam, daemon=True).start()
 threading.Thread(target=_load_batter_profiles, daemon=True).start()
-threading.Thread(target=_prewarm_arsenal_priors, daemon=True).start()
+threading.Thread(target=_prewarm_arsenal_priors,   daemon=True).start()
+threading.Thread(target=_prewarm_pitcher_statcast, daemon=True).start()
 
 
 def _wait_for_fg_data(timeout_sec=30):
