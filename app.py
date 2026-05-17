@@ -113,65 +113,100 @@ def _add_request_id_header(response):
     return response
 
 
-# ── Vertex AI + BigQuery clients ──────────────────────────────────────────────
+# ── LLM clients (Gemini via API key, Claude via direct Anthropic API) ────────
 # Multi-model orchestration: Gemini Flash-Lite for high-volume short text,
 # Gemini Pro for numerical/MC reasoning, Claude Sonnet for narrative, Claude
-# Opus for premium full-boxscore output. BigQuery replaces the per-request
-# CSV scan for BvP situational stats and the daily slate filter.
+# Opus for premium full-boxscore output.
 #
-# Auth: ADC via GOOGLE_APPLICATION_CREDENTIALS (service account JSON mounted
-# on Fly.io). GOOGLE_CLOUD_PROJECT is required; GOOGLE_CLOUD_REGION optional
-# (defaults to us-central1). All four model IDs are env-overridable so they
-# can be swapped without a deploy.
+# Auth note: this Fly.io project has the GCP org policy
+# `constraints/iam.disableServiceAccountKeyCreation` active, which blocks
+# downloading service account JSON keys. Because BigQuery and AnthropicVertex
+# both require OAuth2 / ADC (no API key path exists for either), we use:
+#   - Gemini  -> google-genai SDK with GOOGLE_CLOUD_API_KEY (Developer API
+#                endpoint, not the Vertex Model Garden surface).
+#   - Claude  -> direct anthropic.Anthropic with ANTHROPIC_API_KEY (same
+#                path the legacy /api/ai-boxscore route already uses).
+#   - BigQuery-> probed at boot; only initializes if ADC credentials happen
+#                to be present (Workload Identity, gcloud auth, etc.). When
+#                absent, routes fall through to the existing CSV path.
 #
-# All downstream routes guard with _vertex_available / _bigquery_available
-# and fall back to existing CSV + Anthropic-direct paths on any failure.
-_vertex_available = False
-_bigquery_available = False
-_anthropic_vertex_client = None
-_bq_client = None
-_vertex_gemini_module = None
+# Model IDs are all env-overridable so swapping doesn't need a deploy.
+_vertex_available    = False    # umbrella flag: at least one LLM responded
+_gemini_available    = False
+_claude_available    = False
+_bigquery_available  = False
+_gemini_client       = None
+_anthropic_client    = None
+_bq_client           = None
 VERTEX_MODELS = {
     "fast":      os.environ.get("VERTEX_MODEL_FAST",   "gemini-2.5-flash-lite"),
     "reasoning": os.environ.get("VERTEX_MODEL_PRO",    "gemini-2.5-pro"),
-    "narrative": os.environ.get("VERTEX_MODEL_SONNET", "claude-4.6-sonnet"),
-    "premium":   os.environ.get("VERTEX_MODEL_OPUS",   "claude-4.7-opus"),
+    "narrative": os.environ.get("VERTEX_MODEL_SONNET", "claude-sonnet-4-5"),
+    "premium":   os.environ.get("VERTEX_MODEL_OPUS",   "claude-opus-4-1"),
 }
 BQ_DATASET    = os.environ.get("BQ_DATASET",    "mlb")
 BQ_BATTERS    = os.environ.get("BQ_BATTERS",    f"{BQ_DATASET}.batters")
 BQ_PITCHERS   = os.environ.get("BQ_PITCHERS",   f"{BQ_DATASET}.pitchers")
 BQ_BVP_TABLE  = os.environ.get("BQ_BVP_TABLE",  f"{BQ_DATASET}.bvp_situational")
 BQ_SLATE_VIEW = os.environ.get("BQ_SLATE_VIEW", f"{BQ_DATASET}.daily_slate_view")
+
+# Gemini via API key (google-genai Developer API endpoint)
+try:
+    _gemini_key = os.environ.get("GOOGLE_CLOUD_API_KEY") or os.environ.get("GEMINI_API_KEY")
+    if _gemini_key:
+        from google import genai as _genai
+        _gemini_client = _genai.Client(api_key=_gemini_key)
+        _gemini_available = True
+        app.logger.info(
+            "[gemini] initialized via API key — fast=%s reasoning=%s",
+            VERTEX_MODELS["fast"], VERTEX_MODELS["reasoning"],
+        )
+    else:
+        app.logger.info("[gemini] no API key — Gemini routes will fall back")
+except Exception as _gemini_init_err:
+    app.logger.warning(f"[gemini] init failed: {_gemini_init_err}")
+
+# Claude via direct Anthropic API (AnthropicVertex needs ADC which we don't have)
+try:
+    _claude_key = os.environ.get("ANTHROPIC_API_KEY")
+    if _claude_key:
+        import anthropic as _anthropic_mod
+        _anthropic_client = _anthropic_mod.Anthropic(api_key=_claude_key)
+        _claude_available = True
+        app.logger.info(
+            "[claude] initialized via Anthropic API — narrative=%s premium=%s",
+            VERTEX_MODELS["narrative"], VERTEX_MODELS["premium"],
+        )
+    else:
+        app.logger.info("[claude] ANTHROPIC_API_KEY unset — Claude routes will fall back")
+except Exception as _claude_init_err:
+    app.logger.warning(f"[claude] init failed: {_claude_init_err}")
+
+# BigQuery requires OAuth2 / ADC and has no API key path. Probe for ADC; if
+# none, leave disabled and let routes use the CSV fallback. The bq_etl.py
+# scheduler runs the same probe and no-ops cleanly when ADC is absent.
 try:
     _gcp_project = os.environ.get("GOOGLE_CLOUD_PROJECT")
     if _gcp_project:
-        import vertexai
-        from vertexai import generative_models as _vertex_gen
         from google.cloud import bigquery as _bq_mod
-        from anthropic import AnthropicVertex
-        _gcp_region = os.environ.get("GOOGLE_CLOUD_REGION", "us-central1")
-        vertexai.init(project=_gcp_project, location=_gcp_region)
+        import google.auth as _g_auth
+        _g_auth.default()  # raises DefaultCredentialsError when no ADC present
         _bq_client = _bq_mod.Client(project=_gcp_project)
-        _anthropic_vertex_client = AnthropicVertex(region=_gcp_region, project_id=_gcp_project)
-        _vertex_gemini_module = _vertex_gen
-        _vertex_available = True
         _bigquery_available = True
-        app.logger.info(
-            "[vertex] initialized project=%s region=%s models=%s",
-            _gcp_project, _gcp_region, VERTEX_MODELS,
-        )
+        app.logger.info("[bigquery] initialized project=%s", _gcp_project)
     else:
-        app.logger.info("[vertex] GOOGLE_CLOUD_PROJECT unset — running with local fallbacks only")
-except Exception as _vertex_init_err:
-    app.logger.warning(f"[vertex] init failed, falling back to local paths: {_vertex_init_err}")
+        app.logger.info("[bigquery] GOOGLE_CLOUD_PROJECT unset — BQ disabled")
+except Exception as _bq_init_err:
+    app.logger.info(
+        "[bigquery] no ADC credentials available — falling back to CSV (%s)",
+        type(_bq_init_err).__name__,
+    )
+
+_vertex_available = _gemini_available or _claude_available
 
 
 def _extract_json_block(txt):
-    """Strip markdown fences and parse the first JSON object found in the text.
-
-    Reused by every Vertex JSON parsing path so the bracket-extraction logic
-    from `_claude_matchup_insights` stays in one place.
-    """
+    """Strip markdown fences and parse the first JSON object in the text."""
     if not txt:
         return None
     clean = txt.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
@@ -186,24 +221,18 @@ def _extract_json_block(txt):
 
 
 def _vertex_gemini_json(model_key, prompt, system=None, max_tokens=1024, temperature=0.3):
-    """Call a Vertex Gemini model and return parsed JSON, or (None, error_str).
-
-    model_key: one of VERTEX_MODELS keys ('fast'|'reasoning'|...). The actual
-    model ID is resolved at call time so env overrides take effect.
-    """
-    if not _vertex_available or _vertex_gemini_module is None:
-        return None, "vertex_unavailable"
+    """Call a Gemini model (google-genai SDK, API key auth) and return parsed JSON."""
+    if not _gemini_available or _gemini_client is None:
+        return None, "gemini_unavailable"
     try:
         model_id = VERTEX_MODELS.get(model_key)
         if not model_id:
             return None, f"unknown_model_key:{model_key}"
-        model = _vertex_gemini_module.GenerativeModel(
-            model_id,
-            system_instruction=system or "Respond with raw JSON only — no markdown, no backticks.",
-        )
-        resp = model.generate_content(
-            prompt,
-            generation_config={
+        resp = _gemini_client.models.generate_content(
+            model=model_id,
+            contents=prompt,
+            config={
+                "system_instruction": system or "Respond with raw JSON only — no markdown, no backticks.",
                 "max_output_tokens": max_tokens,
                 "temperature": temperature,
                 "response_mime_type": "application/json",
@@ -219,14 +248,14 @@ def _vertex_gemini_json(model_key, prompt, system=None, max_tokens=1024, tempera
 
 
 def _vertex_claude_json(model_key, prompt, system, max_tokens=2000, temperature=0.4):
-    """Call a Claude model on Vertex AI and return parsed JSON, or (None, error_str)."""
-    if not _vertex_available or _anthropic_vertex_client is None:
-        return None, "vertex_unavailable"
+    """Call a Claude model (direct Anthropic API) and return parsed JSON."""
+    if not _claude_available or _anthropic_client is None:
+        return None, "claude_unavailable"
     try:
         model_id = VERTEX_MODELS.get(model_key)
         if not model_id:
             return None, f"unknown_model_key:{model_key}"
-        resp = _anthropic_vertex_client.messages.create(
+        resp = _anthropic_client.messages.create(
             model=model_id,
             max_tokens=max_tokens,
             temperature=temperature,
@@ -247,7 +276,7 @@ def _bq_query_rows(sql, params=None, timeout=15):
     if not _bigquery_available or _bq_client is None:
         return None
     try:
-        from google.cloud import bigquery as _bq_mod  # local import; client already cached
+        from google.cloud import bigquery as _bq_mod
         job_config = _bq_mod.QueryJobConfig(query_parameters=params or [])
         job = _bq_client.query(sql, job_config=job_config)
         rows = job.result(timeout=timeout)
@@ -21194,7 +21223,7 @@ def api_matchup_vertex():
 
         analysis = None
         analysis_error = None
-        if _vertex_available and mc:
+        if _gemini_available and mc:
             prompt = (
                 "You are evaluating a batter-vs-pitcher prop matchup for MLB betting. "
                 "Use only the provided statistical context. Output strict JSON with keys: "
@@ -21238,7 +21267,7 @@ def _vertex_cheatsheet_enrich(payload):
     Gemini for a one-sentence blurb per item. Non-invasive: the original
     fields remain untouched so the UI keeps rendering even if Gemini fails.
     """
-    if not _vertex_available or not isinstance(payload, dict):
+    if not _gemini_available or not isinstance(payload, dict):
         payload["aiEnriched"] = False
         return payload
 
@@ -21335,11 +21364,12 @@ def _build_insights_context(game_pk):
 
 @app.route("/api/insights/<int:game_pk>")
 def api_insights_vertex(game_pk):
-    """Claude 4.6 Sonnet (via Vertex) matchup insights for a game.
+    """Claude Sonnet (direct Anthropic API) matchup insights for a game.
 
-    Parallel to the existing /api/game-projection storyline; this route
-    targets the Vertex AnthropicVertex client. Falls back to the existing
-    deterministic _fallback_matchup_insights() output when Vertex is down.
+    Parallel to the existing /api/game-projection storyline. Uses the direct
+    Anthropic API (Vertex Model Garden would require ADC, blocked by the
+    org policy on this project). Falls back to the existing deterministic
+    _fallback_matchup_insights() output when Claude is down.
     """
     try:
         _maybe_refresh_fg()
@@ -21349,7 +21379,7 @@ def api_insights_vertex(game_pk):
 
         insights = None
         err = None
-        if _vertex_available:
+        if _claude_available:
             prompt = (
                 "Generate 3 to 5 concise MLB matchup storyline bullets for today's game. "
                 "Use only the provided context. Prioritize actionable prop-betting context. "
@@ -21407,10 +21437,10 @@ def api_insights_vertex(game_pk):
 
 @app.route("/api/projected-boxscore/<int:game_pk>")
 def api_projected_boxscore_vertex(game_pk):
-    """Claude 4.7 Opus (via Vertex) full projected boxscore.
+    """Claude Opus (direct Anthropic API) full projected boxscore.
 
-    Mirror of /api/ai-boxscore that routes through AnthropicVertex; falls
-    back to the existing _local_boxscore_projections() helper on any failure.
+    Mirror of /api/ai-boxscore that uses the premium model tier; falls back
+    to the existing _local_boxscore_projections() helper on any failure.
     """
     try:
         _maybe_refresh_fg()
@@ -21490,8 +21520,8 @@ def api_projected_boxscore_vertex(game_pk):
         }
 
         ai_projections = None
-        vertex_error = None
-        if _vertex_available:
+        claude_error = None
+        if _claude_available:
             prompt = (
                 f"Game: {context['away_team']} ({context['away_pitcher']['name']}, "
                 f"ERA {context['away_pitcher']['era']}) at {context['home_team']} "
@@ -21508,7 +21538,7 @@ def api_projected_boxscore_vertex(game_pk):
                 "key_factors (list of str), confidence (HIGH|MEDIUM|LOW), "
                 "notable_props (list of {player, prop, projection, reasoning})."
             )
-            ai_projections, vertex_error = _vertex_claude_json(
+            ai_projections, claude_error = _vertex_claude_json(
                 "premium", prompt,
                 system="You are an expert MLB analyst providing detailed game and player "
                        "projections. Respond ONLY with valid JSON — no preamble, no markdown.",
@@ -21524,7 +21554,7 @@ def api_projected_boxscore_vertex(game_pk):
             )
             source = "local_fallback"
             ai_projections["source"] = source
-            ai_projections["fallback_reason"] = vertex_error or "Vertex unavailable"
+            ai_projections["fallback_reason"] = claude_error or "Claude unavailable"
         else:
             ai_projections["source"] = source
             ai_projections["model"] = VERTEX_MODELS["premium"]
