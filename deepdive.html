@@ -5547,12 +5547,14 @@ function renderPitchMix(){
         +'<table class="pm-table"><tbody>'+pitchRows+'</tbody></table></div>';
     }
 
-    return '<div class="pm-half-hd">' + label + '</div>' +
+    return '<div class="pm-half">'
+      + '<div class="pm-half-hd">' + label + '</div>' +
       '<div style="overflow-x:auto"><table class="pm-table">' +
         '<thead><tr><th>PITCH</th><th>USAGE</th><th>BA</th><th>wOBA</th><th>SLG</th><th>HR</th><th>WHIFF%</th><th>MATCHUP</th></tr></thead>' +
         '<tbody>' + rows + '</tbody>' +
       '</table></div>'
-      + batMatchupHtml;
+      + batMatchupHtml
+      + '</div>';
   }
 
   var rOpts = [{k:'season',l:'FULL'},{k:'l30',l:'L30D'},{k:'l10',l:'L10D'},{k:'l5',l:'L5D'}];

@@ -3312,31 +3312,41 @@ def _memory_ingest_mlb_api_player_stats(team_ids, max_players=200, season=None):
         
         for tid in team_ids[:30]:
             try:
-                # NB: hydrate=roster on its own returns an empty roster.roster array
-                # in the modern Stats API — must specify the roster type. "active"
-                # gives the 26-man + 40-man overlap; "person" pulls fullName, etc.
-                payload = _collect_mlb_endpoint(
-                    f"{MLB_API}/teams/{tid}?hydrate=roster(active,person)&season={season}",
-                    timeout=12,
-                    default={}
+                # Use the direct roster endpoint — the hydrate=roster(...) variant
+                # on /teams/<id> often returns the team object with an empty roster
+                # array. /teams/<id>/roster?rosterType=active is what
+                # _memory_collect_team_rosters (line ~3150) already uses successfully.
+                team_name = f"Team {tid}"
+                team_payload = _collect_mlb_endpoint(
+                    f"{MLB_API}/teams/{tid}",
+                    params={"season": season},
+                    timeout=10,
+                    default={},
                 )
-                teams = payload.get("teams") or []
-                if not teams:
-                    # Fallback: hit the roster endpoint directly.
-                    roster_payload = _collect_mlb_endpoint(
+                t_arr = team_payload.get("teams") or []
+                if t_arr:
+                    team_name = t_arr[0].get("name") or team_name
+
+                roster_payload = _collect_mlb_endpoint(
+                    f"{MLB_API}/teams/{tid}/roster",
+                    params={"rosterType": "active", "season": season, "hydrate": "person"},
+                    timeout=12,
+                    default={},
+                )
+                roster = roster_payload.get("roster") or []
+                if not roster:
+                    # Some teams may not have an active roster for the requested
+                    # season (e.g. mid-offseason). Fall back to 40Man.
+                    fallback = _collect_mlb_endpoint(
                         f"{MLB_API}/teams/{tid}/roster",
-                        params={"rosterType": "active", "season": season, "hydrate": "person"},
+                        params={"rosterType": "40Man", "season": season, "hydrate": "person"},
                         timeout=12,
                         default={},
-                    ) or {}
-                    if not roster_payload:
-                        print(f"[_memory_ingest_mlb_api_player_stats] Team {tid} missing in API response.")
-                        continue
-                    team_info = {"name": f"Team {tid}", "roster": roster_payload}
-                else:
-                    team_info = teams[0]
-                roster_obj = team_info.get("roster") or {}
-                roster = roster_obj.get("roster", []) if isinstance(roster_obj, dict) else []
+                    )
+                    roster = fallback.get("roster") or []
+                if not roster:
+                    print(f"[_memory_ingest_mlb_api_player_stats] Team {tid} ({team_name}) returned an empty roster.")
+                    continue
 
                 players_by_type = {"batters": [], "pitchers": [], "other": []}
 
@@ -3363,7 +3373,7 @@ def _memory_ingest_mlb_api_player_stats(team_ids, max_players=200, season=None):
                     total_players += 1
 
                 out["teams"][str(tid)] = {
-                    "teamName": team_info.get("name"),
+                    "teamName": team_name,
                     "players": players_by_type,
                     "rosterSize": len(roster),
                 }
