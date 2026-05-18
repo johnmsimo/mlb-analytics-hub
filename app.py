@@ -316,11 +316,14 @@ if _PIPELINE_AVAILABLE:
 def api_brain_fetch_mlb_players():
     """
     Manually fetch and ingest all MLB API player data for all teams (current season).
+
+    Pulls the active team list from /teams?sportId=1 instead of a hardcoded ID
+    range (the static range(108,146) contained 11 non-MLB IDs and missed NYY/MIL).
     """
     try:
         season = request.get_json(silent=True) or {}
         year = season.get('season') or datetime.now().year
-        team_ids = [i for i in range(108, 146)]
+        team_ids = _get_mlb_team_ids(season=year)
         result = _memory_ingest_mlb_api_player_stats(team_ids, season=year)
         return jsonify({'success': True, 'summary': result.get('summary', {}), 'details': result})
     except Exception as ex:
@@ -3257,6 +3260,44 @@ def _memory_ingest_fangraphs_data(max_records=5000):
         return {"sources": [], "summary": {}, "error": str(e)}
 
 
+_MLB_TEAM_IDS_CACHE = {"date": None, "ids": []}
+_MLB_TEAM_IDS_LOCK  = threading.Lock()
+
+
+def _get_mlb_team_ids(season=None):
+    """Return the 30 active MLB team IDs for the given season.
+
+    Queries the MLB Stats API once per day; falls back to the canonical
+    30-team ID list if the API is unreachable. Replaces the legacy
+    ``range(108, 146)`` which silently included 11 non-MLB IDs and missed
+    NYY (147) and MIL (158).
+    """
+    season = season or datetime.now().year
+    today = datetime.now().date().isoformat()
+    with _MLB_TEAM_IDS_LOCK:
+        if _MLB_TEAM_IDS_CACHE.get("date") == today and _MLB_TEAM_IDS_CACHE.get("ids"):
+            return list(_MLB_TEAM_IDS_CACHE["ids"])
+    ids = []
+    try:
+        r = requests.get(
+            f"{MLB_API}/teams",
+            params={"sportId": 1, "season": season, "activeStatus": "Y"},
+            timeout=10,
+        )
+        if r.ok:
+            ids = [t.get("id") for t in (r.json().get("teams") or []) if t.get("id")]
+    except Exception as ex:
+        logging.warning(f"[_get_mlb_team_ids] live lookup failed: {ex}")
+    if not ids:
+        ids = [108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121,
+               133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146,
+               147, 158]
+    with _MLB_TEAM_IDS_LOCK:
+        _MLB_TEAM_IDS_CACHE["date"] = today
+        _MLB_TEAM_IDS_CACHE["ids"]  = list(ids)
+    return list(ids)
+
+
 def _memory_ingest_mlb_api_player_stats(team_ids, max_players=200, season=None):
     """
     Comprehensively ingest MLB API player stats: hitting, pitching, fielding stats per team.
@@ -3271,17 +3312,29 @@ def _memory_ingest_mlb_api_player_stats(team_ids, max_players=200, season=None):
         
         for tid in team_ids[:30]:
             try:
+                # NB: hydrate=roster on its own returns an empty roster.roster array
+                # in the modern Stats API — must specify the roster type. "active"
+                # gives the 26-man + 40-man overlap; "person" pulls fullName, etc.
                 payload = _collect_mlb_endpoint(
-                    f"{MLB_API}/teams/{tid}?hydrate=roster",
+                    f"{MLB_API}/teams/{tid}?hydrate=roster(active,person)&season={season}",
                     timeout=12,
                     default={}
                 )
-                # MLB API now returns 'teams' array
                 teams = payload.get("teams") or []
                 if not teams:
-                    print(f"[_memory_ingest_mlb_api_player_stats] Team {tid} missing in API response.")
-                    continue
-                team_info = teams[0]
+                    # Fallback: hit the roster endpoint directly.
+                    roster_payload = _collect_mlb_endpoint(
+                        f"{MLB_API}/teams/{tid}/roster",
+                        params={"rosterType": "active", "season": season, "hydrate": "person"},
+                        timeout=12,
+                        default={},
+                    ) or {}
+                    if not roster_payload:
+                        print(f"[_memory_ingest_mlb_api_player_stats] Team {tid} missing in API response.")
+                        continue
+                    team_info = {"name": f"Team {tid}", "roster": roster_payload}
+                else:
+                    team_info = teams[0]
                 roster_obj = team_info.get("roster") or {}
                 roster = roster_obj.get("roster", []) if isinstance(roster_obj, dict) else []
 
@@ -4409,7 +4462,7 @@ def api_brain_ingest_status():
 
         statscast = _memory_ingest_statscast_data(today_et)
         fangraphs = _memory_ingest_fangraphs_data()
-        mlb_api = _memory_ingest_mlb_api_player_stats([i for i in range(108, 146)])
+        mlb_api = _memory_ingest_mlb_api_player_stats(_get_mlb_team_ids())
 
         total_statscast = sum(statscast.get('summary', {}).values())
         total_fangraphs = sum(fangraphs.get('summary', {}).values())
@@ -4463,7 +4516,7 @@ def api_brain_ingest_trigger():
         _fetch_injury_status(force=force)
 
         today_et = datetime.now(ET).strftime("%Y-%m-%d")
-        comprehensive = _memory_collect_comprehensive_data(today_et, team_ids=[i for i in range(108, 146)], mode='manual')
+        comprehensive = _memory_collect_comprehensive_data(today_et, team_ids=_get_mlb_team_ids(), mode='manual')
         manual_uploads = comprehensive.get('sources', {}).get('manualUploads', {})
 
         return jsonify({
@@ -7049,6 +7102,31 @@ def api_player_bvp_games(player_id, pitcher_id):
 
         # Ensure latest first.
         games = sorted(games, key=lambda x: x.get("date", ""), reverse=True)[:5]
+
+        # ── Enrich with Statcast per-PA metrics (EV / launch_angle / dist / trajectory).
+        # The MLB Stats API gameLog has no Statcast detail; pull from Savant via pybaseball.
+        try:
+            sc_rows = _recent_statcast_for_batter(player_id, pitcher_id=None, n=40, seasons=1)
+            by_date = {}
+            for r in (sc_rows or []):
+                d = r.get("date")
+                if not d:
+                    continue
+                # Keep the hardest-hit batted ball per date (often only 1 batted ball anyway).
+                cur = by_date.get(d)
+                cur_ev = (cur or {}).get("exit_velocity") or -1
+                new_ev = r.get("exit_velocity") or -1
+                if cur is None or new_ev > cur_ev:
+                    by_date[d] = r
+            for g in games:
+                sc = by_date.get(g.get("date"))
+                if sc:
+                    g["exit_velocity"] = sc.get("exit_velocity")
+                    g["launch_angle"]  = sc.get("launch_angle")
+                    g["hit_distance"]  = sc.get("hit_distance")
+                    g["trajectory"]    = sc.get("trajectory")
+        except Exception as ex:
+            logging.warning(f"[api_player_bvp_games] statcast enrich failed bid={player_id}: {ex}")
 
         ab = bvp.get("ab", 0) or 0
         avg = bvp.get("avg")
@@ -18861,6 +18939,13 @@ def api_props_projections(game_pk):
                 ev   = bsv.get("sv_ev")
                 pull = bsv.get("pull_pct_air")
                 bid  = b.get("id")
+                # Per-pitch outcome stats (keyed by full pitch name, e.g. "4-Seam Fastball").
+                # Used by the PITCH MIX tab to render "BEST BATTER MATCHUPS VS PITCH".
+                try:
+                    with _sv_lock:
+                        bat_arsenal_map = dict(_sv_bat_arsenal_stats.get(str(bid), {})) if bid else {}
+                except Exception:
+                    bat_arsenal_map = {}
                 form = _fetch_rolling_form(bid, False) if bid else None
                 bvp  = _fetch_bvp(bid, opp_pid)      if (bid and opp_pid) else None
                 pitch_adv = _pitch_type_advantage(bid, opp_pid, batter_name=name, pitcher_name=opp_pname) if (bid and opp_pid) else {"status": "neutral", "note": "Neutral matchup"}
@@ -18935,6 +19020,7 @@ def api_props_projections(game_pk):
                     "vs_l_ops":     b.get("vs_l_ops"),
                     "vs_r_ops":     b.get("vs_r_ops"),
                     "xgbHitProb":   round(xgb_hit_p, 4) if xgb_hit_p is not None else None,
+                    "arsenal":      bat_arsenal_map,
                     "proj":         proj,
                 }
 
@@ -21437,13 +21523,130 @@ ARSENAL_PRIOR_SEASONS    = int(os.environ.get("ARSENAL_PRIOR_SEASONS",   "2"))
 ARSENAL_PRIOR_STRENGTH   = int(os.environ.get("ARSENAL_PRIOR_STRENGTH", "20"))
 ARSENAL_PRIOR_SIM_FLOOR  = float(os.environ.get("ARSENAL_PRIOR_SIM_FLOOR", "0.70"))
 ARSENAL_PRIOR_TOPN       = int(os.environ.get("ARSENAL_PRIOR_TOPN",     "10"))
-ARSENAL_PRIOR_TIMEOUT_S  = float(os.environ.get("ARSENAL_PRIOR_TIMEOUT_S", "8.0"))
+ARSENAL_PRIOR_TIMEOUT_S  = float(os.environ.get("ARSENAL_PRIOR_TIMEOUT_S", "20.0"))
 
 # In-memory cache for the batter Statcast DataFrame, keyed by
 # (batter_id, today_date_str). Holds only the 4 columns we filter on
 # (pitcher, events, game_date, pitch_type) to keep memory bounded.
 _batter_statcast_cache: dict = {}
 _batter_statcast_lock = threading.Lock()
+
+# Separate cache for the richer per-PA Statcast pull used by the H2H tab —
+# keeps the EV / launch_angle / hit_distance / bb_type columns that the
+# arsenal-prior pulls drop. Keyed by (batter_id, today, vs_pitcher_id).
+_batter_recent_statcast_cache: dict = {}
+_batter_recent_statcast_lock = threading.Lock()
+
+
+def _recent_statcast_for_batter(batter_id, pitcher_id=None, n=10, seasons=2):
+    """Pull the batter's recent batted-ball events with Statcast metrics.
+
+    Returns a list of dicts (most recent first) with keys:
+        date, exit_velocity, launch_angle, hit_distance, trajectory, event
+    Optionally filtered to events against a specific pitcher_id.
+
+    Uses pybaseball.statcast_batter; caches the per-PA DataFrame per
+    (batter_id, today, vs_pitcher) so repeat H2H lookups are free.
+    Returns [] on any failure (FE renders em-dashes for missing values).
+    """
+    try:
+        bid = int(batter_id)
+    except Exception:
+        return []
+    today = datetime.now().strftime("%Y-%m-%d")
+    cache_key = (bid, today, int(pitcher_id) if pitcher_id else None, int(n), int(seasons))
+    with _batter_recent_statcast_lock:
+        cached = _batter_recent_statcast_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+    try:
+        import pybaseball as pb
+    except Exception as ex:
+        logging.warning(f"[RecentStatcast] pybaseball import failed: {ex}")
+        with _batter_recent_statcast_lock:
+            _batter_recent_statcast_cache[cache_key] = []
+        return []
+
+    current_year = datetime.now().year
+    season_years = list(range(current_year - max(1, seasons) + 1, current_year + 1))
+
+    def _pull_one(yr):
+        try:
+            start = f"{yr}-03-01"
+            end = today if yr == current_year else f"{yr}-11-30"
+            df = pb.statcast_batter(start_dt=start, end_dt=end, player_id=bid)
+            if df is None or df.empty:
+                return None
+            keep_cols = [c for c in ("game_date", "events", "launch_speed", "launch_angle",
+                                     "hit_distance_sc", "bb_type", "pitcher", "description")
+                         if c in df.columns]
+            if "events" not in keep_cols:
+                return None
+            sub = df[keep_cols].dropna(subset=["events"])
+            return sub
+        except Exception as ex:
+            logging.warning(f"[RecentStatcast] pull failed bid={bid} yr={yr}: {ex}")
+            return None
+
+    frames = []
+    with ThreadPoolExecutor(max_workers=min(len(season_years), 4)) as ex:
+        for fut in as_completed({ex.submit(_pull_one, yr): yr for yr in season_years}):
+            df = fut.result()
+            if df is not None and not df.empty:
+                frames.append(df)
+
+    if not frames:
+        with _batter_recent_statcast_lock:
+            _batter_recent_statcast_cache[cache_key] = []
+        return []
+
+    combined = pd.concat(frames, ignore_index=True)
+    if pitcher_id and "pitcher" in combined.columns:
+        try:
+            pid = int(pitcher_id)
+            combined["pitcher"] = pd.to_numeric(combined["pitcher"], errors="coerce")
+            combined = combined[combined["pitcher"] == pid]
+        except Exception:
+            pass
+
+    if combined.empty:
+        with _batter_recent_statcast_lock:
+            _batter_recent_statcast_cache[cache_key] = []
+        return []
+
+    try:
+        combined = combined.sort_values("game_date", ascending=False).head(int(n))
+    except Exception:
+        combined = combined.head(int(n))
+
+    out = []
+    for _, row in combined.iterrows():
+        def _num(v):
+            try:
+                if v is None or (isinstance(v, float) and pd.isna(v)):
+                    return None
+                return round(float(v), 1)
+            except Exception:
+                return None
+        bb = row.get("bb_type")
+        traj_map = {"ground_ball": "GB", "fly_ball": "FB", "line_drive": "LD",
+                    "popup": "PU"}
+        traj = traj_map.get(str(bb).lower(), None) if bb and not (isinstance(bb, float) and pd.isna(bb)) else None
+        evt = row.get("events")
+        event_str = str(evt).replace("_", " ").title() if evt and not (isinstance(evt, float) and pd.isna(evt)) else None
+        out.append({
+            "date":           str(row.get("game_date") or "")[:10],
+            "exit_velocity":  _num(row.get("launch_speed")),
+            "launch_angle":   _num(row.get("launch_angle")),
+            "hit_distance":   _num(row.get("hit_distance_sc")),
+            "trajectory":     traj,
+            "event":          event_str,
+        })
+
+    with _batter_recent_statcast_lock:
+        _batter_recent_statcast_cache[cache_key] = out
+    return out
 
 # Event classification for per-PA rate derivation.
 _BVP_HIT_EVENTS    = {"single", "double", "triple", "home_run"}
@@ -22213,7 +22416,10 @@ def api_matchup_vertex():
                                            reason=target_meta.get("reason") or "no_similar_batters")
             similar_batter_ids = [s["batter_id"] for s in similar_batters]
 
-            # ── Run both pulls in parallel under a shared time budget ────
+            # ── Run both pulls in parallel — each side gets its OWN budget so
+            # a slow batter-side pull can't starve the pitcher-side one (this
+            # was the root cause of the chronic "timeout_or_error: TimeoutError"
+            # on the H2H "Pitcher vs similar-profile batters" panel).
             prior_counts = None
             prior_audit  = {}
             pitcher_prior_counts = None
@@ -22229,11 +22435,9 @@ def api_matchup_vertex():
                     pending["pitcher_side"] = pulls_pool.submit(
                         _aggregate_pitcher_vs_similar_batters, pitcher_id, similar_batter_ids
                     )
-                deadline = time.time() + ARSENAL_PRIOR_TIMEOUT_S
                 for label, fut in pending.items():
-                    remaining = max(0.1, deadline - time.time())
                     try:
-                        counts, audit = fut.result(timeout=remaining)
+                        counts, audit = fut.result(timeout=ARSENAL_PRIOR_TIMEOUT_S)
                     except Exception as tex:
                         counts, audit = None, {"reason": f"timeout_or_error: {tex.__class__.__name__}"}
                     if label == "batter_side":
