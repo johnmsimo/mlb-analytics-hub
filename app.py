@@ -201,7 +201,16 @@ def _extract_json_block(txt):
         return None
 
 
-def _vertex_gemini_json(model_key, prompt, system=None, max_tokens=1024, temperature=0.3):
+def _is_quota_error(err_str):
+    """Detect a Gemini quota / rate-limit error from the exception string."""
+    if not err_str:
+        return False
+    s = str(err_str)
+    return ("RESOURCE_EXHAUSTED" in s) or ("429" in s) or ("quota" in s.lower())
+
+
+def _vertex_gemini_json(model_key, prompt, system=None, max_tokens=1024, temperature=0.3,
+                       _fallback_chain=None):
     """Call a Gemini model (google-genai SDK, API key auth) and return parsed JSON.
 
     Gemini 2.5 models have "thinking" enabled by default — thinking tokens
@@ -209,9 +218,19 @@ def _vertex_gemini_json(model_key, prompt, system=None, max_tokens=1024, tempera
     responses for structured outputs. We disable thinking explicitly here
     since none of our JSON surfaces benefit from chain-of-thought, and the
     saved tokens go entirely to the actual response (cheaper + more reliable).
+
+    Free-tier fallback: when a paid model (reasoning/narrative/premium ->
+    gemini-2.5-pro) returns RESOURCE_EXHAUSTED, the call is retried against
+    the "fast" tier (gemini-2.5-flash-lite, free-tier quota). Quality drops
+    a notch but the panel still gets a real AI verdict instead of an
+    "Unavailable" placeholder.
     """
     if not _gemini_available or _gemini_client is None:
         return None, "gemini_unavailable"
+    if _fallback_chain is None:
+        # Build the per-tier fallback chain ONCE. Paid tiers fall back to
+        # "fast"; the "fast" tier has no further fallback.
+        _fallback_chain = ["fast"] if model_key in ("reasoning", "narrative", "premium") else []
     try:
         model_id = VERTEX_MODELS.get(model_key)
         if not model_id:
@@ -240,7 +259,19 @@ def _vertex_gemini_json(model_key, prompt, system=None, max_tokens=1024, tempera
             return None, f"json_parse_failed (finish={finish}, len={len(txt)}, head={snippet!r})"
         return parsed, None
     except Exception as ex:
-        return None, str(ex)
+        err = str(ex)
+        if _is_quota_error(err) and _fallback_chain:
+            next_key, *rest = _fallback_chain
+            app.logger.warning(
+                "[gemini] %s hit quota, falling back to %s (%s)",
+                model_key, next_key, VERTEX_MODELS.get(next_key, "?"),
+            )
+            return _vertex_gemini_json(
+                next_key, prompt, system=system,
+                max_tokens=max_tokens, temperature=temperature,
+                _fallback_chain=rest,
+            )
+        return None, err
 
 
 # Backwards-compatible alias: every caller that used to hit Claude now
@@ -252,15 +283,21 @@ def _vertex_claude_json(model_key, prompt, system, max_tokens=2000, temperature=
                                max_tokens=max_tokens, temperature=temperature)
 
 
-def _vertex_gemini_text(model_key, prompt, system=None, max_tokens=600, temperature=0.5):
+def _vertex_gemini_text(model_key, prompt, system=None, max_tokens=600, temperature=0.5,
+                       _fallback_chain=None):
     """Call Gemini and return the plain text response (not JSON).
 
     Used by paragraph-form surfaces — HR scouting writeups, single-bullet
     summaries — where forcing application/json would just wrap the text in
     a wrapper key. Returns (text_str_or_None, error_str_or_None).
+
+    Same free-tier fallback as _vertex_gemini_json: paid tiers retry on
+    gemini-2.5-flash-lite when the primary model returns RESOURCE_EXHAUSTED.
     """
     if not _gemini_available or _gemini_client is None:
         return None, "gemini_unavailable"
+    if _fallback_chain is None:
+        _fallback_chain = ["fast"] if model_key in ("reasoning", "narrative", "premium") else []
     try:
         model_id = VERTEX_MODELS.get(model_key)
         if not model_id:
@@ -285,7 +322,19 @@ def _vertex_gemini_text(model_key, prompt, system=None, max_tokens=600, temperat
             return None, f"empty_response (finish={finish})"
         return txt, None
     except Exception as ex:
-        return None, str(ex)
+        err = str(ex)
+        if _is_quota_error(err) and _fallback_chain:
+            next_key, *rest = _fallback_chain
+            app.logger.warning(
+                "[gemini] %s hit quota (text), falling back to %s (%s)",
+                model_key, next_key, VERTEX_MODELS.get(next_key, "?"),
+            )
+            return _vertex_gemini_text(
+                next_key, prompt, system=system,
+                max_tokens=max_tokens, temperature=temperature,
+                _fallback_chain=rest,
+            )
+        return None, err
 
 
 def _bq_query_rows(sql, params=None, timeout=15):
