@@ -94,6 +94,7 @@
     <button class="tab" onclick="switchTab('kelly',this)">Kelly Calculator</button>
     <button class="tab" onclick="switchTab('ev',this)">EV Calculator</button>
     <button class="tab" onclick="switchTab('parlay',this)">Parlay Calculator</button>
+    <button class="tab" onclick="switchTab('signals',this)">Player Signals</button>
   </div>
 
   <!-- NO-VIG -->
@@ -175,6 +176,37 @@
       <div id="ev-result"></div>
       <div class="info-box">
         <strong>Formula:</strong> EV = (prob × profit) − ((1 − prob) × stake). A positive EV means the bet is mathematically profitable over a large sample.
+      </div>
+    </div>
+  </div>
+
+  <!-- PLAYER SIGNALS -->
+  <div class="panel" id="panel-signals">
+    <div class="calc-card" style="max-width:820px">
+      <div class="calc-title">Player Signals — Image Extractor</div>
+      <div class="calc-desc">
+        Upload screenshots of your rating lists (🔥 ISO×EV×Barrel, 💣 vs Pitch Mix, 💤 Sleeper, ⭐ Favorite).
+        Gemini reads the image and merges the signals into your props research view — badges show up on the
+        <a href="/props" style="color:var(--c)">Props</a> page next to each player.
+      </div>
+      <div class="field" style="margin-bottom:12px">
+        <label>Choose images (PNG / JPG / WEBP, multiple OK)</label>
+        <input id="sig-files" type="file" accept="image/png,image/jpeg,image/webp" multiple>
+      </div>
+      <button class="calc-btn" id="sig-upload-btn" onclick="uploadSignalImages()">Extract Signals</button>
+      <div id="sig-status" style="margin-top:12px;font-size:.78rem;color:var(--mu);min-height:1.2em"></div>
+      <div id="sig-results" style="margin-top:14px"></div>
+      <hr class="divider">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+        <div style="font-size:.85rem;color:var(--t);font-weight:600">Current Signal Store</div>
+        <button class="fmt-btn" onclick="refreshSignalsStore()">Refresh</button>
+      </div>
+      <div id="sig-store" style="margin-top:10px"></div>
+      <div class="info-box" style="margin-top:14px">
+        <strong>How it works:</strong> Each upload is OCR'd by Gemini 2.5 Pro and merged into
+        <code>data/player_signals.json</code>. The OR-merge means re-uploading the same image is safe — a
+        flag stays true once it's been seen. To wipe a single player, click the ✕ next to their row. To wipe
+        the entire store, POST <code>/api/player-signals/clear</code> with your admin token.
       </div>
     </div>
   </div>
@@ -473,6 +505,132 @@ function calcParlay() {
     </div>
   `;
 }
+
+/* ── Player Signals ───────────────────────────────────── */
+function signalBadgeRow(p) {
+  const fire = p.fire ? '🔥' : '';
+  const bomb = p.bomb ? '💣' : '';
+  const sleeper = p.sleeper ? '💤' : '';
+  const star = p.star ? '⭐' : '';
+  return fire + bomb + sleeper + star;
+}
+
+function renderSignalStore(store) {
+  const el = document.getElementById('sig-store');
+  const players = (store && store.players) || {};
+  const keys = Object.keys(players);
+  if (!keys.length) {
+    el.innerHTML = '<div style="color:var(--mu);font-size:.78rem;padding:8px 0">No signals stored yet. Upload a screenshot above.</div>';
+    return;
+  }
+  keys.sort();
+  const rows = keys.map(k => {
+    const p = players[k];
+    const badges = signalBadgeRow(p) || '—';
+    const display = (p.name || k).replace(/</g, '&lt;');
+    return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px 10px;border-bottom:1px solid rgba(255,255,255,.05);font-size:.82rem">
+      <span>${display}</span>
+      <span style="display:flex;align-items:center;gap:8px">
+        <span style="font-size:1rem">${badges}</span>
+        <button class="leg-del" style="padding:3px 8px;font-size:.7rem" onclick="deleteSignalPlayer('${k.replace(/'/g, "\\'")}')">✕</button>
+      </span>
+    </div>`;
+  }).join('');
+  const updated = store.updatedAt ? new Date(store.updatedAt).toLocaleString() : '—';
+  el.innerHTML = `<div style="font-size:.7rem;color:var(--mu);margin-bottom:4px">Last updated: ${updated} · ${keys.length} player(s)</div>${rows}`;
+}
+
+async function refreshSignalsStore() {
+  try {
+    const r = await fetch('/api/player-signals');
+    const j = await r.json();
+    if (j.success) renderSignalStore(j.store);
+  } catch (e) {
+    document.getElementById('sig-store').innerHTML = `<div style="color:var(--r);font-size:.78rem">Failed to load: ${e.message}</div>`;
+  }
+}
+
+async function deleteSignalPlayer(key) {
+  if (!confirm(`Remove ${key} from signal store?`)) return;
+  try {
+    const r = await fetch('/api/player-signals/' + encodeURIComponent(key), {method: 'DELETE'});
+    const j = await r.json();
+    if (j.success) renderSignalStore(j.store);
+    else alert('Delete failed: ' + (j.error || 'unknown'));
+  } catch (e) {
+    alert('Delete failed: ' + e.message);
+  }
+}
+
+function renderUploadResults(results) {
+  const el = document.getElementById('sig-results');
+  if (!results || !results.length) { el.innerHTML = ''; return; }
+  const blocks = results.map(r => {
+    const head = r.success
+      ? `<div style="font-size:.82rem;color:var(--g)">✓ ${r.filename} → ${r.extractedCount} player(s)</div>`
+      : `<div style="font-size:.82rem;color:var(--r)">✗ ${r.filename}: ${r.error || 'failed'}</div>`;
+    let body = '';
+    if (r.success && r.extracted && r.extracted.length) {
+      const rows = r.extracted.map(p => {
+        const badges = signalBadgeRow(p) || '—';
+        return `<div style="display:flex;justify-content:space-between;gap:10px;padding:3px 6px;font-size:.78rem">
+          <span>${(p.name || '').replace(/</g, '&lt;')}</span>
+          <span style="font-size:.95rem">${badges}</span>
+        </div>`;
+      }).join('');
+      body = `<div style="border:1px solid var(--b);border-radius:8px;margin-top:4px;background:rgba(255,255,255,.02)">${rows}</div>`;
+    }
+    return `<div style="margin-bottom:10px">${head}${body}</div>`;
+  }).join('');
+  el.innerHTML = blocks;
+}
+
+async function uploadSignalImages() {
+  const input = document.getElementById('sig-files');
+  const status = document.getElementById('sig-status');
+  const btn = document.getElementById('sig-upload-btn');
+  if (!input.files || !input.files.length) {
+    status.textContent = 'Choose at least one image first.';
+    status.style.color = 'var(--r)';
+    return;
+  }
+  btn.disabled = true;
+  const originalLabel = btn.textContent;
+  btn.textContent = 'EXTRACTING…';
+  status.style.color = 'var(--mu)';
+  status.textContent = `Uploading ${input.files.length} image(s) and asking Gemini to extract signals…`;
+  const fd = new FormData();
+  for (const f of input.files) fd.append('files', f);
+  try {
+    const r = await fetch('/api/player-signals/upload-image', {method: 'POST', body: fd});
+    const j = await r.json();
+    if (j.success || (j.results && j.results.length)) {
+      renderUploadResults(j.results || []);
+      if (j.store) renderSignalStore(j.store);
+      const okCount = (j.results || []).filter(x => x.success).length;
+      const failCount = (j.results || []).filter(x => !x.success).length;
+      status.style.color = okCount ? 'var(--g)' : 'var(--r)';
+      status.textContent = `Done — ${okCount} extracted${failCount ? `, ${failCount} failed` : ''}.`;
+      input.value = '';
+    } else {
+      status.style.color = 'var(--r)';
+      status.textContent = 'Upload failed: ' + (j.error || 'unknown error');
+    }
+  } catch (e) {
+    status.style.color = 'var(--r)';
+    status.textContent = 'Network error: ' + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalLabel;
+  }
+}
+
+// Auto-load the signal store the first time the Player Signals tab is opened.
+const _origSwitchTab = switchTab;
+switchTab = function(id, btn) {
+  _origSwitchTab(id, btn);
+  if (id === 'signals') refreshSignalsStore();
+};
 </script>
 </body>
 </html>

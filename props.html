@@ -1491,7 +1491,7 @@ function buildPropsPicksPanel(d) {
     ? starPicks.map((c,i) => `<div class="props-pr-bet">
         <div class="props-pr-rank">${rankEmoji[i]}</div>
         <div class="props-pr-body">
-          <div class="props-pr-title" style="color:${catColor(c.cat)}">${c.name}</div>
+          <div class="props-pr-title" style="color:${catColor(c.cat)}">${c.name}${signalBadge(c.name)}</div>
           <div class="props-pr-pick">${c.pick} <span style="font-size:.46rem;opacity:.6">edge +${c.edge.toFixed(2)}</span></div>
           ${c.reason ? `<div class="props-pr-reason">${c.reason}</div>` : ''}
         </div>
@@ -1504,7 +1504,7 @@ function buildPropsPicksPanel(d) {
         const isOver = leg.pick.includes('OVER');
         return `<div class="props-pr-leg">
           <div class="props-pr-leg-cat" style="color:${catColor(leg.cat)}">${leg.cat}</div>
-          <div class="props-pr-leg-pick">${leg.name} — ${leg.pick}</div>
+          <div class="props-pr-leg-pick">${leg.name}${signalBadge(leg.name)} — ${leg.pick}</div>
           <div class="props-pr-leg-pill ${isOver?'over':'under'}">${isOver?'OVER':'UNDER'}</div>
         </div>`;
       }).join('')
@@ -2347,7 +2347,7 @@ function batterCard(b) {
 
   return `<div class="bcard">
     <div class="bcard-top">
-      <div><div class="bcard-name">${esc(b.name||'—')} ${injBadge}</div><div class="bcard-meta">${esc(b.pos||'')} · ${esc(b.team||'')}</div>${verify}</div>
+      <div><div class="bcard-name">${esc(b.name||'—')}${signalBadge(b.name)} ${injBadge}</div><div class="bcard-meta">${esc(b.pos||'')} · ${esc(b.team||'')}</div>${verify}</div>
       <div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:4px">
         <div class="bcard-slot">${b.slot||'?'}</div>
         ${hub != null ? hubBadge(hub) : ''}
@@ -2542,6 +2542,40 @@ let PLAYER_HUB_MAP  = {};
 let PLAYER_EV_MAP   = {};
 let TRACKED_KEYS    = new Set();
 let PLAYER_BEST_PROP = {};
+
+// ── Player Signals (image-extracted 🔥💣⭐💤 tags, uploaded via /tools) ─────
+let PLAYER_SIGNALS = {};
+function _signalKey(name) {
+  if (!name) return '';
+  // ASCII-fold + lowercase to match the server's _player_signal_key.
+  return String(name).normalize('NFKD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase().trim().replace(/\s+/g, ' ');
+}
+function signalBadge(name) {
+  const s = PLAYER_SIGNALS[_signalKey(name)];
+  if (!s) return '';
+  const parts = [];
+  if (s.fire) parts.push('🔥');
+  if (s.bomb) parts.push('💣');
+  if (s.sleeper) parts.push('💤');
+  if (s.star) parts.push('⭐');
+  if (!parts.length) return '';
+  return ` <span class="player-signals" title="From your uploaded screenshots" style="font-size:.95rem;letter-spacing:1px">${parts.join('')}</span>`;
+}
+async function loadPlayerSignals() {
+  try {
+    const r = await fetch('/api/player-signals');
+    if (!r.ok) return;
+    const j = await r.json();
+    const players = (j && j.store && j.store.players) || {};
+    PLAYER_SIGNALS = players;
+  } catch (e) {
+    // Non-fatal: signals are a research overlay, not core data.
+    console.debug('[player-signals] load failed', e);
+  }
+}
+// Fire once at page load; cached for the session.
+loadPlayerSignals();
 
 function computeHubRating(adjProb, edge) {
   const edgeBonus = Math.min((edge || 0) * 100, 20);

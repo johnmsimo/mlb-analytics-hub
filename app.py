@@ -283,6 +283,66 @@ def _vertex_claude_json(model_key, prompt, system, max_tokens=2000, temperature=
                                max_tokens=max_tokens, temperature=temperature)
 
 
+def _vertex_gemini_json_image(model_key, prompt, image_bytes, mime_type,
+                              system=None, max_tokens=2048, temperature=0.2,
+                              _fallback_chain=None):
+    """Multimodal variant of _vertex_gemini_json: prompt + inline image bytes.
+
+    Gemini 2.5 accepts inline image parts up to ~20MB. We pass the raw bytes
+    via google.genai.types.Part.from_bytes so callers don't need to base64
+    the payload themselves. Same quota-fallback chain as the text-only path.
+    """
+    if not _gemini_available or _gemini_client is None:
+        return None, "gemini_unavailable"
+    if _fallback_chain is None:
+        _fallback_chain = ["fast"] if model_key in ("reasoning", "narrative", "premium") else []
+    try:
+        from google.genai import types as _genai_types
+    except Exception as ex:
+        return None, f"genai_types_unavailable:{ex}"
+    try:
+        model_id = VERTEX_MODELS.get(model_key)
+        if not model_id:
+            return None, f"unknown_model_key:{model_key}"
+        image_part = _genai_types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
+        resp = _gemini_client.models.generate_content(
+            model=model_id,
+            contents=[image_part, prompt],
+            config={
+                "system_instruction": system or "Respond with raw JSON only — no markdown, no backticks.",
+                "max_output_tokens": max_tokens,
+                "temperature": temperature,
+                "response_mime_type": "application/json",
+                "thinking_config": {"thinking_budget": 0},
+            },
+        )
+        txt = getattr(resp, "text", None) or ""
+        parsed = _extract_json_block(txt)
+        if parsed is None:
+            snippet = (txt[:200] + "…") if len(txt) > 200 else txt
+            finish = None
+            try:
+                finish = resp.candidates[0].finish_reason if resp.candidates else None
+            except Exception:
+                pass
+            return None, f"json_parse_failed (finish={finish}, len={len(txt)}, head={snippet!r})"
+        return parsed, None
+    except Exception as ex:
+        err = str(ex)
+        if _is_quota_error(err) and _fallback_chain:
+            next_key, *rest = _fallback_chain
+            app.logger.warning(
+                "[gemini-image] %s hit quota, falling back to %s (%s)",
+                model_key, next_key, VERTEX_MODELS.get(next_key, "?"),
+            )
+            return _vertex_gemini_json_image(
+                next_key, prompt, image_bytes, mime_type,
+                system=system, max_tokens=max_tokens, temperature=temperature,
+                _fallback_chain=rest,
+            )
+        return None, err
+
+
 def _vertex_gemini_text(model_key, prompt, system=None, max_tokens=600, temperature=0.5,
                        _fallback_chain=None):
     """Call Gemini and return the plain text response (not JSON).
@@ -864,9 +924,15 @@ DATA_DIR = os.environ.get('DATA_DIR') or (
 )
 os.makedirs(DATA_DIR, exist_ok=True)
 print(f"[startup] DATA_DIR={DATA_DIR}")
+# Cap multipart uploads at 16MB — image screenshots are typically <2MB; this
+# rejects accidental large file selections before they hit disk.
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 BRAIN_DATA_DIR = os.path.join(DATA_DIR, 'brain_uploads')
 os.makedirs(BRAIN_DATA_DIR, exist_ok=True)
+BRAIN_IMAGES_DIR = os.path.join(BRAIN_DATA_DIR, 'images')
+os.makedirs(BRAIN_IMAGES_DIR, exist_ok=True)
 BRAIN_UPLOAD_STATE_STORE = os.path.join(DATA_DIR, 'brain_upload_state.json')
+PLAYER_SIGNALS_STORE = os.path.join(DATA_DIR, 'player_signals.json')
 TRACKER_STORE = os.path.join(DATA_DIR, 'daily_tracker.json')
 ADJUST_STORE = os.path.join(DATA_DIR, 'model_adjustments.json')
 CAL_HISTORY_STORE = os.path.join(DATA_DIR, 'calibration_history.json')
@@ -886,6 +952,7 @@ _consistency_refreshing = False
 _daily_summary_push_lock = threading.Lock()
 _daily_summary_push_jobs = {}
 _brain_upload_lock = threading.Lock()
+_player_signals_lock = threading.Lock()
 _mlb_memory_lock = threading.Lock()
 _mlb_memory_collecting = False
 _mlb_memory_last_collect = None
@@ -4003,7 +4070,16 @@ def nrfi_page():
 
 @app.route('/tools')
 def tools_page():
-    return TOOLS_HTML
+    html = _read_html_or_fallback('tools.html')
+    return Response(
+        html,
+        mimetype='text/html',
+        headers={
+            'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+            'Pragma': 'no-cache',
+            'Expires': '0',
+        },
+    )
 
 @app.route('/pitcher-deep-dive')
 @app.route('/pitcher-deep-dive/<int:pitcher_id>')
@@ -4507,6 +4583,250 @@ def api_brain_data_delete():
         return jsonify({'success': True, 'message': 'File deleted'})
     except Exception as ex:
         print(f'[api_brain_data_delete] {traceback.format_exc()}')
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
+# ── Player Signals (image-extracted 🔥💣⭐💤 tags) ─────────────────────────
+_PLAYER_SIGNAL_KEYS = ('fire', 'bomb', 'sleeper', 'star')
+_PLAYER_SIGNAL_IMAGE_MIMES = {'image/png', 'image/jpeg', 'image/jpg', 'image/webp'}
+_PLAYER_SIGNAL_IMAGE_EXTS = {'.png', '.jpg', '.jpeg', '.webp'}
+
+
+def _player_signal_key(name):
+    """Normalize a player name to a stable lookup key (ASCII-folded lowercase)."""
+    if not name:
+        return ''
+    folded = _ascii_fold(str(name)).strip().lower()
+    return ' '.join(folded.split())
+
+
+def _player_signals_default():
+    return {'updatedAt': None, 'players': {}}
+
+
+def _load_player_signals():
+    store = _load_json(PLAYER_SIGNALS_STORE, _player_signals_default())
+    if not isinstance(store, dict):
+        store = _player_signals_default()
+    store.setdefault('players', {})
+    return store
+
+
+def _save_player_signals(store):
+    return _save_json(PLAYER_SIGNALS_STORE, store)
+
+
+_SIGNAL_EXTRACTION_PROMPT = (
+    "Extract every player listed in this baseball player-rating screenshot. "
+    "For each player, return whether these emoji indicators appear next to their name:\n"
+    "- \"fire\" (🔥)\n"
+    "- \"bomb\" (💣 — bomb emoji, typically a black sphere with a fuse)\n"
+    "- \"sleeper\" (💤 zZ sleep emoji, sometimes shown as Zz or zZ in blue)\n"
+    "- \"star\" (⭐)\n\n"
+    "Respond with this exact JSON schema:\n"
+    "{\"players\": [{\"name\": \"Kyle Schwarber\", \"fire\": true, \"bomb\": true, "
+    "\"sleeper\": false, \"star\": false}, ...]}\n\n"
+    "Rules:\n"
+    "- Player names are written in \"First Last\" order (e.g. \"Kyle Schwarber\", \"Bobby Witt Jr\").\n"
+    "- Do NOT include legend rows from the bottom of the image (e.g. \"🔥 — Good ISO x EV x Barrel %\").\n"
+    "- If an emoji is ambiguous or absent, return false for that key.\n"
+    "- Preserve the original order players appear in the image."
+)
+
+
+def _extract_player_signals_from_image(image_bytes, mime_type, filename=None):
+    """Call Gemini Pro multimodal to extract player signals from a screenshot.
+
+    Returns (list_of_player_dicts, error_str_or_None).
+    Each player dict: {name, fire, bomb, sleeper, star}.
+    """
+    parsed, err = _vertex_gemini_json_image(
+        'reasoning', _SIGNAL_EXTRACTION_PROMPT, image_bytes, mime_type,
+        system='You extract structured JSON data from baseball screenshots. Respond with raw JSON only.',
+        max_tokens=4096, temperature=0.1,
+    )
+    if err or not isinstance(parsed, dict):
+        return [], err or 'no_json_returned'
+    rows = parsed.get('players') or []
+    if not isinstance(rows, list):
+        return [], 'players_not_a_list'
+    cleaned = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name = (row.get('name') or '').strip()
+        if not name:
+            continue
+        cleaned.append({
+            'name': name,
+            'fire': bool(row.get('fire')),
+            'bomb': bool(row.get('bomb')),
+            'sleeper': bool(row.get('sleeper')),
+            'star': bool(row.get('star')),
+        })
+    return cleaned, None
+
+
+def _merge_player_signals(extracted_rows, source_image_name):
+    """Merge a new batch of extracted rows into the persisted signals store.
+
+    OR-style merge: once a flag is true from any upload, it stays true until
+    the player is explicitly deleted or the store is cleared.
+    """
+    extracted_at = datetime.now(timezone.utc).isoformat()
+    with _player_signals_lock:
+        store = _load_player_signals()
+        players = store.get('players') or {}
+        for row in extracted_rows:
+            key = _player_signal_key(row.get('name'))
+            if not key:
+                continue
+            existing = players.get(key) or {
+                'name': row.get('name'),
+                'fire': False, 'bomb': False, 'sleeper': False, 'star': False,
+                'sources': [],
+            }
+            for sig in _PLAYER_SIGNAL_KEYS:
+                existing[sig] = bool(existing.get(sig)) or bool(row.get(sig))
+            # Preserve the display-case name from the most recent upload.
+            existing['name'] = row.get('name') or existing.get('name')
+            sources = existing.get('sources') or []
+            sources.append({'image': source_image_name, 'extractedAt': extracted_at})
+            # Keep at most the last 10 source references per player.
+            existing['sources'] = sources[-10:]
+            players[key] = existing
+        store['players'] = players
+        store['updatedAt'] = extracted_at
+        _save_player_signals(store)
+        return store
+
+
+def _unique_signal_image_name(filename):
+    safe_name = "".join(c for c in (filename or '') if c.isalnum() or c in ('._-'))
+    if not safe_name:
+        safe_name = f"signal_{uuid4().hex[:8]}.png"
+    stem, ext = os.path.splitext(safe_name)
+    if ext.lower() not in _PLAYER_SIGNAL_IMAGE_EXTS:
+        ext = '.png'
+        safe_name = f"{stem}{ext}"
+    candidate = safe_name
+    idx = 1
+    while os.path.exists(os.path.join(BRAIN_IMAGES_DIR, candidate)):
+        candidate = f"{stem}_{idx}{ext}"
+        idx += 1
+    return candidate
+
+
+@app.route('/api/player-signals/upload-image', methods=['POST'])
+def api_player_signals_upload_image():
+    """Upload one or more screenshots; auto-extract player signals via Gemini.
+
+    Multipart form: files[] (one or more image/png|jpeg|webp). Returns the
+    extracted rows per file plus the merged signals store.
+    """
+    try:
+        uploaded_files = request.files.getlist('files')
+        if not uploaded_files:
+            return jsonify({'success': False, 'error': 'No files provided'}), 400
+        results = []
+        merged_store = None
+        for f in uploaded_files:
+            if not f or not f.filename:
+                continue
+            mime = (f.mimetype or '').lower()
+            ext = os.path.splitext(f.filename)[1].lower()
+            if mime not in _PLAYER_SIGNAL_IMAGE_MIMES and ext not in _PLAYER_SIGNAL_IMAGE_EXTS:
+                results.append({
+                    'filename': f.filename,
+                    'success': False,
+                    'error': f'unsupported_mime:{mime or ext or "?"}',
+                })
+                continue
+            try:
+                image_bytes = f.read()
+                if not image_bytes:
+                    results.append({'filename': f.filename, 'success': False, 'error': 'empty_file'})
+                    continue
+                effective_mime = mime if mime in _PLAYER_SIGNAL_IMAGE_MIMES else (
+                    'image/jpeg' if ext in {'.jpg', '.jpeg'} else
+                    'image/webp' if ext == '.webp' else 'image/png'
+                )
+                safe_name = _unique_signal_image_name(f.filename)
+                file_path = os.path.join(BRAIN_IMAGES_DIR, safe_name)
+                with open(file_path, 'wb') as out:
+                    out.write(image_bytes)
+                rows, err = _extract_player_signals_from_image(image_bytes, effective_mime, safe_name)
+                if err:
+                    results.append({
+                        'filename': f.filename,
+                        'savedAs': safe_name,
+                        'success': False,
+                        'error': err,
+                        'extractedCount': 0,
+                    })
+                    continue
+                merged_store = _merge_player_signals(rows, safe_name)
+                results.append({
+                    'filename': f.filename,
+                    'savedAs': safe_name,
+                    'success': True,
+                    'extractedCount': len(rows),
+                    'extracted': rows,
+                })
+                print(f"[api_player_signals_upload_image] {safe_name}: extracted {len(rows)} players")
+            except Exception as ex:
+                print(f"[api_player_signals_upload_image] failed on {f.filename}: {ex}")
+                results.append({'filename': f.filename, 'success': False, 'error': str(ex)})
+        if merged_store is None:
+            merged_store = _load_player_signals()
+        return jsonify({
+            'success': any(r.get('success') for r in results),
+            'results': results,
+            'store': merged_store,
+        })
+    except Exception as ex:
+        print(f'[api_player_signals_upload_image] {traceback.format_exc()}')
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
+@app.route('/api/player-signals', methods=['GET'])
+def api_player_signals_get():
+    try:
+        store = _load_player_signals()
+        return jsonify({'success': True, 'store': store})
+    except Exception as ex:
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
+@app.route('/api/player-signals/clear', methods=['POST'])
+def api_player_signals_clear():
+    auth_fail = _check_admin_auth()
+    if auth_fail is not None:
+        return auth_fail
+    try:
+        with _player_signals_lock:
+            _save_player_signals(_player_signals_default())
+        return jsonify({'success': True, 'message': 'Player signals cleared'})
+    except Exception as ex:
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
+@app.route('/api/player-signals/<path:name>', methods=['DELETE'])
+def api_player_signals_delete_player(name):
+    auth_fail = _check_admin_auth()
+    if auth_fail is not None:
+        return auth_fail
+    try:
+        key = _player_signal_key(name)
+        if not key:
+            return jsonify({'success': False, 'error': 'invalid_name'}), 400
+        with _player_signals_lock:
+            store = _load_player_signals()
+            removed = store.get('players', {}).pop(key, None)
+            store['updatedAt'] = datetime.now(timezone.utc).isoformat()
+            _save_player_signals(store)
+        return jsonify({'success': True, 'removed': removed is not None, 'store': store})
+    except Exception as ex:
         return jsonify({'success': False, 'error': str(ex)}), 500
 
 
