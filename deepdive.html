@@ -5421,7 +5421,7 @@ function renderPitchMix(){
         var woba = (typeof ps.woba==='number'&&ps.woba>0) ? ps.woba : (LG_WOBA[pname]||.310);
         var slg  = (typeof ps.slg ==='number'&&ps.slg >0) ? ps.slg  : (LG_SLG[pname] ||.380);
         var whiff= (typeof ps.whiff_pct==='number'&&ps.whiff_pct>0) ? ps.whiff_pct : 22;
-        result.push({type:CODE_DISPLAY[code]||pname, code:code, pct:pct,
+        result.push({type:CODE_DISPLAY[code]||pname, code:code, pitchName:pname, pct:pct,
                      ba:ba, woba:woba, slg:slg,
                      hr:Math.round(hr9*(pct/100)*1.8), whiff:whiff,
                      label:mkLabel(woba)});
@@ -5505,14 +5505,15 @@ function renderPitchMix(){
         var perfs = oppBats.map(function(bt){
           var bname = bt.name||bt.fullName||'';
           var ba_data = null;
-          // Try per-pitch batter data from PROPS_DATA
+          // Try per-pitch batter data from PROPS_DATA (keys are full pitch names,
+          // e.g. "4-Seam Fastball"; fall back to 2-letter code for back-compat).
           for(var i=0;i<batArr.length;i++){
             if((batArr[i].name||'')===bname){
               var barsenal = batArr[i].arsenal||batArr[i].batArsenal||{};
-              ba_data = barsenal[pk]||null; break;
+              ba_data = (p.pitchName && barsenal[p.pitchName]) || barsenal[pk] || null; break;
             }
           }
-          if(!ba_data && bt.arsenal) ba_data = bt.arsenal[pk]||null;
+          if(!ba_data && bt.arsenal) ba_data = (p.pitchName && bt.arsenal[p.pitchName]) || bt.arsenal[pk] || null;
           if(ba_data){
             return {name:bname, woba:parseFloat(ba_data.woba||ba_data.wOBA||0)||0,
                     ba:parseFloat(ba_data.ba||ba_data.avg||0)||0, fromOverall:false};
