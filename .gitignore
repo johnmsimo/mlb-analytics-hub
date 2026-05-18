@@ -17,3 +17,5 @@ env/
 data/brain_uploads/images/
 # Generated signals store — rebuilt from uploads, no need to commit
 data/player_signals.json
+# Atomic-write tmp files orphaned by SIGTERM mid-write (see _save_json)
+data/*.tmp
