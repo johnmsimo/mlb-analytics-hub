@@ -202,7 +202,14 @@ def _extract_json_block(txt):
 
 
 def _vertex_gemini_json(model_key, prompt, system=None, max_tokens=1024, temperature=0.3):
-    """Call a Gemini model (google-genai SDK, API key auth) and return parsed JSON."""
+    """Call a Gemini model (google-genai SDK, API key auth) and return parsed JSON.
+
+    Gemini 2.5 models have "thinking" enabled by default — thinking tokens
+    count against max_output_tokens and can cause truncated/empty JSON
+    responses for structured outputs. We disable thinking explicitly here
+    since none of our JSON surfaces benefit from chain-of-thought, and the
+    saved tokens go entirely to the actual response (cheaper + more reliable).
+    """
     if not _gemini_available or _gemini_client is None:
         return None, "gemini_unavailable"
     try:
@@ -217,12 +224,20 @@ def _vertex_gemini_json(model_key, prompt, system=None, max_tokens=1024, tempera
                 "max_output_tokens": max_tokens,
                 "temperature": temperature,
                 "response_mime_type": "application/json",
+                "thinking_config": {"thinking_budget": 0},
             },
         )
         txt = getattr(resp, "text", None) or ""
         parsed = _extract_json_block(txt)
         if parsed is None:
-            return None, "json_parse_failed"
+            # Surface enough context to diagnose without leaking the full prompt.
+            snippet = (txt[:200] + "…") if len(txt) > 200 else txt
+            finish = None
+            try:
+                finish = resp.candidates[0].finish_reason if resp.candidates else None
+            except Exception:
+                pass
+            return None, f"json_parse_failed (finish={finish}, len={len(txt)}, head={snippet!r})"
         return parsed, None
     except Exception as ex:
         return None, str(ex)
@@ -254,14 +269,20 @@ def _vertex_gemini_text(model_key, prompt, system=None, max_tokens=600, temperat
             model=model_id,
             contents=prompt,
             config={
-                "system_instruction": system or "You are an expert MLB betting analyst.",
-                "max_output_tokens":  max_tokens,
-                "temperature":        temperature,
+                "system_instruction":  system or "You are an expert MLB betting analyst.",
+                "max_output_tokens":   max_tokens,
+                "temperature":         temperature,
+                "thinking_config":     {"thinking_budget": 0},
             },
         )
         txt = (getattr(resp, "text", None) or "").strip()
         if not txt:
-            return None, "empty_response"
+            finish = None
+            try:
+                finish = resp.candidates[0].finish_reason if resp.candidates else None
+            except Exception:
+                pass
+            return None, f"empty_response (finish={finish})"
         return txt, None
     except Exception as ex:
         return None, str(ex)
