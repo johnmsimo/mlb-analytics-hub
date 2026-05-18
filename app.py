@@ -22277,6 +22277,98 @@ def _bvp_row_to_pa_rates(row):
     }
 
 
+# ── /api/matchup analysis cache ──────────────────────────────────────────────
+# Gemini quota is a finite daily resource. Without caching, every visit to a
+# BvP page burns at least one Gemini call per matchup; with N batters in a
+# lineup and dozens of users that can easily exhaust the daily quota by noon.
+# Cache successful analyses for 24h keyed by (batter, pitcher, date) so each
+# unique matchup costs at most one Gemini call per day. Failures are NOT cached.
+_matchup_analysis_cache: dict = {}
+_matchup_analysis_lock   = threading.Lock()
+_MATCHUP_ANALYSIS_TTL    = int(os.environ.get("MATCHUP_ANALYSIS_TTL_SEC", "86400"))
+
+
+def _matchup_cache_get(batter_id, pitcher_id):
+    today = datetime.now(ET).strftime("%Y-%m-%d")
+    key = (int(batter_id), int(pitcher_id), today)
+    with _matchup_analysis_lock:
+        entry = _matchup_analysis_cache.get(key)
+        if not entry:
+            return None
+        expires_at, payload = entry
+        if expires_at < time.time():
+            _matchup_analysis_cache.pop(key, None)
+            return None
+        return payload
+
+
+def _matchup_cache_put(batter_id, pitcher_id, payload):
+    today = datetime.now(ET).strftime("%Y-%m-%d")
+    key = (int(batter_id), int(pitcher_id), today)
+    with _matchup_analysis_lock:
+        _matchup_analysis_cache[key] = (time.time() + _MATCHUP_ANALYSIS_TTL, payload)
+
+
+def _deterministic_verdict_from_mc(mc):
+    """Derive a {verdict, confidence, key_factors, summary} block from MC output.
+
+    Used as a fallback when the Gemini analysis fails (quota exhausted, network
+    error, etc.) so the AI VERDICT panel still shows actionable content. The
+    thresholds mirror the deterministic BEST PLAYS thresholds used elsewhere.
+    """
+    if not isinstance(mc, dict):
+        return None
+    hits = mc.get("hits") or {}
+    tb   = mc.get("tb") or {}
+    hr   = mc.get("hr") or {}
+    p_hit = float(hits.get("p_ge_1") or 0)
+    p_tb2 = float(tb.get("p_ge_2") or 0)
+    p_hr  = float(hr.get("p_ge_1") or 0)
+
+    def _v(p, over_thr, under_thr):
+        if p >= over_thr:  return "OVER"
+        if p <= under_thr: return "UNDER"
+        return "PASS"
+
+    verdict = {
+        "hits": _v(p_hit, 0.65, 0.40),
+        "tb":   _v(p_tb2, 0.55, 0.30),
+        "hr":   _v(p_hr,  0.18, 0.04),
+    }
+    over_count = sum(1 for v in verdict.values() if v == "OVER")
+    if over_count >= 2:
+        summary = (
+            f"Model gives {int(p_hit*100)}% on 1+ Hit and {int(p_tb2*100)}% on 2+ TB across "
+            f"{mc.get('nPa', '~3')} projected PAs. Lean OVER on the BEST PLAYS markets."
+        )
+        confidence = 60 + min(20, over_count * 5)
+    elif over_count == 0:
+        summary = (
+            f"Soft projection — {int(p_hit*100)}% on 1+ Hit, {int(p_tb2*100)}% on 2+ TB. "
+            "Fade or pass; book lines likely better than the model."
+        )
+        confidence = 40
+    else:
+        summary = (
+            f"Mixed signal — {int(p_hit*100)}% 1+ Hit, {int(p_tb2*100)}% 2+ TB, "
+            f"{int(p_hr*100)}% HR. Shop the strongest market only."
+        )
+        confidence = 50
+
+    factors = [
+        f"1+ Hit prob {int(p_hit*100)}%",
+        f"2+ TB prob {int(p_tb2*100)}%",
+        f"HR prob {int(p_hr*100)}%",
+    ]
+    return {
+        "verdict": verdict,
+        "confidence": confidence,
+        "key_factors": factors,
+        "summary": summary,
+        "risk": "Deterministic fallback — AI analyst temporarily unavailable.",
+    }
+
+
 @app.route("/api/matchup")
 def api_matchup_vertex():
     """BigQuery + Monte Carlo + Gemini Pro batter-vs-pitcher matchup endpoint.
@@ -22531,7 +22623,14 @@ def api_matchup_vertex():
 
         analysis = None
         analysis_error = None
-        if _gemini_available and mc:
+        analysis_source = None  # "gemini" | "cache" | "fallback"
+
+        cached = _matchup_cache_get(batter_id, pitcher_id)
+        if cached and cached.get("analysis"):
+            analysis = cached["analysis"]
+            analysis_source = "cache"
+
+        if analysis is None and _gemini_available and mc:
             prompt = (
                 "You are evaluating a batter-vs-pitcher prop matchup for MLB betting. "
                 "Use only the provided statistical context. Output strict JSON with keys: "
@@ -22551,8 +22650,29 @@ def api_matchup_vertex():
                 system="You are an expert MLB betting analyst. Respond with raw JSON only.",
                 max_tokens=600, temperature=0.3,
             )
+            if analysis:
+                analysis_source = "gemini"
+                _matchup_cache_put(batter_id, pitcher_id, {"analysis": analysis})
 
-        if analysis is None and source == "vertex":
+        # Deterministic fallback: if Gemini failed (quota / network / parse) we
+        # still want the AI VERDICT panel to show something useful. Build it
+        # from the Monte Carlo output we already computed.
+        if analysis is None and mc:
+            analysis = _deterministic_verdict_from_mc(mc)
+            if analysis:
+                analysis_source = "fallback"
+
+        # Surface a friendlier reason when the Gemini error was a quota hit.
+        if analysis_error and ("RESOURCE_EXHAUSTED" in str(analysis_error) or "429" in str(analysis_error)):
+            analysis_error = "AI quota exhausted — showing deterministic model verdict."
+
+        if analysis_source == "gemini":
+            source = "vertex"
+        elif analysis_source == "cache":
+            source = "vertex_cached"
+        elif analysis_source == "fallback":
+            source = "model_fallback"
+        elif source == "vertex":
             source = "stats_only"
 
         return jsonify({
@@ -22565,8 +22685,13 @@ def api_matchup_vertex():
             "pitcher_batter_prior":  pitcher_prior_block,
             "analysis": analysis,
             "analysis_error": analysis_error,
+            "analysis_source": analysis_source,
             "source": source,
-            "model": VERTEX_MODELS["reasoning"] if analysis else None,
+            "model": (
+                VERTEX_MODELS["reasoning"] if analysis_source in ("gemini", "cache")
+                else "model-deterministic" if analysis_source == "fallback"
+                else None
+            ),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
     except Exception as ex:
