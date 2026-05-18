@@ -22454,7 +22454,7 @@ def _vertex_hr_pick_blurbs(scores, top_n=20):
         result, err = _vertex_gemini_json(
             "fast", prompt,
             system="You are a sharp MLB HR-prop analyst. Be specific, evidence-first. Raw JSON only.",
-            max_tokens=1600, temperature=0.4,
+            max_tokens=4000, temperature=0.4,
         )
         if not result:
             return {}, err

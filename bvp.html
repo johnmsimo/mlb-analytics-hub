@@ -454,6 +454,33 @@
     }
     .reasoning-header{display:flex;align-items:baseline;gap:10px;margin-bottom:8px;flex-wrap:wrap}
     .reasoning-title{font-size:.6rem;font-weight:800;letter-spacing:.12em;color:var(--c);text-transform:uppercase}
+
+    /* AI Verdict block (Gemini /api/matchup) */
+    .ai-verdict{
+      background:linear-gradient(135deg,rgba(127,156,255,.10),rgba(0,0,0,.20));
+      border:1px solid rgba(127,156,255,.28);
+      border-left:3px solid #7f9cff;
+      border-radius:10px;
+      padding:11px 14px;
+      margin:6px 0 14px;
+    }
+    .ai-verdict-header{display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap}
+    .ai-verdict-tag{font-size:.55rem;font-weight:800;color:#7f9cff;background:rgba(127,156,255,.18);padding:2px 7px;border-radius:4px;letter-spacing:.08em}
+    .ai-verdict-conf{font-size:.6rem;color:var(--mu);text-transform:uppercase;letter-spacing:.06em;margin-left:auto}
+    .ai-verdict-conf b{color:var(--t);font-weight:700}
+    .ai-verdict-summary{font-size:.78rem;line-height:1.5;color:var(--t);margin-bottom:8px}
+    .ai-verdict-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:8px}
+    .ai-verdict-cell{background:rgba(0,0,0,.25);border-radius:6px;padding:5px 7px;text-align:center;border:1px solid rgba(255,255,255,.06)}
+    .ai-verdict-cell .vc-mkt{font-size:.55rem;color:var(--mu);text-transform:uppercase;letter-spacing:.06em}
+    .ai-verdict-cell .vc-val{font-size:.85rem;font-weight:800;margin-top:2px}
+    .ai-verdict-cell.vc-over  .vc-val{color:var(--g)}
+    .ai-verdict-cell.vc-under .vc-val{color:var(--y)}
+    .ai-verdict-cell.vc-pass  .vc-val{color:var(--mu)}
+    .ai-verdict-factors{font-size:.68rem;color:var(--mu);line-height:1.5}
+    .ai-verdict-factors b{color:var(--c);font-weight:700;margin-right:4px}
+    .ai-verdict-risk{font-size:.65rem;color:var(--y);margin-top:6px}
+    .ai-verdict-loading{font-size:.7rem;color:var(--mu);font-style:italic}
+    .ai-verdict-fail{font-size:.65rem;color:var(--mu)}
     .reasoning-lead{font-size:.85rem;font-weight:700;color:var(--t);flex:1}
     .reasoning-lead.good{color:var(--g)}
     .reasoning-lead.warn{color:var(--y)}
@@ -734,6 +761,11 @@ function fmtAvg(v) { return v != null ? Number(v).toFixed(3) : '—'; }
 function fmtOps(v) { return v != null ? Number(v).toFixed(3) : '—'; }
 
 function esc(s) { return (s||'').replace(/'/g, "\\'"); }
+function escHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
 
 // ── Stat quality colour helpers ──────────────────────────────────────────────
 function xstatColor(val, lg, higherIsBetter = true) {
@@ -1573,6 +1605,13 @@ function renderDetail(data) {
 
     ${buildReasoningSummary(proj, summary, batterName, pitcherName, batterInjury, pitcherInjury)}
 
+    <div class="ai-verdict" id="aiVerdictBlock">
+      <div class="ai-verdict-header">
+        <span class="ai-verdict-tag">AI VERDICT</span>
+        <span class="ai-verdict-loading">Asking Gemini for an analytical read on this matchup…</span>
+      </div>
+    </div>
+
     <div class="section-label">
       Career H2H Stats
       ${(mc.bvpFirstSeason && mc.bvpLastSeason)
@@ -1652,6 +1691,77 @@ function renderDetail(data) {
     else if ((currentLineup.pitchers.homePitcher || {}).id === pitcherId) pitcherSide = 'home';
   }
   loadContextData(batterId, pitcherId, proj, gamePk, pitcherSide);
+  loadAiVerdict(batterId, pitcherId);
+}
+
+const _aiVerdictCache = {};
+
+async function loadAiVerdict(batterId, pitcherId) {
+  const block = document.getElementById('aiVerdictBlock');
+  if (!block) return;
+  const key = `${batterId}_${pitcherId}`;
+  if (_aiVerdictCache[key]) { renderAiVerdict(_aiVerdictCache[key]); return; }
+  try {
+    const r = await fetch(`/api/matchup?batter_id=${batterId}&pitcher_id=${pitcherId}`);
+    const d = await r.json();
+    _aiVerdictCache[key] = d;
+    if (selectedBatter && selectedBatter.batterId === batterId && selectedBatter.pitcherId === pitcherId) {
+      renderAiVerdict(d);
+    }
+  } catch(e) {
+    renderAiVerdictFailure(e.message || 'network error');
+  }
+}
+
+function renderAiVerdictFailure(reason) {
+  const block = document.getElementById('aiVerdictBlock');
+  if (!block) return;
+  block.innerHTML = `
+    <div class="ai-verdict-header">
+      <span class="ai-verdict-tag">AI VERDICT</span>
+      <span class="ai-verdict-fail">Unavailable — ${escHtml(reason)}</span>
+    </div>`;
+}
+
+function renderAiVerdict(d) {
+  const block = document.getElementById('aiVerdictBlock');
+  if (!block) return;
+  const a = d && d.analysis;
+  if (!a) {
+    const why = (d && (d.analysis_error || d.source)) || 'no analysis';
+    renderAiVerdictFailure(String(why).slice(0, 120));
+    return;
+  }
+  const verdict = a.verdict || {};
+  const verdictCell = (mkt, label) => {
+    const v = String(verdict[mkt] || 'PASS').toUpperCase();
+    const cls = v === 'OVER' ? 'vc-over' : v === 'UNDER' ? 'vc-under' : 'vc-pass';
+    return `<div class="ai-verdict-cell ${cls}">
+      <div class="vc-mkt">${label}</div>
+      <div class="vc-val">${v}</div>
+    </div>`;
+  };
+  const factors = Array.isArray(a.key_factors) ? a.key_factors : [];
+  const factorsHtml = factors.length
+    ? `<div class="ai-verdict-factors"><b>Key factors:</b>${factors.map(f => escHtml(f)).join(' · ')}</div>`
+    : '';
+  const conf = a.confidence != null ? `<span class="ai-verdict-conf">Confidence <b>${Number(a.confidence)|0}</b></span>` : '';
+  const modelTag = d.model ? `<span class="ai-verdict-conf" style="margin-left:0">${escHtml(d.model)}</span>` : '';
+  block.innerHTML = `
+    <div class="ai-verdict-header">
+      <span class="ai-verdict-tag">AI VERDICT</span>
+      ${modelTag}
+      ${conf}
+    </div>
+    ${a.summary ? `<div class="ai-verdict-summary">${escHtml(a.summary)}</div>` : ''}
+    <div class="ai-verdict-grid">
+      ${verdictCell('hits', 'Hits')}
+      ${verdictCell('tb',   'Total Bases')}
+      ${verdictCell('hr',   'Home Run')}
+    </div>
+    ${factorsHtml}
+    ${a.risk ? `<div class="ai-verdict-risk">⚠ ${escHtml(a.risk)}</div>` : ''}
+  `;
 }
 
 async function loadContextData(batterId, pitcherId, proj, gamePk, pitcherSide) {
