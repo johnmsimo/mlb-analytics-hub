@@ -929,8 +929,17 @@ print(f"[startup] DATA_DIR={DATA_DIR}")
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 BRAIN_DATA_DIR = os.path.join(DATA_DIR, 'brain_uploads')
 os.makedirs(BRAIN_DATA_DIR, exist_ok=True)
-BRAIN_IMAGES_DIR = os.path.join(BRAIN_DATA_DIR, 'images')
-os.makedirs(BRAIN_IMAGES_DIR, exist_ok=True)
+# Image uploads for the player-signals feature live in a top-level data subdir
+# (NOT inside brain_uploads/) because on Fly.io the persistent volume's
+# brain_uploads/ directory is owned by root from earlier deploys, so appuser
+# can't create subdirs inside it. DATA_DIR itself is mounted with appuser
+# ownership (uid 1000) so a fresh sibling dir is writable.
+PLAYER_SIGNAL_IMAGES_DIR = os.path.join(DATA_DIR, 'player_signal_images')
+try:
+    os.makedirs(PLAYER_SIGNAL_IMAGES_DIR, exist_ok=True)
+except OSError as _signal_dir_err:
+    # Non-fatal: the upload route degrades gracefully when the dir is missing.
+    print(f"[startup] WARN could not create {PLAYER_SIGNAL_IMAGES_DIR}: {_signal_dir_err}")
 BRAIN_UPLOAD_STATE_STORE = os.path.join(DATA_DIR, 'brain_upload_state.json')
 PLAYER_SIGNALS_STORE = os.path.join(DATA_DIR, 'player_signals.json')
 TRACKER_STORE = os.path.join(DATA_DIR, 'daily_tracker.json')
@@ -4711,7 +4720,7 @@ def _unique_signal_image_name(filename):
         safe_name = f"{stem}{ext}"
     candidate = safe_name
     idx = 1
-    while os.path.exists(os.path.join(BRAIN_IMAGES_DIR, candidate)):
+    while os.path.exists(os.path.join(PLAYER_SIGNAL_IMAGES_DIR, candidate)):
         candidate = f"{stem}_{idx}{ext}"
         idx += 1
     return candidate
@@ -4751,8 +4760,19 @@ def api_player_signals_upload_image():
                     'image/jpeg' if ext in {'.jpg', '.jpeg'} else
                     'image/webp' if ext == '.webp' else 'image/png'
                 )
+                # Lazy create — the boot-time mkdir may have been skipped if
+                # the volume wasn't yet writable.
+                try:
+                    os.makedirs(PLAYER_SIGNAL_IMAGES_DIR, exist_ok=True)
+                except OSError as mkdir_err:
+                    results.append({
+                        'filename': f.filename,
+                        'success': False,
+                        'error': f'image_dir_unwritable:{mkdir_err}',
+                    })
+                    continue
                 safe_name = _unique_signal_image_name(f.filename)
-                file_path = os.path.join(BRAIN_IMAGES_DIR, safe_name)
+                file_path = os.path.join(PLAYER_SIGNAL_IMAGES_DIR, safe_name)
                 with open(file_path, 'wb') as out:
                     out.write(image_bytes)
                 rows, err = _extract_player_signals_from_image(image_bytes, effective_mime, safe_name)
