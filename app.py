@@ -65,6 +65,64 @@ except ImportError:
     def stacked_calibrate(*a, **k): return None
 
 
+# ── Best Bets signal upgrades (all optional, all free) ────────────────────────
+# Each loader is try/except so a missing module just disables that one signal —
+# matches the graceful-fallback pattern documented in CLAUDE.md.
+try:
+    from fg_stuff_loader import fg_stuff, k_multiplier as fg_stuff_k_mult
+    _STUFF_AVAILABLE = True
+except ImportError:
+    _STUFF_AVAILABLE = False
+    def fg_stuff(*a, **k): return {"stuff_plus": 100.0, "location_plus": 100.0, "pitching_plus": 100.0}
+    def fg_stuff_k_mult(_=None): return 1.0
+
+try:
+    from framing_loader import framing_runs, framing_k_multiplier
+    _FRAMING_AVAILABLE = True
+except ImportError:
+    _FRAMING_AVAILABLE = False
+    def framing_runs(*a, **k): return {"framing_runs": 0.0}
+    def framing_k_multiplier(_=None): return 1.0
+
+try:
+    from savant_bat_tracking import (
+        bat_tracking as sv_bat_tracking,
+        swing_take   as sv_swing_take,
+        power_boost  as bt_power_boost,
+        discipline_boost as bt_disc_boost,
+    )
+    _BAT_TRACKING_AVAILABLE = True
+except ImportError:
+    _BAT_TRACKING_AVAILABLE = False
+    def sv_bat_tracking(*a, **k): return {}
+    def sv_swing_take(*a, **k):   return {}
+    def bt_power_boost(_=None):   return 1.0
+    def bt_disc_boost(_=None):    return 0.0
+
+try:
+    from ballparkpal_loader import bp_park_factor
+    _BPP_AVAILABLE = True
+except ImportError:
+    _BPP_AVAILABLE = False
+    def bp_park_factor(*a, **k): return None
+
+try:
+    from travel_features import travel_features as _compute_travel_features
+    _TRAVEL_AVAILABLE = True
+except ImportError:
+    _TRAVEL_AVAILABLE = False
+    def _compute_travel_features(*a, **k):
+        return {"km_traveled_24h": 0.0, "tz_shift": 0, "mult": 1.0, "note": ""}
+
+try:
+    from tier_calibrator import load_thresholds as _load_tier_thresholds, calibrate as _run_tier_calibration
+    _TIER_CAL_AVAILABLE = True
+except ImportError:
+    _TIER_CAL_AVAILABLE = False
+    def _load_tier_thresholds(): return {"thresholds": {}, "meta": {}, "generated_at": None}
+    def _run_tier_calibration(**k): return {"thresholds": {}, "meta": {}}
+
+
 # ── Matchup Pipeline ───────────────────────────────────────────────────────────
 try:
     from pipeline_scheduler import (
@@ -3102,6 +3160,60 @@ def fetch_schedule_game(game_pk):
         return None
     games = dates[0].get("games", [])
     return games[0] if games else None
+
+
+def _team_previous_venue(team_id, today_iso):
+    """Find yesterday's game venue for a team. Used by travel-features shading.
+
+    Returns dict with {lat, lon, was_home, was_night} or None.
+    Walks back up to 3 days to skip off-days. Best-effort — network failures
+    silently return None so projection still produces results.
+    """
+    if not team_id or not today_iso:
+        return None
+    try:
+        base = datetime.strptime(today_iso[:10], "%Y-%m-%d")
+    except Exception:
+        return None
+    for back in (1, 2, 3):
+        date_str = (base - timedelta(days=back)).strftime("%Y-%m-%d")
+        try:
+            games = fetch_schedule(date_str)
+        except Exception:
+            continue
+        for g in games or []:
+            teams = g.get("teams") or {}
+            away = (teams.get("away") or {}).get("team") or {}
+            home = (teams.get("home") or {}).get("team") or {}
+            if team_id == away.get("id") or team_id == home.get("id"):
+                was_home = team_id == home.get("id")
+                ven = g.get("venue") or {}
+                coord = ((ven.get("location") or {}).get("defaultCoordinates")) or {}
+                lat = coord.get("latitude")
+                lon = coord.get("longitude")
+                if lat is None or lon is None:
+                    # Fall back to STADIUM_COORDS for known venues
+                    cc = STADIUM_COORDS.get(ven.get("id"))
+                    if cc:
+                        lat, lon = cc
+                if lat is None or lon is None:
+                    continue
+                game_date = g.get("gameDate") or ""
+                was_night = False
+                try:
+                    dt = datetime.fromisoformat(game_date.replace("Z", "+00:00"))
+                    was_night = dt.astimezone(ET).hour >= 17
+                except Exception:
+                    pass
+                return {
+                    "lat": lat,
+                    "lon": lon,
+                    "was_home": was_home,
+                    "was_night": was_night,
+                    "game_date": game_date,
+                }
+        # Schedule fetched but team didn't play; keep walking back.
+    return None
 
 
 def _collect_mlb_endpoint(url, params=None, timeout=15, default=None):
@@ -8486,6 +8598,55 @@ def _umpire_k_multiplier(game_pk):
         }
     except Exception:
         return 1.0, None
+
+
+def _find_lineup_catcher(lineup):
+    """Return (name, id) of the catcher in a lineup list, or (None, None)."""
+    if not lineup:
+        return None, None
+    for b in lineup:
+        pos = (b.get("pos") or "").upper().strip()
+        if pos == "C":
+            return b.get("name"), b.get("id")
+    return None, None
+
+
+def _framing_ump_k_mult(game_pk, catcher_name=None, catcher_id=None):
+    """Combined catcher-framing × HP-umpire K multiplier in [0.85, 1.18].
+
+    Multiplies the existing zone-rating-based umpire mult with a framing
+    multiplier derived from the catcher's runs-extra-strikes. Returns
+    (mult, meta dict) where meta surfaces both inputs for UI / debug.
+    """
+    ump_mult, ump_meta = _umpire_k_multiplier(game_pk)
+    frame = framing_runs(name=catcher_name, player_id=catcher_id) if _FRAMING_AVAILABLE else {"framing_runs": 0.0}
+    frame_mult = framing_k_multiplier(frame.get("framing_runs")) if _FRAMING_AVAILABLE else 1.0
+    combined = max(0.85, min(1.18, round(ump_mult * frame_mult, 4)))
+    meta = {
+        "ump":           ump_meta,
+        "ump_mult":      ump_mult,
+        "catcher":       catcher_name,
+        "framing_runs":  round(float(frame.get("framing_runs") or 0.0), 2),
+        "framing_mult":  frame_mult,
+        "combined_mult": combined,
+    }
+    return combined, meta
+
+
+def _resolve_park_factor(home_team_abbr, home_team_id, hand="R", stat="HR", date_str=None):
+    """Prefer Ballpark Pal microclimate factor; fall back to static PARK_FACTORS.
+
+    Returns a float multiplier on the ratio scale (1.0 = neutral). The
+    HR_PARK_FACTORS dict is on the 100-scale used elsewhere — we only consult
+    it as a refined HR ratio (divided by 100) when BP misses.
+    """
+    if _BPP_AVAILABLE and home_team_abbr:
+        bp = bp_park_factor(home_team_abbr, hand=hand, stat=stat, date_str=date_str)
+        if bp is not None:
+            return bp
+    if stat == "HR" and home_team_id is not None and home_team_id in HR_PARK_FACTORS:
+        return round(HR_PARK_FACTORS.get(home_team_id, 100) / 100.0, 4)
+    return PARK_FACTORS.get(home_team_id, 1.0)
 
 
 def _model_divergence(probs, gp, batx, exp_pa_total, *, bvp_pa=0, park_factor=1.0):
@@ -14334,6 +14495,32 @@ def _start_tracker_auto_sync_worker():
 
 
 
+@app.route('/api/best-bets/tier-thresholds', methods=['GET', 'POST'])
+def api_best_bets_tier_thresholds():
+    """Serve calibrated ELITE/STRONG/LEAN edge thresholds per market.
+
+    GET  → returns the persisted thresholds (or defaults when calibrator
+           hasn't run yet). Public-read.
+    POST → re-runs the tier_calibrator against the current tracker history
+           and writes data/tier_thresholds.json. Admin-token-gated.
+    """
+    if request.method == 'POST':
+        denied = _check_admin_auth()
+        if denied:
+            return denied
+        if not _TIER_CAL_AVAILABLE:
+            return jsonify({'success': False, 'error': 'tier_calibrator unavailable'}), 503
+        try:
+            payload = _run_tier_calibration()
+            return jsonify({'success': True, **payload})
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+    payload = _load_tier_thresholds() if _TIER_CAL_AVAILABLE else {
+        'thresholds': {}, 'meta': {}, 'generated_at': None,
+    }
+    return jsonify({'success': True, **payload})
+
+
 @app.route('/api/tracker/adjustments', methods=['GET', 'POST'])
 def api_tracker_adjustments():
     if request.method == 'POST':
@@ -18769,7 +18956,7 @@ _LEAGUE_BRL_PCT = 0.063   # 6.3 %
 def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_sv,
                           park_factor, weather, pitcher_hand='R',
                           opp_pitcher_id=None,
-                          form=None, bvp=None):
+                          form=None, bvp=None, travel=None):
     """
     BAT X-style projection engine with named component weights (BATX_WEIGHTS).
     Signature is backwards-compatible with _project_batter; adds optional
@@ -18780,8 +18967,17 @@ def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_s
     W = BATX_WEIGHTS  # shorthand
 
     name = batter.get("name", "")
+    bid  = batter.get("id") or batter.get("mlb_id")
     fg   = fg_batter(name)
     sv   = sv_batter(name)
+
+    # ── Bat tracking + swing/take (free Savant leaderboards) ──────────────────
+    # Used below to boost power_contrib and shade disc_contrib. No-op if the
+    # CSVs aren't available — fallback values keep behavior identical.
+    bt  = sv_bat_tracking(name=name, player_id=bid) if _BAT_TRACKING_AVAILABLE else {}
+    swt = sv_swing_take(name=name,   player_id=bid) if _BAT_TRACKING_AVAILABLE else {}
+    bt_pwr_mult = bt_power_boost(bt) if _BAT_TRACKING_AVAILABLE else 1.0
+    bt_disc_edge = bt_disc_boost(swt) if _BAT_TRACKING_AVAILABLE else 0.0
 
     # ── Slot / PA ─────────────────────────────────────────────────────────────
     slot   = int(batter.get("slot") or 5)
@@ -18836,14 +19032,16 @@ def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_s
     pull_edge = (pull_air - 0.35) / 0.35
     xslg_edge = (sv_xslg - _STAT_DEFAULTS['slg']) / _STAT_DEFAULTS['slg']
     power_raw = iso_edge * 0.30 + brl_edge * 0.30 + ev_edge * 0.15 + xslg_edge * 0.15 + pull_edge * 0.10
+    # Apply bat-tracking power boost (1.0 when no data — backwards-compatible).
+    power_raw = power_raw * bt_pwr_mult + (bt_pwr_mult - 1.0)
     power_contrib = power_raw * W["power"]
 
     # ── COMPONENT 3: Discipline ───────────────────────────────────────────────
-    # Positive: high BB%, low K%, high xwOBA
+    # Positive: high BB%, low K%, high xwOBA + swing/take run value
     bb_edge   = (fg_bbp - _LEAGUE_BB_PCT) / _LEAGUE_BB_PCT
     k_edge    = (_LEAGUE_K_PCT - fg_kp)   / _LEAGUE_K_PCT   # lower K → positive
     woba_edge = (sv_xwoba - _LEAGUE_WOBA) / _LEAGUE_WOBA
-    disc_raw  = bb_edge * 0.30 + k_edge * 0.40 + woba_edge * 0.30
+    disc_raw  = bb_edge * 0.30 + k_edge * 0.40 + woba_edge * 0.30 + bt_disc_edge
     disc_contrib = disc_raw * W["discipline"]
 
     # ── COMPONENT 4: Platoon ──────────────────────────────────────────────────
@@ -18939,11 +19137,26 @@ def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_s
     pitch_mix_edge    = _clamp(pitch_mix_score - 1.0, -0.30, 0.30)
     pitch_mix_contrib = pitch_mix_edge * W.get("pitch_mix", 0.04)
 
+    # ── COMPONENT 11: Travel / rest fatigue (schedule-derived) ───────────────
+    # Schedule-derived multiplier in [0.96, 1.00]. Applied directly to the
+    # composite — no W weight, since it's already a calibrated shade.
+    travel_mult  = 1.0
+    travel_note  = ""
+    if travel and isinstance(travel, dict):
+        try:
+            travel_mult = float(travel.get("mult") or 1.0)
+            travel_note = travel.get("note") or ""
+        except (TypeError, ValueError):
+            travel_mult = 1.0
+    travel_edge    = travel_mult - 1.0
+    travel_contrib = travel_edge   # weight=1.0 (literature-calibrated shade)
+
     # ── Composite multiplier ─────────────────────────────────────────────────
     # Sum contributions; each is a %-point delta weighted by its component weight.
     delta = (contact_contrib + power_contrib + disc_contrib + platoon_contrib
              + park_contrib + wx_contrib + pitcher_contrib
-             + form_contrib + bvp_contrib + pitch_mix_contrib)
+             + form_contrib + bvp_contrib + pitch_mix_contrib
+             + travel_contrib)
     composite = _clamp(1.0 + delta, 0.55, 1.55)
 
     # ── Projections ──────────────────────────────────────────────────────────
@@ -18997,9 +19210,15 @@ def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_s
             "form":            round(form_contrib,       4),
             "bvp":             round(bvp_contrib,        4),
             "pitch_mix":       round(pitch_mix_contrib,  4),
+            "travel":          round(travel_contrib,     4),
             "form_note":       form_label,
             "bvp_note":        bvp_label,
             "pitch_mix_note":  pitch_mix_label,
+            "travel_note":     travel_note,
+            "bat_speed":       round(float(bt.get("bat_speed") or 0.0), 2) if bt.get("bat_speed") is not None else None,
+            "squared_up_pct":  round(float(bt.get("squared_up_pct") or 0.0), 4) if bt.get("squared_up_pct") is not None else None,
+            "bt_power_mult":   round(bt_pwr_mult, 4),
+            "bt_disc_edge":    round(bt_disc_edge, 4),
         },
     }
 
@@ -19081,7 +19300,8 @@ def _pitcher_recent_form(pitcher_id, n_starts=5):
 
 # ── Pitcher projection engine (v2 — recent form weighted) ────────────────────
 def _project_pitcher(pitcher_name, pitcher_id, pitcher_fg, pitcher_sv, pitcher_stats,
-                     opp_batters, park_factor, weather, blend_weights=None):
+                     opp_batters, park_factor, weather, blend_weights=None,
+                     game_pk=None, catcher_name=None, catcher_id=None):
     fg   = pitcher_fg
     sv   = pitcher_sv
 
@@ -19139,6 +19359,27 @@ def _project_pitcher(pitcher_name, pitcher_id, pitcher_fg, pitcher_sv, pitcher_s
     k_proj  = round(max(0.5, (k9 / 9) * exp_ip * k_opp_adj / opp_quality), 2)
     bb_proj = round(max(0.1, (bb9 / 9) * exp_ip * opp_quality), 2)
 
+    # ── Stuff+ / Location+ / Pitching+ K shade ────────────────────────────────
+    # Tightens K projection when public pitch-quality grades disagree with
+    # season FIP/xERA (the early-season leading indicator).
+    stuff = fg_stuff(name=pitcher_name, player_id=pitcher_id) if _STUFF_AVAILABLE else None
+    stuff_mult = 1.0
+    if stuff:
+        stuff_mult = fg_stuff_k_mult(stuff.get("pitching_plus", 100.0))
+        if stuff_mult != 1.0:
+            k_proj = round(k_proj * stuff_mult, 2)
+
+    # ── Catcher framing × HP umpire K shade ───────────────────────────────────
+    # Combined multiplier captures the (framer × strike-zone bias) interaction.
+    fu_mult, fu_meta = (1.0, None)
+    if game_pk is not None:
+        try:
+            fu_mult, fu_meta = _framing_ump_k_mult(game_pk, catcher_name=catcher_name, catcher_id=catcher_id)
+            if fu_mult != 1.0:
+                k_proj = round(k_proj * fu_mult, 2)
+        except Exception:
+            fu_mult, fu_meta = 1.0, None
+
     if not weather.get("dome", False):
         temp_f = _safe_f(weather.get("temp"), 72)
         if temp_f > 88:
@@ -19158,6 +19399,13 @@ def _project_pitcher(pitcher_name, pitcher_id, pitcher_fg, pitcher_sv, pitcher_s
         "recent_ip":   recent.get("total_ip"),
         "recent_er":   recent.get("total_er"),
         "recent_k":    recent.get("total_k"),
+        # Best Bets signal upgrades — exposed for UI surfacing
+        "stuff_plus":     round(float(stuff["stuff_plus"]),    1) if stuff else None,
+        "location_plus":  round(float(stuff["location_plus"]), 1) if stuff else None,
+        "pitching_plus":  round(float(stuff["pitching_plus"]), 1) if stuff else None,
+        "stuff_k_mult":   stuff_mult,
+        "framing_ump":    fu_meta,
+        "framing_ump_k_mult": fu_mult,
     }
 
 
@@ -19253,7 +19501,9 @@ def api_props_projections(game_pk):
         away_abbr = away_t.get("team", {}).get("abbreviation", "AWAY")
         home_abbr = home_t.get("team", {}).get("abbreviation", "HOME")
         home_id   = home_t.get("team", {}).get("id")
-        pf        = PARK_FACTORS.get(home_id, 1.0)
+        # Ballpark Pal microclimate factor when available; falls back to static.
+        pf        = _resolve_park_factor(home_abbr, home_id, hand="R", stat="HR")
+        pf_source = "bpp" if (_BPP_AVAILABLE and bp_park_factor(home_abbr, hand="R", stat="HR") is not None) else "static"
 
         away_full = away_t.get("team", {}).get("name", away_abbr)
         home_full = home_t.get("team", {}).get("name", home_abbr)
@@ -19321,11 +19571,42 @@ def api_props_projections(game_pk):
             ghour  = 13
         wx = get_weather(lat, lon, ghour, venue_id=vid)
 
+        # ── Travel / rest features (per team) ─────────────────────────────────
+        # Compute once per team so the shade is shared across all 9 batters.
+        today_iso = gdata.get("gameDate") or ""
+        try:
+            today_dt = datetime.fromisoformat(today_iso.replace("Z", "+00:00")) if today_iso else None
+            today_is_day = today_dt.astimezone(ET).hour < 17 if today_dt else False
+        except Exception:
+            today_dt, today_is_day = None, False
+        today_venue = {"lat": lat, "lon": lon}
+        away_team_id = (away_t.get("team") or {}).get("id")
+        home_team_id = (home_t.get("team") or {}).get("id")
+
+        def _team_travel(team_id, is_home_today):
+            prev = _team_previous_venue(team_id, today_iso) if (_TRAVEL_AVAILABLE and team_id) else None
+            if not prev:
+                return {"mult": 1.0, "note": "", "km_traveled_24h": 0.0, "tz_shift": 0}
+            try:
+                y_dt = datetime.fromisoformat((prev.get("game_date") or "").replace("Z", "+00:00"))
+            except Exception:
+                y_dt = None
+            return _compute_travel_features(
+                today_venue=today_venue,
+                yesterday_venue={"lat": prev["lat"], "lon": prev["lon"]},
+                today_dt=today_dt, yesterday_dt=y_dt,
+                yesterday_was_home=prev.get("was_home"), today_is_home=is_home_today,
+                yesterday_was_night=prev.get("was_night"), today_is_day=today_is_day,
+            )
+
+        away_travel = _team_travel(away_team_id, is_home_today=False)
+        home_travel = _team_travel(home_team_id, is_home_today=True)
+
         # ── Build batter projections (now passes pitcher_hand) ─────────────────
         away_confirmed = len(away_bats) >= 9 and all((b.get("lineup_status") or "confirmed") == "confirmed" for b in away_bats[:9])
         home_confirmed = len(home_bats) >= 9 and all((b.get("lineup_status") or "confirmed") == "confirmed" for b in home_bats[:9])
 
-        def enrich_batters(batters, opp_pfg, opp_psv, opp_pst, opp_abbr, opp_pname, opp_pid, own_abbr='', lineup_confirmed=False):
+        def enrich_batters(batters, opp_pfg, opp_psv, opp_pst, opp_abbr, opp_pname, opp_pid, own_abbr='', lineup_confirmed=False, team_travel=None):
             opp_hand = (opp_pst.get("pitchHand") or "R").upper()
             batters_top = list((batters or [])[:9])
 
@@ -19355,6 +19636,7 @@ def api_props_projections(game_pk):
                     pitcher_hand=opp_hand,
                     opp_pitcher_id=opp_pid,
                     form=form, bvp=bvp,
+                    travel=team_travel,
                 )
                 slot = int(b.get("slot") or 9)
                 xgb_hit_p = None
@@ -19427,8 +19709,8 @@ def api_props_projections(game_pk):
             with ThreadPoolExecutor(max_workers=workers) as ex:
                 return list(ex.map(_enrich_one, batters_top))
 
-        away_proj = enrich_batters(away_bats, hp_fg, hp_sv, hp_st, home_abbr, hp_name, hp_id, own_abbr=away_abbr, lineup_confirmed=away_confirmed)
-        home_proj = enrich_batters(home_bats, ap_fg, ap_sv, ap_st, away_abbr, ap_name, ap_id, own_abbr=home_abbr, lineup_confirmed=home_confirmed)
+        away_proj = enrich_batters(away_bats, hp_fg, hp_sv, hp_st, home_abbr, hp_name, hp_id, own_abbr=away_abbr, lineup_confirmed=away_confirmed, team_travel=away_travel)
+        home_proj = enrich_batters(home_bats, ap_fg, ap_sv, ap_st, away_abbr, ap_name, ap_id, own_abbr=home_abbr, lineup_confirmed=home_confirmed, team_travel=home_travel)
         all_batters = away_proj + home_proj
 
         injury_summary_rows = []
@@ -19445,15 +19727,18 @@ def api_props_projections(game_pk):
 
         # ── Pitcher projections ────────────────────────────────────────────────
         pitchers_out = []
-        for pid, pname, pfg, psv, pst, opp_bats, pabbr, phand in [
-            (ap_id, ap_name, ap_fg, ap_sv, ap_st, home_bats, away_abbr, ap_hand),
-            (hp_id, hp_name, hp_fg, hp_sv, hp_st, away_bats, home_abbr, hp_hand),
+        for pid, pname, pfg, psv, pst, opp_bats, own_bats, pabbr, phand in [
+            (ap_id, ap_name, ap_fg, ap_sv, ap_st, home_bats, away_bats, away_abbr, ap_hand),
+            (hp_id, hp_name, hp_fg, hp_sv, hp_st, away_bats, home_bats, home_abbr, hp_hand),
         ]:
             if pname == "TBD":
                 continue
             pinj = _get_player_injury(pid) if pid else None
+            # The catcher receiving this pitcher's pitches is on his own team.
+            cname, cid = _find_lineup_catcher(own_bats)
             proj = _project_pitcher(pname, pid, pfg, psv, pst, opp_bats, pf, wx,
-                                    blend_weights=_get_adjustments().get('blend_weights'))
+                                    blend_weights=_get_adjustments().get('blend_weights'),
+                                    game_pk=game_pk, catcher_name=cname, catcher_id=cid)
             pitchers_out.append({
                 "name":        pname,
                 "team":        pabbr,
@@ -19551,6 +19836,11 @@ def api_props_projections(game_pk):
             "pitchers":    pitchers_out,
             "weather":     wx,
             "park_factor": pf,
+            "park_factor_source": pf_source,
+            "travel": {
+                "away": {**away_travel, "team": away_abbr},
+                "home": {**home_travel, "team": home_abbr},
+            },
             "lineup": {
                 "awayConfirmed": away_confirmed,
                 "homeConfirmed": home_confirmed,
