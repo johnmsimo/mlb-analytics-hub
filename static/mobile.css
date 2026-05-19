@@ -1,0 +1,258 @@
+/* MLB Analytics Hub — shared mobile styles.
+   Loaded last in <head>; all rules gated by @media so desktop is untouched. */
+
+@media (max-width: 768px) {
+
+  html, body {
+    -webkit-tap-highlight-color: transparent;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  body {
+    padding-bottom: calc(68px + env(safe-area-inset-bottom)) !important;
+    overflow-x: hidden;
+  }
+
+  /* Prevent iOS auto-zoom on focus */
+  input, select, textarea, button {
+    font-size: 16px;
+  }
+
+  /* Touch-target minimums */
+  button,
+  a.btn, .btn,
+  .chip, .pill,
+  .nav-r a, nav a,
+  .tab, .tabs a, .tabs button,
+  .actions a, .actions button {
+    min-height: 44px;
+    min-width: 44px;
+    box-sizing: border-box;
+  }
+
+  /* Slim top nav: hide secondary nav links so the bottom tab bar is the source of truth.
+     Each page keeps its brand/logo + page-specific controls (date, back button, search). */
+  nav .nav-r,
+  .top .actions > a[href]:not(.back):not(.icon),
+  .topbar .nav-links {
+    display: none !important;
+  }
+
+  /* Tighten generic top nav padding */
+  nav, .top, .topbar {
+    padding: 10px 12px !important;
+  }
+
+  /* ── Page content wrappers ─────────────────────────────────────── */
+  main, .container, .wrap, .page, .content {
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+  }
+
+  /* ── Tables: readable font + sticky first column + scroll affordance ── */
+  table, .stab, .vtbl, .mct, .ptbl {
+    font-size: 0.85rem !important;
+  }
+  table td, table th,
+  .stab td, .stab th,
+  .vtbl td, .vtbl th,
+  .mct td, .mct th {
+    padding: 8px 6px !important;
+    font-size: 0.85rem !important;
+  }
+  /* Add scroll shadow on tables wrapped in overflow-x:auto containers */
+  .tbl-wrap, .table-wrap, .scroll-x,
+  div[style*="overflow-x:auto"],
+  div[style*="overflow-x: auto"] {
+    background:
+      linear-gradient(to right, var(--card, #0e1a2c) 30%, rgba(14,26,44,0)),
+      linear-gradient(to right, rgba(14,26,44,0), var(--card, #0e1a2c) 70%) 100% 0,
+      linear-gradient(to right, rgba(0,229,255,0.18), rgba(0,229,255,0)),
+      linear-gradient(to left,  rgba(0,229,255,0.18), rgba(0,229,255,0)) 100% 0;
+    background-repeat: no-repeat;
+    background-size: 24px 100%, 24px 100%, 12px 100%, 12px 100%;
+    background-attachment: local, local, scroll, scroll;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* ── Dashboard FABs: collapse three vertical pills into one bottom row ── */
+  a.tracker-fab {
+    position: fixed !important;
+    left: auto !important;
+    bottom: calc(74px + env(safe-area-inset-bottom)) !important;
+    padding: 8px 10px !important;
+    font-size: 0.55rem !important;
+    letter-spacing: 1px !important;
+    box-shadow: 0 8px 18px rgba(0,0,0,.4) !important;
+  }
+  /* Spread the three FABs across the bottom: right / center / left */
+  a.tracker-fab:nth-of-type(1) { right: 10px !important; }
+  a.tracker-fab:nth-of-type(2) { right: 50% !important; transform: translateX(50%) !important; }
+  a.tracker-fab:nth-of-type(3) { right: auto !important; left: 10px !important; }
+
+  /* ── Props page game selector: snap-scroll on touch ──────────────── */
+  .game-selector {
+    scroll-snap-type: x mandatory !important;
+    -webkit-overflow-scrolling: touch !important;
+    scroll-padding-left: 12px !important;
+  }
+  .game-selector > * {
+    scroll-snap-align: start;
+  }
+
+  /* ── Tracker: collapse 1fr/380px earlier so the awkward 768-960 window is gone ── */
+  .main-grid {
+    grid-template-columns: 1fr !important;
+  }
+  /* Charts: tracker.html already sets responsive+maintainAspectRatio:false.
+     Just trim the box height on phones so two charts fit in one viewport. */
+  .chart-wrap {
+    height: 200px !important;
+  }
+
+  /* ── Modals → bottom sheet feel ──────────────────────────────────── */
+  .modal, #playerModal, .playerModal {
+    align-items: flex-end !important;
+    padding: 0 !important;
+  }
+  .modal > *, #playerModal > *, .playerModal > * {
+    max-width: 100% !important;
+    width: 100% !important;
+    max-height: 92vh !important;
+    border-radius: 18px 18px 0 0 !important;
+    margin: 0 !important;
+  }
+
+  /* ── Bottom tab bar (injected by mobile-nav.js) ──────────────────── */
+  .mobile-tabbar {
+    position: fixed;
+    left: 0; right: 0;
+    bottom: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: stretch;
+    justify-content: space-around;
+    height: calc(64px + env(safe-area-inset-bottom));
+    padding-bottom: env(safe-area-inset-bottom);
+    background: rgba(8, 14, 28, 0.92);
+    backdrop-filter: saturate(160%) blur(14px);
+    -webkit-backdrop-filter: saturate(160%) blur(14px);
+    border-top: 1px solid var(--b, rgba(255,255,255,0.08));
+    box-shadow: 0 -8px 24px rgba(0,0,0,0.32);
+  }
+  .mobile-tabbar a,
+  .mobile-tabbar button {
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    background: transparent;
+    border: 0;
+    color: var(--mu, #6a8db0);
+    font: 500 0.62rem/1 'Inter', system-ui, sans-serif;
+    letter-spacing: 0.4px;
+    text-decoration: none;
+    padding: 6px 2px;
+    cursor: pointer;
+    min-height: 44px;
+  }
+  .mobile-tabbar .mt-icon {
+    font-size: 1.15rem;
+    line-height: 1;
+  }
+  .mobile-tabbar a.active,
+  .mobile-tabbar button.active {
+    color: var(--c, #00e5ff);
+  }
+  .mobile-tabbar a.active .mt-icon,
+  .mobile-tabbar button.active .mt-icon {
+    transform: translateY(-1px);
+    filter: drop-shadow(0 0 6px var(--c, #00e5ff));
+  }
+
+  /* "More" overlay */
+  .mobile-more {
+    position: fixed;
+    inset: 0;
+    z-index: 1001;
+    background: rgba(2, 6, 16, 0.86);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    display: flex;
+    flex-direction: column;
+    padding: 18px 16px calc(96px + env(safe-area-inset-bottom));
+    overflow-y: auto;
+  }
+  .mobile-more[hidden] { display: none; }
+  .mobile-more h3 {
+    margin: 4px 0 14px;
+    font: 600 0.85rem/1 'Orbitron', 'Inter', sans-serif;
+    letter-spacing: 2px;
+    color: var(--t, #eaf6ff);
+    text-transform: uppercase;
+  }
+  .mobile-more__grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .mobile-more__grid a {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 14px 12px;
+    border-radius: 14px;
+    border: 1px solid var(--b, rgba(255,255,255,0.1));
+    background: var(--card, rgba(14,26,44,0.7));
+    color: var(--t, #eaf6ff);
+    font: 600 0.78rem/1.2 'Inter', sans-serif;
+    text-decoration: none;
+    min-height: 64px;
+    justify-content: center;
+  }
+  .mobile-more__grid a .mm-sub {
+    font-weight: 400;
+    font-size: 0.66rem;
+    color: var(--mu, #6a8db0);
+    letter-spacing: 0.3px;
+  }
+  .mobile-more__close {
+    align-self: flex-end;
+    margin-bottom: 6px;
+    padding: 8px 14px;
+    border-radius: 999px;
+    border: 1px solid var(--b, rgba(255,255,255,0.12));
+    background: transparent;
+    color: var(--t, #eaf6ff);
+    font: 600 0.72rem/1 'Inter', sans-serif;
+    cursor: pointer;
+  }
+
+  /* Toasts above the tab bar */
+  .toast {
+    bottom: calc(84px + env(safe-area-inset-bottom)) !important;
+    right: 12px !important;
+    left: 12px !important;
+    max-width: none !important;
+  }
+}
+
+/* Tighter tweaks for small phones */
+@media (max-width: 480px) {
+  body { font-size: 14px; }
+  h1, .h1 { font-size: 1.15rem !important; }
+  h2, .h2 { font-size: 1rem !important; }
+  .mobile-more__grid { grid-template-columns: 1fr; }
+  a.tracker-fab {
+    font-size: 0.5rem !important;
+    padding: 7px 9px !important;
+  }
+}
+
+/* Hide bottom tab bar above tablet width — desktop keeps its existing nav */
+@media (min-width: 769px) {
+  .mobile-tabbar, .mobile-more { display: none !important; }
+}

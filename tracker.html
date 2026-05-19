@@ -228,6 +228,7 @@ details[open] summary::before{transform:rotate(90deg)}
 @media(max-width:640px){.hero{grid-template-columns:repeat(2,1fr)}.ctrl{gap:5px}.top-actions{gap:5px}.btn{padding:6px 10px;font-size:.68rem}}
 .footer{text-align:center;color:var(--faint);font-size:.65rem;padding:16px 0 6px}
 </style>
+<link rel="stylesheet" href="/static/mobile.css">
 </head>
 <body>
 <div class="wrap">
@@ -2004,5 +2005,6 @@ document.addEventListener('DOMContentLoaded', () => {
 // Global error fallback — surfaces any JS crash in the status bar
 window.addEventListener('error', e => { try { status('JS Error: '+e.message, true); } catch{} console.error(e); });
 window.addEventListener('unhandledrejection', e => { try { status('Error: '+(e.reason?.message||e.reason), true); } catch{} console.error(e); });</script>
+<script src="/static/mobile-nav.js" defer></script>
 </body>
 </html>
