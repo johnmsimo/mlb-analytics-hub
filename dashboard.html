@@ -1254,7 +1254,47 @@ function initMonteCarlo(){
 let BB_GAMES=[], BB_CUR_PK=null, BB_DATA=null, BB_CAT='ALL', BB_LOADED=false;
 const BB_CATS=['ALL','HITS','BASES','HR','K','BB','MONEYLINE','SPREAD','TOTALS','F5'];
 const BB_CAT_COLORS={HITS:'var(--c)',BASES:'#80cbc4',HR:'#f48fb1',K:'#ce93d8',BB:'#aed581',MONEYLINE:'#ffd54f',SPREAD:'#ffb74d',TOTALS:'#4fc3f7',F5:'#b39ddb'};
-const BB_COMP_LABELS={contact:'Contact Quality',power:'Raw Power',discipline:'Plate Discipline',platoon:'Platoon Edge',park:'Park Factor',weather:'Weather',pitcher:'Pitcher Matchup',form:'Recent Form',bvp:'Batter vs Pitcher'};
+const BB_COMP_LABELS={contact:'Contact Quality',power:'Raw Power',discipline:'Plate Discipline',platoon:'Platoon Edge',park:'Park Factor',weather:'Weather',pitcher:'Pitcher Matchup',form:'Recent Form',bvp:'Batter vs Pitcher',pitch_mix:'Pitch-Mix Matchup',travel:'Travel/Rest'};
+
+// Calibrated edge thresholds per market — hydrated from /api/best-bets/tier-thresholds.
+// Defaults mirror the previous hardcoded ternaries so the UI works pre-calibration.
+let BB_TIERS = {
+  HITS_0_5:  {ELITE: 0.35, STRONG: 0.20, LEAN: 0.05},
+  HITS_1_5:  {ELITE: 0.20, STRONG: 0.10, LEAN: 0.05},
+  TB_1_5:    {ELITE: 0.50, STRONG: 0.25, LEAN: 0.10},
+  TB_2_5:    {ELITE: 0.30, STRONG: 0.15, LEAN: 0.05},
+  HR_0_5:    {ELITE: 0.20, STRONG: 0.10, LEAN: 0.05},
+  RBI_0_5:   {ELITE: 0.30, STRONG: 0.15, LEAN: 0.05},
+  K:         {ELITE: 1.50, STRONG: 0.75, LEAN: 0.15},
+  MONEYLINE: {ELITE: 0.10, STRONG: 0.06, LEAN: 0.02},
+  SPREAD:    {ELITE: 0.10, STRONG: 0.06, LEAN: 0.02},
+  TOTALS:    {ELITE: 0.10, STRONG: 0.06, LEAN: 0.02},
+};
+let BB_TIERS_META = {};
+function _bbTierFor(marketKey, edge){
+  const t = BB_TIERS[marketKey];
+  if(!t) return 'LEAN';
+  const e = Math.abs(edge || 0);
+  if (e >= t.ELITE)  return 'ELITE';
+  if (e >= t.STRONG) return 'STRONG';
+  return 'LEAN';
+}
+function _bbLoadTiers(){
+  fetch('/api/best-bets/tier-thresholds')
+    .then(r=>r.json())
+    .then(d=>{
+      if(!d || !d.thresholds) return;
+      // Server keys use dots (e.g. HITS_0.5); normalize to underscored.
+      const norm = {};
+      Object.keys(d.thresholds).forEach(k=>{
+        norm[k.replace(/\./g,'_')] = d.thresholds[k];
+      });
+      BB_TIERS = Object.assign({}, BB_TIERS, norm);
+      BB_TIERS_META = d.meta || {};
+    })
+    .catch(()=>{ /* keep defaults silently */ });
+}
+_bbLoadTiers();
 
 function initBestBets(){
   const wrap=document.getElementById('bbGamesWrap');
@@ -1359,16 +1399,16 @@ function renderBBPicks(){
       picks.push({cat,type:'PROP',name:b.name,team:b.team,pick:b.name+' '+label,projVal,line,edge,dir,conf,score:edge*comp*scoreW,reason:baseReason(cat,projVal)});
     };
     if(p.hits!=null){
-      const e05=p.hits-0.5; if(e05>0) push('HITS','H OVER 0.5',p.hits,0.5,e05>0.35?'ELITE':e05>0.2?'STRONG':'LEAN',1.0);
-      const e15=p.hits-1.5; if(e15>0) push('HITS','H OVER 1.5',p.hits,1.5,e15>0.2?'ELITE':e15>0.1?'STRONG':'LEAN',0.9);
-      const eU=0.5-p.hits;  if(eU>0)  push('HITS','H UNDER 0.5',p.hits,0.5,eU>0.2?'STRONG':'LEAN',0.85);
+      const e05=p.hits-0.5; if(e05>0) push('HITS','H OVER 0.5',p.hits,0.5,_bbTierFor('HITS_0_5',e05),1.0);
+      const e15=p.hits-1.5; if(e15>0) push('HITS','H OVER 1.5',p.hits,1.5,_bbTierFor('HITS_1_5',e15),0.9);
+      const eU=0.5-p.hits;  if(eU>0)  push('HITS','H UNDER 0.5',p.hits,0.5,_bbTierFor('HITS_0_5',eU)==='ELITE'?'STRONG':_bbTierFor('HITS_0_5',eU),0.85);
     }
     if(p.tb!=null){
-      const e15=p.tb-1.5; if(e15>0.1) push('BASES','TB OVER 1.5', p.tb,1.5,e15>0.5?'ELITE':e15>0.25?'STRONG':'LEAN',0.85);
-      const e25=p.tb-2.5; if(e25>0)   push('BASES','TB OVER 2.5', p.tb,2.5,e25>0.3?'ELITE':e25>0.15?'STRONG':'LEAN',0.80);
+      const e15=p.tb-1.5; if(e15>0.1) push('BASES','TB OVER 1.5', p.tb,1.5,_bbTierFor('TB_1_5',e15),0.85);
+      const e25=p.tb-2.5; if(e25>0)   push('BASES','TB OVER 2.5', p.tb,2.5,_bbTierFor('TB_2_5',e25),0.80);
     }
-    if(p.hr!=null&&p.hr>0.05) push('HR','HR OVER 0.5',p.hr,0.5,p.hr>0.2?'ELITE':p.hr>0.1?'STRONG':'LEAN',1.2);
-    if(p.rbi!=null){ const e=p.rbi-0.5; if(e>0) push('RBI','RBI OVER 0.5',p.rbi,0.5,e>0.3?'ELITE':e>0.15?'STRONG':'LEAN',0.75); }
+    if(p.hr!=null&&p.hr>0.05) push('HR','HR OVER 0.5',p.hr,0.5,_bbTierFor('HR_0_5',p.hr),1.2);
+    if(p.rbi!=null){ const e=p.rbi-0.5; if(e>0) push('RBI','RBI OVER 0.5',p.rbi,0.5,_bbTierFor('RBI_0_5',e),0.75); }
     // Walks — derived from discipline adjustment
     const discEdge=adj.discipline||0;
     const bbProjRaw=0.07+(discEdge>0?discEdge*0.18:discEdge*0.12);
@@ -1401,7 +1441,7 @@ function renderBBPicks(){
       const edge=pr.k-line, eAbs=Math.abs(edge); if(eAbs<0.15) return;
       const dir=edge>=0?'OVER':'UNDER';
       picks.push({cat:'K',type:'PROP',name:pt.name,team:pt.team,pick:pt.name+' K '+dir+' '+line,projVal:pr.k,line,edge:eAbs,dir,
-        conf:eAbs>1.5?'ELITE':eAbs>0.75?'STRONG':'LEAN',score:eAbs*0.9,reason});
+        conf:_bbTierFor('K',eAbs),score:eAbs*0.9,reason});
     });
   });
 
@@ -1453,7 +1493,7 @@ function renderBBPicks(){
         awayEdge>=homeEdge
           ? [awayFull, awayEdge, ml.away?.price, awayImp, tA]
           : [homeFull, homeEdge, ml.home?.price, homeImp, tB];
-      const mlConf=mlEdge>0.06?'STRONG':mlEdge>0.02?'LEAN':'LEAN';
+      const mlConf=_bbTierFor('MONEYLINE',mlEdge);
       picks.push({cat:'MONEYLINE',type:'GAME',name:mlAbbr,pick:mlAbbr+' ML ('+mlPrice+')',projVal:null,line:null,edge:Math.max(0,mlEdge),dir:'',
         conf:mlConf,score:Math.max(0,mlEdge)*5,
         reason:'Model composite: '+tA+' '+(compA*100).toFixed(1)+'% vs '+tB+' '+(compB*100).toFixed(1)+'%. '
@@ -1486,7 +1526,7 @@ function renderBBPicks(){
       // Model probability of covering: use composite edge scaled to run diff
       const modelCoverProb=Math.min(0.85,Math.max(0.15,0.5+runDiff*0.6));
       const spEdge=modelCoverProb-favImp;
-      const spConf=spEdge>0.06?'STRONG':spEdge>0.02?'LEAN':'LEAN';
+      const spConf=_bbTierFor('SPREAD',spEdge);
       picks.push({cat:'SPREAD',type:'GAME',name:favAbbr,pick:favAbbr+' '+favPt+' RL ('+favPrice+')',projVal:runDiff,line:Math.abs(favPt),edge:Math.max(0,spEdge),dir:'COVER',
         conf:spConf,score:Math.max(0,spEdge)*4,
         reason:'Run line: '+favAbbr+' '+favPt+' @ '+favPrice+'. '
@@ -1513,7 +1553,7 @@ function renderBBPicks(){
       const modelEdge=(modelDir==='OVER'?(0.5+Math.min(0.35,(totalRuns-totLine)*0.12))
                                         :(0.5+Math.min(0.35,(totLine-totalRuns)*0.12)))-modelImp;
       const totPrice=modelDir==='OVER'?tot.over_price:tot.under_price;
-      const totConf=modelEdge>0.06?'STRONG':modelEdge>0.02?'LEAN':'LEAN';
+      const totConf=_bbTierFor('TOTALS',modelEdge);
       picks.push({cat:'TOTALS',type:'GAME',name:'O/U',pick:'TOTAL '+modelDir+' '+totLine+' ('+totPrice+')',projVal:totalRuns,line:totLine,edge:Math.max(0,modelEdge),dir:modelDir,
         conf:totConf,score:Math.max(0,modelEdge)*4,
         reason:'Market O/U: '+totLine+' ('+modelDir+' @ '+totPrice+'). '

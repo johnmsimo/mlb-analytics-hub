@@ -348,11 +348,40 @@ def run_pipeline(target_date=None):
         matchup_df.to_csv(out_path, index=False)
         log.info(f"[pipeline] Done — {len(matchup_df)} rows → {out_path}")
 
+        # Refresh Best Bets daily caches + recalibrate tiers — best-effort,
+        # failures must not block the main pipeline status update.
+        try:
+            _refresh_best_bets_signals(resolved_date)
+        except Exception as e:
+            log.warning(f"[pipeline] Best Bets refresh failed: {e}")
+
     except Exception as e:
         with _cache_lock:
             _cache["status"]    = "error"
             _cache["error_msg"] = str(e)
         log.error(f"[pipeline] Error: {e}", exc_info=True)
+
+
+def _refresh_best_bets_signals(target_date):
+    """Refresh FG Stuff+, catcher framing, bat tracking, Ballpark Pal, and the
+    tier calibrator. Each step is independently try/except'd so any single
+    source going down doesn't kill the rest.
+    """
+    year = target_date.year if hasattr(target_date, "year") else datetime.now(ET).year
+    date_str = target_date.strftime("%Y-%m-%d") if hasattr(target_date, "strftime") else None
+
+    for label, work in (
+        ("fg_stuff",      lambda: __import__("fg_stuff_loader").fetch_and_save(year)),
+        ("framing",       lambda: __import__("framing_loader").fetch_and_save(year)),
+        ("bat_tracking",  lambda: __import__("savant_bat_tracking").fetch_and_save(year)),
+        ("ballparkpal",   lambda: __import__("ballparkpal_loader").fetch_and_save(date_str)),
+        ("tier_calibrator", lambda: __import__("tier_calibrator").calibrate()),
+    ):
+        try:
+            n = work()
+            log.info(f"[pipeline.best_bets] {label}: refreshed (rows/result={n!r})")
+        except Exception as e:
+            log.warning(f"[pipeline.best_bets] {label} failed: {e}")
 
 
 # ── 8. Daily Scheduler Loop ────────────────────────────────────────────────────────────────────────────────
