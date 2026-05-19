@@ -23048,6 +23048,64 @@ def _deterministic_verdict_from_mc(mc):
     }
 
 
+# Full-game PA target used when verdicting standard prop markets (1+ Hit,
+# 2+ TB, HR). These props settle over the whole game, so a 3-PA vs-SP MC
+# under-projects probability and pushes the AI Verdict toward PASS even
+# when the same page's game-total panel shows a clear BET.
+_AI_VERDICT_FULL_GAME_PA = 4.35
+
+
+def _season_context_for_prompt(batter_name, pitcher_name):
+    """Pull season-level batter/pitcher context from in-memory FG/Savant caches.
+
+    Without season context the Gemini prompt sees only the small-sample BvP H2H
+    plus the vs-SP MC, which biases it toward PASS even on elite matchups. Adding
+    season stats + Statcast quality lets the LLM override H2H noise.
+    """
+    batter = {}
+    pitcher = {}
+    if batter_name:
+        try:
+            fg = fg_batter(batter_name) or {}
+            sv = sv_batter(batter_name) or {}
+            obp = fg.get("fg_obp"); slg = fg.get("fg_slg")
+            batter = {
+                "avg":            fg.get("fg_avg"),
+                "obp":            obp,
+                "slg":            slg,
+                "ops":            round(obp + slg, 3) if (obp is not None and slg is not None) else None,
+                "hr":             fg.get("fg_hr"),
+                "wrc_plus":       fg.get("fg_wrc"),
+                "iso":            fg.get("fg_iso"),
+                "k_pct":          fg.get("fg_kpct"),
+                "xwoba":          sv.get("sv_xwoba"),
+                "exit_velo":      sv.get("sv_ev"),
+                "hard_hit_pct":   sv.get("sv_hh_pct"),
+                "barrel_pct":     sv.get("sv_brl_pct"),
+            }
+        except Exception:
+            pass
+    if pitcher_name:
+        try:
+            fg = fg_pitcher(pitcher_name) or {}
+            sv = sv_pitcher(pitcher_name) or {}
+            pitcher = {
+                "era":                  fg.get("fg_era"),
+                "whip":                 fg.get("fg_whip"),
+                "hr9":                  fg.get("fg_hr9"),
+                "k_pct":                fg.get("fg_kpct"),
+                "xwoba_against":        sv.get("sv_xwoba"),
+                "barrel_pct_allowed":   sv.get("sv_brl_pct"),
+                "hard_hit_pct_allowed": sv.get("sv_hh_pct"),
+            }
+        except Exception:
+            pass
+    return {
+        "batter":  {k: v for k, v in batter.items()  if v is not None},
+        "pitcher": {k: v for k, v in pitcher.items() if v is not None},
+    }
+
+
 @app.route("/api/matchup")
 def api_matchup_vertex():
     """BigQuery + Monte Carlo + Gemini Pro batter-vs-pitcher matchup endpoint.
@@ -23300,6 +23358,26 @@ def api_matchup_vertex():
         mc = _monte_carlo_vs_sp(per_pa, pa_vs_sp, n_sims=4000,
                                 rng_seed=batter_id * 1000 + pitcher_id)
 
+        # Standard prop markets (1+ Hit, 2+ TB, HR) settle over the entire
+        # game, not just the starter segment. The vs-SP MC alone was driving
+        # the AI Verdict toward PASS even when the page's game-total panel
+        # showed a clear BET — feed Gemini the full-game probability set so
+        # its verdict matches the prop scope the user is actually betting on.
+        mc_full_game = _monte_carlo_vs_sp(per_pa, _AI_VERDICT_FULL_GAME_PA,
+                                          n_sims=4000,
+                                          rng_seed=batter_id * 1000 + pitcher_id + 7)
+
+        season_context = _season_context_for_prompt(
+            bq_stats.get("batter_name") or "",
+            bq_stats.get("pitcher_name") or "",
+        )
+
+        # Deterministic recommendation from the full-game MC. Used both as the
+        # final fallback when Gemini fails and as a prior in the prompt so the
+        # LLM has a model-aligned anchor instead of inventing PASS from a thin
+        # H2H sample.
+        model_rec = _deterministic_verdict_from_mc(mc_full_game or mc)
+
         analysis = None
         analysis_error = None
         analysis_source = None  # "gemini" | "cache" | "fallback"
@@ -23309,20 +23387,39 @@ def api_matchup_vertex():
             analysis = cached["analysis"]
             analysis_source = "cache"
 
-        if analysis is None and _gemini_available and mc:
+        if analysis is None and _gemini_available and (mc_full_game or mc):
             prompt = (
-                "You are evaluating a batter-vs-pitcher prop matchup for MLB betting. "
-                "Use only the provided statistical context. Output strict JSON with keys: "
-                "`verdict` (one of OVER|UNDER|PASS for each of hits/tb/hr), "
-                "`confidence` (0-100 int), `key_factors` (array of <=4 short strings), "
-                "`risk` (string), `summary` (one paragraph, <=80 words).\n\n"
-                f"Stats:\n{json.dumps(bq_stats, default=str, ensure_ascii=True)}\n\n"
+                "You are evaluating a batter-vs-pitcher MLB prop matchup. Standard "
+                "prop markets (1+ Hit, 2+ Total Bases, Home Run) settle over the "
+                "ENTIRE game (~4.35 PAs), not just the starting-pitcher segment — "
+                "your verdict must reflect the FULL-GAME probability.\n\n"
+                "Output strict JSON with keys: `verdict` (object with keys hits, tb, "
+                "hr — each one of OVER|UNDER|PASS), `confidence` (0-100 int), "
+                "`key_factors` (array of <=4 short strings), `risk` (string), "
+                "`summary` (one paragraph, <=80 words).\n\n"
+                "Anchor your verdict on the FULL-GAME Monte Carlo probabilities and "
+                "season-level context. Only return PASS when the full-game probability "
+                "is genuinely marginal (1+ Hit <60%, 2+ TB <50%, HR <16%) OR when the "
+                "season + Statcast context clearly contradicts the per-PA rates. Do "
+                "NOT downgrade a strong full-game projection to PASS just because the "
+                "career head-to-head sample is small — H2H is one signal among many.\n\n"
+                f"Batter season + Statcast context:\n"
+                f"{json.dumps(season_context.get('batter') or {}, default=str, ensure_ascii=True)}\n\n"
+                f"Pitcher season + Statcast context:\n"
+                f"{json.dumps(season_context.get('pitcher') or {}, default=str, ensure_ascii=True)}\n\n"
+                f"Career head-to-head (small-sample, use cautiously):\n"
+                f"{json.dumps(bq_stats, default=str, ensure_ascii=True)}\n\n"
                 f"Arsenal-similarity prior (batter vs similar-arsenal pitchers):\n"
                 f"{json.dumps(prior_block, default=str, ensure_ascii=True)}\n\n"
                 f"Similar-batter prior (pitcher vs similar-profile batters):\n"
                 f"{json.dumps(pitcher_prior_block, default=str, ensure_ascii=True)}\n\n"
-                f"Monte Carlo ({mc.get('nSims')} sims, {mc.get('nPa')} PA):\n"
-                f"{json.dumps(mc, default=str, ensure_ascii=True)}"
+                f"FULL-GAME Monte Carlo — this is the prop scope "
+                f"({(mc_full_game or {}).get('nSims')} sims, {(mc_full_game or {}).get('nPa')} PAs):\n"
+                f"{json.dumps(mc_full_game, default=str, ensure_ascii=True)}\n\n"
+                f"Starter-only Monte Carlo (vs-SP segment, narrower context):\n"
+                f"{json.dumps(mc, default=str, ensure_ascii=True)}\n\n"
+                f"Model recommendation (deterministic from full-game MC — treat as a prior):\n"
+                f"{json.dumps(model_rec, default=str, ensure_ascii=True)}"
             )
             analysis, analysis_error = _vertex_gemini_json(
                 "reasoning", prompt,
@@ -23334,12 +23431,37 @@ def api_matchup_vertex():
                 _matchup_cache_put(batter_id, pitcher_id, {"analysis": analysis})
 
         # Deterministic fallback: if Gemini failed (quota / network / parse) we
-        # still want the AI VERDICT panel to show something useful. Build it
-        # from the Monte Carlo output we already computed.
-        if analysis is None and mc:
-            analysis = _deterministic_verdict_from_mc(mc)
+        # still want the AI VERDICT panel to show something useful. Use the
+        # full-game MC since that's the prop scope.
+        if analysis is None and (mc_full_game or mc):
+            analysis = _deterministic_verdict_from_mc(mc_full_game or mc)
             if analysis:
                 analysis_source = "fallback"
+
+        # Safety net: when the model strongly recommends OVER but Gemini
+        # downgrades to PASS, prefer the model call. This was the user-reported
+        # failure mode — AI says PASS while every adjacent panel shows STRONG/BET
+        # because the LLM anchored on a thin career H2H sample.
+        if analysis and model_rec and analysis_source == "gemini":
+            g_v = dict(analysis.get("verdict") or {})
+            m_v = (model_rec.get("verdict") or {})
+            overrode = []
+            for mkt in ("hits", "tb", "hr"):
+                g_mkt = str(g_v.get(mkt) or "").upper()
+                m_mkt = str(m_v.get(mkt) or "").upper()
+                if g_mkt == "PASS" and m_mkt == "OVER":
+                    g_v[mkt] = "OVER"
+                    overrode.append(mkt)
+                elif g_mkt == "PASS" and m_mkt == "UNDER":
+                    g_v[mkt] = "UNDER"
+                    overrode.append(mkt)
+            if overrode:
+                analysis["verdict"] = g_v
+                existing_risk = analysis.get("risk") or ""
+                note = (f"Model override on {','.join(overrode)} — full-game "
+                        "probability supports a side that the analyst initially "
+                        "downgraded to PASS.")
+                analysis["risk"] = (existing_risk + " " + note).strip() if existing_risk else note
 
         # Surface a friendlier reason when the Gemini error was a quota hit.
         if analysis_error and ("RESOURCE_EXHAUSTED" in str(analysis_error) or "429" in str(analysis_error)):
@@ -23360,6 +23482,8 @@ def api_matchup_vertex():
             "pitcher_id": pitcher_id,
             "stats": bq_stats,
             "monte_carlo": mc,
+            "monte_carlo_full_game":  mc_full_game,
+            "model_recommendation":   model_rec,
             "arsenal_prior":         prior_block,
             "pitcher_batter_prior":  pitcher_prior_block,
             "analysis": analysis,
