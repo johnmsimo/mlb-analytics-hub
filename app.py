@@ -9849,10 +9849,25 @@ def _batx_for_sim(batter, opp_pitcher, park, weather):
         opp_fg = fg_pitcher(opp_pitcher.get('name', ''))
         opp_sv = sv_pitcher(opp_pitcher.get('name', ''))
         pitcher_hand = (opp_pitcher.get('pitchHand') or 'R').upper()
+        # Pull rolling form + head-to-head BvP so the BATX "form" (0.07) and
+        # "bvp" (0.01) weights actually fire during simulation. Both helpers
+        # are daily-cached, so this is one MLB Stats API call per batter on
+        # cold start and free afterwards.
+        bid = batter.get('id') or batter.get('mlb_id')
+        opp_pid = opp_pitcher.get('id')
+        try:
+            form = _fetch_rolling_form(bid, False) if bid else None
+        except Exception:
+            form = None
+        try:
+            bvp = _fetch_bvp(bid, opp_pid) if (bid and opp_pid) else None
+        except Exception:
+            bvp = None
         proj = _project_batter_batx(
             batter, opp_pitcher.get('name', ''), opp_fg, opp_sv,
             park, weather or {}, pitcher_hand=pitcher_hand,
-            opp_pitcher_id=opp_pitcher.get('id')
+            opp_pitcher_id=opp_pid,
+            form=form, bvp=bvp,
         )
         adj = proj.get('adjustments', {})
         comp = _clamp(proj.get('composite', 1.0), 0.70, 1.30)
@@ -11501,6 +11516,15 @@ def _simulation_fallback_payload(game_obj, game_pk, sims=0, warning=''):
             'away_pitcher': away_name,
             'home_pitcher': home_name,
         },
+        'projectedBoxscore': {
+            'away': {'batters': [], 'mean_runs': 4.2, 'mean_hits': 8.0, 'mean_bb': 3.0, 'mean_k': 8.0, 'mean_tb': 13.0},
+            'home': {'batters': [], 'mean_runs': 4.3, 'mean_hits': 8.0, 'mean_bb': 3.0, 'mean_k': 8.0, 'mean_tb': 13.0},
+            'away_abbr': away_abbr,
+            'home_abbr': home_abbr,
+            'away_pitcher': away_name,
+            'home_pitcher': home_name,
+            'sims': int(sims or 0),
+        },
     }
 
 
@@ -11973,6 +11997,55 @@ def _do_simulate(game_pk, sims):
         for c in top_sgp_combos:
             c.pop('score', None)
 
+        # Build a projected (expected-value) box score from MC means.
+        # The legacy `sampleBoxscore` is a single random draw from sim #0 — useful
+        # for visualizing one possible game, but misleading as a prediction. This
+        # struct exposes mean H/HR/RBI/etc per batter so consumers can show the
+        # model's actual expectation alongside p(1+H) / p(2+H) variance bands.
+        def _projected_team_box(props, lineup, team_runs):
+            rows = []
+            for i, b in enumerate(lineup):
+                p = props[i] if i < len(props) else {}
+                # Expected PAs — matches the slot decay used in _project_batter_batx
+                exp_pa = round(max(3.4, 4.35 - i * 0.095), 2)
+                rows.append({
+                    'slot':       i + 1,
+                    'name':       b.get('name'),
+                    'pos':        b.get('pos'),
+                    'bats':       b.get('bats', 'S'),
+                    'pa':         exp_pa,
+                    'mean_h':     p.get('mean_hits', 0.0),
+                    'p50_h':      p.get('p50_hits', 0),
+                    'p90_h':      p.get('p90_hits', 0),
+                    'p_1plus_h':  p.get('p_1plus_hit', 0.0),
+                    'p_2plus_h':  p.get('p_2plus_hit', 0.0),
+                    'mean_hr':    p.get('mean_hr', 0.0),
+                    'mean_rbi':   p.get('mean_rbi', 0.0),
+                    'mean_r':     p.get('mean_runs', 0.0),
+                    'mean_bb':    p.get('mean_bb', 0.0),
+                    'mean_k':     p.get('mean_k', 0.0),
+                    'mean_tb':    p.get('mean_tb', 0.0),
+                    'p_1plus_hr': p.get('p_1plus_hr', 0.0),
+                })
+            return {
+                'batters':   rows,
+                'mean_runs': round(statistics.mean(team_runs), 2) if team_runs else 0.0,
+                'mean_hits': round(sum(r['mean_h']  for r in rows), 1),
+                'mean_bb':   round(sum(r['mean_bb'] for r in rows), 1),
+                'mean_k':    round(sum(r['mean_k']  for r in rows), 1),
+                'mean_tb':   round(sum(r['mean_tb'] for r in rows), 1),
+            }
+
+        projected_box = {
+            'away':         _projected_team_box(away_props, away_lineup, away_team_runs),
+            'home':         _projected_team_box(home_props, home_lineup, home_team_runs),
+            'away_abbr':    away_abbr,
+            'home_abbr':    home_abbr,
+            'away_pitcher': away_pitcher['name'],
+            'home_pitcher': home_pitcher['name'],
+            'sims':         sims,
+        }
+
         payload = {
             'success': True,
             'meta': {'sims': sims, 'awayAbbr': away_abbr, 'homeAbbr': home_abbr, 'parkFactor': park},
@@ -12003,6 +12076,7 @@ def _do_simulate(game_pk, sims):
             'correlations': correlations,
             'top_sgp_combos': top_sgp_combos,
             'sampleBoxscore': sample,
+            'projectedBoxscore': projected_box,
         }
         _correlation_cache[game_pk] = {
             'date': today,
@@ -19157,6 +19231,15 @@ def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_s
              + park_contrib + wx_contrib + pitcher_contrib
              + form_contrib + bvp_contrib + pitch_mix_contrib
              + travel_contrib)
+    # Humility prior: when both per-batter matchup signals (recent form, BvP)
+    # are unavailable, the season-level contributions can over-state confidence.
+    # Pull the delta 30% toward zero so projections stay closer to neutral when
+    # we genuinely have no matchup-specific info to distinguish this start from
+    # the batter's seasonal baseline.
+    has_form = bool(form and isinstance(form, dict) and (form.get("l7") or {}).get("raw_woba") is not None)
+    has_bvp  = bool(bvp and isinstance(bvp, dict) and bvp.get("success") and _safe_f(bvp.get("reliability"), 0.0) > 0.0)
+    if not has_form and not has_bvp:
+        delta *= 0.70
     composite = _clamp(1.0 + delta, 0.55, 1.55)
 
     # ── Projections ──────────────────────────────────────────────────────────
