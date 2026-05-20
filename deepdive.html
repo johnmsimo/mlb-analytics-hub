@@ -2758,15 +2758,38 @@ function renderNrfiDeepDive(){
 }
 
 function renderSampleBox(teamKey, abbr, spName){
-  var box = (SIM_DATA.sampleBoxscore || {})[teamKey];
-  if(!box) return '<p class="na">Sample boxscore unavailable</p>';
+  var box = (SIM_DATA.projectedBoxscore || {})[teamKey];
+  if(!box || !box.batters || !box.batters.length){
+    var legacy = (SIM_DATA.sampleBoxscore || {})[teamKey];
+    if(!legacy) return '<p class="na">Projection unavailable</p>';
+    var lrows = (legacy.batters||[]).map(function(p){
+      return '<tr><td>'+p.slot+'</td><td>'+p.name+'</td><td>'+p.pos+'</td><td>'+p.ab+'</td><td>'+p.h+'</td><td>'+p.hr+'</td><td>'+p.rbi+'</td><td>'+p.r+'</td><td>'+p.bb+'</td><td>'+p.k+'</td><td>'+p.tb+'</td></tr>';
+    }).join('');
+    return '<div class="mc-box"><h4>'+abbr+' SAMPLE BOX SCORE (SINGLE DRAW)</h4>'
+      + '<table class="mc-table"><thead><tr><th>#</th><th>PLAYER</th><th>POS</th><th>AB</th><th>H</th><th>HR</th><th>RBI</th><th>R</th><th>BB</th><th>K</th><th>TB</th></tr></thead><tbody>'
+      + lrows + '</tbody></table>'
+      + '<div class="mc-note"><strong style="color:var(--c)">Starter:</strong> '+spName+' &nbsp;|&nbsp; Team R/H: '+legacy.runs+'/'+legacy.hits+' &nbsp;|&nbsp; BB: '+legacy.bb+' &nbsp;|&nbsp; K: '+legacy.k+'</div></div>';
+  }
+  function f1(v){ return (typeof v==='number')?v.toFixed(1):'—'; }
+  function f2(v){ return (typeof v==='number')?v.toFixed(2):'—'; }
+  function pp(v){ return (typeof v==='number')?Math.round(v*100)+'%':'—'; }
   var rows = (box.batters||[]).map(function(p){
-    return '<tr><td>'+p.slot+'</td><td>'+p.name+'</td><td>'+p.pos+'</td><td>'+p.ab+'</td><td>'+p.h+'</td><td>'+p.hr+'</td><td>'+p.rbi+'</td><td>'+p.r+'</td><td>'+p.bb+'</td><td>'+p.k+'</td><td>'+p.tb+'</td></tr>';
+    return '<tr><td>'+p.slot+'</td><td>'+p.name+'</td><td>'+p.pos+'</td>'
+      + '<td>'+f1(p.pa)+'</td>'
+      + '<td>'+f1(p.mean_h)+'</td>'
+      + '<td>'+pp(p.p_1plus_h)+'</td>'
+      + '<td>'+pp(p.p_2plus_h)+'</td>'
+      + '<td>'+f2(p.mean_hr)+'</td>'
+      + '<td>'+f2(p.mean_rbi)+'</td>'
+      + '<td>'+f2(p.mean_r)+'</td>'
+      + '<td>'+f1(p.mean_tb)+'</td>'
+      + '<td>'+f2(p.mean_k)+'</td></tr>';
   }).join('');
-  return '<div class="mc-box"><h4>'+abbr+' SAMPLE BOX SCORE</h4>'
-    + '<table class="mc-table"><thead><tr><th>#</th><th>PLAYER</th><th>POS</th><th>AB</th><th>H</th><th>HR</th><th>RBI</th><th>R</th><th>BB</th><th>K</th><th>TB</th></tr></thead><tbody>'
+  var sims = (SIM_DATA.meta && SIM_DATA.meta.sims) || (box.sims) || 5000;
+  return '<div class="mc-box"><h4>'+abbr+' PROJECTED BOX SCORE <span style="opacity:.6;font-weight:400">(expected value over '+sims+' sims)</span></h4>'
+    + '<table class="mc-table"><thead><tr><th>#</th><th>PLAYER</th><th>POS</th><th>PA</th><th>xH</th><th>P(1+H)</th><th>P(2+H)</th><th>xHR</th><th>xRBI</th><th>xR</th><th>xTB</th><th>xK</th></tr></thead><tbody>'
     + rows + '</tbody></table>'
-    + '<div class="mc-note"><strong style="color:var(--c)">Starter:</strong> '+spName+' &nbsp;|&nbsp; Team R/H: '+box.runs+'/'+box.hits+' &nbsp;|&nbsp; BB: '+box.bb+' &nbsp;|&nbsp; K: '+box.k+'</div></div>';
+    + '<div class="mc-note"><strong style="color:var(--c)">Starter:</strong> '+spName+' &nbsp;|&nbsp; Mean R/H: '+f1(box.mean_runs)+'/'+f1(box.mean_hits)+' &nbsp;|&nbsp; xBB: '+f1(box.mean_bb)+' &nbsp;|&nbsp; xK: '+f1(box.mean_k)+' &nbsp;|&nbsp; xTB: '+f1(box.mean_tb)+'<br><span style="opacity:.55;font-size:.55rem">xH = expected hits; P(1+H) = probability of at least one hit. Single-game outcomes vary widely around the mean.</span></div></div>';
 }
 
 function renderSimulation(){
@@ -2974,15 +2997,38 @@ function tierRow(name, t){
   return '<tr><td>'+name+'</td><td>'+pp(t.mean_er)+'</td><td>'+pp(t.mean_k)+'</td><td>'+pp(t.p50_outs)+'</td><td>'+pct(t.p_2plus_er||0)+'</td></tr>';
 }
 function renderSampleBox(teamKey, abbr, spName){
-  var box = (SIM_DATA.sampleBoxscore || {})[teamKey];
-  if(!box) return '<p class="na">Sample boxscore unavailable</p>';
+  var box = (SIM_DATA.projectedBoxscore || {})[teamKey];
+  if(!box || !box.batters || !box.batters.length){
+    var legacy = (SIM_DATA.sampleBoxscore || {})[teamKey];
+    if(!legacy) return '<p class="na">Projection unavailable</p>';
+    var lrows = (legacy.batters||[]).map(function(p){
+      return '<tr><td>'+p.slot+'</td><td>'+p.name+'</td><td>'+p.pos+'</td><td>'+p.ab+'</td><td>'+p.h+'</td><td>'+p.hr+'</td><td>'+p.rbi+'</td><td>'+p.r+'</td><td>'+p.bb+'</td><td>'+p.k+'</td><td>'+p.tb+'</td><td>'+(p.sb||0)+'</td></tr>';
+    }).join('');
+    return '<div class="mc-box"><h4>'+abbr+' SAMPLE BOX SCORE (SINGLE DRAW)</h4>'
+      + '<table class="mc-table"><thead><tr><th>#</th><th>PLAYER</th><th>POS</th><th>AB</th><th>H</th><th>HR</th><th>RBI</th><th>R</th><th>BB</th><th>K</th><th>TB</th><th>SB</th></tr></thead><tbody>'
+      + lrows + '</tbody></table>'
+      + '<div class="mc-note"><strong style="color:var(--c)">Starter:</strong> '+spName+' &nbsp;|&nbsp; Team R/H: '+legacy.runs+'/'+legacy.hits+' &nbsp;|&nbsp; BB: '+legacy.bb+' &nbsp;|&nbsp; K: '+legacy.k+' &nbsp;|&nbsp; SB: '+(legacy.sb||0)+'</div></div>';
+  }
+  function f1(v){ return (typeof v==='number')?v.toFixed(1):'—'; }
+  function f2(v){ return (typeof v==='number')?v.toFixed(2):'—'; }
+  function pp(v){ return (typeof v==='number')?Math.round(v*100)+'%':'—'; }
   var rows = (box.batters||[]).map(function(p){
-    return '<tr><td>'+p.slot+'</td><td>'+p.name+'</td><td>'+p.pos+'</td><td>'+p.ab+'</td><td>'+p.h+'</td><td>'+p.hr+'</td><td>'+p.rbi+'</td><td>'+p.r+'</td><td>'+p.bb+'</td><td>'+p.k+'</td><td>'+p.tb+'</td><td>'+p.sb+'</td></tr>';
+    return '<tr><td>'+p.slot+'</td><td>'+p.name+'</td><td>'+p.pos+'</td>'
+      + '<td>'+f1(p.pa)+'</td>'
+      + '<td>'+f1(p.mean_h)+'</td>'
+      + '<td>'+pp(p.p_1plus_h)+'</td>'
+      + '<td>'+pp(p.p_2plus_h)+'</td>'
+      + '<td>'+f2(p.mean_hr)+'</td>'
+      + '<td>'+f2(p.mean_rbi)+'</td>'
+      + '<td>'+f2(p.mean_r)+'</td>'
+      + '<td>'+f1(p.mean_tb)+'</td>'
+      + '<td>'+f2(p.mean_k)+'</td></tr>';
   }).join('');
-  return '<div class="mc-box"><h4>'+abbr+' SAMPLE BOX SCORE</h4>'
-    + '<table class="mc-table"><thead><tr><th>#</th><th>PLAYER</th><th>POS</th><th>AB</th><th>H</th><th>HR</th><th>RBI</th><th>R</th><th>BB</th><th>K</th><th>TB</th><th>SB</th></tr></thead><tbody>'
+  var sims = (SIM_DATA.meta && SIM_DATA.meta.sims) || (box.sims) || 5000;
+  return '<div class="mc-box"><h4>'+abbr+' PROJECTED BOX SCORE <span style="opacity:.6;font-weight:400">(expected value over '+sims+' sims)</span></h4>'
+    + '<table class="mc-table"><thead><tr><th>#</th><th>PLAYER</th><th>POS</th><th>PA</th><th>xH</th><th>P(1+H)</th><th>P(2+H)</th><th>xHR</th><th>xRBI</th><th>xR</th><th>xTB</th><th>xK</th></tr></thead><tbody>'
     + rows + '</tbody></table>'
-    + '<div class="mc-note"><strong style="color:var(--c)">Starter:</strong> '+spName+' &nbsp;|&nbsp; Team R/H: '+box.runs+'/'+box.hits+' &nbsp;|&nbsp; BB: '+box.bb+' &nbsp;|&nbsp; K: '+box.k+' &nbsp;|&nbsp; SB: '+(box.sb||0)+'</div></div>';
+    + '<div class="mc-note"><strong style="color:var(--c)">Starter:</strong> '+spName+' &nbsp;|&nbsp; Mean R/H: '+f1(box.mean_runs)+'/'+f1(box.mean_hits)+' &nbsp;|&nbsp; xBB: '+f1(box.mean_bb)+' &nbsp;|&nbsp; xK: '+f1(box.mean_k)+' &nbsp;|&nbsp; xTB: '+f1(box.mean_tb)+'<br><span style="opacity:.55;font-size:.55rem">xH = expected hits; P(1+H) = probability of at least one hit. Single-game outcomes vary widely around the mean.</span></div></div>';
 }
 function renderSimulation(){
   var el = document.getElementById('simPanel');
