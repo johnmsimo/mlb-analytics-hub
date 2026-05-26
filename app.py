@@ -24046,9 +24046,20 @@ def _fetch_prizepicks_mlb():
                 if our_proj is None:
                     fg_p = _fuzzy_lookup(pname_lower, fg_pit_snap)
                     if fg_p:
+                        _p_gs  = int(fg_p.get("fg_gs", 0) or 0)
+                        _p_ip  = float(fg_p.get("fg_ip", 0) or 0)
+                        _p_g   = int(fg_p.get("fg_g",  0) or 0)
+                        _p_k9  = float(fg_p.get("fg_k9", 0) or 0)
+                        _p_bb9 = float(fg_p.get("fg_bb9", 0) or 0)
+                        if _p_gs >= 3:
+                            _ip_per_app = _p_ip / _p_gs          # SP: avg IP per start
+                        elif _p_g >= 1:
+                            _ip_per_app = min(_p_ip / _p_g, 2.0) # RP: avg IP per app, capped at 2
+                        else:
+                            _ip_per_app = 1.0
                         stat_map_p = {
-                            "strikeouts": fg_p.get("fg_k9", 0) / 9 * float(fg_p.get("fg_ip", 0) / max(fg_p.get("fg_gs", 1), 1)),
-                            "walks":      fg_p.get("fg_bb9", 0) / 9 * float(fg_p.get("fg_ip", 0) / max(fg_p.get("fg_gs", 1), 1)),
+                            "strikeouts": round(_p_k9  / 9.0 * _ip_per_app, 2),
+                            "walks":      round(_p_bb9 / 9.0 * _ip_per_app, 2),
                         }
                         if stat_key in stat_map_p:
                             our_proj = round(float(stat_map_p[stat_key]), 2)
@@ -24090,10 +24101,14 @@ def api_prizepicks():
     if now - _pp_cache["ts"] > _PP_TTL or not _pp_cache["data"]:
         _pp_cache["data"] = _fetch_prizepicks_mlb()
         _pp_cache["ts"]   = now
-    stat_filter = request.args.get("stat", "").strip()
+    stat_filter  = request.args.get("stat",  "").strip()
+    teams_filter = request.args.get("teams", "").strip()
     data = _pp_cache["data"]
     if stat_filter:
         data = [p for p in data if p["stat_key"] == stat_filter]
+    if teams_filter:
+        teams_set = {t.strip().upper() for t in teams_filter.split(",") if t.strip()}
+        data = [p for p in data if (p.get("team") or "").upper() in teams_set]
     return jsonify({"status": "ok", "count": len(data), "props": data,
                     "cached_at": int(_pp_cache["ts"])})
 
@@ -24115,32 +24130,4 @@ def api_prizepicks_player(player_name):
 @app.route("/api/prizepicks/refresh", methods=["POST"])
 def api_prizepicks_refresh():
     global _pp_cache
-    _pp_cache["ts"] = 0
-    return jsonify({"status": "ok", "message": "Cache cleared"})
-
-# Start hourly injury refresh worker once routes/helpers are loaded.
-_start_injury_worker()
-_start_tracker_auto_sync_worker()
-_start_mlb_memory_worker()
-
-# Start daily pipeline scheduler (runs at 8 AM ET + on boot)
-if _PIPELINE_AVAILABLE:
-    start_scheduler()
-    logging.info("[pipeline] Scheduler armed — fires at 09:00 ET daily.")
-
-# Start BigQuery ETL scheduler: one boot refresh + daily at 09:30 ET (30 min
-# after the matchup pipeline so today's BvP CSV exists before we upload it).
-# No-ops if GOOGLE_CLOUD_PROJECT is unset or google-cloud-bigquery is missing.
-try:
-    from bq_etl import start_bq_scheduler
-    start_bq_scheduler()
-except Exception as _bq_sched_err:
-    logging.warning(f"[bq_etl] scheduler not started: {_bq_sched_err}")
-
-
-if __name__ == "__main__":
-    # When running via `python app.py` the gunicorn post_fork hook never fires,
-    # so trigger cache preloading here before accepting requests.
-    _preload_caches()
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
+ 
