@@ -23949,6 +23949,174 @@ def api_projected_boxscore_vertex(game_pk):
         app.logger.error(f"[api_projected_boxscore_vertex] {game_pk}: {traceback.format_exc()}")
         return jsonify({"success": False, "error": str(ex)}), 500
 
+# ── PrizePicks Integration ─────────────────────────────────────────────────────
+_pp_cache = {"data": [], "ts": 0}
+_PP_TTL   = 300  # 5-min cache
+
+MLB_STAT_TYPES = {
+    "Hits":                    "hits",
+    "Total Bases":             "total_bases",
+    "Home Runs":               "home_runs",
+    "RBIs":                    "rbi",
+    "Runs":                    "runs",
+    "Stolen Bases":            "stolen_bases",
+    "Pitcher Strikeouts":      "strikeouts",
+    "Strikeouts":              "strikeouts",
+    "Walks":                   "walks",
+    "Earned Runs Allowed":     "earned_runs",
+    "Hits Allowed":            "hits_allowed",
+    "Pitching Outs":           "pitching_outs",
+    "1st Inning Runs Allowed": "first_inning_runs",
+}
+
+def _fetch_prizepicks_mlb():
+    """Fetch all PrizePicks props, filter MLB stat types, cross-ref FG projections."""
+    try:
+        url = "https://partner-api.prizepicks.com/projections?per_page=1000&include=new_player"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json",
+        }
+        resp = requests.get(url, headers=headers, timeout=15)
+        resp.raise_for_status()
+        raw = resp.json()
+    except Exception as e:
+        app.logger.error(f"[PrizePicks] fetch error: {e}")
+        return []
+
+    # Build player lookup from included array
+    player_map = {}
+    for item in raw.get("included", []):
+        if item.get("type") == "new_player":
+            pid   = item["id"]
+            attrs = item.get("attributes", {})
+            player_map[pid] = {
+                "name":     attrs.get("display_name") or attrs.get("name", "Unknown"),
+                "team":     attrs.get("team", ""),
+                "position": attrs.get("position", ""),
+            }
+
+    # Build quick batter/pitcher FG lookup for edge calc (name-keyed)
+    with _fg_lock:
+        fg_bat_snap = dict(_fg_bat)
+        fg_pit_snap = dict(_fg_pit)
+
+    props = []
+    for proj in raw.get("data", []):
+        if proj.get("type") != "projection":
+            continue
+        attrs = proj.get("attributes", {})
+        rels  = proj.get("relationships", {})
+        stat  = attrs.get("stat_type", "")
+
+        if stat not in MLB_STAT_TYPES:
+            continue
+
+        pid    = (rels.get("new_player") or {}).get("data", {}).get("id", "")
+        player = player_map.get(pid, {})
+        line   = attrs.get("line_score")
+        if line is None:
+            continue
+
+        stat_key  = MLB_STAT_TYPES[stat]
+        our_proj  = None
+        edge      = None
+        edge_pct  = None
+        direction = None
+
+        # Cross-reference our FG projection for this player
+        try:
+            pname_lower = player.get("name", "").lower().strip()
+            if pname_lower:
+                # Batter stats
+                fg_b = _fuzzy_lookup(pname_lower, fg_bat_snap)
+                if fg_b:
+                    stat_map = {
+                        "hits":        fg_b.get("fg_avg", 0) * 4.2,
+                        "total_bases": (fg_b.get("fg_slg", 0) * 4.2),
+                        "home_runs":   fg_b.get("fg_hr", 0) / max(fg_b.get("fg_pa", 600), 1) * 4.2,
+                        "rbi":         fg_b.get("fg_rbi", 0) / max(fg_b.get("fg_pa", 600), 1) * 4.2,
+                        "runs":        fg_b.get("fg_r", 0) / max(fg_b.get("fg_pa", 600), 1) * 4.2,
+                        "stolen_bases": fg_b.get("fg_sb", 0) / max(fg_b.get("fg_pa", 600), 1) * 4.2,
+                        "walks":       fg_b.get("fg_bbpct", 0) * 4.2,
+                    }
+                    if stat_key in stat_map:
+                        our_proj = round(float(stat_map[stat_key]), 2)
+                # Pitcher stats
+                if our_proj is None:
+                    fg_p = _fuzzy_lookup(pname_lower, fg_pit_snap)
+                    if fg_p:
+                        stat_map_p = {
+                            "strikeouts": fg_p.get("fg_k9", 0) / 9 * float(fg_p.get("fg_ip", 0) / max(fg_p.get("fg_gs", 1), 1)),
+                            "walks":      fg_p.get("fg_bb9", 0) / 9 * float(fg_p.get("fg_ip", 0) / max(fg_p.get("fg_gs", 1), 1)),
+                        }
+                        if stat_key in stat_map_p:
+                            our_proj = round(float(stat_map_p[stat_key]), 2)
+                if our_proj is not None and our_proj > 0:
+                    edge      = round(our_proj - float(line), 2)
+                    edge_pct  = round((edge / float(line)) * 100, 1) if line else None
+                    direction = "over" if edge > 0 else "under" if edge < 0 else "push"
+        except Exception:
+            pass
+
+        props.append({
+            "id":         proj["id"],
+            "player":     player.get("name", "Unknown"),
+            "team":       player.get("team", ""),
+            "position":   player.get("position", ""),
+            "stat":       stat,
+            "stat_key":   stat_key,
+            "line":       float(line),
+            "our_proj":   our_proj,
+            "edge":       edge,
+            "edge_pct":   edge_pct,
+            "direction":  direction,
+            "status":     attrs.get("status", ""),
+            "is_promo":   attrs.get("is_promo", False),
+            "trending":   attrs.get("trending_count"),
+            "start_time": attrs.get("start_time", ""),
+            "game_id":    attrs.get("game_id", ""),
+        })
+
+    # Sort: props with edge first (abs desc), rest alphabetically
+    props.sort(key=lambda x: (x["edge"] is None, -abs(x["edge"] or 0)))
+    return props
+
+
+@app.route("/api/prizepicks")
+def api_prizepicks():
+    global _pp_cache
+    now = time.time()
+    if now - _pp_cache["ts"] > _PP_TTL or not _pp_cache["data"]:
+        _pp_cache["data"] = _fetch_prizepicks_mlb()
+        _pp_cache["ts"]   = now
+    stat_filter = request.args.get("stat", "").strip()
+    data = _pp_cache["data"]
+    if stat_filter:
+        data = [p for p in data if p["stat_key"] == stat_filter]
+    return jsonify({"status": "ok", "count": len(data), "props": data,
+                    "cached_at": int(_pp_cache["ts"])})
+
+
+@app.route("/api/prizepicks/player/<path:player_name>")
+def api_prizepicks_player(player_name):
+    global _pp_cache
+    now = time.time()
+    if now - _pp_cache["ts"] > _PP_TTL or not _pp_cache["data"]:
+        _pp_cache["data"] = _fetch_prizepicks_mlb()
+        _pp_cache["ts"]   = now
+    name = player_name.lower().strip()
+    data = [p for p in _pp_cache["data"]
+            if name in p["player"].lower() or p["player"].lower() in name]
+    return jsonify({"status": "ok", "count": len(data), "props": data,
+                    "cached_at": int(_pp_cache["ts"])})
+
+
+@app.route("/api/prizepicks/refresh", methods=["POST"])
+def api_prizepicks_refresh():
+    global _pp_cache
+    _pp_cache["ts"] = 0
+    return jsonify({"status": "ok", "message": "Cache cleared"})
 
 # Start hourly injury refresh worker once routes/helpers are loaded.
 _start_injury_worker()
