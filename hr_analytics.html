@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
 <title>HR Analytics Hub — MLB</title>
 <style>
 :root{
@@ -14,14 +15,6 @@
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh}
 a{color:var(--cold);text-decoration:none}
-
-/* ── Header ── */
-.header{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--border);background:#0d1117ee;position:sticky;top:0;z-index:100}
-.logo{font-size:22px;font-weight:700;background:linear-gradient(90deg,#3fb950,#1f6feb);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
-.nav-links{display:flex;gap:16px;margin-left:auto;font-size:13px}
-.nav-links a{color:var(--muted)}
-.nav-links a:hover{color:var(--text)}
-.header-meta{margin-left:auto;font-size:12px;color:var(--muted)}
 
 /* ── Layout ── */
 .layout{display:grid;grid-template-columns:420px 1fr;min-height:calc(100vh - 57px)}
@@ -172,16 +165,19 @@ a{color:var(--cold);text-decoration:none}
 <link rel="stylesheet" href="/static/mobile.css">
 </head>
 <body>
-<div class="header">
-  <div class="logo">⚾ HR Analytics Hub</div>
-  <nav class="nav-links">
-    <a href="/">Dashboard</a>
-    <a href="/props">Props</a>
-    <a href="/breakout-detector">Breakout</a>
-    <a href="/hr-analytics" style="color:var(--text);font-weight:600">HR Lab</a>
-  </nav>
-  <div class="header-meta" id="headerDate"></div>
-</div>
+<nav>
+  <div class="brand">
+    <img src="/static/logo.png" alt="MLB Analytics Hub logo">
+    <div class="brand-text">
+      <div class="brand-name">MLB ANALYTICS HUB</div>
+      <div class="brand-sub">HR Power Simulator</div>
+    </div>
+  </div>
+  <div class="nav-r">
+    <div id="headerDate" style="font-size:.72rem;color:var(--mu);font-family:'Orbitron',monospace"></div>
+    <div class="live-dot"><div class="dot"></div>LIVE</div>
+  </div>
+</nav>
 
 <div class="layout">
   <!-- Left: Ranked Leaderboard -->
@@ -211,7 +207,10 @@ a{color:var(--cold);text-decoration:none}
       <p>Click any player on the leaderboard to see the HR simulator, pitch mix matchup, H2H splits, and AI scouting report.</p>
     </div>
     <div id="detailContent" style="display:none"></div>
-  </div>
+    </div>
+</div>
+
+<script>
 // ── Major Market Odds Panel ──
 async function renderMajorMarketsPanelHR(gamePk) {
   const panel = document.getElementById('majorMarketsPanel');
@@ -253,9 +252,7 @@ async function renderMajorMarketsPanelHR(gamePk) {
     panel.innerHTML = '';
   }
 }
-</div>
 
-<script>
 const API = '';
 let allScores = [];
 let aiBlurbs = {};
