@@ -21862,7 +21862,7 @@ def _call_claude_scouting_report(payload):
 
 @app.route("/hr-analytics")
 def hr_analytics_page():
-    return HR_ANALYTICS_HTML
+    return Response(HR_ANALYTICS_HTML, mimetype='text/html')
 
 
 @app.route("/api/hr-analytics/simulator")
