@@ -22170,7 +22170,7 @@ def api_hr_daily_scores():
                         bat_pid_str = str(svb.get("sv_pid", "") or bid).strip()
                         svp = sv_pitcher(opp_name) if opp_name else {}
                         pit_pid_str = str(svp.get("sv_pid", "") or opp_pid).strip()
-                        mix_score, pitch_rows _ = _compute_pitch_mix_score(pit_pid_str, bat_pid_str)
+                        mix_score, pitch_rows = _compute_pitch_mix_score(pit_pid_str, bat_pid_str)
 
                         # Top 4 pitches sorted by usage
                         pitch_table = sorted(
