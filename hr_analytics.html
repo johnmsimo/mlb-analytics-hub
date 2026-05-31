@@ -11,12 +11,13 @@
   --accent2:#1f6feb;--warn:#d29922;--danger:#f85149;
   --text:#e6edf3;--muted:#8b949e;--hot:#ff7b72;--cold:#79c0ff;
   --score-hi:#3fb950;--score-mid:#d29922;--score-lo:#8b949e;
+  --gold:#ffd700;--lethal:#ff4444;--lethal-bg:rgba(255,68,68,.12);
 }
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh}
 a{color:var(--cold);text-decoration:none}
-  
-/* ── Nav / Brand ── */
+
+/* ── Nav ── */
 nav{display:flex;align-items:center;justify-content:space-between;padding:14px 32px;background:rgba(5,10,24,.95);backdrop-filter:blur(16px);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100}
 .brand{display:flex;align-items:center;gap:14px}
 .brand img{width:52px;height:52px;object-fit:cover;border-radius:12px;filter:drop-shadow(0 0 12px rgba(0,229,255,.3))}
@@ -28,72 +29,113 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .dot{width:8px;height:8px;border-radius:50%;background:#00e676;animation:pulse 1.5s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 @media(max-width:700px){.brand img{width:42px;height:42px}.brand-sub{display:none}nav{padding:12px 16px}}
+
 /* ── Layout ── */
-.layout{display:grid;grid-template-columns:420px 1fr;min-height:calc(100vh - 57px)}
-@media(max-width:900px){.layout{grid-template-columns:1fr;grid-template-rows:auto 1fr}}
+.layout{display:grid;grid-template-columns:440px 1fr;min-height:calc(100vh - 57px)}
+@media(max-width:960px){.layout{grid-template-columns:1fr;grid-template-rows:auto 1fr}}
 
 /* ── Left panel ── */
 .left-panel{border-right:1px solid var(--border);display:flex;flex-direction:column;background:var(--bg)}
-.panel-header{padding:14px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px}
+.panel-header{padding:14px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .panel-title{font-size:14px;font-weight:600;color:var(--text)}
 .panel-sub{font-size:12px;color:var(--muted);margin-left:auto}
 .refresh-btn{background:var(--card);border:1px solid var(--border);color:var(--muted);padding:4px 10px;border-radius:6px;font-size:12px;cursor:pointer;transition:color .2s}
 .refresh-btn:hover{color:var(--text)}
 
-.filters{padding:10px 16px;display:flex;gap:8px;flex-wrap:wrap;border-bottom:1px solid var(--border)}
-.filter-btn{background:var(--card);border:1px solid var(--border);color:var(--muted);padding:4px 10px;border-radius:20px;font-size:12px;cursor:pointer;transition:all .15s}
-.filter-btn.active,.filter-btn:hover{background:var(--accent2);border-color:var(--accent2);color:#fff}
+/* ── Game filter dropdown ── */
+.game-filter-bar{padding:10px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px}
+.game-filter-bar label{font-size:12px;color:var(--muted);white-space:nowrap}
+.game-select{flex:1;background:var(--card);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:8px;font-size:13px;cursor:pointer;outline:none;appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238b949e' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center;padding-right:28px}
+.game-select:focus{border-color:var(--accent2)}
+.game-select option{background:var(--card);color:var(--text)}
 
+/* ── Leaderboard ── */
 .leaderboard{overflow-y:auto;flex:1}
 
-.batter-card{padding:12px 16px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .15s;display:grid;grid-template-columns:36px 1fr auto;gap:10px;align-items:center}
+/* ── Batter Card (propalyticsapp-style) ── */
+.batter-card{padding:14px 16px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .15s;position:relative}
 .batter-card:hover,.batter-card.selected{background:#1c2128}
 .batter-card.selected{border-left:3px solid var(--accent2)}
-
-.rank-badge{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0}
-.rank-1{background:#ffd700;color:#000}
+.batter-card-top{display:grid;grid-template-columns:36px 1fr auto;gap:10px;align-items:flex-start}
+.rank-badge{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0}
+.rank-1{background:var(--gold);color:#000}
 .rank-2{background:#c0c0c0;color:#000}
 .rank-3{background:#cd7f32;color:#fff}
 .rank-other{background:var(--border);color:var(--muted)}
 
 .batter-info{min-width:0}
-.batter-name{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.batter-meta{font-size:11px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.batter-stats{font-size:11px;color:var(--muted);margin-top:3px}
-.batter-stats span{margin-right:8px}
-.ai-blurb{font-size:11.5px;line-height:1.4;color:#cfd6dd;margin-top:6px;padding:6px 8px;background:rgba(127,156,255,0.08);border-left:2px solid var(--accent2);border-radius:3px;white-space:normal}
-.ai-tag{display:inline-block;font-size:9px;font-weight:700;color:var(--accent2);background:rgba(127,156,255,0.18);padding:1px 5px;border-radius:3px;margin-right:6px;vertical-align:middle;letter-spacing:0.5px}
+.batter-name{font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:6px}
+.batter-meta{font-size:11.5px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.batter-stats{font-size:11px;color:var(--muted);margin-top:4px;display:flex;flex-wrap:wrap;gap:0 10px}
+.batter-stats span{white-space:nowrap}
 
-.score-block{text-align:center;flex-shrink:0}
-.score-val{font-size:22px;font-weight:800;line-height:1}
+/* ── Lineup / Weather badges ── */
+.confirmed-badge{display:inline-flex;align-items:center;gap:3px;font-size:9.5px;font-weight:700;padding:2px 6px;border-radius:4px;letter-spacing:.3px;flex-shrink:0}
+.confirmed-yes{background:#3fb95022;color:#3fb950;border:1px solid #3fb95044}
+.confirmed-no{background:#d2992222;color:#d29922;border:1px solid #d2992244}
+.weather-badge{display:inline-flex;align-items:center;gap:4px;font-size:10px;color:var(--muted);margin-top:3px}
+
+/* ── Score block ── */
+.score-block{text-align:center;flex-shrink:0;display:flex;flex-direction:column;align-items:center;gap:2px}
+.score-val{font-size:24px;font-weight:800;line-height:1}
 .score-hi{color:var(--score-hi)}
 .score-mid{color:var(--score-mid)}
 .score-lo{color:var(--score-lo)}
-.score-label{font-size:10px;color:var(--muted);margin-top:1px}
-.prob-badge{font-size:11px;background:#1f6feb22;color:var(--cold);border:1px solid #1f6feb44;padding:2px 7px;border-radius:10px;margin-top:4px;display:inline-block}
+.score-label{font-size:9px;color:var(--muted);letter-spacing:.5px;text-transform:uppercase}
+.prob-badge{font-size:11px;background:#1f6feb22;color:var(--cold);border:1px solid #1f6feb44;padding:2px 8px;border-radius:10px;margin-top:2px;white-space:nowrap;font-weight:600}
 
+/* ── AI blurb ── */
+.ai-blurb{font-size:11.5px;line-height:1.45;color:#cfd6dd;margin-top:8px;padding:6px 8px;background:rgba(127,156,255,0.08);border-left:2px solid var(--accent2);border-radius:3px}
+.ai-tag{display:inline-block;font-size:9px;font-weight:700;color:var(--accent2);background:rgba(127,156,255,0.18);padding:1px 5px;border-radius:3px;margin-right:6px;vertical-align:middle;letter-spacing:0.5px}
+
+/* ── Lethal Combo mini-badge on card ── */
+.lethal-row{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
+.lethal-mini{display:inline-flex;align-items:center;gap:3px;font-size:10px;font-weight:700;background:var(--lethal-bg);color:var(--lethal);border:1px solid rgba(255,68,68,.3);padding:2px 7px;border-radius:4px}
+
+/* ── Empty / Loader ── */
 .empty-state{padding:40px;text-align:center;color:var(--muted);font-size:14px}
 .loader{display:flex;align-items:center;justify-content:center;padding:40px;color:var(--muted);font-size:14px;gap:10px}
-.spinner{width:20px;height:20px;border:2px solid var(--border);border-top-color:var(--accent2);border-radius:50%;animation:spin .7s linear infinite}
+.spinner{width:20px;height:20px;border:2px solid var(--border);border-top-color:var(--accent2);border-radius:50%;animation:spin .7s linear infinite;flex-shrink:0}
 @keyframes spin{to{transform:rotate(360deg)}}
 
-/* ── Right panel (detail) ── */
+/* ── Right panel ── */
 .right-panel{padding:20px;overflow-y:auto}
 .detail-placeholder{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--muted);text-align:center;gap:16px}
 .detail-placeholder svg{opacity:.3}
 .detail-placeholder h3{font-size:18px;font-weight:500}
 .detail-placeholder p{font-size:13px;max-width:300px;line-height:1.6}
 
+/* ── Detail header ── */
 .detail-header{display:flex;align-items:flex-start;gap:16px;margin-bottom:20px;flex-wrap:wrap}
 .detail-name{font-size:24px;font-weight:700}
 .detail-sub{font-size:14px;color:var(--muted);margin-top:4px}
-.score-ring{width:72px;height:72px;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;border:3px solid;flex-shrink:0}
+.score-ring{width:76px;height:76px;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;border:3px solid;flex-shrink:0}
 .score-ring.hi{border-color:var(--score-hi)}
 .score-ring.mid{border-color:var(--score-mid)}
 .score-ring.lo{border-color:var(--score-lo)}
-.score-ring .val{font-size:22px;font-weight:800;line-height:1}
+.score-ring .val{font-size:24px;font-weight:800;line-height:1}
 .score-ring .lbl{font-size:10px;color:var(--muted)}
 
+/* ── Weather row in detail ── */
+.weather-row{display:flex;align-items:center;gap:16px;padding:8px 12px;background:var(--card);border:1px solid var(--border);border-radius:8px;margin-bottom:14px;flex-wrap:wrap;font-size:13px}
+.weather-item{display:flex;align-items:center;gap:5px;color:var(--muted)}
+.weather-item strong{color:var(--text)}
+.weather-wind-warn{color:var(--warn);font-weight:600}
+
+/* ── Lineup confirmed strip ── */
+.lineup-strip{display:flex;align-items:center;gap:8px;padding:6px 12px;background:var(--card);border:1px solid var(--border);border-radius:8px;margin-bottom:14px;font-size:12px}
+.lineup-confirmed{color:var(--score-hi);display:flex;align-items:center;gap:5px;font-weight:600}
+.lineup-projected{color:var(--warn);display:flex;align-items:center;gap:5px;font-weight:600}
+
+/* ── Tabs ── */
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--border);margin-bottom:16px;overflow-x:auto}
+.tab{padding:8px 16px;font-size:13px;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;transition:all .15s;white-space:nowrap;user-select:none}
+.tab.active,.tab:hover{color:var(--text);border-bottom-color:var(--accent2)}
+
+.tab-panel{display:none}
+.tab-panel.active{display:block}
+
+/* ── Sections ── */
 .section{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px}
 .section-title{font-size:13px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px;display:flex;align-items:center;gap:8px}
 .section-title svg{opacity:.7}
@@ -119,23 +161,43 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .hist-label{font-size:10px;color:var(--muted)}
 .hist-count{font-size:9px;color:var(--muted)}
 
-/* ── Pitch mix table ── */
-.pitch-table{width:100%;border-collapse:collapse;font-size:12px}
-.pitch-table th{color:var(--muted);text-align:right;padding:5px 8px;font-weight:500;font-size:11px;border-bottom:1px solid var(--border)}
-.pitch-table th:first-child{text-align:left}
-.pitch-table td{padding:6px 8px;border-bottom:1px solid var(--border)22;text-align:right}
-.pitch-table td:first-child{text-align:left;font-weight:600}
-.pitch-table tr:last-child td{border-bottom:none}
-.pitch-tag{background:var(--border);border-radius:4px;padding:2px 6px;font-size:10px;font-weight:600;color:var(--text)}
-.row-pit{background:#0d111700}
-.row-bat{background:#1f6feb08}
-.row-sep{height:4px;background:transparent}
-.adv-hi{color:var(--hot)}
-.adv-lo{color:var(--cold)}
+/* ── Pitch mix ── */
+.pitch-section{margin-bottom:12px}
+.pitch-mix-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px}
 .mix-score-badge{display:inline-block;padding:4px 12px;border-radius:20px;font-size:13px;font-weight:700;border:1px solid}
 .mix-hi{background:#3fb95022;border-color:#3fb95066;color:#3fb950}
 .mix-mid{background:#d2992222;border-color:#d2992266;color:#d29922}
 .mix-lo{background:#8b949e22;border-color:#8b949e66;color:#8b949e}
+
+/* Pitcher top-level stats */
+.pit-intel-strip{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}
+.pit-intel-chip{padding:5px 10px;border-radius:6px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:5px}
+.chip-elite{background:#3fb95022;border:1px solid #3fb95066;color:#3fb950}
+.chip-high{background:#d2992222;border:1px solid #d2992266;color:#d29922}
+.chip-bad{background:rgba(248,81,73,.12);border:1px solid rgba(248,81,73,.3);color:#f85149}
+
+/* Lethal combo block */
+.lethal-block{background:var(--lethal-bg);border:1px solid rgba(255,68,68,.35);border-radius:8px;padding:12px;margin-bottom:10px}
+.lethal-header{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap}
+.lethal-badge{background:#ff4444;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;letter-spacing:.5px}
+.lethal-pitch-name{font-size:15px;font-weight:700;color:var(--hot)}
+.lethal-usage{font-size:11px;color:var(--muted);margin-left:auto}
+.lethal-bullets{list-style:none;display:flex;flex-direction:column;gap:4px}
+.lethal-bullets li{font-size:12px;color:#cfd6dd;padding-left:14px;position:relative}
+.lethal-bullets li::before{content:"▶";position:absolute;left:0;font-size:9px;color:var(--hot);top:2px}
+
+/* Good matchup block */
+.good-block{background:#3fb95012;border:1px solid rgba(63,185,80,.3);border-radius:8px;padding:12px;margin-bottom:10px}
+.good-header{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap}
+.good-badge{background:#3fb950;color:#000;font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px}
+.good-pitch-name{font-size:15px;font-weight:700;color:#3fb950}
+
+/* usage bar */
+.usage-bar-wrap{display:flex;align-items:center;gap:6px}
+.usage-bar{height:4px;background:var(--accent2);border-radius:2px}
+.adv-hi{color:var(--hot);font-weight:700}
+.adv-lo{color:var(--cold)}
+.lbl{font-size:10px;color:var(--muted)}
 
 /* ── H2H section ── */
 .h2h-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
@@ -143,6 +205,8 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .h2h-val{font-size:16px;font-weight:700}
 .h2h-lbl{font-size:11px;color:var(--muted);margin-top:2px}
 .sample-note{font-size:11px;color:var(--warn);margin-top:8px;padding:6px 10px;background:#d2992210;border-radius:4px}
+.warning-box{background:#d2992210;border:1px solid #d2992244;border-radius:6px;padding:8px 10px;font-size:12px;color:var(--warn);margin-bottom:10px}
+.error-box{background:rgba(248,81,73,.1);border:1px solid rgba(248,81,73,.3);border-radius:6px;padding:8px 10px;font-size:12px;color:var(--danger)}
 
 /* ── Scouting report ── */
 .scouting-text{font-size:14px;line-height:1.7;color:var(--text);white-space:pre-wrap}
@@ -151,328 +215,330 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .bet-BET{background:#3fb95022;color:#3fb950;border:1px solid #3fb95044}
 .bet-LEAN{background:#d2992222;color:#d29922;border:1px solid #d2992244}
 .bet-PASS{background:#f8514922;color:#f85149;border:1px solid #f8514944}
-.scouting-actions{display:flex;gap:8px;margin-top:10px}
+.scouting-actions{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
 .btn{padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:12px;cursor:pointer;transition:all .15s}
-.btn:hover{background:#1c2128}
+.btn:hover{background:#21262d}
 .btn-primary{background:var(--accent2);border-color:var(--accent2);color:#fff}
-.btn-primary:hover{background:#1a5fcc}
+.btn-primary:hover{background:#388bfd}
 
-/* ── Platoon badge ── */
-.platoon-adv{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600}
-.plat-good{background:#3fb95022;color:#3fb950}
-.plat-bad{background:#f8514922;color:#f85149}
-
-/* ── Tabs ── */
-.tabs{display:flex;gap:2px;border-bottom:1px solid var(--border);margin-bottom:16px}
-.tab{padding:8px 16px;font-size:13px;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;transition:all .15s}
-.tab.active,.tab:hover{color:var(--text)}
-.tab.active{border-bottom-color:var(--accent2);color:var(--text)}
-.tab-panel{display:none}
-.tab-panel.active{display:block}
-
-/* ── Error / warning ── */
-.warning-box{background:#d2992215;border:1px solid #d2992244;border-radius:6px;padding:10px 14px;font-size:12px;color:var(--warn);margin-bottom:12px}
-.error-box{background:#f8514915;border:1px solid #f8514944;border-radius:6px;padding:10px 14px;font-size:12px;color:var(--hot);margin-bottom:12px}
+/* ── Plat badges ── */
+.plat-good{background:#3fb95022;color:#3fb950;border:1px solid #3fb95044}
+.plat-bad{background:rgba(248,81,73,.12);color:#f85149;border:1px solid rgba(248,81,73,.3)}
 </style>
-<link rel="stylesheet" href="/static/mobile.css">
 </head>
 <body>
+
+<!-- ── NAV ── -->
 <nav>
   <div class="brand">
-    <img src="/static/logo.png" alt="MLB Analytics Hub logo">
+    <img src="/static/logo.png" onerror="this.style.display='none'" alt="MLB Hub">
     <div class="brand-text">
-      <div class="brand-name">MLB ANALYTICS HUB</div>
-      <div class="brand-sub">HR Power Simulator</div>
+      <span class="brand-name">MLB ANALYTICS HUB</span>
+      <span class="brand-sub">HR Probability Rankings</span>
     </div>
   </div>
   <div class="nav-r">
-    <div id="headerDate" style="font-size:.72rem;color:var(--mu);font-family:'Orbitron',monospace"></div>
     <div class="live-dot"><div class="dot"></div>LIVE</div>
   </div>
 </nav>
 
+<!-- ── LAYOUT ── -->
 <div class="layout">
-  <!-- Left: Ranked Leaderboard -->
+
+  <!-- LEFT PANEL -->
   <div class="left-panel">
     <div class="panel-header">
-      <span class="panel-title">Today's HR Rankings</span>
-      <span class="panel-sub" id="lastRefreshed"></span>
+      <span class="panel-title">🔥 Today's HR Rankings</span>
+      <span class="panel-sub" id="lastRefreshed">—</span>
       <button class="refresh-btn" onclick="loadDailyScores(true)">↻ Refresh</button>
     </div>
-    <div class="filters" id="gameFilters">
-      <button class="filter-btn active" data-game="all" onclick="filterByGame('all',this)">All Games</button>
+
+    <!-- Game dropdown filter sorted by start time -->
+    <div class="game-filter-bar">
+      <label for="gameSelect">Game:</label>
+      <select id="gameSelect" class="game-select" onchange="filterByGame(this.value)">
+        <option value="all">⚾ All Games</option>
+      </select>
     </div>
+
     <div class="leaderboard" id="leaderboard">
-      <div class="loader"><div class="spinner"></div> Loading today's matchups…</div>
+      <div class="loader"><div class="spinner"></div> Loading rankings…</div>
     </div>
   </div>
 
-  <!-- Right: Detail Panel -->
-  <div class="right-panel" id="detailPanel">
-    <!-- Major Market Odds Panel -->
-    <div id="majorMarketsPanel" style="margin-bottom:18px;display:none"></div>
+  <!-- RIGHT PANEL -->
+  <div class="right-panel" id="rightPanel">
     <div class="detail-placeholder" id="placeholderMsg">
-      <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-        <circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/>
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
       </svg>
-      <h3>Select a batter to analyze</h3>
-      <p>Click any player on the leaderboard to see the HR simulator, pitch mix matchup, H2H splits, and AI scouting report.</p>
+      <h3>Select a batter</h3>
+      <p>Click any player in the rankings to see their full HR analysis, pitch mix, H2H splits, and AI scouting report.</p>
     </div>
     <div id="detailContent" style="display:none"></div>
-    </div>
+  </div>
+
 </div>
 
 <script>
-// ── Major Market Odds Panel ──
-async function renderMajorMarketsPanelHR(gamePk) {
-  const panel = document.getElementById('majorMarketsPanel');
-  if (!panel) return;
-  if (!gamePk) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
-  try {
-    const r = await fetch(`/api/game/${gamePk}`);
-    const d = await r.json();
-    const gameLines = d.game_lines || {};
-    if (!gameLines || Object.keys(gameLines).length === 0) {
-      panel.style.display = 'none';
-      panel.innerHTML = '';
-      return;
-    }
-    const mkOrder = ['moneyline', 'spread', 'total'];
-    const mkLabels = {moneyline: 'Moneyline', spread: 'Spread', total: 'Total'};
-    const oddsRow = mkOrder.map(mk => {
-      const arr = gameLines[mk];
-      if (!arr || !arr.length) return '';
-      return `<div style=\"margin-bottom:7px\">`
-        + `<span style=\"font-family:'Orbitron',monospace;font-size:.7rem;color:#00e5ff;letter-spacing:1.5px;min-width:80px;display:inline-block\">${mkLabels[mk]}</span>`
-        + arr.map(line => {
-            const lineStr = line.line != null ? `<span style='color:#d29922;font-weight:700'>${line.line}</span>` : '';
-            const away = line.away_odds != null ? `<span style='color:#8b949e'>${line.away_team||'Away'}:</span> <span style='color:#00e5ff;font-weight:700'>${line.away_odds>0?'+':''}${line.away_odds}</span>` : '';
-            const home = line.home_odds != null ? `<span style='color:#8b949e'>${line.home_team||'Home'}:</span> <span style='color:#00e5ff;font-weight:700'>${line.home_odds>0?'+':''}${line.home_odds}</span>` : '';
-            return `<span style='margin-right:18px'>${lineStr} ${away} ${home}</span>`;
-          }).join('')
-        + `</div>`;
-    }).join('');
-    panel.innerHTML = `
-      <div style=\"background:#161b22;border:1px solid #30363d;border-radius:12px;padding:13px 18px;display:flex;flex-direction:column;gap:2px\">
-        <div style=\"font-family:'Orbitron',monospace;font-size:.68rem;letter-spacing:2px;color:#00e5ff;margin-bottom:4px\">MAJOR MARKET ODDS</div>
-        ${oddsRow || '<div style=\"color:#8b949e\">No odds available.</div>'}
-      </div>
-    `;
-    panel.style.display = '';
-  } catch(e) {
-    panel.style.display = 'none';
-    panel.innerHTML = '';
-  }
-}
-
-const API = '';
-let allScores = [];
-let aiBlurbs = {};
-let selectedBatter = null;
+const API = window.location.origin;
+let allScores        = [];
+let aiBlurbs         = {};
 let activeGameFilter = 'all';
-let scoutingLoading = false;
+let selectedBatter   = null;
+let gameWeather      = {};  // {gamePk: {temp, wind_speed, wind_dir, rain_chance, condition, is_dome}}
+let gameLineups      = {};  // {gamePk: {confirmed}}
+let gameMeta         = [];  // sorted list of {game_pk, label, sort_key}
 
-// ── Utilities ────────────────────────────────────────────────────────────────
+// ── Formatters ────────────────────────────────────────────────────────────────
+function fmt(v,d=2){return v!=null&&v!==''?Number(v).toFixed(d):'—'}
+function fmtPct(v){return v!=null&&v!==''?Number(v).toFixed(1)+'%':'—'}
+function probPct(v){return v!=null?Math.round(v*100)+'%':'—'}
+function escapeHtml(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
+function scoreClass(s){return s>=75?'score-hi':s>=50?'score-mid':'score-lo'}
+function scoreRingClass(s){return s>=75?'hi':s>=50?'mid':'lo'}
+function fmtStatVal(v){if(v==null)return '—';return Math.round(v*1000).toString().padStart(3,'0');}
 
-function fmt(v, decimals=3) {
-  if (v == null || v === 'N/A' || v === '---') return '—';
-  const n = parseFloat(v);
-  if (isNaN(n)) return '—';
-  return n.toFixed(decimals);
+function windIcon(deg){
+  if(deg==null)return '';
+  const dirs=['N','NE','E','SE','S','SW','W','NW'];
+  return dirs[Math.round(deg/45)%8]||'';
 }
 
-function fmtPct(v) {
-  const n = parseFloat(v);
-  if (isNaN(n)) return '—';
-  return n.toFixed(1) + '%';
+function weatherStr(wx){
+  if(!wx||wx.is_dome)return '🏟️ Dome';
+  const parts=[];
+  if(wx.temp!=null)parts.push(wx.temp+'°F');
+  if(wx.wind_speed!=null)parts.push(wx.wind_speed+' mph '+windIcon(wx.wind_dir));
+  if(wx.rain_chance!=null&&wx.rain_chance>0)parts.push(wx.rain_chance+'% rain');
+  return parts.join(' · ');
 }
 
-function scoreClass(s) {
-  if (s >= 65) return 'score-hi';
-  if (s >= 45) return 'score-mid';
-  return 'score-lo';
+function parseGameTimeET(iso){
+  if(!iso)return '';
+  try{
+    const d=new Date(iso);
+    return d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:'America/New_York',hour12:true});
+  }catch(e){return '';}
 }
 
-function scoreRingClass(s) {
-  if (s >= 65) return 'hi';
-  if (s >= 45) return 'mid';
-  return 'lo';
+function timeToMinutes(t){
+  if(!t)return 9999;
+  try{
+    const m=t.match(/(\d+):(\d+)\s*(AM|PM)/i);
+    if(!m)return 9999;
+    let h=parseInt(m[1]),min=parseInt(m[2]);
+    if(m[3].toUpperCase()==='PM'&&h!==12)h+=12;
+    if(m[3].toUpperCase()==='AM'&&h===12)h=0;
+    return h*60+min;
+  }catch(e){return 9999;}
 }
 
-function probPct(p) {
-  return (p * 100).toFixed(1) + '%';
-}
-
-function escapeHtml(s) {
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function setHeaderDate() {
-  const now = new Date();
-  document.getElementById('headerDate').textContent =
-    now.toLocaleDateString('en-US', {weekday:'long', month:'long', day:'numeric', year:'numeric'});
-}
-
-// ── Daily Scores ─────────────────────────────────────────────────────────────
-
-async function loadDailyScores(force=false) {
-  document.getElementById('leaderboard').innerHTML =
+// ── Daily Scores ──────────────────────────────────────────────────────────────
+async function loadDailyScores(force=false){
+  document.getElementById('leaderboard').innerHTML=
     '<div class="loader"><div class="spinner"></div> Loading rankings…</div>';
-
-  try {
-    const url = API + '/api/hr-analytics/daily-scores' + (force ? '?force=1' : '');
-    const r   = await fetch(url);
-    const d   = await r.json();
-
-    if (!d.success || !d.scores) {
-      document.getElementById('leaderboard').innerHTML =
-        `<div class="empty-state">No data available.<br><small>${d.error||''}</small></div>`;
+  try{
+    const url=API+'/api/hr-analytics/daily-scores'+(force?'?force=1':'');
+    const r=await fetch(url);
+    const d=await r.json();
+    if(!d.success||!d.scores){
+      document.getElementById('leaderboard').innerHTML=
+        `<div class="empty-state">No data available.<br><small>${escapeHtml(d.error||'')}</small></div>`;
       return;
     }
-
-    allScores = d.scores;
-    aiBlurbs  = d.ai_blurbs || {};
-    document.getElementById('lastRefreshed').textContent =
-      d.cached ? 'cached' : 'live';
-
-    buildGameFilters(allScores);
+    allScores=d.scores;
+    aiBlurbs=d.ai_blurbs||{};
+    document.getElementById('lastRefreshed').textContent=d.cached?'cached':'live';
+    buildGameMeta(allScores);
+    buildGameSelect(gameMeta);
     renderLeaderboard(allScores);
-  } catch(e) {
-    document.getElementById('leaderboard').innerHTML =
-      `<div class="empty-state">Error loading data: ${e.message}</div>`;
+  }catch(e){
+    document.getElementById('leaderboard').innerHTML=
+      `<div class="empty-state">Error loading data: ${escapeHtml(e.message)}</div>`;
   }
 }
 
-function buildGameFilters(scores) {
-  const games = {};
-  scores.forEach(s => {
-    const key = s.game_pk;
-    if (!games[key]) games[key] = `${s.team} vs ${s.opp_team}`;
-  });
+// ── Build game metadata sorted by start time ──────────────────────────────────
+function buildGameMeta(scores){
+  const seen={};
+  gameMeta=[];
+  scores.forEach(s=>{
+    const pk=String(s.game_pk);
+    if(seen[pk])return;
+    seen[pk]=1;
+    const rawIso=s.game_date_iso||s.game_date||'';
+    const timeET=s.game_time_et||parseGameTimeET(rawIso)||s.game_time||'';
+    const awayName=s.team||'';
+    const homeName=s.opp_team||'';
+    const matchup=awayName&&homeName?`${awayName} @ ${homeName}`:pk;
+    const label=timeET?`${timeET} — ${matchup}`:matchup;
 
-  const container = document.getElementById('gameFilters');
-  container.innerHTML = '<button class="filter-btn active" data-game="all" onclick="filterByGame(\'all\',this)">All Games</button>';
-  Object.entries(games).forEach(([pk, label]) => {
-    const btn = document.createElement('button');
-    btn.className = 'filter-btn';
-    btn.dataset.game = pk;
-    btn.textContent = label.length > 20 ? label.slice(0,18)+'…' : label;
-    btn.onclick = () => filterByGame(pk, btn);
-    container.appendChild(btn);
+    const wx=s.weather_temp!=null?{
+      temp:s.weather_temp,
+      wind_speed:s.weather_wind,
+      wind_dir:s.weather_wind_dir,
+      rain_chance:s.weather_rain,
+      condition:s.weather_condition,
+      is_dome:s.is_dome||false,
+    }:(s.weather||null);
+    if(wx)gameWeather[pk]=wx;
+
+    const confirmed=s.lineup_confirmed||s.confirmed_lineup||false;
+    if(!gameLineups[pk])gameLineups[pk]={confirmed};
+
+    gameMeta.push({game_pk:pk,label,sort_key:timeToMinutes(timeET),away_team:awayName,home_team:homeName,home_team_id:s.home_team_id,confirmed});
+  });
+  gameMeta.sort((a,b)=>a.sort_key-b.sort_key);
+}
+
+function buildGameSelect(meta){
+  const sel=document.getElementById('gameSelect');
+  sel.innerHTML='<option value="all">⚾ All Games</option>';
+  meta.forEach(g=>{
+    const opt=document.createElement('option');
+    opt.value=g.game_pk;
+    opt.textContent=g.label;
+    sel.appendChild(opt);
   });
 }
 
-async function filterByGame(gamePk, btn) {
-  activeGameFilter = gamePk;
-  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
+function filterByGame(val){
+  activeGameFilter=val;
   renderLeaderboard(allScores);
-  // Show major market odds for this game
-  if (gamePk !== 'all') await renderMajorMarketsPanelHR(gamePk);
-  else renderMajorMarketsPanelHR(null);
 }
 
-function renderLeaderboard(scores) {
-  const filtered = activeGameFilter === 'all'
-    ? scores
-    : scores.filter(s => String(s.game_pk) === String(activeGameFilter));
+// ── Render leaderboard ────────────────────────────────────────────────────────
+function renderLeaderboard(scores){
+  const filtered=activeGameFilter==='all'
+    ?scores
+    :scores.filter(s=>String(s.game_pk)===String(activeGameFilter));
 
-  if (!filtered.length) {
-    document.getElementById('leaderboard').innerHTML =
-      '<div class="empty-state">No batters found for this filter.</div>';
+  if(!filtered.length){
+    document.getElementById('leaderboard').innerHTML=
+      '<div class="empty-state">No batters found for this game.</div>';
     return;
   }
 
-  const html = filtered.map((s, i) => {
-    const rank = i + 1;
-    const rankClass = rank === 1 ? 'rank-1' : rank === 2 ? 'rank-2' : rank === 3 ? 'rank-3' : 'rank-other';
-    const sc = scoreClass(s.score);
-    const selected = selectedBatter && selectedBatter.batter_id === s.batter_id && selectedBatter.pitcher_id === s.pitcher_id ? ' selected' : '';
-    const blurb    = aiBlurbs[String(s.batter_id)] || '';
-    const blurbRow = blurb
-      ? `<div class="ai-blurb"><span class="ai-tag">AI</span>${escapeHtml(blurb)}</div>`
-      : '';
+  const html=filtered.map((s,i)=>{
+    const rank=i+1;
+    const rankClass=rank===1?'rank-1':rank===2?'rank-2':rank===3?'rank-3':'rank-other';
+    const sc=scoreClass(s.score);
+    const selected=selectedBatter&&selectedBatter.batter_id===s.batter_id&&selectedBatter.pitcher_id===s.pitcher_id?' selected':'';
+    const blurb=aiBlurbs[String(s.batter_id)]||'';
+    const blurbRow=blurb
+      ?`<div class="ai-blurb"><span class="ai-tag">AI</span>${escapeHtml(blurb)}</div>`:'';
+
+    const gPk=String(s.game_pk);
+    const confirmed=s.lineup_confirmed||(gameLineups[gPk]&&gameLineups[gPk].confirmed)||false;
+    const lineupBadge=confirmed
+      ?`<span class="confirmed-badge confirmed-yes">✓ CONFIRMED</span>`
+      :`<span class="confirmed-badge confirmed-no">~ PROJECTED</span>`;
+
+    const wx=gameWeather[gPk]||null;
+    const wxStr=wx?weatherStr(wx):'';
+    const wxRow=wxStr?`<div class="weather-badge">🌤 ${escapeHtml(wxStr)}</div>`:'';
+
+    const gt=s.game_time_et||s.game_time||'';
+
+    const lethals=s.lethal_pitches||[];
+    const lethalRow=lethals.length
+      ?`<div class="lethal-row">${lethals.map(p=>`<span class="lethal-mini">💀 ${escapeHtml(p)}</span>`).join('')}</div>`:'';
+
     return `
     <div class="batter-card${selected}" onclick="selectBatter(${JSON.stringify(s).replace(/"/g,'&quot;')})">
-      <div class="rank-badge ${rankClass}">#${rank}</div>
-      <div class="batter-info">
-        <div class="batter-name">${s.batter}</div>
-        <div class="batter-meta">vs ${s.pitcher} &bull; ${s.team} @ ${s.opp_team}</div>
-        <div class="batter-stats">
-          <span>ISO ${fmt(s.iso,3)}</span>
-          <span>Brl% ${fmtPct(s.barrel_pct)}</span>
-          <span>HH% ${fmtPct(s.hh_pct)}</span>
-          <span>PkHR ${s.park_hr_idx}</span>
+      <div class="batter-card-top">
+        <div class="rank-badge ${rankClass}">#${rank}</div>
+        <div class="batter-info">
+          <div class="batter-name">${escapeHtml(s.batter)} ${lineupBadge}</div>
+          <div class="batter-meta">vs ${escapeHtml(s.pitcher)} &bull; ${escapeHtml(s.team)} @ ${escapeHtml(s.opp_team)}${gt?' &bull; '+escapeHtml(gt):''}</div>
+          <div class="batter-stats">
+            <span>ISO ${fmt(s.iso,3)}</span>
+            <span>Brl% ${fmtPct(s.barrel_pct)}</span>
+            <span>HH% ${fmtPct(s.hh_pct)}</span>
+            <span>PkHR ${s.park_hr_idx}</span>
+          </div>
+          ${wxRow}
         </div>
-        ${blurbRow}
+        <div class="score-block">
+          <div class="score-val ${sc}">${s.score.toFixed(0)}</div>
+          <div class="score-label">Score</div>
+          <div class="prob-badge">${probPct(s.prob_hr)} HR</div>
+        </div>
       </div>
-      <div class="score-block">
-        <div class="score-val ${sc}">${s.score.toFixed(0)}</div>
-        <div class="score-label">Score</div>
-        <div class="prob-badge">${probPct(s.prob_hr)} HR</div>
-      </div>
+      ${lethalRow}
+      ${blurbRow}
     </div>`;
   }).join('');
 
-  document.getElementById('leaderboard').innerHTML = html;
+  document.getElementById('leaderboard').innerHTML=html;
 }
 
-// ── Batter Selection ─────────────────────────────────────────────────────────
-
-async function selectBatter(s) {
-  selectedBatter = s;
+// ── Select batter ─────────────────────────────────────────────────────────────
+async function selectBatter(s){
+  selectedBatter=s;
   renderLeaderboard(allScores);
-
-  document.getElementById('placeholderMsg').style.display = 'none';
-  const dc = document.getElementById('detailContent');
-  dc.style.display = 'block';
-
+  document.getElementById('placeholderMsg').style.display='none';
+  const dc=document.getElementById('detailContent');
+  dc.style.display='block';
   renderDetailSkeleton(s);
   await loadSimulator(s);
 }
 
-function renderDetailSkeleton(s) {
-  const sc = scoreClass(s.score);
-  const rc = scoreRingClass(s.score);
-  document.getElementById('detailContent').innerHTML = `
+function renderDetailSkeleton(s){
+  const sc=scoreClass(s.score);
+  const rc=scoreRingClass(s.score);
+  const gPk=String(s.game_pk);
+  const wx=gameWeather[gPk]||null;
+  const confirmed=s.lineup_confirmed||(gameLineups[gPk]&&gameLineups[gPk].confirmed)||false;
+
+  let weatherSection='';
+  if(wx){
+    if(wx.is_dome){
+      weatherSection=`<div class="weather-row"><div class="weather-item">🏟️ <strong>Dome / Indoor</strong> — weather not a factor</div></div>`;
+    }else{
+      const windWarn=(wx.wind_speed||0)>=15;
+      weatherSection=`<div class="weather-row">
+        ${wx.temp!=null?`<div class="weather-item">🌡️ <strong>${wx.temp}°F</strong></div>`:''}
+        ${wx.wind_speed!=null?`<div class="weather-item ${windWarn?'weather-wind-warn':''}">💨 <strong>${wx.wind_speed} mph</strong> ${windIcon(wx.wind_dir)}</div>`:''}
+        ${wx.rain_chance!=null?`<div class="weather-item">🌧 <strong>${wx.rain_chance}%</strong> rain</div>`:''}
+        ${wx.condition?`<div class="weather-item">☁️ ${escapeHtml(wx.condition)}</div>`:''}
+      </div>`;
+    }
+  }
+
+  const lineupSection=`<div class="lineup-strip">
+    ${confirmed
+      ?`<span class="lineup-confirmed">✅ Confirmed Lineup</span>`
+      :`<span class="lineup-projected">⚠️ Projected Lineup — not yet confirmed</span>`}
+  </div>`;
+
+  const gt=s.game_time_et||s.game_time||'';
+
+  document.getElementById('detailContent').innerHTML=`
     <div class="detail-header">
       <div class="score-ring ${rc}">
         <div class="val ${sc}">${s.score.toFixed(0)}</div>
         <div class="lbl">Score</div>
       </div>
       <div>
-        <div class="detail-name">${s.batter}</div>
-        <div class="detail-sub">
-          vs <strong>${s.pitcher}</strong> &bull;
-          ${s.team} @ ${s.opp_team}
-          &bull; <span class="game-time">${s.game_time || ''}</span>
-        </div>
+        <div class="detail-name">${escapeHtml(s.batter)}</div>
+        <div class="detail-sub">vs <strong>${escapeHtml(s.pitcher)}</strong> &bull; ${escapeHtml(s.team)} @ ${escapeHtml(s.opp_team)}${gt?' &bull; <span class="game-time">'+escapeHtml(gt)+'</span>':''}</div>
         <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
-          <div class="prob-badge" style="font-size:13px;padding:4px 12px">
-            ${probPct(s.prob_hr)} prob HR today
-          </div>
-          <div class="prob-badge" style="font-size:13px;padding:4px 12px;background:#3fb95022;color:#3fb950;border-color:#3fb95044">
-            Park HR Index: ${s.park_hr_idx}
-          </div>
-          <div class="prob-badge ${s.batter_hand !== 'L' ? 'plat-good' : 'plat-bad'}" style="font-size:13px;padding:4px 12px">
-            Bats ${s.batter_hand}
-          </div>
+          <div class="prob-badge" style="font-size:13px;padding:4px 12px">${probPct(s.prob_hr)} prob HR today</div>
+          <div class="prob-badge" style="font-size:13px;padding:4px 12px;background:#3fb95022;color:#3fb950;border-color:#3fb95044">Park HR Index: ${s.park_hr_idx}</div>
+          <div class="prob-badge ${s.batter_hand==='L'?'plat-good':''}" style="font-size:13px;padding:4px 12px">Bats ${s.batter_hand||'R'}</div>
         </div>
       </div>
     </div>
-
+    ${lineupSection}
+    ${weatherSection}
     <div class="tabs" id="detailTabs">
       <div class="tab active" onclick="switchTab('simulator',this)">Simulator</div>
       <div class="tab" onclick="switchTab('pitchmix',this)">Pitch Mix</div>
       <div class="tab" onclick="switchTab('h2h',this)">H2H</div>
       <div class="tab" onclick="switchTab('scouting',this)">AI Report</div>
     </div>
-
     <div id="tab-simulator" class="tab-panel active">
       <div class="loader"><div class="spinner"></div> Running Monte Carlo…</div>
     </div>
@@ -485,435 +551,330 @@ function renderDetailSkeleton(s) {
     <div id="tab-scouting" class="tab-panel">
       <div class="section">
         <div class="section-title">AI Scouting Report</div>
-        <div class="scouting-loader"><div class="spinner"></div> Generating report…</div>
-        <div class="scouting-actions" style="margin-top:14px">
+        <div class="scouting-actions">
           <button class="btn btn-primary" onclick="loadScouting(${s.batter_id},${s.pitcher_id},${s.game_pk})">Generate Report</button>
         </div>
       </div>
-    </div>
-  `;
+    </div>`;
 }
 
-function switchTab(name, el) {
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+function switchTab(name,el){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
   el.classList.add('active');
-  document.getElementById('tab-' + name).classList.add('active');
-
-  if (name === 'pitchmix' && selectedBatter) loadPitchMix(selectedBatter);
-  if (name === 'h2h' && selectedBatter) loadH2H(selectedBatter);
-  if (name === 'scouting' && selectedBatter) loadScouting(selectedBatter.batter_id, selectedBatter.pitcher_id, selectedBatter.game_pk);
+  document.getElementById('tab-'+name).classList.add('active');
+  if(name==='pitchmix'&&selectedBatter)loadPitchMix(selectedBatter);
+  if(name==='h2h'&&selectedBatter)loadH2H(selectedBatter);
+  if(name==='scouting'&&selectedBatter)loadScouting(selectedBatter.batter_id,selectedBatter.pitcher_id,selectedBatter.game_pk);
 }
 
-// ── Simulator Tab ────────────────────────────────────────────────────────────
-
-async function loadSimulator(s) {
-  const panel = document.getElementById('tab-simulator');
-  if (!panel) return;
-
-  try {
-    const url = `${API}/api/hr-analytics/simulator?batter_id=${s.batter_id}&pitcher_id=${s.pitcher_id}&game_pk=${s.game_pk}&batter_name=${encodeURIComponent(s.batter)}`;
-    const r = await fetch(url);
-    const d = await r.json();
-
-    if (!d.success) {
-      panel.innerHTML = `<div class="error-box">${d.error}</div>`;
-      return;
-    }
-
-    renderSimulator(panel, d, s);
-  } catch(e) {
-    panel.innerHTML = `<div class="error-box">Failed to load simulator: ${e.message}</div>`;
+// ── Simulator Tab ─────────────────────────────────────────────────────────────
+async function loadSimulator(s){
+  const panel=document.getElementById('tab-simulator');
+  if(!panel)return;
+  try{
+    const url=`${API}/api/hr-analytics/simulator?batter_id=${s.batter_id}&pitcher_id=${s.pitcher_id}&game_pk=${s.game_pk}&batter_name=${encodeURIComponent(s.batter)}`;
+    const r=await fetch(url);
+    const d=await r.json();
+    if(!d.success){panel.innerHTML=`<div class="error-box">${escapeHtml(d.error)}</div>`;return;}
+    renderSimulator(panel,d,s);
+  }catch(e){
+    panel.innerHTML=`<div class="error-box">Failed to load simulator: ${escapeHtml(e.message)}</div>`;
   }
 }
 
-function renderSimulator(panel, d, s) {
-  const dist   = d.mc_distribution || [];
-  const total  = dist.reduce((a,b) => a+b, 0) || 1;
-  const maxBar = Math.max(...dist, 1);
-
-  const histBars = dist.map((count, k) => {
-    const pct  = (count / total * 100).toFixed(1);
-    const h    = Math.max(4, Math.round(count / maxBar * 72));
-    const isHR = k >= 1;
-    return `
-    <div class="hist-bar-wrap" title="${k} HR: ${pct}% (${count} sims)">
-      <div class="hist-bar ${isHR ? 'hr-bar' : ''}" style="height:${h}px"></div>
+function renderSimulator(panel,d,s){
+  const dist=d.mc_distribution||[];
+  const total=dist.reduce((a,b)=>a+b,0)||1;
+  const maxBar=Math.max(...dist,1);
+  const histBars=dist.map((count,k)=>{
+    const pct=(count/total*100).toFixed(1);
+    const h=Math.max(4,Math.round(count/maxBar*72));
+    const isHR=k>=1;
+    return `<div class="hist-bar-wrap" title="${k} HR: ${pct}% (${count} sims)">
+      <div class="hist-bar ${isHR?'hr-bar':''}" style="height:${h}px"></div>
       <div class="hist-label">${k} HR</div>
       <div class="hist-count">${pct}%</div>
     </div>`;
   }).join('');
-
-  const inp = d.inputs || s;
-
-  panel.innerHTML = `
+  const inp=d.inputs||s;
+  panel.innerHTML=`
     <div class="section">
       <div class="section-title">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
         Monte Carlo Simulator (1,000 games × 4 AB)
       </div>
       <div class="prob-strip">
-        <div class="prob-box">
-          <div class="prob-big">${probPct(d.prob_hr_today)}</div>
-          <div class="prob-lbl">HR Probability (MC)</div>
-        </div>
-        <div class="prob-box">
-          <div class="prob-big">${probPct(d.prob_hr_closed)}</div>
-          <div class="prob-lbl">Closed Form (1–(1–p)⁴)</div>
-        </div>
-        <div class="prob-box">
-          <div class="prob-big">${(d.p_per_ab * 100).toFixed(2)}%</div>
-          <div class="prob-lbl">p HR per AB</div>
-        </div>
+        <div class="prob-box"><div class="prob-big">${probPct(d.prob_hr_today)}</div><div class="prob-lbl">HR Probability (MC)</div></div>
+        <div class="prob-box"><div class="prob-big">${probPct(d.prob_hr_closed)}</div><div class="prob-lbl">Closed Form (1–(1–p)⁴)</div></div>
+        <div class="prob-box"><div class="prob-big">${(d.p_per_ab*100).toFixed(2)}%</div><div class="prob-lbl">p HR per AB</div></div>
       </div>
       <div class="histogram">${histBars}</div>
       <div style="text-align:center;font-size:11px;color:var(--muted);margin-top:6px">Blue = 0 HR &nbsp; Green = 1+ HR &nbsp; 1,000 simulated games</div>
     </div>
-
     <div class="section">
       <div class="section-title">Key Inputs</div>
       <div class="inputs-grid">
-        <div class="input-item">
-          <div class="input-val">${fmt(inp.iso,3)}</div>
-          <div class="input-lbl">ISO</div>
-          <div class="input-note">Power (SLG–AVG)</div>
-        </div>
-        <div class="input-item">
-          <div class="input-val">${fmtPct(inp.barrel_pct)}</div>
-          <div class="input-lbl">Barrel%</div>
-          <div class="input-note">Lg avg 8.5%</div>
-        </div>
-        <div class="input-item">
-          <div class="input-val">${fmtPct(inp.hh_pct)}</div>
-          <div class="input-lbl">Hard Hit%</div>
-          <div class="input-note">EV ≥ 95 mph</div>
-        </div>
-        <div class="input-item">
-          <div class="input-val">${fmt(inp.avg_ev,1)} mph</div>
-          <div class="input-lbl">Avg EV</div>
-          <div class="input-note">Exit velocity</div>
-        </div>
-        <div class="input-item">
-          <div class="input-val">${fmt(inp.hr9_vs_hand,2)}</div>
-          <div class="input-lbl">Pit HR/9</div>
-          <div class="input-note">vs ${inp.batter_hand} bats</div>
-        </div>
-        <div class="input-item">
-          <div class="input-val">${inp.park_hr_idx}</div>
-          <div class="input-lbl">Park HR idx</div>
-          <div class="input-note">100 = neutral</div>
-        </div>
-        <div class="input-item">
-          <div class="input-val">${fmt(inp.mix_score,2)}×</div>
-          <div class="input-lbl">Mix Score</div>
-          <div class="input-note">1.0 = avg</div>
-        </div>
-        <div class="input-item">
-          <div class="input-val">${fmt(inp.xwoba,3)}</div>
-          <div class="input-lbl">xwOBA</div>
-          <div class="input-note">Expected</div>
-        </div>
+        <div class="input-item"><div class="input-val">${fmt(inp.iso,3)}</div><div class="input-lbl">ISO</div><div class="input-note">Power (SLG-AVG)</div></div>
+        <div class="input-item"><div class="input-val">${fmtPct(inp.barrel_pct)}</div><div class="input-lbl">Barrel%</div><div class="input-note">Lg avg 8.5%</div></div>
+        <div class="input-item"><div class="input-val">${fmtPct(inp.hh_pct)}</div><div class="input-lbl">Hard Hit%</div><div class="input-note">EV ≥ 95 mph</div></div>
+        <div class="input-item"><div class="input-val">${fmt(inp.avg_ev,1)} mph</div><div class="input-lbl">Avg EV</div><div class="input-note">Exit velocity</div></div>
+        <div class="input-item"><div class="input-val">${fmt(inp.hr9_vs_hand,2)}</div><div class="input-lbl">Pit HR/9</div><div class="input-note">vs ${s.batter_hand||'R'} bats</div></div>
+        <div class="input-item"><div class="input-val">${inp.park_hr_idx||100}</div><div class="input-lbl">Park HR idx</div><div class="input-note">100 = neutral</div></div>
+        <div class="input-item"><div class="input-val">${fmt(inp.mix_score,2)}×</div><div class="input-lbl">Mix Score</div><div class="input-note">1.0 = avg</div></div>
+        <div class="input-item"><div class="input-val">${fmt(inp.xwoba,3)}</div><div class="input-lbl">xwOBA</div><div class="input-note">Expected</div></div>
       </div>
-    </div>
-  `;
+    </div>`;
 }
 
 // ── Pitch Mix Tab ─────────────────────────────────────────────────────────────
+let pitchMixLoaded={};
 
-let pitchMixLoaded = {};
-
-async function loadPitchMix(s) {
-  const key = `${s.batter_id}-${s.pitcher_id}`;
-  if (pitchMixLoaded[key]) return;
-
-  const panel = document.getElementById('tab-pitchmix');
-  if (!panel) return;
-
-  try {
-    const url = `${API}/api/hr-analytics/pitch-mix/${s.batter_id}/${s.pitcher_id}`;
-    const r   = await fetch(url);
-    const d   = await r.json();
-
-    renderPitchMix(panel, d, s);
-    pitchMixLoaded[key] = true;
-  } catch(e) {
-    panel.innerHTML = `<div class="error-box">Pitch mix data unavailable: ${e.message}</div>`;
+async function loadPitchMix(s){
+  const key=`${s.batter_id}-${s.pitcher_id}`;
+  if(pitchMixLoaded[key])return;
+  const panel=document.getElementById('tab-pitchmix');
+  if(!panel)return;
+  try{
+    const url=`${API}/api/hr-analytics/pitch-mix/${s.batter_id}/${s.pitcher_id}`;
+    const r=await fetch(url);
+    const d=await r.json();
+    renderPitchMix(panel,d,s);
+    pitchMixLoaded[key]=true;
+  }catch(e){
+    panel.innerHTML=`<div class="error-box">Pitch mix data unavailable: ${escapeHtml(e.message)}</div>`;
   }
 }
 
-function renderPitchMix(panel, d, s) {
-  if (!d.success) {
-    panel.innerHTML = `<div class="error-box">${d.error}</div>`;
+function renderPitchMix(panel,d,s){
+  if(!d.success){
+    panel.innerHTML=`<div class="error-box">${escapeHtml(d.error||'Pitch mix data unavailable')}</div>`;
+    return;
+  }
+  const rows=d.pitch_table||[];
+  const mixScore=d.mix_score||1.0;
+  const mixClass=mixScore>=1.1?'mix-hi':mixScore>=0.9?'mix-mid':'mix-lo';
+  const mixLabel=mixScore>=1.1?'Favorable':mixScore>=0.9?'Neutral':'Unfavorable';
+
+  if(!rows.length){
+    panel.innerHTML=`<div class="section"><div class="section-title">Pitch Mix Matchup Score</div><div class="warning-box">⚠ Pitch arsenal outcome data not yet loaded. Using league average mix score (1.0×). Data loads daily at startup.</div></div>`;
     return;
   }
 
-  const rows = d.pitch_table || [];
-  const mixScore = d.mix_score || 1.0;
-  const mixClass = mixScore >= 1.1 ? 'mix-hi' : mixScore >= 0.9 ? 'mix-mid' : 'mix-lo';
-  const mixLabel = mixScore >= 1.1 ? 'Favorable' : mixScore >= 0.9 ? 'Neutral' : 'Unfavorable';
+  // Pitcher top-level weighted stats
+  let wAvg=0,wSlg=0,wWoba=0,totalW=0;
+  rows.forEach(r=>{
+    if(r.pit_ba!=null)wAvg+=r.pit_ba*r.usage;
+    if(r.pit_slg!=null)wSlg+=r.pit_slg*r.usage;
+    if(r.pit_woba!=null)wWoba+=r.pit_woba*r.usage;
+    totalW+=r.usage;
+  });
+  const pitAvgAll=totalW>0?(wAvg/totalW):null;
+  const pitSlgAll=totalW>0?(wSlg/totalW):null;
+  const pitWobaAll=totalW>0?(wWoba/totalW):null;
 
-  let tableHtml = '';
-  if (!rows.length) {
-    tableHtml = '<div class="warning-box">Pitch arsenal outcome data not yet loaded. Scores use a mix score of 1.0 (league average). Data loads daily at startup.</div>';
-  } else {
-    const rowsHtml = rows.slice(0,5).map(r => {
-      const adv = r.ratio >= 1.1 ? 'adv-hi' : r.ratio <= 0.9 ? 'adv-lo' : '';
-      const usageBar = `<div style="display:inline-block;width:${Math.round(r.usage)}px;height:4px;background:var(--accent2);border-radius:2px;margin-left:6px;vertical-align:middle"></div>`;
-      return `
-        <tr class="row-pit">
-          <td><span class="pitch-tag">${r.pitch}</span>${usageBar}</td>
-          <td>${r.usage.toFixed(0)}%</td>
-          <td>${fmt(r.pit_ba,3)}</td>
-          <td>${fmt(r.pit_slg,3)}</td>
-          <td>${fmt(r.pit_woba,3)}</td>
-          <td>${r.pit_whiff != null ? r.pit_whiff.toFixed(1)+'%' : '—'}</td>
-          <td>${r.pit_hh != null ? r.pit_hh.toFixed(1)+'%' : '—'}</td>
-        </tr>
-        <tr class="row-bat">
-          <td style="color:var(--muted);font-size:11px;font-weight:400;padding-left:20px">Batter vs</td>
-          <td>—</td>
-          <td>—</td>
-          <td class="${adv}">${fmt(r.bat_slg,3)}</td>
-          <td class="${adv}">${fmt(r.bat_woba,3)}</td>
-          <td class="${adv}">${r.bat_whiff != null ? r.bat_whiff.toFixed(1)+'%' : '—'}</td>
-          <td class="${adv}">${r.bat_hh != null ? r.bat_hh.toFixed(1)+'%' : '—'}</td>
-        </tr>
-        <tr class="row-sep"><td colspan="7"></td></tr>`;
-    }).join('');
+  const intelHtml=`<div class="pit-intel-strip">
+    ${pitAvgAll!=null?`<div class="pit-intel-chip ${pitAvgAll>=.310?'chip-bad':pitAvgAll>=.280?'chip-high':'chip-elite'}">Allows .${fmtStatVal(pitAvgAll)} AVG</div>`:''}
+    ${pitSlgAll!=null?`<div class="pit-intel-chip ${pitSlgAll>=.500?'chip-bad':pitSlgAll>=.430?'chip-high':'chip-elite'}">Allows .${fmtStatVal(pitSlgAll)} SLG</div>`:''}
+    ${pitWobaAll!=null?`<div class="pit-intel-chip ${pitWobaAll>=.360?'chip-bad':pitWobaAll>=.330?'chip-high':'chip-elite'}">Allows .${fmtStatVal(pitWobaAll)} wOBA</div>`:''}
+  </div>`;
 
-    tableHtml = `
-      <div style="overflow-x:auto">
-        <table class="pitch-table">
-          <thead>
-            <tr>
-              <th>Pitch</th><th>Usage</th><th>BA</th><th>SLG</th><th>wOBA</th><th>Whiff%</th><th>HH%</th>
-            </tr>
-          </thead>
-          <tbody>${rowsHtml}</tbody>
-        </table>
-      </div>
-      <div style="font-size:11px;color:var(--muted);margin-top:8px">
-        Top row = pitcher's stats allowed; Bottom row = this batter's stats vs that pitch type.
-        <span class="adv-hi">Green</span> = batter advantage, <span class="adv-lo">Blue</span> = disadvantage.
+  function isLethal(r){return r.pit_slg!=null&&r.bat_slg!=null&&r.pit_slg>=.500&&r.bat_slg>=.550;}
+  function isGood(r){return r.bat_slg!=null&&r.bat_slg>=.480&&!isLethal(r);}
+
+  function pitchBlockHtml(row){
+    const lethal=isLethal(row);
+    const good=!lethal&&isGood(row);
+    const bullets=[];
+    if(row.pit_slg!=null&&row.bat_slg!=null)
+      bullets.push(`Pitcher allows .${fmtStatVal(row.pit_slg)} SLG — batter slugs .${fmtStatVal(row.bat_slg)} on it`);
+    if(row.pit_woba!=null&&row.bat_woba!=null)
+      bullets.push(`Both sides post .${fmtStatVal(row.pit_woba)}/.${fmtStatVal(row.bat_woba)} wOBA on this pitch`);
+    if(row.pit_ba!=null&&row.bat_ba!=null)
+      bullets.push(`Easy contact both ways — pitcher allows .${fmtStatVal(row.pit_ba)} BA, batter hits .${fmtStatVal(row.bat_ba)}`);
+    else if(row.pit_ba!=null)
+      bullets.push(`Pitcher allows .${fmtStatVal(row.pit_ba)} BA on this pitch`);
+    const bulletsHtml=bullets.length
+      ?`<ul class="lethal-bullets">${bullets.map(b=>`<li>${escapeHtml(b)}</li>`).join('')}</ul>`:
+      '';
+    if(lethal){
+      return `<div class="lethal-block">
+        <div class="lethal-header">
+          <span class="lethal-pitch-name">${escapeHtml(row.pitch)}</span>
+          <span class="lethal-badge">💀 LETHAL COMBO</span>
+          <span class="lethal-usage">${row.usage.toFixed(1)}% of pitches</span>
+        </div>
+        ${bulletsHtml}
       </div>`;
+    }else if(good){
+      return `<div class="good-block">
+        <div class="good-header">
+          <span class="good-pitch-name">${escapeHtml(row.pitch)}</span>
+          <span class="good-badge">✓ GOOD MATCHUP</span>
+          <span class="lethal-usage">${row.usage.toFixed(1)}% of pitches</span>
+        </div>
+        ${bulletsHtml}
+      </div>`;
+    }else{
+      const adv=row.ratio>=1.1?'adv-hi':row.ratio<=0.9?'adv-lo':'';
+      const barW=Math.min(100,Math.round(row.usage||0));
+      return `<div class="pitch-section">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+          <span style="font-weight:600;font-size:13px">${escapeHtml(row.pitch)}</span>
+          <div class="usage-bar-wrap">
+            <div class="usage-bar" style="width:${barW}px"></div>
+            <span style="font-size:11px;color:var(--muted)">${row.usage.toFixed(1)}%</span>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;font-size:12px">
+          ${row.pit_ba!=null?`<div><div class="lbl">Allows BA</div><div>.${fmtStatVal(row.pit_ba)}</div></div>`:''}
+          ${row.pit_slg!=null?`<div><div class="lbl">Allows SLG</div><div>.${fmtStatVal(row.pit_slg)}</div></div>`:''}
+          ${row.pit_woba!=null?`<div><div class="lbl">Allows wOBA</div><div>.${fmtStatVal(row.pit_woba)}</div></div>`:''}
+          ${row.bat_slg!=null?`<div><div class="lbl">Batter SLG</div><div class="${adv}">.${fmtStatVal(row.bat_slg)}</div></div>`:''}
+          ${row.bat_woba!=null?`<div><div class="lbl">Batter wOBA</div><div class="${adv}">.${fmtStatVal(row.bat_woba)}</div></div>`:''}
+          ${row.pit_whiff!=null?`<div><div class="lbl">Whiff%</div><div>${fmtPct(row.pit_whiff)}</div></div>`:''}
+        </div>
+      </div>`;
+    }
   }
 
-  panel.innerHTML = `
+  const displayRows=rows.slice(0,4);
+  const pitchBlocksHtml=displayRows.map(pitchBlockHtml).join('');
+
+  panel.innerHTML=`
     <div class="section">
-      <div class="section-title">Pitch Mix Matchup Score</div>
-      <div style="margin-bottom:14px;display:flex;align-items:center;gap:12px">
+      <div class="pitch-mix-header">
         <span class="mix-score-badge ${mixClass}">${mixScore.toFixed(2)}× — ${mixLabel}</span>
-        <span style="font-size:12px;color:var(--muted)">
-          ${s.pitcher} vs ${s.batter}
-        </span>
+        <span style="font-size:12px;color:var(--muted)">${escapeHtml(s.pitcher)} vs ${escapeHtml(s.batter)}</span>
       </div>
-      <div style="font-size:12px;color:var(--muted);margin-bottom:12px">
-        Score = weighted avg of batter's SLG vs each pitch type relative to league average,
-        weighted by pitcher's usage. 1.0 = exactly league average.
+      <div style="font-size:12px;color:var(--muted);margin-bottom:14px">
+        Score = weighted avg of batter's SLG vs each pitch relative to league average. 1.0 = exactly league average.
       </div>
-      ${tableHtml}
-    </div>
-  `;
+      <div class="section-title">⚾ PITCHER IS GETTABLE — HERE'S WHY</div>
+      ${intelHtml}
+      <div class="section-title" style="margin-top:4px">PITCH-BY-PITCH MATCHUP (TOP ${displayRows.length})</div>
+      ${pitchBlocksHtml}
+      <div style="font-size:11px;color:var(--muted);margin-top:10px;text-align:right">Data sourced from Baseball Savant / MLB Statcast</div>
+    </div>`;
 }
 
 // ── H2H Tab ───────────────────────────────────────────────────────────────────
+let h2hLoaded={};
 
-let h2hLoaded = {};
-
-async function loadH2H(s) {
-  const key = `${s.batter_id}-${s.pitcher_id}`;
-  if (h2hLoaded[key]) return;
-
-  const panel = document.getElementById('tab-h2h');
-  if (!panel) return;
-
-  try {
-    const url = `${API}/api/bvp/${s.batter_id}/${s.pitcher_id}`;
-    const r   = await fetch(url);
-    const d   = await r.json();
-
-    renderH2H(panel, d, s);
-    h2hLoaded[key] = true;
-  } catch(e) {
-    panel.innerHTML = `<div class="error-box">H2H data unavailable: ${e.message}</div>`;
+async function loadH2H(s){
+  const key=`${s.batter_id}-${s.pitcher_id}`;
+  if(h2hLoaded[key])return;
+  const panel=document.getElementById('tab-h2h');
+  if(!panel)return;
+  try{
+    const url=`${API}/api/bvp/${s.batter_id}/${s.pitcher_id}`;
+    const r=await fetch(url);
+    const d=await r.json();
+    renderH2H(panel,d,s);
+    h2hLoaded[key]=true;
+  }catch(e){
+    panel.innerHTML=`<div class="error-box">H2H data unavailable: ${escapeHtml(e.message)}</div>`;
   }
 }
 
-function renderH2H(panel, d, s) {
-  if (!d.success && d.pa === 0) {
-    panel.innerHTML = `
-      <div class="section">
-        <div class="section-title">Career Head-to-Head</div>
-        <div class="warning-box">No career H2H data on record for this matchup.</div>
-      </div>`;
+function renderH2H(panel,d,s){
+  if(!d.success&&d.pa===0){
+    panel.innerHTML=`<div class="section"><div class="section-title">Career Head-to-Head</div><div class="warning-box">No career H2H data on record for this matchup.</div></div>`;
     return;
   }
-
-  const shrunk = d.shrunk || {};
-  const pa = d.pa || 0;
-  const paNote = pa < 25 ? 'Small sample — shrunk toward league avg' : pa < 50 ? 'Moderate sample' : 'Reliable sample';
-
-  panel.innerHTML = `
+  const shrunk=d.shrunk||{};
+  const pa=d.pa||0;
+  panel.innerHTML=`
     <div class="section">
-      <div class="section-title">Career Head-to-Head: ${s.batter} vs ${s.pitcher}</div>
-      ${pa < 25 ? `<div class="warning-box">⚠ Only ${pa} PA career H2H. Per research, signal emerges near 50-100 PA. Treat as flavor, not primary input.</div>` : ''}
+      <div class="section-title">Career Head-to-Head: ${escapeHtml(s.batter)} vs ${escapeHtml(s.pitcher)}</div>
+      ${pa<25?`<div class="warning-box">⚠ Only ${pa} PA career H2H. Per research, signal emerges near 50-100 PA. Treat as flavor, not primary input.</div>`:''}
       <div class="h2h-grid">
-        <div class="h2h-cell">
-          <div class="h2h-val">${pa}</div>
-          <div class="h2h-lbl">PA</div>
-        </div>
-        <div class="h2h-cell">
-          <div class="h2h-val">${d.hr ?? '—'}</div>
-          <div class="h2h-lbl">HR</div>
-        </div>
-        <div class="h2h-cell">
-          <div class="h2h-val">${d.avg != null ? d.avg.toFixed(3) : '—'}</div>
-          <div class="h2h-lbl">AVG</div>
-        </div>
-        <div class="h2h-cell">
-          <div class="h2h-val">${d.ops != null ? d.ops.toFixed(3) : '—'}</div>
-          <div class="h2h-lbl">OPS</div>
-        </div>
+        <div class="h2h-cell"><div class="h2h-val">${pa}</div><div class="h2h-lbl">PA</div></div>
+        <div class="h2h-cell"><div class="h2h-val">${d.hr??'—'}</div><div class="h2h-lbl">HR</div></div>
+        <div class="h2h-cell"><div class="h2h-val">${d.avg!=null?d.avg.toFixed(3):'—'}</div><div class="h2h-lbl">AVG</div></div>
+        <div class="h2h-cell"><div class="h2h-val">${d.ops!=null?d.ops.toFixed(3):'—'}</div><div class="h2h-lbl">OPS</div></div>
       </div>
-      ${d.bb != null ? `
-      <div style="display:flex;gap:16px;margin-top:12px;flex-wrap:wrap;font-size:13px">
-        <span><strong>${d.ab ?? '—'}</strong> <span style="color:var(--muted)">AB</span></span>
-        <span><strong>${d.h ?? '—'}</strong> <span style="color:var(--muted)">H</span></span>
-        <span><strong>${d.bb ?? '—'}</strong> <span style="color:var(--muted)">BB</span></span>
-        <span><strong>${d.so ?? '—'}</strong> <span style="color:var(--muted)">K</span></span>
-      </div>` : ''}
-      ${d.sample_note || d.note ? `<div class="sample-note">${d.sample_note || d.note}</div>` : ''}
+      ${d.bb!=null?`<div style="display:flex;gap:16px;margin-top:12px;flex-wrap:wrap;font-size:13px">
+        <span><strong>${d.ab??'—'}</strong> <span style="color:var(--muted)">AB</span></span>
+        <span><strong>${d.h??'—'}</strong> <span style="color:var(--muted)">H</span></span>
+        <span><strong>${d.bb??'—'}</strong> <span style="color:var(--muted)">BB</span></span>
+        <span><strong>${d.so??'—'}</strong> <span style="color:var(--muted)">K</span></span>
+      </div>`:''}
+      ${d.sample_note||d.note?`<div class="sample-note">${escapeHtml(d.sample_note||d.note)}</div>`:''}
     </div>
-
-    ${shrunk && Object.keys(shrunk).length ? `
+    ${shrunk&&Object.keys(shrunk).length?`
     <div class="section">
       <div class="section-title">Bayesian-Shrunk Rates</div>
       <div style="font-size:12px;color:var(--muted);margin-bottom:10px">Blends career H2H with league priors. Smaller samples lean more toward league averages.</div>
       <div class="h2h-grid">
-        <div class="h2h-cell">
-          <div class="h2h-val">${shrunk.woba != null ? shrunk.woba.toFixed(3) : '—'}</div>
-          <div class="h2h-lbl">wOBA (shrunk)</div>
-        </div>
-        <div class="h2h-cell">
-          <div class="h2h-val">${shrunk.avg != null ? shrunk.avg.toFixed(3) : '—'}</div>
-          <div class="h2h-lbl">AVG (shrunk)</div>
-        </div>
-        <div class="h2h-cell">
-          <div class="h2h-val">${d.reliability != null ? (d.reliability*100).toFixed(0)+'%' : '—'}</div>
-          <div class="h2h-lbl">Reliability</div>
-        </div>
-        <div class="h2h-cell">
-          <div class="h2h-val">${d.woba_edge != null ? (d.woba_edge >= 0 ? '+' : '') + d.woba_edge.toFixed(3) : '—'}</div>
-          <div class="h2h-lbl">wOBA Edge</div>
-        </div>
+        <div class="h2h-cell"><div class="h2h-val">${shrunk.woba!=null?shrunk.woba.toFixed(3):'—'}</div><div class="h2h-lbl">wOBA (shrunk)</div></div>
+        <div class="h2h-cell"><div class="h2h-val">${shrunk.avg!=null?shrunk.avg.toFixed(3):'—'}</div><div class="h2h-lbl">AVG (shrunk)</div></div>
+        <div class="h2h-cell"><div class="h2h-val">${d.reliability!=null?(d.reliability*100).toFixed(0)+'%':'—'}</div><div class="h2h-lbl">Reliability</div></div>
+        <div class="h2h-cell"><div class="h2h-val">${d.woba_edge!=null?(d.woba_edge>=0?'+':'')+d.woba_edge.toFixed(3):'—'}</div><div class="h2h-lbl">wOBA Edge</div></div>
       </div>
-    </div>` : ''}
-  `;
+    </div>`:''}`;
 }
 
 // ── Scouting Tab ──────────────────────────────────────────────────────────────
+let scoutingLoaded={};
 
-let scoutingLoaded = {};
-
-async function loadScouting(batterId, pitcherId, gamePk) {
-  const key = `${batterId}-${pitcherId}`;
-  if (scoutingLoaded[key]) return;
-
-  const panel = document.getElementById('tab-scouting');
-  if (!panel) return;
-
-  panel.innerHTML = `
-    <div class="section">
-      <div class="section-title">AI Scouting Report</div>
-      <div class="scouting-loader"><div class="spinner"></div> Generating AI analysis…</div>
-    </div>`;
-
-  try {
-    const url = `${API}/api/hr-analytics/scouting/${batterId}/${pitcherId}/${gamePk||0}`;
-    const r   = await fetch(url);
-    const d   = await r.json();
-
-    if (!d.success) {
-      panel.innerHTML = `
-        <div class="section">
-          <div class="section-title">AI Scouting Report</div>
-          <div class="error-box">${d.error}</div>
-          <div class="scouting-actions">
-            <button class="btn btn-primary" onclick="scoutingLoaded['${key}']=false;loadScouting(${batterId},${pitcherId},${gamePk})">Retry</button>
-          </div>
-        </div>`;
+async function loadScouting(batterId,pitcherId,gamePk){
+  const key=`${batterId}-${pitcherId}`;
+  if(scoutingLoaded[key])return;
+  const panel=document.getElementById('tab-scouting');
+  if(!panel)return;
+  panel.innerHTML=`<div class="section"><div class="section-title">AI Scouting Report</div><div class="scouting-loader"><div class="spinner"></div> Generating AI analysis…</div></div>`;
+  try{
+    const url=`${API}/api/hr-analytics/scouting/${batterId}/${pitcherId}/${gamePk||0}`;
+    const r=await fetch(url);
+    const d=await r.json();
+    if(!d.success){
+      panel.innerHTML=`<div class="section"><div class="section-title">AI Scouting Report</div><div class="error-box">${escapeHtml(d.error)}</div>
+        <div class="scouting-actions"><button class="btn btn-primary" onclick="scoutingLoaded['${key}']=false;loadScouting(${batterId},${pitcherId},${gamePk})">Retry</button></div></div>`;
       return;
     }
-
-    scoutingLoaded[key] = true;
-    renderScouting(panel, d, batterId, pitcherId, gamePk);
-  } catch(e) {
-    panel.innerHTML = `
-      <div class="section">
-        <div class="section-title">AI Scouting Report</div>
-        <div class="error-box">Failed: ${e.message}</div>
-      </div>`;
+    scoutingLoaded[key]=true;
+    renderScouting(panel,d,batterId,pitcherId,gamePk);
+  }catch(e){
+    panel.innerHTML=`<div class="section"><div class="section-title">AI Scouting Report</div><div class="error-box">Failed: ${escapeHtml(e.message)}</div></div>`;
   }
 }
 
-function renderScouting(panel, d, batterId, pitcherId, gamePk) {
-  const report = d.report || '';
-  const verdict = report.startsWith('BET') ? 'BET' : report.startsWith('LEAN') ? 'LEAN' : report.startsWith('PASS') ? 'PASS' : '';
-  const payload = d.payload || {};
-
-  panel.innerHTML = `
+function renderScouting(panel,d,batterId,pitcherId,gamePk){
+  const report=d.report||'';
+  const verdict=report.startsWith('**BET**')||report.startsWith('BET')?'BET':
+                report.startsWith('**LEAN**')||report.startsWith('LEAN')?'LEAN':
+                report.startsWith('**PASS**')||report.startsWith('PASS')?'PASS':'';
+  const payload=d.payload||{};
+  panel.innerHTML=`
     <div class="section">
       <div class="section-title">AI Scouting Report</div>
-      ${verdict ? `<span class="bet-tag bet-${verdict}">${verdict}</span>` : ''}
-      <div class="scouting-text" style="margin-top:${verdict?'10px':'0'}">${report}</div>
+      ${verdict?`<span class="bet-tag bet-${verdict}">${verdict}</span>`:''}
+      <div class="scouting-text" style="margin-top:${verdict?'10px':'0'}">${escapeHtml(report)}</div>
       <div class="scouting-actions">
         <button class="btn" onclick="scoutingLoaded['${batterId}-${pitcherId}']=false;loadScouting(${batterId},${pitcherId},${gamePk})">Regenerate</button>
         <button class="btn" onclick="copyReport(this)">Copy Report</button>
       </div>
-      ${d.cached ? '<div style="font-size:11px;color:var(--muted);margin-top:8px">Cached for today\'s matchup.</div>' : ''}
+      ${d.cached?'<div style="font-size:11px;color:var(--muted);margin-top:8px">Cached for today\'s matchup.</div>':''}
     </div>
-
-    ${payload.model ? `
-    <div class="section">
-      <div class="section-title">Model Snapshot</div>
-      <div class="inputs-grid">
-        <div class="input-item">
-          <div class="input-val">${payload.model.prob_hr_today_pct}%</div>
-          <div class="input-lbl">HR Probability</div>
-        </div>
-        <div class="input-item">
-          <div class="input-val">${payload.model.score_0_100}/100</div>
-          <div class="input-lbl">Composite Score</div>
-        </div>
-        <div class="input-item">
-          <div class="input-val">${payload.model.p_per_ab}%</div>
-          <div class="input-lbl">p per AB</div>
-        </div>
-        <div class="input-item">
-          <div class="input-val">${payload.model.platoon||'—'}</div>
-          <div class="input-lbl">Platoon</div>
-        </div>
-      </div>
-    </div>` : ''}
-  `;
+    ${payload.model?`<div class="section"><div class="section-title">Model Snapshot</div><div class="inputs-grid">
+      <div class="input-item"><div class="input-val">${payload.model.prob_hr_today_pct}%</div><div class="input-lbl">HR Probability</div></div>
+      <div class="input-item"><div class="input-val">${payload.model.score_0_100}/100</div><div class="input-lbl">Composite Score</div></div>
+      <div class="input-item"><div class="input-val">${payload.model.p_per_ab}%</div><div class="input-lbl">p per AB</div></div>
+      <div class="input-item"><div class="input-val">${payload.model.platoon||'—'}</div><div class="input-lbl">Platoon</div></div>
+    </div></div>`:''}`;
 }
 
-function copyReport(btn) {
-  const txt = document.querySelector('.scouting-text');
-  if (!txt) return;
-  navigator.clipboard.writeText(txt.textContent || '').then(() => {
-    btn.textContent = 'Copied!';
-    setTimeout(() => btn.textContent = 'Copy Report', 2000);
+function copyReport(btn){
+  const text=btn.closest('.section')?.querySelector('.scouting-text')?.textContent||'';
+  navigator.clipboard.writeText(text).then(()=>{
+    btn.textContent='Copied!';
+    setTimeout(()=>btn.textContent='Copy Report',2000);
   });
 }
 
-// ── Init ──────────────────────────────────────────────────────────────────────
-
-setHeaderDate();
+// ── Boot ──────────────────────────────────────────────────────────────────────
 loadDailyScores();
-// Show odds panel for "all" (none)
-renderMajorMarketsPanelHR(null);
 </script>
-<script src="/static/mobile-nav.js" defer></script>
 </body>
 </html>
