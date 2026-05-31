@@ -22073,7 +22073,50 @@ def api_hr_daily_scores():
             home_prob = (teams.get("home") or {}).get("probablePitcher") or {}
             away_prob = (teams.get("away") or {}).get("probablePitcher") or {}
 
-            game_time = (game.get("gameDate") or "")[-8:-3] if game.get("gameDate") else ""
+            # ── Parse game time in ET ──────────────────────────────────────
+            game_date_raw = game.get("gameDate") or ""
+            game_date_iso = game_date_raw
+            game_time_et  = ""
+            try:
+                dt_utc_g  = datetime.fromisoformat(game_date_raw.replace("Z", "+00:00"))
+                dt_et_g   = dt_utc_g.astimezone(ET)
+                game_time_et = dt_et_g.strftime("%-I:%M %p ET")
+            except Exception:
+                game_time_et = game_date_raw[-8:-3] if len(game_date_raw) >= 8 else ""
+            game_time = game_time_et  # keep legacy field
+
+            # ── Venue & dome check ─────────────────────────────────────────
+            ven_obj  = game.get("venue") or {}
+            venue_id = ven_obj.get("id")
+            is_dome  = bool(venue_id and venue_id in DOME_VENUES)
+
+            # ── Weather (skip for domes) ───────────────────────────────────
+            wx = {"temp": None, "condition": None, "wind": None, "wind_dir": None, "rain_chance": None}
+            if not is_dome:
+                try:
+                    vloc   = ven_obj.get("location") or {}
+                    coords = vloc.get("defaultCoordinates") or {}
+                    lat    = coords.get("latitude")
+                    lon    = coords.get("longitude")
+                    raw_wx = game.get("weather") or {}
+                    if lat and lon:
+                        try:
+                            utc_offset    = VENUE_UTC_OFFSET.get(venue_id, -5)
+                            from datetime import timedelta as _td
+                            game_hour_loc = (datetime.fromisoformat(game_date_raw.replace("Z", "+00:00")) + _td(hours=utc_offset)).hour
+                        except Exception:
+                            game_hour_loc = 13
+                        wx = get_weather(lat, lon, game_hour_loc, venue_id=venue_id)
+                    elif raw_wx:
+                        wx = {
+                            "temp":        raw_wx.get("temp"),
+                            "condition":   raw_wx.get("condition"),
+                            "wind":        raw_wx.get("wind"),
+                            "wind_dir":    "",
+                            "rain_chance": raw_wx.get("precipitationChance"),
+                        }
+                except Exception:
+                    pass
 
             # Fetch lineup for this game
             lineup_data = {}
@@ -22086,7 +22129,10 @@ def api_hr_daily_scores():
                     lineup_data = lr.json()
             except Exception:
                 pass
-
+            away_confirmed = bool(lineup_data.get("away_confirmed") or len(lineup_data.get("away") or []) >= 9)
+            home_confirmed = bool(lineup_data.get("home_confirmed") or len(lineup_data.get("home") or []) >= 9)
+            game_label = f"{away_name} @ {home_name} \u2022 {game_time_et}"
+            
             for side in ("away", "home"):
                 batters   = lineup_data.get(side, [])
                 opp_prob  = home_prob if side == "away" else away_prob
@@ -22095,7 +22141,8 @@ def api_hr_daily_scores():
                 team_tid  = away_tid if side == "away" else home_tid
                 team_name = away_name if side == "away" else home_name
                 opp_team  = home_name if side == "away" else away_name
-
+                lineup_confirmed = away_confirmed if side == "away" else home_confirmed
+                
                 if not opp_pid:
                     continue
 
@@ -22123,7 +22170,23 @@ def api_hr_daily_scores():
                         bat_pid_str = str(svb.get("sv_pid", "") or bid).strip()
                         svp = sv_pitcher(opp_name) if opp_name else {}
                         pit_pid_str = str(svp.get("sv_pid", "") or opp_pid).strip()
-                        mix_score, _ = _compute_pitch_mix_score(pit_pid_str, bat_pid_str)
+                        mix_score, pitch_rows _ = _compute_pitch_mix_score(pit_pid_str, bat_pid_str)
+
+                        # Top 4 pitches sorted by usage
+                        pitch_table = sorted(
+                            pitch_rows or [],
+                            key=lambda r: r.get("usage", 0),
+                            reverse=True
+                        )[:4]
+
+                        # Pitches where both pitcher allows ≥.500 SLG AND batter slugs ≥.550
+                        lethal_pitches = [
+                            r.get("pitch") for r in pitch_table
+                            if r.get("pit_slg") is not None
+                            and r.get("bat_slg") is not None
+                            and r["pit_slg"] >= 0.500
+                            and r["bat_slg"] >= 0.550
+                        ]
 
                         pit_hand = "R"
                         try:
@@ -22156,9 +22219,23 @@ def api_hr_daily_scores():
                             "barrel_pct":  round(barrel_pct, 1),
                             "hh_pct":      round(hh_pct, 1),
                             "hr9_vs_hand": round(hr9_vs_hand, 3),
-                            "park_hr_idx": park_hr_idx,
-                            "mix_score":   mix_score,
+                            "park_hr_idx":      park_hr_idx,
+                            "mix_score":        mix_score,
+                            "game_time_et":     game_time_et,
+                            "game_date_iso":    game_date_iso,
+                            "game_label":       game_label,
+                            "pitch_table":      pitch_table,
+                            "lethal_pitches":   lethal_pitches,
+                            "lineup_confirmed": lineup_confirmed,
+                            "is_dome":          is_dome,
+                            "weather_temp":     wx.get("temp"),
+                            "weather_condition": wx.get("condition"),
+                            "weather_wind":     wx.get("wind"),
+                            "weather_wind_dir": wx.get("wind_dir"),
+                            "weather_rain":     wx.get("rain_chance"),
                         })
+                            
+                        
                     except Exception:
                         continue
 
