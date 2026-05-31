@@ -56,137 +56,93 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .batter-card{padding:14px 16px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .15s;position:relative}
 .batter-card:hover,.batter-card.selected{background:#1c2128}
 .batter-card.selected{border-left:3px solid var(--accent2)}
-.batter-card-top{display:grid;grid-template-columns:36px 1fr auto;gap:10px;align-items:flex-start}
-.rank-badge{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0}
+.batter-card-top{display:flex;align-items:flex-start;gap:12px}
+.rank-badge{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0;margin-top:2px}
 .rank-1{background:var(--gold);color:#000}
 .rank-2{background:#c0c0c0;color:#000}
 .rank-3{background:#cd7f32;color:#fff}
-.rank-other{background:var(--border);color:var(--muted)}
-
-.batter-info{min-width:0}
-.batter-name{font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:6px}
-.batter-meta{font-size:11.5px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.batter-stats{font-size:11px;color:var(--muted);margin-top:4px;display:flex;flex-wrap:wrap;gap:0 10px}
-.batter-stats span{white-space:nowrap}
-
-/* ── Lineup / Weather badges ── */
-.confirmed-badge{display:inline-flex;align-items:center;gap:3px;font-size:9.5px;font-weight:700;padding:2px 6px;border-radius:4px;letter-spacing:.3px;flex-shrink:0}
-.confirmed-yes{background:#3fb95022;color:#3fb950;border:1px solid #3fb95044}
-.confirmed-no{background:#d2992222;color:#d29922;border:1px solid #d2992244}
-.weather-badge{display:inline-flex;align-items:center;gap:4px;font-size:10px;color:var(--muted);margin-top:3px}
-
-/* ── Score block ── */
-.score-block{text-align:center;flex-shrink:0;display:flex;flex-direction:column;align-items:center;gap:2px}
-.score-val{font-size:24px;font-weight:800;line-height:1}
+.rank-other{background:var(--card);border:1px solid var(--border);color:var(--muted)}
+.batter-info{flex:1;min-width:0}
+.batter-name{font-size:15px;font-weight:600;color:var(--text);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.batter-meta{font-size:12px;color:var(--muted);margin-top:2px}
+.batter-stats{display:flex;gap:10px;font-size:11px;color:var(--muted);margin-top:4px;flex-wrap:wrap}
+.batter-stats span{background:var(--card);border:1px solid var(--border);padding:2px 6px;border-radius:4px}
+.score-block{display:flex;flex-direction:column;align-items:center;flex-shrink:0;min-width:58px}
+.score-val{font-size:26px;font-weight:900;line-height:1}
+.score-label{font-size:10px;color:var(--muted);margin-top:2px}
 .score-hi{color:var(--score-hi)}
 .score-mid{color:var(--score-mid)}
 .score-lo{color:var(--score-lo)}
-.score-label{font-size:9px;color:var(--muted);letter-spacing:.5px;text-transform:uppercase}
-.prob-badge{font-size:11px;background:#1f6feb22;color:var(--cold);border:1px solid #1f6feb44;padding:2px 8px;border-radius:10px;margin-top:2px;white-space:nowrap;font-weight:600}
+.prob-badge{font-size:11px;font-weight:700;margin-top:4px;background:rgba(31,111,235,.15);border:1px solid rgba(31,111,235,.3);color:var(--cold);padding:2px 8px;border-radius:10px;white-space:nowrap}
+.confirmed-badge{font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px}
+.confirmed-yes{background:#3fb95022;color:#3fb950;border:1px solid #3fb95044}
+.confirmed-no{background:rgba(210,153,34,.1);color:var(--warn);border:1px solid rgba(210,153,34,.3)}
+.weather-badge{font-size:11px;color:var(--muted);margin-top:3px}
+.lethal-row{display:flex;gap:6px;flex-wrap:wrap;margin-top:5px}
+.lethal-mini{font-size:10px;background:var(--lethal-bg);border:1px solid rgba(255,68,68,.3);color:var(--hot);padding:2px 6px;border-radius:4px}
+.ai-blurb{margin-top:6px;font-size:12px;color:var(--muted);background:rgba(31,111,235,.08);border-left:3px solid var(--accent2);padding:6px 10px;border-radius:4px;line-height:1.5}
+.ai-tag{font-size:10px;font-weight:700;background:var(--accent2);color:#fff;padding:1px 5px;border-radius:3px;margin-right:5px}
 
-/* ── AI blurb ── */
-.ai-blurb{font-size:11.5px;line-height:1.45;color:#cfd6dd;margin-top:8px;padding:6px 8px;background:rgba(127,156,255,0.08);border-left:2px solid var(--accent2);border-radius:3px}
-.ai-tag{display:inline-block;font-size:9px;font-weight:700;color:var(--accent2);background:rgba(127,156,255,0.18);padding:1px 5px;border-radius:3px;margin-right:6px;vertical-align:middle;letter-spacing:0.5px}
-
-/* ── Lethal Combo mini-badge on card ── */
-.lethal-row{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
-.lethal-mini{display:inline-flex;align-items:center;gap:3px;font-size:10px;font-weight:700;background:var(--lethal-bg);color:var(--lethal);border:1px solid rgba(255,68,68,.3);padding:2px 7px;border-radius:4px}
-
-/* ── Empty / Loader ── */
+/* ── Empty / loader ── */
 .empty-state{padding:40px;text-align:center;color:var(--muted);font-size:14px}
-.loader{display:flex;align-items:center;justify-content:center;padding:40px;color:var(--muted);font-size:14px;gap:10px}
-.spinner{width:20px;height:20px;border:2px solid var(--border);border-top-color:var(--accent2);border-radius:50%;animation:spin .7s linear infinite;flex-shrink:0}
+.error-box{background:rgba(248,81,73,.1);border:1px solid rgba(248,81,73,.3);color:var(--hot);padding:12px;border-radius:6px;font-size:13px}
+.warning-box{background:rgba(210,153,34,.1);border:1px solid rgba(210,153,34,.3);color:var(--warn);padding:10px;border-radius:6px;font-size:12px}
+.loader{padding:40px;text-align:center;color:var(--muted);display:flex;align-items:center;justify-content:center;gap:10px}
+.spinner{width:20px;height:20px;border:2px solid var(--border);border-top-color:var(--accent2);border-radius:50%;animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 
 /* ── Right panel ── */
-.right-panel{padding:20px;overflow-y:auto}
-.detail-placeholder{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--muted);text-align:center;gap:16px}
-.detail-placeholder svg{opacity:.3}
-.detail-placeholder h3{font-size:18px;font-weight:500}
-.detail-placeholder p{font-size:13px;max-width:300px;line-height:1.6}
+.right-panel{display:flex;flex-direction:column;background:var(--bg)}
+.detail-placeholder{display:flex;align-items:center;justify-content:center;height:100%;color:var(--muted);font-size:14px;padding:40px;text-align:center}
+#detailContent{display:none;overflow-y:auto;flex:1;padding:20px}
 
-/* ── Detail header ── */
-.detail-header{display:flex;align-items:flex-start;gap:16px;margin-bottom:20px;flex-wrap:wrap}
-.detail-name{font-size:24px;font-weight:700}
-.detail-sub{font-size:14px;color:var(--muted);margin-top:4px}
-.score-ring{width:76px;height:76px;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;border:3px solid;flex-shrink:0}
-.score-ring.hi{border-color:var(--score-hi)}
-.score-ring.mid{border-color:var(--score-mid)}
-.score-ring.lo{border-color:var(--score-lo)}
-.score-ring .val{font-size:24px;font-weight:800;line-height:1}
-.score-ring .lbl{font-size:10px;color:var(--muted)}
+/* ── Detail card styles ── */
+.detail-header{display:flex;align-items:flex-start;gap:16px;margin-bottom:16px}
+.score-ring{width:64px;height:64px;border-radius:50%;border:3px solid;display:flex;flex-direction:column;align-items:center;justify-content:center;flex-shrink:0}
+.ring-hi{border-color:var(--score-hi)}
+.ring-mid{border-color:var(--score-mid)}
+.ring-lo{border-color:var(--score-lo)}
+.score-ring .val{font-size:20px;font-weight:900;line-height:1}
+.score-ring .lbl{font-size:9px;color:var(--muted)}
+.detail-name{font-size:20px;font-weight:700}
+.detail-sub{font-size:13px;color:var(--muted);margin-top:4px}
 
-/* ── Weather row in detail ── */
-.weather-row{display:flex;align-items:center;gap:16px;padding:8px 12px;background:var(--card);border:1px solid var(--border);border-radius:8px;margin-bottom:14px;flex-wrap:wrap;font-size:13px}
-.weather-item{display:flex;align-items:center;gap:5px;color:var(--muted)}
-.weather-item strong{color:var(--text)}
-.weather-wind-warn{color:var(--warn);font-weight:600}
+/* ── Tab nav ── */
+.tab-nav{display:flex;border-bottom:1px solid var(--border);margin-bottom:16px;gap:0}
+.tab-btn{padding:8px 16px;font-size:13px;font-weight:600;color:var(--muted);background:none;border:none;border-bottom:2px solid transparent;cursor:pointer;transition:color .15s}
+.tab-btn.active{color:var(--text);border-bottom-color:var(--accent2)}
+.tab-btn:hover{color:var(--text)}
+.tab-pane{display:none}
+.tab-pane.active{display:block}
 
-/* ── Lineup confirmed strip ── */
-.lineup-strip{display:flex;align-items:center;gap:8px;padding:6px 12px;background:var(--card);border:1px solid var(--border);border-radius:8px;margin-bottom:14px;font-size:12px}
-.lineup-confirmed{color:var(--score-hi);display:flex;align-items:center;gap:5px;font-weight:600}
-.lineup-projected{color:var(--warn);display:flex;align-items:center;gap:5px;font-weight:600}
-
-/* ── Tabs ── */
-.tabs{display:flex;gap:2px;border-bottom:1px solid var(--border);margin-bottom:16px;overflow-x:auto}
-.tab{padding:8px 16px;font-size:13px;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;transition:all .15s;white-space:nowrap;user-select:none}
-.tab.active,.tab:hover{color:var(--text);border-bottom-color:var(--accent2)}
-
-.tab-panel{display:none}
-.tab-panel.active{display:block}
-
-/* ── Sections ── */
-.section{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px}
-.section-title{font-size:13px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px;display:flex;align-items:center;gap:8px}
-.section-title svg{opacity:.7}
-
-/* ── Key inputs grid ── */
-.inputs-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px}
-.input-item{background:#0d1117;border:1px solid var(--border);border-radius:6px;padding:10px;text-align:center}
-.input-val{font-size:18px;font-weight:700;color:var(--text)}
-.input-lbl{font-size:11px;color:var(--muted);margin-top:3px}
-.input-note{font-size:10px;color:var(--muted);margin-top:2px}
-
-/* ── Prob strip ── */
-.prob-strip{display:flex;gap:12px;margin-bottom:12px;flex-wrap:wrap}
-.prob-box{flex:1;min-width:120px;background:#0d1117;border:1px solid var(--border);border-radius:8px;padding:14px;text-align:center}
-.prob-big{font-size:32px;font-weight:800;color:var(--cold)}
-.prob-lbl{font-size:12px;color:var(--muted);margin-top:4px}
-
-/* ── Histogram ── */
-.histogram{display:flex;align-items:flex-end;gap:6px;height:80px;padding:4px 0}
-.hist-bar-wrap{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px}
-.hist-bar{width:100%;background:var(--accent2);border-radius:4px 4px 0 0;transition:height .4s;min-height:2px}
-.hist-bar.hr-bar{background:var(--score-hi)}
-.hist-label{font-size:10px;color:var(--muted)}
-.hist-count{font-size:9px;color:var(--muted)}
+/* ── Simulator ── */
+.sim-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px}
+.sim-cell{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center}
+.sim-val{font-size:22px;font-weight:800;color:var(--cold)}
+.sim-lbl{font-size:11px;color:var(--muted);margin-top:4px}
+.sim-bar-wrap{margin:12px 0}
+.sim-bar-row{display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:12px}
+.sim-bar-track{flex:1;height:8px;background:var(--card);border-radius:4px;overflow:hidden;position:relative}
+.sim-bar-fill-0{background:var(--accent2)}
+.sim-bar-fill-1{background:var(--score-hi)}
+.sim-bar-fill-2{background:var(--score-mid)}
+.sim-bar-fill-3,.sim-bar-fill-4{background:var(--hot)}
+.key-inputs-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.ki-cell{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:8px}
+.ki-val{font-size:15px;font-weight:700}
+.ki-lbl{font-size:10px;color:var(--muted);margin-top:2px}
 
 /* ── Pitch mix ── */
-.pitch-section{margin-bottom:12px}
-.pitch-mix-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px}
-.mix-score-badge{display:inline-block;padding:4px 12px;border-radius:20px;font-size:13px;font-weight:700;border:1px solid}
-.mix-hi{background:#3fb95022;border-color:#3fb95066;color:#3fb950}
-.mix-mid{background:#d2992222;border-color:#d2992266;color:#d29922}
-.mix-lo{background:#8b949e22;border-color:#8b949e66;color:#8b949e}
-
-/* Pitcher top-level stats */
-.pit-intel-strip{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}
-.pit-intel-chip{padding:5px 10px;border-radius:6px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:5px}
-.chip-elite{background:#3fb95022;border:1px solid #3fb95066;color:#3fb950}
-.chip-high{background:#d2992222;border:1px solid #d2992266;color:#d29922}
-.chip-bad{background:rgba(248,81,73,.12);border:1px solid rgba(248,81,73,.3);color:#f85149}
-
-/* Lethal combo block */
-.lethal-block{background:var(--lethal-bg);border:1px solid rgba(255,68,68,.35);border-radius:8px;padding:12px;margin-bottom:10px}
+.section{margin-bottom:20px}
+.section-title{font-size:11px;font-weight:700;letter-spacing:.8px;color:var(--muted);text-transform:uppercase;margin-bottom:10px}
+.pitch-section{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:8px}
+.lethal-block{background:var(--lethal-bg);border:1px solid rgba(255,68,68,.4);border-radius:8px;padding:12px;margin-bottom:8px}
 .lethal-header{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap}
-.lethal-badge{background:#ff4444;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;letter-spacing:.5px}
+.lethal-badge{background:#ff4444;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px}
 .lethal-pitch-name{font-size:15px;font-weight:700;color:var(--hot)}
 .lethal-usage{font-size:11px;color:var(--muted);margin-left:auto}
-.lethal-bullets{list-style:none;display:flex;flex-direction:column;gap:4px}
-.lethal-bullets li{font-size:12px;color:#cfd6dd;padding-left:14px;position:relative}
-.lethal-bullets li::before{content:"▶";position:absolute;left:0;font-size:9px;color:var(--hot);top:2px}
-
-/* Good matchup block */
+.lethal-bullets{list-style:none;font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px}
+.lethal-bullets li::before{content:"▶ ";color:var(--hot)}
 .good-block{background:#3fb95012;border:1px solid rgba(63,185,80,.3);border-radius:8px;padding:12px;margin-bottom:10px}
 .good-header{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap}
 .good-badge{background:#3fb950;color:#000;font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px}
@@ -195,7 +151,7 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 /* usage bar */
 .usage-bar-wrap{display:flex;align-items:center;gap:6px}
 .usage-bar{height:4px;background:var(--accent2);border-radius:2px}
-.adv-hi{color:var(--hot);font-weight:700}
+.adv-hi{color:var(--score-hi);font-weight:700}
 .adv-lo{color:var(--cold)}
 .lbl{font-size:10px;color:var(--muted)}
 
@@ -203,100 +159,104 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .h2h-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
 .h2h-cell{background:#0d1117;border:1px solid var(--border);border-radius:6px;padding:8px;text-align:center}
 .h2h-val{font-size:16px;font-weight:700}
-.h2h-lbl{font-size:11px;color:var(--muted);margin-top:2px}
-.sample-note{font-size:11px;color:var(--warn);margin-top:8px;padding:6px 10px;background:#d2992210;border-radius:4px}
-.warning-box{background:#d2992210;border:1px solid #d2992244;border-radius:6px;padding:8px 10px;font-size:12px;color:var(--warn);margin-bottom:10px}
-.error-box{background:rgba(248,81,73,.1);border:1px solid rgba(248,81,73,.3);border-radius:6px;padding:8px 10px;font-size:12px;color:var(--danger)}
+
+/* ── Weather / lineup ── */
+.lineup-strip{margin-bottom:10px;padding:6px 0}
+.lineup-confirmed{font-size:12px;color:#3fb950;font-weight:600}
+.lineup-projected{font-size:12px;color:var(--warn)}
+.weather-row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;padding:8px;background:var(--card);border-radius:6px;border:1px solid var(--border)}
+.weather-item{font-size:12px;color:var(--muted)}
+.weather-wind-warn{color:var(--warn);font-weight:600}
+.game-time{color:var(--cold);font-weight:600}
+
+/* ── Pit-intel strip ── */
+.pit-intel-strip{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
+.pit-intel-chip{font-size:11px;font-weight:700;padding:3px 10px;border-radius:10px}
+.chip-elite{background:#3fb95022;border:1px solid #3fb95066;color:#3fb950}
+.chip-high{background:#d2992222;border:1px solid #d2992266;color:#d29922}
+.chip-bad{background:rgba(248,81,73,.12);border:1px solid rgba(248,81,73,.3);color:#f85149}
+
+/* ── Mix score badge ── */
+.pitch-mix-header{display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap}
+.mix-score-badge{font-size:13px;font-weight:700;padding:4px 12px;border-radius:10px}
+.mix-hi{background:#3fb95022;color:#3fb950;border:1px solid #3fb95066}
+.mix-mid{background:rgba(210,153,34,.1);color:var(--warn);border:1px solid rgba(210,153,34,.3)}
+.mix-lo{background:rgba(248,81,73,.1);color:var(--hot);border:1px solid rgba(248,81,73,.3)}
 
 /* ── Scouting report ── */
-.scouting-text{font-size:14px;line-height:1.7;color:var(--text);white-space:pre-wrap}
-.scouting-loader{color:var(--muted);font-size:13px;display:flex;align-items:center;gap:8px}
-.bet-tag{display:inline-block;padding:3px 10px;border-radius:4px;font-weight:700;font-size:12px;margin-right:8px}
-.bet-BET{background:#3fb95022;color:#3fb950;border:1px solid #3fb95044}
-.bet-LEAN{background:#d2992222;color:#d29922;border:1px solid #d2992244}
-.bet-PASS{background:#f8514922;color:#f85149;border:1px solid #f8514944}
-.scouting-actions{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
-.btn{padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:12px;cursor:pointer;transition:all .15s}
-.btn:hover{background:#21262d}
-.btn-primary{background:var(--accent2);border-color:var(--accent2);color:#fff}
-.btn-primary:hover{background:#388bfd}
-
-/* ── Plat badges ── */
-.plat-good{background:#3fb95022;color:#3fb950;border:1px solid #3fb95044}
-.plat-bad{background:rgba(248,81,73,.12);color:#f85149;border:1px solid rgba(248,81,73,.3)}
+.scouting-box{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;font-size:13px;line-height:1.7;color:var(--muted);margin-bottom:16px}
+.snap-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.snap-cell{background:#0d1117;border:1px solid var(--border);border-radius:6px;padding:10px;text-align:center}
+.snap-val{font-size:18px;font-weight:700;color:var(--text)}
+.snap-lbl{font-size:10px;color:var(--muted);margin-top:3px}
+.regen-btn{background:var(--card);border:1px solid var(--border);color:var(--text);padding:6px 14px;border-radius:6px;font-size:12px;cursor:pointer;margin-top:10px;transition:border-color .2s}
+.regen-btn:hover{border-color:var(--accent2)}
 </style>
 </head>
 <body>
-
-<!-- ── NAV ── -->
 <nav>
   <div class="brand">
-    <img src="/static/logo.png" onerror="this.style.display='none'" alt="MLB Hub">
+    <img src="/static/logo.png" alt="MLB Analytics Hub" onerror="this.style.display='none'">
     <div class="brand-text">
       <span class="brand-name">MLB ANALYTICS HUB</span>
-      <span class="brand-sub">HR Probability Rankings</span>
+      <span class="brand-sub">Powered by Statcast + FanGraphs</span>
     </div>
   </div>
   <div class="nav-r">
     <div class="live-dot"><div class="dot"></div>LIVE</div>
+    <a href="/dashboard">Dashboard</a>
+    <a href="/props">Props</a>
+    <a href="/bvp">BvP</a>
   </div>
 </nav>
 
-<!-- ── LAYOUT ── -->
 <div class="layout">
-
-  <!-- LEFT PANEL -->
+  <!-- ── Left: Leaderboard ── -->
   <div class="left-panel">
     <div class="panel-header">
-      <span class="panel-title">🔥 Today's HR Rankings</span>
-      <span class="panel-sub" id="lastRefreshed">—</span>
+      <span class="panel-title">Today's HR Rankings</span>
+      <span class="panel-sub" id="lastRefreshed"></span>
       <button class="refresh-btn" onclick="loadDailyScores(true)">↻ Refresh</button>
     </div>
-
-    <!-- Game dropdown filter sorted by start time -->
     <div class="game-filter-bar">
-      <label for="gameSelect">Game:</label>
-      <select id="gameSelect" class="game-select" onchange="filterByGame(this.value)">
+      <label>Game:</label>
+      <select class="game-select" id="gameSelect" onchange="filterByGame(this.value)">
         <option value="all">⚾ All Games</option>
       </select>
     </div>
-
     <div class="leaderboard" id="leaderboard">
       <div class="loader"><div class="spinner"></div> Loading rankings…</div>
     </div>
   </div>
 
-  <!-- RIGHT PANEL -->
-  <div class="right-panel" id="rightPanel">
+  <!-- ── Right: Detail ── -->
+  <div class="right-panel">
     <div class="detail-placeholder" id="placeholderMsg">
-      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-        <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
-      </svg>
-      <h3>Select a batter</h3>
-      <p>Click any player in the rankings to see their full HR analysis, pitch mix, H2H splits, and AI scouting report.</p>
+      ← Select a batter to see detailed HR analysis
     </div>
-    <div id="detailContent" style="display:none"></div>
+    <div id="detailContent"></div>
   </div>
-
 </div>
 
 <script>
-const API = window.location.origin;
-let allScores        = [];
-let aiBlurbs         = {};
-let activeGameFilter = 'all';
-let selectedBatter   = null;
-let gameWeather      = {};  // {gamePk: {temp, wind_speed, wind_dir, rain_chance, condition, is_dome}}
-let gameLineups      = {};  // {gamePk: {confirmed}}
-let gameMeta         = [];  // sorted list of {game_pk, label, sort_key}
+const API=window.location.origin;
+let allScores=[];
+let aiBlurbs={};
+let gameMeta=[];
+let gameWeather={};
+let gameLineups={};
+let activeGameFilter='all';
+let selectedBatter=null;
 
-// ── Formatters ────────────────────────────────────────────────────────────────
-function fmt(v,d=2){return v!=null&&v!==''?Number(v).toFixed(d):'—'}
-function fmtPct(v){return v!=null&&v!==''?Number(v).toFixed(1)+'%':'—'}
-function probPct(v){return v!=null?Math.round(v*100)+'%':'—'}
-function escapeHtml(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
-function scoreClass(s){return s>=75?'score-hi':s>=50?'score-mid':'score-lo'}
-function scoreRingClass(s){return s>=75?'hi':s>=50?'mid':'lo'}
+function escapeHtml(s){
+  if(s==null)return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function fmt(v,d=3){if(v==null)return '—';return Number(v).toFixed(d);}
+function fmtPct(v){if(v==null)return '—';return Number(v).toFixed(1)+'%';}
+function probPct(v){if(v==null)return '—';return (Number(v)*100).toFixed(1)+'%';}
+function scoreClass(s){return s>=80?'score-hi':s>=60?'score-mid':'score-lo';}
+function scoreRingClass(s){return s>=80?'ring-hi':s>=60?'ring-mid':'ring-lo';}
 function fmtStatVal(v){if(v==null)return '—';return Math.round(v*1000).toString().padStart(3,'0');}
 
 function windIcon(deg){
@@ -371,8 +331,8 @@ function buildGameMeta(scores){
     const timeET=s.game_time_et||parseGameTimeET(rawIso)||s.game_time||'';
     const awayName=s.team||'';
     const homeName=s.opp_team||'';
-    const matchup=awayName&&homeName?`${awayName} @ ${homeName}`:pk;
-    const label=timeET?`${timeET} — ${matchup}`:matchup;
+    const matchup=s.game_label||(awayName&&homeName?`${awayName} @ ${homeName}`:pk);
+    const label=s.game_label||(timeET?`${timeET} — ${matchup}`:matchup);
 
     const wx=s.weather_temp!=null?{
       temp:s.weather_temp,
@@ -533,117 +493,130 @@ function renderDetailSkeleton(s){
     </div>
     ${lineupSection}
     ${weatherSection}
-    <div class="tabs" id="detailTabs">
-      <div class="tab active" onclick="switchTab('simulator',this)">Simulator</div>
-      <div class="tab" onclick="switchTab('pitchmix',this)">Pitch Mix</div>
-      <div class="tab" onclick="switchTab('h2h',this)">H2H</div>
-      <div class="tab" onclick="switchTab('scouting',this)">AI Report</div>
+    <div class="tab-nav">
+      <button class="tab-btn active" onclick="switchTab('sim',this)">Simulator</button>
+      <button class="tab-btn" onclick="switchTab('mix',this)">Pitch Mix</button>
+      <button class="tab-btn" onclick="switchTab('h2h',this)">H2H</button>
+      <button class="tab-btn" onclick="switchTab('scout',this)">AI Report</button>
     </div>
-    <div id="tab-simulator" class="tab-panel active">
-      <div class="loader"><div class="spinner"></div> Running Monte Carlo…</div>
+    <div id="tab-sim" class="tab-pane active">
+      <div class="loader"><div class="spinner"></div> Running simulator…</div>
     </div>
-    <div id="tab-pitchmix" class="tab-panel">
-      <div class="loader"><div class="spinner"></div> Loading pitch mix data…</div>
+    <div id="tab-mix" class="tab-pane">
+      <div class="loader"><div class="spinner"></div> Loading pitch mix…</div>
     </div>
-    <div id="tab-h2h" class="tab-panel">
-      <div class="loader"><div class="spinner"></div> Loading H2H splits…</div>
+    <div id="tab-h2h" class="tab-pane">
+      <div class="loader"><div class="spinner"></div> Loading H2H data…</div>
     </div>
-    <div id="tab-scouting" class="tab-panel">
-      <div class="section">
-        <div class="section-title">AI Scouting Report</div>
-        <div class="scouting-actions">
-          <button class="btn btn-primary" onclick="loadScouting(${s.batter_id},${s.pitcher_id},${s.game_pk})">Generate Report</button>
-        </div>
-      </div>
+    <div id="tab-scout" class="tab-pane">
+      <div class="loader"><div class="spinner"></div> Generating AI report…</div>
     </div>`;
 }
 
-function switchTab(name,el){
-  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
-  document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
-  el.classList.add('active');
-  document.getElementById('tab-'+name).classList.add('active');
-  if(name==='pitchmix'&&selectedBatter)loadPitchMix(selectedBatter);
-  if(name==='h2h'&&selectedBatter)loadH2H(selectedBatter);
-  if(name==='scouting'&&selectedBatter)loadScouting(selectedBatter.batter_id,selectedBatter.pitcher_id,selectedBatter.game_pk);
+function switchTab(name,btn){
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('.tab-pane').forEach(p=>p.classList.remove('active'));
+  btn.classList.add('active');
+  const pane=document.getElementById('tab-'+name);
+  if(pane)pane.classList.add('active');
 }
 
-// ── Simulator Tab ─────────────────────────────────────────────────────────────
+// ── Load simulator + pitch mix + h2h + scouting ──────────────────────────────
 async function loadSimulator(s){
-  const panel=document.getElementById('tab-simulator');
-  if(!panel)return;
+  // Simulator
+  const simPanel=document.getElementById('tab-sim');
   try{
-    const url=`${API}/api/hr-analytics/simulator?batter_id=${s.batter_id}&pitcher_id=${s.pitcher_id}&game_pk=${s.game_pk}&batter_name=${encodeURIComponent(s.batter)}`;
-    const r=await fetch(url);
+    const r=await fetch(`${API}/api/hr-analytics/simulator?batter_id=${s.batter_id}&pitcher_id=${s.pitcher_id}&game_pk=${s.game_pk}`);
     const d=await r.json();
-    if(!d.success){panel.innerHTML=`<div class="error-box">${escapeHtml(d.error)}</div>`;return;}
-    renderSimulator(panel,d,s);
+    if(simPanel)renderSimulator(simPanel,d,s);
   }catch(e){
-    panel.innerHTML=`<div class="error-box">Failed to load simulator: ${escapeHtml(e.message)}</div>`;
+    if(simPanel)simPanel.innerHTML=`<div class="error-box">Simulator error: ${escapeHtml(e.message)}</div>`;
+  }
+
+  // Pitch mix
+  const mixPanel=document.getElementById('tab-mix');
+  try{
+    const r=await fetch(`${API}/api/hr-analytics/pitch-mix/${s.batter_id}/${s.pitcher_id}`);
+    const d=await r.json();
+    if(mixPanel)renderPitchMix(mixPanel,d,s);
+  }catch(e){
+    if(mixPanel)mixPanel.innerHTML=`<div class="error-box">Pitch mix error: ${escapeHtml(e.message)}</div>`;
+  }
+
+  // H2H
+  const h2hPanel=document.getElementById('tab-h2h');
+  try{
+    const r=await fetch(`${API}/api/bvp/${s.batter_id}/${s.pitcher_id}`);
+    const d=await r.json();
+    if(h2hPanel)renderH2H(h2hPanel,d,s);
+  }catch(e){
+    if(h2hPanel)h2hPanel.innerHTML=`<div class="error-box">H2H error: ${escapeHtml(e.message)}</div>`;
+  }
+
+  // Scouting
+  const scoutPanel=document.getElementById('tab-scout');
+  try{
+    const r=await fetch(`${API}/api/hr-analytics/scouting/${s.batter_id}/${s.pitcher_id}/${s.game_pk}`);
+    const d=await r.json();
+    if(scoutPanel)renderScouting(scoutPanel,d,s);
+  }catch(e){
+    if(scoutPanel)scoutPanel.innerHTML=`<div class="error-box">Scouting error: ${escapeHtml(e.message)}</div>`;
   }
 }
 
 function renderSimulator(panel,d,s){
-  const dist=d.mc_distribution||[];
-  const total=dist.reduce((a,b)=>a+b,0)||1;
-  const maxBar=Math.max(...dist,1);
-  const histBars=dist.map((count,k)=>{
-    const pct=(count/total*100).toFixed(1);
-    const h=Math.max(4,Math.round(count/maxBar*72));
-    const isHR=k>=1;
-    return `<div class="hist-bar-wrap" title="${k} HR: ${pct}% (${count} sims)">
-      <div class="hist-bar ${isHR?'hr-bar':''}" style="height:${h}px"></div>
-      <div class="hist-label">${k} HR</div>
-      <div class="hist-count">${pct}%</div>
+  if(!d.success){
+    panel.innerHTML=`<div class="error-box">${escapeHtml(d.error||'Simulator unavailable')}</div>`;
+    return;
+  }
+  const mc=d.mc_prob||d.prob_hr||0;
+  const cf=d.cf_prob||0;
+  const pab=d.p_per_ab||0;
+  const dist=d.distribution||{};
+  const keys=Object.keys(dist).map(Number).sort((a,b)=>a-b);
+  const barColors=['sim-bar-fill-0','sim-bar-fill-1','sim-bar-fill-2','sim-bar-fill-3','sim-bar-fill-4'];
+
+  const barsHtml=keys.map(k=>{
+    const pct=Math.round((dist[k]||0)*100);
+    const w=Math.round((dist[k]||0)*200);
+    return `<div class="sim-bar-row">
+      <span style="width:36px;text-align:right;font-weight:600">${k} HR</span>
+      <div class="sim-bar-track"><div class="${barColors[Math.min(k,4)]}" style="height:100%;width:${w}px;border-radius:4px"></div></div>
+      <span style="width:40px">${pct}%</span>
     </div>`;
   }).join('');
-  const inp=d.inputs||s;
+
+  const inp=d.inputs||{};
+  const kiRows=[
+    {v:inp.iso!=null?fmt(inp.iso,3):'—',l:'ISO (Power)'},
+    {v:inp.barrel_pct!=null?fmtPct(inp.barrel_pct):'—',l:'Barrel%'},
+    {v:inp.hh_pct!=null?fmtPct(inp.hh_pct):'—',l:'Hard Hit%'},
+    {v:inp.avg_ev!=null?inp.avg_ev.toFixed(1)+' mph':'—',l:'Avg EV'},
+    {v:inp.hr9_vs_hand!=null?inp.hr9_vs_hand.toFixed(2):'—',l:'Pit HR/9 vs Hand'},
+    {v:inp.park_hr_idx!=null?inp.park_hr_idx:'—',l:'Park HR Index'},
+    {v:inp.mix_score!=null?inp.mix_score.toFixed(2)+'×':'—',l:'Mix Score'},
+    {v:inp.xwoba!=null?fmt(inp.xwoba,3):'—',l:'xwOBA'},
+  ];
+
   panel.innerHTML=`
     <div class="section">
-      <div class="section-title">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-        Monte Carlo Simulator (1,000 games × 4 AB)
+      <div class="section-title">Monte Carlo Simulator (1,000 games × 4 AB)</div>
+      <div class="sim-grid">
+        <div class="sim-cell"><div class="sim-val">${probPct(mc)}</div><div class="sim-lbl">HR Probability (MC)</div></div>
+        <div class="sim-cell"><div class="sim-val">${probPct(cf)}</div><div class="sim-lbl">Closed Form (1−(1−p)⁴)</div></div>
       </div>
-      <div class="prob-strip">
-        <div class="prob-box"><div class="prob-big">${probPct(d.prob_hr_today)}</div><div class="prob-lbl">HR Probability (MC)</div></div>
-        <div class="prob-box"><div class="prob-big">${probPct(d.prob_hr_closed)}</div><div class="prob-lbl">Closed Form (1–(1–p)⁴)</div></div>
-        <div class="prob-box"><div class="prob-big">${(d.p_per_ab*100).toFixed(2)}%</div><div class="prob-lbl">p HR per AB</div></div>
+      <div class="sim-cell" style="margin-bottom:12px;padding:10px 12px">
+        <div class="sim-val">${probPct(pab)}</div>
+        <div class="sim-lbl">p HR per AB</div>
       </div>
-      <div class="histogram">${histBars}</div>
-      <div style="text-align:center;font-size:11px;color:var(--muted);margin-top:6px">Blue = 0 HR &nbsp; Green = 1+ HR &nbsp; 1,000 simulated games</div>
+      <div class="sim-bar-wrap">${barsHtml}</div>
     </div>
     <div class="section">
       <div class="section-title">Key Inputs</div>
-      <div class="inputs-grid">
-        <div class="input-item"><div class="input-val">${fmt(inp.iso,3)}</div><div class="input-lbl">ISO</div><div class="input-note">Power (SLG-AVG)</div></div>
-        <div class="input-item"><div class="input-val">${fmtPct(inp.barrel_pct)}</div><div class="input-lbl">Barrel%</div><div class="input-note">Lg avg 8.5%</div></div>
-        <div class="input-item"><div class="input-val">${fmtPct(inp.hh_pct)}</div><div class="input-lbl">Hard Hit%</div><div class="input-note">EV ≥ 95 mph</div></div>
-        <div class="input-item"><div class="input-val">${fmt(inp.avg_ev,1)} mph</div><div class="input-lbl">Avg EV</div><div class="input-note">Exit velocity</div></div>
-        <div class="input-item"><div class="input-val">${fmt(inp.hr9_vs_hand,2)}</div><div class="input-lbl">Pit HR/9</div><div class="input-note">vs ${s.batter_hand||'R'} bats</div></div>
-        <div class="input-item"><div class="input-val">${inp.park_hr_idx||100}</div><div class="input-lbl">Park HR idx</div><div class="input-note">100 = neutral</div></div>
-        <div class="input-item"><div class="input-val">${fmt(inp.mix_score,2)}×</div><div class="input-lbl">Mix Score</div><div class="input-note">1.0 = avg</div></div>
-        <div class="input-item"><div class="input-val">${fmt(inp.xwoba,3)}</div><div class="input-lbl">xwOBA</div><div class="input-note">Expected</div></div>
+      <div class="key-inputs-grid">
+        ${kiRows.map(r=>`<div class="ki-cell"><div class="ki-val">${escapeHtml(String(r.v))}</div><div class="ki-lbl">${escapeHtml(r.l)}</div></div>`).join('')}
       </div>
     </div>`;
-}
-
-// ── Pitch Mix Tab ─────────────────────────────────────────────────────────────
-let pitchMixLoaded={};
-
-async function loadPitchMix(s){
-  const key=`${s.batter_id}-${s.pitcher_id}`;
-  if(pitchMixLoaded[key])return;
-  const panel=document.getElementById('tab-pitchmix');
-  if(!panel)return;
-  try{
-    const url=`${API}/api/hr-analytics/pitch-mix/${s.batter_id}/${s.pitcher_id}`;
-    const r=await fetch(url);
-    const d=await r.json();
-    renderPitchMix(panel,d,s);
-    pitchMixLoaded[key]=true;
-  }catch(e){
-    panel.innerHTML=`<div class="error-box">Pitch mix data unavailable: ${escapeHtml(e.message)}</div>`;
-  }
 }
 
 function renderPitchMix(panel,d,s){
@@ -758,122 +731,63 @@ function renderPitchMix(panel,d,s){
     </div>`;
 }
 
-// ── H2H Tab ───────────────────────────────────────────────────────────────────
-let h2hLoaded={};
-
-async function loadH2H(s){
-  const key=`${s.batter_id}-${s.pitcher_id}`;
-  if(h2hLoaded[key])return;
-  const panel=document.getElementById('tab-h2h');
-  if(!panel)return;
-  try{
-    const url=`${API}/api/bvp/${s.batter_id}/${s.pitcher_id}`;
-    const r=await fetch(url);
-    const d=await r.json();
-    renderH2H(panel,d,s);
-    h2hLoaded[key]=true;
-  }catch(e){
-    panel.innerHTML=`<div class="error-box">H2H data unavailable: ${escapeHtml(e.message)}</div>`;
-  }
-}
-
 function renderH2H(panel,d,s){
-  if(!d.success&&d.pa===0){
-    panel.innerHTML=`<div class="section"><div class="section-title">Career Head-to-Head</div><div class="warning-box">No career H2H data on record for this matchup.</div></div>`;
-    return;
-  }
-  const shrunk=d.shrunk||{};
-  const pa=d.pa||0;
+  const stats=d.stats||d||{};
+  const pa=stats.pa||stats.PA||0;
+  const hr=stats.hr||stats.HR||0;
+  const avg=stats.avg||stats.AVG||0;
+  const ops=stats.ops||stats.OPS||0;
+  const note=pa<50?`<div class="warning-box" style="margin-bottom:10px">⚠ Only ${pa} PA career H2H. Per research, signal emerges near 50-100 PA. Treat as flavor, not primary input.</div>`:'';
   panel.innerHTML=`
     <div class="section">
       <div class="section-title">Career Head-to-Head: ${escapeHtml(s.batter)} vs ${escapeHtml(s.pitcher)}</div>
-      ${pa<25?`<div class="warning-box">⚠ Only ${pa} PA career H2H. Per research, signal emerges near 50-100 PA. Treat as flavor, not primary input.</div>`:''}
+      ${note}
       <div class="h2h-grid">
-        <div class="h2h-cell"><div class="h2h-val">${pa}</div><div class="h2h-lbl">PA</div></div>
-        <div class="h2h-cell"><div class="h2h-val">${d.hr??'—'}</div><div class="h2h-lbl">HR</div></div>
-        <div class="h2h-cell"><div class="h2h-val">${d.avg!=null?d.avg.toFixed(3):'—'}</div><div class="h2h-lbl">AVG</div></div>
-        <div class="h2h-cell"><div class="h2h-val">${d.ops!=null?d.ops.toFixed(3):'—'}</div><div class="h2h-lbl">OPS</div></div>
+        <div class="h2h-cell"><div class="h2h-val">${pa}</div><div style="font-size:11px;color:var(--muted)">PA</div></div>
+        <div class="h2h-cell"><div class="h2h-val">${hr}</div><div style="font-size:11px;color:var(--muted)">HR</div></div>
+        <div class="h2h-cell"><div class="h2h-val">${fmt(avg,3)}</div><div style="font-size:11px;color:var(--muted)">AVG</div></div>
+        <div class="h2h-cell"><div class="h2h-val">${fmt(ops,3)}</div><div style="font-size:11px;color:var(--muted)">OPS</div></div>
       </div>
-      ${d.bb!=null?`<div style="display:flex;gap:16px;margin-top:12px;flex-wrap:wrap;font-size:13px">
-        <span><strong>${d.ab??'—'}</strong> <span style="color:var(--muted)">AB</span></span>
-        <span><strong>${d.h??'—'}</strong> <span style="color:var(--muted)">H</span></span>
-        <span><strong>${d.bb??'—'}</strong> <span style="color:var(--muted)">BB</span></span>
-        <span><strong>${d.so??'—'}</strong> <span style="color:var(--muted)">K</span></span>
-      </div>`:''}
-      ${d.sample_note||d.note?`<div class="sample-note">${escapeHtml(d.sample_note||d.note)}</div>`:''}
-    </div>
-    ${shrunk&&Object.keys(shrunk).length?`
+      ${pa<50?`<div style="font-size:11px;color:var(--warn);margin-top:8px">Only ${pa} PA — insufficient sample.</div>`:''}
+    </div>`;
+}
+
+function renderScouting(panel,d,s){
+  const report=d.report||d.text||d.scouting_report||'';
+  const snap=d.snapshot||d.model_snapshot||{};
+  const snapHtml=Object.keys(snap).length?`
     <div class="section">
-      <div class="section-title">Bayesian-Shrunk Rates</div>
-      <div style="font-size:12px;color:var(--muted);margin-bottom:10px">Blends career H2H with league priors. Smaller samples lean more toward league averages.</div>
-      <div class="h2h-grid">
-        <div class="h2h-cell"><div class="h2h-val">${shrunk.woba!=null?shrunk.woba.toFixed(3):'—'}</div><div class="h2h-lbl">wOBA (shrunk)</div></div>
-        <div class="h2h-cell"><div class="h2h-val">${shrunk.avg!=null?shrunk.avg.toFixed(3):'—'}</div><div class="h2h-lbl">AVG (shrunk)</div></div>
-        <div class="h2h-cell"><div class="h2h-val">${d.reliability!=null?(d.reliability*100).toFixed(0)+'%':'—'}</div><div class="h2h-lbl">Reliability</div></div>
-        <div class="h2h-cell"><div class="h2h-val">${d.woba_edge!=null?(d.woba_edge>=0?'+':'')+d.woba_edge.toFixed(3):'—'}</div><div class="h2h-lbl">wOBA Edge</div></div>
+      <div class="section-title">Model Snapshot</div>
+      <div class="snap-grid">
+        ${snap.hr_prob!=null?`<div class="snap-cell"><div class="snap-val">${probPct(snap.hr_prob)}</div><div class="snap-lbl">HR Probability</div></div>`:''}
+        ${snap.composite_score!=null?`<div class="snap-cell"><div class="snap-val">${snap.composite_score}/100</div><div class="snap-lbl">Composite Score</div></div>`:''}
+        ${snap.p_per_ab!=null?`<div class="snap-cell"><div class="snap-val">${probPct(snap.p_per_ab)}</div><div class="snap-lbl">p per AB</div></div>`:''}
+        ${snap.platoon!=null?`<div class="snap-cell"><div class="snap-val">${snap.platoon}</div><div class="snap-lbl">Platoon</div></div>`:''}
       </div>
-    </div>`:''}`;
-}
+    </div>`:'';
 
-// ── Scouting Tab ──────────────────────────────────────────────────────────────
-let scoutingLoaded={};
-
-async function loadScouting(batterId,pitcherId,gamePk){
-  const key=`${batterId}-${pitcherId}`;
-  if(scoutingLoaded[key])return;
-  const panel=document.getElementById('tab-scouting');
-  if(!panel)return;
-  panel.innerHTML=`<div class="section"><div class="section-title">AI Scouting Report</div><div class="scouting-loader"><div class="spinner"></div> Generating AI analysis…</div></div>`;
-  try{
-    const url=`${API}/api/hr-analytics/scouting/${batterId}/${pitcherId}/${gamePk||0}`;
-    const r=await fetch(url);
-    const d=await r.json();
-    if(!d.success){
-      panel.innerHTML=`<div class="section"><div class="section-title">AI Scouting Report</div><div class="error-box">${escapeHtml(d.error)}</div>
-        <div class="scouting-actions"><button class="btn btn-primary" onclick="scoutingLoaded['${key}']=false;loadScouting(${batterId},${pitcherId},${gamePk})">Retry</button></div></div>`;
-      return;
-    }
-    scoutingLoaded[key]=true;
-    renderScouting(panel,d,batterId,pitcherId,gamePk);
-  }catch(e){
-    panel.innerHTML=`<div class="section"><div class="section-title">AI Scouting Report</div><div class="error-box">Failed: ${escapeHtml(e.message)}</div></div>`;
-  }
-}
-
-function renderScouting(panel,d,batterId,pitcherId,gamePk){
-  const report=d.report||'';
-  const verdict=report.startsWith('**BET**')||report.startsWith('BET')?'BET':
-                report.startsWith('**LEAN**')||report.startsWith('LEAN')?'LEAN':
-                report.startsWith('**PASS**')||report.startsWith('PASS')?'PASS':'';
-  const payload=d.payload||{};
   panel.innerHTML=`
     <div class="section">
       <div class="section-title">AI Scouting Report</div>
-      ${verdict?`<span class="bet-tag bet-${verdict}">${verdict}</span>`:''}
-      <div class="scouting-text" style="margin-top:${verdict?'10px':'0'}">${escapeHtml(report)}</div>
-      <div class="scouting-actions">
-        <button class="btn" onclick="scoutingLoaded['${batterId}-${pitcherId}']=false;loadScouting(${batterId},${pitcherId},${gamePk})">Regenerate</button>
-        <button class="btn" onclick="copyReport(this)">Copy Report</button>
-      </div>
-      ${d.cached?'<div style="font-size:11px;color:var(--muted);margin-top:8px">Cached for today\'s matchup.</div>':''}
+      <div class="scouting-box">${escapeHtml(report||'No report available.')}</div>
+      <button class="regen-btn" onclick="regenScouting(${JSON.stringify(s).replace(/"/g,'&quot;')})">↻ Regenerate</button>
     </div>
-    ${payload.model?`<div class="section"><div class="section-title">Model Snapshot</div><div class="inputs-grid">
-      <div class="input-item"><div class="input-val">${payload.model.prob_hr_today_pct}%</div><div class="input-lbl">HR Probability</div></div>
-      <div class="input-item"><div class="input-val">${payload.model.score_0_100}/100</div><div class="input-lbl">Composite Score</div></div>
-      <div class="input-item"><div class="input-val">${payload.model.p_per_ab}%</div><div class="input-lbl">p per AB</div></div>
-      <div class="input-item"><div class="input-val">${payload.model.platoon||'—'}</div><div class="input-lbl">Platoon</div></div>
-    </div></div>`:''}`;
+    ${snapHtml}`;
 }
 
-function copyReport(btn){
-  const text=btn.closest('.section')?.querySelector('.scouting-text')?.textContent||'';
-  navigator.clipboard.writeText(text).then(()=>{
-    btn.textContent='Copied!';
-    setTimeout(()=>btn.textContent='Copy Report',2000);
-  });
+async function regenScouting(s){
+  const panel=document.getElementById('tab-scout');
+  if(panel)panel.innerHTML='<div class="loader"><div class="spinner"></div> Regenerating…</div>';
+  try{
+    const r=await fetch(`${API}/api/hr-analytics/scouting/${s.batter_id}/${s.pitcher_id}/${s.game_pk}?regen=1`);
+    const d=await r.json();
+    if(panel)renderScouting(panel,d,s);
+  }catch(e){
+    if(panel)panel.innerHTML=`<div class="error-box">Error: ${escapeHtml(e.message)}</div>`;
+  }
 }
 
-// ── Boot ──────────────────────────────────────────────────────────────────────
+// ──────────────────────────────────────────────────────
 loadDailyScores();
 </script>
 </body>
