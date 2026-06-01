@@ -371,7 +371,10 @@ def xgb_hit_prob(batter: dict, pitcher: dict) -> Optional[float]:
         if X is None:
             return None
         prob = float(model.predict_proba(X)[0, 1])
+        # Temporary: log raw prob to confirm model is outputting extreme values
+        print(f"[xgb DEBUG] RAW prob before clamp = {prob:.4f}")
         return round(min(0.97, max(0.03, prob)), 4)
+        
     except Exception:
         return None
 
