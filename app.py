@@ -54,6 +54,11 @@ except ImportError:
     def enrich_batter(d, **k):   return d
     def enrich_pitcher(d, **k):  return d
 
+# Force-load XGBoost models at startup instead of lazily on first request
+if _XGB_AVAILABLE:
+    from xgb_prop_scorer import _load_models as _xgb_load_models
+    _xgb_load_models()
+    
 # Stacked calibrator — combines XGB+BATX into a single verdict + 95% CI.
 # Graceful fallback to deterministic logistic blend when no trained isotonic
 # is on disk (typical until enough graded picks accumulate).
