@@ -23557,6 +23557,37 @@ def api_matchup_vertex():
             bq_stats.get("pitcher_name") or "",
         )
 
+        # ── XGB hit probability ──────────────────────────────────────────────────
+        xgb_hit_p    = None
+        xgb_hit_cov  = 0.0
+        if xgb_ready("hits"):
+            try:
+               _batter_name  = bq_stats.get("batter_name") or ""
+               _pitcher_name = bq_stats.get("pitcher_name") or ""
+               _fg_b  = fg_batter(_batter_name)  or {}
+               _sv_b  = sv_batter(_batter_name)  or {}
+               _fg_p  = fg_pitcher(_pitcher_name) or {}
+               _sv_p  = sv_pitcher(_pitcher_name) or {}
+               # rolling form from the in-memory form cache (same source as BvP page)
+               _form  = _fetch_rolling_form(batter_id, False) or {}
+               _xgb_bdict = {
+                   **_fg_b, **_sv_b,
+                   "name":      _batter_name,
+                   "bats":      bq_stats.get("bats") or _fg_b.get("fg_bats") or "R",
+                   "l7Hits":    _form.get("l7Hits"),
+                   "l14Hits":   _form.get("l14Hits"),
+                   "l7HitRate": _form.get("l7HitRate"),
+               }
+               _xgb_pdict = {
+                   **_fg_p, **_sv_p,
+                   "name":      _pitcher_name,
+                   "pitchHand": bq_stats.get("throws") or _fg_p.get("fg_throws") or "R",
+               }
+               xgb_hit_p   = xgb_hit_prob(_xgb_bdict, _xgb_pdict)
+               xgb_hit_cov = _xgb_hit_coverage(_xgb_bdict, _xgb_pdict) if xgb_hit_p is not None else 0.0
+           except Exception:
+               pass
+        
         # Deterministic recommendation from the full-game MC. Used both as the
         # final fallback when Gemini fails and as a prior in the prompt so the
         # LLM has a model-aligned anchor instead of inventing PASS from a thin
@@ -23598,6 +23629,12 @@ def api_matchup_vertex():
                 f"{json.dumps(prior_block, default=str, ensure_ascii=True)}\n\n"
                 f"Similar-batter prior (pitcher vs similar-profile batters):\n"
                 f"{json.dumps(pitcher_prior_block, default=str, ensure_ascii=True)}\n\n"
+                f"XGBoost hit model — P(1+ hit, calibrated): "
+                f"{round(xgb_hit_p, 3) if xgb_hit_p is not None else 'unavailable'} "
+                f"(input coverage: {round(xgb_hit_cov, 2) if xgb_hit_p is not None else 'n/a'}). "
+                f"When XGBoost is available and coverage >= 0.50, treat it as a strong signal "
+                f"that should anchor the hits verdict — do NOT override a strong XGB probability "
+                f"(>0.68 → OVER, <0.45 → UNDER) to PASS without explicit contradicting context.\n\n"
                 f"FULL-GAME Monte Carlo — this is the prop scope "
                 f"({(mc_full_game or {}).get('nSims')} sims, {(mc_full_game or {}).get('nPa')} PAs):\n"
                 f"{json.dumps(mc_full_game, default=str, ensure_ascii=True)}\n\n"
@@ -23623,6 +23660,25 @@ def api_matchup_vertex():
             if analysis:
                 analysis_source = "fallback"
 
+        # XGB override: if XGB is confident (cov >= 0.50) and Gemini said PASS on hits,
+        # and XGB strongly disagrees, override hits verdict.
+        if analysis and xgb_hit_p is not None and xgb_hit_cov >= 0.50 and analysis_source == "gemini":
+            g_verdict = dict(analysis.get("verdict") or {})
+            g_hits = str(g_verdict.get("hits") or "").upper()
+            if g_hits == "PASS":
+                if xgb_hit_p >= 0.68:
+                    g_verdict["hits"] = "OVER"
+                    analysis["verdict"] = g_verdict
+                    analysis["risk"] = ((analysis.get("risk") or "") +
+                        " XGB override: model P(hit)={:.3f} at coverage {:.2f}.".format(
+                        xgb_hit_p, xgb_hit_cov)).strip()
+                elif xgb_hit_p <= 0.45:
+                    g_verdict["hits"] = "UNDER"
+                    analysis["verdict"] = g_verdict
+                    analysis["risk"] = ((analysis.get("risk") or "") +
+                        " XGB override: model P(hit)={:.3f} at coverage {:.2f}.".format(
+                        xgb_hit_p, xgb_hit_cov)).strip()
+        
         # Safety net: when the model strongly recommends OVER but Gemini
         # downgrades to PASS, prefer the model call. This was the user-reported
         # failure mode — AI says PASS while every adjacent panel shows STRONG/BET
@@ -23680,6 +23736,8 @@ def api_matchup_vertex():
                 else "model-deterministic" if analysis_source == "fallback"
                 else None
             ),
+            "xgbHitProb":     round(xgb_hit_p, 4) if xgb_hit_p is not None else None,
+            "xgbHitCoverage": round(xgb_hit_cov, 2) if xgb_hit_p is not None else None,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
     except Exception as ex:
