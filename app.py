@@ -23557,36 +23557,35 @@ def api_matchup_vertex():
             bq_stats.get("pitcher_name") or "",
         )
 
-        # ── XGB hit probability ──────────────────────────────────────────────────
+                # ── XGB hit probability ────────────────────────────────────────────
         xgb_hit_p    = None
         xgb_hit_cov  = 0.0
         if xgb_ready("hits"):
             try:
-               _batter_name  = bq_stats.get("batter_name") or ""
-               _pitcher_name = bq_stats.get("pitcher_name") or ""
-               _fg_b  = fg_batter(_batter_name)  or {}
-               _sv_b  = sv_batter(_batter_name)  or {}
-               _fg_p  = fg_pitcher(_pitcher_name) or {}
-               _sv_p  = sv_pitcher(_pitcher_name) or {}
-               # rolling form from the in-memory form cache (same source as BvP page)
-               _form  = _fetch_rolling_form(batter_id, False) or {}
-               _xgb_bdict = {
-                   **_fg_b, **_sv_b,
-                   "name":      _batter_name,
-                   "bats":      bq_stats.get("bats") or _fg_b.get("fg_bats") or "R",
-                   "l7Hits":    _form.get("l7Hits"),
-                   "l14Hits":   _form.get("l14Hits"),
-                   "l7HitRate": _form.get("l7HitRate"),
-               }
-               _xgb_pdict = {
-                   **_fg_p, **_sv_p,
-                   "name":      _pitcher_name,
-                   "pitchHand": bq_stats.get("throws") or _fg_p.get("fg_throws") or "R",
-               }
-               xgb_hit_p   = xgb_hit_prob(_xgb_bdict, _xgb_pdict)
-               xgb_hit_cov = _xgb_hit_coverage(_xgb_bdict, _xgb_pdict) if xgb_hit_p is not None else 0.0
-           except Exception:
-               pass
+                _batter_name  = bq_stats.get("batter_name") or ""
+                _pitcher_name = bq_stats.get("pitcher_name") or ""
+                _fg_b  = fg_batter(_batter_name)  or {}
+                _sv_b  = sv_batter(_batter_name)  or {}
+                _fg_p  = fg_pitcher(_pitcher_name) or {}
+                _sv_p  = sv_pitcher(_pitcher_name) or {}
+                _form  = _fetch_rolling_form(batter_id, False) or {}
+                _xgb_bdict = {
+                    **_fg_b, **_sv_b,
+                    "name":      _batter_name,
+                    "bats":      bq_stats.get("bats") or _fg_b.get("fg_bats") or "R",
+                    "l7Hits":    _form.get("l7Hits"),
+                    "l14Hits":   _form.get("l14Hits"),
+                    "l7HitRate": _form.get("l7HitRate"),
+                }
+                _xgb_pdict = {
+                    **_fg_p, **_sv_p,
+                    "name":      _pitcher_name,
+                    "pitchHand": bq_stats.get("throws") or _fg_p.get("fg_throws") or "R",
+                }
+                xgb_hit_p   = xgb_hit_prob(_xgb_bdict, _xgb_pdict)
+                xgb_hit_cov = _xgb_hit_coverage(_xgb_bdict, _xgb_pdict) if xgb_hit_p is not None else 0.0
+            except Exception:
+                pass
         
         # Deterministic recommendation from the full-game MC. Used both as the
         # final fallback when Gemini fails and as a prior in the prompt so the
