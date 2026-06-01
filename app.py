@@ -7108,7 +7108,26 @@ def api_bvp_projection(batter_id, pitcher_id):
             "fg_hr9":  _safe_f(fg_pit.get("fg_hr9"),  1.10),
             "fg_kpct": _safe_f(fg_pit.get("fg_kpct"), 0.22),
         }
-        gp = _project_batter_vs_pitcher(bstats, pstats)
+        _full_bstats = {
+            **bstats,
+            **fg_bat,        # brings fgId, fgkpct, fgbbpct, etc.
+            **sv_bat,        # brings svxba, svev, svhhpct, svsspct, svbrlpct, svla
+            "name":   batter_name,
+            "bats":   bats_code,
+            # rolling form
+            "l7Hits":    batter_form.get("l7Hits")    if batter_form else None,
+            "l14Hits":   batter_form.get("l14Hits")   if batter_form else None,
+            "l7HitRate": batter_form.get("l7HitRate") if batter_form else None,
+            "parkFactor": park_factor,
+        }
+        _full_pstats = {
+            **pstats,
+            **fg_pit,
+            **sv_pit,
+            "name":      pitcher_name,
+            "pitchHand": pitcher_hand,
+        }
+        gp = _project_batter_vs_pitcher(_full_bstats, _full_pstats)
 
         # BATX expected → Poisson probs; blend with calibrated probs (60/40)
         hits_m = float(batx.get("hits", 0) or 0)
