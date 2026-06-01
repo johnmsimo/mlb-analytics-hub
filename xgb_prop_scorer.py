@@ -357,12 +357,17 @@ def xgb_hit_prob(batter: dict, pitcher: dict) -> Optional[float]:
         _load_models()
     model = _models.get("hits")
     if model is None:
+        print("[xgb DEBUG] ❌ No hits model loaded!")
         return None
     try:
         batter_enriched = _enrich_batter_from_fg(batter)
         pitcher_enriched = _enrich_pitcher_from_fg(pitcher)
         feat_order = _feat_cols.get("hits", [])
         X = _build_hit_features(batter_enriched, pitcher_enriched, feat_order)
+        print(f"[xgb DEBUG] Player: {batter.get('name', 'unknown')}")
+        print(f"[xgb DEBUG] xBA={batter_enriched.get('svxba')} EV={batter_enriched.get('svev')} HardHit%={batter_enriched.get('svhhpct')}")
+        print(f"[xgb DEBUG] l7_hits={batter_enriched.get('l7Hits')} l7_hit_rate={batter_enriched.get('l7HitRate')}")
+        print(f"[xgb DEBUG] park_factor={batter_enriched.get('parkFactor')} opp_xera={pitcher_enriched.get('svxera')}")
         if X is None:
             return None
         prob = float(model.predict_proba(X)[0, 1])
