@@ -5916,10 +5916,10 @@ def _project_batter_vs_pitcher(batter_stats, pitcher_stats):
             # Gate by input coverage: full XGB weight (0.60) only when inputs
             # are well-populated; below 0.40 coverage the model is suppressed.
             _xgb_cov = _xgb_hit_coverage(batter_stats, pitcher_stats)
-            if _xgb_cov < 0.40:
+            if _xgb_cov < 0.20:
                 _xgb_hit = None
             else:
-                w_xgb = 0.60 * max(0.0, min(1.0, (_xgb_cov - 0.40) / 0.40))
+                w_xgb = 0.60 * max(0.0, min(1.0, (_xgb_cov - 0.20) / 0.40))
                 hit_prob = round(_clamp((1 - w_xgb) * hit_prob + w_xgb * _xgb_hit,
                                         0.03, 0.97), 3)
 
@@ -12787,13 +12787,14 @@ def _shrink_to_prior(p, prior, weight):
 # thin to trust the XGB output. Drives both blend weight and reliability flag.
 _XGB_HIT_COVERAGE_KEYS = (
     # batter
-    ("b", "sv_xba",     0.245, 0.260),   # league-average xBA ≈ 0.250
-    ("b", "sv_xwoba",   0.305, 0.335),
-    ("b", "sv_brl_pct", 3.5,   8.5),
-    ("b", "fg_pa",      30,    None),     # at least 30 PA on the season
+    ("b", "sv_xba",     0.200, 0.310),   # wider band - catches more real values
+    ("b", "sv_xwoba",   0.280, 0.380),
+    ("b", "sv_brl_pct", 1.0,   15.0),
+    ("b", "fg_pa",      10,    None),     # lower PA threshold
+    ("b", "l7Hits",     0.0,   7.0),    # recent form counts too
     # pitcher
-    ("p", "fg_kpct",    0.18,  0.28),
-    ("p", "fg_fip",     3.50,  5.20),
+    ("p", "fg_kpct",    0.10,  0.40),
+    ("p", "fg_era",     2.00,  7.00),   # use ERA if FIP missing
 )
 
 
