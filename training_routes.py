@@ -1,0 +1,279 @@
+"""
+training_routes.py — Flask Blueprint: 1-click XGB model training
+═══════════════════════════════════════════════════════════════════════
+Registers under /api/training/*
+
+  POST /api/training/run
+      Launches train_prop_models.train_all() in a background thread.
+      Optional JSON body:
+        { "markets": ["hits", "k_4.5"], "seasons": [2022, 2023, 2024, 2025] }
+      Omit both keys to train all 7 markets on the default season window.
+
+  GET  /api/training/status
+      Returns current phase, per-market progress, live log tail,
+      elapsed time, and a final results scorecard when done.
+
+Protection:
+  - Requires ADMIN_TOKEN (same env var as pipeline_routes.py) when set.
+  - Rate-limited to 1 run / 10 min per IP (training is expensive).
+  - Safe to poll /status at any cadence — it never blocks.
+"""
+
+from __future__ import annotations
+
+import io
+import logging
+import os
+import threading
+import time
+import traceback
+from contextlib import redirect_stdout
+from typing import Optional
+
+from flask import Blueprint, jsonify, request
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+
+log = logging.getLogger(__name__)
+
+training_bp = Blueprint("training", __name__, url_prefix="/api/training")
+
+_REDIS_URL   = os.getenv("REDIS_URL", "")
+_ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "").strip()
+
+limiter = Limiter(
+    key_func=get_remote_address,
+    storage_uri=_REDIS_URL if _REDIS_URL else "memory://",
+    default_limits=[],
+    headers_enabled=True,
+)
+
+# ── Shared training state (in-memory; one run at a time) ──────────────────────
+_VALID_MARKETS = ["hits", "hr", "tb", "rbi", "k_3.5", "k_4.5", "k_5.5"]
+
+_state: dict = {
+    "status":       "idle",          # idle | running | done | error
+    "phase":        "",              # current human-readable phase
+    "markets_total":   0,
+    "markets_done":    0,
+    "market_results":  {},           # {market_key: {auc, brier, status}}
+    "log_lines":       [],           # rolling last-200 log lines
+    "started_at":      None,
+    "finished_at":     None,
+    "error":           None,
+    "requested_markets": [],
+    "requested_seasons":  [],
+}
+_state_lock = threading.Lock()
+_MAX_LOG_LINES = 200
+
+
+def _set(key: str, value) -> None:
+    with _state_lock:
+        _state[key] = value
+
+
+def _append_log(line: str) -> None:
+    with _state_lock:
+        _state["log_lines"].append(line)
+        if len(_state["log_lines"]) > _MAX_LOG_LINES:
+            _state["log_lines"] = _state["log_lines"][-_MAX_LOG_LINES:]
+
+
+class _LogCapture(io.StringIO):
+    """StringIO that mirrors writes to _append_log so the UI sees live output."""
+    def write(self, s: str) -> int:
+        n = super().write(s)
+        for line in s.splitlines():
+            stripped = line.strip()
+            if stripped:
+                _append_log(stripped)
+        return n
+
+
+# ── Background training worker ────────────────────────────────────────────────
+
+def _run_training(markets: list[str], seasons: list[int]) -> None:
+    """Runs in a daemon thread. Updates _state throughout."""
+    with _state_lock:
+        _state.update({
+            "status":          "running",
+            "phase":           "Initialising data fetch…",
+            "markets_total":   len(markets),
+            "markets_done":    0,
+            "market_results":  {m: {"status": "pending"} for m in markets},
+            "log_lines":       [],
+            "started_at":      time.time(),
+            "finished_at":     None,
+            "error":           None,
+        })
+
+    cap = _LogCapture()
+    try:
+        # Lazy import so the module isn't loaded until needed
+        from train_prop_models import train_all, MODEL_CONFIGS
+
+        _set("phase", "Fetching Statcast + FanGraphs season data…")
+        _append_log(f"Starting training — markets: {markets}  seasons: {seasons}")
+
+        # Monkey-patch train_one_market to intercept per-market results
+        import train_prop_models as _tm
+        _orig_train_one = _tm.train_one_market
+
+        def _patched_train_one(market_key, df, config, seasons_arg):
+            _set("phase", f"Training {market_key}…")
+            _append_log(f"── {market_key} started")
+            with _state_lock:
+                _state["market_results"][market_key]["status"] = "training"
+
+            result = _orig_train_one(market_key, df, config, seasons_arg)
+
+            with _state_lock:
+                if result:
+                    m = result["meta"]
+                    _state["market_results"][market_key] = {
+                        "status":   "done",
+                        "auc":      m.get("auc"),
+                        "brier":    m.get("brier"),
+                        "log_loss": m.get("log_loss"),
+                        "n_rows":   m.get("n_rows"),
+                        "pos_rate": m.get("pos_rate"),
+                        "cv_auc":   m.get("cv_auc_mean"),
+                    }
+                    _append_log(
+                        f"✓ {market_key}  AUC={m.get('auc'):.4f}  "
+                        f"Brier={m.get('brier'):.4f}"
+                    )
+                else:
+                    _state["market_results"][market_key]["status"] = "failed"
+                    _append_log(f"✗ {market_key} FAILED")
+                _state["markets_done"] += 1
+            return result
+
+        _tm.train_one_market = _patched_train_one
+
+        with redirect_stdout(cap):
+            results = train_all(markets=markets, seasons=seasons)
+
+        # Restore original
+        _tm.train_one_market = _orig_train_one
+
+        # Mark any still-pending as failed (shouldn't happen, but safety net)
+        with _state_lock:
+            for mkey, mval in _state["market_results"].items():
+                if mval.get("status") == "pending":
+                    _state["market_results"][mkey]["status"] = "skipped"
+
+        _append_log("Training complete — models saved to models/")
+        _set("status", "done")
+        _set("phase", "Complete")
+
+    except Exception as exc:
+        tb = traceback.format_exc()
+        _append_log(f"ERROR: {exc}")
+        for tbl in tb.splitlines():
+            _append_log(tbl)
+        _set("status", "error")
+        _set("phase", "Error")
+        _set("error", str(exc))
+        log.error("[training] background run failed: %s", exc)
+    finally:
+        _set("finished_at", time.time())
+
+
+# ── Auth helper ───────────────────────────────────────────────────────────────
+
+def _check_admin_auth():
+    if not _ADMIN_TOKEN:
+        return None
+    auth  = request.headers.get("Authorization", "")
+    token = request.headers.get("X-Admin-Token", "")
+    bearer = auth.removeprefix("Bearer ").strip() if auth.startswith("Bearer ") else ""
+    if (bearer or token.strip()) == _ADMIN_TOKEN:
+        return None
+    return jsonify({"success": False, "error": "Unauthorized"}), 401
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+
+@training_bp.route("/status")
+def training_status():
+    """
+    GET /api/training/status
+    Returns:
+      status        — idle | running | done | error
+      phase         — human-readable current step
+      progress_pct  — 0-100
+      markets_done  — int
+      markets_total — int
+      market_results — {market: {status, auc, brier, ...}}
+      log_tail      — last 50 log lines
+      elapsed_s     — seconds since run started (null if idle)
+      error         — error message string (null if none)
+    """
+    with _state_lock:
+        snap = dict(_state)
+
+    total    = snap["markets_total"] or 1
+    done     = snap["markets_done"]
+    pct      = round(done / total * 100) if snap["status"] == "running" else (
+        100 if snap["status"] == "done" else 0
+    )
+    elapsed  = None
+    if snap["started_at"]:
+        end  = snap["finished_at"] or time.time()
+        elapsed = round(end - snap["started_at"], 1)
+
+    return jsonify({
+        "success":        True,
+        "status":         snap["status"],
+        "phase":          snap["phase"],
+        "progress_pct":   pct,
+        "markets_done":   done,
+        "markets_total":  snap["markets_total"],
+        "market_results": snap["market_results"],
+        "log_tail":       snap["log_lines"][-50:],
+        "elapsed_s":      elapsed,
+        "error":          snap["error"],
+    })
+
+
+@training_bp.route("/run", methods=["POST"])
+@limiter.limit("1 per 10 minutes")
+def training_run():
+    """
+    POST /api/training/run
+    Optional JSON body:
+      { "markets": ["hits","k_4.5"], "seasons": [2023,2024,2025] }
+    Omit to train all 7 markets on default seasons (2021-2025).
+    """
+    auth_err = _check_admin_auth()
+    if auth_err is not None:
+        return auth_err
+
+    with _state_lock:
+        if _state["status"] == "running":
+            return jsonify({"success": False, "error": "Training already in progress"}), 409
+
+    body    = request.get_json(silent=True) or {}
+    markets = body.get("markets") or _VALID_MARKETS
+    seasons = body.get("seasons") or [2021, 2022, 2023, 2024, 2025]
+
+    # Validate
+    bad_markets = [m for m in markets if m not in _VALID_MARKETS]
+    if bad_markets:
+        return jsonify({"success": False, "error": f"Unknown markets: {bad_markets}"}), 400
+
+    with _state_lock:
+        _state["requested_markets"] = markets
+        _state["requested_seasons"] = seasons
+
+    t = threading.Thread(target=_run_training, args=(markets, seasons), daemon=True)
+    t.start()
+    log.info("[training] run triggered — markets=%s seasons=%s", markets, seasons)
+    return jsonify({
+        "success": True,
+        "message": f"Training started for {len(markets)} markets",
+        "markets": markets,
+        "seasons": seasons,
+    })
