@@ -48,7 +48,15 @@ except ImportError:
     _UMP_AVAILABLE = False
     def _get_ump_features(name: str) -> dict:
         return {"ump_zone_size": 0.0, "ump_k_boost": 0.0}
-        
+
+try:
+    from lineup_loader import get_lineup_features as _get_lineup_features
+    _LINEUP_AVAILABLE = True
+except ImportError:
+    _LINEUP_AVAILABLE = False
+    def _get_lineup_features(**kw) -> dict:
+        return {"expected_pa": 4.20, "batting_order": 0, "lineup_confirmed": 0}
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _MODEL_DIR = os.path.join(_HERE, "models")
 _FEAT_FILE = os.path.join(_MODEL_DIR, "xgb_feature_cols.json")
@@ -58,7 +66,6 @@ _MODEL_PATHS = {
     "k_3.5": os.path.join(_MODEL_DIR, "xgb_k_over_3.5.pkl"),
     "k_4.5": os.path.join(_MODEL_DIR, "xgb_k_over_4.5.pkl"),
     "k_5.5": os.path.join(_MODEL_DIR, "xgb_k_over_5.5.pkl"),
-    # Auto-loaded when artifacts exist on disk. Train via xgb_training_pipeline.py.
     "hr":    os.path.join(_MODEL_DIR, "xgb_hr_over_0.5.pkl"),
     "tb":    os.path.join(_MODEL_DIR, "xgb_tb_over_1.5.pkl"),
     "rbi":   os.path.join(_MODEL_DIR, "xgb_rbi_over_0.5.pkl"),
@@ -257,6 +264,14 @@ def _build_hit_features(batter: dict, pitcher: dict, feat_order: list) -> Option
     pit_hand = (pitcher.get("pitchHand") or pitcher.get("throws") or "R").upper()[:1]
     platoon = 1 if (bat_side == "L" and pit_hand == "R") or (bat_side == "R" and pit_hand == "L") else 0
 
+    # ── Lineup PA features: pull from confirmed lineup if available ──────────
+    mlbam_id    = batter.get("mlbamid") or batter.get("xMLBAMID")
+    player_name = batter.get("name") or batter.get("Name") or batter.get("PlayerName")
+    lineup_feats = _get_lineup_features(mlbam_id=mlbam_id, player_name=player_name)
+    expected_pa      = lineup_feats["expected_pa"]
+    batting_order    = lineup_feats["batting_order"]
+    lineup_confirmed = lineup_feats["lineup_confirmed"]
+
     raw = {
         "sv_xba": _sf(batter, "svxba", "xAVG", default=0.250),
         "sv_xwoba": _sf(batter, "svxwoba", "xwOBA", "fgwoba", default=0.320),
@@ -278,15 +293,17 @@ def _build_hit_features(batter: dict, pitcher: dict, feat_order: list) -> Option
         "l7_hits": _sf(batter, "l7Hits", "l7hits", default=1.5),
         "l14_hits": _sf(batter, "l14Hits", "l14hits", default=3.0),
         "l7_hit_rate": _sf(batter, "l7HitRate", "l7hitrate", default=0.50),
-        # ── BATX-parity features (v2). Defaults are league-neutral so v1 models
-        #    keep working until v2 model artifact is trained. ──────────────────
+        # ── Lineup context (1C) ──────────────────────────────────────────────
+        "expected_pa":       expected_pa,
+        "batting_order":     float(batting_order),
+        "lineup_confirmed":  float(lineup_confirmed),
+        # ── BATX-parity features (v2) ────────────────────────────────────────
         "park_factor":          _sf(batter, "parkFactor", "park_factor", default=1.00),
         "wx_temp_mult":         _sf(batter, "wxTempMult", "wx_temp_mult", default=1.00),
         "wx_wind_mult":         _sf(batter, "wxWindMult", "wx_wind_mult", default=1.00),
         "pitch_mix_slg_edge":   _sf(batter, "pitchMixSlgEdge", "pitch_mix_slg_edge", default=0.00),
         "bvp_woba_edge_shrunk": _sf(batter, "bvpWobaEdge", "bvp_woba_edge_shrunk", default=0.00),
         "split_ops_edge":       _sf(batter, "splitOpsEdge", "split_ops_edge", default=0.00),
-        "expected_pa":          _sf(batter, "expectedPa", "expected_pa", default=4.20),
     }
 
     for pct_key in ("sv_k_pct", "sv_bb_pct", "opp_k_pct", "opp_bb_pct"):
@@ -305,17 +322,15 @@ def _build_hit_features(batter: dict, pitcher: dict, feat_order: list) -> Option
         "opp_xera", "opp_k_pct", "opp_bb_pct", "opp_whiff",
         "bats_L", "throws_R", "platoon_adv",
         "l7_hits", "l14_hits", "l7_hit_rate",
+        "expected_pa", "batting_order", "lineup_confirmed",
         "park_factor", "wx_temp_mult", "wx_wind_mult",
         "pitch_mix_slg_edge", "bvp_woba_edge_shrunk",
-        "split_ops_edge", "expected_pa",
+        "split_ops_edge",
     ]
     return np.array([[raw[c] for c in hits_features]], dtype=np.float32)
 
 
 def _build_k_features(pitcher: dict, feat_order: list) -> Optional[np.ndarray]:
-    """
-    Build the 13-feature strikeout vector.
-    """
     raw = {
         "sv_xera": _sf(pitcher, "svxera", "xERA", "fgera", default=4.50),
         "sv_era": _sf(pitcher, "fgera", "ERA", default=4.50),
@@ -329,18 +344,14 @@ def _build_k_features(pitcher: dict, feat_order: list) -> Optional[np.ndarray]:
         "l3_ip": _sf(pitcher, "l3IP", "l3ip", default=5.0),
         "l5_ip": _sf(pitcher, "l5IP", "l5ip", default=5.0),
         "days_rest": _sf(pitcher, "daysRest", "days_rest", default=5.0),
-        "opp_lineup_k_pct_proxy": _sf(
-            pitcher, "oppKPct", "opponentkpct", "opp_lineup_k_pct_proxy", default=22.0
+        "opp_lineup_k_pct": _sf(
+            pitcher, "oppKPct", "opponentkpct", "opp_lineup_k_pct", default=22.0
         ),
-        "opp_lineup_xwoba_proxy": _sf(
-            pitcher, "oppWoba", "opponentxwoba", "opp_lineup_xwoba_proxy", default=0.320
+        "opp_lineup_xwoba": _sf(
+            pitcher, "oppWoba", "opponentxwoba", "opp_lineup_xwoba", default=0.320
         ),
-        "ump_zone_size": _sf(
-            pitcher, "ump_zone_size", default=0.0
-        ),
-        "ump_k_boost": _sf(
-            pitcher, "ump_k_boost", default=0.0
-        ),
+        "ump_zone_size": _sf(pitcher, "ump_zone_size", default=0.0),
+        "ump_k_boost":   _sf(pitcher, "ump_k_boost",   default=0.0),
     }
 
     for pct_key in ("sv_k_pct", "sv_bb_pct", "opp_lineup_k_pct"):
@@ -354,7 +365,7 @@ def _build_k_features(pitcher: dict, feat_order: list) -> Optional[np.ndarray]:
         "l3_ks", "l5_ks", "l5_k_rate", "l10_ks",
         "l3_ip", "l5_ip",
         "days_rest",
-        "opp_lineup_k_pct_proxy", "opp_lineup_xwoba_proxy",
+        "opp_lineup_k_pct", "opp_lineup_xwoba",
         "ump_zone_size", "ump_k_boost",
     ]
 
@@ -383,13 +394,16 @@ def xgb_hit_prob(batter: dict, pitcher: dict) -> Optional[float]:
         print(f"[xgb DEBUG] xBA={batter_enriched.get('svxba')} EV={batter_enriched.get('svev')} HardHit%={batter_enriched.get('svhhpct')}")
         print(f"[xgb DEBUG] l7_hits={batter_enriched.get('l7Hits')} l7_hit_rate={batter_enriched.get('l7HitRate')}")
         print(f"[xgb DEBUG] park_factor={batter_enriched.get('parkFactor')} opp_xera={pitcher_enriched.get('svxera')}")
+        mlbam_id    = batter_enriched.get("mlbamid") or batter_enriched.get("xMLBAMID")
+        player_name = batter_enriched.get("name") or batter_enriched.get("Name")
+        lf = _get_lineup_features(mlbam_id=mlbam_id, player_name=player_name)
+        print(f"[xgb DEBUG] batting_order={lf['batting_order']} expected_pa={lf['expected_pa']} confirmed={lf['lineup_confirmed']}")
         if X is None:
             return None
         prob = float(model.predict_proba(X)[0, 1])
-        # Temporary: log raw prob to confirm model is outputting extreme values
         print(f"[xgb DEBUG] RAW prob before clamp = {prob:.4f}")
         return round(min(0.97, max(0.03, prob)), 4)
-        
+
     except Exception:
         return None
 
@@ -399,7 +413,6 @@ def xgb_k_prob(pitcher: dict, line: float = 4.5) -> Optional[float]:
         _load_models()
     line_key = f"k_{line}"
     if line_key not in _models:
-        # Fall back to the nearest available line rather than a fixed order.
         candidates = []
         for k in _models:
             if k.startswith("k_"):
@@ -413,7 +426,6 @@ def xgb_k_prob(pitcher: dict, line: float = 4.5) -> Optional[float]:
 
     try:
         pitcher_enriched = _enrich_pitcher_from_fg(pitcher)
-        # Inject live umpire features
         ump_name = pitcher.get("umpire") or pitcher.get("hp_umpire") or ""
         ump_feats = _get_ump_features(ump_name) if _UMP_AVAILABLE else {}
         pitcher_enriched["ump_zone_size"] = ump_feats.get("ump_zone_size", 0.0)
@@ -454,12 +466,6 @@ def xgb_hit_prob_bulk(batters: list, pitcher: dict) -> dict:
 
 
 def _predict_batter_market(market_key: str, batter: dict, pitcher: dict) -> Optional[float]:
-    """Generic batter-vs-pitcher predictor for HR / TB / RBI markets.
-
-    Reuses the same feature builder as the hits model — once the corresponding
-    artifact is on disk (xgb_hr_over_0.5.pkl etc.), this function activates
-    automatically without additional wiring.
-    """
     if not _loaded:
         _load_models()
     model = _models.get(market_key)
@@ -479,17 +485,14 @@ def _predict_batter_market(market_key: str, batter: dict, pitcher: dict) -> Opti
 
 
 def xgb_hr_prob(batter: dict, pitcher: dict) -> Optional[float]:
-    """P(>= 1 HR in game). Returns None when no model artifact is loaded."""
     return _predict_batter_market("hr", batter, pitcher)
 
 
 def xgb_tb_prob(batter: dict, pitcher: dict) -> Optional[float]:
-    """P(>= 2 TB in game). Returns None when no model artifact is loaded."""
     return _predict_batter_market("tb", batter, pitcher)
 
 
 def xgb_rbi_prob(batter: dict, pitcher: dict) -> Optional[float]:
-    """P(>= 1 RBI in game). Returns None when no model artifact is loaded."""
     return _predict_batter_market("rbi", batter, pitcher)
 
 
