@@ -1,27 +1,32 @@
 """
-eval_models.py — Calibration + CLV evaluation for graded BvP picks.
-
-Reads `data/daily_tracker.json`, filters to graded picks, and computes
-per-market reliability and value-vs-the-book metrics.
+eval_models.py — Calibration + CLV + MC convergence evaluation
+═══════════════════════════════════════════════════════════════════════════════
+Reads `data/daily_tracker.json`, filters to graded picks, computes:
 
   1. CALIBRATION
      - Brier score, Brier Skill Score (BSS), log loss, AUC-ROC
      - Expected Calibration Error (ECE) + 10-bucket reliability table
      - Optional reliability diagram PNG (matplotlib)
 
-  2. CLV / VALUE
+  2. CLV / VALUE  (Step 4)
      - Average CLV (closingImplied - openingImplied)
      - CLV-positive rate
-     - Model edge vs close (adjProb - closingImplied)
+     - Model edge vs closing line (adjProb - closingImplied)
      - ROI at flat-1-unit and fractional-Kelly stake
+     - Closing-line value (CLV) used as ground-truth alongside outcomes
 
-  3. ROLLING TREND  (--rolling)
+  3. MC CONVERGENCE  (Step 4 — new)
+     - Head-to-head: mc_prob_over Brier vs adjProb (XGB calibrated) Brier
+     - mc_prob_over CLV+ rate vs adjProb CLV+ rate
+     - Verdict: which signal adds more value vs closing line
+     - MC anchor quality: std dev of mc_p10/p90 spread over graded picks
+
+  4. ROLLING TREND  (--rolling)
      - Brier + CLV broken into 7 / 14 / 30 / 90-day rolling windows
      - Drift alert fired when 14-day Brier degrades > DRIFT_BRIER_THRESHOLD
-       vs the 90-day baseline, or CLV-positive rate drops below
-       CLV_POSITIVE_FLOOR
+       vs the 90-day baseline, or CLV-positive rate drops below CLV_POSITIVE_FLOOR
 
-  4. DRIFT ALERTS
+  5. DRIFT ALERTS
      - Written to `data/model_drift_alerts.json` automatically so
        props.html can surface them without a separate script.
 
@@ -30,6 +35,7 @@ Usage:
   python eval_models.py --since 2026-04-01
   python eval_models.py --market batter_hits
   python eval_models.py --rolling --out reports/eval_2026.json
+  python eval_models.py --compare-mc --market pitcher_strikeouts
   python eval_models.py --kelly 0.25 --plot --out reports/eval_2026.json
 """
 
@@ -48,15 +54,21 @@ from typing import Dict, List, Optional, Tuple
 TRACKER_PATH_DEFAULT = "data/daily_tracker.json"
 DRIFT_ALERTS_PATH    = "data/model_drift_alerts.json"
 
-# Drift thresholds — tune these as sample grows
-DRIFT_BRIER_THRESHOLD  = 0.04   # 14-day Brier must not exceed 90-day baseline by this amount
-CLV_POSITIVE_FLOOR     = 0.45   # 14-day CLV+ rate below this triggers alert
+# Drift thresholds
+DRIFT_BRIER_THRESHOLD  = 0.04
+CLV_POSITIVE_FLOOR     = 0.45
 ROLLING_WINDOWS        = [7, 14, 30, 90]
 
+# Tracker field names for Step-3 MC output stored per pick
+_MC_PROB_FIELD   = "mc_prob_over"   # P(over line) from mc_simulate()
+_MC_P10_FIELD    = "mc_p10"         # 10th pct of Beta draws
+_MC_P90_FIELD    = "mc_p90"         # 90th pct of Beta draws
+_MC_STD_FIELD    = "mc_std"         # std dev of Beta draws
+_CAL_PROB_FIELD  = "adjProb"        # isotonic-calibrated XGB prob (existing)
+_BLEND_FIELD     = "blendedProb"    # stacked_calibrator output (existing)
 
-# ────────────────────────────────────────────────────────────────────────────
-# Math helpers
-# ────────────────────────────────────────────────────────────────────────────
+
+# ─── Math helpers ───────────────────────────────────────────────────────────
 
 def american_to_decimal(american) -> Optional[float]:
     """+150 → 2.50, -180 → 1.5556."""
@@ -145,9 +157,6 @@ def brier_score(probs: List[float], outcomes: List[int]) -> Optional[float]:
 
 
 def brier_skill_score(probs: List[float], outcomes: List[int]) -> Optional[float]:
-    """BSS = 1 - (Brier / Brier_naive). Naive model always predicts base rate.
-    BSS=1 is perfect; BSS=0 is no better than guessing the mean; negative = worse.
-    """
     bs = brier_score(probs, outcomes)
     if bs is None or not outcomes:
         return None
@@ -170,9 +179,7 @@ def log_loss(probs: List[float], outcomes: List[int],
     return round(s / len(paired), 4)
 
 
-# ────────────────────────────────────────────────────────────────────────────
-# Tracker loading + filtering
-# ────────────────────────────────────────────────────────────────────────────
+# ─── Tracker loading + filtering ───────────────────────────────────────────────────
 
 def load_tracker(path: str) -> List[dict]:
     if not os.path.exists(path):
@@ -203,17 +210,151 @@ def filter_picks(rows: List[dict], since: Optional[str], until: Optional[str],
         if since and (r.get("date") or "") < since:    continue
         if until and (r.get("date") or "") > until:    continue
         if market and r.get("marketKey") != market:    continue
-        p = r.get("adjProb")
+        p = r.get(_CAL_PROB_FIELD)
         if p is None:
             continue
-        if p < min_prob or p > max_prob:               continue
+        if p < min_prob or p > max_prob:
+            continue
         out.append(r)
     return out
 
 
-# ────────────────────────────────────────────────────────────────────────────
-# Per-market evaluation (single window)
-# ────────────────────────────────────────────────────────────────────────────
+# ─── MC convergence evaluation (Step 4) ───────────────────────────────────────────
+
+def evaluate_mc_vs_xgb(
+    picks: List[dict],
+    market: str,
+) -> dict:
+    """
+    Head-to-head comparison: mc_prob_over (Step 3 anchored MC) vs
+    adjProb (isotonic-calibrated XGB) against:
+      a) actual graded outcomes (Brier Score)
+      b) closing line implied probability (CLV proxy — market ground truth)
+
+    This answers: "Does the MC simulation layer add accuracy beyond
+    the calibrated XGB score alone?"
+
+    A well-anchored MC should have:
+      - mc_brier <= xgb_brier   (MC is at least as accurate as raw XGB)
+      - mc_clv_edge >= xgb_clv_edge  (MC beats closing line more often)
+      - mc_std positively correlated with outcome variance (wide MC = uncertain)
+
+    Returns
+    -------
+    {
+      "market":             str,
+      "n":                  int,
+      "n_with_mc":          int,    # picks that have mc_prob_over stored
+      "xgb_brier":          float,  # Brier using adjProb
+      "mc_brier":           float,  # Brier using mc_prob_over
+      "brier_delta":        float,  # mc_brier - xgb_brier (negative = MC better)
+      "xgb_ece":            float,
+      "mc_ece":             float,
+      "xgb_clv_edge":       float,  # mean(adjProb - closingImplied)
+      "mc_clv_edge":        float,  # mean(mc_prob_over - closingImplied)
+      "xgb_clv_pos_rate":   float,
+      "mc_clv_pos_rate":    float,
+      "avg_mc_std":         float,  # mean of mc_std across picks
+      "avg_mc_spread":      float,  # mean of (mc_p90 - mc_p10)
+      "mc_verdict":         str,    # "MC_BETTER" / "XGB_BETTER" / "TIED"
+      "wide_mc_accuracy":   float,  # hit rate when mc_spread > median spread
+      "narrow_mc_accuracy": float,  # hit rate when mc_spread <= median spread
+    }
+    """
+    xgb_probs,  mc_probs   = [], []
+    outcomes_xgb, outcomes_mc = [], []
+    xgb_close_edges, mc_close_edges = [], []
+    mc_stds, mc_spreads = [], []
+    paired_spread_outcome = []  # (spread, outcome) for wide vs narrow analysis
+
+    for r in picks:
+        grade = r.get("grade") or r.get("status")
+        if grade not in ("win", "loss"):
+            continue
+        y = 1 if grade == "win" else 0
+        side = r.get("recommendedSide") or "Over"
+
+        xgb_p = r.get(_CAL_PROB_FIELD) or r.get(_BLEND_FIELD)
+        mc_p  = r.get(_MC_PROB_FIELD)
+
+        if xgb_p is not None:
+            xgb_p = pick_prob_for_side(float(xgb_p), side)
+            xgb_probs.append(xgb_p)
+            outcomes_xgb.append(y)
+
+        if mc_p is not None:
+            mc_p = float(mc_p)
+            mc_probs.append(mc_p)
+            outcomes_mc.append(y)
+
+        close_imp = r.get("closingImplied")
+        if close_imp is not None:
+            ci = float(close_imp)
+            if xgb_p is not None:
+                xgb_close_edges.append(xgb_p - ci)
+            if mc_p is not None:
+                mc_close_edges.append(mc_p - ci)
+
+        std = r.get(_MC_STD_FIELD)
+        p10 = r.get(_MC_P10_FIELD)
+        p90 = r.get(_MC_P90_FIELD)
+        if std is not None:
+            mc_stds.append(float(std))
+        if p10 is not None and p90 is not None:
+            spread = float(p90) - float(p10)
+            mc_spreads.append(spread)
+            paired_spread_outcome.append((spread, y))
+
+    def _avg(xs): return round(sum(xs) / len(xs), 4) if xs else None
+    def _clv_pos(xs): return round(sum(1 for x in xs if x > 0) / len(xs), 4) if xs else None
+
+    xgb_brier = brier_score(xgb_probs, outcomes_xgb)
+    mc_brier  = brier_score(mc_probs,  outcomes_mc)
+    xgb_ece   = expected_calibration_error(xgb_probs, outcomes_xgb)
+    mc_ece    = expected_calibration_error(mc_probs,  outcomes_mc)
+
+    brier_delta = None
+    mc_verdict  = "INSUFFICIENT_DATA"
+    if xgb_brier is not None and mc_brier is not None:
+        brier_delta = round(mc_brier - xgb_brier, 4)
+        if abs(brier_delta) < 0.002:
+            mc_verdict = "TIED"
+        elif mc_brier < xgb_brier:
+            mc_verdict = "MC_BETTER"
+        else:
+            mc_verdict = "XGB_BETTER"
+
+    # Wide vs narrow MC spread accuracy
+    wide_acc = narrow_acc = None
+    if len(paired_spread_outcome) >= 10:
+        median_spread = sorted(s for s, _ in paired_spread_outcome)[len(paired_spread_outcome) // 2]
+        wide   = [y for s, y in paired_spread_outcome if s >  median_spread]
+        narrow = [y for s, y in paired_spread_outcome if s <= median_spread]
+        wide_acc   = round(sum(wide)   / len(wide),   4) if wide   else None
+        narrow_acc = round(sum(narrow) / len(narrow), 4) if narrow else None
+
+    return {
+        "market":             market,
+        "n":                  len(outcomes_xgb),
+        "n_with_mc":          len(outcomes_mc),
+        "xgb_brier":          xgb_brier,
+        "mc_brier":           mc_brier,
+        "brier_delta":        brier_delta,
+        "xgb_ece":            xgb_ece,
+        "mc_ece":             mc_ece,
+        "xgb_clv_edge":       _avg(xgb_close_edges),
+        "mc_clv_edge":        _avg(mc_close_edges),
+        "xgb_clv_pos_rate":   _clv_pos(xgb_close_edges),
+        "mc_clv_pos_rate":    _clv_pos(mc_close_edges),
+        "avg_mc_std":         _avg(mc_stds),
+        "avg_mc_spread":      _avg(mc_spreads),
+        "mc_verdict":         mc_verdict,
+        "wide_mc_accuracy":   wide_acc,
+        "narrow_mc_accuracy": narrow_acc,
+    }
+
+
+# ─── Per-market evaluation (single window) ───────────────────────────────────────
 
 def evaluate_market(market: str, picks: List[dict],
                      kelly_frac: float = 0.25) -> dict:
@@ -227,7 +368,7 @@ def evaluate_market(market: str, picks: List[dict],
 
     for r in picks:
         side = r.get("recommendedSide") or "Over"
-        p = pick_prob_for_side(r.get("adjProb"), side)
+        p = pick_prob_for_side(r.get(_CAL_PROB_FIELD), side)
         if p is None:
             continue
         grade = r.get("grade")
@@ -303,19 +444,15 @@ def evaluate_market(market: str, picks: List[dict],
     return summary
 
 
-# ────────────────────────────────────────────────────────────────────────────
-# Rolling window trend + drift detection
-# ────────────────────────────────────────────────────────────────────────────
+# ─── Rolling window trend + drift detection ─────────────────────────────────────────
 
 def _date_cutoff(days_back: int) -> str:
-    """Return YYYY-MM-DD for `days_back` days ago from today."""
     return (datetime.utcnow() - timedelta(days=days_back)).strftime("%Y-%m-%d")
 
 
 def rolling_trend(all_rows: List[dict], market: str,
                   kelly_frac: float = 0.25,
                   windows: List[int] = None) -> dict:
-    """Compute calibration + CLV for each rolling window independently."""
     if windows is None:
         windows = ROLLING_WINDOWS
     result: Dict[str, dict] = {}
@@ -339,14 +476,13 @@ def rolling_trend(all_rows: List[dict], market: str,
 
 
 def detect_drift(trend: Dict[str, dict], market: str) -> List[dict]:
-    """Compare 14d window vs 90d baseline. Return list of alert dicts."""
     alerts = []
     w14 = trend.get("14d", {})
     w90 = trend.get("90d", {})
     if not w14 or not w90:
         return alerts
     if w14.get("n", 0) < 10 or w90.get("n", 0) < 20:
-        return alerts  # not enough data
+        return alerts
 
     b14 = w14.get("brier");  b90 = w90.get("brier")
     if b14 is not None and b90 is not None and b14 - b90 > DRIFT_BRIER_THRESHOLD:
@@ -386,16 +522,13 @@ def detect_drift(trend: Dict[str, dict], market: str) -> List[dict]:
 
 def build_rolling_report(all_rows: List[dict], markets: List[str],
                           kelly_frac: float = 0.25) -> dict:
-    """Full rolling report across all markets with drift alerts."""
     per_market_trend: Dict[str, dict] = {}
     all_alerts: List[dict] = []
-
     for market in markets:
         trend = rolling_trend(all_rows, market, kelly_frac)
         per_market_trend[market] = trend
         alerts = detect_drift(trend, market)
         all_alerts.extend(alerts)
-
     return {
         "generatedAt":   datetime.utcnow().isoformat() + "Z",
         "windows_days":  ROLLING_WINDOWS,
@@ -411,13 +544,11 @@ def build_rolling_report(all_rows: List[dict], markets: List[str],
 
 def write_drift_alerts(rolling_report: dict,
                         alerts_path: str = DRIFT_ALERTS_PATH) -> None:
-    """Write a slim drift-alerts JSON consumed by props.html."""
     slim = {
         "generatedAt":   rolling_report["generatedAt"],
         "n_alerts":      rolling_report["n_alerts"],
         "alert_summary": rolling_report["alert_summary"],
         "alerts":        rolling_report["alerts"],
-        # Compact per-market sparkline data (14d Brier + CLV+ rate only)
         "sparklines": {
             market: {
                 w: {
@@ -437,9 +568,7 @@ def write_drift_alerts(rolling_report: dict,
         json.dump(slim, f, indent=2)
 
 
-# ────────────────────────────────────────────────────────────────────────────
-# Reliability plot
-# ────────────────────────────────────────────────────────────────────────────
+# ─── Reliability plot ─────────────────────────────────────────────────────────────────
 
 def render_reliability_plot(per_market: dict, out_path: str) -> Optional[str]:
     try:
@@ -485,28 +614,7 @@ def render_reliability_plot(per_market: dict, out_path: str) -> Optional[str]:
     return out_path
 
 
-# ────────────────────────────────────────────────────────────────────────────
-# CLI
-# ────────────────────────────────────────────────────────────────────────────
-
-def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("--tracker",   default=TRACKER_PATH_DEFAULT)
-    p.add_argument("--since",     default=None,  help="YYYY-MM-DD")
-    p.add_argument("--until",     default=None,  help="YYYY-MM-DD")
-    p.add_argument("--market",    default=None,  help="e.g. batter_hits")
-    p.add_argument("--min-prob",  type=float, default=0.0)
-    p.add_argument("--max-prob",  type=float, default=1.0)
-    p.add_argument("--kelly",     type=float, default=0.25)
-    p.add_argument("--out",       default=None,  help="Write JSON report here")
-    p.add_argument("--plot",      action="store_true", help="Save reliability PNG")
-    p.add_argument("--quiet",     action="store_true")
-    p.add_argument("--rolling",   action="store_true",
-                   help="Compute rolling 7/14/30/90d trend + drift alerts")
-    p.add_argument("--drift-out", default=DRIFT_ALERTS_PATH,
-                   help=f"Where to write drift alerts JSON (default: {DRIFT_ALERTS_PATH})")
-    return p.parse_args()
-
+# ─── CLI print helpers ─────────────────────────────────────────────────────────────────
 
 def print_human_summary(report: dict) -> None:
     print(f"\n=== Evaluation Report ({report['n_total']:,} graded picks) ===")
@@ -537,6 +645,27 @@ def print_human_summary(report: dict) -> None:
             print(f"  ⚠ {m['warning']}")
 
 
+def print_mc_comparison(results: dict) -> None:
+    print("\n=== MC vs XGB Head-to-Head ===")
+    print(f"  {'MARKET':<28} {'XGB-B':>7} {'MC-B':>7} {'Δ':>7} {'VERDICT':<16} {'XGB-CLV+':>9} {'MC-CLV+':>9} {'AVG-SPREAD':>11}")
+    print("  " + "-" * 100)
+    for market, r in results.items():
+        if r.get("n", 0) == 0:
+            continue
+        xb  = f"{r['xgb_brier']:.4f}"  if r.get("xgb_brier")  is not None else "  —   "
+        mb  = f"{r['mc_brier']:.4f}"   if r.get("mc_brier")   is not None else "  —   "
+        d   = f"{r['brier_delta']:+.4f}" if r.get("brier_delta") is not None else "  —   "
+        ver = r.get("mc_verdict", "")
+        xcp = f"{r['xgb_clv_pos_rate']:.1%}" if r.get("xgb_clv_pos_rate") is not None else "—"
+        mcp = f"{r['mc_clv_pos_rate']:.1%}"  if r.get("mc_clv_pos_rate")  is not None else "—"
+        sp  = f"{r['avg_mc_spread']:.4f}"     if r.get("avg_mc_spread")    is not None else "—"
+        icon = "✅" if ver == "MC_BETTER" else ("❌" if ver == "XGB_BETTER" else "↔")
+        print(f"  {market:<28} {xb:>7} {mb:>7} {d:>7} {icon} {ver:<14} {xcp:>9} {mcp:>9} {sp:>11}")
+        if r.get("wide_mc_accuracy") is not None:
+            print(f"    narrow CI accuracy: {r['narrow_mc_accuracy']:.3f}  vs  wide CI accuracy: {r['wide_mc_accuracy']:.3f}")
+    print()
+
+
 def print_rolling_summary(rolling: dict) -> None:
     print("\n=== Rolling Window Trend ===")
     headers = ["MARKET", "7d-B", "14d-B", "30d-B", "90d-B", "14d-BSS", "14d-CLV+", "14d-ROI", "14d-N"]
@@ -559,7 +688,6 @@ def print_rolling_summary(rolling: dict) -> None:
     print("  " + "  ".join("-" * w for w in col_w))
     for row in rows_out:
         print("  " + fmt.format(*row))
-
     if rolling["alerts"]:
         print(f"\n  🚨 {len(rolling['alerts'])} DRIFT ALERT(S):")
         for a in rolling["alerts"]:
@@ -569,21 +697,43 @@ def print_rolling_summary(rolling: dict) -> None:
         print("\n  ✅ No drift alerts detected across all windows.")
 
 
+# ─── CLI ─────────────────────────────────────────────────────────────────────────
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    p.add_argument("--tracker",    default=TRACKER_PATH_DEFAULT)
+    p.add_argument("--since",      default=None,  help="YYYY-MM-DD")
+    p.add_argument("--until",      default=None,  help="YYYY-MM-DD")
+    p.add_argument("--market",     default=None,  help="e.g. batter_hits")
+    p.add_argument("--min-prob",   type=float, default=0.0)
+    p.add_argument("--max-prob",   type=float, default=1.0)
+    p.add_argument("--kelly",      type=float, default=0.25)
+    p.add_argument("--out",        default=None,  help="Write JSON report here")
+    p.add_argument("--plot",       action="store_true", help="Save reliability PNG")
+    p.add_argument("--quiet",      action="store_true")
+    p.add_argument("--rolling",    action="store_true",
+                   help="Compute rolling 7/14/30/90d trend + drift alerts")
+    p.add_argument("--compare-mc", action="store_true",
+                   help="MC vs XGB head-to-head Brier + CLV comparison (Step 4)")
+    p.add_argument("--drift-out",  default=DRIFT_ALERTS_PATH,
+                   help=f"Where to write drift alerts JSON (default: {DRIFT_ALERTS_PATH})")
+    return p.parse_args()
+
+
 def main() -> int:
     args = parse_args()
     all_rows = load_tracker(args.tracker)
 
-    # ── Rolling mode ──────────────────────────────────────────────────────
+    # ── Rolling mode ─────────────────────────────────────────────────────────────────
     if args.rolling:
         market_keys = sorted({
             r.get("marketKey") or "unknown"
             for r in all_rows
             if (r.get("grade") or r.get("status")) in ("win", "loss", "push", "graded")
-            and r.get("adjProb") is not None
+            and r.get(_CAL_PROB_FIELD) is not None
         })
         if args.market:
             market_keys = [k for k in market_keys if k == args.market]
-
         rolling = build_rolling_report(all_rows, market_keys, args.kelly)
         write_drift_alerts(rolling, args.drift_out)
         if not args.quiet:
@@ -596,18 +746,44 @@ def main() -> int:
         print(f"[drift] alerts written to {args.drift_out}", flush=True)
         return 0
 
-    # ── Standard (single-window) mode ─────────────────────────────────────
+    # ── MC comparison mode (Step 4) ───────────────────────────────────────────────
+    if args.compare_mc:
+        market_keys = sorted({
+            r.get("marketKey") or "unknown"
+            for r in all_rows
+            if (r.get("grade") or r.get("status")) in ("win", "loss")
+            and r.get(_CAL_PROB_FIELD) is not None
+        })
+        if args.market:
+            market_keys = [k for k in market_keys if k == args.market]
+        picks_by_market = defaultdict(list)
+        for r in all_rows:
+            if (r.get("grade") or r.get("status")) in ("win", "loss"):
+                if args.since and (r.get("date") or "") < args.since: continue
+                if args.until and (r.get("date") or "") > args.until: continue
+                picks_by_market[r.get("marketKey") or "unknown"].append(r)
+        mc_results = {
+            mk: evaluate_mc_vs_xgb(picks_by_market[mk], mk)
+            for mk in market_keys
+        }
+        if not args.quiet:
+            print_mc_comparison(mc_results)
+        if args.out:
+            os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
+            with open(args.out, "w") as f:
+                json.dump(mc_results, f, indent=2)
+            print(f"[out] wrote {args.out}", flush=True)
+        return 0
+
+    # ── Standard (single-window) mode ─────────────────────────────────────────────
     picks = filter_picks(all_rows, args.since, args.until, args.market,
                           args.min_prob, args.max_prob)
-
     by_market: Dict[str, List[dict]] = defaultdict(list)
     for r in picks:
         by_market[r.get("marketKey") or "unknown"].append(r)
-
     per_market: Dict[str, dict] = {}
     for market in sorted(by_market):
         per_market[market] = evaluate_market(market, by_market[market], args.kelly)
-
     report = {
         "generatedAt": datetime.utcnow().isoformat() + "Z",
         "tracker":     os.path.abspath(args.tracker),
@@ -620,23 +796,19 @@ def main() -> int:
     }
     if not picks:
         report["warnings"].append("no graded picks matched filters — nothing to evaluate")
-
     if args.out:
         os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
         with open(args.out, "w") as f:
             json.dump(report, f, indent=2)
         print(f"[out] wrote {args.out}", flush=True)
-
     if args.plot:
         plot_path = (os.path.splitext(args.out)[0] + "_reliability.png") if args.out \
                     else "eval_reliability.png"
         path = render_reliability_plot(per_market, plot_path)
         if path:
             print(f"[plot] wrote {path}", flush=True)
-
     if not args.quiet:
         print_human_summary(report)
-
     return 0
 
 
