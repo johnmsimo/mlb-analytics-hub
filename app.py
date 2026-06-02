@@ -978,7 +978,7 @@ DEEP_DIVE_HTML = _read_html_or_fallback('deepdive.html')
 PROPS_HTML = _read_html_or_fallback('props.html')
 CHEATSHEET_HTML = _read_html_or_fallback('cheatsheet.html')
 TRACKER_HTML = _read_html_or_fallback('tracker.html')
-SETTINGS_HTML = _read_html_or_fallback('settings.html', '<h1>Settings unavailable</h1>')
+SETTINGS_HTML = _read_html_or_fallback('settings.html')
 CONSISTENCY_HTML = _read_html_or_fallback('consistency.html')
 # Pitcher Analysis page - linked from dashboard header as /pitcher-deep-dive.
 PITCHER_DEEP_DIVE_HTML = _read_html_or_fallback('pitcher_deepdive.html')
