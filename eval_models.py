@@ -2,25 +2,34 @@
 eval_models.py — Calibration + CLV evaluation for graded BvP picks.
 
 Reads `data/daily_tracker.json`, filters to graded picks, and computes
-per-market reliability and value-vs-the-book metrics. Designed to answer
-two questions:
+per-market reliability and value-vs-the-book metrics.
 
-  1. Are our model probabilities CALIBRATED?
-     - Brier score, log loss, AUC-ROC
+  1. CALIBRATION
+     - Brier score, Brier Skill Score (BSS), log loss, AUC-ROC
      - Expected Calibration Error (ECE) + 10-bucket reliability table
      - Optional reliability diagram PNG (matplotlib)
 
-  2. Are our picks BEATING THE BOOK?
+  2. CLV / VALUE
      - Average CLV (closingImplied - openingImplied)
      - CLV-positive rate
      - Model edge vs close (adjProb - closingImplied)
-     - ROI at flat-1-unit stake
-     - ROI at fractional-Kelly stake
+     - ROI at flat-1-unit and fractional-Kelly stake
+
+  3. ROLLING TREND  (--rolling)
+     - Brier + CLV broken into 7 / 14 / 30 / 90-day rolling windows
+     - Drift alert fired when 14-day Brier degrades > DRIFT_BRIER_THRESHOLD
+       vs the 90-day baseline, or CLV-positive rate drops below
+       CLV_POSITIVE_FLOOR
+
+  4. DRIFT ALERTS
+     - Written to `data/model_drift_alerts.json` automatically so
+       props.html can surface them without a separate script.
 
 Usage:
-  python eval_models.py                                  # all graded picks, all markets
-  python eval_models.py --since 2026-04-01               # filter by date
-  python eval_models.py --market batter_hits             # one market
+  python eval_models.py
+  python eval_models.py --since 2026-04-01
+  python eval_models.py --market batter_hits
+  python eval_models.py --rolling --out reports/eval_2026.json
   python eval_models.py --kelly 0.25 --plot --out reports/eval_2026.json
 """
 
@@ -32,19 +41,25 @@ import math
 import os
 import sys
 from collections import defaultdict
-from datetime import datetime
-from typing import Dict, List, Optional
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Tuple
 
 
 TRACKER_PATH_DEFAULT = "data/daily_tracker.json"
+DRIFT_ALERTS_PATH    = "data/model_drift_alerts.json"
+
+# Drift thresholds — tune these as sample grows
+DRIFT_BRIER_THRESHOLD  = 0.04   # 14-day Brier must not exceed 90-day baseline by this amount
+CLV_POSITIVE_FLOOR     = 0.45   # 14-day CLV+ rate below this triggers alert
+ROLLING_WINDOWS        = [7, 14, 30, 90]
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# Helpers
+# Math helpers
 # ────────────────────────────────────────────────────────────────────────────
 
 def american_to_decimal(american) -> Optional[float]:
-    """+150 → 2.50, -180 → 1.5556. Returns None when input isn't parseable."""
+    """+150 → 2.50, -180 → 1.5556."""
     try:
         a = float(american)
     except (TypeError, ValueError):
@@ -59,9 +74,6 @@ def american_to_decimal(american) -> Optional[float]:
 
 
 def kelly_fraction(p: float, dec_odds: float) -> float:
-    """Full-Kelly fraction for a binary bet at decimal odds `dec_odds` and
-    true win prob `p`. Returns 0 when there's no edge.
-    """
     if dec_odds is None or dec_odds <= 1.0 or p is None:
         return 0.0
     b = dec_odds - 1.0
@@ -70,25 +82,16 @@ def kelly_fraction(p: float, dec_odds: float) -> float:
 
 
 def pick_prob_for_side(adj_prob: float, side: str) -> Optional[float]:
-    """`adjProb` is stored as the side's hit probability when `recommendedSide`
-    is set; for older rows where it's the over-prob, flip it for Under picks.
-    """
     if adj_prob is None:
         return None
     side_norm = (side or "Over").strip().lower()
     if side_norm == "under":
-        # If the value is < 0.5 it's already under-prob; otherwise treat as over-prob.
-        # In practice _recalc_tracker_entry stores adjProb as the recommended-side prob,
-        # so this branch is only for legacy rows.
         return float(adj_prob) if adj_prob < 0.5 else round(1.0 - float(adj_prob), 4)
     return float(adj_prob)
 
 
 def reliability_bins(probs: List[float], outcomes: List[int],
                      n_bins: int = 10) -> List[dict]:
-    """Standard reliability table: bucket probs into n_bins, report bucket
-    avg prob and observed hit rate plus N. Used for ECE + diagram.
-    """
     bins = [{"lo": i / n_bins, "hi": (i + 1) / n_bins,
              "n": 0, "sum_p": 0.0, "sum_y": 0} for i in range(n_bins)]
     for p, y in zip(probs, outcomes):
@@ -113,7 +116,6 @@ def reliability_bins(probs: List[float], outcomes: List[int],
 
 
 def expected_calibration_error(probs, outcomes, n_bins=10) -> float:
-    """ECE = Σ (n_bin / N) × |bucket_p - bucket_hit_rate|."""
     total = sum(1 for p in probs if p is not None)
     if total == 0:
         return 0.0
@@ -122,7 +124,6 @@ def expected_calibration_error(probs, outcomes, n_bins=10) -> float:
 
 
 def auc_roc(probs: List[float], outcomes: List[int]) -> Optional[float]:
-    """Mann-Whitney AUC. Returns None if only one class present (undefined)."""
     paired = [(p, y) for p, y in zip(probs, outcomes) if p is not None]
     pos = [p for p, y in paired if y == 1]
     neg = [p for p, y in paired if y == 0]
@@ -143,6 +144,20 @@ def brier_score(probs: List[float], outcomes: List[int]) -> Optional[float]:
     return round(sum((p - y) ** 2 for p, y in paired) / len(paired), 4)
 
 
+def brier_skill_score(probs: List[float], outcomes: List[int]) -> Optional[float]:
+    """BSS = 1 - (Brier / Brier_naive). Naive model always predicts base rate.
+    BSS=1 is perfect; BSS=0 is no better than guessing the mean; negative = worse.
+    """
+    bs = brier_score(probs, outcomes)
+    if bs is None or not outcomes:
+        return None
+    base_rate = sum(outcomes) / len(outcomes)
+    naive = sum((base_rate - y) ** 2 for y in outcomes) / len(outcomes)
+    if naive == 0:
+        return None
+    return round(1.0 - bs / naive, 4)
+
+
 def log_loss(probs: List[float], outcomes: List[int],
              eps: float = 1e-6) -> Optional[float]:
     paired = [(p, y) for p, y in zip(probs, outcomes) if p is not None]
@@ -160,9 +175,6 @@ def log_loss(probs: List[float], outcomes: List[int],
 # ────────────────────────────────────────────────────────────────────────────
 
 def load_tracker(path: str) -> List[dict]:
-    """Flatten `{date: {entries: [...]}}` into a single list of pick rows
-    with the `date` field guaranteed populated.
-    """
     if not os.path.exists(path):
         raise FileNotFoundError(path)
     with open(path) as f:
@@ -200,12 +212,11 @@ def filter_picks(rows: List[dict], since: Optional[str], until: Optional[str],
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# Per-market evaluation
+# Per-market evaluation (single window)
 # ────────────────────────────────────────────────────────────────────────────
 
 def evaluate_market(market: str, picks: List[dict],
                      kelly_frac: float = 0.25) -> dict:
-    """Calibration + CLV + ROI metrics for a single market."""
     probs:    List[float] = []
     outcomes: List[int]   = []
     edges_close: List[float] = []
@@ -227,28 +238,21 @@ def evaluate_market(market: str, picks: List[dict],
         probs.append(p)
         outcomes.append(y)
 
-        # Odds-based metrics
         open_dec  = american_to_decimal(r.get("openingPrice"))
         close_dec = american_to_decimal(r.get("closingPrice"))
         close_imp = r.get("closingImplied")
         open_imp  = r.get("openingImplied")
         clv       = r.get("clvEdge")
 
-        # Model edge vs the closing implied probability (positive = model says
-        # this side is more likely than the close suggests).
         if close_imp is not None:
             edges_close.append(p - float(close_imp))
-        # CLV (line moved toward us by close)
         if clv is not None:
             clv_edges.append(float(clv))
         elif open_imp is not None and close_imp is not None:
             clv_edges.append(float(close_imp) - float(open_imp))
 
-        # ROI at flat 1u stake based on OPENING odds (what we actually bet)
         if open_dec is not None:
             flat_pl.append((open_dec - 1.0) if y == 1 else -1.0)
-
-            # Fractional Kelly using the same odds + model prob
             f_full = kelly_fraction(p, open_dec)
             f_use  = max(0.0, kelly_frac * f_full)
             if f_use > 0:
@@ -256,36 +260,34 @@ def evaluate_market(market: str, picks: List[dict],
 
     n = len(outcomes)
     summary: Dict[str, object] = {
-        "market":       market,
-        "n_graded":     n,
-        "n_pushes":     n_pushes,
-        "win_rate":     round(sum(outcomes) / n, 4) if n else None,
-        "avg_model_prob": round(sum(probs) / n, 4) if n else None,
+        "market":         market,
+        "n_graded":       n,
+        "n_pushes":       n_pushes,
+        "win_rate":       round(sum(outcomes) / n, 4) if n else None,
+        "avg_model_prob": round(sum(probs) / n, 4)    if n else None,
     }
     if n == 0:
         summary["note"] = "no graded picks in window"
         return summary
 
-    # Calibration block
     summary["calibration"] = {
-        "brier":    brier_score(probs, outcomes),
-        "log_loss": log_loss(probs, outcomes),
-        "auc_roc":  auc_roc(probs, outcomes),
-        "ece":      expected_calibration_error(probs, outcomes, 10),
-        "bins":     reliability_bins(probs, outcomes, 10),
+        "brier":       brier_score(probs, outcomes),
+        "brier_skill": brier_skill_score(probs, outcomes),
+        "log_loss":    log_loss(probs, outcomes),
+        "auc_roc":     auc_roc(probs, outcomes),
+        "ece":         expected_calibration_error(probs, outcomes, 10),
+        "bins":        reliability_bins(probs, outcomes, 10),
     }
 
-    # CLV / value-vs-book block
     def _avg(xs): return round(sum(xs) / len(xs), 4) if xs else None
     summary["clv"] = {
-        "n_with_close":    len(edges_close),
-        "avg_edge_vs_close": _avg(edges_close),         # model-prob - close-implied
-        "avg_clv":         _avg(clv_edges),             # close-implied - open-implied
-        "clv_positive_rate": round(sum(1 for c in clv_edges if c > 0) / len(clv_edges), 4)
-                              if clv_edges else None,
+        "n_with_close":       len(edges_close),
+        "avg_edge_vs_close":  _avg(edges_close),
+        "avg_clv":            _avg(clv_edges),
+        "clv_positive_rate":  round(sum(1 for c in clv_edges if c > 0) / len(clv_edges), 4)
+                               if clv_edges else None,
     }
 
-    # ROI block
     summary["roi"] = {
         "n_with_open_odds": len(flat_pl),
         "flat_unit_pl":     round(sum(flat_pl), 3),
@@ -295,15 +297,151 @@ def evaluate_market(market: str, picks: List[dict],
         "kelly_total_pl":   round(sum(kelly_pl), 4),
     }
 
-    # Sample-size warning
     if n < 30:
         summary["warning"] = f"small sample (n={n}) — metrics are noisy"
 
     return summary
 
 
+# ────────────────────────────────────────────────────────────────────────────
+# Rolling window trend + drift detection
+# ────────────────────────────────────────────────────────────────────────────
+
+def _date_cutoff(days_back: int) -> str:
+    """Return YYYY-MM-DD for `days_back` days ago from today."""
+    return (datetime.utcnow() - timedelta(days=days_back)).strftime("%Y-%m-%d")
+
+
+def rolling_trend(all_rows: List[dict], market: str,
+                  kelly_frac: float = 0.25,
+                  windows: List[int] = None) -> dict:
+    """Compute calibration + CLV for each rolling window independently."""
+    if windows is None:
+        windows = ROLLING_WINDOWS
+    result: Dict[str, dict] = {}
+    for days in windows:
+        since = _date_cutoff(days)
+        picks = filter_picks(all_rows, since=since, until=None, market=None)
+        picks = [r for r in picks if r.get("marketKey") == market]
+        metrics = evaluate_market(f"{market}_{days}d", picks, kelly_frac)
+        result[f"{days}d"] = {
+            "since":        since,
+            "n":            metrics.get("n_graded", 0),
+            "win_rate":     metrics.get("win_rate"),
+            "brier":        metrics.get("calibration", {}).get("brier")       if metrics.get("calibration") else None,
+            "bss":          metrics.get("calibration", {}).get("brier_skill") if metrics.get("calibration") else None,
+            "ece":          metrics.get("calibration", {}).get("ece")         if metrics.get("calibration") else None,
+            "avg_clv":      metrics.get("clv", {}).get("avg_clv"),
+            "clv_pos_rate": metrics.get("clv", {}).get("clv_positive_rate"),
+            "flat_roi":     metrics.get("roi", {}).get("flat_unit_roi"),
+        }
+    return result
+
+
+def detect_drift(trend: Dict[str, dict], market: str) -> List[dict]:
+    """Compare 14d window vs 90d baseline. Return list of alert dicts."""
+    alerts = []
+    w14 = trend.get("14d", {})
+    w90 = trend.get("90d", {})
+    if not w14 or not w90:
+        return alerts
+    if w14.get("n", 0) < 10 or w90.get("n", 0) < 20:
+        return alerts  # not enough data
+
+    b14 = w14.get("brier");  b90 = w90.get("brier")
+    if b14 is not None and b90 is not None and b14 - b90 > DRIFT_BRIER_THRESHOLD:
+        alerts.append({
+            "market":    market,
+            "type":      "BRIER_DRIFT",
+            "severity":  "warn",
+            "msg":       f"14d Brier ({b14:.4f}) is {b14-b90:.4f} above 90d baseline ({b90:.4f}). Model may be drifting.",
+            "14d_brier": b14,
+            "90d_brier": b90,
+            "delta":     round(b14 - b90, 4),
+        })
+
+    c14 = w14.get("clv_pos_rate")
+    if c14 is not None and c14 < CLV_POSITIVE_FLOOR:
+        alerts.append({
+            "market":           market,
+            "type":             "CLV_DECLINE",
+            "severity":         "warn",
+            "msg":              f"14d CLV+ rate ({c14:.1%}) is below floor ({CLV_POSITIVE_FLOOR:.1%}). Value edge softening.",
+            "14d_clv_pos_rate": c14,
+            "floor":            CLV_POSITIVE_FLOOR,
+        })
+
+    bss14 = w14.get("bss")
+    if bss14 is not None and bss14 < 0:
+        alerts.append({
+            "market":   market,
+            "type":     "BSS_NEGATIVE",
+            "severity": "critical",
+            "msg":      f"14d Brier Skill Score is {bss14:.4f} (negative = worse than naive baseline). Immediate review needed.",
+            "14d_bss":  bss14,
+        })
+
+    return alerts
+
+
+def build_rolling_report(all_rows: List[dict], markets: List[str],
+                          kelly_frac: float = 0.25) -> dict:
+    """Full rolling report across all markets with drift alerts."""
+    per_market_trend: Dict[str, dict] = {}
+    all_alerts: List[dict] = []
+
+    for market in markets:
+        trend = rolling_trend(all_rows, market, kelly_frac)
+        per_market_trend[market] = trend
+        alerts = detect_drift(trend, market)
+        all_alerts.extend(alerts)
+
+    return {
+        "generatedAt":   datetime.utcnow().isoformat() + "Z",
+        "windows_days":  ROLLING_WINDOWS,
+        "per_market":    per_market_trend,
+        "alerts":        all_alerts,
+        "n_alerts":      len(all_alerts),
+        "alert_summary": {
+            "critical": sum(1 for a in all_alerts if a.get("severity") == "critical"),
+            "warn":     sum(1 for a in all_alerts if a.get("severity") == "warn"),
+        }
+    }
+
+
+def write_drift_alerts(rolling_report: dict,
+                        alerts_path: str = DRIFT_ALERTS_PATH) -> None:
+    """Write a slim drift-alerts JSON consumed by props.html."""
+    slim = {
+        "generatedAt":   rolling_report["generatedAt"],
+        "n_alerts":      rolling_report["n_alerts"],
+        "alert_summary": rolling_report["alert_summary"],
+        "alerts":        rolling_report["alerts"],
+        # Compact per-market sparkline data (14d Brier + CLV+ rate only)
+        "sparklines": {
+            market: {
+                w: {
+                    "n":        d.get("n"),
+                    "brier":    d.get("brier"),
+                    "bss":      d.get("bss"),
+                    "clv_pos":  d.get("clv_pos_rate"),
+                    "flat_roi": d.get("flat_roi"),
+                }
+                for w, d in windows.items()
+            }
+            for market, windows in rolling_report["per_market"].items()
+        }
+    }
+    os.makedirs(os.path.dirname(os.path.abspath(alerts_path)) or ".", exist_ok=True)
+    with open(alerts_path, "w") as f:
+        json.dump(slim, f, indent=2)
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Reliability plot
+# ────────────────────────────────────────────────────────────────────────────
+
 def render_reliability_plot(per_market: dict, out_path: str) -> Optional[str]:
-    """Save a multi-panel reliability diagram. Returns path or None on failure."""
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -327,17 +465,17 @@ def render_reliability_plot(per_market: dict, out_path: str) -> Optional[str]:
         ys = [b["hit_rate"] for b in bins]
         ns = [b["n"]        for b in bins]
         sizes = [max(20, n * 12) for n in ns]
-        ax.plot([0, 1], [0, 1], color="gray", linestyle="--", alpha=0.6, label="perfect")
-        ax.scatter(xs, ys, s=sizes, alpha=0.7, label=f"buckets (n shown by size)")
+        ax.plot([0, 1], [0, 1], color="gray", linestyle="--", alpha=0.6)
+        ax.scatter(xs, ys, s=sizes, alpha=0.7)
         ax.set_xlim(0, 1); ax.set_ylim(0, 1)
         ax.set_xlabel("model probability")
         ax.set_ylabel("observed hit rate")
-        ece = per_market[market]["calibration"]["ece"]
-        n   = per_market[market]["n_graded"]
-        ax.set_title(f"{market}\nECE {ece} · N {n}")
+        cal   = per_market[market]["calibration"]
+        ece   = cal.get("ece");  bss = cal.get("brier_skill")
+        n_val = per_market[market]["n_graded"]
+        ax.set_title(f"{market}\nECE {ece}  BSS {bss}  N {n_val}")
         ax.grid(True, alpha=0.25)
 
-    # Hide any unused axes
     for j in range(len(markets), rows * cols):
         axes[j // cols][j % cols].axis("off")
 
@@ -353,26 +491,20 @@ def render_reliability_plot(per_market: dict, out_path: str) -> Optional[str]:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("--tracker", default=TRACKER_PATH_DEFAULT,
-                   help=f"Tracker JSON path (default: {TRACKER_PATH_DEFAULT})")
-    p.add_argument("--since",  default=None,
-                   help="Only include picks on/after this date (YYYY-MM-DD)")
-    p.add_argument("--until",  default=None,
-                   help="Only include picks on/before this date (YYYY-MM-DD)")
-    p.add_argument("--market", default=None,
-                   help="Filter to one marketKey (e.g. batter_hits)")
-    p.add_argument("--min-prob", type=float, default=0.0,
-                   help="Filter picks with model prob < this (default 0)")
-    p.add_argument("--max-prob", type=float, default=1.0,
-                   help="Filter picks with model prob > this (default 1)")
-    p.add_argument("--kelly",  type=float, default=0.25,
-                   help="Fractional Kelly multiplier (default 0.25)")
-    p.add_argument("--out",    default=None,
-                   help="Write JSON report to this path (default: stdout only)")
-    p.add_argument("--plot",   action="store_true",
-                   help="Save reliability diagram PNG next to --out (or in CWD)")
-    p.add_argument("--quiet",  action="store_true",
-                   help="Suppress per-market human-readable summary")
+    p.add_argument("--tracker",   default=TRACKER_PATH_DEFAULT)
+    p.add_argument("--since",     default=None,  help="YYYY-MM-DD")
+    p.add_argument("--until",     default=None,  help="YYYY-MM-DD")
+    p.add_argument("--market",    default=None,  help="e.g. batter_hits")
+    p.add_argument("--min-prob",  type=float, default=0.0)
+    p.add_argument("--max-prob",  type=float, default=1.0)
+    p.add_argument("--kelly",     type=float, default=0.25)
+    p.add_argument("--out",       default=None,  help="Write JSON report here")
+    p.add_argument("--plot",      action="store_true", help="Save reliability PNG")
+    p.add_argument("--quiet",     action="store_true")
+    p.add_argument("--rolling",   action="store_true",
+                   help="Compute rolling 7/14/30/90d trend + drift alerts")
+    p.add_argument("--drift-out", default=DRIFT_ALERTS_PATH,
+                   help=f"Where to write drift alerts JSON (default: {DRIFT_ALERTS_PATH})")
     return p.parse_args()
 
 
@@ -389,9 +521,9 @@ def print_human_summary(report: dict) -> None:
         cal = m["calibration"]
         clv = m["clv"]
         roi = m["roi"]
-        print(f"\n[{market}] n={m['n_graded']} (pushes {m['n_pushes']}) · win-rate {m['win_rate']:.3f} · model-prob μ {m['avg_model_prob']:.3f}")
-        print(f"  Calibration  Brier {cal['brier']} · LogLoss {cal['log_loss']} · "
-              f"AUC {cal['auc_roc']} · ECE {cal['ece']}")
+        bss = cal.get("brier_skill")
+        print(f"\n[{market}] n={m['n_graded']} (pushes {m['n_pushes']}) · win-rate {m['win_rate']:.3f}")
+        print(f"  Calibration  Brier {cal['brier']} · BSS {bss} · LogLoss {cal['log_loss']} · AUC {cal['auc_roc']} · ECE {cal['ece']}")
         avg_clv = clv.get("avg_clv");   pos = clv.get("clv_positive_rate")
         edge    = clv.get("avg_edge_vs_close")
         print(f"  CLV          edge-vs-close {edge if edge is not None else '—'} · "
@@ -399,16 +531,73 @@ def print_human_summary(report: dict) -> None:
               f"CLV+ rate {pos if pos is not None else '—'} ({clv['n_with_close']} with close)")
         roi_v = roi.get("flat_unit_roi");  pl = roi.get("flat_unit_pl")
         kpl   = roi.get("kelly_total_pl")
-        print(f"  ROI          flat 1u: {pl:+.2f}u total ({roi_v:+.4f} ROI) · "
-              f"Kelly {roi['kelly_frac']}: {kpl:+.4f} bankroll units across {roi['kelly_n_bets']} bets")
+        print(f"  ROI          flat 1u: {pl:+.2f}u ({roi_v:+.4f}) · "
+              f"Kelly {roi['kelly_frac']}: {kpl:+.4f} bankroll units ({roi['kelly_n_bets']} bets)")
         if m.get("warning"):
             print(f"  ⚠ {m['warning']}")
 
 
+def print_rolling_summary(rolling: dict) -> None:
+    print("\n=== Rolling Window Trend ===")
+    headers = ["MARKET", "7d-B", "14d-B", "30d-B", "90d-B", "14d-BSS", "14d-CLV+", "14d-ROI", "14d-N"]
+    rows_out = []
+    for market, windows in rolling["per_market"].items():
+        rows_out.append([
+            market,
+            f"{windows['7d']['brier']}"  if windows["7d"].get("brier")  is not None else "—",
+            f"{windows['14d']['brier']}" if windows["14d"].get("brier") is not None else "—",
+            f"{windows['30d']['brier']}" if windows["30d"].get("brier") is not None else "—",
+            f"{windows['90d']['brier']}" if windows["90d"].get("brier") is not None else "—",
+            f"{windows['14d']['bss']}"   if windows["14d"].get("bss")   is not None else "—",
+            f"{windows['14d']['clv_pos_rate']:.2%}" if windows["14d"].get("clv_pos_rate") is not None else "—",
+            f"{windows['14d']['flat_roi']:+.4f}" if windows["14d"].get("flat_roi") is not None else "—",
+            str(windows["14d"].get("n", 0)),
+        ])
+    col_w = [max(len(h), max((len(r[i]) for r in rows_out), default=0)) for i, h in enumerate(headers)]
+    fmt   = "  ".join(f"{{:<{w}}}" for w in col_w)
+    print("  " + fmt.format(*headers))
+    print("  " + "  ".join("-" * w for w in col_w))
+    for row in rows_out:
+        print("  " + fmt.format(*row))
+
+    if rolling["alerts"]:
+        print(f"\n  🚨 {len(rolling['alerts'])} DRIFT ALERT(S):")
+        for a in rolling["alerts"]:
+            sev = "🔴 CRITICAL" if a["severity"] == "critical" else "🟡 WARN"
+            print(f"    {sev} [{a['market']}] {a['msg']}")
+    else:
+        print("\n  ✅ No drift alerts detected across all windows.")
+
+
 def main() -> int:
     args = parse_args()
-    rows = load_tracker(args.tracker)
-    picks = filter_picks(rows, args.since, args.until, args.market,
+    all_rows = load_tracker(args.tracker)
+
+    # ── Rolling mode ──────────────────────────────────────────────────────
+    if args.rolling:
+        market_keys = sorted({
+            r.get("marketKey") or "unknown"
+            for r in all_rows
+            if (r.get("grade") or r.get("status")) in ("win", "loss", "push", "graded")
+            and r.get("adjProb") is not None
+        })
+        if args.market:
+            market_keys = [k for k in market_keys if k == args.market]
+
+        rolling = build_rolling_report(all_rows, market_keys, args.kelly)
+        write_drift_alerts(rolling, args.drift_out)
+        if not args.quiet:
+            print_rolling_summary(rolling)
+        if args.out:
+            os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
+            with open(args.out, "w") as f:
+                json.dump(rolling, f, indent=2)
+            print(f"[out] wrote {args.out}", flush=True)
+        print(f"[drift] alerts written to {args.drift_out}", flush=True)
+        return 0
+
+    # ── Standard (single-window) mode ─────────────────────────────────────
+    picks = filter_picks(all_rows, args.since, args.until, args.market,
                           args.min_prob, args.max_prob)
 
     by_market: Dict[str, List[dict]] = defaultdict(list)
@@ -429,7 +618,6 @@ def main() -> int:
         "warnings":    [],
         "per_market":  per_market,
     }
-    # Top-level warnings
     if not picks:
         report["warnings"].append("no graded picks matched filters — nothing to evaluate")
 
