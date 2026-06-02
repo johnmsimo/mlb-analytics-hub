@@ -14298,6 +14298,29 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                         'score': round(score, 4), 'hubRating': hub, 'evPct': ev_pct, 'opp': opp_name, 'reason': _projection_reason_short(p.get('name'), mk, adj_prob, edge, opp_name), 'status': 'pending', 'actual': None, 'grade': 'pending', 'openingPrice': msum.get('best_over_price'), 'openingImplied': market_implied, 'closingPrice': None, 'closingImplied': None, 'closingBookmaker': None, 'closingCapturedAt': None, 'clvEdge': None, 'profitUnits': None, 'profitDollars': None,
                         'parlayId': None, 'parlayLeg': None
                     }
+                    # ── MC fields (Step 4) ──────────────────────────────────────────────────
+                    _mc_batter = None
+                    if xgb_ready(mk):
+                        _score_field = {
+                            'batter_hits': 'xgb_hit_prob_full',
+                            'batter_total_bases': 'xgb_tb_prob_full',
+                            'batter_home_runs': 'xgb_hr_prob_full',
+                            'batter_rbis': 'xgb_rbi_prob_full',
+                        }.get(mk)
+                        if _score_field:
+                            _full = globals().get(_score_field, lambda *a, **kw: {})(p, line=line)
+                            _mc_batter = _full.get('mc') or {}
+                    temp_row['mc_prob_over']  = _mc_batter.get('mc_prob_over')  if _mc_batter else None
+                    temp_row['mc_prob_under'] = _mc_batter.get('mc_prob_under') if _mc_batter else None
+                    temp_row['mc_mean']       = _mc_batter.get('mc_mean')       if _mc_batter else None
+                    temp_row['mc_p10']        = _mc_batter.get('mc_p10')        if _mc_batter else None
+                    temp_row['mc_p25']        = _mc_batter.get('mc_p25')        if _mc_batter else None
+                    temp_row['mc_p75']        = _mc_batter.get('mc_p75')        if _mc_batter else None
+                    temp_row['mc_p90']        = _mc_batter.get('mc_p90')        if _mc_batter else None
+                    temp_row['mc_std']        = _mc_batter.get('mc_std')        if _mc_batter else None
+                    temp_row['mc_n_sims']     = _mc_batter.get('n_sims')        if _mc_batter else None
+                    temp_row['mc_anchored']   = _mc_batter.get('anchored')      if _mc_batter else None
+                    # ────────────────────────────────────────────────────────────────────────
                     # Phase 1: Add schema fields
                     temp_row['id'] = str(uuid4())
                     temp_row['savedAt'] = datetime.now(ET).isoformat()
@@ -14370,6 +14393,23 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                 'score': round(score, 4), 'hubRating': hub, 'evPct': ev_pct, 'opp': '', 'reason': _projection_reason_short(sp.get('name'), 'pitcher_strikeouts', adj_prob, edge), 'status': 'pending', 'actual': None, 'grade': 'pending', 'openingPrice': msum.get('best_over_price'), 'openingImplied': market_implied, 'closingPrice': None, 'closingImplied': None, 'closingBookmaker': None, 'closingCapturedAt': None, 'clvEdge': None, 'profitUnits': None, 'profitDollars': None,
                 'parlayId': None, 'parlayLeg': None
             }
+            # ── MC fields (Step 4) ──────────────────────────────────────────────────
+            if k_xgb_ready:
+                _k_full = xgb_k_prob_full(sp, line=line) if callable(globals().get('xgb_k_prob_full')) else {}
+                _mc_k   = (_k_full or {}).get('mc') or {}
+            else:
+                _mc_k = {}
+            temp_row['mc_prob_over']  = _mc_k.get('mc_prob_over')
+            temp_row['mc_prob_under'] = _mc_k.get('mc_prob_under')
+            temp_row['mc_mean']       = _mc_k.get('mc_mean')
+            temp_row['mc_p10']        = _mc_k.get('mc_p10')
+            temp_row['mc_p25']        = _mc_k.get('mc_p25')
+            temp_row['mc_p75']        = _mc_k.get('mc_p75')
+            temp_row['mc_p90']        = _mc_k.get('mc_p90')
+            temp_row['mc_std']        = _mc_k.get('mc_std')
+            temp_row['mc_n_sims']     = _mc_k.get('n_sims')
+            temp_row['mc_anchored']   = _mc_k.get('anchored')
+            # ────────────────────────────────────────────────────────────────────────
             # Phase 1: Add schema fields
             temp_row['id'] = str(uuid4())
             temp_row['savedAt'] = datetime.now(ET).isoformat()
