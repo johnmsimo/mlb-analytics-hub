@@ -16046,6 +16046,40 @@ def api_tracker_backtest():
         print(f'[api_tracker_backtest] {traceback.format_exc()}')
         return jsonify({'success': False, 'error': str(ex)}), 500
 
+@app.route('/api/eval/summary')
+def api_eval_summary():
+    from eval_models import load_tracker, filter_picks, brier_score, \
+        brier_skill_score, log_loss, auc_roc, expected_calibration_error, \
+        reliability_bins, compute_clv_stats, evaluate_mc_vs_xgb, \
+        rolling_windows_stats
+    since  = request.args.get('since')
+    market = request.args.get('market')
+    window = int(request.args.get('window', 30))
+    try:
+        rows  = load_tracker(TRACKER_STORE)
+        picks = filter_picks(rows, since=since, until=None, market=market)
+        if not picks:
+            return jsonify({'success': False, 'error': 'No graded picks found', 'n': 0})
+        probs    = [r.get('adjProb') for r in picks]
+        outcomes = [1 if r.get('grade') == 'win' else 0 for r in picks]
+        return jsonify({
+            'success':  True,
+            'n':        len(picks),
+            'market':   market or 'all',
+            'brier':    brier_score(probs, outcomes),
+            'bss':      brier_skill_score(probs, outcomes),
+            'logloss':  log_loss(probs, outcomes),
+            'auc':      auc_roc(probs, outcomes),
+            'ece':      expected_calibration_error(probs, outcomes),
+            'bins':     reliability_bins(probs, outcomes),
+            'clv':      compute_clv_stats(picks),
+            'rolling':  rolling_windows_stats(picks, windows=[7,14,30,90]),
+            'mc':       evaluate_mc_vs_xgb(picks, market or 'all'),
+        })
+    except FileNotFoundError:
+        return jsonify({'success': False, 'error': 'No tracker data yet'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/tracker/settings', methods=['GET', 'POST'])
 def api_tracker_settings():
