@@ -233,60 +233,49 @@ def build_batter_features(bg, sv_bat, fg_bat, sv_pit, fg_pit, season):
     # Merge batter stats onto game log
     df = bg.merge(sv, left_on="batter", right_on="player_id", how="left")
 
-    # ── Pitcher opponent stats ─────────────────────────────────────────────
+    # ── Pitcher season stats ───────────────────────────────────────────────
     sv_p = sv_pit[sv_pit["season"] == season].copy()
     sv_p["player_id"] = sv_p["player_id"].astype(int)
     sv_p = sv_p.rename(columns={
-        "xera":         "opp_xera",
-        "era":          "opp_era_sv",
-        "est_woba":     "opp_xwoba_allowed",
-        "k_percent":    "opp_k_pct",
-        "bb_percent":   "opp_bb_pct",
-        "whiff_percent":"opp_whiff",
+        "xera":        "sv_era_p",
+        "k_percent":   "sv_k_pct_p",
+        "est_woba":    "sv_xwoba_p",
+        "whiff_percent":"sv_whiff_p",
     })
-    pit_sv_cols = ["player_id","opp_xera","opp_era_sv",
-                   "opp_xwoba_allowed","opp_k_pct","opp_bb_pct","opp_whiff"]
+    pit_sv_cols = ["player_id","sv_era_p","sv_k_pct_p","sv_xwoba_p","sv_whiff_p"]
     sv_p = sv_p[[c for c in pit_sv_cols if c in sv_p.columns]]
 
-    fg_p = fg_pit[fg_pit["season"] == season].copy()
-    fg_p_id_col = "IDfg" if "IDfg" in fg_p.columns else "playerid"
-    fg_p_cols = [fg_p_id_col,"ERA","FIP","xFIP","WHIP","K/9","BB/9",
-                 "HR/9","K%","BB%","BABIP","LOB%","GB%","IP","GS","WAR"]
-    fg_p = fg_p[[c for c in fg_p_cols if c in fg_p.columns]]
-    fg_p.columns = ["opp_" + c.lower().replace("/","9").replace("%","_pct")
-                     .replace("+","_plus").replace(" ","_")
-                     for c in fg_p.columns]
+    # Add pitcher rolling game-log features (from batter game log context)
+    # For now use the statcast agg — intra-game features added in Cell 5
 
-    # ── Handedness feature ─────────────────────────────────────────────────
-    df["bats_L"]     = (df["stand"] == "L").astype(int)
-    df["throws_R"]   = (df["p_throws"] == "R").astype(int)
-    df["platoon_adv"] = ((df["stand"] == "L") & (df["p_throws"] == "R")).astype(int) |                         ((df["stand"] == "R") & (df["p_throws"] == "L")).astype(int)
-
-    # ── Rolling L7/L14 form (lag features) ────────────────────────────────
+    # ── Rolling batter form ────────────────────────────────────────────────
     df = df.sort_values(["batter","game_date"])
-    df["l7_hits"] = (df.groupby("batter")["hits"]
-                       .transform(lambda x: x.shift(1).rolling(7, min_periods=1).mean()))
-    df["l14_hits"] = (df.groupby("batter")["hits"]
-                        .transform(lambda x: x.shift(1).rolling(14, min_periods=1).mean()))
-    df["l7_hit_rate"] = (df.groupby("batter")["hit_over_0.5"]
-                           .transform(lambda x: x.shift(1).rolling(7, min_periods=1).mean()))
+    df["l5_hits"]  = df.groupby("batter")["hits"].transform(
+        lambda x: x.shift(1).rolling(5, min_periods=1).mean())
+    df["l10_hits"] = df.groupby("batter")["hits"].transform(
+        lambda x: x.shift(1).rolling(10, min_periods=1).mean())
+    df["l5_ab"]    = df.groupby("batter")["ab"].transform(
+        lambda x: x.shift(1).rolling(5, min_periods=1).mean())
+    df["l5_pa"]    = df.groupby("batter")["pa"].transform(
+        lambda x: x.shift(1).rolling(5, min_periods=1).mean())
 
     df["season"] = season
     return df
+
 
 print("\n🔧 Building batter feature matrix (2024)...")
 bat_features = build_batter_features(
     bg_2024, sv_bat_all, fg_bat_all, sv_pit_all, fg_pit_all, season=2024
 )
-print(f"   Rows: {len(bat_features):,}  |  Columns: {bat_features.shape[1]}")
-bat_features.to_csv(f"{OUTPUT_DIR}/batter_features_2024.csv", index=False)
-print("✅ Batter features saved")
+print(f"   Shape: {bat_features.shape}")
+bat_features.to_csv(f"{OUTPUT_DIR}/bat_features_2024.csv", index=False)
+print("✅ bat_features_2024.csv saved")
 
 
 # ============================================================
 # CELL 5 — Feature Engineering: STRIKEOUTS MODEL
 # ============================================================
-def build_pitcher_features(pg, sv_pit, fg_pit, sv_bat_lineup, fg_bat, season):
+def build_pitcher_features(pg, sv_pit, fg_pit, sv_bat_lineup, fg_bat, season, umpire_features=None, lineup_stats=None):
     pg = pg.copy()
     pg["pitcher"] = pg["pitcher"].astype(int)
 
@@ -337,8 +326,19 @@ def build_pitcher_features(pg, sv_pit, fg_pit, sv_bat_lineup, fg_bat, season):
         pd.to_datetime(df["game_date"]) - pd.to_datetime(df["prev_game_date"])
     ).dt.days.fillna(5).clip(lower=0, upper=14)
 
-    df["opp_lineup_k_pct_proxy"] = 22.0
-    df["opp_lineup_xwoba_proxy"] = 0.320
+    # --- Real lineup stats (injected from lineup_loader) ---
+    if lineup_stats and "k_pct" in lineup_stats:
+        df["opp_lineup_k_pct_proxy"] = float(lineup_stats["k_pct"])
+    else:
+        df["opp_lineup_k_pct_proxy"] = 22.0
+    if lineup_stats and "xwoba" in lineup_stats:
+        df["opp_lineup_xwoba_proxy"] = float(lineup_stats["xwoba"])
+    else:
+        df["opp_lineup_xwoba_proxy"] = 0.320
+
+    # --- Umpire features (from umpire_loader) ---
+    df["ump_zone_size"] = float((umpire_features or {}).get("ump_zone_size", 0.0))
+    df["ump_k_boost"]   = float((umpire_features or {}).get("ump_k_boost",   0.0))
 
     df["season"] = season
     return df
@@ -349,69 +349,56 @@ print("\n🔧 Building pitcher feature matrix (2024)...")
 pit_features = build_pitcher_features(
     pg_2024, sv_pit_all, fg_pit_all, sv_bat_all, fg_bat_all, season=2024
 )
-print(f"   Rows: {len(pit_features):,}  |  Columns: {pit_features.shape[1]}")
-pit_features.to_csv(f"{OUTPUT_DIR}/pitcher_features_2024.csv", index=False)
-print("✅ Pitcher features saved")
+print(f"   Shape: {pit_features.shape}")
+pit_features.to_csv(f"{OUTPUT_DIR}/pit_features_2024.csv", index=False)
+print("✅ pit_features_2024.csv saved")
 
 
 # ============================================================
 # CELL 6 — Model Training: HITS XGBoost
 # ============================================================
-HITS_FEATURES = [
+HITS_FEATURES_BASE = [
     # Batter quality
-    "sv_xba", "sv_xwoba", "sv_xslg", "sv_ev",
-    "sv_brl_pct", "sv_hh_pct", "sv_ss_pct", "sv_la",
-    "sv_k_pct", "sv_bb_pct",
-    # Opposing pitcher
-    "opp_xera", "opp_k_pct", "opp_bb_pct", "opp_whiff",
-    # Handedness
-    "bats_L", "throws_R", "platoon_adv",
+    "sv_xba", "sv_xwoba", "sv_xslg",
+    "sv_k_pct", "sv_bb_pct", "sv_ev", "sv_brl_pct", "sv_ss_pct",
+    # Pitcher quality (opponent)
+    "sv_era_p", "sv_k_pct_p", "sv_xwoba_p", "sv_whiff_p",
     # Recent form
-    "l7_hits", "l14_hits", "l7_hit_rate",
+    "l5_hits", "l10_hits", "l5_ab", "l5_pa",
+    # Context
+    "p_throws",
 ]
 
-TARGET_HITS = "hit_over_0.5"
+def train_xgb_hits(df, target="hit_over_0.5"):
+    feat_cols = [f for f in HITS_FEATURES_BASE if f in df.columns]
 
-def train_xgb_hits(df):
-    # Drop rows missing the target or more than 40% of features
-    feat_cols = [f for f in HITS_FEATURES if f in df.columns]
-    df_model = df[feat_cols + [TARGET_HITS]].dropna(subset=[TARGET_HITS])
+    if "p_throws" in feat_cols:
+        df = df.copy()
+        df["p_throws"] = LabelEncoder().fit_transform(df["p_throws"].fillna("R"))
+
+    keep_cols = feat_cols + [target]
+    df_model = df[keep_cols].dropna(subset=[target]).copy()
     df_model[feat_cols] = df_model[feat_cols].fillna(df_model[feat_cols].median())
+    df_model = df_model[df_model["l5_ab"] >= 2]
 
     X = df_model[feat_cols].values
-    y = df_model[TARGET_HITS].values.astype(int)
+    y = df_model[target].values
 
-    scale_pos_weight = (y == 0).sum() / max((y == 1).sum(), 1)
+    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=SEED)
+    model = xgb.XGBClassifier(
+        n_estimators=300,
+        max_depth=4,
+        learning_rate=0.05,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        use_label_encoder=False,
+        eval_metric="logloss",
+        random_state=SEED,
+    )
+    cv_scores = cross_val_score(model, X, y, cv=skf, scoring="roc_auc")
+    print(f"  CV AUC: {cv_scores.mean():.4f} ± {cv_scores.std():.4f}")
 
-    params = {
-        "n_estimators":        800,
-        "learning_rate":       0.04,
-        "max_depth":           5,
-        "min_child_weight":    8,
-        "subsample":           0.80,
-        "colsample_bytree":    0.75,
-        "gamma":               0.10,
-        "reg_alpha":           0.05,
-        "reg_lambda":          1.50,
-        "scale_pos_weight":    scale_pos_weight,
-        "objective":           "binary:logistic",
-        "eval_metric":         "auc",
-        "tree_method":         "hist",
-        "random_state":        SEED,
-        "n_jobs":              -1,
-    }
-    model = xgb.XGBClassifier(**params)
-
-    # 5-fold CV
-    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=SEED)
-    cv_auc = cross_val_score(model, X, y, cv=cv, scoring="roc_auc")
-    cv_ll  = cross_val_score(model, X, y, cv=cv, scoring="neg_log_loss")
-
-    print(f"\n📊 HITS XGBoost CV Results (5-fold):")
-    print(f"   AUC:       {cv_auc.mean():.4f} ± {cv_auc.std():.4f}")
-    print(f"   Log-loss: {-cv_ll.mean():.4f} ± {cv_ll.std():.4f}")
-
-    # Probability calibration (Platt scaling)
+    model.fit(X, y)
     calib = CalibratedClassifierCV(model, cv=3, method="sigmoid")
     calib.fit(X, y)
 
@@ -431,6 +418,8 @@ K_FEATURES_BASE = [
     "l5_ks", "l5_k_rate", "l10_ks",
     # Opponent lineup
     "opp_lineup_k_pct_proxy", "opp_lineup_xwoba_proxy",
+    # Umpire zone tendencies
+    "ump_zone_size", "ump_k_boost",
 ]
 
 def train_xgb_ks(df, target, label):
@@ -451,287 +440,216 @@ def train_xgb_ks(df, target, label):
         df_model = df_model[df_model["bf"] >= 15]
 
     X = df_model[feat_cols].values
-    y = df_model[target].values.astype(int)
+    y = df_model[target].values
 
-    scale_pos_weight = (y == 0).sum() / max((y == 1).sum(), 1)
+    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=SEED)
+    model = xgb.XGBClassifier(
+        n_estimators=400,
+        max_depth=5,
+        learning_rate=0.04,
+        subsample=0.75,
+        colsample_bytree=0.75,
+        min_child_weight=3,
+        use_label_encoder=False,
+        eval_metric="logloss",
+        random_state=SEED,
+    )
+    cv_scores = cross_val_score(model, X, y, cv=skf, scoring="roc_auc")
+    print(f"  [{label}] CV AUC: {cv_scores.mean():.4f} ± {cv_scores.std():.4f}")
 
-    params = {
-        "n_estimators":        700,
-        "learning_rate":       0.05,
-        "max_depth":           4,
-        "min_child_weight":    10,
-        "subsample":           0.80,
-        "colsample_bytree":    0.70,
-        "gamma":               0.15,
-        "reg_alpha":           0.10,
-        "reg_lambda":          2.00,
-        "scale_pos_weight":    scale_pos_weight,
-        "objective":           "binary:logistic",
-        "eval_metric":         "auc",
-        "tree_method":         "hist",
-        "random_state":        SEED,
-        "n_jobs":              -1,
-    }
-    model = xgb.XGBClassifier(**params)
-
-    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=SEED)
-    cv_auc = cross_val_score(model, X, y, cv=cv, scoring="roc_auc")
-    cv_ll  = cross_val_score(model, X, y, cv=cv, scoring="neg_log_loss")
-
-    print(f"\n📊 {label} XGBoost CV Results (5-fold):")
-    print(f"   AUC:       {cv_auc.mean():.4f} ± {cv_auc.std():.4f}")
-    print(f"   Log-loss: {-cv_ll.mean():.4f} ± {cv_ll.std():.4f}")
-
+    model.fit(X, y)
     calib = CalibratedClassifierCV(model, cv=3, method="sigmoid")
     calib.fit(X, y)
+
     return calib, feat_cols, df_model
 
-print("\n🏋️  Training STRIKEOUTS XGBoost models...")
-ks_35_model, ks_35_features, ks_35_df = train_xgb_ks(pit_features, "k_over_3.5", "K OVER 3.5")
-ks_45_model, ks_45_features, ks_45_df = train_xgb_ks(pit_features, "k_over_4.5", "K OVER 4.5")
-ks_55_model, ks_55_features, ks_55_df = train_xgb_ks(pit_features, "k_over_5.5", "K OVER 5.5")
+print("\n🏋️  Training K OVER 3.5 model...")
+k35_model, k35_features, k35_df = train_xgb_ks(pit_features, "k_over_3.5", "K>3.5")
+print("\n🏋️  Training K OVER 4.5 model...")
+k45_model, k45_features, k45_df = train_xgb_ks(pit_features, "k_over_4.5", "K>4.5")
+print("\n🏋️  Training K OVER 5.5 model...")
+k55_model, k55_features, k55_df = train_xgb_ks(pit_features, "k_over_5.5", "K>5.5")
 
 
 # ============================================================
-# CELL 8 — Evaluation & Calibration Plots
+# CELL 8 — Model Evaluation
 # ============================================================
-def evaluate_model(model, feat_cols, df_model, target, title):
-    X = df_model[feat_cols].fillna(df_model[feat_cols].median()).values
-    y = df_model[target].values.astype(int)
+def evaluate_model(model, feat_cols, df_model, target, label):
+    X = df_model[feat_cols].values
+    y = df_model[target].values
     probs = model.predict_proba(X)[:, 1]
-    preds = (probs >= 0.50).astype(int)
+    preds = (probs >= 0.5).astype(int)
 
     auc   = roc_auc_score(y, probs)
     brier = brier_score_loss(y, probs)
     ll    = log_loss(y, probs)
-    acc   = accuracy_score(y, preds)
 
-    print(f"\n{'='*50}")
-    print(f"  {title}")
-    print(f"  AUC: {auc:.4f}  |  Brier: {brier:.4f}  |  LogLoss: {ll:.4f}  |  Acc: {acc:.3f}")
-    print(classification_report(y, preds, target_names=["Under","Over"]))
+    print(f"\n── {label} ──")
+    print(f"  AUC:         {auc:.4f}")
+    print(f"  Brier Score: {brier:.4f}  (lower is better, 0.25 = random)")
+    print(f"  Log Loss:    {ll:.4f}")
+    print(classification_report(y, preds, target_names=["UNDER","OVER"]))
 
-    # Calibration plot
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-    fraction_pos, mean_pred = calibration_curve(y, probs, n_bins=10)
-    axes[0].plot(mean_pred, fraction_pos, "s-", label="XGBoost")
-    axes[0].plot([0, 1], [0, 1], "k--", label="Perfect")
-    axes[0].set_title(f"{title} — Calibration")
-    axes[0].set_xlabel("Mean Predicted Prob"); axes[0].set_ylabel("Fraction Positive")
+    frac_pos, mean_pred = calibration_curve(y, probs, n_bins=10)
+    axes[0].plot(mean_pred, frac_pos, marker="o", label="Model")
+    axes[0].plot([0,1],[0,1], "--", label="Perfect")
+    axes[0].set_title(f"{label} Calibration")
     axes[0].legend()
 
-    axes[1].hist(probs[y == 1], bins=20, alpha=0.6, label="Actual Over", color="green")
-    axes[1].hist(probs[y == 0], bins=20, alpha=0.6, label="Actual Under", color="red")
-    axes[1].set_title(f"{title} — Prob Distribution")
-    axes[1].set_xlabel("Predicted Probability"); axes[1].legend()
-    plt.tight_layout()
-    plt.savefig(f"{OUTPUT_DIR}/{title.replace(' ','_')}_calibration.png", dpi=120)
-    plt.show()
-    return {"auc": auc, "brier": brier, "log_loss": ll, "accuracy": acc}
-
-results = {}
-results["hits_0.5"] = evaluate_model(hits_model, hits_features, hits_df, TARGET_HITS, "HITS OVER 0.5")
-results["k_3.5"]    = evaluate_model(ks_35_model, ks_35_features, ks_35_df, "k_over_3.5", "K OVER 3.5")
-results["k_4.5"]    = evaluate_model(ks_45_model, ks_45_features, ks_45_df, "k_over_4.5", "K OVER 4.5")
-results["k_5.5"]    = evaluate_model(ks_55_model, ks_55_features, ks_55_df, "k_over_5.5", "K OVER 5.5")
-
-
-# ============================================================
-# CELL 9 — SHAP Feature Importance
-# ============================================================
-def plot_shap(model, feat_cols, df_model, title, n=500):
-    """SHAP beeswarm + bar for the underlying XGB estimator."""
-    X_sample = (df_model[feat_cols]
-                .fillna(df_model[feat_cols].median())
-                .sample(min(n, len(df_model)), random_state=SEED)
-                .values)
+    importances = None
     try:
-        base_est = model.calibrated_classifiers_[0].estimator
+        raw_model = model.estimators_[0] if hasattr(model, "estimators_") else model
+        importances = raw_model.feature_importances_
+        axes[1].barh(feat_cols, importances)
+        axes[1].set_title(f"{label} Feature Importance")
     except Exception:
-        base_est = model
-    explainer = shap.TreeExplainer(base_est)
-    shap_vals  = explainer.shap_values(X_sample)
-    plt.figure(figsize=(10, 6))
-    shap.summary_plot(shap_vals, X_sample, feature_names=feat_cols,
-                      show=False, plot_size=None)
-    plt.title(f"SHAP — {title}")
+        axes[1].set_visible(False)
+
     plt.tight_layout()
-    plt.savefig(f"{OUTPUT_DIR}/shap_{title.replace(' ','_')}.png", dpi=120)
-    plt.show()
+    plt.savefig(f"{OUTPUT_DIR}/{label.replace('>','_over_').replace(' ','_')}_eval.png", dpi=120)
+    plt.close()
 
-print("\n🔍 SHAP feature importance...")
-plot_shap(hits_model,  hits_features,  hits_df,  "HITS OVER 0.5")
-plot_shap(ks_45_model, ks_45_features, ks_45_df, "K OVER 4.5")
+    return {"auc": auc, "brier": brier, "log_loss": ll}
+
+print("\n📊 Evaluating models...")
+hits_eval = evaluate_model(hits_model, hits_features, hits_df, "hit_over_0.5", "Hits>0.5")
+k35_eval  = evaluate_model(k35_model,  k35_features,  k35_df,  "k_over_3.5",   "K>3.5")
+k45_eval  = evaluate_model(k45_model,  k45_features,  k45_df,  "k_over_4.5",   "K>4.5")
+k55_eval  = evaluate_model(k55_model,  k55_features,  k55_df,  "k_over_5.5",   "K>5.5")
 
 
 # ============================================================
-# CELL 10 — Export Models + App Integration Wrapper
+# CELL 9 — SHAP Explainability
 # ============================================================
-model_registry = {
-    "hits_over_0.5": {
-        "model":    hits_model,
-        "features": hits_features,
-        "target":   TARGET_HITS,
-        "market":   "batter_hits",
-        "line":     0.5,
-        "version":  "1.0.0",
-        "trained":  datetime.utcnow().isoformat(),
-        "seasons":  SEASONS,
-    },
-    "k_over_3.5": {
-        "model":    ks_35_model,
-        "features": ks_35_features,
-        "target":   "k_over_3.5",
-        "market":   "pitcher_strikeouts",
-        "line":     3.5,
-        "version":  "1.0.0",
-        "trained":  datetime.utcnow().isoformat(),
-        "seasons":  SEASONS,
-    },
-    "k_over_4.5": {
-        "model":    ks_45_model,
-        "features": ks_45_features,
-        "target":   "k_over_4.5",
-        "market":   "pitcher_strikeouts",
-        "line":     4.5,
-        "version":  "1.0.0",
-        "trained":  datetime.utcnow().isoformat(),
-        "seasons":  SEASONS,
-    },
-    "k_over_5.5": {
-        "model":    ks_55_model,
-        "features": ks_55_features,
-        "target":   "k_over_5.5",
-        "market":   "pitcher_strikeouts",
-        "line":     5.5,
-        "version":  "1.0.0",
-        "trained":  datetime.utcnow().isoformat(),
-        "seasons":  SEASONS,
-    },
+def plot_shap(model, feat_cols, df_model, label, n=500):
+    try:
+        raw = (model.estimators_[0]
+               if hasattr(model, "estimators_") else model)
+        explainer = shap.TreeExplainer(raw)
+        sample = df_model[feat_cols].sample(min(n, len(df_model)), random_state=SEED)
+        shap_vals = explainer.shap_values(sample)
+        shap.summary_plot(shap_vals, sample, show=False)
+        plt.title(f"SHAP — {label}")
+        plt.tight_layout()
+        plt.savefig(f"{OUTPUT_DIR}/shap_{label.replace('>','_over_').replace(' ','_')}.png", dpi=120)
+        plt.close()
+        print(f"  SHAP plot saved for {label}")
+    except Exception as e:
+        print(f"  SHAP failed for {label}: {e}")
+
+print("\n🔍 Generating SHAP plots...")
+plot_shap(hits_model, hits_features, hits_df, "Hits_0.5")
+plot_shap(k35_model,  k35_features,  k35_df,  "K_3.5")
+plot_shap(k45_model,  k45_features,  k45_df,  "K_4.5")
+
+
+# ============================================================
+# CELL 10 — Save Models
+# ============================================================
+_REGISTRY: dict[str, dict] = {}
+
+def save_model(model, feat_cols, line_key, meta=None):
+    path = os.path.join(OUTPUT_DIR, f"xgb_{line_key}.pkl")
+    _REGISTRY[line_key] = {"model": model, "features": feat_cols}
+    joblib.dump({"model": model, "features": feat_cols, "meta": meta or {}}, path)
+    print(f"  Saved → {path}")
+
+results = {
+    "hits_over_0.5": hits_eval,
+    "k_over_3.5":    k35_eval,
+    "k_over_4.5":    k45_eval,
+    "k_over_5.5":    k55_eval,
 }
 
-# Save .pkl files
-for name, reg in model_registry.items():
-    path = f"{OUTPUT_DIR}/xgb_{name}.pkl"
-    meta = {k: v for k, v in reg.items() if k not in ("model", "features")}
-    meta["xgboost_version"] = xgb.__version__
-    joblib.dump({"model": reg["model"], "features": reg["features"], "meta": meta}, path)
-    print(f"✅ Saved: {path}")
+print("\n💾 Saving models...")
+save_model(hits_model, hits_features, "hits_over_0.5", {"target": "hits", "line": 0.5})
+save_model(k35_model,  k35_features,  "k_over_3.5",   {"target": "ks",   "line": 3.5})
+save_model(k45_model,  k45_features,  "k_over_4.5",   {"target": "ks",   "line": 4.5})
+save_model(k55_model,  k55_features,  "k_over_5.5",   {"target": "ks",   "line": 5.5})
 
-# Save metrics summary
-with open(f"{OUTPUT_DIR}/model_metrics.json", "w") as f:
+with open(f"{OUTPUT_DIR}/eval_results.json", "w") as f:
     json.dump(results, f, indent=2)
-
+print("✅ eval_results.json saved")
 print("\n✅ All models saved to", OUTPUT_DIR)
 
 
 # ============================================================
-# CELL 11 — App Integration Module (xgb_prop_scorer.py)
+# CELL 11 — xgb_prop_scorer.py (app.py integration snippet)
 # ============================================================
 APP_INTEGRATION_CODE = '''
-# xgb_prop_scorer.py
-# Drop into your project root alongside app.py.
-# Loaded once at startup; called inside _project_batter_vs_pitcher()
-# and the pitcher K projection path to REPLACE or AUGMENT formula output.
-#
-# NOTE: This file is generated by xgb_prop_pipeline.py Cell 11 for reference.
-# The canonical production version in the repository root adds richer enrichment,
-# feature fallbacks, and the full public API expected by app.py:
-#   xgb_hit_prob, xgb_k_prob, xgb_ready, enrich_batter, enrich_pitcher
+"""
+xgb_prop_scorer.py — XGBoost Prop Probability Scorer
+=====================================================
+Drop this into your project root.  Loaded once by app.py at startup.
 
-import os, joblib
+Usage:
+    from xgb_prop_scorer import load_models, xgb_hits_prob, xgb_k_prob
+
+    load_models()   # call once, e.g. in app.py create_app()
+
+    p_hit  = xgb_hits_prob(batter_stats)
+    p_k35  = xgb_k_prob(pitcher_stats, line=3.5)
+    p_k45  = xgb_k_prob(pitcher_stats, line=4.5)
+    p_k55  = xgb_k_prob(pitcher_stats, line=5.5)
+"""
+from __future__ import annotations
+import os
+import joblib
 import numpy as np
 
-_MODEL_DIR = os.environ.get("XGB_MODEL_DIR", "./models")
-_REGISTRY  = {}
-_LOADED    = False
-
-def _load_models():
-    """Load all trained .pkl models from MODEL_DIR at startup."""
-    global _REGISTRY, _LOADED
-    import glob
-    for path in glob.glob(os.path.join(_MODEL_DIR, "xgb_*.pkl")):
-        key = os.path.basename(path).replace("xgb_","").replace(".pkl","")
-        try:
-            payload = joblib.load(path)
-            # Support both dict payload (current) and legacy direct-model artifacts.
-            if isinstance(payload, dict) and "model" in payload:
-                _REGISTRY[key] = payload
-            else:
-                _REGISTRY[key] = {"model": payload, "features": []}
-            print(f"[xgb] Loaded model: {key}")
-        except Exception as e:
-            print(f"[xgb] Failed to load {path}: {e}")
-    _LOADED = True
-
-_load_models()
+_MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+_REGISTRY: dict[str, dict] = {}
 
 def _safe(v, default=0.0):
     try:
         f = float(v)
-        return f if f == f else default  # nan check
-    except Exception:
+        return f if not (f != f) else default   # guard NaN
+    except (TypeError, ValueError):
         return default
 
-def xgb_ready(market: str = "hits") -> bool:
-    """Returns True if the requested model family is loaded."""
-    if not _LOADED:
-        _load_models()
-    if market == "hits":
-        return "hits_over_0.5" in _REGISTRY
-    if market == "k":
-        return any(k.startswith("k_over_") for k in _REGISTRY)
-    return False
+def load_models():
+    """Load all .pkl model files from the models/ directory into _REGISTRY."""
+    for fname in os.listdir(_MODELS_DIR):
+        if not fname.endswith(".pkl"):
+            continue
+        key = fname.replace("xgb_","").replace(".pkl","")
+        try:
+            obj = joblib.load(os.path.join(_MODELS_DIR, fname))
+            _REGISTRY[key] = obj
+            print(f"[xgb_scorer] loaded {key}")
+        except Exception as e:
+            print(f"[xgb_scorer] failed to load {fname}: {e}")
 
-def enrich_batter(d: dict, **kwargs) -> dict:
-    """Optional enrichment hook — returns input unchanged in this minimal scorer."""
-    return d
-
-def enrich_pitcher(d: dict, **kwargs) -> dict:
-    """Optional enrichment hook — returns input unchanged in this minimal scorer."""
-    return d
-
-def xgb_hit_prob(batter_stats: dict, pitcher_stats: dict) -> float | None:
+def xgb_hits_prob(batter_stats: dict) -> float | None:
     """
-    Returns calibrated P(hits >= 1) for a batter vs. pitcher.
-    Returns None if model not loaded (graceful fallback to formula).
+    Probability of batter recording ≥1 hit.
+    batter_stats keys match the HITS_FEATURES_BASE list.
+    Returns float [0,1] or None if model not loaded.
     """
-    reg = _REGISTRY.get("hits_over_0.5")
-    if not reg:
+    if "hits_over_0.5" not in _REGISTRY:
         return None
+    reg = _REGISTRY["hits_over_0.5"]
     feat_cols = reg["features"]
     row = {
-        "sv_xba":         _safe(batter_stats.get("sv_xba"),      0.250),
-        "sv_xwoba":       _safe(batter_stats.get("sv_xwoba") or
-                                batter_stats.get("fg_woba"),      0.320),
-        "sv_xslg":        _safe(batter_stats.get("sv_xslg"),     0.400),
-        "sv_ev":          _safe(batter_stats.get("sv_ev"),        88.5),
-        "sv_brl_pct":     _safe(batter_stats.get("sv_brl_pct"),  6.0),
-        "sv_hh_pct":      _safe(batter_stats.get("sv_hh_pct"),   37.0),
-        "sv_ss_pct":      _safe(batter_stats.get("sv_ss_pct"),   30.0),
-        "sv_la":          _safe(batter_stats.get("sv_la"),        12.0),
-        "sv_k_pct":       _safe(batter_stats.get("sv_k_pct") or
-                                batter_stats.get("fg_kpct"),      0.22),
-        "sv_bb_pct":      _safe(batter_stats.get("sv_bb_pct") or
-                                batter_stats.get("fg_bbpct"),     0.08),
-        "opp_xera":       _safe(pitcher_stats.get("sv_xera") or
-                                pitcher_stats.get("fg_era"),      4.20),
-        "opp_k_pct":      _safe(pitcher_stats.get("sv_k_pct") or
-                                pitcher_stats.get("fg_kpct"),     0.22),
-        "opp_bb_pct":     _safe(pitcher_stats.get("sv_bb_pct") or
-                                pitcher_stats.get("fg_bbpct"),    0.08),
-        "opp_whiff":      _safe(pitcher_stats.get("sv_whiff"),   22.0),
-        "bats_L":         1 if str(batter_stats.get("fg_bats","R")).upper() == "L" else 0,
-        "throws_R":       1 if str(pitcher_stats.get("pitch_hand","R")).upper() == "R" else 0,
-        "platoon_adv":    0,   # computed below from bat/throw matchup
-        "l7_hits":        _safe(batter_stats.get("l7_hits"),     1.0),
-        "l14_hits":       _safe(batter_stats.get("l14_hits"),    2.0),
-        "l7_hit_rate":    _safe(batter_stats.get("l7_hit_rate"), 0.65),
+        "sv_xba":    _safe(batter_stats.get("sv_xba"),    0.250),
+        "sv_xwoba":  _safe(batter_stats.get("sv_xwoba"),  0.320),
+        "sv_xslg":   _safe(batter_stats.get("sv_xslg"),   0.420),
+        "sv_k_pct":  _safe(batter_stats.get("sv_k_pct"),  22.0),
+        "sv_bb_pct": _safe(batter_stats.get("sv_bb_pct"),  8.5),
+        "sv_ev":     _safe(batter_stats.get("sv_ev"),     88.5),
+        "sv_brl_pct":_safe(batter_stats.get("sv_brl_pct"), 7.0),
+        "sv_ss_pct": _safe(batter_stats.get("sv_ss_pct"), 30.0),
+        "sv_era_p":  _safe(batter_stats.get("sv_era_p"),   4.20),
+        "sv_k_pct_p":_safe(batter_stats.get("sv_k_pct_p"),22.0),
+        "sv_xwoba_p":_safe(batter_stats.get("sv_xwoba_p"), 0.310),
+        "sv_whiff_p":_safe(batter_stats.get("sv_whiff_p"),22.0),
+        "l5_hits":   _safe(batter_stats.get("l5_hits"),    0.8),
+        "l10_hits":  _safe(batter_stats.get("l10_hits"),   0.9),
+        "l5_ab":     _safe(batter_stats.get("l5_ab"),      3.5),
+        "l5_pa":     _safe(batter_stats.get("l5_pa"),      4.0),
+        "p_throws":  0 if str(batter_stats.get("p_throws","R")).upper() == "L" else 1,
     }
-    row["platoon_adv"] = int(
-        (row["bats_L"] == 1 and row["throws_R"] == 1) or
-        (row["bats_L"] == 0 and row["throws_R"] == 0)
-    )
     X = np.array([[row.get(f, 0.0) for f in feat_cols]], dtype=float)
     try:
         return float(reg["model"].predict_proba(X)[0, 1])
@@ -740,23 +658,15 @@ def xgb_hit_prob(batter_stats: dict, pitcher_stats: dict) -> float | None:
 
 def xgb_k_prob(pitcher_stats: dict, line: float = 4.5) -> float | None:
     """
-    Returns calibrated P(Ks >= line + 0.5) for a pitcher.
-    line should be 3.5, 4.5, or 5.5.
-    Falls back to the nearest available model when the exact line is missing.
-    Returns None if no model is loaded.
+    Probability of pitcher recording strikeouts OVER `line`.
+    pitcher_stats keys match K_FEATURES_BASE.
+    Pass ump_zone_size and ump_k_boost in pitcher_stats for umpire-adjusted probs.
+    Returns float [0,1] or None if model not loaded.
     """
-    line_key = f"k_over_{line}"
+    line_map  = {3.5: "k_over_3.5", 4.5: "k_over_4.5", 5.5: "k_over_5.5"}
+    line_key  = line_map.get(line, "k_over_4.5")
     if line_key not in _REGISTRY:
-        candidates = []
-        for k in _REGISTRY:
-            if k.startswith("k_over_"):
-                try:
-                    candidates.append((abs(float(k[7:]) - line), k))
-                except ValueError:
-                    pass
-        if not candidates:
-            return None
-        line_key = min(candidates)[1]
+        return None
     reg = _REGISTRY[line_key]
     feat_cols = reg["features"]
     row = {
@@ -774,7 +684,10 @@ def xgb_k_prob(pitcher_stats: dict, line: float = 4.5) -> float | None:
         "l10_ks":                  _safe(pitcher_stats.get("l10_ks"),    4.5),
         "opp_lineup_k_pct_proxy":  _safe(pitcher_stats.get("sv_k_pct") or
                                          pitcher_stats.get("fg_kpct"),   0.22) * 0.88,
-        "opp_lineup_xwoba_proxy":  0.320,
+        "opp_lineup_xwoba_proxy":  _safe(pitcher_stats.get("opp_xwoba"), 0.320),
+        # Umpire features — injected by xgb_k_prob caller or scorer wrapper
+        "ump_zone_size":           _safe(pitcher_stats.get("ump_zone_size"), 0.0),
+        "ump_k_boost":             _safe(pitcher_stats.get("ump_k_boost"),   0.0),
     }
     X = np.array([[row.get(f, 0.0) for f in feat_cols]], dtype=float)
     try:
@@ -801,33 +714,22 @@ HOW TO INTEGRATE INTO app.py
    models/xgb_k_over_4.5.pkl
    models/xgb_k_over_5.5.pkl
 
-2. Copy xgb_prop_scorer.py to your project root.
+2. At app startup (create_app or equivalent):
+   from xgb_prop_scorer import load_models
+   load_models()
 
-3. In app.py top-level imports, add:
-   from xgb_prop_scorer import xgb_hit_prob, xgb_k_prob
+3. In your props route / scorer:
+   from xgb_prop_scorer import xgb_hits_prob, xgb_k_prob
 
-4. In _project_batter_vs_pitcher(), BLEND formula + XGB:
-   xgb_p = xgb_hit_prob(batter_stats, pitcher_stats)
-   if xgb_p is not None:
-       p_hit = 0.40 * p_hit + 0.60 * xgb_p   # 60% XGB, 40% formula
-   # (tune the blend weight as you validate)
+   # For a batter prop:
+   p = xgb_hits_prob(batter_stats_dict)
 
-5. In pitcher K projection section, BLEND:
-   xgb_k = xgb_k_prob(pitcher_stats, line=4.5)
-   if xgb_k is not None:
-       raw_k_prob = 0.40 * raw_k_prob + 0.60 * xgb_k
+   # For a K prop (umpire-adjusted):
+   import umpire_loader
+   uf = umpire_loader.get_umpire_features(game_hp_umpire_name)
+   pitcher_stats_dict.update(uf)   # injects ump_zone_size, ump_k_boost
+   p = xgb_k_prob(pitcher_stats_dict, line=4.5)
 
-6. Re-train on Render (or Colab) nightly with previous season + YTD data.
-   Set XGB_MODEL_DIR env var to your model path.
+4. Retrain periodically (weekly or end-of-season) with the full pipeline.
 """
 print(PATCH_NOTES)
-with open(f"{OUTPUT_DIR}/integration_notes.txt", "w") as f:
-    f.write(PATCH_NOTES)
-
-print(f"\n{'='*55}")
-print("  PIPELINE COMPLETE — files in:", OUTPUT_DIR)
-print(f"{'='*55}")
-import os
-for fn in sorted(os.listdir(OUTPUT_DIR)):
-    size = os.path.getsize(f"{OUTPUT_DIR}/{fn}")
-    print(f"  {fn:<45} {size/1024:.1f} KB")
