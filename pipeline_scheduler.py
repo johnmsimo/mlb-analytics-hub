@@ -375,6 +375,7 @@ def _refresh_best_bets_signals(target_date):
         ("framing",       lambda: __import__("framing_loader").fetch_and_save(year)),
         ("bat_tracking",  lambda: __import__("savant_bat_tracking").fetch_and_save(year)),
         ("ballparkpal",   lambda: __import__("ballparkpal_loader").fetch_and_save(date_str)),
+        ("umpire",        lambda: __import__("umpire_loader").fetch_and_save(date_str)),
         ("tier_calibrator", lambda: __import__("tier_calibrator").calibrate()),
     ):
         try:
