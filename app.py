@@ -4167,6 +4167,19 @@ def props_page():
         },
     )
 
+@app.route('/settings')
+def settings_page():
+    html = _read_html_or_fallback('settings.html')
+    return Response(
+        html,
+        mimetype='text/html',
+        headers={
+            'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+            'Pragma': 'no-cache',
+            'Expires': '0',
+        },
+    )
+
 @app.route('/cheatsheets')
 def cheatsheets_page():
     return CHEATSHEET_HTML
