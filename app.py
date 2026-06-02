@@ -485,6 +485,9 @@ if _PIPELINE_AVAILABLE:
     app.register_blueprint(pipeline_bp)
     logging.info("[pipeline] Blueprint registered at /api/pipeline/*")
 
+from training_routes import training_bp, limiter as training_limiter
+app.register_blueprint(training_bp)
+training_limiter.init_app(app)  # only if you're not already calling init_app centrally
 
 # --- MLB API PLAYERS INGEST ROUTE (must be after app = Flask(__name__)) ---
 @app.route('/api/brain/fetch-mlb-players', methods=['POST'])
