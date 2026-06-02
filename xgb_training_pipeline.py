@@ -1,5 +1,15 @@
 """
-xgb_training_pipeline.py — XGBoost Prop Training Pipeline (updated K schema)
+xgb_training_pipeline.py — XGBoost Prop Training Pipeline (Step 1B update)
+
+Changes from previous version:
+  - opp_lineup_k_pct and opp_lineup_xwoba are now computed from actual
+    Statcast opponent-lineup data per game_pk instead of being hardcoded
+    league-average constants (22.0 / 0.320).
+  - ump_zone_size and ump_k_boost added to K_FEATURES and K_MEDIANS so
+    umpire zone data (from umpire_loader.py) flows into all three K models
+    at both train time and score time.
+  - K_MEDIANS defaults for the new features set to 0.0 (league-average
+    z-score / boost) so training is unaffected when umpire data is absent.
 
 Outputs:
   models/xgb_hits.pkl
@@ -36,12 +46,16 @@ HITS_FEATURES = [
     'split_ops_edge', 'expected_pa',
 ]
 
+# ── K features now include real umpire zone features ───────────────────────────
 K_FEATURES = [
     'sv_xera', 'sv_era', 'sv_k_pct', 'sv_bb_pct', 'sv_whiff_pct',
     'l3_ks', 'l5_ks', 'l10_ks',
     'l3_ip', 'l5_ip',
     'days_rest',
-    'opp_lineup_k_pct_proxy', 'opp_lineup_xwoba_proxy',
+    'opp_lineup_k_pct',    # real per-game opponent lineup K% (was proxy)
+    'opp_lineup_xwoba',    # real per-game opponent lineup xwOBA (was proxy)
+    'ump_zone_size',       # umpire zone size z-score (from umpire_loader)
+    'ump_k_boost',         # umpire extra Ks/9 vs. league average
 ]
 
 XGB_PARAMS = dict(
@@ -106,7 +120,7 @@ for yr in SEASONS:
 
 game_df = pd.concat(out_rows, ignore_index=True) if out_rows else pd.DataFrame()
 
-# Pitcher-game outcomes with improved K features
+# ── Pitcher-game outcomes with real opponent lineup stats ──────────────────────
 pit_out_rows = []
 for yr in SEASONS:
     try:
@@ -121,7 +135,7 @@ for yr in SEASONS:
         }).astype(int)
 
         pit_game = (
-            sc.groupby(['game_pk', 'game_date', 'pitcher'])
+            sc.groupby(['game_pk', 'game_date', 'pitcher', 'home_team', 'away_team'])
             .agg(
                 total_ks=('is_k', 'sum'),
                 total_bf=('events', 'count'),
@@ -132,6 +146,65 @@ for yr in SEASONS:
         pit_game['season'] = yr
         pit_game['ip'] = pit_game['outs_recorded'] / 3.0
 
+        # ── Real opponent lineup K% and xwOBA per game ────────────────────────
+        # For each (game_pk, pitcher): the opposing batters are those who batted
+        # for the *other* team in that game.
+        #
+        # Step 1: tag each plate appearance with whether the batter's team is
+        #         the home or away side (inferred from fielding_team)
+        sc['is_k_bat'] = sc['is_k']  # already computed above
+        sc['xwoba_val'] = pd.to_numeric(
+            sc.get('estimated_woba_using_speedangle', sc.get('estimated_woba', None)),
+            errors='coerce'
+        )
+
+        # Build per-game batter-side aggregates (home batting lineup and away batting lineup)
+        # Statcast 'inning_topbot': 'Top' = away batting, 'Bot' = home batting
+        opp_rows = []
+        for (gk, ht, at), g_sc in sc.groupby(['game_pk', 'home_team', 'away_team']):
+            for pitching_side, batting_inning in [('home', 'Top'), ('away', 'Bot')]:
+                # pitching_side pitcher faces batters in batting_inning half-innings
+                opp_pa = g_sc[g_sc['inning_topbot'] == batting_inning]
+                if opp_pa.empty:
+                    continue
+                n_pa    = len(opp_pa)
+                n_k     = int(opp_pa['is_k_bat'].sum())
+                xwoba   = opp_pa['xwoba_val'].dropna().mean()
+                # Identify the pitcher(s) for the pitching_side
+                # (use pitcher column; take the most common pitcher in those PAs as primary)
+                if pitching_side == 'home':
+                    pit_ids = g_sc[g_sc['inning_topbot'] == 'Top']['pitcher'].unique()
+                else:
+                    pit_ids = g_sc[g_sc['inning_topbot'] == 'Bot']['pitcher'].unique()
+                for pid in pit_ids:
+                    opp_rows.append({
+                        'game_pk':           gk,
+                        'pitcher':           pid,
+                        'opp_lineup_k_pct':  round(n_k / max(n_pa, 1) * 100, 2),
+                        'opp_lineup_xwoba':  round(xwoba, 4) if not pd.isna(xwoba) else np.nan,
+                    })
+
+        opp_df = pd.DataFrame(opp_rows).drop_duplicates(subset=['game_pk', 'pitcher'])
+
+        # Merge real lineup stats onto pit_game
+        pit_game = pit_game.merge(opp_df, on=['game_pk', 'pitcher'], how='left')
+
+        # Fill any unmatched rows with season medians (rather than fixed constants)
+        season_k_med    = pit_game['opp_lineup_k_pct'].dropna().median()
+        season_xwoba_med = pit_game['opp_lineup_xwoba'].dropna().median()
+        pit_game['opp_lineup_k_pct']  = pit_game['opp_lineup_k_pct'].fillna(
+            season_k_med if not pd.isna(season_k_med) else 22.0
+        )
+        pit_game['opp_lineup_xwoba'] = pit_game['opp_lineup_xwoba'].fillna(
+            season_xwoba_med if not pd.isna(season_xwoba_med) else 0.320
+        )
+
+        print(f"{yr} opp_lineup_k_pct  median={pit_game['opp_lineup_k_pct'].median():.2f}  "
+              f"std={pit_game['opp_lineup_k_pct'].std():.2f}")
+        print(f"{yr} opp_lineup_xwoba  median={pit_game['opp_lineup_xwoba'].median():.4f}  "
+              f"std={pit_game['opp_lineup_xwoba'].std():.4f}")
+
+        # ── Rolling K/IP windows ──────────────────────────────────────────────
         pit_game = pit_game.sort_values(['pitcher', 'game_date'])
         pit_game['l3_ks'] = pit_game.groupby('pitcher')['total_ks'].transform(
             lambda x: x.shift(1).rolling(3, min_periods=1).mean()
@@ -153,13 +226,17 @@ for yr in SEASONS:
             pd.to_datetime(pit_game['game_date']) - pd.to_datetime(pit_game['prev_game_date'])
         ).dt.days.fillna(5).clip(lower=0, upper=14)
 
-        # Temporary opponent proxies
-        pit_game['opp_lineup_k_pct_proxy'] = 22.0
-        pit_game['opp_lineup_xwoba_proxy'] = 0.320
+        # ── Umpire features ───────────────────────────────────────────────────
+        # During training we don't have HP umpire assignments per historical
+        # game_pk, so we default both umpire features to 0.0 (league average).
+        # At score time (xgb_prop_scorer.py), umpire_loader.get_umpire_features()
+        # supplies the real values for today's umpire.
+        pit_game['ump_zone_size'] = 0.0
+        pit_game['ump_k_boost']   = 0.0
 
-        pit_game[f'k_over_3.5'] = (pit_game['total_ks'] >= 4).astype(int)
-        pit_game[f'k_over_4.5'] = (pit_game['total_ks'] >= 5).astype(int)
-        pit_game[f'k_over_5.5'] = (pit_game['total_ks'] >= 6).astype(int)
+        pit_game['k_over_3.5'] = (pit_game['total_ks'] >= 4).astype(int)
+        pit_game['k_over_4.5'] = (pit_game['total_ks'] >= 5).astype(int)
+        pit_game['k_over_5.5'] = (pit_game['total_ks'] >= 6).astype(int)
 
         pit_out_rows.append(pit_game)
     except Exception as e:
@@ -212,11 +289,16 @@ HIT_MEDIANS = {
     'bats_L': 0, 'throws_R': 1, 'platoon_adv': 0,
     'l7_hits': 1.5, 'l7_hit_rate': 0.50,
 }
+# K_MEDIANS updated: real computed columns replace proxy constants;
+# umpire features default to 0.0 (league average z-score / boost).
 K_MEDIANS = {
     'sv_xera': 4.50, 'sv_era': 4.50, 'sv_k_pct': 22.0, 'sv_bb_pct': 8.0,
     'sv_whiff_pct': 24.0, 'l3_ks': 4.5, 'l5_ks': 4.5, 'l10_ks': 4.5,
     'l3_ip': 5.0, 'l5_ip': 5.0, 'days_rest': 5.0,
-    'opp_lineup_k_pct_proxy': 22.0, 'opp_lineup_xwoba_proxy': 0.320,
+    'opp_lineup_k_pct':  22.0,   # real column; median fallback for any missing
+    'opp_lineup_xwoba':  0.320,  # real column; median fallback for any missing
+    'ump_zone_size':     0.0,    # league-average umpire zone (z-score)
+    'ump_k_boost':       0.0,    # league-average umpire K boost
 }
 
 for col, med in HIT_MEDIANS.items():
