@@ -487,7 +487,7 @@ if _PIPELINE_AVAILABLE:
 
 from training_routes import training_bp, limiter as training_limiter
 app.register_blueprint(training_bp)
-training_limiter.init_app(app)  # only if you're not already calling init_app centrally
+training_limiter.init_app(app)
 
 # --- MLB API PLAYERS INGEST ROUTE (must be after app = Flask(__name__)) ---
 @app.route('/api/brain/fetch-mlb-players', methods=['POST'])
@@ -978,6 +978,7 @@ DEEP_DIVE_HTML = _read_html_or_fallback('deepdive.html')
 PROPS_HTML = _read_html_or_fallback('props.html')
 CHEATSHEET_HTML = _read_html_or_fallback('cheatsheet.html')
 TRACKER_HTML = _read_html_or_fallback('tracker.html')
+SETTINGS_HTML = _read_html_or_fallback('settings.html', '<h1>Settings unavailable</h1>')
 CONSISTENCY_HTML = _read_html_or_fallback('consistency.html')
 # Pitcher Analysis page - linked from dashboard header as /pitcher-deep-dive.
 PITCHER_DEEP_DIVE_HTML = _read_html_or_fallback('pitcher_deepdive.html')
