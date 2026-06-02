@@ -41,6 +41,14 @@ except ImportError:
     def get_batter_projection(*a, **kw): return {}
     def get_pitcher_projection(*a, **kw): return {}
 
+try:
+    from umpire_loader import get_umpire_features as _get_ump_features
+    _UMP_AVAILABLE = True
+except ImportError:
+    _UMP_AVAILABLE = False
+    def _get_ump_features(name: str) -> dict:
+        return {"ump_zone_size": 0.0, "ump_k_boost": 0.0}
+        
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _MODEL_DIR = os.path.join(_HERE, "models")
 _FEAT_FILE = os.path.join(_MODEL_DIR, "xgb_feature_cols.json")
@@ -327,9 +335,15 @@ def _build_k_features(pitcher: dict, feat_order: list) -> Optional[np.ndarray]:
         "opp_lineup_xwoba_proxy": _sf(
             pitcher, "oppWoba", "opponentxwoba", "opp_lineup_xwoba_proxy", default=0.320
         ),
+        "ump_zone_size": _sf(
+            pitcher, "ump_zone_size", default=0.0
+        ),
+        "ump_k_boost": _sf(
+            pitcher, "ump_k_boost", default=0.0
+        ),
     }
 
-    for pct_key in ("sv_k_pct", "sv_bb_pct", "opp_lineup_k_pct_proxy"):
+    for pct_key in ("sv_k_pct", "sv_bb_pct", "opp_lineup_k_pct"):
         if 0 < raw[pct_key] <= 1.0:
             raw[pct_key] *= 100.0
 
@@ -341,6 +355,7 @@ def _build_k_features(pitcher: dict, feat_order: list) -> Optional[np.ndarray]:
         "l3_ip", "l5_ip",
         "days_rest",
         "opp_lineup_k_pct_proxy", "opp_lineup_xwoba_proxy",
+        "ump_zone_size", "ump_k_boost",
     ]
 
     if feat_order:
@@ -398,6 +413,11 @@ def xgb_k_prob(pitcher: dict, line: float = 4.5) -> Optional[float]:
 
     try:
         pitcher_enriched = _enrich_pitcher_from_fg(pitcher)
+        # Inject live umpire features
+        ump_name = pitcher.get("umpire") or pitcher.get("hp_umpire") or ""
+        ump_feats = _get_ump_features(ump_name) if _UMP_AVAILABLE else {}
+        pitcher_enriched["ump_zone_size"] = ump_feats.get("ump_zone_size", 0.0)
+        pitcher_enriched["ump_k_boost"]   = ump_feats.get("ump_k_boost",   0.0)
         feat_order = _feat_cols.get(line_key, [])
         X = _build_k_features(pitcher_enriched, feat_order)
         if X is None:
