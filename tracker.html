@@ -485,6 +485,7 @@ details[open] summary::before{transform:rotate(90deg)}
       <button class="ptab" data-pv="value" onclick="switchPerf(this)">Value / CLV</button>
       <button class="ptab" data-pv="bankroll" onclick="switchPerf(this)">Bankroll</button>
       <button class="ptab" data-pv="attribution" onclick="switchPerf(this)">Attribution</button>
+      <button class="ptab" data-pv="model-eval" onclick="switchPerf(this)">🎯 Model Eval</button>
       <button class="ptab" data-pv="backtest" onclick="switchPerf(this)">📊 Backtest</button>
     </div>
   </div>
@@ -628,6 +629,76 @@ details[open] summary::before{transform:rotate(90deg)}
     </div>
   </div>
 
+  <!-- ── MODEL EVAL ── -->
+  <div class="pview" id="pv-model-eval">
+    <div style="display:flex;gap:8px;align-items:center;margin:14px 0 10px;flex-wrap:wrap">
+      <select id="evalMarket" style="max-width:170px">
+        <option value="">All Markets</option>
+        <option value="batter_hits">Hits</option>
+        <option value="batter_home_runs">Home Runs</option>
+        <option value="batter_total_bases">Total Bases</option>
+        <option value="batter_rbi">RBI</option>
+        <option value="pitcher_strikeouts">Strikeouts</option>
+      </select>
+      <select id="evalSince" style="max-width:140px">
+        <option value="">All time</option>
+        <option value="7">Last 7 days</option>
+        <option value="14" selected>Last 14 days</option>
+        <option value="30">Last 30 days</option>
+        <option value="90">Last 90 days</option>
+      </select>
+      <button class="btn sm" onclick="loadModelEval()">Load</button>
+      <span class="pill" id="evalPill">Awaiting data</span>
+    </div>
+
+    <!-- drift alert banner — hidden until a drift is detected -->
+    <div id="evalDriftBanner" style="display:none;background:rgba(255,80,80,.12);border:1px solid rgba(255,80,80,.4);border-radius:10px;padding:10px 14px;margin-bottom:12px;font-size:.72rem;color:#ff9090"></div>
+
+    <!-- KPI cards -->
+    <div class="scards" style="grid-template-columns:repeat(5,1fr);margin-bottom:12px">
+      <div class="scard"><div class="scard-v" id="evBrier">—</div><div class="scard-l">Brier Score</div></div>
+      <div class="scard"><div class="scard-v" id="evBSS">—</div><div class="scard-l">Brier Skill</div></div>
+      <div class="scard"><div class="scard-v" id="evECE">—</div><div class="scard-l">Calib. Error</div></div>
+      <div class="scard"><div class="scard-v" id="evCLV">—</div><div class="scard-l">Avg CLV Edge</div></div>
+      <div class="scard"><div class="scard-v" id="evCLVRate">—</div><div class="scard-l">+CLV Rate</div></div>
+    </div>
+
+    <div class="two" style="margin-bottom:12px">
+      <!-- Reliability diagram -->
+      <div class="panel" style="padding:12px">
+        <div class="panel-sub" style="margin-bottom:8px">Reliability Diagram — Model Prob vs Actual Hit Rate</div>
+        <div class="chart-wrap"><canvas id="reliabilityChart"></canvas></div>
+      </div>
+      <!-- Rolling Brier trend -->
+      <div class="panel" style="padding:12px">
+        <div class="panel-sub" style="margin-bottom:8px">Rolling Brier Score (7 / 14 / 30 / 90d)</div>
+        <div class="chart-wrap"><canvas id="rollingBrierChart"></canvas></div>
+      </div>
+    </div>
+
+    <!-- Per-market breakdown table -->
+    <div class="panel" style="padding:12px;margin-bottom:12px">
+      <div class="panel-sub" style="margin-bottom:8px">Per-Market Breakdown</div>
+      <div class="tw">
+        <table id="evalMktTbl">
+          <thead><tr><th>Market</th><th>N</th><th>Win Rate</th><th>Brier</th><th>Skill</th><th>ECE</th><th>Avg CLV</th><th>+CLV Rate</th><th>Flat ROI</th><th>AUC</th></tr></thead>
+          <tbody id="evalMktBody"><tr><td colspan="10" class="empty">Click Load to run evaluation.</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- MC vs XGB comparison -->
+    <div class="panel" style="padding:12px">
+      <div class="panel-sub" style="margin-bottom:8px">MC Simulation vs XGB Calibrated — Head to Head</div>
+      <div class="tw">
+        <table id="evalMcTbl">
+          <thead><tr><th>Market</th><th>N (MC)</th><th>XGB Brier</th><th>MC Brier</th><th>Δ Brier</th><th>XGB CLV Edge</th><th>MC CLV Edge</th><th>Avg MC Spread</th><th>Verdict</th></tr></thead>
+          <tbody id="evalMcBody"><tr><td colspan="9" class="empty">Click Load to run evaluation.</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  
   <!-- ── BACKTEST ── -->
   <div class="pview" id="pv-backtest">
     <div style="display:flex;gap:8px;align-items:center;margin:14px 0 10px;flex-wrap:wrap">
@@ -1739,6 +1810,155 @@ async function loadAttr() {
     </tr>`).join(''):'<tr><td colspan="10" class="empty">No daily data.</td></tr>';
     status('Attribution loaded');
   } catch(e){status(e.message,true);}
+}
+
+// ── Model Eval Tab ──────────────────────────────────────────────────
+let _reliabilityChart = null, _rollingBrierChart = null;
+
+async function loadModelEval() {
+  const market = document.getElementById('evalMarket').value;
+  const sinceVal = document.getElementById('evalSince').value;
+  const pill = document.getElementById('evalPill');
+  pill.textContent = 'Loading…';
+
+  const since = sinceVal
+    ? new Date(Date.now() - sinceVal * 864e5).toISOString().slice(0,10)
+    : '';
+  const qs = [market && `market=${market}`, since && `since=${since}`].filter(Boolean).join('&');
+
+  let d;
+  try {
+    const r = await fetch(`/api/eval/summary${qs ? '?' + qs : ''}`);
+    d = await r.json();
+  } catch(e) { pill.textContent = 'Error: ' + e.message; return; }
+
+  if (!d.success) { pill.textContent = d.error || 'No data'; return; }
+
+  // ── Drift banner ──
+  const banner = document.getElementById('evalDriftBanner');
+  const allDrifts = Object.values(d.drift || {}).flat();
+  if (allDrifts.length) {
+    banner.style.display = 'block';
+    banner.innerHTML = '⚠️ <strong>Drift detected:</strong> ' +
+      allDrifts.map(a => `${a.market} — ${a.message}`).join(' &nbsp;|&nbsp; ');
+  } else {
+    banner.style.display = 'none';
+  }
+
+  // ── Aggregate KPIs (average across markets) ──
+  const mkt_vals = Object.values(d.per_market || {});
+  const avg = (fn) => {
+    const vs = mkt_vals.map(fn).filter(v => v != null);
+    return vs.length ? vs.reduce((a,b)=>a+b,0)/vs.length : null;
+  };
+  const fmt = (v, dec=3) => v != null ? v.toFixed(dec) : '—';
+  const fmtPct = (v) => v != null ? (v*100).toFixed(1)+'%' : '—';
+
+  document.getElementById('evBrier').textContent   = fmt(avg(m => m.calibration?.brier));
+  document.getElementById('evBSS').textContent     = fmt(avg(m => m.calibration?.brier_skill));
+  document.getElementById('evECE').textContent     = fmt(avg(m => m.calibration?.ece));
+  document.getElementById('evCLV').textContent     = fmt(avg(m => m.clv?.avg_clv), 4);
+  document.getElementById('evCLVRate').textContent = fmtPct(avg(m => m.clv?.clv_positive_rate));
+
+  // colour Brier (lower=better green, higher=red)
+  const bEl = document.getElementById('evBrier');
+  const bv = avg(m => m.calibration?.brier);
+  bEl.style.color = bv == null ? '' : bv < 0.22 ? 'var(--g)' : bv > 0.27 ? '#ff6b6b' : 'var(--c)';
+
+  // colour CLV rate
+  const cEl = document.getElementById('evCLVRate');
+  const cv = avg(m => m.clv?.clv_positive_rate);
+  cEl.style.color = cv == null ? '' : cv >= 0.55 ? 'var(--g)' : cv < 0.45 ? '#ff6b6b' : '';
+
+  pill.textContent = `${mkt_vals.reduce((s,m)=>s+(m.n_graded||0),0)} graded picks`;
+
+  // ── Per-market table ──
+  const tbody = document.getElementById('evalMktBody');
+  tbody.innerHTML = '';
+  for (const [mk, m] of Object.entries(d.per_market || {})) {
+    const cal = m.calibration || {};
+    const clv = m.clv || {};
+    const roi = m.roi || {};
+    const label = mk.replace('batter_','').replace('pitcher_','').replace('_',' ');
+    const brier = cal.brier;
+    const brCol = brier == null ? '' : brier < 0.22 ? 'color:var(--g)' : brier > 0.27 ? 'color:#ff6b6b' : '';
+    tbody.innerHTML += `<tr>
+      <td>${label}</td>
+      <td>${m.n_graded ?? '—'}</td>
+      <td>${fmtPct(m.win_rate)}</td>
+      <td style="${brCol}">${fmt(brier)}</td>
+      <td>${fmt(cal.brier_skill)}</td>
+      <td>${fmt(cal.ece)}</td>
+      <td>${fmt(clv.avg_clv,4)}</td>
+      <td>${fmtPct(clv.clv_positive_rate)}</td>
+      <td>${fmtPct(roi.flat_unit_roi)}</td>
+      <td>${fmt(cal.auc_roc)}</td>
+    </tr>`;
+  }
+  if (!tbody.innerHTML) tbody.innerHTML = '<tr><td colspan="10" class="empty">No graded picks yet.</td></tr>';
+
+  // ── MC vs XGB table ──
+  const mcBody = document.getElementById('evalMcBody');
+  mcBody.innerHTML = '';
+  for (const [mk, mc] of Object.entries(d.mc || {})) {
+    if (!mc.n_with_mc) continue;
+    const delta = mc.brier_delta;
+    const dCol = delta == null ? '' : delta < 0 ? 'color:var(--g)' : 'color:#ff6b6b';
+    const verdict = mc.mc_verdict === 'MC_BETTER'
+      ? '<span style="color:var(--g)">✓ MC better</span>'
+      : mc.mc_verdict === 'XGB_BETTER'
+        ? '<span style="color:#ff6b6b">XGB better</span>'
+        : 'Tied';
+    const label = mk.replace('batter_','').replace('pitcher_','').replace('_',' ');
+    mcBody.innerHTML += `<tr>
+      <td>${label}</td>
+      <td>${mc.n_with_mc ?? '—'}</td>
+      <td>${fmt(mc.xgb_brier)}</td>
+      <td>${fmt(mc.mc_brier)}</td>
+      <td style="${dCol}">${delta != null ? (delta > 0 ? '+' : '') + delta.toFixed(4) : '—'}</td>
+      <td>${fmt(mc.xgb_clv_edge,4)}</td>
+      <td>${fmt(mc.mc_clv_edge,4)}</td>
+      <td>${fmt(mc.avg_mc_spread,3)}</td>
+      <td>${verdict}</td>
+    </tr>`;
+  }
+  if (!mcBody.innerHTML) mcBody.innerHTML = '<tr><td colspan="9" class="empty">No MC data yet — needs mc_prob_over stored on picks.</td></tr>';
+
+  // ── Reliability diagram ──
+  const firstMkt = Object.values(d.per_market || {}).find(m => m.calibration?.bins?.length);
+  if (firstMkt) {
+    const bins = firstMkt.calibration.bins;
+    const labels = bins.map(b => b.bin);
+    if (_reliabilityChart) _reliabilityChart.destroy();
+    _reliabilityChart = new Chart(document.getElementById('reliabilityChart'), {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [
+          { label: 'Hit Rate', data: bins.map(b => b.hit_rate), backgroundColor: 'rgba(0,229,255,.5)', borderColor: 'rgba(0,229,255,1)', borderWidth: 1 },
+          { label: 'Model Prob', data: bins.map(b => b.avg_prob), type: 'line', borderColor: '#ff9800', borderWidth: 2, pointRadius: 3, fill: false },
+        ]
+      },
+      options: { plugins: { legend: { labels: { color: 'var(--tx)' } } }, scales: { x: { ticks: { color: 'var(--mu)', font:{size:9} } }, y: { min:0, max:1, ticks:{color:'var(--mu)'} } } }
+    });
+  }
+
+  // ── Rolling Brier chart ──
+  const windows = ['7d','14d','30d','90d'];
+  const rollingDatasets = Object.entries(d.rolling || {}).map(([mk, trend]) => ({
+    label: mk.replace('batter_','').replace('pitcher_','').replace('_',' '),
+    data: windows.map(w => trend[w]?.brier ?? null),
+    borderWidth: 2, pointRadius: 3, fill: false,
+    tension: 0.3,
+  }));
+  if (_rollingBrierChart) _rollingBrierChart.destroy();
+  if (rollingDatasets.length) {
+    _rollingBrierChart = new Chart(document.getElementById('rollingBrierChart'), {
+      type: 'line',
+      data: { labels: windows, datasets: rollingDatasets },
+      options: { plugins: { legend: { labels: { color: 'var(--tx)', font:{size:10} } } }, scales: { x: { ticks:{color:'var(--mu)'} }, y: { ticks:{color:'var(--mu)'}, title:{display:true,text:'Brier',color:'var(--mu)'} } } }
+    });
+  }
 }
 
 // ── Backtest ──────────────────────────────────────────────────────────────────
