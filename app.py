@@ -478,6 +478,9 @@ def _bq_query_rows(sql, params=None, timeout=15):
 from nrfi_odds_routes import register_nrfi_odds_routes
 register_nrfi_odds_routes(app)
 
+from draftkings_odds_routes import register_draftkings_odds_routes
+register_draftkings_odds_routes(app)
+
 if _PIPELINE_AVAILABLE:
     app.register_blueprint(pipeline_bp)
     logging.info("[pipeline] Blueprint registered at /api/pipeline/*")
