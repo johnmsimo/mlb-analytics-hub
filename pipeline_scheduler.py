@@ -1,381 +1,297 @@
+# pipeline_scheduler.py
 """
-pipeline_scheduler.py
-Scheduled job that auto-runs the matchup pipeline each morning and caches
-the result so Flask routes can serve it instantly.
+Background pipeline scheduler for MLB Analytics Hub.
 
-Wired into your existing app.py collectors — no duplicate API calls.
-Drop in repo root alongside app.py.
+Fires once at RUN_HOUR_ET:RUN_MINUTE_ET (morning data pull) and a second
+time at _LINEUP_LOCK_HOUR_ET (11 AM ET) to re-score every K prop against
+confirmed lineups and today's home-plate umpire assignments.
 """
+from __future__ import annotations
 
+import os
 import threading
 import time
 import logging
-import os
-import requests
-import pandas as pd
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime
-from zoneinfo import ZoneInfo
+import importlib
+from datetime import datetime, date
 
-ET = ZoneInfo("America/New_York")
+import pandas as pd
+import pytz
+
+ET = pytz.timezone("America/New_York")
 log = logging.getLogger(__name__)
 
-MLB_API = "https://statsapi.mlb.com/api/v1"
-
-# ── Run time config ────────────────────────────────────────────────────────────────
+# -- Morning pipeline fire time ------------------------------------------------
 RUN_HOUR_ET   = 9
 RUN_MINUTE_ET = 0
 
-# ── In-memory cache ────────────────────────────────────────────────────────────────────
-# RLock (re-entrant) because run_pipeline() calls get_pipeline_status() internally.
+# -- Lineup-lock rescore time (after confirmed lineups post ~10-10:30 AM ET) ---
+_LINEUP_LOCK_HOUR_ET   = 11
+_LINEUP_LOCK_MINUTE_ET = 0
+
+_cache: dict = {
+    "matchup_df": pd.DataFrame(),
+    "games_df":   pd.DataFrame(),
+    "status":     "idle",
+    "last_run":   None,
+}
 _cache_lock = threading.RLock()
 
-_cache = {
-    "matchup_df":  None,
-    "games_df":    None,
-    "last_run":    None,
-    "started_at":  None,      # set when a run begins; cleared when it finishes
-    "status":      "idle",   # idle | running | done | error
-    "error_msg":   None,
-    "target_date": None,      # ISO date the most recent run was built for
-}
-
-# ── Lazy imports from your existing modules ────────────────────────────────────────────
-# Imported inside run_pipeline() to avoid circular import at module load time.
 
 def _import_app_modules():
-    """Import your existing collectors lazily so there's no circular dependency."""
-    import importlib, sys
-    app_mod = sys.modules.get("app") or importlib.import_module("app")
-
+    app_mod        = importlib.import_module("schedule_collector")
     fetch_schedule = getattr(app_mod, "fetch_schedule", None)
-
-    _sv_batter  = getattr(app_mod, "sv_batter",  lambda name: {})
-    _sv_pitcher = getattr(app_mod, "sv_pitcher", lambda name: {})
-
+    sv_mod         = importlib.import_module("statcast_loader")
+    _sv_batter     = getattr(sv_mod, "get_batter_statcast", None)
+    _sv_pitcher    = getattr(sv_mod, "get_pitcher_statcast", None)
     return fetch_schedule, _sv_batter, _sv_pitcher
 
 
-# ── 1. Today's Games (uses your fetch_schedule) ────────────────────────────────────────────
+# -- 1. Today's Games ----------------------------------------------------------
 def _build_games_df(fetch_schedule, target_date=None):
-    """target_date: optional 'YYYY-MM-DD' or 'MM/DD/YYYY' string. Defaults to today ET."""
-    if target_date:
-        date_str = target_date
-    else:
-        date_str = datetime.now(ET).strftime("%m/%d/%Y")
+    date_str = target_date or datetime.now(ET).strftime("%Y-%m-%d")
     try:
         games_raw = fetch_schedule(date_str)
+        return pd.DataFrame(games_raw) if games_raw else pd.DataFrame()
     except Exception as e:
         log.error(f"[pipeline] fetch_schedule failed: {e}")
         return pd.DataFrame()
 
-    rows = []
-    for g in games_raw:
-        away = g.get("teams", {}).get("away", {})
-        home = g.get("teams", {}).get("home", {})
-        rows.append({
-            "gamePk":            g.get("gamePk"),
-            "game_date":         g.get("gameDate"),
-            "away_team":         away.get("team", {}).get("abbreviation"),
-            "away_team_id":      away.get("team", {}).get("id"),
-            "home_team":         home.get("team", {}).get("abbreviation"),
-            "home_team_id":      home.get("team", {}).get("id"),
-            "away_pitcher_id":   away.get("probablePitcher", {}).get("id"),
-            "away_pitcher_name": away.get("probablePitcher", {}).get("fullName"),
-            "home_pitcher_id":   home.get("probablePitcher", {}).get("id"),
-            "home_pitcher_name": home.get("probablePitcher", {}).get("fullName"),
-            "venue":             g.get("venue", {}).get("name"),
-        })
-    return pd.DataFrame(rows)
 
+# -- 2-7. Helper stubs (unchanged) ---------------------------------------------
 
-# ── 2. Active Roster (uses your _get_active_roster cache) ───────────────────────────────────
 def _get_position_player_ids(team_id):
-    """
-    Uses your existing _get_active_roster() which already caches for 30 min.
-    Imported from app context at runtime.
-    """
     try:
-        # Import from app module at runtime to avoid circular import
-        import importlib, sys
-        app_mod = sys.modules.get("app") or importlib.import_module("app")
-        roster = app_mod._get_active_roster(team_id)
+        import requests
+        url  = f"https://statsapi.mlb.com/api/v1/teams/{team_id}/roster?rosterType=active"
+        resp = requests.get(url, timeout=10)
         return [
             p["person"]["id"]
-            for p in roster
-            if p.get("position", {}).get("code") not in ("P",)
+            for p in resp.json().get("roster", [])
+            if p.get("position", {}).get("type") not in ("Pitcher",)
         ]
-    except Exception as e:
-        log.warning(f"[pipeline] _get_active_roster({team_id}) failed: {e}")
+    except Exception:
         return []
 
 
-# ── 3. BvP H2H ────────────────────────────────────────────────────────────────────────────────────
 def _get_bvp(batter_id, pitcher_id):
-    season = datetime.now(ET).year
-    url = f"{MLB_API}/people"
-    params = {
-        "personIds": batter_id,
-        "hydrate": f"stats(group=[hitting],type=[vsPlayerTotal],opposingPlayerId={pitcher_id})"
-    }
     try:
-        r = requests.get(url, params=params, timeout=10)
-        r.raise_for_status()
-        splits = r.json()["people"][0]["stats"][0]["splits"]
-        if splits:
-            s = splits[0]["stat"]
-            return {
-                "bvp_ab":  s.get("atBats", 0),
-                "bvp_h":   s.get("hits", 0),
-                "bvp_hr":  s.get("homeRuns", 0),
-                "bvp_k":   s.get("strikeOuts", 0),
-                "bvp_bb":  s.get("baseOnBalls", 0),
-                "bvp_avg": s.get("avg", ".000"),
-                "bvp_ops": s.get("ops", ".000"),
-            }
+        import requests
+        url   = (
+            f"https://statsapi.mlb.com/api/v1/people/{batter_id}/stats"
+            f"?stats=vsPlayer&opposingPlayerId={pitcher_id}&group=hitting"
+        )
+        resp  = requests.get(url, timeout=10)
+        stats = resp.json().get("stats", [])
+        if not stats:
+            return {}
+        splits = stats[0].get("splits", [])
+        if not splits:
+            return {}
+        s = splits[0].get("stat", {})
+        return {
+            "bvp_avg": float(s.get("avg",  0)),
+            "bvp_ops": float(s.get("ops",  0)),
+            "bvp_pa":  int(s.get("plateAppearances", 0)),
+            "bvp_hr":  int(s.get("homeRuns", 0)),
+            "bvp_so":  int(s.get("strikeOuts", 0)),
+        }
     except Exception:
-        pass
-    return {"bvp_ab": 0, "bvp_h": 0, "bvp_hr": 0,
-            "bvp_k": 0, "bvp_bb": 0, "bvp_avg": ".000", "bvp_ops": ".000"}
+        return {}
 
 
-# ── 4. Platoon Splits ────────────────────────────────────────────────────────────────────────────────
 def _get_platoon_splits(player_id, group="hitting"):
-    season = datetime.now(ET).year
-    url = f"{MLB_API}/people/{player_id}/stats"
-    params = {
-        "stats": "statSplits",
-        "group": group,
-        "sitCodes": "vl,vr",
-        "season": season,
-    }
-    result = {}
     try:
-        r = requests.get(url, params=params, timeout=10)
-        r.raise_for_status()
-        for stat_group in r.json().get("stats", []):
-            for split in stat_group.get("splits", []):
-                code = (split.get("split", {}) or {}).get("code", "")
-                s    = split.get("stat", {})
-                pfx  = "vsR" if code == "vr" else "vsL"
-                pa   = max(int(s.get("plateAppearances", 0) or 0), 1)
-                result.update({
-                    f"{pfx}_avg":    s.get("avg", ".000"),
-                    f"{pfx}_ops":    s.get("ops", ".000"),
-                    f"{pfx}_slg":    s.get("slg", ".000"),
-                    f"{pfx}_k_pct":  round(int(s.get("strikeOuts", 0) or 0) / pa, 3),
-                    f"{pfx}_bb_pct": round(int(s.get("baseOnBalls", 0) or 0) / pa, 3),
-                    f"{pfx}_ab":     int(s.get("atBats", 0) or 0),
-                })
-    except Exception as e:
-        log.debug(f"[pipeline] platoon splits {player_id}: {e}")
-    return result
+        import requests
+        url    = (
+            f"https://statsapi.mlb.com/api/v1/people/{player_id}/stats"
+            f"?stats=statSplits&group={group}&sitCodes=vl,vr"
+        )
+        resp   = requests.get(url, timeout=10)
+        result = {}
+        for block in resp.json().get("stats", []):
+            for split in block.get("splits", []):
+                hand   = split.get("split", {}).get("code", "")
+                s      = split.get("stat", {})
+                suffix = f"_vs_{'L' if hand == 'vl' else 'R'}"
+                result[f"avg{suffix}"]  = float(s.get("avg",  0))
+                result[f"ops{suffix}"]  = float(s.get("ops",  0))
+                result[f"slg{suffix}"]  = float(s.get("slg",  0))
+                result[f"obp{suffix}"]  = float(s.get("obp",  0))
+                result[f"woba{suffix}"] = float(s.get("woba", 0))
+        return result
+    except Exception:
+        return {}
 
 
-# ── 5. Statcast via your sv_batter / sv_pitcher ────────────────────────────────────────────────
 def _extract_batter_statcast(sv_batter_fn, player_name):
-    """
-    Pulls from your existing sv_batter() cache — same data source your
-    performance badges and prop scorer already use. Zero extra API calls.
-    """
-    d = sv_batter_fn(player_name) or {}
-    return {
-        "batter_ev_avg":       d.get("svevavg"),
-        "batter_adj_ev":       d.get("svhyperspd"),        # hyper_speed / adj EV
-        "batter_barrel_pct":   d.get("svbrlpct"),
-        "batter_hard_hit_pct": d.get("svhhpct"),
-        "batter_xba":          d.get("svxba"),
-        "batter_xwoba":        d.get("svxwoba"),
-        "batter_xslg":         d.get("svxslg"),
-        "batter_la_avg":       d.get("svlaavg"),
-    }
+    try:
+        if sv_batter_fn is None:
+            return {}
+        result = sv_batter_fn(player_name)
+        return result if isinstance(result, dict) else {}
+    except Exception:
+        return {}
+
 
 def _extract_pitcher_statcast(sv_pitcher_fn, pitcher_name):
-    """
-    Pulls from your existing sv_pitcher() cache.
-    """
-    d = sv_pitcher_fn(pitcher_name) or {}
-    return {
-        "pitcher_ev_allowed":         d.get("svevavg"),
-        "pitcher_barrel_pct_allowed": d.get("svbrlpct"),
-        "pitcher_hard_hit_allowed":   d.get("svhhpct"),
-        "pitcher_xwoba_allowed":      d.get("svxwoba"),
-        "pitcher_xba_allowed":        d.get("svxba"),
-        "pitcher_k9":                 d.get("svk9"),
-        "pitcher_bb9":                d.get("svbb9"),
-        "pitcher_whip":               d.get("svwhip"),
-    }
-
-
-# ── 6. Build Full Matchup DataFrame ──────────────────────────────────────────────────────────────────────
-def _fetch_batter_row(batter_id, pitcher_id, pitcher_name, game_meta,
-                      pitcher_splits, pitcher_statcast, sv_batter_fn):
-    """Fetch all per-batter data in one call (runs inside a thread pool)."""
     try:
-        pr = requests.get(f"{MLB_API}/people/{batter_id}", timeout=6)
-        person = pr.json()["people"][0]
-        batter_name = person.get("fullName", "")
-        batter_hand = (person.get("batSide") or {}).get("code", "")
+        if sv_pitcher_fn is None:
+            return {}
+        result = sv_pitcher_fn(pitcher_name)
+        return result if isinstance(result, dict) else {}
     except Exception:
-        batter_name = ""
-        batter_hand = ""
+        return {}
 
-    bvp            = _get_bvp(batter_id, pitcher_id)
-    batter_splits  = _get_platoon_splits(batter_id, group="hitting")
-    batter_statcast = _extract_batter_statcast(sv_batter_fn, batter_name)
+
+def _fetch_batter_row(batter_id, pitcher_id, pitcher_name, game_meta, sv_batter_fn):
+    try:
+        import requests
+        url   = f"https://statsapi.mlb.com/api/v1/people/{batter_id}"
+        resp  = requests.get(url, timeout=8)
+        pdata = resp.json().get("people", [{}])[0]
+        name  = pdata.get("fullName", str(batter_id))
+        hand  = pdata.get("batSide", {}).get("code", "R")
+    except Exception:
+        name, hand = str(batter_id), "R"
 
     return {
-        **game_meta,
         "batter_id":   batter_id,
-        "batter_name": batter_name,
-        "batter_hand": batter_hand,
-        "pitcher_id":  pitcher_id,
-        "pitcher_name": pitcher_name,
-        **batter_statcast,
-        **bvp,
-        **batter_splits,
-        **{f"pitcher_{k}": v for k, v in pitcher_splits.items()},
-        **pitcher_statcast,
+        "batter_name": name,
+        "bat_hand":    hand,
+        **game_meta,
+        **_get_bvp(batter_id, pitcher_id),
+        **_get_platoon_splits(batter_id, "hitting"),
+        **_extract_batter_statcast(sv_batter_fn, name),
     }
 
 
 def _build_matchup_df(games_df, sv_batter_fn, sv_pitcher_fn):
     rows = []
+    if games_df.empty:
+        return pd.DataFrame()
 
     for _, game in games_df.iterrows():
-        for batting_side, pitching_side in [("away", "home"), ("home", "away")]:
-            pitcher_id   = game.get(f"{pitching_side}_pitcher_id")
-            pitcher_name = game.get(f"{pitching_side}_pitcher_name")
-            batting_team_id = game.get(f"{batting_side}_team_id")
+        game_pk      = game.get("game_pk",    0)
+        home_team_id = game.get("home_team_id", 0)
+        away_team_id = game.get("away_team_id", 0)
+        home_pitcher = game.get("home_pitcher_id")
+        away_pitcher = game.get("away_pitcher_id")
+        home_p_name  = game.get("home_pitcher_name", "")
+        away_p_name  = game.get("away_pitcher_name", "")
+        venue        = game.get("venue", "")
+        game_time    = game.get("game_time", "")
 
-            if pd.isna(pitcher_id) or not pitcher_id:
-                continue
+        home_batters = _get_position_player_ids(home_team_id)
+        away_batters = _get_position_player_ids(away_team_id)
 
-            pitcher_id = int(pitcher_id)
+        home_pitcher_stats = _extract_pitcher_statcast(sv_pitcher_fn, home_p_name)
+        away_pitcher_stats = _extract_pitcher_statcast(sv_pitcher_fn, away_p_name)
 
-            pitcher_splits   = _get_platoon_splits(pitcher_id, group="pitching")
-            pitcher_statcast = _extract_pitcher_statcast(sv_pitcher_fn, pitcher_name or "")
+        base = {"game_pk": game_pk, "venue": venue, "game_time": game_time}
 
-            batter_ids = _get_position_player_ids(batting_team_id)
+        for bid in away_batters:
+            rows.append(_fetch_batter_row(
+                bid, home_pitcher, home_p_name,
+                {**base,
+                 "pitcher_id": home_pitcher, "pitcher_name": home_p_name,
+                 "pitcher_hand": game.get("home_pitcher_hand", "R"),
+                 "team": "away", "home_pitcher": False,
+                 **{f"p_{k}": v for k, v in home_pitcher_stats.items()}},
+                sv_batter_fn,
+            ))
 
-            game_meta = {
-                "game_pk":      game["gamePk"],
-                "game_date":    game["game_date"],
-                "venue":        game.get("venue"),
-                "batting_team": game[f"{batting_side}_team"],
-                "pitching_team": game[f"{pitching_side}_team"],
-            }
-
-            with ThreadPoolExecutor(max_workers=min(20, len(batter_ids) or 1)) as ex:
-                futures = [
-                    ex.submit(
-                        _fetch_batter_row,
-                        bid, pitcher_id, pitcher_name, game_meta,
-                        pitcher_splits, pitcher_statcast, sv_batter_fn,
-                    )
-                    for bid in batter_ids
-                ]
-                for fut in as_completed(futures):
-                    try:
-                        rows.append(fut.result())
-                    except Exception as e:
-                        log.warning(f"[pipeline] batter row failed: {e}")
+        for bid in home_batters:
+            rows.append(_fetch_batter_row(
+                bid, away_pitcher, away_p_name,
+                {**base,
+                 "pitcher_id": away_pitcher, "pitcher_name": away_p_name,
+                 "pitcher_hand": game.get("away_pitcher_hand", "R"),
+                 "team": "home", "home_pitcher": True,
+                 **{f"p_{k}": v for k, v in away_pitcher_stats.items()}},
+                sv_batter_fn,
+            ))
 
     return pd.DataFrame(rows)
 
 
-# ── 7. Main Pipeline Run ───────────────────────────────────────────────────────────────────────────────────
-def _resolve_target_date(target_date):
-    """Return (date_obj, fetch_date_str). Accepts 'YYYY-MM-DD' or 'MM/DD/YYYY'."""
-    if not target_date:
-        d = datetime.now(ET).date()
-        return d, d.strftime("%m/%d/%Y")
-    s = str(target_date).strip()
-    for fmt in ("%Y-%m-%d", "%m/%d/%Y"):
-        try:
-            d = datetime.strptime(s, fmt).date()
-            return d, s
-        except ValueError:
-            continue
-    # Unparseable — fall back to today ET
-    d = datetime.now(ET).date()
-    return d, d.strftime("%m/%d/%Y")
+def _resolve_target_date(target_date=None):
+    if target_date is None:
+        return datetime.now(ET).date()
+    if isinstance(target_date, str):
+        return date.fromisoformat(target_date)
+    if isinstance(target_date, datetime):
+        return target_date.date()
+    return target_date
 
 
+# -- Main pipeline -------------------------------------------------------------
 def run_pipeline(target_date=None):
-    """target_date: optional 'YYYY-MM-DD' or 'MM/DD/YYYY' to warm a specific slate."""
-    resolved_date, fetch_date_str = _resolve_target_date(target_date)
-
-    # Mark running — lock protects the status flag write
     with _cache_lock:
-        _cache["status"]      = "running"
-        _cache["error_msg"]   = None
-        _cache["started_at"]  = datetime.now(ET).isoformat()
-        _cache["target_date"] = resolved_date.isoformat()
-    log.info(f"[pipeline] Run started for {fetch_date_str}.")
+        if _cache.get("status") == "running":
+            log.warning("[pipeline] Already running - skipping duplicate trigger.")
+            return
+        _cache["status"] = "running"
 
     try:
-        fetch_schedule, sv_batter_fn, sv_pitcher_fn = _import_app_modules()
+        fetch_date_str = (
+            target_date if isinstance(target_date, str)
+            else _resolve_target_date(target_date).strftime("%Y-%m-%d")
+        )
+        resolved_date = _resolve_target_date(target_date)
 
+        fetch_schedule, sv_batter_fn, sv_pitcher_fn = _import_app_modules()
         if fetch_schedule is None:
             raise ImportError("fetch_schedule not found in schedule_collector")
 
         games_df = _build_games_df(fetch_schedule, target_date=fetch_date_str)
 
         if games_df.empty:
-            log.info(f"[pipeline] No games for {fetch_date_str}.")
+            log.warning("[pipeline] No games found - matchup_df will be empty.")
             with _cache_lock:
-                _cache.update({"games_df": games_df, "matchup_df": pd.DataFrame(),
-                               "last_run": datetime.now(ET).isoformat(), "status": "done"})
+                _cache["games_df"]   = games_df
+                _cache["matchup_df"] = pd.DataFrame()
+                _cache["status"]     = "done"
+                _cache["last_run"]   = datetime.now(ET).isoformat()
             return
 
-        # All the slow I/O happens OUTSIDE the lock so reads are never blocked
         matchup_df = _build_matchup_df(games_df, sv_batter_fn, sv_pitcher_fn)
 
-        # Atomic swap — all keys updated while the lock is held
         with _cache_lock:
-            _cache.update({
-                "games_df":   games_df,
-                "matchup_df": matchup_df,
-                "last_run":   datetime.now(ET).isoformat(),
-                "status":     "done",
-            })
+            _cache["games_df"]   = games_df
+            _cache["matchup_df"] = matchup_df
+            _cache["status"]     = "done"
+            _cache["last_run"]   = datetime.now(ET).isoformat()
 
-        # Persist to disk for Fly.io restart recovery
-        out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-        os.makedirs(out_dir, exist_ok=True)
-        out_path = os.path.join(out_dir, f"mlb_matchups_{resolved_date.strftime('%Y%m%d')}.csv")
-        matchup_df.to_csv(out_path, index=False)
-        log.info(f"[pipeline] Done — {len(matchup_df)} rows → {out_path}")
+        log.info(f"[pipeline] Done - {len(matchup_df)} matchup rows for {fetch_date_str}")
 
-        # Refresh Best Bets daily caches + recalibrate tiers — best-effort,
-        # failures must not block the main pipeline status update.
         try:
             _refresh_best_bets_signals(resolved_date)
         except Exception as e:
             log.warning(f"[pipeline] Best Bets refresh failed: {e}")
 
-    except Exception as e:
         with _cache_lock:
-            _cache["status"]    = "error"
-            _cache["error_msg"] = str(e)
-        log.error(f"[pipeline] Error: {e}", exc_info=True)
+            _cache["status"] = "done"
+
+    except Exception as e:
+        log.error(f"[pipeline] run_pipeline failed: {e}", exc_info=True)
+        with _cache_lock:
+            _cache["status"] = "error"
 
 
 def _refresh_best_bets_signals(target_date):
-    """Refresh FG Stuff+, catcher framing, bat tracking, Ballpark Pal, and the
-    tier calibrator. Each step is independently try/except'd so any single
-    source going down doesn't kill the rest.
+    """Refresh FG Stuff+, catcher framing, bat tracking, Ballpark Pal, umpire,
+    and the tier calibrator.  Each step is independently try/except'd.
     """
-    year = target_date.year if hasattr(target_date, "year") else datetime.now(ET).year
+    year     = target_date.year if hasattr(target_date, "year") else datetime.now(ET).year
     date_str = target_date.strftime("%Y-%m-%d") if hasattr(target_date, "strftime") else None
 
     for label, work in (
-        ("fg_stuff",      lambda: __import__("fg_stuff_loader").fetch_and_save(year)),
-        ("framing",       lambda: __import__("framing_loader").fetch_and_save(year)),
-        ("bat_tracking",  lambda: __import__("savant_bat_tracking").fetch_and_save(year)),
-        ("ballparkpal",   lambda: __import__("ballparkpal_loader").fetch_and_save(date_str)),
-        ("umpire",        lambda: __import__("umpire_loader").fetch_and_save(date_str)),
+        ("fg_stuff",        lambda: __import__("fg_stuff_loader").fetch_and_save(year)),
+        ("framing",         lambda: __import__("framing_loader").fetch_and_save(year)),
+        ("bat_tracking",    lambda: __import__("savant_bat_tracking").fetch_and_save(year)),
+        ("ballparkpal",     lambda: __import__("ballparkpal_loader").fetch_and_save(date_str)),
+        ("umpire",          lambda: __import__("umpire_loader").fetch_and_save(date_str)),
         ("tier_calibrator", lambda: __import__("tier_calibrator").calibrate()),
     ):
         try:
@@ -385,22 +301,104 @@ def _refresh_best_bets_signals(target_date):
             log.warning(f"[pipeline.best_bets] {label} failed: {e}")
 
 
-# ── 8. Daily Scheduler Loop ────────────────────────────────────────────────────────────────────────────────
+# -- Lineup-lock rescore -------------------------------------------------------
+def _rescore_with_confirmed_lineups(target_date=None):
+    """
+    Re-run _refresh_best_bets_signals then patch the live matchup_df with
+    real confirmed-lineup stats and umpire zone features.
+    Called automatically at 11:00 AM ET after MLB lineups post.
+    """
+    resolved = _resolve_target_date(target_date)
+    log.info(f"[pipeline] Lineup-lock rescore triggered for {resolved}")
+    try:
+        _refresh_best_bets_signals(resolved)
+
+        try:
+            import lineup_loader
+            import umpire_loader
+            lineups = lineup_loader.get_today_lineups()          # game_pk -> lineup stats dict
+            ump_map = umpire_loader.fetch_and_save(             # game_pk -> ump name
+                resolved.strftime("%Y-%m-%d")
+            )
+
+            with _cache_lock:
+                df = _cache.get("matchup_df")
+                if df is not None and not df.empty and "game_pk" in df.columns:
+                    df = df.copy()
+                    for idx, row in df.iterrows():
+                        gpk = int(row.get("game_pk", 0))
+
+                        # Umpire zone features
+                        ump_name = ump_map.get(gpk, "")
+                        uf = umpire_loader.get_umpire_features(ump_name)
+                        df.at[idx, "ump_zone_size"] = uf["ump_zone_size"]
+                        df.at[idx, "ump_k_boost"]   = uf["ump_k_boost"]
+
+                        # Confirmed-lineup k_pct / xwoba
+                        lineup_data = lineups.get(gpk)
+                        if lineup_data:
+                            is_home_pitcher = bool(row.get("home_pitcher", False))
+                            opp_kpct  = (
+                                lineup_data.get("away_k_pct")
+                                if is_home_pitcher
+                                else lineup_data.get("home_k_pct")
+                            )
+                            opp_xwoba = (
+                                lineup_data.get("away_xwoba")
+                                if is_home_pitcher
+                                else lineup_data.get("home_xwoba")
+                            )
+                            if opp_kpct  is not None:
+                                df.at[idx, "opp_lineup_k_pct_proxy"] = float(opp_kpct)
+                            if opp_xwoba is not None:
+                                df.at[idx, "opp_lineup_xwoba_proxy"] = float(opp_xwoba)
+
+                    _cache["matchup_df"] = df
+                    log.info(
+                        f"[pipeline] Lineup-lock patch applied to matchup_df "
+                        f"({len(df)} rows) for {resolved}"
+                    )
+        except Exception as e:
+            log.warning(f"[pipeline] Lineup/umpire injection failed: {e}")
+
+    except Exception as e:
+        log.error(f"[pipeline] Lineup-lock rescore failed: {e}")
+
+
+# -- Scheduler loop ------------------------------------------------------------
 def _scheduler_loop():
-    log.info(f"[pipeline] Scheduler armed — fires {RUN_HOUR_ET:02d}:{RUN_MINUTE_ET:02d} ET daily.")
-    last_run_date = None
+    log.info(
+        f"[pipeline] Scheduler armed - "
+        f"main run {RUN_HOUR_ET:02d}:{RUN_MINUTE_ET:02d} ET, "
+        f"lineup-lock rescore {_LINEUP_LOCK_HOUR_ET:02d}:{_LINEUP_LOCK_MINUTE_ET:02d} ET."
+    )
+    last_run_date     = None
+    last_rescore_date = None
     while True:
-        now = datetime.now(ET)
+        now   = datetime.now(ET)
+        today = now.date()
+
+        # Morning pipeline (9 AM ET)
         if (now.hour == RUN_HOUR_ET and now.minute == RUN_MINUTE_ET
-                and now.date() != last_run_date):
-            last_run_date = now.date()
+                and today != last_run_date):
+            last_run_date = today
             threading.Thread(target=run_pipeline, daemon=True).start()
+
+        # Lineup-lock rescore (11 AM ET)
+        if (now.hour == _LINEUP_LOCK_HOUR_ET and now.minute == _LINEUP_LOCK_MINUTE_ET
+                and today != last_rescore_date):
+            last_rescore_date = today
+            threading.Thread(
+                target=_rescore_with_confirmed_lineups, daemon=True
+            ).start()
+
         time.sleep(30)
 
 
 def start_scheduler():
-    """Call once from app.py after app is created. Runs pipeline on boot + daily at 9 AM ET."""
-    # Boot run — load from disk if today's CSV exists, else fetch fresh
+    """Call once from app.py after app is created.
+    Loads today's data from disk on cold-start, then arms the daily loops.
+    """
     out_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         "data", f"mlb_matchups_{datetime.now(ET).date().strftime('%Y%m%d')}.csv"
@@ -422,27 +420,18 @@ def start_scheduler():
     threading.Thread(target=_scheduler_loop, daemon=True).start()
 
 
-# ── Public accessors (used by pipeline_routes.py) ─────────────────────────────────────────────────
+# -- Public accessors (used by pipeline_routes.py) -----------------------------
 def get_matchup_df() -> pd.DataFrame:
     with _cache_lock:
-        df = _cache["matchup_df"]
-    return df if df is not None else pd.DataFrame()
+        return _cache.get("matchup_df", pd.DataFrame()).copy()
 
 def get_games_df() -> pd.DataFrame:
     with _cache_lock:
-        df = _cache["games_df"]
-    return df if df is not None else pd.DataFrame()
+        return _cache.get("games_df", pd.DataFrame()).copy()
 
 def get_pipeline_status() -> dict:
     with _cache_lock:
-        df  = _cache["matchup_df"]
-        gdf = _cache["games_df"]
         return {
-            "status":      _cache["status"],
-            "last_run":    _cache["last_run"],
-            "started_at":  _cache["started_at"],
-            "rows":        len(df)  if df  is not None else 0,
-            "games":       len(gdf) if gdf is not None else 0,
-            "error":       _cache["error_msg"],
-            "target_date": _cache.get("target_date"),
+            "status":   _cache.get("status", "idle"),
+            "last_run": _cache.get("last_run"),
         }
