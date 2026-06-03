@@ -588,14 +588,36 @@ function startTraining() {
     `<div class="mc" id="mc-${m.replace('.','_')}"><div class="mc-name">${m}</div><div class="mc-stat">Waiting…</div></div>`
   ).join('');
 
-  fetch('/api/training/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({markets,seasons})})
-    .then(r=>r.json()).then(d=>{
-      if(!d.success){alert(d.error);document.getElementById('train-btn').disabled=false;return;}
+  fetch('/api/training/run', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({markets,seasons})})
+    .then(function(r) {
+      if (!r.ok) throw new Error('Server returned ' + r.status + (r.status === 429 ? ' — please wait 10 minutes before retrying' : ''));
+      return r.json();
+    })
+    .then(function(d) {
+      if (!d || !d.success) {
+        _showTrainError(d && d.error ? d.error : 'Failed to start training');
+        return;
+      }
       attachTrainingPoll();
-    }).catch(e=>{alert(e);document.getElementById('train-btn').disabled=false;});
+    })
+    .catch(function(e) {
+      _showTrainError(e.message || String(e));
+    });
+}
+
+function _showTrainError(msg) {
+  document.getElementById('train-btn').disabled = false;
+  document.getElementById('train-progress').style.display = 'none';
+  const box = document.getElementById('train-log');
+  box.style.display = 'block';
+  const div = document.createElement('div');
+  div.className = 'log-err';
+  div.textContent = '✗ ' + msg;
+  box.appendChild(div);
 }
 
 function attachTrainingPoll() {
+  if (_pt) clearInterval(_pt);
   _pt = setInterval(pollTraining, 2000);
   pollTraining();
 }
@@ -643,7 +665,7 @@ function pollTraining() {
     }
 
     if(d.status==='done'||d.status==='error'){
-      clearInterval(_pt); document.getElementById('train-btn').disabled=false;
+      clearInterval(_pt); _pt=null; document.getElementById('train-btn').disabled=false;
     }
   }).catch(()=>{});
 }
