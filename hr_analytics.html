@@ -52,7 +52,7 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 /* ── Leaderboard ── */
 .leaderboard{overflow-y:auto;flex:1}
 
-/* ── Batter Card (propalyticsapp-style) ── */
+/* ── Batter Card ── */
 .batter-card{padding:14px 16px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .15s;position:relative}
 .batter-card:hover,.batter-card.selected{background:#1c2128}
 .batter-card.selected{border-left:3px solid var(--accent2)}
@@ -132,6 +132,13 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .ki-val{font-size:15px;font-weight:700}
 .ki-lbl{font-size:10px;color:var(--muted);margin-top:2px}
 
+/* ── Sim run button ── */
+.sim-run-btn{background:linear-gradient(135deg,var(--accent2),var(--accent));color:#fff;border:none;border-radius:10px;padding:14px 32px;font-size:15px;font-weight:700;cursor:pointer;letter-spacing:.5px;transition:opacity .2s,transform .1s;display:inline-flex;align-items:center;gap:8px}
+.sim-run-btn:hover{opacity:.88}
+.sim-run-btn:active{transform:scale(.97)}
+.sim-run-wrap{text-align:center;padding:36px 20px}
+.sim-run-sub{font-size:12px;color:var(--muted);margin-top:8px}
+
 /* ── Pitch mix ── */
 .section{margin-bottom:20px}
 .section-title{font-size:11px;font-weight:700;letter-spacing:.8px;color:var(--muted);text-transform:uppercase;margin-bottom:10px}
@@ -191,6 +198,10 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .snap-lbl{font-size:10px;color:var(--muted);margin-top:3px}
 .regen-btn{background:var(--card);border:1px solid var(--border);color:var(--text);padding:6px 14px;border-radius:6px;font-size:12px;cursor:pointer;margin-top:10px;transition:border-color .2s}
 .regen-btn:hover{border-color:var(--accent2)}
+
+/* ── Auto-refresh countdown ── */
+.lineup-refresh-row{display:flex;align-items:center;gap:8px;margin-top:4px;font-size:11px;color:var(--muted)}
+.lineup-countdown{color:var(--warn);font-weight:600;font-variant-numeric:tabular-nums}
 </style>
 </head>
 <body>
@@ -248,6 +259,45 @@ let gameLineups={};
 let activeGameFilter='all';
 let selectedBatter=null;
 
+// ── Auto-refresh for projected lineups ────────────────────────────────────────
+let lineupPollTimer=null;
+let lineupCountdownTimer=null;
+let lineupCountdownSec=0;
+
+function startLineupPoll(){
+  stopLineupPoll();
+  lineupCountdownSec=90; // poll every 90 seconds
+  updateCountdownDisplay();
+  lineupCountdownTimer=setInterval(()=>{
+    lineupCountdownSec--;
+    if(lineupCountdownSec<=0){
+      lineupCountdownSec=90;
+      loadDailyScores(true);
+    }
+    updateCountdownDisplay();
+  },1000);
+}
+
+function stopLineupPoll(){
+  if(lineupPollTimer){clearInterval(lineupPollTimer);lineupPollTimer=null;}
+  if(lineupCountdownTimer){clearInterval(lineupCountdownTimer);lineupCountdownTimer=null;}
+  const el=document.getElementById('lineupCountdown');
+  if(el)el.closest('.lineup-refresh-row').style.display='none';
+}
+
+function updateCountdownDisplay(){
+  const el=document.getElementById('lineupCountdown');
+  if(el)el.textContent=lineupCountdownSec+'s';
+}
+
+function allLineupsConfirmed(){
+  return allScores.length>0&&allScores.every(s=>{
+    const gPk=String(s.game_pk);
+    return s.lineup_confirmed||(gameLineups[gPk]&&gameLineups[gPk].confirmed)||false;
+  });
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 function escapeHtml(s){
   if(s==null)return '';
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -294,6 +344,23 @@ function timeToMinutes(t){
   }catch(e){return 9999;}
 }
 
+// ── FIX 1: Correct game location using game_label (already "AWAY @ HOME") ─────
+// game_label from API is always formatted as "AWAY @ HOME" — use it directly.
+// Falls back to raw team/opp_team only if game_label is missing.
+function gameMatchupStr(s){
+  if(s.game_label){
+    // game_label format: "NYY @ CLE • 7:05 PM ET" — strip the time portion
+    return s.game_label.split(' \u2022')[0].trim();
+  }
+  // Fallback: use home_team_id to determine who is home
+  // If batter's team is the HOME team, the correct display is OPP @ TEAM
+  const batterIsHome=s.home_team_id&&String(s.home_team_id)===String(s.batter_team_id||s.team_id||'');
+  if(batterIsHome){
+    return escapeHtml(s.opp_team)+' @ '+escapeHtml(s.team);
+  }
+  return escapeHtml(s.team)+' @ '+escapeHtml(s.opp_team);
+}
+
 // ── Daily Scores ──────────────────────────────────────────────────────────────
 async function loadDailyScores(force=false){
   document.getElementById('leaderboard').innerHTML=
@@ -313,13 +380,20 @@ async function loadDailyScores(force=false){
     buildGameMeta(allScores);
     buildGameSelect(gameMeta);
     renderLeaderboard(allScores);
+
+    // Start auto-refresh if any lineup is still projected; stop once all confirmed
+    if(allLineupsConfirmed()){
+      stopLineupPoll();
+    }else{
+      startLineupPoll();
+    }
   }catch(e){
     document.getElementById('leaderboard').innerHTML=
       `<div class="empty-state">Error loading data: ${escapeHtml(e.message)}</div>`;
   }
 }
 
-// ── Build game metadata sorted by start time ──────────────────────────────────
+// ── Build game metadata sorted by start time ───────────────────────────────────
 function buildGameMeta(scores){
   const seen={};
   gameMeta=[];
@@ -400,6 +474,8 @@ function renderLeaderboard(scores){
     const wxRow=wxStr?`<div class="weather-badge">🌤 ${escapeHtml(wxStr)}</div>`:'';
 
     const gt=s.game_time_et||s.game_time||'';
+    // FIX 1: use corrected matchup string
+    const matchupStr=gameMatchupStr(s);
 
     const lethals=s.lethal_pitches||[];
     const lethalRow=lethals.length
@@ -411,7 +487,7 @@ function renderLeaderboard(scores){
         <div class="rank-badge ${rankClass}">#${rank}</div>
         <div class="batter-info">
           <div class="batter-name">${escapeHtml(s.batter)} ${lineupBadge}</div>
-          <div class="batter-meta">vs ${escapeHtml(s.pitcher)} &bull; ${escapeHtml(s.team)} @ ${escapeHtml(s.opp_team)}${gt?' &bull; '+escapeHtml(gt):''}</div>
+          <div class="batter-meta">vs ${escapeHtml(s.pitcher)} &bull; ${matchupStr}${gt?' &bull; '+escapeHtml(gt):''}</div>
           <div class="batter-stats">
             <span>ISO ${fmt(s.iso,3)}</span>
             <span>Brl% ${fmtPct(s.barrel_pct)}</span>
@@ -442,7 +518,10 @@ async function selectBatter(s){
   const dc=document.getElementById('detailContent');
   dc.style.display='block';
   renderDetailSkeleton(s);
-  await loadSimulator(s);
+  // Load all tabs except simulator (simulator is on-demand via Run button)
+  loadPitchMix(s);
+  loadH2H(s);
+  loadScouting(s);
 }
 
 function renderDetailSkeleton(s){
@@ -467,13 +546,21 @@ function renderDetailSkeleton(s){
     }
   }
 
+  // FIX 3: Show auto-refresh countdown when lineup is projected
   const lineupSection=`<div class="lineup-strip">
     ${confirmed
       ?`<span class="lineup-confirmed">✅ Confirmed Lineup</span>`
-      :`<span class="lineup-projected">⚠️ Projected Lineup — not yet confirmed</span>`}
+      :`<div>
+          <span class="lineup-projected">⚠️ Projected Lineup — not yet confirmed</span>
+          <div class="lineup-refresh-row" id="lineupRefreshRow">
+            🔄 Auto-refreshing in <span class="lineup-countdown" id="lineupCountdown">${lineupCountdownSec}s</span>
+          </div>
+        </div>`}
   </div>`;
 
   const gt=s.game_time_et||s.game_time||'';
+  // FIX 1: use corrected matchup string in detail header
+  const matchupStr=gameMatchupStr(s);
 
   document.getElementById('detailContent').innerHTML=`
     <div class="detail-header">
@@ -483,7 +570,7 @@ function renderDetailSkeleton(s){
       </div>
       <div>
         <div class="detail-name">${escapeHtml(s.batter)}</div>
-        <div class="detail-sub">vs <strong>${escapeHtml(s.pitcher)}</strong> &bull; ${escapeHtml(s.team)} @ ${escapeHtml(s.opp_team)}${gt?' &bull; <span class="game-time">'+escapeHtml(gt)+'</span>':''}</div>
+        <div class="detail-sub">vs <strong>${escapeHtml(s.pitcher)}</strong> &bull; ${matchupStr}${gt?' &bull; <span class="game-time">'+escapeHtml(gt)+'</span>':''}</div>
         <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
           <div class="prob-badge" style="font-size:13px;padding:4px 12px">${probPct(s.prob_hr)} prob HR today</div>
           <div class="prob-badge" style="font-size:13px;padding:4px 12px;background:#3fb95022;color:#3fb950;border-color:#3fb95044">Park HR Index: ${s.park_hr_idx}</div>
@@ -500,7 +587,12 @@ function renderDetailSkeleton(s){
       <button class="tab-btn" onclick="switchTab('scout',this)">AI Report</button>
     </div>
     <div id="tab-sim" class="tab-pane active">
-      <div class="loader"><div class="spinner"></div> Running simulator…</div>
+      <div class="sim-run-wrap">
+        <button class="sim-run-btn" id="simRunBtn" onclick="triggerSimulator()">
+          ▶ Run Monte Carlo Simulation
+        </button>
+        <div class="sim-run-sub">1,000 games × 4 AB — click to simulate HR probability</div>
+      </div>
     </div>
     <div id="tab-mix" class="tab-pane">
       <div class="loader"><div class="spinner"></div> Loading pitch mix…</div>
@@ -521,19 +613,25 @@ function switchTab(name,btn){
   if(pane)pane.classList.add('active');
 }
 
-// ── Load simulator + pitch mix + h2h + scouting ──────────────────────────────
-async function loadSimulator(s){
-  // Simulator
-  const simPanel=document.getElementById('tab-sim');
+// ── FIX 2: On-demand simulator triggered by Run button ─────────────────────────
+async function triggerSimulator(){
+  const s=selectedBatter;
+  if(!s)return;
+  const btn=document.getElementById('simRunBtn');
+  const panel=document.getElementById('tab-sim');
+  if(btn){btn.disabled=true;btn.textContent='⏳ Simulating…';}
+  if(panel)panel.innerHTML='<div class="loader"><div class="spinner"></div> Running Monte Carlo simulation…</div>';
   try{
     const r=await fetch(`${API}/api/hr-analytics/simulator?batter_id=${s.batter_id}&pitcher_id=${s.pitcher_id}&game_pk=${s.game_pk}`);
     const d=await r.json();
-    if(simPanel)renderSimulator(simPanel,d,s);
+    if(panel)renderSimulator(panel,d,s);
   }catch(e){
-    if(simPanel)simPanel.innerHTML=`<div class="error-box">Simulator error: ${escapeHtml(e.message)}</div>`;
+    if(panel)panel.innerHTML=`<div class="error-box">Simulator error: ${escapeHtml(e.message)}</div>`;
   }
+}
 
-  // Pitch mix
+// ── Individual tab loaders ────────────────────────────────────────────────────
+async function loadPitchMix(s){
   const mixPanel=document.getElementById('tab-mix');
   try{
     const r=await fetch(`${API}/api/hr-analytics/pitch-mix/${s.batter_id}/${s.pitcher_id}`);
@@ -542,8 +640,9 @@ async function loadSimulator(s){
   }catch(e){
     if(mixPanel)mixPanel.innerHTML=`<div class="error-box">Pitch mix error: ${escapeHtml(e.message)}</div>`;
   }
+}
 
-  // H2H
+async function loadH2H(s){
   const h2hPanel=document.getElementById('tab-h2h');
   try{
     const r=await fetch(`${API}/api/bvp/${s.batter_id}/${s.pitcher_id}`);
@@ -552,8 +651,9 @@ async function loadSimulator(s){
   }catch(e){
     if(h2hPanel)h2hPanel.innerHTML=`<div class="error-box">H2H error: ${escapeHtml(e.message)}</div>`;
   }
+}
 
-  // Scouting
+async function loadScouting(s){
   const scoutPanel=document.getElementById('tab-scout');
   try{
     const r=await fetch(`${API}/api/hr-analytics/scouting/${s.batter_id}/${s.pitcher_id}/${s.game_pk}`);
@@ -566,7 +666,10 @@ async function loadSimulator(s){
 
 function renderSimulator(panel,d,s){
   if(!d.success){
-    panel.innerHTML=`<div class="error-box">${escapeHtml(d.error||'Simulator unavailable')}</div>`;
+    panel.innerHTML=`<div class="error-box">${escapeHtml(d.error||'Simulator unavailable')}</div>
+      <div class="sim-run-wrap" style="padding-top:16px">
+        <button class="sim-run-btn" id="simRunBtn" onclick="triggerSimulator()">↻ Retry Simulation</button>
+      </div>`;
     return;
   }
   const mc=d.mc_prob||d.prob_hr||0;
@@ -610,6 +713,9 @@ function renderSimulator(panel,d,s){
         <div class="sim-lbl">p HR per AB</div>
       </div>
       <div class="sim-bar-wrap">${barsHtml}</div>
+      <div style="text-align:right;margin-top:8px">
+        <button class="regen-btn" onclick="triggerSimulator()">↻ Re-run Simulation</button>
+      </div>
     </div>
     <div class="section">
       <div class="section-title">Key Inputs</div>
@@ -634,7 +740,6 @@ function renderPitchMix(panel,d,s){
     return;
   }
 
-  // Pitcher top-level weighted stats
   let wAvg=0,wSlg=0,wWoba=0,totalW=0;
   rows.forEach(r=>{
     if(r.pit_ba!=null)wAvg+=r.pit_ba*r.usage;
