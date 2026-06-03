@@ -1,420 +1,655 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Settings — MLB Analytics Hub</title>
 <style>
-:root,[data-theme="dark"]{--bg:#0f1117;--surface:#181c24;--surface2:#1e2330;--border:#2a2f3d;--text:#e2e5ed;--muted:#7a7f8e;--faint:#3a3f50;--primary:#3b82f6;--primary-hover:#2563eb;--success:#22c55e;--warning:#f59e0b;--error:#ef4444;--radius:8px;--font:"Inter",-apple-system,sans-serif}
-[data-theme="light"]{--bg:#f5f6fa;--surface:#fff;--surface2:#f0f1f7;--border:#dde1ed;--text:#1a1d2e;--muted:#5a5f72;--faint:#e4e6f0;--primary:#2563eb;--primary-hover:#1d4ed8;--success:#16a34a;--warning:#d97706;--error:#dc2626}
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-html{-webkit-font-smoothing:antialiased;scroll-behavior:smooth}
-body{font-family:var(--font);font-size:14px;background:var(--bg);color:var(--text);min-height:100dvh;display:flex;flex-direction:column}
-a{color:var(--primary);text-decoration:none}
-button{cursor:pointer;font:inherit;color:inherit;border:none;background:none}
+body{font-family:'Courier New',monospace;background:#0a0e1a;color:#c8d0e0;min-height:100vh;font-size:13px}
+input,select,textarea{background:#0d1220;border:1px solid #2a3550;color:#c8d0e0;border-radius:4px;padding:8px 10px;font-family:inherit;font-size:13px;width:100%;outline:none}
+input:focus,select:focus,textarea:focus{border-color:#00d4ff;box-shadow:0 0 0 2px rgba(0,212,255,.1)}
+label{display:block;font-size:11px;color:#7a8aa0;text-transform:uppercase;letter-spacing:.6px;margin-bottom:5px}
+button{font-family:inherit;cursor:pointer;border:none;border-radius:4px;font-size:11px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;padding:8px 16px;transition:all .2s}
+.btn-save{background:transparent;border:1px solid #3a4560;color:#8090b0;padding:8px 20px}
+.btn-save:hover{border-color:#00d4ff;color:#00d4ff}
 
-/* ── Layout ── */
-.topbar{display:flex;align-items:center;gap:12px;padding:0 24px;height:56px;background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100}
-.topbar-logo{font-size:15px;font-weight:700;color:var(--text);letter-spacing:-.3px}
-.topbar-logo span{color:var(--primary)}
-.topbar-nav{display:flex;gap:4px;margin-left:auto}
-.topbar-nav a{padding:6px 12px;border-radius:6px;font-size:13px;color:var(--muted);transition:background .15s,color .15s}
-.topbar-nav a:hover,.topbar-nav a.active{background:var(--faint);color:var(--text)}
-.theme-btn{margin-left:8px;padding:6px;border-radius:6px;color:var(--muted);transition:background .15s,color .15s}
-.theme-btn:hover{background:var(--faint);color:var(--text)}
+/* ── Section cards ── */
+.section-card{background:#111827;border:1px solid #1e2a3a;border-radius:6px;padding:20px;margin-bottom:24px}
+.section-title{font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:#00d4ff;margin-bottom:16px;display:flex;align-items:center;gap:8px}
+.section-title::before{content:'○';font-size:9px}
+.field-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:14px;margin-bottom:14px}
+.field-grid-2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
 
-.page{max-width:860px;margin:0 auto;padding:32px 24px;flex:1;width:100%}
-.page-title{font-size:20px;font-weight:700;margin-bottom:4px}
-.page-sub{color:var(--muted);font-size:13px;margin-bottom:32px}
+/* ── Three-column top layout ── */
+.top-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px;margin-bottom:24px}
+@media(max-width:900px){.top-grid{grid-template-columns:1fr}}
 
-/* ── Cards ── */
-.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:20px}
-.card-header{padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px}
-.card-icon{width:32px;height:32px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
-.card-icon.blue{background:rgba(59,130,246,.15);color:var(--primary)}
-.card-icon.green{background:rgba(34,197,94,.15);color:var(--success)}
-.card-icon.orange{background:rgba(245,158,11,.15);color:var(--warning)}
-.card-title{font-size:14px;font-weight:600}
-.card-desc{font-size:12px;color:var(--muted);margin-top:1px}
-.card-body{padding:20px}
-
-/* ── Form controls ── */
-.field-row{display:flex;flex-wrap:wrap;gap:16px;margin-bottom:16px}
-.field{display:flex;flex-direction:column;gap:6px;flex:1;min-width:140px}
-.field label{font-size:12px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.4px}
-.checkgroup{display:flex;flex-wrap:wrap;gap:8px}
-.chip{display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);font-size:12px;cursor:pointer;transition:border-color .15s,background .15s;user-select:none}
-.chip input{width:13px;height:13px;accent-color:var(--primary)}
-.chip:has(input:checked){border-color:var(--primary);background:rgba(59,130,246,.1);color:var(--primary)}
-.season-select{display:flex;flex-wrap:wrap;gap:6px}
-.season-chip{padding:4px 10px;border-radius:20px;border:1px solid var(--border);background:var(--surface2);font-size:12px;cursor:pointer;transition:border-color .15s,background .15s;user-select:none}
-.season-chip.on{border-color:var(--primary);background:rgba(59,130,246,.12);color:var(--primary);font-weight:600}
-
-/* ── Buttons ── */
-.btn{display:inline-flex;align-items:center;gap:7px;padding:9px 18px;border-radius:6px;font-size:13px;font-weight:600;border:none;cursor:pointer;transition:background .15s,opacity .15s}
-.btn:disabled{opacity:.45;cursor:not-allowed}
-.btn-primary{background:var(--primary);color:#fff}
-.btn-primary:not(:disabled):hover{background:var(--primary-hover)}
-.btn-ghost{background:var(--surface2);color:var(--text);border:1px solid var(--border)}
-.btn-ghost:not(:disabled):hover{background:var(--faint)}
-
-/* ── Progress bar ── */
-.progress-wrap{margin:16px 0}
-.progress-label{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:6px}
-.progress-bar{height:6px;border-radius:3px;background:var(--faint);overflow:hidden}
-.progress-fill{height:100%;border-radius:3px;background:var(--primary);transition:width .4s ease;width:0%}
-.progress-fill.done{background:var(--success)}
-.progress-fill.error{background:var(--error)}
-
-/* ── Market status grid ── */
-.market-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px;margin:16px 0}
-.market-card{padding:12px 14px;border-radius:6px;border:1px solid var(--border);background:var(--surface2)}
-.market-card.training{border-color:var(--primary);background:rgba(59,130,246,.07)}
-.market-card.done{border-color:var(--success);background:rgba(34,197,94,.06)}
-.market-card.failed{border-color:var(--error);background:rgba(239,68,68,.06)}
-.market-name{font-size:12px;font-weight:600;margin-bottom:6px;display:flex;align-items:center;gap:6px}
-.market-name .dot{width:7px;height:7px;border-radius:50%;background:var(--faint);flex-shrink:0}
-.market-card.training .dot{background:var(--primary);box-shadow:0 0 6px var(--primary);animation:pulse 1s infinite}
-.market-card.done .dot{background:var(--success)}
-.market-card.failed .dot{background:var(--error)}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
-.market-stat{font-size:11px;color:var(--muted)}
-.market-stat strong{color:var(--text);font-weight:600}
-
-/* ── Log viewer ── */
-.log-box{background:#0a0c12;border:1px solid var(--border);border-radius:6px;padding:12px 14px;height:200px;overflow-y:auto;font-family:"JetBrains Mono","Fira Code",monospace;font-size:11px;line-height:1.7;color:#9ba3b4;margin-top:16px}
-.log-box .log-ok{color:#22c55e}
-.log-box .log-err{color:#ef4444}
-.log-box .log-head{color:#60a5fa;font-weight:700}
-
-/* ── Status badge ── */
-.status-badge{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px}
-.status-badge.idle{background:var(--faint);color:var(--muted)}
-.status-badge.running{background:rgba(59,130,246,.15);color:var(--primary)}
-.status-badge.done{background:rgba(34,197,94,.15);color:var(--success)}
-.status-badge.error{background:rgba(239,68,68,.15);color:var(--error)}
-
-/* ── Divider ── */
-.divider{height:1px;background:var(--border);margin:20px 0}
-
-/* ── Elapsed ── */
-.elapsed{font-size:12px;color:var(--muted);margin-left:10px}
+/* ── Training specific ── */
+.chip-group{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
+.chip{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:4px;border:1px solid #2a3550;background:#0d1220;font-size:11px;cursor:pointer;user-select:none;transition:all .15s}
+.chip input{width:12px;height:12px;accent-color:#00d4ff}
+.chip.checked{border-color:#00d4ff;background:rgba(0,212,255,.08);color:#00d4ff}
+.szn{display:inline-flex;align-items:center;padding:3px 10px;border-radius:20px;border:1px solid #2a3550;background:#0d1220;font-size:11px;cursor:pointer;transition:all .15s}
+.szn.on{border-color:#00d4ff;background:rgba(0,212,255,.1);color:#00d4ff;font-weight:700}
+.train-btn{background:rgba(0,212,255,.1);border:1px solid #00d4ff;color:#00d4ff;padding:9px 20px;font-size:11px;font-weight:700;letter-spacing:.8px;border-radius:4px;cursor:pointer;display:inline-flex;align-items:center;gap:8px;transition:all .2s}
+.train-btn:hover:not(:disabled){background:rgba(0,212,255,.2)}
+.train-btn:disabled{opacity:.4;cursor:not-allowed}
+.progress-bar{height:5px;border-radius:3px;background:#1e2a3a;overflow:hidden;margin:10px 0}
+.progress-fill{height:100%;border-radius:3px;background:#00d4ff;transition:width .4s}
+.market-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px;margin:10px 0}
+.mc{padding:10px 12px;border-radius:4px;border:1px solid #2a3550;background:#0d1220}
+.mc.training{border-color:#00d4ff;background:rgba(0,212,255,.05)}
+.mc.done{border-color:#00ff88;background:rgba(0,255,136,.05)}
+.mc.failed{border-color:#ff4444;background:rgba(255,68,68,.05)}
+.mc-name{font-size:11px;font-weight:700;letter-spacing:.4px;margin-bottom:4px}
+.mc-stat{font-size:10px;color:#7a8aa0}
+.log-box{background:#060a14;border:1px solid #1e2a3a;border-radius:4px;padding:10px 12px;height:180px;overflow-y:auto;font-size:10px;line-height:1.8;color:#7a8aa0;margin-top:10px;font-family:'Courier New',monospace}
+.log-ok{color:#00ff88}.log-err{color:#ff4444}.log-head{color:#00d4ff;font-weight:700}
+.badge{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:3px;font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase}
+.badge.idle{background:#1e2a3a;color:#7a8aa0}
+.badge.running{background:rgba(0,212,255,.12);color:#00d4ff}
+.badge.done{background:rgba(0,255,136,.12);color:#00ff88}
+.badge.error{background:rgba(255,68,68,.12);color:#ff4444}
+.select-wrap{position:relative}
+.select-wrap select{appearance:none;padding-right:28px}
+.select-wrap::after{content:'▾';position:absolute;right:10px;top:50%;transform:translateY(-50%);color:#5a6a80;pointer-events:none;font-size:11px}
+.toggle-row{display:flex;align-items:center;gap:8px}
+.toggle{position:relative;width:36px;height:20px;flex-shrink:0}
+.toggle input{opacity:0;width:0;height:0}
+.toggle-slider{position:absolute;inset:0;border-radius:20px;background:#1e2a3a;cursor:pointer;transition:.2s}
+.toggle-slider::before{content:'';position:absolute;width:14px;height:14px;left:3px;top:3px;border-radius:50%;background:#5a6a80;transition:.2s}
+.toggle input:checked+.toggle-slider{background:rgba(0,212,255,.2);border:1px solid #00d4ff}
+.toggle input:checked+.toggle-slider::before{transform:translateX(16px);background:#00d4ff}
+.status-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+.divider{height:1px;background:#1e2a3a;margin:14px 0}
 </style>
 </head>
 <body>
 
-<!-- Topbar -->
-<header class="topbar">
-  <div class="topbar-logo">MLB <span>Analytics</span></div>
-  <nav class="topbar-nav">
-    <a href="/dashboard">Dashboard</a>
-    <a href="/props">Props</a>
-    <a href="/tools">Tools</a>
-    <a href="/settings" class="active">Settings</a>
-  </nav>
-  <button class="theme-btn" data-theme-toggle aria-label="Toggle theme">
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-  </button>
-</header>
-
-<!-- Page -->
-<main class="page">
-  <h1 class="page-title">Settings</h1>
-  <p class="page-sub">Manage model training, pipeline configuration, and system preferences.</p>
-
-  <!-- ══ Model Training Card ══ -->
-  <div class="card" id="training-card">
-    <div class="card-header">
-      <div class="card-icon blue">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
-      </div>
-      <div>
-        <div class="card-title">XGBoost Model Training</div>
-        <div class="card-desc">Retrain prop-type-specific models on fresh Statcast data</div>
-      </div>
-      <span class="status-badge idle" id="train-status-badge" style="margin-left:auto">Idle</span>
-    </div>
-
-    <div class="card-body">
-
-      <!-- Market selector -->
-      <div class="field-row">
-        <div class="field">
-          <label>Markets to train</label>
-          <div class="checkgroup" id="market-checkgroup">
-            <label class="chip"><input type="checkbox" value="hits" checked> Hits</label>
-            <label class="chip"><input type="checkbox" value="hr" checked> Home Runs</label>
-            <label class="chip"><input type="checkbox" value="tb" checked> Total Bases</label>
-            <label class="chip"><input type="checkbox" value="rbi" checked> RBI</label>
-            <label class="chip"><input type="checkbox" value="k_3.5" checked> K&nbsp;3.5</label>
-            <label class="chip"><input type="checkbox" value="k_4.5" checked> K&nbsp;4.5</label>
-            <label class="chip"><input type="checkbox" value="k_5.5" checked> K&nbsp;5.5</label>
-          </div>
-        </div>
-      </div>
-
-      <!-- Season selector -->
-      <div class="field-row">
-        <div class="field">
-          <label>Training seasons</label>
-          <div class="season-select" id="season-select">
-            <span class="season-chip" data-year="2021">2021</span>
-            <span class="season-chip on" data-year="2022">2022</span>
-            <span class="season-chip on" data-year="2023">2023</span>
-            <span class="season-chip on" data-year="2024">2024</span>
-            <span class="season-chip on" data-year="2025">2025</span>
-          </div>
-        </div>
-      </div>
-
-      <div style="display:flex;align-items:center;gap:10px;margin-top:4px">
-        <button class="btn btn-primary" id="train-btn" onclick="startTraining()">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-          Run Training
-        </button>
-        <button class="btn btn-ghost" id="select-all-btn" onclick="toggleSelectAll()" style="font-size:12px;padding:6px 12px">Select All</button>
-        <span class="elapsed" id="elapsed-label"></span>
-      </div>
-
-      <!-- Progress -->
-      <div class="progress-wrap" id="progress-section" style="display:none">
-        <div class="progress-label">
-          <span id="phase-label">Starting…</span>
-          <span id="pct-label">0%</span>
-        </div>
-        <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
-      </div>
-
-      <!-- Market status grid -->
-      <div class="market-grid" id="market-grid" style="display:none"></div>
-
-      <!-- Log -->
-      <div class="log-box" id="log-box" style="display:none"></div>
-
-    </div>
-  </div>
-
-  <!-- ══ Pipeline Card ══ -->
-  <div class="card">
-    <div class="card-header">
-      <div class="card-icon green">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-      </div>
-      <div>
-        <div class="card-title">Daily Pipeline</div>
-        <div class="card-desc">Manually trigger the matchup data pipeline</div>
-      </div>
-    </div>
-    <div class="card-body">
-      <p style="color:var(--muted);font-size:13px;margin-bottom:14px">Runs the full Statcast + FanGraphs data fetch and populates today's matchup matrix. Normally runs automatically at 9 AM.</p>
-      <button class="btn btn-ghost" onclick="runPipeline()" id="pipeline-btn">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.1"/></svg>
-        Run Pipeline Now
-      </button>
-      <span id="pipeline-msg" style="font-size:12px;color:var(--muted);margin-left:10px"></span>
-    </div>
-  </div>
-
-</main>
+<div id="app-root" style="min-height:100vh"></div>
 
 <script>
-// ─────────────────────────────────────────────────────────────────────────────
-// Theme toggle
-// ─────────────────────────────────────────────────────────────────────────────
-(function(){
-  const btn=document.querySelector('[data-theme-toggle]');
-  const root=document.documentElement;
-  let d=root.getAttribute('data-theme')||'dark';
-  const sunIcon='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>';
-  const moonIcon='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
-  if(btn){btn.innerHTML=d==='dark'?sunIcon:moonIcon;btn.addEventListener('click',()=>{d=d==='dark'?'light':'dark';root.setAttribute('data-theme',d);btn.innerHTML=d==='dark'?sunIcon:moonIcon;});}
-})();
+// ── Fetch settings then render ──────────────────────────────────────────────
+async function init() {
+  let appSettings = {}, adminSettings = {}, trackerSettings = {}, cacheStatus = {}, perfSettings = {}, memoryStatus = {};
+  try { const r = await fetch('/api/app-settings'); const d = await r.json(); if(d.success) appSettings = d.settings; } catch(e){}
+  try { const r = await fetch('/api/admin/settings'); const d = await r.json(); if(d.success) adminSettings = d.settings; } catch(e){}
+  try { const r = await fetch('/api/tracker/settings'); const d = await r.json(); if(d.success) trackerSettings = d.settings||d; } catch(e){}
+  try { const r = await fetch('/api/cache/status'); const d = await r.json(); if(d.success||d.status) cacheStatus = d; } catch(e){}
+  try { const r = await fetch('/api/memory/status'); const d = await r.json(); memoryStatus = d; } catch(e){}
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Season chip toggles
-// ─────────────────────────────────────────────────────────────────────────────
-document.querySelectorAll('.season-chip').forEach(chip=>{
-  chip.addEventListener('click',()=>{
-    const on=chip.classList.toggle('on');
-    // At least one season must be selected
-    const onCount=document.querySelectorAll('.season-chip.on').length;
-    if(onCount===0) chip.classList.add('on');
+  const ai = appSettings.intelligence || {};
+  const dc = appSettings.dataCollection || {};
+  const api = appSettings.apiConfig || {};
+  const perf = appSettings.performance || {};
+  const tr = trackerSettings;
+  const adm = adminSettings;
+
+  document.getElementById('app-root').innerHTML = `
+  <div style="padding:24px;max-width:1400px;margin:0 auto">
+
+    <!-- Title -->
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:24px">
+      <div style="font-size:11px;font-weight:700;letter-spacing:1px;color:#7a8aa0">○ ADMIN SETTINGS</div>
+    </div>
+
+    <!-- Row 1: Intelligence / Data Collection / API Cache -->
+    <div class="top-grid">
+
+      <!-- Intelligence & AI -->
+      <div class="section-card">
+        <div class="section-title">Intelligence &amp; AI</div>
+        <div style="margin-bottom:10px">
+          <label>Enable AI</label>
+          <div class="select-wrap">
+            <select id="ai-enabled">
+              <option value="true" ${ai.enableAI!==false?'selected':''}>Enabled</option>
+              <option value="false" ${ai.enableAI===false?'selected':''}>Disabled</option>
+            </select>
+          </div>
+        </div>
+        <div style="margin-bottom:10px"><label>AI Model</label><input id="ai-model" value="${ai.aiModel||'claude-sonnet-4-20250514'}"></div>
+        <div style="margin-bottom:10px">
+          <label>Insight Style</label>
+          <div class="select-wrap">
+            <select id="insight-style">
+              <option value="detailed" ${(ai.insightStyle||'detailed')==='detailed'?'selected':''}>Detailed</option>
+              <option value="concise" ${ai.insightStyle==='concise'?'selected':''}>Concise</option>
+              <option value="brief" ${ai.insightStyle==='brief'?'selected':''}>Brief</option>
+            </select>
+          </div>
+        </div>
+        <div style="margin-bottom:10px"><label>Park Factor Weight</label><input id="park-weight" type="number" step="0.01" value="${ai.parkFactorWeight??0.3}"></div>
+        <div style="margin-bottom:10px"><label>Weather Weight</label><input id="weather-weight" type="number" step="0.01" value="${ai.weatherWeight??0.2}"></div>
+        <div style="margin-bottom:14px"><label>Opponent Impact Weight</label><input id="opp-weight" type="number" step="0.01" value="${ai.opponentWeight??0.25}"></div>
+        <button class="btn-save" onclick="saveAI()">SAVE AI SETTINGS</button>
+      </div>
+
+      <!-- Data Collection -->
+      <div class="section-card">
+        <div class="section-title">Data Collection</div>
+        <div class="field-grid-2" style="margin-bottom:10px">
+          <div>
+            <label>Enable FanGraphs</label>
+            <div class="select-wrap"><select id="fg-enabled"><option value="true" ${dc.enableFanGraphs!==false?'selected':''}>✓ Enabled</option><option value="false" ${dc.enableFanGraphs===false?'selected':''}>Disabled</option></select></div>
+          </div>
+          <div>
+            <label>Enable Savant</label>
+            <div class="select-wrap"><select id="sv-enabled"><option value="true" ${dc.enableSavant!==false?'selected':''}>✓ Enabled</option><option value="false" ${dc.enableSavant===false?'selected':''}>Disabled</option></select></div>
+          </div>
+          <div>
+            <label>Enable Odds API</label>
+            <div class="select-wrap"><select id="odds-enabled"><option value="true" ${dc.enableOdds!==false?'selected':''}>✓ Enabled</option><option value="false" ${dc.enableOdds===false?'selected':''}>Disabled</option></select></div>
+          </div>
+          <div>
+            <label>Enable Weather API</label>
+            <div class="select-wrap"><select id="wx-enabled"><option value="true" ${dc.enableWeather!==false?'selected':''}>✓ Enabled</option><option value="false" ${dc.enableWeather===false?'selected':''}>Disabled</option></select></div>
+          </div>
+        </div>
+        <div class="field-grid-2">
+          <div><label>FanGraphs Refresh (hrs)</label><input id="fg-refresh" type="number" value="${dc.fgRefreshHours??6}"></div>
+          <div><label>Savant Refresh (hrs)</label><input id="sv-refresh" type="number" value="${dc.savantRefreshHours??4}"></div>
+          <div><label>Odds Refresh (min)</label><input id="odds-refresh" type="number" value="${dc.oddsRefreshMinutes??30}"></div>
+          <div><label>Weather Refresh (min)</label><input id="wx-refresh" type="number" value="${dc.weatherRefreshMinutes??60}"></div>
+        </div>
+        <button class="btn-save" onclick="saveDC()">SAVE DATA COLLECTION</button>
+      </div>
+
+      <!-- API & Cache Config -->
+      <div class="section-card">
+        <div class="section-title">API &amp; Cache Configuration</div>
+        <div class="field-grid-2">
+          <div><label>Odds Events TTL (sec)</label><input id="odds-events-ttl" type="number" value="${api.oddsEventsTTLSec??21600}"></div>
+          <div><label>Odds Game TTL (sec)</label><input id="odds-game-ttl" type="number" value="${api.oddsGameTTLSec??86400}"></div>
+          <div><label>Odds NRFI TTL (sec)</label><input id="odds-nrfi-ttl" type="number" value="${api.oddsNRFITTLSec??300}"></div>
+          <div><label>Memory Snapshots to Keep</label><input id="mem-snaps" type="number" value="${api.memoryKeepSnapshots??30}"></div>
+          <div><label>Memory Max Size (MB)</label><input id="mem-max" type="number" value="${api.memoryMaxBytesMB??11}"></div>
+          <div><label>Weather Cache TTL (min)</label><input id="wx-ttl" type="number" value="${api.weatherCacheTTLMin??20}"></div>
+          <div><label>Props Scan Cache TTL (min)</label><input id="props-ttl" type="number" value="${api.propScanCacheTTLMin??20}"></div>
+          <div><label>Consistency Cache TTL (min)</label><input id="cons-ttl" type="number" value="${api.consistencyCacheTTLMin??20}"></div>
+        </div>
+        <button class="btn-save" onclick="saveAPI()">SAVE API CONFIG</button>
+      </div>
+    </div>
+
+    <!-- Row 2: Cache Status / Performance / Upload -->
+    <div class="top-grid">
+
+      <!-- Cache Status & Warm-Up -->
+      <div class="section-card">
+        <div class="section-title">Cache Status &amp; Warm-Up</div>
+        <p style="font-size:11px;color:#7a8aa0;line-height:1.6;margin-bottom:14px">Readiness of background loaders the Monte Carlo sim depends on. After a redeploy, click <span style="color:#00d4ff;font-weight:700">WARM UP NOW</span> and wait until every row is green — cold caches make sims time out.</p>
+        <div style="margin-bottom:12px">
+          <label>Select Date:</label>
+          <input type="date" id="cache-date" style="width:auto">
+          <span id="lineup-status" style="font-size:11px;color:#7a8aa0;margin-left:8px">slate the lineup</span>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn-save" onclick="warmupCache()">WARM UP NOW</button>
+          <button class="btn-save" onclick="refreshCache()">REFRESH</button>
+        </div>
+        <div id="cache-rows" style="margin-top:12px;font-size:11px;color:#7a8aa0">Loading…</div>
+        <div id="cache-ready" style="font-size:11px;color:#00ff88;margin-top:6px"></div>
+        <div style="margin-top:10px;font-size:11px;color:#7a8aa0">pipeline will build</div>
+      </div>
+
+      <!-- Performance & System -->
+      <div class="section-card">
+        <div class="section-title">Performance &amp; System</div>
+        <div class="field-grid-2">
+          <div><label>Background Worker Interval (min)</label><input id="bg-interval" type="number" value="${perf.backgroundWorkerIntervalMin??300}"></div>
+          <div><label>Max Concurrent Requests</label><input id="max-req" type="number" value="${perf.maxConcurrentRequests??10}"></div>
+          <div><label>API Timeout (sec)</label><input id="api-timeout" type="number" value="${perf.apiTimeoutSec??30}"></div>
+          <div>
+            <label>Enable Diagnostics</label>
+            <div class="select-wrap"><select id="diag-enabled"><option value="false" ${!perf.enableDiagnostics?'selected':''}>Disabled</option><option value="true" ${perf.enableDiagnostics?'selected':''}>Enabled</option></select></div>
+          </div>
+        </div>
+        <button class="btn-save" onclick="savePerf()">SAVE PERFORMANCE SETTINGS</button>
+      </div>
+
+      <!-- Upload Data for Brain -->
+      <div class="section-card">
+        <div class="section-title">Upload Data for Brain</div>
+        <div style="margin-bottom:12px">
+          <label>Upload File</label>
+          <input type="file" id="upload-file" accept=".csv,.json" style="padding:6px">
+        </div>
+        <div style="margin-bottom:12px">
+          <label>File Type</label>
+          <div class="select-wrap">
+            <select id="upload-type">
+              <option value="player_stats">Player Stats</option>
+              <option value="game_logs">Game Logs</option>
+              <option value="projections">Projections</option>
+              <option value="custom">Custom</option>
+            </select>
+          </div>
+        </div>
+        <button class="btn-save" onclick="uploadFile()">UPLOAD</button>
+        <div id="upload-msg" style="font-size:11px;color:#7a8aa0;margin-top:8px"></div>
+        <div id="upload-list" style="margin-top:12px;font-size:11px"></div>
+      </div>
+    </div>
+
+    <!-- Row 3: Cache Status Detail / Final Daily Summary / (blank or extra) -->
+    <div class="top-grid">
+
+      <!-- Brain Data Ingestion -->
+      <div class="section-card">
+        <div class="section-title">Brain Data Ingestion</div>
+        <div id="brain-stats" style="font-size:11px;line-height:2;color:#c8d0e0">Loading…</div>
+        <div class="divider"></div>
+        <div id="brain-msg" style="font-size:11px;color:#7a8aa0;margin-bottom:10px"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn-save" onclick="ingestNow()">INGEST NOW</button>
+          <button class="btn-save" onclick="refreshBrain()">REFRESH</button>
+          <button class="btn-save" onclick="fetchMLBPlayers()">FETCH MLB API PLAYERS</button>
+        </div>
+        <div id="brain-status-msg" style="font-size:11px;color:#7a8aa0;margin-top:8px"></div>
+      </div>
+
+      <!-- Final Daily Summary -->
+      <div class="section-card">
+        <div class="section-title">Final Daily Summary</div>
+        <div style="margin-bottom:12px">
+          <label>Select Date:</label>
+          <input type="date" id="summary-date" style="width:auto">
+        </div>
+        <div id="summary-content" style="font-size:11px;color:#7a8aa0;margin-bottom:12px">Loading final daily summary…</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn-save" onclick="buildLiveSummary()">BUILD LIVE SUMMARY</button>
+          <button class="btn-save" onclick="rebuildPush()">REBUILD + PUSH</button>
+          <button class="btn-save" onclick="pushSummary()">PUSH SUMMARY</button>
+          <button class="btn-save" onclick="loadStored()">LOAD STORED</button>
+        </div>
+        <div id="summary-msg" style="font-size:11px;color:#7a8aa0;margin-top:8px"></div>
+        <div style="font-size:11px;color:#7a8aa0;margin-top:6px">Push state: <span id="push-state">IDLE</span></div>
+      </div>
+
+      <!-- Admin Details -->
+      <div class="section-card">
+        <div class="section-title">Admin Details</div>
+        <div style="margin-bottom:10px"><label>Organization</label><input id="adm-org" value="${adm.orgName||'MLB Analytics Hub'}"></div>
+        <div style="margin-bottom:10px"><label>Admin Name</label><input id="adm-name" value="${adm.adminName||''}"></div>
+        <div style="margin-bottom:10px"><label>Contact Email</label><input id="adm-email" value="${adm.contactEmail||''}"></div>
+        <div style="margin-bottom:10px"><label>Timezone</label><input id="adm-tz" value="${adm.timezone||'America/New_York'}"></div>
+        <div style="margin-bottom:14px">
+          <label>Operational Mode</label>
+          <div class="select-wrap">
+            <select id="adm-mode">
+              <option value="normal" ${(adm.operationalMode||'normal')==='normal'?'selected':''}>NORMAL</option>
+              <option value="maintenance" ${adm.operationalMode==='maintenance'?'selected':''}>MAINTENANCE</option>
+              <option value="debug" ${adm.operationalMode==='debug'?'selected':''}>DEBUG</option>
+            </select>
+          </div>
+        </div>
+        <button class="btn-save" onclick="saveAdmin()">SAVE ADMIN</button>
+      </div>
+    </div>
+
+    <!-- Row 4: Risk & Tracker / Memory Collection / XGBoost Training -->
+    <div class="top-grid">
+
+      <!-- Risk & Tracker Settings -->
+      <div class="section-card">
+        <div class="section-title">Risk &amp; Tracker Settings</div>
+        <div class="field-grid-2">
+          <div><label>Bankroll</label><input id="tr-bankroll" type="number" value="${tr.bankroll??100}"></div>
+          <div><label>Kelly Fraction</label><input id="tr-kelly" type="number" step="0.01" value="${tr.kellyFraction??0.5}"></div>
+          <div><label>Unit Size %</label><input id="tr-unit" type="number" step="0.001" value="${tr.unitSizePct??0.01}"></div>
+          <div><label>Max Bet %</label><input id="tr-maxbet" type="number" step="0.001" value="${tr.maxBetPct??0.03}"></div>
+          <div><label>Picks / Game</label><input id="tr-picks" type="number" value="${tr.picksPerGame??14}"></div>
+          <div><label>Best Edge Threshold</label><input id="tr-edge" type="number" step="0.001" value="${tr.bestEdgeThreshold??0.03}"></div>
+        </div>
+        <button class="btn-save" onclick="saveTracker()">SAVE TRACKER SETTINGS</button>
+        <span id="tracker-msg" style="font-size:11px;color:#00ff88;margin-left:8px"></span>
+      </div>
+
+      <!-- Memory Collection Controls -->
+      <div class="section-card">
+        <div class="section-title">Memory Collection Controls</div>
+        <div id="mem-status" style="font-size:11px;line-height:2.2;color:#c8d0e0;margin-bottom:14px">Loading…</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <button class="btn-save" onclick="memCollect('light')">RUN LIGHT</button>
+          <button class="btn-save" onclick="memCollect('deep')">RUN DEEP</button>
+          <button class="btn-save" onclick="memCollect('auto')">RUN AUTO</button>
+          <button class="btn-save" onclick="refreshMem()">REFRESH</button>
+        </div>
+        <div id="mem-msg" style="font-size:11px;color:#7a8aa0;margin-top:8px">Status updated</div>
+      </div>
+
+      <!-- ══ XGBoost Model Training ══ -->
+      <div class="section-card">
+        <div class="section-title" style="display:flex;align-items:center;justify-content:space-between">
+          <span>XGBoost Model Training</span>
+          <span class="badge idle" id="train-badge">IDLE</span>
+        </div>
+
+        <div style="margin-bottom:10px">
+          <label>Markets to train</label>
+          <div class="chip-group" id="market-chips">
+            <label class="chip checked"><input type="checkbox" value="hits" checked onchange="syncChip(this)"> Hits</label>
+            <label class="chip checked"><input type="checkbox" value="hr" checked onchange="syncChip(this)"> HR</label>
+            <label class="chip checked"><input type="checkbox" value="tb" checked onchange="syncChip(this)"> Tot Bases</label>
+            <label class="chip checked"><input type="checkbox" value="rbi" checked onchange="syncChip(this)"> RBI</label>
+            <label class="chip checked"><input type="checkbox" value="k_3.5" checked onchange="syncChip(this)"> K 3.5</label>
+            <label class="chip checked"><input type="checkbox" value="k_4.5" checked onchange="syncChip(this)"> K 4.5</label>
+            <label class="chip checked"><input type="checkbox" value="k_5.5" checked onchange="syncChip(this)"> K 5.5</label>
+          </div>
+        </div>
+
+        <div style="margin-bottom:12px">
+          <label>Training seasons</label>
+          <div style="display:flex;flex-wrap:wrap;gap:6px" id="szn-select">
+            <span class="szn" data-year="2021">2021</span>
+            <span class="szn on" data-year="2022">2022</span>
+            <span class="szn on" data-year="2023">2023</span>
+            <span class="szn on" data-year="2024">2024</span>
+            <span class="szn on" data-year="2025">2025</span>
+          </div>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+          <button class="train-btn" id="train-btn" onclick="startTraining()">▶ RUN TRAINING</button>
+          <span id="train-elapsed" style="font-size:11px;color:#7a8aa0"></span>
+        </div>
+
+        <div id="train-progress" style="display:none">
+          <div style="display:flex;justify-content:space-between;font-size:10px;color:#7a8aa0;margin-bottom:4px">
+            <span id="train-phase">Starting…</span><span id="train-pct">0%</span>
+          </div>
+          <div class="progress-bar"><div class="progress-fill" id="train-fill" style="width:0%"></div></div>
+        </div>
+
+        <div class="market-grid" id="train-market-grid" style="display:none"></div>
+        <div class="log-box" id="train-log" style="display:none"></div>
+      </div>
+    </div>
+
+  </div>
+  `;
+
+  // Init season chips
+  document.querySelectorAll('.szn').forEach(c => {
+    c.addEventListener('click', () => {
+      c.classList.toggle('on');
+      if (!document.querySelectorAll('.szn.on').length) c.classList.add('on');
+    });
   });
-});
 
-function getSelectedSeasons(){
-  return [...document.querySelectorAll('.season-chip.on')].map(c=>parseInt(c.dataset.year));
-}
-function getSelectedMarkets(){
-  return [...document.querySelectorAll('#market-checkgroup input:checked')].map(c=>c.value);
-}
-function toggleSelectAll(){
-  const all=[...document.querySelectorAll('#market-checkgroup input')];
-  const allChecked=all.every(c=>c.checked);
-  all.forEach(c=>c.checked=!allChecked);
-  document.getElementById('select-all-btn').textContent=allChecked?'Select All':'Deselect All';
-}
+  // Load live data
+  loadCacheStatus();
+  loadBrainStatus();
+  loadMemStatus();
+  loadUploadedFiles();
+  loadSummary();
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Training
-// ─────────────────────────────────────────────────────────────────────────────
-let _pollTimer=null;
-let _lastLogLen=0;
-
-function startTraining(){
-  const markets=getSelectedMarkets();
-  const seasons=getSelectedSeasons();
-  if(!markets.length){alert('Select at least one market to train.');return;}
-
-  document.getElementById('train-btn').disabled=true;
-  document.getElementById('progress-section').style.display='block';
-  document.getElementById('market-grid').style.display='grid';
-  document.getElementById('log-box').style.display='block';
-  document.getElementById('log-box').innerHTML='';
-  _lastLogLen=0;
-
-  // Init market cards
-  const grid=document.getElementById('market-grid');
-  grid.innerHTML=markets.map(m=>`
-    <div class="market-card" id="mc-${m.replace('.','_')}">
-      <div class="market-name"><span class="dot"></span>${marketLabel(m)}</div>
-      <div class="market-stat">Waiting…</div>
-    </div>`).join('');
-
-  fetch('/api/training/run',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({markets,seasons})
-  })
-  .then(r=>r.json())
-  .then(d=>{
-    if(!d.success){showError(d.error);return;}
-    _pollTimer=setInterval(pollStatus,2000);
-    pollStatus();
-  })
-  .catch(e=>showError(e.toString()));
+  // Auto-attach if training already running
+  fetch('/api/training/status').then(r=>r.json()).then(d=>{
+    if(d.status==='running') attachTrainingPoll();
+  }).catch(()=>{});
 }
 
-function pollStatus(){
+// ── Chip sync ──────────────────────────────────────────────────────────────
+function syncChip(input) {
+  input.closest('.chip').classList.toggle('checked', input.checked);
+}
+
+// ── Save helpers ───────────────────────────────────────────────────────────
+async function post(url, body) {
+  const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  return r.json();
+}
+
+async function saveAI() {
+  await post('/api/app-settings', {intelligence:{
+    enableAI: document.getElementById('ai-enabled').value==='true',
+    aiModel: document.getElementById('ai-model').value,
+    insightStyle: document.getElementById('insight-style').value,
+    parkFactorWeight: +document.getElementById('park-weight').value,
+    weatherWeight: +document.getElementById('weather-weight').value,
+    opponentWeight: +document.getElementById('opp-weight').value,
+  }});
+}
+async function saveDC() {
+  await post('/api/app-settings', {dataCollection:{
+    enableFanGraphs: document.getElementById('fg-enabled').value==='true',
+    enableSavant: document.getElementById('sv-enabled').value==='true',
+    enableOdds: document.getElementById('odds-enabled').value==='true',
+    enableWeather: document.getElementById('wx-enabled').value==='true',
+    fgRefreshHours: +document.getElementById('fg-refresh').value,
+    savantRefreshHours: +document.getElementById('sv-refresh').value,
+    oddsRefreshMinutes: +document.getElementById('odds-refresh').value,
+    weatherRefreshMinutes: +document.getElementById('wx-refresh').value,
+  }});
+}
+async function saveAPI() {
+  await post('/api/app-settings', {apiConfig:{
+    oddsEventsTTLSec: +document.getElementById('odds-events-ttl').value,
+    oddsGameTTLSec: +document.getElementById('odds-game-ttl').value,
+    oddsNRFITTLSec: +document.getElementById('odds-nrfi-ttl').value,
+    memoryKeepSnapshots: +document.getElementById('mem-snaps').value,
+    memoryMaxBytesMB: +document.getElementById('mem-max').value,
+    weatherCacheTTLMin: +document.getElementById('wx-ttl').value,
+    propScanCacheTTLMin: +document.getElementById('props-ttl').value,
+    consistencyCacheTTLMin: +document.getElementById('cons-ttl').value,
+  }});
+}
+async function savePerf() {
+  await post('/api/app-settings', {performance:{
+    backgroundWorkerIntervalMin: +document.getElementById('bg-interval').value,
+    maxConcurrentRequests: +document.getElementById('max-req').value,
+    apiTimeoutSec: +document.getElementById('api-timeout').value,
+    enableDiagnostics: document.getElementById('diag-enabled').value==='true',
+  }});
+}
+async function saveAdmin() {
+  await post('/api/admin/settings', {
+    orgName: document.getElementById('adm-org').value,
+    adminName: document.getElementById('adm-name').value,
+    contactEmail: document.getElementById('adm-email').value,
+    timezone: document.getElementById('adm-tz').value,
+    operationalMode: document.getElementById('adm-mode').value,
+  });
+}
+async function saveTracker() {
+  const d = await post('/api/tracker/settings', {
+    bankroll: +document.getElementById('tr-bankroll').value,
+    kellyFraction: +document.getElementById('tr-kelly').value,
+    unitSizePct: +document.getElementById('tr-unit').value,
+    maxBetPct: +document.getElementById('tr-maxbet').value,
+    picksPerGame: +document.getElementById('tr-picks').value,
+    bestEdgeThreshold: +document.getElementById('tr-edge').value,
+  });
+  const msg = document.getElementById('tracker-msg');
+  msg.textContent = d.success ? 'Loaded' : (d.error||'Error');
+  setTimeout(()=>msg.textContent='', 3000);
+}
+
+// ── Cache ──────────────────────────────────────────────────────────────────
+async function loadCacheStatus() {
+  try {
+    const r = await fetch('/api/cache/status'); const d = await r.json();
+    const el = document.getElementById('cache-rows');
+    if (d.ready) { el.innerHTML=''; document.getElementById('cache-ready').textContent='✓ READY'; }
+    else { el.innerHTML = Object.entries(d.loaders||{}).map(([k,v])=>`<div style="color:${v?'#00ff88':'#ff4444'}">${v?'✓':'✗'} ${k}</div>`).join('') || 'Status unavailable'; }
+  } catch(e) {}
+}
+async function warmupCache() { try { await fetch('/api/cache/warmup',{method:'POST'}); setTimeout(loadCacheStatus,2000); } catch(e){} }
+async function refreshCache() { loadCacheStatus(); }
+
+// ── Brain ──────────────────────────────────────────────────────────────────
+async function loadBrainStatus() {
+  try {
+    const r = await fetch('/api/brain/status'); const d = await r.json();
+    document.getElementById('brain-stats').innerHTML = [
+      d.statscast ? `Statscast/Savant: <span style="color:#c8d0e0">${d.statscast}</span>` : '',
+      d.fangraphs ? `FanGraphs: <span style="color:#c8d0e0">${d.fangraphs}</span>` : '',
+      d.mlb_api ? `MLB API Players: <span style="color:#c8d0e0">${d.mlb_api}</span>` : '',
+      d.manual_uploads ? `Manual Uploads: <span style="color:#c8d0e0">${d.manual_uploads}</span>` : '',
+      d.total ? `Total Data Points: <span style="color:#00d4ff;font-weight:700">${d.total}</span>` : '',
+    ].filter(Boolean).join('<br>') || JSON.stringify(d);
+    if(d.message) document.getElementById('brain-msg').textContent = d.message;
+    if(d.status) document.getElementById('brain-status-msg').textContent = 'Status: '+d.status;
+  } catch(e) { document.getElementById('brain-stats').textContent='Unavailable'; }
+}
+async function ingestNow() { try { await fetch('/api/brain/ingest',{method:'POST'}); setTimeout(loadBrainStatus,2000); } catch(e){} }
+async function refreshBrain() { loadBrainStatus(); }
+async function fetchMLBPlayers() { try { await fetch('/api/brain/fetch-mlb-players',{method:'POST'}); setTimeout(loadBrainStatus,3000); } catch(e){} }
+
+// ── Memory ─────────────────────────────────────────────────────────────────
+async function loadMemStatus() {
+  try {
+    const r = await fetch('/api/memory/status'); const d = await r.json();
+    document.getElementById('mem-status').innerHTML = [
+      `Snapshots: <span style="color:#c8d0e0">${d.snapshots??d.count??0}</span>`,
+      `Last Mode: <span style="color:#c8d0e0">${d.last_mode||d.mode||'—'}</span>`,
+      `Collecting: <span style="color:#c8d0e0">${d.collecting?'YES':'NO'}</span>`,
+      `Last Collect: <span style="color:#c8d0e0">${d.last_collect||'—'}</span>`,
+      `File Size: <span style="color:#c8d0e0">${d.file_size_bytes??d.file_size??'—'} bytes</span>`,
+    ].join('<br>');
+  } catch(e) { document.getElementById('mem-status').textContent='Unavailable'; }
+}
+async function memCollect(mode) {
+  try {
+    await fetch('/api/memory/collect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode})});
+    document.getElementById('mem-msg').textContent='Running '+mode+'…';
+    setTimeout(()=>{ loadMemStatus(); document.getElementById('mem-msg').textContent='Status updated'; }, 3000);
+  } catch(e){}
+}
+async function refreshMem() { loadMemStatus(); }
+
+// ── Upload ─────────────────────────────────────────────────────────────────
+async function uploadFile() {
+  const file = document.getElementById('upload-file').files[0];
+  if(!file){document.getElementById('upload-msg').textContent='Select a file first.';return;}
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('file_type', document.getElementById('upload-type').value);
+  try {
+    const r = await fetch('/api/brain/upload',{method:'POST',body:fd});
+    const d = await r.json();
+    document.getElementById('upload-msg').textContent = d.success ? '✓ Uploaded' : (d.error||'Error');
+    loadUploadedFiles();
+  } catch(e){ document.getElementById('upload-msg').textContent='Error: '+e; }
+}
+async function loadUploadedFiles() {
+  try {
+    const r = await fetch('/api/brain/files'); const d = await r.json();
+    const files = d.files||[];
+    document.getElementById('upload-list').innerHTML = files.map(f=>`
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px;padding:8px;background:#0d1220;border-radius:4px;border:1px solid #1e2a3a">
+        <div>
+          <div style="font-weight:700;margin-bottom:2px">${f.name||f.filename}</div>
+          <div style="color:#7a8aa0;font-size:10px">${f.type||''} · ${f.format||''} · ${f.size||''} · ${f.records||''} records</div>
+          ${f.status==='INGESTED'?'<div style="color:#00ff88;font-size:10px">INGESTED</div>':''}
+        </div>
+        <button class="btn-save" onclick="deleteFile('${f.id||f.name}')" style="font-size:10px;padding:4px 10px">DELETE</button>
+      </div>`).join('') || '<div style="color:#7a8aa0">No files uploaded</div>';
+  } catch(e){}
+}
+async function deleteFile(id) {
+  try { await fetch('/api/brain/files/'+id,{method:'DELETE'}); loadUploadedFiles(); } catch(e){}
+}
+
+// ── Summary ────────────────────────────────────────────────────────────────
+async function loadSummary() {
+  const date = document.getElementById('summary-date').value;
+  try {
+    const url = date ? '/api/summary/daily?date='+date : '/api/summary/daily';
+    const r = await fetch(url); const d = await r.json();
+    document.getElementById('summary-content').textContent = d.summary || d.message || 'No stored daily summary for date';
+    document.getElementById('push-state').textContent = d.push_state || 'IDLE';
+  } catch(e){}
+}
+async function buildLiveSummary() { try { const r=await fetch('/api/summary/build',{method:'POST'}); const d=await r.json(); document.getElementById('summary-msg').textContent=d.message||d.error||''; } catch(e){} }
+async function rebuildPush() { try { const r=await fetch('/api/summary/rebuild-push',{method:'POST'}); const d=await r.json(); document.getElementById('summary-msg').textContent=d.message||d.error||''; } catch(e){} }
+async function pushSummary() { try { const r=await fetch('/api/summary/push',{method:'POST'}); const d=await r.json(); document.getElementById('summary-msg').textContent=d.message||d.error||''; } catch(e){} }
+async function loadStored() { loadSummary(); }
+
+// ── XGBoost Training ───────────────────────────────────────────────────────
+let _pt = null, _ll = 0;
+
+function startTraining() {
+  const markets = [...document.querySelectorAll('#market-chips input:checked')].map(c=>c.value);
+  const seasons = [...document.querySelectorAll('.szn.on')].map(c=>+c.dataset.year);
+  if(!markets.length){alert('Select at least one market.');return;}
+
+  document.getElementById('train-btn').disabled = true;
+  document.getElementById('train-progress').style.display = 'block';
+  document.getElementById('train-market-grid').style.display = 'grid';
+  document.getElementById('train-log').style.display = 'block';
+  document.getElementById('train-log').innerHTML = '';
+  _ll = 0;
+
+  document.getElementById('train-market-grid').innerHTML = markets.map(m=>
+    `<div class="mc" id="mc-${m.replace('.','_')}"><div class="mc-name">${m}</div><div class="mc-stat">Waiting…</div></div>`
+  ).join('');
+
+  fetch('/api/training/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({markets,seasons})})
+    .then(r=>r.json()).then(d=>{
+      if(!d.success){alert(d.error);document.getElementById('train-btn').disabled=false;return;}
+      attachTrainingPoll();
+    }).catch(e=>{alert(e);document.getElementById('train-btn').disabled=false;});
+}
+
+function attachTrainingPoll() {
+  _pt = setInterval(pollTraining, 2000);
+  pollTraining();
+}
+
+function pollTraining() {
   fetch('/api/training/status').then(r=>r.json()).then(d=>{
     if(!d.success) return;
+    const badge = document.getElementById('train-badge');
+    badge.className = 'badge '+d.status;
+    badge.textContent = d.status.toUpperCase();
 
-    // Badge
-    const badge=document.getElementById('train-status-badge');
-    badge.className='status-badge '+d.status;
-    badge.textContent=d.status.charAt(0).toUpperCase()+d.status.slice(1);
+    const fill = document.getElementById('train-fill');
+    fill.style.width = d.progress_pct+'%';
+    fill.style.background = d.status==='done'?'#00ff88':d.status==='error'?'#ff4444':'#00d4ff';
+    document.getElementById('train-phase').textContent = d.phase||'…';
+    document.getElementById('train-pct').textContent = d.progress_pct+'%';
 
-    // Progress bar
-    const fill=document.getElementById('progress-fill');
-    fill.style.width=d.progress_pct+'%';
-    fill.className='progress-fill'+(d.status==='done'?' done':d.status==='error'?' error':'');
-    document.getElementById('phase-label').textContent=d.phase||'…';
-    document.getElementById('pct-label').textContent=d.progress_pct+'%';
-
-    // Elapsed
     if(d.elapsed_s!=null){
       const m=Math.floor(d.elapsed_s/60),s=Math.round(d.elapsed_s%60);
-      document.getElementById('elapsed-label').textContent=
-        m>0?`${m}m ${s}s elapsed`:`${s}s elapsed`;
+      document.getElementById('train-elapsed').textContent = m>0?`${m}m ${s}s elapsed`:`${s}s elapsed`;
     }
 
-    // Market cards
-    Object.entries(d.market_results||{}).forEach(([key,res])=>{
-      const card=document.getElementById('mc-'+key.replace('.','_'));
-      if(!card)return;
-      card.className='market-card '+(res.status||'');
-      let stat='Waiting…';
-      if(res.status==='training') stat='<span style="color:var(--primary)">Training…</span>';
-      else if(res.status==='done') stat=
-        `AUC <strong>${res.auc?.toFixed(4)||'—'}</strong> &nbsp; Brier <strong>${res.brier?.toFixed(4)||'—'}</strong><br>`+
-        `<span style="font-size:10px;color:var(--muted)">rows ${(res.n_rows||0).toLocaleString()} &nbsp; pos ${((res.pos_rate||0)*100).toFixed(1)}%</span>`;
-      else if(res.status==='failed') stat='<span style="color:var(--error)">Failed</span>';
-      else if(res.status==='skipped') stat='<span style="color:var(--muted)">Skipped</span>';
-      card.querySelector('.market-stat').innerHTML=stat;
+    Object.entries(d.market_results||{}).forEach(([k,res])=>{
+      const card = document.getElementById('mc-'+k.replace('.','_'));
+      if(!card) return;
+      card.className = 'mc '+(res.status||'');
+      const stat = card.querySelector('.mc-stat');
+      if(res.status==='done') stat.innerHTML=`AUC <b>${res.auc?.toFixed(4)||'—'}</b> Brier <b>${res.brier?.toFixed(4)||'—'}</b>`;
+      else if(res.status==='training') stat.innerHTML='<span style="color:#00d4ff">Training…</span>';
+      else if(res.status==='failed') stat.innerHTML='<span style="color:#ff4444">Failed</span>';
+      else stat.textContent='Waiting…';
     });
 
-    // Log
-    const box=document.getElementById('log-box');
-    const lines=d.log_tail||[];
-    if(lines.length>_lastLogLen){
-      const newLines=lines.slice(_lastLogLen);
-      _lastLogLen=lines.length;
-      newLines.forEach(line=>{
+    const box = document.getElementById('train-log');
+    const lines = d.log_tail||[];
+    if(lines.length>_ll){
+      lines.slice(_ll).forEach(l=>{
         const div=document.createElement('div');
-        if(line.startsWith('✓')||line.toLowerCase().includes('complete'))div.className='log-ok';
-        else if(line.startsWith('✗')||line.toLowerCase().includes('error')||line.toLowerCase().includes('failed'))div.className='log-err';
-        else if(line.startsWith('──'))div.className='log-head';
-        div.textContent=line;
-        box.appendChild(div);
+        div.className = l.startsWith('✓')||l.toLowerCase().includes('complete') ? 'log-ok'
+          : l.startsWith('✗')||l.toLowerCase().includes('error') ? 'log-err'
+          : l.startsWith('──') ? 'log-head' : '';
+        div.textContent=l; box.appendChild(div);
       });
-      box.scrollTop=box.scrollHeight;
+      _ll=lines.length; box.scrollTop=box.scrollHeight;
     }
 
-    // Done / error
     if(d.status==='done'||d.status==='error'){
-      clearInterval(_pollTimer);
-      document.getElementById('train-btn').disabled=false;
-      if(d.status==='error'&&d.error){
-        const div=document.createElement('div');
-        div.className='log-err';
-        div.textContent='ERROR: '+d.error;
-        box.appendChild(div);
-        box.scrollTop=box.scrollHeight;
-      }
+      clearInterval(_pt); document.getElementById('train-btn').disabled=false;
     }
   }).catch(()=>{});
 }
 
-function showError(msg){
-  clearInterval(_pollTimer);
-  document.getElementById('train-btn').disabled=false;
-  const badge=document.getElementById('train-status-badge');
-  badge.className='status-badge error';
-  badge.textContent='Error';
-  const box=document.getElementById('log-box');
-  box.style.display='block';
-  const div=document.createElement('div');
-  div.className='log-err';
-  div.textContent='ERROR: '+msg;
-  box.appendChild(div);
-}
-
-function marketLabel(key){
-  const map={hits:'Hits >0.5',hr:'HR >0.5',tb:'Tot Bases >1.5',rbi:'RBI >0.5','k_3.5':'K >3.5','k_4.5':'K >4.5','k_5.5':'K >5.5'};
-  return map[key]||key;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Pipeline run
-// ─────────────────────────────────────────────────────────────────────────────
-function runPipeline(){
-  document.getElementById('pipeline-btn').disabled=true;
-  document.getElementById('pipeline-msg').textContent='Starting…';
-  fetch('/api/pipeline/run',{method:'POST'})
-    .then(r=>r.json())
-    .then(d=>{
-      document.getElementById('pipeline-msg').textContent=d.message||d.error||'';
-      document.getElementById('pipeline-btn').disabled=false;
-    })
-    .catch(e=>{
-      document.getElementById('pipeline-msg').textContent='Error: '+e;
-      document.getElementById('pipeline-btn').disabled=false;
-    });
-}
-
-// On load: check if training is already running and auto-attach
-window.addEventListener('DOMContentLoaded',()=>{
-  fetch('/api/training/status').then(r=>r.json()).then(d=>{
-    if(d.status==='running'){
-      document.getElementById('progress-section').style.display='block';
-      document.getElementById('market-grid').style.display='grid';
-      document.getElementById('log-box').style.display='block';
-      document.getElementById('train-btn').disabled=true;
-      _pollTimer=setInterval(pollStatus,2000);
-      pollStatus();
-    }
-  }).catch(()=>{});
-});
+// ── Boot ────────────────────────────────────────────────────────────────────
+init();
 </script>
 </body>
 </html>
