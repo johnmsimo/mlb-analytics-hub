@@ -650,7 +650,9 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
   </div>
 
   <!-- Log tail -->
-  <div id="trainLogWrap" style="display:none;max-height:120px;overflow-y:auto;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.06);border-radius:8px;padding:8px;margin-bottom:10px;font-size:.58rem;color:var(--mu);font-family:monospace;line-height:1.7" id="trainLog"></div>
+  <div id="trainLogWrap" style="display:none;max-height:120px;overflow-y:auto;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.06);border-radius:8px;padding:8px;margin-bottom:10px">
+  <div id="trainLog" style="font-size:.58rem;color:var(--mu);font-family:monospace;line-height:1.7"></div>
+</div>
 
   <div class="settings-actions">
     <button class="tabbtn" onclick="triggerTrainingRun()">▶ RUN TRAINING</button>
