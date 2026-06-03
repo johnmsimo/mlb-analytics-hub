@@ -96,8 +96,112 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .detail-placeholder{display:flex;align-items:center;justify-content:center;height:100%;color:var(--muted);font-size:14px;padding:40px;text-align:center}
 #detailContent{display:none;overflow-y:auto;flex:1;padding:20px}
 
-/* ── Detail card styles ── */
-.detail-header{display:flex;align-items:flex-start;gap:16px;margin-bottom:16px}
+/* ── STEP 1: Rich Player Header ── */
+.player-header{
+  background:linear-gradient(135deg,#161b22 0%,#0d1117 100%);
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:16px;
+  margin-bottom:14px;
+  display:flex;
+  gap:16px;
+  align-items:flex-start;
+  position:relative;
+  overflow:hidden;
+}
+.player-header::before{
+  content:'';
+  position:absolute;
+  top:0;left:0;right:0;
+  height:3px;
+  background:linear-gradient(90deg,var(--accent2),var(--accent));
+}
+.player-photo-wrap{
+  position:relative;
+  flex-shrink:0;
+}
+.player-photo{
+  width:72px;height:72px;
+  border-radius:50%;
+  object-fit:cover;
+  border:2px solid var(--border);
+  background:var(--card);
+  display:block;
+}
+.player-photo-fallback{
+  width:72px;height:72px;
+  border-radius:50%;
+  background:linear-gradient(135deg,#1c2128,#0d1117);
+  border:2px solid var(--border);
+  display:flex;align-items:center;justify-content:center;
+  font-size:26px;font-weight:700;color:var(--muted);
+  flex-shrink:0;
+}
+
+/* SVG score ring */
+.score-ring-wrap{
+  position:relative;
+  width:72px;height:72px;
+  flex-shrink:0;
+}
+.score-ring-wrap svg{
+  width:72px;height:72px;
+  transform:rotate(-90deg);
+}
+.score-ring-inner{
+  position:absolute;
+  top:50%;left:50%;
+  transform:translate(-50%,-50%);
+  text-align:center;
+  line-height:1;
+}
+.score-ring-val{font-size:19px;font-weight:900;}
+.score-ring-lbl{font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-top:1px;}
+
+/* Player info block */
+.player-info{flex:1;min-width:0;}
+.player-name-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;}
+.player-name{font-size:20px;font-weight:800;color:var(--text);line-height:1.1;}
+.strength-badge{
+  font-size:10px;font-weight:800;
+  padding:2px 8px;border-radius:4px;
+  text-transform:uppercase;letter-spacing:.5px;
+  white-space:nowrap;
+}
+.strength-elite{background:linear-gradient(90deg,#3fb950,#238636);color:#fff;}
+.strength-strong{background:linear-gradient(90deg,#d29922,#b07800);color:#fff;}
+.strength-moderate{background:rgba(31,111,235,.25);color:var(--cold);border:1px solid rgba(31,111,235,.4);}
+.strength-weak{background:rgba(139,148,158,.15);color:var(--muted);border:1px solid var(--border);}
+
+.player-meta-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-bottom:8px;}
+.player-meta-sep{opacity:.4;}
+.hand-badge{
+  font-size:11px;font-weight:700;
+  padding:1px 7px;border-radius:10px;
+  background:rgba(121,192,255,.12);
+  border:1px solid rgba(121,192,255,.25);
+  color:var(--cold);
+}
+
+/* Pills row */
+.player-pills{display:flex;gap:6px;flex-wrap:wrap;}
+.pill{
+  display:flex;align-items:center;gap:4px;
+  font-size:11px;font-weight:700;
+  padding:3px 9px;border-radius:10px;
+  white-space:nowrap;
+}
+.pill-hr{background:rgba(31,111,235,.15);border:1px solid rgba(31,111,235,.35);color:var(--cold);}
+.pill-park-good{background:rgba(63,185,80,.12);border:1px solid rgba(63,185,80,.3);color:#3fb950;}
+.pill-park-mid{background:rgba(210,153,34,.1);border:1px solid rgba(210,153,34,.3);color:var(--warn);}
+.pill-park-bad{background:rgba(248,81,73,.1);border:1px solid rgba(248,81,73,.3);color:var(--hot);}
+.pill-mix-good{background:rgba(63,185,80,.12);border:1px solid rgba(63,185,80,.3);color:#3fb950;}
+.pill-mix-mid{background:rgba(210,153,34,.1);border:1px solid rgba(210,153,34,.3);color:var(--warn);}
+.pill-mix-bad{background:rgba(248,81,73,.1);border:1px solid rgba(248,81,73,.3);color:var(--hot);}
+.pill-odds{background:rgba(255,215,0,.1);border:1px solid rgba(255,215,0,.3);color:var(--gold);}
+.pill-time{background:rgba(139,148,158,.1);border:1px solid var(--border);color:var(--muted);}
+
+/* legacy score-ring kept for any other usage */
 .score-ring{width:64px;height:64px;border-radius:50%;border:3px solid;display:flex;flex-direction:column;align-items:center;justify-content:center;flex-shrink:0}
 .ring-hi{border-color:var(--score-hi)}
 .ring-mid{border-color:var(--score-mid)}
@@ -266,7 +370,7 @@ let lineupCountdownSec=0;
 
 function startLineupPoll(){
   stopLineupPoll();
-  lineupCountdownSec=90; // poll every 90 seconds
+  lineupCountdownSec=90;
   updateCountdownDisplay();
   lineupCountdownTimer=setInterval(()=>{
     lineupCountdownSec--;
@@ -344,16 +448,10 @@ function timeToMinutes(t){
   }catch(e){return 9999;}
 }
 
-// ── FIX 1: Correct game location using game_label (already "AWAY @ HOME") ─────
-// game_label from API is always formatted as "AWAY @ HOME" — use it directly.
-// Falls back to raw team/opp_team only if game_label is missing.
 function gameMatchupStr(s){
   if(s.game_label){
-    // game_label format: "NYY @ CLE • 7:05 PM ET" — strip the time portion
     return s.game_label.split(' \u2022')[0].trim();
   }
-  // Fallback: use home_team_id to determine who is home
-  // If batter's team is the HOME team, the correct display is OPP @ TEAM
   const batterIsHome=s.home_team_id&&String(s.home_team_id)===String(s.batter_team_id||s.team_id||'');
   if(batterIsHome){
     return escapeHtml(s.opp_team)+' @ '+escapeHtml(s.team);
@@ -380,8 +478,6 @@ async function loadDailyScores(force=false){
     buildGameMeta(allScores);
     buildGameSelect(gameMeta);
     renderLeaderboard(allScores);
-
-    // Start auto-refresh if any lineup is still projected; stop once all confirmed
     if(allLineupsConfirmed()){
       stopLineupPoll();
     }else{
@@ -393,7 +489,6 @@ async function loadDailyScores(force=false){
   }
 }
 
-// ── Build game metadata sorted by start time ───────────────────────────────────
 function buildGameMeta(scores){
   const seen={};
   gameMeta=[];
@@ -407,7 +502,6 @@ function buildGameMeta(scores){
     const homeName=s.opp_team||'';
     const matchup=s.game_label||(awayName&&homeName?`${awayName} @ ${homeName}`:pk);
     const label=s.game_label||(timeET?`${timeET} — ${matchup}`:matchup);
-
     const wx=s.weather_temp!=null?{
       temp:s.weather_temp,
       wind_speed:s.weather_wind,
@@ -417,10 +511,8 @@ function buildGameMeta(scores){
       is_dome:s.is_dome||false,
     }:(s.weather||null);
     if(wx)gameWeather[pk]=wx;
-
     const confirmed=s.lineup_confirmed||s.confirmed_lineup||false;
     if(!gameLineups[pk])gameLineups[pk]={confirmed};
-
     gameMeta.push({game_pk:pk,label,sort_key:timeToMinutes(timeET),away_team:awayName,home_team:homeName,home_team_id:s.home_team_id,confirmed});
   });
   gameMeta.sort((a,b)=>a.sort_key-b.sort_key);
@@ -442,18 +534,15 @@ function filterByGame(val){
   renderLeaderboard(allScores);
 }
 
-// ── Render leaderboard ────────────────────────────────────────────────────────
 function renderLeaderboard(scores){
   const filtered=activeGameFilter==='all'
     ?scores
     :scores.filter(s=>String(s.game_pk)===String(activeGameFilter));
-
   if(!filtered.length){
     document.getElementById('leaderboard').innerHTML=
       '<div class="empty-state">No batters found for this game.</div>';
     return;
   }
-
   const html=filtered.map((s,i)=>{
     const rank=i+1;
     const rankClass=rank===1?'rank-1':rank===2?'rank-2':rank===3?'rank-3':'rank-other';
@@ -462,25 +551,19 @@ function renderLeaderboard(scores){
     const blurb=aiBlurbs[String(s.batter_id)]||'';
     const blurbRow=blurb
       ?`<div class="ai-blurb"><span class="ai-tag">AI</span>${escapeHtml(blurb)}</div>`:'';
-
     const gPk=String(s.game_pk);
     const confirmed=s.lineup_confirmed||(gameLineups[gPk]&&gameLineups[gPk].confirmed)||false;
     const lineupBadge=confirmed
       ?`<span class="confirmed-badge confirmed-yes">✓ CONFIRMED</span>`
       :`<span class="confirmed-badge confirmed-no">~ PROJECTED</span>`;
-
     const wx=gameWeather[gPk]||null;
     const wxStr=wx?weatherStr(wx):'';
     const wxRow=wxStr?`<div class="weather-badge">🌤 ${escapeHtml(wxStr)}</div>`:'';
-
     const gt=s.game_time_et||s.game_time||'';
-    // FIX 1: use corrected matchup string
     const matchupStr=gameMatchupStr(s);
-
     const lethals=s.lethal_pitches||[];
     const lethalRow=lethals.length
       ?`<div class="lethal-row">${lethals.map(p=>`<span class="lethal-mini">💀 ${escapeHtml(p)}</span>`).join('')}</div>`:'';
-
     return `
     <div class="batter-card${selected}" onclick="selectBatter(${JSON.stringify(s).replace(/"/g,'&quot;')})">
       <div class="batter-card-top">
@@ -506,7 +589,6 @@ function renderLeaderboard(scores){
       ${blurbRow}
     </div>`;
   }).join('');
-
   document.getElementById('leaderboard').innerHTML=html;
 }
 
@@ -518,19 +600,84 @@ async function selectBatter(s){
   const dc=document.getElementById('detailContent');
   dc.style.display='block';
   renderDetailSkeleton(s);
-  // Load all tabs except simulator (simulator is on-demand via Run button)
   loadPitchMix(s);
   loadH2H(s);
   loadScouting(s);
 }
 
+// ── STEP 1: Build SVG score ring ──────────────────────────────────────────────
+function buildScoreRing(score){
+  const pct=Math.min(100,Math.max(0,score));
+  const r=30;
+  const circ=2*Math.PI*r;
+  const dash=((pct/100)*circ).toFixed(2);
+  const gap=(circ-dash).toFixed(2);
+  const color=score>=80?'#3fb950':score>=60?'#d29922':'#8b949e';
+  const textColor=score>=80?'var(--score-hi)':score>=60?'var(--score-mid)':'var(--score-lo)';
+  return `<div class="score-ring-wrap">
+    <svg viewBox="0 0 72 72">
+      <circle cx="36" cy="36" r="${r}" fill="none" stroke="#30363d" stroke-width="5"/>
+      <circle cx="36" cy="36" r="${r}" fill="none" stroke="${color}" stroke-width="5"
+        stroke-dasharray="${dash} ${gap}" stroke-linecap="round"/>
+    </svg>
+    <div class="score-ring-inner">
+      <div class="score-ring-val" style="color:${textColor}">${score.toFixed(0)}</div>
+      <div class="score-ring-lbl">Score</div>
+    </div>
+  </div>`;
+}
+
+// ── STEP 1: Strength badge label ──────────────────────────────────────────────
+function strengthBadge(score){
+  if(score>=85)return `<span class="strength-badge strength-elite">⚡ ELITE</span>`;
+  if(score>=70)return `<span class="strength-badge strength-strong">🔥 STRONG</span>`;
+  if(score>=55)return `<span class="strength-badge strength-moderate">📊 MODERATE</span>`;
+  return `<span class="strength-badge strength-weak">❄ WEAK</span>`;
+}
+
+// ── STEP 1: Park factor pill ──────────────────────────────────────────────────
+function parkPill(idx){
+  if(idx==null)return '';
+  const n=Number(idx);
+  const cls=n>=110?'pill-park-good':n>=95?'pill-park-mid':'pill-park-bad';
+  const icon=n>=110?'🏟️↑':n>=95?'🏟️':'🏟️↓';
+  return `<span class="pill ${cls}">${icon} Park ${n}</span>`;
+}
+
+// ── STEP 1: Mix score pill ────────────────────────────────────────────────────
+function mixPill(mixScore){
+  if(mixScore==null)return '';
+  const n=Number(mixScore);
+  const cls=n>=1.1?'pill-mix-good':n>=0.9?'pill-mix-mid':'pill-mix-bad';
+  return `<span class="pill ${cls}">Mix ${n.toFixed(2)}×</span>`;
+}
+
+// ── STEP 1: Odds pill ─────────────────────────────────────────────────────────
+function oddsPill(s){
+  const odds=s.odds_hr||s.hr_odds||s.moneyline||null;
+  if(!odds)return '';
+  return `<span class="pill pill-odds">💰 ${escapeHtml(String(odds))}</span>`;
+}
+
+// ── STEP 1: Player photo with fallback ───────────────────────────────────────
+function playerPhotoHtml(s){
+  const bid=s.batter_id||s.player_id||'';
+  const photoUrl=bid?`https://img.mlbstatic.com/mlb-photos/image/upload/d_people:generic:headshot:67:current.png/w_213,q_auto:best/v1/people/${bid}/headshot/67/current`:'';
+  const initials=(s.batter||'?').split(' ').map(w=>w[0]||'').join('').slice(0,2).toUpperCase();
+  if(photoUrl){
+    return `<img class="player-photo" src="${escapeHtml(photoUrl)}" alt="${escapeHtml(s.batter)}"
+      onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" loading="lazy">
+    <div class="player-photo-fallback" style="display:none">${initials}</div>`;
+  }
+  return `<div class="player-photo-fallback">${initials}</div>`;
+}
+
 function renderDetailSkeleton(s){
-  const sc=scoreClass(s.score);
-  const rc=scoreRingClass(s.score);
   const gPk=String(s.game_pk);
   const wx=gameWeather[gPk]||null;
   const confirmed=s.lineup_confirmed||(gameLineups[gPk]&&gameLineups[gPk].confirmed)||false;
 
+  // ── Weather section (unchanged) ──
   let weatherSection='';
   if(wx){
     if(wx.is_dome){
@@ -546,7 +693,7 @@ function renderDetailSkeleton(s){
     }
   }
 
-  // FIX 3: Show auto-refresh countdown when lineup is projected
+  // ── Lineup section (unchanged) ──
   const lineupSection=`<div class="lineup-strip">
     ${confirmed
       ?`<span class="lineup-confirmed">✅ Confirmed Lineup</span>`
@@ -559,25 +706,43 @@ function renderDetailSkeleton(s){
   </div>`;
 
   const gt=s.game_time_et||s.game_time||'';
-  // FIX 1: use corrected matchup string in detail header
   const matchupStr=gameMatchupStr(s);
+  const hand=s.batter_hand||s.hand||'R';
+  const throws=s.pitcher_hand||s.pitcher_throws||'R';
+  const team=s.team||'';
+  const mixScore=s.mix_score!=null?s.mix_score:null;
 
-  document.getElementById('detailContent').innerHTML=`
-    <div class="detail-header">
-      <div class="score-ring ${rc}">
-        <div class="val ${sc}">${s.score.toFixed(0)}</div>
-        <div class="lbl">Score</div>
+  // ── STEP 1: Rich player header ──
+  const playerHeader=`
+    <div class="player-header">
+      <div class="player-photo-wrap">
+        ${playerPhotoHtml(s)}
       </div>
-      <div>
-        <div class="detail-name">${escapeHtml(s.batter)}</div>
-        <div class="detail-sub">vs <strong>${escapeHtml(s.pitcher)}</strong> &bull; ${matchupStr}${gt?' &bull; <span class="game-time">'+escapeHtml(gt)+'</span>':''}</div>
-        <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
-          <div class="prob-badge" style="font-size:13px;padding:4px 12px">${probPct(s.prob_hr)} prob HR today</div>
-          <div class="prob-badge" style="font-size:13px;padding:4px 12px;background:#3fb95022;color:#3fb950;border-color:#3fb95044">Park HR Index: ${s.park_hr_idx}</div>
-          <div class="prob-badge ${s.batter_hand==='L'?'plat-good':''}" style="font-size:13px;padding:4px 12px">Bats ${s.batter_hand||'R'}</div>
+      ${buildScoreRing(s.score)}
+      <div class="player-info">
+        <div class="player-name-row">
+          <span class="player-name">${escapeHtml(s.batter)}</span>
+          ${strengthBadge(s.score)}
+        </div>
+        <div class="player-meta-row">
+          ${team?`<span>${escapeHtml(team)}</span><span class="player-meta-sep">·</span>`:''}
+          <span class="hand-badge">Bats ${escapeHtml(hand)}</span>
+          <span class="player-meta-sep">·</span>
+          <span style="color:var(--muted)">vs <strong style="color:var(--text)">${escapeHtml(s.pitcher)}</strong> (${escapeHtml(throws)}HP)</span>
+          ${gt?`<span class="player-meta-sep">·</span><span class="game-time">${escapeHtml(gt)}</span>`:''}
+        </div>
+        <div class="player-pills">
+          <span class="pill pill-hr">🎯 ${probPct(s.prob_hr)} HR Prob</span>
+          ${parkPill(s.park_hr_idx)}
+          ${mixPill(mixScore)}
+          ${oddsPill(s)}
+          ${matchupStr?`<span class="pill pill-time">⚾ ${escapeHtml(matchupStr)}</span>`:''}
         </div>
       </div>
-    </div>
+    </div>`;
+
+  document.getElementById('detailContent').innerHTML=`
+    ${playerHeader}
     ${lineupSection}
     ${weatherSection}
     <div class="tab-nav">
@@ -613,7 +778,6 @@ function switchTab(name,btn){
   if(pane)pane.classList.add('active');
 }
 
-// ── FIX 2: On-demand simulator triggered by Run button ─────────────────────────
 async function triggerSimulator(){
   const s=selectedBatter;
   if(!s)return;
@@ -630,7 +794,6 @@ async function triggerSimulator(){
   }
 }
 
-// ── Individual tab loaders ────────────────────────────────────────────────────
 async function loadPitchMix(s){
   const mixPanel=document.getElementById('tab-mix');
   try{
@@ -678,7 +841,6 @@ function renderSimulator(panel,d,s){
   const dist=d.distribution||{};
   const keys=Object.keys(dist).map(Number).sort((a,b)=>a-b);
   const barColors=['sim-bar-fill-0','sim-bar-fill-1','sim-bar-fill-2','sim-bar-fill-3','sim-bar-fill-4'];
-
   const barsHtml=keys.map(k=>{
     const pct=Math.round((dist[k]||0)*100);
     const w=Math.round((dist[k]||0)*200);
@@ -688,7 +850,6 @@ function renderSimulator(panel,d,s){
       <span style="width:40px">${pct}%</span>
     </div>`;
   }).join('');
-
   const inp=d.inputs||{};
   const kiRows=[
     {v:inp.iso!=null?fmt(inp.iso,3):'—',l:'ISO (Power)'},
@@ -700,7 +861,6 @@ function renderSimulator(panel,d,s){
     {v:inp.mix_score!=null?inp.mix_score.toFixed(2)+'×':'—',l:'Mix Score'},
     {v:inp.xwoba!=null?fmt(inp.xwoba,3):'—',l:'xwOBA'},
   ];
-
   panel.innerHTML=`
     <div class="section">
       <div class="section-title">Monte Carlo Simulator (1,000 games × 4 AB)</div>
@@ -734,12 +894,10 @@ function renderPitchMix(panel,d,s){
   const mixScore=d.mix_score||1.0;
   const mixClass=mixScore>=1.1?'mix-hi':mixScore>=0.9?'mix-mid':'mix-lo';
   const mixLabel=mixScore>=1.1?'Favorable':mixScore>=0.9?'Neutral':'Unfavorable';
-
   if(!rows.length){
     panel.innerHTML=`<div class="section"><div class="section-title">Pitch Mix Matchup Score</div><div class="warning-box">⚠ Pitch arsenal outcome data not yet loaded. Using league average mix score (1.0×). Data loads daily at startup.</div></div>`;
     return;
   }
-
   let wAvg=0,wSlg=0,wWoba=0,totalW=0;
   rows.forEach(r=>{
     if(r.pit_ba!=null)wAvg+=r.pit_ba*r.usage;
@@ -750,16 +908,13 @@ function renderPitchMix(panel,d,s){
   const pitAvgAll=totalW>0?(wAvg/totalW):null;
   const pitSlgAll=totalW>0?(wSlg/totalW):null;
   const pitWobaAll=totalW>0?(wWoba/totalW):null;
-
   const intelHtml=`<div class="pit-intel-strip">
     ${pitAvgAll!=null?`<div class="pit-intel-chip ${pitAvgAll>=.310?'chip-bad':pitAvgAll>=.280?'chip-high':'chip-elite'}">Allows .${fmtStatVal(pitAvgAll)} AVG</div>`:''}
     ${pitSlgAll!=null?`<div class="pit-intel-chip ${pitSlgAll>=.500?'chip-bad':pitSlgAll>=.430?'chip-high':'chip-elite'}">Allows .${fmtStatVal(pitSlgAll)} SLG</div>`:''}
     ${pitWobaAll!=null?`<div class="pit-intel-chip ${pitWobaAll>=.360?'chip-bad':pitWobaAll>=.330?'chip-high':'chip-elite'}">Allows .${fmtStatVal(pitWobaAll)} wOBA</div>`:''}
   </div>`;
-
   function isLethal(r){return r.pit_slg!=null&&r.bat_slg!=null&&r.pit_slg>=.500&&r.bat_slg>=.550;}
   function isGood(r){return r.bat_slg!=null&&r.bat_slg>=.480&&!isLethal(r);}
-
   function pitchBlockHtml(row){
     const lethal=isLethal(row);
     const good=!lethal&&isGood(row);
@@ -815,10 +970,8 @@ function renderPitchMix(panel,d,s){
       </div>`;
     }
   }
-
   const displayRows=rows.slice(0,4);
   const pitchBlocksHtml=displayRows.map(pitchBlockHtml).join('');
-
   panel.innerHTML=`
     <div class="section">
       <div class="pitch-mix-header">
@@ -870,7 +1023,6 @@ function renderScouting(panel,d,s){
         ${snap.platoon!=null?`<div class="snap-cell"><div class="snap-val">${snap.platoon}</div><div class="snap-lbl">Platoon</div></div>`:''}
       </div>
     </div>`:'';
-
   panel.innerHTML=`
     <div class="section">
       <div class="section-title">AI Scouting Report</div>
