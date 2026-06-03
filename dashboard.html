@@ -635,6 +635,29 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
           </div>
           <div id="dailySummaryPushState" style="margin-top:8px;font-size:.62rem;color:var(--mu);letter-spacing:.5px">Push state: checking…</div>
         </div>
+        <div class="settings-card">
+  <div class="settings-title">MODEL TRAINING</div>
+  <div id="trainStatusBox" class="settings-status">Click REFRESH to load last run status.</div>
+
+  <!-- Progress bar (hidden until running) -->
+  <div id="trainProgressWrap" style="display:none;margin-bottom:10px">
+    <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+      <span style="font-size:.58rem;color:var(--mu);font-family:Orbitron,monospace;letter-spacing:1px" id="trainPhase">—</span>
+      <span style="font-size:.58rem;color:var(--c);font-family:Orbitron,monospace" id="trainPct">0%</span>
+    </div>
+    <div class="bar"><div class="fill" id="trainFill" style="width:0%"></div></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:6px;margin-top:8px" id="trainMarkets"></div>
+  </div>
+
+  <!-- Log tail -->
+  <div id="trainLogWrap" style="display:none;max-height:120px;overflow-y:auto;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.06);border-radius:8px;padding:8px;margin-bottom:10px;font-size:.58rem;color:var(--mu);font-family:monospace;line-height:1.7" id="trainLog"></div>
+
+  <div class="settings-actions">
+    <button class="tabbtn" onclick="triggerTrainingRun()">▶ RUN TRAINING</button>
+    <button class="tabbtn" onclick="refreshTrainingStatus()">REFRESH</button>
+    <span id="trainMsg" class="settings-msg"></span>
+  </div>
+</div>
       </div>
     </div>
   </div>
@@ -643,6 +666,75 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
 <div id="appToast" class="toast"></div>
 <footer><div class="footstack"><div>MLB ANALYTICS HUB &nbsp;|&nbsp; DATA: MLB API &middot; FANGRAPHS &middot; BASEBALL SAVANT &middot; OPEN-METEO</div><div><span class="fgtag">FG</span> FANGRAPHS: wOBA &middot; wRC+ &middot; FIP &middot; xFIP &middot; WAR &nbsp;|&nbsp; <span class="svtag">SV</span> BASEBALL SAVANT: xERA &middot; xBA &middot; xSLG &middot; xwOBA &middot; EV &middot; HH% &middot; Barrel% &middot; Pitch Arsenal</div><div>FOR ENTERTAINMENT PURPOSES ONLY</div></div></footer>
 <script>
+function refreshTrainingStatus() {
+  fetch('/api/training/status')
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if (!d || !d.success) { setText('trainMsg', d.error || 'Error', true); return; }
+      var s = d.status;
+      var color = s==='done'?'#00e676':s==='error'?'#ff5252':s==='running'?'var(--c)':'var(--mu)';
+      var elapsed = d.elapsed_s ? ' — '+d.elapsed_s+'s' : '';
+      var lines = [
+        'STATUS: '+s.toUpperCase()+elapsed,
+        'PHASE:  '+(d.phase||'—'),
+        'PROGRESS: '+d.markets_done+'/'+d.markets_total+' markets ('+d.progress_pct+'%)',
+      ];
+      if (d.error) lines.push('ERROR: '+d.error);
+      document.getElementById('trainStatusBox').style.color = color;
+      document.getElementById('trainStatusBox').textContent = lines.join('\n');
+
+      // progress bar
+      var wrap = document.getElementById('trainProgressWrap');
+      if (s === 'running' || s === 'done') {
+        wrap.style.display = 'block';
+        document.getElementById('trainPhase').textContent = d.phase||'';
+        document.getElementById('trainPct').textContent = d.progress_pct+'%';
+        document.getElementById('trainFill').style.width = d.progress_pct+'%';
+        // per-market chips
+        var html = '';
+        Object.entries(d.market_results||{}).forEach(function(entry){
+          var mk=entry[0], mv=entry[1];
+          var st=mv.status||'pending';
+          var bg = st==='done'?'rgba(0,230,118,.15)':st==='training'?'rgba(0,229,255,.12)':st==='failed'?'rgba(244,67,54,.12)':'rgba(106,141,176,.06)';
+          var tc = st==='done'?'#00e676':st==='training'?'var(--c)':st==='failed'?'#ff5252':'var(--mu)';
+          var auc = mv.auc ? ' AUC:'+mv.auc.toFixed(3) : '';
+          html += '<div style="background:'+bg+';border-radius:7px;padding:5px 7px;font-size:.56rem;font-family:Orbitron,monospace;color:'+tc+';letter-spacing:.8px">'+mk.toUpperCase()+'<br><span style="font-size:.5rem;color:var(--mu)">'+st+(auc?'<br>'+auc:'')+'</span></div>';
+        });
+        document.getElementById('trainMarkets').innerHTML = html;
+      } else {
+        wrap.style.display = 'none';
+      }
+
+      // log tail
+      var logWrap = document.getElementById('trainLogWrap');
+      var logEl   = document.getElementById('trainLog');
+      var logLines = d.log_tail||[];
+      if (logLines.length) {
+        logWrap.style.display = 'block';
+        logEl.innerHTML = logLines.map(function(l){return '<div>'+l+'</div>';}).join('');
+        logEl.scrollTop = logEl.scrollHeight;
+      } else {
+        logWrap.style.display = 'none';
+      }
+
+      // auto-poll while running
+      if (s === 'running') setTimeout(refreshTrainingStatus, 3000);
+    })
+    .catch(function(e){ setText('trainMsg', e.message||'Fetch error', true); });
+}
+
+function triggerTrainingRun() {
+  if (!confirm('Start a full model retraining run? This will run in the background.')) return;
+  setText('trainMsg', 'Starting…');
+  fetch('/api/training/run', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if (!d || !d.success) { setText('trainMsg', d.error||'Failed to start', true); return; }
+      setText('trainMsg', 'Training started — polling status…');
+      setTimeout(refreshTrainingStatus, 1500);
+    })
+    .catch(function(e){ setText('trainMsg', e.message||'Error', true); });
+}  
 // --- MLB API Players fetch button logic ---
 function fetchMLBPlayers() {
   setText('brainMsg', 'Fetching MLB API players...');
