@@ -440,9 +440,9 @@ def fetch_all_seasons(seasons: list[int]) -> dict[str, pd.DataFrame]:
     pb = _load_pybaseball()
     print(f"\n══ Fetching season data: {seasons} ══")
 
-    def _try(fn, *args, label=""):
+    def _try(fn, *args, label="", **kwargs):
         try:
-            df = fn(*args)
+            df = fn(*args, **kwargs)
             df["season"] = args[-1] if args else 0
             return df
         except Exception as e:
