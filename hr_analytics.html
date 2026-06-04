@@ -1,1 +1,1068 @@
-PLACEHOLDER
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
+<title>HR Analytics Hub — MLB</title>
+<style>
+:root{
+  --bg:#0d1117;--card:#161b22;--border:#30363d;--accent:#238636;
+  --accent2:#1f6feb;--warn:#d29922;--danger:#f85149;
+  --text:#e6edf3;--muted:#8b949e;--hot:#ff7b72;--cold:#79c0ff;
+  --score-hi:#3fb950;--score-mid:#d29922;--score-lo:#8b949e;
+  --gold:#ffd700;--lethal:#ff4444;--lethal-bg:rgba(255,68,68,.12);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh}
+a{color:var(--cold);text-decoration:none}
+
+/* ── Nav ── */
+nav{display:flex;align-items:center;justify-content:space-between;padding:14px 32px;background:rgba(5,10,24,.95);backdrop-filter:blur(16px);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100}
+.brand{display:flex;align-items:center;gap:14px}
+.brand img{width:52px;height:52px;object-fit:cover;border-radius:12px;filter:drop-shadow(0 0 12px rgba(0,229,255,.3))}
+.brand-text{display:flex;flex-direction:column;gap:2px}
+.brand-name{font-family:Orbitron,sans-serif;font-weight:800;letter-spacing:1.5px;color:#00e5ff}
+.brand-sub{font-size:.72rem;color:var(--muted)}
+.nav-r{display:flex;align-items:center;gap:16px}
+.live-dot{display:flex;align-items:center;gap:6px;font-size:.7rem;letter-spacing:2px;color:#00e676;font-family:'Orbitron',monospace}
+.dot{width:8px;height:8px;border-radius:50%;background:#00e676;animation:pulse 1.5s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+@media(max-width:700px){.brand img{width:42px;height:42px}.brand-sub{display:none}nav{padding:12px 16px}}
+
+/* ── Layout ── */
+/* FIX 1: left panel width uses clamp so it never overflows on tablet */
+.layout{display:grid;grid-template-columns:min(440px,100%) 1fr;min-height:calc(100vh - 57px)}
+@media(max-width:960px){.layout{grid-template-columns:1fr;grid-template-rows:auto 1fr}}
+
+/* ── Left panel ── */
+.left-panel{border-right:1px solid var(--border);display:flex;flex-direction:column;background:var(--bg)}
+.panel-header{padding:14px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.panel-title{font-size:14px;font-weight:600;color:var(--text)}
+.panel-sub{font-size:12px;color:var(--muted);margin-left:auto}
+.refresh-btn{background:var(--card);border:1px solid var(--border);color:var(--muted);padding:4px 10px;border-radius:6px;font-size:12px;cursor:pointer;transition:color .2s}
+.refresh-btn:hover{color:var(--text)}
+
+/* ── Game filter dropdown ── */
+.game-filter-bar{padding:10px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px}
+.game-filter-bar label{font-size:12px;color:var(--muted);white-space:nowrap}
+.game-select{flex:1;background:var(--card);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:8px;font-size:13px;cursor:pointer;outline:none;appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238b949e' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center;padding-right:28px}
+.game-select:focus{border-color:var(--accent2)}
+.game-select option{background:var(--card);color:var(--text)}
+
+/* ── Leaderboard ── */
+.leaderboard{overflow-y:auto;flex:1}
+
+/* ── Batter Card ── */
+.batter-card{padding:14px 16px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .15s;position:relative}
+.batter-card:hover,.batter-card.selected{background:#1c2128}
+.batter-card.selected{border-left:3px solid var(--accent2)}
+.batter-card-top{display:flex;align-items:flex-start;gap:12px}
+.rank-badge{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0;margin-top:2px}
+.rank-1{background:var(--gold);color:#000}
+.rank-2{background:#c0c0c0;color:#000}
+.rank-3{background:#cd7f32;color:#fff}
+.rank-other{background:var(--card);border:1px solid var(--border);color:var(--muted)}
+.batter-info{flex:1;min-width:0}
+.batter-name{font-size:15px;font-weight:600;color:var(--text);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.batter-meta{font-size:12px;color:var(--muted);margin-top:2px}
+.batter-stats{display:flex;gap:10px;font-size:11px;color:var(--muted);margin-top:4px;flex-wrap:wrap}
+.batter-stats span{background:var(--card);border:1px solid var(--border);padding:2px 6px;border-radius:4px}
+.score-block{display:flex;flex-direction:column;align-items:center;flex-shrink:0;min-width:58px}
+.score-val{font-size:26px;font-weight:900;line-height:1}
+.score-label{font-size:10px;color:var(--muted);margin-top:2px}
+.score-hi{color:var(--score-hi)}
+.score-mid{color:var(--score-mid)}
+.score-lo{color:var(--score-lo)}
+.prob-badge{font-size:11px;font-weight:700;margin-top:4px;background:rgba(31,111,235,.15);border:1px solid rgba(31,111,235,.3);color:var(--cold);padding:2px 8px;border-radius:10px;white-space:nowrap}
+.confirmed-badge{font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px}
+.confirmed-yes{background:#3fb95022;color:#3fb950;border:1px solid #3fb95044}
+.confirmed-no{background:rgba(210,153,34,.1);color:var(--warn);border:1px solid rgba(210,153,34,.3)}
+.weather-badge{font-size:11px;color:var(--muted);margin-top:3px}
+.lethal-row{display:flex;gap:6px;flex-wrap:wrap;margin-top:5px}
+.lethal-mini{font-size:10px;background:var(--lethal-bg);border:1px solid rgba(255,68,68,.3);color:var(--hot);padding:2px 6px;border-radius:4px}
+.ai-blurb{margin-top:6px;font-size:12px;color:var(--muted);background:rgba(31,111,235,.08);border-left:3px solid var(--accent2);padding:6px 10px;border-radius:4px;line-height:1.5}
+.ai-tag{font-size:10px;font-weight:700;background:var(--accent2);color:#fff;padding:1px 5px;border-radius:3px;margin-right:5px}
+
+/* ── Empty / loader ── */
+.empty-state{padding:40px;text-align:center;color:var(--muted);font-size:14px}
+.error-box{background:rgba(248,81,73,.1);border:1px solid rgba(248,81,73,.3);color:var(--hot);padding:12px;border-radius:6px;font-size:13px}
+.warning-box{background:rgba(210,153,34,.1);border:1px solid rgba(210,153,34,.3);color:var(--warn);padding:10px;border-radius:6px;font-size:12px}
+.loader{padding:40px;text-align:center;color:var(--muted);display:flex;align-items:center;justify-content:center;gap:10px}
+.spinner{width:20px;height:20px;border:2px solid var(--border);border-top-color:var(--accent2);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── Right panel ── */
+.right-panel{display:flex;flex-direction:column;background:var(--bg)}
+.detail-placeholder{display:flex;align-items:center;justify-content:center;height:100%;color:var(--muted);font-size:14px;padding:40px;text-align:center}
+#detailContent{display:none;overflow-y:auto;flex:1;padding:20px}
+
+/* ── STEP 1: Rich Player Header ── */
+.player-header{
+  background:linear-gradient(135deg,#161b22 0%,#0d1117 100%);
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:16px;
+  margin-bottom:14px;
+  display:flex;
+  gap:16px;
+  align-items:flex-start;
+  position:relative;
+  overflow:hidden;
+}
+.player-header::before{
+  content:'';
+  position:absolute;
+  top:0;left:0;right:0;
+  height:3px;
+  background:linear-gradient(90deg,var(--accent2),var(--accent));
+}
+.player-photo-wrap{
+  position:relative;
+  flex-shrink:0;
+}
+.player-photo{
+  width:72px;height:72px;
+  border-radius:50%;
+  object-fit:cover;
+  border:2px solid var(--border);
+  background:var(--card);
+  display:block;
+}
+.player-photo-fallback{
+  width:72px;height:72px;
+  border-radius:50%;
+  background:linear-gradient(135deg,#1c2128,#0d1117);
+  border:2px solid var(--border);
+  display:flex;align-items:center;justify-content:center;
+  font-size:26px;font-weight:700;color:var(--muted);
+  flex-shrink:0;
+}
+
+/* SVG score ring */
+.score-ring-wrap{
+  position:relative;
+  width:72px;height:72px;
+  flex-shrink:0;
+}
+.score-ring-wrap svg{
+  width:72px;height:72px;
+  transform:rotate(-90deg);
+}
+.score-ring-inner{
+  position:absolute;
+  top:50%;left:50%;
+  transform:translate(-50%,-50%);
+  text-align:center;
+  line-height:1;
+}
+.score-ring-val{font-size:19px;font-weight:900;}
+.score-ring-lbl{font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-top:1px;}
+
+/* Player info block */
+.player-info{flex:1;min-width:0;}
+.player-name-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;}
+.player-name{font-size:20px;font-weight:800;color:var(--text);line-height:1.1;}
+.strength-badge{
+  font-size:10px;font-weight:800;
+  padding:2px 8px;border-radius:4px;
+  text-transform:uppercase;letter-spacing:.5px;
+  white-space:nowrap;
+}
+.strength-elite{background:linear-gradient(90deg,#3fb950,#238636);color:#fff;}
+.strength-strong{background:linear-gradient(90deg,#d29922,#b07800);color:#fff;}
+.strength-moderate{background:rgba(31,111,235,.25);color:var(--cold);border:1px solid rgba(31,111,235,.4);}
+.strength-weak{background:rgba(139,148,158,.15);color:var(--muted);border:1px solid var(--border);}
+
+.player-meta-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-bottom:8px;}
+.player-meta-sep{opacity:.4;}
+.hand-badge{
+  font-size:11px;font-weight:700;
+  padding:1px 7px;border-radius:10px;
+  background:rgba(121,192,255,.12);
+  border:1px solid rgba(121,192,255,.25);
+  color:var(--cold);
+}
+
+/* Pills row */
+.player-pills{display:flex;gap:6px;flex-wrap:wrap;}
+.pill{
+  display:flex;align-items:center;gap:4px;
+  font-size:11px;font-weight:700;
+  padding:3px 9px;border-radius:10px;
+  white-space:nowrap;
+}
+.pill-hr{background:rgba(31,111,235,.15);border:1px solid rgba(31,111,235,.35);color:var(--cold);}
+.pill-park-good{background:rgba(63,185,80,.12);border:1px solid rgba(63,185,80,.3);color:#3fb950;}
+.pill-park-mid{background:rgba(210,153,34,.1);border:1px solid rgba(210,153,34,.3);color:var(--warn);}
+.pill-park-bad{background:rgba(248,81,73,.1);border:1px solid rgba(248,81,73,.3);color:var(--hot);}
+.pill-mix-good{background:rgba(63,185,80,.12);border:1px solid rgba(63,185,80,.3);color:#3fb950;}
+.pill-mix-mid{background:rgba(210,153,34,.1);border:1px solid rgba(210,153,34,.3);color:var(--warn);}
+.pill-mix-bad{background:rgba(248,81,73,.1);border:1px solid rgba(248,81,73,.3);color:var(--hot);}
+.pill-odds{background:rgba(255,215,0,.1);border:1px solid rgba(255,215,0,.3);color:var(--gold);}
+.pill-time{background:rgba(139,148,158,.1);border:1px solid var(--border);color:var(--muted);}
+
+/* legacy score-ring kept for any other usage */
+.score-ring{width:64px;height:64px;border-radius:50%;border:3px solid;display:flex;flex-direction:column;align-items:center;justify-content:center;flex-shrink:0}
+.ring-hi{border-color:var(--score-hi)}
+.ring-mid{border-color:var(--score-mid)}
+.ring-lo{border-color:var(--score-lo)}
+.score-ring .val{font-size:20px;font-weight:900;line-height:1}
+.score-ring .lbl{font-size:9px;color:var(--muted)}
+.detail-name{font-size:20px;font-weight:700}
+.detail-sub{font-size:13px;color:var(--muted);margin-top:4px}
+
+/* ── Tab nav ── */
+.tab-nav{display:flex;border-bottom:1px solid var(--border);margin-bottom:16px;gap:0}
+.tab-btn{padding:8px 16px;font-size:13px;font-weight:600;color:var(--muted);background:none;border:none;border-bottom:2px solid transparent;cursor:pointer;transition:color .15s}
+.tab-btn.active{color:var(--text);border-bottom-color:var(--accent2)}
+.tab-btn:hover{color:var(--text)}
+.tab-pane{display:none}
+.tab-pane.active{display:block}
+
+/* ── Simulator ── */
+.sim-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px}
+.sim-cell{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center}
+.sim-val{font-size:22px;font-weight:800;color:var(--cold)}
+.sim-lbl{font-size:11px;color:var(--muted);margin-top:4px}
+.sim-bar-wrap{margin:12px 0}
+.sim-bar-row{display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:12px}
+.sim-bar-track{flex:1;height:8px;background:var(--card);border-radius:4px;overflow:hidden;position:relative}
+.sim-bar-fill-0{background:var(--accent2)}
+.sim-bar-fill-1{background:var(--score-hi)}
+.sim-bar-fill-2{background:var(--score-mid)}
+.sim-bar-fill-3,.sim-bar-fill-4{background:var(--hot)}
+.key-inputs-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.ki-cell{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:8px}
+.ki-val{font-size:15px;font-weight:700}
+.ki-lbl{font-size:10px;color:var(--muted);margin-top:2px}
+
+/* ── Sim run button ── */
+.sim-run-btn{background:linear-gradient(135deg,var(--accent2),var(--accent));color:#fff;border:none;border-radius:10px;padding:14px 32px;font-size:15px;font-weight:700;cursor:pointer;letter-spacing:.5px;transition:opacity .2s,transform .1s;display:inline-flex;align-items:center;gap:8px}
+.sim-run-btn:hover{opacity:.88}
+.sim-run-btn:active{transform:scale(.97)}
+.sim-run-wrap{text-align:center;padding:36px 20px}
+.sim-run-sub{font-size:12px;color:var(--muted);margin-top:8px}
+
+/* ── Pitch mix ── */
+.section{margin-bottom:20px}
+.section-title{font-size:11px;font-weight:700;letter-spacing:.8px;color:var(--muted);text-transform:uppercase;margin-bottom:10px}
+.pitch-section{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:8px}
+.lethal-block{background:var(--lethal-bg);border:1px solid rgba(255,68,68,.4);border-radius:8px;padding:12px;margin-bottom:8px}
+.lethal-header{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap}
+.lethal-badge{background:#ff4444;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px}
+.lethal-pitch-name{font-size:15px;font-weight:700;color:var(--hot)}
+.lethal-usage{font-size:11px;color:var(--muted);margin-left:auto}
+.lethal-bullets{list-style:none;font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px}
+.lethal-bullets li::before{content:"▶ ";color:var(--hot)}
+.good-block{background:#3fb95012;border:1px solid rgba(63,185,80,.3);border-radius:8px;padding:12px;margin-bottom:10px}
+.good-header{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap}
+.good-badge{background:#3fb950;color:#000;font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px}
+.good-pitch-name{font-size:15px;font-weight:700;color:#3fb950}
+
+/* usage bar */
+.usage-bar-wrap{display:flex;align-items:center;gap:6px}
+.usage-bar{height:4px;background:var(--accent2);border-radius:2px}
+.adv-hi{color:var(--score-hi);font-weight:700}
+.adv-lo{color:var(--cold)}
+.lbl{font-size:10px;color:var(--muted)}
+
+/* ── H2H section ── */
+.h2h-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.h2h-cell{background:#0d1117;border:1px solid var(--border);border-radius:6px;padding:8px;text-align:center}
+.h2h-val{font-size:16px;font-weight:700}
+
+/* ── Weather / lineup ── */
+.lineup-strip{margin-bottom:10px;padding:6px 0}
+.lineup-confirmed{font-size:12px;color:#3fb950;font-weight:600}
+.lineup-projected{font-size:12px;color:var(--warn)}
+.weather-row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;padding:8px;background:var(--card);border-radius:6px;border:1px solid var(--border)}
+.weather-item{font-size:12px;color:var(--muted)}
+.weather-wind-warn{color:var(--warn);font-weight:600}
+.game-time{color:var(--cold);font-weight:600}
+
+/* ── Pit-intel strip ── */
+.pit-intel-strip{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
+.pit-intel-chip{font-size:11px;font-weight:700;padding:3px 10px;border-radius:10px}
+.chip-elite{background:#3fb95022;border:1px solid #3fb95066;color:#3fb950}
+.chip-high{background:#d2992222;border:1px solid #d2992266;color:#d29922}
+.chip-bad{background:rgba(248,81,73,.12);border:1px solid rgba(248,81,73,.3);color:#f85149}
+
+/* ── Mix score badge ── */
+.pitch-mix-header{display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap}
+.mix-score-badge{font-size:13px;font-weight:700;padding:4px 12px;border-radius:10px}
+.mix-hi{background:#3fb95022;color:#3fb950;border:1px solid #3fb95066}
+.mix-mid{background:rgba(210,153,34,.1);color:var(--warn);border:1px solid rgba(210,153,34,.3)}
+.mix-lo{background:rgba(248,81,73,.1);color:var(--hot);border:1px solid rgba(248,81,73,.3)}
+
+/* ── Scouting report ── */
+.scouting-box{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;font-size:13px;line-height:1.7;color:var(--muted);margin-bottom:16px}
+.snap-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.snap-cell{background:#0d1117;border:1px solid var(--border);border-radius:6px;padding:10px;text-align:center}
+.snap-val{font-size:18px;font-weight:700;color:var(--text)}
+.snap-lbl{font-size:10px;color:var(--muted);margin-top:3px}
+.regen-btn{background:var(--card);border:1px solid var(--border);color:var(--text);padding:6px 14px;border-radius:6px;font-size:12px;cursor:pointer;margin-top:10px;transition:border-color .2s}
+.regen-btn:hover{border-color:var(--accent2)}
+
+/* ── Auto-refresh countdown ── */
+.lineup-refresh-row{display:flex;align-items:center;gap:8px;margin-top:4px;font-size:11px;color:var(--muted)}
+.lineup-countdown{color:var(--warn);font-weight:600;font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+<nav>
+  <div class="brand">
+    <img src="/static/logo.png" alt="MLB Analytics Hub" onerror="this.style.display='none'">
+    <div class="brand-text">
+      <span class="brand-name">MLB ANALYTICS HUB</span>
+      <span class="brand-sub">Powered by Statcast + FanGraphs</span>
+    </div>
+  </div>
+  <div class="nav-r">
+    <div class="live-dot"><div class="dot"></div>LIVE</div>
+    <a href="/dashboard">Dashboard</a>
+    <a href="/props">Props</a>
+    <a href="/bvp">BvP</a>
+    <!-- FIX 4: add HR Analytics nav link -->
+    <a href="/hr-analytics" style="color:#3fb950;font-weight:700">HR</a>
+  </div>
+</nav>
+
+<div class="layout">
+  <!-- ── Left: Leaderboard ── -->
+  <div class="left-panel">
+    <div class="panel-header">
+      <span class="panel-title">Today's HR Rankings</span>
+      <span class="panel-sub" id="lastRefreshed"></span>
+      <button class="refresh-btn" onclick="loadDailyScores(true)">↻ Refresh</button>
+    </div>
+    <div class="game-filter-bar">
+      <label>Game:</label>
+      <select class="game-select" id="gameSelect" onchange="filterByGame(this.value)">
+        <option value="all">⚾ All Games</option>
+      </select>
+    </div>
+    <div class="leaderboard" id="leaderboard">
+      <div class="loader"><div class="spinner"></div> Loading rankings…</div>
+    </div>
+  </div>
+
+  <!-- ── Right: Detail ── -->
+  <div class="right-panel">
+    <div class="detail-placeholder" id="placeholderMsg">
+      ← Select a batter to see detailed HR analysis
+    </div>
+    <div id="detailContent"></div>
+  </div>
+</div>
+
+<script>
+const API=window.location.origin;
+let allScores=[];
+let aiBlurbs={};
+let gameMeta=[];
+let gameWeather={};
+let gameLineups={};
+let activeGameFilter='all';
+let selectedBatter=null;
+// FIX 5: track the key of the currently-rendered batter to avoid redundant re-renders
+let selectedBatterKey=null;
+
+// ── Auto-refresh for projected lineups ────────────────────────────────────────
+let lineupPollTimer=null;
+let lineupCountdownTimer=null;
+let lineupCountdownSec=0;
+
+function startLineupPoll(){
+  stopLineupPoll();
+  lineupCountdownSec=90;
+  updateCountdownDisplay();
+  lineupCountdownTimer=setInterval(()=>{
+    lineupCountdownSec--;
+    if(lineupCountdownSec<=0){
+      lineupCountdownSec=90;
+      loadDailyScores(true);
+    }
+    updateCountdownDisplay();
+  },1000);
+}
+
+function stopLineupPoll(){
+  if(lineupPollTimer){clearInterval(lineupPollTimer);lineupPollTimer=null;}
+  if(lineupCountdownTimer){clearInterval(lineupCountdownTimer);lineupCountdownTimer=null;}
+  const el=document.getElementById('lineupCountdown');
+  if(el)el.closest('.lineup-refresh-row').style.display='none';
+}
+
+function updateCountdownDisplay(){
+  const el=document.getElementById('lineupCountdown');
+  if(el)el.textContent=lineupCountdownSec+'s';
+}
+
+function allLineupsConfirmed(){
+  return allScores.length>0&&allScores.every(s=>{
+    const gPk=String(s.game_pk);
+    return s.lineup_confirmed||(gameLineups[gPk]&&gameLineups[gPk].confirmed)||false;
+  });
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function escapeHtml(s){
+  if(s==null)return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function fmt(v,d=3){if(v==null)return '—';return Number(v).toFixed(d);}
+function fmtPct(v){if(v==null)return '—';return Number(v).toFixed(1)+'%';}
+function probPct(v){if(v==null)return '—';return (Number(v)*100).toFixed(1)+'%';}
+function scoreClass(s){return s>=80?'score-hi':s>=60?'score-mid':'score-lo';}
+function scoreRingClass(s){return s>=80?'ring-hi':s>=60?'ring-mid':'ring-lo';}
+// FIX 3: correct stat formatting — multiply by 1000, floor, then zero-pad to 3 digits
+// e.g. 0.312 → "312", 0.050 → "050", 0.005 → "005"
+function fmtStatVal(v){
+  if(v==null)return '—';
+  return Math.floor(Number(v)*1000).toString().padStart(3,'0');
+}
+
+function windIcon(deg){
+  if(deg==null)return '';
+  const dirs=['N','NE','E','SE','S','SW','W','NW'];
+  return dirs[Math.round(deg/45)%8]||'';
+}
+
+function weatherStr(wx){
+  if(!wx||wx.is_dome)return '🏟️ Dome';
+  const parts=[];
+  if(wx.temp!=null)parts.push(wx.temp+'°F');
+  if(wx.wind_speed!=null)parts.push(wx.wind_speed+' mph '+windIcon(wx.wind_dir));
+  if(wx.rain_chance!=null&&wx.rain_chance>0)parts.push(wx.rain_chance+'% rain');
+  return parts.join(' · ');
+}
+
+function parseGameTimeET(iso){
+  if(!iso)return '';
+  try{
+    const d=new Date(iso);
+    return d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:'America/New_York',hour12:true});
+  }catch(e){return '';}
+}
+
+function timeToMinutes(t){
+  if(!t)return 9999;
+  try{
+    const m=t.match(/(\d+):(\d+)\s*(AM|PM)/i);
+    if(!m)return 9999;
+    let h=parseInt(m[1]),min=parseInt(m[2]);
+    if(m[3].toUpperCase()==='PM'&&h!==12)h+=12;
+    if(m[3].toUpperCase()==='AM'&&h===12)h=0;
+    return h*60+min;
+  }catch(e){return 9999;}
+}
+
+function gameMatchupStr(s){
+  if(s.game_label){
+    return s.game_label.split(' \u2022')[0].trim();
+  }
+  const batterIsHome=s.home_team_id&&String(s.home_team_id)===String(s.batter_team_id||s.team_id||'');
+  if(batterIsHome){
+    return escapeHtml(s.opp_team)+' @ '+escapeHtml(s.team);
+  }
+  return escapeHtml(s.team)+' @ '+escapeHtml(s.opp_team);
+}
+
+// ── Daily Scores ──────────────────────────────────────────────────────────────
+async function loadDailyScores(force=false){
+  document.getElementById('leaderboard').innerHTML=
+    '<div class="loader"><div class="spinner"></div> Loading rankings…</div>';
+  try{
+    const url=API+'/api/hr-analytics/daily-scores'+(force?'?force=1':'');
+    const r=await fetch(url);
+    const d=await r.json();
+    if(!d.success||!d.scores){
+      document.getElementById('leaderboard').innerHTML=
+        `<div class="empty-state">No data available.<br><small>${escapeHtml(d.error||'')}</small></div>`;
+      return;
+    }
+    allScores=d.scores;
+    aiBlurbs=d.ai_blurbs||{};
+    document.getElementById('lastRefreshed').textContent=d.cached?'cached':'live';
+    buildGameMeta(allScores);
+    buildGameSelect(gameMeta);
+    renderLeaderboard(allScores);
+    if(allLineupsConfirmed()){
+      stopLineupPoll();
+    }else{
+      startLineupPoll();
+    }
+  }catch(e){
+    document.getElementById('leaderboard').innerHTML=
+      `<div class="empty-state">Error loading data: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function buildGameMeta(scores){
+  const seen={};
+  gameMeta=[];
+  scores.forEach(s=>{
+    const pk=String(s.game_pk);
+    if(seen[pk])return;
+    seen[pk]=1;
+    const rawIso=s.game_date_iso||s.game_date||'';
+    const timeET=s.game_time_et||parseGameTimeET(rawIso)||s.game_time||'';
+    const awayName=s.team||'';
+    const homeName=s.opp_team||'';
+    const matchup=s.game_label||(awayName&&homeName?`${awayName} @ ${homeName}`:pk);
+    const label=s.game_label||(timeET?`${timeET} — ${matchup}`:matchup);
+    const wx=s.weather_temp!=null?{
+      temp:s.weather_temp,
+      wind_speed:s.weather_wind,
+      wind_dir:s.weather_wind_dir,
+      rain_chance:s.weather_rain,
+      condition:s.weather_condition,
+      is_dome:s.is_dome||false,
+    }:(s.weather||null);
+    if(wx)gameWeather[pk]=wx;
+    // FIX 6: always overwrite confirmed status on refresh so lineup updates propagate
+    const confirmed=s.lineup_confirmed||s.confirmed_lineup||false;
+    gameLineups[pk]={confirmed};
+    gameMeta.push({game_pk:pk,label,sort_key:timeToMinutes(timeET),away_team:awayName,home_team:homeName,home_team_id:s.home_team_id,confirmed});
+  });
+  gameMeta.sort((a,b)=>a.sort_key-b.sort_key);
+}
+
+function buildGameSelect(meta){
+  const sel=document.getElementById('gameSelect');
+  sel.innerHTML='<option value="all">⚾ All Games</option>';
+  meta.forEach(g=>{
+    const opt=document.createElement('option');
+    opt.value=g.game_pk;
+    opt.textContent=g.label;
+    sel.appendChild(opt);
+  });
+}
+
+function filterByGame(val){
+  activeGameFilter=val;
+  renderLeaderboard(allScores);
+}
+
+function renderLeaderboard(scores){
+  const filtered=activeGameFilter==='all'
+    ?scores
+    :scores.filter(s=>String(s.game_pk)===String(activeGameFilter));
+  if(!filtered.length){
+    document.getElementById('leaderboard').innerHTML=
+      '<div class="empty-state">No batters found for this game.</div>';
+    return;
+  }
+  const html=filtered.map((s,i)=>{
+    const rank=i+1;
+    const rankClass=rank===1?'rank-1':rank===2?'rank-2':rank===3?'rank-3':'rank-other';
+    const sc=scoreClass(s.score);
+    const selected=selectedBatter&&selectedBatter.batter_id===s.batter_id&&selectedBatter.pitcher_id===s.pitcher_id?' selected':'';
+    const blurb=aiBlurbs[String(s.batter_id)]||'';
+    const blurbRow=blurb
+      ?`<div class="ai-blurb"><span class="ai-tag">AI</span>${escapeHtml(blurb)}</div>`:'';
+    const gPk=String(s.game_pk);
+    const confirmed=s.lineup_confirmed||(gameLineups[gPk]&&gameLineups[gPk].confirmed)||false;
+    const lineupBadge=confirmed
+      ?`<span class="confirmed-badge confirmed-yes">✓ CONFIRMED</span>`
+      :`<span class="confirmed-badge confirmed-no">~ PROJECTED</span>`;
+    const wx=gameWeather[gPk]||null;
+    const wxStr=wx?weatherStr(wx):'';
+    const wxRow=wxStr?`<div class="weather-badge">🌤 ${escapeHtml(wxStr)}</div>`:'';
+    const gt=s.game_time_et||s.game_time||'';
+    const matchupStr=gameMatchupStr(s);
+    const lethals=s.lethal_pitches||[];
+    const lethalRow=lethals.length
+      ?`<div class="lethal-row">${lethals.map(p=>`<span class="lethal-mini">💀 ${escapeHtml(p)}</span>`).join('')}</div>`:'';
+    return `
+    <div class="batter-card${selected}" onclick="selectBatter(${JSON.stringify(s).replace(/"/g,'&quot;')})">
+      <div class="batter-card-top">
+        <div class="rank-badge ${rankClass}">#${rank}</div>
+        <div class="batter-info">
+          <div class="batter-name">${escapeHtml(s.batter)} ${lineupBadge}</div>
+          <div class="batter-meta">vs ${escapeHtml(s.pitcher)} &bull; ${matchupStr}${gt?' &bull; '+escapeHtml(gt):''}</div>
+          <div class="batter-stats">
+            <span>ISO ${fmt(s.iso,3)}</span>
+            <span>Brl% ${fmtPct(s.barrel_pct)}</span>
+            <span>HH% ${fmtPct(s.hh_pct)}</span>
+            <span>PkHR ${s.park_hr_idx}</span>
+          </div>
+          ${wxRow}
+        </div>
+        <div class="score-block">
+          <div class="score-val ${sc}">${s.score.toFixed(0)}</div>
+          <div class="score-label">Score</div>
+          <div class="prob-badge">${probPct(s.prob_hr)} HR</div>
+        </div>
+      </div>
+      ${lethalRow}
+      ${blurbRow}
+    </div>`;
+  }).join('');
+  document.getElementById('leaderboard').innerHTML=html;
+}
+
+// ── Select batter ─────────────────────────────────────────────────────────────
+// FIX 5: only rebuild the full detail panel when a different batter is selected;
+// re-clicking the same batter no longer cancels in-flight API requests.
+async function selectBatter(s){
+  const newKey=`${s.batter_id}|${s.pitcher_id}|${s.game_pk}`;
+  const isSame=(newKey===selectedBatterKey);
+  selectedBatter=s;
+  selectedBatterKey=newKey;
+  renderLeaderboard(allScores);
+  document.getElementById('placeholderMsg').style.display='none';
+  const dc=document.getElementById('detailContent');
+  dc.style.display='block';
+  if(isSame)return; // don't re-render and cancel in-flight fetches
+  renderDetailSkeleton(s);
+  loadPitchMix(s);
+  loadH2H(s);
+  loadScouting(s);
+}
+
+// ── STEP 1: Build SVG score ring ──────────────────────────────────────────────
+function buildScoreRing(score){
+  const pct=Math.min(100,Math.max(0,score));
+  const r=30;
+  const circ=2*Math.PI*r;
+  const dash=((pct/100)*circ).toFixed(2);
+  const gap=(circ-dash).toFixed(2);
+  const color=score>=80?'#3fb950':score>=60?'#d29922':'#8b949e';
+  const textColor=score>=80?'var(--score-hi)':score>=60?'var(--score-mid)':'var(--score-lo)';
+  return `<div class="score-ring-wrap">
+    <svg viewBox="0 0 72 72">
+      <circle cx="36" cy="36" r="${r}" fill="none" stroke="#30363d" stroke-width="5"/>
+      <circle cx="36" cy="36" r="${r}" fill="none" stroke="${color}" stroke-width="5"
+        stroke-dasharray="${dash} ${gap}" stroke-linecap="round"/>
+    </svg>
+    <div class="score-ring-inner">
+      <div class="score-ring-val" style="color:${textColor}">${score.toFixed(0)}</div>
+      <div class="score-ring-lbl">Score</div>
+    </div>
+  </div>`;
+}
+
+// ── STEP 1: Strength badge label ──────────────────────────────────────────────
+function strengthBadge(score){
+  if(score>=85)return `<span class="strength-badge strength-elite">⚡ ELITE</span>`;
+  if(score>=70)return `<span class="strength-badge strength-strong">🔥 STRONG</span>`;
+  if(score>=55)return `<span class="strength-badge strength-moderate">📊 MODERATE</span>`;
+  return `<span class="strength-badge strength-weak">❄ WEAK</span>`;
+}
+
+// ── STEP 1: Park factor pill ──────────────────────────────────────────────────
+function parkPill(idx){
+  if(idx==null)return '';
+  const n=Number(idx);
+  const cls=n>=110?'pill-park-good':n>=95?'pill-park-mid':'pill-park-bad';
+  const icon=n>=110?'🏟️↑':n>=95?'🏟️':'🏟️↓';
+  return `<span class="pill ${cls}">${icon} Park ${n}</span>`;
+}
+
+// ── STEP 1: Mix score pill ────────────────────────────────────────────────────
+function mixPill(mixScore){
+  if(mixScore==null)return '';
+  const n=Number(mixScore);
+  const cls=n>=1.1?'pill-mix-good':n>=0.9?'pill-mix-mid':'pill-mix-bad';
+  return `<span class="pill ${cls}">Mix ${n.toFixed(2)}×</span>`;
+}
+
+// ── STEP 1: Odds pill ─────────────────────────────────────────────────────────
+function oddsPill(s){
+  const odds=s.odds_hr||s.hr_odds||s.moneyline||null;
+  if(!odds)return '';
+  return `<span class="pill pill-odds">💰 ${escapeHtml(String(odds))}</span>`;
+}
+
+// ── STEP 1: Player photo with fallback ───────────────────────────────────────
+function playerPhotoHtml(s){
+  const bid=s.batter_id||s.player_id||'';
+  const photoUrl=bid?`https://img.mlbstatic.com/mlb-photos/image/upload/d_people:generic:headshot:67:current.png/w_213,q_auto:best/v1/people/${bid}/headshot/67/current`:'';
+  const initials=(s.batter||'?').split(' ').map(w=>w[0]||'').join('').slice(0,2).toUpperCase();
+  if(photoUrl){
+    return `<img class="player-photo" src="${escapeHtml(photoUrl)}" alt="${escapeHtml(s.batter)}"
+      onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" loading="lazy">
+    <div class="player-photo-fallback" style="display:none">${initials}</div>`;
+  }
+  return `<div class="player-photo-fallback">${initials}</div>`;
+}
+
+function renderDetailSkeleton(s){
+  const gPk=String(s.game_pk);
+  const wx=gameWeather[gPk]||null;
+  const confirmed=s.lineup_confirmed||(gameLineups[gPk]&&gameLineups[gPk].confirmed)||false;
+
+  // ── Weather section (unchanged) ──
+  let weatherSection='';
+  if(wx){
+    if(wx.is_dome){
+      weatherSection=`<div class="weather-row"><div class="weather-item">🏟️ <strong>Dome / Indoor</strong> — weather not a factor</div></div>`;
+    }else{
+      const windWarn=(wx.wind_speed||0)>=15;
+      weatherSection=`<div class="weather-row">
+        ${wx.temp!=null?`<div class="weather-item">🌡️ <strong>${wx.temp}°F</strong></div>`:''}
+        ${wx.wind_speed!=null?`<div class="weather-item ${windWarn?'weather-wind-warn':''}">💨 <strong>${wx.wind_speed} mph</strong> ${windIcon(wx.wind_dir)}</div>`:''}
+        ${wx.rain_chance!=null?`<div class="weather-item">🌧 <strong>${wx.rain_chance}%</strong> rain</div>`:''}
+        ${wx.condition?`<div class="weather-item">☁️ ${escapeHtml(wx.condition)}</div>`:''}
+      </div>`;
+    }
+  }
+
+  // ── Lineup section (unchanged) ──
+  const lineupSection=`<div class="lineup-strip">
+    ${confirmed
+      ?`<span class="lineup-confirmed">✅ Confirmed Lineup</span>`
+      :`<div>
+          <span class="lineup-projected">⚠️ Projected Lineup — not yet confirmed</span>
+          <div class="lineup-refresh-row" id="lineupRefreshRow">
+            🔄 Auto-refreshing in <span class="lineup-countdown" id="lineupCountdown">${lineupCountdownSec}s</span>
+          </div>
+        </div>`}
+  </div>`;
+
+  const gt=s.game_time_et||s.game_time||'';
+  const matchupStr=gameMatchupStr(s);
+  const hand=s.batter_hand||s.hand||'R';
+  const throws=s.pitcher_hand||s.pitcher_throws||'R';
+  const team=s.team||'';
+  const mixScore=s.mix_score!=null?s.mix_score:null;
+
+  // ── STEP 1: Rich player header ──
+  const playerHeader=`
+    <div class="player-header">
+      <div class="player-photo-wrap">
+        ${playerPhotoHtml(s)}
+      </div>
+      ${buildScoreRing(s.score)}
+      <div class="player-info">
+        <div class="player-name-row">
+          <span class="player-name">${escapeHtml(s.batter)}</span>
+          ${strengthBadge(s.score)}
+        </div>
+        <div class="player-meta-row">
+          ${team?`<span>${escapeHtml(team)}</span><span class="player-meta-sep">·</span>`:''}
+          <span class="hand-badge">Bats ${escapeHtml(hand)}</span>
+          <span class="player-meta-sep">·</span>
+          <span style="color:var(--muted)">vs <strong style="color:var(--text)">${escapeHtml(s.pitcher)}</strong> (${escapeHtml(throws)}HP)</span>
+          ${gt?`<span class="player-meta-sep">·</span><span class="game-time">${escapeHtml(gt)}</span>`:''}
+        </div>
+        <div class="player-pills">
+          <span class="pill pill-hr">🎯 ${probPct(s.prob_hr)} HR Prob</span>
+          ${parkPill(s.park_hr_idx)}
+          ${mixPill(mixScore)}
+          ${oddsPill(s)}
+          ${matchupStr?`<span class="pill pill-time">⚾ ${escapeHtml(matchupStr)}</span>`:''}
+        </div>
+      </div>
+    </div>`;
+
+  document.getElementById('detailContent').innerHTML=`
+    ${playerHeader}
+    ${lineupSection}
+    ${weatherSection}
+    <div class="tab-nav">
+      <button class="tab-btn active" onclick="switchTab('sim',this)">Simulator</button>
+      <button class="tab-btn" onclick="switchTab('mix',this)">Pitch Mix</button>
+      <button class="tab-btn" onclick="switchTab('h2h',this)">H2H</button>
+      <button class="tab-btn" onclick="switchTab('scout',this)">AI Report</button>
+    </div>
+    <div id="tab-sim" class="tab-pane active">
+      <div class="sim-run-wrap">
+        <button class="sim-run-btn" id="simRunBtn" onclick="triggerSimulator()">
+          ▶ Run Monte Carlo Simulation
+        </button>
+        <div class="sim-run-sub">1,000 games × 4 AB — click to simulate HR probability</div>
+      </div>
+    </div>
+    <div id="tab-mix" class="tab-pane">
+      <div class="loader"><div class="spinner"></div> Loading pitch mix…</div>
+    </div>
+    <div id="tab-h2h" class="tab-pane">
+      <div class="loader"><div class="spinner"></div> Loading H2H data…</div>
+    </div>
+    <div id="tab-scout" class="tab-pane">
+      <div class="loader"><div class="spinner"></div> Generating AI report…</div>
+    </div>`;
+}
+
+function switchTab(name,btn){
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('.tab-pane').forEach(p=>p.classList.remove('active'));
+  btn.classList.add('active');
+  const pane=document.getElementById('tab-'+name);
+  if(pane)pane.classList.add('active');
+}
+
+async function triggerSimulator(){
+  const s=selectedBatter;
+  if(!s)return;
+  const btn=document.getElementById('simRunBtn');
+  const panel=document.getElementById('tab-sim');
+  if(btn){btn.disabled=true;btn.textContent='⏳ Simulating…';}
+  if(panel)panel.innerHTML='<div class="loader"><div class="spinner"></div> Running Monte Carlo simulation…</div>';
+  try{
+    const r=await fetch(`${API}/api/hr-analytics/simulator?batter_id=${s.batter_id}&pitcher_id=${s.pitcher_id}&game_pk=${s.game_pk}`);
+    const d=await r.json();
+    if(panel)renderSimulator(panel,d,s);
+  }catch(e){
+    if(panel)panel.innerHTML=`<div class="error-box">Simulator error: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function loadPitchMix(s){
+  const mixPanel=document.getElementById('tab-mix');
+  try{
+    const r=await fetch(`${API}/api/hr-analytics/pitch-mix/${s.batter_id}/${s.pitcher_id}`);
+    const d=await r.json();
+    if(mixPanel)renderPitchMix(mixPanel,d,s);
+  }catch(e){
+    if(mixPanel)mixPanel.innerHTML=`<div class="error-box">Pitch mix error: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function loadH2H(s){
+  const h2hPanel=document.getElementById('tab-h2h');
+  try{
+    const r=await fetch(`${API}/api/bvp/${s.batter_id}/${s.pitcher_id}`);
+    const d=await r.json();
+    if(h2hPanel)renderH2H(h2hPanel,d,s);
+  }catch(e){
+    if(h2hPanel)h2hPanel.innerHTML=`<div class="error-box">H2H error: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function loadScouting(s){
+  const scoutPanel=document.getElementById('tab-scout');
+  try{
+    const r=await fetch(`${API}/api/hr-analytics/scouting/${s.batter_id}/${s.pitcher_id}/${s.game_pk}`);
+    const d=await r.json();
+    if(scoutPanel)renderScouting(scoutPanel,d,s);
+  }catch(e){
+    if(scoutPanel)scoutPanel.innerHTML=`<div class="error-box">Scouting error: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderSimulator(panel,d,s){
+  if(!d.success){
+    panel.innerHTML=`<div class="error-box">${escapeHtml(d.error||'Simulator unavailable')}</div>
+      <div class="sim-run-wrap" style="padding-top:16px">
+        <button class="sim-run-btn" id="simRunBtn" onclick="triggerSimulator()">↻ Retry Simulation</button>
+      </div>`;
+    return;
+  }
+  const mc=d.mc_prob||d.prob_hr||0;
+  const cf=d.cf_prob||0;
+  const pab=d.p_per_ab||0;
+  const dist=d.distribution||{};
+  const keys=Object.keys(dist).map(Number).sort((a,b)=>a-b);
+  const barColors=['sim-bar-fill-0','sim-bar-fill-1','sim-bar-fill-2','sim-bar-fill-3','sim-bar-fill-4'];
+  // FIX 2: use % width so bars scale correctly inside any container width
+  const barsHtml=keys.map(k=>{
+    const pct=Math.round((dist[k]||0)*100);
+    return `<div class="sim-bar-row">
+      <span style="width:36px;text-align:right;font-weight:600">${k} HR</span>
+      <div class="sim-bar-track"><div class="${barColors[Math.min(k,4)]}" style="height:100%;width:${pct}%;border-radius:4px"></div></div>
+      <span style="width:40px">${pct}%</span>
+    </div>`;
+  }).join('');
+  const inp=d.inputs||{};
+  const kiRows=[
+    {v:inp.iso!=null?fmt(inp.iso,3):'—',l:'ISO (Power)'},
+    {v:inp.barrel_pct!=null?fmtPct(inp.barrel_pct):'—',l:'Barrel%'},
+    {v:inp.hh_pct!=null?fmtPct(inp.hh_pct):'—',l:'Hard Hit%'},
+    {v:inp.avg_ev!=null?inp.avg_ev.toFixed(1)+' mph':'—',l:'Avg EV'},
+    {v:inp.hr9_vs_hand!=null?inp.hr9_vs_hand.toFixed(2):'—',l:'Pit HR/9 vs Hand'},
+    {v:inp.park_hr_idx!=null?inp.park_hr_idx:'—',l:'Park HR Index'},
+    {v:inp.mix_score!=null?inp.mix_score.toFixed(2)+'×':'—',l:'Mix Score'},
+    {v:inp.xwoba!=null?fmt(inp.xwoba,3):'—',l:'xwOBA'},
+  ];
+  panel.innerHTML=`
+    <div class="section">
+      <div class="section-title">Monte Carlo Simulator (1,000 games × 4 AB)</div>
+      <div class="sim-grid">
+        <div class="sim-cell"><div class="sim-val">${probPct(mc)}</div><div class="sim-lbl">HR Probability (MC)</div></div>
+        <div class="sim-cell"><div class="sim-val">${probPct(cf)}</div><div class="sim-lbl">Closed Form (1−(1−p)⁴)</div></div>
+      </div>
+      <div class="sim-cell" style="margin-bottom:12px;padding:10px 12px">
+        <div class="sim-val">${probPct(pab)}</div>
+        <div class="sim-lbl">p HR per AB</div>
+      </div>
+      <div class="sim-bar-wrap">${barsHtml}</div>
+      <div style="text-align:right;margin-top:8px">
+        <button class="regen-btn" onclick="triggerSimulator()">↻ Re-run Simulation</button>
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-title">Key Inputs</div>
+      <div class="key-inputs-grid">
+        ${kiRows.map(r=>`<div class="ki-cell"><div class="ki-val">${escapeHtml(String(r.v))}</div><div class="ki-lbl">${escapeHtml(r.l)}</div></div>`).join('')}
+      </div>
+    </div>`;
+}
+
+function renderPitchMix(panel,d,s){
+  if(!d.success){
+    panel.innerHTML=`<div class="error-box">${escapeHtml(d.error||'Pitch mix data unavailable')}</div>`;
+    return;
+  }
+  const rows=d.pitch_table||[];
+  const mixScore=d.mix_score||1.0;
+  const mixClass=mixScore>=1.1?'mix-hi':mixScore>=0.9?'mix-mid':'mix-lo';
+  const mixLabel=mixScore>=1.1?'Favorable':mixScore>=0.9?'Neutral':'Unfavorable';
+  if(!rows.length){
+    panel.innerHTML=`<div class="section"><div class="section-title">Pitch Mix Matchup Score</div><div class="warning-box">⚠ Pitch arsenal outcome data not yet loaded. Using league average mix score (1.0×). Data loads daily at startup.</div></div>`;
+    return;
+  }
+  let wAvg=0,wSlg=0,wWoba=0,totalW=0;
+  rows.forEach(r=>{
+    if(r.pit_ba!=null)wAvg+=r.pit_ba*r.usage;
+    if(r.pit_slg!=null)wSlg+=r.pit_slg*r.usage;
+    if(r.pit_woba!=null)wWoba+=r.pit_woba*r.usage;
+    totalW+=r.usage;
+  });
+  const pitAvgAll=totalW>0?(wAvg/totalW):null;
+  const pitSlgAll=totalW>0?(wSlg/totalW):null;
+  const pitWobaAll=totalW>0?(wWoba/totalW):null;
+  const intelHtml=`<div class="pit-intel-strip">
+    ${pitAvgAll!=null?`<div class="pit-intel-chip ${pitAvgAll>=.310?'chip-bad':pitAvgAll>=.280?'chip-high':'chip-elite'}">Allows .${fmtStatVal(pitAvgAll)} AVG</div>`:''}
+    ${pitSlgAll!=null?`<div class="pit-intel-chip ${pitSlgAll>=.500?'chip-bad':pitSlgAll>=.430?'chip-high':'chip-elite'}">Allows .${fmtStatVal(pitSlgAll)} SLG</div>`:''}
+    ${pitWobaAll!=null?`<div class="pit-intel-chip ${pitWobaAll>=.360?'chip-bad':pitWobaAll>=.330?'chip-high':'chip-elite'}">Allows .${fmtStatVal(pitWobaAll)} wOBA</div>`:''}
+  </div>`;
+  function isLethal(r){return r.pit_slg!=null&&r.bat_slg!=null&&r.pit_slg>=.500&&r.bat_slg>=.550;}
+  function isGood(r){return r.bat_slg!=null&&r.bat_slg>=.480&&!isLethal(r);}
+  function pitchBlockHtml(row){
+    const lethal=isLethal(row);
+    const good=!lethal&&isGood(row);
+    const bullets=[];
+    if(row.pit_slg!=null&&row.bat_slg!=null)
+      bullets.push(`Pitcher allows .${fmtStatVal(row.pit_slg)} SLG — batter slugs .${fmtStatVal(row.bat_slg)} on it`);
+    if(row.pit_woba!=null&&row.bat_woba!=null)
+      bullets.push(`Both sides post .${fmtStatVal(row.pit_woba)}/.${fmtStatVal(row.bat_woba)} wOBA on this pitch`);
+    if(row.pit_ba!=null&&row.bat_ba!=null)
+      bullets.push(`Easy contact both ways — pitcher allows .${fmtStatVal(row.pit_ba)} BA, batter hits .${fmtStatVal(row.bat_ba)}`);
+    else if(row.pit_ba!=null)
+      bullets.push(`Pitcher allows .${fmtStatVal(row.pit_ba)} BA on this pitch`);
+    const bulletsHtml=bullets.length
+      ?`<ul class="lethal-bullets">${bullets.map(b=>`<li>${escapeHtml(b)}</li>`).join('')}</ul>`:
+      '';
+    if(lethal){
+      return `<div class="lethal-block">
+        <div class="lethal-header">
+          <span class="lethal-pitch-name">${escapeHtml(row.pitch)}</span>
+          <span class="lethal-badge">💀 LETHAL COMBO</span>
+          <span class="lethal-usage">${row.usage.toFixed(1)}% of pitches</span>
+        </div>
+        ${bulletsHtml}
+      </div>`;
+    }else if(good){
+      return `<div class="good-block">
+        <div class="good-header">
+          <span class="good-pitch-name">${escapeHtml(row.pitch)}</span>
+          <span class="good-badge">✓ GOOD MATCHUP</span>
+          <span class="lethal-usage">${row.usage.toFixed(1)}% of pitches</span>
+        </div>
+        ${bulletsHtml}
+      </div>`;
+    }else{
+      const adv=row.ratio>=1.1?'adv-hi':row.ratio<=0.9?'adv-lo':'';
+      const barW=Math.min(100,Math.round(row.usage||0));
+      return `<div class="pitch-section">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+          <span style="font-weight:600;font-size:13px">${escapeHtml(row.pitch)}</span>
+          <div class="usage-bar-wrap">
+            <div class="usage-bar" style="width:${barW}px"></div>
+            <span style="font-size:11px;color:var(--muted)">${row.usage.toFixed(1)}%</span>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;font-size:12px">
+          ${row.pit_ba!=null?`<div><div class="lbl">Allows BA</div><div>.${fmtStatVal(row.pit_ba)}</div></div>`:''}
+          ${row.pit_slg!=null?`<div><div class="lbl">Allows SLG</div><div>.${fmtStatVal(row.pit_slg)}</div></div>`:''}
+          ${row.pit_woba!=null?`<div><div class="lbl">Allows wOBA</div><div>.${fmtStatVal(row.pit_woba)}</div></div>`:''}
+          ${row.bat_slg!=null?`<div><div class="lbl">Batter SLG</div><div class="${adv}">.${fmtStatVal(row.bat_slg)}</div></div>`:''}
+          ${row.bat_woba!=null?`<div><div class="lbl">Batter wOBA</div><div class="${adv}">.${fmtStatVal(row.bat_woba)}</div></div>`:''}
+          ${row.pit_whiff!=null?`<div><div class="lbl">Whiff%</div><div>${fmtPct(row.pit_whiff)}</div></div>`:''}
+        </div>
+      </div>`;
+    }
+  }
+  const displayRows=rows.slice(0,4);
+  const pitchBlocksHtml=displayRows.map(pitchBlockHtml).join('');
+  panel.innerHTML=`
+    <div class="section">
+      <div class="pitch-mix-header">
+        <span class="mix-score-badge ${mixClass}">${mixScore.toFixed(2)}× — ${mixLabel}</span>
+        <span style="font-size:12px;color:var(--muted)">${escapeHtml(s.pitcher)} vs ${escapeHtml(s.batter)}</span>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:14px">
+        Score = weighted avg of batter's SLG vs each pitch relative to league average. 1.0 = exactly league average.
+      </div>
+      <div class="section-title">⚾ PITCHER IS GETTABLE — HERE'S WHY</div>
+      ${intelHtml}
+      <div class="section-title" style="margin-top:4px">PITCH-BY-PITCH MATCHUP (TOP ${displayRows.length})</div>
+      ${pitchBlocksHtml}
+      <div style="font-size:11px;color:var(--muted);margin-top:10px;text-align:right">Data sourced from Baseball Savant / MLB Statcast</div>
+    </div>`;
+}
+
+function renderH2H(panel,d,s){
+  const stats=d.stats||d||{};
+  const pa=stats.pa||stats.PA||0;
+  const hr=stats.hr||stats.HR||0;
+  const avg=stats.avg||stats.AVG||0;
+  const ops=stats.ops||stats.OPS||0;
+  const note=pa<50?`<div class="warning-box" style="margin-bottom:10px">⚠ Only ${pa} PA career H2H. Per research, signal emerges near 50-100 PA. Treat as flavor, not primary input.</div>`:'';
+  panel.innerHTML=`
+    <div class="section">
+      <div class="section-title">Career Head-to-Head: ${escapeHtml(s.batter)} vs ${escapeHtml(s.pitcher)}</div>
+      ${note}
+      <div class="h2h-grid">
+        <div class="h2h-cell"><div class="h2h-val">${pa}</div><div style="font-size:11px;color:var(--muted)">PA</div></div>
+        <div class="h2h-cell"><div class="h2h-val">${hr}</div><div style="font-size:11px;color:var(--muted)">HR</div></div>
+        <div class="h2h-cell"><div class="h2h-val">${fmt(avg,3)}</div><div style="font-size:11px;color:var(--muted)">AVG</div></div>
+        <div class="h2h-cell"><div class="h2h-val">${fmt(ops,3)}</div><div style="font-size:11px;color:var(--muted)">OPS</div></div>
+      </div>
+      ${pa<50?`<div style="font-size:11px;color:var(--warn);margin-top:8px">Only ${pa} PA — insufficient sample.</div>`:''}
+    </div>`;
+}
+
+function renderScouting(panel,d,s){
+  const report=d.report||d.text||d.scouting_report||'';
+  const snap=d.snapshot||d.model_snapshot||{};
+  const snapHtml=Object.keys(snap).length?`
+    <div class="section">
+      <div class="section-title">Model Snapshot</div>
+      <div class="snap-grid">
+        ${snap.hr_prob!=null?`<div class="snap-cell"><div class="snap-val">${probPct(snap.hr_prob)}</div><div class="snap-lbl">HR Probability</div></div>`:''}
+        ${snap.composite_score!=null?`<div class="snap-cell"><div class="snap-val">${snap.composite_score}/100</div><div class="snap-lbl">Composite Score</div></div>`:''}
+        ${snap.p_per_ab!=null?`<div class="snap-cell"><div class="snap-val">${probPct(snap.p_per_ab)}</div><div class="snap-lbl">p per AB</div></div>`:''}
+        ${snap.platoon!=null?`<div class="snap-cell"><div class="snap-val">${snap.platoon}</div><div class="snap-lbl">Platoon</div></div>`:''}
+      </div>
+    </div>`:'';
+  panel.innerHTML=`
+    <div class="section">
+      <div class="section-title">AI Scouting Report</div>
+      <div class="scouting-box">${escapeHtml(report||'No report available.')}</div>
+      <button class="regen-btn" onclick="regenScouting(${JSON.stringify(s).replace(/"/g,'&quot;')})">↻ Regenerate</button>
+    </div>
+    ${snapHtml}`;
+}
+
+async function regenScouting(s){
+  const panel=document.getElementById('tab-scout');
+  if(panel)panel.innerHTML='<div class="loader"><div class="spinner"></div> Regenerating…</div>';
+  try{
+    const r=await fetch(`${API}/api/hr-analytics/scouting/${s.batter_id}/${s.pitcher_id}/${s.game_pk}?regen=1`);
+    const d=await r.json();
+    if(panel)renderScouting(panel,d,s);
+  }catch(e){
+    if(panel)panel.innerHTML=`<div class="error-box">Error: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+// ──────────────────────────────────────────────────────
+loadDailyScores();
+</script>
+</body>
+</html>
