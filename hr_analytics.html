@@ -31,7 +31,6 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 @media(max-width:700px){.brand img{width:42px;height:42px}.brand-sub{display:none}nav{padding:12px 16px}}
 
 /* ── Layout ── */
-/* FIX 1: left panel width uses clamp so it never overflows on tablet */
 .layout{display:grid;grid-template-columns:min(440px,100%) 1fr;min-height:calc(100vh - 57px)}
 @media(max-width:960px){.layout{grid-template-columns:1fr;grid-template-rows:auto 1fr}}
 
@@ -93,7 +92,7 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 @keyframes spin{to{transform:rotate(360deg)}}
 
 /* ── Right panel ── */
-.right-panel{display:flex;flex-direction:column;background:var(--bg)}
+.right-panel{display:flex;flex-direction:column;background:var(--bg);overflow:hidden}
 .detail-placeholder{display:flex;align-items:center;justify-content:center;height:100%;color:var(--muted);font-size:14px;padding:40px;text-align:center}
 #detailContent{display:none;overflow-y:auto;flex:1;padding:20px}
 
@@ -107,8 +106,9 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
   display:flex;
   gap:16px;
   align-items:flex-start;
-  position:relative;
-  overflow:hidden;
+  position:sticky;
+  top:0;
+  z-index:10;
 }
 .player-header::before{
   content:'';
@@ -260,8 +260,8 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .good-badge{background:#3fb950;color:#000;font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px}
 .good-pitch-name{font-size:15px;font-weight:700;color:#3fb950}
 
-/* usage bar */
-.usage-bar-wrap{display:flex;align-items:center;gap:6px}
+/* usage bar — % width */
+.usage-bar-wrap{display:flex;align-items:center;gap:6px;flex:1;min-width:0}
 .usage-bar{height:4px;background:var(--accent2);border-radius:2px}
 .adv-hi{color:var(--score-hi);font-weight:700}
 .adv-lo{color:var(--cold)}
@@ -271,6 +271,13 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .h2h-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
 .h2h-cell{background:#0d1117;border:1px solid var(--border);border-radius:6px;padding:8px;text-align:center}
 .h2h-val{font-size:16px;font-weight:700}
+
+/* ── H2H year table ── */
+.h2h-year-table{width:100%;border-collapse:collapse;font-size:12px}
+.h2h-year-table th{padding:6px 10px;text-align:left;font-size:10px;font-weight:700;letter-spacing:.5px;color:var(--muted);text-transform:uppercase;border-bottom:1px solid var(--border)}
+.h2h-year-table td{padding:7px 10px;border-bottom:1px solid var(--border)}
+.h2h-year-table tr:last-child td{border-bottom:none}
+.h2h-year-table tr:hover td{background:#1c2128}
 
 /* ── Weather / lineup ── */
 .lineup-strip{margin-bottom:10px;padding:6px 0}
@@ -323,7 +330,6 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
     <a href="/dashboard">Dashboard</a>
     <a href="/props">Props</a>
     <a href="/bvp">BvP</a>
-    <!-- FIX 4: add HR Analytics nav link -->
     <a href="/hr-analytics" style="color:#3fb950;font-weight:700">HR</a>
   </div>
 </nav>
@@ -365,7 +371,6 @@ let gameWeather={};
 let gameLineups={};
 let activeGameFilter='all';
 let selectedBatter=null;
-// FIX 5: track the key of the currently-rendered batter to avoid redundant re-renders
 let selectedBatterKey=null;
 
 // ── Auto-refresh for projected lineups ────────────────────────────────────────
@@ -416,8 +421,7 @@ function fmtPct(v){if(v==null)return '—';return Number(v).toFixed(1)+'%';}
 function probPct(v){if(v==null)return '—';return (Number(v)*100).toFixed(1)+'%';}
 function scoreClass(s){return s>=80?'score-hi':s>=60?'score-mid':'score-lo';}
 function scoreRingClass(s){return s>=80?'ring-hi':s>=60?'ring-mid':'ring-lo';}
-// FIX 3: correct stat formatting — multiply by 1000, floor, then zero-pad to 3 digits
-// e.g. 0.312 → "312", 0.050 → "050", 0.005 → "005"
+// fmtStatVal: multiply by 1000, floor, zero-pad to 3 digits → "0.312" → "312", "0.050" → "050"
 function fmtStatVal(v){
   if(v==null)return '—';
   return Math.floor(Number(v)*1000).toString().padStart(3,'0');
@@ -521,7 +525,6 @@ function buildGameMeta(scores){
       is_dome:s.is_dome||false,
     }:(s.weather||null);
     if(wx)gameWeather[pk]=wx;
-    // FIX 6: always overwrite confirmed status on refresh so lineup updates propagate
     const confirmed=s.lineup_confirmed||s.confirmed_lineup||false;
     gameLineups[pk]={confirmed};
     gameMeta.push({game_pk:pk,label,sort_key:timeToMinutes(timeET),away_team:awayName,home_team:homeName,home_team_id:s.home_team_id,confirmed});
@@ -583,7 +586,7 @@ function renderLeaderboard(scores){
           <div class="batter-name">${escapeHtml(s.batter)} ${lineupBadge}</div>
           <div class="batter-meta">vs ${escapeHtml(s.pitcher)} &bull; ${matchupStr}${gt?' &bull; '+escapeHtml(gt):''}</div>
           <div class="batter-stats">
-            <span>ISO ${fmt(s.iso,3)}</span>
+            <span>ISO .${fmtStatVal(s.iso)}</span>
             <span>Brl% ${fmtPct(s.barrel_pct)}</span>
             <span>HH% ${fmtPct(s.hh_pct)}</span>
             <span>PkHR ${s.park_hr_idx}</span>
@@ -604,8 +607,6 @@ function renderLeaderboard(scores){
 }
 
 // ── Select batter ─────────────────────────────────────────────────────────────
-// FIX 5: only rebuild the full detail panel when a different batter is selected;
-// re-clicking the same batter no longer cancels in-flight API requests.
 async function selectBatter(s){
   const newKey=`${s.batter_id}|${s.pitcher_id}|${s.game_pk}`;
   const isSame=(newKey===selectedBatterKey);
@@ -615,14 +616,14 @@ async function selectBatter(s){
   document.getElementById('placeholderMsg').style.display='none';
   const dc=document.getElementById('detailContent');
   dc.style.display='block';
-  if(isSame)return; // don't re-render and cancel in-flight fetches
+  if(isSame)return;
   renderDetailSkeleton(s);
   loadPitchMix(s);
   loadH2H(s);
   loadScouting(s);
 }
 
-// ── STEP 1: Build SVG score ring ──────────────────────────────────────────────
+// ── Build SVG score ring ──────────────────────────────────────────────────────
 function buildScoreRing(score){
   const pct=Math.min(100,Math.max(0,score));
   const r=30;
@@ -644,7 +645,7 @@ function buildScoreRing(score){
   </div>`;
 }
 
-// ── STEP 1: Strength badge label ──────────────────────────────────────────────
+// ── Strength badge label ──────────────────────────────────────────────────────
 function strengthBadge(score){
   if(score>=85)return `<span class="strength-badge strength-elite">⚡ ELITE</span>`;
   if(score>=70)return `<span class="strength-badge strength-strong">🔥 STRONG</span>`;
@@ -652,7 +653,7 @@ function strengthBadge(score){
   return `<span class="strength-badge strength-weak">❄ WEAK</span>`;
 }
 
-// ── STEP 1: Park factor pill ──────────────────────────────────────────────────
+// ── Park factor pill ──────────────────────────────────────────────────────────
 function parkPill(idx){
   if(idx==null)return '';
   const n=Number(idx);
@@ -661,7 +662,7 @@ function parkPill(idx){
   return `<span class="pill ${cls}">${icon} Park ${n}</span>`;
 }
 
-// ── STEP 1: Mix score pill ────────────────────────────────────────────────────
+// ── Mix score pill ────────────────────────────────────────────────────────────
 function mixPill(mixScore){
   if(mixScore==null)return '';
   const n=Number(mixScore);
@@ -669,14 +670,14 @@ function mixPill(mixScore){
   return `<span class="pill ${cls}">Mix ${n.toFixed(2)}×</span>`;
 }
 
-// ── STEP 1: Odds pill ─────────────────────────────────────────────────────────
+// ── Odds pill ─────────────────────────────────────────────────────────────────
 function oddsPill(s){
   const odds=s.odds_hr||s.hr_odds||s.moneyline||null;
   if(!odds)return '';
   return `<span class="pill pill-odds">💰 ${escapeHtml(String(odds))}</span>`;
 }
 
-// ── STEP 1: Player photo with fallback ───────────────────────────────────────
+// ── Player photo with fallback ───────────────────────────────────────────────
 function playerPhotoHtml(s){
   const bid=s.batter_id||s.player_id||'';
   const photoUrl=bid?`https://img.mlbstatic.com/mlb-photos/image/upload/d_people:generic:headshot:67:current.png/w_213,q_auto:best/v1/people/${bid}/headshot/67/current`:'';
@@ -694,7 +695,6 @@ function renderDetailSkeleton(s){
   const wx=gameWeather[gPk]||null;
   const confirmed=s.lineup_confirmed||(gameLineups[gPk]&&gameLineups[gPk].confirmed)||false;
 
-  // ── Weather section (unchanged) ──
   let weatherSection='';
   if(wx){
     if(wx.is_dome){
@@ -710,7 +710,6 @@ function renderDetailSkeleton(s){
     }
   }
 
-  // ── Lineup section (unchanged) ──
   const lineupSection=`<div class="lineup-strip">
     ${confirmed
       ?`<span class="lineup-confirmed">✅ Confirmed Lineup</span>`
@@ -729,7 +728,6 @@ function renderDetailSkeleton(s){
   const team=s.team||'';
   const mixScore=s.mix_score!=null?s.mix_score:null;
 
-  // ── STEP 1: Rich player header ──
   const playerHeader=`
     <div class="player-header">
       <div class="player-photo-wrap">
@@ -858,7 +856,6 @@ function renderSimulator(panel,d,s){
   const dist=d.distribution||{};
   const keys=Object.keys(dist).map(Number).sort((a,b)=>a-b);
   const barColors=['sim-bar-fill-0','sim-bar-fill-1','sim-bar-fill-2','sim-bar-fill-3','sim-bar-fill-4'];
-  // FIX 2: use % width so bars scale correctly inside any container width
   const barsHtml=keys.map(k=>{
     const pct=Math.round((dist[k]||0)*100);
     return `<div class="sim-bar-row">
@@ -869,7 +866,7 @@ function renderSimulator(panel,d,s){
   }).join('');
   const inp=d.inputs||{};
   const kiRows=[
-    {v:inp.iso!=null?fmt(inp.iso,3):'—',l:'ISO (Power)'},
+    {v:inp.iso!=null?'.'+fmtStatVal(inp.iso):'—',l:'ISO (Power)'},
     {v:inp.barrel_pct!=null?fmtPct(inp.barrel_pct):'—',l:'Barrel%'},
     {v:inp.hh_pct!=null?fmtPct(inp.hh_pct):'—',l:'Hard Hit%'},
     {v:inp.avg_ev!=null?inp.avg_ev.toFixed(1)+' mph':'—',l:'Avg EV'},
@@ -970,10 +967,10 @@ function renderPitchMix(panel,d,s){
       const barW=Math.min(100,Math.round(row.usage||0));
       return `<div class="pitch-section">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
-          <span style="font-weight:600;font-size:13px">${escapeHtml(row.pitch)}</span>
+          <span style="font-weight:600;font-size:13px;min-width:80px">${escapeHtml(row.pitch)}</span>
           <div class="usage-bar-wrap">
-            <div class="usage-bar" style="width:${barW}px"></div>
-            <span style="font-size:11px;color:var(--muted)">${row.usage.toFixed(1)}%</span>
+            <div class="usage-bar" style="width:${barW}%"></div>
+            <span style="font-size:11px;color:var(--muted);white-space:nowrap">${row.usage.toFixed(1)}%</span>
           </div>
         </div>
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;font-size:12px">
@@ -987,6 +984,7 @@ function renderPitchMix(panel,d,s){
       </div>`;
     }
   }
+  const hasGettable=rows.some(r=>isLethal(r))||rows.some(r=>isGood(r))||(mixScore>=1.0);
   const displayRows=rows.slice(0,4);
   const pitchBlocksHtml=displayRows.map(pitchBlockHtml).join('');
   panel.innerHTML=`
@@ -998,7 +996,9 @@ function renderPitchMix(panel,d,s){
       <div style="font-size:12px;color:var(--muted);margin-bottom:14px">
         Score = weighted avg of batter's SLG vs each pitch relative to league average. 1.0 = exactly league average.
       </div>
-      <div class="section-title">⚾ PITCHER IS GETTABLE — HERE'S WHY</div>
+      ${hasGettable
+        ?'<div class="section-title" style="color:var(--score-hi)">⚾ PITCHER IS GETTABLE — HERE\'S WHY</div>'
+        :'<div class="section-title">⚾ PITCH-BY-PITCH MATCHUP ANALYSIS</div>'}
       ${intelHtml}
       <div class="section-title" style="margin-top:4px">PITCH-BY-PITCH MATCHUP (TOP ${displayRows.length})</div>
       ${pitchBlocksHtml}
@@ -1011,20 +1011,73 @@ function renderH2H(panel,d,s){
   const pa=stats.pa||stats.PA||0;
   const hr=stats.hr||stats.HR||0;
   const avg=stats.avg||stats.AVG||0;
+  const obp=stats.obp||stats.OBP||0;
+  const slg=stats.slg||stats.SLG||0;
   const ops=stats.ops||stats.OPS||0;
-  const note=pa<50?`<div class="warning-box" style="margin-bottom:10px">⚠ Only ${pa} PA career H2H. Per research, signal emerges near 50-100 PA. Treat as flavor, not primary input.</div>`:'';
+  const iso=stats.iso||stats.ISO||0;
+  const woba=stats.woba||stats.wOBA||0;
+  const xwoba=stats.xwoba||stats.xwOBA||0;
+  const k_pct=stats.k_pct||stats.K_pct||stats.so_pct||0;
+  const bb_pct=stats.bb_pct||stats.BB_pct||0;
+  const byYear=d.by_year||d.yearly||[];
+  const note=pa<50?`<div class="warning-box" style="margin-bottom:10px">⚠ Only ${pa} PA career H2H. Per research, signal emerges near 50–100 PA. Treat as flavor, not primary input.</div>`:'';
+  function avgColor(v){return v>=.300?'var(--score-hi)':v>=.250?'var(--score-mid)':'var(--muted)';}
+  function slgColor(v){return v>=.500?'var(--score-hi)':v>=.400?'var(--score-mid)':'var(--muted)';}
+  function opsColor(v){return v>=.850?'var(--score-hi)':v>=.720?'var(--score-mid)':'var(--muted)';}
+  function hrColor(v){return v>0?'var(--hot)':'var(--muted)';}
+  const extraStats=[obp,slg,iso,woba,xwoba,k_pct,bb_pct].filter(v=>v>0);
+  let yearTable='';
+  if(byYear.length){
+    yearTable=`<div class="section" style="margin-top:14px">
+      <div class="section-title">Year-by-Year Splits</div>
+      <div style="overflow-x:auto">
+        <table class="h2h-year-table">
+          <thead><tr>
+            <th>Year</th><th>PA</th><th>HR</th><th>AVG</th><th>OBP</th><th>SLG</th><th>OPS</th>
+          </tr></thead>
+          <tbody>
+            ${byYear.map(yr=>{
+              const yavg=yr.avg||yr.AVG||0;
+              const yslg=yr.slg||yr.SLG||0;
+              const yops=yr.ops||yr.OPS||0;
+              const yhr=yr.hr||yr.HR||0;
+              return `<tr>
+                <td style="color:var(--cold);font-weight:700">${escapeHtml(String(yr.year||yr.season||''))}</td>
+                <td>${yr.pa||yr.PA||0}</td>
+                <td style="color:${hrColor(yhr)};font-weight:${yhr>0?'700':'400'}">${yhr}</td>
+                <td style="color:${avgColor(yavg)}">${fmt(yavg,3)}</td>
+                <td>${fmt(yr.obp||yr.OBP||0,3)}</td>
+                <td style="color:${slgColor(yslg)}">${fmt(yslg,3)}</td>
+                <td style="color:${opsColor(yops)};font-weight:700">${fmt(yops,3)}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+  }
   panel.innerHTML=`
     <div class="section">
-      <div class="section-title">Career Head-to-Head: ${escapeHtml(s.batter)} vs ${escapeHtml(s.pitcher)}</div>
+      <div class="section-title">Career H2H: ${escapeHtml(s.batter)} vs ${escapeHtml(s.pitcher)}</div>
       ${note}
-      <div class="h2h-grid">
+      <div class="h2h-grid" style="grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px">
         <div class="h2h-cell"><div class="h2h-val">${pa}</div><div style="font-size:11px;color:var(--muted)">PA</div></div>
-        <div class="h2h-cell"><div class="h2h-val">${hr}</div><div style="font-size:11px;color:var(--muted)">HR</div></div>
-        <div class="h2h-cell"><div class="h2h-val">${fmt(avg,3)}</div><div style="font-size:11px;color:var(--muted)">AVG</div></div>
-        <div class="h2h-cell"><div class="h2h-val">${fmt(ops,3)}</div><div style="font-size:11px;color:var(--muted)">OPS</div></div>
+        <div class="h2h-cell"><div class="h2h-val" style="color:${hrColor(hr)}">${hr}</div><div style="font-size:11px;color:var(--muted)">HR</div></div>
+        <div class="h2h-cell"><div class="h2h-val" style="color:${avgColor(avg)}">${fmt(avg,3)}</div><div style="font-size:11px;color:var(--muted)">AVG</div></div>
+        <div class="h2h-cell"><div class="h2h-val" style="color:${opsColor(ops)}">${fmt(ops,3)}</div><div style="font-size:11px;color:var(--muted)">OPS</div></div>
       </div>
-      ${pa<50?`<div style="font-size:11px;color:var(--warn);margin-top:8px">Only ${pa} PA — insufficient sample.</div>`:''}
-    </div>`;
+      ${extraStats.length>0?`<div class="h2h-grid" style="grid-template-columns:repeat(${Math.min(extraStats.length,4)},1fr);gap:8px">
+        ${obp>0?`<div class="h2h-cell"><div class="h2h-val">${fmt(obp,3)}</div><div style="font-size:11px;color:var(--muted)">OBP</div></div>`:''}
+        ${slg>0?`<div class="h2h-cell"><div class="h2h-val" style="color:${slgColor(slg)}">${fmt(slg,3)}</div><div style="font-size:11px;color:var(--muted)">SLG</div></div>`:''}
+        ${iso>0?`<div class="h2h-cell"><div class="h2h-val">.${fmtStatVal(iso)}</div><div style="font-size:11px;color:var(--muted)">ISO</div></div>`:''}
+        ${woba>0?`<div class="h2h-cell"><div class="h2h-val">${fmt(woba,3)}</div><div style="font-size:11px;color:var(--muted)">wOBA</div></div>`:''}
+        ${xwoba>0?`<div class="h2h-cell"><div class="h2h-val">${fmt(xwoba,3)}</div><div style="font-size:11px;color:var(--muted)">xwOBA</div></div>`:''}
+        ${k_pct>0?`<div class="h2h-cell"><div class="h2h-val">${fmtPct(k_pct)}</div><div style="font-size:11px;color:var(--muted)">K%</div></div>`:''}
+        ${bb_pct>0?`<div class="h2h-cell"><div class="h2h-val">${fmtPct(bb_pct)}</div><div style="font-size:11px;color:var(--muted)">BB%</div></div>`:''}
+      </div>`:''}
+      ${pa<50?`<div style="font-size:11px;color:var(--warn);margin-top:8px">Only ${pa} PA — small sample.</div>`:''}
+    </div>
+    ${yearTable}`;
 }
 
 function renderScouting(panel,d,s){
@@ -1043,7 +1096,7 @@ function renderScouting(panel,d,s){
   panel.innerHTML=`
     <div class="section">
       <div class="section-title">AI Scouting Report</div>
-      <div class="scouting-box">${escapeHtml(report||'No report available.')}</div>
+      <div class="scouting-box">${(report||'No report available.').split('\n').map(l=>escapeHtml(l)).join('<br>')}</div>
       <button class="regen-btn" onclick="regenScouting(${JSON.stringify(s).replace(/"/g,'&quot;')})">↻ Regenerate</button>
     </div>
     ${snapHtml}`;
