@@ -1,0 +1,97 @@
+{
+  "generated_at": "2026-06-17T23:19:44.714471Z",
+  "thresholds": {
+    "HITS_0.5": {
+      "ELITE": 0.35,
+      "STRONG": 0.2,
+      "LEAN": 0.05
+    },
+    "HITS_1.5": {
+      "ELITE": 0.2,
+      "STRONG": 0.1,
+      "LEAN": 0.05
+    },
+    "TB_1.5": {
+      "ELITE": 0.5,
+      "STRONG": 0.25,
+      "LEAN": 0.1
+    },
+    "TB_2.5": {
+      "ELITE": 0.3,
+      "STRONG": 0.15,
+      "LEAN": 0.05
+    },
+    "HR_0.5": {
+      "ELITE": 0.2,
+      "STRONG": 0.1,
+      "LEAN": 0.05
+    },
+    "RBI_0.5": {
+      "ELITE": 0.3,
+      "STRONG": 0.15,
+      "LEAN": 0.05
+    },
+    "K": {
+      "ELITE": 1.5,
+      "STRONG": 0.75,
+      "LEAN": 0.15
+    },
+    "MONEYLINE": {
+      "ELITE": 0.1,
+      "STRONG": 0.06,
+      "LEAN": 0.02
+    },
+    "SPREAD": {
+      "ELITE": 0.1,
+      "STRONG": 0.06,
+      "LEAN": 0.02
+    },
+    "TOTALS": {
+      "ELITE": 0.1,
+      "STRONG": 0.06,
+      "LEAN": 0.02
+    }
+  },
+  "meta": {
+    "HITS_0.5": {
+      "n": 0,
+      "source": "default"
+    },
+    "HITS_1.5": {
+      "n": 0,
+      "source": "default"
+    },
+    "TB_1.5": {
+      "n": 0,
+      "source": "default"
+    },
+    "TB_2.5": {
+      "n": 0,
+      "source": "default"
+    },
+    "HR_0.5": {
+      "n": 0,
+      "source": "default"
+    },
+    "RBI_0.5": {
+      "n": 0,
+      "source": "default"
+    },
+    "K": {
+      "n": 0,
+      "source": "default"
+    },
+    "MONEYLINE": {
+      "n": 0,
+      "source": "default"
+    },
+    "SPREAD": {
+      "n": 0,
+      "source": "default"
+    },
+    "TOTALS": {
+      "n": 0,
+      "source": "default"
+    }
+  }
+}
