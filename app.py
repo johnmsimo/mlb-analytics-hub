@@ -40,6 +40,8 @@ try:
     from xgb_prop_scorer import (
         xgb_hit_prob, xgb_k_prob, xgb_ready,
         xgb_hr_prob, xgb_tb_prob, xgb_rbi_prob,
+        xgb_hit_prob_full, xgb_k_prob_full,
+        xgb_hr_prob_full, xgb_tb_prob_full, xgb_rbi_prob_full,
         enrich_batter, enrich_pitcher,
     )
     _XGB_AVAILABLE = True
@@ -50,6 +52,11 @@ except ImportError:
     def xgb_hr_prob(*a, **k):    return None
     def xgb_tb_prob(*a, **k):    return None
     def xgb_rbi_prob(*a, **k):   return None
+    def xgb_hit_prob_full(*a, **k): return {}
+    def xgb_k_prob_full(*a, **k):   return {}
+    def xgb_hr_prob_full(*a, **k):  return {}
+    def xgb_tb_prob_full(*a, **k):  return {}
+    def xgb_rbi_prob_full(*a, **k): return {}
     def xgb_ready(_=None):       return False
     def enrich_batter(d, **k):   return d
     def enrich_pitcher(d, **k):  return d
@@ -2415,13 +2422,19 @@ def _prewarm_arsenal_priors():
     logging.info(f"[ArsenalPriorWarm] complete: {done} hit, {failed} miss out of {len(batter_ids)}")
 
 
-# Launch historical data loaders at startup (after function definitions)
-threading.Thread(target=_load_fg_historical, daemon=True).start()
-threading.Thread(target=_load_matchup_files, daemon=True).start()
-threading.Thread(target=_load_pitcher_name_to_mlbam, daemon=True).start()
-threading.Thread(target=_load_batter_profiles, daemon=True).start()
-threading.Thread(target=_prewarm_arsenal_priors,   daemon=True).start()
-threading.Thread(target=_prewarm_pitcher_statcast, daemon=True).start()
+# Launch historical data loaders at startup. Deferred into a function and
+# invoked at the very end of module load (see _launch_startup_loaders() call
+# near the bottom) because several of these loaders reference functions defined
+# later in this file (e.g. _sv_key, fetch_schedule). Starting the threads here
+# raced module execution and intermittently raised NameError before those names
+# were bound.
+def _launch_startup_loaders():
+    threading.Thread(target=_load_fg_historical, daemon=True).start()
+    threading.Thread(target=_load_matchup_files, daemon=True).start()
+    threading.Thread(target=_load_pitcher_name_to_mlbam, daemon=True).start()
+    threading.Thread(target=_load_batter_profiles, daemon=True).start()
+    threading.Thread(target=_prewarm_arsenal_priors,   daemon=True).start()
+    threading.Thread(target=_prewarm_pitcher_statcast, daemon=True).start()
 
 
 def _wait_for_fg_data(timeout_sec=30):
@@ -5935,14 +5948,27 @@ def _project_batter_vs_pitcher(batter_stats, pitcher_stats):
     hit_prob = _game_prob(p_hit)
     _xgb_hit = None
     _xgb_cov = 0.0
+    _xgb_ci_lo = None
+    _xgb_ci_hi = None
     if xgb_ready('hits'):
-        _xgb_hit = xgb_hit_prob(batter_stats, pitcher_stats)
+        # Use the *_full scorer so we capture the model's prediction interval
+        # (p_lo, p_hi) in the same call — the stacked calibrator fuses it into
+        # an empirical, simulation-grounded confidence interval downstream.
+        _xgb_full = xgb_hit_prob_full(batter_stats, pitcher_stats) or {}
+        _xgb_hit = _xgb_full.get('prob')
+        _xgb_ci_lo = _xgb_full.get('p_lo')
+        _xgb_ci_hi = _xgb_full.get('p_hi')
         if _xgb_hit is not None:
             # Gate by input coverage: full XGB weight (0.60) only when inputs
             # are well-populated; below 0.40 coverage the model is suppressed.
             _xgb_cov = _xgb_hit_coverage(batter_stats, pitcher_stats)
             if _xgb_cov < 0.20:
+                # Too little signal to trust the XGB output — drop its
+                # probability AND its interval so nothing downstream fuses a CI
+                # for a prediction we've suppressed.
                 _xgb_hit = None
+                _xgb_ci_lo = None
+                _xgb_ci_hi = None
             else:
                 w_xgb = 0.60 * max(0.0, min(1.0, (_xgb_cov - 0.20) / 0.40))
                 hit_prob = round(_clamp((1 - w_xgb) * hit_prob + w_xgb * _xgb_hit,
@@ -5959,6 +5985,8 @@ def _project_batter_vs_pitcher(batter_stats, pitcher_stats):
         "projRBI":  round(p_rbi * pa, 2),
         "xgbHitProb":     round(_xgb_hit, 4) if _xgb_hit is not None else None,
         "xgbHitCoverage": round(_xgb_cov, 3),
+        "xgbHitCiLo":     round(_xgb_ci_lo, 4) if _xgb_ci_lo is not None else None,
+        "xgbHitCiHi":     round(_xgb_ci_hi, 4) if _xgb_ci_hi is not None else None,
     }
 
 
@@ -8739,6 +8767,12 @@ def _model_divergence(probs, gp, batx, exp_pa_total, *, bvp_pa=0, park_factor=1.
     #    module isn't importable.
     stack = None
     if _STACK_AVAILABLE:
+        # Pass the XGB prediction interval (when present) so the calibrator can
+        # fuse an empirical, simulation-grounded CI rather than relying solely
+        # on the heuristic analytic interval.
+        _ci_lo = gp.get("xgbHitCiLo")
+        _ci_hi = gp.get("xgbHitCiHi")
+        _mc_ci = (_ci_lo, _ci_hi) if (_ci_lo is not None and _ci_hi is not None) else None
         try:
             stack = stacked_calibrate(
                 xgb_p, batx_p,
@@ -8746,6 +8780,7 @@ def _model_divergence(probs, gp, batx, exp_pa_total, *, bvp_pa=0, park_factor=1.
                 exp_pa=exp_pa,
                 bvp_pa=bvp_pa,
                 park_factor=park_factor,
+                mc_ci=_mc_ci,
             )
         except Exception:
             stack = None
@@ -14316,17 +14351,23 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                         'parlayId': None, 'parlayLeg': None
                     }
                     # ── MC fields (Step 4) ──────────────────────────────────────────────────
+                    # xgb_ready() speaks the scorer's short market names
+                    # (hits/tb/hr/rbi), not the book market keys (batter_*), so
+                    # translate before gating — otherwise the guard is always
+                    # False and the MC distribution fields stay null.
                     _mc_batter = None
-                    if xgb_ready(mk):
-                        _score_field = {
-                            'batter_hits': 'xgb_hit_prob_full',
-                            'batter_total_bases': 'xgb_tb_prob_full',
-                            'batter_home_runs': 'xgb_hr_prob_full',
-                            'batter_rbis': 'xgb_rbi_prob_full',
-                        }.get(mk)
-                        if _score_field:
-                            _full = globals().get(_score_field, lambda *a, **kw: {})(p, line=line)
-                            _mc_batter = _full.get('mc') or {}
+                    _xgb_market, _full_fn = {
+                        'batter_hits':        ('hits', xgb_hit_prob_full),
+                        'batter_total_bases': ('tb',   xgb_tb_prob_full),
+                        'batter_home_runs':   ('hr',   xgb_hr_prob_full),
+                        'batter_rbis':        ('rbi',  xgb_rbi_prob_full),
+                    }.get(mk, (None, None))
+                    if _full_fn and xgb_ready(_xgb_market):
+                        try:
+                            _full = _full_fn(p, opp_pitcher) or {}
+                        except Exception:
+                            _full = {}
+                        _mc_batter = _full.get('mc') or {}
                     temp_row['mc_prob_over']  = _mc_batter.get('mc_prob_over')  if _mc_batter else None
                     temp_row['mc_prob_under'] = _mc_batter.get('mc_prob_under') if _mc_batter else None
                     temp_row['mc_mean']       = _mc_batter.get('mc_mean')       if _mc_batter else None
@@ -14412,7 +14453,10 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
             }
             # ── MC fields (Step 4) ──────────────────────────────────────────────────
             if k_xgb_ready:
-                _k_full = xgb_k_prob_full(sp, line=line) if callable(globals().get('xgb_k_prob_full')) else {}
+                try:
+                    _k_full = xgb_k_prob_full(sp, line=line) or {}
+                except Exception:
+                    _k_full = {}
                 _mc_k   = (_k_full or {}).get('mc') or {}
             else:
                 _mc_k = {}
@@ -24380,6 +24424,10 @@ def api_prizepicks_refresh():
     return jsonify({"status": "ok", "message": "Cache cleared"})
 
 # Start hourly injury refresh worker once routes/helpers are loaded.
+# Launch historical/prewarm loaders now that every function they reference
+# (e.g. _sv_key, fetch_schedule) is defined.
+_launch_startup_loaders()
+
 _start_injury_worker()
 _start_tracker_auto_sync_worker()
 _start_mlb_memory_worker()

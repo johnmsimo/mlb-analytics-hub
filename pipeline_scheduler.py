@@ -16,9 +16,9 @@ import importlib
 from datetime import datetime, date
 
 import pandas as pd
-import pytz
+from zoneinfo import ZoneInfo
 
-ET = pytz.timezone("America/New_York")
+ET = ZoneInfo("America/New_York")
 log = logging.getLogger(__name__)
 
 # -- Morning pipeline fire time ------------------------------------------------
@@ -39,11 +39,15 @@ _cache_lock = threading.RLock()
 
 
 def _import_app_modules():
-    app_mod        = importlib.import_module("schedule_collector")
+    # Resolved lazily at run time (never at import) so this stays clear of the
+    # app.py -> pipeline_routes -> pipeline_scheduler import cycle. By the time
+    # run_pipeline() fires, `app` is fully initialized and importlib returns the
+    # cached module. The schedule and Savant accessors all live in app.py:
+    #   fetch_schedule(date_str), sv_batter(name), sv_pitcher(name).
+    app_mod        = importlib.import_module("app")
     fetch_schedule = getattr(app_mod, "fetch_schedule", None)
-    sv_mod         = importlib.import_module("statcast_loader")
-    _sv_batter     = getattr(sv_mod, "get_batter_statcast", None)
-    _sv_pitcher    = getattr(sv_mod, "get_pitcher_statcast", None)
+    _sv_batter     = getattr(app_mod, "sv_batter", None)
+    _sv_pitcher    = getattr(app_mod, "sv_pitcher", None)
     return fetch_schedule, _sv_batter, _sv_pitcher
 
 
@@ -242,7 +246,7 @@ def run_pipeline(target_date=None):
 
         fetch_schedule, sv_batter_fn, sv_pitcher_fn = _import_app_modules()
         if fetch_schedule is None:
-            raise ImportError("fetch_schedule not found in schedule_collector")
+            raise ImportError("fetch_schedule not found in app module")
 
         games_df = _build_games_df(fetch_schedule, target_date=fetch_date_str)
 
