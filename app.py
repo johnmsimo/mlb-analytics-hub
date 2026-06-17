@@ -14329,20 +14329,23 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                         'parlayId': None, 'parlayLeg': None
                     }
                     # ── MC fields (Step 4) ──────────────────────────────────────────────────
+                    # xgb_ready() speaks the scorer's short market names
+                    # (hits/tb/hr/rbi), not the book market keys (batter_*), so
+                    # translate before gating — otherwise the guard is always
+                    # False and the MC distribution fields stay null.
                     _mc_batter = None
-                    if xgb_ready(mk):
-                        _full_fn = {
-                            'batter_hits': xgb_hit_prob_full,
-                            'batter_total_bases': xgb_tb_prob_full,
-                            'batter_home_runs': xgb_hr_prob_full,
-                            'batter_rbis': xgb_rbi_prob_full,
-                        }.get(mk)
-                        if _full_fn:
-                            try:
-                                _full = _full_fn(p, opp_pitcher) or {}
-                            except Exception:
-                                _full = {}
-                            _mc_batter = _full.get('mc') or {}
+                    _xgb_market, _full_fn = {
+                        'batter_hits':        ('hits', xgb_hit_prob_full),
+                        'batter_total_bases': ('tb',   xgb_tb_prob_full),
+                        'batter_home_runs':   ('hr',   xgb_hr_prob_full),
+                        'batter_rbis':        ('rbi',  xgb_rbi_prob_full),
+                    }.get(mk, (None, None))
+                    if _full_fn and xgb_ready(_xgb_market):
+                        try:
+                            _full = _full_fn(p, opp_pitcher) or {}
+                        except Exception:
+                            _full = {}
+                        _mc_batter = _full.get('mc') or {}
                     temp_row['mc_prob_over']  = _mc_batter.get('mc_prob_over')  if _mc_batter else None
                     temp_row['mc_prob_under'] = _mc_batter.get('mc_prob_under') if _mc_batter else None
                     temp_row['mc_mean']       = _mc_batter.get('mc_mean')       if _mc_batter else None
