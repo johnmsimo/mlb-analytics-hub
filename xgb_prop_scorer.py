@@ -315,14 +315,16 @@ def mc_simulate(
     p_samples = rng.beta(a, b, size=n_sims)           # shape (n_sims,)
     p_samples = np.clip(p_samples, 0.001, 0.999)
 
-    # For each sampled p_i, simulate a Bernoulli outcome
+    # For each sampled p_i, simulate a Bernoulli "did this trial clear the
+    # line" outcome. cal_p (and therefore every p_i drawn from the Beta) is
+    # already the calibrated probability of going OVER this specific line, so an
+    # outcome of 1 means that trial went over. The over-rate is just the mean of
+    # the outcomes — the line is already baked into cal_p and must NOT be
+    # re-applied here. (The previous `outcomes > line - 1` test compared a 0/1
+    # Bernoulli against the raw line, forcing mc_prob_over to 1.0 for every
+    # hits/HR prop and 0.0 for every K prop.)
     outcomes  = (rng.uniform(size=n_sims) < p_samples).astype(np.float32)
-
-    # Over/under at the given line
-    # For binary props (hits ≥0.5, HR ≥0.5) line is 0.5 so "over" = 1
-    # For multi-outcome props (Ks ≥4.5) the individual Bernoulli is
-    # already modelling P(Ks > line) so the same logic holds
-    prob_over  = float(np.mean(outcomes > line - 1))
+    prob_over  = float(np.mean(outcomes))
     prob_under = 1.0 - prob_over
 
     return {
