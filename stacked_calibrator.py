@@ -185,20 +185,55 @@ def _logistic_blend(xgb_p: float, batx_p: float,
     return p
 
 
-def _analytic_ci(xgb_p: float, batx_p: float,
-                 coverage: float, exp_pa: float, bvp_pa: float,
-                 blended: float) -> tuple[float, float]:
+def _analytic_sigma_logit(xgb_p: float, batx_p: float,
+                          coverage: float, exp_pa: float, bvp_pa: float) -> float:
+    """Heuristic logit-scale standard deviation of the blended estimate.
+
+    Combines model disagreement, XGB input coverage, and expected-PA sample
+    size into one uncertainty figure. Kept separate from _analytic_ci so the
+    sigma can be fused with an empirical (Monte Carlo) interval.
+    """
     div_logit = abs(_logit(xgb_p) - _logit(batx_p))
     cov_unc   = max(0.0, 0.50 - coverage) * 0.60
     pa_unc    = _exp_pa_uncertainty(exp_pa) * 2.0
     sigma_logit = math.sqrt(
         (div_logit * 0.18) ** 2 + cov_unc ** 2 + pa_unc ** 2
     )
-    sigma_logit = _clamp(sigma_logit, 0.08, 0.55)
+    return _clamp(sigma_logit, 0.08, 0.55)
+
+
+def _sigma_from_interval(lo: float, hi: float, coverage_z: float = 1.645) -> Optional[float]:
+    """Recover a logit-scale sigma from an interval [lo, hi].
+
+    Defaults to a 90% interval (z=1.645), matching the XGB prediction interval
+    that the Monte Carlo simulation is anchored to. Returns None for a
+    degenerate / unusable interval.
+    """
+    try:
+        lo = _clamp(float(lo), 0.001, 0.999)
+        hi = _clamp(float(hi), 0.001, 0.999)
+        if hi <= lo:
+            return None
+        sig = (_logit(hi) - _logit(lo)) / (2.0 * coverage_z)
+        if not math.isfinite(sig) or sig <= 0:
+            return None
+        return _clamp(sig, 0.04, 0.80)
+    except Exception:
+        return None
+
+
+def _ci_from_sigma(blended: float, sigma_logit: float) -> tuple[float, float]:
     z  = _logit(blended)
     lo = _sigmoid(z - 1.96 * sigma_logit)
     hi = _sigmoid(z + 1.96 * sigma_logit)
     return round(lo, 3), round(hi, 3)
+
+
+def _analytic_ci(xgb_p: float, batx_p: float,
+                 coverage: float, exp_pa: float, bvp_pa: float,
+                 blended: float) -> tuple[float, float]:
+    sigma_logit = _analytic_sigma_logit(xgb_p, batx_p, coverage, exp_pa, bvp_pa)
+    return _ci_from_sigma(blended, sigma_logit)
 
 
 # ─── Verdict tiering ─────────────────────────────────────────────────────────
@@ -244,12 +279,19 @@ def calibrate(xgb_p: Optional[float], batx_p: Optional[float], *,
               exp_pa: float = 4.2,
               bvp_pa: float = 0.0,
               park_factor: float = 1.0,
-              market_key: str = "batter_hits") -> dict:
+              market_key: str = "batter_hits",
+              mc_ci: Optional[tuple] = None) -> dict:
     """Combine XGB + BATX into a single calibrated probability with verdict.
 
     Step 2A: applies per-market isotonic calibration to BOTH raw inputs
     before the logistic blend, so the blend operates on already-calibrated
     scores rather than raw model outputs.
+
+    mc_ci: optional (lo, hi) empirical interval from the XGB Monte Carlo
+        prediction interval. When supplied, its logit-scale uncertainty is
+        fused with the heuristic analytic uncertainty via inverse-variance
+        (precision) weighting, producing a tighter, simulation-grounded CI.
+        The 'source' field is suffixed with '+mc' when this path is taken.
     """
     if xgb_p is None and batx_p is None:
         return {
@@ -277,7 +319,21 @@ def calibrate(xgb_p: Optional[float], batx_p: Optional[float], *,
 
     blended = _logistic_blend(xgb_cal, batx_cal, coverage, exp_pa, bvp_pa)
 
-    ci_lo, ci_hi = _analytic_ci(xgb_cal, batx_cal, coverage, exp_pa, bvp_pa, blended)
+    # Heuristic uncertainty (always available).
+    sigma_analytic = _analytic_sigma_logit(xgb_cal, batx_cal, coverage, exp_pa, bvp_pa)
+
+    # Fuse with the empirical Monte Carlo interval when provided. Two
+    # independent uncertainty estimates of the same quantity combine by
+    # inverse-variance weighting: 1/σ² = 1/σ_a² + 1/σ_mc². This can only
+    # tighten the interval, and weights the more precise estimate higher.
+    sigma_mc = _sigma_from_interval(*mc_ci) if (mc_ci and len(mc_ci) == 2) else None
+    if sigma_mc is not None:
+        sigma_combined = math.sqrt(1.0 / (1.0 / sigma_analytic ** 2 + 1.0 / sigma_mc ** 2))
+        sigma_combined = _clamp(sigma_combined, 0.05, 0.55)
+        ci_lo, ci_hi = _ci_from_sigma(blended, sigma_combined)
+        source = f"{source}+mc"
+    else:
+        ci_lo, ci_hi = _ci_from_sigma(blended, sigma_analytic)
 
     ci_width    = ci_hi - ci_lo
     width_conf  = _clamp(1.0 - (ci_width / 0.40), 0.0, 1.0)

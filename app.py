@@ -5948,14 +5948,27 @@ def _project_batter_vs_pitcher(batter_stats, pitcher_stats):
     hit_prob = _game_prob(p_hit)
     _xgb_hit = None
     _xgb_cov = 0.0
+    _xgb_ci_lo = None
+    _xgb_ci_hi = None
     if xgb_ready('hits'):
-        _xgb_hit = xgb_hit_prob(batter_stats, pitcher_stats)
+        # Use the *_full scorer so we capture the model's prediction interval
+        # (p_lo, p_hi) in the same call — the stacked calibrator fuses it into
+        # an empirical, simulation-grounded confidence interval downstream.
+        _xgb_full = xgb_hit_prob_full(batter_stats, pitcher_stats) or {}
+        _xgb_hit = _xgb_full.get('prob')
+        _xgb_ci_lo = _xgb_full.get('p_lo')
+        _xgb_ci_hi = _xgb_full.get('p_hi')
         if _xgb_hit is not None:
             # Gate by input coverage: full XGB weight (0.60) only when inputs
             # are well-populated; below 0.40 coverage the model is suppressed.
             _xgb_cov = _xgb_hit_coverage(batter_stats, pitcher_stats)
             if _xgb_cov < 0.20:
+                # Too little signal to trust the XGB output — drop its
+                # probability AND its interval so nothing downstream fuses a CI
+                # for a prediction we've suppressed.
                 _xgb_hit = None
+                _xgb_ci_lo = None
+                _xgb_ci_hi = None
             else:
                 w_xgb = 0.60 * max(0.0, min(1.0, (_xgb_cov - 0.20) / 0.40))
                 hit_prob = round(_clamp((1 - w_xgb) * hit_prob + w_xgb * _xgb_hit,
@@ -5972,6 +5985,8 @@ def _project_batter_vs_pitcher(batter_stats, pitcher_stats):
         "projRBI":  round(p_rbi * pa, 2),
         "xgbHitProb":     round(_xgb_hit, 4) if _xgb_hit is not None else None,
         "xgbHitCoverage": round(_xgb_cov, 3),
+        "xgbHitCiLo":     round(_xgb_ci_lo, 4) if _xgb_ci_lo is not None else None,
+        "xgbHitCiHi":     round(_xgb_ci_hi, 4) if _xgb_ci_hi is not None else None,
     }
 
 
@@ -8752,6 +8767,12 @@ def _model_divergence(probs, gp, batx, exp_pa_total, *, bvp_pa=0, park_factor=1.
     #    module isn't importable.
     stack = None
     if _STACK_AVAILABLE:
+        # Pass the XGB prediction interval (when present) so the calibrator can
+        # fuse an empirical, simulation-grounded CI rather than relying solely
+        # on the heuristic analytic interval.
+        _ci_lo = gp.get("xgbHitCiLo")
+        _ci_hi = gp.get("xgbHitCiHi")
+        _mc_ci = (_ci_lo, _ci_hi) if (_ci_lo is not None and _ci_hi is not None) else None
         try:
             stack = stacked_calibrate(
                 xgb_p, batx_p,
@@ -8759,6 +8780,7 @@ def _model_divergence(probs, gp, batx, exp_pa_total, *, bvp_pa=0, park_factor=1.
                 exp_pa=exp_pa,
                 bvp_pa=bvp_pa,
                 park_factor=park_factor,
+                mc_ci=_mc_ci,
             )
         except Exception:
             stack = None
