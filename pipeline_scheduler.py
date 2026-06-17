@@ -16,9 +16,9 @@ import importlib
 from datetime import datetime, date
 
 import pandas as pd
-import pytz
+from zoneinfo import ZoneInfo
 
-ET = pytz.timezone("America/New_York")
+ET = ZoneInfo("America/New_York")
 log = logging.getLogger(__name__)
 
 # -- Morning pipeline fire time ------------------------------------------------

@@ -40,6 +40,8 @@ try:
     from xgb_prop_scorer import (
         xgb_hit_prob, xgb_k_prob, xgb_ready,
         xgb_hr_prob, xgb_tb_prob, xgb_rbi_prob,
+        xgb_hit_prob_full, xgb_k_prob_full,
+        xgb_hr_prob_full, xgb_tb_prob_full, xgb_rbi_prob_full,
         enrich_batter, enrich_pitcher,
     )
     _XGB_AVAILABLE = True
@@ -50,6 +52,11 @@ except ImportError:
     def xgb_hr_prob(*a, **k):    return None
     def xgb_tb_prob(*a, **k):    return None
     def xgb_rbi_prob(*a, **k):   return None
+    def xgb_hit_prob_full(*a, **k): return {}
+    def xgb_k_prob_full(*a, **k):   return {}
+    def xgb_hr_prob_full(*a, **k):  return {}
+    def xgb_tb_prob_full(*a, **k):  return {}
+    def xgb_rbi_prob_full(*a, **k): return {}
     def xgb_ready(_=None):       return False
     def enrich_batter(d, **k):   return d
     def enrich_pitcher(d, **k):  return d
@@ -2415,13 +2422,19 @@ def _prewarm_arsenal_priors():
     logging.info(f"[ArsenalPriorWarm] complete: {done} hit, {failed} miss out of {len(batter_ids)}")
 
 
-# Launch historical data loaders at startup (after function definitions)
-threading.Thread(target=_load_fg_historical, daemon=True).start()
-threading.Thread(target=_load_matchup_files, daemon=True).start()
-threading.Thread(target=_load_pitcher_name_to_mlbam, daemon=True).start()
-threading.Thread(target=_load_batter_profiles, daemon=True).start()
-threading.Thread(target=_prewarm_arsenal_priors,   daemon=True).start()
-threading.Thread(target=_prewarm_pitcher_statcast, daemon=True).start()
+# Launch historical data loaders at startup. Deferred into a function and
+# invoked at the very end of module load (see _launch_startup_loaders() call
+# near the bottom) because several of these loaders reference functions defined
+# later in this file (e.g. _sv_key, fetch_schedule). Starting the threads here
+# raced module execution and intermittently raised NameError before those names
+# were bound.
+def _launch_startup_loaders():
+    threading.Thread(target=_load_fg_historical, daemon=True).start()
+    threading.Thread(target=_load_matchup_files, daemon=True).start()
+    threading.Thread(target=_load_pitcher_name_to_mlbam, daemon=True).start()
+    threading.Thread(target=_load_batter_profiles, daemon=True).start()
+    threading.Thread(target=_prewarm_arsenal_priors,   daemon=True).start()
+    threading.Thread(target=_prewarm_pitcher_statcast, daemon=True).start()
 
 
 def _wait_for_fg_data(timeout_sec=30):
@@ -14318,14 +14331,17 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                     # ── MC fields (Step 4) ──────────────────────────────────────────────────
                     _mc_batter = None
                     if xgb_ready(mk):
-                        _score_field = {
-                            'batter_hits': 'xgb_hit_prob_full',
-                            'batter_total_bases': 'xgb_tb_prob_full',
-                            'batter_home_runs': 'xgb_hr_prob_full',
-                            'batter_rbis': 'xgb_rbi_prob_full',
+                        _full_fn = {
+                            'batter_hits': xgb_hit_prob_full,
+                            'batter_total_bases': xgb_tb_prob_full,
+                            'batter_home_runs': xgb_hr_prob_full,
+                            'batter_rbis': xgb_rbi_prob_full,
                         }.get(mk)
-                        if _score_field:
-                            _full = globals().get(_score_field, lambda *a, **kw: {})(p, line=line)
+                        if _full_fn:
+                            try:
+                                _full = _full_fn(p, opp_pitcher) or {}
+                            except Exception:
+                                _full = {}
                             _mc_batter = _full.get('mc') or {}
                     temp_row['mc_prob_over']  = _mc_batter.get('mc_prob_over')  if _mc_batter else None
                     temp_row['mc_prob_under'] = _mc_batter.get('mc_prob_under') if _mc_batter else None
@@ -14412,7 +14428,10 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
             }
             # ── MC fields (Step 4) ──────────────────────────────────────────────────
             if k_xgb_ready:
-                _k_full = xgb_k_prob_full(sp, line=line) if callable(globals().get('xgb_k_prob_full')) else {}
+                try:
+                    _k_full = xgb_k_prob_full(sp, line=line) or {}
+                except Exception:
+                    _k_full = {}
                 _mc_k   = (_k_full or {}).get('mc') or {}
             else:
                 _mc_k = {}
@@ -24380,6 +24399,10 @@ def api_prizepicks_refresh():
     return jsonify({"status": "ok", "message": "Cache cleared"})
 
 # Start hourly injury refresh worker once routes/helpers are loaded.
+# Launch historical/prewarm loaders now that every function they reference
+# (e.g. _sv_key, fetch_schedule) is defined.
+_launch_startup_loaders()
+
 _start_injury_worker()
 _start_tracker_auto_sync_worker()
 _start_mlb_memory_worker()
