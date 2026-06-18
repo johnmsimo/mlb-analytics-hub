@@ -459,6 +459,18 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
   <span style="color:var(--mu);margin-left:auto;font-size:.58rem" id="lastUpdate"></span>
 </div>
 
+<!-- ── 100% Club widget (Edge Lab) ── -->
+<div id="hotHandWidget" style="margin:10px 32px 0;border:1px solid var(--b);border-radius:14px;background:var(--card);overflow:hidden">
+  <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--b)">
+    <span style="font-family:'Orbitron',monospace;font-size:.7rem;letter-spacing:2px;color:var(--g)">🔥 100% CLUB</span>
+    <span id="hhSub" style="font-size:.66rem;color:var(--mu)">players hitting their prop in 100% of the last 5</span>
+    <a href="/edge-lab" style="margin-left:auto;font-size:.64rem;color:var(--c);text-decoration:none">EDGE LAB →</a>
+  </div>
+  <div id="hhStrip" style="display:flex;gap:10px;overflow-x:auto;padding:12px 14px;scrollbar-width:thin">
+    <span style="color:var(--mu);font-size:.7rem">Loading hot hands…</span>
+  </div>
+</div>
+
 <!-- ── Model Track Record Banner ── -->
 <div class="trec-bar" id="trecBar" style="display:none">
   <span class="trec-bar-lbl">📊 MODEL HIT RATE · LAST 30 DAYS</span>
@@ -807,7 +819,59 @@ document.addEventListener('DOMContentLoaded', () => {
   loadTrackedKeys();
   loadGames();
   loadModelRecordBanner();
+  loadHotHandWidget();
 });
+
+// ── 100% Club widget ──────────────────────────────────────────────────────────
+let HH_ROWS = [];
+function escW(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+async function loadHotHandWidget(){
+  const strip = document.getElementById('hhStrip');
+  if(!strip) return;
+  try{
+    const r = await fetch('/api/hot-hand/today?window=l5&minPct=1.0&minTotal=5');
+    const d = await r.json();
+    if(!d.success) throw new Error(d.error||'failed');
+    HH_ROWS = d.players || [];
+    const sub = document.getElementById('hhSub');
+    if(sub) sub.textContent = `${d.count} players hitting their prop in 100% of the last 5`;
+    if(!HH_ROWS.length){
+      strip.innerHTML = `<span style="color:var(--mu);font-size:.7rem">No 100% Club members right now${d.computing?' (computing…)':''}</span>`;
+      if(d.computing) setTimeout(loadHotHandWidget, 6000);
+      return;
+    }
+    strip.innerHTML = HH_ROWS.slice(0,20).map((p,i)=>{
+      const l5 = p.l5 || {};
+      return `<div style="flex:0 0 auto;min-width:172px;border:1px solid var(--b);border-radius:10px;padding:9px 11px;background:rgba(255,255,255,.02)">
+        <div style="font-weight:700;font-size:.82rem;color:var(--t)">${escW(p.player)}</div>
+        <div style="font-size:.66rem;color:var(--mu);margin:2px 0 6px">${escW(p.team||'')} · ${escW(p.marketLabel||p.marketKey)} o${p.line}</div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <span style="font-size:.7rem;color:var(--g);font-weight:700">${l5.over||0}/${l5.total||0}</span>
+          <span style="font-size:.66rem;color:var(--o)">${p.streakOver||0}🔥</span>
+          <button onclick="trackHotHand(${i},this)" style="margin-left:auto;border:1px solid rgba(0,229,255,.3);background:rgba(0,229,255,.08);color:var(--c);border-radius:7px;padding:3px 8px;font-size:.62rem;cursor:pointer">+ TRACK</button>
+        </div>
+      </div>`;
+    }).join('');
+    if(d.computing) setTimeout(loadHotHandWidget, 6000);
+  }catch(e){
+    strip.innerHTML = '<span style="color:var(--mu);font-size:.7rem">100% Club unavailable</span>';
+  }
+}
+async function trackHotHand(i, btn){
+  const p = HH_ROWS[i]; if(!p) return;
+  btn.disabled = true; btn.textContent = '…';
+  try{
+    const r = await fetch('/api/tracker/pick', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({player:p.player, playerId:p.playerId, team:p.team, gamePk:p.gamePk,
+        marketKey:p.marketKey, line:p.line, recommendedSide:'Over',
+        hubRating:p.hubRating, evPct:p.evPct, source:'hot_hand_widget', date:CUR_DATE})
+    });
+    const d = await r.json();
+    if(d.success){ btn.textContent='✓'; btn.style.color='var(--g)'; }
+    else { btn.disabled=false; btn.textContent='+ TRACK'; alert('Save failed: '+(d.error||'error')); }
+  }catch(e){ btn.disabled=false; btn.textContent='+ TRACK'; alert('Save failed: '+e.message); }
+}
 
 // ── Model Track Record Banner ─────────────────────────────────────────────────
 async function loadModelRecordBanner() {

@@ -80,6 +80,11 @@
     .badge.conservative{background:rgba(0,212,122,.14);color:var(--green)}
     .badge.moderate{background:rgba(255,204,77,.14);color:var(--yellow)}
     .badge.aggressive{background:rgba(255,107,107,.14);color:var(--red)}
+    .trackbtn{border:1px solid rgba(77,220,255,.35);background:rgba(77,220,255,.08);color:var(--cyan);padding:6px 11px;border-radius:8px;cursor:pointer;font-size:.76rem;font-weight:700;white-space:nowrap}
+    .trackbtn:hover{background:rgba(77,220,255,.16)}
+    .trackbtn:disabled{cursor:default;opacity:.85}
+    .trackbtn.tracked{background:rgba(0,212,122,.16);border-color:rgba(0,212,122,.45);color:var(--green)}
+    .trackbtn.full{width:100%;margin-top:4px;padding:9px}
     @media (max-width:980px){.parlay-grid{grid-template-columns:1fr}}
     @media (max-width:640px){.wrap{padding:14px}.filters{width:100%}.filters select{flex:1;min-width:0}.actions{width:100%}}
   </style>
@@ -168,9 +173,9 @@
         <table>
           <thead><tr>
             <th>Grade</th><th>Player</th><th>Team</th><th>Matchup</th><th>Market</th><th>Side</th>
-            <th>Line</th><th>Edge</th><th>EV</th><th>Model%</th><th>Implied%</th><th>Hub</th><th>Book</th>
+            <th>Line</th><th>Edge</th><th>EV</th><th>Model%</th><th>Implied%</th><th>Hub</th><th>Book</th><th>Track</th>
           </tr></thead>
-          <tbody id="edgeBody"><tr><td colspan="13" class="empty">Loading…</td></tr></tbody>
+          <tbody id="edgeBody"><tr><td colspan="14" class="empty">Loading…</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -199,6 +204,55 @@
   <script>
     const LOADED = {hot:false, edges:false, defense:false, parlays:false};
     let VIEW = 'hot';
+    let EDGES = [], PARLAYS = [], CUR_DATE = null;
+
+    function toast(msg, ok){
+      let t=document.getElementById('toast');
+      if(!t){t=document.createElement('div');t.id='toast';
+        t.style.cssText='position:fixed;bottom:22px;left:50%;transform:translateX(-50%);z-index:9999;padding:12px 18px;border-radius:12px;font-weight:700;font-size:.86rem;box-shadow:0 8px 30px rgba(0,0,0,.5);transition:opacity .3s';
+        document.body.appendChild(t);}
+      t.style.background = ok ? 'rgba(0,212,122,.95)' : 'rgba(255,107,107,.95)';
+      t.style.color='#08121f'; t.textContent=msg; t.style.opacity='1';
+      clearTimeout(t._h); t._h=setTimeout(()=>{t.style.opacity='0';},2600);
+    }
+    async function postJSON(url, body){
+      const r = await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      return r.json();
+    }
+
+    async function trackEdge(i, btn){
+      const e = EDGES[i]; if(!e) return;
+      const entry = {
+        player:e.player, playerId:e.playerId, team:e.team, gamePk:e.gamePk,
+        marketKey:e.marketKey, line:e.line, recommendedSide:e.side||'Over',
+        adjProb:e.modelProb, edge:e.edge, marketImplied:e.marketImplied,
+        hubRating:e.hubRating, evPct:e.evPct,
+        bestOverPrice:e.bestPrice, bookmaker:e.bestBook, source:'edge_finder',
+        date: CUR_DATE,
+      };
+      if(btn){btn.disabled=true;btn.textContent='…';}
+      try{
+        const d = await postJSON('/api/tracker/pick', entry);
+        if(d.success){ if(btn){btn.textContent='✓ Tracked';btn.classList.add('tracked');} toast(`${e.player} sent to tracker`, true); }
+        else { if(btn){btn.disabled=false;btn.textContent='+ Track';} toast('Failed: '+(d.error||'error'), false); }
+      }catch(err){ if(btn){btn.disabled=false;btn.textContent='+ Track';} toast('Failed: '+err.message, false); }
+    }
+
+    async function trackParlay(i, btn){
+      const p = PARLAYS[i]; if(!p || !(p.legs||[]).length) return;
+      const parlay = {
+        id: 'auto-'+p.risk+'-'+Date.now(),
+        selections: p.legs.map(l=>({game_pk:l.gamePk, player:l.player, market:l.marketKey, projection:l.line, side:l.side, win_probability:l.winProb, american_odds:l.price})),
+        american_odds: p.americanOdds,
+        summary: {break_even_prob:p.combinedWinProb, leg_count:p.legCount},
+      };
+      if(btn){btn.disabled=true;btn.textContent='…';}
+      try{
+        const d = await postJSON('/api/parlay/send-to-tracker', {parlay, date:CUR_DATE});
+        if(d.success){ if(btn){btn.textContent='✓ Sent to tracker';btn.classList.add('tracked');} toast(`${p.name} parlay sent to tracker`, true); }
+        else { if(btn){btn.disabled=false;btn.textContent='Send to tracker';} toast('Failed: '+(d.error||'error'), false); }
+      }catch(err){ if(btn){btn.disabled=false;btn.textContent='Send to tracker';} toast('Failed: '+err.message, false); }
+    }
 
     function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
     function pct(v){return v==null?'-':Math.round(Number(v)*100)+'%';}
@@ -284,6 +338,7 @@
         const d=await r.json();
         if(!d.success) throw new Error(d.error||'failed');
         LOADED.edges=true;
+        EDGES = d.edges||[]; CUR_DATE = d.date;
         const gc=d.gradeCounts||{};
         document.getElementById('edgeMeta').innerHTML=[
           `<span class="pill">${d.count} edges</span>`,
@@ -292,8 +347,8 @@
           gc['A']?`<span class="pill">A: ${gc['A']}</span>`:'',
           d.computing?`<span class="pill">Computing… retry 6s</span>`:`<span class="pill">${d.cached?'cached':'fresh'}</span>`
         ].filter(Boolean).join('');
-        const rows=d.edges||[];
-        document.getElementById('edgeBody').innerHTML = rows.length? rows.map(e=>(
+        const rows=EDGES;
+        document.getElementById('edgeBody').innerHTML = rows.length? rows.map((e,i)=>(
           '<tr>'+
           `<td><span class="grade ${gradeClass(e.grade)}">${esc(e.grade||'-')}</span></td>`+
           `<td><div class="player">${esc(e.player)}</div></td>`+
@@ -308,8 +363,9 @@
           `<td>${pct(e.marketImplied)}</td>`+
           `<td><span class="hub">${e.hubRating==null?'-':Math.round(e.hubRating)}</span></td>`+
           `<td class="small">${esc(e.bestBook||e.bookmaker||'-')}</td>`+
+          `<td><button class="trackbtn" onclick="trackEdge(${i}, this)">+ Track</button></td>`+
           '</tr>'
-        )).join('') : `<tr><td colspan="13" class="empty">No positive-edge plays${d.computing?' yet (computing)':''}. Edges require live book lines (ODDS_API_KEY).</td></tr>`;
+        )).join('') : `<tr><td colspan="14" class="empty">No positive-edge plays${d.computing?' yet (computing)':''}. Edges require live book lines (ODDS_API_KEY).</td></tr>`;
         if(d.computing) setTimeout(()=>loadEdges(false),6000);
         setStatus(`Edge Finder · ${d.count} plays · ${d.date}`);
       }catch(e){
@@ -363,14 +419,15 @@
         const d=await r.json();
         if(!d.success) throw new Error(d.error||'failed');
         LOADED.parlays=true;
+        PARLAYS = d.parlays||[]; CUR_DATE = d.date;
         document.getElementById('parMeta').innerHTML=[
           `<span class="pill">${d.candidateCount} candidate legs</span>`,
           d.computing?`<span class="pill">Computing… retry 6s</span>`:`<span class="pill">${d.cached?'cached':'fresh'}</span>`,
           `<span class="pill">${d.date}</span>`
         ].join('');
         const grid=document.getElementById('parGrid');
-        const parlays=d.parlays||[];
-        grid.innerHTML = parlays.map(p=>{
+        const parlays=PARLAYS;
+        grid.innerHTML = parlays.map((p,i)=>{
           const legs=(p.legs||[]).map(l=>(
             `<div class="leg"><div class="lp">${esc(l.player)} · ${esc(l.marketLabel)} ${l.side} ${l.line}</div>`+
             `<div class="lm">Model ${pct(l.winProb)} · ${odds(l.price)}${l.priceSource==='model'?' (model)':''}${l.grade?' · '+l.grade:''}</div></div>`
@@ -383,6 +440,7 @@
             `<div class="kv"><span>Payout / $100</span><b>${p.payoutPer100==null?'-':'$'+p.payoutPer100}</b></div>`+
             `<div class="kv"><span>Model EV</span><b class="${evCls}">${p.evPct==null?'-':pct1(p.evPct)}</b></div>`+
             `<div style="display:flex;flex-direction:column;gap:7px;margin-top:4px">${legs}</div>`+
+            `<button class="trackbtn full" onclick="trackParlay(${i}, this)"${(p.legs||[]).length?'':' disabled'}>Send to tracker</button>`+
           `</div>`;
         }).join('') || '<div class="empty">No parlays available.</div>';
         if(d.computing) setTimeout(()=>loadParlays(false),6000);

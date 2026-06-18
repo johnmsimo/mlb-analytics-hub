@@ -384,6 +384,7 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
  <a href="/cheatsheets" style="padding:7px 16px;background:rgba(255,152,0,.08);border:1px solid rgba(255,152,0,.28);border-radius:8px;color:#ffb74d;font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:2px;text-decoration:none">CHEATSHEETS</a>
  <a href="/tracker" style="padding:7px 16px;background:rgba(0,230,118,.09);border:1px solid rgba(0,230,118,.3);border-radius:8px;color:#00e676;font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:2px;text-decoration:none">TRACKER</a>
  <a href="/consistency" style="padding:7px 16px;background:rgba(255,204,77,.08);border:1px solid rgba(255,204,77,.28);border-radius:8px;color:#ffcc4d;font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:2px;text-decoration:none">CONSISTENCY</a>
+ <a href="/edge-lab" style="padding:7px 16px;background:rgba(0,230,118,.09);border:1px solid rgba(0,230,118,.3);border-radius:8px;color:#00e676;font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:2px;text-decoration:none">🔥 EDGE LAB</a>
  <a href="/pitcher-deep-dive" style="padding:7px 16px;background:rgba(250,100,0,.07);border:1px solid rgba(250,100,0,.28);border-radius:8px;color:#fa6400;font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:2px;text-decoration:none">⚾ PITCHER ANALYSIS</a>
  <a href="/batter-vs-pitcher" style="padding:7px 16px;background:rgba(0,229,255,.07);border:1px solid rgba(0,229,255,.22);border-radius:8px;color:var(--c);font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:2px;text-decoration:none">BVP</a>
  <a href="/value-bets" style="padding:7px 16px;background:rgba(0,230,118,.09);border:1px solid rgba(0,230,118,.3);border-radius:8px;color:#00e676;font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:2px;text-decoration:none">VALUE BETS</a>
@@ -395,6 +396,17 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
   <button class="tabbtn" onclick="switchView('bestBetsView',this);initBestBets()">🎯 BEST BETS</button>
   <button class="tabbtn" onclick="switchView('settingsView',this);initSettingsView()">⚙ SETTINGS</button>
 
+</div>
+<!-- ── 100% Club widget (Edge Lab) ── -->
+<div id="hotHandWidget" style="margin:14px 24px 0;border:1px solid var(--b);border-radius:14px;background:var(--card);overflow:hidden">
+  <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--b)">
+    <span style="font-family:'Orbitron',monospace;font-size:.7rem;letter-spacing:2px;color:var(--g)">🔥 100% CLUB</span>
+    <span id="hhSub" style="font-size:.66rem;color:var(--mu)">players hitting their prop in 100% of the last 5</span>
+    <a href="/edge-lab" style="margin-left:auto;font-size:.64rem;color:var(--c);text-decoration:none">EDGE LAB →</a>
+  </div>
+  <div id="hhStrip" style="display:flex;gap:10px;overflow-x:auto;padding:12px 14px;scrollbar-width:thin">
+    <span style="color:var(--mu);font-size:.7rem">Loading hot hands…</span>
+  </div>
 </div>
 <div class="main">
   <div id="gamesView" class="view active">
@@ -2577,6 +2589,50 @@ setTimeout(loadDailySummaryBadge, 1800);
 setInterval(function(){load(selectedGamesDate)},60000);
 setInterval(loadMemoryStatus,90000);
 setInterval(loadDailySummaryBadge,90000);
+
+// ── 100% Club widget ──────────────────────────────────────────────────────────
+var HH_ROWS = [];
+function loadHotHandWidget(){
+  var strip = document.getElementById('hhStrip');
+  if(!strip) return;
+  fetch('/api/hot-hand/today?window=l5&minPct=1.0&minTotal=5').then(function(r){return r.json();}).then(function(d){
+    if(!d.success) throw new Error(d.error||'failed');
+    HH_ROWS = d.players || [];
+    var sub = document.getElementById('hhSub');
+    if(sub) sub.textContent = d.count + ' players hitting their prop in 100% of the last 5';
+    if(!HH_ROWS.length){
+      strip.innerHTML = '<span style="color:var(--mu);font-size:.7rem">No 100% Club members right now'+(d.computing?' (computing…)':'')+'</span>';
+      if(d.computing) setTimeout(loadHotHandWidget, 6000);
+      return;
+    }
+    strip.innerHTML = HH_ROWS.slice(0,20).map(function(p,i){
+      var l5 = p.l5 || {};
+      return '<div style="flex:0 0 auto;min-width:172px;border:1px solid var(--b);border-radius:10px;padding:9px 11px;background:rgba(255,255,255,.02)">'+
+        '<div style="font-weight:700;font-size:.82rem;color:var(--t)">'+esc(p.player)+'</div>'+
+        '<div style="font-size:.66rem;color:var(--mu);margin:2px 0 6px">'+esc(p.team||'')+' · '+esc(p.marketLabel||p.marketKey)+' o'+p.line+'</div>'+
+        '<div style="display:flex;align-items:center;gap:6px">'+
+          '<span style="font-size:.7rem;color:var(--g);font-weight:700">'+(l5.over||0)+'/'+(l5.total||0)+'</span>'+
+          '<span style="font-size:.66rem;color:var(--o)">'+(p.streakOver||0)+'🔥</span>'+
+          '<button onclick="trackHotHand('+i+',this)" style="margin-left:auto;border:1px solid rgba(0,229,255,.3);background:rgba(0,229,255,.08);color:var(--c);border-radius:7px;padding:3px 8px;font-size:.62rem;cursor:pointer">+ TRACK</button>'+
+        '</div></div>';
+    }).join('');
+    if(d.computing) setTimeout(loadHotHandWidget, 6000);
+  }).catch(function(){ strip.innerHTML = '<span style="color:var(--mu);font-size:.7rem">100% Club unavailable</span>'; });
+}
+function trackHotHand(i, btn){
+  var p = HH_ROWS[i]; if(!p) return;
+  btn.disabled = true; btn.textContent = '…';
+  fetch('/api/tracker/pick', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({player:p.player, playerId:p.playerId, team:p.team, gamePk:p.gamePk,
+      marketKey:p.marketKey, line:p.line, recommendedSide:'Over',
+      hubRating:p.hubRating, evPct:p.evPct, source:'hot_hand_widget'})
+  }).then(function(r){return r.json();}).then(function(d){
+    if(d.success){ btn.textContent='✓'; btn.style.color='var(--g)'; }
+    else { btn.disabled=false; btn.textContent='+ TRACK'; alert('Save failed: '+(d.error||'error')); }
+  }).catch(function(e){ btn.disabled=false; btn.textContent='+ TRACK'; alert('Save failed: '+e.message); });
+}
+loadHotHandWidget();
+setInterval(loadHotHandWidget, 300000);
 </script>
 <!-- LIVE GAMEPLAY PATCH -->
 <style>
