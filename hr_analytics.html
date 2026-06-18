@@ -338,6 +338,24 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 /* ── Auto-refresh countdown ── */
 .lineup-refresh-row{display:flex;align-items:center;gap:8px;margin-top:4px;font-size:11px;color:var(--muted)}
 .lineup-countdown{color:var(--warn);font-weight:600;font-variant-numeric:tabular-nums}
+
+/* ── Spray chart + zone heatmap ── */
+.sz-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:760px){.sz-grid{grid-template-columns:1fr}}
+.sz-card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px}
+.sz-title{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between}
+.spray-svg{width:100%;height:auto;display:block;border-radius:8px;background:radial-gradient(circle at 50% 95%,#12321f 0%,#0b1f14 55%,#091a11 100%)}
+.spray-legend{display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-top:8px;justify-content:center}
+.spray-legend span{display:inline-flex;align-items:center;gap:5px}
+.spray-dot{width:9px;height:9px;border-radius:50%;display:inline-block}
+.zone-3x3{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;aspect-ratio:1;max-width:240px;margin:0 auto;
+  border:2px dashed rgba(255,255,255,.18);padding:4px;border-radius:6px}
+.zone-cell{border-radius:5px;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  min-height:56px;color:#06121a;font-weight:700}
+.zone-cell .zc-slg{font-size:15px;line-height:1}
+.zone-cell .zc-sub{font-size:9px;font-weight:600;opacity:.85;margin-top:2px}
+.zone-empty{color:var(--muted);font-size:13px;text-align:center;padding:24px 10px}
+.sz-meta{font-size:11px;color:var(--muted);text-align:center;margin-top:8px}
 </style>
 </head>
 <body>
@@ -407,7 +425,9 @@ const GLOSSARY={
   mcprob:"Monte Carlo HR probability: % of 1,000 simulated games (4 AB each) in which the batter hits at least one HR. The headline number.",
   closed:"Closed-form estimate: 1−(1−p)⁴ where p is the per-AB HR chance and 4 is a typical game's AB. A quick analytic cross-check on the simulation.",
   perab:"Per-AB HR probability — the chance of a home run in a single at-bat, before scaling up to a full game.",
-  score:"Composite 0–100 HR score blending power (ISO/barrel/HH), the pitcher's homer-rate vs this hand, park, and pitch-mix into one ranking number."
+  score:"Composite 0–100 HR score blending power (ISO/barrel/HH), the pitcher's homer-rate vs this hand, park, and pitch-mix into one ranking number.",
+  spray:"Where the batter has put balls in play this season (Statcast hit coordinates). Orange = HR, green = hit, gray = out. Reveals pull/oppo tendencies and where he does damage.",
+  hotzone:"Slugging by strike-zone third (catcher's view). Warmer cells = where the batter does the most damage; cold cells are pitch-here-to-attack locations."
 };
 function infoIcon(key,left){
   const t=GLOSSARY[key];if(!t)return '';
@@ -844,6 +864,7 @@ function renderDetailSkeleton(s){
     <div class="tab-nav">
       <button class="tab-btn active" onclick="switchTab('sim',this)">Simulator</button>
       <button class="tab-btn" onclick="switchTab('mix',this)">Pitch Mix</button>
+      <button class="tab-btn" onclick="switchTab('zones',this)">Spray &amp; Zones</button>
       <button class="tab-btn" onclick="switchTab('h2h',this)">H2H</button>
       <button class="tab-btn" onclick="switchTab('scout',this)">AI Report</button>
     </div>
@@ -852,6 +873,9 @@ function renderDetailSkeleton(s){
     </div>
     <div id="tab-mix" class="tab-pane">
       <div class="loader"><div class="spinner"></div> Loading pitch mix…</div>
+    </div>
+    <div id="tab-zones" class="tab-pane">
+      <div class="loader"><div class="spinner"></div> Loading spray &amp; zones…</div>
     </div>
     <div id="tab-h2h" class="tab-pane">
       <div class="loader"><div class="spinner"></div> Loading H2H data…</div>
@@ -867,6 +891,105 @@ function switchTab(name,btn){
   btn.classList.add('active');
   const pane=document.getElementById('tab-'+name);
   if(pane)pane.classList.add('active');
+  if(name==='zones')loadSprayZone();   // lazy-load on first open (spray fetch is slow)
+}
+
+// ── Spray chart + strike-zone hot-zone heatmap ──────────────────────────────
+const _sprayZoneCache={};
+async function loadSprayZone(){
+  const s=selectedBatter;
+  if(!s)return;
+  const bid=s.batter_id;
+  const panel=document.getElementById('tab-zones');
+  if(!panel)return;
+  const renderInto=(spray,zone)=>{
+    if(!selectedBatter||selectedBatter.batter_id!==bid)return;
+    const p=document.getElementById('tab-zones');
+    if(!p)return;
+    p.innerHTML=`<div class="sz-grid">
+      <div class="sz-card"><div class="sz-title">Spray Chart${infoIcon('spray')}</div>${renderSprayChart(spray)}</div>
+      <div class="sz-card"><div class="sz-title">Hot Zones · SLG${infoIcon('hotzone')}</div>${renderZoneChart(zone)}</div>
+    </div>`;
+  };
+  if(_sprayZoneCache[bid]){const c=_sprayZoneCache[bid];renderInto(c.spray,c.zone);return;}
+  panel.innerHTML='<div class="loader"><div class="spinner"></div> Loading spray &amp; zones…</div>';
+  try{
+    const [sr,zr]=await Promise.allSettled([
+      fetch(`${API}/api/player/${bid}/spray`).then(r=>r.json()),
+      fetch(`${API}/api/player/${bid}/zonechart`).then(r=>r.json()),
+    ]);
+    const spray=(sr.status==='fulfilled'&&sr.value&&sr.value.success)?(sr.value.data||[]):[];
+    const zone=(zr.status==='fulfilled'&&zr.value&&zr.value.success)?(zr.value.data||[]):[];
+    _sprayZoneCache[bid]={spray,zone};
+    renderInto(spray,zone);
+  }catch(e){
+    if(panel)panel.innerHTML=`<div class="error-box">Spray / zone error: ${escapeHtml(e.message)}</div>
+      <div style="text-align:right;margin-top:8px"><button class="regen-btn" onclick="loadSprayZone()">↻ Retry</button></div>`;
+  }
+}
+
+function renderSprayChart(data){
+  if(!data||!data.length)return '<div class="zone-empty">No batted-ball data yet this season.</div>';
+  const HX=125.42,HY=198.27,S=0.62,cx=125,baseY=200;
+  const clamp=(v,lo,hi)=>Math.max(lo,Math.min(hi,v));
+  let hr=0,hit=0,out=0;
+  const dots=data.map(d=>{
+    const fx=(d.hc_x-HX),fy=(HY-d.hc_y);
+    const x=clamp(cx+fx*S,8,242).toFixed(1);
+    const y=clamp(baseY-fy*S,12,205).toFixed(1);
+    let col,r;
+    if(d.outcome==='hr'){col='#ff9800';r=3.1;hr++;}
+    else if(d.outcome==='hit'){col='#3fb950';r=2.4;hit++;}
+    else{col='rgba(139,148,158,.45)';r=1.9;out++;}
+    const ev=d.exit_velocity!=null?Math.round(d.exit_velocity)+' mph':'';
+    const dist=d.hit_distance!=null?', '+Math.round(d.hit_distance)+' ft':'';
+    const title=`${(d.result||d.outcome||'').toString()}${ev?' — '+ev:''}${dist}`;
+    return `<circle cx="${x}" cy="${y}" r="${r}" fill="${col}" opacity="${d.outcome==='out'?0.5:0.9}"><title>${escapeHtml(title)}</title></circle>`;
+  }).join('');
+  const field=`
+    <line x1="125" y1="200" x2="30" y2="78" stroke="rgba(255,255,255,.22)" stroke-width="1"/>
+    <line x1="125" y1="200" x2="220" y2="78" stroke="rgba(255,255,255,.22)" stroke-width="1"/>
+    <path d="M30 78 Q125 8 220 78" fill="none" stroke="rgba(255,255,255,.22)" stroke-width="1.2"/>
+    <path d="M125 200 L92 168 L125 138 L158 168 Z" fill="none" stroke="rgba(255,255,255,.16)" stroke-width="1"/>
+    <circle cx="125" cy="200" r="2" fill="rgba(255,255,255,.5)"/>`;
+  return `<svg class="spray-svg" viewBox="0 0 250 210" preserveAspectRatio="xMidYMid meet">${field}${dots}</svg>
+    <div class="spray-legend">
+      <span><i class="spray-dot" style="background:#ff9800"></i>HR ${hr}</span>
+      <span><i class="spray-dot" style="background:#3fb950"></i>Hit ${hit}</span>
+      <span><i class="spray-dot" style="background:rgba(139,148,158,.6)"></i>Out ${out}</span>
+    </div>`;
+}
+
+function renderZoneChart(zones){
+  const valid=(zones||[]).filter(z=>z&&z.zone_id!=null);
+  const hasData=valid.some(z=>(z.slg||0)>0||(z.ba||0)>0||(z.pitch_pct||0)>0);
+  if(!valid.length||!hasData)return '<div class="zone-empty">No zone profile yet this season.</div>';
+  const byId={};valid.forEach(z=>{byId[z.zone_id]=z;});
+  function clamp01(v){return Math.max(0,Math.min(1,v));}
+  function mix(a,b,t){
+    const pa=[parseInt(a.slice(1,3),16),parseInt(a.slice(3,5),16),parseInt(a.slice(5,7),16)];
+    const pb=[parseInt(b.slice(1,3),16),parseInt(b.slice(3,5),16),parseInt(b.slice(5,7),16)];
+    const c=pa.map((x,i)=>Math.round(x+(pb[i]-x)*t));
+    return `rgb(${c[0]},${c[1]},${c[2]})`;
+  }
+  const heat=(slg)=>{
+    if(slg==null||slg<=0)return '#2a3346';
+    const t=clamp01((slg-0.250)/(0.750-0.250));
+    if(t<0.5)return mix('#3a6ea5','#f5c542',t/0.5);
+    return mix('#f5c542','#ff5252',(t-0.5)/0.5);
+  };
+  let cells='';
+  for(let i=0;i<9;i++){
+    const z=byId[i];
+    const slg=z?z.slg:null,ba=z?z.ba:null;
+    const bg=heat(slg);
+    const slgTxt=(slg!=null&&slg>0)?'.'+String(Math.round(slg*1000)).padStart(3,'0'):'—';
+    const baTxt=(ba!=null&&ba>0)?'BA .'+String(Math.round(ba*1000)).padStart(3,'0'):'';
+    cells+=`<div class="zone-cell" style="background:${bg}" title="Zone ${i+1}: SLG ${slgTxt}${baTxt?' · '+baTxt:''}">
+      <div class="zc-slg">${slgTxt}</div>${baTxt?`<div class="zc-sub">${baTxt}</div>`:''}</div>`;
+  }
+  return `<div class="zone-3x3">${cells}</div>
+    <div class="sz-meta">Slugging by strike-zone third (catcher's view) — warmer = more damage</div>`;
 }
 
 async function triggerSimulator(){
