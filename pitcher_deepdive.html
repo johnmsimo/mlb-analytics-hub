@@ -106,6 +106,11 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .kprop-table tr:last-child td{border-bottom:none}
 .pct-hot{color:var(--g);font-weight:700} .pct-warm{color:var(--o)} .pct-cold{color:var(--r)} .pct-neu{color:var(--mu)}
 .proj-note{margin-top:10px;font-size:.62rem;color:var(--mu);line-height:1.6;border-top:1px dashed rgba(255,255,255,.07);padding-top:8px}
+.me-chips{display:flex;flex-wrap:wrap;gap:6px}
+.me-chip{display:inline-block;padding:5px 9px;border-radius:7px;font-family:'Orbitron',monospace;font-size:.52rem;letter-spacing:.6px;color:var(--mu);background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.08)}
+.me-chip strong{color:#e8e8e8;font-weight:800}
+.me-chip.good{border-color:rgba(76,175,80,.4);color:#9ccc9e}
+.me-chip.bad{border-color:rgba(244,67,54,.35);color:#e88}
 
 /* GAME LOG */
 .gl-pills{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
@@ -552,6 +557,10 @@ function rebuildThreats(){
   if(!PD||!PD.success) return;
   for(const pit of [PD.awayPitcher, PD.homePitcher]){
     if(!pit?.id) continue;
+    // Populate the MATCHUP EDGE block (platoon + pitch-mix) — depends only on
+    // PROPS_DATA, so update it independently of the MATCHUPS guard below.
+    const medge = document.getElementById(`${pit.id}-medge`);
+    if(medge) medge.innerHTML = buildMatchupEdge(pit.id);
     const side = MATCHUPS[pit.id];
     if(!side) continue;
     // Rebuild threats pane
@@ -570,6 +579,49 @@ function lookupBatX(playerName){
   if(!PROPS_DATA) return null;
   const batters = PROPS_DATA.batters || [];
   return batters.find(b=>b.name===playerName) || null;
+}
+
+// Backend pitcher projection (carries platoon-aware opponent quality + arsenal
+// pitch-mix K shade) keyed by pitcher id from /api/props/projections.
+function lookupPitcherProj(pitcherId){
+  if(!PROPS_DATA || !pitcherId) return null;
+  const pit = (PROPS_DATA.pitchers||[]).find(p=>String(p.id)===String(pitcherId));
+  return pit ? (pit.proj||null) : null;
+}
+
+// "MATCHUP EDGE" block: surfaces the platoon-adjusted lineup read and the
+// arsenal swing-and-miss (pitch-mix) shade that feed the K projection.
+function buildMatchupEdge(pitcherId){
+  const pr = lookupPitcherProj(pitcherId);
+  if(!pr) return PROPS_DATA ? '' : '<div style="font-size:.55rem;color:var(--mu);opacity:.6;margin:8px 0">Matchup edge loading…</div>';
+  const chips=[];
+  const handTxt = pr.pitcher_hand ? (pr.pitcher_hand==='L'?'LHP':'RHP') : '';
+  if(pr.opp_woba_platoon!=null){
+    const v=pr.opp_woba_platoon;
+    const cls=v>=0.335?'bad':v<=0.305?'good':'';
+    chips.push(`<span class="me-chip ${cls}" title="Lineup-weighted opponent wOBA vs ${handTxt} (platoon-adjusted). Lower = tougher for hitters.">OPP wOBA vs hand <strong>${v.toFixed(3)}</strong></span>`);
+  }
+  if(pr.opp_kpct_platoon!=null){
+    const v=pr.opp_kpct_platoon;
+    const cls=v>=0.235?'good':v<=0.195?'bad':'';
+    chips.push(`<span class="me-chip ${cls}" title="Lineup-weighted opponent K% vs ${handTxt} (platoon-adjusted). Higher = more strikeout upside.">OPP K% vs hand <strong>${(v*100).toFixed(1)}%</strong></span>`);
+  }
+  if(pr.arsenal_whiff!=null){
+    chips.push(`<span class="me-chip" title="Usage-weighted whiff% across this pitcher's arsenal.">ARSENAL WHIFF <strong>${pr.arsenal_whiff.toFixed(1)}%</strong></span>`);
+  }
+  if(pr.arsenal_k_mult!=null && pr.arsenal_k_mult!==1){
+    const m=pr.arsenal_k_mult;
+    const cls=m>=1.02?'good':m<=0.98?'bad':'';
+    chips.push(`<span class="me-chip ${cls}" title="K projection shade from the arsenal's swing-and-miss (pitch mix).">PITCH-MIX K ${m>=1?'+':''}${((m-1)*100).toFixed(1)}%</span>`);
+  }
+  if(pr.stuff_plus!=null){
+    chips.push(`<span class="me-chip" title="FanGraphs Stuff+ (100 = league avg).">STUFF+ <strong>${pr.stuff_plus}</strong></span>`);
+  }
+  if(!chips.length) return '';
+  return `<div style="margin:4px 0 12px">
+    <div style="font-family:'Orbitron',monospace;font-size:.55rem;letter-spacing:1.5px;color:var(--mu);margin-bottom:6px">MATCHUP EDGE${handTxt?` · ${handTxt}`:''} <span style="opacity:.5;font-weight:400">(platoon &amp; pitch-mix)</span></div>
+    <div class="me-chips">${chips.join('')}</div>
+  </div>`;
 }
 
 function batxOUPills(proj, adj, playerName){
@@ -652,7 +704,7 @@ function buildCard(pit,teamAbbr,oppAbbr){
     <div id="${pit.id}-stats"   class="pc-pane active">${buildStatsPane(s,log)}</div>
     <div id="${pit.id}-threats" class="pc-pane">${buildThreatsPane(pit.id)}</div>
     <div id="${pit.id}-vuln"    class="pc-pane">${buildVulnPane(pit.id)}</div>
-    <div id="${pit.id}-proj"    class="pc-pane">${buildProjPane(s,log,oppAbbr)}</div>
+    <div id="${pit.id}-proj"    class="pc-pane">${buildProjPane(s,log,oppAbbr,pit.id)}</div>
     <div id="${pit.id}-log"     class="pc-pane">${buildLogPane(log)}</div>
     <div id="${pit.id}-ars"     class="pc-pane">${buildArsenalPane(s, pit.id)}</div>
   </div>`;
@@ -837,7 +889,7 @@ function buildStatsPane(s,log){
 }
 
 // ── PROJECTION PANE ───────────────────────────────────────────────────────
-function buildProjPane(s,log,oppAbbr){
+function buildProjPane(s,log,oppAbbr,pitcherId){
   const era  = parseFloat(s.sv_xera||s.fg_era||s.era)||4.20;
   const k9   = parseFloat(s.fg_k9||s.k9)||8.0;
   const kpct = parseFloat(s.fg_kpct)||(k9/36);
@@ -894,6 +946,7 @@ function buildProjPane(s,log,oppAbbr){
   }).join('');
   return`
     <div style="font-family:'Orbitron',monospace;font-size:.6rem;letter-spacing:2px;color:var(--mu);margin-bottom:10px">PITCH X ENGINE</div>
+    <div id="${pitcherId||''}-medge">${pitcherId?buildMatchupEdge(pitcherId):''}</div>
     <div class="proj-kpis">
       <div class="proj-kpi"><div class="proj-kpi-val pv-ip">${blendIP}</div><div class="proj-kpi-lbl">PROJ IP</div></div>
       <div class="proj-kpi"><div class="proj-kpi-val pv-k">${blendK}</div><div class="proj-kpi-lbl">PROJ K</div></div>
@@ -1093,6 +1146,7 @@ function buildThreatsPane(pitcherId){
           ${b.iso?`<span>ISO <strong>${fmtNum(b.iso)}</strong></span>`:''}
           ${b.brl_pct?`<span>Barrel% <strong>${fmtNum(b.brl_pct,1)}%</strong></span>`:''}
           ${b.ev?`<span>EV <strong>${fmtNum(b.ev,1)}</strong></span>`:''}
+          ${(b.pitchMixScore!=null && b.pitchMixScore!==1)?`<span ${b.pitchMixScore>=1.05?'class="good"':b.pitchMixScore<=0.95?'class="bad"':''} title="Batter's production vs THIS pitcher's arsenal (1.00 = league avg)">Pitch-mix <strong>${b.pitchMixScore.toFixed(2)}×</strong></span>`:''}
           ${(() => {
             const bvp = b.bvp;
             if (!bvp || !bvp.pa) return '';

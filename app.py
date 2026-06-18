@@ -5961,12 +5961,16 @@ def _trigger_zonechart_prefetch_async(player_id):
 
 
 # ── Pitcher vs. Opposing Lineup — "Top Damage Threats" ───────────────────────
-def _damage_score(batter_stats, pitcher_stats):
+def _damage_score(batter_stats, pitcher_stats, pitcher_hand=None):
     """Compute a 0-100 score representing this batter's projected damage
     against this pitcher.  Higher = more dangerous.
 
     Inputs are the enriched dicts returned by get_batters_from_boxscore()
     (merged with fg_batter/sv_batter) and build_pitcher_stats().
+
+    Platoon-aware: the batter's wOBA is graded vs the pitcher's handedness
+    (Bayesian-shrunk handed split, with the theoretical league edge when the
+    split is missing). pitcher_hand defaults to whatever pitcher_stats carries.
     """
     def _f(v, d=0.0):
         try:
@@ -5975,8 +5979,20 @@ def _damage_score(batter_stats, pitcher_stats):
         except Exception:
             return d
 
-    # Batter quality
-    xwoba = _f(batter_stats.get("sv_xwoba") or batter_stats.get("fg_woba"), 0.320)
+    phand = (pitcher_hand or pitcher_stats.get("pitchHand")
+             or pitcher_stats.get("throws") or "R").upper()[:1]
+    if phand not in ("L", "R"):
+        phand = "R"
+
+    # Batter quality — wOBA graded vs the pitcher's hand (platoon split).
+    _pb = {
+        "bats":      (batter_stats.get("fg_bats") or batter_stats.get("bats") or "R"),
+        "fg_woba":   batter_stats.get("fg_woba"),
+        "sv_xwoba":  batter_stats.get("sv_xwoba"),
+        "vs_l_woba": batter_stats.get("vs_l_woba"), "vs_l_pa": batter_stats.get("vs_l_pa"),
+        "vs_r_woba": batter_stats.get("vs_r_woba"), "vs_r_pa": batter_stats.get("vs_r_pa"),
+    }
+    xwoba = _f(platoon_blend_v2(_pb, phand, "woba"), 0.320)
     iso   = _f(batter_stats.get("fg_iso"), 0.150)
     brl_raw = _f(batter_stats.get("sv_brl_pct"), 6.0)
     brl     = brl_raw / 100.0 if brl_raw > 1 else brl_raw
@@ -6008,17 +6024,37 @@ def _damage_score(batter_stats, pitcher_stats):
     return round(max(0.0, min(100.0, 50.0 + score)), 1)
 
 
-def _project_batter_vs_pitcher(batter_stats, pitcher_stats):
+def _project_batter_vs_pitcher(batter_stats, pitcher_stats, pitcher_hand=None):
     """Return per-game probabilities (1+ hit, 2+ TB, HR, 1+ RBI) + projected
     totals.  Calibrated so elite hitter vs weak SP ≈ 80% hit, 15-25% HR;
     below-average batter ≈ 50% hit, 3-6% HR.  These are per-game odds,
-    not per-PA."""
+    not per-PA.
+
+    Platoon-aware: the batter's contact (xBA) and overall quality (xwOBA) are
+    graded vs the pitcher's handedness before the per-PA rates are derived."""
     def _f(v, d=0.0):
         try: return float(v)
         except Exception: return d
 
-    xba   = _f(batter_stats.get("sv_xba")   or batter_stats.get("fg_avg"),  0.250)
-    xwoba = _f(batter_stats.get("sv_xwoba") or batter_stats.get("fg_woba"), 0.320)
+    phand = (pitcher_hand or pitcher_stats.get("pitchHand")
+             or pitcher_stats.get("throws") or "R").upper()[:1]
+    if phand not in ("L", "R"):
+        phand = "R"
+    _pb = {
+        "bats":      (batter_stats.get("fg_bats") or batter_stats.get("bats") or "R"),
+        "fg_avg":    batter_stats.get("fg_avg"),
+        "fg_woba":   batter_stats.get("fg_woba"),
+        "sv_xwoba":  batter_stats.get("sv_xwoba"),
+        "vs_l_avg":  batter_stats.get("vs_l_avg"),  "vs_l_pa": batter_stats.get("vs_l_pa"),
+        "vs_r_avg":  batter_stats.get("vs_r_avg"),  "vs_r_pa": batter_stats.get("vs_r_pa"),
+        "vs_l_woba": batter_stats.get("vs_l_woba"),
+        "vs_r_woba": batter_stats.get("vs_r_woba"),
+    }
+    # Platoon-graded xBA / xwOBA (fall back to raw values if blend returns 0).
+    xba   = _f(platoon_blend_v2(_pb, phand, "avg"),
+               _f(batter_stats.get("sv_xba") or batter_stats.get("fg_avg"), 0.250))
+    xwoba = _f(platoon_blend_v2(_pb, phand, "woba"),
+               _f(batter_stats.get("sv_xwoba") or batter_stats.get("fg_woba"), 0.320))
     iso   = _f(batter_stats.get("fg_iso"),  0.140)
     brl_r = _f(batter_stats.get("sv_brl_pct"), 6.0)
     brl   = brl_r / 100.0 if brl_r > 1 else brl_r
@@ -6101,14 +6137,24 @@ def _project_batter_vs_pitcher(batter_stats, pitcher_stats):
     }
 
 
-def _pitcher_prop_vulnerability_from_inputs(p_stats, opposing_lineup, park_factor=1.0):
-    """Build Sprint 3.2 pitcher prop vulnerability profile from pitcher+opponent context."""
+def _pitcher_prop_vulnerability_from_inputs(p_stats, opposing_lineup, park_factor=1.0,
+                                            pitcher_hand=None):
+    """Build Sprint 3.2 pitcher prop vulnerability profile from pitcher+opponent context.
+
+    Platoon- and lineup-position-aware: each opposing hitter's contact is graded
+    vs the pitcher's handedness and weighted by lineup-slot PA share, so the
+    'lineup weakness' read reflects who the pitcher actually faces most."""
     def _f(v, d=0.0):
         try:
             f = float(v)
             return f if f == f else d
         except Exception:
             return d
+
+    phand = (pitcher_hand or p_stats.get("pitchHand")
+             or p_stats.get("throws") or "R").upper()[:1]
+    if phand not in ("L", "R"):
+        phand = "R"
 
     bats = []
     for b in opposing_lineup or []:
@@ -6120,14 +6166,26 @@ def _pitcher_prop_vulnerability_from_inputs(p_stats, opposing_lineup, park_facto
     park = _f(park_factor, 1.0)
     park = max(0.90, min(1.20, park))
 
-    avg_values = []
-    hh_values = []
-    for b in bats:
-        avg_values.append(_f(b.get("fg_avg") or b.get("avg"), 0.245))
-        hh_values.append(_f(b.get("sv_hh_pct"), 37.0))
+    avg_acc = hh_acc = w_acc = 0.0
+    for idx, b in enumerate(bats):
+        _pb = {
+            "bats":      (b.get("fg_bats") or b.get("bats") or "R"),
+            "fg_avg":    b.get("fg_avg") or b.get("avg"),
+            "fg_woba":   b.get("fg_woba"), "sv_xwoba": b.get("sv_xwoba"),
+            "vs_l_avg":  b.get("vs_l_avg"), "vs_r_avg": b.get("vs_r_avg"),
+            "vs_l_pa":   b.get("vs_l_pa"), "vs_r_pa": b.get("vs_r_pa"),
+        }
+        avg_b = _f(platoon_blend_v2(_pb, phand, "avg"),
+                   _f(b.get("fg_avg") or b.get("avg"), 0.245))
+        hh_b  = _f(b.get("sv_hh_pct"), 37.0)
+        # Lineup-slot PA weight for the first 9; flat for any roster-fallback tail.
+        w = _LINEUP_PA_WEIGHTS[idx] if idx < len(_LINEUP_PA_WEIGHTS) else 3.5
+        avg_acc += avg_b * w
+        hh_acc  += hh_b  * w
+        w_acc   += w
 
-    opp_avg = sum(avg_values) / len(avg_values) if avg_values else 0.245
-    opp_hh = sum(hh_values) / len(hh_values) if hh_values else 37.0
+    opp_avg = (avg_acc / w_acc) if w_acc else 0.245
+    opp_hh = (hh_acc / w_acc) if w_acc else 37.0
 
     whip = _f(p_stats.get("fg_whip") or p_stats.get("whip"), 1.25)
     era = _f(p_stats.get("fg_era") or p_stats.get("era"), 4.20)
@@ -6182,6 +6240,8 @@ def _pitcher_prop_vulnerability_from_inputs(p_stats, opposing_lineup, park_facto
             "exploitable": tb_exploitable,
             "context": "hard_hit_pct_allowed_proxy",
         },
+        "pitcher_hand": phand,
+        "opp_avg_platoon": round(opp_avg, 3),
     }
 
 
@@ -6362,6 +6422,25 @@ def api_pitcher_matchup(game_pk):
                 merged = {**fgb, **svb, **b}
                 proj = _project_batter_vs_pitcher(merged, p_stats)
                 score = _damage_score(merged, p_stats)
+                # Pitch-mix matchup: how well this hitter handles THIS pitcher's
+                # arsenal (FG run-value per pitch + Savant SLG-vs-pitch, 60/40).
+                # 1.0 = neutral; folded modestly into the damage score.
+                mix_score = 1.0
+                _bid = merged.get("id")
+                if pitcher_id and _bid:
+                    try:
+                        fg_pm, _ = _fg_pitch_matchup_score(_bid, pitcher_id)
+                        sv_pm, _ = _compute_pitch_mix_score(str(pitcher_id), str(_bid))
+                        fg_h = (fg_pm != 1.0); sv_h = (sv_pm != 1.0)
+                        if fg_h and sv_h:
+                            mix_score = fg_pm * 0.60 + sv_pm * 0.40
+                        elif fg_h:
+                            mix_score = fg_pm
+                        elif sv_h:
+                            mix_score = sv_pm
+                    except Exception:
+                        mix_score = 1.0
+                    score = round(_clamp(score + (mix_score - 1.0) * 25.0, 0.0, 100.0), 1)
                 bvp_b = bvp_by_bid.get(merged.get("id")) or {}
                 threats.append({
                     "id":       merged.get("id"),
@@ -6386,6 +6465,7 @@ def api_pitcher_matchup(game_pk):
                     "hh_pct":   merged.get("sv_hh_pct"),
                     "brl_pct":  merged.get("sv_brl_pct"),
                     "score":    score,
+                    "pitchMixScore": round(mix_score, 3),
                     "bvp": {
                         "pa":    bvp_b.get("pa", 0),
                         "ab":    bvp_b.get("ab", 0),
@@ -8684,6 +8764,17 @@ def _pitcher_k_projection_vs_lineup(pitcher_id, pitcher_name, opposing_lineup,
                     "l5IP":      _safe_f(l5.get("ip"),       5.0),
                     "daysRest":  _safe_f(rf.get("days_rest"), 5.0),
                 })
+        except Exception:
+            pass
+
+    # Fold in arsenal pitch-mix (usage-weighted whiff%/putaway%) so the K model
+    # can use the swing-and-miss signal the retrained models were trained on.
+    if xgb_avail and pitcher_dict:
+        try:
+            _ars = _arsenal_whiff_summary(pitcher_id) if pitcher_id else None
+            if _ars:
+                pitcher_dict.setdefault("arsenalWhiff",   _ars.get("whiff"))
+                pitcher_dict.setdefault("arsenalPutaway", _ars.get("putaway"))
         except Exception:
             pass
 
@@ -14551,6 +14642,14 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
         # ── FanGraphs enrichment for pitcher K props (done once per starter) ──
         if k_xgb_ready:
             sp = {**sp, **enrich_pitcher(sp)}   # merges real FG stats into sp dict
+            # Arsenal pitch-mix (usage-weighted whiff%/putaway%) for the K model.
+            try:
+                _ars = _arsenal_whiff_summary(sp.get('id'))
+                if _ars:
+                    sp['arsenalWhiff']   = _ars.get('whiff')
+                    sp['arsenalPutaway'] = _ars.get('putaway')
+            except Exception:
+                pass
         # ─────────────────────────────────────────────────────────────────────
         for line in k_lines:
             prob_field = _K_PROB_FIELD_FOR.get(line)
@@ -20030,10 +20129,57 @@ def _pitcher_recent_form(pitcher_id, n_starts=5):
         return {}
 
 
+# ── Pitcher projection tuning constants ───────────────────────────────────────
+# Expected PA by lineup slot over a full game (leadoff sees the most). Used to
+# weight opponent-quality so the top of the order — which a starter faces ~3
+# times — counts more than the 8-9 hitters when grading "lineup weakness".
+_LINEUP_PA_WEIGHTS = [4.65, 4.55, 4.45, 4.36, 4.27, 4.17, 4.08, 3.99, 3.89]
+# K% nudge for same-/opposite-handed matchups (pitcher platoon advantage). A
+# same-handed hitter strikes out modestly more vs this pitcher; opposite less.
+_K_PLATOON_MULT = 0.05
+# League-average usage-weighted arsenal whiff% and the slope mapping a pitcher's
+# deviation from it onto a K multiplier (≈ +8pp whiff → +6% projected Ks).
+_LG_ARSENAL_WHIFF = 24.5
+_ARSENAL_WHIFF_SLOPE = 0.0075
+
+
+def _arsenal_whiff_summary(pitcher_id):
+    """Usage-weighted whiff% / put-away% across a pitcher's arsenal.
+
+    Reads the in-memory Savant pitch-arsenal cache (no external calls). Returns
+    {'whiff', 'putaway', 'pitches'} or None when no arsenal is cached.
+    """
+    if not pitcher_id:
+        return None
+    with _sv_lock:
+        ars = dict(_sv_pit_arsenal_stats.get(str(pitcher_id), {}))
+    if not ars:
+        return None
+    w_whiff = w_putaway = use_sum = 0.0
+    n = 0
+    for st in ars.values():
+        u = _safe_f(st.get("usage"), 0.0)
+        wf = st.get("whiff_pct")
+        if u <= 0 or wf is None:
+            continue
+        w_whiff   += _safe_f(wf, 0.0) * u
+        w_putaway += _safe_f(st.get("k_pct"), 0.0) * u
+        use_sum   += u
+        n += 1
+    if use_sum <= 0 or n == 0:
+        return None
+    return {
+        "whiff":   round(w_whiff / use_sum, 2),
+        "putaway": round(w_putaway / use_sum, 2),
+        "pitches": n,
+    }
+
+
 # ── Pitcher projection engine (v2 — recent form weighted) ────────────────────
 def _project_pitcher(pitcher_name, pitcher_id, pitcher_fg, pitcher_sv, pitcher_stats,
                      opp_batters, park_factor, weather, blend_weights=None,
-                     game_pk=None, catcher_name=None, catcher_id=None):
+                     game_pk=None, catcher_name=None, catcher_id=None,
+                     pitcher_hand='R'):
     fg   = pitcher_fg
     sv   = pitcher_sv
 
@@ -20075,16 +20221,40 @@ def _project_pitcher(pitcher_name, pitcher_id, pitcher_fg, pitcher_sv, pitcher_s
     ip_adj  = 1.0 + (4.20 - era) * 0.10
     exp_ip  = round(min(8.0, max(3.5, base_ip + ip_adj)), 1)
 
-    # ── Opponent quality adjustment ───────────────────────────────────────────
-    opp_wobas, opp_kpcts = [], []
-    for b in opp_batters[:9]:
-        b_fg = fg_batter(b.get("name", ""))
-        b_sv = sv_batter(b.get("name", ""))
-        opp_wobas.append(_safe_f(b_fg.get("fg_woba") or b_sv.get("sv_xwoba"), 0.310))
-        opp_kpcts.append(_safe_f(b_fg.get("fg_kpct") or b_sv.get("sv_k_pct"), 0.22))
+    # ── Opponent quality adjustment (platoon-aware, lineup-position weighted) ──
+    # Each opposing hitter is graded vs THIS pitcher's handedness (platoon split
+    # via Bayesian shrinkage in platoon_blend_v2), then aggregated with
+    # lineup-slot PA weights so the top of the order counts more. This is what
+    # turns a flat 9-man average into a real "lineup weakness vs handedness" read.
+    phand = (pitcher_hand or 'R').upper()
+    if phand not in ('L', 'R'):
+        phand = 'R'
+    opp_woba_acc = opp_kpct_acc = w_acc = 0.0
+    for idx, b in enumerate(opp_batters[:9]):
+        nm   = b.get("name", "")
+        b_fg = fg_batter(nm)
+        b_sv = sv_batter(nm)
+        bats = (b.get("bats") or b_fg.get("fg_bats") or "R").upper()
+        # Dict shaped for platoon_blend_v2 (handed splits, then season fallbacks).
+        pb = {
+            "bats":      bats,
+            "fg_woba":   b_fg.get("fg_woba"),
+            "sv_xwoba":  b_sv.get("sv_xwoba"),
+            "vs_l_woba": b.get("vs_l_woba"), "vs_l_pa": b.get("vs_l_pa"),
+            "vs_r_woba": b.get("vs_r_woba"), "vs_r_pa": b.get("vs_r_pa"),
+        }
+        woba_vs = platoon_blend_v2(pb, phand, 'woba')
+        kpct_b  = _safe_f(b_fg.get("fg_kpct") or b_sv.get("sv_k_pct"), 0.22)
+        # Same-handed matchup favors the pitcher (more whiffs); opposite fewer.
+        if bats in ('L', 'R'):
+            kpct_b *= (1.0 + _K_PLATOON_MULT) if bats == phand else (1.0 - _K_PLATOON_MULT)
+        w = _LINEUP_PA_WEIGHTS[idx] if idx < len(_LINEUP_PA_WEIGHTS) else 3.9
+        opp_woba_acc += woba_vs * w
+        opp_kpct_acc += kpct_b  * w
+        w_acc        += w
 
-    avg_opp_woba = sum(opp_wobas) / len(opp_wobas) if opp_wobas else 0.310
-    avg_opp_kpct = sum(opp_kpcts) / len(opp_kpcts) if opp_kpcts else 0.22
+    avg_opp_woba = (opp_woba_acc / w_acc) if w_acc else 0.320
+    avg_opp_kpct = (opp_kpct_acc / w_acc) if w_acc else 0.22
     opp_quality  = _clamp(avg_opp_woba / 0.320, 0.85, 1.15)
     k_opp_adj    = 1.0 + (avg_opp_kpct - 0.22) * 0.4
 
@@ -20100,6 +20270,21 @@ def _project_pitcher(pitcher_name, pitcher_id, pitcher_fg, pitcher_sv, pitcher_s
         stuff_mult = fg_stuff_k_mult(stuff.get("pitching_plus", 100.0))
         if stuff_mult != 1.0:
             k_proj = round(k_proj * stuff_mult, 2)
+
+    # ── Pitch-mix / arsenal swing-and-miss shade ──────────────────────────────
+    # Usage-weighted whiff% across the pitcher's arsenal is an outcome-based
+    # leading indicator of strikeout upside that season K/9 alone can lag (a
+    # nasty slider-heavy mix vs a whiff-prone lineup). Centered at the league
+    # average and tightly clamped so pitch mix refines rather than dominates.
+    ars_summary = _arsenal_whiff_summary(pitcher_id)
+    arsenal_k_mult = 1.0
+    if ars_summary and ars_summary.get("whiff") is not None:
+        arsenal_k_mult = _clamp(
+            1.0 + (ars_summary["whiff"] - _LG_ARSENAL_WHIFF) * _ARSENAL_WHIFF_SLOPE,
+            0.94, 1.07,
+        )
+        if arsenal_k_mult != 1.0:
+            k_proj = round(k_proj * arsenal_k_mult, 2)
 
     # ── Catcher framing × HP umpire K shade ───────────────────────────────────
     # Combined multiplier captures the (framer × strike-zone bias) interaction.
@@ -20138,6 +20323,17 @@ def _project_pitcher(pitcher_name, pitcher_id, pitcher_fg, pitcher_sv, pitcher_s
         "stuff_k_mult":   stuff_mult,
         "framing_ump":    fu_meta,
         "framing_ump_k_mult": fu_mult,
+        # Pitch-mix (arsenal) swing-and-miss shade
+        "arsenal_k_mult":  arsenal_k_mult,
+        "arsenal_whiff":   ars_summary.get("whiff")   if ars_summary else None,
+        "arsenal_putaway": ars_summary.get("putaway") if ars_summary else None,
+        "arsenal_pitches": ars_summary.get("pitches") if ars_summary else None,
+        # Platoon-aware, lineup-position-weighted opponent read
+        "pitcher_hand":     phand,
+        "opp_woba_platoon": round(avg_opp_woba, 3),
+        "opp_kpct_platoon": round(avg_opp_kpct, 3),
+        "opp_quality":      round(opp_quality, 3),
+        "lineup_weighted":  True,
     }
 
 
@@ -20473,7 +20669,8 @@ def api_props_projections(game_pk):
             cname, cid = _find_lineup_catcher(own_bats)
             proj = _project_pitcher(pname, pid, pfg, psv, pst, opp_bats, pf, wx,
                                     blend_weights=_get_adjustments().get('blend_weights'),
-                                    game_pk=game_pk, catcher_name=cname, catcher_id=cid)
+                                    game_pk=game_pk, catcher_name=cname, catcher_id=cid,
+                                    pitcher_hand=phand)
             pitchers_out.append({
                 "name":        pname,
                 "team":        pabbr,
@@ -20502,7 +20699,9 @@ def api_props_projections(game_pk):
                     str(ln): xgb_k_prob(
                         {"fgera": pfg.get("fg_era"), "fgkpct": pfg.get("fg_kpct"),
                          "fgbbpct": pfg.get("fg_bbpct"), "svwhiffpct": psv.get("sv_whiff"),
-                         "name": pname},
+                         "name": pname,
+                         "arsenalWhiff": proj.get("arsenal_whiff"),
+                         "arsenalPutaway": proj.get("arsenal_putaway")},
                         line=ln
                     ) if _XGB_AVAILABLE and xgb_ready('k') else None
                     for ln in [3.5, 4.5, 5.5]

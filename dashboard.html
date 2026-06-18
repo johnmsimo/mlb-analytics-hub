@@ -737,7 +737,11 @@ function refreshTrainingStatus() {
       var logLines = d.log_tail||[];
       if (logLines.length) {
         logWrap.style.display = 'block';
-        logEl.innerHTML = logLines.map(function(l){return '<div>'+l+'</div>';}).join('');
+        // Escape — log lines are raw server stdout and may contain </>/& which
+        // would corrupt the markup if injected directly.
+        var esc = function(l){ return String(l)
+          .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
+        logEl.innerHTML = logLines.map(function(l){return '<div>'+esc(l)+'</div>';}).join('');
         logEl.scrollTop = logEl.scrollHeight;
       } else {
         logWrap.style.display = 'none';

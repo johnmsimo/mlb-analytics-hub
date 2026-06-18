@@ -23,7 +23,9 @@ from __future__ import annotations
 
 import io
 import logging
+import math
 import os
+import sys
 import threading
 import time
 import traceback
@@ -81,14 +83,54 @@ def _append_log(line: str) -> None:
 
 
 class _LogCapture(io.StringIO):
-    """StringIO that mirrors writes to _append_log so the UI sees live output."""
+    """Tee stdout to the real console while recording ONLY the training thread's
+    output into the UI log.
+
+    `redirect_stdout` swaps `sys.stdout` process-wide, so without the thread
+    filter every other request's `print()` (e.g. the props-projection debug
+    lines) would pollute the training log — and the training output would be
+    swallowed instead of reaching the real logs. Filtering by the owning thread
+    ident fixes both."""
+    def __init__(self, real_stream, owner_ident: int):
+        super().__init__()
+        self._real = real_stream
+        self._owner = owner_ident
+
     def write(self, s: str) -> int:
-        n = super().write(s)
-        for line in s.splitlines():
-            stripped = line.strip()
-            if stripped:
-                _append_log(stripped)
-        return n
+        # Always pass through to the real stdout so nothing is lost.
+        try:
+            if self._real is not None:
+                self._real.write(s)
+        except Exception:
+            pass
+        # Only record lines emitted by the training thread itself.
+        if threading.get_ident() == self._owner:
+            for line in s.splitlines():
+                stripped = line.strip()
+                if stripped:
+                    _append_log(stripped)
+        return len(s)
+
+    def flush(self) -> None:
+        try:
+            if self._real is not None:
+                self._real.flush()
+        except Exception:
+            pass
+
+
+def _json_safe(obj):
+    """Recursively replace NaN/Infinity with None so the status payload is
+    strict-JSON. jsonify emits bare `NaN`/`Infinity` tokens otherwise, which
+    iOS Safari's JSON.parse rejects with 'The string did not match the
+    expected pattern.'"""
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+        return None
+    return obj
 
 
 # ── Background training worker ────────────────────────────────────────────────
@@ -108,7 +150,16 @@ def _run_training(markets: list[str], seasons: list[int]) -> None:
             "error":           None,
         })
 
-    cap = _LogCapture()
+    cap = _LogCapture(sys.__stdout__ or sys.stdout, threading.get_ident())
+
+    # Live phase/progress hook so the UI shows movement during the long
+    # data-fetch stage (which can run for many minutes before market 1 starts).
+    def _progress(phase: str, log_line: Optional[str] = None) -> None:
+        if phase:
+            _set("phase", phase)
+        if log_line:
+            _append_log(log_line)
+
     try:
         # Lazy import so the module isn't loaded until needed
         from train_prop_models import train_all, MODEL_CONFIGS
@@ -153,7 +204,7 @@ def _run_training(markets: list[str], seasons: list[int]) -> None:
         _tm.train_one_market = _patched_train_one
 
         with redirect_stdout(cap):
-            results = train_all(markets=markets, seasons=seasons)
+            results = train_all(markets=markets, seasons=seasons, progress_cb=_progress)
 
         # Restore original
         _tm.train_one_market = _orig_train_one
@@ -224,7 +275,7 @@ def training_status():
         end  = snap["finished_at"] or time.time()
         elapsed = round(end - snap["started_at"], 1)
 
-    return jsonify({
+    return jsonify(_json_safe({
         "success":        True,
         "status":         snap["status"],
         "phase":          snap["phase"],
@@ -235,7 +286,7 @@ def training_status():
         "log_tail":       snap["log_lines"][-50:],
         "elapsed_s":      elapsed,
         "error":          snap["error"],
-    })
+    }))
 
 
 @training_bp.route("/run", methods=["POST"])
