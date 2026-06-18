@@ -5961,12 +5961,16 @@ def _trigger_zonechart_prefetch_async(player_id):
 
 
 # ── Pitcher vs. Opposing Lineup — "Top Damage Threats" ───────────────────────
-def _damage_score(batter_stats, pitcher_stats):
+def _damage_score(batter_stats, pitcher_stats, pitcher_hand=None):
     """Compute a 0-100 score representing this batter's projected damage
     against this pitcher.  Higher = more dangerous.
 
     Inputs are the enriched dicts returned by get_batters_from_boxscore()
     (merged with fg_batter/sv_batter) and build_pitcher_stats().
+
+    Platoon-aware: the batter's wOBA is graded vs the pitcher's handedness
+    (Bayesian-shrunk handed split, with the theoretical league edge when the
+    split is missing). pitcher_hand defaults to whatever pitcher_stats carries.
     """
     def _f(v, d=0.0):
         try:
@@ -5975,8 +5979,20 @@ def _damage_score(batter_stats, pitcher_stats):
         except Exception:
             return d
 
-    # Batter quality
-    xwoba = _f(batter_stats.get("sv_xwoba") or batter_stats.get("fg_woba"), 0.320)
+    phand = (pitcher_hand or pitcher_stats.get("pitchHand")
+             or pitcher_stats.get("throws") or "R").upper()[:1]
+    if phand not in ("L", "R"):
+        phand = "R"
+
+    # Batter quality — wOBA graded vs the pitcher's hand (platoon split).
+    _pb = {
+        "bats":      (batter_stats.get("fg_bats") or batter_stats.get("bats") or "R"),
+        "fg_woba":   batter_stats.get("fg_woba"),
+        "sv_xwoba":  batter_stats.get("sv_xwoba"),
+        "vs_l_woba": batter_stats.get("vs_l_woba"), "vs_l_pa": batter_stats.get("vs_l_pa"),
+        "vs_r_woba": batter_stats.get("vs_r_woba"), "vs_r_pa": batter_stats.get("vs_r_pa"),
+    }
+    xwoba = _f(platoon_blend_v2(_pb, phand, "woba"), 0.320)
     iso   = _f(batter_stats.get("fg_iso"), 0.150)
     brl_raw = _f(batter_stats.get("sv_brl_pct"), 6.0)
     brl     = brl_raw / 100.0 if brl_raw > 1 else brl_raw
@@ -6008,17 +6024,37 @@ def _damage_score(batter_stats, pitcher_stats):
     return round(max(0.0, min(100.0, 50.0 + score)), 1)
 
 
-def _project_batter_vs_pitcher(batter_stats, pitcher_stats):
+def _project_batter_vs_pitcher(batter_stats, pitcher_stats, pitcher_hand=None):
     """Return per-game probabilities (1+ hit, 2+ TB, HR, 1+ RBI) + projected
     totals.  Calibrated so elite hitter vs weak SP ≈ 80% hit, 15-25% HR;
     below-average batter ≈ 50% hit, 3-6% HR.  These are per-game odds,
-    not per-PA."""
+    not per-PA.
+
+    Platoon-aware: the batter's contact (xBA) and overall quality (xwOBA) are
+    graded vs the pitcher's handedness before the per-PA rates are derived."""
     def _f(v, d=0.0):
         try: return float(v)
         except Exception: return d
 
-    xba   = _f(batter_stats.get("sv_xba")   or batter_stats.get("fg_avg"),  0.250)
-    xwoba = _f(batter_stats.get("sv_xwoba") or batter_stats.get("fg_woba"), 0.320)
+    phand = (pitcher_hand or pitcher_stats.get("pitchHand")
+             or pitcher_stats.get("throws") or "R").upper()[:1]
+    if phand not in ("L", "R"):
+        phand = "R"
+    _pb = {
+        "bats":      (batter_stats.get("fg_bats") or batter_stats.get("bats") or "R"),
+        "fg_avg":    batter_stats.get("fg_avg"),
+        "fg_woba":   batter_stats.get("fg_woba"),
+        "sv_xwoba":  batter_stats.get("sv_xwoba"),
+        "vs_l_avg":  batter_stats.get("vs_l_avg"),  "vs_l_pa": batter_stats.get("vs_l_pa"),
+        "vs_r_avg":  batter_stats.get("vs_r_avg"),  "vs_r_pa": batter_stats.get("vs_r_pa"),
+        "vs_l_woba": batter_stats.get("vs_l_woba"),
+        "vs_r_woba": batter_stats.get("vs_r_woba"),
+    }
+    # Platoon-graded xBA / xwOBA (fall back to raw values if blend returns 0).
+    xba   = _f(platoon_blend_v2(_pb, phand, "avg"),
+               _f(batter_stats.get("sv_xba") or batter_stats.get("fg_avg"), 0.250))
+    xwoba = _f(platoon_blend_v2(_pb, phand, "woba"),
+               _f(batter_stats.get("sv_xwoba") or batter_stats.get("fg_woba"), 0.320))
     iso   = _f(batter_stats.get("fg_iso"),  0.140)
     brl_r = _f(batter_stats.get("sv_brl_pct"), 6.0)
     brl   = brl_r / 100.0 if brl_r > 1 else brl_r
@@ -6101,14 +6137,24 @@ def _project_batter_vs_pitcher(batter_stats, pitcher_stats):
     }
 
 
-def _pitcher_prop_vulnerability_from_inputs(p_stats, opposing_lineup, park_factor=1.0):
-    """Build Sprint 3.2 pitcher prop vulnerability profile from pitcher+opponent context."""
+def _pitcher_prop_vulnerability_from_inputs(p_stats, opposing_lineup, park_factor=1.0,
+                                            pitcher_hand=None):
+    """Build Sprint 3.2 pitcher prop vulnerability profile from pitcher+opponent context.
+
+    Platoon- and lineup-position-aware: each opposing hitter's contact is graded
+    vs the pitcher's handedness and weighted by lineup-slot PA share, so the
+    'lineup weakness' read reflects who the pitcher actually faces most."""
     def _f(v, d=0.0):
         try:
             f = float(v)
             return f if f == f else d
         except Exception:
             return d
+
+    phand = (pitcher_hand or p_stats.get("pitchHand")
+             or p_stats.get("throws") or "R").upper()[:1]
+    if phand not in ("L", "R"):
+        phand = "R"
 
     bats = []
     for b in opposing_lineup or []:
@@ -6120,14 +6166,26 @@ def _pitcher_prop_vulnerability_from_inputs(p_stats, opposing_lineup, park_facto
     park = _f(park_factor, 1.0)
     park = max(0.90, min(1.20, park))
 
-    avg_values = []
-    hh_values = []
-    for b in bats:
-        avg_values.append(_f(b.get("fg_avg") or b.get("avg"), 0.245))
-        hh_values.append(_f(b.get("sv_hh_pct"), 37.0))
+    avg_acc = hh_acc = w_acc = 0.0
+    for idx, b in enumerate(bats):
+        _pb = {
+            "bats":      (b.get("fg_bats") or b.get("bats") or "R"),
+            "fg_avg":    b.get("fg_avg") or b.get("avg"),
+            "fg_woba":   b.get("fg_woba"), "sv_xwoba": b.get("sv_xwoba"),
+            "vs_l_avg":  b.get("vs_l_avg"), "vs_r_avg": b.get("vs_r_avg"),
+            "vs_l_pa":   b.get("vs_l_pa"), "vs_r_pa": b.get("vs_r_pa"),
+        }
+        avg_b = _f(platoon_blend_v2(_pb, phand, "avg"),
+                   _f(b.get("fg_avg") or b.get("avg"), 0.245))
+        hh_b  = _f(b.get("sv_hh_pct"), 37.0)
+        # Lineup-slot PA weight for the first 9; flat for any roster-fallback tail.
+        w = _LINEUP_PA_WEIGHTS[idx] if idx < len(_LINEUP_PA_WEIGHTS) else 3.5
+        avg_acc += avg_b * w
+        hh_acc  += hh_b  * w
+        w_acc   += w
 
-    opp_avg = sum(avg_values) / len(avg_values) if avg_values else 0.245
-    opp_hh = sum(hh_values) / len(hh_values) if hh_values else 37.0
+    opp_avg = (avg_acc / w_acc) if w_acc else 0.245
+    opp_hh = (hh_acc / w_acc) if w_acc else 37.0
 
     whip = _f(p_stats.get("fg_whip") or p_stats.get("whip"), 1.25)
     era = _f(p_stats.get("fg_era") or p_stats.get("era"), 4.20)
@@ -6182,6 +6240,8 @@ def _pitcher_prop_vulnerability_from_inputs(p_stats, opposing_lineup, park_facto
             "exploitable": tb_exploitable,
             "context": "hard_hit_pct_allowed_proxy",
         },
+        "pitcher_hand": phand,
+        "opp_avg_platoon": round(opp_avg, 3),
     }
 
 
