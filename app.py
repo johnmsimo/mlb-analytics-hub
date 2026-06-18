@@ -18609,6 +18609,161 @@ def api_build_parlay():
         return jsonify({'success': False, 'error': str(ex), 'parlay': None}), 500
 
 
+# ── Auto parlay risk tiers ───────────────────────────────────────────────────
+# Auto-generate Conservative / Moderate / Aggressive parlays from the model's
+# own prop pool (Bobby's Bets "data-backed parlays across risk tiers"). Reuses
+# the cached props-scan; each tier picks one leg per game so legs stay roughly
+# independent and the combined-probability product is a fair estimate.
+def _american_to_decimal(price):
+    try:
+        p = float(price)
+    except (TypeError, ValueError):
+        return None
+    if p > 0:
+        return 1.0 + p / 100.0
+    if p < 0:
+        return 1.0 + 100.0 / abs(p)
+    return None
+
+
+def _decimal_to_american(dec):
+    try:
+        d = float(dec)
+    except (TypeError, ValueError):
+        return None
+    if d <= 1.0:
+        return None
+    return round((d - 1.0) * 100.0) if d >= 2.0 else round(-100.0 / (d - 1.0))
+
+
+_PARLAY_PROP_MARKETS = {
+    'batter_hits', 'batter_total_bases', 'batter_home_runs', 'batter_rbis',
+    'batter_runs_scored', 'batter_hits_runs_rbis', 'pitcher_strikeouts',
+}
+
+
+def _parlay_leg_candidates(props):
+    """Distinct candidate legs from the scan props: the best (highest model
+    probability) leg per (player, market, line), restricted to player-prop
+    markets that carry a model probability. Each leg uses a real book price when
+    odds are available, else a model-implied price so payout/EV still compute."""
+    best = {}
+    for p in props or []:
+        mk = p.get('marketKey')
+        if mk not in _PARLAY_PROP_MARKETS:
+            continue
+        try:
+            prob = float(p.get('adjProb'))
+        except (TypeError, ValueError):
+            continue
+        if not (0.0 < prob < 1.0):
+            continue
+        key = (p.get('player'), mk, p.get('line'))
+        cur = best.get(key)
+        if cur is not None and prob <= cur['winProb']:
+            continue
+        price = p.get('bestOverPrice') or p.get('bestAvailablePrice') or p.get('marketPrice')
+        price_source = 'market'
+        if price is None:
+            price = _prob_to_american(prob)
+            price_source = 'model'
+        best[key] = {
+            'player': p.get('player'), 'playerId': p.get('playerId'),
+            'team': p.get('team'), 'opp': p.get('opp'),
+            'gamePk': p.get('gamePk'), 'matchup': p.get('matchup'),
+            'marketKey': mk, 'marketLabel': _EDGE_MARKET_LABELS.get(mk, mk),
+            'line': p.get('line'), 'side': p.get('recommendedSide') or 'Over',
+            'winProb': round(prob, 4),
+            'price': price, 'priceSource': price_source,
+            'edge': p.get('edge'), 'evPct': p.get('evPct'),
+            'hubRating': p.get('hubRating'), 'grade': _edge_letter_grade(p.get('edge')),
+        }
+    return list(best.values())
+
+
+def _select_parlay_legs(cands, n, min_prob, max_prob, rank_key):
+    pool = [c for c in cands if min_prob <= c['winProb'] <= max_prob]
+    pool.sort(key=rank_key)
+    chosen, used_games = [], set()
+    for c in pool:
+        gp = c.get('gamePk')
+        if gp in used_games:          # one leg per game → legs stay ~independent
+            continue
+        chosen.append(c)
+        used_games.add(gp)
+        if len(chosen) >= n:
+            break
+    return chosen
+
+
+def _build_parlay_from_legs(legs, name, risk):
+    prob, dec, priced = 1.0, 1.0, True
+    for l in legs:
+        prob *= l['winProb']
+        d = _american_to_decimal(l['price'])
+        if d is None:
+            priced = False
+        else:
+            dec *= d
+    priced = priced and bool(legs)
+    return {
+        'name': name,
+        'risk': risk,
+        'legCount': len(legs),
+        'legs': legs,
+        'combinedWinProb': round(prob, 4) if legs else 0.0,
+        'decimalOdds': round(dec, 3) if priced else None,
+        'americanOdds': _decimal_to_american(dec) if priced else None,
+        'payoutPer100': round((dec - 1.0) * 100.0, 2) if priced else None,
+        # EV per unit staked = P(win) * decimal_payout - 1. Meaningfully positive
+        # only when real book prices beat the model; ~0 on model-implied prices.
+        'evPct': round(prob * dec - 1.0, 4) if priced else None,
+    }
+
+
+def _auto_parlays_payload(date_str):
+    base = _props_scan_today_payload(date_str)
+    cands = _parlay_leg_candidates(base.get('props', []))
+
+    def _value(c):
+        if c.get('edge') is not None:
+            return float(c['edge'])
+        if c.get('evPct') is not None:
+            return float(c['evPct'])
+        return (float(c.get('hubRating') or 0)) / 100.0
+
+    conservative = _select_parlay_legs(cands, 3, 0.68, 0.999, lambda c: -c['winProb'])
+    moderate     = _select_parlay_legs(cands, 3, 0.55, 0.85,  lambda c: (-_value(c), -c['winProb']))
+    aggressive   = _select_parlay_legs(cands, 4, 0.42, 0.72,  lambda c: (-_value(c), -(float(c.get('hubRating') or 0))))
+
+    return {
+        'success': True,
+        'date': date_str,
+        'candidateCount': len(cands),
+        'cached': base.get('cached', False),
+        'computing': base.get('computing', False),
+        'message': base.get('message'),
+        'generatedAt': datetime.now(timezone.utc).isoformat(),
+        'parlays': [
+            _build_parlay_from_legs(conservative, 'Conservative', 'conservative'),
+            _build_parlay_from_legs(moderate, 'Moderate', 'moderate'),
+            _build_parlay_from_legs(aggressive, 'Aggressive', 'aggressive'),
+        ],
+    }
+
+
+@app.route('/api/parlay/auto')
+def api_parlay_auto():
+    """Auto-generated Conservative/Moderate/Aggressive parlays from today's
+    model prop pool. Param: date."""
+    date_str = request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
+    try:
+        return jsonify(_auto_parlays_payload(date_str))
+    except Exception as ex:
+        print(f'[api_parlay_auto] {traceback.format_exc()}')
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
 @app.route('/api/parlay/send-to-tracker', methods=['POST'])
 def api_parlay_to_tracker():
     """Send a parlay to the daily tracker."""
