@@ -1590,23 +1590,128 @@ STADIUM_COORDS = {
 }
 
 # Domed / retractable-roof stadiums (weather is always INDOOR/controlled)
-# ── Team Defensive Metrics (UZR) ────────────────────────────────────────────
-# UZR (Ultimate Zone Rating) per team from FanGraphs team defense.
-# Positive = above-average defense; Negative = below-average.
-# Updated at startup via _load_fg_data(); default 0.0 = league average.
-# Source: FanGraphs /leaders.aspx?pos=all&stats=fld&lg=all&qual=0&type=1
-_TEAM_UZR: dict[int, float] = {}  # team_id → UZR (populated at startup)
-_LEAGUE_UZR_AVG = 0.0
+# ── Team Defensive Metrics (Statcast Outs Above Average) ────────────────────
+# Real team defense from Baseball Savant's OAA leaderboard. Positive OAA =
+# better-than-average defense (suppresses hits on balls in play); negative =
+# porous defense (inflates them). Populated at startup by _load_team_defense();
+# an empty cache => every defense factor falls back to neutral (1.0).
+#
+# (Replaces a dead UZR stub: _TEAM_UZR was declared but never populated and
+#  _team_uzr_hit_mult was never called, so team defense had zero effect on any
+#  projection. This wires a live signal into the BABIP-dependent props.)
+_team_def_lock = threading.RLock()   # reentrant: rankings route holds it while calling _team_def_hit_mult
+_TEAM_DEFENSE: dict[int, dict] = {}   # team_id -> {team, oaa, oaa_rhh, oaa_lhh, rank, success}
+_TEAM_DEF_STATS = {"mean": 0.0, "std": 1.0, "n": 0, "season": None}
+_team_def_loaded = False
 
-def _team_uzr_hit_mult(fielding_team_id: int) -> float:
+
+def _load_team_defense():
+    """Load Statcast team Outs Above Average from Baseball Savant.
+
+    Builds _TEAM_DEFENSE per team_id plus the league mean/std used to z-score
+    each team's OAA. Z-scoring keeps the factor scale-invariant: raw OAA grows
+    in magnitude over the season, but its standardized value stays comparable.
+    Graceful no-op on fetch failure — the defense factor then stays neutral.
     """
-    Convert team UZR to a hit-suppression multiplier applied to p_hit in sim.
-    Research basis: +10 UZR ≈ −0.010 BABIP (Lichtman 2010, FanGraphs team def).
-    Effect clamped to ±6% to avoid overweighting in small samples.
+    global _team_def_loaded
+    url_t = ("https://baseballsavant.mlb.com/leaderboard/outs_above_average?"
+             "type=Fielding_Team&startYear={year}&endYear={year}&split=no&team="
+             "&range=year&min=q&pos=&roles=&viz=show&csv=true")
+    try:
+        rows, season = _fetch_sv_csv_by_season(url_t, _season_candidates(depth=3))
+    except Exception as ex:
+        logging.warning(f"[TeamDefense] OAA fetch error: {ex}")
+        return
+    if not rows:
+        logging.warning("[TeamDefense] OAA leaderboard unavailable — defense factor neutral")
+        return
+    parsed, oaas = {}, []
+    for r in rows:
+        try:
+            tid = int(r.get("team_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not tid:
+            continue
+        oaa = _safe_num(r.get("outs_above_average"), 0.0)
+        parsed[tid] = {
+            "team":    (r.get("team_name") or "").strip(),
+            "oaa":     oaa,
+            "oaa_rhh": _safe_num(r.get("outs_above_average_rhh"), 0.0),
+            "oaa_lhh": _safe_num(r.get("outs_above_average_lhh"), 0.0),
+            "success": (r.get("actual_success_rate_formatted") or "").strip(),
+        }
+        oaas.append(oaa)
+    if not parsed:
+        return
+    n = len(oaas)
+    mean = sum(oaas) / n
+    std = max(1e-6, (sum((x - mean) ** 2 for x in oaas) / n) ** 0.5) if n > 1 else 1.0
+    for rank, (tid, _v) in enumerate(sorted(parsed.items(), key=lambda kv: -kv[1]["oaa"]), start=1):
+        parsed[tid]["rank"] = rank
+    with _team_def_lock:
+        _TEAM_DEFENSE.clear(); _TEAM_DEFENSE.update(parsed)
+        _TEAM_DEF_STATS.update({"mean": mean, "std": std, "n": n, "season": season})
+        _team_def_loaded = True
+    logging.info(f"[TeamDefense] {n} teams OAA loaded (season={season}, mean={mean:.1f}, std={std:.1f})")
+
+
+def _team_def_hit_mult(fielding_team_id) -> float:
+    """Hit-suppression multiplier from team OAA for BABIP-dependent props
+    (hits/TB/RBI/runs). Uses a z-score so it's scale-invariant across the
+    season: ~+1 SD of defense => -2% on contact props, clamped to ±6%. HR props
+    are intentionally NOT adjusted — home runs don't depend on fielding.
+    Returns 1.0 (neutral) when the team is unknown or data hasn't loaded.
     """
-    uzr = _TEAM_UZR.get(fielding_team_id, _LEAGUE_UZR_AVG)
-    babip_delta = (uzr - _LEAGUE_UZR_AVG) / 10.0 * 0.010
-    return min(1.06, max(0.94, 1.0 - babip_delta * 3.0))
+    if not fielding_team_id:
+        return 1.0
+    with _team_def_lock:
+        rec = _TEAM_DEFENSE.get(int(fielding_team_id))
+        mean, std = _TEAM_DEF_STATS["mean"], _TEAM_DEF_STATS["std"]
+    if not rec:
+        return 1.0
+    z = (rec.get("oaa", mean) - mean) / (std or 1.0)
+    return min(1.06, max(0.94, 1.0 - z * 0.02))
+
+
+# pitcher_id -> (date_iso, fielding_team_id); the fielding team for a batter is
+# whoever the opposing pitcher plays for. Resolved via the MLB people API and
+# cached for the day so it costs one call per starter.
+_pitcher_team_lock = threading.Lock()
+_pitcher_team_cache: dict = {}
+
+
+def _fielding_team_for_pitcher(pitcher_id):
+    if not pitcher_id:
+        return None
+    try:
+        pid = int(pitcher_id)
+    except (TypeError, ValueError):
+        return None
+    today = datetime.now(ET).date().isoformat()
+    with _pitcher_team_lock:
+        hit = _pitcher_team_cache.get(pid)
+        if hit and hit[0] == today:
+            return hit[1]
+    team_id = None
+    try:
+        r = requests.get(f"{MLB_API}/people/{pid}?hydrate=currentTeam", timeout=8)
+        r.raise_for_status()
+        ppl = r.json().get("people", [])
+        if ppl:
+            team_id = (ppl[0].get("currentTeam") or {}).get("id")
+    except Exception:
+        team_id = None
+    with _pitcher_team_lock:
+        _evict_if_large(_pitcher_team_cache, 400)
+        _pitcher_team_cache[pid] = (today, team_id)
+    return team_id
+
+
+def _def_factor_for_pitcher(pitcher_id) -> float:
+    """Convenience: resolve the opposing pitcher's team and return its
+    hit-suppression multiplier. Neutral (1.0) on any miss."""
+    return _team_def_hit_mult(_fielding_team_for_pitcher(pitcher_id))
 
 DOME_VENUES = {
     12,    # Tropicana Field (fixed dome)
@@ -2435,6 +2540,7 @@ def _launch_startup_loaders():
     threading.Thread(target=_load_batter_profiles, daemon=True).start()
     threading.Thread(target=_prewarm_arsenal_priors,   daemon=True).start()
     threading.Thread(target=_prewarm_pitcher_statcast, daemon=True).start()
+    threading.Thread(target=_load_team_defense,        daemon=True).start()
 
 
 def _wait_for_fg_data(timeout_sec=30):
@@ -7139,6 +7245,7 @@ def api_bvp_projection(batter_id, pitcher_id):
             batter_obj, pitcher_name, fg_pit, sv_pit,
             park_factor, weather, pitcher_hand,
             opp_pitcher_id=pitcher_id, bvp=bvp_data, form=batter_form,
+            def_factor=_def_factor_for_pitcher(pitcher_id),
         )
 
         # ── 7. Calibrated game probs via _project_batter_vs_pitcher ─────────
@@ -9947,6 +10054,7 @@ def _batx_for_sim(batter, opp_pitcher, park, weather):
             park, weather or {}, pitcher_hand=pitcher_hand,
             opp_pitcher_id=opp_pid,
             form=form, bvp=bvp,
+            def_factor=_def_factor_for_pitcher(opp_pid),
         )
         adj = proj.get('adjustments', {})
         comp = _clamp(proj.get('composite', 1.0), 0.70, 1.30)
@@ -16076,6 +16184,36 @@ def api_hot_hand_today():
         return jsonify({'success': False, 'error': str(ex)}), 500
 
 
+@app.route('/api/defense/rankings')
+def api_defense_rankings():
+    """Statcast team Outs Above Average rankings + the hit-suppression
+    multiplier each team applies to opposing batters' contact props."""
+    with _team_def_lock:
+        stats = dict(_TEAM_DEF_STATS)
+        teams = []
+        for tid, rec in _TEAM_DEFENSE.items():
+            teams.append({
+                'teamId': tid,
+                'team': rec.get('team'),
+                'oaa': rec.get('oaa'),
+                'oaaVsRHH': rec.get('oaa_rhh'),
+                'oaaVsLHH': rec.get('oaa_lhh'),
+                'successRate': rec.get('success'),
+                'rank': rec.get('rank'),
+                'hitMult': round(_team_def_hit_mult(tid), 4),
+            })
+    teams.sort(key=lambda x: x.get('rank') or 999)
+    return jsonify({
+        'success': True,
+        'loaded': _team_def_loaded,
+        'season': stats.get('season'),
+        'leagueMeanOaa': round(stats.get('mean', 0.0), 2),
+        'oaaStd': round(stats.get('std', 0.0), 2),
+        'count': len(teams),
+        'teams': teams,
+    })
+
+
 @app.route('/api/tracker/today')
 def api_tracker_today():
     date_str = request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
@@ -19217,7 +19355,7 @@ _LEAGUE_BRL_PCT = 0.063   # 6.3 %
 def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_sv,
                           park_factor, weather, pitcher_hand='R',
                           opp_pitcher_id=None,
-                          form=None, bvp=None, travel=None):
+                          form=None, bvp=None, travel=None, def_factor=1.0):
     """
     BAT X-style projection engine with named component weights (BATX_WEIGHTS).
     Signature is backwards-compatible with _project_batter; adds optional
@@ -19437,8 +19575,13 @@ def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_s
     ops_ratio = ops / max(season_ops, 0.400)
     hr_r_adj  = hr_r * ops_ratio * _clamp(brl_edge + 1.0, 0.70, 1.40)
 
-    hits_proj = round(max(0.05, avg_blend * exp_pa * composite * wx_mult), 3)
-    tb_proj   = round(max(0.08, slg       * exp_pa * composite * wx_mult), 3)
+    # Opponent team-defense factor (OAA-based). Applies to BABIP-dependent
+    # props only — better defense converts more balls in play into outs. HR is
+    # excluded (fielding can't take back a ball over the fence).
+    def_factor = _clamp(float(def_factor or 1.0), 0.90, 1.10)
+
+    hits_proj = round(max(0.05, avg_blend * exp_pa * composite * wx_mult * def_factor), 3)
+    tb_proj   = round(max(0.08, slg       * exp_pa * composite * wx_mult * def_factor), 3)
 
     hr_pf   = _clamp(park_factor * 1.08, 0.80, 1.35)
     pull_park_boost = 1.0 + (max(0.0, pull_edge) * max(0.0, park_factor - 1.0) * 1.25)
@@ -19448,10 +19591,10 @@ def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_s
     ), 4)
 
     slot_rbi_bonus = max(0.8, 1.0 + (4 - abs(slot - 4)) * 0.03)
-    rbi_proj = round(max(0.05, rbi_r * exp_pa * composite * slot_rbi_bonus), 3)
+    rbi_proj = round(max(0.05, rbi_r * exp_pa * composite * slot_rbi_bonus * def_factor), 3)
 
     slot_r_bonus = max(0.8, 1.1 - abs(slot - 1.5) * 0.025)
-    r_proj   = round(max(0.04, r_r * exp_pa * composite * slot_r_bonus), 3)
+    r_proj   = round(max(0.04, r_r * exp_pa * composite * slot_r_bonus * def_factor), 3)
 
     hrr_proj = round(hits_proj + r_proj + rbi_proj, 3)
 
@@ -19466,6 +19609,7 @@ def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_s
         "split_avg":   round(avg_blend, 3),
         "split_ops":   round(ops, 3),
         "platoon_note": _batter_hand_note(batter, pitcher_hand),
+        "defFactor":   round(def_factor, 4),
         # BAT X diagnostics
         "composite":   round(composite, 4),
         "adjustments": {
@@ -19879,6 +20023,8 @@ def api_props_projections(game_pk):
         def enrich_batters(batters, opp_pfg, opp_psv, opp_pst, opp_abbr, opp_pname, opp_pid, own_abbr='', lineup_confirmed=False, team_travel=None):
             opp_hand = (opp_pst.get("pitchHand") or "R").upper()
             batters_top = list((batters or [])[:9])
+            # Opposing team's defense factor is constant for this side — resolve once.
+            _side_def_factor = _def_factor_for_pitcher(opp_pid)
 
             def _enrich_one(b):
                 name = b.get("name", "")
@@ -19907,6 +20053,7 @@ def api_props_projections(game_pk):
                     opp_pitcher_id=opp_pid,
                     form=form, bvp=bvp,
                     travel=team_travel,
+                    def_factor=_side_def_factor,
                 )
                 slot = int(b.get("slot") or 9)
                 xgb_hit_p = None
