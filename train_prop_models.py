@@ -33,11 +33,12 @@ Prerequisites:
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import os
 import warnings
-from datetime import datetime
-from typing import Optional
+from datetime import datetime, timedelta
+from typing import Callable, Optional
 
 import joblib
 import numpy as np
@@ -432,13 +433,40 @@ def _safe_concat(frames: list) -> pd.DataFrame:
     return pd.concat(valid, ignore_index=True) if valid else pd.DataFrame()
 
 
-def fetch_all_seasons(seasons: list[int]) -> dict[str, pd.DataFrame]:
+def _emit(progress_cb: Optional[Callable], phase: str, log_line: Optional[str] = None) -> None:
+    """Report a phase/log line to the optional progress callback (and stdout)."""
+    if log_line:
+        print(log_line)
+    elif phase:
+        print(phase)
+    if progress_cb:
+        try:
+            progress_cb(phase, log_line)
+        except Exception:
+            pass
+
+
+def _statcast_windows(season: int, days: int = 16):
+    """Yield (start, end) date-string windows spanning a season, so Statcast is
+    pulled in memory-bounded chunks instead of one multi-GB season-wide call."""
+    start = datetime(season, 3, 20)
+    final = datetime(season, 10, 5)
+    cur = start
+    while cur <= final:
+        wend = min(cur + timedelta(days=days - 1), final)
+        yield cur.strftime("%Y-%m-%d"), wend.strftime("%Y-%m-%d")
+        cur = wend + timedelta(days=1)
+
+
+def fetch_all_seasons(seasons: list[int],
+                      progress_cb: Optional[Callable] = None) -> dict[str, pd.DataFrame]:
     """
     Fetch Statcast + FanGraphs data for all training seasons.
     Returns a dict with keys: sv_bat, sv_pit, fg_bat, fg_pit.
     """
     pb = _load_pybaseball()
-    print(f"\n══ Fetching season data: {seasons} ══")
+    _emit(progress_cb, "Fetching Statcast + FanGraphs season stats…",
+          f"══ Fetching season stats: {seasons} ══")
 
     def _try(fn, *args, label="", **kwargs):
         try:
@@ -467,94 +495,127 @@ def fetch_all_seasons(seasons: list[int]) -> dict[str, pd.DataFrame]:
     return {"sv_bat": sv_bat, "sv_pit": sv_pit, "fg_bat": fg_bat, "fg_pit": fg_pit}
 
 
-def fetch_game_logs(seasons: list[int]) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Pull raw Statcast and aggregate to per-game batter + pitcher outcome rows."""
+def _aggregate_statcast_chunk(sc: pd.DataFrame, season: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Compute event flags and aggregate one raw-Statcast chunk to per-game
+    batter and pitcher outcome rows. Kept separate so callers can free the raw
+    (multi-100k-row) chunk immediately after aggregating it. A game never spans
+    two date windows, so per-window aggregation is exact."""
+    sc = sc.dropna(subset=["batter", "pitcher", "game_pk"])
+    if len(sc) == 0:
+        return pd.DataFrame(), pd.DataFrame()
+
+    # ─ Event flags ────────────────────────────────────────────────────────────
+    sc["is_hit"]    = sc["events"].isin(["single","double","triple","home_run"]).astype(int)
+    sc["is_ab"]     = sc["events"].isin([
+        "single","double","triple","home_run","strikeout","field_out",
+        "grounded_into_double_play","double_play","force_out",
+        "fielders_choice","fielders_choice_out","strikeout_double_play",
+    ]).astype(int)
+    sc["is_pa"]     = (~sc["events"].isna()).astype(int)
+    sc["is_k"]      = sc["events"].isin(["strikeout","strikeout_double_play"]).astype(int)
+    sc["is_hr"]     = (sc["events"] == "home_run").astype(int)
+    sc["is_double"] = (sc["events"] == "double").astype(int)
+    sc["is_triple"] = (sc["events"] == "triple").astype(int)
+    sc["tb"]        = sc["is_hit"] + sc["is_hr"] + sc["is_double"] + sc["is_triple"]
+
+    # ─ Batter game aggregation ───────────────────────────────────────────────
+    bat_agg = (
+        sc[sc["is_pa"] == 1]
+        .groupby(["game_pk", "game_date", "batter"])
+        .agg(
+            hits=("is_hit",  "sum"),
+            ab=("is_ab",   "sum"),
+            pa=("is_pa",   "sum"),
+            hr=("is_hr",   "sum"),
+            tb=("tb",      "sum"),
+            home_team=("home_team", "first"),
+            away_team=("away_team", "first"),
+            p_throws=("p_throws",   "first"),
+            stand=("stand",         "first"),
+        )
+        .reset_index()
+    )
+    # RBI requires retrosheet/baseball-reference; approximated from events
+    if "post_bat_score" in sc.columns and "bat_score" in sc.columns:
+        sc["rbi_est"] = (sc["post_bat_score"] - sc["bat_score"]).clip(0, 4)
+        rbi_agg = (
+            sc[sc["is_ab"] == 1]
+            .groupby(["game_pk","game_date","batter"])
+            .agg(rbi=("rbi_est","sum"))
+            .reset_index()
+        )
+        bat_agg = bat_agg.merge(rbi_agg, on=["game_pk","game_date","batter"], how="left")
+        bat_agg["rbi"] = bat_agg["rbi"].fillna(0)
+    else:
+        bat_agg["rbi"] = 0
+
+    # Binary targets
+    bat_agg["hit_over_0.5"] = (bat_agg["hits"] >= 1).astype(int)
+    bat_agg["hr_over_0.5"]  = (bat_agg["hr"]   >= 1).astype(int)
+    bat_agg["tb_over_1.5"]  = (bat_agg["tb"]   >= 2).astype(int)
+    bat_agg["rbi_over_0.5"] = (bat_agg["rbi"]  >= 1).astype(int)
+    bat_agg["season"]       = season
+
+    # ─ Pitcher game aggregation ───────────────────────────────────────────────
+    pit_agg = (
+        sc[sc["is_pa"] == 1]
+        .groupby(["game_pk","game_date","pitcher"])
+        .agg(
+            ks=("is_k", "sum"),
+            bf=("is_pa","sum"),
+            home_team=("home_team","first"),
+            away_team=("away_team","first"),
+        )
+        .reset_index()
+    )
+    pit_agg["k_over_3.5"] = (pit_agg["ks"] >= 4).astype(int)
+    pit_agg["k_over_4.5"] = (pit_agg["ks"] >= 5).astype(int)
+    pit_agg["k_over_5.5"] = (pit_agg["ks"] >= 6).astype(int)
+    pit_agg["season"]      = season
+
+    return bat_agg, pit_agg
+
+
+def fetch_game_logs(seasons: list[int],
+                    progress_cb: Optional[Callable] = None) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Pull raw Statcast and aggregate to per-game batter + pitcher outcome rows.
+
+    Statcast is fetched in ~2-week windows and aggregated immediately, so peak
+    memory is bounded to a single window (~tens of thousands of rows) rather
+    than a whole season (~700k+ rows × 90 columns) — which previously risked
+    OOM on the 4GB box and gave no progress feedback for many minutes."""
     pb = _load_pybaseball()
     batter_frames, pitcher_frames = [], []
-    for season in seasons:
-        start = f"{season}-03-20"
-        end   = f"{season}-10-05"
-        print(f"  Fetching Statcast game logs {season} ({start} → {end})...")
+
+    windows = [(s, ws, we) for s in seasons for (ws, we) in _statcast_windows(s)]
+    total_w = len(windows) or 1
+
+    for i, (season, start, end) in enumerate(windows, 1):
+        _emit(progress_cb,
+              f"Fetching Statcast {start} → {end}  ({i}/{total_w})",
+              f"  [{i}/{total_w}] Statcast {start} → {end}…")
         try:
             sc = pb.statcast(start_dt=start, end_dt=end)
-            sc = sc.dropna(subset=["batter", "pitcher", "game_pk"])
         except Exception as e:
-            print(f"  ⚠️  Statcast {season} failed: {e}")
+            _emit(progress_cb, None, f"  ⚠️  Statcast {start}→{end} failed: {e}")
             continue
+        if sc is None or len(sc) == 0:
+            continue
+        try:
+            bat_agg, pit_agg = _aggregate_statcast_chunk(sc, season)
+        finally:
+            del sc
+            gc.collect()
+        if len(bat_agg):
+            batter_frames.append(bat_agg)
+        if len(pit_agg):
+            pitcher_frames.append(pit_agg)
 
-        # ─ Event flags ────────────────────────────────────────────────────────────
-        sc["is_hit"]    = sc["events"].isin(["single","double","triple","home_run"]).astype(int)
-        sc["is_ab"]     = sc["events"].isin([
-            "single","double","triple","home_run","strikeout","field_out",
-            "grounded_into_double_play","double_play","force_out",
-            "fielders_choice","fielders_choice_out","strikeout_double_play",
-        ]).astype(int)
-        sc["is_pa"]     = (~sc["events"].isna()).astype(int)
-        sc["is_k"]      = sc["events"].isin(["strikeout","strikeout_double_play"]).astype(int)
-        sc["is_hr"]     = (sc["events"] == "home_run").astype(int)
-        sc["is_double"] = (sc["events"] == "double").astype(int)
-        sc["is_triple"] = (sc["events"] == "triple").astype(int)
-        sc["tb"]        = sc["is_hit"] + sc["is_hr"] + sc["is_double"] + sc["is_triple"]
-
-        # ─ Batter game aggregation ───────────────────────────────────────────────
-        bat_agg = (
-            sc[sc["is_pa"] == 1]
-            .groupby(["game_pk", "game_date", "batter"])
-            .agg(
-                hits=("is_hit",  "sum"),
-                ab=("is_ab",   "sum"),
-                pa=("is_pa",   "sum"),
-                hr=("is_hr",   "sum"),
-                tb=("tb",      "sum"),
-                home_team=("home_team", "first"),
-                away_team=("away_team", "first"),
-                p_throws=("p_throws",   "first"),
-                stand=("stand",         "first"),
-            )
-            .reset_index()
-        )
-        # RBI requires retrosheet/baseball-reference; approximated from events
-        rbi_flags = sc[sc["estimated_ba_using_speedangle"].notna()][["game_pk","game_date","batter"]].copy()
-        if "post_bat_score" in sc.columns and "bat_score" in sc.columns:
-            sc["rbi_est"] = (sc["post_bat_score"] - sc["bat_score"]).clip(0, 4)
-            rbi_agg = (
-                sc[sc["is_ab"] == 1]
-                .groupby(["game_pk","game_date","batter"])
-                .agg(rbi=("rbi_est","sum"))
-                .reset_index()
-            )
-            bat_agg = bat_agg.merge(rbi_agg, on=["game_pk","game_date","batter"], how="left")
-            bat_agg["rbi"] = bat_agg["rbi"].fillna(0)
-        else:
-            bat_agg["rbi"] = 0
-
-        # Binary targets
-        bat_agg["hit_over_0.5"] = (bat_agg["hits"] >= 1).astype(int)
-        bat_agg["hr_over_0.5"]  = (bat_agg["hr"]   >= 1).astype(int)
-        bat_agg["tb_over_1.5"]  = (bat_agg["tb"]   >= 2).astype(int)
-        bat_agg["rbi_over_0.5"] = (bat_agg["rbi"]  >= 1).astype(int)
-        bat_agg["season"]       = season
-        batter_frames.append(bat_agg)
-
-        # ─ Pitcher game aggregation ───────────────────────────────────────────────
-        pit_agg = (
-            sc[sc["is_pa"] == 1]
-            .groupby(["game_pk","game_date","pitcher"])
-            .agg(
-                ks=("is_k", "sum"),
-                bf=("is_pa","sum"),
-                home_team=("home_team","first"),
-                away_team=("away_team","first"),
-            )
-            .reset_index()
-        )
-        pit_agg["k_over_3.5"] = (pit_agg["ks"] >= 4).astype(int)
-        pit_agg["k_over_4.5"] = (pit_agg["ks"] >= 5).astype(int)
-        pit_agg["k_over_5.5"] = (pit_agg["ks"] >= 6).astype(int)
-        pit_agg["season"]      = season
-        pitcher_frames.append(pit_agg)
-
-    return _safe_concat(batter_frames), _safe_concat(pitcher_frames)
+    bg_all = _safe_concat(batter_frames)
+    pg_all = _safe_concat(pitcher_frames)
+    _emit(progress_cb, "Statcast game logs assembled",
+          f"  Batter game rows: {len(bg_all):,}  Pitcher game rows: {len(pg_all):,}")
+    return bg_all, pg_all
 
 
 # ═════════════════════════════════════════════════════════════════════
@@ -882,8 +943,9 @@ def train_one_market(
 # ═════════════════════════════════════════════════════════════════════
 
 def train_all(
-    markets:    Optional[list[str]] = None,
-    seasons:    Optional[list[int]] = None,
+    markets:     Optional[list[str]] = None,
+    seasons:     Optional[list[int]] = None,
+    progress_cb: Optional[Callable]  = None,
 ) -> dict:
     """
     Train all (or a subset of) prop-type models.
@@ -912,12 +974,12 @@ def train_all(
     print(f"═══════════════════════════════════════════════════════")
 
     # Fetch all data
-    season_data = fetch_all_seasons(seasons)
-    print("\n══ Fetching game logs ══")
-    bg_all, pg_all = fetch_game_logs(seasons)
-    print(f"  Batter game rows: {len(bg_all):,}  Pitcher game rows: {len(pg_all):,}")
+    season_data = fetch_all_seasons(seasons, progress_cb=progress_cb)
+    _emit(progress_cb, "Fetching Statcast game logs…", "══ Fetching game logs ══")
+    bg_all, pg_all = fetch_game_logs(seasons, progress_cb=progress_cb)
 
     # Build feature matrices once per source type
+    _emit(progress_cb, "Building feature matrices…")
     bat_matrix = _safe_concat([
         build_batter_matrix(bg_all, season_data["sv_bat"], season_data["fg_bat"],
                             season_data["sv_pit"], s)
@@ -932,10 +994,11 @@ def train_all(
     results = {}
     feat_cols_map = {}
 
-    for mkey in markets:
+    for mi, mkey in enumerate(markets, 1):
         config = MODEL_CONFIGS[mkey]
         source = config["source"]
         df     = bat_matrix if source == "batter" else pit_matrix
+        _emit(progress_cb, f"Training {mkey}  ({mi}/{len(markets)})")
         result = train_one_market(mkey, df.copy(), config, seasons)
         results[mkey] = result
         if result:
