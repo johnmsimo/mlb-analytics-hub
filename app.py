@@ -996,6 +996,7 @@ BVP_HTML = _read_html_or_fallback('bvp.html')
 VALUE_BETS_HTML = _read_html_or_fallback('value_bets.html')
 NRFI_HTML = _read_html_or_fallback('nrfi.html')
 TOOLS_HTML = _read_html_or_fallback('tools.html')
+EDGE_LAB_HTML = _read_html_or_fallback('edge_lab.html')
 DATA_DIR = os.environ.get('DATA_DIR') or (
     '/app/data' if os.path.isdir('/app/data') else os.path.join(_HERE, 'data')
 )
@@ -4320,6 +4321,10 @@ def tracker_page():
 @app.route('/consistency')
 def consistency_page():
     return CONSISTENCY_HTML
+
+@app.route('/edge-lab')
+def edge_lab_page():
+    return _read_html_or_fallback('edge_lab.html')
 
 @app.route('/batter-vs-pitcher')
 def bvp_page():
