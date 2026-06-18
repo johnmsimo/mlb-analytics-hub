@@ -12418,7 +12418,36 @@ _ODDS_SNAPSHOT_META: dict = {
     'eventsCount': 0,
     'eventsFetched': 0,
     'errors': [],
+    # The Odds API credit usage (from x-requests-* response headers), so we can
+    # confirm caching is actually saving fetch usage.
+    'creditsRemaining': None,
+    'creditsUsed': None,
+    'creditsLastCost': None,
+    'creditsUsedToday': 0,
+    'lastCreditAt': None,
 }
+
+
+def _record_odds_credits(resp):
+    """Capture The Odds API credit headers after a live fetch. Cheap, best-effort."""
+    try:
+        h = resp.headers or {}
+        rem = h.get('x-requests-remaining')
+        used = h.get('x-requests-used')
+        last = h.get('x-requests-last')
+        with _ODDS_CACHE_LOCK:
+            if rem is not None:
+                _ODDS_SNAPSHOT_META['creditsRemaining'] = int(float(rem))
+            if used is not None:
+                _ODDS_SNAPSHOT_META['creditsUsed'] = int(float(used))
+            if last is not None:
+                cost = int(float(last))
+                _ODDS_SNAPSHOT_META['creditsLastCost'] = cost
+                if _ODDS_SNAPSHOT_META.get('date') == _odds_today_key():
+                    _ODDS_SNAPSHOT_META['creditsUsedToday'] = int(_ODDS_SNAPSHOT_META.get('creditsUsedToday') or 0) + cost
+            _ODDS_SNAPSHOT_META['lastCreditAt'] = datetime.now(timezone.utc).isoformat()
+    except Exception:
+        pass
 _ODDS_ALL_MARKETS = (
     'h2h,spreads,totals,h2h_1st_1_innings,'
     'batter_hits,batter_total_bases,batter_home_runs,batter_rbis,'
@@ -12490,6 +12519,7 @@ def _ensure_daily_odds_snapshot():
             'eventsCount': 0,
             'eventsFetched': 0,
             'errors': [],
+            'creditsUsedToday': 0,
         })
 
     try:
@@ -12500,6 +12530,7 @@ def _ensure_daily_odds_snapshot():
             timeout=12,
         )
         r.raise_for_status()
+        _record_odds_credits(r)
         events = r.json() or []
 
         with _ODDS_CACHE_LOCK:
@@ -12528,6 +12559,7 @@ def _ensure_daily_odds_snapshot():
                     timeout=15,
                 )
                 rr.raise_for_status()
+                _record_odds_credits(rr)
                 books = rr.json().get('bookmakers', []) or []
                 with _ODDS_CACHE_LOCK:
                     _ODDS_GAME_CACHE[eid] = {
