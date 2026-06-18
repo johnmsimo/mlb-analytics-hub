@@ -6422,6 +6422,25 @@ def api_pitcher_matchup(game_pk):
                 merged = {**fgb, **svb, **b}
                 proj = _project_batter_vs_pitcher(merged, p_stats)
                 score = _damage_score(merged, p_stats)
+                # Pitch-mix matchup: how well this hitter handles THIS pitcher's
+                # arsenal (FG run-value per pitch + Savant SLG-vs-pitch, 60/40).
+                # 1.0 = neutral; folded modestly into the damage score.
+                mix_score = 1.0
+                _bid = merged.get("id")
+                if pitcher_id and _bid:
+                    try:
+                        fg_pm, _ = _fg_pitch_matchup_score(_bid, pitcher_id)
+                        sv_pm, _ = _compute_pitch_mix_score(str(pitcher_id), str(_bid))
+                        fg_h = (fg_pm != 1.0); sv_h = (sv_pm != 1.0)
+                        if fg_h and sv_h:
+                            mix_score = fg_pm * 0.60 + sv_pm * 0.40
+                        elif fg_h:
+                            mix_score = fg_pm
+                        elif sv_h:
+                            mix_score = sv_pm
+                    except Exception:
+                        mix_score = 1.0
+                    score = round(_clamp(score + (mix_score - 1.0) * 25.0, 0.0, 100.0), 1)
                 bvp_b = bvp_by_bid.get(merged.get("id")) or {}
                 threats.append({
                     "id":       merged.get("id"),
@@ -6446,6 +6465,7 @@ def api_pitcher_matchup(game_pk):
                     "hh_pct":   merged.get("sv_hh_pct"),
                     "brl_pct":  merged.get("sv_brl_pct"),
                     "score":    score,
+                    "pitchMixScore": round(mix_score, 3),
                     "bvp": {
                         "pa":    bvp_b.get("pa", 0),
                         "ab":    bvp_b.get("ab", 0),
