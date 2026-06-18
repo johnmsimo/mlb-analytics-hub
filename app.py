@@ -996,6 +996,7 @@ BVP_HTML = _read_html_or_fallback('bvp.html')
 VALUE_BETS_HTML = _read_html_or_fallback('value_bets.html')
 NRFI_HTML = _read_html_or_fallback('nrfi.html')
 TOOLS_HTML = _read_html_or_fallback('tools.html')
+EDGE_LAB_HTML = _read_html_or_fallback('edge_lab.html')
 DATA_DIR = os.environ.get('DATA_DIR') or (
     '/app/data' if os.path.isdir('/app/data') else os.path.join(_HERE, 'data')
 )
@@ -1590,23 +1591,128 @@ STADIUM_COORDS = {
 }
 
 # Domed / retractable-roof stadiums (weather is always INDOOR/controlled)
-# ── Team Defensive Metrics (UZR) ────────────────────────────────────────────
-# UZR (Ultimate Zone Rating) per team from FanGraphs team defense.
-# Positive = above-average defense; Negative = below-average.
-# Updated at startup via _load_fg_data(); default 0.0 = league average.
-# Source: FanGraphs /leaders.aspx?pos=all&stats=fld&lg=all&qual=0&type=1
-_TEAM_UZR: dict[int, float] = {}  # team_id → UZR (populated at startup)
-_LEAGUE_UZR_AVG = 0.0
+# ── Team Defensive Metrics (Statcast Outs Above Average) ────────────────────
+# Real team defense from Baseball Savant's OAA leaderboard. Positive OAA =
+# better-than-average defense (suppresses hits on balls in play); negative =
+# porous defense (inflates them). Populated at startup by _load_team_defense();
+# an empty cache => every defense factor falls back to neutral (1.0).
+#
+# (Replaces a dead UZR stub: _TEAM_UZR was declared but never populated and
+#  _team_uzr_hit_mult was never called, so team defense had zero effect on any
+#  projection. This wires a live signal into the BABIP-dependent props.)
+_team_def_lock = threading.RLock()   # reentrant: rankings route holds it while calling _team_def_hit_mult
+_TEAM_DEFENSE: dict[int, dict] = {}   # team_id -> {team, oaa, oaa_rhh, oaa_lhh, rank, success}
+_TEAM_DEF_STATS = {"mean": 0.0, "std": 1.0, "n": 0, "season": None}
+_team_def_loaded = False
 
-def _team_uzr_hit_mult(fielding_team_id: int) -> float:
+
+def _load_team_defense():
+    """Load Statcast team Outs Above Average from Baseball Savant.
+
+    Builds _TEAM_DEFENSE per team_id plus the league mean/std used to z-score
+    each team's OAA. Z-scoring keeps the factor scale-invariant: raw OAA grows
+    in magnitude over the season, but its standardized value stays comparable.
+    Graceful no-op on fetch failure — the defense factor then stays neutral.
     """
-    Convert team UZR to a hit-suppression multiplier applied to p_hit in sim.
-    Research basis: +10 UZR ≈ −0.010 BABIP (Lichtman 2010, FanGraphs team def).
-    Effect clamped to ±6% to avoid overweighting in small samples.
+    global _team_def_loaded
+    url_t = ("https://baseballsavant.mlb.com/leaderboard/outs_above_average?"
+             "type=Fielding_Team&startYear={year}&endYear={year}&split=no&team="
+             "&range=year&min=q&pos=&roles=&viz=show&csv=true")
+    try:
+        rows, season = _fetch_sv_csv_by_season(url_t, _season_candidates(depth=3))
+    except Exception as ex:
+        logging.warning(f"[TeamDefense] OAA fetch error: {ex}")
+        return
+    if not rows:
+        logging.warning("[TeamDefense] OAA leaderboard unavailable — defense factor neutral")
+        return
+    parsed, oaas = {}, []
+    for r in rows:
+        try:
+            tid = int(r.get("team_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not tid:
+            continue
+        oaa = _safe_num(r.get("outs_above_average"), 0.0)
+        parsed[tid] = {
+            "team":    (r.get("team_name") or "").strip(),
+            "oaa":     oaa,
+            "oaa_rhh": _safe_num(r.get("outs_above_average_rhh"), 0.0),
+            "oaa_lhh": _safe_num(r.get("outs_above_average_lhh"), 0.0),
+            "success": (r.get("actual_success_rate_formatted") or "").strip(),
+        }
+        oaas.append(oaa)
+    if not parsed:
+        return
+    n = len(oaas)
+    mean = sum(oaas) / n
+    std = max(1e-6, (sum((x - mean) ** 2 for x in oaas) / n) ** 0.5) if n > 1 else 1.0
+    for rank, (tid, _v) in enumerate(sorted(parsed.items(), key=lambda kv: -kv[1]["oaa"]), start=1):
+        parsed[tid]["rank"] = rank
+    with _team_def_lock:
+        _TEAM_DEFENSE.clear(); _TEAM_DEFENSE.update(parsed)
+        _TEAM_DEF_STATS.update({"mean": mean, "std": std, "n": n, "season": season})
+        _team_def_loaded = True
+    logging.info(f"[TeamDefense] {n} teams OAA loaded (season={season}, mean={mean:.1f}, std={std:.1f})")
+
+
+def _team_def_hit_mult(fielding_team_id) -> float:
+    """Hit-suppression multiplier from team OAA for BABIP-dependent props
+    (hits/TB/RBI/runs). Uses a z-score so it's scale-invariant across the
+    season: ~+1 SD of defense => -2% on contact props, clamped to ±6%. HR props
+    are intentionally NOT adjusted — home runs don't depend on fielding.
+    Returns 1.0 (neutral) when the team is unknown or data hasn't loaded.
     """
-    uzr = _TEAM_UZR.get(fielding_team_id, _LEAGUE_UZR_AVG)
-    babip_delta = (uzr - _LEAGUE_UZR_AVG) / 10.0 * 0.010
-    return min(1.06, max(0.94, 1.0 - babip_delta * 3.0))
+    if not fielding_team_id:
+        return 1.0
+    with _team_def_lock:
+        rec = _TEAM_DEFENSE.get(int(fielding_team_id))
+        mean, std = _TEAM_DEF_STATS["mean"], _TEAM_DEF_STATS["std"]
+    if not rec:
+        return 1.0
+    z = (rec.get("oaa", mean) - mean) / (std or 1.0)
+    return min(1.06, max(0.94, 1.0 - z * 0.02))
+
+
+# pitcher_id -> (date_iso, fielding_team_id); the fielding team for a batter is
+# whoever the opposing pitcher plays for. Resolved via the MLB people API and
+# cached for the day so it costs one call per starter.
+_pitcher_team_lock = threading.Lock()
+_pitcher_team_cache: dict = {}
+
+
+def _fielding_team_for_pitcher(pitcher_id):
+    if not pitcher_id:
+        return None
+    try:
+        pid = int(pitcher_id)
+    except (TypeError, ValueError):
+        return None
+    today = datetime.now(ET).date().isoformat()
+    with _pitcher_team_lock:
+        hit = _pitcher_team_cache.get(pid)
+        if hit and hit[0] == today:
+            return hit[1]
+    team_id = None
+    try:
+        r = requests.get(f"{MLB_API}/people/{pid}?hydrate=currentTeam", timeout=8)
+        r.raise_for_status()
+        ppl = r.json().get("people", [])
+        if ppl:
+            team_id = (ppl[0].get("currentTeam") or {}).get("id")
+    except Exception:
+        team_id = None
+    with _pitcher_team_lock:
+        _evict_if_large(_pitcher_team_cache, 400)
+        _pitcher_team_cache[pid] = (today, team_id)
+    return team_id
+
+
+def _def_factor_for_pitcher(pitcher_id) -> float:
+    """Convenience: resolve the opposing pitcher's team and return its
+    hit-suppression multiplier. Neutral (1.0) on any miss."""
+    return _team_def_hit_mult(_fielding_team_for_pitcher(pitcher_id))
 
 DOME_VENUES = {
     12,    # Tropicana Field (fixed dome)
@@ -2435,6 +2541,7 @@ def _launch_startup_loaders():
     threading.Thread(target=_load_batter_profiles, daemon=True).start()
     threading.Thread(target=_prewarm_arsenal_priors,   daemon=True).start()
     threading.Thread(target=_prewarm_pitcher_statcast, daemon=True).start()
+    threading.Thread(target=_load_team_defense,        daemon=True).start()
 
 
 def _wait_for_fg_data(timeout_sec=30):
@@ -4214,6 +4321,10 @@ def tracker_page():
 @app.route('/consistency')
 def consistency_page():
     return CONSISTENCY_HTML
+
+@app.route('/edge-lab')
+def edge_lab_page():
+    return _read_html_or_fallback('edge_lab.html')
 
 @app.route('/batter-vs-pitcher')
 def bvp_page():
@@ -7139,6 +7250,7 @@ def api_bvp_projection(batter_id, pitcher_id):
             batter_obj, pitcher_name, fg_pit, sv_pit,
             park_factor, weather, pitcher_hand,
             opp_pitcher_id=pitcher_id, bvp=bvp_data, form=batter_form,
+            def_factor=_def_factor_for_pitcher(pitcher_id),
         )
 
         # ── 7. Calibrated game probs via _project_batter_vs_pitcher ─────────
@@ -9947,6 +10059,7 @@ def _batx_for_sim(batter, opp_pitcher, park, weather):
             park, weather or {}, pitcher_hand=pitcher_hand,
             opp_pitcher_id=opp_pid,
             form=form, bvp=bvp,
+            def_factor=_def_factor_for_pitcher(opp_pid),
         )
         adj = proj.get('adjustments', {})
         comp = _clamp(proj.get('composite', 1.0), 0.70, 1.30)
@@ -15933,6 +16046,132 @@ def _props_scan_today_payload(date_str, refresh=False):
     return payload
 
 
+# ── Edge Finder ──────────────────────────────────────────────────────────────
+# One slate-wide, edge-ranked board (Bobby's Bets "Edges"). Reuses the cached
+# props-scan payload — no extra computation — and surfaces only positive-value
+# plays (model probability above the book's implied probability), each with a
+# confidence letter grade derived from edge strength.
+_EDGE_MARKET_LABELS = {
+    'batter_hits': 'Hits', 'batter_total_bases': 'Total Bases',
+    'batter_home_runs': 'Home Runs', 'batter_rbis': 'RBIs',
+    'batter_runs_scored': 'Runs', 'batter_hits_runs_rbis': 'H+R+RBI',
+    'batter_stolen_bases': 'Stolen Bases', 'pitcher_strikeouts': 'Pitcher Ks',
+    'h2h': 'Moneyline', 'totals': 'Total', 'spread': 'Run Line',
+    'f5_h2h': 'F5 Moneyline', 'f5_totals': 'F5 Total',
+}
+
+
+def _edge_letter_grade(edge):
+    """Confidence letter grade from edge strength (probability points).
+    A+ = elite mispricing, D = marginal. Mirrors Bobby's A+/A/B/C grading."""
+    if edge is None:
+        return None
+    e = float(edge)
+    if e >= 0.10:  return 'A+'
+    if e >= 0.075: return 'A'
+    if e >= 0.055: return 'B+'
+    if e >= 0.04:  return 'B'
+    if e >= 0.025: return 'C+'
+    if e >= 0.015: return 'C'
+    return 'D'
+
+
+def _edge_finder_payload(date_str, min_edge=0.02, market=None, limit=150):
+    base = _props_scan_today_payload(date_str)
+    try:
+        min_edge = float(min_edge)
+    except (TypeError, ValueError):
+        min_edge = 0.02
+    market = (market or '').strip().lower() or None
+
+    edges = []
+    for p in base.get('props', []) or []:
+        edge = p.get('edge')
+        mi = p.get('marketImplied')
+        if edge is None or mi is None:          # need a real market line to have an edge
+            continue
+        try:
+            edge_f = float(edge)
+        except (TypeError, ValueError):
+            continue
+        if edge_f < min_edge:                   # positive-value plays only
+            continue
+        mk = p.get('marketKey')
+        if market and mk != market:
+            continue
+        edges.append({
+            'player': p.get('player'),
+            'playerId': p.get('playerId'),
+            'team': p.get('team'),
+            'opp': p.get('opp'),
+            'gamePk': p.get('gamePk'),
+            'matchup': p.get('matchup'),
+            'marketKey': mk,
+            'marketLabel': _EDGE_MARKET_LABELS.get(mk, mk),
+            'line': p.get('line'),
+            'side': p.get('recommendedSide') or p.get('side') or 'Over',
+            'edge': round(edge_f, 4),
+            'edgePct': round(edge_f * 100, 1),
+            'evPct': p.get('evPct'),
+            'modelProb': p.get('adjProb'),
+            'marketImplied': mi,
+            'hubRating': p.get('hubRating'),
+            'grade': _edge_letter_grade(edge_f),
+            'bestPrice': p.get('bestOverPrice') or p.get('bestAvailablePrice') or p.get('marketPrice'),
+            'bestBook': p.get('bestOverBook') or p.get('bestAvailableBook') or p.get('bookmaker'),
+            'bookmaker': p.get('bookmaker'),
+            'reason': p.get('reason'),
+        })
+
+    edges.sort(key=lambda x: (
+        -(x['edge'] or 0),
+        -((x['evPct'] or 0)),
+        -(float(x['hubRating'] or 0)),
+        x['player'] or '',
+    ))
+    edges = edges[:int(limit)]
+
+    grade_counts = {}
+    for e in edges:
+        grade_counts[e['grade']] = grade_counts.get(e['grade'], 0) + 1
+
+    return {
+        'success': True,
+        'date': date_str,
+        'minEdge': min_edge,
+        'market': market,
+        'count': len(edges),
+        'gradeCounts': grade_counts,
+        'cached': base.get('cached', False),
+        'computing': base.get('computing', False),
+        'message': base.get('message'),
+        'generatedAt': datetime.now(timezone.utc).isoformat(),
+        'edges': edges,
+    }
+
+
+@app.route('/api/edges/today')
+def api_edges_today():
+    """Edge Finder — slate-wide, edge-ranked board of positive-value plays with
+    confidence letter grades. Params: date, minEdge (default 0.02),
+    market (e.g. batter_hits), limit (default 150)."""
+    date_str = request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
+    market = request.args.get('market')
+    try:
+        min_edge = float(request.args.get('minEdge', 0.02))
+    except (TypeError, ValueError):
+        min_edge = 0.02
+    try:
+        limit = int(request.args.get('limit', 150))
+    except (TypeError, ValueError):
+        limit = 150
+    try:
+        return jsonify(_edge_finder_payload(date_str, min_edge=min_edge, market=market, limit=limit))
+    except Exception as ex:
+        print(f'[api_edges_today] {traceback.format_exc()}')
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
 @app.route('/api/tracker/calibration/dashboard/<date_str>')
 def api_tracker_calibration_dashboard(date_str):
     window = int(request.args.get('window', 14) or 14)
@@ -16058,6 +16297,52 @@ def api_consistency_today():
     except Exception as ex:
         print(f'[api_consistency_today] {traceback.format_exc()}')
         return jsonify({'success': False, 'error': str(ex)}), 500
+
+
+@app.route('/api/hot-hand/today')
+def api_hot_hand_today():
+    """100% Club / hot-hand board — slate-wide ranked list of players on a
+    streak against their current prop line. Params: date, window
+    (l5|l10|l20|season), minPct (0..1, default 1.0), minTotal (default 5)."""
+    date_str = request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
+    window = (request.args.get('window') or 'l5').strip().lower()
+    min_pct = request.args.get('minPct', 1.0)
+    min_total = request.args.get('minTotal', 5)
+    try:
+        return jsonify(_hot_hand_payload(date_str, window, min_pct, min_total))
+    except Exception as ex:
+        print(f'[api_hot_hand_today] {traceback.format_exc()}')
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
+@app.route('/api/defense/rankings')
+def api_defense_rankings():
+    """Statcast team Outs Above Average rankings + the hit-suppression
+    multiplier each team applies to opposing batters' contact props."""
+    with _team_def_lock:
+        stats = dict(_TEAM_DEF_STATS)
+        teams = []
+        for tid, rec in _TEAM_DEFENSE.items():
+            teams.append({
+                'teamId': tid,
+                'team': rec.get('team'),
+                'oaa': rec.get('oaa'),
+                'oaaVsRHH': rec.get('oaa_rhh'),
+                'oaaVsLHH': rec.get('oaa_lhh'),
+                'successRate': rec.get('success'),
+                'rank': rec.get('rank'),
+                'hitMult': round(_team_def_hit_mult(tid), 4),
+            })
+    teams.sort(key=lambda x: x.get('rank') or 999)
+    return jsonify({
+        'success': True,
+        'loaded': _team_def_loaded,
+        'season': stats.get('season'),
+        'leagueMeanOaa': round(stats.get('mean', 0.0), 2),
+        'oaaStd': round(stats.get('std', 0.0), 2),
+        'count': len(teams),
+        'teams': teams,
+    })
 
 
 @app.route('/api/tracker/today')
@@ -18329,6 +18614,161 @@ def api_build_parlay():
         return jsonify({'success': False, 'error': str(ex), 'parlay': None}), 500
 
 
+# ── Auto parlay risk tiers ───────────────────────────────────────────────────
+# Auto-generate Conservative / Moderate / Aggressive parlays from the model's
+# own prop pool (Bobby's Bets "data-backed parlays across risk tiers"). Reuses
+# the cached props-scan; each tier picks one leg per game so legs stay roughly
+# independent and the combined-probability product is a fair estimate.
+def _american_to_decimal(price):
+    try:
+        p = float(price)
+    except (TypeError, ValueError):
+        return None
+    if p > 0:
+        return 1.0 + p / 100.0
+    if p < 0:
+        return 1.0 + 100.0 / abs(p)
+    return None
+
+
+def _decimal_to_american(dec):
+    try:
+        d = float(dec)
+    except (TypeError, ValueError):
+        return None
+    if d <= 1.0:
+        return None
+    return round((d - 1.0) * 100.0) if d >= 2.0 else round(-100.0 / (d - 1.0))
+
+
+_PARLAY_PROP_MARKETS = {
+    'batter_hits', 'batter_total_bases', 'batter_home_runs', 'batter_rbis',
+    'batter_runs_scored', 'batter_hits_runs_rbis', 'pitcher_strikeouts',
+}
+
+
+def _parlay_leg_candidates(props):
+    """Distinct candidate legs from the scan props: the best (highest model
+    probability) leg per (player, market, line), restricted to player-prop
+    markets that carry a model probability. Each leg uses a real book price when
+    odds are available, else a model-implied price so payout/EV still compute."""
+    best = {}
+    for p in props or []:
+        mk = p.get('marketKey')
+        if mk not in _PARLAY_PROP_MARKETS:
+            continue
+        try:
+            prob = float(p.get('adjProb'))
+        except (TypeError, ValueError):
+            continue
+        if not (0.0 < prob < 1.0):
+            continue
+        key = (p.get('player'), mk, p.get('line'))
+        cur = best.get(key)
+        if cur is not None and prob <= cur['winProb']:
+            continue
+        price = p.get('bestOverPrice') or p.get('bestAvailablePrice') or p.get('marketPrice')
+        price_source = 'market'
+        if price is None:
+            price = _prob_to_american(prob)
+            price_source = 'model'
+        best[key] = {
+            'player': p.get('player'), 'playerId': p.get('playerId'),
+            'team': p.get('team'), 'opp': p.get('opp'),
+            'gamePk': p.get('gamePk'), 'matchup': p.get('matchup'),
+            'marketKey': mk, 'marketLabel': _EDGE_MARKET_LABELS.get(mk, mk),
+            'line': p.get('line'), 'side': p.get('recommendedSide') or 'Over',
+            'winProb': round(prob, 4),
+            'price': price, 'priceSource': price_source,
+            'edge': p.get('edge'), 'evPct': p.get('evPct'),
+            'hubRating': p.get('hubRating'), 'grade': _edge_letter_grade(p.get('edge')),
+        }
+    return list(best.values())
+
+
+def _select_parlay_legs(cands, n, min_prob, max_prob, rank_key):
+    pool = [c for c in cands if min_prob <= c['winProb'] <= max_prob]
+    pool.sort(key=rank_key)
+    chosen, used_games = [], set()
+    for c in pool:
+        gp = c.get('gamePk')
+        if gp in used_games:          # one leg per game → legs stay ~independent
+            continue
+        chosen.append(c)
+        used_games.add(gp)
+        if len(chosen) >= n:
+            break
+    return chosen
+
+
+def _build_parlay_from_legs(legs, name, risk):
+    prob, dec, priced = 1.0, 1.0, True
+    for l in legs:
+        prob *= l['winProb']
+        d = _american_to_decimal(l['price'])
+        if d is None:
+            priced = False
+        else:
+            dec *= d
+    priced = priced and bool(legs)
+    return {
+        'name': name,
+        'risk': risk,
+        'legCount': len(legs),
+        'legs': legs,
+        'combinedWinProb': round(prob, 4) if legs else 0.0,
+        'decimalOdds': round(dec, 3) if priced else None,
+        'americanOdds': _decimal_to_american(dec) if priced else None,
+        'payoutPer100': round((dec - 1.0) * 100.0, 2) if priced else None,
+        # EV per unit staked = P(win) * decimal_payout - 1. Meaningfully positive
+        # only when real book prices beat the model; ~0 on model-implied prices.
+        'evPct': round(prob * dec - 1.0, 4) if priced else None,
+    }
+
+
+def _auto_parlays_payload(date_str):
+    base = _props_scan_today_payload(date_str)
+    cands = _parlay_leg_candidates(base.get('props', []))
+
+    def _value(c):
+        if c.get('edge') is not None:
+            return float(c['edge'])
+        if c.get('evPct') is not None:
+            return float(c['evPct'])
+        return (float(c.get('hubRating') or 0)) / 100.0
+
+    conservative = _select_parlay_legs(cands, 3, 0.68, 0.999, lambda c: -c['winProb'])
+    moderate     = _select_parlay_legs(cands, 3, 0.55, 0.85,  lambda c: (-_value(c), -c['winProb']))
+    aggressive   = _select_parlay_legs(cands, 4, 0.42, 0.72,  lambda c: (-_value(c), -(float(c.get('hubRating') or 0))))
+
+    return {
+        'success': True,
+        'date': date_str,
+        'candidateCount': len(cands),
+        'cached': base.get('cached', False),
+        'computing': base.get('computing', False),
+        'message': base.get('message'),
+        'generatedAt': datetime.now(timezone.utc).isoformat(),
+        'parlays': [
+            _build_parlay_from_legs(conservative, 'Conservative', 'conservative'),
+            _build_parlay_from_legs(moderate, 'Moderate', 'moderate'),
+            _build_parlay_from_legs(aggressive, 'Aggressive', 'aggressive'),
+        ],
+    }
+
+
+@app.route('/api/parlay/auto')
+def api_parlay_auto():
+    """Auto-generated Conservative/Moderate/Aggressive parlays from today's
+    model prop pool. Param: date."""
+    date_str = request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
+    try:
+        return jsonify(_auto_parlays_payload(date_str))
+    except Exception as ex:
+        print(f'[api_parlay_auto] {traceback.format_exc()}')
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
 @app.route('/api/parlay/send-to-tracker', methods=['POST'])
 def api_parlay_to_tracker():
     """Send a parlay to the daily tracker."""
@@ -19201,7 +19641,7 @@ _LEAGUE_BRL_PCT = 0.063   # 6.3 %
 def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_sv,
                           park_factor, weather, pitcher_hand='R',
                           opp_pitcher_id=None,
-                          form=None, bvp=None, travel=None):
+                          form=None, bvp=None, travel=None, def_factor=1.0):
     """
     BAT X-style projection engine with named component weights (BATX_WEIGHTS).
     Signature is backwards-compatible with _project_batter; adds optional
@@ -19421,8 +19861,13 @@ def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_s
     ops_ratio = ops / max(season_ops, 0.400)
     hr_r_adj  = hr_r * ops_ratio * _clamp(brl_edge + 1.0, 0.70, 1.40)
 
-    hits_proj = round(max(0.05, avg_blend * exp_pa * composite * wx_mult), 3)
-    tb_proj   = round(max(0.08, slg       * exp_pa * composite * wx_mult), 3)
+    # Opponent team-defense factor (OAA-based). Applies to BABIP-dependent
+    # props only — better defense converts more balls in play into outs. HR is
+    # excluded (fielding can't take back a ball over the fence).
+    def_factor = _clamp(float(def_factor or 1.0), 0.90, 1.10)
+
+    hits_proj = round(max(0.05, avg_blend * exp_pa * composite * wx_mult * def_factor), 3)
+    tb_proj   = round(max(0.08, slg       * exp_pa * composite * wx_mult * def_factor), 3)
 
     hr_pf   = _clamp(park_factor * 1.08, 0.80, 1.35)
     pull_park_boost = 1.0 + (max(0.0, pull_edge) * max(0.0, park_factor - 1.0) * 1.25)
@@ -19432,10 +19877,10 @@ def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_s
     ), 4)
 
     slot_rbi_bonus = max(0.8, 1.0 + (4 - abs(slot - 4)) * 0.03)
-    rbi_proj = round(max(0.05, rbi_r * exp_pa * composite * slot_rbi_bonus), 3)
+    rbi_proj = round(max(0.05, rbi_r * exp_pa * composite * slot_rbi_bonus * def_factor), 3)
 
     slot_r_bonus = max(0.8, 1.1 - abs(slot - 1.5) * 0.025)
-    r_proj   = round(max(0.04, r_r * exp_pa * composite * slot_r_bonus), 3)
+    r_proj   = round(max(0.04, r_r * exp_pa * composite * slot_r_bonus * def_factor), 3)
 
     hrr_proj = round(hits_proj + r_proj + rbi_proj, 3)
 
@@ -19450,6 +19895,7 @@ def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_s
         "split_avg":   round(avg_blend, 3),
         "split_ops":   round(ops, 3),
         "platoon_note": _batter_hand_note(batter, pitcher_hand),
+        "defFactor":   round(def_factor, 4),
         # BAT X diagnostics
         "composite":   round(composite, 4),
         "adjustments": {
@@ -19863,6 +20309,8 @@ def api_props_projections(game_pk):
         def enrich_batters(batters, opp_pfg, opp_psv, opp_pst, opp_abbr, opp_pname, opp_pid, own_abbr='', lineup_confirmed=False, team_travel=None):
             opp_hand = (opp_pst.get("pitchHand") or "R").upper()
             batters_top = list((batters or [])[:9])
+            # Opposing team's defense factor is constant for this side — resolve once.
+            _side_def_factor = _def_factor_for_pitcher(opp_pid)
 
             def _enrich_one(b):
                 name = b.get("name", "")
@@ -19891,6 +20339,7 @@ def api_props_projections(game_pk):
                     opp_pitcher_id=opp_pid,
                     form=form, bvp=bvp,
                     travel=team_travel,
+                    def_factor=_side_def_factor,
                 )
                 slot = int(b.get("slot") or 9)
                 xgb_hit_p = None
@@ -20728,6 +21177,30 @@ def _consistency_window_summary(values, line, limit=None):
     return {'over': over, 'total': total, 'pct': round(over / total, 3)}
 
 
+def _consistency_recent_form(values, line, limit=10):
+    """Per-game recent-form detail for L5/L10 sparklines + current over streak.
+
+    `values` are ordered oldest -> newest (most recent last), matching the
+    game-log order used elsewhere in the consistency path. Returns the last
+    `limit` games as [{v, over}] (chronological, most recent last) plus the
+    current consecutive over-streak counted back from the most recent game.
+    This is the recent-form visualization Bobby's Bets surfaces as L5
+    sparklines, and the streak that powers the "hot hand" ranking.
+    """
+    clean = [v for v in values if v is not None]
+    if not clean:
+        return {'spark': [], 'streakOver': 0}
+    tail = clean[-int(limit):]
+    spark = [{'v': float(v), 'over': bool(float(v) > float(line))} for v in tail]
+    streak = 0
+    for v in reversed(clean):
+        if float(v) > float(line):
+            streak += 1
+        else:
+            break
+    return {'spark': spark, 'streakOver': streak}
+
+
 def _empty_consistency_payload(date_str):
     return {
         'success': True,
@@ -20842,6 +21315,9 @@ def _compute_consistency_payload(date_str):
             'season': _consistency_window_summary(values, row.get('line'), None),
             'sampleSize': len(values),
         }
+        _form = _consistency_recent_form(values, row.get('line'), 10)
+        sheet_row['sparkline'] = _form['spark']
+        sheet_row['streakOver'] = _form['streakOver']
         sheets[market_key]['rows'].append(sheet_row)
 
     for market_key, sheet in sheets.items():
@@ -20925,6 +21401,76 @@ def _consistency_payload(date_str, refresh=False):
     payload['computing'] = True
     payload['message'] = 'Computing... auto-refresh in 20s'
     return payload
+
+
+_HOT_HAND_FIELDS = (
+    'player', 'playerId', 'team', 'opp', 'slot', 'gamePk', 'gameLabel',
+    'line', 'hubRating', 'evPct', 'l5', 'l10', 'l20', 'season',
+    'sparkline', 'streakOver', 'sampleSize',
+)
+
+
+def _hot_hand_payload(date_str, window='l5', min_pct=1.0, min_total=5, limit=250):
+    """The "100% Club" / hot-hand board.
+
+    Flattens the per-market consistency sheets into a single slate-wide list of
+    players clearing their current prop line in at least `min_pct` of their last
+    `window` games (default: 100% of the last 5 — the "100% Club"), then ranks by
+    recent hit-rate, current over-streak, and model edge. Reuses the cached
+    consistency payload so it adds no extra game-log fetching.
+    """
+    base = _consistency_payload(date_str)
+    window = window if window in ('l5', 'l10', 'l20', 'season') else 'l5'
+    try:
+        min_pct = max(0.0, min(1.0, float(min_pct)))
+    except (TypeError, ValueError):
+        min_pct = 1.0
+    try:
+        min_total = max(1, int(min_total))
+    except (TypeError, ValueError):
+        min_total = 5
+
+    rows = []
+    for sheet in base.get('markets', []) or []:
+        mk = sheet.get('marketKey')
+        label = sheet.get('marketLabel')
+        for r in sheet.get('rows', []) or []:
+            win = r.get(window) or {}
+            pct = win.get('pct')
+            total = win.get('total') or 0
+            if pct is None or total < min_total or pct < min_pct:
+                continue
+            entry = {k: r.get(k) for k in _HOT_HAND_FIELDS}
+            entry['marketKey'] = mk
+            entry['marketLabel'] = label
+            entry['windowPct'] = pct
+            entry['windowOver'] = win.get('over')
+            entry['windowTotal'] = total
+            rows.append(entry)
+
+    rows.sort(key=lambda x: (
+        -(x.get('windowPct') or 0),
+        -(x.get('streakOver') or 0),
+        -((x.get('l10') or {}).get('pct') or 0),
+        -(x.get('windowTotal') or 0),
+        -(float(x.get('hubRating') or 0)),
+        x.get('player') or '',
+    ))
+    rows = rows[:int(limit)]
+
+    return {
+        'success': True,
+        'date': date_str,
+        'generatedAt': datetime.now(timezone.utc).isoformat(),
+        'window': window,
+        'minPct': min_pct,
+        'minTotal': min_total,
+        'count': len(rows),
+        'cached': base.get('cached', False),
+        'computing': base.get('computing', False),
+        'message': base.get('message'),
+        'players': rows,
+    }
 
 
 def _build_player_trends(player_id, is_pitcher):

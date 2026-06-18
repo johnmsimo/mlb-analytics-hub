@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MLB Analytics Hub - Edge Lab</title>
+  <style>
+    :root{
+      --bg:#08121f;--panel:#0f1d31;--panel2:#11233a;--panel3:#162a44;--line:#203654;
+      --text:#dbe8fb;--muted:#8ca3c4;--cyan:#4ddcff;--green:#00d47a;--yellow:#ffcc4d;
+      --red:#ff6b6b;--blue:#7ec8ff;--violet:#b79bff;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:radial-gradient(circle at top left, rgba(77,220,255,.14), transparent 28%),linear-gradient(180deg,#07101a 0%,#08121f 100%);color:var(--text);font-family:Segoe UI,Arial,sans-serif}
+    a{color:var(--cyan);text-decoration:none}
+    button,input,select{font:inherit}
+    .wrap{max-width:1480px;margin:0 auto;padding:20px}
+    .top{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;margin-bottom:16px}
+    .brand{font-size:1.35rem;font-weight:800;letter-spacing:.08em}
+    .sub{margin-top:4px;color:var(--muted);font-size:.92rem;max-width:820px}
+    .actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    .toplink{padding:8px 12px;border:1px solid rgba(77,220,255,.18);border-radius:999px;background:rgba(255,255,255,.02)}
+    .btn{border:1px solid rgba(77,220,255,.35);background:rgba(77,220,255,.08);color:var(--cyan);padding:9px 13px;border-radius:10px;cursor:pointer}
+    .btn:disabled{opacity:.6;cursor:not-allowed}
+    .navtabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+    .navtab{border:1px solid var(--line);background:rgba(255,255,255,.03);color:var(--muted);padding:11px 18px;border-radius:12px;cursor:pointer;font-weight:700;transition:.15s}
+    .navtab.on{color:#08121f;background:linear-gradient(180deg,var(--cyan),#39c6ec);border-color:var(--cyan)}
+    .panel{background:linear-gradient(180deg,var(--panel2),var(--panel));border:1px solid var(--line);border-radius:18px;padding:16px}
+    .toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+    .filters{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    .filters label{font-size:.72rem;letter-spacing:.06em;color:var(--muted);text-transform:uppercase}
+    .filters select{background:var(--panel3);border:1px solid var(--line);color:var(--text);border-radius:10px;padding:9px 12px;min-width:130px}
+    .meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+    .pill{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;border:1px solid rgba(77,220,255,.22);background:rgba(77,220,255,.08);font-size:.76rem;color:var(--cyan)}
+    .table-wrap{overflow:auto;border:1px solid var(--line);border-radius:14px}
+    table{width:100%;border-collapse:collapse;min-width:980px}
+    th,td{padding:11px 12px;border-bottom:1px solid rgba(255,255,255,.05);text-align:left;white-space:nowrap}
+    th{font-size:.7rem;letter-spacing:.08em;color:var(--muted);text-transform:uppercase;background:rgba(0,0,0,.16);position:sticky;top:0}
+    tr:hover td{background:rgba(77,220,255,.03)}
+    .player{font-weight:700}
+    .small{font-size:.8rem;color:var(--muted)}
+    .rate{display:inline-flex;align-items:center;justify-content:center;min-width:78px;padding:6px 8px;border-radius:10px;font-size:.76rem;font-weight:700;border:1px solid}
+    .rate.good{background:rgba(0,212,122,.13);border-color:rgba(0,212,122,.4);color:var(--green)}
+    .rate.warn{background:rgba(255,204,77,.12);border-color:rgba(255,204,77,.38);color:var(--yellow)}
+    .rate.bad{background:rgba(255,107,107,.12);border-color:rgba(255,107,107,.35);color:var(--red)}
+    .rate.na{background:rgba(126,200,255,.08);border-color:rgba(126,200,255,.22);color:var(--blue)}
+    .hub{display:inline-block;padding:4px 8px;border-radius:8px;border:1px solid rgba(77,220,255,.22);background:rgba(77,220,255,.08);color:var(--cyan);font-weight:700;font-size:.76rem}
+    .ev.pos{color:var(--green);font-weight:700}.ev.neg{color:var(--red);font-weight:700}
+    .empty{padding:34px 18px;text-align:center;color:var(--muted)}
+    /* sparkline */
+    .spark{display:inline-flex;gap:2px;align-items:flex-end;height:18px}
+    .spark i{width:7px;border-radius:2px;display:inline-block;opacity:.92}
+    .spark i.o{background:var(--green)}
+    .spark i.u{background:rgba(255,107,107,.55)}
+    /* streak badge */
+    .streak{display:inline-block;padding:3px 9px;border-radius:999px;font-weight:800;font-size:.76rem;border:1px solid rgba(0,212,122,.4);background:rgba(0,212,122,.12);color:var(--green)}
+    .streak.cool{border-color:rgba(126,200,255,.3);background:rgba(126,200,255,.08);color:var(--blue)}
+    /* letter grade */
+    .grade{display:inline-block;min-width:34px;text-align:center;padding:4px 8px;border-radius:8px;font-weight:800;font-size:.8rem;border:1px solid}
+    .grade.g-ap,.grade.g-a{background:rgba(0,212,122,.16);border-color:rgba(0,212,122,.45);color:var(--green)}
+    .grade.g-bp,.grade.g-b{background:rgba(77,220,255,.14);border-color:rgba(77,220,255,.4);color:var(--cyan)}
+    .grade.g-cp,.grade.g-c{background:rgba(255,204,77,.13);border-color:rgba(255,204,77,.4);color:var(--yellow)}
+    .grade.g-d{background:rgba(140,163,196,.1);border-color:rgba(140,163,196,.3);color:var(--muted)}
+    /* defense mult */
+    .mult.suppress{color:var(--green);font-weight:700}.mult.inflate{color:var(--red);font-weight:700}
+    /* parlay cards */
+    .parlay-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+    .pcard{background:linear-gradient(180deg,var(--panel3),var(--panel));border:1px solid var(--line);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:12px}
+    .pcard h3{margin:0;font-size:1.05rem;letter-spacing:.04em}
+    .pcard.conservative{border-top:3px solid var(--green)}
+    .pcard.moderate{border-top:3px solid var(--yellow)}
+    .pcard.aggressive{border-top:3px solid var(--red)}
+    .pcard .odds{font-size:1.6rem;font-weight:800;color:var(--cyan)}
+    .pcard .kv{display:flex;justify-content:space-between;font-size:.82rem;color:var(--muted)}
+    .pcard .kv b{color:var(--text)}
+    .leg{border:1px solid var(--line);border-radius:10px;padding:9px 11px;background:rgba(255,255,255,.02)}
+    .leg .lp{font-weight:700;font-size:.9rem}
+    .leg .lm{font-size:.78rem;color:var(--muted);margin-top:2px}
+    .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:.68rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase}
+    .badge.conservative{background:rgba(0,212,122,.14);color:var(--green)}
+    .badge.moderate{background:rgba(255,204,77,.14);color:var(--yellow)}
+    .badge.aggressive{background:rgba(255,107,107,.14);color:var(--red)}
+    .trackbtn{border:1px solid rgba(77,220,255,.35);background:rgba(77,220,255,.08);color:var(--cyan);padding:6px 11px;border-radius:8px;cursor:pointer;font-size:.76rem;font-weight:700;white-space:nowrap}
+    .trackbtn:hover{background:rgba(77,220,255,.16)}
+    .trackbtn:disabled{cursor:default;opacity:.85}
+    .trackbtn.tracked{background:rgba(0,212,122,.16);border-color:rgba(0,212,122,.45);color:var(--green)}
+    .trackbtn.full{width:100%;margin-top:4px;padding:9px}
+    @media (max-width:980px){.parlay-grid{grid-template-columns:1fr}}
+    @media (max-width:640px){.wrap{padding:14px}.filters{width:100%}.filters select{flex:1;min-width:0}.actions{width:100%}}
+  </style>
+<link rel="stylesheet" href="/static/mobile.css">
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div>
+        <div class="brand">MLB ANALYTICS HUB - EDGE LAB</div>
+        <div class="sub" id="statusText">Hot-hand streaks, model edges, opponent defense, and auto-built parlays across today's slate.</div>
+      </div>
+      <div class="actions">
+        <a class="toplink" href="/">Dashboard</a>
+        <a class="toplink" href="/props">Props</a>
+        <a class="toplink" href="/consistency">Consistency</a>
+        <a class="toplink" href="/tracker">Tracker</a>
+        <button class="btn" id="refreshBtn" onclick="loadActive(true)">Refresh</button>
+      </div>
+    </div>
+
+    <div class="navtabs">
+      <button class="navtab on" data-view="hot" onclick="setView('hot')">🔥 100% Club</button>
+      <button class="navtab" data-view="edges" onclick="setView('edges')">📈 Edge Finder</button>
+      <button class="navtab" data-view="defense" onclick="setView('defense')">🧤 Defense</button>
+      <button class="navtab" data-view="parlays" onclick="setView('parlays')">🎰 Parlays</button>
+    </div>
+
+    <!-- 100% CLUB -->
+    <section class="panel" id="view-hot">
+      <div class="toolbar">
+        <div class="meta" id="hotMeta"></div>
+        <div class="filters">
+          <label>Window</label>
+          <select id="hotWindow" onchange="loadHot(true)">
+            <option value="l5" selected>Last 5</option>
+            <option value="l10">Last 10</option>
+            <option value="l20">Last 20</option>
+            <option value="season">Season</option>
+          </select>
+          <label>Min hit-rate</label>
+          <select id="hotMinPct" onchange="loadHot(true)">
+            <option value="1.0" selected>100%</option>
+            <option value="0.9">90%+</option>
+            <option value="0.8">80%+</option>
+            <option value="0.7">70%+</option>
+          </select>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>#</th><th>Player</th><th>Team</th><th>Opp</th><th>Market</th><th>Line</th>
+            <th>Window</th><th>Streak</th><th>Recent (L10)</th><th>L10</th><th>Hub</th>
+          </tr></thead>
+          <tbody id="hotBody"><tr><td colspan="11" class="empty">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- EDGE FINDER -->
+    <section class="panel" id="view-edges" style="display:none">
+      <div class="toolbar">
+        <div class="meta" id="edgeMeta"></div>
+        <div class="filters">
+          <label>Min edge</label>
+          <select id="edgeMin" onchange="loadEdges(true)">
+            <option value="0.02" selected>2%+</option>
+            <option value="0.04">4%+</option>
+            <option value="0.06">6%+</option>
+            <option value="0.08">8%+</option>
+          </select>
+          <label>Market</label>
+          <select id="edgeMarket" onchange="loadEdges(true)">
+            <option value="" selected>All markets</option>
+            <option value="batter_hits">Hits</option>
+            <option value="batter_total_bases">Total Bases</option>
+            <option value="batter_home_runs">Home Runs</option>
+            <option value="batter_rbis">RBIs</option>
+            <option value="batter_runs_scored">Runs</option>
+            <option value="pitcher_strikeouts">Pitcher Ks</option>
+          </select>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Grade</th><th>Player</th><th>Team</th><th>Matchup</th><th>Market</th><th>Side</th>
+            <th>Line</th><th>Edge</th><th>EV</th><th>Model%</th><th>Implied%</th><th>Hub</th><th>Book</th><th>Track</th>
+          </tr></thead>
+          <tbody id="edgeBody"><tr><td colspan="14" class="empty">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- DEFENSE -->
+    <section class="panel" id="view-defense" style="display:none">
+      <div class="meta" id="defMeta"></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Rank</th><th>Team</th><th>OAA</th><th>vs RHH</th><th>vs LHH</th>
+            <th>Success%</th><th>Hit Multiplier</th><th>Effect</th>
+          </tr></thead>
+          <tbody id="defBody"><tr><td colspan="8" class="empty">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- PARLAYS -->
+    <section class="panel" id="view-parlays" style="display:none">
+      <div class="meta" id="parMeta"></div>
+      <div class="parlay-grid" id="parGrid"></div>
+    </section>
+  </div>
+
+  <script>
+    const LOADED = {hot:false, edges:false, defense:false, parlays:false};
+    let VIEW = 'hot';
+    let EDGES = [], PARLAYS = [], CUR_DATE = null;
+
+    function toast(msg, ok){
+      let t=document.getElementById('toast');
+      if(!t){t=document.createElement('div');t.id='toast';
+        t.style.cssText='position:fixed;bottom:22px;left:50%;transform:translateX(-50%);z-index:9999;padding:12px 18px;border-radius:12px;font-weight:700;font-size:.86rem;box-shadow:0 8px 30px rgba(0,0,0,.5);transition:opacity .3s';
+        document.body.appendChild(t);}
+      t.style.background = ok ? 'rgba(0,212,122,.95)' : 'rgba(255,107,107,.95)';
+      t.style.color='#08121f'; t.textContent=msg; t.style.opacity='1';
+      clearTimeout(t._h); t._h=setTimeout(()=>{t.style.opacity='0';},2600);
+    }
+    async function postJSON(url, body){
+      const r = await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      return r.json();
+    }
+
+    async function trackEdge(i, btn){
+      const e = EDGES[i]; if(!e) return;
+      const entry = {
+        player:e.player, playerId:e.playerId, team:e.team, gamePk:e.gamePk,
+        marketKey:e.marketKey, line:e.line, recommendedSide:e.side||'Over',
+        adjProb:e.modelProb, edge:e.edge, marketImplied:e.marketImplied,
+        hubRating:e.hubRating, evPct:e.evPct,
+        bestOverPrice:e.bestPrice, bookmaker:e.bestBook, source:'edge_finder',
+        date: CUR_DATE,
+      };
+      if(btn){btn.disabled=true;btn.textContent='…';}
+      try{
+        const d = await postJSON('/api/tracker/pick', entry);
+        if(d.success){ if(btn){btn.textContent='✓ Tracked';btn.classList.add('tracked');} toast(`${e.player} sent to tracker`, true); }
+        else { if(btn){btn.disabled=false;btn.textContent='+ Track';} toast('Failed: '+(d.error||'error'), false); }
+      }catch(err){ if(btn){btn.disabled=false;btn.textContent='+ Track';} toast('Failed: '+err.message, false); }
+    }
+
+    async function trackParlay(i, btn){
+      const p = PARLAYS[i]; if(!p || !(p.legs||[]).length) return;
+      const parlay = {
+        id: 'auto-'+p.risk+'-'+Date.now(),
+        selections: p.legs.map(l=>({game_pk:l.gamePk, player:l.player, market:l.marketKey, projection:l.line, side:l.side, win_probability:l.winProb, american_odds:l.price})),
+        american_odds: p.americanOdds,
+        summary: {break_even_prob:p.combinedWinProb, leg_count:p.legCount},
+      };
+      if(btn){btn.disabled=true;btn.textContent='…';}
+      try{
+        const d = await postJSON('/api/parlay/send-to-tracker', {parlay, date:CUR_DATE});
+        if(d.success){ if(btn){btn.textContent='✓ Sent to tracker';btn.classList.add('tracked');} toast(`${p.name} parlay sent to tracker`, true); }
+        else { if(btn){btn.disabled=false;btn.textContent='Send to tracker';} toast('Failed: '+(d.error||'error'), false); }
+      }catch(err){ if(btn){btn.disabled=false;btn.textContent='Send to tracker';} toast('Failed: '+err.message, false); }
+    }
+
+    function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+    function pct(v){return v==null?'-':Math.round(Number(v)*100)+'%';}
+    function pct1(v){return v==null?'-':(Number(v)*100).toFixed(1)+'%';}
+    function odds(v){if(v==null)return '-';const n=Number(v);return (n>0?'+':'')+n;}
+    function rateClass(p){if(p==null)return 'na';p=Number(p);if(p>0.7)return 'good';if(p>=0.5)return 'warn';return 'bad';}
+    function rateMarkup(s){if(!s||s.pct==null)return '<span class="rate na">No data</span>';return `<span class="rate ${rateClass(s.pct)}">${s.over}/${s.total} · ${Math.round(s.pct*100)}%</span>`;}
+    function gradeClass(g){if(!g)return 'g-d';return 'g-'+g.toLowerCase().replace('+','p');}
+
+    function sparkMarkup(spark){
+      if(!Array.isArray(spark)||!spark.length) return '<span class="small">-</span>';
+      return '<span class="spark">'+spark.map(s=>{
+        const h = 6 + Math.min(12, Math.max(0, Number(s.v)||0)*4); // taller bar = bigger stat
+        return `<i class="${s.over?'o':'u'}" style="height:${h}px" title="${esc(s.v)}"></i>`;
+      }).join('')+'</span>';
+    }
+
+    function setView(v){
+      VIEW=v;
+      document.querySelectorAll('.navtab').forEach(b=>b.classList.toggle('on', b.dataset.view===v));
+      ['hot','edges','defense','parlays'].forEach(k=>{
+        document.getElementById('view-'+k).style.display = (k===v)?'':'none';
+      });
+      if(!LOADED[v]) loadActive(false);
+    }
+    function loadActive(force){
+      if(VIEW==='hot') return loadHot(force);
+      if(VIEW==='edges') return loadEdges(force);
+      if(VIEW==='defense') return loadDefense(force);
+      if(VIEW==='parlays') return loadParlays(force);
+    }
+    function setStatus(t){document.getElementById('statusText').textContent=t;}
+
+    async function loadHot(force){
+      const btn=document.getElementById('refreshBtn'); btn.disabled=true;
+      const win=document.getElementById('hotWindow').value;
+      const mp=document.getElementById('hotMinPct').value;
+      try{
+        setStatus('Loading 100% Club…');
+        const r=await fetch(`/api/hot-hand/today?window=${win}&minPct=${mp}&minTotal=5`);
+        const d=await r.json();
+        if(!d.success) throw new Error(d.error||'failed');
+        LOADED.hot=true;
+        document.getElementById('hotMeta').innerHTML=[
+          `<span class="pill">${d.count} players</span>`,
+          `<span class="pill">Window: ${win.toUpperCase()}</span>`,
+          `<span class="pill">≥ ${Math.round(mp*100)}%</span>`,
+          d.computing?`<span class="pill">Computing… retry 6s</span>`:`<span class="pill">${d.cached?'cached':'fresh'}</span>`
+        ].join('');
+        const rows=d.players||[];
+        document.getElementById('hotBody').innerHTML = rows.length? rows.map((p,i)=>{
+          const wkey=win;
+          const streakCls = (p.streakOver>=10)?'streak':'streak cool';
+          return '<tr>'+
+            `<td>${i+1}</td>`+
+            `<td><div class="player">${esc(p.player)}</div><div class="small">${esc(p.gameLabel||'')}</div></td>`+
+            `<td>${esc(p.team||'-')}</td>`+
+            `<td>${esc(p.opp||'-')}</td>`+
+            `<td>${esc(p.marketLabel||p.marketKey)}</td>`+
+            `<td>${p.line==null?'-':p.line}</td>`+
+            `<td>${rateMarkup(p[wkey])}</td>`+
+            `<td><span class="${streakCls}">${p.streakOver||0}🔥</span></td>`+
+            `<td>${sparkMarkup(p.sparkline)}</td>`+
+            `<td>${rateMarkup(p.l10)}</td>`+
+            `<td><span class="hub">${p.hubRating==null?'-':Math.round(p.hubRating)}</span></td>`+
+          '</tr>';
+        }).join('') : '<tr><td colspan="11" class="empty">No players meet this streak threshold.</td></tr>';
+        if(d.computing) setTimeout(()=>loadHot(false),6000);
+        setStatus(`100% Club · ${d.count} players · ${d.date}`);
+      }catch(e){
+        document.getElementById('hotBody').innerHTML=`<tr><td colspan="11" class="empty">${esc(e.message)}</td></tr>`;
+        setStatus('Error: '+e.message);
+      }finally{btn.disabled=false;}
+    }
+
+    async function loadEdges(force){
+      const btn=document.getElementById('refreshBtn'); btn.disabled=true;
+      const me=document.getElementById('edgeMin').value;
+      const mk=document.getElementById('edgeMarket').value;
+      try{
+        setStatus('Loading edges…');
+        const r=await fetch(`/api/edges/today?minEdge=${me}${mk?`&market=${mk}`:''}`);
+        const d=await r.json();
+        if(!d.success) throw new Error(d.error||'failed');
+        LOADED.edges=true;
+        EDGES = d.edges||[]; CUR_DATE = d.date;
+        const gc=d.gradeCounts||{};
+        document.getElementById('edgeMeta').innerHTML=[
+          `<span class="pill">${d.count} edges</span>`,
+          `<span class="pill">≥ ${(d.minEdge*100).toFixed(0)}% edge</span>`,
+          gc['A+']?`<span class="pill">A+: ${gc['A+']}</span>`:'',
+          gc['A']?`<span class="pill">A: ${gc['A']}</span>`:'',
+          d.computing?`<span class="pill">Computing… retry 6s</span>`:`<span class="pill">${d.cached?'cached':'fresh'}</span>`
+        ].filter(Boolean).join('');
+        const rows=EDGES;
+        document.getElementById('edgeBody').innerHTML = rows.length? rows.map((e,i)=>(
+          '<tr>'+
+          `<td><span class="grade ${gradeClass(e.grade)}">${esc(e.grade||'-')}</span></td>`+
+          `<td><div class="player">${esc(e.player)}</div></td>`+
+          `<td>${esc(e.team||'-')}</td>`+
+          `<td class="small">${esc(e.matchup||'-')}</td>`+
+          `<td>${esc(e.marketLabel||e.marketKey)}</td>`+
+          `<td>${esc(e.side||'Over')}</td>`+
+          `<td>${e.line==null?'-':e.line}</td>`+
+          `<td class="ev pos">+${Number(e.edgePct!=null?e.edgePct:(e.edge*100)).toFixed(1)}%</td>`+
+          `<td class="${(e.evPct||0)>=0?'ev pos':'ev neg'}">${e.evPct==null?'-':pct1(e.evPct)}</td>`+
+          `<td>${pct(e.modelProb)}</td>`+
+          `<td>${pct(e.marketImplied)}</td>`+
+          `<td><span class="hub">${e.hubRating==null?'-':Math.round(e.hubRating)}</span></td>`+
+          `<td class="small">${esc(e.bestBook||e.bookmaker||'-')}</td>`+
+          `<td><button class="trackbtn" onclick="trackEdge(${i}, this)">+ Track</button></td>`+
+          '</tr>'
+        )).join('') : `<tr><td colspan="14" class="empty">No positive-edge plays${d.computing?' yet (computing)':''}. Edges require live book lines (ODDS_API_KEY).</td></tr>`;
+        if(d.computing) setTimeout(()=>loadEdges(false),6000);
+        setStatus(`Edge Finder · ${d.count} plays · ${d.date}`);
+      }catch(e){
+        document.getElementById('edgeBody').innerHTML=`<tr><td colspan="13" class="empty">${esc(e.message)}</td></tr>`;
+        setStatus('Error: '+e.message);
+      }finally{btn.disabled=false;}
+    }
+
+    async function loadDefense(force){
+      const btn=document.getElementById('refreshBtn'); btn.disabled=true;
+      try{
+        setStatus('Loading defense rankings…');
+        const r=await fetch('/api/defense/rankings');
+        const d=await r.json();
+        if(!d.success) throw new Error(d.error||'failed');
+        LOADED.defense=true;
+        document.getElementById('defMeta').innerHTML=[
+          `<span class="pill">${d.count} teams</span>`,
+          `<span class="pill">Season ${d.season||'-'}</span>`,
+          `<span class="pill">Lg mean OAA ${d.leagueMeanOaa}</span>`,
+          d.loaded?'':'<span class="pill">Loading data…</span>'
+        ].filter(Boolean).join('');
+        const rows=d.teams||[];
+        document.getElementById('defBody').innerHTML = rows.length? rows.map(t=>{
+          const m=Number(t.hitMult||1);
+          const cls=m<1?'mult suppress':(m>1?'mult inflate':'');
+          const eff=m<1?`Suppresses hits ${((1-m)*100).toFixed(1)}%`:(m>1?`Inflates hits ${((m-1)*100).toFixed(1)}%`:'Neutral');
+          return '<tr>'+
+            `<td><span class="hub">#${t.rank}</span></td>`+
+            `<td class="player">${esc(t.team)}</td>`+
+            `<td>${t.oaa>0?'+':''}${t.oaa}</td>`+
+            `<td>${t.oaaVsRHH>0?'+':''}${t.oaaVsRHH}</td>`+
+            `<td>${t.oaaVsLHH>0?'+':''}${t.oaaVsLHH}</td>`+
+            `<td>${esc(t.successRate||'-')}</td>`+
+            `<td class="${cls}">${m.toFixed(3)}×</td>`+
+            `<td class="small">${eff}</td>`+
+          '</tr>';
+        }).join('') : `<tr><td colspan="8" class="empty">Defense data not loaded yet.</td></tr>`;
+        setStatus(`Defense · ${d.count} teams · season ${d.season||'-'}`);
+      }catch(e){
+        document.getElementById('defBody').innerHTML=`<tr><td colspan="8" class="empty">${esc(e.message)}</td></tr>`;
+        setStatus('Error: '+e.message);
+      }finally{btn.disabled=false;}
+    }
+
+    async function loadParlays(force){
+      const btn=document.getElementById('refreshBtn'); btn.disabled=true;
+      try{
+        setStatus('Building parlays…');
+        const r=await fetch('/api/parlay/auto');
+        const d=await r.json();
+        if(!d.success) throw new Error(d.error||'failed');
+        LOADED.parlays=true;
+        PARLAYS = d.parlays||[]; CUR_DATE = d.date;
+        document.getElementById('parMeta').innerHTML=[
+          `<span class="pill">${d.candidateCount} candidate legs</span>`,
+          d.computing?`<span class="pill">Computing… retry 6s</span>`:`<span class="pill">${d.cached?'cached':'fresh'}</span>`,
+          `<span class="pill">${d.date}</span>`
+        ].join('');
+        const grid=document.getElementById('parGrid');
+        const parlays=PARLAYS;
+        grid.innerHTML = parlays.map((p,i)=>{
+          const legs=(p.legs||[]).map(l=>(
+            `<div class="leg"><div class="lp">${esc(l.player)} · ${esc(l.marketLabel)} ${l.side} ${l.line}</div>`+
+            `<div class="lm">Model ${pct(l.winProb)} · ${odds(l.price)}${l.priceSource==='model'?' (model)':''}${l.grade?' · '+l.grade:''}</div></div>`
+          )).join('') || '<div class="small">Not enough qualifying legs.</div>';
+          const evCls=(p.evPct||0)>=0?'ev pos':'ev neg';
+          return `<div class="pcard ${p.risk}">`+
+            `<div style="display:flex;justify-content:space-between;align-items:center"><h3>${esc(p.name)}</h3><span class="badge ${p.risk}">${p.legCount} legs</span></div>`+
+            `<div class="odds">${odds(p.americanOdds)}</div>`+
+            `<div class="kv"><span>Combined win prob</span><b>${pct1(p.combinedWinProb)}</b></div>`+
+            `<div class="kv"><span>Payout / $100</span><b>${p.payoutPer100==null?'-':'$'+p.payoutPer100}</b></div>`+
+            `<div class="kv"><span>Model EV</span><b class="${evCls}">${p.evPct==null?'-':pct1(p.evPct)}</b></div>`+
+            `<div style="display:flex;flex-direction:column;gap:7px;margin-top:4px">${legs}</div>`+
+            `<button class="trackbtn full" onclick="trackParlay(${i}, this)"${(p.legs||[]).length?'':' disabled'}>Send to tracker</button>`+
+          `</div>`;
+        }).join('') || '<div class="empty">No parlays available.</div>';
+        if(d.computing) setTimeout(()=>loadParlays(false),6000);
+        setStatus(`Parlays · ${d.candidateCount} candidate legs · ${d.date}`);
+      }catch(e){
+        document.getElementById('parGrid').innerHTML=`<div class="empty">${esc(e.message)}</div>`;
+        setStatus('Error: '+e.message);
+      }finally{btn.disabled=false;}
+    }
+
+    loadHot(false);
+  </script>
+<script src="/static/mobile-nav.js" defer></script>
+</body>
+</html>

@@ -59,6 +59,11 @@
     .hub{display:inline-block;padding:4px 8px;border-radius:8px;border:1px solid rgba(77,220,255,.22);background:rgba(77,220,255,.08);color:var(--cyan);font-weight:700;font-size:.76rem}
     .ev.pos{color:var(--green);font-weight:700}
     .ev.neg{color:var(--red);font-weight:700}
+    .spark{display:inline-flex;gap:2px;align-items:flex-end;height:18px}
+    .spark i{width:7px;border-radius:2px;display:inline-block;opacity:.92}
+    .spark i.o{background:var(--green)}
+    .spark i.u{background:rgba(255,107,107,.55)}
+    .streak{display:inline-block;padding:3px 9px;border-radius:999px;font-weight:800;font-size:.74rem;border:1px solid rgba(0,212,122,.4);background:rgba(0,212,122,.12);color:var(--green)}
     .empty{padding:34px 18px;text-align:center;color:var(--muted)}
     @media (max-width:980px){
       .hero{grid-template-columns:repeat(2,minmax(0,1fr))}
@@ -83,6 +88,7 @@
       <div class="actions">
         <a class="toplink" href="/">Dashboard</a>
         <a class="toplink" href="/props">Props</a>
+        <a class="toplink" href="/edge-lab">Edge Lab</a>
         <a class="toplink" href="/cheatsheets">Cheatsheets</a>
         <a class="toplink" href="/tracker">Tracker</a>
         <button class="btn" id="refreshBtn" onclick="loadData(true)">Refresh</button>
@@ -132,6 +138,8 @@
               <th>L10 Over%</th>
               <th>L20 Over%</th>
               <th>Season%</th>
+              <th>Recent (L10)</th>
+              <th>Streak</th>
               <th>Sample</th>
               <th>Hub</th>
               <th>EV</th>
@@ -178,6 +186,14 @@
     function num(value, digits=1){
       if(value == null || value === '' || Number.isNaN(Number(value))) return '-';
       return Number(value).toFixed(digits);
+    }
+
+    function sparkMarkup(spark){
+      if(!Array.isArray(spark) || !spark.length) return '<span class="small">-</span>';
+      return '<span class="spark">' + spark.map(s=>{
+        const h = 6 + Math.min(12, Math.max(0, Number(s.v)||0) * 4);
+        return `<i class="${s.over?'o':'u'}" style="height:${h}px" title="${esc(s.v)}"></i>`;
+      }).join('') + '</span>';
     }
 
     function setOptions(selectId, items, allLabel){
@@ -234,7 +250,7 @@
 
       if(!sheet){
         meta.innerHTML = '';
-        body.innerHTML = '<tr><td colspan="13" class="empty">No consistency sheets are available.</td></tr>';
+        body.innerHTML = '<tr><td colspan="15" class="empty">No consistency sheets are available.</td></tr>';
         return;
       }
 
@@ -246,7 +262,7 @@
       ].join('');
 
       if(!rows.length){
-        body.innerHTML = '<tr><td colspan="13" class="empty">No rows match the current filters.</td></tr>';
+        body.innerHTML = '<tr><td colspan="15" class="empty">No rows match the current filters.</td></tr>';
         return;
       }
 
@@ -264,6 +280,8 @@
           `<td>${rateMarkup(row.l10)}</td>` +
           `<td>${rateMarkup(row.l20)}</td>` +
           `<td>${rateMarkup(row.season)}</td>` +
+          `<td>${sparkMarkup(row.sparkline)}</td>` +
+          `<td>${row.streakOver ? `<span class="streak">${row.streakOver}🔥</span>` : '-'}</td>` +
           `<td>${row.sampleSize || 0}</td>` +
           `<td><span class="hub">${row.hubRating == null ? '-' : num(row.hubRating, 0)}</span></td>` +
           `<td class="ev ${evClass}">${num(ev, 1)}%</td>` +
@@ -323,7 +341,7 @@
           status.textContent = `Updated ${data.generatedAt || 'now'} | ${data.cached ? 'cached' : 'fresh'} payload for ${data.date || etToday()}`;
         }
       }catch(err){
-        document.getElementById('sheetBody').innerHTML = `<tr><td colspan="13" class="empty">${err.message}</td></tr>`;
+        document.getElementById('sheetBody').innerHTML = `<tr><td colspan="15" class="empty">${err.message}</td></tr>`;
         document.getElementById('sheetMeta').innerHTML = '';
         status.textContent = 'Error: ' + err.message;
       }finally{

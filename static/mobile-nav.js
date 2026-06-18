@@ -14,6 +14,7 @@
   ];
 
   var MORE_LINKS = [
+    { href: '/edge-lab',             label: 'Edge Lab',          sub: '100% Club · edges · parlays' },
     { href: '__DEEPDIVE__',          label: 'Deep Dive',         sub: "Today's first game" },
     { href: '/batter-vs-pitcher',    label: 'BvP',               sub: 'Batter vs pitcher' },
     { href: '/value-bets',           label: 'Value Bets',        sub: 'CLV & edges' },
