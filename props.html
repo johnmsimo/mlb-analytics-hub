@@ -471,6 +471,18 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
   </div>
 </div>
 
+<!-- ── Top Edges widget (Edge Lab) ── -->
+<div id="edgesWidget" style="margin:10px 32px 0;border:1px solid var(--b);border-radius:14px;background:var(--card);overflow:hidden">
+  <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--b)">
+    <span style="font-family:'Orbitron',monospace;font-size:.7rem;letter-spacing:2px;color:var(--o)">📈 TOP EDGES</span>
+    <span id="edgSub" style="font-size:.66rem;color:var(--mu)">biggest model edges vs the book</span>
+    <a href="/edge-lab" style="margin-left:auto;font-size:.64rem;color:var(--c);text-decoration:none">EDGE LAB →</a>
+  </div>
+  <div id="edgStrip" style="display:flex;gap:10px;overflow-x:auto;padding:12px 14px;scrollbar-width:thin">
+    <span style="color:var(--mu);font-size:.7rem">Loading edges…</span>
+  </div>
+</div>
+
 <!-- ── Model Track Record Banner ── -->
 <div class="trec-bar" id="trecBar" style="display:none">
   <span class="trec-bar-lbl">📊 MODEL HIT RATE · LAST 30 DAYS</span>
@@ -820,7 +832,56 @@ document.addEventListener('DOMContentLoaded', () => {
   loadGames();
   loadModelRecordBanner();
   loadHotHandWidget();
+  loadEdgesWidget();
 });
+
+// ── Top Edges widget ──────────────────────────────────────────────────────────
+let EDG_ROWS = [];
+async function loadEdgesWidget(){
+  const strip = document.getElementById('edgStrip');
+  if(!strip) return;
+  try{
+    const r = await fetch('/api/edges/today?minEdge=0.03');
+    const d = await r.json();
+    if(!d.success) throw new Error(d.error||'failed');
+    EDG_ROWS = d.edges || [];
+    const sub = document.getElementById('edgSub');
+    if(sub) sub.textContent = `${d.count} positive-value plays`;
+    if(!EDG_ROWS.length){
+      strip.innerHTML = `<span style="color:var(--mu);font-size:.7rem">No edges right now${d.computing?' (computing…)':''}.</span>`;
+      if(d.computing) setTimeout(loadEdgesWidget, 6000);
+      return;
+    }
+    strip.innerHTML = EDG_ROWS.slice(0,20).map((e,i)=>(
+      `<div style="flex:0 0 auto;min-width:184px;border:1px solid var(--b);border-radius:10px;padding:9px 11px;background:rgba(255,255,255,.02)">
+        <div style="display:flex;align-items:center;gap:6px"><span style="font-weight:800;font-size:.72rem;color:var(--g)">${escW(e.grade||'-')}</span><span style="font-weight:700;font-size:.82rem;color:var(--t)">${escW(e.player)}</span></div>
+        <div style="font-size:.66rem;color:var(--mu);margin:2px 0 6px">${escW(e.marketLabel||e.marketKey)} ${escW(e.side||'Over')} ${e.line}</div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:.7rem;color:var(--g);font-weight:700">+${Number(e.edgePct||0).toFixed(1)}%</span>
+          ${e.evPct!=null?`<span style="font-size:.66rem;color:var(--o)">EV ${(e.evPct*100).toFixed(0)}%</span>`:''}
+          <button onclick="trackEdgeW(${i},this)" style="margin-left:auto;border:1px solid rgba(0,229,255,.3);background:rgba(0,229,255,.08);color:var(--c);border-radius:7px;padding:3px 8px;font-size:.62rem;cursor:pointer">+ TRACK</button>
+        </div>
+      </div>`
+    )).join('');
+    if(d.computing) setTimeout(loadEdgesWidget, 6000);
+  }catch(e){
+    strip.innerHTML = '<span style="color:var(--mu);font-size:.7rem">Edges unavailable</span>';
+  }
+}
+async function trackEdgeW(i, btn){
+  const e = EDG_ROWS[i]; if(!e) return;
+  btn.disabled = true; btn.textContent = '…';
+  try{
+    const r = await fetch('/api/tracker/pick', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({player:e.player, playerId:e.playerId, team:e.team, gamePk:e.gamePk,
+        marketKey:e.marketKey, line:e.line, recommendedSide:e.side||'Over', adjProb:e.modelProb,
+        edge:e.edge, marketImplied:e.marketImplied, hubRating:e.hubRating, evPct:e.evPct,
+        bestOverPrice:e.bestPrice, bookmaker:e.bestBook, source:'edge_finder', date:CUR_DATE})});
+    const d = await r.json();
+    if(d.success){ btn.textContent='✓'; btn.style.color='var(--g)'; }
+    else { btn.disabled=false; btn.textContent='+ TRACK'; alert('Save failed: '+(d.error||'error')); }
+  }catch(err){ btn.disabled=false; btn.textContent='+ TRACK'; alert('Save failed: '+err.message); }
+}
 
 // ── 100% Club widget ──────────────────────────────────────────────────────────
 let HH_ROWS = [];
@@ -2481,6 +2542,20 @@ function createZoneChartTable(data, view) {
   }).join('');
 }
 
+function defBadgeHtml(defFactor){
+  // Opponent team-defense (Statcast OAA) effect on contact props. <1 suppresses
+  // hits (tough defense, caution for the hitter); >1 inflates (soft defense).
+  if (defFactor == null || Math.abs(Number(defFactor) - 1) < 0.005) return '';
+  const f = Number(defFactor);
+  const tough = f < 1;
+  const pctTxt = (Math.abs(f - 1) * 100).toFixed(1) + '%';
+  const col = tough ? 'var(--r)' : 'var(--g)';
+  const bg  = tough ? 'rgba(244,67,54,.1)' : 'rgba(0,230,118,.1)';
+  const bd  = tough ? 'rgba(244,67,54,.32)' : 'rgba(0,230,118,.32)';
+  const txt = tough ? `Tough D · −${pctTxt} hits` : `Soft D · +${pctTxt} hits`;
+  return `<div style="display:inline-flex;align-items:center;gap:5px;margin:2px 0 4px;padding:3px 9px;border-radius:999px;border:1px solid ${bd};background:${bg};color:${col};font-size:.6rem;font-weight:700;letter-spacing:.5px">🧤 OPP DEF ${txt}</div>`;
+}
+
 function batterCard(b) {
   const p    = b.proj || {};
   const adj  = p.adjustments || null;
@@ -2528,6 +2603,7 @@ function batterCard(b) {
       </div>
     </div>
     <div class="bcard-vs">vs ${b.opp_pitcher||'—'} (${b.opp_hand||'?'}HP) · ERA ${nd(b.opp_era)} · K/9 ${nd(b.opp_k9)}</div>
+    ${defBadgeHtml(p.defFactor)}
     ${pitchAdvBadgeHtml(b.pitchTypeAdvantage, b.pitchTypeAdvantageNote)}
     ${b.proj?.platoon_note ? `<div class="platoon-badge platoon-${platoonCls(b.proj.platoon_note)}">${b.proj.platoon_note} · split avg ${b.proj.split_avg??'—'} · ops ${b.proj.split_ops??'—'}</div>` : ''}
     <div class="proj-grid">

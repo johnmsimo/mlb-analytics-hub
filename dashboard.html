@@ -374,6 +374,7 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
     <div class="ss"><div class="ss-v" id="sl">-</div><div class="ss-l">LIVE NOW</div></div>
     <div class="ss"><div class="ss-v" id="se">-</div><div class="ss-l">AVG EDGE</div></div>
     <div class="ss"><div class="ss-v" id="sh">-</div><div class="ss-l">HIGH CONF</div></div>
+    <div class="ss"><div class="ss-v" id="shh">-</div><div class="ss-l">100% CLUB</div></div>
     <div class="ss"><div class="ss-v" id="sm">-</div><div class="ss-l" id="sml">MEMORY</div></div>
     <div class="ss ss-click" onclick="openDailySummaryPanel()" title="Open final daily summary in Settings"><div class="ss-v" id="sd">-</div><div class="ss-l" id="sdl">DAILY SUMMARY</div></div>
   </div>
@@ -406,6 +407,17 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
   </div>
   <div id="hhStrip" style="display:flex;gap:10px;overflow-x:auto;padding:12px 14px;scrollbar-width:thin">
     <span style="color:var(--mu);font-size:.7rem">Loading hot hands…</span>
+  </div>
+</div>
+<!-- ── Top Edges widget (Edge Lab) ── -->
+<div id="edgesWidget" style="margin:12px 24px 0;border:1px solid var(--b);border-radius:14px;background:var(--card);overflow:hidden">
+  <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--b)">
+    <span style="font-family:'Orbitron',monospace;font-size:.7rem;letter-spacing:2px;color:var(--o)">📈 TOP EDGES</span>
+    <span id="edgSub" style="font-size:.66rem;color:var(--mu)">biggest model edges vs the book</span>
+    <a href="/edge-lab" style="margin-left:auto;font-size:.64rem;color:var(--c);text-decoration:none">EDGE LAB →</a>
+  </div>
+  <div id="edgStrip" style="display:flex;gap:10px;overflow-x:auto;padding:12px 14px;scrollbar-width:thin">
+    <span style="color:var(--mu);font-size:.7rem">Loading edges…</span>
   </div>
 </div>
 <div class="main">
@@ -2600,6 +2612,8 @@ function loadHotHandWidget(){
     HH_ROWS = d.players || [];
     var sub = document.getElementById('hhSub');
     if(sub) sub.textContent = d.count + ' players hitting their prop in 100% of the last 5';
+    var badge = document.getElementById('shh');
+    if(badge) badge.textContent = d.count != null ? d.count : '-';
     if(!HH_ROWS.length){
       strip.innerHTML = '<span style="color:var(--mu);font-size:.7rem">No 100% Club members right now'+(d.computing?' (computing…)':'')+'</span>';
       if(d.computing) setTimeout(loadHotHandWidget, 6000);
@@ -2633,6 +2647,50 @@ function trackHotHand(i, btn){
 }
 loadHotHandWidget();
 setInterval(loadHotHandWidget, 300000);
+
+// ── Top Edges widget ──────────────────────────────────────────────────────────
+var EDG_ROWS = [];
+function loadEdgesWidget(){
+  var strip = document.getElementById('edgStrip');
+  if(!strip) return;
+  fetch('/api/edges/today?minEdge=0.03').then(function(r){return r.json();}).then(function(d){
+    if(!d.success) throw new Error(d.error||'failed');
+    EDG_ROWS = d.edges || [];
+    var sub = document.getElementById('edgSub');
+    if(sub) sub.textContent = d.count + ' positive-value plays';
+    if(!EDG_ROWS.length){
+      strip.innerHTML = '<span style="color:var(--mu);font-size:.7rem">No edges right now'+(d.computing?' (computing…)':'')+'.</span>';
+      if(d.computing) setTimeout(loadEdgesWidget, 6000);
+      return;
+    }
+    strip.innerHTML = EDG_ROWS.slice(0,20).map(function(e,i){
+      return '<div style="flex:0 0 auto;min-width:184px;border:1px solid var(--b);border-radius:10px;padding:9px 11px;background:rgba(255,255,255,.02)">'+
+        '<div style="display:flex;align-items:center;gap:6px"><span style="font-weight:800;font-size:.72rem;color:var(--g)">'+esc(e.grade||'-')+'</span><span style="font-weight:700;font-size:.82rem;color:var(--t)">'+esc(e.player)+'</span></div>'+
+        '<div style="font-size:.66rem;color:var(--mu);margin:2px 0 6px">'+esc(e.marketLabel||e.marketKey)+' '+esc(e.side||'Over')+' '+e.line+'</div>'+
+        '<div style="display:flex;align-items:center;gap:8px">'+
+          '<span style="font-size:.7rem;color:var(--g);font-weight:700">+'+Number(e.edgePct||0).toFixed(1)+'%</span>'+
+          (e.evPct!=null?'<span style="font-size:.66rem;color:var(--o)">EV '+(e.evPct*100).toFixed(0)+'%</span>':'')+
+          '<button onclick="trackEdgeW('+i+',this)" style="margin-left:auto;border:1px solid rgba(0,229,255,.3);background:rgba(0,229,255,.08);color:var(--c);border-radius:7px;padding:3px 8px;font-size:.62rem;cursor:pointer">+ TRACK</button>'+
+        '</div></div>';
+    }).join('');
+    if(d.computing) setTimeout(loadEdgesWidget, 6000);
+  }).catch(function(){ strip.innerHTML = '<span style="color:var(--mu);font-size:.7rem">Edges unavailable</span>'; });
+}
+function trackEdgeW(i, btn){
+  var e = EDG_ROWS[i]; if(!e) return;
+  btn.disabled = true; btn.textContent = '…';
+  fetch('/api/tracker/pick', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({player:e.player, playerId:e.playerId, team:e.team, gamePk:e.gamePk,
+      marketKey:e.marketKey, line:e.line, recommendedSide:e.side||'Over', adjProb:e.modelProb,
+      edge:e.edge, marketImplied:e.marketImplied, hubRating:e.hubRating, evPct:e.evPct,
+      bestOverPrice:e.bestPrice, bookmaker:e.bestBook, source:'edge_finder'})
+  }).then(function(r){return r.json();}).then(function(d){
+    if(d.success){ btn.textContent='✓'; btn.style.color='var(--g)'; }
+    else { btn.disabled=false; btn.textContent='+ TRACK'; alert('Save failed: '+(d.error||'error')); }
+  }).catch(function(e){ btn.disabled=false; btn.textContent='+ TRACK'; alert('Save failed: '+e.message); });
+}
+loadEdgesWidget();
+setInterval(loadEdgesWidget, 300000);
 </script>
 <!-- LIVE GAMEPLAY PATCH -->
 <style>
