@@ -17,6 +17,26 @@
 body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh}
 a{color:var(--cold);text-decoration:none}
 
+/* ── Glossary tooltip (pure CSS, focus + hover accessible) ── */
+.info{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;
+  border:1px solid var(--muted);color:var(--muted);font-size:9px;font-weight:700;line-height:1;cursor:help;
+  position:relative;margin-left:4px;vertical-align:middle;flex:none}
+.info:hover,.info:focus{border-color:var(--cold);color:var(--cold);outline:none}
+.info::after{content:attr(data-tip);position:absolute;bottom:140%;left:50%;transform:translateX(-50%);
+  background:#0a0e16;color:var(--text);border:1px solid var(--accent2);border-radius:8px;padding:8px 10px;
+  font-size:11px;font-weight:400;line-height:1.45;width:230px;text-align:left;white-space:normal;
+  box-shadow:0 6px 24px rgba(0,0,0,.6);opacity:0;visibility:hidden;transition:opacity .15s;z-index:50;pointer-events:none}
+.info:hover::after,.info:focus::after{opacity:1;visibility:visible}
+.info.tip-left::after{left:auto;right:0;transform:none}
+
+/* ── Leaderboard search ── */
+.lb-search-bar{padding:8px 16px 0;display:flex;gap:8px;align-items:center}
+.lb-search{flex:1;background:var(--card);border:1px solid var(--border);color:var(--text);
+  padding:7px 10px;border-radius:6px;font-size:13px;outline:none;transition:border-color .2s}
+.lb-search:focus{border-color:var(--accent2)}
+.lb-search::placeholder{color:var(--muted)}
+.lb-count{font-size:11px;color:var(--muted);white-space:nowrap}
+
 /* ── Nav ── */
 nav{display:flex;align-items:center;justify-content:space-between;padding:14px 32px;background:rgba(5,10,24,.95);backdrop-filter:blur(16px);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100}
 .brand{display:flex;align-items:center;gap:14px}
@@ -348,6 +368,11 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
         <option value="all">⚾ All Games</option>
       </select>
     </div>
+    <div class="lb-search-bar">
+      <input type="text" class="lb-search" id="lbSearch" placeholder="🔍 Search batter or pitcher…"
+        oninput="filterBySearch(this.value)" autocomplete="off">
+      <span class="lb-count" id="lbCount"></span>
+    </div>
     <div class="leaderboard" id="leaderboard">
       <div class="loader"><div class="spinner"></div> Loading rankings…</div>
     </div>
@@ -364,6 +389,27 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 
 <script>
 const API=window.location.origin;
+
+// ── Glossary: plain-English explanations surfaced via ⓘ tooltips ──
+const GLOSSARY={
+  iso:"Isolated Power = SLG − AVG. Measures raw extra-base power independent of singles. League avg ≈ .160; .250+ is elite power.",
+  barrel:"Barrel% = share of batted balls hit at the ideal exit-velocity + launch-angle combo that produces the most HRs. League avg ≈ 8%; 15%+ is elite.",
+  hardhit:"Hard-Hit% = share of batted balls hit 95+ mph. Strong predictor of power output. League avg ≈ 40%.",
+  ev:"Average Exit Velocity (mph) off the bat. Higher = more authoritative contact. League avg ≈ 89 mph.",
+  hr9:"Pitcher's HRs allowed per 9 innings, split by batter handedness (the relevant platoon side). Higher = more homer-prone. League avg ≈ 1.2.",
+  park:"Park HR Index for the home venue. 100 = neutral; 110 means ~10% more HRs than average; below 100 suppresses HRs.",
+  mix:"Pitch-Mix Score: how well this batter's results match the pitcher's specific arsenal, weighted by usage. 1.0× = league-average matchup; >1.1× favors the hitter.",
+  xwoba:"Expected wOBA from quality of contact (exit velo + launch angle). Strips out luck/defense; a clean read on true offensive value. League avg ≈ .320.",
+  mcprob:"Monte Carlo HR probability: % of 1,000 simulated games (4 AB each) in which the batter hits at least one HR. The headline number.",
+  closed:"Closed-form estimate: 1−(1−p)⁴ where p is the per-AB HR chance and 4 is a typical game's AB. A quick analytic cross-check on the simulation.",
+  perab:"Per-AB HR probability — the chance of a home run in a single at-bat, before scaling up to a full game.",
+  score:"Composite 0–100 HR score blending power (ISO/barrel/HH), the pitcher's homer-rate vs this hand, park, and pitch-mix into one ranking number."
+};
+function infoIcon(key,left){
+  const t=GLOSSARY[key];if(!t)return '';
+  return `<span class="info${left?' tip-left':''}" tabindex="0" role="img" aria-label="${escapeHtml(t)}" data-tip="${escapeHtml(t)}">i</span>`;
+}
+
 let allScores=[];
 let aiBlurbs={};
 let gameMeta=[];
@@ -548,17 +594,32 @@ function filterByGame(val){
   renderLeaderboard(allScores);
 }
 
+let activeSearch='';
+function filterBySearch(val){
+  activeSearch=(val||'').trim().toLowerCase();
+  renderLeaderboard(allScores);
+}
+
 function renderLeaderboard(scores){
-  const filtered=activeGameFilter==='all'
+  let filtered=activeGameFilter==='all'
     ?scores
     :scores.filter(s=>String(s.game_pk)===String(activeGameFilter));
+  if(activeSearch){
+    filtered=filtered.filter(s=>
+      (s.batter||'').toLowerCase().includes(activeSearch)||
+      (s.pitcher||'').toLowerCase().includes(activeSearch)||
+      (s.team||'').toLowerCase().includes(activeSearch));
+  }
+  const countEl=document.getElementById('lbCount');
+  if(countEl)countEl.textContent=filtered.length+' batter'+(filtered.length===1?'':'s');
   if(!filtered.length){
     document.getElementById('leaderboard').innerHTML=
-      '<div class="empty-state">No batters found for this game.</div>';
+      '<div class="empty-state">No batters match your filter.</div>';
     return;
   }
-  const html=filtered.map((s,i)=>{
-    const rank=i+1;
+  const rankOf=new Map(scores.map((s,i)=>[`${s.batter_id}|${s.pitcher_id}|${s.game_pk}`,i+1]));
+  const html=filtered.map((s)=>{
+    const rank=rankOf.get(`${s.batter_id}|${s.pitcher_id}|${s.game_pk}`)||0;
     const rankClass=rank===1?'rank-1':rank===2?'rank-2':rank===3?'rank-3':'rank-other';
     const sc=scoreClass(s.score);
     const selected=selectedBatter&&selectedBatter.batter_id===s.batter_id&&selectedBatter.pitcher_id===s.pitcher_id?' selected':'';
@@ -618,6 +679,7 @@ async function selectBatter(s){
   dc.style.display='block';
   if(isSame)return;
   renderDetailSkeleton(s);
+  triggerSimulator();   // auto-run so the default tab shows results immediately
   loadPitchMix(s);
   loadH2H(s);
   loadScouting(s);
@@ -767,12 +829,7 @@ function renderDetailSkeleton(s){
       <button class="tab-btn" onclick="switchTab('scout',this)">AI Report</button>
     </div>
     <div id="tab-sim" class="tab-pane active">
-      <div class="sim-run-wrap">
-        <button class="sim-run-btn" id="simRunBtn" onclick="triggerSimulator()">
-          ▶ Run Monte Carlo Simulation
-        </button>
-        <div class="sim-run-sub">1,000 games × 4 AB — click to simulate HR probability</div>
-      </div>
+      <div class="loader"><div class="spinner"></div> Running Monte Carlo simulation…</div>
     </div>
     <div id="tab-mix" class="tab-pane">
       <div class="loader"><div class="spinner"></div> Loading pitch mix…</div>
@@ -816,7 +873,8 @@ async function loadPitchMix(s){
     const d=await r.json();
     if(mixPanel)renderPitchMix(mixPanel,d,s);
   }catch(e){
-    if(mixPanel)mixPanel.innerHTML=`<div class="error-box">Pitch mix error: ${escapeHtml(e.message)}</div>`;
+    if(mixPanel)mixPanel.innerHTML=`<div class="error-box">Pitch mix error: ${escapeHtml(e.message)}</div>
+      <div style="text-align:right;margin-top:8px"><button class="regen-btn" onclick="loadPitchMix(selectedBatter)">↻ Retry</button></div>`;
   }
 }
 
@@ -827,7 +885,8 @@ async function loadH2H(s){
     const d=await r.json();
     if(h2hPanel)renderH2H(h2hPanel,d,s);
   }catch(e){
-    if(h2hPanel)h2hPanel.innerHTML=`<div class="error-box">H2H error: ${escapeHtml(e.message)}</div>`;
+    if(h2hPanel)h2hPanel.innerHTML=`<div class="error-box">H2H error: ${escapeHtml(e.message)}</div>
+      <div style="text-align:right;margin-top:8px"><button class="regen-btn" onclick="loadH2H(selectedBatter)">↻ Retry</button></div>`;
   }
 }
 
@@ -838,7 +897,8 @@ async function loadScouting(s){
     const d=await r.json();
     if(scoutPanel)renderScouting(scoutPanel,d,s);
   }catch(e){
-    if(scoutPanel)scoutPanel.innerHTML=`<div class="error-box">Scouting error: ${escapeHtml(e.message)}</div>`;
+    if(scoutPanel)scoutPanel.innerHTML=`<div class="error-box">Scouting error: ${escapeHtml(e.message)}</div>
+      <div style="text-align:right;margin-top:8px"><button class="regen-btn" onclick="loadScouting(selectedBatter)">↻ Retry</button></div>`;
   }
 }
 
@@ -866,25 +926,25 @@ function renderSimulator(panel,d,s){
   }).join('');
   const inp=d.inputs||{};
   const kiRows=[
-    {v:inp.iso!=null?'.'+fmtStatVal(inp.iso):'—',l:'ISO (Power)'},
-    {v:inp.barrel_pct!=null?fmtPct(inp.barrel_pct):'—',l:'Barrel%'},
-    {v:inp.hh_pct!=null?fmtPct(inp.hh_pct):'—',l:'Hard Hit%'},
-    {v:inp.avg_ev!=null?inp.avg_ev.toFixed(1)+' mph':'—',l:'Avg EV'},
-    {v:inp.hr9_vs_hand!=null?inp.hr9_vs_hand.toFixed(2):'—',l:'Pit HR/9 vs Hand'},
-    {v:inp.park_hr_idx!=null?inp.park_hr_idx:'—',l:'Park HR Index'},
-    {v:inp.mix_score!=null?inp.mix_score.toFixed(2)+'×':'—',l:'Mix Score'},
-    {v:inp.xwoba!=null?fmt(inp.xwoba,3):'—',l:'xwOBA'},
+    {v:inp.iso!=null?'.'+fmtStatVal(inp.iso):'—',l:'ISO (Power)',k:'iso'},
+    {v:inp.barrel_pct!=null?fmtPct(inp.barrel_pct):'—',l:'Barrel%',k:'barrel'},
+    {v:inp.hh_pct!=null?fmtPct(inp.hh_pct):'—',l:'Hard Hit%',k:'hardhit'},
+    {v:inp.avg_ev!=null?inp.avg_ev.toFixed(1)+' mph':'—',l:'Avg EV',k:'ev'},
+    {v:inp.hr9_vs_hand!=null?inp.hr9_vs_hand.toFixed(2):'—',l:'Pit HR/9 vs Hand',k:'hr9'},
+    {v:inp.park_hr_idx!=null?inp.park_hr_idx:'—',l:'Park HR Index',k:'park'},
+    {v:inp.mix_score!=null?inp.mix_score.toFixed(2)+'×':'—',l:'Mix Score',k:'mix'},
+    {v:inp.xwoba!=null?fmt(inp.xwoba,3):'—',l:'xwOBA',k:'xwoba'},
   ];
   panel.innerHTML=`
     <div class="section">
       <div class="section-title">Monte Carlo Simulator (1,000 games × 4 AB)</div>
       <div class="sim-grid">
-        <div class="sim-cell"><div class="sim-val">${probPct(mc)}</div><div class="sim-lbl">HR Probability (MC)</div></div>
-        <div class="sim-cell"><div class="sim-val">${probPct(cf)}</div><div class="sim-lbl">Closed Form (1−(1−p)⁴)</div></div>
+        <div class="sim-cell"><div class="sim-val">${probPct(mc)}</div><div class="sim-lbl">HR Probability (MC)${infoIcon('mcprob')}</div></div>
+        <div class="sim-cell"><div class="sim-val">${probPct(cf)}</div><div class="sim-lbl">Closed Form (1−(1−p)⁴)${infoIcon('closed')}</div></div>
       </div>
       <div class="sim-cell" style="margin-bottom:12px;padding:10px 12px">
         <div class="sim-val">${probPct(pab)}</div>
-        <div class="sim-lbl">p HR per AB</div>
+        <div class="sim-lbl">p HR per AB${infoIcon('perab')}</div>
       </div>
       <div class="sim-bar-wrap">${barsHtml}</div>
       <div style="text-align:right;margin-top:8px">
@@ -894,7 +954,7 @@ function renderSimulator(panel,d,s){
     <div class="section">
       <div class="section-title">Key Inputs</div>
       <div class="key-inputs-grid">
-        ${kiRows.map(r=>`<div class="ki-cell"><div class="ki-val">${escapeHtml(String(r.v))}</div><div class="ki-lbl">${escapeHtml(r.l)}</div></div>`).join('')}
+        ${kiRows.map(r=>`<div class="ki-cell"><div class="ki-val">${escapeHtml(String(r.v))}</div><div class="ki-lbl">${escapeHtml(r.l)}${infoIcon(r.k)}</div></div>`).join('')}
       </div>
     </div>`;
 }
