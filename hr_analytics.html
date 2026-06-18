@@ -339,6 +339,14 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .lineup-refresh-row{display:flex;align-items:center;gap:8px;margin-top:4px;font-size:11px;color:var(--muted)}
 .lineup-countdown{color:var(--warn);font-weight:600;font-variant-numeric:tabular-nums}
 
+/* ── Game-status badges ── */
+.gs-badge{display:inline-block;font-size:9px;font-weight:700;letter-spacing:.05em;padding:2px 7px;border-radius:5px;
+  vertical-align:middle;margin-right:6px;white-space:nowrap}
+.gs-live{background:rgba(248,81,73,.18);color:#ff7b72;border:1px solid rgba(248,81,73,.5);animation:gsPulse 1.6s ease-in-out infinite}
+.gs-final{background:rgba(139,148,158,.15);color:var(--muted);border:1px solid var(--border)}
+.gs-ppd{background:rgba(210,153,34,.15);color:var(--warn);border:1px solid rgba(210,153,34,.45)}
+@keyframes gsPulse{0%,100%{opacity:1}50%{opacity:.55}}
+
 /* ── Spray chart + zone heatmap ── */
 .sz-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 @media(max-width:760px){.sz-grid{grid-template-columns:1fr}}
@@ -439,6 +447,7 @@ let aiBlurbs={};
 let gameMeta=[];
 let gameWeather={};
 let gameLineups={};
+let gameStatus={};   // game_pk -> {state:'pre'|'live'|'final'|'ppd', label, away, home}
 let activeGameFilter='all';
 let selectedBatter=null;
 let selectedBatterKey=null;
@@ -562,6 +571,7 @@ async function loadDailyScores(force=false){
     buildGameMeta(allScores);
     buildGameSelect(gameMeta);
     renderLeaderboard(allScores);
+    loadGameStatus();   // real Pre/Live/Final state from the schedule (non-blocking)
     if(allLineupsConfirmed()){
       stopLineupPoll();
     }else{
@@ -571,6 +581,43 @@ async function loadDailyScores(force=false){
     document.getElementById('leaderboard').innerHTML=
       `<div class="empty-state">Error loading data: ${escapeHtml(e.message)}</div>`;
   }
+}
+
+// Classify an MLB detailedState string into a compact badge state.
+function classifyGameState(status){
+  const t=(status||'').toLowerCase();
+  if(!t)return null;
+  if(t.includes('final')||t.includes('game over')||t.includes('completed'))return {state:'final',label:'FINAL'};
+  if(t.includes('postpon'))return {state:'ppd',label:'PPD'};
+  if(t.includes('suspend'))return {state:'ppd',label:'SUSP'};
+  if(t.includes('cancel'))return {state:'ppd',label:'CANCELLED'};
+  if(t.includes('in progress')||t.includes('warmup')||t.includes('delayed')||t.includes('manager challenge')||t.includes('review'))return {state:'live',label:'LIVE'};
+  return {state:'pre',label:'PRE'};
+}
+async function loadGameStatus(){
+  try{
+    const r=await fetch(`${API}/api/games/today`);
+    const d=await r.json();
+    const games=Array.isArray(d)?d:(d.games||d.data||[]);
+    const map={};
+    games.forEach(g=>{
+      const pk=String(g.gamePk||g.game_pk||'');
+      if(!pk)return;
+      const cls=classifyGameState(g.status);
+      if(cls)map[pk]={...cls,away:g.awayScore,home:g.homeScore,awayAbbr:g.awayAbbr,homeAbbr:g.homeAbbr};
+    });
+    gameStatus=map;
+    renderLeaderboard(allScores);   // re-render so badges appear
+  }catch(e){/* status is best-effort; ignore */}
+}
+function gameStatusBadge(gamePk){
+  const gs=gameStatus[String(gamePk)];
+  if(!gs||gs.state==='pre')return '';   // pre-game is the default; game time already shown
+  const cls={live:'gs-live',final:'gs-final',ppd:'gs-ppd'}[gs.state]||'gs-pre';
+  let txt=gs.label;
+  if(gs.state==='final'&&gs.away!=null&&gs.home!=null&&gs.awayAbbr&&gs.homeAbbr)
+    txt=`FINAL ${escapeHtml(gs.awayAbbr)} ${gs.away}–${gs.home} ${escapeHtml(gs.homeAbbr)}`;
+  return `<span class="gs-badge ${cls}">${txt}</span>`;
 }
 
 function buildGameMeta(scores){
@@ -611,10 +658,22 @@ function buildGameSelect(meta){
     opt.textContent=g.label;
     sel.appendChild(opt);
   });
+  // Restore a game filter shared via the URL (?game=<pk>) if it's still valid.
+  const urlGame=new URLSearchParams(location.search).get('game');
+  if(urlGame&&(urlGame==='all'||meta.some(g=>String(g.game_pk)===String(urlGame)))){
+    sel.value=urlGame;
+    activeGameFilter=urlGame;
+  }else if(activeGameFilter!=='all'&&meta.some(g=>String(g.game_pk)===String(activeGameFilter))){
+    sel.value=activeGameFilter; // keep current selection across refreshes
+  }
 }
 
 function filterByGame(val){
   activeGameFilter=val;
+  // Reflect the filter in the URL so it survives reload / can be shared.
+  const u=new URL(location.href);
+  if(val&&val!=='all')u.searchParams.set('game',val);else u.searchParams.delete('game');
+  history.replaceState(null,'',u);
   renderLeaderboard(allScores);
 }
 
@@ -669,7 +728,7 @@ function renderLeaderboard(scores){
         <div class="rank-badge ${rankClass}">#${rank}</div>
         ${lbThumbHtml(s)}
         <div class="batter-info">
-          <div class="batter-name">${escapeHtml(s.batter)} ${lineupBadge}</div>
+          <div class="batter-name">${escapeHtml(s.batter)} ${gameStatusBadge(s.game_pk)}${lineupBadge}</div>
           <div class="batter-meta">vs ${escapeHtml(s.pitcher)} &bull; ${matchupStr}${gt?' &bull; '+escapeHtml(gt):''}</div>
           <div class="batter-stats">
             <span>ISO .${fmtStatVal(s.iso)}</span>
@@ -848,6 +907,7 @@ function renderDetailSkeleton(s){
           ${gt?`<span class="player-meta-sep">·</span><span class="game-time">${escapeHtml(gt)}</span>`:''}
         </div>
         <div class="player-pills">
+          ${gameStatusBadge(s.game_pk)}
           <span class="pill pill-hr">🎯 ${probPct(s.prob_hr)} HR Prob</span>
           ${parkPill(s.park_hr_idx)}
           ${mixPill(mixScore)}
@@ -1187,8 +1247,15 @@ function renderPitchMix(panel,d,s){
     }
   }
   const hasGettable=rows.some(r=>isLethal(r))||rows.some(r=>isGood(r))||(mixScore>=1.0);
-  const displayRows=rows.slice(0,4);
-  const pitchBlocksHtml=displayRows.map(pitchBlockHtml).join('');
+  // Show the 4 most-used pitches up front; reveal the rest behind a toggle.
+  const primaryHtml=rows.slice(0,4).map(pitchBlockHtml).join('');
+  const extraRows=rows.slice(4);
+  const extraHtml=extraRows.length
+    ?`<div id="extraPitches" style="display:none">${extraRows.map(pitchBlockHtml).join('')}</div>
+      <div style="text-align:center;margin-top:10px">
+        <button class="regen-btn" id="pitchToggleBtn" onclick="togglePitches(this,${rows.length})">▾ Show all ${rows.length} pitches</button>
+      </div>`
+    :'';
   panel.innerHTML=`
     <div class="section">
       <div class="pitch-mix-header">
@@ -1202,10 +1269,19 @@ function renderPitchMix(panel,d,s){
         ?'<div class="section-title" style="color:var(--score-hi)">⚾ PITCHER IS GETTABLE — HERE\'S WHY</div>'
         :'<div class="section-title">⚾ PITCH-BY-PITCH MATCHUP ANALYSIS</div>'}
       ${intelHtml}
-      <div class="section-title" style="margin-top:4px">PITCH-BY-PITCH MATCHUP (TOP ${displayRows.length})</div>
-      ${pitchBlocksHtml}
+      <div class="section-title" style="margin-top:4px">PITCH-BY-PITCH MATCHUP${extraRows.length?` (${rows.length} PITCHES)`:` (TOP ${Math.min(rows.length,4)})`}</div>
+      ${primaryHtml}
+      ${extraHtml}
       <div style="font-size:11px;color:var(--muted);margin-top:10px;text-align:right">Data sourced from Baseball Savant / MLB Statcast</div>
     </div>`;
+}
+
+function togglePitches(btn,total){
+  const ex=document.getElementById('extraPitches');
+  if(!ex)return;
+  const open=ex.style.display!=='none';
+  ex.style.display=open?'none':'block';
+  btn.textContent=open?`▾ Show all ${total} pitches`:'▴ Show fewer pitches';
 }
 
 function renderH2H(panel,d,s){
