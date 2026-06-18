@@ -34,6 +34,14 @@
     .legend-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 18px;margin-top:6px}
     @media(max-width:600px){.legend-grid{grid-template-columns:1fr}}
     .legend-tier{display:inline-block;padding:1px 7px;border-radius:6px;font-size:.7rem;font-weight:700;margin-right:6px}
+
+    /* H2H sample reliability bar */
+    .rel-wrap{margin:8px 0 4px;font-size:.7rem;color:var(--mu)}
+    .rel-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
+    .rel-head b{color:var(--t);font-size:.72rem}
+    .rel-track{height:7px;border-radius:6px;background:rgba(255,255,255,.06);overflow:hidden;border:1px solid var(--b)}
+    .rel-fill{height:100%;border-radius:6px;transition:width .4s ease}
+    .rel-note{margin-top:4px;font-size:.66rem;line-height:1.4}
     .wrap{max-width:1500px;margin:0 auto;padding:18px}
     .top{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px}
     .brand{font-weight:700;letter-spacing:.08em}
@@ -1706,6 +1714,25 @@ function renderDetail(data) {
       <div class="stat-box"><div class="stat-val">${summary.hr??'—'}</div><div class="stat-lbl">HR</div></div>
       <div class="stat-box"><div class="stat-val" ${ratioColor(summary.ops_ratio)}>${summary.ops_ratio!=null ? Number(summary.ops_ratio).toFixed(2)+'x' : '—'}</div><div class="stat-lbl">OPS Ratio</div></div>
     </div>
+
+    ${(() => {
+      // Sample-reliability bar: how much weight the H2H carries vs the platoon baseline.
+      let rel = (mc.bvpReliability != null) ? Number(mc.bvpReliability) : null;
+      if (rel == null) { const p = Number(pa) || 0; rel = Math.max(0, Math.min(1, p / 30)); }
+      const pct = Math.round(rel * 100);
+      const col = rel >= 0.66 ? 'var(--g)' : rel >= 0.33 ? 'var(--y)' : 'var(--r)';
+      const word = rel >= 0.66 ? 'HIGH' : rel >= 0.33 ? 'MODERATE' : 'LOW';
+      const note = rel >= 0.66
+        ? 'Enough head-to-head plate appearances to trust this matchup history directly.'
+        : rel >= 0.33
+          ? 'Partial sample — the grade blends H2H history with the batter\'s platoon split.'
+          : 'Thin head-to-head sample — the grade leans mostly on platoon (vs LHP/RHP) data, not this exact matchup.';
+      return `<div class="rel-wrap">
+        <div class="rel-head"><b>H2H Sample Reliability${infoIcon('reliability')}</b><span style="color:${col};font-weight:700">${word} · ${pct}%</span></div>
+        <div class="rel-track"><div class="rel-fill" style="width:${pct}%;background:${col}"></div></div>
+        <div class="rel-note">${note}</div>
+      </div>`;
+    })()}
 
     ${seasonalTrendHtml(mc.bvpSeasons, summary.pa || 0)}
 
