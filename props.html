@@ -69,6 +69,13 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .plbl{font-size:.5rem;color:var(--mu);letter-spacing:1.5px;font-family:'Orbitron',monospace;margin-bottom:4px}
 .pval{font-family:'Orbitron',monospace;font-size:.88rem;font-weight:700;color:var(--c)}
 .pval.mv-hr{color:var(--m)}.pval.mv-tb{color:var(--o)}.pval.mv-rbi{color:var(--g)}
+/* ── Recommended prop ("take this") — gold pulsing border ── */
+.pcell.rec,.pp-proj.rec,.fstat.rec{position:relative;overflow:visible;border:1.5px solid #ffd24a;background:linear-gradient(180deg,rgba(255,196,0,.14),rgba(0,0,0,.28));animation:recPulse 1.7s ease-in-out infinite;z-index:1}
+.pcell.rec-elite,.pp-proj.rec-elite,.fstat.rec-elite{animation-duration:1.05s}
+.pcell.rec .pval,.pp-proj.rec .pp-pval,.fstat.rec .hrr-pill{color:#ffe6a0!important;text-shadow:0 0 10px rgba(255,196,0,.55)}
+.rec-tag{position:absolute;top:-8px;left:50%;transform:translateX(-50%);font-family:'Orbitron',monospace;font-size:.42rem;letter-spacing:.7px;font-weight:700;background:linear-gradient(90deg,#ffb300,#ffe082);color:#1a1300;padding:1px 7px;border-radius:7px;white-space:nowrap;box-shadow:0 1px 5px rgba(0,0,0,.45);z-index:2}
+@keyframes recPulse{0%,100%{box-shadow:0 0 0 1px rgba(255,210,74,.30),0 0 7px rgba(255,196,0,.25);border-color:#ffce5a}50%{box-shadow:0 0 0 2px rgba(255,210,74,.70),0 0 20px rgba(255,196,0,.60);border-color:#ffe6a0}}
+@media(prefers-reduced-motion:reduce){.pcell.rec,.pp-proj.rec,.fstat.rec{animation:none;box-shadow:0 0 0 2px rgba(255,210,74,.6),0 0 16px rgba(255,196,0,.45)}}
 .bcard-foot{display:flex;justify-content:space-between;align-items:center;padding-top:10px;border-top:1px solid rgba(255,255,255,.06)}
 .fstat{text-align:center}
 .fstat-lbl{font-size:.5rem;color:var(--mu);letter-spacing:1px;font-family:'Orbitron',monospace}
@@ -2556,6 +2563,46 @@ function defBadgeHtml(defFactor){
   return `<div style="display:inline-flex;align-items:center;gap:5px;margin:2px 0 4px;padding:3px 9px;border-radius:999px;border:1px solid ${bd};background:${bg};color:${col};font-size:.6rem;font-weight:700;letter-spacing:.5px">🧤 OPP DEF ${txt}</div>`;
 }
 
+// ── Recommended-prop ("take this") detection ──────────────────────────────────
+// Minimum Hub Rating before a prop is flagged as a gold "take" pick.
+const REC_MIN_HUB = 60;
+
+// Resolve the best engine prop for a player, falling back to a card-supplied one.
+function bestPropFor(name, fallback) {
+  const n = (name || '').toLowerCase();
+  return PLAYER_BEST_PROP[n] || fallback || null;
+}
+
+// From a best-prop row, decide which stat box should glow gold (or null).
+// Returns { stat, tier, hub, line } where stat ∈ hits|hr|tb|rbi|hrr|k.
+function recPickFromBest(best) {
+  if (!best) return null;
+  const side = String(best.side || best.recommendedSide || 'Over').toLowerCase();
+  if (side.indexOf('under') >= 0) return null;          // only flag "take the over" picks
+  const stat = MKT_PROJ[best.marketKey];
+  if (!stat) return null;
+  const hub = best.hubRating != null ? best.hubRating : computeHubRating(best.adjProb, best.edge);
+  if (hub == null || hub < REC_MIN_HUB) return null;
+  return { stat, tier: hub >= 80 ? 'elite' : 'strong', hub, line: best.line };
+}
+
+// Pitcher recommendation — prefer the engine's K prop, else derive from PROJ K
+// clearing a standard strikeout line by a meaningful margin.
+function recPickPitcher(p, pr) {
+  const eng = recPickFromBest(bestPropFor(p && p.name));
+  if (eng && eng.stat === 'k') return eng;
+  if (!pr || pr.k == null) return null;
+  if ((pr.form_flag || '') === 'struggling') return null;  // don't push Ks on a fading arm
+  let line = null;
+  [3.5, 4.5, 5.5, 6.5].forEach(l => { if (pr.k - l >= 0.5) line = l; });
+  if (line == null) return null;
+  return { stat: 'k', tier: (pr.k - line) >= 1.2 ? 'elite' : 'strong', line };
+}
+
+// Class + tag helpers for the stat boxes.
+function recCls(rec, stat) { return rec && rec.stat === stat ? ` rec rec-${rec.tier}` : ''; }
+function recTag(rec, stat) { return rec && rec.stat === stat ? `<div class="rec-tag">⭐ TAKE</div>` : ''; }
+
 function batterCard(b) {
   const p    = b.proj || {};
   const adj  = p.adjustments || null;
@@ -2565,6 +2612,7 @@ function batterCard(b) {
   const hub  = PLAYER_HUB_MAP[nKey] ?? b.scanHubRating;
   const ev   = PLAYER_EV_MAP[nKey] ?? b.scanEvPct;
   const best = PLAYER_BEST_PROP[nKey] || b.scanBestProp;
+  const rec  = recPickFromBest(best);
   const bKey = best ? pickKey(best) : null;
   const bSaved = bKey && TRACKED_KEYS.has(bKey);
   const hrPanel = p.hr != null ? hrProfilePanel(b, p) : '';
@@ -2607,13 +2655,13 @@ function batterCard(b) {
     ${pitchAdvBadgeHtml(b.pitchTypeAdvantage, b.pitchTypeAdvantageNote)}
     ${b.proj?.platoon_note ? `<div class="platoon-badge platoon-${platoonCls(b.proj.platoon_note)}">${b.proj.platoon_note} · split avg ${b.proj.split_avg??'—'} · ops ${b.proj.split_ops??'—'}</div>` : ''}
     <div class="proj-grid">
-      <div class="pcell"><div class="plbl">HITS</div><div class="pval">${f2(p.hits)}</div></div>
-      <div class="pcell"><div class="plbl">HR</div><div class="pval mv-hr">${f3(p.hr)}</div></div>
-      <div class="pcell"><div class="plbl">TOT BASES</div><div class="pval mv-tb">${f2(p.tb)}</div></div>
-      <div class="pcell"><div class="plbl">RBI</div><div class="pval mv-rbi">${f2(p.rbi)}</div></div>
+      <div class="pcell${recCls(rec,'hits')}">${recTag(rec,'hits')}<div class="plbl">HITS</div><div class="pval">${f2(p.hits)}</div></div>
+      <div class="pcell${recCls(rec,'hr')}">${recTag(rec,'hr')}<div class="plbl">HR</div><div class="pval mv-hr">${f3(p.hr)}</div></div>
+      <div class="pcell${recCls(rec,'tb')}">${recTag(rec,'tb')}<div class="plbl">TOT BASES</div><div class="pval mv-tb">${f2(p.tb)}</div></div>
+      <div class="pcell${recCls(rec,'rbi')}">${recTag(rec,'rbi')}<div class="plbl">RBI</div><div class="pval mv-rbi">${f2(p.rbi)}</div></div>
     </div>
     <div class="bcard-foot">
-      <div class="fstat"><div class="fstat-lbl">H+R+RBI</div><div class="hrr-pill">${f2(p.hrr)}</div></div>
+      <div class="fstat${recCls(rec,'hrr')}">${recTag(rec,'hrr')}<div class="fstat-lbl">H+R+RBI</div><div class="hrr-pill">${f2(p.hrr)}</div></div>
       <div class="fstat"><div class="fstat-lbl">xWOBA</div><div class="fstat-val">${b.sv_xwoba ? Number(b.sv_xwoba).toFixed(3) : nd(b.fg_woba)}</div></div>
       <div class="fstat"><div class="fstat-lbl">EV</div><div class="fstat-val">${b.sv_ev ? Number(b.sv_ev).toFixed(1) : '—'}</div></div>
       <div class="fstat"><div class="fstat-lbl">EXP PA</div><div class="fstat-val">${p.expected_pa ?? '—'}</div></div>
@@ -2673,6 +2721,7 @@ function pitcherPanel(p) {
   const pr   = p.proj || {};
   const pid  = p.id;
   const trnd = trendPillsForPitcher(pid);
+  const recK = recPickPitcher(p, pr);
 
   // Form badge
   const flag = pr.form_flag || 'neutral';
@@ -2700,7 +2749,7 @@ function pitcherPanel(p) {
     <div class="pp-meta">${p.team||''} · ${p.role||'SP'} · ${p.pitchHand||'R'}HP</div>
     ${recentRow}
     <div class="pp-projs">
-      <div class="pp-proj"><div class="pp-plbl">PROJ K</div><div class="pp-pval kv">${f1(pr.k)}</div></div>
+      <div class="pp-proj${recCls(recK,'k')}">${recTag(recK,'k')}<div class="pp-plbl">PROJ K</div><div class="pp-pval kv">${f1(pr.k)}</div></div>
       <div class="pp-proj"><div class="pp-plbl">PROJ BB</div><div class="pp-pval bbv">${f1(pr.bb)}</div></div>
       <div class="pp-proj"><div class="pp-plbl">EXP IP</div><div class="pp-pval">${pr.expected_ip ?? '—'}</div></div>
     </div>
