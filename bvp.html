@@ -8,6 +8,58 @@
     :root{--bg:#070d18;--card:#101a2a;--card2:#0b1322;--b:#223149;--t:#dfe9ff;--mu:#8ea4c8;--c:#00e5ff;--g:#00e676;--o:#ff9800;--r:#ff5252;--y:#f5c542}
     *{box-sizing:border-box}
     body{margin:0;background:radial-gradient(circle at 10% 0%,#0f1d36,transparent 45%),var(--bg);color:var(--t);font-family:Segoe UI,Arial,sans-serif;min-height:100vh}
+
+    /* Glossary tooltip (pure CSS, focus + hover accessible) */
+    .info{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;
+      border:1px solid var(--mu);color:var(--mu);font-size:9px;font-weight:700;line-height:1;cursor:help;
+      position:relative;margin-left:4px;vertical-align:middle;flex:none}
+    .info:hover,.info:focus{border-color:var(--c);color:var(--c);outline:none}
+    .info::after{content:attr(data-tip);position:absolute;bottom:140%;left:50%;transform:translateX(-50%);
+      background:#060b16;color:var(--t);border:1px solid var(--c);border-radius:8px;padding:8px 10px;
+      font-size:11px;font-weight:400;line-height:1.45;width:235px;text-align:left;white-space:normal;
+      box-shadow:0 6px 24px rgba(0,0,0,.6);opacity:0;visibility:hidden;transition:opacity .15s;z-index:60;pointer-events:none}
+    .info:hover::after,.info:focus::after{opacity:1;visibility:visible}
+    .info.tip-left::after{left:auto;right:0;transform:none}
+
+    /* "How to read this" methodology legend */
+    .legend{background:linear-gradient(135deg,rgba(0,229,255,.05),transparent);border:1px solid var(--b);
+      border-left:3px solid var(--c);border-radius:10px;margin-bottom:14px;overflow:hidden}
+    .legend summary{cursor:pointer;padding:10px 14px;font-size:.82rem;font-weight:600;color:var(--c);
+      letter-spacing:.03em;list-style:none;user-select:none;display:flex;align-items:center;gap:8px}
+    .legend summary::-webkit-details-marker{display:none}
+    .legend summary::before{content:'▸';transition:transform .2s;font-size:.7rem}
+    .legend[open] summary::before{transform:rotate(90deg)}
+    .legend-body{padding:4px 16px 14px;font-size:.78rem;color:var(--mu);line-height:1.6}
+    .legend-body b{color:var(--t)}
+    .legend-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 18px;margin-top:6px}
+    @media(max-width:600px){.legend-grid{grid-template-columns:1fr}}
+    .legend-tier{display:inline-block;padding:1px 7px;border-radius:6px;font-size:.7rem;font-weight:700;margin-right:6px}
+
+    /* H2H sample reliability bar */
+    .rel-wrap{margin:8px 0 4px;font-size:.7rem;color:var(--mu)}
+    .rel-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
+    .rel-head b{color:var(--t);font-size:.72rem}
+    .rel-track{height:7px;border-radius:6px;background:rgba(255,255,255,.06);overflow:hidden;border:1px solid var(--b)}
+    .rel-fill{height:100%;border-radius:6px;transition:width .4s ease}
+    .rel-note{margin-top:4px;font-size:.66rem;line-height:1.4}
+
+    /* Spray chart + zone heatmap */
+    .sz-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:6px}
+    @media(max-width:700px){.sz-grid{grid-template-columns:1fr}}
+    .sz-card{background:var(--card2);border:1px solid var(--b);border-radius:10px;padding:10px}
+    .sz-title{font-size:.66rem;text-transform:uppercase;letter-spacing:.08em;color:var(--mu);font-weight:600;margin-bottom:6px;display:flex;align-items:center;justify-content:space-between}
+    .spray-svg{width:100%;height:auto;display:block;border-radius:8px;background:radial-gradient(circle at 50% 95%,#12321f 0%,#0b1f14 55%,#091a11 100%)}
+    .spray-legend{display:flex;gap:10px;flex-wrap:wrap;font-size:.6rem;color:var(--mu);margin-top:6px;justify-content:center}
+    .spray-legend span{display:inline-flex;align-items:center;gap:4px}
+    .spray-dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+    .zone-3x3{display:grid;grid-template-columns:repeat(3,1fr);gap:3px;aspect-ratio:1;max-width:230px;margin:0 auto;
+      border:2px dashed rgba(255,255,255,.18);padding:3px;border-radius:6px}
+    .zone-cell{border-radius:5px;display:flex;flex-direction:column;align-items:center;justify-content:center;
+      min-height:54px;color:#06121a;font-weight:700}
+    .zone-cell .zc-slg{font-size:.92rem;line-height:1}
+    .zone-cell .zc-sub{font-size:.54rem;font-weight:600;opacity:.85;margin-top:2px}
+    .zone-empty{color:var(--mu);font-size:.7rem;text-align:center;padding:20px 8px}
+    .sz-meta{font-size:.6rem;color:var(--mu);text-align:center;margin-top:6px}
     .wrap{max-width:1500px;margin:0 auto;padding:18px}
     .top{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px}
     .brand{font-weight:700;letter-spacing:.08em}
@@ -768,6 +820,60 @@ function escHtml(s) {
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+// ── Glossary: plain-English metric/verdict explanations surfaced via ⓘ tooltips ──
+const GLOSSARY = {
+  grade: "Career matchup grade (A+ to D). Driven by the batter's OPS vs this pitcher when the sample is meaningful, otherwise by his platoon split (vs LHP/RHP). Small samples are shrunk toward the platoon baseline.",
+  hit1: "Probability the batter records 1+ hit in the game, combining platoon-adjusted contact rate, the pitcher's profile, park and weather.",
+  tb2: "Probability of 2+ total bases (a double, two singles, a HR, etc.) — a power-leaning marker.",
+  hr: "Probability of hitting at least one home run, driven by barrel rate, the pitcher's HR tendency vs this hand, park HR factor and weather carry.",
+  rbi1: "Probability the batter drives in 1+ run, sensitive to lineup slot and the projected runners on base.",
+  ev: "Expected Value vs the book's implied probability. Positive EV means the model sees a profitable edge at the listed price.",
+  verdict: "Bet tier from the model's edge vs the market. STRONG BET / LEAN OVER are positive edges; PASS is no edge; LEAN UNDER / STRONG FADE favor the under.",
+  ci: "95% confidence interval. A wide band means more uncertainty (small sample); a tight band means the estimate is well-supported.",
+  reliability: "How trustworthy the head-to-head sample is, 0–100%. Low reliability (few plate appearances) means the grade leans on platoon data instead.",
+  mix: "Pitch-Mix Score: how the batter's results line up against this pitcher's specific arsenal, weighted by usage. 1.0× = league-average matchup; >1.10× favors the hitter.",
+  xwoba: "Expected wOBA from quality of contact (exit velocity + launch angle). Removes luck and defense for a clean read on true value. League avg ≈ .320.",
+  xba: "Expected batting average from contact quality — what the batter 'should' be hitting based on how hard/at what angle he hits the ball.",
+  xslg: "Expected slugging from contact quality, isolating power independent of park and luck.",
+  barrel: "Barrel% = share of batted balls in the optimal exit-velo + launch-angle zone for home runs. League avg ≈ 8%; 15%+ is elite.",
+  ttop: "Times-Through-Order penalty: starters get hit harder each time the lineup sees them. Expressed as a wOBA multiplier on later trips.",
+  ump: "Home-plate umpire's strike-zone tendency (40–60 scale). A hitter-friendly zone (tight) helps batters; a pitcher-friendly zone (wide) boosts strikeouts.",
+  montecarlo: "Monte Carlo: thousands of simulated games using the projected rate stats, producing a distribution of outcomes (e.g. P(2+ hits)) rather than a single point estimate.",
+  ensemble: "Two independent models — XGBoost (ML) and BATX (analytic) — projected side by side. AGREE = they're within ~8 pts; SPLIT = they diverge, so trust the call less.",
+  pitcherK: "Projected strikeouts for the starting pitcher vs this lineup, using each batter's K-rate matched against the pitcher (Log5).",
+  parkfactor: "Park factor for the venue. 100 = neutral; above 100 inflates offense/HRs, below 100 suppresses it.",
+  spray: "Where the batter has put balls in play this season (Statcast hit coordinates). Orange = HR, green = hit, gray = out. Reveals pull/oppo tendencies and where he does damage.",
+  hotzone: "Slugging by strike-zone third (catcher's view). Warmer cells = where the batter does the most damage; cold cells are pitch-here-to-attack locations."
+};
+function infoIcon(key, left) {
+  const t = GLOSSARY[key]; if (!t) return '';
+  return `<span class="info${left ? ' tip-left' : ''}" tabindex="0" role="img" aria-label="${escHtml(t)}" data-tip="${escHtml(t)}">i</span>`;
+}
+
+// ── "How to read this page" methodology legend (shown atop each detail panel) ──
+function methodologyLegend() {
+  const tier = (cls, txt) => `<span class="legend-tier" style="background:${cls}1f;color:${cls};border:1px solid ${cls}55">${txt}</span>`;
+  return `<details class="legend">
+    <summary>How to read this page — methodology &amp; verdict guide</summary>
+    <div class="legend-body">
+      Every projection blends <b>FanGraphs season stats</b>, <b>Statcast expected stats</b> (quality of contact),
+      the pitcher's <b>arsenal &amp; platoon profile</b>, <b>park factor</b>, <b>weather</b>, and any <b>head-to-head history</b>
+      (shrunk toward platoon baselines when the sample is thin). Two models run in parallel — an <b>XGBoost</b> ML model
+      and the analytic <b>BATX</b> model — and a calibrator fuses them into one probability with a 95% confidence band.
+      <div class="legend-grid">
+        <div>${tier('#00e676','STRONG BET')} clear +EV edge — model well above the book</div>
+        <div>${tier('#00e5ff','LEAN OVER')} modest +EV edge on the over</div>
+        <div>${tier('#8ea4c8','PASS')} no actionable edge either way</div>
+        <div>${tier('#ff9800','LEAN UNDER')} modest edge to the under</div>
+        <div>${tier('#ff5252','STRONG FADE')} model well below the book — fade</div>
+        <div>Hover any <span class="info" data-tip="Hover icons like this for a plain-English definition of the metric.">i</span> icon for a definition</div>
+      </div>
+      <div style="margin-top:8px"><b>Trust tip:</b> weigh calls by sample size — a tight confidence interval and high
+      reliability mean the number is solid; a wide band or "SPLIT" model agreement means treat it as a lean, not a lock.</div>
+    </div>
+  </details>`;
+}
+
 // ── Stat quality colour helpers ──────────────────────────────────────────────
 function xstatColor(val, lg, higherIsBetter = true) {
   if (val == null) return '';
@@ -1299,7 +1405,7 @@ function renderDetail(data) {
     const valColor = v.key === 'bet' ? 'good' : v.key === 'fade' ? 'bad' : v.key === 'lean' ? 'warn' : '';
     return `<div class="prob-box ${tone}">
       <div class="prob-val ${valColor}">${fmtPct2(prob)}</div>
-      <div class="prob-lbl">${label}</div>
+      <div class="prob-lbl">${label}${infoIcon(market)}</div>
       ${evVal != null ? `<div style="font-size:.58rem;color:var(--mu);margin-top:2px">E: ${Number(evVal).toFixed(market==='hr'?3:2)}${evSuffix?' '+evSuffix:''}</div>` : ''}
       ${v.label && v.label !== '—' ? `<div class="verdict-pill ${v.cls}">${v.label}</div>` : ''}
     </div>`;
@@ -1320,7 +1426,7 @@ function renderDetail(data) {
   const ensembleRows = computeEnsembleAgreement(probs);
   const agreeCount = ensembleRows.filter(r => r.flag === 'AGREE').length;
   const ensembleHtml = ensembleRows.length ? `
-    <div class="section-label">Component Models <span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— diagnostic · ${agreeCount}/${ensembleRows.length} markets agree</span></div>
+    <div class="section-label">Component Models${infoIcon('ensemble')} <span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— diagnostic · ${agreeCount}/${ensembleRows.length} markets agree</span></div>
     <div class="ensemble-grid">
       ${ensembleRows.map(r => `
         <div class="ensemble-cell ${r.flag.toLowerCase()}">
@@ -1344,7 +1450,7 @@ function renderDetail(data) {
   // Pitcher K total vs the actual lineup he's facing today.
   const pkProj = (proj && proj.pitcherKProjection) || null;
   const pkHtml = pkProj ? `
-    <div class="section-label">Pitcher K's vs Lineup <span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— Log5 matchup · ${pkProj.lineupSize}-man lineup · ~${pkProj.expectedTBF} TBF</span></div>
+    <div class="section-label">Pitcher K's vs Lineup${infoIcon('pitcherK')} <span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— Log5 matchup · ${pkProj.lineupSize}-man lineup · ~${pkProj.expectedTBF} TBF</span></div>
     <div class="pk-panel">
       <div class="pk-head">
         <div><span style="font-size:.66rem;color:var(--mu);text-transform:uppercase;letter-spacing:.08em">Projected K Total</span></div>
@@ -1453,7 +1559,7 @@ function renderDetail(data) {
       </div>` : '';
 
     return `
-    <div class="section-label">Pitch-Mix Matchup <span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— arsenal-weighted RV/100</span></div>
+    <div class="section-label">Pitch-Mix Matchup${infoIcon('mix')} <span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— arsenal-weighted RV/100</span></div>
     <div style="background:rgba(0,229,255,.03);border:1px solid rgba(0,229,255,.1);border-left:3px solid ${col};border-radius:8px;padding:10px 12px;margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;align-items:center">
         <span style="font-size:.74rem;color:var(--mu)">${label} arsenal matchup</span>
@@ -1496,7 +1602,7 @@ function renderDetail(data) {
       ? `XGB ${(md.xgb*100).toFixed(0)}% · BATX ${(md.batx*100).toFixed(0)}% · Δ${(md.divergence*100).toFixed(0)}pts`
       : (md.batx != null ? `BATX ${(md.batx*100).toFixed(0)}% (XGB unavailable)` : '');
     verdictHtml = `
-      <div class="section-label">1+ Hit Verdict <span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— single calibrated probability + 95% CI</span></div>
+      <div class="section-label">1+ Hit Verdict${infoIcon('ci')} <span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— single calibrated probability + 95% CI</span></div>
       <div class="verdict-card ${tierCls}" title="${vdt.source === 'isotonic' ? 'Trained on historical outcomes' : 'Logistic blend of XGB + BATX with coverage- and sample-aware weights'}">
         <div class="vc-left">
           <div class="vc-tier">${vdt.label}</div>
@@ -1530,7 +1636,7 @@ function renderDetail(data) {
   // ── Monte Carlo distribution bands ────────────────────────────────────────
   const mcSim = (proj && proj.monteCarlo) || null;
   const mcHtml = mcSim ? `
-    <div class="section-label">Monte Carlo · ${mcSim.nPa} PAs vs SP <span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— ${(mcSim.nSims/1000).toFixed(0)}k sims · 50/75/90 percentile</span></div>
+    <div class="section-label">Monte Carlo${infoIcon('montecarlo')} · ${mcSim.nPa} PAs vs SP <span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— ${(mcSim.nSims/1000).toFixed(0)}k sims · 50/75/90 percentile</span></div>
     <div class="mc-strip">
       <div class="mc-cell">
         <div class="v">${mcSim.hits.p50}–${mcSim.hits.p90}</div>
@@ -1567,6 +1673,7 @@ function renderDetail(data) {
 
   // Render layout
   document.getElementById('detailPanel').innerHTML = `
+    ${methodologyLegend()}
     <div class="bvp-header">
       <div class="bvp-names">
         <div class="bvp-batter">${batterName}</div>
@@ -1575,7 +1682,7 @@ function renderDetail(data) {
       </div>
       <div class="grade-badge-wrap">
         <div class="grade-badge ${gbClass}">${grade}</div>
-        <div class="grade-basis-lbl">${gradeBasis}</div>
+        <div class="grade-basis-lbl">${gradeBasis}${infoIcon('grade', true)}</div>
       </div>
     </div>
 
@@ -1628,6 +1735,25 @@ function renderDetail(data) {
       <div class="stat-box"><div class="stat-val" ${ratioColor(summary.ops_ratio)}>${summary.ops_ratio!=null ? Number(summary.ops_ratio).toFixed(2)+'x' : '—'}</div><div class="stat-lbl">OPS Ratio</div></div>
     </div>
 
+    ${(() => {
+      // Sample-reliability bar: how much weight the H2H carries vs the platoon baseline.
+      let rel = (mc.bvpReliability != null) ? Number(mc.bvpReliability) : null;
+      if (rel == null) { const p = Number(pa) || 0; rel = Math.max(0, Math.min(1, p / 30)); }
+      const pct = Math.round(rel * 100);
+      const col = rel >= 0.66 ? 'var(--g)' : rel >= 0.33 ? 'var(--y)' : 'var(--r)';
+      const word = rel >= 0.66 ? 'HIGH' : rel >= 0.33 ? 'MODERATE' : 'LOW';
+      const note = rel >= 0.66
+        ? 'Enough head-to-head plate appearances to trust this matchup history directly.'
+        : rel >= 0.33
+          ? 'Partial sample — the grade blends H2H history with the batter\'s platoon split.'
+          : 'Thin head-to-head sample — the grade leans mostly on platoon (vs LHP/RHP) data, not this exact matchup.';
+      return `<div class="rel-wrap">
+        <div class="rel-head"><b>H2H Sample Reliability${infoIcon('reliability')}</b><span style="color:${col};font-weight:700">${word} · ${pct}%</span></div>
+        <div class="rel-track"><div class="rel-fill" style="width:${pct}%;background:${col}"></div></div>
+        <div class="rel-note">${note}</div>
+      </div>`;
+    })()}
+
     ${seasonalTrendHtml(mc.bvpSeasons, summary.pa || 0)}
 
     ${xstatsHtml}
@@ -1662,6 +1788,12 @@ function renderDetail(data) {
       <div class="context-card"><div class="context-loading">Loading quality metrics...</div></div>
     </div>
 
+    <div class="section-label">Batted-Ball Spray &amp; Hot Zones <span style="font-size:.6rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— ${new Date().getFullYear()} season Statcast</span></div>
+    <div class="sz-grid" id="sprayZoneGrid">
+      <div class="sz-card"><div class="sz-title">Spray Chart</div><div class="context-loading">Loading spray chart…</div></div>
+      <div class="sz-card"><div class="sz-title">Hot Zones (SLG)</div><div class="context-loading">Loading zone profile…</div></div>
+    </div>
+
     <div class="section-label">Prop Signals <span style="font-size:.6rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— recent form based</span></div>
     <div class="prop-signal-grid" id="propSignalGrid">
       <div class="prop-signal-box"><div class="prop-signal-type">HIT</div><div class="prop-signal-val" style="color:var(--mu)">—</div></div>
@@ -1693,6 +1825,118 @@ function renderDetail(data) {
   }
   loadContextData(batterId, pitcherId, proj, gamePk, pitcherSide);
   loadAiVerdict(batterId, pitcherId);
+  loadSprayZone(batterId);
+}
+
+// ── Spray chart + strike-zone hot-zone heatmap (lazy-loaded) ──────────────────
+const _sprayZoneCache = {};
+async function loadSprayZone(batterId) {
+  const grid = document.getElementById('sprayZoneGrid');
+  if (!grid) return;
+  const renderInto = (spray, zone) => {
+    // Guard against the user having switched batters mid-flight.
+    if (!selectedBatter || selectedBatter.batterId !== batterId) return;
+    const g = document.getElementById('sprayZoneGrid');
+    if (!g) return;
+    g.innerHTML =
+      `<div class="sz-card"><div class="sz-title">Spray Chart${infoIcon('spray')}</div>${renderSprayChart(spray)}</div>` +
+      `<div class="sz-card"><div class="sz-title">Hot Zones · SLG${infoIcon('hotzone')}</div>${renderZoneChart(zone)}</div>`;
+  };
+  if (_sprayZoneCache[batterId]) {
+    const c = _sprayZoneCache[batterId];
+    renderInto(c.spray, c.zone);
+    return;
+  }
+  try {
+    const [sr, zr] = await Promise.allSettled([
+      fetch(`/api/player/${batterId}/spray`).then(r => r.json()),
+      fetch(`/api/player/${batterId}/zonechart`).then(r => r.json()),
+    ]);
+    const spray = (sr.status === 'fulfilled' && sr.value && sr.value.success) ? (sr.value.data || []) : [];
+    const zone  = (zr.status === 'fulfilled' && zr.value && zr.value.success) ? (zr.value.data || []) : [];
+    _sprayZoneCache[batterId] = { spray, zone };
+    renderInto(spray, zone);
+  } catch (e) {
+    const g = document.getElementById('sprayZoneGrid');
+    if (g) g.innerHTML = '<div class="sz-card"><div class="zone-empty">Spray / zone data unavailable.</div></div>';
+  }
+}
+
+function renderSprayChart(data) {
+  if (!data || !data.length) {
+    return '<div class="zone-empty">No batted-ball data yet this season.</div>';
+  }
+  // Statcast hc coords: home plate ≈ (125.42, 198.27); y grows toward the plate,
+  // so flip it. Scale chosen so deep flies land inside the 250×210 viewBox.
+  const HX = 125.42, HY = 198.27, S = 0.62, cx = 125, baseY = 200;
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  let hr = 0, hit = 0, out = 0;
+  const dots = data.map(d => {
+    const fx = (d.hc_x - HX), fy = (HY - d.hc_y);
+    const x = clamp(cx + fx * S, 8, 242).toFixed(1);
+    const y = clamp(baseY - fy * S, 12, 205).toFixed(1);
+    let col, r;
+    if (d.outcome === 'hr') { col = '#ff9800'; r = 3.1; hr++; }
+    else if (d.outcome === 'hit') { col = '#00e676'; r = 2.4; hit++; }
+    else { col = 'rgba(142,164,200,.45)'; r = 1.9; out++; }
+    const ev = d.exit_velocity != null ? Math.round(d.exit_velocity) + ' mph' : '';
+    const dist = d.hit_distance != null ? ', ' + Math.round(d.hit_distance) + ' ft' : '';
+    const title = `${(d.result || d.outcome || '').toString()}${ev ? ' — ' + ev : ''}${dist}`;
+    return `<circle cx="${x}" cy="${y}" r="${r}" fill="${col}" opacity="${d.outcome === 'out' ? 0.5 : 0.9}"><title>${escHtml(title)}</title></circle>`;
+  }).join('');
+  // Simple field: foul lines + outfield arc + infield diamond.
+  const field = `
+    <line x1="125" y1="200" x2="30" y2="78" stroke="rgba(255,255,255,.22)" stroke-width="1"/>
+    <line x1="125" y1="200" x2="220" y2="78" stroke="rgba(255,255,255,.22)" stroke-width="1"/>
+    <path d="M30 78 Q125 8 220 78" fill="none" stroke="rgba(255,255,255,.22)" stroke-width="1.2"/>
+    <path d="M125 200 L92 168 L125 138 L158 168 Z" fill="none" stroke="rgba(255,255,255,.16)" stroke-width="1"/>
+    <circle cx="125" cy="200" r="2" fill="rgba(255,255,255,.5)"/>`;
+  return `<svg class="spray-svg" viewBox="0 0 250 210" preserveAspectRatio="xMidYMid meet">
+      ${field}${dots}
+    </svg>
+    <div class="spray-legend">
+      <span><i class="spray-dot" style="background:#ff9800"></i>HR ${hr}</span>
+      <span><i class="spray-dot" style="background:#00e676"></i>Hit ${hit}</span>
+      <span><i class="spray-dot" style="background:rgba(142,164,200,.6)"></i>Out ${out}</span>
+    </div>`;
+}
+
+function renderZoneChart(zones) {
+  const valid = (zones || []).filter(z => z && z.zone_id != null);
+  const hasData = valid.some(z => (z.slg || 0) > 0 || (z.ba || 0) > 0 || (z.pitch_pct || 0) > 0);
+  if (!valid.length || !hasData) {
+    return '<div class="zone-empty">No zone profile yet this season.</div>';
+  }
+  const byId = {}; valid.forEach(z => { byId[z.zone_id] = z; });
+  // SLG heat: cold (.<300) → blue/gray, warm (~.450) → amber, hot (.700+) → red.
+  const heat = (slg) => {
+    if (slg == null || slg <= 0) return '#2a3346';
+    const t = clamp01((slg - 0.250) / (0.750 - 0.250));
+    // interpolate slate-blue → amber → red
+    if (t < 0.5) { const u = t / 0.5; return mix('#3a6ea5', '#f5c542', u); }
+    const u = (t - 0.5) / 0.5; return mix('#f5c542', '#ff5252', u);
+  };
+  function clamp01(v){ return Math.max(0, Math.min(1, v)); }
+  function mix(a, b, t){
+    const pa = [parseInt(a.slice(1,3),16), parseInt(a.slice(3,5),16), parseInt(a.slice(5,7),16)];
+    const pb = [parseInt(b.slice(1,3),16), parseInt(b.slice(3,5),16), parseInt(b.slice(5,7),16)];
+    const c = pa.map((x,i)=>Math.round(x + (pb[i]-x)*t));
+    return `rgb(${c[0]},${c[1]},${c[2]})`;
+  }
+  let cells = '';
+  for (let i = 0; i < 9; i++) {
+    const z = byId[i];
+    const slg = z ? z.slg : null;
+    const ba = z ? z.ba : null;
+    const bg = heat(slg);
+    const slgTxt = (slg != null && slg > 0) ? '.' + String(Math.round(slg * 1000)).padStart(3, '0') : '—';
+    const baTxt = (ba != null && ba > 0) ? 'BA .' + String(Math.round(ba * 1000)).padStart(3, '0') : '';
+    cells += `<div class="zone-cell" style="background:${bg}" title="Zone ${i+1}: SLG ${slgTxt}${baTxt ? ' · ' + baTxt : ''}">
+        <div class="zc-slg">${slgTxt}</div>${baTxt ? `<div class="zc-sub">${baTxt}</div>` : ''}
+      </div>`;
+  }
+  return `<div class="zone-3x3">${cells}</div>
+    <div class="sz-meta">Slugging by strike-zone third (catcher's view) — warmer = more damage</div>`;
 }
 
 const _aiVerdictCache = {};

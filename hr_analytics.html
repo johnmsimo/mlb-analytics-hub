@@ -17,6 +17,26 @@
 body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh}
 a{color:var(--cold);text-decoration:none}
 
+/* ── Glossary tooltip (pure CSS, focus + hover accessible) ── */
+.info{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;
+  border:1px solid var(--muted);color:var(--muted);font-size:9px;font-weight:700;line-height:1;cursor:help;
+  position:relative;margin-left:4px;vertical-align:middle;flex:none}
+.info:hover,.info:focus{border-color:var(--cold);color:var(--cold);outline:none}
+.info::after{content:attr(data-tip);position:absolute;bottom:140%;left:50%;transform:translateX(-50%);
+  background:#0a0e16;color:var(--text);border:1px solid var(--accent2);border-radius:8px;padding:8px 10px;
+  font-size:11px;font-weight:400;line-height:1.45;width:230px;text-align:left;white-space:normal;
+  box-shadow:0 6px 24px rgba(0,0,0,.6);opacity:0;visibility:hidden;transition:opacity .15s;z-index:50;pointer-events:none}
+.info:hover::after,.info:focus::after{opacity:1;visibility:visible}
+.info.tip-left::after{left:auto;right:0;transform:none}
+
+/* ── Leaderboard search ── */
+.lb-search-bar{padding:8px 16px 0;display:flex;gap:8px;align-items:center}
+.lb-search{flex:1;background:var(--card);border:1px solid var(--border);color:var(--text);
+  padding:7px 10px;border-radius:6px;font-size:13px;outline:none;transition:border-color .2s}
+.lb-search:focus{border-color:var(--accent2)}
+.lb-search::placeholder{color:var(--muted)}
+.lb-count{font-size:11px;color:var(--muted);white-space:nowrap}
+
 /* ── Nav ── */
 nav{display:flex;align-items:center;justify-content:space-between;padding:14px 32px;background:rgba(5,10,24,.95);backdrop-filter:blur(16px);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100}
 .brand{display:flex;align-items:center;gap:14px}
@@ -57,6 +77,10 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .batter-card:hover,.batter-card.selected{background:#1c2128}
 .batter-card.selected{border-left:3px solid var(--accent2)}
 .batter-card-top{display:flex;align-items:flex-start;gap:12px}
+.lb-thumb-wrap{position:relative;flex:none;width:38px;height:38px}
+.lb-thumb{width:38px;height:38px;border-radius:50%;object-fit:cover;border:1px solid var(--border);background:var(--bg)}
+.lb-thumb-fallback{width:38px;height:38px;border-radius:50%;border:1px solid var(--border);background:var(--card);
+  display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--muted)}
 .rank-badge{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0;margin-top:2px}
 .rank-1{background:var(--gold);color:#000}
 .rank-2{background:#c0c0c0;color:#000}
@@ -314,6 +338,32 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 /* ── Auto-refresh countdown ── */
 .lineup-refresh-row{display:flex;align-items:center;gap:8px;margin-top:4px;font-size:11px;color:var(--muted)}
 .lineup-countdown{color:var(--warn);font-weight:600;font-variant-numeric:tabular-nums}
+
+/* ── Game-status badges ── */
+.gs-badge{display:inline-block;font-size:9px;font-weight:700;letter-spacing:.05em;padding:2px 7px;border-radius:5px;
+  vertical-align:middle;margin-right:6px;white-space:nowrap}
+.gs-live{background:rgba(248,81,73,.18);color:#ff7b72;border:1px solid rgba(248,81,73,.5);animation:gsPulse 1.6s ease-in-out infinite}
+.gs-final{background:rgba(139,148,158,.15);color:var(--muted);border:1px solid var(--border)}
+.gs-ppd{background:rgba(210,153,34,.15);color:var(--warn);border:1px solid rgba(210,153,34,.45)}
+@keyframes gsPulse{0%,100%{opacity:1}50%{opacity:.55}}
+
+/* ── Spray chart + zone heatmap ── */
+.sz-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:760px){.sz-grid{grid-template-columns:1fr}}
+.sz-card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px}
+.sz-title{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between}
+.spray-svg{width:100%;height:auto;display:block;border-radius:8px;background:radial-gradient(circle at 50% 95%,#12321f 0%,#0b1f14 55%,#091a11 100%)}
+.spray-legend{display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-top:8px;justify-content:center}
+.spray-legend span{display:inline-flex;align-items:center;gap:5px}
+.spray-dot{width:9px;height:9px;border-radius:50%;display:inline-block}
+.zone-3x3{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;aspect-ratio:1;max-width:240px;margin:0 auto;
+  border:2px dashed rgba(255,255,255,.18);padding:4px;border-radius:6px}
+.zone-cell{border-radius:5px;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  min-height:56px;color:#06121a;font-weight:700}
+.zone-cell .zc-slg{font-size:15px;line-height:1}
+.zone-cell .zc-sub{font-size:9px;font-weight:600;opacity:.85;margin-top:2px}
+.zone-empty{color:var(--muted);font-size:13px;text-align:center;padding:24px 10px}
+.sz-meta{font-size:11px;color:var(--muted);text-align:center;margin-top:8px}
 </style>
 </head>
 <body>
@@ -348,6 +398,11 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
         <option value="all">⚾ All Games</option>
       </select>
     </div>
+    <div class="lb-search-bar">
+      <input type="text" class="lb-search" id="lbSearch" placeholder="🔍 Search batter or pitcher…"
+        oninput="filterBySearch(this.value)" autocomplete="off">
+      <span class="lb-count" id="lbCount"></span>
+    </div>
     <div class="leaderboard" id="leaderboard">
       <div class="loader"><div class="spinner"></div> Loading rankings…</div>
     </div>
@@ -364,11 +419,35 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 
 <script>
 const API=window.location.origin;
+
+// ── Glossary: plain-English explanations surfaced via ⓘ tooltips ──
+const GLOSSARY={
+  iso:"Isolated Power = SLG − AVG. Measures raw extra-base power independent of singles. League avg ≈ .160; .250+ is elite power.",
+  barrel:"Barrel% = share of batted balls hit at the ideal exit-velocity + launch-angle combo that produces the most HRs. League avg ≈ 8%; 15%+ is elite.",
+  hardhit:"Hard-Hit% = share of batted balls hit 95+ mph. Strong predictor of power output. League avg ≈ 40%.",
+  ev:"Average Exit Velocity (mph) off the bat. Higher = more authoritative contact. League avg ≈ 89 mph.",
+  hr9:"Pitcher's HRs allowed per 9 innings, split by batter handedness (the relevant platoon side). Higher = more homer-prone. League avg ≈ 1.2.",
+  park:"Park HR Index for the home venue. 100 = neutral; 110 means ~10% more HRs than average; below 100 suppresses HRs.",
+  mix:"Pitch-Mix Score: how well this batter's results match the pitcher's specific arsenal, weighted by usage. 1.0× = league-average matchup; >1.1× favors the hitter.",
+  xwoba:"Expected wOBA from quality of contact (exit velo + launch angle). Strips out luck/defense; a clean read on true offensive value. League avg ≈ .320.",
+  mcprob:"Monte Carlo HR probability: % of 1,000 simulated games (4 AB each) in which the batter hits at least one HR. The headline number.",
+  closed:"Closed-form estimate: 1−(1−p)⁴ where p is the per-AB HR chance and 4 is a typical game's AB. A quick analytic cross-check on the simulation.",
+  perab:"Per-AB HR probability — the chance of a home run in a single at-bat, before scaling up to a full game.",
+  score:"Composite 0–100 HR score blending power (ISO/barrel/HH), the pitcher's homer-rate vs this hand, park, and pitch-mix into one ranking number.",
+  spray:"Where the batter has put balls in play this season (Statcast hit coordinates). Orange = HR, green = hit, gray = out. Reveals pull/oppo tendencies and where he does damage.",
+  hotzone:"Slugging by strike-zone third (catcher's view). Warmer cells = where the batter does the most damage; cold cells are pitch-here-to-attack locations."
+};
+function infoIcon(key,left){
+  const t=GLOSSARY[key];if(!t)return '';
+  return `<span class="info${left?' tip-left':''}" tabindex="0" role="img" aria-label="${escapeHtml(t)}" data-tip="${escapeHtml(t)}">i</span>`;
+}
+
 let allScores=[];
 let aiBlurbs={};
 let gameMeta=[];
 let gameWeather={};
 let gameLineups={};
+let gameStatus={};   // game_pk -> {state:'pre'|'live'|'final'|'ppd', label, away, home}
 let activeGameFilter='all';
 let selectedBatter=null;
 let selectedBatterKey=null;
@@ -492,6 +571,7 @@ async function loadDailyScores(force=false){
     buildGameMeta(allScores);
     buildGameSelect(gameMeta);
     renderLeaderboard(allScores);
+    loadGameStatus();   // real Pre/Live/Final state from the schedule (non-blocking)
     if(allLineupsConfirmed()){
       stopLineupPoll();
     }else{
@@ -501,6 +581,43 @@ async function loadDailyScores(force=false){
     document.getElementById('leaderboard').innerHTML=
       `<div class="empty-state">Error loading data: ${escapeHtml(e.message)}</div>`;
   }
+}
+
+// Classify an MLB detailedState string into a compact badge state.
+function classifyGameState(status){
+  const t=(status||'').toLowerCase();
+  if(!t)return null;
+  if(t.includes('final')||t.includes('game over')||t.includes('completed'))return {state:'final',label:'FINAL'};
+  if(t.includes('postpon'))return {state:'ppd',label:'PPD'};
+  if(t.includes('suspend'))return {state:'ppd',label:'SUSP'};
+  if(t.includes('cancel'))return {state:'ppd',label:'CANCELLED'};
+  if(t.includes('in progress')||t.includes('warmup')||t.includes('delayed')||t.includes('manager challenge')||t.includes('review'))return {state:'live',label:'LIVE'};
+  return {state:'pre',label:'PRE'};
+}
+async function loadGameStatus(){
+  try{
+    const r=await fetch(`${API}/api/games/today`);
+    const d=await r.json();
+    const games=Array.isArray(d)?d:(d.games||d.data||[]);
+    const map={};
+    games.forEach(g=>{
+      const pk=String(g.gamePk||g.game_pk||'');
+      if(!pk)return;
+      const cls=classifyGameState(g.status);
+      if(cls)map[pk]={...cls,away:g.awayScore,home:g.homeScore,awayAbbr:g.awayAbbr,homeAbbr:g.homeAbbr};
+    });
+    gameStatus=map;
+    renderLeaderboard(allScores);   // re-render so badges appear
+  }catch(e){/* status is best-effort; ignore */}
+}
+function gameStatusBadge(gamePk){
+  const gs=gameStatus[String(gamePk)];
+  if(!gs||gs.state==='pre')return '';   // pre-game is the default; game time already shown
+  const cls={live:'gs-live',final:'gs-final',ppd:'gs-ppd'}[gs.state]||'gs-pre';
+  let txt=gs.label;
+  if(gs.state==='final'&&gs.away!=null&&gs.home!=null&&gs.awayAbbr&&gs.homeAbbr)
+    txt=`FINAL ${escapeHtml(gs.awayAbbr)} ${gs.away}–${gs.home} ${escapeHtml(gs.homeAbbr)}`;
+  return `<span class="gs-badge ${cls}">${txt}</span>`;
 }
 
 function buildGameMeta(scores){
@@ -541,24 +658,51 @@ function buildGameSelect(meta){
     opt.textContent=g.label;
     sel.appendChild(opt);
   });
+  // Restore a game filter shared via the URL (?game=<pk>) if it's still valid.
+  const urlGame=new URLSearchParams(location.search).get('game');
+  if(urlGame&&(urlGame==='all'||meta.some(g=>String(g.game_pk)===String(urlGame)))){
+    sel.value=urlGame;
+    activeGameFilter=urlGame;
+  }else if(activeGameFilter!=='all'&&meta.some(g=>String(g.game_pk)===String(activeGameFilter))){
+    sel.value=activeGameFilter; // keep current selection across refreshes
+  }
 }
 
 function filterByGame(val){
   activeGameFilter=val;
+  // Reflect the filter in the URL so it survives reload / can be shared.
+  const u=new URL(location.href);
+  if(val&&val!=='all')u.searchParams.set('game',val);else u.searchParams.delete('game');
+  history.replaceState(null,'',u);
+  renderLeaderboard(allScores);
+}
+
+let activeSearch='';
+function filterBySearch(val){
+  activeSearch=(val||'').trim().toLowerCase();
   renderLeaderboard(allScores);
 }
 
 function renderLeaderboard(scores){
-  const filtered=activeGameFilter==='all'
+  let filtered=activeGameFilter==='all'
     ?scores
     :scores.filter(s=>String(s.game_pk)===String(activeGameFilter));
+  if(activeSearch){
+    filtered=filtered.filter(s=>
+      (s.batter||'').toLowerCase().includes(activeSearch)||
+      (s.pitcher||'').toLowerCase().includes(activeSearch)||
+      (s.team||'').toLowerCase().includes(activeSearch));
+  }
+  const countEl=document.getElementById('lbCount');
+  if(countEl)countEl.textContent=filtered.length+' batter'+(filtered.length===1?'':'s');
   if(!filtered.length){
     document.getElementById('leaderboard').innerHTML=
-      '<div class="empty-state">No batters found for this game.</div>';
+      '<div class="empty-state">No batters match your filter.</div>';
     return;
   }
-  const html=filtered.map((s,i)=>{
-    const rank=i+1;
+  const rankOf=new Map(scores.map((s,i)=>[`${s.batter_id}|${s.pitcher_id}|${s.game_pk}`,i+1]));
+  const html=filtered.map((s)=>{
+    const rank=rankOf.get(`${s.batter_id}|${s.pitcher_id}|${s.game_pk}`)||0;
     const rankClass=rank===1?'rank-1':rank===2?'rank-2':rank===3?'rank-3':'rank-other';
     const sc=scoreClass(s.score);
     const selected=selectedBatter&&selectedBatter.batter_id===s.batter_id&&selectedBatter.pitcher_id===s.pitcher_id?' selected':'';
@@ -582,8 +726,9 @@ function renderLeaderboard(scores){
     <div class="batter-card${selected}" onclick="selectBatter(${JSON.stringify(s).replace(/"/g,'&quot;')})">
       <div class="batter-card-top">
         <div class="rank-badge ${rankClass}">#${rank}</div>
+        ${lbThumbHtml(s)}
         <div class="batter-info">
-          <div class="batter-name">${escapeHtml(s.batter)} ${lineupBadge}</div>
+          <div class="batter-name">${escapeHtml(s.batter)} ${gameStatusBadge(s.game_pk)}${lineupBadge}</div>
           <div class="batter-meta">vs ${escapeHtml(s.pitcher)} &bull; ${matchupStr}${gt?' &bull; '+escapeHtml(gt):''}</div>
           <div class="batter-stats">
             <span>ISO .${fmtStatVal(s.iso)}</span>
@@ -618,6 +763,7 @@ async function selectBatter(s){
   dc.style.display='block';
   if(isSame)return;
   renderDetailSkeleton(s);
+  triggerSimulator();   // auto-run so the default tab shows results immediately
   loadPitchMix(s);
   loadH2H(s);
   loadScouting(s);
@@ -678,6 +824,20 @@ function oddsPill(s){
 }
 
 // ── Player photo with fallback ───────────────────────────────────────────────
+function lbThumbHtml(s){
+  const bid=s.batter_id||s.player_id||'';
+  const initials=(s.batter||'?').split(' ').map(w=>w[0]||'').join('').slice(0,2).toUpperCase();
+  if(bid){
+    const url=`https://img.mlbstatic.com/mlb-photos/image/upload/d_people:generic:headshot:67:current.png/w_120,q_auto:best/v1/people/${bid}/headshot/67/current`;
+    return `<div class="lb-thumb-wrap">
+      <img class="lb-thumb" src="${escapeHtml(url)}" alt="${escapeHtml(s.batter)}"
+        onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" loading="lazy">
+      <div class="lb-thumb-fallback" style="display:none">${initials}</div>
+    </div>`;
+  }
+  return `<div class="lb-thumb-wrap"><div class="lb-thumb-fallback">${initials}</div></div>`;
+}
+
 function playerPhotoHtml(s){
   const bid=s.batter_id||s.player_id||'';
   const photoUrl=bid?`https://img.mlbstatic.com/mlb-photos/image/upload/d_people:generic:headshot:67:current.png/w_213,q_auto:best/v1/people/${bid}/headshot/67/current`:'';
@@ -747,6 +907,7 @@ function renderDetailSkeleton(s){
           ${gt?`<span class="player-meta-sep">·</span><span class="game-time">${escapeHtml(gt)}</span>`:''}
         </div>
         <div class="player-pills">
+          ${gameStatusBadge(s.game_pk)}
           <span class="pill pill-hr">🎯 ${probPct(s.prob_hr)} HR Prob</span>
           ${parkPill(s.park_hr_idx)}
           ${mixPill(mixScore)}
@@ -763,19 +924,18 @@ function renderDetailSkeleton(s){
     <div class="tab-nav">
       <button class="tab-btn active" onclick="switchTab('sim',this)">Simulator</button>
       <button class="tab-btn" onclick="switchTab('mix',this)">Pitch Mix</button>
+      <button class="tab-btn" onclick="switchTab('zones',this)">Spray &amp; Zones</button>
       <button class="tab-btn" onclick="switchTab('h2h',this)">H2H</button>
       <button class="tab-btn" onclick="switchTab('scout',this)">AI Report</button>
     </div>
     <div id="tab-sim" class="tab-pane active">
-      <div class="sim-run-wrap">
-        <button class="sim-run-btn" id="simRunBtn" onclick="triggerSimulator()">
-          ▶ Run Monte Carlo Simulation
-        </button>
-        <div class="sim-run-sub">1,000 games × 4 AB — click to simulate HR probability</div>
-      </div>
+      <div class="loader"><div class="spinner"></div> Running Monte Carlo simulation…</div>
     </div>
     <div id="tab-mix" class="tab-pane">
       <div class="loader"><div class="spinner"></div> Loading pitch mix…</div>
+    </div>
+    <div id="tab-zones" class="tab-pane">
+      <div class="loader"><div class="spinner"></div> Loading spray &amp; zones…</div>
     </div>
     <div id="tab-h2h" class="tab-pane">
       <div class="loader"><div class="spinner"></div> Loading H2H data…</div>
@@ -791,6 +951,105 @@ function switchTab(name,btn){
   btn.classList.add('active');
   const pane=document.getElementById('tab-'+name);
   if(pane)pane.classList.add('active');
+  if(name==='zones')loadSprayZone();   // lazy-load on first open (spray fetch is slow)
+}
+
+// ── Spray chart + strike-zone hot-zone heatmap ──────────────────────────────
+const _sprayZoneCache={};
+async function loadSprayZone(){
+  const s=selectedBatter;
+  if(!s)return;
+  const bid=s.batter_id;
+  const panel=document.getElementById('tab-zones');
+  if(!panel)return;
+  const renderInto=(spray,zone)=>{
+    if(!selectedBatter||selectedBatter.batter_id!==bid)return;
+    const p=document.getElementById('tab-zones');
+    if(!p)return;
+    p.innerHTML=`<div class="sz-grid">
+      <div class="sz-card"><div class="sz-title">Spray Chart${infoIcon('spray')}</div>${renderSprayChart(spray)}</div>
+      <div class="sz-card"><div class="sz-title">Hot Zones · SLG${infoIcon('hotzone')}</div>${renderZoneChart(zone)}</div>
+    </div>`;
+  };
+  if(_sprayZoneCache[bid]){const c=_sprayZoneCache[bid];renderInto(c.spray,c.zone);return;}
+  panel.innerHTML='<div class="loader"><div class="spinner"></div> Loading spray &amp; zones…</div>';
+  try{
+    const [sr,zr]=await Promise.allSettled([
+      fetch(`${API}/api/player/${bid}/spray`).then(r=>r.json()),
+      fetch(`${API}/api/player/${bid}/zonechart`).then(r=>r.json()),
+    ]);
+    const spray=(sr.status==='fulfilled'&&sr.value&&sr.value.success)?(sr.value.data||[]):[];
+    const zone=(zr.status==='fulfilled'&&zr.value&&zr.value.success)?(zr.value.data||[]):[];
+    _sprayZoneCache[bid]={spray,zone};
+    renderInto(spray,zone);
+  }catch(e){
+    if(panel)panel.innerHTML=`<div class="error-box">Spray / zone error: ${escapeHtml(e.message)}</div>
+      <div style="text-align:right;margin-top:8px"><button class="regen-btn" onclick="loadSprayZone()">↻ Retry</button></div>`;
+  }
+}
+
+function renderSprayChart(data){
+  if(!data||!data.length)return '<div class="zone-empty">No batted-ball data yet this season.</div>';
+  const HX=125.42,HY=198.27,S=0.62,cx=125,baseY=200;
+  const clamp=(v,lo,hi)=>Math.max(lo,Math.min(hi,v));
+  let hr=0,hit=0,out=0;
+  const dots=data.map(d=>{
+    const fx=(d.hc_x-HX),fy=(HY-d.hc_y);
+    const x=clamp(cx+fx*S,8,242).toFixed(1);
+    const y=clamp(baseY-fy*S,12,205).toFixed(1);
+    let col,r;
+    if(d.outcome==='hr'){col='#ff9800';r=3.1;hr++;}
+    else if(d.outcome==='hit'){col='#3fb950';r=2.4;hit++;}
+    else{col='rgba(139,148,158,.45)';r=1.9;out++;}
+    const ev=d.exit_velocity!=null?Math.round(d.exit_velocity)+' mph':'';
+    const dist=d.hit_distance!=null?', '+Math.round(d.hit_distance)+' ft':'';
+    const title=`${(d.result||d.outcome||'').toString()}${ev?' — '+ev:''}${dist}`;
+    return `<circle cx="${x}" cy="${y}" r="${r}" fill="${col}" opacity="${d.outcome==='out'?0.5:0.9}"><title>${escapeHtml(title)}</title></circle>`;
+  }).join('');
+  const field=`
+    <line x1="125" y1="200" x2="30" y2="78" stroke="rgba(255,255,255,.22)" stroke-width="1"/>
+    <line x1="125" y1="200" x2="220" y2="78" stroke="rgba(255,255,255,.22)" stroke-width="1"/>
+    <path d="M30 78 Q125 8 220 78" fill="none" stroke="rgba(255,255,255,.22)" stroke-width="1.2"/>
+    <path d="M125 200 L92 168 L125 138 L158 168 Z" fill="none" stroke="rgba(255,255,255,.16)" stroke-width="1"/>
+    <circle cx="125" cy="200" r="2" fill="rgba(255,255,255,.5)"/>`;
+  return `<svg class="spray-svg" viewBox="0 0 250 210" preserveAspectRatio="xMidYMid meet">${field}${dots}</svg>
+    <div class="spray-legend">
+      <span><i class="spray-dot" style="background:#ff9800"></i>HR ${hr}</span>
+      <span><i class="spray-dot" style="background:#3fb950"></i>Hit ${hit}</span>
+      <span><i class="spray-dot" style="background:rgba(139,148,158,.6)"></i>Out ${out}</span>
+    </div>`;
+}
+
+function renderZoneChart(zones){
+  const valid=(zones||[]).filter(z=>z&&z.zone_id!=null);
+  const hasData=valid.some(z=>(z.slg||0)>0||(z.ba||0)>0||(z.pitch_pct||0)>0);
+  if(!valid.length||!hasData)return '<div class="zone-empty">No zone profile yet this season.</div>';
+  const byId={};valid.forEach(z=>{byId[z.zone_id]=z;});
+  function clamp01(v){return Math.max(0,Math.min(1,v));}
+  function mix(a,b,t){
+    const pa=[parseInt(a.slice(1,3),16),parseInt(a.slice(3,5),16),parseInt(a.slice(5,7),16)];
+    const pb=[parseInt(b.slice(1,3),16),parseInt(b.slice(3,5),16),parseInt(b.slice(5,7),16)];
+    const c=pa.map((x,i)=>Math.round(x+(pb[i]-x)*t));
+    return `rgb(${c[0]},${c[1]},${c[2]})`;
+  }
+  const heat=(slg)=>{
+    if(slg==null||slg<=0)return '#2a3346';
+    const t=clamp01((slg-0.250)/(0.750-0.250));
+    if(t<0.5)return mix('#3a6ea5','#f5c542',t/0.5);
+    return mix('#f5c542','#ff5252',(t-0.5)/0.5);
+  };
+  let cells='';
+  for(let i=0;i<9;i++){
+    const z=byId[i];
+    const slg=z?z.slg:null,ba=z?z.ba:null;
+    const bg=heat(slg);
+    const slgTxt=(slg!=null&&slg>0)?'.'+String(Math.round(slg*1000)).padStart(3,'0'):'—';
+    const baTxt=(ba!=null&&ba>0)?'BA .'+String(Math.round(ba*1000)).padStart(3,'0'):'';
+    cells+=`<div class="zone-cell" style="background:${bg}" title="Zone ${i+1}: SLG ${slgTxt}${baTxt?' · '+baTxt:''}">
+      <div class="zc-slg">${slgTxt}</div>${baTxt?`<div class="zc-sub">${baTxt}</div>`:''}</div>`;
+  }
+  return `<div class="zone-3x3">${cells}</div>
+    <div class="sz-meta">Slugging by strike-zone third (catcher's view) — warmer = more damage</div>`;
 }
 
 async function triggerSimulator(){
@@ -816,7 +1075,8 @@ async function loadPitchMix(s){
     const d=await r.json();
     if(mixPanel)renderPitchMix(mixPanel,d,s);
   }catch(e){
-    if(mixPanel)mixPanel.innerHTML=`<div class="error-box">Pitch mix error: ${escapeHtml(e.message)}</div>`;
+    if(mixPanel)mixPanel.innerHTML=`<div class="error-box">Pitch mix error: ${escapeHtml(e.message)}</div>
+      <div style="text-align:right;margin-top:8px"><button class="regen-btn" onclick="loadPitchMix(selectedBatter)">↻ Retry</button></div>`;
   }
 }
 
@@ -827,7 +1087,8 @@ async function loadH2H(s){
     const d=await r.json();
     if(h2hPanel)renderH2H(h2hPanel,d,s);
   }catch(e){
-    if(h2hPanel)h2hPanel.innerHTML=`<div class="error-box">H2H error: ${escapeHtml(e.message)}</div>`;
+    if(h2hPanel)h2hPanel.innerHTML=`<div class="error-box">H2H error: ${escapeHtml(e.message)}</div>
+      <div style="text-align:right;margin-top:8px"><button class="regen-btn" onclick="loadH2H(selectedBatter)">↻ Retry</button></div>`;
   }
 }
 
@@ -838,7 +1099,8 @@ async function loadScouting(s){
     const d=await r.json();
     if(scoutPanel)renderScouting(scoutPanel,d,s);
   }catch(e){
-    if(scoutPanel)scoutPanel.innerHTML=`<div class="error-box">Scouting error: ${escapeHtml(e.message)}</div>`;
+    if(scoutPanel)scoutPanel.innerHTML=`<div class="error-box">Scouting error: ${escapeHtml(e.message)}</div>
+      <div style="text-align:right;margin-top:8px"><button class="regen-btn" onclick="loadScouting(selectedBatter)">↻ Retry</button></div>`;
   }
 }
 
@@ -866,25 +1128,25 @@ function renderSimulator(panel,d,s){
   }).join('');
   const inp=d.inputs||{};
   const kiRows=[
-    {v:inp.iso!=null?'.'+fmtStatVal(inp.iso):'—',l:'ISO (Power)'},
-    {v:inp.barrel_pct!=null?fmtPct(inp.barrel_pct):'—',l:'Barrel%'},
-    {v:inp.hh_pct!=null?fmtPct(inp.hh_pct):'—',l:'Hard Hit%'},
-    {v:inp.avg_ev!=null?inp.avg_ev.toFixed(1)+' mph':'—',l:'Avg EV'},
-    {v:inp.hr9_vs_hand!=null?inp.hr9_vs_hand.toFixed(2):'—',l:'Pit HR/9 vs Hand'},
-    {v:inp.park_hr_idx!=null?inp.park_hr_idx:'—',l:'Park HR Index'},
-    {v:inp.mix_score!=null?inp.mix_score.toFixed(2)+'×':'—',l:'Mix Score'},
-    {v:inp.xwoba!=null?fmt(inp.xwoba,3):'—',l:'xwOBA'},
+    {v:inp.iso!=null?'.'+fmtStatVal(inp.iso):'—',l:'ISO (Power)',k:'iso'},
+    {v:inp.barrel_pct!=null?fmtPct(inp.barrel_pct):'—',l:'Barrel%',k:'barrel'},
+    {v:inp.hh_pct!=null?fmtPct(inp.hh_pct):'—',l:'Hard Hit%',k:'hardhit'},
+    {v:inp.avg_ev!=null?inp.avg_ev.toFixed(1)+' mph':'—',l:'Avg EV',k:'ev'},
+    {v:inp.hr9_vs_hand!=null?inp.hr9_vs_hand.toFixed(2):'—',l:'Pit HR/9 vs Hand',k:'hr9'},
+    {v:inp.park_hr_idx!=null?inp.park_hr_idx:'—',l:'Park HR Index',k:'park'},
+    {v:inp.mix_score!=null?inp.mix_score.toFixed(2)+'×':'—',l:'Mix Score',k:'mix'},
+    {v:inp.xwoba!=null?fmt(inp.xwoba,3):'—',l:'xwOBA',k:'xwoba'},
   ];
   panel.innerHTML=`
     <div class="section">
       <div class="section-title">Monte Carlo Simulator (1,000 games × 4 AB)</div>
       <div class="sim-grid">
-        <div class="sim-cell"><div class="sim-val">${probPct(mc)}</div><div class="sim-lbl">HR Probability (MC)</div></div>
-        <div class="sim-cell"><div class="sim-val">${probPct(cf)}</div><div class="sim-lbl">Closed Form (1−(1−p)⁴)</div></div>
+        <div class="sim-cell"><div class="sim-val">${probPct(mc)}</div><div class="sim-lbl">HR Probability (MC)${infoIcon('mcprob')}</div></div>
+        <div class="sim-cell"><div class="sim-val">${probPct(cf)}</div><div class="sim-lbl">Closed Form (1−(1−p)⁴)${infoIcon('closed')}</div></div>
       </div>
       <div class="sim-cell" style="margin-bottom:12px;padding:10px 12px">
         <div class="sim-val">${probPct(pab)}</div>
-        <div class="sim-lbl">p HR per AB</div>
+        <div class="sim-lbl">p HR per AB${infoIcon('perab')}</div>
       </div>
       <div class="sim-bar-wrap">${barsHtml}</div>
       <div style="text-align:right;margin-top:8px">
@@ -894,7 +1156,7 @@ function renderSimulator(panel,d,s){
     <div class="section">
       <div class="section-title">Key Inputs</div>
       <div class="key-inputs-grid">
-        ${kiRows.map(r=>`<div class="ki-cell"><div class="ki-val">${escapeHtml(String(r.v))}</div><div class="ki-lbl">${escapeHtml(r.l)}</div></div>`).join('')}
+        ${kiRows.map(r=>`<div class="ki-cell"><div class="ki-val">${escapeHtml(String(r.v))}</div><div class="ki-lbl">${escapeHtml(r.l)}${infoIcon(r.k)}</div></div>`).join('')}
       </div>
     </div>`;
 }
@@ -985,8 +1247,15 @@ function renderPitchMix(panel,d,s){
     }
   }
   const hasGettable=rows.some(r=>isLethal(r))||rows.some(r=>isGood(r))||(mixScore>=1.0);
-  const displayRows=rows.slice(0,4);
-  const pitchBlocksHtml=displayRows.map(pitchBlockHtml).join('');
+  // Show the 4 most-used pitches up front; reveal the rest behind a toggle.
+  const primaryHtml=rows.slice(0,4).map(pitchBlockHtml).join('');
+  const extraRows=rows.slice(4);
+  const extraHtml=extraRows.length
+    ?`<div id="extraPitches" style="display:none">${extraRows.map(pitchBlockHtml).join('')}</div>
+      <div style="text-align:center;margin-top:10px">
+        <button class="regen-btn" id="pitchToggleBtn" onclick="togglePitches(this,${rows.length})">▾ Show all ${rows.length} pitches</button>
+      </div>`
+    :'';
   panel.innerHTML=`
     <div class="section">
       <div class="pitch-mix-header">
@@ -1000,10 +1269,19 @@ function renderPitchMix(panel,d,s){
         ?'<div class="section-title" style="color:var(--score-hi)">⚾ PITCHER IS GETTABLE — HERE\'S WHY</div>'
         :'<div class="section-title">⚾ PITCH-BY-PITCH MATCHUP ANALYSIS</div>'}
       ${intelHtml}
-      <div class="section-title" style="margin-top:4px">PITCH-BY-PITCH MATCHUP (TOP ${displayRows.length})</div>
-      ${pitchBlocksHtml}
+      <div class="section-title" style="margin-top:4px">PITCH-BY-PITCH MATCHUP${extraRows.length?` (${rows.length} PITCHES)`:` (TOP ${Math.min(rows.length,4)})`}</div>
+      ${primaryHtml}
+      ${extraHtml}
       <div style="font-size:11px;color:var(--muted);margin-top:10px;text-align:right">Data sourced from Baseball Savant / MLB Statcast</div>
     </div>`;
+}
+
+function togglePitches(btn,total){
+  const ex=document.getElementById('extraPitches');
+  if(!ex)return;
+  const open=ex.style.display!=='none';
+  ex.style.display=open?'none':'block';
+  btn.textContent=open?`▾ Show all ${total} pitches`:'▴ Show fewer pitches';
 }
 
 function renderH2H(panel,d,s){
