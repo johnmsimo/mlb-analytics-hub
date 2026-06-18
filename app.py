@@ -16060,6 +16060,22 @@ def api_consistency_today():
         return jsonify({'success': False, 'error': str(ex)}), 500
 
 
+@app.route('/api/hot-hand/today')
+def api_hot_hand_today():
+    """100% Club / hot-hand board — slate-wide ranked list of players on a
+    streak against their current prop line. Params: date, window
+    (l5|l10|l20|season), minPct (0..1, default 1.0), minTotal (default 5)."""
+    date_str = request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
+    window = (request.args.get('window') or 'l5').strip().lower()
+    min_pct = request.args.get('minPct', 1.0)
+    min_total = request.args.get('minTotal', 5)
+    try:
+        return jsonify(_hot_hand_payload(date_str, window, min_pct, min_total))
+    except Exception as ex:
+        print(f'[api_hot_hand_today] {traceback.format_exc()}')
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
 @app.route('/api/tracker/today')
 def api_tracker_today():
     date_str = request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
@@ -20728,6 +20744,30 @@ def _consistency_window_summary(values, line, limit=None):
     return {'over': over, 'total': total, 'pct': round(over / total, 3)}
 
 
+def _consistency_recent_form(values, line, limit=10):
+    """Per-game recent-form detail for L5/L10 sparklines + current over streak.
+
+    `values` are ordered oldest -> newest (most recent last), matching the
+    game-log order used elsewhere in the consistency path. Returns the last
+    `limit` games as [{v, over}] (chronological, most recent last) plus the
+    current consecutive over-streak counted back from the most recent game.
+    This is the recent-form visualization Bobby's Bets surfaces as L5
+    sparklines, and the streak that powers the "hot hand" ranking.
+    """
+    clean = [v for v in values if v is not None]
+    if not clean:
+        return {'spark': [], 'streakOver': 0}
+    tail = clean[-int(limit):]
+    spark = [{'v': float(v), 'over': bool(float(v) > float(line))} for v in tail]
+    streak = 0
+    for v in reversed(clean):
+        if float(v) > float(line):
+            streak += 1
+        else:
+            break
+    return {'spark': spark, 'streakOver': streak}
+
+
 def _empty_consistency_payload(date_str):
     return {
         'success': True,
@@ -20842,6 +20882,9 @@ def _compute_consistency_payload(date_str):
             'season': _consistency_window_summary(values, row.get('line'), None),
             'sampleSize': len(values),
         }
+        _form = _consistency_recent_form(values, row.get('line'), 10)
+        sheet_row['sparkline'] = _form['spark']
+        sheet_row['streakOver'] = _form['streakOver']
         sheets[market_key]['rows'].append(sheet_row)
 
     for market_key, sheet in sheets.items():
@@ -20925,6 +20968,76 @@ def _consistency_payload(date_str, refresh=False):
     payload['computing'] = True
     payload['message'] = 'Computing... auto-refresh in 20s'
     return payload
+
+
+_HOT_HAND_FIELDS = (
+    'player', 'playerId', 'team', 'opp', 'slot', 'gamePk', 'gameLabel',
+    'line', 'hubRating', 'evPct', 'l5', 'l10', 'l20', 'season',
+    'sparkline', 'streakOver', 'sampleSize',
+)
+
+
+def _hot_hand_payload(date_str, window='l5', min_pct=1.0, min_total=5, limit=250):
+    """The "100% Club" / hot-hand board.
+
+    Flattens the per-market consistency sheets into a single slate-wide list of
+    players clearing their current prop line in at least `min_pct` of their last
+    `window` games (default: 100% of the last 5 — the "100% Club"), then ranks by
+    recent hit-rate, current over-streak, and model edge. Reuses the cached
+    consistency payload so it adds no extra game-log fetching.
+    """
+    base = _consistency_payload(date_str)
+    window = window if window in ('l5', 'l10', 'l20', 'season') else 'l5'
+    try:
+        min_pct = max(0.0, min(1.0, float(min_pct)))
+    except (TypeError, ValueError):
+        min_pct = 1.0
+    try:
+        min_total = max(1, int(min_total))
+    except (TypeError, ValueError):
+        min_total = 5
+
+    rows = []
+    for sheet in base.get('markets', []) or []:
+        mk = sheet.get('marketKey')
+        label = sheet.get('marketLabel')
+        for r in sheet.get('rows', []) or []:
+            win = r.get(window) or {}
+            pct = win.get('pct')
+            total = win.get('total') or 0
+            if pct is None or total < min_total or pct < min_pct:
+                continue
+            entry = {k: r.get(k) for k in _HOT_HAND_FIELDS}
+            entry['marketKey'] = mk
+            entry['marketLabel'] = label
+            entry['windowPct'] = pct
+            entry['windowOver'] = win.get('over')
+            entry['windowTotal'] = total
+            rows.append(entry)
+
+    rows.sort(key=lambda x: (
+        -(x.get('windowPct') or 0),
+        -(x.get('streakOver') or 0),
+        -((x.get('l10') or {}).get('pct') or 0),
+        -(x.get('windowTotal') or 0),
+        -(float(x.get('hubRating') or 0)),
+        x.get('player') or '',
+    ))
+    rows = rows[:int(limit)]
+
+    return {
+        'success': True,
+        'date': date_str,
+        'generatedAt': datetime.now(timezone.utc).isoformat(),
+        'window': window,
+        'minPct': min_pct,
+        'minTotal': min_total,
+        'count': len(rows),
+        'cached': base.get('cached', False),
+        'computing': base.get('computing', False),
+        'message': base.get('message'),
+        'players': rows,
+    }
 
 
 def _build_player_trends(player_id, is_pitcher):
