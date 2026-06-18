@@ -850,11 +850,9 @@ function playerPhotoHtml(s){
   return `<div class="player-photo-fallback">${initials}</div>`;
 }
 
-function renderDetailSkeleton(s){
+function hrWeatherSection(s){
   const gPk=String(s.game_pk);
   const wx=gameWeather[gPk]||null;
-  const confirmed=s.lineup_confirmed||(gameLineups[gPk]&&gameLineups[gPk].confirmed)||false;
-
   let weatherSection='';
   if(wx){
     if(wx.is_dome){
@@ -869,8 +867,13 @@ function renderDetailSkeleton(s){
       </div>`;
     }
   }
+  return weatherSection;
+}
 
-  const lineupSection=`<div class="lineup-strip">
+function hrLineupSection(s){
+  const gPk=String(s.game_pk);
+  const confirmed=s.lineup_confirmed||(gameLineups[gPk]&&gameLineups[gPk].confirmed)||false;
+  return `<div class="lineup-strip">
     ${confirmed
       ?`<span class="lineup-confirmed">✅ Confirmed Lineup</span>`
       :`<div>
@@ -880,15 +883,16 @@ function renderDetailSkeleton(s){
           </div>
         </div>`}
   </div>`;
+}
 
+function hrPlayerHeader(s){
   const gt=s.game_time_et||s.game_time||'';
   const matchupStr=gameMatchupStr(s);
   const hand=s.batter_hand||s.hand||'R';
   const throws=s.pitcher_hand||s.pitcher_throws||'R';
   const team=s.team||'';
   const mixScore=s.mix_score!=null?s.mix_score:null;
-
-  const playerHeader=`
+  return `
     <div class="player-header">
       <div class="player-photo-wrap">
         ${playerPhotoHtml(s)}
@@ -916,11 +920,13 @@ function renderDetailSkeleton(s){
         </div>
       </div>
     </div>`;
+}
 
+function renderDetailSkeleton(s){
   document.getElementById('detailContent').innerHTML=`
-    ${playerHeader}
-    ${lineupSection}
-    ${weatherSection}
+    ${hrPlayerHeader(s)}
+    ${hrLineupSection(s)}
+    ${hrWeatherSection(s)}
     <div class="tab-nav">
       <button class="tab-btn active" onclick="switchTab('sim',this)">Simulator</button>
       <button class="tab-btn" onclick="switchTab('mix',this)">Pitch Mix</button>

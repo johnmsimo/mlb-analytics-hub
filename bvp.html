@@ -1288,36 +1288,23 @@ function buildReasoningSummary(proj, summary, batterName, pitcherName, batterInj
     </div>`;
 }
 
-function renderDetail(data) {
-  const { summary, logs, proj, batterName, pitcherName, batterInjury, pitcherInjury } = data;
-  const { batterId, pitcherId } = selectedBatter;
-  const grade   = summary.grade || '?';
-  const gbClass = 'gb-' + grade.replace('+','\\+');
-  const pa      = summary.pa || 0;
-  const games   = logs.games || [];
+// ── Detail-panel section builders (extracted from renderDetail) ──────────────
 
-  // Use projection probs (Feature #1); fallback to legacy logs field
-  const probs = (proj && proj.projectedProbs) || logs.projectedProbs || null;
-  const ev    = (proj && proj.expectedValues)  || {};
-  const bq    = (proj && proj.batterQuality)   || {};
-  const pp    = (proj && proj.pitcherProfile)  || {};
-  const mc    = (proj && proj.matchupContext)  || {};
+function bvpProbTile(prob, evVal, evSuffix, label, market, verdict) {
+    if (prob == null) return '';
+    const v = verdict || {key:'pass', label:'—', cls:''};
+    const tone = v.key === 'bet' ? 'bet' : v.key === 'lean' ? 'lean' : v.key === 'fade' ? 'fade' : '';
+    const valColor = v.key === 'bet' ? 'good' : v.key === 'fade' ? 'bad' : v.key === 'lean' ? 'warn' : '';
+    return `<div class="prob-box ${tone}">
+      <div class="prob-val ${valColor}">${fmtPct2(prob)}</div>
+      <div class="prob-lbl">${label}${infoIcon(market)}</div>
+      ${evVal != null ? `<div style="font-size:.58rem;color:var(--mu);margin-top:2px">E: ${Number(evVal).toFixed(market==='hr'?3:2)}${evSuffix?' '+evSuffix:''}</div>` : ''}
+      ${v.label && v.label !== '—' ? `<div class="verdict-pill ${v.cls}">${v.label}</div>` : ''}
+    </div>`;
+  }
 
-  const ratioColor = (r) => {
-    if (r == null) return '';
-    if (r >= 1.20) return 'class="good"';
-    if (r >= 1.00) return '';
-    return 'class="bad"';
-  };
-
-  // Grade basis label — append staleness indicator when data is old
-  const _staleCapped = summary.is_stale && (summary.grade === 'B') && pa >= 10;
-  const gradeBasis = (summary.grade_basis === 'platoon'
-    ? `vs ${summary.pitcher_hand === 'L' ? 'LHP' : 'RHP'}`
-    : (pa >= 10 ? 'H2H' : pa > 0 ? 'H2H*' : 'vs RHP/LHP'))
-    + (_staleCapped ? ' · capped' : (summary.is_stale && pa > 0 ? ' · stale' : ''));
-
-  const gameRows = games.slice(0, 10).map(g => {
+function bvpGameRowsHtml(games, pitcherName){
+  return games.slice(0, 10).map(g => {
     const hitColor = g.hits >= 1 ? 'class="good"' : 'class="bad"';
     const pitcherDisplay = g.pitcher && g.pitcher !== '—' ? g.pitcher : (pitcherName || '—');
     const teamDisplay = g.team ? `<span style="color:var(--mu);font-size:.68rem">${g.team}</span> ` : '';
@@ -1332,8 +1319,9 @@ function renderDetail(data) {
       <td style="color:var(--mu);font-size:.7rem">${g.score||'—'} ${g.result||''}</td>
     </tr>`;
   }).join('') || '<tr><td colspan="8" style="color:var(--mu);text-align:center;padding:12px">No game logs available</td></tr>';
+}
 
-  // ── xStats / quality row (Feature #2) ────────────────────────────────────
+function bvpExpectedStatsHtml(bq){
   const _bqSrc = bq.source || 'fg';
   const xstatsHtml = bq.xba != null ? `
     <div class="section-label" style="margin-top:12px">Expected Stats <span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— Statcast / season</span></div>
@@ -1378,8 +1366,10 @@ function renderDetail(data) {
         <div class="stat-lbl">BB%</div>
       </div>
     </div>` : '');
+  return xstatsHtml;
+}
 
-  // ── Pitcher profile compact note ───────────────────────────────────────────
+function bvpPitcherProfileHtml(pp, mc){
   const pitNotes = [];
   if (pp.xera   != null) pitNotes.push(`xERA ${pp.xera.toFixed(2)}`);
   if (pp.whiff_pct != null) pitNotes.push(`Whiff ${(pp.whiff_pct).toFixed(1)}%`);
@@ -1390,39 +1380,23 @@ function renderDetail(data) {
       <span style="color:var(--c);margin-right:4px">Pitcher:</span>${pitNotes.join(' · ')}
       ${mc.platoonNote ? `<span style="margin-left:8px;color:var(--y)">${mc.platoonNote}</span>` : ''}
     </div>` : '';
+  return pitProfileHtml;
+}
 
-  // ── Projected probs section ───────────────────────────────────────────────
-  // Renders BOTH game-level probabilities (what props clear on) and the
-  // PA-vs-this-starter slice (what truly reflects this matchup). Each tile
-  // is colored by Bet/Lean/Pass/Fade verdict.
+function bvpGameProbsHtml(probs, ev, proj){
   const verdicts = (proj && proj.verdicts) || {};
-  const vsSP     = (proj && proj.vsStarter) || null;
-
-  function probTile(prob, evVal, evSuffix, label, market, verdict) {
-    if (prob == null) return '';
-    const v = verdict || {key:'pass', label:'—', cls:''};
-    const tone = v.key === 'bet' ? 'bet' : v.key === 'lean' ? 'lean' : v.key === 'fade' ? 'fade' : '';
-    const valColor = v.key === 'bet' ? 'good' : v.key === 'fade' ? 'bad' : v.key === 'lean' ? 'warn' : '';
-    return `<div class="prob-box ${tone}">
-      <div class="prob-val ${valColor}">${fmtPct2(prob)}</div>
-      <div class="prob-lbl">${label}${infoIcon(market)}</div>
-      ${evVal != null ? `<div style="font-size:.58rem;color:var(--mu);margin-top:2px">E: ${Number(evVal).toFixed(market==='hr'?3:2)}${evSuffix?' '+evSuffix:''}</div>` : ''}
-      ${v.label && v.label !== '—' ? `<div class="verdict-pill ${v.cls}">${v.label}</div>` : ''}
-    </div>`;
-  }
-
   const probHtml = probs ? `
     <div class="section-label">Game-Total Projection <span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— full game · BATX engine · how the prop clears</span></div>
     <div class="prob-row">
-      ${probTile(probs.hit1, ev.hits, 'H',   '1+ Hit',   'hit1', verdicts.hit1)}
-      ${probTile(probs.tb2,  ev.tb,   'TB',  '2+ TB',    'tb2',  verdicts.tb2)}
-      ${probTile(probs.hr,   ev.hr,   'HR',  'Home Run', 'hr',   verdicts.hr)}
-      ${probTile(probs.rbi1, ev.rbi,  'RBI', '1+ RBI',   'rbi1', verdicts.rbi1)}
+      ${bvpProbTile(probs.hit1, ev.hits, 'H',   '1+ Hit',   'hit1', verdicts.hit1)}
+      ${bvpProbTile(probs.tb2,  ev.tb,   'TB',  '2+ TB',    'tb2',  verdicts.tb2)}
+      ${bvpProbTile(probs.hr,   ev.hr,   'HR',  'Home Run', 'hr',   verdicts.hr)}
+      ${bvpProbTile(probs.rbi1, ev.rbi,  'RBI', '1+ RBI',   'rbi1', verdicts.rbi1)}
     </div>` : '';
+  return probHtml;
+}
 
-  // ── Ensemble model agreement panel (Phase 2) ─────────────────────────────
-  // Show XGB vs Blended agreement per market so users can spot when models
-  // disagree (i.e., the projection is less reliable).
+function bvpEnsembleHtml(probs){
   const ensembleRows = computeEnsembleAgreement(probs);
   const agreeCount = ensembleRows.filter(r => r.flag === 'AGREE').length;
   const ensembleHtml = ensembleRows.length ? `
@@ -1435,19 +1409,23 @@ function renderDetail(data) {
           <div class="ec-flag ${r.flagCls}">${r.flag} · Δ${(r.divergence*100).toFixed(0)}pts</div>
         </div>`).join('')}
     </div>` : '';
+  return ensembleHtml;
+}
 
-  // PA vs This Pitcher (Starter only) — shows the slice of the game that
-  // actually pits this batter against this pitcher.
+function bvpVsStarterHtml(proj, pitcherName){
+  const vsSP = (proj && proj.vsStarter) || null;
   const vsSpHtml = (vsSP && vsSP.probs) ? `
     <div class="section-label">vs ${pitcherName||'Starter'} <span style="font-size:.58rem;color:var(--c);font-weight:400;text-transform:none;letter-spacing:0">— ${vsSP.paVsSp} PAs vs SP only · ~${vsSP.starterTBF} TBF</span></div>
     <div class="prob-row">
-      ${probTile(vsSP.probs.hit1, vsSP.expected?.hits, 'H',   '1+ Hit',   'hit1', vsSP.verdicts?.hit1)}
-      ${probTile(vsSP.probs.tb2,  vsSP.expected?.tb,   'TB',  '2+ TB',    'tb2',  vsSP.verdicts?.tb2)}
-      ${probTile(vsSP.probs.hr,   vsSP.expected?.hr,   'HR',  'Home Run', 'hr',   vsSP.verdicts?.hr)}
-      ${probTile(vsSP.probs.rbi1, vsSP.expected?.rbi,  'RBI', '1+ RBI',   'rbi1', vsSP.verdicts?.rbi1)}
+      ${bvpProbTile(vsSP.probs.hit1, vsSP.expected?.hits, 'H',   '1+ Hit',   'hit1', vsSP.verdicts?.hit1)}
+      ${bvpProbTile(vsSP.probs.tb2,  vsSP.expected?.tb,   'TB',  '2+ TB',    'tb2',  vsSP.verdicts?.tb2)}
+      ${bvpProbTile(vsSP.probs.hr,   vsSP.expected?.hr,   'HR',  'Home Run', 'hr',   vsSP.verdicts?.hr)}
+      ${bvpProbTile(vsSP.probs.rbi1, vsSP.expected?.rbi,  'RBI', '1+ RBI',   'rbi1', vsSP.verdicts?.rbi1)}
     </div>` : '';
+  return vsSpHtml;
+}
 
-  // Pitcher K total vs the actual lineup he's facing today.
+function bvpPitcherKHtml(proj){
   const pkProj = (proj && proj.pitcherKProjection) || null;
   const pkHtml = pkProj ? `
     <div class="section-label">Pitcher K's vs Lineup${infoIcon('pitcherK')} <span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— Log5 matchup · ${pkProj.lineupSize}-man lineup · ~${pkProj.expectedTBF} TBF</span></div>
@@ -1485,8 +1463,10 @@ function renderDetail(data) {
           </div>
         </details>` : ''}
     </div>` : '';
+  return pkHtml;
+}
 
-  // ── Game-context strip: TTOP, umpire, park, weather (Phase 2) ─────────────
+function bvpGameContextHtml(proj){
   const gctx = (proj && proj.gameContext) || {};
   const ctxChips = [];
   if (gctx.ttopBatterMult != null && gctx.ttopBatterMult !== 1) {
@@ -1512,8 +1492,10 @@ function renderDetail(data) {
     ctxChips.push(`<span class="ctx-chip">${wxScore.label}</span>`);
   }
   const ctxStripHtml = ctxChips.length ? `<div class="ctx-strip">${ctxChips.join('')}</div>` : '';
+  return ctxStripHtml;
+}
 
-  // ── Pitch-mix adjustment panel ────────────────────────────────────────────
+function bvpPitchMixHtml(proj){
   const _adjt = (proj && proj.adjustments) || {};
   const _pmCtx = (proj && proj.matchupContext) || {};
   const pitchMixHtml = (() => {
@@ -1570,8 +1552,10 @@ function renderDetail(data) {
       ${fgRowsHtml}
     </div>`;
   })();
+  return pitchMixHtml;
+}
 
-  // ── Why-this-projection drivers (top BATX components) ─────────────────────
+function bvpDriversHtml(proj){
   const drivers = (proj && Array.isArray(proj.drivers)) ? proj.drivers : [];
   const driversHtml = drivers.length ? `
     <div class="section-label">Why This Projection <span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— top contributing factors</span></div>
@@ -1582,11 +1566,10 @@ function renderDetail(data) {
         return `<span class="driver-pill ${tone}"><span class="arrow">${arrow}</span>${d.label} <span style="opacity:.7">${(d.contribution*100).toFixed(1)}%</span></span>`;
       }).join('')}
     </div>` : '';
+  return driversHtml;
+}
 
-  // ── 1+ Hit verdict (single calibrated probability + 95% CI + tier) ────────
-  // Replaces the legacy XGB-vs-BATX divergence bar so the user gets a definite
-  // answer instead of "models disagree, you decide". Component models are kept
-  // visible underneath for trust/diagnostics, but the verdict is the answer.
+function bvpVerdictHtml(proj){
   const md = (proj && proj.modelDivergence) || {};
   const vdt = md.verdict || null;
   let verdictHtml = '';
@@ -1631,9 +1614,10 @@ function renderDetail(data) {
         <div></div>
       </div>`;
   }
-  const divergenceHtml = verdictHtml;
+  return verdictHtml;
+}
 
-  // ── Monte Carlo distribution bands ────────────────────────────────────────
+function bvpMonteCarloHtml(proj){
   const mcSim = (proj && proj.monteCarlo) || null;
   const mcHtml = mcSim ? `
     <div class="section-label">Monte Carlo${infoIcon('montecarlo')} · ${mcSim.nPa} PAs vs SP <span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— ${(mcSim.nSims/1000).toFixed(0)}k sims · 50/75/90 percentile</span></div>
@@ -1659,17 +1643,103 @@ function renderDetail(data) {
         <div class="b">μ ${mcSim.k.mean.toFixed(2)} K · ${mcSim.bb.mean.toFixed(2)} BB</div>
       </div>
     </div>` : '';
+  return mcHtml;
+}
 
-  // ── vs Bullpen slice ──────────────────────────────────────────────────────
+function bvpVsBullpenHtml(proj){
   const vsRP = (proj && proj.vsBullpen) || null;
   const vsRpHtml = vsRP ? `
     <div class="section-label">vs Bullpen <span style="font-size:.58rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— ${vsRP.note}</span></div>
     <div class="prob-row">
-      ${probTile(vsRP.probs.hit1, vsRP.expected?.hits, 'H',   '1+ Hit',   'hit1', null)}
-      ${probTile(vsRP.probs.tb2,  vsRP.expected?.tb,   'TB',  '2+ TB',    'tb2',  null)}
-      ${probTile(vsRP.probs.hr,   vsRP.expected?.hr,   'HR',  'Home Run', 'hr',   null)}
-      ${probTile(vsRP.probs.rbi1, vsRP.expected?.rbi,  'RBI', '1+ RBI',   'rbi1', null)}
+      ${bvpProbTile(vsRP.probs.hit1, vsRP.expected?.hits, 'H',   '1+ Hit',   'hit1', null)}
+      ${bvpProbTile(vsRP.probs.tb2,  vsRP.expected?.tb,   'TB',  '2+ TB',    'tb2',  null)}
+      ${bvpProbTile(vsRP.probs.hr,   vsRP.expected?.hr,   'HR',  'Home Run', 'hr',   null)}
+      ${bvpProbTile(vsRP.probs.rbi1, vsRP.expected?.rbi,  'RBI', '1+ RBI',   'rbi1', null)}
     </div>` : '';
+  return vsRpHtml;
+}
+
+function bvpConfidenceHtml(mc){
+  const conf = mc.confidence || {};
+  if (conf.value == null) return '';
+  const confCls = conf.value >= 70 ? 'good' : conf.value >= 40 ? '' : 'bad';
+  return `<div style="display:flex;justify-content:space-between;align-items:center;margin:4px 0 8px;font-size:.66rem;color:var(--mu)">
+        <span><strong style="color:var(--c)">Confidence:</strong> <span class="${confCls}">${conf.label||'—'} ${conf.value}/100</span></span>
+        <span style="font-size:.6rem">${conf.basis||''}</span>
+      </div>`;
+}
+
+function bvpH2hWarnHtml(pa, summary){
+  if (pa <= 0 || pa >= 50) return '';
+  return `<div class="h2h-sample-warn">
+        <span class="warn-icon">⚠</span>
+        <span><strong>Small H2H sample (${pa} PA)</strong> — below the 50-PA reliability threshold. Lean on platoon splits (vs ${summary.pitcher_hand === 'L' ? 'LHP' : 'RHP'}) and Statcast quality metrics instead of H2H stats.</span>
+      </div>`;
+}
+
+function bvpReliabilityHtml(mc, pa){
+  // Sample-reliability bar: how much weight the H2H carries vs the platoon baseline.
+  let rel = (mc.bvpReliability != null) ? Number(mc.bvpReliability) : null;
+  if (rel == null) { const p = Number(pa) || 0; rel = Math.max(0, Math.min(1, p / 30)); }
+  const pct = Math.round(rel * 100);
+  const col = rel >= 0.66 ? 'var(--g)' : rel >= 0.33 ? 'var(--y)' : 'var(--r)';
+  const word = rel >= 0.66 ? 'HIGH' : rel >= 0.33 ? 'MODERATE' : 'LOW';
+  const note = rel >= 0.66
+        ? 'Enough head-to-head plate appearances to trust this matchup history directly.'
+        : rel >= 0.33
+          ? 'Partial sample — the grade blends H2H history with the batter\'s platoon split.'
+          : 'Thin head-to-head sample — the grade leans mostly on platoon (vs LHP/RHP) data, not this exact matchup.';
+  return `<div class="rel-wrap">
+        <div class="rel-head"><b>H2H Sample Reliability${infoIcon('reliability')}</b><span style="color:${col};font-weight:700">${word} · ${pct}%</span></div>
+        <div class="rel-track"><div class="rel-fill" style="width:${pct}%;background:${col}"></div></div>
+        <div class="rel-note">${note}</div>
+      </div>`;
+}
+
+function renderDetail(data) {
+  const { summary, logs, proj, batterName, pitcherName, batterInjury, pitcherInjury } = data;
+  const { batterId, pitcherId } = selectedBatter;
+  const grade   = summary.grade || '?';
+  const gbClass = 'gb-' + grade.replace('+','\\+');
+  const pa      = summary.pa || 0;
+  const games   = logs.games || [];
+
+  // Use projection probs (Feature #1); fallback to legacy logs field
+  const probs = (proj && proj.projectedProbs) || logs.projectedProbs || null;
+  const ev    = (proj && proj.expectedValues)  || {};
+  const bq    = (proj && proj.batterQuality)   || {};
+  const pp    = (proj && proj.pitcherProfile)  || {};
+  const mc    = (proj && proj.matchupContext)  || {};
+
+  const ratioColor = (r) => {
+    if (r == null) return '';
+    if (r >= 1.20) return 'class="good"';
+    if (r >= 1.00) return '';
+    return 'class="bad"';
+  };
+
+  // Grade basis label — append staleness indicator when data is old
+  const _staleCapped = summary.is_stale && (summary.grade === 'B') && pa >= 10;
+  const gradeBasis = (summary.grade_basis === 'platoon'
+    ? `vs ${summary.pitcher_hand === 'L' ? 'LHP' : 'RHP'}`
+    : (pa >= 10 ? 'H2H' : pa > 0 ? 'H2H*' : 'vs RHP/LHP'))
+    + (_staleCapped ? ' · capped' : (summary.is_stale && pa > 0 ? ' · stale' : ''));
+
+  // Section builders (extracted to top-level fns below) — each returns an HTML
+  // string and is responsible for its own "no data" empty-string fallback.
+  const gameRows      = bvpGameRowsHtml(games, pitcherName);
+  const xstatsHtml    = bvpExpectedStatsHtml(bq);
+  const pitProfileHtml= bvpPitcherProfileHtml(pp, mc);
+  const probHtml      = bvpGameProbsHtml(probs, ev, proj);
+  const ensembleHtml  = bvpEnsembleHtml(probs);
+  const vsSpHtml      = bvpVsStarterHtml(proj, pitcherName);
+  const pkHtml        = bvpPitcherKHtml(proj);
+  const ctxStripHtml  = bvpGameContextHtml(proj);
+  const pitchMixHtml  = bvpPitchMixHtml(proj);
+  const driversHtml   = bvpDriversHtml(proj);
+  const divergenceHtml= bvpVerdictHtml(proj);
+  const mcHtml        = bvpMonteCarloHtml(proj);
+  const vsRpHtml      = bvpVsBullpenHtml(proj);
 
   // Render layout
   document.getElementById('detailPanel').innerHTML = `
@@ -1688,28 +1758,12 @@ function renderDetail(data) {
 
     ${summary.sample_note ? `<div class="sample-note${summary.is_stale ? ' stale-note' : ''}">${summary.sample_note}</div>` : ''}
 
-    ${(() => {
-      const conf = mc.confidence || {};
-      if (conf.value == null) return '';
-      const confCls = conf.value >= 70 ? 'good' : conf.value >= 40 ? '' : 'bad';
-      return `<div style="display:flex;justify-content:space-between;align-items:center;margin:4px 0 8px;font-size:.66rem;color:var(--mu)">
-        <span><strong style="color:var(--c)">Confidence:</strong> <span class="${confCls}">${conf.label||'—'} ${conf.value}/100</span></span>
-        <span style="font-size:.6rem">${conf.basis||''}</span>
-      </div>`;
-    })()}
+    ${bvpConfidenceHtml(mc)}
 
     ${injuryAlertHtml(batterInjury, batterName)}
     ${injuryAlertHtml(pitcherInjury, pitcherName)}
 
-    ${(() => {
-      // H2H sample-size warning: <50 career PA is statistically unreliable.
-      // Research: industry threshold is 50–100 PA before BvP is signal vs noise.
-      if (pa <= 0 || pa >= 50) return '';
-      return `<div class="h2h-sample-warn">
-        <span class="warn-icon">⚠</span>
-        <span><strong>Small H2H sample (${pa} PA)</strong> — below the 50-PA reliability threshold. Lean on platoon splits (vs ${summary.pitcher_hand === 'L' ? 'LHP' : 'RHP'}) and Statcast quality metrics instead of H2H stats.</span>
-      </div>`;
-    })()}
+    ${bvpH2hWarnHtml(pa, summary)}
 
     ${buildReasoningSummary(proj, summary, batterName, pitcherName, batterInjury, pitcherInjury)}
 
@@ -1735,24 +1789,7 @@ function renderDetail(data) {
       <div class="stat-box"><div class="stat-val" ${ratioColor(summary.ops_ratio)}>${summary.ops_ratio!=null ? Number(summary.ops_ratio).toFixed(2)+'x' : '—'}</div><div class="stat-lbl">OPS Ratio</div></div>
     </div>
 
-    ${(() => {
-      // Sample-reliability bar: how much weight the H2H carries vs the platoon baseline.
-      let rel = (mc.bvpReliability != null) ? Number(mc.bvpReliability) : null;
-      if (rel == null) { const p = Number(pa) || 0; rel = Math.max(0, Math.min(1, p / 30)); }
-      const pct = Math.round(rel * 100);
-      const col = rel >= 0.66 ? 'var(--g)' : rel >= 0.33 ? 'var(--y)' : 'var(--r)';
-      const word = rel >= 0.66 ? 'HIGH' : rel >= 0.33 ? 'MODERATE' : 'LOW';
-      const note = rel >= 0.66
-        ? 'Enough head-to-head plate appearances to trust this matchup history directly.'
-        : rel >= 0.33
-          ? 'Partial sample — the grade blends H2H history with the batter\'s platoon split.'
-          : 'Thin head-to-head sample — the grade leans mostly on platoon (vs LHP/RHP) data, not this exact matchup.';
-      return `<div class="rel-wrap">
-        <div class="rel-head"><b>H2H Sample Reliability${infoIcon('reliability')}</b><span style="color:${col};font-weight:700">${word} · ${pct}%</span></div>
-        <div class="rel-track"><div class="rel-fill" style="width:${pct}%;background:${col}"></div></div>
-        <div class="rel-note">${note}</div>
-      </div>`;
-    })()}
+    ${bvpReliabilityHtml(mc, pa)}
 
     ${seasonalTrendHtml(mc.bvpSeasons, summary.pa || 0)}
 
