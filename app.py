@@ -16041,6 +16041,132 @@ def _props_scan_today_payload(date_str, refresh=False):
     return payload
 
 
+# ── Edge Finder ──────────────────────────────────────────────────────────────
+# One slate-wide, edge-ranked board (Bobby's Bets "Edges"). Reuses the cached
+# props-scan payload — no extra computation — and surfaces only positive-value
+# plays (model probability above the book's implied probability), each with a
+# confidence letter grade derived from edge strength.
+_EDGE_MARKET_LABELS = {
+    'batter_hits': 'Hits', 'batter_total_bases': 'Total Bases',
+    'batter_home_runs': 'Home Runs', 'batter_rbis': 'RBIs',
+    'batter_runs_scored': 'Runs', 'batter_hits_runs_rbis': 'H+R+RBI',
+    'batter_stolen_bases': 'Stolen Bases', 'pitcher_strikeouts': 'Pitcher Ks',
+    'h2h': 'Moneyline', 'totals': 'Total', 'spread': 'Run Line',
+    'f5_h2h': 'F5 Moneyline', 'f5_totals': 'F5 Total',
+}
+
+
+def _edge_letter_grade(edge):
+    """Confidence letter grade from edge strength (probability points).
+    A+ = elite mispricing, D = marginal. Mirrors Bobby's A+/A/B/C grading."""
+    if edge is None:
+        return None
+    e = float(edge)
+    if e >= 0.10:  return 'A+'
+    if e >= 0.075: return 'A'
+    if e >= 0.055: return 'B+'
+    if e >= 0.04:  return 'B'
+    if e >= 0.025: return 'C+'
+    if e >= 0.015: return 'C'
+    return 'D'
+
+
+def _edge_finder_payload(date_str, min_edge=0.02, market=None, limit=150):
+    base = _props_scan_today_payload(date_str)
+    try:
+        min_edge = float(min_edge)
+    except (TypeError, ValueError):
+        min_edge = 0.02
+    market = (market or '').strip().lower() or None
+
+    edges = []
+    for p in base.get('props', []) or []:
+        edge = p.get('edge')
+        mi = p.get('marketImplied')
+        if edge is None or mi is None:          # need a real market line to have an edge
+            continue
+        try:
+            edge_f = float(edge)
+        except (TypeError, ValueError):
+            continue
+        if edge_f < min_edge:                   # positive-value plays only
+            continue
+        mk = p.get('marketKey')
+        if market and mk != market:
+            continue
+        edges.append({
+            'player': p.get('player'),
+            'playerId': p.get('playerId'),
+            'team': p.get('team'),
+            'opp': p.get('opp'),
+            'gamePk': p.get('gamePk'),
+            'matchup': p.get('matchup'),
+            'marketKey': mk,
+            'marketLabel': _EDGE_MARKET_LABELS.get(mk, mk),
+            'line': p.get('line'),
+            'side': p.get('recommendedSide') or p.get('side') or 'Over',
+            'edge': round(edge_f, 4),
+            'edgePct': round(edge_f * 100, 1),
+            'evPct': p.get('evPct'),
+            'modelProb': p.get('adjProb'),
+            'marketImplied': mi,
+            'hubRating': p.get('hubRating'),
+            'grade': _edge_letter_grade(edge_f),
+            'bestPrice': p.get('bestOverPrice') or p.get('bestAvailablePrice') or p.get('marketPrice'),
+            'bestBook': p.get('bestOverBook') or p.get('bestAvailableBook') or p.get('bookmaker'),
+            'bookmaker': p.get('bookmaker'),
+            'reason': p.get('reason'),
+        })
+
+    edges.sort(key=lambda x: (
+        -(x['edge'] or 0),
+        -((x['evPct'] or 0)),
+        -(float(x['hubRating'] or 0)),
+        x['player'] or '',
+    ))
+    edges = edges[:int(limit)]
+
+    grade_counts = {}
+    for e in edges:
+        grade_counts[e['grade']] = grade_counts.get(e['grade'], 0) + 1
+
+    return {
+        'success': True,
+        'date': date_str,
+        'minEdge': min_edge,
+        'market': market,
+        'count': len(edges),
+        'gradeCounts': grade_counts,
+        'cached': base.get('cached', False),
+        'computing': base.get('computing', False),
+        'message': base.get('message'),
+        'generatedAt': datetime.now(timezone.utc).isoformat(),
+        'edges': edges,
+    }
+
+
+@app.route('/api/edges/today')
+def api_edges_today():
+    """Edge Finder — slate-wide, edge-ranked board of positive-value plays with
+    confidence letter grades. Params: date, minEdge (default 0.02),
+    market (e.g. batter_hits), limit (default 150)."""
+    date_str = request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
+    market = request.args.get('market')
+    try:
+        min_edge = float(request.args.get('minEdge', 0.02))
+    except (TypeError, ValueError):
+        min_edge = 0.02
+    try:
+        limit = int(request.args.get('limit', 150))
+    except (TypeError, ValueError):
+        limit = 150
+    try:
+        return jsonify(_edge_finder_payload(date_str, min_edge=min_edge, market=market, limit=limit))
+    except Exception as ex:
+        print(f'[api_edges_today] {traceback.format_exc()}')
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
 @app.route('/api/tracker/calibration/dashboard/<date_str>')
 def api_tracker_calibration_dashboard(date_str):
     window = int(request.args.get('window', 14) or 14)
