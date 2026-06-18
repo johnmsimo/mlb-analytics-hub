@@ -523,6 +523,10 @@ def _build_k_features(pitcher: dict, feat_order: list) -> Optional[np.ndarray]:
         "opp_lineup_xwoba": _sf(pitcher, "oppWoba","opponentxwoba","opp_lineup_xwoba",default=0.320),
         "ump_zone_size":    _sf(pitcher, "ump_zone_size",                 default=0.0),
         "ump_k_boost":      _sf(pitcher, "ump_k_boost",                   default=0.0),
+        # Pitch-mix / arsenal swing-and-miss (usage-weighted across the arsenal).
+        # Outcome-based leading indicators of K upside beyond season K rate.
+        "arsenal_whiff_pct":   _sf(pitcher, "arsenalWhiff","arsenal_whiff_pct","arsenal_whiff",     default=24.5),
+        "arsenal_putaway_pct": _sf(pitcher, "arsenalPutaway","arsenal_putaway_pct","arsenal_putaway", default=18.0),
     }
     for pct_key in ("sv_k_pct", "sv_bb_pct", "opp_lineup_k_pct"):
         if 0 < raw[pct_key] <= 1.0:
@@ -534,6 +538,7 @@ def _build_k_features(pitcher: dict, feat_order: list) -> Optional[np.ndarray]:
         "l3_ip","l5_ip","days_rest",
         "opp_lineup_k_pct","opp_lineup_xwoba",
         "ump_zone_size","ump_k_boost",
+        "arsenal_whiff_pct","arsenal_putaway_pct",
     ]
     if feat_order:
         try:

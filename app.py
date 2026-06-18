@@ -8767,6 +8767,17 @@ def _pitcher_k_projection_vs_lineup(pitcher_id, pitcher_name, opposing_lineup,
         except Exception:
             pass
 
+    # Fold in arsenal pitch-mix (usage-weighted whiff%/putaway%) so the K model
+    # can use the swing-and-miss signal the retrained models were trained on.
+    if xgb_avail and pitcher_dict:
+        try:
+            _ars = _arsenal_whiff_summary(pitcher_id) if pitcher_id else None
+            if _ars:
+                pitcher_dict.setdefault("arsenalWhiff",   _ars.get("whiff"))
+                pitcher_dict.setdefault("arsenalPutaway", _ars.get("putaway"))
+        except Exception:
+            pass
+
     # Blend Log5 expected K with the average of XGB per-line implied means
     # (so the displayed expected K reflects the ensemble too). When XGB is
     # unavailable, expected_k = expected_k_log5.
@@ -14631,6 +14642,14 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
         # ── FanGraphs enrichment for pitcher K props (done once per starter) ──
         if k_xgb_ready:
             sp = {**sp, **enrich_pitcher(sp)}   # merges real FG stats into sp dict
+            # Arsenal pitch-mix (usage-weighted whiff%/putaway%) for the K model.
+            try:
+                _ars = _arsenal_whiff_summary(sp.get('id'))
+                if _ars:
+                    sp['arsenalWhiff']   = _ars.get('whiff')
+                    sp['arsenalPutaway'] = _ars.get('putaway')
+            except Exception:
+                pass
         # ─────────────────────────────────────────────────────────────────────
         for line in k_lines:
             prob_field = _K_PROB_FIELD_FOR.get(line)
@@ -20680,7 +20699,9 @@ def api_props_projections(game_pk):
                     str(ln): xgb_k_prob(
                         {"fgera": pfg.get("fg_era"), "fgkpct": pfg.get("fg_kpct"),
                          "fgbbpct": pfg.get("fg_bbpct"), "svwhiffpct": psv.get("sv_whiff"),
-                         "name": pname},
+                         "name": pname,
+                         "arsenalWhiff": proj.get("arsenal_whiff"),
+                         "arsenalPutaway": proj.get("arsenal_putaway")},
                         line=ln
                     ) if _XGB_AVAILABLE and xgb_ready('k') else None
                     for ln in [3.5, 4.5, 5.5]

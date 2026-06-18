@@ -34,8 +34,10 @@ from __future__ import annotations
 
 import argparse
 import gc
+import io
 import json
 import os
+import urllib.request
 import warnings
 from datetime import datetime, timedelta
 from typing import Callable, Optional
@@ -256,6 +258,9 @@ K_FEATURES_BASE = [
     # Opponent lineup
     "opp_lineup_k_pct", # confirmed lineup avg K%
     "opp_lineup_xwoba", # confirmed lineup avg xwOBA
+    # Pitch mix / arsenal swing-and-miss (usage-weighted across arsenal)
+    "arsenal_whiff_pct",   # usage-weighted whiff% — leading K indicator
+    "arsenal_putaway_pct", # usage-weighted 2-strike putaway rate
     # Umpire features (from umpire_loader)
     "ump_zone_size",
     "ump_k_boost",
@@ -270,6 +275,7 @@ K55_FEATURES = [
     "l5_ks", "l5_k_rate", "l10_ks",
     "l3_ip", "l5_ip", "days_rest",
     "opp_lineup_k_pct", "opp_lineup_xwoba",
+    "arsenal_whiff_pct", "arsenal_putaway_pct",
     "ump_zone_size", "ump_k_boost",
     "temperature",
 ]
@@ -493,6 +499,67 @@ def fetch_all_seasons(seasons: list[int],
     print(f"  sv_bat: {len(sv_bat):,} rows  sv_pit: {len(sv_pit):,} rows")
     print(f"  fg_bat: {len(fg_bat):,} rows  fg_pit: {len(fg_pit):,} rows")
     return {"sv_bat": sv_bat, "sv_pit": sv_pit, "fg_bat": fg_bat, "fg_pit": fg_pit}
+
+
+def _fetch_csv_savant(url: str) -> pd.DataFrame:
+    """Fetch a Baseball Savant leaderboard CSV (UA header required)."""
+    req = urllib.request.Request(
+        url, headers={"User-Agent": "Mozilla/5.0 (compatible; MLBAnalyticsHub-training/1.0)"}
+    )
+    with urllib.request.urlopen(req, timeout=90) as resp:
+        data = resp.read().decode("utf-8", "replace")
+    return pd.read_csv(io.StringIO(data))
+
+
+def fetch_arsenal_stats(seasons: list[int],
+                        progress_cb: Optional[Callable] = None) -> pd.DataFrame:
+    """Per-pitcher, per-season usage-weighted arsenal swing-and-miss features.
+
+    Pulls the same Savant pitch-arsenal-stats leaderboard the live app uses, so
+    the trained columns (arsenal_whiff_pct / arsenal_putaway_pct) are produced
+    from an identical source to xgb_prop_scorer's inference inputs.
+
+    Returns columns: player_id, season, arsenal_whiff_pct, arsenal_putaway_pct.
+    """
+    BASE = "https://baseballsavant.mlb.com"
+    frames = []
+    for s in seasons:
+        url = (f"{BASE}/leaderboard/pitch-arsenal-stats?type=pitcher&pitchType="
+               f"&year={s}&team=&min=25&csv=true")
+        _emit(progress_cb, f"Fetching pitch-arsenal stats {s}…", f"  arsenal stats {s}…")
+        try:
+            df = _fetch_csv_savant(url)
+        except Exception as e:
+            _emit(progress_cb, None, f"  ⚠️  arsenal stats {s} failed: {e}")
+            continue
+        if df is None or len(df) == 0 or "player_id" not in df.columns:
+            continue
+        for src in ("pitch_usage", "whiff_percent", "k_percent"):
+            if src not in df.columns:
+                df[src] = np.nan
+            df[src] = pd.to_numeric(df[src], errors="coerce")
+        df["pitch_usage"] = df["pitch_usage"].fillna(0.0).clip(lower=0.0)
+
+        def _agg(x: pd.DataFrame) -> pd.Series:
+            w = x["pitch_usage"]
+            tot = float(w.sum())
+            if tot <= 0:
+                return pd.Series({
+                    "arsenal_whiff_pct":   x["whiff_percent"].mean(),
+                    "arsenal_putaway_pct": x["k_percent"].mean(),
+                })
+            return pd.Series({
+                "arsenal_whiff_pct":   float((x["whiff_percent"].fillna(0) * w).sum() / tot),
+                "arsenal_putaway_pct": float((x["k_percent"].fillna(0)     * w).sum() / tot),
+            })
+
+        g = df.groupby("player_id").apply(_agg).reset_index()
+        g["season"] = s
+        frames.append(g)
+
+    out = _safe_concat(frames)
+    _emit(progress_cb, None, f"  arsenal stats: {len(out):,} pitcher-seasons")
+    return out
 
 
 def _aggregate_statcast_chunk(sc: pd.DataFrame, season: int) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -758,9 +825,11 @@ def build_pitcher_matrix(
     pg: pd.DataFrame,
     sv_pit: pd.DataFrame,
     season: int,
+    arsenal_df: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
-    """Merge per-game pitcher outcomes with Statcast season stats."""
+    """Merge per-game pitcher outcomes with Statcast season + arsenal stats."""
     pg = _add_rolling_pitcher(pg[pg["season"] == season].copy())
+    pg["pitcher"] = pd.to_numeric(pg["pitcher"], errors="coerce").astype("Int64")
 
     svp = sv_pit[sv_pit["season"] == season].copy()
     if "player_id" in svp.columns:
@@ -775,9 +844,26 @@ def build_pitcher_matrix(
                 if c in svp.columns]
     pg = pg.merge(svp[pit_cols], left_on="pitcher", right_on="player_id", how="left")
 
+    # Arsenal pitch-mix features (usage-weighted whiff% / putaway%)
+    if arsenal_df is not None and len(arsenal_df) and "season" in arsenal_df.columns:
+        ad = arsenal_df[arsenal_df["season"] == season].copy()
+        if "player_id" in ad.columns and len(ad):
+            ad["pitcher"] = pd.to_numeric(ad["player_id"], errors="coerce").astype("Int64")
+            pg = pg.merge(
+                ad[["pitcher", "arsenal_whiff_pct", "arsenal_putaway_pct"]],
+                on="pitcher", how="left",
+            )
+    # Fill unmatched arsenal rows with league-average constants.
+    if "arsenal_whiff_pct" in pg.columns:
+        pg["arsenal_whiff_pct"] = pg["arsenal_whiff_pct"].fillna(24.5)
+    if "arsenal_putaway_pct" in pg.columns:
+        pg["arsenal_putaway_pct"] = pg["arsenal_putaway_pct"].fillna(18.0)
+
     for col, default in [
         ("opp_lineup_k_pct",  22.0),
         ("opp_lineup_xwoba",   0.320),
+        ("arsenal_whiff_pct",  24.5),
+        ("arsenal_putaway_pct",18.0),
         ("ump_zone_size",       0.0),
         ("ump_k_boost",         0.0),
         ("temperature",        72.0),
@@ -975,6 +1061,7 @@ def train_all(
 
     # Fetch all data
     season_data = fetch_all_seasons(seasons, progress_cb=progress_cb)
+    arsenal_df  = fetch_arsenal_stats(seasons, progress_cb=progress_cb)
     _emit(progress_cb, "Fetching Statcast game logs…", "══ Fetching game logs ══")
     bg_all, pg_all = fetch_game_logs(seasons, progress_cb=progress_cb)
 
@@ -986,7 +1073,7 @@ def train_all(
         for s in seasons
     ])
     pit_matrix = _safe_concat([
-        build_pitcher_matrix(pg_all, season_data["sv_pit"], s)
+        build_pitcher_matrix(pg_all, season_data["sv_pit"], s, arsenal_df=arsenal_df)
         for s in seasons
     ])
     print(f"  Batter matrix: {bat_matrix.shape}  Pitcher matrix: {pit_matrix.shape}")
