@@ -20522,8 +20522,11 @@ def api_props_projections(game_pk):
             })
 
 
-        # ── Attach Odds API prop lines/odds to each pitcher and batter ───────
-        odds_props = {}
+        # ── Attach real Odds API prop lines/prices to each pitcher and batter ──
+        # Each entry is a real sportsbook line with the best over/under price &
+        # book across all books, so the props board can render a "take" with the
+        # actual market line (never a fabricated/default line).
+        market_props = []
         if event:
             props_books = _load_event_odds(event.get('id'), featured_only=False) or []
             valid_names = set([x.get('name') for x in away_bats + home_bats if x.get('name')])
@@ -20532,32 +20535,35 @@ def api_props_projections(game_pk):
             if ap.get('fullName'): valid_names.add(ap.get('fullName'))
             if hp.get('fullName'): valid_names.add(hp.get('fullName'))
             market_props = _parse_prop_markets(props_books, valid_names)
-            # Build lookup: (player, marketKey) -> list of lines/odds
-            for prop in market_props:
-                key = (prop.get('player'), prop.get('marketKey'))
-                odds_props.setdefault(key, []).append({
-                    'line': prop.get('line'),
-                    'odds': prop.get('odds'),
-                    'side': prop.get('side'),
-                    'book': prop.get('book'),
-                    'marketKey': prop.get('marketKey'),
-                })
 
-        # Attach to batters
+        def _odds_markets_for(player_name, mk_list):
+            out = []
+            if not (market_props and player_name):
+                return out
+            for mk in mk_list:
+                for ln in (_market_lines_for_player(market_props, player_name, mk) or []):
+                    msum = _market_price_summary(market_props, player_name, mk, ln)
+                    out.append({
+                        'marketKey':     mk,
+                        'line':          ln,
+                        'overPrice':     msum.get('best_over_price'),
+                        'overBook':      msum.get('best_over_book'),
+                        'underPrice':    msum.get('best_under_price'),
+                        'underBook':     msum.get('best_under_book'),
+                        'marketImplied': msum.get('market_implied'),
+                        'bookCount':     msum.get('book_count'),
+                    })
+            return out
+
         for b in all_batters:
-            b['oddsMarkets'] = []
-            for mk in ['batter_hits', 'batter_total_bases', 'batter_home_runs', 'batter_rbis']:
-                odds = odds_props.get((b.get('name'), mk), [])
-                if odds:
-                    b['oddsMarkets'].extend(odds)
+            b['oddsMarkets'] = _odds_markets_for(
+                b.get('name'),
+                ['batter_hits', 'batter_total_bases', 'batter_home_runs', 'batter_rbis'])
 
-        # Attach to pitchers
         for p in pitchers_out:
-            p['oddsMarkets'] = []
-            for mk in ['pitcher_strikeouts', 'pitcher_outs_recorded', 'pitcher_earned_runs']:
-                odds = odds_props.get((p.get('name'), mk), [])
-                if odds:
-                    p['oddsMarkets'].extend(odds)
+            p['oddsMarkets'] = _odds_markets_for(
+                p.get('name'),
+                ['pitcher_strikeouts', 'pitcher_outs_recorded', 'pitcher_earned_runs'])
 
         return jsonify({
             "success":     True,
