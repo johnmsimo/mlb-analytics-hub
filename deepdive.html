@@ -1088,14 +1088,25 @@ function renderWx(){
 }
 function renderPark(){
   var g=GD,pf=g.parkFactor||1.0;
+  var hrpf=(g.hrParkFactor!=null)?g.hrParkFactor:null;
   var type=pf>=1.05?'Hitter-Friendly':pf<=0.95?'Pitcher-Friendly':'Neutral';
   var col=pf>=1.05?'var(--o)':pf<=0.95?'var(--g)':'var(--c)';
+  var hrCol=(hrpf==null)?'var(--mu)':hrpf>=1.04?'var(--o)':hrpf<=0.96?'var(--g)':'var(--c)';
   var desc=pf>=1.05?'<strong style="color:var(--o)">'+g.venue+'</strong> boosts offense.'
     :pf<=0.95?'<strong style="color:var(--g)">'+g.venue+'</strong> suppresses offense.'
     :'<strong style="color:var(--c)">'+g.venue+'</strong> plays neutral.';
+  // HR park factor often diverges from run factor (e.g. Yankee Stadium: modest
+  // runs, big HR boost). Call it out when it disagrees with the run read.
+  if(hrpf!=null){
+    var hrLean=hrpf>=1.04?'inflates home runs':hrpf<=0.96?'suppresses home runs':'is HR-neutral';
+    var hrEmph=(hrpf>=1.04&&pf<1.05)||(hrpf<=0.96&&pf>0.95)?' (diverges from its run profile)':'';
+    desc+=' This park <strong style="color:'+hrCol+'">'+hrLean+'</strong>'+hrEmph+'.';
+  }
   document.getElementById('pkP').innerHTML=
     '<div class="pkg"><div class="ps"><div class="pv" style="color:'+col+'">'+pf+'x</div><div class="plb">RUN FACTOR</div></div>'
-    +'<div class="ps"><div class="pv" style="color:'+col+';font-size:.88rem">'+type+'</div><div class="plb">PARK TYPE</div></div></div>'
+    +'<div class="ps"><div class="pv" style="color:'+hrCol+'">'+(hrpf==null?'—':hrpf+'x')+'</div><div class="plb">HR FACTOR</div></div></div>'
+    +'<div class="pkg" style="margin-top:10px"><div class="ps"><div class="pv" style="color:'+col+';font-size:.88rem">'+type+'</div><div class="plb">PARK TYPE</div></div>'
+    +'<div class="ps"><div class="pv" style="color:'+hrCol+';font-size:.88rem">'+(hrpf==null?'—':hrpf>=1.04?'HR Boost':hrpf<=0.96?'HR Drag':'HR Neutral')+'</div><div class="plb">HR PROFILE</div></div></div>'
     +'<div style="margin-top:11px;padding:9px;background:rgba(0,0,0,.28);border-radius:7px;font-size:.7rem;color:var(--mu);line-height:1.6">'+desc+'</div>';
 }
 function renderMatchup(){

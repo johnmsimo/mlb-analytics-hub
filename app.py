@@ -4400,6 +4400,7 @@ def parse_game(g, prefer_live_weather=True):
             gt_fmt = dt_et.strftime("%-I:%M %p ET")
         except Exception: gt_fmt = "TBD"
         pf   = PARK_FACTORS.get(hid, 1.0)
+        hrpf = round(HR_PARK_FACTORS.get(hid, 100) / 100.0, 2)   # HR index → multiplier
         series_game  = int(g.get("seriesGameNumber") or 1)
         series_total = int(g.get("gamesInSeries")    or 3)
         double_header = str(g.get("doubleHeader") or "N").upper()
@@ -4457,7 +4458,7 @@ def parse_game(g, prefer_live_weather=True):
             "awayRecord": away_record, "homeRecord": home_record,
             "awayScore": away_score, "homeScore": home_score,
             "venue": ven.get("name",""), "gameTime": gt_fmt,
-            "parkFactor": pf, "edge": edge, "barPct": bar,
+            "parkFactor": pf, "hrParkFactor": hrpf, "edge": edge, "barPct": bar,
             "seriesGame": series_game, "seriesTotal": series_total,
             "temp": wx.get("temp","N/A"), "wind": wx.get("wind", f"{wx.get('wind_speed','?')} mph {wx.get('wind_dir','')}").strip(),
             "condition": wx.get("condition",""), "rainChance": wx.get("rain_chance","N/A"),
