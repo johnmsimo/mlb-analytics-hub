@@ -6519,6 +6519,28 @@ function ppLoad() {
     });
 }
 
+// Surface the strongest edges so the user doesn't have to scan the whole board.
+// Ranks the current (filtered) rows by absolute edge %, keeping only plays with
+// a real edge and a definitive side.
+function ppTopPlays(rows) {
+  var cand = (rows||[]).filter(function(p){
+    return p.edge_pct != null && (p.direction==='over'||p.direction==='under') && Math.abs(p.edge_pct) >= 8;
+  });
+  cand.sort(function(a,b){ return Math.abs(b.edge_pct)-Math.abs(a.edge_pct); });
+  var top = cand.slice(0,5);
+  if (!top.length) return '';
+  var chips = top.map(function(p){
+    var dir = p.direction==='over' ? 'OVER' : 'UNDER';
+    var col = p.direction==='over' ? '#00e676' : '#ff9800';
+    return '<span style="display:inline-flex;align-items:center;gap:5px;padding:4px 9px;border-radius:999px;border:1px solid '+col+'40;background:'+col+'14;font-size:.6rem;margin:3px 4px 0 0">'
+      +'<strong style="color:'+col+'">'+dir+' '+p.line+'</strong> '+(p.player||'')+' '+(p.stat||'')
+      +' <span style="color:'+col+';font-weight:700">+'+Math.abs(p.edge_pct).toFixed(0)+'%</span></span>';
+  }).join('');
+  return '<div style="margin:2px 0 12px;padding:9px 11px;border-radius:9px;border:1px solid rgba(255,183,77,.25);background:rgba(255,152,0,.06)">'
+    +'<div style="font-family:Orbitron,monospace;font-size:.56rem;letter-spacing:1.5px;color:#ffb74d;margin-bottom:5px">&#11088; TOP MODEL EDGES</div>'
+    +chips+'</div>';
+}
+
 function ppRender() {
   var el = document.getElementById('tab-prizepicks');
   if (!el) return;
@@ -6586,6 +6608,7 @@ function ppRender() {
     +'<input class="pp-search" type="text" placeholder="Search player, stat&hellip;" '
     +'value="'+(_ppSearch||'').replace(/"/g,'&quot;')+'" oninput="ppSetSearch(this.value)">'
     +'</div>'
+    +ppTopPlays(rows)
     +'<div class="pp-table-wrap"><table class="pp-table"><thead><tr>'
     +th('player','PLAYER')+th('team','TEAM')+th('stat','STAT')
     +th('line','PP LINE')+th('our_proj','OUR PROJ')+th('edge','EDGE')
