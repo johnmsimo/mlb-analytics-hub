@@ -1751,6 +1751,163 @@ DOME_VENUES = {
     4321,  # Globe Life Field alt
 }
 
+# Ballpark orientation: compass azimuth (degrees clockwise from true north) of
+# the line from home plate through the pitcher's mound to straightaway center
+# field. Wind blowing TOWARD this bearing carries fly balls out of the park;
+# wind blowing the opposite way knocks them down. Used by _wind_field_geometry()
+# to turn a raw "12 mph NE" string into an actionable OUT/IN/CROSS read.
+#
+# Only outdoor parks are listed — the eight dome/retractable venues in
+# DOME_VENUES play in controlled air, so a directional read is meaningless
+# there. Bearings are bucketed to the nearest well-established quadrant; the
+# downstream classifier only resolves OUT / IN / CROSS (45-degree bins), so
+# small per-park errors never flip the sign of the call.
+PARK_CF_BEARING = {
+    1:    45,   # Angel Stadium — CF to NE
+    2:    30,   # Camden Yards — CF to NNE
+    3:    45,   # Fenway Park — CF to NE
+    4:    43,   # Rate Field (Chicago AL) — CF to NE
+    5:    0,    # Progressive Field — CF to N
+    7:    45,   # Kauffman Stadium — CF to NE
+    17:   30,   # Wrigley Field — CF to NNE (the classic wind park)
+    19:   0,    # Coors Field — CF to N
+    22:   25,   # Dodger Stadium — CF to NNE
+    31:   120,  # PNC Park — CF to ESE (toward the river)
+    2394: 150,  # Comerica Park — CF to SSE
+    2395: 90,   # Oracle Park — CF to E (McCovey Cove)
+    2602: 120,  # Great American Ball Park — CF to ESE
+    2680: 0,    # Petco Park — CF to N
+    2681: 15,   # Citizens Bank Park — CF to NNE
+    2889: 60,   # Busch Stadium — CF to ENE
+    3289: 28,   # Citi Field — CF to NNE
+    3309: 30,   # Nationals Park — CF to NNE
+    3312: 68,   # Target Field — CF to ENE
+    3313: 75,   # Yankee Stadium — CF to ENE
+    4705: 138,  # Truist Park — CF to SE
+}
+
+
+def _wind_field_geometry(venue_id, wind_deg, wind_speed):
+    """Resolve a meteorological wind (direction it blows FROM, in degrees) into
+    the component blowing out toward center field for a given park.
+
+    Open-Meteo's ``winddirection_10m`` follows the meteorological convention:
+    it is the heading the wind is coming *from*. The ball is carried toward the
+    opposite heading, so we rotate by 180 degrees before comparing to the
+    park's home-plate -> CF bearing.
+
+    Returns a dict with:
+      ``out``   signed mph blowing out to CF (+) or in from CF (-)
+      ``cross`` signed mph of crosswind (+ = toward right field / L->R)
+      ``field`` short label: "OUT to CF" / "IN from CF" / "Crosswind L->R" / ...
+      ``emoji`` a directional glyph for the UI
+    or ``None`` when the park bearing or wind data is unavailable.
+    """
+    try:
+        bearing = PARK_CF_BEARING.get(int(venue_id or 0))
+    except (TypeError, ValueError):
+        bearing = None
+    if bearing is None:
+        return None
+    try:
+        spd = float(wind_speed)
+        deg = float(wind_deg)
+    except (TypeError, ValueError):
+        return None
+    if spd <= 0:
+        return {"out": 0.0, "cross": 0.0, "field": "Calm", "emoji": "\U0001F4A4"}
+    to_dir = (deg + 180.0) % 360.0
+    delta = ((to_dir - bearing + 180.0) % 360.0) - 180.0   # signed, [-180, 180]
+    rad = math.radians(delta)
+    out = round(spd * math.cos(rad), 1)
+    cross = round(spd * math.sin(rad), 1)
+    ad = abs(delta)
+    if ad <= 45:
+        field, emoji = "OUT to CF", "↗"
+    elif ad >= 135:
+        field, emoji = "IN from CF", "↙"
+    else:
+        if delta > 0:
+            field, emoji = "Crosswind L→R", "➡"
+        else:
+            field, emoji = "Crosswind R→L", "⬅"
+    return {"out": out, "cross": cross, "field": field, "emoji": emoji}
+
+
+def _scoring_environment(temp, wind_out, park_factor, rain_chance, dome=False):
+    """Blend temperature, the out-to-CF wind component, and the park run factor
+    into a single per-team run delta plus a plain-language verdict. This is the
+    composite "scoring environment" the deep-dive surfaces above the raw cards.
+
+    All deltas are runs-per-team relative to a neutral 70F / calm / 1.00-park
+    baseline and are clamped so no single driver can dominate the read.
+    """
+    drivers = []
+    if dome:
+        return {
+            "runDelta": 0.0, "tier": "CONTROLLED", "color": "neutral",
+            "label": "Indoor / roof closed — weather neutralized",
+            "drivers": ["Climate-controlled air: no wind or temperature effect"],
+        }
+
+    temp_d = 0.0
+    try:
+        t = float(temp)
+        temp_d = max(-0.45, min(0.45, (t - 70.0) / 10.0 * 0.12))
+        if t >= 85:
+            drivers.append(f"Hot {int(t)}°F air thins out — ball carries (+)")
+        elif t <= 50:
+            drivers.append(f"Cold {int(t)}°F air is dense — ball dies (−)")
+    except (TypeError, ValueError):
+        pass
+
+    wind_d = 0.0
+    if isinstance(wind_out, (int, float)):
+        wind_d = max(-0.6, min(0.6, float(wind_out) * 0.035))
+        if wind_out >= 6:
+            drivers.append(f"{abs(round(wind_out))} mph blowing OUT — fly balls carry (+)")
+        elif wind_out <= -6:
+            drivers.append(f"{abs(round(wind_out))} mph blowing IN — fly balls held up (−)")
+
+    park_d = 0.0
+    try:
+        pf = float(park_factor)
+        park_d = max(-0.9, min(0.9, (pf - 1.0) * 4.5))
+        if pf >= 1.05:
+            drivers.append(f"{pf:.2f}x hitter's park dimensions (+)")
+        elif pf <= 0.95:
+            drivers.append(f"{pf:.2f}x pitcher's park dimensions (−)")
+    except (TypeError, ValueError):
+        pass
+
+    rain_note = None
+    try:
+        rc = float(rain_chance)
+        if rc >= 60:
+            rain_note = f"{int(rc)}% rain risk — heavy air, possible delay"
+            drivers.append(rain_note + " (−)")
+    except (TypeError, ValueError):
+        pass
+
+    total = round(temp_d + wind_d + park_d - (0.1 if rain_note else 0.0), 2)
+    if total >= 0.5:
+        tier, color, label = "HITTER-FRIENDLY", "good", "Run-scoring environment favors overs / hitter props"
+    elif total >= 0.2:
+        tier, color, label = "SLIGHT HITTER LEAN", "good", "Modest tailwind for offense"
+    elif total <= -0.5:
+        tier, color, label = "PITCHER-FRIENDLY", "bad", "Suppressed environment favors unders / NRFI / K props"
+    elif total <= -0.2:
+        tier, color, label = "SLIGHT PITCHER LEAN", "bad", "Modest drag on offense"
+    else:
+        tier, color, label = "NEUTRAL", "neutral", "Balanced scoring environment"
+    if not drivers:
+        drivers.append("No standout weather or park driver — plays neutral")
+    return {
+        "runDelta": total, "tier": tier, "color": color,
+        "label": label, "drivers": drivers,
+    }
+
+
 LOGO_BASE = "https://www.mlbstatic.com/team-logos/{team_id}.svg"
 PARK_FACTORS = {
     133:1.08,144:0.92,110:0.97,111:1.04,112:0.97,137:0.95,109:1.06,
@@ -4058,12 +4215,18 @@ def get_weather(lat, lon, game_hour=13, venue_id=None):
         compass = _deg_to_compass(wdeg)
         wind_speed = round(wind[idx]) if idx < len(wind) else "N/A"
         wind_str = f"{wind_speed} mph {compass}".strip()
+        geom = _wind_field_geometry(venue_id, wdeg, wind_speed)
         payload = {
             "temp":       round(temps[idx]) if idx < len(temps) else "N/A",
             "rain_chance":precip[idx] if idx < len(precip) else "N/A",
             "wind_speed": wind_speed,
             "wind_dir":   compass,
+            "wind_deg":   round(float(wdeg)) if wdeg is not None else None,
             "wind":       wind_str,
+            "wind_out":   (geom or {}).get("out"),
+            "wind_cross": (geom or {}).get("cross"),
+            "wind_field": (geom or {}).get("field"),
+            "wind_emoji": (geom or {}).get("emoji"),
             "condition":  wcode_map.get(wcode, "Clear"),
         }
         with _weather_cache_lock:
@@ -4279,6 +4442,14 @@ def parse_game(g, prefer_live_weather=True):
             "seriesGame": series_game, "seriesTotal": series_total,
             "temp": wx.get("temp","N/A"), "wind": wx.get("wind", f"{wx.get('wind_speed','?')} mph {wx.get('wind_dir','')}").strip(),
             "condition": wx.get("condition",""), "rainChance": wx.get("rain_chance","N/A"),
+            "windDir": wx.get("wind_dir",""), "windSpeed": wx.get("wind_speed","N/A"),
+            "windOut": wx.get("wind_out"), "windCross": wx.get("wind_cross"),
+            "windField": wx.get("wind_field"), "windEmoji": wx.get("wind_emoji"),
+            "venueId": venue_id,
+            "weatherImpact": _scoring_environment(
+                wx.get("temp"), wx.get("wind_out"), pf, wx.get("rain_chance"),
+                dome=(venue_id in DOME_VENUES),
+            ),
             "weatherIcon": wi,
             "injuryAlert": injury_alert,
         }

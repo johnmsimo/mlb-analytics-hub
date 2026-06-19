@@ -51,6 +51,17 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .wv{font-family:'Orbitron',monospace;font-size:.9rem;font-weight:700}
 .wl{font-size:.58rem;color:var(--mu);letter-spacing:1px;margin-top:3px}
 .wi2{margin-top:10px;padding:8px 12px;background:rgba(0,229,255,.05);border:1px solid rgba(0,229,255,.1);border-radius:8px;font-size:.7rem;color:var(--c);text-align:center}
+/* scoring environment + wind direction */
+.wind-chip{display:inline-flex;align-items:center;gap:6px;margin-top:9px;padding:5px 11px;border-radius:20px;font-size:.66rem;font-weight:700;letter-spacing:.5px}
+.wind-chip .wc-ar{font-size:.92rem;line-height:1}
+.env-banner{margin-top:11px;border-radius:10px;padding:11px 13px;border:1px solid}
+.env-top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+.env-tier{font-family:'Orbitron',monospace;font-size:.68rem;letter-spacing:1px;font-weight:700}
+.env-delta{font-family:'Orbitron',monospace;font-size:.82rem;font-weight:700}
+.env-label{font-size:.64rem;color:var(--mu);line-height:1.5;margin-bottom:7px}
+.env-drivers{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:3px}
+.env-drivers li{font-size:.63rem;color:var(--t);opacity:.86;padding-left:13px;position:relative;line-height:1.45}
+.env-drivers li:before{content:'';position:absolute;left:2px;top:6px;width:5px;height:5px;border-radius:50%;background:var(--c)}
 /* pitcher panels */
 .pg{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 .pc{background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.05);border-radius:10px;padding:16px}
@@ -1022,6 +1033,39 @@ function renderEdge(){
     +'<div class="cb"><div class="cf" id="cfill" style="width:0%" data-w="'+g.barPct+'%"></div></div></div></div>';
   setTimeout(function(){var e=document.getElementById('cfill');if(e)e.style.width=e.getAttribute('data-w');},200);
 }
+function envStyle(tier){
+  if(tier&&tier.indexOf('HITTER')>=0) return {fg:'#ff9800',bg:'rgba(255,152,0,.08)',bd:'rgba(255,152,0,.32)'};
+  if(tier&&tier.indexOf('PITCHER')>=0) return {fg:'#00e676',bg:'rgba(0,230,118,.08)',bd:'rgba(0,230,118,.32)'};
+  if(tier==='CONTROLLED') return {fg:'#6a8db0',bg:'rgba(106,141,176,.08)',bd:'rgba(106,141,176,.28)'};
+  return {fg:'#00e5ff',bg:'rgba(0,229,255,.06)',bd:'rgba(0,229,255,.22)'};
+}
+// Composite scoring-environment banner (temp + wind-to-CF + park run factor).
+function renderEnvBanner(imp){
+  if(!imp || imp.tier==null) return '';
+  var s=envStyle(imp.tier);
+  var dn=Number(imp.runDelta||0);
+  var dStr=(dn>0?'+':'')+dn.toFixed(2)+' R/team';
+  var drivers=(imp.drivers||[]).map(function(x){return '<li>'+x+'</li>';}).join('');
+  return '<div class="env-banner" style="background:'+s.bg+';border-color:'+s.bd+'">'
+    +'<div class="env-top"><span class="env-tier" style="color:'+s.fg+'">'+imp.tier+'</span>'
+    +'<span class="env-delta" style="color:'+s.fg+'">'+dStr+'</span></div>'
+    +'<div class="env-label">'+(imp.label||'')+'</div>'
+    +'<ul class="env-drivers">'+drivers+'</ul></div>';
+}
+// Wind direction relative to the park's center-field bearing: OUT carries fly
+// balls, IN holds them up. Falls back to a raw read for parks without a bearing.
+function renderWindChip(g){
+  if(!g.windField) return '';
+  var f=g.windField, ar=g.windEmoji||'•';
+  var out=Number(g.windOut);
+  var style;
+  if(f.indexOf('OUT')>=0) style={fg:'#ff9800',bg:'rgba(255,152,0,.12)'};
+  else if(f.indexOf('IN')>=0) style={fg:'#00e676',bg:'rgba(0,230,118,.12)'};
+  else style={fg:'#6a8db0',bg:'rgba(106,141,176,.12)'};
+  var mag=(!isNaN(out)&&Math.abs(out)>=1)?(' '+Math.abs(Math.round(out))+' mph'):'';
+  return '<div class="wind-chip" style="color:'+style.fg+';background:'+style.bg+'">'
+    +'<span class="wc-ar">'+ar+'</span> '+f+mag+'</div>';
+}
 function renderWx(){
   var g=GD;
   if(!g.temp||g.temp==='N/A'){document.getElementById('wxP').innerHTML='<p class="na">Weather data not yet available.</p>';return;}
@@ -1030,16 +1074,17 @@ function renderWx(){
       '<div class="wg"><div class="ws"><div class="wi">&#127968;</div><div class="wv" style="font-size:.74rem">DOME</div><div class="wl">VENUE</div></div>'
       +'<div class="ws"><div class="wi">&#9989;</div><div class="wv" style="font-size:.74rem">INDOOR</div><div class="wl">CONDITIONS</div></div>'
       +'<div class="ws"><div class="wi">&#127788;</div><div class="wv">72&deg;F</div><div class="wl">EST TEMP</div></div></div>'
-      +'<div class="wi2">&#127968; DOME / RETRACTABLE ROOF — Controlled indoor conditions. Weather adjustments suppressed.</div>';
+      +'<div class="wi2">&#127968; DOME / RETRACTABLE ROOF — Controlled indoor conditions. Weather adjustments suppressed.</div>'
+      +renderEnvBanner(g.weatherImpact);
     return;
   }
-  var tv=parseInt(g.temp)||70,rc=g.rainChance!=='N/A'&&g.rainChance!==0?g.rainChance+'%':'N/A';
-  var imp=tv>80?'&#128293; HOT — Ball carries. Hitters favored.':tv<50?'&#129398; COLD — Ball dies. Pitchers favored.':'&#9989; NEUTRAL — Standard conditions.';
+  var rc=g.rainChance!=='N/A'&&g.rainChance!==0?g.rainChance+'%':'N/A';
   document.getElementById('wxP').innerHTML=
     '<div class="wg"><div class="ws"><div class="wi">'+wic(g.condition)+'</div><div class="wv">'+g.temp+'°F</div><div class="wl">TEMP</div></div>'
     +'<div class="ws"><div class="wi">&#128168;</div><div class="wv" style="font-size:.78rem">'+(g.wind||'N/A')+'</div><div class="wl">WIND</div></div>'
     +'<div class="ws"><div class="wi">&#127783;</div><div class="wv">'+rc+'</div><div class="wl">RAIN CHANCE</div></div></div>'
-    +'<div class="wi2">'+imp+'</div>';
+    +renderWindChip(g)
+    +renderEnvBanner(g.weatherImpact);
 }
 function renderPark(){
   var g=GD,pf=g.parkFactor||1.0;
