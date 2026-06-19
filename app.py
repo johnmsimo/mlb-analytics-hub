@@ -14910,10 +14910,16 @@ def _tracker_auto_sync_once():
         pending = [r for r in day.get('entries', []) if r.get('grade') == 'pending']
         if not pending:
             continue
+        # api_tracker_close / api_tracker_grade are admin-token-gated. When
+        # ADMIN_TOKEN is set, calling them with an empty request context makes
+        # _check_admin_auth() return a 401 that this worker would silently
+        # discard — so nothing ever gets graded. Forward the token so the
+        # internal call authenticates like a real admin request.
+        _auth_headers = {'X-Admin-Token': _ADMIN_TOKEN} if _ADMIN_TOKEN else {}
         try:
-            with app.test_request_context(f'/api/tracker/close/{ds}', method='POST'):
+            with app.test_request_context(f'/api/tracker/close/{ds}', method='POST', headers=_auth_headers):
                 api_tracker_close(ds)
-            with app.test_request_context(f'/api/tracker/grade/{ds}', method='POST'):
+            with app.test_request_context(f'/api/tracker/grade/{ds}', method='POST', headers=_auth_headers):
                 api_tracker_grade(ds)
         except Exception:
             print(f'[tracker_auto_sync_once {ds}] {traceback.format_exc()}')
@@ -14936,6 +14942,75 @@ def _start_tracker_auto_sync_worker():
                 _tracker_auto_sync_once()
             except Exception:
                 print(f'[tracker_auto_sync] {traceback.format_exc()}')
+            time.sleep(interval_min * 60)
+
+    threading.Thread(target=_runner, daemon=True).start()
+
+
+_TRACKER_AUTO_CAPTURE_STARTED = False
+_TRACKER_AUTO_CAPTURE_LOCK = threading.Lock()
+
+
+def _tracker_auto_capture_once():
+    """Capture today's slate into the tracker if it hasn't been captured yet.
+
+    This is the missing half of the feedback loop: the auto-sync worker only
+    *grades* picks that already exist, but picks only ever entered the tracker
+    via the manual, admin-gated "Capture Slate" button. Without an automated
+    capture, the tracker stays empty, the auto-grader has nothing to grade, and
+    the per-market isotonic calibrators (which need graded outcomes) never
+    train. This worker closes that gap.
+
+    Reuses api_tracker_capture wholesale (parallel fetch, odds, background
+    continuation) by calling it in-process with the admin token forwarded, so
+    we don't duplicate the capture pipeline.
+    """
+    today = datetime.now(ET).strftime('%Y-%m-%d')
+
+    # Only capture once lineups/odds have started to firm up. Capturing at
+    # 3am ET would produce thin, projected-lineup picks. Configurable via
+    # TRACKER_AUTO_CAPTURE_HOUR (ET, default 11:00).
+    capture_hour = max(0, min(23, int(os.getenv('TRACKER_AUTO_CAPTURE_HOUR', '11') or 11)))
+    if datetime.now(ET).hour < capture_hour:
+        return
+
+    store = _load_json(TRACKER_STORE, {})
+    day = _normalize_tracker_day(store.get(today))
+    # Already have picks for today — nothing to do. (Re-capture merges, but we
+    # avoid re-hammering the MLB API once a day is populated.)
+    if day.get('entries'):
+        return
+
+    _auth_headers = {'X-Admin-Token': _ADMIN_TOKEN} if _ADMIN_TOKEN else {}
+    try:
+        with app.test_request_context(f'/api/tracker/capture/{today}', method='POST', headers=_auth_headers):
+            api_tracker_capture(today)
+        print(f'[tracker_auto_capture] captured slate for {today}')
+    except Exception:
+        print(f'[tracker_auto_capture {today}] {traceback.format_exc()}')
+
+
+def _start_tracker_auto_capture_worker():
+    global _TRACKER_AUTO_CAPTURE_STARTED
+    if str(os.getenv('TRACKER_AUTO_CAPTURE_ENABLED', '1')).strip().lower() not in ('1', 'true', 'yes'):
+        return
+    with _TRACKER_AUTO_CAPTURE_LOCK:
+        if _TRACKER_AUTO_CAPTURE_STARTED:
+            return
+        _TRACKER_AUTO_CAPTURE_STARTED = True
+
+    # Check a few times a day so the first run after capture_hour fires the
+    # capture, and a failed capture gets retried on the next pass.
+    interval_min = max(15, int(os.getenv('TRACKER_AUTO_CAPTURE_MINUTES', '120') or 120))
+
+    def _runner():
+        # Small startup delay so FG/Savant/schedule caches warm first.
+        time.sleep(float(os.getenv('TRACKER_AUTO_CAPTURE_BOOT_DELAY_SEC', '90') or 90))
+        while True:
+            try:
+                _tracker_auto_capture_once()
+            except Exception:
+                print(f'[tracker_auto_capture] {traceback.format_exc()}')
             time.sleep(interval_min * 60)
 
     threading.Thread(target=_runner, daemon=True).start()
@@ -15000,6 +15075,11 @@ def api_tracker_capture(date_str):
     denied = _check_admin_auth()
     if denied:
         return denied
+    # Backfill mode: picks captured for a past date are projected with the
+    # CURRENT season caches, not point-in-time stats, so their model probs
+    # carry mild look-ahead bias. Stamp them so calibration/eval can isolate
+    # or down-weight them vs. genuinely live-captured picks.
+    is_backfill = str(request.args.get('backfill', '')).strip().lower() in ('1', 'true', 'yes')
     try:
         adjustments = _get_adjustments()
         sched = fetch_schedule(date_str)
@@ -15019,6 +15099,14 @@ def api_tracker_capture(date_str):
         # in-memory + on-disk odds cache (data/odds_cache.json) keeps API usage
         # low; set TRACKER_CAPTURE_INCLUDE_ODDS=0 to opt out.
         include_odds = str(os.getenv('TRACKER_CAPTURE_INCLUDE_ODDS', '1')).strip().lower() in ('1', 'true', 'yes')
+        # The Odds API only serves live markets, so backfilling past dates can't
+        # fetch historical odds and would just burn credits. Default odds OFF for
+        # backfill unless the caller explicitly opts in via ?odds=1.
+        _odds_q = request.args.get('odds')
+        if _odds_q is not None:
+            include_odds = str(_odds_q).strip().lower() in ('1', 'true', 'yes')
+        elif is_backfill:
+            include_odds = False
 
         # Parallelise I/O-bound boxscore/roster fetches across games.
         # cap workers at 4 to stay within the single-Gunicorn-worker memory budget.
@@ -15080,8 +15168,11 @@ def api_tracker_capture(date_str):
         store = _load_json(TRACKER_STORE, {})
         day = _normalize_tracker_day(store.get(date_str))
         entries = _merge_tracker_entries(day.get('entries', []), _recalc_tracker_entries(all_entries))
+        if is_backfill:
+            for _e in entries:
+                _e['backfilled'] = True
         entries.sort(key=lambda x: x.get('score', 0), reverse=True)
-        store[date_str] = {'capturedAt': datetime.now().isoformat(), 'gradedAt': None, 'closingCapturedAt': None, 'entries': entries}
+        store[date_str] = {'capturedAt': datetime.now().isoformat(), 'gradedAt': None, 'closingCapturedAt': None, 'entries': entries, 'backfilled': is_backfill or day.get('backfilled', False)}
         # Without this check, a failed disk write silently returns 210 picks to
         # the user — then "Capture Closing" 404s because the day isn't on disk.
         if not _save_json(TRACKER_STORE, store):
@@ -25213,6 +25304,7 @@ _launch_startup_loaders()
 
 _start_injury_worker()
 _start_tracker_auto_sync_worker()
+_start_tracker_auto_capture_worker()
 _start_mlb_memory_worker()
 
 # Start daily pipeline scheduler (runs at 8 AM ET + on boot)
