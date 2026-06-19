@@ -1131,10 +1131,15 @@ function renderSharpCard(){
   var saveBtn = (best && best.entry)
     ? '<button onclick="saveSharpBet()" style="margin-left:auto;padding:4px 12px;font-size:.6rem;font-family:Orbitron,monospace;letter-spacing:1px;border-radius:999px;cursor:pointer;border:1px solid '+(saved?'#00e676':best.col)+'66;background:'+(saved?'rgba(0,230,118,.12)':best.col+'18')+';color:'+(saved?'#00e676':best.col)+'">'+(_sharpSaving?'…':(saved?'✓ SAVED':'💾 SAVE BET'))+'</button>'
     : '';
+  // Backtest hook: once final, auto-grade the headline bet's ML/total lean.
+  var grade = best ? gradeSharpBet(best.entry, g) : null;
+  var gradeChip = grade
+    ? '<span style="font-family:Orbitron,monospace;font-size:.58rem;font-weight:700;padding:2px 9px;border-radius:999px;color:'+grade.col+';border:1px solid '+grade.col+'66;background:'+grade.col+'1f">'+grade.r+'</span>'
+    : '';
   var bestHtml = best
     ? '<div style="margin-bottom:10px;padding:9px 12px;border-radius:9px;border:1px solid '+best.col+'55;background:'+best.col+'14;display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
       +'<span style="font-family:Orbitron,monospace;font-size:.6rem;letter-spacing:1px;color:'+best.col+'">'+best.tier+'</span>'
-      +'<span style="font-size:.72rem;color:var(--t);font-weight:600">'+best.text+'</span>'+saveBtn+'</div>'
+      +'<span style="font-size:.72rem;color:var(--t);font-weight:600">'+best.text+'</span>'+gradeChip+(grade?'':saveBtn)+'</div>'
     : '';
 
   host.innerHTML='<div class="pt">⚡ SHARP CARD <span class="tag-sv">SIGNAL ROLLUP</span></div>'
@@ -1188,6 +1193,28 @@ function sharpBestBet(g, gp, sim, topProp){
   var tier=top.conf>=0.45?'STRONG BET':top.conf>=0.22?'LEAN':'SLIGHT LEAN';
   var col=top.conf>=0.45?'#00e676':top.conf>=0.22?'#ffd740':'#00e5ff';
   return {text:'Best bet: '+top.text, tier:tier, col:col, entry:top.entry, key:'sharp::'+top.type+'::'+(top.entry&&top.entry.player)+'::'+(top.entry&&top.entry.marketKey)+'::'+(top.entry&&top.entry.line)};
+}
+// Light backtest hook: score the Sharp Card's headline bet against the final
+// result. Moneyline and game-total leans grade off the box score; props return
+// null (they're tracked individually and graded by the tracker's auto-grader).
+function gradeSharpBet(entry, g){
+  var status=(g&&g.status)?String(g.status):'';
+  if(!(status==='Final'||status==='Game Over'||status==='Completed Early') || !entry) return null;
+  var a=Number(g.awayScore), h=Number(g.homeScore);
+  if(isNaN(a)||isNaN(h)) return null;
+  if(entry.marketKey==='game_moneyline'){
+    if(a===h) return {r:'PUSH',col:'#6a8db0'};
+    var winner=a>h?(g.awayAbbr||'AWAY'):(g.homeAbbr||'HOME');
+    var won=winner===entry.recommendedSide;
+    return {r:won?'WON ✓':'LOST ✗', col:won?'#00e676':'#f44336'};
+  }
+  if(entry.marketKey==='game_total' && entry.line!=null){
+    var tot=a+h;
+    if(tot===entry.line) return {r:'PUSH',col:'#6a8db0'};
+    var won2=((entry.recommendedSide==='Over')===(tot>entry.line));
+    return {r:won2?'WON ✓':'LOST ✗', col:won2?'#00e676':'#f44336'};
+  }
+  return null;
 }
 function _sharpEntryFromProp(r){
   var e = (typeof trackerEntryFromProjection==='function') ? trackerEntryFromProjection(r) : {gamePk:GPK, player:r.player, marketKey:r.marketKey, line:r.line, recommendedSide:'Over', adjProb:r.prob, edge:r.edge};
