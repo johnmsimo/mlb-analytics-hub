@@ -6394,7 +6394,9 @@ function scoreBatter(b, pitcher, gd, teamAbbr){
   // Exit velo: sv_ev is the Savant field name in batter objects
   var ev     = parseFloat(b&&(b.avgev||b.avgEV||b.ev||b.sv_ev))        || 87.0;
   var hr9    = parseFloat(pitcher&&pitcher.stats&&(pitcher.stats.hr9||pitcher.stats.hrper9)) || 1.2;
-  var pf     = parseFloat((gd&&(gd.parkFactor||gd.park_factor)))                     || 1.0;
+  // Use the handedness-aware HR park factor (not the run factor) so the HR
+  // pick score reflects the actual home-run environment for this hitter.
+  var pf     = _getParkFactor(gd, b).val;
   var score  = Math.round((iso*80) + (barrel*3.5) + ((ev-85)*1.5) + (hr9*6) + ((pf-1)*30));
   var tier   = score>=55?'STRONG':score>=38?'MODERATE':'LEAN';
   return { name:(b.name||b.fullName||'Batter'), team:teamAbbr, score:score, tier:tier, iso:iso, barrel:barrel, ev:ev, hr9:hr9, pf:pf };
