@@ -4888,11 +4888,16 @@ function recomputeRunEnv() {
     }
     if (GD.temp === 'DOME') { wxScore = 12; windAdj = 0; }
   }
-  // 3. Umpire zone (0–25): higher zone → pitcher-friendly → subtract from run env
-  // Zone 100 (pitcher) → 0 run pts; Zone 0 (hitter) → 25 run pts
-  var umpScore = 12;
+  // 3. Umpire (0–25): zone rating (mechanism: tight zone = fewer Ks = more runs)
+  //    blended with the umpire's observed run tendency r_vs_avg (outcome). Zone
+  //    100 (pitcher) → 0 pts, Zone 0 (hitter) → 25; then ±6 from run tendency.
+  var umpScore = 12, umpRvs = NaN;
   if (DD_UMP && DD_UMP.umpire && DD_UMP.umpire.zone_rating != null) {
-    umpScore = Math.round(25 - (DD_UMP.umpire.zone_rating / 100) * 25);
+    var _u = DD_UMP.umpire;
+    var umpBase = 25 - (_u.zone_rating / 100) * 25;
+    umpRvs = parseFloat(String(_u.r_vs_avg||'').replace('+',''));
+    if (!isNaN(umpRvs)) umpBase += Math.max(-6, Math.min(6, umpRvs * 6));
+    umpScore = Math.round(Math.max(0, Math.min(25, umpBase)));
   }
   // 4. Starter quality (0–25): blended ERA 3.00 → 0 pts; 5.50 → 25 pts
   var eraScore = 12;
@@ -4944,6 +4949,15 @@ function recomputeRunEnv() {
       + ' / ' + (hBp2.team_abbr || 'HOME') + ' ' + (hBp2.stress_label || '—')
       + ' — ' + (bpAdj > 0 ? '+' : '') + bpAdj + ' run-env pts</div>';
   }
+  // Umpire caption: surface the plate ump's run tendency when notable.
+  var umpCap = '';
+  if (DD_UMP && DD_UMP.umpire && !isNaN(umpRvs) && Math.abs(umpRvs) >= 0.2) {
+    var uCol = umpRvs > 0 ? '#ff9800' : '#00e676';
+    var uName = DD_UMP.umpire.name || 'HP umpire';
+    umpCap = '<div style="font-size:.6rem;color:' + uCol + ';margin-top:6px;letter-spacing:.5px">'
+      + '⚖️ ' + uName + ': ' + (umpRvs > 0 ? '+' : '') + umpRvs.toFixed(1) + ' R/G vs avg — '
+      + (umpRvs > 0 ? 'hitter-leaning zone' : 'pitcher-leaning zone') + '</div>';
+  }
   existing.innerHTML = ''
     + '<div style="border-top:1px solid rgba(255,255,255,.06);padding-top:12px;margin-top:4px">'
     + '<div style="font-family:Orbitron,monospace;font-size:.6rem;color:var(--mu);letter-spacing:3px;margin-bottom:10px">RUN ENVIRONMENT COMPOSITE</div>'
@@ -4951,7 +4965,7 @@ function recomputeRunEnv() {
     +   '<div style="flex:1;min-width:180px">'
     +     renderReBar('PARK FACTOR', pfScore, '#ff9800')
     +     renderReBar('WEATHER + WIND', wxScore, '#00b8d4')
-    +     renderReBar('UMPIRE ZONE', umpScore, '#a855f7')
+    +     renderReBar('UMPIRE', umpScore, '#a855f7')
     +     renderReBar('STARTER ERA', eraScore, '#f44336')
     +   '</div>'
     +   '<div style="text-align:center;min-width:120px">'
@@ -4962,6 +4976,7 @@ function recomputeRunEnv() {
     + '</div>'
     + windCap
     + bpCap
+    + umpCap
     + '</div>';
 }
 
