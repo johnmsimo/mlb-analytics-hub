@@ -6204,8 +6204,17 @@ function _getPitcherHr9(pitcher){
 }
 
 // Get park factor from GD
-function _getParkFactor(gd){
+// For HR modeling, prefer the HR-specific park factor — handedness-split when
+// available (e.g. a LHB at Yankee Stadium gets the short-porch boost). Falls
+// back to the symmetric HR factor, then the run factor, then neutral.
+function _getParkFactor(gd, batter){
   if(!gd) return { val: 1.0, src: 'DEFAULT' };
+  var hand = batter ? String(batter.bats||batter.batSide||batter.bat_side||'R').charAt(0).toUpperCase() : '';
+  var hsplit = hand==='L' ? gd.hrParkFactorLHB : (hand==='R' ? gd.hrParkFactorRHB : null);
+  var hpf = parseFloat(hsplit);
+  if(!isNaN(hpf) && hpf > 0) return { val: hpf, src: 'LIVE' };
+  var hr = parseFloat(gd.hrParkFactor);
+  if(!isNaN(hr) && hr > 0) return { val: hr, src: 'LIVE' };
   var pf = parseFloat(gd.parkFactor || gd.park_factor || gd.pf);
   if(!isNaN(pf) && pf > 0) return { val: pf, src: 'LIVE' };
   return { val: 1.0, src: 'DEFAULT' };
@@ -6288,9 +6297,9 @@ function renderHRSim(){
   var brlSrc   = stats.barrelSrc;
   var evSrc    = stats.evSrc;
 
-  // Pull pitcher HR/9 and park factor
+  // Pull pitcher HR/9 and HR park factor (handedness-aware for the hitter)
   var hr9Data  = _getPitcherHr9(oppPitcher);
-  var pfData   = _getParkFactor(gd);
+  var pfData   = _getParkFactor(gd, b);
   var hr9      = hr9Data.val;
   var pf       = pfData.val;
   var hr9Src   = hr9Data.src;
@@ -6335,9 +6344,9 @@ function renderHRSim(){
       'AVG EXIT VELOCITY',
       'Average speed off the bat. HRs typically need 95+ mph EV. Sourced from Statcast / projections.',
       [['LG AVG','88.0 mph'],['ABOVE AVG','&gt; 90'],['ELITE','&gt; 93']]) +
-    _simCard('PARK FACTOR',     pf.toFixed(2)+'x',     pfSrc,
-      'PARK FACTOR',
-      'HR-friendliness multiplier for today\'s ballpark. Sourced from your game-summary API.',
+    _simCard('HR PARK'+(function(){var h=String(b.bats||b.batSide||'').charAt(0).toUpperCase();return (h==='L'||h==='R')?(' ('+h+'HB)'):'';})(), pf.toFixed(2)+'x', pfSrc,
+      'HR PARK FACTOR',
+      'Home-run park multiplier for today\'s ballpark, split by the hitter\'s handedness when the park has a known platoon skew (e.g. Yankee Stadium short porch for LHB). Falls back to the symmetric HR factor.',
       [['NEUTRAL','1.00'],['HR FRIENDLY','&gt; 1.05'],['PITCHER PARK','&lt; 0.95']]) +
     _simCard('SIMULATIONS',     '5,000',                'LIVE',
       'MONTE CARLO SIMS',
