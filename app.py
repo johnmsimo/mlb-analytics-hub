@@ -9178,7 +9178,9 @@ def _resolve_park_factor(home_team_abbr, home_team_id, hand="R", stat="HR", date
         if bp is not None:
             return bp
     if stat == "HR" and home_team_id is not None and home_team_id in HR_PARK_FACTORS:
-        return round(HR_PARK_FACTORS.get(home_team_id, 100) / 100.0, 4)
+        # Handedness-split HR factor when the park has a known platoon skew,
+        # else the symmetric HR index — both via _hr_park_factor_hand().
+        return _hr_park_factor_hand(home_team_id, hand)
     return PARK_FACTORS.get(home_team_id, 1.0)
 
 
@@ -20796,7 +20798,11 @@ def api_props_projections(game_pk):
         home_abbr = home_t.get("team", {}).get("abbreviation", "HOME")
         home_id   = home_t.get("team", {}).get("id")
         # Ballpark Pal microclimate factor when available; falls back to static.
+        # Resolve both handedness splits so each batter's HR park factor reflects
+        # the park's platoon skew (e.g. LHB short-porch boost at Yankee Stadium).
         pf        = _resolve_park_factor(home_abbr, home_id, hand="R", stat="HR")
+        pf_lhb    = _resolve_park_factor(home_abbr, home_id, hand="L", stat="HR")
+        pf_rhb    = pf
         pf_source = "bpp" if (_BPP_AVAILABLE and bp_park_factor(home_abbr, hand="R", stat="HR") is not None) else "static"
 
         away_full = away_t.get("team", {}).get("name", away_abbr)
@@ -20927,8 +20933,15 @@ def api_props_projections(game_pk):
                 pitch_adv = _pitch_type_advantage(bid, opp_pid, batter_name=name, pitcher_name=opp_pname) if (bid and opp_pid) else {"status": "neutral", "note": "Neutral matchup"}
                 bvp_grade = _compute_bvp_grade(bvp) if bvp else 'D'
                 injury = _get_player_injury(bid) if bid else None
+                # Handedness-aware HR park factor: a switch hitter bats opposite
+                # the starter's throwing hand. Only the HR component meaningfully
+                # depends on this; the split is neutral at parks without a skew.
+                bhand = (bfg.get("fg_bats") or b.get("bats") or "R").upper()
+                if bhand == "S":
+                    bhand = "L" if opp_hand == "R" else "R"
+                bpf = pf_lhb if bhand == "L" else pf_rhb
                 proj = _project_batter_batx(
-                    b, opp_pname, opp_pfg, opp_psv, pf, wx,
+                    b, opp_pname, opp_pfg, opp_psv, bpf, wx,
                     pitcher_hand=opp_hand,
                     opp_pitcher_id=opp_pid,
                     form=form, bvp=bvp,
