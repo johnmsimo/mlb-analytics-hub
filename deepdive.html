@@ -3047,6 +3047,7 @@ function renderSimulation(){
     + '<div class="mc-card"><div class="mc-v">'+pct(t.p_9plus_total)+'</div><div class="mc-l">P(TOTAL 9+)</div></div>'
     + '<div class="mc-card"><div class="mc-v">'+pct(t.p_10plus_total)+'</div><div class="mc-l">P(TOTAL 10+)</div></div>'
     + '</div>'
+    + mcOuLadder(t)
     + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 4px">'
     + '<button class="btn" onclick="refreshSimulation()" style="padding:6px 12px;font-size:.62rem">REFRESH SIM</button>'
     + '<button class="btn" onclick="runHighPrecisionSimulation()" style="padding:6px 12px;font-size:.62rem">HIGH PRECISION RECHECK</button>'
@@ -3171,6 +3172,25 @@ function renderSampleBox(teamKey, abbr, spName){
     + rows + '</tbody></table>'
     + '<div class="mc-note"><strong style="color:var(--c)">Starter:</strong> '+spName+' &nbsp;|&nbsp; Mean R/H: '+f1(box.mean_runs)+'/'+f1(box.mean_hits)+' &nbsp;|&nbsp; xBB: '+f1(box.mean_bb)+' &nbsp;|&nbsp; xK: '+f1(box.mean_k)+' &nbsp;|&nbsp; xTB: '+f1(box.mean_tb)+'<br><span style="opacity:.55;font-size:.55rem">xH = expected hits; P(1+H) = probability of at least one hit. Single-game outcomes vary widely around the mean.</span></div></div>';
 }
+// O/U probability ladder from the Monte Carlo total distribution: P(over) at
+// each common book line, plus the middle-50% likely range and spread.
+function mcOuLadder(t){
+  if(!t || !t.ou_ladder) return '';
+  var lines = ['6.5','7.5','8.5','9.5','10.5','11.5'];
+  var cells = lines.map(function(L){
+    var pOver = t.ou_ladder[L];
+    if(pOver==null) return '';
+    var pov = Math.round(pOver*100);
+    var col = pov>=58?'#ff9800':pov<=42?'#00e676':'#00e5ff';
+    return '<div class="mc-card"><div class="mc-v" style="color:'+col+';font-size:.9rem">'+pov+'%</div><div class="mc-l">OVER '+L+'</div></div>';
+  }).join('');
+  var rangeNote='';
+  if(t.p25_total!=null && t.p75_total!=null)
+    rangeNote='<div class="proj-note" style="margin-top:6px">Likely total range (middle 50% of sims): <strong style="color:var(--c)">'+t.p25_total+'–'+t.p75_total+' runs</strong>'
+      +(t.std_total!=null?' · σ '+t.std_total:'')+(t.median_total!=null?' · median '+t.median_total:'')+'</div>';
+  return '<div style="font-family:Orbitron,monospace;font-size:.58rem;letter-spacing:1.5px;color:var(--mu);margin:12px 0 6px">⚙ O/U PROBABILITY LADDER — P(OVER) PER LINE</div>'
+    +'<div class="mc-grid" style="grid-template-columns:repeat(6,1fr)">'+cells+'</div>'+rangeNote;
+}
 function renderSimulation(){
   var el = document.getElementById('simPanel');
   if(!el) return;
@@ -3194,6 +3214,7 @@ function renderSimulation(){
     + '<div class="mc-card"><div class="mc-v">'+pct(t.p_9plus_total)+'</div><div class="mc-l">P(TOTAL 9+)</div></div>'
     + '<div class="mc-card"><div class="mc-v">'+pct(t.p_10plus_total)+'</div><div class="mc-l">P(TOTAL 10+)</div></div>'
     + '</div>'
+    + mcOuLadder(t)
     + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 4px">'
     + '<button class="btn" onclick="refreshSimulation()" style="padding:6px 12px;font-size:.62rem">REFRESH SIM</button>'
     + '<button class="btn" onclick="runHighPrecisionSimulation()" style="padding:6px 12px;font-size:.62rem">HIGH PRECISION RECHECK</button>'

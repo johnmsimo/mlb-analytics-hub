@@ -12124,6 +12124,19 @@ def _simulation_fallback_payload(game_obj, game_pk, sims=0, warning=''):
     }
 
 
+def _pctl(arr, p):
+    """Linear-interpolated percentile of a numeric list (p in 0–100)."""
+    if not arr:
+        return 0.0
+    s = sorted(arr)
+    if len(s) == 1:
+        return float(s[0])
+    k = (len(s) - 1) * (p / 100.0)
+    lo = int(k)
+    hi = min(lo + 1, len(s) - 1)
+    return float(s[lo] + (s[hi] - s[lo]) * (k - lo))
+
+
 def _do_simulate(game_pk, sims):
     """Core simulation logic, extracted so it can run in a background thread.
     Returns a plain dict (not a Flask Response)."""
@@ -12650,9 +12663,15 @@ def _do_simulate(game_pk, sims):
                 'home_mean_runs': round(statistics.mean(home_team_runs), 2),
                 'mean_total': round(statistics.mean(totals), 2),
                 'median_total': statistics.median(totals),
+                'std_total': round(statistics.pstdev(totals), 2) if len(totals) > 1 else 0.0,
+                'p25_total': round(_pctl(totals, 25), 1),
+                'p75_total': round(_pctl(totals, 75), 1),
                 'p_8plus_total': round(sum(1 for x in totals if x >= 8)/len(totals), 3),
                 'p_9plus_total': round(sum(1 for x in totals if x >= 9)/len(totals), 3),
                 'p_10plus_total': round(sum(1 for x in totals if x >= 10)/len(totals), 3),
+                # P(over) at each common book total — the O/U ladder.
+                'ou_ladder': {str(L): round(sum(1 for x in totals if x > L)/len(totals), 3)
+                              for L in (6.5, 7.5, 8.5, 9.5, 10.5, 11.5)},
                 'away_win_pct': round(away_win / sims, 3),
                 'home_win_pct': round(home_win / sims, 3),
                 'tie_pct': round(ties / sims, 3),
