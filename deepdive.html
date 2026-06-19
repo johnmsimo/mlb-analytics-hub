@@ -1125,9 +1125,59 @@ function renderSharpCard(){
   var driverHtml = drivers.length
     ? '<div style="font-size:.6rem;color:var(--mu);margin-top:9px">KEY DRIVERS: '+drivers.join(' &nbsp;·&nbsp; ')+'</div>' : '';
 
+  var best = sharpBestBet(g, gp, sim, (typeof PROJ_ROWS!=='undefined'&&PROJ_ROWS&&PROJ_ROWS.length)?PROJ_ROWS[0]:null);
+  var bestHtml = best
+    ? '<div style="margin-bottom:10px;padding:9px 12px;border-radius:9px;border:1px solid '+best.col+'55;background:'+best.col+'14;display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
+      +'<span style="font-family:Orbitron,monospace;font-size:.6rem;letter-spacing:1px;color:'+best.col+'">'+best.tier+'</span>'
+      +'<span style="font-size:.72rem;color:var(--t);font-weight:600">'+best.text+'</span></div>'
+    : '';
+
   host.innerHTML='<div class="pt">⚡ SHARP CARD <span class="tag-sv">SIGNAL ROLLUP</span></div>'
+    +bestHtml
     +'<div style="display:flex;gap:8px;flex-wrap:wrap">'+chips.join('')+'</div>'+driverHtml;
 }
+// Synthesize the single most actionable play across the rolled-up signals:
+// score the moneyline, total, and top prop, then headline the strongest.
+function sharpBestBet(g, gp, sim, topProp){
+  var cands=[];
+  // Side: model favorite confirmed by MC win%.
+  if(sim && sim.away_win_pct!=null){
+    var aw=sim.away_win_pct, hw=sim.home_win_pct;
+    var mcFav=aw>=hw?(g.awayAbbr||'AWAY'):(g.homeAbbr||'HOME');
+    var mcPct=Math.max(aw,hw);
+    var modelFav=(gp&&gp.favorite)?gp.favorite:'EVEN';
+    var agree=(modelFav==='EVEN')||(modelFav===mcFav);
+    if(mcPct>=0.56 && agree){
+      cands.push({type:'ML', conf:(mcPct-0.5)*2 + (modelFav===mcFav?0.12:0),
+        text:mcFav+' moneyline — '+Math.round(mcPct*100)+'% to win'+(modelFav===mcFav?' (model + sim agree)':'')});
+    }
+  }
+  // Total: run environment + MC mean alignment.
+  var mcTot=sim&&sim.mean_total!=null?Number(sim.mean_total):null;
+  var pTot=(gp&&gp.total!=null)?Number(gp.total):null;
+  var ref=mcTot!=null?mcTot:pTot;
+  if(ref!=null){
+    if((gp&&gp.runEnv==='HIGH') && ref>=9.2)
+      cands.push({type:'TOTAL', conf:Math.min(0.6,(ref-8.5)*0.25), text:'Game total OVER — model '+ref.toFixed(1)+' runs in a high-scoring environment'});
+    else if((gp&&gp.runEnv==='LOW') && ref<=7.8)
+      cands.push({type:'TOTAL', conf:Math.min(0.6,(8.5-ref)*0.25), text:'Game total UNDER — model '+ref.toFixed(1)+' runs in a suppressed environment'});
+  }
+  // Top prop: strong book edge.
+  if(topProp && topProp.kind==='hitter' && topProp.edge!=null && topProp.edge>=0.05){
+    cands.push({type:'PROP', conf:Math.min(0.7, topProp.edge*6),
+      text:topProp.player+' '+marketLabel(topProp.marketKey,topProp.line)+' OVER — '+pct2(topProp.edge)+' edge ('+pct2(topProp.prob)+' model)'});
+  } else if(topProp && topProp.edge==null && topProp.prob>=0.72){
+    cands.push({type:'PROP', conf:Math.min(0.5,(topProp.prob-0.6)),
+      text:topProp.player+' '+marketLabel(topProp.marketKey,topProp.line)+' — '+pct2(topProp.prob)+' model confidence'});
+  }
+  if(!cands.length) return null;
+  cands.sort(function(a,b){ return b.conf-a.conf; });
+  var top=cands[0];
+  var tier=top.conf>=0.45?'STRONG BET':top.conf>=0.22?'LEAN':'SLIGHT LEAN';
+  var col=top.conf>=0.45?'#00e676':top.conf>=0.22?'#ffd740':'#00e5ff';
+  return {text:'Best bet: '+top.text, tier:tier, col:col};
+}
+function envStyle(tier){
 function envStyle(tier){
   if(tier&&tier.indexOf('HITTER')>=0) return {fg:'#ff9800',bg:'rgba(255,152,0,.08)',bd:'rgba(255,152,0,.32)'};
   if(tier&&tier.indexOf('PITCHER')>=0) return {fg:'#00e676',bg:'rgba(0,230,118,.08)',bd:'rgba(0,230,118,.32)'};
