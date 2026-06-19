@@ -51,6 +51,11 @@ COPY --from=build /usr/src/app .
 # Set the virtual environment as the active Python environment
 ENV PATH="/opt/venv/bin:$PATH"
 
+# Build-time commit marker (passed by the deploy workflow), surfaced by /health
+# so "is this commit actually live?" is a one-second check.
+ARG GIT_SHA=unknown
+ENV GIT_SHA=$GIT_SHA
+
 # Create a non-root user to run the application
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /usr/src/app
 USER appuser

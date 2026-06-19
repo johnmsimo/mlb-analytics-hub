@@ -4568,6 +4568,12 @@ def api_cache_warm():
     })
 
 
+# Commit marker (baked in by the Docker build via GIT_SHA) + process boot time,
+# so a deploy can be verified live: GET /health → {"version": "<sha>", ...}.
+_APP_VERSION = os.getenv('GIT_SHA') or 'dev'
+_APP_BOOT_ISO = datetime.now().isoformat()
+
+
 @app.route('/health')
 def health_check():
     t0 = time.time()
@@ -4577,6 +4583,8 @@ def health_check():
         sv_ready = _sv_loaded
     resp = {
         'status': 'ok',
+        'version': _APP_VERSION,
+        'bootedAt': _APP_BOOT_ISO,
         'fg_loaded': fg_ready,
         'sv_loaded': sv_ready,
     }
