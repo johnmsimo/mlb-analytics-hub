@@ -3497,12 +3497,32 @@ function buildReasoning(row){
 }
 function addProjRow(rows, base){
   var score = (base.edge!=null ? base.edge*100 : 0) + base.prob;
+  // Fold in batting-order matchup threat as a bounded nudge: a tiebreaker when
+  // a real book edge already drives the score, but a more meaningful secondary
+  // sort when no odds exist (score is then just the 0–1 model probability).
+  var th = base.matchupThreat;
+  if(th!=null){ score += ((th-50)/100) * (base.edge!=null ? 0.05 : 0.12); }
   base.score = score;
   base.reasons = buildReasoning(base);
   rows.push(base);
 }
+// name → 0–100 matchup threat, computed from the batting-order tab data when
+// it's loaded (same fields bomThreatScore expects). Rebuilt per render.
+var _bomThreatMap = null;
+function buildBomThreatMap(){
+  _bomThreatMap = {};
+  if(!BOM_DATA || !BOM_DATA.success) return;
+  (BOM_DATA.awayBatters||[]).concat(BOM_DATA.homeBatters||[]).forEach(function(b){
+    if(b && b.name) _bomThreatMap[b.name] = bomThreatScore(b);
+  });
+}
+function getMatchupThreat(name){
+  if(_bomThreatMap===null) buildBomThreatMap();
+  return (_bomThreatMap && (name in _bomThreatMap)) ? _bomThreatMap[name] : null;
+}
 function buildProjectionRows(){
   if(!SIM_DATA || !SIM_DATA.success) return [];
+  _bomThreatMap = null;   // rebuild from latest BOM_DATA on each render
   var rows=[];
   var away=(SIM_DATA.playerProps&&SIM_DATA.playerProps.away)||[];
   var home=(SIM_DATA.playerProps&&SIM_DATA.playerProps.home)||[];
@@ -3529,7 +3549,7 @@ function buildProjectionRows(){
         addProjRow(rows, {
           kind:'hitter', team:teamAbbr, player:p.name, pos:p.pos, bats:p.bats||'S', oppPitcher:opp?opp.name:'Opp SP', oppHand:oppHand,
           marketKey:def.k, line:def.line, prob:prob, mean:safeNum(p[def.mean])||0, p10:def.p10?safeNum(p[def.p10]):null, p50:def.p50?safeNum(p[def.p50]):null, p90:def.p90?safeNum(p[def.p90]):null,
-          market:mkt, edge:edge, lineup:lp
+          market:mkt, edge:edge, lineup:lp, matchupThreat:getMatchupThreat(p.name)
         });
       });
     });
@@ -3566,8 +3586,12 @@ function projectionRowHtml(r, idx){
   var saved = TRACKED_KEYS.has(key);
   var btnCls = 'trk-save'+(saved?' saved':'')+(saving?' saving':'');
   var btnTxt = saving ? '...' : (saved ? '✓ Saved' : '💾 Save Pick');
+  var _th = r.matchupThreat;
+  var thBadge = (_th!=null && _th>=60)
+    ? ' <span title="Batting-order matchup threat" style="font-family:Orbitron,monospace;font-size:.5rem;font-weight:700;padding:1px 5px;border-radius:999px;color:'+(_th>=70?'#ff5252':'#ff9800')+';border:1px solid '+(_th>=70?'#ff5252':'#ff9800')+'55">'+_th+'</span>'
+    : '';
   return '<tr class="'+(SELECTED_PROJ===idx?'sel':'')+'" onclick="selectProjection('+idx+')">'
-    + '<td>'+r.rank+'</td><td><span class="pos-tag">'+r.team+'</span></td><td>'+r.player+'</td><td>'+marketLabel(r.marketKey,r.line)+'</td><td>'+pct2(r.prob)+'</td><td>'+(r.edge!=null?'<span class="'+(r.edge>=0.03?'edge-pos':'edge-neu')+'">'+pct2(r.edge)+'</span>':'<span class="edge-na">N/A</span>')+'</td><td>'+confidenceTag(r.edge!=null?r.edge:r.prob)+'</td><td style="max-width:340px;white-space:normal">'+reason+'</td><td><button class="'+btnCls+'" onclick="saveProjectionPick('+idx+',event)">'+btnTxt+'</button></td></tr>';
+    + '<td>'+r.rank+'</td><td><span class="pos-tag">'+r.team+'</span></td><td>'+r.player+thBadge+'</td><td>'+marketLabel(r.marketKey,r.line)+'</td><td>'+pct2(r.prob)+'</td><td>'+(r.edge!=null?'<span class="'+(r.edge>=0.03?'edge-pos':'edge-neu')+'">'+pct2(r.edge)+'</span>':'<span class="edge-na">N/A</span>')+'</td><td>'+confidenceTag(r.edge!=null?r.edge:r.prob)+'</td><td style="max-width:340px;white-space:normal">'+reason+'</td><td><button class="'+btnCls+'" onclick="saveProjectionPick('+idx+',event)">'+btnTxt+'</button></td></tr>';
 }
 function renderProjectionDetail(){
   if(SELECTED_PROJ==null || !PROJ_ROWS[SELECTED_PROJ]) return '<p class="na">Select a ranked projection to open the player and matchup dive.</p>';
