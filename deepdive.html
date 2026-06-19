@@ -1024,13 +1024,29 @@ function renderHeader(){
 }
 function renderEdge(){
   var g=GD,col=g.edge>=8?'var(--g)':g.edge>=5?'var(--c)':'var(--mu)',conf=g.edge>=8?'HIGH':g.edge>=5?'MEDIUM':'LOW';
+  // Monte Carlo win-probability bar — appended once the simulation has run.
+  var sim=(SIM_DATA&&SIM_DATA.team)?SIM_DATA.team:null, mcHtml='';
+  if(sim && sim.away_win_pct!=null && sim.home_win_pct!=null){
+    var aw=sim.away_win_pct, hw=sim.home_win_pct;
+    var awAbbr=(SIM_DATA.meta&&SIM_DATA.meta.awayAbbr)||(g&&g.awayAbbr)||'AWAY';
+    var hwAbbr=(SIM_DATA.meta&&SIM_DATA.meta.homeAbbr)||(g&&g.homeAbbr)||'HOME';
+    var awP=Math.round(aw*100), hwP=Math.round(hw*100);
+    var favTeam=aw>=hw?awAbbr:hwAbbr, favP=Math.max(awP,hwP);
+    mcHtml='<div style="margin-top:14px;border-top:1px solid rgba(255,255,255,.07);padding-top:12px;text-align:left">'
+      +'<div style="display:flex;justify-content:space-between;font-size:.6rem;color:var(--mu);letter-spacing:1px;margin-bottom:5px"><span>MONTE CARLO WIN%</span><span style="color:var(--c)">'+favTeam+' '+favP+'%</span></div>'
+      +'<div style="display:flex;height:18px;border-radius:5px;overflow:hidden;font-family:Orbitron,monospace;font-size:.52rem">'
+      +'<div style="width:'+awP+'%;background:rgba(0,229,255,.35);display:flex;align-items:center;justify-content:center;color:#fff;min-width:34px">'+awAbbr+' '+awP+'%</div>'
+      +'<div style="width:'+hwP+'%;background:rgba(224,64,251,.3);display:flex;align-items:center;justify-content:center;color:#fff;min-width:34px">'+hwAbbr+' '+hwP+'%</div>'
+      +'</div></div>';
+  }
   document.getElementById('edgeP').innerHTML=
     '<div style="text-align:center;padding:10px 0">'
     +'<div class="en" style="color:'+col+'">'+g.edge+'%</div><div class="el">MODEL EDGE SCORE</div>'
     +'<div style="margin-top:14px"><div style="display:flex;justify-content:space-between;margin-bottom:4px">'
     +'<span style="font-size:.62rem;color:var(--mu);letter-spacing:2px">CONFIDENCE</span>'
     +'<span style="font-family:Orbitron;font-size:.7rem;color:'+col+'">'+conf+'</span></div>'
-    +'<div class="cb"><div class="cf" id="cfill" style="width:0%" data-w="'+g.barPct+'%"></div></div></div></div>';
+    +'<div class="cb"><div class="cf" id="cfill" style="width:0%" data-w="'+g.barPct+'%"></div></div></div>'
+    +mcHtml+'</div>';
   setTimeout(function(){var e=document.getElementById('cfill');if(e)e.style.width=e.getAttribute('data-w');},200);
 }
 function envStyle(tier){
@@ -2749,6 +2765,7 @@ function _handleSimResult(d, highPrecision, sims){
   if(!d || !d.success) d = _simFallbackPayload((d && d.error) || 'Simulation failed', sims);
   SIM_DATA = d;
   _buildSimCorrLookup(d.correlations || []);
+  if(GD && typeof renderEdge==='function') renderEdge();   // surface MC win% in the edge card
   var badge = document.getElementById('simRunsBadge') || document.querySelector('#simWrap .tag-sv');
   if(badge){
     var runs = (d.meta && d.meta.sims) ? Number(d.meta.sims).toLocaleString() + (highPrecision ? ' RUNS · HP' : ' RUNS') : 'FALLBACK';
