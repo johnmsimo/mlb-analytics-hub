@@ -22850,17 +22850,32 @@ def breakout_detector_page():
     return BREAKOUT_DETECTOR_HTML
 
 
+_breakout_cache = {"key": None, "ts": 0.0, "payload": None}
+_breakout_cache_lock = threading.Lock()
+_BREAKOUT_TTL = 3600   # 1h — underlying Savant/FG caches refresh at most daily
+
+
 @app.route("/api/breakout/candidates")
 def api_breakout_candidates():
     """Returns scored breakout candidates from Savant batter stats + FanGraphs.
     Score = weighted EV95 delta, barrel rate, xwOBA alignment, HH%, K% improvement,
     with penalties for BABIP fluke / wRC+ mirage / BA-xBA luck gap.
+
+    The scored list is identical for every game on a given day, so it's cached
+    keyed by (date, Savant cache size) with a 1h TTL — this endpoint was
+    recomputing over the entire ~500-player Savant cache on every deep-dive load.
     """
     _maybe_refresh_fg(); _maybe_refresh_savant()
     try:
         with _sv_lock:
             stat = dict(_sv_bat_statcast)
             xst = dict(_sv_bat_xstats)
+        cache_key = (datetime.now(ET).date().isoformat(), len(stat))
+        now = time.time()
+        with _breakout_cache_lock:
+            c = _breakout_cache
+            if c["key"] == cache_key and (now - c["ts"]) < _BREAKOUT_TTL and c["payload"] is not None:
+                return jsonify(c["payload"])
         with _fg_lock:
             fg = dict(_fg_bat)
 
@@ -22914,12 +22929,15 @@ def api_breakout_candidates():
             except Exception:
                 continue
 
-        return jsonify({
+        payload = {
             "success": True,
             "players": players[:50],
             "count": len(players),
             "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+        }
+        with _breakout_cache_lock:
+            _breakout_cache.update({"key": cache_key, "ts": now, "payload": payload})
+        return jsonify(payload)
     except Exception as ex:
         print(f"[api_breakout_candidates] {traceback.format_exc()}")
         return jsonify({"success": False, "error": str(ex), "players": []}), 500
