@@ -14299,6 +14299,99 @@ def _compute_game_projection_core(game_pk):
         return {"success": False, "error": str(ex)}
 
 
+def _build_sharp_card(game_pk):
+    """Server-side Sharp Card rollup — the game-level half of the deep-dive's
+    in-page Sharp Card (side lean, total lean, scoring environment, drivers, a
+    headline best bet, and a final-result grade). Player-prop selection stays
+    client-side since it needs the Monte Carlo sim. Reuses parse_game (weather /
+    park / score) and _compute_game_projection_core (total / favorite / win%)."""
+    g = fetch_schedule_game(game_pk)
+    if not g:
+        return {"success": False, "error": "Game not found"}
+    gd = parse_game(g) or {}
+    proj = _compute_game_projection_core(game_pk) or {}
+    away = gd.get("awayAbbr") or proj.get("awayAbbr") or "AWAY"
+    home = gd.get("homeAbbr") or proj.get("homeAbbr") or "HOME"
+    total = proj.get("total")
+    fav = proj.get("favorite") or "EVEN"
+    awp = proj.get("awayWinProb"); hwp = proj.get("homeWinProb")
+    win_team, win_pct = (None, None)
+    if awp is not None and hwp is not None:
+        win_team, win_pct = (away, awp) if awp >= hwp else (home, hwp)
+    run_env = "HIGH" if (total is not None and total > 9.5) else ("LOW" if (total is not None and total < 7.5) else "NEUTRAL")
+    total_lean = "OVER" if run_env == "HIGH" else ("UNDER" if run_env == "LOW" else "NEUTRAL")
+
+    imp = gd.get("weatherImpact") or {}
+    drivers = []
+    if gd.get("windField") and isinstance(gd.get("windOut"), (int, float)) and abs(gd["windOut"]) >= 4 and gd.get("temp") != "DOME":
+        drivers.append(f"{abs(round(gd['windOut']))}mph {gd['windField']}")
+    hl, hr = gd.get("hrParkFactorLHB"), gd.get("hrParkFactorRHB")
+    if hl is not None and hr is not None and abs(hl - hr) >= 0.06:
+        drivers.append("Park HR favors " + ("LHB" if hl > hr else "RHB"))
+
+    # Headline best bet (ML / total only — props need the sim).
+    cands = []
+    if win_pct is not None and win_pct >= 0.56 and (fav == "EVEN" or fav == win_team):
+        cands.append({"conf": (win_pct - 0.5) * 2 + (0.12 if fav == win_team else 0.0),
+                      "type": "ML", "marketKey": "game_moneyline", "side": win_team, "line": 0,
+                      "text": f"{win_team} moneyline — {round(win_pct*100)}% to win"})
+    if total is not None:
+        if run_env == "HIGH" and total >= 9.2:
+            cands.append({"conf": min(0.6, (total - 8.5) * 0.25), "type": "TOTAL",
+                          "marketKey": "game_total", "side": "Over", "line": round(total * 2) / 2,
+                          "text": f"Game total OVER — model {total:.1f} in a high-scoring environment"})
+        elif run_env == "LOW" and total <= 7.8:
+            cands.append({"conf": min(0.6, (8.5 - total) * 0.25), "type": "TOTAL",
+                          "marketKey": "game_total", "side": "Under", "line": round(total * 2) / 2,
+                          "text": f"Game total UNDER — model {total:.1f} in a suppressed environment"})
+    best = None
+    if cands:
+        cands.sort(key=lambda c: -c["conf"])
+        top = cands[0]
+        tier = "STRONG BET" if top["conf"] >= 0.45 else ("LEAN" if top["conf"] >= 0.22 else "SLIGHT LEAN")
+        best = {"type": top["type"], "marketKey": top["marketKey"], "side": top["side"],
+                "line": top["line"], "tier": tier, "text": "Best bet: " + top["text"]}
+
+    # Grade vs final when available.
+    status = gd.get("status") or ""
+    is_final = status in ("Final", "Game Over", "Completed Early")
+    grade = None
+    if is_final and best:
+        try:
+            a, h = int(gd.get("awayScore") or 0), int(gd.get("homeScore") or 0)
+            if best["marketKey"] == "game_moneyline":
+                if a == h:
+                    grade = "PUSH"
+                else:
+                    grade = "WON" if (away if a > h else home) == best["side"] else "LOST"
+            elif best["marketKey"] == "game_total" and best["line"] is not None:
+                tot = a + h
+                grade = "PUSH" if tot == best["line"] else ("WON" if ((best["side"] == "Over") == (tot > best["line"])) else "LOST")
+        except Exception:
+            grade = None
+
+    return {
+        "success": True, "gamePk": game_pk, "awayAbbr": away, "homeAbbr": home,
+        "status": status, "final": is_final,
+        "sideLean": {"team": fav, "winTeam": win_team, "winPct": win_pct},
+        "totalLean": {"lean": total_lean, "total": total, "runEnv": run_env},
+        "environment": {"tier": imp.get("tier"), "runDelta": imp.get("runDelta"), "label": imp.get("label")},
+        "drivers": drivers,
+        "bestBet": best,
+        "grade": grade,
+    }
+
+
+@app.route('/api/sharp-card/<int:game_pk>')
+def api_sharp_card(game_pk):
+    try:
+        out = _build_sharp_card(game_pk)
+        return jsonify(out), (200 if out.get("success") else 404)
+    except Exception as ex:
+        print(f"[api_sharp_card] {traceback.format_exc()}")
+        return jsonify({"success": False, "error": str(ex)}), 500
+
+
 @app.route('/api/market/<int:game_pk>')
 def api_market(game_pk):
     try:
