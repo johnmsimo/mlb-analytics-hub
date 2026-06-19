@@ -8,6 +8,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: superfly/flyctl-actions/setup-flyctl@master
-      - run: fly deploy --remote-only
+      # setup-flyctl installs the binary as `flyctl` (no `fly` alias on the
+      # runner), so `fly deploy` failed with "fly: command not found" (exit
+      # 127) on every run since June 2026 — no deploy reached production.
+      - run: flyctl deploy --remote-only --build-arg GIT_SHA=${{ github.sha }}
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
