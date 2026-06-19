@@ -1371,6 +1371,21 @@ function updateProj(){
   document.getElementById('projP').innerHTML='<div class="projg">'+left+right+'</div>';
 }
 
+// Confirmed vs projected lineup read — props off a projected order can shift
+// before first pitch. Derived from how many distinct 1–9 batting slots are set.
+function lineupStatusBanner(lu){
+  var distinct = {};
+  lu.forEach(function(p){ var s=parseInt(p.slot); if(s>=1&&s<=9) distinct[s]=1; });
+  var n = Object.keys(distinct).length;
+  var anyPending = lu.some(function(p){ return (p.lineup_status||'')==='pending'; });
+  var c, label, sub;
+  if(n>=9 && !anyPending){ c='#00e676'; label='✓ CONFIRMED LINEUP'; sub='Official batting order posted — props are matchup-locked'; }
+  else if(n>0 || anyPending){ c='#ff9800'; label='◐ PROJECTED LINEUP'; sub='Order not fully posted ('+n+'/9 set) — slots may shift before first pitch'; }
+  else { c='#6a8db0'; label='○ NO ORDER POSTED'; sub='Showing season-stat ordering as a placeholder'; }
+  return '<div style="margin-bottom:9px;padding:7px 11px;border-radius:8px;border:1px solid '+c+'40;background:'+c+'12;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">'
+    +'<span style="font-family:Orbitron,monospace;font-size:.6rem;letter-spacing:1px;color:'+c+'">'+label+'</span>'
+    +'<span style="font-size:.56rem;color:var(--mu)">'+sub+'</span></div>';
+}
 function showTab(side){
   document.querySelectorAll('.tb2').forEach(function(b,i){b.classList.toggle('ac',(i===0&&side==='away')||(i===1&&side==='home'));});
   var lu=side==='away'?AL:HL;
@@ -1404,7 +1419,8 @@ function showTab(side){
       +'<td>'+p.ab+'</td><td>'+p.hr+'</td><td>'+p.rbi+'</td>'+fc+sc+'</tr>';
   }).join('');
   document.getElementById('luP').innerHTML=
-    '<div style="overflow-x:auto"><table class="lu-table"><thead>'+hdr+'</thead><tbody>'+rows+'</tbody></table></div>'
+    lineupStatusBanner(lu)
+    +'<div style="overflow-x:auto"><table class="lu-table"><thead>'+hdr+'</thead><tbody>'+rows+'</tbody></table></div>'
     +(hasFg||hasSvX||hasSvSc?'<div class="legend">'
       +(hasFg?'<span style="color:var(--fg)">&#9889; Orange = FanGraphs (wOBA/wRC+/WAR)</span>':'')
       +(hasSvX||hasSvSc?'<span style="color:var(--sv)">&#127987;&#65039; Cyan = Baseball Savant (xStats/EV/HH%/Brl%)</span>':'')
