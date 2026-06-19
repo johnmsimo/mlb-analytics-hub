@@ -5725,6 +5725,35 @@ function renderPitchMix(){
     return m[l] || m['bad'];
   }
 
+  // Synthesize a pitcher-level read from the arsenal: the putaway (whiff) pitch,
+  // the pitch to target (highest wOBA at meaningful usage), and a usage-weighted
+  // arsenal quality tier. Turns the per-pitch table into an actionable summary.
+  function pmPitcherSummary(data){
+    if(!data || !data.length) return '';
+    var used = data.filter(function(p){ return (p.pct||0) >= 8; });
+    if(!used.length) used = data.slice();
+    var putaway = used.slice().sort(function(a,b){ return (b.whiff||0)-(a.whiff||0); })[0];
+    var targPool = used.filter(function(p){ return (p.pct||0) >= 10; });
+    var target = (targPool.length?targPool:used).slice().sort(function(a,b){ return (b.woba||0)-(a.woba||0); })[0];
+    var pieces=[];
+    if(putaway && (putaway.whiff||0) >= 24)
+      pieces.push('<span style="color:#00e676">Putaway: <strong>'+putaway.type+'</strong> ('+(putaway.whiff).toFixed(0)+'% whiff)</span>');
+    else if(putaway)
+      pieces.push('<span style="color:var(--mu)">Top whiff: '+putaway.type+' ('+(putaway.whiff||0).toFixed(0)+'%)</span>');
+    if(target && (target.woba||0) >= 0.330)
+      pieces.push('<span style="color:#ff5252">Target: <strong>'+target.type+'</strong> ('+(target.woba).toFixed(3).replace(/^0/,'')+' wOBA, '+(target.pct||0)+'% usage)</span>');
+    var tot=0, wsum=0;
+    used.forEach(function(p){ tot+=(p.pct||0); wsum+=(p.woba||0)*(p.pct||0); });
+    var arsWoba = tot ? wsum/tot : 0;
+    var tier = arsWoba>=0.345 ? {t:'HITTABLE ARSENAL',c:'#ff5252'}
+             : arsWoba<=0.305 ? {t:'TOUGH ARSENAL',c:'#00e676'}
+             : {t:'AVERAGE ARSENAL',c:'#00e5ff'};
+    return '<div style="margin:2px 0 8px;padding:8px 10px;border-radius:8px;border:1px solid '+tier.c+'40;background:'+tier.c+'12">'
+      +'<div style="font-family:Orbitron,monospace;font-size:.56rem;letter-spacing:1px;color:'+tier.c+';margin-bottom:4px">'+tier.t+' · '+arsWoba.toFixed(3).replace(/^0/,'')+' usage-wtd wOBA</div>'
+      +(pieces.length?'<div style="font-size:.58rem;line-height:1.55">'+pieces.join(' &nbsp;·&nbsp; ')+'</div>':'')
+      +'</div>';
+  }
+
   function buildHalf(pitcher, label, side){
     if(!pitcher) return '<p style="color:var(--mu);font-size:.62rem;padding:8px">No pitcher data.</p>';
     var data = arsenalFromStats(pitcher);
@@ -5810,7 +5839,8 @@ function renderPitchMix(){
     }
 
     return '<div class="pm-half">'
-      + '<div class="pm-half-hd">' + label + '</div>' +
+      + '<div class="pm-half-hd">' + label + '</div>'
+      + pmPitcherSummary(data) +
       '<div style="overflow-x:auto"><table class="pm-table">' +
         '<thead><tr><th>PITCH</th><th>USAGE</th><th>BA</th><th>wOBA</th><th>SLG</th><th>HR</th><th>WHIFF%</th><th>MATCHUP</th></tr></thead>' +
         '<tbody>' + rows + '</tbody>' +
