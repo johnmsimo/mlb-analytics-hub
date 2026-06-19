@@ -1048,6 +1048,83 @@ function renderEdge(){
     +'<div class="cb"><div class="cf" id="cfill" style="width:0%" data-w="'+g.barPct+'%"></div></div></div>'
     +mcHtml+'</div>';
   setTimeout(function(){var e=document.getElementById('cfill');if(e)e.style.width=e.getAttribute('data-w');},200);
+  renderSharpCard();
+}
+// ── SHARP CARD ───────────────────────────────────────────────────────
+// One synthesized verdict at the top of the deep-dive that rolls up every
+// signal: side lean (model edge + MC win%), total lean (run env + MC mean),
+// scoring environment, the #1 ranked prop, and the key drivers (wind, HR park,
+// bullpen, umpire). Re-rendered as each data source lands.
+function _sharpChip(label, value, col){
+  return '<div style="flex:1;min-width:120px;background:rgba(0,0,0,.25);border:1px solid '+col+'33;border-radius:8px;padding:8px 10px">'
+    +'<div style="font-family:Orbitron,monospace;font-size:.5rem;letter-spacing:1px;color:var(--mu);margin-bottom:3px">'+label+'</div>'
+    +'<div style="font-family:Orbitron,monospace;font-size:.74rem;color:'+col+'">'+value+'</div></div>';
+}
+function renderSharpCard(){
+  var g=GD; if(!g) return;
+  var host=document.getElementById('sharpCard');
+  if(!host){
+    var dg=document.querySelector('.dg'); if(!dg) return;
+    host=document.createElement('div'); host.id='sharpCard'; host.className='pnl fw';
+    host.style.cssText='grid-column:1/-1;border:1px solid rgba(255,183,77,.3);background:linear-gradient(180deg,rgba(255,152,0,.05),rgba(10,22,40,0))';
+    dg.insertBefore(host, dg.firstChild);
+  }
+  var gp=GP_DATA, sim=(SIM_DATA&&SIM_DATA.team)?SIM_DATA.team:null;
+  var chips=[], drivers=[];
+
+  // Side lean — model favorite + MC win%.
+  var fav=(gp&&gp.favorite)?gp.favorite:'EVEN';
+  var sideVal=fav==='EVEN'?'No side edge':(fav+' favored');
+  var sideCol=fav==='EVEN'?'#6a8db0':'#00e5ff';
+  if(sim && sim.away_win_pct!=null){
+    var aw=sim.away_win_pct,hw=sim.home_win_pct;
+    var mcFav=aw>=hw?(g.awayAbbr||'AWAY'):(g.homeAbbr||'HOME');
+    sideVal=mcFav+' '+Math.round(Math.max(aw,hw)*100)+'% MC'+(fav!=='EVEN'&&fav!==mcFav?' ⚠ model split':'');
+    sideCol=(fav===mcFav||fav==='EVEN')?'#00e676':'#ff9800';
+  }
+  chips.push(_sharpChip('SIDE LEAN', sideVal, sideCol));
+
+  // Total lean — projection total + run environment, MC mean when available.
+  var total=(gp&&gp.total!=null)?Number(gp.total):null;
+  var mcTot=sim&&sim.mean_total!=null?Number(sim.mean_total):null;
+  var env=gp?gp.runEnv:null;
+  var totLean=env==='HIGH'?'OVER':env==='LOW'?'UNDER':'NEUTRAL';
+  var totCol=env==='HIGH'?'#ff9800':env==='LOW'?'#00e676':'#00e5ff';
+  var totVal=(total!=null?total.toFixed(1):(mcTot!=null?mcTot.toFixed(1):'--'))+' R · '+totLean;
+  chips.push(_sharpChip('TOTAL LEAN', totVal, totCol));
+
+  // Scoring environment.
+  var imp=g.weatherImpact;
+  if(imp && imp.tier){
+    var eCol=imp.tier.indexOf('HITTER')>=0?'#ff9800':imp.tier.indexOf('PITCHER')>=0?'#00e676':imp.tier==='CONTROLLED'?'#6a8db0':'#00e5ff';
+    chips.push(_sharpChip('ENVIRONMENT', imp.tier+(imp.runDelta?' ('+(imp.runDelta>0?'+':'')+imp.runDelta+')':''), eCol));
+  }
+
+  // Top ranked prop.
+  if(typeof PROJ_ROWS!=='undefined' && PROJ_ROWS && PROJ_ROWS.length){
+    var t0=PROJ_ROWS[0];
+    var pv=t0.player+' '+marketLabel(t0.marketKey,t0.line)+' '+pct2(t0.prob)+(t0.edge!=null?(' ('+pct2(t0.edge)+' edge)'):'');
+    chips.push(_sharpChip('TOP PROP', pv, '#67e8f9'));
+  }
+
+  // Drivers.
+  if(g.windField && typeof g.windOut==='number' && Math.abs(g.windOut)>=4 && g.temp!=='DOME')
+    drivers.push((g.windEmoji||'')+' '+Math.abs(Math.round(g.windOut))+'mph '+g.windField);
+  if(g.hrParkFactorLHB!=null && g.hrParkFactorRHB!=null && Math.abs(g.hrParkFactorLHB-g.hrParkFactorRHB)>=0.06)
+    drivers.push('Park HR favors '+(g.hrParkFactorLHB>g.hrParkFactorRHB?'LHB':'RHB'));
+  if(typeof DD_BULLPEN!=='undefined' && DD_BULLPEN && DD_BULLPEN.success){
+    var aS=(DD_BULLPEN.away&&DD_BULLPEN.away.stress_score)||0, hS=(DD_BULLPEN.home&&DD_BULLPEN.home.stress_score)||0;
+    if(Math.max(aS,hS)>=60) drivers.push('Gassed bullpen ('+(aS>=hS?(DD_BULLPEN.away.team_abbr||'AWAY'):(DD_BULLPEN.home.team_abbr||'HOME'))+')');
+  }
+  if(typeof DD_UMP!=='undefined' && DD_UMP && DD_UMP.umpire){
+    var rv=parseFloat(String(DD_UMP.umpire.r_vs_avg||'').replace('+',''));
+    if(!isNaN(rv) && Math.abs(rv)>=0.3) drivers.push('Ump '+(rv>0?'+':'')+rv.toFixed(1)+' R/G');
+  }
+  var driverHtml = drivers.length
+    ? '<div style="font-size:.6rem;color:var(--mu);margin-top:9px">KEY DRIVERS: '+drivers.join(' &nbsp;·&nbsp; ')+'</div>' : '';
+
+  host.innerHTML='<div class="pt">⚡ SHARP CARD <span class="tag-sv">SIGNAL ROLLUP</span></div>'
+    +'<div style="display:flex;gap:8px;flex-wrap:wrap">'+chips.join('')+'</div>'+driverHtml;
 }
 function envStyle(tier){
   if(tier&&tier.indexOf('HITTER')>=0) return {fg:'#ff9800',bg:'rgba(255,152,0,.08)',bd:'rgba(255,152,0,.32)'};
@@ -4078,6 +4155,7 @@ function renderProjectionHub(){
   if(!box) return;
   if(!SIM_DATA || !SIM_DATA.success){ box.innerHTML='<p class="na">Waiting for Monte Carlo simulation before building the ranked projections board.</p>'; return; }
   PROJ_ROWS = buildProjectionRows();
+  if(typeof renderSharpCard==='function') renderSharpCard();
   if(!PROJ_ROWS.length){ box.innerHTML='<p class="na">No ranked player projections are available yet for this matchup.</p>'; return; }
   var rowsFiltered = filteredProjectionRows();
   var uniquePlayers=[]; var seen={};
@@ -5158,6 +5236,7 @@ renderGameProjection = function(d) {
   if (_origRGP) _origRGP(d);
   GP_DATA = d;
   setTimeout(recomputeRunEnv, 400);
+  if (typeof renderSharpCard === 'function') renderSharpCard();
 };
 
 
