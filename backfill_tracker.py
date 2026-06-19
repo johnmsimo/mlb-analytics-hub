@@ -102,8 +102,59 @@ def _with_retry(method: str, url: str, token: str | None, *, retries: int = 3,
     return last
 
 
-def backfill_date(base: str, ds: str, token: str | None, *, bg_wait: float,
-                  with_odds: bool) -> dict:
+def wait_for_capture_complete(base: str, ds: str, token: str | None, fg: dict, *,
+                              poll: float = 4.0, quiet: float = 12.0,
+                              empty_quiet: float = 45.0,
+                              max_wait: float = 240.0) -> tuple[int, str]:
+    """Block until the server-side background capture continuation for `ds` has
+    finished, inferred by polling /api/tracker/date.
+
+    The app has no capture-status endpoint, so we watch two observable signals:
+      • entry count, and
+      • capturedAt timestamp (the background continuation bumps it on its single
+        final merge).
+
+    Two cases must be handled distinctly:
+      1. Background produced rows → entries jump and capturedAt advances past the
+         foreground value. We wait for that to happen, then for a short `quiet`
+         window with no further change, then return ("settled").
+      2. Background produced 0 rows (common for old dates with no projectable
+         lineups) → nothing ever changes. A naive "count stable" check would
+         fire immediately and race the merge, so we require a longer
+         `empty_quiet` window of no change before giving up ("no_bg_change").
+
+    Returns (final_entry_count, reason). `reason` ∈ {"settled","no_bg_change","timeout"}.
+    """
+    fg_cap = fg.get("capturedAt")
+    last_count = len(fg.get("entries", []))
+    last_cap = fg_cap
+    last_change = time.time()
+    bg_observed = False
+    start = time.time()
+
+    while True:
+        time.sleep(poll)
+        st, j = _request("GET", f"{base}/api/tracker/date/{ds}", token, timeout=30)
+        now = time.time()
+        if st == 200:
+            cnt = len(j.get("entries", []))
+            cap = j.get("capturedAt")
+            if cnt != last_count or cap != last_cap:
+                last_change = now
+                if cap and cap != fg_cap:
+                    bg_observed = True
+                last_count, last_cap = cnt, cap
+        # Longer quiet window until we've actually seen the background merge land,
+        # so we don't declare completion during the pre-merge lull.
+        quiet_need = quiet if bg_observed else empty_quiet
+        if now - last_change >= quiet_need:
+            return last_count, ("settled" if bg_observed else "no_bg_change")
+        if now - start >= max_wait:
+            return last_count, "timeout"
+
+
+def backfill_date(base: str, ds: str, token: str | None, *, max_bg_wait: float,
+                  poll: float, with_odds: bool) -> dict:
     """Capture (backfill mode) then grade a single date. Returns a summary."""
     odds_q = "&odds=1" if with_odds else ""
     cap_url = f"{base}/api/tracker/capture/{ds}?backfill=1{odds_q}"
@@ -120,10 +171,14 @@ def backfill_date(base: str, ds: str, token: str | None, *, bg_wait: float,
     total = cap.get("totalGames", 0)
     n_entries = len(cap.get("entries", []))
 
-    # If capture spilled into a background thread, give it time before grading
-    # so all games' picks exist on disk first.
+    # If capture spilled into a background thread, wait for that continuation to
+    # actually finish (entries settled / capturedAt advanced) before grading, so
+    # all games' picks exist on disk first. Waiting per-date also prevents
+    # overlapping background jobs from piling up across dates.
+    wait_reason = None
     if cap.get("backgroundStarted") or cap.get("timedOut"):
-        time.sleep(bg_wait)
+        n_entries, wait_reason = wait_for_capture_complete(
+            base, ds, token, cap, poll=poll, max_wait=max_bg_wait)
 
     grade_url = f"{base}/api/tracker/grade/{ds}"
     gstatus, gr = _with_retry("POST", grade_url, token, timeout=180)
@@ -140,6 +195,7 @@ def backfill_date(base: str, ds: str, token: str | None, *, bg_wait: float,
         "capturedGames": captured, "totalGames": total,
         "entries": len(entries), "graded": graded,
         "wins": wins, "losses": losses,
+        "waitReason": wait_reason,
     }
 
 
@@ -176,8 +232,11 @@ def parse_args(argv) -> argparse.Namespace:
                    help="Admin token (or set MLB_ADMIN_TOKEN). Omit if app has no ADMIN_TOKEN.")
     p.add_argument("--sleep", type=float, default=3.0,
                    help="Seconds to pause between dates (be kind to the MLB API)")
-    p.add_argument("--bg-wait", type=float, default=40.0,
-                   help="Seconds to wait when a capture spills into background")
+    p.add_argument("--max-bg-wait", type=float, default=240.0,
+                   help="Max seconds to wait for a date's background capture to "
+                        "finish before grading (polls until settled, not a fixed sleep)")
+    p.add_argument("--poll", type=float, default=4.0,
+                   help="Seconds between background-completion polls")
     p.add_argument("--with-odds", action="store_true",
                    help="Also request odds (off by default; historical odds unavailable)")
     p.add_argument("--dry-run", action="store_true", help="List dates, hit nothing")
@@ -213,15 +272,17 @@ def main(argv) -> int:
     results = []
     failures = 0
     for i, ds in enumerate(dates, 1):
-        res = backfill_date(base, ds, args.token, bg_wait=args.bg_wait, with_odds=args.with_odds)
+        res = backfill_date(base, ds, args.token, max_bg_wait=args.max_bg_wait,
+                            poll=args.poll, with_odds=args.with_odds)
         results.append(res)
         if res.get("ok"):
             if res.get("skipped"):
                 print(f"  [{i}/{len(dates)}] {ds}  · skipped ({res['skipped']})")
             else:
+                warn = "  ⚠ bg-wait timed out" if res.get("waitReason") == "timeout" else ""
                 print(f"  [{i}/{len(dates)}] {ds}  · games {res.get('capturedGames')}/{res.get('totalGames')}"
                       f" · entries {res.get('entries')} · graded {res.get('graded')}"
-                      f" (W{res.get('wins')} L{res.get('losses')})")
+                      f" (W{res.get('wins')} L{res.get('losses')}){warn}")
         else:
             failures += 1
             print(f"  [{i}/{len(dates)}] {ds}  · FAILED: {res.get('error')}")
