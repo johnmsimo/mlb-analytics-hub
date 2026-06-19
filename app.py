@@ -1908,6 +1908,25 @@ def _scoring_environment(temp, wind_out, park_factor, rain_chance, dome=False):
     }
 
 
+def _wind_run_adj(wx, scale=1.0):
+    """Per-team run adjustment from the out-to-CF wind component (signed mph).
+
+    ~10 mph blowing out ≈ +0.25 R/team at scale=1.0, blowing in the reverse;
+    clamped to ±0.45 so wind never overwhelms the rest of the run model. Pass
+    scale<1 for half-game (F5/NRFI) projections. Returns 0.0 whenever the wind
+    geometry is unavailable — dome, a park without a known CF bearing, or calm.
+    """
+    try:
+        if not wx or wx.get("dome"):
+            return 0.0
+        wo = wx.get("wind_out")
+        if wo is None:
+            return 0.0
+        return round(max(-0.45, min(0.45, float(wo) * 0.025)) * scale, 2)
+    except Exception:
+        return 0.0
+
+
 LOGO_BASE = "https://www.mlbstatic.com/team-logos/{team_id}.svg"
 PARK_FACTORS = {
     133:1.08,144:0.92,110:0.97,111:1.04,112:0.97,137:0.95,109:1.06,
@@ -6919,8 +6938,9 @@ def api_game_projection(game_pk):
                 elif t < 48: wx_adj = -0.20
                 elif t < 56: wx_adj = -0.10
             except Exception: pass
-        away_runs = round(away_runs + wx_adj, 1)
-        home_runs = round(home_runs + wx_adj, 1)
+        wind_adj = _wind_run_adj(wx)
+        away_runs = round(away_runs + wx_adj + wind_adj, 1)
+        home_runs = round(home_runs + wx_adj + wind_adj, 1)
         total = round(away_runs + home_runs, 1)
         run_env = "HIGH" if total > 9.5 else ("LOW" if total < 7.5 else "NEUTRAL")
         at_abbr = away_t.get("team",{}).get("abbreviation","AWAY")
@@ -6974,6 +6994,8 @@ def api_game_projection(game_pk):
                 "condition": wx.get("condition", "N/A"),
                 "wind": wx.get("wind", "N/A"),
                 "wind_dir": wx.get("wind_dir", ""),
+                "wind_to_field": wx.get("wind_field"),
+                "wind_out_mph": wx.get("wind_out"),
             },
             "series": {
                 "game": gdata.get("seriesGame"),
@@ -7026,7 +7048,8 @@ def api_game_projection(game_pk):
             "homePitcherEra": round(home_pit_era,2),
             "awayPitcherFip": round(away_pit_fip,2),
             "homePitcherFip": round(home_pit_fip,2),
-            "parkFactor": pf, "wxAdj": wx_adj,
+            "parkFactor": pf, "wxAdj": wx_adj, "windAdj": wind_adj,
+            "windField": wx.get("wind_field"), "windOut": wx.get("wind_out"),
             "matchup_insights": matchup_insights[:5],
             "storylineSource": storyline_source,
         })
@@ -13978,8 +14001,9 @@ def _compute_f5(game_pk):
             except Exception:
                 pass
 
-        away_f5 = round(max(0.8, away_f5 + wx_adj), 2)
-        home_f5 = round(max(0.8, home_f5 + wx_adj), 2)
+        wind_adj = _wind_run_adj(wx, scale=0.5)
+        away_f5 = round(max(0.8, away_f5 + wx_adj + wind_adj), 2)
+        home_f5 = round(max(0.8, home_f5 + wx_adj + wind_adj), 2)
         total_f5 = round(away_f5 + home_f5, 2)
 
         if total_f5 >= 5.0:
@@ -14117,8 +14141,9 @@ def _compute_game_projection_core(game_pk):
                 elif t < 48: wx_adj = -0.20
                 elif t < 56: wx_adj = -0.10
             except Exception: pass
-        away_runs = round(away_runs + wx_adj, 1)
-        home_runs = round(home_runs + wx_adj, 1)
+        wind_adj = _wind_run_adj(wx)
+        away_runs = round(away_runs + wx_adj + wind_adj, 1)
+        home_runs = round(home_runs + wx_adj + wind_adj, 1)
         total = round(away_runs + home_runs, 1)
         at_abbr = away_t.get("team",{}).get("abbreviation","AWAY")
         ht_abbr = home_t.get("team",{}).get("abbreviation","HOME")
@@ -19421,8 +19446,9 @@ def _local_boxscore_projections(game_pk, context, away_bats, home_bats, ap_name,
         except Exception:
             pass
 
-    away_runs = round(max(2.0, min(8.0, away_runs + wx_adj)), 1)
-    home_runs = round(max(2.0, min(8.0, home_runs + wx_adj)), 1)
+    wind_adj = _wind_run_adj(wx)
+    away_runs = round(max(2.0, min(8.0, away_runs + wx_adj + wind_adj)), 1)
+    home_runs = round(max(2.0, min(8.0, home_runs + wx_adj + wind_adj)), 1)
     total_runs = round(away_runs + home_runs, 1)
 
     def build_reasoning(team_abbr, runs, xwoba, pitcher_name, opponent_name):

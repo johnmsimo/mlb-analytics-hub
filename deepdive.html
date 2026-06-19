@@ -1540,8 +1540,11 @@ function renderGameProjection(d) {
   var ouCol = ouSig === 'LEAN OVER' ? 'var(--g)' : ouSig === 'LEAN UNDER' ? 'var(--o)' : 'var(--c)';
   var envCol = d.runEnv === 'HIGH' ? 'var(--o)' : d.runEnv === 'LOW' ? 'var(--g)' : 'var(--c)';
   var favCol = d.favorite === 'EVEN' ? 'var(--mu)' : 'var(--c)';
-  var wxNote = d.wxAdj && d.wxAdj !== 0
-    ? '<div class="wi2" style="margin-top:10px">Weather adj: '+(d.wxAdj>0?'+':'')+d.wxAdj+' runs/team ('+(d.wxAdj>0?'Hot weather boosts scoring':'Cold weather suppresses scoring')+')</div>' : '';
+  var wxBits = [];
+  if(d.wxAdj && d.wxAdj !== 0) wxBits.push('Temp '+(d.wxAdj>0?'+':'')+d.wxAdj+' R/team ('+(d.wxAdj>0?'warm air':'cold air')+')');
+  if(d.windAdj && d.windAdj !== 0) wxBits.push('Wind '+(d.windAdj>0?'+':'')+d.windAdj+' R/team'+(d.windField?' ('+d.windField+')':''));
+  var wxNote = wxBits.length
+    ? '<div class="wi2" style="margin-top:10px">Run-line weather adj: '+wxBits.join(' · ')+'</div>' : '';
   var compareHtml = '';
   var gameStatus = (GD && GD.status) ? String(GD.status) : '';
   var isFinal = gameStatus === 'Final' || gameStatus === 'Game Over' || gameStatus === 'Completed Early';
