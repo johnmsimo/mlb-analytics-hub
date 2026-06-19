@@ -4193,6 +4193,35 @@ function hrmEstP4(p1, p2) {
   return hrmEstP3(p2, p3);
 }
 
+// Surface the strongest cells in the matrix for the active market so the user
+// doesn't have to scan the whole grid. Ranks by the headline line (cols[0]) and
+// also names the best play on the next-harder line.
+function hrmTopPlays(players, cols, colHdrs, resolve, marketLbl){
+  if(!players || !players.length || !cols || cols[0]==null) return '';
+  var line0 = colHdrs[0];
+  var ranked = players.map(function(p){ return {name:p.name, prob:resolve(p, cols[0])}; })
+    .filter(function(x){ return x.name && x.prob!=null && !isNaN(x.prob); })
+    .sort(function(a,b){ return b.prob-a.prob; });
+  if(!ranked.length) return '';
+  var top = ranked.filter(function(x){ return x.prob>=0.60; }).slice(0,4);
+  if(!top.length) top = ranked.slice(0,3);
+  var chips = top.map(function(x){
+    var col = x.prob>=0.70?'#00e676':x.prob>=0.60?'#9ccc65':'#ffd740';
+    return '<span style="display:inline-flex;gap:5px;padding:4px 9px;border-radius:999px;border:1px solid '+col+'40;background:'+col+'14;font-size:.6rem;margin:3px 4px 0 0">'
+      +'<strong style="color:'+col+'">'+Math.round(x.prob*100)+'%</strong> '+x.name+' '+line0+'</span>';
+  }).join('');
+  var prem='';
+  if(cols[1] && colHdrs[1] && colHdrs[1]!=='—'){
+    var r2 = players.map(function(p){ return {name:p.name, prob:resolve(p, cols[1])}; })
+      .filter(function(x){ return x.name && x.prob!=null && !isNaN(x.prob); })
+      .sort(function(a,b){ return b.prob-a.prob; })[0];
+    if(r2 && r2.prob>=0.45)
+      prem='<div style="font-size:.58rem;color:var(--mu);margin-top:6px">Best '+colHdrs[1].replace('*','')+' play: <strong style="color:#67e8f9">'+r2.name+'</strong> ('+Math.round(r2.prob*100)+'%)</div>';
+  }
+  return '<div style="margin:0 0 10px;padding:9px 11px;border-radius:9px;border:1px solid rgba(0,229,255,.18);background:rgba(0,229,255,.04)">'
+    +'<div style="font-family:Orbitron,monospace;font-size:.55rem;letter-spacing:1.5px;color:#67e8f9;margin-bottom:3px">&#127919; TOP '+marketLbl+' PLAYS — '+line0+'</div>'+chips+prem+'</div>';
+}
+
 function renderHitRateMatrix() {
   var box = document.getElementById('luP');
   if(!box) return;
@@ -4301,8 +4330,11 @@ function renderHitRateMatrix() {
   var note = colHdrs.some(function(h){return h.indexOf('*')>-1;})
     ? '<div style="font-size:.6rem;color:var(--mu);margin-top:7px">* Estimated via linear extrapolation of Monte Carlo distribution. Treat as directional — not as precise as O0.5/O1.5 lines.</div>' : '';
 
+  var matrixPlayers = isPitcher ? [awayP, homeP].filter(Boolean) : away.concat(home);
+  var marketLbl = {hits:'HITS',tb:'TB',hr:'HR',rbi:'RBI',runs:'RUNS',k:'K'}[f] || 'PROP';
   box.innerHTML =
     '<div class="hrm-btn-row">' + btnRow + '</div>'
+    + hrmTopPlays(matrixPlayers, cols, colHdrs, resolve, marketLbl)
     + '<div class="hrm-wrap"><table class="hrm-table"><thead>' + hdr + '</thead><tbody>' + bodyRows + '</tbody></table></div>'
     + '<div class="hrm-legend">'
     + '<span class="hrc-hot" style="padding:2px 8px">≥70%</span>'
