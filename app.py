@@ -14879,6 +14879,11 @@ def _build_tracker_rows_quick(game_obj, capture_date, adjustments=None):
 
 _TRACKER_CAPTURE_LOCK = threading.Lock()
 _TRACKER_CAPTURE_JOBS = {}
+# Global ceiling on concurrent background capture-continuation threads. Each
+# timed-out capture spawns one; firing many captures in a burst (e.g. a bulk
+# backfill) used to spawn dozens that grind sequentially and starve the worker
+# so NO capture can finish — the "tracker caught nothing" failure. Cap them.
+_TRACKER_CAPTURE_MAX_JOBS = max(1, int(os.getenv('TRACKER_CAPTURE_MAX_JOBS', '2') or 2))
 _TRACKER_AUTO_SYNC_LOCK = threading.Lock()
 _TRACKER_AUTO_SYNC_STARTED = False
 
@@ -15007,6 +15012,12 @@ def _tracker_auto_capture_once():
     capture_hour = max(0, min(23, int(os.getenv('TRACKER_AUTO_CAPTURE_HOUR', '11') or 11)))
     if datetime.now(ET).hour < capture_hour:
         return
+
+    # Stand down if background capture jobs are already in flight — adding more
+    # load when there's a backlog is exactly what starves the worker.
+    with _TRACKER_CAPTURE_LOCK:
+        if _TRACKER_CAPTURE_JOBS:
+            return
 
     store = _load_json(TRACKER_STORE, {})
     day = _normalize_tracker_day(store.get(today))
@@ -15222,10 +15233,16 @@ def api_tracker_capture(date_str):
         remaining_games = games_timed_out if timed_out else []
         background_started = False
         background_already_running = False
+        background_capacity_full = False
         if remaining_games and str(os.getenv('TRACKER_CAPTURE_BACKGROUND', '1')).strip().lower() in ('1', 'true', 'yes'):
             with _TRACKER_CAPTURE_LOCK:
                 if date_str in _TRACKER_CAPTURE_JOBS:
                     background_already_running = True
+                elif len(_TRACKER_CAPTURE_JOBS) >= _TRACKER_CAPTURE_MAX_JOBS:
+                    # At the global ceiling — refuse to spawn another grinder.
+                    # The games captured so far are already persisted; the rest
+                    # get picked up by a later capture once a slot frees.
+                    background_capacity_full = True
                 else:
                     t = threading.Thread(
                         target=_tracker_capture_continue_bg,
@@ -15241,6 +15258,8 @@ def api_tracker_capture(date_str):
                 msg = f'Partial capture: {captured_games}/{len(sched)} games processed. Continuing {len(remaining_games)} game(s) in background — reload in ~30s.'
             elif background_already_running:
                 msg = f'Partial capture: {captured_games}/{len(sched)} games processed. Background continuation already running — reload in ~30s.'
+            elif background_capacity_full:
+                msg = f'Partial capture: {captured_games}/{len(sched)} games processed. {len(_TRACKER_CAPTURE_JOBS)} background job(s) already in flight (max {_TRACKER_CAPTURE_MAX_JOBS}) — retry this date shortly.'
             else:
                 msg = f'Partial capture: {captured_games}/{len(sched)} games processed in time budget.'
         elif not entries:
@@ -15258,6 +15277,7 @@ def api_tracker_capture(date_str):
             'totalGames': len(sched),
             'timedOut': timed_out,
             'backgroundStarted': background_started,
+            'backgroundCapacityFull': background_capacity_full,
             'remainingGames': len(remaining_games),
             'recoveredGames': recovered_games,
             'failedGames': failed_games,
