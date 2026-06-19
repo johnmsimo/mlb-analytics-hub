@@ -4727,12 +4727,20 @@ function recomputeRunEnv() {
   // Components:
   // 1. Park factor (0–25): pf 1.10 → 25, pf 0.90 → 0, 1.00 → 12.5
   var pfScore = Math.round(Math.min(25, Math.max(0, (gp.parkFactor - 0.88) / (1.12 - 0.88) * 25)));
-  // 2. Weather (0–25): temp 90°F → 25, 45°F → 0, 70°F → 12.5; dome → 12.5
-  var wxScore = 12;
+  // 2. Weather (0–25): temp 90°F → 25, 45°F → 0, 70°F → 12.5; dome → 12.5.
+  //    Now also folds in the directional wind-to-CF component (windOut, signed
+  //    mph) so a stiff wind blowing out/in moves the run environment, not just
+  //    temperature. Park factor is intentionally excluded here — it is its own
+  //    composite component below, so we must not double-count it.
+  var wxScore = 12, windAdj = 0;
   if (GD) {
     var t = parseFloat(GD.temp);
     if (!isNaN(t)) wxScore = Math.round(Math.min(25, Math.max(0, (t - 45) / (92 - 45) * 25)));
-    if (GD.temp === 'DOME') wxScore = 12;
+    if (typeof GD.windOut === 'number' && GD.temp !== 'DOME') {
+      windAdj = Math.max(-8, Math.min(8, GD.windOut * 0.7));  // ~10 mph out → +7 pts
+      wxScore = Math.round(Math.min(25, Math.max(0, wxScore + windAdj)));
+    }
+    if (GD.temp === 'DOME') { wxScore = 12; windAdj = 0; }
   }
   // 3. Umpire zone (0–25): higher zone → pitcher-friendly → subtract from run env
   // Zone 100 (pitcher) → 0 run pts; Zone 0 (hitter) → 25 run pts
@@ -4761,13 +4769,23 @@ function recomputeRunEnv() {
     existing.style.marginTop = '12px';
     gpEl.appendChild(existing);
   }
+  // Wind caption: surface the directional read when it's a real mover.
+  var windCap = '';
+  if (GD && GD.windField && typeof GD.windOut === 'number' && Math.abs(GD.windOut) >= 4 && GD.temp !== 'DOME') {
+    var wDir = GD.windField.indexOf('OUT') >= 0 ? 'lifting the run environment'
+             : GD.windField.indexOf('IN') >= 0 ? 'suppressing the run environment' : 'blowing across';
+    var wCol = GD.windField.indexOf('OUT') >= 0 ? '#ff9800' : GD.windField.indexOf('IN') >= 0 ? '#00e676' : 'var(--mu)';
+    windCap = '<div style="font-size:.6rem;color:' + wCol + ';margin-top:8px;letter-spacing:.5px">'
+      + (GD.windEmoji || '') + ' ' + Math.abs(Math.round(GD.windOut)) + ' mph ' + GD.windField
+      + ' — ' + wDir + ' (' + (windAdj > 0 ? '+' : '') + windAdj.toFixed(1) + ' wx pts)</div>';
+  }
   existing.innerHTML = ''
     + '<div style="border-top:1px solid rgba(255,255,255,.06);padding-top:12px;margin-top:4px">'
     + '<div style="font-family:Orbitron,monospace;font-size:.6rem;color:var(--mu);letter-spacing:3px;margin-bottom:10px">RUN ENVIRONMENT COMPOSITE</div>'
     + '<div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">'
     +   '<div style="flex:1;min-width:180px">'
     +     renderReBar('PARK FACTOR', pfScore, '#ff9800')
-    +     renderReBar('WEATHER', wxScore, '#00b8d4')
+    +     renderReBar('WEATHER + WIND', wxScore, '#00b8d4')
     +     renderReBar('UMPIRE ZONE', umpScore, '#a855f7')
     +     renderReBar('STARTER ERA', eraScore, '#f44336')
     +   '</div>'
@@ -4776,7 +4794,9 @@ function recomputeRunEnv() {
     +     '<div class="re-score-lbl" style="color:' + col + '">/ 100</div>'
     +     '<div style="font-family:Orbitron,monospace;font-size:.65rem;color:' + col + ';margin-top:6px;letter-spacing:1.5px">' + label + '</div>'
     +   '</div>'
-    + '</div></div>';
+    + '</div>'
+    + windCap
+    + '</div>';
 }
 
 function renderReBar(label, score, col) {
