@@ -1569,8 +1569,10 @@ function renderGameProjection(d) {
   var wxBits = [];
   if(d.wxAdj && d.wxAdj !== 0) wxBits.push('Temp '+(d.wxAdj>0?'+':'')+d.wxAdj+' R/team ('+(d.wxAdj>0?'warm air':'cold air')+')');
   if(d.windAdj && d.windAdj !== 0) wxBits.push('Wind '+(d.windAdj>0?'+':'')+d.windAdj+' R/team'+(d.windField?' ('+d.windField+')':''));
+  var maxBp = Math.max(Number(d.awayBullpenAdj)||0, Number(d.homeBullpenAdj)||0);
+  if(maxBp > 0) wxBits.push('Bullpen fatigue +'+maxBp.toFixed(2)+' R vs tired pen');
   var wxNote = wxBits.length
-    ? '<div class="wi2" style="margin-top:10px">Run-line weather adj: '+wxBits.join(' · ')+'</div>' : '';
+    ? '<div class="wi2" style="margin-top:10px">Run-line adj: '+wxBits.join(' · ')+'</div>' : '';
   var compareHtml = '';
   var gameStatus = (GD && GD.status) ? String(GD.status) : '';
   var isFinal = gameStatus === 'Final' || gameStatus === 'Game Over' || gameStatus === 'Completed Early';

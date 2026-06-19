@@ -6970,8 +6970,14 @@ def api_game_projection(game_pk):
                 elif t < 56: wx_adj = -0.10
             except Exception: pass
         wind_adj = _wind_run_adj(wx)
-        away_runs = round(away_runs + wx_adj + wind_adj, 1)
-        home_runs = round(home_runs + wx_adj + wind_adj, 1)
+        # Bullpen fatigue: each team scores extra against the OTHER team's tired
+        # pen (day-cached, non-blocking — 0 until warm). Affects late innings, so
+        # it belongs in the full-game total, not F5.
+        aid = away_t.get("team", {}).get("id")
+        away_bp = _bullpen_run_boost(_relief_fatigue_penalty_cached(hid))
+        home_bp = _bullpen_run_boost(_relief_fatigue_penalty_cached(aid))
+        away_runs = round(away_runs + wx_adj + wind_adj + away_bp, 1)
+        home_runs = round(home_runs + wx_adj + wind_adj + home_bp, 1)
         total = round(away_runs + home_runs, 1)
         run_env = "HIGH" if total > 9.5 else ("LOW" if total < 7.5 else "NEUTRAL")
         at_abbr = away_t.get("team",{}).get("abbreviation","AWAY")
@@ -7081,6 +7087,7 @@ def api_game_projection(game_pk):
             "homePitcherFip": round(home_pit_fip,2),
             "parkFactor": pf, "wxAdj": wx_adj, "windAdj": wind_adj,
             "windField": wx.get("wind_field"), "windOut": wx.get("wind_out"),
+            "awayBullpenAdj": away_bp, "homeBullpenAdj": home_bp,
             "matchup_insights": matchup_insights[:5],
             "storylineSource": storyline_source,
         })
@@ -11703,6 +11710,52 @@ def _team_relief_fatigue_woba(team_id: int) -> float:
         return 0.0
 
 
+# Day-level cache for the relief-fatigue penalty. The full computation fetches
+# each team's recent boxscores, so we never run it inline on a latency-sensitive
+# projection path — _relief_fatigue_penalty_cached warms it in the background and
+# returns 0.0 until ready (the projection refines on the next render), mirroring
+# the FG/Savant "responsive now, refresh later" pattern used elsewhere.
+_relief_fatigue_cache: dict = {}
+_relief_fatigue_lock = threading.Lock()
+_relief_fatigue_warming: set = set()
+
+
+def _relief_fatigue_penalty_cached(team_id):
+    if not team_id:
+        return 0.0
+    today = datetime.now(ET).date().isoformat()
+    key = (int(team_id), today)
+    with _relief_fatigue_lock:
+        if key in _relief_fatigue_cache:
+            return _relief_fatigue_cache[key]
+        if key in _relief_fatigue_warming:
+            return 0.0
+        _relief_fatigue_warming.add(key)
+
+    def _warm():
+        try:
+            val = _team_relief_fatigue_woba(team_id)
+        except Exception:
+            val = 0.0
+        with _relief_fatigue_lock:
+            _relief_fatigue_cache[key] = val
+            _relief_fatigue_warming.discard(key)
+
+    threading.Thread(target=_warm, daemon=True).start()
+    return 0.0
+
+
+def _bullpen_run_boost(opp_pen):
+    """Runs added to a team's projection from facing a fatigued opposing bullpen.
+    The opponent's relief-fatigue wOBA penalty applied over ~14 relief PA, scaled
+    to runs and clamped to +0.5 so a gassed pen nudges rather than dominates. Only
+    ever positive — fatigue inflates late scoring; a fresh pen contributes 0."""
+    try:
+        return round(min(0.5, max(0.0, float(opp_pen) * 11.7)), 2)
+    except Exception:
+        return 0.0
+
+
 def _simulate_offense(lineup, opp_starter, opp_team_id, park, rng, batx_map=None,
                       wx_mults=None, ump_adj=None, relief_fatigue_woba: float = 0.0):
     """
@@ -14185,8 +14238,12 @@ def _compute_game_projection_core(game_pk):
                 elif t < 56: wx_adj = -0.10
             except Exception: pass
         wind_adj = _wind_run_adj(wx)
-        away_runs = round(away_runs + wx_adj + wind_adj, 1)
-        home_runs = round(home_runs + wx_adj + wind_adj, 1)
+        # Bullpen fatigue boost vs the opposing tired pen (day-cached, non-blocking).
+        aid = away_t.get("team", {}).get("id")
+        away_bp = _bullpen_run_boost(_relief_fatigue_penalty_cached(hid))
+        home_bp = _bullpen_run_boost(_relief_fatigue_penalty_cached(aid))
+        away_runs = round(away_runs + wx_adj + wind_adj + away_bp, 1)
+        home_runs = round(home_runs + wx_adj + wind_adj + home_bp, 1)
         total = round(away_runs + home_runs, 1)
         at_abbr = away_t.get("team",{}).get("abbreviation","AWAY")
         ht_abbr = home_t.get("team",{}).get("abbreviation","HOME")
