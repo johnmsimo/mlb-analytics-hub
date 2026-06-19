@@ -1814,6 +1814,31 @@ function loadPlayerSplits(playerId, group, targetId, oppHand) {
   });
 }
 
+// Game-by-game recent-form sparkline (chronological, oldest→newest). Hitters:
+// bar height = hits (+HR weight), colored by multi-hit / HR / hitless. Pitchers:
+// strikeouts per start.
+function formSparkline(games, group){
+  if(!games || !games.length) return '';
+  var valOf = group==='hitting'
+    ? function(g){ return (g.h||0) + (g.hr||0)*0.5; }
+    : function(g){ return (g.k||0); };
+  var vals = games.map(valOf);
+  var maxV = Math.max.apply(null, vals.concat([1]));
+  var bars = games.map(function(g,i){
+    var hgt = Math.max(10, Math.round(vals[i]/maxV*100));
+    var col = group==='hitting'
+      ? (g.hr>0 ? '#ff9800' : (g.h>=2 ? '#00e676' : (g.h===0 ? '#f44336' : '#00e5ff')))
+      : (g.k>=8 ? '#00e676' : (g.k<=3 ? '#6a8db0' : '#a855f7'));
+    var tip = group==='hitting'
+      ? ((g.h||0)+'H'+(g.hr?' '+g.hr+'HR':'')+' vs '+(g.opp||'')+' '+(g.date||'').slice(5))
+      : ((g.k||0)+'K, '+(g.er||0)+'ER vs '+(g.opp||'')+' '+(g.date||'').slice(5));
+    return '<div title="'+tip+'" style="flex:1;display:flex;align-items:flex-end;justify-content:center;height:100%;min-width:0">'
+      +'<div style="width:64%;height:'+hgt+'%;background:'+col+';border-radius:2px 2px 0 0"></div></div>';
+  }).join('');
+  var lbl = group==='hitting' ? 'HITS/GM (→ recent)' : 'K/START (→ recent)';
+  return '<div style="margin-top:8px"><div style="font-size:.5rem;color:var(--mu);letter-spacing:1px;margin-bottom:3px">'+lbl+'</div>'
+    +'<div style="display:flex;align-items:flex-end;gap:3px;height:38px;padding:4px 3px;background:rgba(0,0,0,.22);border-radius:6px">'+bars+'</div></div>';
+}
 function renderSplitsCard(d, targetId, oppHand, group) {
   var el = document.getElementById(targetId);
   if(!el || !d || !d.success) return;
@@ -1852,6 +1877,7 @@ function renderSplitsCard(d, targetId, oppHand, group) {
       formHtml = '<div style="margin-top:10px">'
         + '<div class="sp-title" style="margin-bottom:6px">LAST 7 GAMES &nbsp;'+hcBadge
         + '&nbsp; <span style="color:var(--mu);font-family:Inter;text-transform:none;letter-spacing:0">AVG: <strong style="color:var(--c)">'+l7avg+'</strong> &nbsp; HR: <strong style="color:var(--c)">'+l7hr+'</strong></span></div>'
+        + formSparkline(recentGames, 'hitting')
         + '<div class="gl-row gl-hdr"><span>DATE</span><span>OPP</span><span>AB</span><span>H</span><span>HR</span><span>RBI</span><span>K</span></div>'
         + recentGames.slice().reverse().map(function(g){
             return '<div class="gl-row"><span>'+g.date.slice(5)+'</span><span>'+g.opp+'</span>'
@@ -1868,6 +1894,7 @@ function renderSplitsCard(d, targetId, oppHand, group) {
       formHtml = '<div style="margin-top:10px">'
         + '<div class="sp-title" style="margin-bottom:6px">LAST '+ recentGames.length +' STARTS &nbsp;'+hcBadge
         + '&nbsp; <span style="color:var(--mu);font-family:Inter;text-transform:none;letter-spacing:0">ER: <strong style="color:var(--c)">'+l7er+'</strong> &nbsp; K: <strong style="color:var(--c)">'+l7k+'</strong></span></div>'
+        + formSparkline(recentGames, 'pitching')
         + '<div class="gl-row gl-hdr" style="grid-template-columns:72px 44px 42px 32px 32px 32px 32px"><span>DATE</span><span>OPP</span><span>IP</span><span>H</span><span>ER</span><span>K</span><span>BB</span></div>'
         + recentGames.slice().reverse().map(function(g){
             return '<div class="gl-row" style="grid-template-columns:72px 44px 42px 32px 32px 32px 32px"><span>'+g.date.slice(5)+'</span><span>'+g.opp+'</span>'
