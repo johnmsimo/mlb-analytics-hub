@@ -3771,6 +3771,26 @@ function syncTabButtons(tab){
   document.querySelectorAll('.tb2[data-tab]').forEach(function(btn){ btn.classList.toggle('ac', btn.getAttribute('data-tab')===tab); });
 }
 
+// Grade the model's game-level prediction once the result is final: totals
+// accuracy (run error) bumped by whether the winner call hit, distilled to a
+// letter grade + plain-language summary.
+function compareScorecard(isFinal, projTotal, actualTotal, winnerCall){
+  if(!isFinal || projTotal==null || isNaN(projTotal)) return '';
+  var err = Math.abs(projTotal - actualTotal);
+  var pts = err<=1?4 : err<=2?3 : err<=3?2 : err<=4?1 : 0;
+  if(winnerCall==='CORRECT') pts = Math.min(4, pts+0.5);
+  else if(winnerCall==='MISSED') pts = Math.max(0, pts-0.5);
+  var letter = pts>=3.5?'A' : pts>=2.5?'B' : pts>=1.5?'C' : pts>=0.5?'D' : 'F';
+  var col = pts>=3.5?'#00e676' : pts>=2.5?'#9ccc65' : pts>=1.5?'#ffd740' : pts>=0.5?'#ff9800' : '#f44336';
+  var totalRead = err<=1.5?'nailed the total' : err<=2.5?'close on the total' : 'missed the total';
+  var winRead = winnerCall==='CORRECT'?'called the winner' : winnerCall==='MISSED'?'missed the winner' : 'had no winner edge';
+  return '<div style="margin:0 0 12px;padding:11px 13px;border-radius:10px;border:1px solid '+col+'45;background:'+col+'12;display:flex;align-items:center;gap:14px">'
+    +'<div style="font-family:Orbitron,monospace;font-size:2rem;font-weight:900;color:'+col+';line-height:1">'+letter+'</div>'
+    +'<div><div style="font-family:Orbitron,monospace;font-size:.62rem;letter-spacing:1px;color:'+col+';margin-bottom:3px">MODEL SCORECARD</div>'
+    +'<div style="font-size:.62rem;color:var(--t);opacity:.88;line-height:1.5">Model '+totalRead+' ('+err.toFixed(1)+' run error) and '+winRead+'.</div></div>'
+    +'</div>';
+}
+
 function renderDeepDiveCompare(){
   var box=document.getElementById('luP');
   if(!box) return;
@@ -3816,6 +3836,7 @@ function renderDeepDiveCompare(){
 
   box.innerHTML=''
     +'<div class="proj-note" style="margin-bottom:10px">Comprehensive deep-dive compare view across projection, F5, Monte Carlo, parlay signal, and adjustment recommendation.</div>'
+    +compareScorecard(isFinal, projTotal, actualTotal, winnerCall)
     +'<div class="mc-grid">'
       +'<div class="mc-card"><div class="mc-v" style="color:var(--g)">'+away+' '+actualAway+'</div><div class="mc-l">ACTUAL AWAY</div></div>'
       +'<div class="mc-card"><div class="mc-v" style="color:var(--g)">'+home+' '+actualHome+'</div><div class="mc-l">ACTUAL HOME</div></div>'
