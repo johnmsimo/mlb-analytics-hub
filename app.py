@@ -1948,6 +1948,32 @@ HR_PARK_FACTORS = {
     141: 102, 120: 99,  135: 97,  145: 95,  113: 100, 114: 98,
 }
 
+# ── Handedness-split HR park factors (index 100 = neutral) ──────────────────
+# Only parks with well-documented LHB/RHB HR asymmetry are listed; every other
+# park inherits the symmetric HR_PARK_FACTORS value for both hands via
+# _hr_park_factor_hand(). Keeping the list curated avoids asserting a split
+# direction we aren't confident about (a wrong direction is worse than none).
+HR_PARK_FACTORS_HAND = {
+    147: {"L": 134, "R": 100},  # Yankee Stadium — short RF porch inflates LHB power
+    137: {"L": 80,  "R": 96},   # Oracle Park — deep RF / Triples Alley buries LHB
+    111: {"L": 90,  "R": 104},  # Fenway — deep RF suppresses LHB; Monster aids RHB
+    110: {"L": 112, "R": 95},   # Camden Yards — 2022 LF wall move suppressed RHB HR
+    117: {"L": 99,  "R": 110},  # Daikin/Minute Maid — short LF Crawford boxes aid RHB
+    134: {"L": 104, "R": 92},   # PNC Park — short RF favors LHB, deep LF buries RHB
+    143: {"L": 114, "R": 108},  # Citizens Bank — bandbox, LHB edge
+    116: {"L": 96,  "R": 92},   # Comerica — deep gaps suppress HR, RHB most
+}
+
+
+def _hr_park_factor_hand(home_team_id, hand):
+    """HR park multiplier (1.0 = neutral) for a batter of the given hand. Uses
+    the curated handedness table when available, else the symmetric HR index."""
+    h = "L" if str(hand or "R").upper().startswith("L") else "R"
+    rec = HR_PARK_FACTORS_HAND.get(home_team_id)
+    if rec and h in rec:
+        return round(rec[h] / 100.0, 2)
+    return round(HR_PARK_FACTORS.get(home_team_id, 100) / 100.0, 2)
+
 _fg_lock = threading.Lock()
 _fg_cond = threading.Condition(_fg_lock)   # notified when FG load completes
 _fg_bat = {}
@@ -4401,6 +4427,8 @@ def parse_game(g, prefer_live_weather=True):
         except Exception: gt_fmt = "TBD"
         pf   = PARK_FACTORS.get(hid, 1.0)
         hrpf = round(HR_PARK_FACTORS.get(hid, 100) / 100.0, 2)   # HR index → multiplier
+        hrpf_l = _hr_park_factor_hand(hid, "L")
+        hrpf_r = _hr_park_factor_hand(hid, "R")
         series_game  = int(g.get("seriesGameNumber") or 1)
         series_total = int(g.get("gamesInSeries")    or 3)
         double_header = str(g.get("doubleHeader") or "N").upper()
@@ -4458,7 +4486,9 @@ def parse_game(g, prefer_live_weather=True):
             "awayRecord": away_record, "homeRecord": home_record,
             "awayScore": away_score, "homeScore": home_score,
             "venue": ven.get("name",""), "gameTime": gt_fmt,
-            "parkFactor": pf, "hrParkFactor": hrpf, "edge": edge, "barPct": bar,
+            "parkFactor": pf, "hrParkFactor": hrpf,
+            "hrParkFactorLHB": hrpf_l, "hrParkFactorRHB": hrpf_r,
+            "edge": edge, "barPct": bar,
             "seriesGame": series_game, "seriesTotal": series_total,
             "temp": wx.get("temp","N/A"), "wind": wx.get("wind", f"{wx.get('wind_speed','?')} mph {wx.get('wind_dir','')}").strip(),
             "condition": wx.get("condition",""), "rainChance": wx.get("rain_chance","N/A"),

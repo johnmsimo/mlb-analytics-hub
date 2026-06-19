@@ -1102,11 +1102,26 @@ function renderPark(){
     var hrEmph=(hrpf>=1.04&&pf<1.05)||(hrpf<=0.96&&pf>0.95)?' (diverges from its run profile)':'';
     desc+=' This park <strong style="color:'+hrCol+'">'+hrLean+'</strong>'+hrEmph+'.';
   }
+  // Platoon HR split: only shown when LHB/RHB HR factors diverge meaningfully
+  // (e.g. Yankee Stadium short porch, Oracle's deep RF).
+  var hrL=(g.hrParkFactorLHB!=null)?g.hrParkFactorLHB:null;
+  var hrR=(g.hrParkFactorRHB!=null)?g.hrParkFactorRHB:null;
+  var splitHtml='';
+  if(hrL!=null && hrR!=null && Math.abs(hrL-hrR)>=0.06){
+    var favHand=hrL>hrR?'LHB':'RHB';
+    var lCol=hrL>=1.04?'var(--o)':hrL<=0.96?'var(--g)':'var(--c)';
+    var rCol=hrR>=1.04?'var(--o)':hrR<=0.96?'var(--g)':'var(--c)';
+    splitHtml='<div class="pkg" style="margin-top:10px">'
+      +'<div class="ps"><div class="pv" style="color:'+lCol+'">'+hrL+'x</div><div class="plb">LHB HR FACTOR</div></div>'
+      +'<div class="ps"><div class="pv" style="color:'+rCol+'">'+hrR+'x</div><div class="plb">RHB HR FACTOR</div></div></div>'
+      +'<div style="margin-top:7px;font-size:.62rem;color:var(--c)">⚾ Platoon HR split favors <strong>'+favHand+'</strong> power — weight HR props accordingly.</div>';
+  }
   document.getElementById('pkP').innerHTML=
     '<div class="pkg"><div class="ps"><div class="pv" style="color:'+col+'">'+pf+'x</div><div class="plb">RUN FACTOR</div></div>'
     +'<div class="ps"><div class="pv" style="color:'+hrCol+'">'+(hrpf==null?'—':hrpf+'x')+'</div><div class="plb">HR FACTOR</div></div></div>'
     +'<div class="pkg" style="margin-top:10px"><div class="ps"><div class="pv" style="color:'+col+';font-size:.88rem">'+type+'</div><div class="plb">PARK TYPE</div></div>'
     +'<div class="ps"><div class="pv" style="color:'+hrCol+';font-size:.88rem">'+(hrpf==null?'—':hrpf>=1.04?'HR Boost':hrpf<=0.96?'HR Drag':'HR Neutral')+'</div><div class="plb">HR PROFILE</div></div></div>'
+    +splitHtml
     +'<div style="margin-top:11px;padding:9px;background:rgba(0,0,0,.28);border-radius:7px;font-size:.7rem;color:var(--mu);line-height:1.6">'+desc+'</div>';
 }
 function renderMatchup(){
