@@ -15075,6 +15075,11 @@ def api_tracker_capture(date_str):
     denied = _check_admin_auth()
     if denied:
         return denied
+    # Backfill mode: picks captured for a past date are projected with the
+    # CURRENT season caches, not point-in-time stats, so their model probs
+    # carry mild look-ahead bias. Stamp them so calibration/eval can isolate
+    # or down-weight them vs. genuinely live-captured picks.
+    is_backfill = str(request.args.get('backfill', '')).strip().lower() in ('1', 'true', 'yes')
     try:
         adjustments = _get_adjustments()
         sched = fetch_schedule(date_str)
@@ -15094,6 +15099,14 @@ def api_tracker_capture(date_str):
         # in-memory + on-disk odds cache (data/odds_cache.json) keeps API usage
         # low; set TRACKER_CAPTURE_INCLUDE_ODDS=0 to opt out.
         include_odds = str(os.getenv('TRACKER_CAPTURE_INCLUDE_ODDS', '1')).strip().lower() in ('1', 'true', 'yes')
+        # The Odds API only serves live markets, so backfilling past dates can't
+        # fetch historical odds and would just burn credits. Default odds OFF for
+        # backfill unless the caller explicitly opts in via ?odds=1.
+        _odds_q = request.args.get('odds')
+        if _odds_q is not None:
+            include_odds = str(_odds_q).strip().lower() in ('1', 'true', 'yes')
+        elif is_backfill:
+            include_odds = False
 
         # Parallelise I/O-bound boxscore/roster fetches across games.
         # cap workers at 4 to stay within the single-Gunicorn-worker memory budget.
@@ -15155,8 +15168,11 @@ def api_tracker_capture(date_str):
         store = _load_json(TRACKER_STORE, {})
         day = _normalize_tracker_day(store.get(date_str))
         entries = _merge_tracker_entries(day.get('entries', []), _recalc_tracker_entries(all_entries))
+        if is_backfill:
+            for _e in entries:
+                _e['backfilled'] = True
         entries.sort(key=lambda x: x.get('score', 0), reverse=True)
-        store[date_str] = {'capturedAt': datetime.now().isoformat(), 'gradedAt': None, 'closingCapturedAt': None, 'entries': entries}
+        store[date_str] = {'capturedAt': datetime.now().isoformat(), 'gradedAt': None, 'closingCapturedAt': None, 'entries': entries, 'backfilled': is_backfill or day.get('backfilled', False)}
         # Without this check, a failed disk write silently returns 210 picks to
         # the user — then "Capture Closing" 404s because the day isn't on disk.
         if not _save_json(TRACKER_STORE, store):
