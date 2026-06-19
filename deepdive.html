@@ -196,7 +196,9 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .mc-table th{font-size:.52rem;color:var(--mu);letter-spacing:2px;text-align:left;padding:5px 4px;border-bottom:1px solid var(--b);font-family:'Orbitron',monospace;white-space:nowrap}
 .mc-table td{padding:5px 4px;border-bottom:1px solid rgba(255,255,255,.04);white-space:nowrap}
 .mc-note{margin-top:10px;font-size:.62rem;color:var(--mu);line-height:1.6}
-@media(max-width:860px){.mc-grid{grid-template-columns:1fr 1fr}.mc-box-wrap{grid-template-columns:1fr}}
+.mc-ou-ladder{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-top:6px}
+@media(max-width:860px){.mc-grid{grid-template-columns:1fr 1fr}.mc-box-wrap{grid-template-columns:1fr}.mc-ou-ladder{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:480px){#sharpCard .pt + div > div{min-width:calc(50% - 4px)!important}}
 
 
 .edge-grid{display:grid;grid-template-columns:1.1fr .9fr;gap:14px;margin-top:12px}
@@ -3310,7 +3312,7 @@ function mcOuLadder(t){
     rangeNote='<div class="proj-note" style="margin-top:6px">Likely total range (middle 50% of sims): <strong style="color:var(--c)">'+t.p25_total+'–'+t.p75_total+' runs</strong>'
       +(t.std_total!=null?' · σ '+t.std_total:'')+(t.median_total!=null?' · median '+t.median_total:'')+'</div>';
   return '<div style="font-family:Orbitron,monospace;font-size:.58rem;letter-spacing:1.5px;color:var(--mu);margin:12px 0 6px">⚙ O/U PROBABILITY LADDER — P(OVER) PER LINE</div>'
-    +'<div class="mc-grid" style="grid-template-columns:repeat(6,1fr)">'+cells+'</div>'+rangeNote;
+    +'<div class="mc-ou-ladder">'+cells+'</div>'+rangeNote;
 }
 function renderSimulation(){
   var el = document.getElementById('simPanel');
