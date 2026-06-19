@@ -1447,7 +1447,7 @@ function addToParlay(playerName, type, idx) {
 
 loadTrackedKeys();
 ensureSimWrap();
-loadGame();loadPitchers();loadLineups();
+loadGame();loadPitchers();loadLineups();loadBreakoutData();
 
 // ── Phase 3 ───────────────────────────────────────────────────────────────────
 var GP_DATA = null;
@@ -3541,6 +3541,40 @@ function getMatchupThreat(name){
   if(_bomThreatMap===null) buildBomThreatMap();
   return (_bomThreatMap && (name in _bomThreatMap)) ? _bomThreatMap[name] : null;
 }
+
+// ── Breakout-detector integration ────────────────────────────────────
+// Ports the breakout_detector scoring and flags this game's hitters who grade
+// as REAL BREAKOUT / WATCH (or a regression trap), so the deep-dive shows which
+// hot bats are backed by Statcast vs riding luck.
+function _bkKey(n){ return (n||'').toString().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').trim(); }
+function scoreBreakout(p){
+  var dEV = p.ev95 - p.ev95Prior;
+  var sEv = Math.max(0, Math.min(30, dEV*10 + (p.ev95-103)*2));
+  var sBrl = Math.max(0, Math.min(20, (p.brl-6)*2.5));
+  var sX = Math.max(-10, Math.min(20, (p.xwoba-p.woba)*400 + (p.xwoba-0.320)*40));
+  var sHh = Math.max(0, Math.min(15, (p.hh-40)*0.75));
+  var dK = p.kpctPrior - p.kpct;
+  var sK = Math.max(0, Math.min(15, dK*3));
+  var babipPen = (p.babip>0.340 && p.hh<44) ? -15 : 0;
+  var mirage = (p.wrc>125 && dEV<0.8) ? -10 : 0;
+  var luck = (p.avg-p.xba>0.020) ? -8 : 0;
+  var total = Math.max(0, Math.min(100, sEv+sBrl+sX+sHh+sK+babipPen+mirage+luck));
+  var verdict='fake', vLabel='REGRESSION TRAP';
+  if(total>=75){ verdict='real'; vLabel='REAL BREAKOUT'; }
+  else if(total>=50){ verdict='watch'; vLabel='WATCH LIST'; }
+  return { total:Math.round(total), verdict:verdict, vLabel:vLabel, xGap:(p.xwoba-p.woba) };
+}
+var BREAKOUT_MAP = {};
+function loadBreakoutData(){
+  fetch('/api/breakout/candidates').then(function(r){ return r.json(); }).then(function(d){
+    if(!d || !d.success || !d.players) return;
+    var map = {};
+    d.players.forEach(function(p){ if(p && p.name) map[_bkKey(p.name)] = scoreBreakout(p); });
+    BREAKOUT_MAP = map;
+    if(ACTIVE_TAB==='proj') renderProjectionHub();
+  }).catch(function(){});
+}
+function getBreakout(name){ var k=_bkKey(name); return (k in BREAKOUT_MAP) ? BREAKOUT_MAP[k] : null; }
 function buildProjectionRows(){
   if(!SIM_DATA || !SIM_DATA.success) return [];
   _bomThreatMap = null;   // rebuild from latest BOM_DATA on each render
@@ -3611,8 +3645,12 @@ function projectionRowHtml(r, idx){
   var thBadge = (_th!=null && _th>=60)
     ? ' <span title="Batting-order matchup threat" style="font-family:Orbitron,monospace;font-size:.5rem;font-weight:700;padding:1px 5px;border-radius:999px;color:'+(_th>=70?'#ff5252':'#ff9800')+';border:1px solid '+(_th>=70?'#ff5252':'#ff9800')+'55">'+_th+'</span>'
     : '';
+  var _bk = (r.kind==='hitter') ? getBreakout(r.player) : null;
+  var bkBadge = (_bk && _bk.total>=50)
+    ? ' <span title="Breakout score '+_bk.total+' — '+_bk.vLabel+' (Statcast-backed surge)" style="font-size:.55rem">'+(_bk.verdict==='real'?'🚀':'👀')+'</span>'
+    : '';
   return '<tr class="'+(SELECTED_PROJ===idx?'sel':'')+'" onclick="selectProjection('+idx+')">'
-    + '<td>'+r.rank+'</td><td><span class="pos-tag">'+r.team+'</span></td><td>'+r.player+thBadge+'</td><td>'+marketLabel(r.marketKey,r.line)+'</td><td>'+pct2(r.prob)+'</td><td>'+(r.edge!=null?'<span class="'+(r.edge>=0.03?'edge-pos':'edge-neu')+'">'+pct2(r.edge)+'</span>':'<span class="edge-na">N/A</span>')+'</td><td>'+confidenceTag(r.edge!=null?r.edge:r.prob)+'</td><td style="max-width:340px;white-space:normal">'+reason+'</td><td><button class="'+btnCls+'" onclick="saveProjectionPick('+idx+',event)">'+btnTxt+'</button></td></tr>';
+    + '<td>'+r.rank+'</td><td><span class="pos-tag">'+r.team+'</span></td><td>'+r.player+thBadge+bkBadge+'</td><td>'+marketLabel(r.marketKey,r.line)+'</td><td>'+pct2(r.prob)+'</td><td>'+(r.edge!=null?'<span class="'+(r.edge>=0.03?'edge-pos':'edge-neu')+'">'+pct2(r.edge)+'</span>':'<span class="edge-na">N/A</span>')+'</td><td>'+confidenceTag(r.edge!=null?r.edge:r.prob)+'</td><td style="max-width:340px;white-space:normal">'+reason+'</td><td><button class="'+btnCls+'" onclick="saveProjectionPick('+idx+',event)">'+btnTxt+'</button></td></tr>';
 }
 function renderProjectionDetail(){
   if(SELECTED_PROJ==null || !PROJ_ROWS[SELECTED_PROJ]) return '<p class="na">Select a ranked projection to open the player and matchup dive.</p>';
