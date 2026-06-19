@@ -5921,12 +5921,55 @@ function renderH2H(){
       if(bvpEv  > 70) ev26   = bvpEv;
       if(bvpBrl >  0) brl26  = bvpBrl;
       el.innerHTML = buildShell(kpiRow(ev, barrel, ev26, brl26),
-                                evTableHtml(games) + priorPanelsHtml(mp));
+                                h2hVerdict(games, b, bvpEv, bvpBrl, mp) + evTableHtml(games) + priorPanelsHtml(mp));
     });
   } else {
     // No IDs available — show Savant stats we have on the batter object
     el.innerHTML = buildShell(kpiRow(ev, barrel, ev26, brl26), evTableHtml([]));
   }
+}
+
+// ── H2H matchup verdict ──────────────────────────────────────────────
+// Synthesizes a directional read even when there's no direct BvP history
+// (the common case): combines career BvP at-bats, the batter's barrel
+// profile, and the arsenal-similarity prior slash into a single lean.
+function h2hVerdict(games, b, bvpEv, bvpBrl, mp){
+  var pa=0,h=0,hr=0,k=0;
+  (games||[]).forEach(function(e){
+    var r=(e.result||e.event||'').toUpperCase(); if(!r) return; pa++;
+    if(r.indexOf('HOME RUN')>=0){ h++; hr++; }
+    else if(r.indexOf('TRIPLE')>=0||r.indexOf('DOUBLE')>=0||r.indexOf('SINGLE')>=0){ h++; }
+    else if(r==='STRIKEOUT'||r==='K'){ k++; }
+  });
+  var brl = bvpBrl>0 ? bvpBrl : (parseFloat(b&&(b.sv_brl_pct||b.barrelPct||b.barrelpct))||0);
+  var lean=0, signals=[];
+  if(brl>=10){ lean++; signals.push('Above-average barrel rate ('+brl.toFixed(1)+'%)'); }
+  else if(brl>0 && brl<=5){ lean--; signals.push('Light barrel profile ('+brl.toFixed(1)+'%)'); }
+  var ap = mp && mp.arsenal_prior && mp.arsenal_prior.prior_counts;
+  if(ap){
+    var ab=+ap.ab||0;
+    var tb=(+ap['1b']||0)+2*(+ap['2b']||0)+3*(+ap['3b']||0)+4*(+ap.hr||0);
+    if(ab>=10){
+      var slg=tb/ab;
+      if(slg>=0.450){ lean++; signals.push('Mashes similar arsenals ('+slg.toFixed(3).replace(/^0/,'')+' SLG)'); }
+      else if(slg<=0.350){ lean--; signals.push('Struggles vs similar arsenals ('+slg.toFixed(3).replace(/^0/,'')+' SLG)'); }
+    }
+  }
+  if(pa>=10){
+    if(hr>=2){ lean++; signals.push(hr+' HR in '+pa+' career PA'); }
+    if(k/pa>=0.35){ lean--; signals.push(Math.round(k/pa*100)+'% K rate in this matchup'); }
+  }
+  var tier = lean>=1?'ADVANTAGE BATTER':lean<=-1?'ADVANTAGE PITCHER':'EVEN MATCHUP';
+  var col  = lean>=1?'#00e676':lean<=-1?'#f44336':'#00e5ff';
+  var sample = pa>0 ? (pa+' PA on record · '+h+' H · '+hr+' HR · '+k+' K')
+                    : 'No direct PA on record — projecting from profile + arsenal priors';
+  if(!signals.length) signals.push('Balanced profile with no standout edge either way');
+  return '<div style="margin:4px 0 12px;padding:10px 12px;border-radius:9px;border:1px solid '+col+'40;background:'+col+'12">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">'
+    +'<span style="font-family:Orbitron,monospace;font-size:.62rem;letter-spacing:1px;color:'+col+'">'+tier+'</span>'
+    +'<span style="font-size:.55rem;color:var(--mu)">'+sample+'</span></div>'
+    +'<div style="font-size:.6rem;color:var(--t);opacity:.85;line-height:1.55">'+signals.map(function(s){return '• '+s;}).join('<br>')+'</div>'
+    +'</div>';
 }
 
 // ── Arsenal-similarity prior panels ──────────────────────────────────
