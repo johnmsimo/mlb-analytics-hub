@@ -1021,6 +1021,7 @@ except OSError as _signal_dir_err:
 BRAIN_UPLOAD_STATE_STORE = os.path.join(DATA_DIR, 'brain_upload_state.json')
 PLAYER_SIGNALS_STORE = os.path.join(DATA_DIR, 'player_signals.json')
 TRACKER_STORE = os.path.join(DATA_DIR, 'daily_tracker.json')
+SHARP_HISTORY_STORE = os.path.join(DATA_DIR, 'sharp_card_history.json')
 ADJUST_STORE = os.path.join(DATA_DIR, 'model_adjustments.json')
 CAL_HISTORY_STORE = os.path.join(DATA_DIR, 'calibration_history.json')
 VALUE_HISTORY_STORE = os.path.join(DATA_DIR, 'value_history.json')
@@ -14299,6 +14300,61 @@ def _compute_game_projection_core(game_pk):
         return {"success": False, "error": str(ex)}
 
 
+def _grade_game_bet(bet, away, home, ascore, hscore):
+    """WON / LOST / PUSH for an ML or game-total bet vs a final box score."""
+    try:
+        a, h = int(ascore or 0), int(hscore or 0)
+    except (TypeError, ValueError):
+        return None
+    if not bet:
+        return None
+    if bet.get("marketKey") == "game_moneyline":
+        if a == h:
+            return "PUSH"
+        return "WON" if (away if a > h else home) == bet.get("side") else "LOST"
+    if bet.get("marketKey") == "game_total" and bet.get("line") is not None:
+        tot = a + h
+        if tot == bet["line"]:
+            return "PUSH"
+        return "WON" if ((bet.get("side") == "Over") == (tot > bet["line"])) else "LOST"
+    return None
+
+
+_sharp_history_lock = threading.Lock()
+
+
+def _record_sharp_verdict(game_pk, date_str, away, home, best, is_final, ascore, hscore):
+    """Persist the pre-game Sharp Card verdict (locked once, before first pitch)
+    and grade it against the final once available — building a rolling hit-rate
+    record without re-grading a verdict that may have since shifted."""
+    if not date_str:
+        date_str = datetime.now(ET).strftime("%Y-%m-%d")
+    try:
+        with _sharp_history_lock:
+            store = _load_json(SHARP_HISTORY_STORE, {})
+            day = store.setdefault(date_str, {})
+            rec = day.get(str(game_pk))
+            changed = False
+            if rec is None:
+                # Lock the verdict only before the game is final, so we record a
+                # genuine pre-result prediction.
+                if best and not is_final:
+                    day[str(game_pk)] = {
+                        "recordedAt": datetime.now(ET).isoformat(),
+                        "away": away, "home": home,
+                        "bestBet": best, "grade": None, "gradedAt": None,
+                    }
+                    changed = True
+            elif is_final and rec.get("grade") is None:
+                rec["grade"] = _grade_game_bet(rec.get("bestBet"), away, home, ascore, hscore)
+                rec["gradedAt"] = datetime.now(ET).isoformat()
+                changed = True
+            if changed:
+                _save_json(SHARP_HISTORY_STORE, store)
+    except Exception as ex:
+        print(f"[_record_sharp_verdict] {ex}")
+
+
 def _build_sharp_card(game_pk):
     """Server-side Sharp Card rollup — the game-level half of the deep-dive's
     in-page Sharp Card (side lean, total lean, scoring environment, drivers, a
@@ -14355,20 +14411,12 @@ def _build_sharp_card(game_pk):
     # Grade vs final when available.
     status = gd.get("status") or ""
     is_final = status in ("Final", "Game Over", "Completed Early")
-    grade = None
-    if is_final and best:
-        try:
-            a, h = int(gd.get("awayScore") or 0), int(gd.get("homeScore") or 0)
-            if best["marketKey"] == "game_moneyline":
-                if a == h:
-                    grade = "PUSH"
-                else:
-                    grade = "WON" if (away if a > h else home) == best["side"] else "LOST"
-            elif best["marketKey"] == "game_total" and best["line"] is not None:
-                tot = a + h
-                grade = "PUSH" if tot == best["line"] else ("WON" if ((best["side"] == "Over") == (tot > best["line"])) else "LOST")
-        except Exception:
-            grade = None
+    ascore, hscore = gd.get("awayScore"), gd.get("homeScore")
+    grade = _grade_game_bet(best, away, home, ascore, hscore) if (is_final and best) else None
+
+    # Persist the verdict (pre-game lock + post-game grade) for the hit-rate log.
+    date_str = g.get("officialDate") or (g.get("gameDate") or "")[:10]
+    _record_sharp_verdict(game_pk, date_str, away, home, best, is_final, ascore, hscore)
 
     return {
         "success": True, "gamePk": game_pk, "awayAbbr": away, "homeAbbr": home,
@@ -14389,6 +14437,42 @@ def api_sharp_card(game_pk):
         return jsonify(out), (200 if out.get("success") else 404)
     except Exception as ex:
         print(f"[api_sharp_card] {traceback.format_exc()}")
+        return jsonify({"success": False, "error": str(ex)}), 500
+
+
+@app.route('/api/sharp-card/accuracy')
+def api_sharp_card_accuracy():
+    """Rolling hit-rate of recorded Sharp Card best bets (graded verdicts)."""
+    try:
+        with _sharp_history_lock:
+            store = _load_json(SHARP_HISTORY_STORE, {})
+        overall = {"won": 0, "lost": 0, "push": 0}
+        by_type = {}
+        recent = []
+        for date_str in sorted(store.keys(), reverse=True):
+            for gpk, rec in store[date_str].items():
+                grade = rec.get("grade")
+                bet = rec.get("bestBet") or {}
+                btype = bet.get("type") or "?"
+                bucket = by_type.setdefault(btype, {"won": 0, "lost": 0, "push": 0})
+                if grade == "WON":
+                    overall["won"] += 1; bucket["won"] += 1
+                elif grade == "LOST":
+                    overall["lost"] += 1; bucket["lost"] += 1
+                elif grade == "PUSH":
+                    overall["push"] += 1; bucket["push"] += 1
+                if grade and len(recent) < 30:
+                    recent.append({"date": date_str, "gamePk": gpk,
+                                   "matchup": f"{rec.get('away','')} @ {rec.get('home','')}",
+                                   "bet": bet.get("text"), "grade": grade})
+        decided = overall["won"] + overall["lost"]
+        overall["hitRate"] = round(overall["won"] / decided, 3) if decided else None
+        for b in by_type.values():
+            d = b["won"] + b["lost"]
+            b["hitRate"] = round(b["won"] / d, 3) if d else None
+        return jsonify({"success": True, "overall": overall, "byType": by_type, "recent": recent})
+    except Exception as ex:
+        print(f"[api_sharp_card_accuracy] {traceback.format_exc()}")
         return jsonify({"success": False, "error": str(ex)}), 500
 
 

@@ -1649,6 +1649,9 @@ function addToParlay(playerName, type, idx) {
 loadTrackedKeys();
 ensureSimWrap();
 loadGame();loadPitchers();loadLineups();loadBreakoutData();
+// Fire-and-forget: let the server lock/grade this game's Sharp Card verdict for
+// the rolling hit-rate log. Deferred so it never competes with page load.
+setTimeout(function(){ fetch('/api/sharp-card/'+GPK).catch(function(){}); }, 4000);
 
 // ── Phase 3 ───────────────────────────────────────────────────────────────────
 var GP_DATA = null;
