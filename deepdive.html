@@ -4844,7 +4844,28 @@ function renderF5Panel(d) {
   if (!el) return;
   if (!d.success) { el.innerHTML = '<p class="na">' + (d.error||'Unavailable') + '</p>'; return; }
   var domeTxt = d.dome ? '<span style="color:var(--c);font-family:Orbitron,monospace;font-size:.62rem">🏟 DOME — No weather adj</span>' : '';
+  // F5 scoring-environment verdict vs the ~4.3-run league-average first-5 total.
+  var f5t = Number(d.totalF5);
+  var f5Verdict = '';
+  if (!isNaN(f5t)) {
+    var tier = f5t >= 5.0 ? {t:'HIGH F5 SCORING',c:'#ff9800',s:'leans F5 OVER / YRFI'}
+             : f5t <= 3.6 ? {t:'LOW F5 SCORING',c:'#00e676',s:'leans F5 UNDER / NRFI'}
+             : {t:'NEUTRAL F5',c:'#00e5ff',s:'balanced first-5 environment'};
+    var drivers = [];
+    if (d.windField && d.windAdj) drivers.push((d.windAdj>0?'wind out':'wind in')+' ('+d.windField+')');
+    if (Number(d.parkFactor)>=1.03) drivers.push('hitter park');
+    else if (Number(d.parkFactor)<=0.97) drivers.push('pitcher park');
+    var avgEra = (parseFloat(d.awayEra)+parseFloat(d.homeEra))/2;
+    if (!isNaN(avgEra)) drivers.push(avgEra<=3.6?'sharp starters':avgEra>=4.6?'hittable starters':'average starters');
+    f5Verdict = '<div style="margin:0 0 10px;padding:9px 11px;border-radius:9px;border:1px solid '+tier.c+'45;background:'+tier.c+'12">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">'
+      +'<span style="font-family:Orbitron,monospace;font-size:.62rem;letter-spacing:1px;color:'+tier.c+'">'+tier.t+'</span>'
+      +'<span style="font-size:.58rem;color:'+tier.c+'">'+tier.s+'</span></div>'
+      +(drivers.length?'<div style="font-size:.58rem;color:var(--mu);margin-top:5px">Drivers: '+drivers.join(' · ')+'</div>':'')
+      +'</div>';
+  }
   el.innerHTML = ''
+    + f5Verdict
     + '<div class="f5-signal">'
     +   '<div class="f5-signal-val" style="color:' + d.signalColor + '">' + d.signal + '</div>'
     +   '<div class="f5-signal-lbl">F5 PROJECTED TOTAL: ' + d.totalF5 + ' RUNS</div>'
@@ -4859,6 +4880,7 @@ function renderF5Panel(d) {
     +   d.awayAbbr + ' vs ' + d.awayPitcher + ' ERA ' + d.awayEra
     +   ' | ' + d.homeAbbr + ' vs ' + d.homePitcher + ' ERA ' + d.homeEra
     +   (d.wxAdj ? ' | Wx adj: ' + (d.wxAdj > 0 ? '+' : '') + d.wxAdj : '')
+    +   (d.windAdj ? ' | Wind adj: ' + (d.windAdj > 0 ? '+' : '') + d.windAdj + (d.windField ? ' ('+d.windField+')' : '') : '')
     + '</div>';
 }
 

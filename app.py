@@ -14140,6 +14140,8 @@ def _compute_f5(game_pk):
             "homeXwoba":    home_xwoba,
             "parkFactor":   pf,
             "wxAdj":        wx_adj,
+            "windAdj":      wind_adj,
+            "windField":    wx.get("wind_field"),
             "dome":         wx.get("dome", False),
         }
 
