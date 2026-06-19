@@ -13793,10 +13793,16 @@ def _compute_nrfi(game_pk):
     home_hand_adj, home_split = _leadoff_handedness_adj(home_leadoff, away_sp_hand)
 
     temp = _num(wx.get('temp'), 72)
-    wind = _num(wx.get('wind_speed'), 7)
     weather_mult = 1.0
     weather_mult += _clamp((temp - 72.0) * 0.0025, -0.05, 0.08)
-    weather_mult += _clamp((wind - 8.0) * 0.0030, -0.03, 0.06)
+    # Directional wind: use the signed out-to-CF component, not raw speed. Wind
+    # blowing OUT lifts first-inning run risk; blowing IN suppresses it. When the
+    # park has no known orientation (wind_out is None) we add nothing rather than
+    # assume every breeze boosts offense (the old, directionally-blind behavior).
+    wind_out = wx.get('wind_out')
+    wind_directional = wind_out is not None
+    if wind_directional:
+        weather_mult += _clamp(_num(wind_out, 0.0) * 0.0045, -0.05, 0.07)
     weather_mult = _clamp(weather_mult, 0.90, 1.14)
 
     away_score_rate_i1 = _clamp((home_i1_era / 9.0) * park * away_hand_adj * weather_mult, 0.03, 0.62)
@@ -13820,9 +13826,13 @@ def _compute_nrfi(game_pk):
         factors.append('Weak away leadoff split versus starter hand')
     if home_hand_adj <= 0.93:
         factors.append('Weak home leadoff split versus starter hand')
-    if weather_mult <= 0.96:
+    if wind_directional and wind_out <= -6:
+        factors.append('Wind blowing in suppresses early scoring')
+    elif weather_mult <= 0.96:
         factors.append('Run environment dampened by weather')
-    if weather_mult >= 1.06:
+    if wind_directional and wind_out >= 6:
+        factors.append('Wind blowing out lifts first-inning run risk')
+    elif weather_mult >= 1.06:
         factors.append('Weather boosts first-inning scoring risk')
     if park <= 0.97:
         factors.append('Pitcher-friendly park factor')

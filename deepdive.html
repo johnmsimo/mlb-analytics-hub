@@ -2830,9 +2830,20 @@ function renderNrfiDeepDive(){
   var edgeColor = (n.nrfi_edge||0) >= 0 ? '#00e676' : '#f44336';
   var price = (n.book_price!=null ? n.book_price : '—') + (n.bookmaker ? (' @ ' + n.bookmaker) : '');
   var fx = (n.key_factors || []).map(function(f){ return '&#8226; ' + f; }).join('<br>');
+  var envBits = [];
+  var nw = n.weather || {};
+  if(nw.temp!=null && nw.temp!=='N/A') envBits.push('🌡 '+nw.temp+'°F');
+  if(nw.wind && nw.wind!=='N/A') envBits.push('💨 '+nw.wind);
+  if(nw.wind_field){
+    var wfCol = nw.wind_field.indexOf('OUT')>=0?'#ff9800':nw.wind_field.indexOf('IN')>=0?'#00e676':'var(--mu)';
+    envBits.push('<span style="color:'+wfCol+'">'+(nw.wind_emoji||'')+' '+nw.wind_field+'</span>');
+  }
+  if(n.park_factor!=null) envBits.push('🏟 '+n.park_factor+'x');
+  var envLine = envBits.length ? '<div class="nrfi-factors" style="margin-top:0;margin-bottom:6px;color:var(--c)">'+envBits.join(' &nbsp;·&nbsp; ')+'</div>' : '';
   el.innerHTML = ''
     + '<div class="nrfi-card">'
     + '<div class="nrfi-hd">'+n.game+' · '+n.away_sp+' vs '+n.home_sp+'</div>'
+    + envLine
     + '<div class="nrfi-grid">'
     + '<div class="nrfi-stat"><div class="nrfi-l">NRFI PROB</div><div class="nrfi-v" style="color:#00e676">'+(n.nrfi_prob*100).toFixed(1)+'%</div></div>'
     + '<div class="nrfi-stat"><div class="nrfi-l">YRFI PROB</div><div class="nrfi-v" style="color:#ff9800">'+(n.yrfi_prob*100).toFixed(1)+'%</div></div>'
