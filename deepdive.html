@@ -5407,6 +5407,26 @@ function seSummaryBar(all){
     +'</div>';
 }
 
+// Surface the engine's strongest signals across both lineups so the user
+// doesn't have to scan 18 rows: top hit probabilities and top HR probabilities.
+function seTopPlays(all){
+  if(!all || !all.length) return '';
+  function chip(name, label, col){
+    return '<span style="display:inline-flex;align-items:center;gap:5px;padding:4px 9px;border-radius:999px;border:1px solid '+col+'40;background:'+col+'14;font-size:.6rem;margin:3px 4px 0 0">'
+      +'<strong style="color:'+col+'">'+label+'</strong> '+name+'</span>';
+  }
+  var byHit = all.filter(function(r){ return r.sim && r.sim.p1h!=null; })
+                 .sort(function(a,b){ return b.sim.p1h-a.sim.p1h; }).slice(0,3);
+  var byHR  = all.filter(function(r){ return r.sim && r.comp; })
+                 .sort(function(a,b){ return (b.sim.phr*b.comp.expPA)-(a.sim.phr*a.comp.expPA); }).slice(0,3);
+  var hitChips = byHit.map(function(r){ return chip(r.name, Math.round(r.sim.p1h*100)+'% 1H', '#00e676'); }).join('');
+  var hrChips  = byHR.map(function(r){ return chip(r.name, Math.round(r.sim.phr*r.comp.expPA*100)+'% HR', '#ff9800'); }).join('');
+  return '<div style="margin:0 0 12px;padding:9px 11px;border-radius:9px;border:1px solid rgba(0,229,255,.18);background:rgba(0,229,255,.04)">'
+    +'<div style="font-family:Orbitron,monospace;font-size:.55rem;letter-spacing:1.5px;color:#67e8f9;margin-bottom:3px">&#9889; TOP HIT SIGNALS</div>'+hitChips
+    +'<div style="font-family:Orbitron,monospace;font-size:.55rem;letter-spacing:1.5px;color:#ffb74d;margin:8px 0 3px">&#128640; TOP POWER SIGNALS</div>'+hrChips
+    +'</div>';
+}
+
 function seTheadHtml(){
   return '<thead><tr>'
     +'<th class="left">#</th>'
@@ -5503,6 +5523,7 @@ function _doRenderStrikeEngine(){
     +seOddsStatusHtml()
     +'</div>'
     +seSummaryBar(all)
+    +seTopPlays(all)
     +'<div class="se-section-hdr">&#9889; <span>'+(d.awayAbbr||'AWAY')+' BATTERS</span>'
     +'<span style="font-size:.58rem;color:var(--mu)">vs '+(d.homePitcherName||'?')+' ('+(d.homePitcherHand||'?')+'HP) &mdash; '+((d.homeStaffBadge&&d.homeStaffBadge.label)||'Mid-Pack')+'</span></div>'
     +'<div style="overflow-x:auto"><table class="se-table">'+thead+'<tbody>'+awayRes.html+'</tbody></table></div>'
