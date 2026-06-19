@@ -4361,18 +4361,51 @@ function bomStaffBadge(badge) {
   return '<span class="bom-staff-tag ' + cls + '">' + icon + ' ' + label + rankTxt + '</span>';
 }
 
+// Composite 0–100 threat score per batter vs the opposing starter, blending
+// overall quality (xwOBA), power (ISO), barrel rate, the pitch-type edge, and
+// the platoon split vs this pitcher's hand. All derived from fields the backend
+// already returns — no extra request. Missing Statcast fields fall back to a
+// neutral baseline so a no-data bat isn't auto-zeroed.
+function bomThreatScore(b) {
+  function num(v){ var n=parseFloat(v); return isNaN(n)?null:n; }
+  var xw = num(b.xwoba), iso = num(b.iso), brl = num(b.brl_pct);
+  var score = 0;
+  score += Math.max(0, Math.min(1, ((xw==null?0.320:xw) - 0.300) / 0.120)) * 40;
+  score += iso  != null ? Math.max(0, Math.min(1, (iso - 0.100) / 0.180)) * 25 : 8;
+  score += brl  != null ? Math.max(0, Math.min(1, brl / 15)) * 15 : 4;
+  var pe = String(b.pitch_type_advantage || 'neutral').toLowerCase();
+  score += pe === 'favorable' ? 12 : (pe === 'unfavorable' ? -8 : 0);
+  var sa = num(b.split_avg), ba = num(b.avg);
+  score += (sa != null && ba != null && sa > 0)
+    ? Math.max(0, Math.min(1, ((sa - ba) + 0.03) / 0.06)) * 8 : 4;
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+function bomThreatTier(score) {
+  return score >= 70 ? 'ELITE' : score >= 50 ? 'HIGH' : score >= 30 ? 'MED' : 'LOW';
+}
+function bomThreatColor(score) {
+  return score >= 70 ? '#ff5252' : score >= 50 ? '#ff9800' : score >= 30 ? '#ffd740' : '#6a8db0';
+}
+function bomThreatBadge(score) {
+  var col = bomThreatColor(score);
+  return '<span style="font-family:Orbitron,monospace;font-size:.56rem;font-weight:700;'
+    + 'padding:2px 7px;border-radius:999px;color:' + col + ';border:1px solid ' + col
+    + '55;background:' + col + '1f">' + score + ' ' + bomThreatTier(score) + '</span>';
+}
+
 function buildBomSide(batters, teamAbbr, oppPitcherName, oppPitcherHand, oppStaffBadge) {
   if(!batters || !batters.length) {
     return '<p class="na" style="padding:12px">Lineup not yet available.</p>';
   }
-  var rows = batters.sort(function(a,b){ return (a.slot||99)-(b.slot||99); }).map(function(b) {
-    var splitAvg = parseFloat(b.split_avg); // vs opp pitcher hand
-    var baseAvg  = parseFloat(b.avg);
+  var sorted = batters.sort(function(a,b){ return (a.slot||99)-(b.slot||99); });
+  var threats = sorted.map(bomThreatScore);
+  var rows = sorted.map(function(b, i) {
     var tag = bomSplitTag(b.split_avg, b.avg);
     return '<tr>'
       + '<td><span class="on">' + (b.slot||'?') + '</span></td>'
       + '<td style="font-size:.68rem">' + (b.name||'?') + '</td>'
       + '<td><span class="pos-tag">' + (b.pos||'?') + '</span></td>'
+      + '<td>' + bomThreatBadge(threats[i]) + '</td>'
       + '<td class="' + avc(b.avg) + '">' + (b.avg||'---') + '</td>'
       + '<td>' + (b.slg||'---') + '</td>'
       + '<td>' + bomIsoCell(b.iso) + '</td>'
@@ -4385,12 +4418,30 @@ function buildBomSide(batters, teamAbbr, oppPitcherName, oppPitcherHand, oppStaf
       + '</tr>';
   }).join('');
 
+  // Lineup summary: average threat, elite/high count, hot-ISO and favorable
+  // pitch-matchup counts — a quick read on which lineup holds the edge.
+  var avgThreat = threats.length ? Math.round(threats.reduce(function(a,b){return a+b;},0)/threats.length) : 0;
+  var dangerCount = threats.filter(function(s){ return s >= 50; }).length;
+  var hotIso = sorted.filter(function(b){ var n=parseFloat(b.iso); return !isNaN(n) && n >= 0.200; }).length;
+  var favCount = sorted.filter(function(b){ return String(b.pitch_type_advantage||'').toLowerCase()==='favorable'; }).length;
+  var aCol = bomThreatColor(avgThreat);
+  var summary = '<div style="display:flex;flex-wrap:wrap;gap:8px;padding:8px 13px;background:rgba(0,0,0,.18);border-bottom:1px solid rgba(255,255,255,.05);font-size:.58rem">'
+    + '<span style="color:' + aCol + '"><strong>LINEUP THREAT ' + avgThreat + '</strong> ' + bomThreatTier(avgThreat) + '</span>'
+    + '<span style="color:var(--mu)">·</span>'
+    + '<span style="color:#ff9800">' + dangerCount + ' HIGH+ bats</span>'
+    + '<span style="color:var(--mu)">·</span>'
+    + '<span class="bom-iso-hot">' + hotIso + ' hot ISO</span>'
+    + '<span style="color:var(--mu)">·</span>'
+    + '<span style="color:#00e676">' + favCount + ' favorable pitch edge</span>'
+    + '</div>';
+
   return '<div class="bom-side-hdr">'
     + '<span style="font-size:.68rem">vs <strong style="color:var(--c)">' + oppPitcherName + '</strong> (' + oppPitcherHand + 'HP) ' + bomStaffBadge(oppStaffBadge) + '</span>'
     + '<span style="font-size:.58rem;color:var(--mu)">ISO ≥.200 = 🟢 HOT ZONE</span>'
     + '</div>'
+    + summary
     + '<div style="overflow-x:auto"><table class="bom-table">'
-    + '<thead><tr><th>#</th><th>PLAYER</th><th>POS</th><th>AVG</th><th>SLG</th><th>ISO</th><th>OPS</th>'
+    + '<thead><tr><th>#</th><th>PLAYER</th><th>POS</th><th>THREAT</th><th>AVG</th><th>SLG</th><th>ISO</th><th>OPS</th>'
     + '<th class="sv-h">xwOBA</th><th class="sv-h">EV</th><th class="sv-h">BRL%</th>'
     + '<th>PITCH TYPE</th>'
     + '<th>vs' + oppPitcherHand + 'AVG</th>'
