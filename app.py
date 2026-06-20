@@ -14349,6 +14349,11 @@ def _record_sharp_verdict(game_pk, date_str, away, home, best, is_final, ascore,
                 rec["grade"] = _grade_game_bet(rec.get("bestBet"), away, home, ascore, hscore)
                 rec["gradedAt"] = datetime.now(ET).isoformat()
                 changed = True
+            # Retention cap: this endpoint auto-writes on every dashboard/deep-dive
+            # view, so keep only the most recent ~90 date keys to bound the file.
+            if changed and len(store) > 90:
+                for old in sorted(store.keys())[:-90]:
+                    store.pop(old, None)
             if changed:
                 _save_json(SHARP_HISTORY_STORE, store)
     except Exception as ex:
