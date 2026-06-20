@@ -133,7 +133,9 @@ Each HTML file is loaded into a module-level string at boot via `_read_html_or_f
 - `/api/tracker/*` — full CRUD for picks, settings, performance, bankroll, calibration, Brier, attribution, value, portfolio, bet slip, closing-line capture
 - `/api/cheatsheets/today` — daily cheatsheet (cached, async refresh)
 - `/api/cheatsheet` — BQ-backed Vertex/Gemini cheatsheet
-- `/api/breakout/candidates` — Statcast breakout scores
+- `/api/breakout/candidates` — Statcast breakout scores (day-cached, 1h TTL)
+- `/api/sharp-card/<game_pk>` — server-side Sharp Card rollup (side/total/environment/drivers/best-bet/grade); also locks + grades the verdict into `sharp_card_history.json`
+- `/api/sharp-card/accuracy` — rolling hit-rate of recorded Sharp Card best bets
 - `/api/umpire/<game_pk>` — HP umpire stats
 - `/api/bullpen/fatigue/<game_pk>`, `/api/f5/<game_pk>`, `/api/lineup-status/<game_pk>`
 - `/api/hr-analytics/*` — HR sim, pitch mix, scouting writeup, daily scores
@@ -188,7 +190,8 @@ It does **not** import `app.py` (which would trigger a 150MB cache preload). The
 
 All persistent state lives under `data/` (Fly.io mounts `mlb_data` volume to `/app/data`):
 
-- `daily_tracker.json` — picks keyed by `YYYY-MM-DD` → day record with `entries[]`, `capturedAt`, `gradedAt`, `closingCapturedAt`
+- `daily_tracker.json` — picks keyed by `YYYY-MM-DD` → day record with `entries[]`, `capturedAt`, `gradedAt`, `closingCapturedAt`. Sharp Card "Save Bet" writes game-level picks under the existing `h2h` / `totals` markets (the auto-grader settles those from the linescore), tagged `source:'sharp_card'`.
+- `sharp_card_history.json` — keyed by `YYYY-MM-DD` → `{<game_pk>: {bestBet, grade, recordedAt, gradedAt}}`. Locks each game's pre-game Sharp Card best bet once, then grades it vs the final via `_grade_game_bet`; backs `/api/sharp-card/accuracy`.
 - `model_adjustments.json` — Kelly settings, market multipliers, bankroll, calibration nudges
 - `calibration_history.json` — historical calibration snapshots
 - `value_history.json` — CLV/value series
