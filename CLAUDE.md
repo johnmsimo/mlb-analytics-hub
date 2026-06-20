@@ -67,7 +67,6 @@ app.py                          ~22.7k LOC Flask app — routes, caches, project
 ├── eval_models.py              Backtest + calibration evaluation harness
 ├── nrfi_odds.py                NRFI/YRFI devig math + odds parsing
 ├── nrfi_odds_routes.py         Registers /api/nrfi/odds, /api/nrfi/devig, /api/nrfi/odds-cache-status
-├── api_matchup_card_route.py   /api/matchup-card/<game_pk> + 4-min cache
 ├── savant_arsenal.py           Pitch arsenal helper
 ├── badge_patch.py              Performance badge tweaks
 ├── bq_etl.py                   Standalone ETL — populates BigQuery mlb.{batters,pitchers,bvp_situational,daily_slate_view}
@@ -117,7 +116,8 @@ app.py                          ~22.7k LOC Flask app — routes, caches, project
 | `breakout_detector.html` | `/breakout-detector` | Statcast breakout signal scoring |
 | `cheatsheet.html` | `/cheatsheets` | Daily top prop targets (BQ-backed `/api/cheatsheet`) |
 | `hr_analytics.html` | `/hr-analytics` | HR simulator, pitch mix, scouting writeups, daily scores |
-| `matchup_card.html` | (no top-level route) | Used by `/api/matchup-card/<game_pk>` consumers |
+| `edge_lab.html` | `/edge-lab` | Edge lab tools |
+| `settings.html` | `/settings` | Admin: cache warm, brain ingest/upload, final daily summary, XGB training |
 
 Each HTML file is loaded into a module-level string at boot via `_read_html_or_fallback()` (`app.py:784`). The dashboards that change most often (`dashboard.html`, `deepdive.html`, `props.html`, `tracker.html`) are re-read per-request with `Cache-Control: no-store` so a redeploy isn't needed to pick up frontend edits to those files. All data fetching is done client-side via `/api/*`.
 
@@ -156,7 +156,9 @@ When XGBoost artifacts are present, `xgb_prop_scorer.{xgb_hit_prob, xgb_k_prob, 
 
 ### XGBoost models
 
-Four `.pkl` artifacts live in `models/`: `xgb_hits_over_0.5.pkl`, `xgb_k_over_3.5.pkl`, `xgb_k_over_4.5.pkl`, `xgb_k_over_5.5.pkl`. Each is a joblib-serialized `{"model": <CalibratedClassifierCV>, "features": [...], "meta": {...}}` dict. **Pin `xgboost==3.2.0` in both training and runtime** — see `docs/xgb_model_regeneration.md` for the full regeneration playbook (Colab notebook at `notebooks/xgb_production_export_colab.ipynb`). The scorer also accepts the legacy direct-model format and falls back to `models/xgb_feature_cols.json` for features.
+Four `.pkl` artifacts live in `models/`: `xgb_hits_over_0.5.pkl`, `xgb_k_over_3.5.pkl`, `xgb_k_over_4.5.pkl`, `xgb_k_over_5.5.pkl`. Each is a joblib-serialized `{"model": <CalibratedClassifierCV>, "features": [...], "meta": {...}}` dict. **Pin `xgboost==3.2.0` in both training and runtime** (matches the serialized artifacts — loading them under an older XGBoost emits a version warning) — see `docs/xgb_model_regeneration.md` for the full regeneration playbook (Colab notebook at `notebooks/xgb_production_export_colab.ipynb`). The scorer also accepts the legacy direct-model format and falls back to `models/xgb_feature_cols.json` for features.
+
+**HR/TB/RBI models are deferred (not committed).** `xgb_prop_scorer` looks for `xgb_hr_over_0.5.pkl`, `xgb_tb_over_1.5.pkl`, and `xgb_rbi_over_0.5.pkl`, but those artifacts are not present in `models/`. The scorer skips any missing model file (`if not os.path.exists(path): continue`), so `xgb_hr_prob / xgb_tb_prob / xgb_rbi_prob` return `None` and those markets fall back to the analytic `_project_batter` model — this is expected, not a bug. To enable them, train via `train_hr_tb_rbi.py` (then backtest/calibrate per the regeneration playbook before committing under `xgboost==3.2.0`).
 
 ### Gemini / LLM integration
 
@@ -199,9 +201,10 @@ All persistent state lives under `data/` (Fly.io mounts `mlb_data` volume to `/a
 - `brain_upload_state.json` — registry of uploaded brain files
 - `mlb_memory_store.json` — rolling snapshots of MLB Stats API pulls (capped by `MLB_MEMORY_KEEP_SNAPSHOTS` / `MLB_MEMORY_MAX_BYTES`)
 - `fg_batting_{year}.csv`, `fg_pitching_{year}.csv`, `fg_steamer_bat_{year}.csv`, `fg_steamer_pit_{year}.csv` — 2021–2026 FanGraphs season + Steamer projection files used by `fangraphs_loader.py`
-- `mlb_matchups_YYYYMMDD.csv` — daily BvP snapshot files
+- `savant_bat_tracking_{year}.csv`, `savant_framing_{year}.csv`, `savant_swing_take_{year}.csv` — Baseball Savant leaderboards via `savant_bat_tracking.py`. **Note:** the swing-take leaderboard CSV frequently comes back header-only from Savant (documented in `savant_bat_tracking.py`); `sv_swing_take()` returns `{}` and callers fall back, so an empty `savant_swing_take_{year}.csv` is expected, not a bug.
+- `mlb_matchups_YYYYMMDD.csv` — daily BvP snapshot files, **generated on demand by the pipeline** (date-stamped, ephemeral). Not checked in; absence is normal.
 
-These files (other than the JSON tracker artifacts) are checked into the repo so Fly.io deploys have them available.
+The static reference CSVs (FanGraphs/Steamer/Savant) are checked into the repo so Fly.io deploys have them available. The date-stamped/JSON runtime artifacts (`daily_tracker.json`, `mlb_matchups_*.csv`, `lineups_*.json`, `umpires_*.json`, etc.) are regenerated at runtime.
 
 ### Gunicorn / Fly.io constraints
 

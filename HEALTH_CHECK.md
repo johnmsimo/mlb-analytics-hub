@@ -63,40 +63,46 @@ aligning runtime with the artifacts, the docs, and CLAUDE.md.
   source of truth — either re-pin runtime to the training version, or re-export the `.pkl`s under
   2.1.1 — and align `requirements.txt`, the docs, and the artifacts.
 
-### 🟡 L1 — "Matchup card" feature is fully orphaned (dead code)
-- `/api/matchup-card/<game_pk>` is **not registered** (verified against `url_map`). Its only
-  implementation is `api_matchup_card_route.py`, a paste-in snippet (`app` undefined at module
-  scope) that `app.py` never imports.
-- `matchup_card.html` is **not served** anywhere either, and it's the only caller of the route.
-- Both halves are dead, so nothing breaks at runtime — but CLAUDE.md documents the route as live.
-  Action: wire it up, or delete the two orphaned files and the CLAUDE.md references.
+### 🟡 L1 — "Matchup card" feature is fully orphaned (dead code)  ✅ FIXED (deleted)
+- `/api/matchup-card/<game_pk>` was **not registered**; its only implementation was
+  `api_matchup_card_route.py`, a paste-in snippet whose helper calls (`props_fetch_game`,
+  `fgpitcher`, `matchupscore`, `PARKFACTORS`…) used **outdated names** that no longer exist in
+  `app.py`. `matchup_card.html` was unserved, unlinked (no deepdive mount), and its referenced
+  `static/.../matchup_card.{css,js}` assets never existed.
+- **Resolved (2026-06-20):** deleted `api_matchup_card_route.py` + `matchup_card.html` and removed
+  the route/page from CLAUDE.md (per user decision to delete the abandoned feature).
 
-### 🟡 L2 — HR/TB/RBI XGBoost models referenced but absent
-`xgb_prop_scorer` exposes `xgb_hr_prob / xgb_tb_prob / xgb_rbi_prob` (and `train_hr_tb_rbi.py`
-exists), but `models/` contains only `xgb_hits_over_0.5` + the three K models. Startup log loads
-only those four. HR/TB/RBI scoring silently falls back to the analytic model. Either train/commit
-the artifacts or document them as intentionally-deferred.
+### 🟡 L2 — HR/TB/RBI XGBoost models referenced but absent  ✅ DOCUMENTED (deferred)
+`xgb_prop_scorer` looks for `xgb_hr_over_0.5.pkl` / `xgb_tb_over_1.5.pkl` / `xgb_rbi_over_0.5.pkl`,
+which are not committed. Confirmed the scorer skips missing files (`if not os.path.exists(path):
+continue`), so `xgb_hr_prob/tb/rbi` return `None` and those markets fall back to the analytic
+`_project_batter` model — expected, not a bug. **Resolved (2026-06-20):** documented as
+intentionally-deferred in CLAUDE.md (XGBoost models section) with the training/regeneration path.
+Not training unvalidated production models from a health-check session (per user decision).
 
-### 🟡 L3 — Empty / missing data files
-- `data/savant_swing_take_2026.csv` is **header-only (0 data rows)** — swing/take run-value data
-  is absent for 2026 (companion `savant_framing_2026.csv` has 59 rows, `savant_bat_tracking_2026`
-  212). Degrades gracefully (no crash) but the feature has no data.
-- `data/mlb_matchups_*.csv` (daily BvP snapshots) — **none present**, though CLAUDE.md says they
-  are checked in. (BvP routes still 200 via live fetch.)
-- Committed `lineups_2026-06-{17,18}.json` / `umpires_*` are empty stubs (`"lineups": {}`). The
-  app regenerates today's files on demand (observed `lineups_2026-06-20.json` created during this
-  run), so this is cosmetic, not functional.
+### 🟡 L3 — Empty / missing data files  ✅ DOCUMENTED
+- `data/savant_swing_take_2026.csv` is header-only — this is a **known upstream Baseball Savant
+  quirk** (the swing-take leaderboard CSV "frequently returns header-only", per
+  `savant_bat_tracking.py:39`); `sv_swing_take()` returns `{}` and callers fall back. Documented in
+  CLAUDE.md as expected.
+- `data/mlb_matchups_*.csv` (daily BvP snapshots) are date-stamped, pipeline-generated, ephemeral —
+  not "checked in". CLAUDE.md corrected.
+- `lineups_*.json` / `umpires_*.json` are runtime artifacts the app regenerates on demand
+  (observed during the audit). CLAUDE.md corrected to classify them as runtime, not committed.
 
-### 🟡 L4 — Dependency version drift / reproducibility
+### 🟡 L4 — Dependency version drift / reproducibility  ✅ FIXED
 - Floor-only pins (`pandas>=2.0`, `numpy>=1.24`) resolved to **pandas 3.0.3 / numpy 2.4.6** on a
-  fresh install — pandas 3.0 has breaking changes vs 2.x; the production image's behavior depends
-  on whatever Fly.io resolves at build time. Consider upper-bounding pandas/numpy for
-  reproducibility. (App imported and served correctly under these versions here.)
+  fresh install — non-reproducible across builds. The app imported, served, and ran model
+  predictions correctly under those versions here.
+- **Resolved (2026-06-20):** added upper bounds in `requirements.txt` — `pandas>=2.0,<3.1`,
+  `numpy>=1.24,<2.5` — which permit the validated current versions while preventing an unannounced
+  major-version jump.
 
-### 🟡 L5 — Doc drift (CLAUDE.md)
-- `edge_lab.html` is served at `/edge-lab` (`app.py:4572`) but is missing from the CLAUDE.md page
-  table.
-- CLAUDE.md lists `/api/matchup-card` and the BvP snapshot CSVs as present; neither is (see L1/L3).
+### 🟡 L5 — Doc drift (CLAUDE.md)  ✅ FIXED
+- **Resolved (2026-06-20):** added `edge_lab.html` (`/edge-lab`) and `settings.html` (`/settings`)
+  to the page table; removed the `/api/matchup-card` route + `matchup_card.html` references (L1);
+  corrected the data-persistence section so BvP-snapshot / lineup / umpire files are described as
+  runtime-generated rather than checked-in (L3).
 
 ---
 
@@ -120,8 +126,13 @@ the artifacts or document them as intentionally-deferred.
   one-shot test runs is a **benign teardown artifact** of the daemon auto-sync thread — a
   long-lived gunicorn process won't hit it. Not a bug.
 
-## Recommended fix order
+## Recommended fix order — all resolved
 1. ~~**M1** — repoint `settings.html` fetch URLs to the real routes.~~ ✅ done
 2. ~~**M2** — resolve the XGBoost version of record and align requirements/docs/artifacts.~~ ✅ done
-3. **L1/L2** — wire up or delete the matchup-card feature; train or document HR/TB/RBI models.
-4. **L3/L4/L5** — backfill swing-take data, pin pandas/numpy, fix CLAUDE.md drift.
+3. ~~**L1** — delete the orphaned matchup-card feature.~~ ✅ done
+4. ~~**L2** — document HR/TB/RBI models as deferred (graceful fallback confirmed).~~ ✅ done
+5. ~~**L3** — document swing-take upstream quirk + correct ephemeral-data claims.~~ ✅ done
+6. ~~**L4** — upper-bound pandas/numpy in requirements.txt.~~ ✅ done
+7. ~~**L5** — fix CLAUDE.md page table + data-persistence drift.~~ ✅ done
+
+Every finding from this audit is now either fixed or documented. No open items.
