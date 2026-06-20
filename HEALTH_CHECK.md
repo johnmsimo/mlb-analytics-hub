@@ -73,6 +73,27 @@ bug** found and fixed:
   Recommended: fit the per-AB scale to the realized season HR rate and cap at a realistic
   max (~0.12/AB). Flagged for a data-driven pass.
 
+### Verified accurate (round 2) + cross-surface observations
+- **Monte Carlo sim (`/api/simulate`)** — healthy and well-calibrated: away/home mean runs 4.72/3.72,
+  win% 53.9/35.5 + tie 10.6 (sums to 1.0), monotonic O/U ladder, and **per-batter HR prob ~0.088**
+  (realistic) — which is exactly why A3's ~0.51 stands out as the miscalibrated surface.
+- **F5 model (`/api/f5`)** — correct: each team's runs are computed vs the *opposing* pitcher
+  (`away_f5` uses `hp_era`), and the UI renders "`{awayAbbr}` vs `{awayPitcher}`", so the
+  `awayPitcher = home pitcher` field naming is an intentional, consistent convention, not a swap.
+- **Pitcher K matchup (`/api/pitcher-matchup`)** — vulnerability badges sane (K-rate 24.6% →
+  hittable, hits 0.191 NEUTRAL); some Savant pitcher fields `N/A` fall back to FanGraphs.
+- **Tracker grading (`_grade_game_bet`)** — ML (tie→PUSH, winner-match→WON) and totals (push on
+  exact line, correct Over/Under XOR) are correct; Sharp Card verdicts are locked only pre-final, so
+  the hit-rate log records genuine pre-result predictions.
+- **Observation — cross-surface win-prob/run disagreement (no code change):** the Sharp Card win%
+  (73%) comes from the lightweight closed-form `_compute_game_projection_core` (run gap 1.9), while
+  the full MC gives ~54–60% (run gap 1.0). The logistic win-prob coefficient itself is fine; the gap
+  is the two models projecting different run margins. Worth reconciling (e.g. surface the MC win% on
+  the Sharp Card) so the "STRONG BET" ML threshold isn't tripped by the more confident closed-form.
+- **Observation — pitchers as batters in MC correlations:** SPs (e.g. Newcomb) appear with
+  `batter_total_bases` correlations; under the universal DH they don't bat, so those rows are
+  spurious (harmless unless someone bets a pitcher batting prop). Minor lineup-hygiene cleanup.
+
 ---
 
 ## Findings (severity: 🔴 High · 🟠 Medium · 🟡 Low/Info)
