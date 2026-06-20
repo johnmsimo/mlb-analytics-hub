@@ -18,6 +18,41 @@ devig math verification.
 
 ---
 
+## Accuracy deep-pass (2026-06-20, round 2)
+
+Beyond "does it return 200", verified the projection engine is firing on real data and producing
+plausible numbers. Caches populate fully (616 FG batters / 697 pitchers, 568 Savant xStats, 697
+pitcher xStats, 678 arsenals); name lookups resolve; the analytic `_project_batter` output is sane
+(e.g. 1.51 expected hits, 2.19 TB, full adjustment ledger); NRFI devig normalizes to 1.0;
+`/api/game-projection` run totals are plausible (CWS 5.1 / DET 3.2). One **high-severity accuracy
+bug** found and fixed:
+
+### 🔴 A1 — Uncalibrated XGBoost models were corrupting hit projections  ✅ FIXED
+- `models/xgb_*.pkl` are raw `XGBClassifier`s (`calibrated_classifiers_ = False`) whose
+  `predict_proba` is **uncalibrated** — bimodal/extreme (≈0.0012–0.0015 for ordinary hitters,
+  ≈0.998 for the odd one). They depend on a per-market isotonic calibrator
+  (`models/iso_{market}.pkl`) that **does not exist** in the repo (only the 4 raw models are
+  tracked; not gitignored), so `apply_isotonic` was an identity+clamp and the raw extremes flowed
+  straight into the blend.
+- Measured impact: feeding the garbage XGB prob into the hit blend (weight up to 0.60) dragged a
+  **true ~0.65 hitter down to a final 0.30 (verdict PASS)**; an inflated XGB pushed others to 0.84
+  (LEAN_OVER). With XGB absent the blend correctly returns the analytic ~0.65. **The app was less
+  accurate with the XGB hit model on than off.**
+- Also: `[xgb DEBUG]` `print()`s fired on every batter on every projection (stdout spam + overhead).
+- **Fix (`xgb_prop_scorer.py`):** added `_xgb_calibrated(market_key)` — XGB output is only used
+  when a trained `iso_{market}.pkl` is loaded. `xgb_ready()` now requires model **and** calibrator,
+  and `_score_full` / `xgb_hit_prob_bulk` bail out when uncalibrated, so callers fall back to the
+  analytic model (consistent with the existing HR/TB/RBI graceful-degradation pattern). Removed all
+  debug prints. Self-healing: committing `iso_batter_hits.pkl` / `iso_pitcher_strikeouts.pkl`
+  re-engages XGB automatically. Verified: `xgb_ready('hits'/'k') = False`, projection runs clean
+  (0 debug lines), hit projections now driven by the sane analytic model.
+- **Follow-up (not a regression):** to actually *use* the XGB models, train + commit per-market
+  isotonic calibrators alongside them (the regeneration playbook in `docs/` should emit
+  `iso_{market}.pkl`). Until then the analytic model is authoritative — which is the more accurate
+  state today.
+
+---
+
 ## Findings (severity: 🔴 High · 🟠 Medium · 🟡 Low/Info)
 
 ### 🟠 M1 — Settings page (`/settings`) calls ~9 endpoints that don't exist → 404  ✅ FIXED
