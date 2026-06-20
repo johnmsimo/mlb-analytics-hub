@@ -1178,7 +1178,7 @@ function sharpBestBet(g, gp, sim, topProp){
     if(mcPct>=0.56 && agree){
       cands.push({type:'ML', conf:(mcPct-0.5)*2 + (modelFav===mcFav?0.12:0),
         text:mcFav+' moneyline — '+Math.round(mcPct*100)+'% to win'+(modelFav===mcFav?' (model + sim agree)':''),
-        entry:{gamePk:GPK, team:mcFav, player:matchup, marketKey:'game_moneyline', line:0, recommendedSide:mcFav, rawProb:mcPct, adjProb:mcPct, source:'sharp_card', reason:'Sharp Card best bet (MC win%)'}});
+        entry:{gamePk:GPK, team:mcFav, player:matchup, marketKey:'h2h', line:0, recommendedSide:mcFav, rawProb:mcPct, adjProb:mcPct, source:'sharp_card', reason:'Sharp Card best bet (MC win%)'}});
     }
   }
   // Total: run environment + MC mean alignment.
@@ -1189,10 +1189,10 @@ function sharpBestBet(g, gp, sim, topProp){
   if(ref!=null){
     if((gp&&gp.runEnv==='HIGH') && ref>=9.2)
       cands.push({type:'TOTAL', conf:Math.min(0.6,(ref-8.5)*0.25), text:'Game total OVER — model '+ref.toFixed(1)+' runs in a high-scoring environment',
-        entry:{gamePk:GPK, player:matchup, marketKey:'game_total', line:totLine, recommendedSide:'Over', modelMean:ref, source:'sharp_card', reason:'Sharp Card best bet (high run env)'}});
+        entry:{gamePk:GPK, player:matchup, marketKey:'totals', line:totLine, recommendedSide:'Over', modelMean:ref, source:'sharp_card', reason:'Sharp Card best bet (high run env)'}});
     else if((gp&&gp.runEnv==='LOW') && ref<=7.8)
       cands.push({type:'TOTAL', conf:Math.min(0.6,(8.5-ref)*0.25), text:'Game total UNDER — model '+ref.toFixed(1)+' runs in a suppressed environment',
-        entry:{gamePk:GPK, player:matchup, marketKey:'game_total', line:totLine, recommendedSide:'Under', modelMean:ref, source:'sharp_card', reason:'Sharp Card best bet (low run env)'}});
+        entry:{gamePk:GPK, player:matchup, marketKey:'totals', line:totLine, recommendedSide:'Under', modelMean:ref, source:'sharp_card', reason:'Sharp Card best bet (low run env)'}});
   }
   // Top prop: strong book edge.
   if(topProp && topProp.kind==='hitter' && topProp.edge!=null && topProp.edge>=0.05){
@@ -1219,13 +1219,13 @@ function gradeSharpBet(entry, g){
   if(!(status==='Final'||status==='Game Over'||status==='Completed Early') || !entry) return null;
   var a=Number(g.awayScore), h=Number(g.homeScore);
   if(isNaN(a)||isNaN(h)) return null;
-  if(entry.marketKey==='game_moneyline'){
+  if(entry.marketKey==='h2h' || entry.marketKey==='game_moneyline'){
     if(a===h) return {r:'PUSH',col:'#6a8db0'};
     var winner=a>h?(g.awayAbbr||'AWAY'):(g.homeAbbr||'HOME');
     var won=winner===entry.recommendedSide;
     return {r:won?'WON ✓':'LOST ✗', col:won?'#00e676':'#f44336'};
   }
-  if(entry.marketKey==='game_total' && entry.line!=null){
+  if((entry.marketKey==='totals' || entry.marketKey==='game_total') && entry.line!=null){
     var tot=a+h;
     if(tot===entry.line) return {r:'PUSH',col:'#6a8db0'};
     var won2=((entry.recommendedSide==='Over')===(tot>entry.line));
