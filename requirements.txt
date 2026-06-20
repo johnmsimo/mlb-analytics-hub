@@ -10,7 +10,7 @@ fuzzywuzzy>=0.18
 python-Levenshtein>=0.21
 tzdata>=2024.1
 scikit-learn==1.6.1
-xgboost==2.1.1
+xgboost==3.2.0
 shap==0.46.0
 redis>=5.0
 flask-limiter[redis]>=3.5
