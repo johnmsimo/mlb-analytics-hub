@@ -2964,6 +2964,7 @@ function lookupPitchX(playerName){
 
 var _simHandednessRetried = false;
 var _simPollTimer = null;
+var _simInterimShown = false;
 
 function _simFallbackPayload(msg, simsVal){
   var away = (GD && GD.awayAbbr) ? GD.awayAbbr : 'AWAY';
@@ -3031,23 +3032,47 @@ function _handleSimResult(d, highPrecision, sims){
 }
 
 function _pollSimulation(sims, highPrecision, attempt){
-  // Cold-start sims on a freshly redeployed Render dyno commonly take 3-5 min
-  // because the sim thread shares 1 CPU with FG/Savant/pipeline cache loaders.
-  // The backend keeps the job in _sim_bg_jobs and serves it as soon as it
-  // finishes, so polling longer just retrieves the real result.
-  // 72 × 5s = 6 min total before giving up.
-  if(attempt > 72) {
-    _handleSimResult(_simFallbackPayload('Simulation still running — refresh the page in ~30 seconds to retrieve it.'), highPrecision, sims);
+  // Cold-start sims on a freshly redeployed / throttled production CPU can take
+  // several minutes because the sim thread shares the box with FG/Savant/
+  // pipeline cache loaders. The backend runs the sim in a background thread and
+  // caches the real result as soon as it finishes (in _sim_bg_jobs and
+  // _correlation_cache), so we keep polling — at a gentle cadence — until the
+  // real result lands rather than dead-ending on a static estimate.
+  //
+  // INTERIM_AFTER: once the warm-path window has elapsed we surface a usable
+  //   placeholder estimate so the panel isn't just a spinner, but KEEP polling
+  //   so the full simulation swaps in automatically (no manual refresh needed).
+  // HARD_CAP: only after this many polls do we truly stop. The estimate stays
+  //   on screen and the RETRY control re-runs the sim.
+  var INTERIM_AFTER = 28;   // ~3 min in
+  var HARD_CAP = 110;       // ~20 min worst case before giving up entirely
+  if(attempt > HARD_CAP){
+    if(!SIM_DATA || !SIM_DATA.success || SIM_DATA.fallback){
+      _handleSimResult(_simFallbackPayload('Simulation timed out — showing an estimate. Use the RETRY / refresh control to run it again.'), highPrecision, sims);
+    }
     return;
   }
   // Back off poll interval after the warm-path window to reduce server load
   // while the cold-start workers compete for CPU.
-  var pollDelay = (attempt > 18) ? 8000 : 5000;
+  var pollDelay = (attempt > 45) ? 15000 : ((attempt > 18) ? 8000 : 5000);
   fetch('/api/simulate/'+GPK+'?sims='+sims)
     .then(function(r){ return r.json().catch(function(){ return {}; }); })
     .then(function(d){
       if(d && d.computing){
-        _showSimComputing(d.elapsed, d.estimatedSeconds);
+        if(!_simInterimShown){
+          // Still inside the spinner phase — show the live countdown.
+          _showSimComputing(d.elapsed, d.estimatedSeconds);
+          if(attempt >= INTERIM_AFTER){
+            // Server is taking a while; render a usable estimate now but keep
+            // polling so the real result replaces it automatically.
+            _simInterimShown = true;
+            var n = (sims || 5000);
+            var nLabel = (n && n.toLocaleString) ? n.toLocaleString() : n;
+            _handleSimResult(_simFallbackPayload('Showing a quick estimate — the full '+nLabel+'-run simulation is still computing on the server and will update here automatically.', sims), highPrecision, sims);
+          }
+        }
+        // Once the interim estimate is up we leave the panel as-is and keep
+        // polling quietly in the background until the real result is ready.
         _simPollTimer = setTimeout(function(){ _pollSimulation(sims, highPrecision, attempt+1); }, pollDelay);
         return;
       }
@@ -3059,6 +3084,7 @@ function _pollSimulation(sims, highPrecision, attempt){
 function loadSimulation(opts){
   opts = opts || {};
   if(!opts._handednessRetry) _simHandednessRetried = false;
+  _simInterimShown = false;
   if(_simPollTimer){ clearTimeout(_simPollTimer); _simPollTimer = null; }
   var sims = parseInt(opts.sims || 5000, 10);
   if(!isFinite(sims)) sims = 5000;
