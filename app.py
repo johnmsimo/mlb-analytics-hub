@@ -1021,6 +1021,7 @@ except OSError as _signal_dir_err:
 BRAIN_UPLOAD_STATE_STORE = os.path.join(DATA_DIR, 'brain_upload_state.json')
 PLAYER_SIGNALS_STORE = os.path.join(DATA_DIR, 'player_signals.json')
 TRACKER_STORE = os.path.join(DATA_DIR, 'daily_tracker.json')
+SHARP_HISTORY_STORE = os.path.join(DATA_DIR, 'sharp_card_history.json')
 ADJUST_STORE = os.path.join(DATA_DIR, 'model_adjustments.json')
 CAL_HISTORY_STORE = os.path.join(DATA_DIR, 'calibration_history.json')
 VALUE_HISTORY_STORE = os.path.join(DATA_DIR, 'value_history.json')
@@ -1751,6 +1752,182 @@ DOME_VENUES = {
     4321,  # Globe Life Field alt
 }
 
+# Ballpark orientation: compass azimuth (degrees clockwise from true north) of
+# the line from home plate through the pitcher's mound to straightaway center
+# field. Wind blowing TOWARD this bearing carries fly balls out of the park;
+# wind blowing the opposite way knocks them down. Used by _wind_field_geometry()
+# to turn a raw "12 mph NE" string into an actionable OUT/IN/CROSS read.
+#
+# Only outdoor parks are listed — the eight dome/retractable venues in
+# DOME_VENUES play in controlled air, so a directional read is meaningless
+# there. Bearings are bucketed to the nearest well-established quadrant; the
+# downstream classifier only resolves OUT / IN / CROSS (45-degree bins), so
+# small per-park errors never flip the sign of the call.
+PARK_CF_BEARING = {
+    1:    45,   # Angel Stadium — CF to NE
+    2:    30,   # Camden Yards — CF to NNE
+    3:    45,   # Fenway Park — CF to NE
+    4:    43,   # Rate Field (Chicago AL) — CF to NE
+    5:    0,    # Progressive Field — CF to N
+    7:    45,   # Kauffman Stadium — CF to NE
+    17:   30,   # Wrigley Field — CF to NNE (the classic wind park)
+    19:   0,    # Coors Field — CF to N
+    22:   25,   # Dodger Stadium — CF to NNE
+    31:   120,  # PNC Park — CF to ESE (toward the river)
+    2394: 150,  # Comerica Park — CF to SSE
+    2395: 90,   # Oracle Park — CF to E (McCovey Cove)
+    2602: 120,  # Great American Ball Park — CF to ESE
+    2680: 0,    # Petco Park — CF to N
+    2681: 15,   # Citizens Bank Park — CF to NNE
+    2889: 60,   # Busch Stadium — CF to ENE
+    3289: 28,   # Citi Field — CF to NNE
+    3309: 30,   # Nationals Park — CF to NNE
+    3312: 68,   # Target Field — CF to ENE
+    3313: 75,   # Yankee Stadium — CF to ENE
+    4705: 138,  # Truist Park — CF to SE
+}
+
+
+def _wind_field_geometry(venue_id, wind_deg, wind_speed):
+    """Resolve a meteorological wind (direction it blows FROM, in degrees) into
+    the component blowing out toward center field for a given park.
+
+    Open-Meteo's ``winddirection_10m`` follows the meteorological convention:
+    it is the heading the wind is coming *from*. The ball is carried toward the
+    opposite heading, so we rotate by 180 degrees before comparing to the
+    park's home-plate -> CF bearing.
+
+    Returns a dict with:
+      ``out``   signed mph blowing out to CF (+) or in from CF (-)
+      ``cross`` signed mph of crosswind (+ = toward right field / L->R)
+      ``field`` short label: "OUT to CF" / "IN from CF" / "Crosswind L->R" / ...
+      ``emoji`` a directional glyph for the UI
+    or ``None`` when the park bearing or wind data is unavailable.
+    """
+    try:
+        bearing = PARK_CF_BEARING.get(int(venue_id or 0))
+    except (TypeError, ValueError):
+        bearing = None
+    if bearing is None:
+        return None
+    try:
+        spd = float(wind_speed)
+        deg = float(wind_deg)
+    except (TypeError, ValueError):
+        return None
+    if spd <= 0:
+        return {"out": 0.0, "cross": 0.0, "field": "Calm", "emoji": "\U0001F4A4"}
+    to_dir = (deg + 180.0) % 360.0
+    delta = ((to_dir - bearing + 180.0) % 360.0) - 180.0   # signed, [-180, 180]
+    rad = math.radians(delta)
+    out = round(spd * math.cos(rad), 1)
+    cross = round(spd * math.sin(rad), 1)
+    ad = abs(delta)
+    if ad <= 45:
+        field, emoji = "OUT to CF", "↗"
+    elif ad >= 135:
+        field, emoji = "IN from CF", "↙"
+    else:
+        if delta > 0:
+            field, emoji = "Crosswind L→R", "➡"
+        else:
+            field, emoji = "Crosswind R→L", "⬅"
+    return {"out": out, "cross": cross, "field": field, "emoji": emoji}
+
+
+def _scoring_environment(temp, wind_out, park_factor, rain_chance, dome=False):
+    """Blend temperature, the out-to-CF wind component, and the park run factor
+    into a single per-team run delta plus a plain-language verdict. This is the
+    composite "scoring environment" the deep-dive surfaces above the raw cards.
+
+    All deltas are runs-per-team relative to a neutral 70F / calm / 1.00-park
+    baseline and are clamped so no single driver can dominate the read.
+    """
+    drivers = []
+    if dome:
+        return {
+            "runDelta": 0.0, "tier": "CONTROLLED", "color": "neutral",
+            "label": "Indoor / roof closed — weather neutralized",
+            "drivers": ["Climate-controlled air: no wind or temperature effect"],
+        }
+
+    temp_d = 0.0
+    try:
+        t = float(temp)
+        temp_d = max(-0.45, min(0.45, (t - 70.0) / 10.0 * 0.12))
+        if t >= 85:
+            drivers.append(f"Hot {int(t)}°F air thins out — ball carries (+)")
+        elif t <= 50:
+            drivers.append(f"Cold {int(t)}°F air is dense — ball dies (−)")
+    except (TypeError, ValueError):
+        pass
+
+    wind_d = 0.0
+    if isinstance(wind_out, (int, float)):
+        wind_d = max(-0.6, min(0.6, float(wind_out) * 0.035))
+        if wind_out >= 6:
+            drivers.append(f"{abs(round(wind_out))} mph blowing OUT — fly balls carry (+)")
+        elif wind_out <= -6:
+            drivers.append(f"{abs(round(wind_out))} mph blowing IN — fly balls held up (−)")
+
+    park_d = 0.0
+    try:
+        pf = float(park_factor)
+        park_d = max(-0.9, min(0.9, (pf - 1.0) * 4.5))
+        if pf >= 1.05:
+            drivers.append(f"{pf:.2f}x hitter's park dimensions (+)")
+        elif pf <= 0.95:
+            drivers.append(f"{pf:.2f}x pitcher's park dimensions (−)")
+    except (TypeError, ValueError):
+        pass
+
+    rain_note = None
+    try:
+        rc = float(rain_chance)
+        if rc >= 60:
+            rain_note = f"{int(rc)}% rain risk — heavy air, possible delay"
+            drivers.append(rain_note + " (−)")
+    except (TypeError, ValueError):
+        pass
+
+    total = round(temp_d + wind_d + park_d - (0.1 if rain_note else 0.0), 2)
+    if total >= 0.5:
+        tier, color, label = "HITTER-FRIENDLY", "good", "Run-scoring environment favors overs / hitter props"
+    elif total >= 0.2:
+        tier, color, label = "SLIGHT HITTER LEAN", "good", "Modest tailwind for offense"
+    elif total <= -0.5:
+        tier, color, label = "PITCHER-FRIENDLY", "bad", "Suppressed environment favors unders / NRFI / K props"
+    elif total <= -0.2:
+        tier, color, label = "SLIGHT PITCHER LEAN", "bad", "Modest drag on offense"
+    else:
+        tier, color, label = "NEUTRAL", "neutral", "Balanced scoring environment"
+    if not drivers:
+        drivers.append("No standout weather or park driver — plays neutral")
+    return {
+        "runDelta": total, "tier": tier, "color": color,
+        "label": label, "drivers": drivers,
+    }
+
+
+def _wind_run_adj(wx, scale=1.0):
+    """Per-team run adjustment from the out-to-CF wind component (signed mph).
+
+    ~10 mph blowing out ≈ +0.25 R/team at scale=1.0, blowing in the reverse;
+    clamped to ±0.45 so wind never overwhelms the rest of the run model. Pass
+    scale<1 for half-game (F5/NRFI) projections. Returns 0.0 whenever the wind
+    geometry is unavailable — dome, a park without a known CF bearing, or calm.
+    """
+    try:
+        if not wx or wx.get("dome"):
+            return 0.0
+        wo = wx.get("wind_out")
+        if wo is None:
+            return 0.0
+        return round(max(-0.45, min(0.45, float(wo) * 0.025)) * scale, 2)
+    except Exception:
+        return 0.0
+
+
 LOGO_BASE = "https://www.mlbstatic.com/team-logos/{team_id}.svg"
 PARK_FACTORS = {
     133:1.08,144:0.92,110:0.97,111:1.04,112:0.97,137:0.95,109:1.06,
@@ -1771,6 +1948,32 @@ HR_PARK_FACTORS = {
     143: 111, 134: 95,  136: 95,  138: 98,  139: 96,  140: 112,
     141: 102, 120: 99,  135: 97,  145: 95,  113: 100, 114: 98,
 }
+
+# ── Handedness-split HR park factors (index 100 = neutral) ──────────────────
+# Only parks with well-documented LHB/RHB HR asymmetry are listed; every other
+# park inherits the symmetric HR_PARK_FACTORS value for both hands via
+# _hr_park_factor_hand(). Keeping the list curated avoids asserting a split
+# direction we aren't confident about (a wrong direction is worse than none).
+HR_PARK_FACTORS_HAND = {
+    147: {"L": 134, "R": 100},  # Yankee Stadium — short RF porch inflates LHB power
+    137: {"L": 80,  "R": 96},   # Oracle Park — deep RF / Triples Alley buries LHB
+    111: {"L": 90,  "R": 104},  # Fenway — deep RF suppresses LHB; Monster aids RHB
+    110: {"L": 112, "R": 95},   # Camden Yards — 2022 LF wall move suppressed RHB HR
+    117: {"L": 99,  "R": 110},  # Daikin/Minute Maid — short LF Crawford boxes aid RHB
+    134: {"L": 104, "R": 92},   # PNC Park — short RF favors LHB, deep LF buries RHB
+    143: {"L": 114, "R": 108},  # Citizens Bank — bandbox, LHB edge
+    116: {"L": 96,  "R": 92},   # Comerica — deep gaps suppress HR, RHB most
+}
+
+
+def _hr_park_factor_hand(home_team_id, hand):
+    """HR park multiplier (1.0 = neutral) for a batter of the given hand. Uses
+    the curated handedness table when available, else the symmetric HR index."""
+    h = "L" if str(hand or "R").upper().startswith("L") else "R"
+    rec = HR_PARK_FACTORS_HAND.get(home_team_id)
+    if rec and h in rec:
+        return round(rec[h] / 100.0, 2)
+    return round(HR_PARK_FACTORS.get(home_team_id, 100) / 100.0, 2)
 
 _fg_lock = threading.Lock()
 _fg_cond = threading.Condition(_fg_lock)   # notified when FG load completes
@@ -4058,12 +4261,18 @@ def get_weather(lat, lon, game_hour=13, venue_id=None):
         compass = _deg_to_compass(wdeg)
         wind_speed = round(wind[idx]) if idx < len(wind) else "N/A"
         wind_str = f"{wind_speed} mph {compass}".strip()
+        geom = _wind_field_geometry(venue_id, wdeg, wind_speed)
         payload = {
             "temp":       round(temps[idx]) if idx < len(temps) else "N/A",
             "rain_chance":precip[idx] if idx < len(precip) else "N/A",
             "wind_speed": wind_speed,
             "wind_dir":   compass,
+            "wind_deg":   round(float(wdeg)) if wdeg is not None else None,
             "wind":       wind_str,
+            "wind_out":   (geom or {}).get("out"),
+            "wind_cross": (geom or {}).get("cross"),
+            "wind_field": (geom or {}).get("field"),
+            "wind_emoji": (geom or {}).get("emoji"),
             "condition":  wcode_map.get(wcode, "Clear"),
         }
         with _weather_cache_lock:
@@ -4218,6 +4427,9 @@ def parse_game(g, prefer_live_weather=True):
             gt_fmt = dt_et.strftime("%-I:%M %p ET")
         except Exception: gt_fmt = "TBD"
         pf   = PARK_FACTORS.get(hid, 1.0)
+        hrpf = round(HR_PARK_FACTORS.get(hid, 100) / 100.0, 2)   # HR index → multiplier
+        hrpf_l = _hr_park_factor_hand(hid, "L")
+        hrpf_r = _hr_park_factor_hand(hid, "R")
         series_game  = int(g.get("seriesGameNumber") or 1)
         series_total = int(g.get("gamesInSeries")    or 3)
         double_header = str(g.get("doubleHeader") or "N").upper()
@@ -4275,10 +4487,20 @@ def parse_game(g, prefer_live_weather=True):
             "awayRecord": away_record, "homeRecord": home_record,
             "awayScore": away_score, "homeScore": home_score,
             "venue": ven.get("name",""), "gameTime": gt_fmt,
-            "parkFactor": pf, "edge": edge, "barPct": bar,
+            "parkFactor": pf, "hrParkFactor": hrpf,
+            "hrParkFactorLHB": hrpf_l, "hrParkFactorRHB": hrpf_r,
+            "edge": edge, "barPct": bar,
             "seriesGame": series_game, "seriesTotal": series_total,
             "temp": wx.get("temp","N/A"), "wind": wx.get("wind", f"{wx.get('wind_speed','?')} mph {wx.get('wind_dir','')}").strip(),
             "condition": wx.get("condition",""), "rainChance": wx.get("rain_chance","N/A"),
+            "windDir": wx.get("wind_dir",""), "windSpeed": wx.get("wind_speed","N/A"),
+            "windOut": wx.get("wind_out"), "windCross": wx.get("wind_cross"),
+            "windField": wx.get("wind_field"), "windEmoji": wx.get("wind_emoji"),
+            "venueId": venue_id,
+            "weatherImpact": _scoring_environment(
+                wx.get("temp"), wx.get("wind_out"), pf, wx.get("rain_chance"),
+                dome=(venue_id in DOME_VENUES),
+            ),
             "weatherIcon": wi,
             "injuryAlert": injury_alert,
         }
@@ -6748,8 +6970,15 @@ def api_game_projection(game_pk):
                 elif t < 48: wx_adj = -0.20
                 elif t < 56: wx_adj = -0.10
             except Exception: pass
-        away_runs = round(away_runs + wx_adj, 1)
-        home_runs = round(home_runs + wx_adj, 1)
+        wind_adj = _wind_run_adj(wx)
+        # Bullpen fatigue: each team scores extra against the OTHER team's tired
+        # pen (day-cached, non-blocking — 0 until warm). Affects late innings, so
+        # it belongs in the full-game total, not F5.
+        aid = away_t.get("team", {}).get("id")
+        away_bp = _bullpen_run_boost(_relief_fatigue_penalty_cached(hid))
+        home_bp = _bullpen_run_boost(_relief_fatigue_penalty_cached(aid))
+        away_runs = round(away_runs + wx_adj + wind_adj + away_bp, 1)
+        home_runs = round(home_runs + wx_adj + wind_adj + home_bp, 1)
         total = round(away_runs + home_runs, 1)
         run_env = "HIGH" if total > 9.5 else ("LOW" if total < 7.5 else "NEUTRAL")
         at_abbr = away_t.get("team",{}).get("abbreviation","AWAY")
@@ -6803,6 +7032,8 @@ def api_game_projection(game_pk):
                 "condition": wx.get("condition", "N/A"),
                 "wind": wx.get("wind", "N/A"),
                 "wind_dir": wx.get("wind_dir", ""),
+                "wind_to_field": wx.get("wind_field"),
+                "wind_out_mph": wx.get("wind_out"),
             },
             "series": {
                 "game": gdata.get("seriesGame"),
@@ -6855,7 +7086,9 @@ def api_game_projection(game_pk):
             "homePitcherEra": round(home_pit_era,2),
             "awayPitcherFip": round(away_pit_fip,2),
             "homePitcherFip": round(home_pit_fip,2),
-            "parkFactor": pf, "wxAdj": wx_adj,
+            "parkFactor": pf, "wxAdj": wx_adj, "windAdj": wind_adj,
+            "windField": wx.get("wind_field"), "windOut": wx.get("wind_out"),
+            "awayBullpenAdj": away_bp, "homeBullpenAdj": home_bp,
             "matchup_insights": matchup_insights[:5],
             "storylineSource": storyline_source,
         })
@@ -8953,7 +9186,9 @@ def _resolve_park_factor(home_team_abbr, home_team_id, hand="R", stat="HR", date
         if bp is not None:
             return bp
     if stat == "HR" and home_team_id is not None and home_team_id in HR_PARK_FACTORS:
-        return round(HR_PARK_FACTORS.get(home_team_id, 100) / 100.0, 4)
+        # Handedness-split HR factor when the park has a known platoon skew,
+        # else the symmetric HR index — both via _hr_park_factor_hand().
+        return _hr_park_factor_hand(home_team_id, hand)
     return PARK_FACTORS.get(home_team_id, 1.0)
 
 
@@ -11476,6 +11711,52 @@ def _team_relief_fatigue_woba(team_id: int) -> float:
         return 0.0
 
 
+# Day-level cache for the relief-fatigue penalty. The full computation fetches
+# each team's recent boxscores, so we never run it inline on a latency-sensitive
+# projection path — _relief_fatigue_penalty_cached warms it in the background and
+# returns 0.0 until ready (the projection refines on the next render), mirroring
+# the FG/Savant "responsive now, refresh later" pattern used elsewhere.
+_relief_fatigue_cache: dict = {}
+_relief_fatigue_lock = threading.Lock()
+_relief_fatigue_warming: set = set()
+
+
+def _relief_fatigue_penalty_cached(team_id):
+    if not team_id:
+        return 0.0
+    today = datetime.now(ET).date().isoformat()
+    key = (int(team_id), today)
+    with _relief_fatigue_lock:
+        if key in _relief_fatigue_cache:
+            return _relief_fatigue_cache[key]
+        if key in _relief_fatigue_warming:
+            return 0.0
+        _relief_fatigue_warming.add(key)
+
+    def _warm():
+        try:
+            val = _team_relief_fatigue_woba(team_id)
+        except Exception:
+            val = 0.0
+        with _relief_fatigue_lock:
+            _relief_fatigue_cache[key] = val
+            _relief_fatigue_warming.discard(key)
+
+    threading.Thread(target=_warm, daemon=True).start()
+    return 0.0
+
+
+def _bullpen_run_boost(opp_pen):
+    """Runs added to a team's projection from facing a fatigued opposing bullpen.
+    The opponent's relief-fatigue wOBA penalty applied over ~14 relief PA, scaled
+    to runs and clamped to +0.5 so a gassed pen nudges rather than dominates. Only
+    ever positive — fatigue inflates late scoring; a fresh pen contributes 0."""
+    try:
+        return round(min(0.5, max(0.0, float(opp_pen) * 11.7)), 2)
+    except Exception:
+        return 0.0
+
+
 def _simulate_offense(lineup, opp_starter, opp_team_id, park, rng, batx_map=None,
                       wx_mults=None, ump_adj=None, relief_fatigue_woba: float = 0.0):
     """
@@ -11842,6 +12123,19 @@ def _simulation_fallback_payload(game_obj, game_pk, sims=0, warning=''):
             'sims': int(sims or 0),
         },
     }
+
+
+def _pctl(arr, p):
+    """Linear-interpolated percentile of a numeric list (p in 0–100)."""
+    if not arr:
+        return 0.0
+    s = sorted(arr)
+    if len(s) == 1:
+        return float(s[0])
+    k = (len(s) - 1) * (p / 100.0)
+    lo = int(k)
+    hi = min(lo + 1, len(s) - 1)
+    return float(s[lo] + (s[hi] - s[lo]) * (k - lo))
 
 
 def _do_simulate(game_pk, sims):
@@ -12370,9 +12664,15 @@ def _do_simulate(game_pk, sims):
                 'home_mean_runs': round(statistics.mean(home_team_runs), 2),
                 'mean_total': round(statistics.mean(totals), 2),
                 'median_total': statistics.median(totals),
+                'std_total': round(statistics.pstdev(totals), 2) if len(totals) > 1 else 0.0,
+                'p25_total': round(_pctl(totals, 25), 1),
+                'p75_total': round(_pctl(totals, 75), 1),
                 'p_8plus_total': round(sum(1 for x in totals if x >= 8)/len(totals), 3),
                 'p_9plus_total': round(sum(1 for x in totals if x >= 9)/len(totals), 3),
                 'p_10plus_total': round(sum(1 for x in totals if x >= 10)/len(totals), 3),
+                # P(over) at each common book total — the O/U ladder.
+                'ou_ladder': {str(L): round(sum(1 for x in totals if x > L)/len(totals), 3)
+                              for L in (6.5, 7.5, 8.5, 9.5, 10.5, 11.5)},
                 'away_win_pct': round(away_win / sims, 3),
                 'home_win_pct': round(home_win / sims, 3),
                 'tie_pct': round(ties / sims, 3),
@@ -13599,10 +13899,16 @@ def _compute_nrfi(game_pk):
     home_hand_adj, home_split = _leadoff_handedness_adj(home_leadoff, away_sp_hand)
 
     temp = _num(wx.get('temp'), 72)
-    wind = _num(wx.get('wind_speed'), 7)
     weather_mult = 1.0
     weather_mult += _clamp((temp - 72.0) * 0.0025, -0.05, 0.08)
-    weather_mult += _clamp((wind - 8.0) * 0.0030, -0.03, 0.06)
+    # Directional wind: use the signed out-to-CF component, not raw speed. Wind
+    # blowing OUT lifts first-inning run risk; blowing IN suppresses it. When the
+    # park has no known orientation (wind_out is None) we add nothing rather than
+    # assume every breeze boosts offense (the old, directionally-blind behavior).
+    wind_out = wx.get('wind_out')
+    wind_directional = wind_out is not None
+    if wind_directional:
+        weather_mult += _clamp(_num(wind_out, 0.0) * 0.0045, -0.05, 0.07)
     weather_mult = _clamp(weather_mult, 0.90, 1.14)
 
     away_score_rate_i1 = _clamp((home_i1_era / 9.0) * park * away_hand_adj * weather_mult, 0.03, 0.62)
@@ -13626,9 +13932,13 @@ def _compute_nrfi(game_pk):
         factors.append('Weak away leadoff split versus starter hand')
     if home_hand_adj <= 0.93:
         factors.append('Weak home leadoff split versus starter hand')
-    if weather_mult <= 0.96:
+    if wind_directional and wind_out <= -6:
+        factors.append('Wind blowing in suppresses early scoring')
+    elif weather_mult <= 0.96:
         factors.append('Run environment dampened by weather')
-    if weather_mult >= 1.06:
+    if wind_directional and wind_out >= 6:
+        factors.append('Wind blowing out lifts first-inning run risk')
+    elif weather_mult >= 1.06:
         factors.append('Weather boosts first-inning scoring risk')
     if park <= 0.97:
         factors.append('Pitcher-friendly park factor')
@@ -13807,8 +14117,9 @@ def _compute_f5(game_pk):
             except Exception:
                 pass
 
-        away_f5 = round(max(0.8, away_f5 + wx_adj), 2)
-        home_f5 = round(max(0.8, home_f5 + wx_adj), 2)
+        wind_adj = _wind_run_adj(wx, scale=0.5)
+        away_f5 = round(max(0.8, away_f5 + wx_adj + wind_adj), 2)
+        home_f5 = round(max(0.8, home_f5 + wx_adj + wind_adj), 2)
         total_f5 = round(away_f5 + home_f5, 2)
 
         if total_f5 >= 5.0:
@@ -13849,6 +14160,8 @@ def _compute_f5(game_pk):
             "homeXwoba":    home_xwoba,
             "parkFactor":   pf,
             "wxAdj":        wx_adj,
+            "windAdj":      wind_adj,
+            "windField":    wx.get("wind_field"),
             "dome":         wx.get("dome", False),
         }
 
@@ -13946,8 +14259,13 @@ def _compute_game_projection_core(game_pk):
                 elif t < 48: wx_adj = -0.20
                 elif t < 56: wx_adj = -0.10
             except Exception: pass
-        away_runs = round(away_runs + wx_adj, 1)
-        home_runs = round(home_runs + wx_adj, 1)
+        wind_adj = _wind_run_adj(wx)
+        # Bullpen fatigue boost vs the opposing tired pen (day-cached, non-blocking).
+        aid = away_t.get("team", {}).get("id")
+        away_bp = _bullpen_run_boost(_relief_fatigue_penalty_cached(hid))
+        home_bp = _bullpen_run_boost(_relief_fatigue_penalty_cached(aid))
+        away_runs = round(away_runs + wx_adj + wind_adj + away_bp, 1)
+        home_runs = round(home_runs + wx_adj + wind_adj + home_bp, 1)
         total = round(away_runs + home_runs, 1)
         at_abbr = away_t.get("team",{}).get("abbreviation","AWAY")
         ht_abbr = home_t.get("team",{}).get("abbreviation","HOME")
@@ -13980,6 +14298,187 @@ def _compute_game_projection_core(game_pk):
     except Exception as ex:
         print(f"[_compute_game_projection_core] {traceback.format_exc()}")
         return {"success": False, "error": str(ex)}
+
+
+def _grade_game_bet(bet, away, home, ascore, hscore):
+    """WON / LOST / PUSH for an ML or game-total bet vs a final box score."""
+    try:
+        a, h = int(ascore or 0), int(hscore or 0)
+    except (TypeError, ValueError):
+        return None
+    if not bet:
+        return None
+    if bet.get("marketKey") == "game_moneyline":
+        if a == h:
+            return "PUSH"
+        return "WON" if (away if a > h else home) == bet.get("side") else "LOST"
+    if bet.get("marketKey") == "game_total" and bet.get("line") is not None:
+        tot = a + h
+        if tot == bet["line"]:
+            return "PUSH"
+        return "WON" if ((bet.get("side") == "Over") == (tot > bet["line"])) else "LOST"
+    return None
+
+
+_sharp_history_lock = threading.Lock()
+
+
+def _record_sharp_verdict(game_pk, date_str, away, home, best, is_final, ascore, hscore):
+    """Persist the pre-game Sharp Card verdict (locked once, before first pitch)
+    and grade it against the final once available — building a rolling hit-rate
+    record without re-grading a verdict that may have since shifted."""
+    if not date_str:
+        date_str = datetime.now(ET).strftime("%Y-%m-%d")
+    try:
+        with _sharp_history_lock:
+            store = _load_json(SHARP_HISTORY_STORE, {})
+            day = store.setdefault(date_str, {})
+            rec = day.get(str(game_pk))
+            changed = False
+            if rec is None:
+                # Lock the verdict only before the game is final, so we record a
+                # genuine pre-result prediction.
+                if best and not is_final:
+                    day[str(game_pk)] = {
+                        "recordedAt": datetime.now(ET).isoformat(),
+                        "away": away, "home": home,
+                        "bestBet": best, "grade": None, "gradedAt": None,
+                    }
+                    changed = True
+            elif is_final and rec.get("grade") is None:
+                rec["grade"] = _grade_game_bet(rec.get("bestBet"), away, home, ascore, hscore)
+                rec["gradedAt"] = datetime.now(ET).isoformat()
+                changed = True
+            # Retention cap: this endpoint auto-writes on every dashboard/deep-dive
+            # view, so keep only the most recent ~90 date keys to bound the file.
+            if changed and len(store) > 90:
+                for old in sorted(store.keys())[:-90]:
+                    store.pop(old, None)
+            if changed:
+                _save_json(SHARP_HISTORY_STORE, store)
+    except Exception as ex:
+        print(f"[_record_sharp_verdict] {ex}")
+
+
+def _build_sharp_card(game_pk):
+    """Server-side Sharp Card rollup — the game-level half of the deep-dive's
+    in-page Sharp Card (side lean, total lean, scoring environment, drivers, a
+    headline best bet, and a final-result grade). Player-prop selection stays
+    client-side since it needs the Monte Carlo sim. Reuses parse_game (weather /
+    park / score) and _compute_game_projection_core (total / favorite / win%)."""
+    g = fetch_schedule_game(game_pk)
+    if not g:
+        return {"success": False, "error": "Game not found"}
+    gd = parse_game(g) or {}
+    proj = _compute_game_projection_core(game_pk) or {}
+    away = gd.get("awayAbbr") or proj.get("awayAbbr") or "AWAY"
+    home = gd.get("homeAbbr") or proj.get("homeAbbr") or "HOME"
+    total = proj.get("total")
+    fav = proj.get("favorite") or "EVEN"
+    awp = proj.get("awayWinProb"); hwp = proj.get("homeWinProb")
+    win_team, win_pct = (None, None)
+    if awp is not None and hwp is not None:
+        win_team, win_pct = (away, awp) if awp >= hwp else (home, hwp)
+    run_env = "HIGH" if (total is not None and total > 9.5) else ("LOW" if (total is not None and total < 7.5) else "NEUTRAL")
+    total_lean = "OVER" if run_env == "HIGH" else ("UNDER" if run_env == "LOW" else "NEUTRAL")
+
+    imp = gd.get("weatherImpact") or {}
+    drivers = []
+    if gd.get("windField") and isinstance(gd.get("windOut"), (int, float)) and abs(gd["windOut"]) >= 4 and gd.get("temp") != "DOME":
+        drivers.append(f"{abs(round(gd['windOut']))}mph {gd['windField']}")
+    hl, hr = gd.get("hrParkFactorLHB"), gd.get("hrParkFactorRHB")
+    if hl is not None and hr is not None and abs(hl - hr) >= 0.06:
+        drivers.append("Park HR favors " + ("LHB" if hl > hr else "RHB"))
+
+    # Headline best bet (ML / total only — props need the sim).
+    cands = []
+    if win_pct is not None and win_pct >= 0.56 and (fav == "EVEN" or fav == win_team):
+        cands.append({"conf": (win_pct - 0.5) * 2 + (0.12 if fav == win_team else 0.0),
+                      "type": "ML", "marketKey": "game_moneyline", "side": win_team, "line": 0,
+                      "text": f"{win_team} moneyline — {round(win_pct*100)}% to win"})
+    if total is not None:
+        if run_env == "HIGH" and total >= 9.2:
+            cands.append({"conf": min(0.6, (total - 8.5) * 0.25), "type": "TOTAL",
+                          "marketKey": "game_total", "side": "Over", "line": round(total * 2) / 2,
+                          "text": f"Game total OVER — model {total:.1f} in a high-scoring environment"})
+        elif run_env == "LOW" and total <= 7.8:
+            cands.append({"conf": min(0.6, (8.5 - total) * 0.25), "type": "TOTAL",
+                          "marketKey": "game_total", "side": "Under", "line": round(total * 2) / 2,
+                          "text": f"Game total UNDER — model {total:.1f} in a suppressed environment"})
+    best = None
+    if cands:
+        cands.sort(key=lambda c: -c["conf"])
+        top = cands[0]
+        tier = "STRONG BET" if top["conf"] >= 0.45 else ("LEAN" if top["conf"] >= 0.22 else "SLIGHT LEAN")
+        best = {"type": top["type"], "marketKey": top["marketKey"], "side": top["side"],
+                "line": top["line"], "tier": tier, "text": "Best bet: " + top["text"]}
+
+    # Grade vs final when available.
+    status = gd.get("status") or ""
+    is_final = status in ("Final", "Game Over", "Completed Early")
+    ascore, hscore = gd.get("awayScore"), gd.get("homeScore")
+    grade = _grade_game_bet(best, away, home, ascore, hscore) if (is_final and best) else None
+
+    # Persist the verdict (pre-game lock + post-game grade) for the hit-rate log.
+    date_str = g.get("officialDate") or (g.get("gameDate") or "")[:10]
+    _record_sharp_verdict(game_pk, date_str, away, home, best, is_final, ascore, hscore)
+
+    return {
+        "success": True, "gamePk": game_pk, "awayAbbr": away, "homeAbbr": home,
+        "status": status, "final": is_final,
+        "sideLean": {"team": fav, "winTeam": win_team, "winPct": win_pct},
+        "totalLean": {"lean": total_lean, "total": total, "runEnv": run_env},
+        "environment": {"tier": imp.get("tier"), "runDelta": imp.get("runDelta"), "label": imp.get("label")},
+        "drivers": drivers,
+        "bestBet": best,
+        "grade": grade,
+    }
+
+
+@app.route('/api/sharp-card/<int:game_pk>')
+def api_sharp_card(game_pk):
+    try:
+        out = _build_sharp_card(game_pk)
+        return jsonify(out), (200 if out.get("success") else 404)
+    except Exception as ex:
+        print(f"[api_sharp_card] {traceback.format_exc()}")
+        return jsonify({"success": False, "error": str(ex)}), 500
+
+
+@app.route('/api/sharp-card/accuracy')
+def api_sharp_card_accuracy():
+    """Rolling hit-rate of recorded Sharp Card best bets (graded verdicts)."""
+    try:
+        with _sharp_history_lock:
+            store = _load_json(SHARP_HISTORY_STORE, {})
+        overall = {"won": 0, "lost": 0, "push": 0}
+        by_type = {}
+        recent = []
+        for date_str in sorted(store.keys(), reverse=True):
+            for gpk, rec in store[date_str].items():
+                grade = rec.get("grade")
+                bet = rec.get("bestBet") or {}
+                btype = bet.get("type") or "?"
+                bucket = by_type.setdefault(btype, {"won": 0, "lost": 0, "push": 0})
+                if grade == "WON":
+                    overall["won"] += 1; bucket["won"] += 1
+                elif grade == "LOST":
+                    overall["lost"] += 1; bucket["lost"] += 1
+                elif grade == "PUSH":
+                    overall["push"] += 1; bucket["push"] += 1
+                if grade and len(recent) < 30:
+                    recent.append({"date": date_str, "gamePk": gpk,
+                                   "matchup": f"{rec.get('away','')} @ {rec.get('home','')}",
+                                   "bet": bet.get("text"), "grade": grade})
+        decided = overall["won"] + overall["lost"]
+        overall["hitRate"] = round(overall["won"] / decided, 3) if decided else None
+        for b in by_type.values():
+            d = b["won"] + b["lost"]
+            b["hitRate"] = round(b["won"] / d, 3) if d else None
+        return jsonify({"success": True, "overall": overall, "byType": by_type, "recent": recent})
+    except Exception as ex:
+        print(f"[api_sharp_card_accuracy] {traceback.format_exc()}")
+        return jsonify({"success": False, "error": str(ex)}), 500
 
 
 @app.route('/api/market/<int:game_pk>')
@@ -19250,8 +19749,9 @@ def _local_boxscore_projections(game_pk, context, away_bats, home_bats, ap_name,
         except Exception:
             pass
 
-    away_runs = round(max(2.0, min(8.0, away_runs + wx_adj)), 1)
-    home_runs = round(max(2.0, min(8.0, home_runs + wx_adj)), 1)
+    wind_adj = _wind_run_adj(wx)
+    away_runs = round(max(2.0, min(8.0, away_runs + wx_adj + wind_adj)), 1)
+    home_runs = round(max(2.0, min(8.0, home_runs + wx_adj + wind_adj)), 1)
     total_runs = round(away_runs + home_runs, 1)
 
     def build_reasoning(team_abbr, runs, xwoba, pitcher_name, opponent_name):
@@ -20558,7 +21058,11 @@ def api_props_projections(game_pk):
         home_abbr = home_t.get("team", {}).get("abbreviation", "HOME")
         home_id   = home_t.get("team", {}).get("id")
         # Ballpark Pal microclimate factor when available; falls back to static.
+        # Resolve both handedness splits so each batter's HR park factor reflects
+        # the park's platoon skew (e.g. LHB short-porch boost at Yankee Stadium).
         pf        = _resolve_park_factor(home_abbr, home_id, hand="R", stat="HR")
+        pf_lhb    = _resolve_park_factor(home_abbr, home_id, hand="L", stat="HR")
+        pf_rhb    = pf
         pf_source = "bpp" if (_BPP_AVAILABLE and bp_park_factor(home_abbr, hand="R", stat="HR") is not None) else "static"
 
         away_full = away_t.get("team", {}).get("name", away_abbr)
@@ -20689,8 +21193,15 @@ def api_props_projections(game_pk):
                 pitch_adv = _pitch_type_advantage(bid, opp_pid, batter_name=name, pitcher_name=opp_pname) if (bid and opp_pid) else {"status": "neutral", "note": "Neutral matchup"}
                 bvp_grade = _compute_bvp_grade(bvp) if bvp else 'D'
                 injury = _get_player_injury(bid) if bid else None
+                # Handedness-aware HR park factor: a switch hitter bats opposite
+                # the starter's throwing hand. Only the HR component meaningfully
+                # depends on this; the split is neutral at parks without a skew.
+                bhand = (bfg.get("fg_bats") or b.get("bats") or "R").upper()
+                if bhand == "S":
+                    bhand = "L" if opp_hand == "R" else "R"
+                bpf = pf_lhb if bhand == "L" else pf_rhb
                 proj = _project_batter_batx(
-                    b, opp_pname, opp_pfg, opp_psv, pf, wx,
+                    b, opp_pname, opp_pfg, opp_psv, bpf, wx,
                     pitcher_hand=opp_hand,
                     opp_pitcher_id=opp_pid,
                     form=form, bvp=bvp,
@@ -22521,17 +23032,32 @@ def breakout_detector_page():
     return BREAKOUT_DETECTOR_HTML
 
 
+_breakout_cache = {"key": None, "ts": 0.0, "payload": None}
+_breakout_cache_lock = threading.Lock()
+_BREAKOUT_TTL = 3600   # 1h — underlying Savant/FG caches refresh at most daily
+
+
 @app.route("/api/breakout/candidates")
 def api_breakout_candidates():
     """Returns scored breakout candidates from Savant batter stats + FanGraphs.
     Score = weighted EV95 delta, barrel rate, xwOBA alignment, HH%, K% improvement,
     with penalties for BABIP fluke / wRC+ mirage / BA-xBA luck gap.
+
+    The scored list is identical for every game on a given day, so it's cached
+    keyed by (date, Savant cache size) with a 1h TTL — this endpoint was
+    recomputing over the entire ~500-player Savant cache on every deep-dive load.
     """
     _maybe_refresh_fg(); _maybe_refresh_savant()
     try:
         with _sv_lock:
             stat = dict(_sv_bat_statcast)
             xst = dict(_sv_bat_xstats)
+        cache_key = (datetime.now(ET).date().isoformat(), len(stat))
+        now = time.time()
+        with _breakout_cache_lock:
+            c = _breakout_cache
+            if c["key"] == cache_key and (now - c["ts"]) < _BREAKOUT_TTL and c["payload"] is not None:
+                return jsonify(c["payload"])
         with _fg_lock:
             fg = dict(_fg_bat)
 
@@ -22585,12 +23111,15 @@ def api_breakout_candidates():
             except Exception:
                 continue
 
-        return jsonify({
+        payload = {
             "success": True,
             "players": players[:50],
             "count": len(players),
             "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+        }
+        with _breakout_cache_lock:
+            _breakout_cache.update({"key": cache_key, "ts": now, "payload": payload})
+        return jsonify(payload)
     except Exception as ex:
         print(f"[api_breakout_candidates] {traceback.format_exc()}")
         return jsonify({"success": False, "error": str(ex), "players": []}), 500

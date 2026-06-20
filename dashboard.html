@@ -53,6 +53,10 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .wr{display:flex;align-items:center;gap:8px;margin-bottom:12px;padding:7px 10px;background:rgba(0,0,0,.2);border-radius:7px;font-size:.7rem;color:var(--mu)}
 .wr span.val{color:var(--t);font-weight:600}
 .eb{margin-bottom:8px}
+.sharp-chip:empty{display:none}
+.sharp-chip{margin:0 0 8px;padding:6px 9px;border-radius:8px;font-size:.6rem;line-height:1.4;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.sharp-chip .sc-tier{font-family:'Orbitron',monospace;font-size:.52rem;letter-spacing:.5px;font-weight:700}
+.sharp-chip .sc-grade{font-family:'Orbitron',monospace;font-size:.52rem;font-weight:700;padding:1px 6px;border-radius:999px}
 .ebl{display:flex;justify-content:space-between;margin-bottom:4px}
 .ebl span{font-size:.62rem;color:var(--mu);letter-spacing:1px}
 .ebl strong{font-size:.75rem;color:var(--c);font-family:'Orbitron',monospace}
@@ -861,6 +865,7 @@ function mkCard(g){
     +hW
     +'<div class="eb"><div class="ebl"><span>MODEL EDGE</span><strong>'+g.edge+'%</strong></div>'
     +'<div class="bar"><div class="fill" style="width:0%" data-w="'+g.barPct+'%"></div></div></div>'
+    +'<div class="sharp-chip" id="sharp-'+g.gamePk+'"></div>'
     +'<div class="vn">'+g.venue+'</div>'
     +inj
     +deepDiveBtn
@@ -2535,7 +2540,36 @@ let NRFI_LAST_DATE='';
 function syncDateUI(){var inp=document.getElementById('gamesDateInput'),lbl=document.getElementById('gamesDateLabel'),todayBtn=document.getElementById('todayDateBtn'),tmrwBtn=document.getElementById('tomorrowDateBtn');var today=etTodayStr();var tomorrow=shiftDate(today,1);if(inp) inp.value=selectedGamesDate;if(lbl) lbl.textContent=fmtDateLabel(selectedGamesDate);if(todayBtn) todayBtn.classList.toggle('active',selectedGamesDate===today);if(tmrwBtn) tmrwBtn.classList.toggle('active',selectedGamesDate===tomorrow)}
 function shiftDate(dateStr,days){var dt=new Date(dateStr+'T12:00:00');dt.setDate(dt.getDate()+days);return dt.toISOString().slice(0,10);}
 function shiftGamesDate(days){selectedGamesDate=shiftDate(selectedGamesDate,days);syncDateUI();load(selectedGamesDate)}
-function load(dateStr){if(dateStr) selectedGamesDate=dateStr;syncDateUI();apiFetchJson('/api/games/today?date='+encodeURIComponent(selectedGamesDate)).then(function(d){if(!d.success)throw new Error(d.error||'API error');var gs=d.games||[];window.__lastGames=gs;var activeGs=gs.filter(function(g){return !g.isPostponed&&!g.isCancelled&&!g.isSuspended&&g.status!=='Postponed'&&g.status!=='Cancelled'&&g.status!=='Suspended';});document.getElementById('sg').textContent=activeGs.length||0;document.getElementById('sl').textContent=activeGs.filter(function(g){return g.status==='Live'}).length;var edges=activeGs.map(function(g){return g.edge});document.getElementById('se').textContent=edges.length?(edges.reduce(function(a,b){return a+b},0)/edges.length).toFixed(1):'--';document.getElementById('sh').textContent=activeGs.filter(function(g){return g.edge>=8}).length;if(!gs.length){document.getElementById('gc').innerHTML='<div class="ng"><h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px">NO GAMES FOR '+fmtDateLabel(selectedGamesDate).toUpperCase()+'</h3></div>';}else{document.getElementById('gc').innerHTML='<div class="grid">'+gs.map(mkCard).join('')+'</div>';setTimeout(function(){document.querySelectorAll('.fill').forEach(function(e){e.style.width=e.getAttribute('data-w')+'%'})},150);if(window.initLiveCards)initLiveCards(gs);}if(document.getElementById('nrfiView').classList.contains('active')) loadNRFIBoard(activeGs);}).catch(function(e){document.getElementById('gc').innerHTML='<div class="sw"><div style="background:rgba(224,64,251,.08);border:1px solid rgba(224,64,251,.3);border-radius:12px;padding:24px 32px;text-align:center"><h3 style="color:var(--m);font-family:Orbitron;margin-bottom:8px">CONNECTION ERROR</h3><p style="color:var(--mu);font-size:.82rem">'+e.message+'</p></div></div>'})}
+// Sharp Card best-bet chips on the slate. Fetched staggered (each /api/sharp-card
+// call runs a server projection) so we never hammer the backend on slate load.
+function _renderSharpChip(pk, d){
+  var el=document.getElementById('sharp-'+pk);
+  if(!el || !d || !d.success || !d.bestBet) return;
+  var b=d.bestBet, tierCol=b.tier==='STRONG BET'?'#00e676':b.tier==='LEAN'?'#ffd740':'#00e5ff';
+  var gradeHtml='';
+  if(d.grade){
+    var gc=d.grade==='WON'?'#00e676':d.grade==='LOST'?'#f44336':'#6a8db0';
+    gradeHtml='<span class="sc-grade" style="color:'+gc+';border:1px solid '+gc+'66;background:'+gc+'1f">'+d.grade+'</span>';
+  }
+  el.style.border='1px solid '+tierCol+'40';
+  el.style.background=tierCol+'12';
+  var txt=(b.text||'').replace(/^Best bet:\s*/,'');
+  el.innerHTML='<span class="sc-tier" style="color:'+tierCol+'">⚡ '+b.tier+'</span>'
+    +'<span style="color:var(--t)">'+txt+'</span>'+gradeHtml;
+}
+function loadSharpChips(games){
+  var list=(games||[]).filter(function(g){return !g.isPostponed&&!g.isCancelled&&!g.isSuspended;});
+  var i=0;
+  (function next(){
+    if(i>=list.length) return;
+    var g=list[i++];
+    fetch('/api/sharp-card/'+g.gamePk).then(function(r){return r.json();})
+      .then(function(d){ _renderSharpChip(g.gamePk, d); })
+      .catch(function(){})
+      .finally(function(){ setTimeout(next, 500); });
+  })();
+}
+function load(dateStr){if(dateStr) selectedGamesDate=dateStr;syncDateUI();apiFetchJson('/api/games/today?date='+encodeURIComponent(selectedGamesDate)).then(function(d){if(!d.success)throw new Error(d.error||'API error');var gs=d.games||[];window.__lastGames=gs;var activeGs=gs.filter(function(g){return !g.isPostponed&&!g.isCancelled&&!g.isSuspended&&g.status!=='Postponed'&&g.status!=='Cancelled'&&g.status!=='Suspended';});document.getElementById('sg').textContent=activeGs.length||0;document.getElementById('sl').textContent=activeGs.filter(function(g){return g.status==='Live'}).length;var edges=activeGs.map(function(g){return g.edge});document.getElementById('se').textContent=edges.length?(edges.reduce(function(a,b){return a+b},0)/edges.length).toFixed(1):'--';document.getElementById('sh').textContent=activeGs.filter(function(g){return g.edge>=8}).length;if(!gs.length){document.getElementById('gc').innerHTML='<div class="ng"><h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px">NO GAMES FOR '+fmtDateLabel(selectedGamesDate).toUpperCase()+'</h3></div>';}else{document.getElementById('gc').innerHTML='<div class="grid">'+gs.map(mkCard).join('')+'</div>';setTimeout(function(){document.querySelectorAll('.fill').forEach(function(e){e.style.width=e.getAttribute('data-w')+'%'})},150);if(window.initLiveCards)initLiveCards(gs);loadSharpChips(gs);}if(document.getElementById('nrfiView').classList.contains('active')) loadNRFIBoard(activeGs);}).catch(function(e){document.getElementById('gc').innerHTML='<div class="sw"><div style="background:rgba(224,64,251,.08);border:1px solid rgba(224,64,251,.3);border-radius:12px;padding:24px 32px;text-align:center"><h3 style="color:var(--m);font-family:Orbitron;margin-bottom:8px">CONNECTION ERROR</h3><p style="color:var(--mu);font-size:.82rem">'+e.message+'</p></div></div>'})}
 function initNRFI(){ if(NRFI_LAST_DATE===selectedGamesDate && NRFI_ROWS.length) return; loadNRFIBoard(window.__lastGames||[]); }
 function loadNRFIBoard(games){
   var meta=document.getElementById('nrfiMeta'), body=document.getElementById('nrfiBody');

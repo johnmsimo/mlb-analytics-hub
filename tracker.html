@@ -326,6 +326,7 @@ details[open] summary::before{transform:rotate(90deg)}
         <span class="chip" id="evOnlyChip" onclick="toggleEvOnly()">⚡ +EV Only</span>
         <span class="chip" id="pendingChip" onclick="togglePending()">⏳ Pending Only</span>
         <span class="chip" id="coreChip" onclick="toggleCore()">⭐ Core Only (A/B)</span>
+        <span class="chip" id="sharpChip" onclick="toggleSharp()">⚡ Sharp Card</span>
         <input id="fPlayer" class="btn sm" type="search" placeholder="🔍 Search player…" style="min-width:180px;margin-left:6px">
       </div>
 
@@ -787,7 +788,7 @@ const st = {
   parlay: [],
   charts: {},
   filters: { mkt:'', res:'', tier:'' },
-  flags: { evOnly:false, pendingOnly:false, coreOnly:false },
+  flags: { evOnly:false, pendingOnly:false, coreOnly:false, sharpOnly:false },
   calMarkets: new Set(),
 };
 
@@ -1187,7 +1188,7 @@ function renderBoard() {
     const srt = $('fSort').value;
     const gpk = $('fGame') ? $('fGame').value : '';
     const q   = $('fPlayer') ? ($('fPlayer').value || '').trim().toLowerCase() : '';
-    const {evOnly, pendingOnly, coreOnly} = st.flags;
+    const {evOnly, pendingOnly, coreOnly, sharpOnly} = st.flags;
     console.log('[renderBoard] filters:', {mkt, res, tier, gpk, q, evOnly, pendingOnly, coreOnly});
 
     let rows = entries.filter(r => {
@@ -1202,6 +1203,7 @@ function renderBoard() {
       }
       if (pendingOnly && (r.grade||'pending') !== 'pending') return false;
       if (coreOnly && !['A','B'].includes(r.confidenceTier||'D')) return false;
+      if (sharpOnly && r.source !== 'sharp_card') return false;
       return true;
     });
     console.log('[renderBoard] filtered rows:', rows.length);
@@ -2024,6 +2026,11 @@ function togglePending() {
 function toggleCore() {
   st.flags.coreOnly=!st.flags.coreOnly;
   $('coreChip').classList.toggle('on',st.flags.coreOnly);
+  renderBoard();
+}
+function toggleSharp() {
+  st.flags.sharpOnly=!st.flags.sharpOnly;
+  $('sharpChip').classList.toggle('on',st.flags.sharpOnly);
   renderBoard();
 }
 

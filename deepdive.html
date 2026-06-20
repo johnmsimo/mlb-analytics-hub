@@ -51,6 +51,17 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .wv{font-family:'Orbitron',monospace;font-size:.9rem;font-weight:700}
 .wl{font-size:.58rem;color:var(--mu);letter-spacing:1px;margin-top:3px}
 .wi2{margin-top:10px;padding:8px 12px;background:rgba(0,229,255,.05);border:1px solid rgba(0,229,255,.1);border-radius:8px;font-size:.7rem;color:var(--c);text-align:center}
+/* scoring environment + wind direction */
+.wind-chip{display:inline-flex;align-items:center;gap:6px;margin-top:9px;padding:5px 11px;border-radius:20px;font-size:.66rem;font-weight:700;letter-spacing:.5px}
+.wind-chip .wc-ar{font-size:.92rem;line-height:1}
+.env-banner{margin-top:11px;border-radius:10px;padding:11px 13px;border:1px solid}
+.env-top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+.env-tier{font-family:'Orbitron',monospace;font-size:.68rem;letter-spacing:1px;font-weight:700}
+.env-delta{font-family:'Orbitron',monospace;font-size:.82rem;font-weight:700}
+.env-label{font-size:.64rem;color:var(--mu);line-height:1.5;margin-bottom:7px}
+.env-drivers{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:3px}
+.env-drivers li{font-size:.63rem;color:var(--t);opacity:.86;padding-left:13px;position:relative;line-height:1.45}
+.env-drivers li:before{content:'';position:absolute;left:2px;top:6px;width:5px;height:5px;border-radius:50%;background:var(--c)}
 /* pitcher panels */
 .pg{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 .pc{background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.05);border-radius:10px;padding:16px}
@@ -185,7 +196,9 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .mc-table th{font-size:.52rem;color:var(--mu);letter-spacing:2px;text-align:left;padding:5px 4px;border-bottom:1px solid var(--b);font-family:'Orbitron',monospace;white-space:nowrap}
 .mc-table td{padding:5px 4px;border-bottom:1px solid rgba(255,255,255,.04);white-space:nowrap}
 .mc-note{margin-top:10px;font-size:.62rem;color:var(--mu);line-height:1.6}
-@media(max-width:860px){.mc-grid{grid-template-columns:1fr 1fr}.mc-box-wrap{grid-template-columns:1fr}}
+.mc-ou-ladder{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-top:6px}
+@media(max-width:860px){.mc-grid{grid-template-columns:1fr 1fr}.mc-box-wrap{grid-template-columns:1fr}.mc-ou-ladder{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:480px){#sharpCard .pt + div > div{min-width:calc(50% - 4px)!important}}
 
 
 .edge-grid{display:grid;grid-template-columns:1.1fr .9fr;gap:14px;margin-top:12px}
@@ -1013,14 +1026,287 @@ function renderHeader(){
 }
 function renderEdge(){
   var g=GD,col=g.edge>=8?'var(--g)':g.edge>=5?'var(--c)':'var(--mu)',conf=g.edge>=8?'HIGH':g.edge>=5?'MEDIUM':'LOW';
+  // Monte Carlo win-probability bar — appended once the simulation has run.
+  var sim=(SIM_DATA&&SIM_DATA.team)?SIM_DATA.team:null, mcHtml='';
+  if(sim && sim.away_win_pct!=null && sim.home_win_pct!=null){
+    var aw=sim.away_win_pct, hw=sim.home_win_pct;
+    var awAbbr=(SIM_DATA.meta&&SIM_DATA.meta.awayAbbr)||(g&&g.awayAbbr)||'AWAY';
+    var hwAbbr=(SIM_DATA.meta&&SIM_DATA.meta.homeAbbr)||(g&&g.homeAbbr)||'HOME';
+    var awP=Math.round(aw*100), hwP=Math.round(hw*100);
+    var favTeam=aw>=hw?awAbbr:hwAbbr, favP=Math.max(awP,hwP);
+    mcHtml='<div style="margin-top:14px;border-top:1px solid rgba(255,255,255,.07);padding-top:12px;text-align:left">'
+      +'<div style="display:flex;justify-content:space-between;font-size:.6rem;color:var(--mu);letter-spacing:1px;margin-bottom:5px"><span>MONTE CARLO WIN%</span><span style="color:var(--c)">'+favTeam+' '+favP+'%</span></div>'
+      +'<div style="display:flex;height:18px;border-radius:5px;overflow:hidden;font-family:Orbitron,monospace;font-size:.52rem">'
+      +'<div style="width:'+awP+'%;background:rgba(0,229,255,.35);display:flex;align-items:center;justify-content:center;color:#fff;min-width:34px">'+awAbbr+' '+awP+'%</div>'
+      +'<div style="width:'+hwP+'%;background:rgba(224,64,251,.3);display:flex;align-items:center;justify-content:center;color:#fff;min-width:34px">'+hwAbbr+' '+hwP+'%</div>'
+      +'</div></div>';
+  }
   document.getElementById('edgeP').innerHTML=
     '<div style="text-align:center;padding:10px 0">'
     +'<div class="en" style="color:'+col+'">'+g.edge+'%</div><div class="el">MODEL EDGE SCORE</div>'
     +'<div style="margin-top:14px"><div style="display:flex;justify-content:space-between;margin-bottom:4px">'
     +'<span style="font-size:.62rem;color:var(--mu);letter-spacing:2px">CONFIDENCE</span>'
     +'<span style="font-family:Orbitron;font-size:.7rem;color:'+col+'">'+conf+'</span></div>'
-    +'<div class="cb"><div class="cf" id="cfill" style="width:0%" data-w="'+g.barPct+'%"></div></div></div></div>';
+    +'<div class="cb"><div class="cf" id="cfill" style="width:0%" data-w="'+g.barPct+'%"></div></div></div>'
+    +mcHtml+'</div>';
   setTimeout(function(){var e=document.getElementById('cfill');if(e)e.style.width=e.getAttribute('data-w');},200);
+  renderSharpCard();
+}
+// ── SHARP CARD ───────────────────────────────────────────────────────
+// One synthesized verdict at the top of the deep-dive that rolls up every
+// signal: side lean (model edge + MC win%), total lean (run env + MC mean),
+// scoring environment, the #1 ranked prop, and the key drivers (wind, HR park,
+// bullpen, umpire). Re-rendered as each data source lands.
+function _sharpChip(label, value, col){
+  return '<div style="flex:1;min-width:120px;background:rgba(0,0,0,.25);border:1px solid '+col+'33;border-radius:8px;padding:8px 10px">'
+    +'<div style="font-family:Orbitron,monospace;font-size:.5rem;letter-spacing:1px;color:var(--mu);margin-bottom:3px">'+label+'</div>'
+    +'<div style="font-family:Orbitron,monospace;font-size:.74rem;color:'+col+'">'+value+'</div></div>';
+}
+function renderSharpCard(){
+  var g=GD; if(!g) return;
+  var host=document.getElementById('sharpCard');
+  if(!host){
+    var dg=document.querySelector('.dg'); if(!dg) return;
+    host=document.createElement('div'); host.id='sharpCard'; host.className='pnl fw';
+    host.style.cssText='grid-column:1/-1;border:1px solid rgba(255,183,77,.3);background:linear-gradient(180deg,rgba(255,152,0,.05),rgba(10,22,40,0))';
+    dg.insertBefore(host, dg.firstChild);
+  }
+  var gp=GP_DATA, sim=(SIM_DATA&&SIM_DATA.team)?SIM_DATA.team:null;
+  var chips=[], drivers=[];
+
+  // Side lean — model favorite + MC win%.
+  var fav=(gp&&gp.favorite)?gp.favorite:'EVEN';
+  var sideVal=fav==='EVEN'?'No side edge':(fav+' favored');
+  var sideCol=fav==='EVEN'?'#6a8db0':'#00e5ff';
+  if(sim && sim.away_win_pct!=null){
+    var aw=sim.away_win_pct,hw=sim.home_win_pct;
+    var mcFav=aw>=hw?(g.awayAbbr||'AWAY'):(g.homeAbbr||'HOME');
+    sideVal=mcFav+' '+Math.round(Math.max(aw,hw)*100)+'% MC'+(fav!=='EVEN'&&fav!==mcFav?' ⚠ model split':'');
+    sideCol=(fav===mcFav||fav==='EVEN')?'#00e676':'#ff9800';
+  }
+  chips.push(_sharpChip('SIDE LEAN', sideVal, sideCol));
+
+  // Total lean — projection total + run environment, MC mean when available.
+  var total=(gp&&gp.total!=null)?Number(gp.total):null;
+  var mcTot=sim&&sim.mean_total!=null?Number(sim.mean_total):null;
+  var env=gp?gp.runEnv:null;
+  var totLean=env==='HIGH'?'OVER':env==='LOW'?'UNDER':'NEUTRAL';
+  var totCol=env==='HIGH'?'#ff9800':env==='LOW'?'#00e676':'#00e5ff';
+  var totVal=(total!=null?total.toFixed(1):(mcTot!=null?mcTot.toFixed(1):'--'))+' R · '+totLean;
+  chips.push(_sharpChip('TOTAL LEAN', totVal, totCol));
+
+  // Scoring environment.
+  var imp=g.weatherImpact;
+  if(imp && imp.tier){
+    var eCol=imp.tier.indexOf('HITTER')>=0?'#ff9800':imp.tier.indexOf('PITCHER')>=0?'#00e676':imp.tier==='CONTROLLED'?'#6a8db0':'#00e5ff';
+    chips.push(_sharpChip('ENVIRONMENT', imp.tier+(imp.runDelta?' ('+(imp.runDelta>0?'+':'')+imp.runDelta+')':''), eCol));
+  }
+
+  // Top ranked prop.
+  if(typeof PROJ_ROWS!=='undefined' && PROJ_ROWS && PROJ_ROWS.length){
+    var t0=PROJ_ROWS[0];
+    var pv=t0.player+' '+marketLabel(t0.marketKey,t0.line)+' '+pct2(t0.prob)+(t0.edge!=null?(' ('+pct2(t0.edge)+' edge)'):'');
+    chips.push(_sharpChip('TOP PROP', pv, '#67e8f9'));
+  }
+
+  // Drivers.
+  if(g.windField && typeof g.windOut==='number' && Math.abs(g.windOut)>=4 && g.temp!=='DOME')
+    drivers.push((g.windEmoji||'')+' '+Math.abs(Math.round(g.windOut))+'mph '+g.windField);
+  if(g.hrParkFactorLHB!=null && g.hrParkFactorRHB!=null && Math.abs(g.hrParkFactorLHB-g.hrParkFactorRHB)>=0.06)
+    drivers.push('Park HR favors '+(g.hrParkFactorLHB>g.hrParkFactorRHB?'LHB':'RHB'));
+  if(typeof DD_BULLPEN!=='undefined' && DD_BULLPEN && DD_BULLPEN.success){
+    var aS=(DD_BULLPEN.away&&DD_BULLPEN.away.stress_score)||0, hS=(DD_BULLPEN.home&&DD_BULLPEN.home.stress_score)||0;
+    if(Math.max(aS,hS)>=60) drivers.push('Gassed bullpen ('+(aS>=hS?(DD_BULLPEN.away.team_abbr||'AWAY'):(DD_BULLPEN.home.team_abbr||'HOME'))+')');
+  }
+  if(typeof DD_UMP!=='undefined' && DD_UMP && DD_UMP.umpire){
+    var rv=parseFloat(String(DD_UMP.umpire.r_vs_avg||'').replace('+',''));
+    if(!isNaN(rv) && Math.abs(rv)>=0.3) drivers.push('Ump '+(rv>0?'+':'')+rv.toFixed(1)+' R/G');
+  }
+  var driverHtml = drivers.length
+    ? '<div style="font-size:.6rem;color:var(--mu);margin-top:9px">KEY DRIVERS: '+drivers.join(' &nbsp;·&nbsp; ')+'</div>' : '';
+
+  // Correlated parlay idea when multiple aligned props exist.
+  var parlay = sharpParlaySuggestion(g, gp, sim);
+  var parlayHtml = parlay
+    ? '<div style="margin-top:9px;padding:8px 11px;border-radius:8px;border:1px solid rgba(0,229,255,.18);background:rgba(0,229,255,.04)">'
+      +'<div style="font-family:Orbitron,monospace;font-size:.54rem;letter-spacing:1.2px;color:#67e8f9;margin-bottom:4px">🔗 CORRELATED PARLAY IDEA ('+parlay.theme+')</div>'
+      +'<div style="font-size:.62rem;color:var(--t);line-height:1.6">'+parlay.legs.map(function(l){return '• '+l.label+' <span style="color:var(--mu)">'+pct2(l.prob)+'</span>';}).join('<br>')+'</div>'
+      +'<div style="font-size:.58rem;color:var(--mu);margin-top:5px">Independent combined: <strong style="color:#67e8f9">'+pct2(parlay.combined)+'</strong> — correlation lifts the true hit rate above this floor.</div></div>'
+    : '';
+
+  var best = sharpBestBet(g, gp, sim, (typeof PROJ_ROWS!=='undefined'&&PROJ_ROWS&&PROJ_ROWS.length)?PROJ_ROWS[0]:null);
+  _sharpBestEntry = best?best.entry:null; _sharpBestKey = best?best.key:null;
+  var saved = _sharpBestKey && _sharpSavedKeys[_sharpBestKey];
+  var saveBtn = (best && best.entry)
+    ? '<button onclick="saveSharpBet()" style="margin-left:auto;padding:4px 12px;font-size:.6rem;font-family:Orbitron,monospace;letter-spacing:1px;border-radius:999px;cursor:pointer;border:1px solid '+(saved?'#00e676':best.col)+'66;background:'+(saved?'rgba(0,230,118,.12)':best.col+'18')+';color:'+(saved?'#00e676':best.col)+'">'+(_sharpSaving?'…':(saved?'✓ SAVED':'💾 SAVE BET'))+'</button>'
+    : '';
+  // Backtest hook: once final, auto-grade the headline bet's ML/total lean.
+  var grade = best ? gradeSharpBet(best.entry, g) : null;
+  var gradeChip = grade
+    ? '<span style="font-family:Orbitron,monospace;font-size:.58rem;font-weight:700;padding:2px 9px;border-radius:999px;color:'+grade.col+';border:1px solid '+grade.col+'66;background:'+grade.col+'1f">'+grade.r+'</span>'
+    : '';
+  var bestHtml = best
+    ? '<div style="margin-bottom:10px;padding:9px 12px;border-radius:9px;border:1px solid '+best.col+'55;background:'+best.col+'14;display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
+      +'<span style="font-family:Orbitron,monospace;font-size:.6rem;letter-spacing:1px;color:'+best.col+'">'+best.tier+'</span>'
+      +'<span style="font-size:.72rem;color:var(--t);font-weight:600">'+best.text+'</span>'+gradeChip+(grade?'':saveBtn)+'</div>'
+    : '';
+
+  var accBadge='';
+  if(SHARP_ACCURACY && SHARP_ACCURACY.overall){
+    var o=SHARP_ACCURACY.overall, dec=(o.won||0)+(o.lost||0);
+    if(dec>=5 && o.hitRate!=null){
+      var aCol=o.hitRate>=0.55?'#00e676':o.hitRate>=0.5?'#ffd740':'#ff9800';
+      accBadge=' <span title="Rolling Sharp Card best-bet record" style="font-family:Orbitron,monospace;font-size:.52rem;color:'+aCol+';border:1px solid '+aCol+'55;border-radius:999px;padding:1px 7px">VERDICTS '+(o.won||0)+'-'+(o.lost||0)+(o.push?'-'+o.push:'')+' · '+Math.round(o.hitRate*100)+'%</span>';
+    }
+  }
+  host.innerHTML='<div class="pt">⚡ SHARP CARD <span class="tag-sv">SIGNAL ROLLUP</span>'+accBadge+'</div>'
+    +bestHtml
+    +'<div style="display:flex;gap:8px;flex-wrap:wrap">'+chips.join('')+'</div>'+driverHtml+parlayHtml;
+}
+// Synthesize the single most actionable play across the rolled-up signals:
+// score the moneyline, total, and top prop, then headline the strongest.
+function sharpBestBet(g, gp, sim, topProp){
+  var cands=[];
+  var matchup=(g.awayAbbr||'AWAY')+' @ '+(g.homeAbbr||'HOME');
+  // Side: model favorite confirmed by MC win%.
+  if(sim && sim.away_win_pct!=null){
+    var aw=sim.away_win_pct, hw=sim.home_win_pct;
+    var mcFav=aw>=hw?(g.awayAbbr||'AWAY'):(g.homeAbbr||'HOME');
+    var mcPct=Math.max(aw,hw);
+    var modelFav=(gp&&gp.favorite)?gp.favorite:'EVEN';
+    var agree=(modelFav==='EVEN')||(modelFav===mcFav);
+    if(mcPct>=0.56 && agree){
+      cands.push({type:'ML', conf:(mcPct-0.5)*2 + (modelFav===mcFav?0.12:0),
+        text:mcFav+' moneyline — '+Math.round(mcPct*100)+'% to win'+(modelFav===mcFav?' (model + sim agree)':''),
+        entry:{gamePk:GPK, team:mcFav, player:matchup, marketKey:'h2h', line:0, recommendedSide:mcFav, rawProb:mcPct, adjProb:mcPct, source:'sharp_card', reason:'Sharp Card best bet (MC win%)'}});
+    }
+  }
+  // Total: run environment + MC mean alignment.
+  var mcTot=sim&&sim.mean_total!=null?Number(sim.mean_total):null;
+  var pTot=(gp&&gp.total!=null)?Number(gp.total):null;
+  var ref=mcTot!=null?mcTot:pTot;
+  var totLine=ref!=null?Math.round(ref*2)/2:null;
+  if(ref!=null){
+    if((gp&&gp.runEnv==='HIGH') && ref>=9.2)
+      cands.push({type:'TOTAL', conf:Math.min(0.6,(ref-8.5)*0.25), text:'Game total OVER — model '+ref.toFixed(1)+' runs in a high-scoring environment',
+        entry:{gamePk:GPK, player:matchup, marketKey:'totals', line:totLine, recommendedSide:'Over', modelMean:ref, source:'sharp_card', reason:'Sharp Card best bet (high run env)'}});
+    else if((gp&&gp.runEnv==='LOW') && ref<=7.8)
+      cands.push({type:'TOTAL', conf:Math.min(0.6,(8.5-ref)*0.25), text:'Game total UNDER — model '+ref.toFixed(1)+' runs in a suppressed environment',
+        entry:{gamePk:GPK, player:matchup, marketKey:'totals', line:totLine, recommendedSide:'Under', modelMean:ref, source:'sharp_card', reason:'Sharp Card best bet (low run env)'}});
+  }
+  // Top prop: strong book edge.
+  if(topProp && topProp.kind==='hitter' && topProp.edge!=null && topProp.edge>=0.05){
+    cands.push({type:'PROP', conf:Math.min(0.7, topProp.edge*6),
+      text:topProp.player+' '+marketLabel(topProp.marketKey,topProp.line)+' OVER — '+pct2(topProp.edge)+' edge ('+pct2(topProp.prob)+' model)',
+      entry:_sharpEntryFromProp(topProp)});
+  } else if(topProp && topProp.edge==null && topProp.prob>=0.72){
+    cands.push({type:'PROP', conf:Math.min(0.5,(topProp.prob-0.6)),
+      text:topProp.player+' '+marketLabel(topProp.marketKey,topProp.line)+' — '+pct2(topProp.prob)+' model confidence',
+      entry:_sharpEntryFromProp(topProp)});
+  }
+  if(!cands.length) return null;
+  cands.sort(function(a,b){ return b.conf-a.conf; });
+  var top=cands[0];
+  var tier=top.conf>=0.45?'STRONG BET':top.conf>=0.22?'LEAN':'SLIGHT LEAN';
+  var col=top.conf>=0.45?'#00e676':top.conf>=0.22?'#ffd740':'#00e5ff';
+  return {text:'Best bet: '+top.text, tier:tier, col:col, entry:top.entry, key:'sharp::'+top.type+'::'+(top.entry&&top.entry.player)+'::'+(top.entry&&top.entry.marketKey)+'::'+(top.entry&&top.entry.line)};
+}
+// Light backtest hook: score the Sharp Card's headline bet against the final
+// result. Moneyline and game-total leans grade off the box score; props return
+// null (they're tracked individually and graded by the tracker's auto-grader).
+function gradeSharpBet(entry, g){
+  var status=(g&&g.status)?String(g.status):'';
+  if(!(status==='Final'||status==='Game Over'||status==='Completed Early') || !entry) return null;
+  var a=Number(g.awayScore), h=Number(g.homeScore);
+  if(isNaN(a)||isNaN(h)) return null;
+  if(entry.marketKey==='h2h' || entry.marketKey==='game_moneyline'){
+    if(a===h) return {r:'PUSH',col:'#6a8db0'};
+    var winner=a>h?(g.awayAbbr||'AWAY'):(g.homeAbbr||'HOME');
+    var won=winner===entry.recommendedSide;
+    return {r:won?'WON ✓':'LOST ✗', col:won?'#00e676':'#f44336'};
+  }
+  if((entry.marketKey==='totals' || entry.marketKey==='game_total') && entry.line!=null){
+    var tot=a+h;
+    if(tot===entry.line) return {r:'PUSH',col:'#6a8db0'};
+    var won2=((entry.recommendedSide==='Over')===(tot>entry.line));
+    return {r:won2?'WON ✓':'LOST ✗', col:won2?'#00e676':'#f44336'};
+  }
+  return null;
+}
+// Correlated same-game parlay idea: stack legs that move together with the
+// game's scoring theme — OVER game + hitter OVERs (more offense), or UNDER game
+// + starter Ks (suppressed offense). Combined prob is the independent product
+// (conservative; positive correlation lifts the true hit rate).
+function sharpParlaySuggestion(g, gp, sim){
+  if(typeof PROJ_ROWS==='undefined' || !PROJ_ROWS || !PROJ_ROWS.length) return null;
+  var env = gp?gp.runEnv:null, legs=[], theme;
+  if(env==='LOW'){
+    theme='UNDER / pitching';
+    PROJ_ROWS.filter(function(r){return r.kind==='pitcher' && r.prob>=0.55;}).slice(0,2)
+      .forEach(function(r){ legs.push({label:r.player+' '+marketLabel(r.marketKey,r.line)+' OVER', prob:r.prob}); });
+  } else {
+    theme = env==='HIGH' ? 'OVER / offense' : 'offense';
+    PROJ_ROWS.filter(function(r){return r.kind==='hitter' && r.prob>=0.55;}).slice(0,3)
+      .forEach(function(r){ legs.push({label:r.player+' '+marketLabel(r.marketKey,r.line)+' OVER', prob:r.prob}); });
+  }
+  // Need at least 2 same-direction legs from different players.
+  var seen={}, uniq=[];
+  legs.forEach(function(l){ var p=l.label.split(' ')[0]; if(!seen[p]){ seen[p]=1; uniq.push(l); } });
+  if(uniq.length<2) return null;
+  uniq=uniq.slice(0,3);
+  var combined = uniq.reduce(function(a,l){ return a*l.prob; }, 1);
+  return {legs:uniq, combined:combined, theme:theme};
+}
+function _sharpEntryFromProp(r){
+  var e = (typeof trackerEntryFromProjection==='function') ? trackerEntryFromProjection(r) : {gamePk:GPK, player:r.player, marketKey:r.marketKey, line:r.line, recommendedSide:'Over', adjProb:r.prob, edge:r.edge};
+  e.source='sharp_card';
+  e.reason='Sharp Card best bet (top edge)';
+  return e;
+}
+var _sharpBestEntry=null, _sharpBestKey=null, _sharpSaving=false, _sharpSavedKeys={};
+function saveSharpBet(){
+  if(!_sharpBestEntry || _sharpSaving) return;
+  if(_sharpBestKey && _sharpSavedKeys[_sharpBestKey]) return;
+  _sharpSaving=true; renderSharpCard();
+  fetch('/api/tracker/pick',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(_sharpBestEntry)})
+    .then(function(r){return r.json();})
+    .then(function(d){ if(d&&d.success){ if(_sharpBestKey) _sharpSavedKeys[_sharpBestKey]=1; } else { alert('Save failed: '+((d&&d.error)||'unknown')); } })
+    .catch(function(e){ alert('Save failed: '+e.message); })
+    .finally(function(){ _sharpSaving=false; renderSharpCard(); });
+}
+function envStyle(tier){
+function envStyle(tier){
+  if(tier&&tier.indexOf('HITTER')>=0) return {fg:'#ff9800',bg:'rgba(255,152,0,.08)',bd:'rgba(255,152,0,.32)'};
+  if(tier&&tier.indexOf('PITCHER')>=0) return {fg:'#00e676',bg:'rgba(0,230,118,.08)',bd:'rgba(0,230,118,.32)'};
+  if(tier==='CONTROLLED') return {fg:'#6a8db0',bg:'rgba(106,141,176,.08)',bd:'rgba(106,141,176,.28)'};
+  return {fg:'#00e5ff',bg:'rgba(0,229,255,.06)',bd:'rgba(0,229,255,.22)'};
+}
+// Composite scoring-environment banner (temp + wind-to-CF + park run factor).
+function renderEnvBanner(imp){
+  if(!imp || imp.tier==null) return '';
+  var s=envStyle(imp.tier);
+  var dn=Number(imp.runDelta||0);
+  var dStr=(dn>0?'+':'')+dn.toFixed(2)+' R/team';
+  var drivers=(imp.drivers||[]).map(function(x){return '<li>'+x+'</li>';}).join('');
+  return '<div class="env-banner" style="background:'+s.bg+';border-color:'+s.bd+'">'
+    +'<div class="env-top"><span class="env-tier" style="color:'+s.fg+'">'+imp.tier+'</span>'
+    +'<span class="env-delta" style="color:'+s.fg+'">'+dStr+'</span></div>'
+    +'<div class="env-label">'+(imp.label||'')+'</div>'
+    +'<ul class="env-drivers">'+drivers+'</ul></div>';
+}
+// Wind direction relative to the park's center-field bearing: OUT carries fly
+// balls, IN holds them up. Falls back to a raw read for parks without a bearing.
+function renderWindChip(g){
+  if(!g.windField) return '';
+  var f=g.windField, ar=g.windEmoji||'•';
+  var out=Number(g.windOut);
+  var style;
+  if(f.indexOf('OUT')>=0) style={fg:'#ff9800',bg:'rgba(255,152,0,.12)'};
+  else if(f.indexOf('IN')>=0) style={fg:'#00e676',bg:'rgba(0,230,118,.12)'};
+  else style={fg:'#6a8db0',bg:'rgba(106,141,176,.12)'};
+  var mag=(!isNaN(out)&&Math.abs(out)>=1)?(' '+Math.abs(Math.round(out))+' mph'):'';
+  return '<div class="wind-chip" style="color:'+style.fg+';background:'+style.bg+'">'
+    +'<span class="wc-ar">'+ar+'</span> '+f+mag+'</div>';
 }
 function renderWx(){
   var g=GD;
@@ -1030,27 +1316,54 @@ function renderWx(){
       '<div class="wg"><div class="ws"><div class="wi">&#127968;</div><div class="wv" style="font-size:.74rem">DOME</div><div class="wl">VENUE</div></div>'
       +'<div class="ws"><div class="wi">&#9989;</div><div class="wv" style="font-size:.74rem">INDOOR</div><div class="wl">CONDITIONS</div></div>'
       +'<div class="ws"><div class="wi">&#127788;</div><div class="wv">72&deg;F</div><div class="wl">EST TEMP</div></div></div>'
-      +'<div class="wi2">&#127968; DOME / RETRACTABLE ROOF — Controlled indoor conditions. Weather adjustments suppressed.</div>';
+      +'<div class="wi2">&#127968; DOME / RETRACTABLE ROOF — Controlled indoor conditions. Weather adjustments suppressed.</div>'
+      +renderEnvBanner(g.weatherImpact);
     return;
   }
-  var tv=parseInt(g.temp)||70,rc=g.rainChance!=='N/A'&&g.rainChance!==0?g.rainChance+'%':'N/A';
-  var imp=tv>80?'&#128293; HOT — Ball carries. Hitters favored.':tv<50?'&#129398; COLD — Ball dies. Pitchers favored.':'&#9989; NEUTRAL — Standard conditions.';
+  var rc=g.rainChance!=='N/A'&&g.rainChance!==0?g.rainChance+'%':'N/A';
   document.getElementById('wxP').innerHTML=
     '<div class="wg"><div class="ws"><div class="wi">'+wic(g.condition)+'</div><div class="wv">'+g.temp+'°F</div><div class="wl">TEMP</div></div>'
     +'<div class="ws"><div class="wi">&#128168;</div><div class="wv" style="font-size:.78rem">'+(g.wind||'N/A')+'</div><div class="wl">WIND</div></div>'
     +'<div class="ws"><div class="wi">&#127783;</div><div class="wv">'+rc+'</div><div class="wl">RAIN CHANCE</div></div></div>'
-    +'<div class="wi2">'+imp+'</div>';
+    +renderWindChip(g)
+    +renderEnvBanner(g.weatherImpact);
 }
 function renderPark(){
   var g=GD,pf=g.parkFactor||1.0;
+  var hrpf=(g.hrParkFactor!=null)?g.hrParkFactor:null;
   var type=pf>=1.05?'Hitter-Friendly':pf<=0.95?'Pitcher-Friendly':'Neutral';
   var col=pf>=1.05?'var(--o)':pf<=0.95?'var(--g)':'var(--c)';
+  var hrCol=(hrpf==null)?'var(--mu)':hrpf>=1.04?'var(--o)':hrpf<=0.96?'var(--g)':'var(--c)';
   var desc=pf>=1.05?'<strong style="color:var(--o)">'+g.venue+'</strong> boosts offense.'
     :pf<=0.95?'<strong style="color:var(--g)">'+g.venue+'</strong> suppresses offense.'
     :'<strong style="color:var(--c)">'+g.venue+'</strong> plays neutral.';
+  // HR park factor often diverges from run factor (e.g. Yankee Stadium: modest
+  // runs, big HR boost). Call it out when it disagrees with the run read.
+  if(hrpf!=null){
+    var hrLean=hrpf>=1.04?'inflates home runs':hrpf<=0.96?'suppresses home runs':'is HR-neutral';
+    var hrEmph=(hrpf>=1.04&&pf<1.05)||(hrpf<=0.96&&pf>0.95)?' (diverges from its run profile)':'';
+    desc+=' This park <strong style="color:'+hrCol+'">'+hrLean+'</strong>'+hrEmph+'.';
+  }
+  // Platoon HR split: only shown when LHB/RHB HR factors diverge meaningfully
+  // (e.g. Yankee Stadium short porch, Oracle's deep RF).
+  var hrL=(g.hrParkFactorLHB!=null)?g.hrParkFactorLHB:null;
+  var hrR=(g.hrParkFactorRHB!=null)?g.hrParkFactorRHB:null;
+  var splitHtml='';
+  if(hrL!=null && hrR!=null && Math.abs(hrL-hrR)>=0.06){
+    var favHand=hrL>hrR?'LHB':'RHB';
+    var lCol=hrL>=1.04?'var(--o)':hrL<=0.96?'var(--g)':'var(--c)';
+    var rCol=hrR>=1.04?'var(--o)':hrR<=0.96?'var(--g)':'var(--c)';
+    splitHtml='<div class="pkg" style="margin-top:10px">'
+      +'<div class="ps"><div class="pv" style="color:'+lCol+'">'+hrL+'x</div><div class="plb">LHB HR FACTOR</div></div>'
+      +'<div class="ps"><div class="pv" style="color:'+rCol+'">'+hrR+'x</div><div class="plb">RHB HR FACTOR</div></div></div>'
+      +'<div style="margin-top:7px;font-size:.62rem;color:var(--c)">⚾ Platoon HR split favors <strong>'+favHand+'</strong> power — weight HR props accordingly.</div>';
+  }
   document.getElementById('pkP').innerHTML=
     '<div class="pkg"><div class="ps"><div class="pv" style="color:'+col+'">'+pf+'x</div><div class="plb">RUN FACTOR</div></div>'
-    +'<div class="ps"><div class="pv" style="color:'+col+';font-size:.88rem">'+type+'</div><div class="plb">PARK TYPE</div></div></div>'
+    +'<div class="ps"><div class="pv" style="color:'+hrCol+'">'+(hrpf==null?'—':hrpf+'x')+'</div><div class="plb">HR FACTOR</div></div></div>'
+    +'<div class="pkg" style="margin-top:10px"><div class="ps"><div class="pv" style="color:'+col+';font-size:.88rem">'+type+'</div><div class="plb">PARK TYPE</div></div>'
+    +'<div class="ps"><div class="pv" style="color:'+hrCol+';font-size:.88rem">'+(hrpf==null?'—':hrpf>=1.04?'HR Boost':hrpf<=0.96?'HR Drag':'HR Neutral')+'</div><div class="plb">HR PROFILE</div></div></div>'
+    +splitHtml
     +'<div style="margin-top:11px;padding:9px;background:rgba(0,0,0,.28);border-radius:7px;font-size:.7rem;color:var(--mu);line-height:1.6">'+desc+'</div>';
 }
 function renderMatchup(){
@@ -1300,6 +1613,21 @@ function updateProj(){
   document.getElementById('projP').innerHTML='<div class="projg">'+left+right+'</div>';
 }
 
+// Confirmed vs projected lineup read — props off a projected order can shift
+// before first pitch. Derived from how many distinct 1–9 batting slots are set.
+function lineupStatusBanner(lu){
+  var distinct = {};
+  lu.forEach(function(p){ var s=parseInt(p.slot); if(s>=1&&s<=9) distinct[s]=1; });
+  var n = Object.keys(distinct).length;
+  var anyPending = lu.some(function(p){ return (p.lineup_status||'')==='pending'; });
+  var c, label, sub;
+  if(n>=9 && !anyPending){ c='#00e676'; label='✓ CONFIRMED LINEUP'; sub='Official batting order posted — props are matchup-locked'; }
+  else if(n>0 || anyPending){ c='#ff9800'; label='◐ PROJECTED LINEUP'; sub='Order not fully posted ('+n+'/9 set) — slots may shift before first pitch'; }
+  else { c='#6a8db0'; label='○ NO ORDER POSTED'; sub='Showing season-stat ordering as a placeholder'; }
+  return '<div style="margin-bottom:9px;padding:7px 11px;border-radius:8px;border:1px solid '+c+'40;background:'+c+'12;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">'
+    +'<span style="font-family:Orbitron,monospace;font-size:.6rem;letter-spacing:1px;color:'+c+'">'+label+'</span>'
+    +'<span style="font-size:.56rem;color:var(--mu)">'+sub+'</span></div>';
+}
 function showTab(side){
   document.querySelectorAll('.tb2').forEach(function(b,i){b.classList.toggle('ac',(i===0&&side==='away')||(i===1&&side==='home'));});
   var lu=side==='away'?AL:HL;
@@ -1333,7 +1661,8 @@ function showTab(side){
       +'<td>'+p.ab+'</td><td>'+p.hr+'</td><td>'+p.rbi+'</td>'+fc+sc+'</tr>';
   }).join('');
   document.getElementById('luP').innerHTML=
-    '<div style="overflow-x:auto"><table class="lu-table"><thead>'+hdr+'</thead><tbody>'+rows+'</tbody></table></div>'
+    lineupStatusBanner(lu)
+    +'<div style="overflow-x:auto"><table class="lu-table"><thead>'+hdr+'</thead><tbody>'+rows+'</tbody></table></div>'
     +(hasFg||hasSvX||hasSvSc?'<div class="legend">'
       +(hasFg?'<span style="color:var(--fg)">&#9889; Orange = FanGraphs (wOBA/wRC+/WAR)</span>':'')
       +(hasSvX||hasSvSc?'<span style="color:var(--sv)">&#127987;&#65039; Cyan = Baseball Savant (xStats/EV/HH%/Brl%)</span>':'')
@@ -1360,7 +1689,10 @@ function addToParlay(playerName, type, idx) {
 
 loadTrackedKeys();
 ensureSimWrap();
-loadGame();loadPitchers();loadLineups();
+loadGame();loadPitchers();loadLineups();loadBreakoutData();loadSharpAccuracy();
+// Fire-and-forget: let the server lock/grade this game's Sharp Card verdict for
+// the rolling hit-rate log. Deferred so it never competes with page load.
+setTimeout(function(){ fetch('/api/sharp-card/'+GPK).catch(function(){}); }, 4000);
 
 // ── Phase 3 ───────────────────────────────────────────────────────────────────
 var GP_DATA = null;
@@ -1495,8 +1827,13 @@ function renderGameProjection(d) {
   var ouCol = ouSig === 'LEAN OVER' ? 'var(--g)' : ouSig === 'LEAN UNDER' ? 'var(--o)' : 'var(--c)';
   var envCol = d.runEnv === 'HIGH' ? 'var(--o)' : d.runEnv === 'LOW' ? 'var(--g)' : 'var(--c)';
   var favCol = d.favorite === 'EVEN' ? 'var(--mu)' : 'var(--c)';
-  var wxNote = d.wxAdj && d.wxAdj !== 0
-    ? '<div class="wi2" style="margin-top:10px">Weather adj: '+(d.wxAdj>0?'+':'')+d.wxAdj+' runs/team ('+(d.wxAdj>0?'Hot weather boosts scoring':'Cold weather suppresses scoring')+')</div>' : '';
+  var wxBits = [];
+  if(d.wxAdj && d.wxAdj !== 0) wxBits.push('Temp '+(d.wxAdj>0?'+':'')+d.wxAdj+' R/team ('+(d.wxAdj>0?'warm air':'cold air')+')');
+  if(d.windAdj && d.windAdj !== 0) wxBits.push('Wind '+(d.windAdj>0?'+':'')+d.windAdj+' R/team'+(d.windField?' ('+d.windField+')':''));
+  var maxBp = Math.max(Number(d.awayBullpenAdj)||0, Number(d.homeBullpenAdj)||0);
+  if(maxBp > 0) wxBits.push('Bullpen fatigue +'+maxBp.toFixed(2)+' R vs tired pen');
+  var wxNote = wxBits.length
+    ? '<div class="wi2" style="margin-top:10px">Run-line adj: '+wxBits.join(' · ')+'</div>' : '';
   var compareHtml = '';
   var gameStatus = (GD && GD.status) ? String(GD.status) : '';
   var isFinal = gameStatus === 'Final' || gameStatus === 'Game Over' || gameStatus === 'Completed Early';
@@ -1706,6 +2043,31 @@ function loadPlayerSplits(playerId, group, targetId, oppHand) {
   });
 }
 
+// Game-by-game recent-form sparkline (chronological, oldest→newest). Hitters:
+// bar height = hits (+HR weight), colored by multi-hit / HR / hitless. Pitchers:
+// strikeouts per start.
+function formSparkline(games, group){
+  if(!games || !games.length) return '';
+  var valOf = group==='hitting'
+    ? function(g){ return (g.h||0) + (g.hr||0)*0.5; }
+    : function(g){ return (g.k||0); };
+  var vals = games.map(valOf);
+  var maxV = Math.max.apply(null, vals.concat([1]));
+  var bars = games.map(function(g,i){
+    var hgt = Math.max(10, Math.round(vals[i]/maxV*100));
+    var col = group==='hitting'
+      ? (g.hr>0 ? '#ff9800' : (g.h>=2 ? '#00e676' : (g.h===0 ? '#f44336' : '#00e5ff')))
+      : (g.k>=8 ? '#00e676' : (g.k<=3 ? '#6a8db0' : '#a855f7'));
+    var tip = group==='hitting'
+      ? ((g.h||0)+'H'+(g.hr?' '+g.hr+'HR':'')+' vs '+(g.opp||'')+' '+(g.date||'').slice(5))
+      : ((g.k||0)+'K, '+(g.er||0)+'ER vs '+(g.opp||'')+' '+(g.date||'').slice(5));
+    return '<div title="'+tip+'" style="flex:1;display:flex;align-items:flex-end;justify-content:center;height:100%;min-width:0">'
+      +'<div style="width:64%;height:'+hgt+'%;background:'+col+';border-radius:2px 2px 0 0"></div></div>';
+  }).join('');
+  var lbl = group==='hitting' ? 'HITS/GM (→ recent)' : 'K/START (→ recent)';
+  return '<div style="margin-top:8px"><div style="font-size:.5rem;color:var(--mu);letter-spacing:1px;margin-bottom:3px">'+lbl+'</div>'
+    +'<div style="display:flex;align-items:flex-end;gap:3px;height:38px;padding:4px 3px;background:rgba(0,0,0,.22);border-radius:6px">'+bars+'</div></div>';
+}
 function renderSplitsCard(d, targetId, oppHand, group) {
   var el = document.getElementById(targetId);
   if(!el || !d || !d.success) return;
@@ -1744,6 +2106,7 @@ function renderSplitsCard(d, targetId, oppHand, group) {
       formHtml = '<div style="margin-top:10px">'
         + '<div class="sp-title" style="margin-bottom:6px">LAST 7 GAMES &nbsp;'+hcBadge
         + '&nbsp; <span style="color:var(--mu);font-family:Inter;text-transform:none;letter-spacing:0">AVG: <strong style="color:var(--c)">'+l7avg+'</strong> &nbsp; HR: <strong style="color:var(--c)">'+l7hr+'</strong></span></div>'
+        + formSparkline(recentGames, 'hitting')
         + '<div class="gl-row gl-hdr"><span>DATE</span><span>OPP</span><span>AB</span><span>H</span><span>HR</span><span>RBI</span><span>K</span></div>'
         + recentGames.slice().reverse().map(function(g){
             return '<div class="gl-row"><span>'+g.date.slice(5)+'</span><span>'+g.opp+'</span>'
@@ -1760,6 +2123,7 @@ function renderSplitsCard(d, targetId, oppHand, group) {
       formHtml = '<div style="margin-top:10px">'
         + '<div class="sp-title" style="margin-bottom:6px">LAST '+ recentGames.length +' STARTS &nbsp;'+hcBadge
         + '&nbsp; <span style="color:var(--mu);font-family:Inter;text-transform:none;letter-spacing:0">ER: <strong style="color:var(--c)">'+l7er+'</strong> &nbsp; K: <strong style="color:var(--c)">'+l7k+'</strong></span></div>'
+        + formSparkline(recentGames, 'pitching')
         + '<div class="gl-row gl-hdr" style="grid-template-columns:72px 44px 42px 32px 32px 32px 32px"><span>DATE</span><span>OPP</span><span>IP</span><span>H</span><span>ER</span><span>K</span><span>BB</span></div>'
         + recentGames.slice().reverse().map(function(g){
             return '<div class="gl-row" style="grid-template-columns:72px 44px 42px 32px 32px 32px 32px"><span>'+g.date.slice(5)+'</span><span>'+g.opp+'</span>'
@@ -2657,6 +3021,7 @@ function _handleSimResult(d, highPrecision, sims){
   if(!d || !d.success) d = _simFallbackPayload((d && d.error) || 'Simulation failed', sims);
   SIM_DATA = d;
   _buildSimCorrLookup(d.correlations || []);
+  if(GD && typeof renderEdge==='function') renderEdge();   // surface MC win% in the edge card
   var badge = document.getElementById('simRunsBadge') || document.querySelector('#simWrap .tag-sv');
   if(badge){
     var runs = (d.meta && d.meta.sims) ? Number(d.meta.sims).toLocaleString() + (highPrecision ? ' RUNS · HP' : ' RUNS') : 'FALLBACK';
@@ -2782,9 +3147,20 @@ function renderNrfiDeepDive(){
   var edgeColor = (n.nrfi_edge||0) >= 0 ? '#00e676' : '#f44336';
   var price = (n.book_price!=null ? n.book_price : '—') + (n.bookmaker ? (' @ ' + n.bookmaker) : '');
   var fx = (n.key_factors || []).map(function(f){ return '&#8226; ' + f; }).join('<br>');
+  var envBits = [];
+  var nw = n.weather || {};
+  if(nw.temp!=null && nw.temp!=='N/A') envBits.push('🌡 '+nw.temp+'°F');
+  if(nw.wind && nw.wind!=='N/A') envBits.push('💨 '+nw.wind);
+  if(nw.wind_field){
+    var wfCol = nw.wind_field.indexOf('OUT')>=0?'#ff9800':nw.wind_field.indexOf('IN')>=0?'#00e676':'var(--mu)';
+    envBits.push('<span style="color:'+wfCol+'">'+(nw.wind_emoji||'')+' '+nw.wind_field+'</span>');
+  }
+  if(n.park_factor!=null) envBits.push('🏟 '+n.park_factor+'x');
+  var envLine = envBits.length ? '<div class="nrfi-factors" style="margin-top:0;margin-bottom:6px;color:var(--c)">'+envBits.join(' &nbsp;·&nbsp; ')+'</div>' : '';
   el.innerHTML = ''
     + '<div class="nrfi-card">'
     + '<div class="nrfi-hd">'+n.game+' · '+n.away_sp+' vs '+n.home_sp+'</div>'
+    + envLine
     + '<div class="nrfi-grid">'
     + '<div class="nrfi-stat"><div class="nrfi-l">NRFI PROB</div><div class="nrfi-v" style="color:#00e676">'+(n.nrfi_prob*100).toFixed(1)+'%</div></div>'
     + '<div class="nrfi-stat"><div class="nrfi-l">YRFI PROB</div><div class="nrfi-v" style="color:#ff9800">'+(n.yrfi_prob*100).toFixed(1)+'%</div></div>'
@@ -2944,6 +3320,7 @@ function renderSimulation(){
     + '<div class="mc-card"><div class="mc-v">'+pct(t.p_9plus_total)+'</div><div class="mc-l">P(TOTAL 9+)</div></div>'
     + '<div class="mc-card"><div class="mc-v">'+pct(t.p_10plus_total)+'</div><div class="mc-l">P(TOTAL 10+)</div></div>'
     + '</div>'
+    + mcOuLadder(t)
     + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 4px">'
     + '<button class="btn" onclick="refreshSimulation()" style="padding:6px 12px;font-size:.62rem">REFRESH SIM</button>'
     + '<button class="btn" onclick="runHighPrecisionSimulation()" style="padding:6px 12px;font-size:.62rem">HIGH PRECISION RECHECK</button>'
@@ -3068,6 +3445,25 @@ function renderSampleBox(teamKey, abbr, spName){
     + rows + '</tbody></table>'
     + '<div class="mc-note"><strong style="color:var(--c)">Starter:</strong> '+spName+' &nbsp;|&nbsp; Mean R/H: '+f1(box.mean_runs)+'/'+f1(box.mean_hits)+' &nbsp;|&nbsp; xBB: '+f1(box.mean_bb)+' &nbsp;|&nbsp; xK: '+f1(box.mean_k)+' &nbsp;|&nbsp; xTB: '+f1(box.mean_tb)+'<br><span style="opacity:.55;font-size:.55rem">xH = expected hits; P(1+H) = probability of at least one hit. Single-game outcomes vary widely around the mean.</span></div></div>';
 }
+// O/U probability ladder from the Monte Carlo total distribution: P(over) at
+// each common book line, plus the middle-50% likely range and spread.
+function mcOuLadder(t){
+  if(!t || !t.ou_ladder) return '';
+  var lines = ['6.5','7.5','8.5','9.5','10.5','11.5'];
+  var cells = lines.map(function(L){
+    var pOver = t.ou_ladder[L];
+    if(pOver==null) return '';
+    var pov = Math.round(pOver*100);
+    var col = pov>=58?'#ff9800':pov<=42?'#00e676':'#00e5ff';
+    return '<div class="mc-card"><div class="mc-v" style="color:'+col+';font-size:.9rem">'+pov+'%</div><div class="mc-l">OVER '+L+'</div></div>';
+  }).join('');
+  var rangeNote='';
+  if(t.p25_total!=null && t.p75_total!=null)
+    rangeNote='<div class="proj-note" style="margin-top:6px">Likely total range (middle 50% of sims): <strong style="color:var(--c)">'+t.p25_total+'–'+t.p75_total+' runs</strong>'
+      +(t.std_total!=null?' · σ '+t.std_total:'')+(t.median_total!=null?' · median '+t.median_total:'')+'</div>';
+  return '<div style="font-family:Orbitron,monospace;font-size:.58rem;letter-spacing:1.5px;color:var(--mu);margin:12px 0 6px">⚙ O/U PROBABILITY LADDER — P(OVER) PER LINE</div>'
+    +'<div class="mc-ou-ladder">'+cells+'</div>'+rangeNote;
+}
 function renderSimulation(){
   var el = document.getElementById('simPanel');
   if(!el) return;
@@ -3091,6 +3487,7 @@ function renderSimulation(){
     + '<div class="mc-card"><div class="mc-v">'+pct(t.p_9plus_total)+'</div><div class="mc-l">P(TOTAL 9+)</div></div>'
     + '<div class="mc-card"><div class="mc-v">'+pct(t.p_10plus_total)+'</div><div class="mc-l">P(TOTAL 10+)</div></div>'
     + '</div>'
+    + mcOuLadder(t)
     + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 4px">'
     + '<button class="btn" onclick="refreshSimulation()" style="padding:6px 12px;font-size:.62rem">REFRESH SIM</button>'
     + '<button class="btn" onclick="runHighPrecisionSimulation()" style="padding:6px 12px;font-size:.62rem">HIGH PRECISION RECHECK</button>'
@@ -3394,12 +3791,72 @@ function buildReasoning(row){
 }
 function addProjRow(rows, base){
   var score = (base.edge!=null ? base.edge*100 : 0) + base.prob;
+  // Fold in batting-order matchup threat as a bounded nudge: a tiebreaker when
+  // a real book edge already drives the score, but a more meaningful secondary
+  // sort when no odds exist (score is then just the 0–1 model probability).
+  var th = base.matchupThreat;
+  if(th!=null){ score += ((th-50)/100) * (base.edge!=null ? 0.05 : 0.12); }
   base.score = score;
   base.reasons = buildReasoning(base);
   rows.push(base);
 }
+// name → 0–100 matchup threat, computed from the batting-order tab data when
+// it's loaded (same fields bomThreatScore expects). Rebuilt per render.
+var _bomThreatMap = null;
+function buildBomThreatMap(){
+  _bomThreatMap = {};
+  if(!BOM_DATA || !BOM_DATA.success) return;
+  (BOM_DATA.awayBatters||[]).concat(BOM_DATA.homeBatters||[]).forEach(function(b){
+    if(b && b.name) _bomThreatMap[b.name] = bomThreatScore(b);
+  });
+}
+function getMatchupThreat(name){
+  if(_bomThreatMap===null) buildBomThreatMap();
+  return (_bomThreatMap && (name in _bomThreatMap)) ? _bomThreatMap[name] : null;
+}
+
+// ── Breakout-detector integration ────────────────────────────────────
+// Ports the breakout_detector scoring and flags this game's hitters who grade
+// as REAL BREAKOUT / WATCH (or a regression trap), so the deep-dive shows which
+// hot bats are backed by Statcast vs riding luck.
+function _bkKey(n){ return (n||'').toString().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').trim(); }
+function scoreBreakout(p){
+  var dEV = p.ev95 - p.ev95Prior;
+  var sEv = Math.max(0, Math.min(30, dEV*10 + (p.ev95-103)*2));
+  var sBrl = Math.max(0, Math.min(20, (p.brl-6)*2.5));
+  var sX = Math.max(-10, Math.min(20, (p.xwoba-p.woba)*400 + (p.xwoba-0.320)*40));
+  var sHh = Math.max(0, Math.min(15, (p.hh-40)*0.75));
+  var dK = p.kpctPrior - p.kpct;
+  var sK = Math.max(0, Math.min(15, dK*3));
+  var babipPen = (p.babip>0.340 && p.hh<44) ? -15 : 0;
+  var mirage = (p.wrc>125 && dEV<0.8) ? -10 : 0;
+  var luck = (p.avg-p.xba>0.020) ? -8 : 0;
+  var total = Math.max(0, Math.min(100, sEv+sBrl+sX+sHh+sK+babipPen+mirage+luck));
+  var verdict='fake', vLabel='REGRESSION TRAP';
+  if(total>=75){ verdict='real'; vLabel='REAL BREAKOUT'; }
+  else if(total>=50){ verdict='watch'; vLabel='WATCH LIST'; }
+  return { total:Math.round(total), verdict:verdict, vLabel:vLabel, xGap:(p.xwoba-p.woba) };
+}
+var BREAKOUT_MAP = {};
+function loadBreakoutData(){
+  fetch('/api/breakout/candidates').then(function(r){ return r.json(); }).then(function(d){
+    if(!d || !d.success || !d.players) return;
+    var map = {};
+    d.players.forEach(function(p){ if(p && p.name) map[_bkKey(p.name)] = scoreBreakout(p); });
+    BREAKOUT_MAP = map;
+    if(ACTIVE_TAB==='proj') renderProjectionHub();
+  }).catch(function(){});
+}
+function getBreakout(name){ var k=_bkKey(name); return (k in BREAKOUT_MAP) ? BREAKOUT_MAP[k] : null; }
+var SHARP_ACCURACY = null;
+function loadSharpAccuracy(){
+  fetch('/api/sharp-card/accuracy').then(function(r){return r.json();}).then(function(d){
+    if(d && d.success){ SHARP_ACCURACY = d; if(typeof renderSharpCard==='function' && GD) renderSharpCard(); }
+  }).catch(function(){});
+}
 function buildProjectionRows(){
   if(!SIM_DATA || !SIM_DATA.success) return [];
+  _bomThreatMap = null;   // rebuild from latest BOM_DATA on each render
   var rows=[];
   var away=(SIM_DATA.playerProps&&SIM_DATA.playerProps.away)||[];
   var home=(SIM_DATA.playerProps&&SIM_DATA.playerProps.home)||[];
@@ -3426,7 +3883,7 @@ function buildProjectionRows(){
         addProjRow(rows, {
           kind:'hitter', team:teamAbbr, player:p.name, pos:p.pos, bats:p.bats||'S', oppPitcher:opp?opp.name:'Opp SP', oppHand:oppHand,
           marketKey:def.k, line:def.line, prob:prob, mean:safeNum(p[def.mean])||0, p10:def.p10?safeNum(p[def.p10]):null, p50:def.p50?safeNum(p[def.p50]):null, p90:def.p90?safeNum(p[def.p90]):null,
-          market:mkt, edge:edge, lineup:lp
+          market:mkt, edge:edge, lineup:lp, matchupThreat:getMatchupThreat(p.name)
         });
       });
     });
@@ -3463,8 +3920,16 @@ function projectionRowHtml(r, idx){
   var saved = TRACKED_KEYS.has(key);
   var btnCls = 'trk-save'+(saved?' saved':'')+(saving?' saving':'');
   var btnTxt = saving ? '...' : (saved ? '✓ Saved' : '💾 Save Pick');
+  var _th = r.matchupThreat;
+  var thBadge = (_th!=null && _th>=60)
+    ? ' <span title="Batting-order matchup threat" style="font-family:Orbitron,monospace;font-size:.5rem;font-weight:700;padding:1px 5px;border-radius:999px;color:'+(_th>=70?'#ff5252':'#ff9800')+';border:1px solid '+(_th>=70?'#ff5252':'#ff9800')+'55">'+_th+'</span>'
+    : '';
+  var _bk = (r.kind==='hitter') ? getBreakout(r.player) : null;
+  var bkBadge = (_bk && _bk.total>=50)
+    ? ' <span title="Breakout score '+_bk.total+' — '+_bk.vLabel+' (Statcast-backed surge)" style="font-size:.55rem">'+(_bk.verdict==='real'?'🚀':'👀')+'</span>'
+    : '';
   return '<tr class="'+(SELECTED_PROJ===idx?'sel':'')+'" onclick="selectProjection('+idx+')">'
-    + '<td>'+r.rank+'</td><td><span class="pos-tag">'+r.team+'</span></td><td>'+r.player+'</td><td>'+marketLabel(r.marketKey,r.line)+'</td><td>'+pct2(r.prob)+'</td><td>'+(r.edge!=null?'<span class="'+(r.edge>=0.03?'edge-pos':'edge-neu')+'">'+pct2(r.edge)+'</span>':'<span class="edge-na">N/A</span>')+'</td><td>'+confidenceTag(r.edge!=null?r.edge:r.prob)+'</td><td style="max-width:340px;white-space:normal">'+reason+'</td><td><button class="'+btnCls+'" onclick="saveProjectionPick('+idx+',event)">'+btnTxt+'</button></td></tr>';
+    + '<td>'+r.rank+'</td><td><span class="pos-tag">'+r.team+'</span></td><td>'+r.player+thBadge+bkBadge+'</td><td>'+marketLabel(r.marketKey,r.line)+'</td><td>'+pct2(r.prob)+'</td><td>'+(r.edge!=null?'<span class="'+(r.edge>=0.03?'edge-pos':'edge-neu')+'">'+pct2(r.edge)+'</span>':'<span class="edge-na">N/A</span>')+'</td><td>'+confidenceTag(r.edge!=null?r.edge:r.prob)+'</td><td style="max-width:340px;white-space:normal">'+reason+'</td><td><button class="'+btnCls+'" onclick="saveProjectionPick('+idx+',event)">'+btnTxt+'</button></td></tr>';
 }
 function renderProjectionDetail(){
   if(SELECTED_PROJ==null || !PROJ_ROWS[SELECTED_PROJ]) return '<p class="na">Select a ranked projection to open the player and matchup dive.</p>';
@@ -3684,6 +4149,26 @@ function syncTabButtons(tab){
   document.querySelectorAll('.tb2[data-tab]').forEach(function(btn){ btn.classList.toggle('ac', btn.getAttribute('data-tab')===tab); });
 }
 
+// Grade the model's game-level prediction once the result is final: totals
+// accuracy (run error) bumped by whether the winner call hit, distilled to a
+// letter grade + plain-language summary.
+function compareScorecard(isFinal, projTotal, actualTotal, winnerCall){
+  if(!isFinal || projTotal==null || isNaN(projTotal)) return '';
+  var err = Math.abs(projTotal - actualTotal);
+  var pts = err<=1?4 : err<=2?3 : err<=3?2 : err<=4?1 : 0;
+  if(winnerCall==='CORRECT') pts = Math.min(4, pts+0.5);
+  else if(winnerCall==='MISSED') pts = Math.max(0, pts-0.5);
+  var letter = pts>=3.5?'A' : pts>=2.5?'B' : pts>=1.5?'C' : pts>=0.5?'D' : 'F';
+  var col = pts>=3.5?'#00e676' : pts>=2.5?'#9ccc65' : pts>=1.5?'#ffd740' : pts>=0.5?'#ff9800' : '#f44336';
+  var totalRead = err<=1.5?'nailed the total' : err<=2.5?'close on the total' : 'missed the total';
+  var winRead = winnerCall==='CORRECT'?'called the winner' : winnerCall==='MISSED'?'missed the winner' : 'had no winner edge';
+  return '<div style="margin:0 0 12px;padding:11px 13px;border-radius:10px;border:1px solid '+col+'45;background:'+col+'12;display:flex;align-items:center;gap:14px">'
+    +'<div style="font-family:Orbitron,monospace;font-size:2rem;font-weight:900;color:'+col+';line-height:1">'+letter+'</div>'
+    +'<div><div style="font-family:Orbitron,monospace;font-size:.62rem;letter-spacing:1px;color:'+col+';margin-bottom:3px">MODEL SCORECARD</div>'
+    +'<div style="font-size:.62rem;color:var(--t);opacity:.88;line-height:1.5">Model '+totalRead+' ('+err.toFixed(1)+' run error) and '+winRead+'.</div></div>'
+    +'</div>';
+}
+
 function renderDeepDiveCompare(){
   var box=document.getElementById('luP');
   if(!box) return;
@@ -3729,6 +4214,7 @@ function renderDeepDiveCompare(){
 
   box.innerHTML=''
     +'<div class="proj-note" style="margin-bottom:10px">Comprehensive deep-dive compare view across projection, F5, Monte Carlo, parlay signal, and adjustment recommendation.</div>'
+    +compareScorecard(isFinal, projTotal, actualTotal, winnerCall)
     +'<div class="mc-grid">'
       +'<div class="mc-card"><div class="mc-v" style="color:var(--g)">'+away+' '+actualAway+'</div><div class="mc-l">ACTUAL AWAY</div></div>'
       +'<div class="mc-card"><div class="mc-v" style="color:var(--g)">'+home+' '+actualHome+'</div><div class="mc-l">ACTUAL HOME</div></div>'
@@ -3827,6 +4313,7 @@ function renderProjectionHub(){
   if(!box) return;
   if(!SIM_DATA || !SIM_DATA.success){ box.innerHTML='<p class="na">Waiting for Monte Carlo simulation before building the ranked projections board.</p>'; return; }
   PROJ_ROWS = buildProjectionRows();
+  if(typeof renderSharpCard==='function') renderSharpCard();
   if(!PROJ_ROWS.length){ box.innerHTML='<p class="na">No ranked player projections are available yet for this matchup.</p>'; return; }
   var rowsFiltered = filteredProjectionRows();
   var uniquePlayers=[]; var seen={};
@@ -4106,6 +4593,35 @@ function hrmEstP4(p1, p2) {
   return hrmEstP3(p2, p3);
 }
 
+// Surface the strongest cells in the matrix for the active market so the user
+// doesn't have to scan the whole grid. Ranks by the headline line (cols[0]) and
+// also names the best play on the next-harder line.
+function hrmTopPlays(players, cols, colHdrs, resolve, marketLbl){
+  if(!players || !players.length || !cols || cols[0]==null) return '';
+  var line0 = colHdrs[0];
+  var ranked = players.map(function(p){ return {name:p.name, prob:resolve(p, cols[0])}; })
+    .filter(function(x){ return x.name && x.prob!=null && !isNaN(x.prob); })
+    .sort(function(a,b){ return b.prob-a.prob; });
+  if(!ranked.length) return '';
+  var top = ranked.filter(function(x){ return x.prob>=0.60; }).slice(0,4);
+  if(!top.length) top = ranked.slice(0,3);
+  var chips = top.map(function(x){
+    var col = x.prob>=0.70?'#00e676':x.prob>=0.60?'#9ccc65':'#ffd740';
+    return '<span style="display:inline-flex;gap:5px;padding:4px 9px;border-radius:999px;border:1px solid '+col+'40;background:'+col+'14;font-size:.6rem;margin:3px 4px 0 0">'
+      +'<strong style="color:'+col+'">'+Math.round(x.prob*100)+'%</strong> '+x.name+' '+line0+'</span>';
+  }).join('');
+  var prem='';
+  if(cols[1] && colHdrs[1] && colHdrs[1]!=='—'){
+    var r2 = players.map(function(p){ return {name:p.name, prob:resolve(p, cols[1])}; })
+      .filter(function(x){ return x.name && x.prob!=null && !isNaN(x.prob); })
+      .sort(function(a,b){ return b.prob-a.prob; })[0];
+    if(r2 && r2.prob>=0.45)
+      prem='<div style="font-size:.58rem;color:var(--mu);margin-top:6px">Best '+colHdrs[1].replace('*','')+' play: <strong style="color:#67e8f9">'+r2.name+'</strong> ('+Math.round(r2.prob*100)+'%)</div>';
+  }
+  return '<div style="margin:0 0 10px;padding:9px 11px;border-radius:9px;border:1px solid rgba(0,229,255,.18);background:rgba(0,229,255,.04)">'
+    +'<div style="font-family:Orbitron,monospace;font-size:.55rem;letter-spacing:1.5px;color:#67e8f9;margin-bottom:3px">&#127919; TOP '+marketLbl+' PLAYS — '+line0+'</div>'+chips+prem+'</div>';
+}
+
 function renderHitRateMatrix() {
   var box = document.getElementById('luP');
   if(!box) return;
@@ -4214,8 +4730,11 @@ function renderHitRateMatrix() {
   var note = colHdrs.some(function(h){return h.indexOf('*')>-1;})
     ? '<div style="font-size:.6rem;color:var(--mu);margin-top:7px">* Estimated via linear extrapolation of Monte Carlo distribution. Treat as directional — not as precise as O0.5/O1.5 lines.</div>' : '';
 
+  var matrixPlayers = isPitcher ? [awayP, homeP].filter(Boolean) : away.concat(home);
+  var marketLbl = {hits:'HITS',tb:'TB',hr:'HR',rbi:'RBI',runs:'RUNS',k:'K'}[f] || 'PROP';
   box.innerHTML =
     '<div class="hrm-btn-row">' + btnRow + '</div>'
+    + hrmTopPlays(matrixPlayers, cols, colHdrs, resolve, marketLbl)
     + '<div class="hrm-wrap"><table class="hrm-table"><thead>' + hdr + '</thead><tbody>' + bodyRows + '</tbody></table></div>'
     + '<div class="hrm-legend">'
     + '<span class="hrc-hot" style="padding:2px 8px">≥70%</span>'
@@ -4291,18 +4810,51 @@ function bomStaffBadge(badge) {
   return '<span class="bom-staff-tag ' + cls + '">' + icon + ' ' + label + rankTxt + '</span>';
 }
 
+// Composite 0–100 threat score per batter vs the opposing starter, blending
+// overall quality (xwOBA), power (ISO), barrel rate, the pitch-type edge, and
+// the platoon split vs this pitcher's hand. All derived from fields the backend
+// already returns — no extra request. Missing Statcast fields fall back to a
+// neutral baseline so a no-data bat isn't auto-zeroed.
+function bomThreatScore(b) {
+  function num(v){ var n=parseFloat(v); return isNaN(n)?null:n; }
+  var xw = num(b.xwoba), iso = num(b.iso), brl = num(b.brl_pct);
+  var score = 0;
+  score += Math.max(0, Math.min(1, ((xw==null?0.320:xw) - 0.300) / 0.120)) * 40;
+  score += iso  != null ? Math.max(0, Math.min(1, (iso - 0.100) / 0.180)) * 25 : 8;
+  score += brl  != null ? Math.max(0, Math.min(1, brl / 15)) * 15 : 4;
+  var pe = String(b.pitch_type_advantage || 'neutral').toLowerCase();
+  score += pe === 'favorable' ? 12 : (pe === 'unfavorable' ? -8 : 0);
+  var sa = num(b.split_avg), ba = num(b.avg);
+  score += (sa != null && ba != null && sa > 0)
+    ? Math.max(0, Math.min(1, ((sa - ba) + 0.03) / 0.06)) * 8 : 4;
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+function bomThreatTier(score) {
+  return score >= 70 ? 'ELITE' : score >= 50 ? 'HIGH' : score >= 30 ? 'MED' : 'LOW';
+}
+function bomThreatColor(score) {
+  return score >= 70 ? '#ff5252' : score >= 50 ? '#ff9800' : score >= 30 ? '#ffd740' : '#6a8db0';
+}
+function bomThreatBadge(score) {
+  var col = bomThreatColor(score);
+  return '<span style="font-family:Orbitron,monospace;font-size:.56rem;font-weight:700;'
+    + 'padding:2px 7px;border-radius:999px;color:' + col + ';border:1px solid ' + col
+    + '55;background:' + col + '1f">' + score + ' ' + bomThreatTier(score) + '</span>';
+}
+
 function buildBomSide(batters, teamAbbr, oppPitcherName, oppPitcherHand, oppStaffBadge) {
   if(!batters || !batters.length) {
     return '<p class="na" style="padding:12px">Lineup not yet available.</p>';
   }
-  var rows = batters.sort(function(a,b){ return (a.slot||99)-(b.slot||99); }).map(function(b) {
-    var splitAvg = parseFloat(b.split_avg); // vs opp pitcher hand
-    var baseAvg  = parseFloat(b.avg);
+  var sorted = batters.sort(function(a,b){ return (a.slot||99)-(b.slot||99); });
+  var threats = sorted.map(bomThreatScore);
+  var rows = sorted.map(function(b, i) {
     var tag = bomSplitTag(b.split_avg, b.avg);
     return '<tr>'
       + '<td><span class="on">' + (b.slot||'?') + '</span></td>'
       + '<td style="font-size:.68rem">' + (b.name||'?') + '</td>'
       + '<td><span class="pos-tag">' + (b.pos||'?') + '</span></td>'
+      + '<td>' + bomThreatBadge(threats[i]) + '</td>'
       + '<td class="' + avc(b.avg) + '">' + (b.avg||'---') + '</td>'
       + '<td>' + (b.slg||'---') + '</td>'
       + '<td>' + bomIsoCell(b.iso) + '</td>'
@@ -4315,12 +4867,30 @@ function buildBomSide(batters, teamAbbr, oppPitcherName, oppPitcherHand, oppStaf
       + '</tr>';
   }).join('');
 
+  // Lineup summary: average threat, elite/high count, hot-ISO and favorable
+  // pitch-matchup counts — a quick read on which lineup holds the edge.
+  var avgThreat = threats.length ? Math.round(threats.reduce(function(a,b){return a+b;},0)/threats.length) : 0;
+  var dangerCount = threats.filter(function(s){ return s >= 50; }).length;
+  var hotIso = sorted.filter(function(b){ var n=parseFloat(b.iso); return !isNaN(n) && n >= 0.200; }).length;
+  var favCount = sorted.filter(function(b){ return String(b.pitch_type_advantage||'').toLowerCase()==='favorable'; }).length;
+  var aCol = bomThreatColor(avgThreat);
+  var summary = '<div style="display:flex;flex-wrap:wrap;gap:8px;padding:8px 13px;background:rgba(0,0,0,.18);border-bottom:1px solid rgba(255,255,255,.05);font-size:.58rem">'
+    + '<span style="color:' + aCol + '"><strong>LINEUP THREAT ' + avgThreat + '</strong> ' + bomThreatTier(avgThreat) + '</span>'
+    + '<span style="color:var(--mu)">·</span>'
+    + '<span style="color:#ff9800">' + dangerCount + ' HIGH+ bats</span>'
+    + '<span style="color:var(--mu)">·</span>'
+    + '<span class="bom-iso-hot">' + hotIso + ' hot ISO</span>'
+    + '<span style="color:var(--mu)">·</span>'
+    + '<span style="color:#00e676">' + favCount + ' favorable pitch edge</span>'
+    + '</div>';
+
   return '<div class="bom-side-hdr">'
     + '<span style="font-size:.68rem">vs <strong style="color:var(--c)">' + oppPitcherName + '</strong> (' + oppPitcherHand + 'HP) ' + bomStaffBadge(oppStaffBadge) + '</span>'
     + '<span style="font-size:.58rem;color:var(--mu)">ISO ≥.200 = 🟢 HOT ZONE</span>'
     + '</div>'
+    + summary
     + '<div style="overflow-x:auto"><table class="bom-table">'
-    + '<thead><tr><th>#</th><th>PLAYER</th><th>POS</th><th>AVG</th><th>SLG</th><th>ISO</th><th>OPS</th>'
+    + '<thead><tr><th>#</th><th>PLAYER</th><th>POS</th><th>THREAT</th><th>AVG</th><th>SLG</th><th>ISO</th><th>OPS</th>'
     + '<th class="sv-h">xwOBA</th><th class="sv-h">EV</th><th class="sv-h">BRL%</th>'
     + '<th>PITCH TYPE</th>'
     + '<th>vs' + oppPitcherHand + 'AVG</th>'
@@ -4653,7 +5223,28 @@ function renderF5Panel(d) {
   if (!el) return;
   if (!d.success) { el.innerHTML = '<p class="na">' + (d.error||'Unavailable') + '</p>'; return; }
   var domeTxt = d.dome ? '<span style="color:var(--c);font-family:Orbitron,monospace;font-size:.62rem">🏟 DOME — No weather adj</span>' : '';
+  // F5 scoring-environment verdict vs the ~4.3-run league-average first-5 total.
+  var f5t = Number(d.totalF5);
+  var f5Verdict = '';
+  if (!isNaN(f5t)) {
+    var tier = f5t >= 5.0 ? {t:'HIGH F5 SCORING',c:'#ff9800',s:'leans F5 OVER / YRFI'}
+             : f5t <= 3.6 ? {t:'LOW F5 SCORING',c:'#00e676',s:'leans F5 UNDER / NRFI'}
+             : {t:'NEUTRAL F5',c:'#00e5ff',s:'balanced first-5 environment'};
+    var drivers = [];
+    if (d.windField && d.windAdj) drivers.push((d.windAdj>0?'wind out':'wind in')+' ('+d.windField+')');
+    if (Number(d.parkFactor)>=1.03) drivers.push('hitter park');
+    else if (Number(d.parkFactor)<=0.97) drivers.push('pitcher park');
+    var avgEra = (parseFloat(d.awayEra)+parseFloat(d.homeEra))/2;
+    if (!isNaN(avgEra)) drivers.push(avgEra<=3.6?'sharp starters':avgEra>=4.6?'hittable starters':'average starters');
+    f5Verdict = '<div style="margin:0 0 10px;padding:9px 11px;border-radius:9px;border:1px solid '+tier.c+'45;background:'+tier.c+'12">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">'
+      +'<span style="font-family:Orbitron,monospace;font-size:.62rem;letter-spacing:1px;color:'+tier.c+'">'+tier.t+'</span>'
+      +'<span style="font-size:.58rem;color:'+tier.c+'">'+tier.s+'</span></div>'
+      +(drivers.length?'<div style="font-size:.58rem;color:var(--mu);margin-top:5px">Drivers: '+drivers.join(' · ')+'</div>':'')
+      +'</div>';
+  }
   el.innerHTML = ''
+    + f5Verdict
     + '<div class="f5-signal">'
     +   '<div class="f5-signal-val" style="color:' + d.signalColor + '">' + d.signal + '</div>'
     +   '<div class="f5-signal-lbl">F5 PROJECTED TOTAL: ' + d.totalF5 + ' RUNS</div>'
@@ -4668,6 +5259,7 @@ function renderF5Panel(d) {
     +   d.awayAbbr + ' vs ' + d.awayPitcher + ' ERA ' + d.awayEra
     +   ' | ' + d.homeAbbr + ' vs ' + d.homePitcher + ' ERA ' + d.homeEra
     +   (d.wxAdj ? ' | Wx adj: ' + (d.wxAdj > 0 ? '+' : '') + d.wxAdj : '')
+    +   (d.windAdj ? ' | Wind adj: ' + (d.windAdj > 0 ? '+' : '') + d.windAdj + (d.windField ? ' ('+d.windField+')' : '') : '')
     + '</div>';
 }
 
@@ -4682,18 +5274,31 @@ function recomputeRunEnv() {
   // Components:
   // 1. Park factor (0–25): pf 1.10 → 25, pf 0.90 → 0, 1.00 → 12.5
   var pfScore = Math.round(Math.min(25, Math.max(0, (gp.parkFactor - 0.88) / (1.12 - 0.88) * 25)));
-  // 2. Weather (0–25): temp 90°F → 25, 45°F → 0, 70°F → 12.5; dome → 12.5
-  var wxScore = 12;
+  // 2. Weather (0–25): temp 90°F → 25, 45°F → 0, 70°F → 12.5; dome → 12.5.
+  //    Now also folds in the directional wind-to-CF component (windOut, signed
+  //    mph) so a stiff wind blowing out/in moves the run environment, not just
+  //    temperature. Park factor is intentionally excluded here — it is its own
+  //    composite component below, so we must not double-count it.
+  var wxScore = 12, windAdj = 0;
   if (GD) {
     var t = parseFloat(GD.temp);
     if (!isNaN(t)) wxScore = Math.round(Math.min(25, Math.max(0, (t - 45) / (92 - 45) * 25)));
-    if (GD.temp === 'DOME') wxScore = 12;
+    if (typeof GD.windOut === 'number' && GD.temp !== 'DOME') {
+      windAdj = Math.max(-8, Math.min(8, GD.windOut * 0.7));  // ~10 mph out → +7 pts
+      wxScore = Math.round(Math.min(25, Math.max(0, wxScore + windAdj)));
+    }
+    if (GD.temp === 'DOME') { wxScore = 12; windAdj = 0; }
   }
-  // 3. Umpire zone (0–25): higher zone → pitcher-friendly → subtract from run env
-  // Zone 100 (pitcher) → 0 run pts; Zone 0 (hitter) → 25 run pts
-  var umpScore = 12;
+  // 3. Umpire (0–25): zone rating (mechanism: tight zone = fewer Ks = more runs)
+  //    blended with the umpire's observed run tendency r_vs_avg (outcome). Zone
+  //    100 (pitcher) → 0 pts, Zone 0 (hitter) → 25; then ±6 from run tendency.
+  var umpScore = 12, umpRvs = NaN;
   if (DD_UMP && DD_UMP.umpire && DD_UMP.umpire.zone_rating != null) {
-    umpScore = Math.round(25 - (DD_UMP.umpire.zone_rating / 100) * 25);
+    var _u = DD_UMP.umpire;
+    var umpBase = 25 - (_u.zone_rating / 100) * 25;
+    umpRvs = parseFloat(String(_u.r_vs_avg||'').replace('+',''));
+    if (!isNaN(umpRvs)) umpBase += Math.max(-6, Math.min(6, umpRvs * 6));
+    umpScore = Math.round(Math.max(0, Math.min(25, umpBase)));
   }
   // 4. Starter quality (0–25): blended ERA 3.00 → 0 pts; 5.50 → 25 pts
   var eraScore = 12;
@@ -4701,7 +5306,16 @@ function recomputeRunEnv() {
     var avgEra = (parseFloat(gp.awayPitcherEra) + parseFloat(gp.homePitcherEra)) / 2;
     eraScore = Math.round(Math.min(25, Math.max(0, (avgEra - 3.00) / (5.50 - 3.00) * 25)));
   }
-  var total  = pfScore + wxScore + umpScore + eraScore;
+  // 5. Bullpen fatigue modifier (run-env points, not a 0–25 bar): gassed pens
+  //    inflate late-inning scoring, fresh pens suppress it. Asymmetric and
+  //    bounded (−3..+8) so it nudges the total rather than dominating it.
+  var bpAdj = 0;
+  if (DD_BULLPEN && DD_BULLPEN.success) {
+    var aBp = DD_BULLPEN.away || {}, hBp = DD_BULLPEN.home || {};
+    var avgStress = ((aBp.stress_score || 0) + (hBp.stress_score || 0)) / 2;
+    bpAdj = Math.round(Math.max(-3, Math.min(8, (avgStress - 35) * 0.11)));
+  }
+  var total  = Math.max(0, Math.min(100, pfScore + wxScore + umpScore + eraScore + bpAdj));
   var label  = total >= 75 ? '🔥 HIGH SCORING' : total >= 55 ? '📈 LEAN OVER' : total >= 45 ? '⚖️ NEUTRAL' : total >= 30 ? '📉 LEAN UNDER' : '❄️ PITCHER\'S GAME';
   var col    = total >= 75 ? '#ff9800' : total >= 55 ? '#00e676' : total >= 45 ? '#00e5ff' : total >= 30 ? '#76ff03' : '#00b8d4';
   var bpFill = total >= 60 ? 'linear-gradient(90deg,#ff9800,#f44336)' : total >= 45 ? 'linear-gradient(90deg,var(--c),#00e676)' : 'linear-gradient(90deg,#00b8d4,var(--m))';
@@ -4716,14 +5330,43 @@ function recomputeRunEnv() {
     existing.style.marginTop = '12px';
     gpEl.appendChild(existing);
   }
+  // Wind caption: surface the directional read when it's a real mover.
+  var windCap = '';
+  if (GD && GD.windField && typeof GD.windOut === 'number' && Math.abs(GD.windOut) >= 4 && GD.temp !== 'DOME') {
+    var wDir = GD.windField.indexOf('OUT') >= 0 ? 'lifting the run environment'
+             : GD.windField.indexOf('IN') >= 0 ? 'suppressing the run environment' : 'blowing across';
+    var wCol = GD.windField.indexOf('OUT') >= 0 ? '#ff9800' : GD.windField.indexOf('IN') >= 0 ? '#00e676' : 'var(--mu)';
+    windCap = '<div style="font-size:.6rem;color:' + wCol + ';margin-top:8px;letter-spacing:.5px">'
+      + (GD.windEmoji || '') + ' ' + Math.abs(Math.round(GD.windOut)) + ' mph ' + GD.windField
+      + ' — ' + wDir + ' (' + (windAdj > 0 ? '+' : '') + windAdj.toFixed(1) + ' wx pts)</div>';
+  }
+  // Bullpen caption: surface the fatigue read driving the bpAdj modifier.
+  var bpCap = '';
+  if (DD_BULLPEN && DD_BULLPEN.success && bpAdj !== 0) {
+    var aBp2 = DD_BULLPEN.away || {}, hBp2 = DD_BULLPEN.home || {};
+    var bpCol = bpAdj > 0 ? '#ff9800' : '#00e676';
+    bpCap = '<div style="font-size:.6rem;color:' + bpCol + ';margin-top:6px;letter-spacing:.5px">'
+      + '💪 Bullpens: ' + (aBp2.team_abbr || 'AWAY') + ' ' + (aBp2.stress_label || '—')
+      + ' / ' + (hBp2.team_abbr || 'HOME') + ' ' + (hBp2.stress_label || '—')
+      + ' — ' + (bpAdj > 0 ? '+' : '') + bpAdj + ' run-env pts</div>';
+  }
+  // Umpire caption: surface the plate ump's run tendency when notable.
+  var umpCap = '';
+  if (DD_UMP && DD_UMP.umpire && !isNaN(umpRvs) && Math.abs(umpRvs) >= 0.2) {
+    var uCol = umpRvs > 0 ? '#ff9800' : '#00e676';
+    var uName = DD_UMP.umpire.name || 'HP umpire';
+    umpCap = '<div style="font-size:.6rem;color:' + uCol + ';margin-top:6px;letter-spacing:.5px">'
+      + '⚖️ ' + uName + ': ' + (umpRvs > 0 ? '+' : '') + umpRvs.toFixed(1) + ' R/G vs avg — '
+      + (umpRvs > 0 ? 'hitter-leaning zone' : 'pitcher-leaning zone') + '</div>';
+  }
   existing.innerHTML = ''
     + '<div style="border-top:1px solid rgba(255,255,255,.06);padding-top:12px;margin-top:4px">'
     + '<div style="font-family:Orbitron,monospace;font-size:.6rem;color:var(--mu);letter-spacing:3px;margin-bottom:10px">RUN ENVIRONMENT COMPOSITE</div>'
     + '<div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">'
     +   '<div style="flex:1;min-width:180px">'
     +     renderReBar('PARK FACTOR', pfScore, '#ff9800')
-    +     renderReBar('WEATHER', wxScore, '#00b8d4')
-    +     renderReBar('UMPIRE ZONE', umpScore, '#a855f7')
+    +     renderReBar('WEATHER + WIND', wxScore, '#00b8d4')
+    +     renderReBar('UMPIRE', umpScore, '#a855f7')
     +     renderReBar('STARTER ERA', eraScore, '#f44336')
     +   '</div>'
     +   '<div style="text-align:center;min-width:120px">'
@@ -4731,7 +5374,11 @@ function recomputeRunEnv() {
     +     '<div class="re-score-lbl" style="color:' + col + '">/ 100</div>'
     +     '<div style="font-family:Orbitron,monospace;font-size:.65rem;color:' + col + ';margin-top:6px;letter-spacing:1.5px">' + label + '</div>'
     +   '</div>'
-    + '</div></div>';
+    + '</div>'
+    + windCap
+    + bpCap
+    + umpCap
+    + '</div>';
 }
 
 function renderReBar(label, score, col) {
@@ -4747,6 +5394,7 @@ renderGameProjection = function(d) {
   if (_origRGP) _origRGP(d);
   GP_DATA = d;
   setTimeout(recomputeRunEnv, 400);
+  if (typeof renderSharpCard === 'function') renderSharpCard();
 };
 
 
@@ -5231,6 +5879,26 @@ function seSummaryBar(all){
     +'</div>';
 }
 
+// Surface the engine's strongest signals across both lineups so the user
+// doesn't have to scan 18 rows: top hit probabilities and top HR probabilities.
+function seTopPlays(all){
+  if(!all || !all.length) return '';
+  function chip(name, label, col){
+    return '<span style="display:inline-flex;align-items:center;gap:5px;padding:4px 9px;border-radius:999px;border:1px solid '+col+'40;background:'+col+'14;font-size:.6rem;margin:3px 4px 0 0">'
+      +'<strong style="color:'+col+'">'+label+'</strong> '+name+'</span>';
+  }
+  var byHit = all.filter(function(r){ return r.sim && r.sim.p1h!=null; })
+                 .sort(function(a,b){ return b.sim.p1h-a.sim.p1h; }).slice(0,3);
+  var byHR  = all.filter(function(r){ return r.sim && r.comp; })
+                 .sort(function(a,b){ return (b.sim.phr*b.comp.expPA)-(a.sim.phr*a.comp.expPA); }).slice(0,3);
+  var hitChips = byHit.map(function(r){ return chip(r.name, Math.round(r.sim.p1h*100)+'% 1H', '#00e676'); }).join('');
+  var hrChips  = byHR.map(function(r){ return chip(r.name, Math.round(r.sim.phr*r.comp.expPA*100)+'% HR', '#ff9800'); }).join('');
+  return '<div style="margin:0 0 12px;padding:9px 11px;border-radius:9px;border:1px solid rgba(0,229,255,.18);background:rgba(0,229,255,.04)">'
+    +'<div style="font-family:Orbitron,monospace;font-size:.55rem;letter-spacing:1.5px;color:#67e8f9;margin-bottom:3px">&#9889; TOP HIT SIGNALS</div>'+hitChips
+    +'<div style="font-family:Orbitron,monospace;font-size:.55rem;letter-spacing:1.5px;color:#ffb74d;margin:8px 0 3px">&#128640; TOP POWER SIGNALS</div>'+hrChips
+    +'</div>';
+}
+
 function seTheadHtml(){
   return '<thead><tr>'
     +'<th class="left">#</th>'
@@ -5327,6 +5995,7 @@ function _doRenderStrikeEngine(){
     +seOddsStatusHtml()
     +'</div>'
     +seSummaryBar(all)
+    +seTopPlays(all)
     +'<div class="se-section-hdr">&#9889; <span>'+(d.awayAbbr||'AWAY')+' BATTERS</span>'
     +'<span style="font-size:.58rem;color:var(--mu)">vs '+(d.homePitcherName||'?')+' ('+(d.homePitcherHand||'?')+'HP) &mdash; '+((d.homeStaffBadge&&d.homeStaffBadge.label)||'Mid-Pack')+'</span></div>'
     +'<div style="overflow-x:auto"><table class="se-table">'+thead+'<tbody>'+awayRes.html+'</tbody></table></div>'
@@ -5549,6 +6218,35 @@ function renderPitchMix(){
     return m[l] || m['bad'];
   }
 
+  // Synthesize a pitcher-level read from the arsenal: the putaway (whiff) pitch,
+  // the pitch to target (highest wOBA at meaningful usage), and a usage-weighted
+  // arsenal quality tier. Turns the per-pitch table into an actionable summary.
+  function pmPitcherSummary(data){
+    if(!data || !data.length) return '';
+    var used = data.filter(function(p){ return (p.pct||0) >= 8; });
+    if(!used.length) used = data.slice();
+    var putaway = used.slice().sort(function(a,b){ return (b.whiff||0)-(a.whiff||0); })[0];
+    var targPool = used.filter(function(p){ return (p.pct||0) >= 10; });
+    var target = (targPool.length?targPool:used).slice().sort(function(a,b){ return (b.woba||0)-(a.woba||0); })[0];
+    var pieces=[];
+    if(putaway && (putaway.whiff||0) >= 24)
+      pieces.push('<span style="color:#00e676">Putaway: <strong>'+putaway.type+'</strong> ('+(putaway.whiff).toFixed(0)+'% whiff)</span>');
+    else if(putaway)
+      pieces.push('<span style="color:var(--mu)">Top whiff: '+putaway.type+' ('+(putaway.whiff||0).toFixed(0)+'%)</span>');
+    if(target && (target.woba||0) >= 0.330)
+      pieces.push('<span style="color:#ff5252">Target: <strong>'+target.type+'</strong> ('+(target.woba).toFixed(3).replace(/^0/,'')+' wOBA, '+(target.pct||0)+'% usage)</span>');
+    var tot=0, wsum=0;
+    used.forEach(function(p){ tot+=(p.pct||0); wsum+=(p.woba||0)*(p.pct||0); });
+    var arsWoba = tot ? wsum/tot : 0;
+    var tier = arsWoba>=0.345 ? {t:'HITTABLE ARSENAL',c:'#ff5252'}
+             : arsWoba<=0.305 ? {t:'TOUGH ARSENAL',c:'#00e676'}
+             : {t:'AVERAGE ARSENAL',c:'#00e5ff'};
+    return '<div style="margin:2px 0 8px;padding:8px 10px;border-radius:8px;border:1px solid '+tier.c+'40;background:'+tier.c+'12">'
+      +'<div style="font-family:Orbitron,monospace;font-size:.56rem;letter-spacing:1px;color:'+tier.c+';margin-bottom:4px">'+tier.t+' · '+arsWoba.toFixed(3).replace(/^0/,'')+' usage-wtd wOBA</div>'
+      +(pieces.length?'<div style="font-size:.58rem;line-height:1.55">'+pieces.join(' &nbsp;·&nbsp; ')+'</div>':'')
+      +'</div>';
+  }
+
   function buildHalf(pitcher, label, side){
     if(!pitcher) return '<p style="color:var(--mu);font-size:.62rem;padding:8px">No pitcher data.</p>';
     var data = arsenalFromStats(pitcher);
@@ -5634,7 +6332,8 @@ function renderPitchMix(){
     }
 
     return '<div class="pm-half">'
-      + '<div class="pm-half-hd">' + label + '</div>' +
+      + '<div class="pm-half-hd">' + label + '</div>'
+      + pmPitcherSummary(data) +
       '<div style="overflow-x:auto"><table class="pm-table">' +
         '<thead><tr><th>PITCH</th><th>USAGE</th><th>BA</th><th>wOBA</th><th>SLG</th><th>HR</th><th>WHIFF%</th><th>MATCHUP</th></tr></thead>' +
         '<tbody>' + rows + '</tbody>' +
@@ -5760,12 +6459,55 @@ function renderH2H(){
       if(bvpEv  > 70) ev26   = bvpEv;
       if(bvpBrl >  0) brl26  = bvpBrl;
       el.innerHTML = buildShell(kpiRow(ev, barrel, ev26, brl26),
-                                evTableHtml(games) + priorPanelsHtml(mp));
+                                h2hVerdict(games, b, bvpEv, bvpBrl, mp) + evTableHtml(games) + priorPanelsHtml(mp));
     });
   } else {
     // No IDs available — show Savant stats we have on the batter object
     el.innerHTML = buildShell(kpiRow(ev, barrel, ev26, brl26), evTableHtml([]));
   }
+}
+
+// ── H2H matchup verdict ──────────────────────────────────────────────
+// Synthesizes a directional read even when there's no direct BvP history
+// (the common case): combines career BvP at-bats, the batter's barrel
+// profile, and the arsenal-similarity prior slash into a single lean.
+function h2hVerdict(games, b, bvpEv, bvpBrl, mp){
+  var pa=0,h=0,hr=0,k=0;
+  (games||[]).forEach(function(e){
+    var r=(e.result||e.event||'').toUpperCase(); if(!r) return; pa++;
+    if(r.indexOf('HOME RUN')>=0){ h++; hr++; }
+    else if(r.indexOf('TRIPLE')>=0||r.indexOf('DOUBLE')>=0||r.indexOf('SINGLE')>=0){ h++; }
+    else if(r==='STRIKEOUT'||r==='K'){ k++; }
+  });
+  var brl = bvpBrl>0 ? bvpBrl : (parseFloat(b&&(b.sv_brl_pct||b.barrelPct||b.barrelpct))||0);
+  var lean=0, signals=[];
+  if(brl>=10){ lean++; signals.push('Above-average barrel rate ('+brl.toFixed(1)+'%)'); }
+  else if(brl>0 && brl<=5){ lean--; signals.push('Light barrel profile ('+brl.toFixed(1)+'%)'); }
+  var ap = mp && mp.arsenal_prior && mp.arsenal_prior.prior_counts;
+  if(ap){
+    var ab=+ap.ab||0;
+    var tb=(+ap['1b']||0)+2*(+ap['2b']||0)+3*(+ap['3b']||0)+4*(+ap.hr||0);
+    if(ab>=10){
+      var slg=tb/ab;
+      if(slg>=0.450){ lean++; signals.push('Mashes similar arsenals ('+slg.toFixed(3).replace(/^0/,'')+' SLG)'); }
+      else if(slg<=0.350){ lean--; signals.push('Struggles vs similar arsenals ('+slg.toFixed(3).replace(/^0/,'')+' SLG)'); }
+    }
+  }
+  if(pa>=10){
+    if(hr>=2){ lean++; signals.push(hr+' HR in '+pa+' career PA'); }
+    if(k/pa>=0.35){ lean--; signals.push(Math.round(k/pa*100)+'% K rate in this matchup'); }
+  }
+  var tier = lean>=1?'ADVANTAGE BATTER':lean<=-1?'ADVANTAGE PITCHER':'EVEN MATCHUP';
+  var col  = lean>=1?'#00e676':lean<=-1?'#f44336':'#00e5ff';
+  var sample = pa>0 ? (pa+' PA on record · '+h+' H · '+hr+' HR · '+k+' K')
+                    : 'No direct PA on record — projecting from profile + arsenal priors';
+  if(!signals.length) signals.push('Balanced profile with no standout edge either way');
+  return '<div style="margin:4px 0 12px;padding:10px 12px;border-radius:9px;border:1px solid '+col+'40;background:'+col+'12">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">'
+    +'<span style="font-family:Orbitron,monospace;font-size:.62rem;letter-spacing:1px;color:'+col+'">'+tier+'</span>'
+    +'<span style="font-size:.55rem;color:var(--mu)">'+sample+'</span></div>'
+    +'<div style="font-size:.6rem;color:var(--t);opacity:.85;line-height:1.55">'+signals.map(function(s){return '• '+s;}).join('<br>')+'</div>'
+    +'</div>';
 }
 
 // ── Arsenal-similarity prior panels ──────────────────────────────────
@@ -5955,8 +6697,17 @@ function _getPitcherHr9(pitcher){
 }
 
 // Get park factor from GD
-function _getParkFactor(gd){
+// For HR modeling, prefer the HR-specific park factor — handedness-split when
+// available (e.g. a LHB at Yankee Stadium gets the short-porch boost). Falls
+// back to the symmetric HR factor, then the run factor, then neutral.
+function _getParkFactor(gd, batter){
   if(!gd) return { val: 1.0, src: 'DEFAULT' };
+  var hand = batter ? String(batter.bats||batter.batSide||batter.bat_side||'R').charAt(0).toUpperCase() : '';
+  var hsplit = hand==='L' ? gd.hrParkFactorLHB : (hand==='R' ? gd.hrParkFactorRHB : null);
+  var hpf = parseFloat(hsplit);
+  if(!isNaN(hpf) && hpf > 0) return { val: hpf, src: 'LIVE' };
+  var hr = parseFloat(gd.hrParkFactor);
+  if(!isNaN(hr) && hr > 0) return { val: hr, src: 'LIVE' };
   var pf = parseFloat(gd.parkFactor || gd.park_factor || gd.pf);
   if(!isNaN(pf) && pf > 0) return { val: pf, src: 'LIVE' };
   return { val: 1.0, src: 'DEFAULT' };
@@ -6039,9 +6790,9 @@ function renderHRSim(){
   var brlSrc   = stats.barrelSrc;
   var evSrc    = stats.evSrc;
 
-  // Pull pitcher HR/9 and park factor
+  // Pull pitcher HR/9 and HR park factor (handedness-aware for the hitter)
   var hr9Data  = _getPitcherHr9(oppPitcher);
-  var pfData   = _getParkFactor(gd);
+  var pfData   = _getParkFactor(gd, b);
   var hr9      = hr9Data.val;
   var pf       = pfData.val;
   var hr9Src   = hr9Data.src;
@@ -6086,9 +6837,9 @@ function renderHRSim(){
       'AVG EXIT VELOCITY',
       'Average speed off the bat. HRs typically need 95+ mph EV. Sourced from Statcast / projections.',
       [['LG AVG','88.0 mph'],['ABOVE AVG','&gt; 90'],['ELITE','&gt; 93']]) +
-    _simCard('PARK FACTOR',     pf.toFixed(2)+'x',     pfSrc,
-      'PARK FACTOR',
-      'HR-friendliness multiplier for today\'s ballpark. Sourced from your game-summary API.',
+    _simCard('HR PARK'+(function(){var h=String(b.bats||b.batSide||'').charAt(0).toUpperCase();return (h==='L'||h==='R')?(' ('+h+'HB)'):'';})(), pf.toFixed(2)+'x', pfSrc,
+      'HR PARK FACTOR',
+      'Home-run park multiplier for today\'s ballpark, split by the hitter\'s handedness when the park has a known platoon skew (e.g. Yankee Stadium short porch for LHB). Falls back to the symmetric HR factor.',
       [['NEUTRAL','1.00'],['HR FRIENDLY','&gt; 1.05'],['PITCHER PARK','&lt; 0.95']]) +
     _simCard('SIMULATIONS',     '5,000',                'LIVE',
       'MONTE CARLO SIMS',
@@ -6136,7 +6887,9 @@ function scoreBatter(b, pitcher, gd, teamAbbr){
   // Exit velo: sv_ev is the Savant field name in batter objects
   var ev     = parseFloat(b&&(b.avgev||b.avgEV||b.ev||b.sv_ev))        || 87.0;
   var hr9    = parseFloat(pitcher&&pitcher.stats&&(pitcher.stats.hr9||pitcher.stats.hrper9)) || 1.2;
-  var pf     = parseFloat((gd&&(gd.parkFactor||gd.park_factor)))                     || 1.0;
+  // Use the handedness-aware HR park factor (not the run factor) so the HR
+  // pick score reflects the actual home-run environment for this hitter.
+  var pf     = _getParkFactor(gd, b).val;
   var score  = Math.round((iso*80) + (barrel*3.5) + ((ev-85)*1.5) + (hr9*6) + ((pf-1)*30));
   var tier   = score>=55?'STRONG':score>=38?'MODERATE':'LEAN';
   return { name:(b.name||b.fullName||'Batter'), team:teamAbbr, score:score, tier:tier, iso:iso, barrel:barrel, ev:ev, hr9:hr9, pf:pf };
@@ -6259,6 +7012,28 @@ function ppLoad() {
     });
 }
 
+// Surface the strongest edges so the user doesn't have to scan the whole board.
+// Ranks the current (filtered) rows by absolute edge %, keeping only plays with
+// a real edge and a definitive side.
+function ppTopPlays(rows) {
+  var cand = (rows||[]).filter(function(p){
+    return p.edge_pct != null && (p.direction==='over'||p.direction==='under') && Math.abs(p.edge_pct) >= 8;
+  });
+  cand.sort(function(a,b){ return Math.abs(b.edge_pct)-Math.abs(a.edge_pct); });
+  var top = cand.slice(0,5);
+  if (!top.length) return '';
+  var chips = top.map(function(p){
+    var dir = p.direction==='over' ? 'OVER' : 'UNDER';
+    var col = p.direction==='over' ? '#00e676' : '#ff9800';
+    return '<span style="display:inline-flex;align-items:center;gap:5px;padding:4px 9px;border-radius:999px;border:1px solid '+col+'40;background:'+col+'14;font-size:.6rem;margin:3px 4px 0 0">'
+      +'<strong style="color:'+col+'">'+dir+' '+p.line+'</strong> '+(p.player||'')+' '+(p.stat||'')
+      +' <span style="color:'+col+';font-weight:700">+'+Math.abs(p.edge_pct).toFixed(0)+'%</span></span>';
+  }).join('');
+  return '<div style="margin:2px 0 12px;padding:9px 11px;border-radius:9px;border:1px solid rgba(255,183,77,.25);background:rgba(255,152,0,.06)">'
+    +'<div style="font-family:Orbitron,monospace;font-size:.56rem;letter-spacing:1.5px;color:#ffb74d;margin-bottom:5px">&#11088; TOP MODEL EDGES</div>'
+    +chips+'</div>';
+}
+
 function ppRender() {
   var el = document.getElementById('tab-prizepicks');
   if (!el) return;
@@ -6326,6 +7101,7 @@ function ppRender() {
     +'<input class="pp-search" type="text" placeholder="Search player, stat&hellip;" '
     +'value="'+(_ppSearch||'').replace(/"/g,'&quot;')+'" oninput="ppSetSearch(this.value)">'
     +'</div>'
+    +ppTopPlays(rows)
     +'<div class="pp-table-wrap"><table class="pp-table"><thead><tr>'
     +th('player','PLAYER')+th('team','TEAM')+th('stat','STAT')
     +th('line','PP LINE')+th('our_proj','OUR PROJ')+th('edge','EDGE')
