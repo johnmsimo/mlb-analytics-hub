@@ -1275,7 +1275,6 @@ function saveSharpBet(){
     .finally(function(){ _sharpSaving=false; renderSharpCard(); });
 }
 function envStyle(tier){
-function envStyle(tier){
   if(tier&&tier.indexOf('HITTER')>=0) return {fg:'#ff9800',bg:'rgba(255,152,0,.08)',bd:'rgba(255,152,0,.32)'};
   if(tier&&tier.indexOf('PITCHER')>=0) return {fg:'#00e676',bg:'rgba(0,230,118,.08)',bd:'rgba(0,230,118,.32)'};
   if(tier==='CONTROLLED') return {fg:'#6a8db0',bg:'rgba(106,141,176,.08)',bd:'rgba(106,141,176,.28)'};
