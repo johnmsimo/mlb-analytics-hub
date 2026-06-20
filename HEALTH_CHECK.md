@@ -63,15 +63,19 @@ bug** found and fixed:
   always missing → relied on the length fallback). Verified: **0 → 252 scores**, correctly ranked
   (Ben Rice, Yordan Alvarez, Byron Buxton on top).
 
-### 🟠 A3 — HR per-game probability (`prob_hr`) is ~2–3× inflated (calibration)
-- In `_p_hr_per_ab` the factors compound multiplicatively and the per-AB cap is a too-loose `0.28`,
-  yielding ~0.16 HR/AB (→ ~0.51 per game) for the top hitter — elite sluggers are ~0.07–0.08/AB
-  (~0.15–0.20 per game). The **ranking is correct** (it's the headline `score` that drives the UI),
-  but the absolute `prob_hr` would mislead if read as a true probability.
-- **Not blindly re-tuned** — proper recalibration needs a backtest against actual HR outcomes
-  (`eval_models.py` / tracker history), same discipline applied to the XGB/HR-TB-RBI models.
-  Recommended: fit the per-AB scale to the realized season HR rate and cap at a realistic
-  max (~0.12/AB). Flagged for a data-driven pass.
+### 🟠 A3 — HR per-game probability (`prob_hr`) was ~2–3× inflated  ✅ FIXED (data-driven)
+- In `_p_hr_per_ab` the factors compounded multiplicatively with unbounded matchup multipliers and a
+  too-loose `0.28` per-AB cap, yielding ~0.16 HR/AB (→ ~0.51 per game) for the top hitter.
+- **Root cause isolated against data** (`data/fg_batting_2026.csv`, AB≥80; realized HR/AB mean
+  0.033, p90 0.059, max 0.100): the *talent* factors (ISO/Barrel%/HardHit%) already reproduce the
+  realized distribution well (corr 0.90, elite ~0.07–0.08). The overshoot came **entirely from the
+  matchup modifiers** — `mix_f` alone could double the rate (range up to 2.0) and the cap was ~3×
+  the realized max.
+- **Fix (data-validated):** `base` set to the realized league HR/AB (0.035) so the population mean
+  is centred (predicted mean 0.0327 vs realized 0.0329, ratio 0.995, corr 0.90); matchup modifiers
+  bounded to sane single-game ranges (`pit_f` [0.70,1.50], `park_f` [0.85,1.30], `mix_f` [0.85,1.20]);
+  per-AB cap 0.28 → 0.13 (empirical max 0.10 + matchup headroom). Live result: top `prob_hr` 0.51 →
+  ~0.36 (Ben Rice), ranking preserved, slate mean p/AB 0.035 — in line with reality.
 
 ### Verified accurate (round 2) + cross-surface observations
 - **Monte Carlo sim (`/api/simulate`)** — healthy and well-calibrated: away/home mean runs 4.72/3.72,

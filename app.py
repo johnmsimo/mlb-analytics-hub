@@ -23269,18 +23269,32 @@ def _compute_pitch_mix_score(pit_pid_str, bat_pid_str):
 
 
 def _p_hr_per_ab(iso, barrel_pct, hh_pct, hr9_vs_hand, park_hr_idx, mix_score):
-    """Compute per-AB HR probability from weighted input factors.
-    Calibrated to 2024 MLB-wide HR rate ~3.2% (1 HR per 31 AB).
+    """Per-AB HR probability from weighted talent + matchup factors.
+
+    Recalibrated 2026-06 against the realized season HR/AB distribution
+    (data/fg_batting_2026.csv, AB>=80: league mean ~0.033, p90 ~0.059,
+    max ~0.100). The talent factors (ISO / Barrel% / HardHit%) reproduce that
+    distribution well on their own (corr ~0.90; elite hitters land ~0.07-0.08).
+    The previous version overshot badly — elite hitters came out at ~0.16/AB
+    (~0.51 per game) — not because of the talent model but because the matchup
+    multipliers were unbounded: pitch-mix alone could DOUBLE the rate (mix_f up
+    to 2.0) and the final cap (0.28) was ~3x the realized season max. The
+    matchup factors are now bounded to sane single-game ranges and the cap
+    reflects the empirical ceiling (~0.10) plus modest favorable-matchup
+    headroom.
     """
-    base = 0.032
-    iso_f    = (max(0.01, iso)    / 0.165) ** 0.6
-    barrel_f = (max(0.1, barrel_pct) / 8.5)  ** 0.5
-    hh_f     = (max(5.0, hh_pct)  / 40.0) ** 0.3
-    pit_f    = (max(0.1, hr9_vs_hand) / 1.25) ** 0.7
-    park_f   = park_hr_idx / 100.0
-    mix_f    = max(0.5, min(2.0, mix_score))
+    # Talent baseline — factors are ~1.0 at league-average inputs; base is the
+    # realized 2026 league HR/AB (~3.3%), which centres the population mean.
+    base = 0.035
+    iso_f    = (max(0.01, iso)        / 0.165) ** 0.6
+    barrel_f = (max(0.1, barrel_pct)  / 8.5)   ** 0.5
+    hh_f     = (max(5.0, hh_pct)      / 40.0)  ** 0.3
+    # Matchup modifiers — bounded so no single factor can dominate one game.
+    pit_f    = min(1.50, max(0.70, (max(0.1, hr9_vs_hand) / 1.25) ** 0.7))
+    park_f   = min(1.30, max(0.85, park_hr_idx / 100.0))
+    mix_f    = min(1.20, max(0.85, 1.0 + (mix_score - 1.0) * 0.35))
     p = base * iso_f * barrel_f * hh_f * pit_f * park_f * mix_f
-    return round(min(p, 0.28), 5)
+    return round(min(p, 0.13), 5)
 
 
 def _daily_hr_score(iso, barrel_pct, hh_pct, hr9_hand, park_hr_idx, mix_score, platoon_adv=0):
