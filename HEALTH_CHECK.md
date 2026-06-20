@@ -51,6 +51,28 @@ bug** found and fixed:
   `iso_{market}.pkl`). Until then the analytic model is authoritative — which is the more accurate
   state today.
 
+### 🔴 A2 — HR daily-scores returned empty (self-referential HTTP call)  ✅ FIXED
+- `/api/hr-analytics/daily-scores` (`api_hr_daily_scores`) fetched each game's lineup by making an
+  **HTTP request to `http://localhost:{PORT}/api/lineup/{game_pk}`** from inside the request
+  handler. That round-trip fails whenever the assumed port is wrong (it defaulted to `10000`, but
+  prod binds `8080`) or no server is bound (tests) → `lineup_data={}` → no batters → **`scores: []`**
+  (observed live). Even when it works it ties up a second worker thread per game, up to ~15×
+  sequentially (workers=1, threads=8).
+- **Fix:** call the lineup builder `api_lineup(game_pk)` in-process and read `.get_json()`; also
+  corrected the `awayConfirmed`/`homeConfirmed` key names the handler was reading (was snake_case,
+  always missing → relied on the length fallback). Verified: **0 → 252 scores**, correctly ranked
+  (Ben Rice, Yordan Alvarez, Byron Buxton on top).
+
+### 🟠 A3 — HR per-game probability (`prob_hr`) is ~2–3× inflated (calibration)
+- In `_p_hr_per_ab` the factors compound multiplicatively and the per-AB cap is a too-loose `0.28`,
+  yielding ~0.16 HR/AB (→ ~0.51 per game) for the top hitter — elite sluggers are ~0.07–0.08/AB
+  (~0.15–0.20 per game). The **ranking is correct** (it's the headline `score` that drives the UI),
+  but the absolute `prob_hr` would mislead if read as a true probability.
+- **Not blindly re-tuned** — proper recalibration needs a backtest against actual HR outcomes
+  (`eval_models.py` / tracker history), same discipline applied to the XGB/HR-TB-RBI models.
+  Recommended: fit the per-AB scale to the realized season HR rate and cap at a realistic
+  max (~0.12/AB). Flagged for a data-driven pass.
+
 ---
 
 ## Findings (severity: 🔴 High · 🟠 Medium · 🟡 Low/Info)

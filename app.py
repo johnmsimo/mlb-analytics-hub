@@ -23729,19 +23729,20 @@ def api_hr_daily_scores():
                 except Exception:
                     pass
 
-            # Fetch lineup for this game
+            # Fetch lineup for this game. Call the lineup builder in-process
+            # rather than over a self-referential HTTP request to
+            # localhost:$PORT — that round-trip silently failed whenever the
+            # assumed port was wrong (default 10000 vs the prod bind 8080) or no
+            # server was listening, leaving scores empty, and otherwise tied up
+            # a second worker thread per game (up to 15× sequentially).
             lineup_data = {}
             try:
-                lr = requests.get(
-                    f"http://localhost:{os.environ.get('PORT', 10000)}/api/lineup/{game_pk}",
-                    timeout=8,
-                )
-                if lr.ok:
-                    lineup_data = lr.json()
+                _lu_resp = api_lineup(game_pk)
+                lineup_data = (_lu_resp.get_json() if hasattr(_lu_resp, "get_json") else None) or {}
             except Exception:
                 pass
-            away_confirmed = bool(lineup_data.get("away_confirmed") or len(lineup_data.get("away") or []) >= 9)
-            home_confirmed = bool(lineup_data.get("home_confirmed") or len(lineup_data.get("home") or []) >= 9)
+            away_confirmed = bool(lineup_data.get("awayConfirmed") or len(lineup_data.get("away") or []) >= 9)
+            home_confirmed = bool(lineup_data.get("homeConfirmed") or len(lineup_data.get("home") or []) >= 9)
             game_label = f"{away_name} @ {home_name} \u2022 {game_time_et}"
             
             for side in ("away", "home"):
