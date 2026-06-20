@@ -1125,6 +1125,15 @@ function renderSharpCard(){
   var driverHtml = drivers.length
     ? '<div style="font-size:.6rem;color:var(--mu);margin-top:9px">KEY DRIVERS: '+drivers.join(' &nbsp;·&nbsp; ')+'</div>' : '';
 
+  // Correlated parlay idea when multiple aligned props exist.
+  var parlay = sharpParlaySuggestion(g, gp, sim);
+  var parlayHtml = parlay
+    ? '<div style="margin-top:9px;padding:8px 11px;border-radius:8px;border:1px solid rgba(0,229,255,.18);background:rgba(0,229,255,.04)">'
+      +'<div style="font-family:Orbitron,monospace;font-size:.54rem;letter-spacing:1.2px;color:#67e8f9;margin-bottom:4px">🔗 CORRELATED PARLAY IDEA ('+parlay.theme+')</div>'
+      +'<div style="font-size:.62rem;color:var(--t);line-height:1.6">'+parlay.legs.map(function(l){return '• '+l.label+' <span style="color:var(--mu)">'+pct2(l.prob)+'</span>';}).join('<br>')+'</div>'
+      +'<div style="font-size:.58rem;color:var(--mu);margin-top:5px">Independent combined: <strong style="color:#67e8f9">'+pct2(parlay.combined)+'</strong> — correlation lifts the true hit rate above this floor.</div></div>'
+    : '';
+
   var best = sharpBestBet(g, gp, sim, (typeof PROJ_ROWS!=='undefined'&&PROJ_ROWS&&PROJ_ROWS.length)?PROJ_ROWS[0]:null);
   _sharpBestEntry = best?best.entry:null; _sharpBestKey = best?best.key:null;
   var saved = _sharpBestKey && _sharpSavedKeys[_sharpBestKey];
@@ -1144,7 +1153,7 @@ function renderSharpCard(){
 
   host.innerHTML='<div class="pt">⚡ SHARP CARD <span class="tag-sv">SIGNAL ROLLUP</span></div>'
     +bestHtml
-    +'<div style="display:flex;gap:8px;flex-wrap:wrap">'+chips.join('')+'</div>'+driverHtml;
+    +'<div style="display:flex;gap:8px;flex-wrap:wrap">'+chips.join('')+'</div>'+driverHtml+parlayHtml;
 }
 // Synthesize the single most actionable play across the rolled-up signals:
 // score the moneyline, total, and top prop, then headline the strongest.
@@ -1215,6 +1224,30 @@ function gradeSharpBet(entry, g){
     return {r:won2?'WON ✓':'LOST ✗', col:won2?'#00e676':'#f44336'};
   }
   return null;
+}
+// Correlated same-game parlay idea: stack legs that move together with the
+// game's scoring theme — OVER game + hitter OVERs (more offense), or UNDER game
+// + starter Ks (suppressed offense). Combined prob is the independent product
+// (conservative; positive correlation lifts the true hit rate).
+function sharpParlaySuggestion(g, gp, sim){
+  if(typeof PROJ_ROWS==='undefined' || !PROJ_ROWS || !PROJ_ROWS.length) return null;
+  var env = gp?gp.runEnv:null, legs=[], theme;
+  if(env==='LOW'){
+    theme='UNDER / pitching';
+    PROJ_ROWS.filter(function(r){return r.kind==='pitcher' && r.prob>=0.55;}).slice(0,2)
+      .forEach(function(r){ legs.push({label:r.player+' '+marketLabel(r.marketKey,r.line)+' OVER', prob:r.prob}); });
+  } else {
+    theme = env==='HIGH' ? 'OVER / offense' : 'offense';
+    PROJ_ROWS.filter(function(r){return r.kind==='hitter' && r.prob>=0.55;}).slice(0,3)
+      .forEach(function(r){ legs.push({label:r.player+' '+marketLabel(r.marketKey,r.line)+' OVER', prob:r.prob}); });
+  }
+  // Need at least 2 same-direction legs from different players.
+  var seen={}, uniq=[];
+  legs.forEach(function(l){ var p=l.label.split(' ')[0]; if(!seen[p]){ seen[p]=1; uniq.push(l); } });
+  if(uniq.length<2) return null;
+  uniq=uniq.slice(0,3);
+  var combined = uniq.reduce(function(a,l){ return a*l.prob; }, 1);
+  return {legs:uniq, combined:combined, theme:theme};
 }
 function _sharpEntryFromProp(r){
   var e = (typeof trackerEntryFromProjection==='function') ? trackerEntryFromProjection(r) : {gamePk:GPK, player:r.player, marketKey:r.marketKey, line:r.line, recommendedSide:'Over', adjProb:r.prob, edge:r.edge};
