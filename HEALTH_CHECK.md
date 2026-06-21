@@ -46,10 +46,21 @@ bug** found and fixed:
   debug prints. Self-healing: committing `iso_batter_hits.pkl` / `iso_pitcher_strikeouts.pkl`
   re-engages XGB automatically. Verified: `xgb_ready('hits'/'k') = False`, projection runs clean
   (0 debug lines), hit projections now driven by the sane analytic model.
-- **Follow-up (not a regression):** to actually *use* the XGB models, train + commit per-market
-  isotonic calibrators alongside them (the regeneration playbook in `docs/` should emit
-  `iso_{market}.pkl`). Until then the analytic model is authoritative — which is the more accurate
-  state today.
+- **Follow-up — ✅ RESOLVED (2026-06-21):** rather than bolt an isotonic onto the broken legacy
+  models, the four models were **regenerated properly** (`regenerate_models.py`). The legacy
+  artifacts were not just uncalibrated — they were trained on a feature schema that was mostly
+  *zero-filled* (the old `train_prop_models.py` never merged FanGraphs K%/BB%/barrel%/whiff% and
+  never wired the opponent-pitcher join), which is the real reason their `predict_proba` was
+  bimodal noise. The regeneration sources season skills from the local FG CSVs by `xMLBAMID`
+  (same source/scale as the live scorer → no train/serve skew), captures the real opposing starter
+  from Statcast, drops historically-unreconstructable features instead of zero-filling, and is
+  validated on a **2025 held-out test** (train 2021–24). All four ship as
+  `CalibratedClassifierCV(XGBClassifier)` with honest out-of-sample skill: test AUC hits 0.591,
+  k_3.5 0.699, k_4.5 0.710, k_5.5 0.725, each beating base-rate Brier and well-calibrated
+  (predicted mean ≈ actual). `xgb_prop_scorer._xgb_calibrated()` now recognises a self-calibrated
+  model (in addition to the `iso_{market}.pkl` path), so `xgb_ready('hits'/'k')` is True and the
+  XGB probability blends with BATX in the stacked calibrator; raw uncalibrated models still stay
+  gated. End-to-end verified.
 
 ### 🔴 A2 — HR daily-scores returned empty (self-referential HTTP call)  ✅ FIXED
 - `/api/hr-analytics/daily-scores` (`api_hr_daily_scores`) fetched each game's lineup by making an

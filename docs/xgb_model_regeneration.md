@@ -5,6 +5,42 @@ used by **`xgb_prop_scorer.py`** and how to deploy them.
 
 ---
 
+## ⚠️ Current production path: `regenerate_models.py`
+
+The four committed models were produced by **`regenerate_models.py`**, not the
+`train_prop_models.py` / Colab path documented further down. Use it to refresh them:
+
+```bash
+pip install xgboost==3.2.0 scikit-learn==1.6.1 pybaseball pandas joblib pyarrow -q
+python regenerate_models.py            # all 4 markets; reruns hit pybaseball's cache
+```
+
+Why a separate script: the older `train_prop_models.py` declared a 20–28 feature
+schema but **silently zero-filled most of it** — it never merged FanGraphs
+K%/BB%/barrel%/whiff% and never wired the opponent-pitcher join, so the models
+trained on ~8 real columns and reported *in-sample* AUC (~0.94 vanity).
+`regenerate_models.py` fixes the data layer and reports **honest held-out metrics**:
+
+- Season skills come from the local `data/fg_{batting,pitching}_*.csv` joined by
+  `xMLBAMID` — the *same source and scale* the live scorer feeds at inference
+  (`_enrich_*_from_fg`), so there is no train/serve skew.
+- Each batter's real **opposing starter** is captured from Statcast (the pitcher
+  with the smallest `at_bat_number` on the batter's half-inning side).
+- Features that can't be reconstructed historically (park/weather/lineup/umpire/
+  bvp) are **dropped from the model's feature list**, not trained on a constant.
+- Train 2021–24, **test on held-out 2025**. A model only ships if its 2025 test
+  AUC ≥ 0.53 **and** it beats the base-rate Brier (genuine out-of-sample skill).
+
+Held-out results of the committed models (2025 test): hits 0.591, k_3.5 0.699,
+k_4.5 0.710, k_5.5 0.725 — all calibrated (predicted mean ≈ actual).
+
+Each artifact is a fitted `CalibratedClassifierCV(XGBClassifier)`, so its
+`predict_proba` is already a probability. The scorer's `xgb_ready()` engages a
+market when the model is self-calibrated (detected at load) **or** a post-hoc
+`models/iso_{market}.pkl` exists; a raw uncalibrated `XGBClassifier` stays gated.
+
+---
+
 ## Background
 
 `xgb_prop_scorer.py` loads four `.pkl` artifacts at startup:
