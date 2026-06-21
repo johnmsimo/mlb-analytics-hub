@@ -20605,7 +20605,7 @@ def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_s
     pitcher_edge = (pit_mult * k_adj) - 1.0
     pitcher_contrib = pitcher_edge * W["pitcher"]
 
-    # ── COMPONENT 8: Recent form (Phase 1) ───────────────────────────────────
+    # ── COMPONENT 8: Recent form (L7) + year-over-year trend ──────────────────
     form_edge   = 0.0
     form_label  = "no data"
     if form and isinstance(form, dict):
@@ -20614,7 +20614,23 @@ def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_s
         if rw is not None:
             form_edge  = _clamp((rw - _LEAGUE_WOBA) / _LEAGUE_WOBA, -0.25, 0.25)
             form_label = f"L7 wOBA {rw:.3f}"
-    form_contrib = form_edge * W["form"]
+    # Year-over-year skill trend from the real FanGraphs 2021-2026 data: the
+    # change in season wOBA vs the player's PRIOR season is a genuine step
+    # forward/back that L7 recent form alone misses. Bounded tighter than L7 and
+    # blended at half weight so it nudges (max ~±0.4% on the composite) rather
+    # than dominates; current-season level already lives in the other components.
+    yoy_edge = 0.0
+    try:
+        _prior_woba = _batx_prior_woba(name)
+        if _prior_woba is not None and fg_woba:
+            yoy_edge = _clamp((fg_woba - _prior_woba) / _LEAGUE_WOBA, -0.12, 0.12)
+            _arrow = '↑' if yoy_edge > 0 else ('↓' if yoy_edge < 0 else '·')
+            _yoy_txt = f"YoY {_arrow} wOBA {fg_woba:.3f} vs {_prior_woba:.3f}"
+            form_label = _yoy_txt if form_label == "no data" else f"{form_label} | {_yoy_txt}"
+    except Exception:
+        pass
+    form_combined = _clamp(form_edge + yoy_edge * 0.5, -0.30, 0.30)
+    form_contrib = form_combined * W["form"]
 
     # ── COMPONENT 9: BvP (recency-weighted H2H) ──────────────────────────────
     bvp_edge    = 0.0
@@ -23140,8 +23156,18 @@ _breakout_cache = {"key": None, "ts": 0.0, "payload": None}
 _breakout_cache_lock = threading.Lock()
 _BREAKOUT_TTL = 3600   # 1h — underlying Savant/FG caches refresh at most daily
 
-_breakout_fg_base = {}        # name_key -> {ev90_cur, ev90_prior, kpct_prior}
+_breakout_fg_base = {}        # name_key -> {ev90_cur, ev90_prior, kpct_prior, woba_prior}
 _breakout_prior_lock = threading.Lock()
+
+
+def _batx_prior_woba(name):
+    """Prior-season (2025) FanGraphs wOBA for a batter, by normalized name, for
+    the BATX form component's year-over-year trend. Shares the memoized FG
+    baseline cache built by _breakout_fg_baselines()."""
+    if not name:
+        return None
+    key = ' '.join(_ascii_fold(str(name)).lower().split())
+    return _breakout_fg_baselines().get(key, {}).get('woba_prior')
 
 
 def _breakout_fg_baselines():
@@ -23173,6 +23199,7 @@ def _breakout_fg_baselines():
             if prior is not None and 'Name' in prior.columns:
                 has_ev90 = 'EV90' in prior.columns
                 has_k = 'K%' in prior.columns
+                has_woba = 'wOBA' in prior.columns
                 for _, r in prior.iterrows():
                     k = _key(r.get('Name'))
                     if not k:
@@ -23186,6 +23213,10 @@ def _breakout_fg_baselines():
                         kp = _f(r.get('K%'))
                         if kp is not None:
                             ent['kpct_prior'] = kp * (100 if kp <= 1 else 1)
+                    if has_woba:
+                        wo = _f(r.get('wOBA'))
+                        if wo and 0.1 < wo < 0.7:
+                            ent['woba_prior'] = wo
 
             cur = _fl._cache.get('bat')
             if cur is not None and 'Name' in cur.columns and 'EV90' in cur.columns:
