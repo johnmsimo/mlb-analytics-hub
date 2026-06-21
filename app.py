@@ -21005,6 +21005,21 @@ def _project_pitcher(pitcher_name, pitcher_id, pitcher_fg, pitcher_sv, pitcher_s
         if arsenal_k_mult != 1.0:
             k_proj = round(k_proj * arsenal_k_mult, 2)
 
+    # ── Year-over-year K% trend shade ─────────────────────────────────────────
+    # K% is the stickiest pitcher skill, so a genuine season-over-season step
+    # (new pitch, velo gain/loss) is real K signal the last-5-start recent form
+    # doesn't capture as a multi-month trajectory. Real FanGraphs 2021-2026 data,
+    # bounded like the stuff/arsenal shades so it refines rather than dominates.
+    yoy_k_mult = 1.0
+    _prior_kpct = _pitcher_prior_kpct(pitcher_name)
+    if _prior_kpct and kpct:
+        yoy_k_mult = _clamp(
+            1.0 + ((kpct - _prior_kpct) / max(_prior_kpct, 0.12)) * 0.18,
+            0.95, 1.07,
+        )
+        if yoy_k_mult != 1.0:
+            k_proj = round(k_proj * yoy_k_mult, 2)
+
     # ── Catcher framing × HP umpire K shade ───────────────────────────────────
     # Combined multiplier captures the (framer × strike-zone bias) interaction.
     fu_mult, fu_meta = (1.0, None)
@@ -21044,6 +21059,10 @@ def _project_pitcher(pitcher_name, pitcher_id, pitcher_fg, pitcher_sv, pitcher_s
         "framing_ump_k_mult": fu_mult,
         # Pitch-mix (arsenal) swing-and-miss shade
         "arsenal_k_mult":  arsenal_k_mult,
+        # Year-over-year K% trend shade (real FG 2025 -> 2026)
+        "yoy_k_mult":      yoy_k_mult,
+        "kpct_prior":      round(_prior_kpct, 3) if _prior_kpct else None,
+        "kpct_current":    round(kpct, 3) if kpct else None,
         "arsenal_whiff":   ars_summary.get("whiff")   if ars_summary else None,
         "arsenal_putaway": ars_summary.get("putaway") if ars_summary else None,
         "arsenal_pitches": ars_summary.get("pitches") if ars_summary else None,
@@ -23168,6 +23187,44 @@ def _batx_prior_woba(name):
         return None
     key = ' '.join(_ascii_fold(str(name)).lower().split())
     return _breakout_fg_baselines().get(key, {}).get('woba_prior')
+
+
+_pitcher_prior_kpct_base = {}      # name_key -> prior-season (2025) K% (decimal)
+_pitcher_prior_kpct_loaded = False
+_pitcher_prior_kpct_lock = threading.Lock()
+
+
+def _pitcher_prior_kpct(name):
+    """Prior-season (2025) FanGraphs K% for a pitcher (decimal), by normalized
+    name, for the pitcher projection's year-over-year K-trend shade. K% is the
+    stickiest pitcher skill, so a real season-over-season step is signal the
+    last-5-start recent form doesn't capture. Built once from FG 2025, memoized."""
+    global _pitcher_prior_kpct_loaded
+    if not name:
+        return None
+    if not _pitcher_prior_kpct_loaded:
+        with _pitcher_prior_kpct_lock:
+            if not _pitcher_prior_kpct_loaded:
+                try:
+                    import fangraphs_loader as _fl
+                    _fl._load_all()
+                    df = _fl._cache.get('pit_2025')
+                    if df is not None and 'Name' in df.columns and 'K%' in df.columns:
+                        for _, r in df.iterrows():
+                            nm, kp = r.get('Name'), r.get('K%')
+                            if nm is None or kp is None:
+                                continue
+                            try:
+                                kpf = float(kp)
+                            except (TypeError, ValueError):
+                                continue
+                            key = ' '.join(_ascii_fold(str(nm)).lower().split())
+                            if key and 0.0 < kpf < 1.0:
+                                _pitcher_prior_kpct_base[key] = kpf
+                except Exception:
+                    print(f"[pitcher_prior_kpct] {traceback.format_exc()}")
+                _pitcher_prior_kpct_loaded = True
+    return _pitcher_prior_kpct_base.get(' '.join(_ascii_fold(str(name)).lower().split()))
 
 
 def _breakout_fg_baselines():
