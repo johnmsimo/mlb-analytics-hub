@@ -184,6 +184,14 @@ bug** found and fixed:
   Buehler (K% .163→.211) +5.3%, Melton/Abbott/Corbin −3 to −4%, all within bounds; exposed as
   `yoy_k_mult`/`kpct_prior`/`kpct_current` in the projection meta.
 
+- **✅ A14 — Consistency board now shows season-over-season hit-rate (data-enabled).** The board
+  showed only current-season l5/l10/l20/season over-rates. Added the same over-rate computed on each
+  player's full **prior season (2025) real game logs** plus a year-over-year delta, so a hot current
+  line reads against last year's established level. 2025 is static → session-cached (fetched once per
+  player, in the same parallel batch) for bounded cost. Surfaced in the UI under the Season cell
+  (`'25 60% · 140g ▲+10`). Verified: 222/249 hit rows carry a real prior rate (Crow-Armstrong +.096,
+  McCarthy +.151, Marte −.05); rookies fall back to null.
+
 > **Note (per the 2021–2026 data pointer):** FanGraphs season files include Statcast-derived EV90 /
 > Barrel% / HardHit% / maxEV for 2021–2026, so genuine year-over-year power/contact deltas are
 > available app-wide — useful anywhere a "trend vs last year" signal is wanted, not just the breakout
