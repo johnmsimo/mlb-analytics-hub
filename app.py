@@ -14360,6 +14360,28 @@ def _record_sharp_verdict(game_pk, date_str, away, home, best, is_final, ascore,
         print(f"[_record_sharp_verdict] {ex}")
 
 
+def _mc_win_pct(game_pk):
+    """Return (away_wp, home_wp) from the cached Monte Carlo sim for this game,
+    tie-redistributed to a 2-way moneyline probability, or None if no fresh sim
+    is cached. Lets the Sharp Card surface the simulation's variance-aware win%
+    instead of the lightweight closed-form (which projects a wider run gap and
+    therefore runs hotter), so its moneyline signal matches the simulation."""
+    try:
+        cc = _correlation_cache.get(game_pk)
+        if not cc or cc.get('date') != datetime.now(ET).strftime('%Y-%m-%d'):
+            return None
+        team = ((cc.get('payload') or {}).get('team')) or {}
+        aw, hw = team.get('away_win_pct'), team.get('home_win_pct')
+        if aw is None or hw is None:
+            return None
+        decided = float(aw) + float(hw)
+        if decided <= 0:
+            return None
+        return round(float(aw) / decided, 4), round(float(hw) / decided, 4)
+    except Exception:
+        return None
+
+
 def _build_sharp_card(game_pk):
     """Server-side Sharp Card rollup — the game-level half of the deep-dive's
     in-page Sharp Card (side lean, total lean, scoring environment, drivers, a
@@ -14376,9 +14398,17 @@ def _build_sharp_card(game_pk):
     total = proj.get("total")
     fav = proj.get("favorite") or "EVEN"
     awp = proj.get("awayWinProb"); hwp = proj.get("homeWinProb")
+    # Prefer the Monte Carlo win% when a fresh sim is cached — the closed-form
+    # projection runs hotter (wider run gap) than the full lineup simulation.
+    win_source = "model"
+    _mc_wp = _mc_win_pct(game_pk)
+    if _mc_wp is not None:
+        awp, hwp = _mc_wp
+        win_source = "monte_carlo"
     win_team, win_pct = (None, None)
     if awp is not None and hwp is not None:
         win_team, win_pct = (away, awp) if awp >= hwp else (home, hwp)
+    lean_team = win_team if (win_source == "monte_carlo" and win_team) else fav
     run_env = "HIGH" if (total is not None and total > 9.5) else ("LOW" if (total is not None and total < 7.5) else "NEUTRAL")
     total_lean = "OVER" if run_env == "HIGH" else ("UNDER" if run_env == "LOW" else "NEUTRAL")
 
@@ -14390,9 +14420,12 @@ def _build_sharp_card(game_pk):
     if hl is not None and hr is not None and abs(hl - hr) >= 0.06:
         drivers.append("Park HR favors " + ("LHB" if hl > hr else "RHB"))
 
-    # Headline best bet (ML / total only — props need the sim).
+    # Headline best bet (ML / total only — props need the sim). The moneyline
+    # signal must be backed by the Monte Carlo win% (not the hotter closed-form),
+    # so a "STRONG BET" ML only fires when the simulation actually supports it.
     cands = []
-    if win_pct is not None and win_pct >= 0.56 and (fav == "EVEN" or fav == win_team):
+    if (win_source == "monte_carlo" and win_pct is not None and win_pct >= 0.56
+            and (fav == "EVEN" or fav == win_team)):
         cands.append({"conf": (win_pct - 0.5) * 2 + (0.12 if fav == win_team else 0.0),
                       "type": "ML", "marketKey": "game_moneyline", "side": win_team, "line": 0,
                       "text": f"{win_team} moneyline — {round(win_pct*100)}% to win"})
@@ -14426,7 +14459,7 @@ def _build_sharp_card(game_pk):
     return {
         "success": True, "gamePk": game_pk, "awayAbbr": away, "homeAbbr": home,
         "status": status, "final": is_final,
-        "sideLean": {"team": fav, "winTeam": win_team, "winPct": win_pct},
+        "sideLean": {"team": lean_team, "winTeam": win_team, "winPct": win_pct, "source": win_source},
         "totalLean": {"lean": total_lean, "total": total, "runEnv": run_env},
         "environment": {"tier": imp.get("tier"), "runDelta": imp.get("runDelta"), "label": imp.get("label")},
         "drivers": drivers,

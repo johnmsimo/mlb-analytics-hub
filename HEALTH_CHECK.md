@@ -89,11 +89,17 @@ bug** found and fixed:
 - **Tracker grading (`_grade_game_bet`)** — ML (tie→PUSH, winner-match→WON) and totals (push on
   exact line, correct Over/Under XOR) are correct; Sharp Card verdicts are locked only pre-final, so
   the hit-rate log records genuine pre-result predictions.
-- **Observation — cross-surface win-prob/run disagreement (no code change):** the Sharp Card win%
-  (73%) comes from the lightweight closed-form `_compute_game_projection_core` (run gap 1.9), while
-  the full MC gives ~54–60% (run gap 1.0). The logistic win-prob coefficient itself is fine; the gap
-  is the two models projecting different run margins. Worth reconciling (e.g. surface the MC win% on
-  the Sharp Card) so the "STRONG BET" ML threshold isn't tripped by the more confident closed-form.
+### 🟠 A4 — Sharp Card win% / moneyline signal overconfident vs the simulation  ✅ FIXED
+- The Sharp Card win% (73%) came from the lightweight closed-form `_compute_game_projection_core`
+  (which projects a wider run gap, 1.9) while the full Monte Carlo gave ~54–64% (run gap 1.0).
+  Diagnosis showed the win-prob *formula* is fine — the gap is the two models projecting different
+  run margins — so the closed-form was tripping the "STRONG BET" moneyline threshold unjustifiably.
+- **Fix:** `_build_sharp_card` now reuses the cached Monte Carlo win% (`_mc_win_pct`, tie-redistributed
+  to a 2-way moneyline prob) when a fresh sim exists, and the moneyline best-bet candidate is gated on
+  `source == monte_carlo` — so a "STRONG BET" ML only fires when the simulation supports it; with no
+  sim cached, no ML signal is emitted. `sideLean.source` exposes which model produced the number.
+  Verified: same game went from "STRONG BET — 73%" → "LEAN — 64%" (the sim's win%) once the sim was
+  cached, and emitted no ML signal beforehand.
 - **Observation — pitchers as batters in MC correlations:** SPs (e.g. Newcomb) appear with
   `batter_total_bases` correlations; under the universal DH they don't bat, so those rows are
   spurious (harmless unless someone bets a pitcher batting prop). Minor lineup-hygiene cleanup.
