@@ -23140,37 +23140,65 @@ _breakout_cache = {"key": None, "ts": 0.0, "payload": None}
 _breakout_cache_lock = threading.Lock()
 _BREAKOUT_TTL = 3600   # 1h — underlying Savant/FG caches refresh at most daily
 
-_breakout_prior_kpct = {}        # name_key -> prior-season (2025) K% in PERCENT
+_breakout_fg_base = {}        # name_key -> {ev90_cur, ev90_prior, kpct_prior}
 _breakout_prior_lock = threading.Lock()
 
 
-def _prior_year_kpct_map():
-    """Real prior-season (2025) K% by normalized name, for the breakout detector's
-    K%-improvement signal. The endpoint previously faked the prior (kpct + 0.5),
-    making every player's year-over-year delta a constant — useless for detecting
-    real contact gains. Built once from the FanGraphs 2025 batting cache."""
+def _breakout_fg_baselines():
+    """Per-name FanGraphs baselines for the breakout detector: current-season
+    (2026) and prior-season (2025) EV90, plus prior-season K%.
+
+    FanGraphs carries Statcast-derived EV90 / Barrel% / HardHit% for 2021-2026,
+    so the detector's headline year-over-year EV90 ('stickiness') and
+    K%-improvement deltas are REAL. The endpoint previously fabricated the prior
+    (ev95-0.5, kpct+0.5), making every player's delta a constant and firing the
+    'regression trap' penalty on every good hitter. Built once and memoized."""
     with _breakout_prior_lock:
-        if _breakout_prior_kpct:
-            return _breakout_prior_kpct
+        if _breakout_fg_base:
+            return _breakout_fg_base
         try:
             import fangraphs_loader as _fl
             _fl._load_all()
-            df = _fl._cache.get('bat_2025')
-            if df is not None and 'Name' in df.columns and 'K%' in df.columns:
-                for _, r in df.iterrows():
-                    nm, kp = r.get('Name'), r.get('K%')
-                    if nm is None or kp is None:
+
+            def _key(nm):
+                return ' '.join(_ascii_fold(str(nm)).lower().split())
+
+            def _f(v):
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    return None
+
+            prior = _fl._cache.get('bat_2025')
+            if prior is not None and 'Name' in prior.columns:
+                has_ev90 = 'EV90' in prior.columns
+                has_k = 'K%' in prior.columns
+                for _, r in prior.iterrows():
+                    k = _key(r.get('Name'))
+                    if not k:
                         continue
-                    try:
-                        kpf = float(kp)
-                    except (TypeError, ValueError):
+                    ent = _breakout_fg_base.setdefault(k, {})
+                    if has_ev90:
+                        ev = _f(r.get('EV90'))
+                        if ev and ev > 50:
+                            ent['ev90_prior'] = ev
+                    if has_k:
+                        kp = _f(r.get('K%'))
+                        if kp is not None:
+                            ent['kpct_prior'] = kp * (100 if kp <= 1 else 1)
+
+            cur = _fl._cache.get('bat')
+            if cur is not None and 'Name' in cur.columns and 'EV90' in cur.columns:
+                for _, r in cur.iterrows():
+                    k = _key(r.get('Name'))
+                    if not k:
                         continue
-                    key = ' '.join(_ascii_fold(str(nm)).lower().split())
-                    if key:
-                        _breakout_prior_kpct[key] = kpf * (100 if kpf <= 1 else 1)
+                    ev = _f(r.get('EV90'))
+                    if ev and ev > 50:
+                        _breakout_fg_base.setdefault(k, {})['ev90_cur'] = ev
         except Exception:
-            print(f"[breakout_prior_kpct] {traceback.format_exc()}")
-        return _breakout_prior_kpct
+            print(f"[breakout_fg_baselines] {traceback.format_exc()}")
+        return _breakout_fg_base
 
 
 @app.route("/api/breakout/candidates")
@@ -23197,7 +23225,7 @@ def api_breakout_candidates():
         with _fg_lock:
             fg = dict(_fg_bat)
 
-        prior_kpct_map = _prior_year_kpct_map()
+        fg_base = _breakout_fg_baselines()
         players = []
         for name_key, sc in stat.items():
             f = fg.get(name_key, {})
@@ -23216,21 +23244,27 @@ def api_breakout_candidates():
                 babip = float(f.get("fg_babip") or .295)
                 iso   = float(f.get("fg_iso") or .150)
                 kpct  = float(f.get("fg_kpct") or .22) * (100 if (f.get("fg_kpct") or 0) <= 1 else 1)
-                # Real 2026 EV95 uses avg_hit_speed proxy; fallback
-                actual_ev95 = float(sc.get("sv_ev") or 0) + 13  # approx offset
                 pa = int(f.get("fg_pa") or 0)
                 if pa < 30: continue  # not enough BIP yet
 
-                # Prior season (2025) K% — real year-over-year contact signal.
-                # Falls back to the current value (dK = 0) when 2025 data is
-                # missing, rather than fabricating a +0.5 improvement for everyone.
-                kpct_prior  = prior_kpct_map.get(name_key, kpct)
-                kpct_real   = name_key in prior_kpct_map
-                # EV95 year-over-year needs prior-season Statcast, which isn't in
-                # the repo. Don't fabricate a delta — flag it so the frontend
-                # scores EV95 on its absolute level and skips the EV-trend mirage
-                # penalty (which previously fired on every wRC+>125 hitter).
-                ev95_prior  = actual_ev95
+                _b = fg_base.get(name_key, {})
+                # EV95 signal: use FanGraphs EV90 (90th-pctile exit velo, ~104 lg
+                # avg) for BOTH seasons — a real, scale-consistent year-over-year
+                # delta. Fall back to the Savant avg-EV proxy only when the
+                # current-season FG EV90 is unavailable.
+                ev90_cur   = _b.get('ev90_cur')
+                ev90_prior = _b.get('ev90_prior')
+                actual_ev95 = ev90_cur if ev90_cur is not None else (float(sc.get("sv_ev") or 0) + 13)
+                if ev90_prior is not None:
+                    ev95_prior          = ev90_prior      # real prior-season EV90
+                    ev_prior_available  = True
+                else:
+                    ev95_prior          = actual_ev95     # no prior → no fabricated delta
+                    ev_prior_available  = False
+                # Prior season (2025) K% — real contact-improvement signal; falls
+                # back to current (dK = 0) when 2025 data is missing.
+                kpct_prior = _b.get('kpct_prior', kpct)
+                kpct_real  = 'kpct_prior' in _b
 
                 # Compose player object
                 players.append({
@@ -23247,7 +23281,7 @@ def api_breakout_candidates():
                     "kpct": round(kpct, 1),
                     "kpctPrior": round(kpct_prior, 1),
                     "kpctPriorReal": kpct_real,
-                    "evPriorAvailable": False,
+                    "evPriorAvailable": ev_prior_available,
                     "babip": round(babip, 3),
                     "wrc": wrc,
                     "avg": round(avg, 3),
