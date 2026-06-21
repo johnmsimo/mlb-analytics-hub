@@ -7769,10 +7769,17 @@ def api_bvp_projection(batter_id, pitcher_id):
         try:
             _pit_form = _pitcher_recent_form(pitcher_id) if pitcher_id else None
             if _pit_form:
-                _avg_ip = _safe_f((_pit_form.get("l5") or _pit_form.get("l3") or {}).get("ip"), None)
-                if _avg_ip and _avg_ip > 0:
+                # _pitcher_recent_form returns {total_ip, n_starts, ...}. The
+                # old code read l5/l3->ip/games (keys that never exist here), so
+                # _avg_ip was always None and every starter was pinned to the
+                # league-average 22.0 TBF — the workload estimate was dead code.
+                _total_ip = _safe_f(_pit_form.get("total_ip"), None)
+                _n_starts = _safe_f(_pit_form.get("n_starts"), 0)
+                # Require >= 2 recent starts; a single start is too noisy a
+                # workload signal, so fall back to the league-average default.
+                if _total_ip and _total_ip > 0 and _n_starts and _n_starts >= 2:
                     # IP per start × ~4.3 batters per inning ≈ TBF/start
-                    starter_tbf = max(15.0, min(28.0, float(_avg_ip) / max(1, (_pit_form.get("l5") or _pit_form.get("l3") or {}).get("games", 1)) * 4.3))
+                    starter_tbf = max(15.0, min(28.0, (_total_ip / _n_starts) * 4.3))
         except Exception:
             pass
 
