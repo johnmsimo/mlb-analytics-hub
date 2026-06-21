@@ -477,25 +477,26 @@ async function loadCacheStatus() {
     else { el.innerHTML = Object.entries(d.loaders||{}).map(([k,v])=>`<div style="color:${v?'#00ff88':'#ff4444'}">${v?'✓':'✗'} ${k}</div>`).join('') || 'Status unavailable'; }
   } catch(e) {}
 }
-async function warmupCache() { try { await fetch('/api/cache/warmup',{method:'POST'}); setTimeout(loadCacheStatus,2000); } catch(e){} }
+async function warmupCache() { try { await fetch('/api/cache/warm',{method:'POST'}); setTimeout(loadCacheStatus,2000); } catch(e){} }
 async function refreshCache() { loadCacheStatus(); }
 
 // ── Brain ──────────────────────────────────────────────────────────────────
 async function loadBrainStatus() {
   try {
-    const r = await fetch('/api/brain/status'); const d = await r.json();
+    const r = await fetch('/api/brain/ingest-status'); const d = await r.json();
+    const s = d.summary || {};
     document.getElementById('brain-stats').innerHTML = [
-      d.statscast ? `Statscast/Savant: <span style="color:#c8d0e0">${d.statscast}</span>` : '',
-      d.fangraphs ? `FanGraphs: <span style="color:#c8d0e0">${d.fangraphs}</span>` : '',
-      d.mlb_api ? `MLB API Players: <span style="color:#c8d0e0">${d.mlb_api}</span>` : '',
-      d.manual_uploads ? `Manual Uploads: <span style="color:#c8d0e0">${d.manual_uploads}</span>` : '',
-      d.total ? `Total Data Points: <span style="color:#00d4ff;font-weight:700">${d.total}</span>` : '',
+      `Statscast/Savant: <span style="color:#c8d0e0">${s.totalStatscastRecords ?? 0}</span>`,
+      `FanGraphs: <span style="color:#c8d0e0">${s.totalFanGraphsRecords ?? 0}</span>`,
+      `MLB API Players: <span style="color:#c8d0e0">${s.totalPlayerRecords ?? 0}</span>`,
+      `Manual Uploads: <span style="color:#c8d0e0">${s.totalManualUploadRecords ?? 0} (${s.manualUploadFiles ?? 0} files)</span>`,
+      `Total Data Points: <span style="color:#00d4ff;font-weight:700">${s.totalDataPoints ?? 0}</span>`,
     ].filter(Boolean).join('<br>') || JSON.stringify(d);
-    if(d.message) document.getElementById('brain-msg').textContent = d.message;
-    if(d.status) document.getElementById('brain-status-msg').textContent = 'Status: '+d.status;
+    if(d.error) document.getElementById('brain-msg').textContent = d.error;
+    if(s.manualUploadState) document.getElementById('brain-status-msg').textContent = 'Status: '+s.manualUploadState;
   } catch(e) { document.getElementById('brain-stats').textContent='Unavailable'; }
 }
-async function ingestNow() { try { await fetch('/api/brain/ingest',{method:'POST'}); setTimeout(loadBrainStatus,2000); } catch(e){} }
+async function ingestNow() { try { await fetch('/api/brain/ingest-trigger',{method:'POST'}); setTimeout(loadBrainStatus,2000); } catch(e){} }
 async function refreshBrain() { loadBrainStatus(); }
 async function fetchMLBPlayers() { try { await fetch('/api/brain/fetch-mlb-players',{method:'POST'}); setTimeout(loadBrainStatus,3000); } catch(e){} }
 
@@ -526,10 +527,10 @@ async function uploadFile() {
   const file = document.getElementById('upload-file').files[0];
   if(!file){document.getElementById('upload-msg').textContent='Select a file first.';return;}
   const fd = new FormData();
-  fd.append('file', file);
-  fd.append('file_type', document.getElementById('upload-type').value);
+  fd.append('files', file);
+  fd.append('type', document.getElementById('upload-type').value);
   try {
-    const r = await fetch('/api/brain/upload',{method:'POST',body:fd});
+    const r = await fetch('/api/brain-data/upload',{method:'POST',body:fd});
     const d = await r.json();
     document.getElementById('upload-msg').textContent = d.success ? '✓ Uploaded' : (d.error||'Error');
     loadUploadedFiles();
@@ -537,37 +538,119 @@ async function uploadFile() {
 }
 async function loadUploadedFiles() {
   try {
-    const r = await fetch('/api/brain/files'); const d = await r.json();
+    const r = await fetch('/api/brain-data/list'); const d = await r.json();
     const files = d.files||[];
     document.getElementById('upload-list').innerHTML = files.map(f=>`
       <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px;padding:8px;background:#0d1220;border-radius:4px;border:1px solid #1e2a3a">
         <div>
-          <div style="font-weight:700;margin-bottom:2px">${f.name||f.filename}</div>
-          <div style="color:#7a8aa0;font-size:10px">${f.type||''} · ${f.format||''} · ${f.size||''} · ${f.records||''} records</div>
-          ${f.status==='INGESTED'?'<div style="color:#00ff88;font-size:10px">INGESTED</div>':''}
+          <div style="font-weight:700;margin-bottom:2px">${f.filename}</div>
+          <div style="color:#7a8aa0;font-size:10px">${f.category||''} · ${f.type||''} · ${f.sizeKB||0} KB · ${f.recordCount||0} records</div>
+          ${f.ingestState==='ingested'?'<div style="color:#00ff88;font-size:10px">INGESTED</div>':''}
         </div>
-        <button class="btn-save" onclick="deleteFile('${f.id||f.name}')" style="font-size:10px;padding:4px 10px">DELETE</button>
+        <button class="btn-save" onclick="deleteFile('${f.filename}')" style="font-size:10px;padding:4px 10px">DELETE</button>
       </div>`).join('') || '<div style="color:#7a8aa0">No files uploaded</div>';
   } catch(e){}
 }
 async function deleteFile(id) {
-  try { await fetch('/api/brain/files/'+id,{method:'DELETE'}); loadUploadedFiles(); } catch(e){}
+  try { await fetch('/api/brain-data/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:id})}); loadUploadedFiles(); } catch(e){}
 }
 
-// ── Summary ────────────────────────────────────────────────────────────────
-async function loadSummary() {
-  const date = document.getElementById('summary-date').value;
-  try {
-    const url = date ? '/api/summary/daily?date='+date : '/api/summary/daily';
-    const r = await fetch(url); const d = await r.json();
-    document.getElementById('summary-content').textContent = d.summary || d.message || 'No stored daily summary for date';
-    document.getElementById('push-state').textContent = d.push_state || 'IDLE';
-  } catch(e){}
+// ── Summary (model-vs-actual final daily summary) ────────────────────────────
+function _summaryDate(){ return (document.getElementById('summary-date').value||'').trim(); }
+function _setSummaryMsg(t){ const el=document.getElementById('summary-msg'); if(el) el.textContent=t||''; }
+function _setPushState(t){ const el=document.getElementById('push-state'); if(el) el.textContent=t||'IDLE'; }
+
+function _renderSummary(payload, label){
+  const el=document.getElementById('summary-content');
+  if(!el) return;
+  const s=(payload&&payload.summary)||null;
+  if(!s){ el.textContent='No stored daily summary for date'; return; }
+  const pct=v=>v==null?'N/A':(Number(v*100).toFixed(1)+'%');
+  const num=v=>v==null?'N/A':v;
+  const topParlays=s.topParlays||[];
+  const recos=s.modelAdjustmentRecommendations||[];
+  const trackerRecos=s.trackerCalibrationRecommendations||[];
+  let html=''
+    +'<div style="color:#c8d0e0;font-weight:700;margin-bottom:6px">'+(s.headline||'Final daily summary')+(label?' ['+label+']':'')+'</div>'
+    +'<div>Pushed: '+(payload.pushedAt||payload.generatedAt||'N/A')+' · by '+(payload.pushedBy||'system')+'</div>'
+    +'<div>Games Processed: '+(s.gamesProcessed||0)+' | Finals: '+(s.finalGames||0)+'</div>'
+    +'<div>Winner Accuracy: '+pct(s.winnerAccuracy)+' | Avg Total Error: '+num(s.avgTotalError)+'</div>'
+    +'<div>Avg F5 Total: '+num(s.avgF5Total)+' | Avg MC Total: '+num(s.avgMonteCarloTotal)+'</div>';
+  html+='<div style="margin-top:8px;color:#c8d0e0;font-weight:700">Top Parlay Candidates</div>';
+  html+=topParlays.length?topParlays.map(p=>{
+    const teams=((p.teams||{}).away||'AWAY')+' @ '+((p.teams||{}).home||'HOME');
+    return '<div style="padding:4px 0;border-bottom:1px solid #1e2a3a">'+teams+' | P '+(p.combinedProb==null?'--':pct(p.combinedProb))+' | EV '+(p.combinedEVPct==null?'--':(Number(p.combinedEVPct).toFixed(2)+'%'))+'<br><span style="color:#7a8aa0">'+((p.legs||[]).join(' + ')||'No legs')+'</span></div>';
+  }).join(''):'<div style="color:#7a8aa0">No parlay candidates stored.</div>';
+  html+='<div style="margin-top:8px;color:#c8d0e0;font-weight:700">Model Adjustment Recommendations</div>';
+  html+=recos.length?recos.map(r=>'<div style="padding:4px 0;border-bottom:1px solid #1e2a3a"><span style="color:#00d4ff">'+String(r.severity||'low').toUpperCase()+'</span> — '+(r.recommendation||'Hold current settings')+'</div>').join(''):'<div style="color:#7a8aa0">No model adjustment recommendations.</div>';
+  html+='<div style="margin-top:8px;color:#c8d0e0;font-weight:700">Tracker Calibration Suggestions</div>';
+  html+=trackerRecos.length?trackerRecos.slice(0,5).map(r=>'<div style="padding:4px 0;border-bottom:1px solid #1e2a3a">'+(r.marketKey||'market')+': '+(r.action||'hold')+' to '+(r.suggested_multiplier==null?'--':r.suggested_multiplier)+'</div>').join(''):'<div style="color:#7a8aa0">No tracker calibration suggestions.</div>';
+  el.innerHTML=html;
 }
-async function buildLiveSummary() { try { const r=await fetch('/api/summary/build',{method:'POST'}); const d=await r.json(); document.getElementById('summary-msg').textContent=d.message||d.error||''; } catch(e){} }
-async function rebuildPush() { try { const r=await fetch('/api/summary/rebuild-push',{method:'POST'}); const d=await r.json(); document.getElementById('summary-msg').textContent=d.message||d.error||''; } catch(e){} }
-async function pushSummary() { try { const r=await fetch('/api/summary/push',{method:'POST'}); const d=await r.json(); document.getElementById('summary-msg').textContent=d.message||d.error||''; } catch(e){} }
-async function loadStored() { loadSummary(); }
+
+async function refreshPushState(){
+  try {
+    const date=_summaryDate();
+    const r=await fetch('/api/model-actual/daily-summary/push-status'+(date?('?date='+encodeURIComponent(date)):''));
+    const d=await r.json();
+    const state=((d.state||((d.status||{}).state)||'idle')+'').toUpperCase();
+    _setPushState(state);
+  } catch(e){ _setPushState('UNAVAILABLE'); }
+}
+
+async function loadSummary() {
+  const date=_summaryDate();
+  _setSummaryMsg('Loading stored summary…');
+  try {
+    const r=await fetch('/api/model-actual/daily-summary/stored'+(date?('?date='+encodeURIComponent(date)):''));
+    const d=await r.json();
+    if(!d||!d.success){ document.getElementById('summary-content').textContent=(d&&d.error)||'No stored daily summary for date'; }
+    else { _renderSummary(d.payload||{}, 'STORED'); }
+    _setSummaryMsg(d&&d.success?'Stored summary loaded':'');
+    refreshPushState();
+  } catch(e){ _setSummaryMsg('Stored summary unavailable'); }
+}
+
+async function buildLiveSummary() {
+  const date=_summaryDate();
+  _setSummaryMsg('Building live summary…');
+  try {
+    const r=await fetch('/api/model-actual/daily-summary?sims=300'+(date?('&date='+encodeURIComponent(date)):''));
+    const d=await r.json();
+    if(!d||!d.success) throw new Error(d.error||'Summary load failed');
+    _renderSummary(d,'LIVE');
+    _setSummaryMsg('Live summary loaded');
+  } catch(e){ _setSummaryMsg(e.message||'Summary load failed'); }
+}
+
+function _pollPush(date, attempt){
+  attempt=attempt||0;
+  if(attempt>80){ _setSummaryMsg('Push is taking longer than expected. Retry load stored.'); return; }
+  fetch('/api/model-actual/daily-summary/push-status?date='+encodeURIComponent(date))
+    .then(r=>r.json()).then(d=>{
+      const st=((d.status||{}).state||d.state||'idle');
+      _setPushState((st+'').toUpperCase());
+      if(st==='completed'){ loadSummary(); _setSummaryMsg('Final daily summary pushed'); return; }
+      if(st==='failed'){ _setSummaryMsg((d.status&&d.status.error)||'Push failed'); return; }
+      setTimeout(()=>_pollPush(date, attempt+1), 2500);
+    }).catch(()=>setTimeout(()=>_pollPush(date, attempt+1), 2500));
+}
+
+async function pushSummary() {
+  const date=_summaryDate();
+  _setSummaryMsg('Pushing final daily summary…');
+  try {
+    const body={sims:800,includeSim:true,maxGames:20};
+    if(date) body.date=date;
+    const r=await fetch('/api/model-actual/daily-summary/push',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const d=await r.json();
+    if(!d||!d.success) throw new Error(d.error||'Push failed');
+    _setSummaryMsg('Push queued. Building full summary…');
+    _pollPush(d.date||date, 0);
+  } catch(e){ _setSummaryMsg(e.message||'Push failed'); }
+}
+async function rebuildPush() { return pushSummary(); }
+async function loadStored() { return loadSummary(); }
 
 // ── XGBoost Training ───────────────────────────────────────────────────────
 let _pt = null, _ll = 0;

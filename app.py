@@ -7769,10 +7769,17 @@ def api_bvp_projection(batter_id, pitcher_id):
         try:
             _pit_form = _pitcher_recent_form(pitcher_id) if pitcher_id else None
             if _pit_form:
-                _avg_ip = _safe_f((_pit_form.get("l5") or _pit_form.get("l3") or {}).get("ip"), None)
-                if _avg_ip and _avg_ip > 0:
+                # _pitcher_recent_form returns {total_ip, n_starts, ...}. The
+                # old code read l5/l3->ip/games (keys that never exist here), so
+                # _avg_ip was always None and every starter was pinned to the
+                # league-average 22.0 TBF — the workload estimate was dead code.
+                _total_ip = _safe_f(_pit_form.get("total_ip"), None)
+                _n_starts = _safe_f(_pit_form.get("n_starts"), 0)
+                # Require >= 2 recent starts; a single start is too noisy a
+                # workload signal, so fall back to the league-average default.
+                if _total_ip and _total_ip > 0 and _n_starts and _n_starts >= 2:
                     # IP per start × ~4.3 batters per inning ≈ TBF/start
-                    starter_tbf = max(15.0, min(28.0, float(_avg_ip) / max(1, (_pit_form.get("l5") or _pit_form.get("l3") or {}).get("games", 1)) * 4.3))
+                    starter_tbf = max(15.0, min(28.0, (_total_ip / _n_starts) * 4.3))
         except Exception:
             pass
 
@@ -13911,8 +13918,19 @@ def _compute_nrfi(game_pk):
         weather_mult += _clamp(_num(wind_out, 0.0) * 0.0045, -0.05, 0.07)
     weather_mult = _clamp(weather_mult, 0.90, 1.14)
 
-    away_score_rate_i1 = _clamp((home_i1_era / 9.0) * park * away_hand_adj * weather_mult, 0.03, 0.62)
-    home_score_rate_i1 = _clamp((away_i1_era / 9.0) * park * home_hand_adj * weather_mult, 0.03, 0.62)
+    # Convert expected first-inning runs (λ = i1_era/9, scaled by park/hand/weather)
+    # to P(>=1 run) via Poisson rather than using λ directly as the probability.
+    # The old code used λ AS the score probability — but P(>=1 run) is always less
+    # than the expected run count (λ > 1-e^-λ for all λ>0), so it overstated the
+    # score rate (an average starter's λ~0.5 became a 0.50 score rate instead of
+    # ~0.39) and collapsed NRFI to ~0.25 for an average matchup vs the ~0.50-0.55
+    # NRFI markets price. (Poisson still slightly overstates because real
+    # first-inning runs cluster; calibrating to play-by-play 1st-inning data is a
+    # follow-up.)
+    away_lambda = (home_i1_era / 9.0) * park * away_hand_adj * weather_mult
+    home_lambda = (away_i1_era / 9.0) * park * home_hand_adj * weather_mult
+    away_score_rate_i1 = _clamp(1.0 - math.exp(-max(0.0, away_lambda)), 0.03, 0.62)
+    home_score_rate_i1 = _clamp(1.0 - math.exp(-max(0.0, home_lambda)), 0.03, 0.62)
 
     nrfi_prob = _clamp((1.0 - away_score_rate_i1) * (1.0 - home_score_rate_i1), 0.03, 0.97)
     yrfi_prob = round(1.0 - nrfi_prob, 4)
@@ -14360,6 +14378,28 @@ def _record_sharp_verdict(game_pk, date_str, away, home, best, is_final, ascore,
         print(f"[_record_sharp_verdict] {ex}")
 
 
+def _mc_win_pct(game_pk):
+    """Return (away_wp, home_wp) from the cached Monte Carlo sim for this game,
+    tie-redistributed to a 2-way moneyline probability, or None if no fresh sim
+    is cached. Lets the Sharp Card surface the simulation's variance-aware win%
+    instead of the lightweight closed-form (which projects a wider run gap and
+    therefore runs hotter), so its moneyline signal matches the simulation."""
+    try:
+        cc = _correlation_cache.get(game_pk)
+        if not cc or cc.get('date') != datetime.now(ET).strftime('%Y-%m-%d'):
+            return None
+        team = ((cc.get('payload') or {}).get('team')) or {}
+        aw, hw = team.get('away_win_pct'), team.get('home_win_pct')
+        if aw is None or hw is None:
+            return None
+        decided = float(aw) + float(hw)
+        if decided <= 0:
+            return None
+        return round(float(aw) / decided, 4), round(float(hw) / decided, 4)
+    except Exception:
+        return None
+
+
 def _build_sharp_card(game_pk):
     """Server-side Sharp Card rollup — the game-level half of the deep-dive's
     in-page Sharp Card (side lean, total lean, scoring environment, drivers, a
@@ -14376,9 +14416,17 @@ def _build_sharp_card(game_pk):
     total = proj.get("total")
     fav = proj.get("favorite") or "EVEN"
     awp = proj.get("awayWinProb"); hwp = proj.get("homeWinProb")
+    # Prefer the Monte Carlo win% when a fresh sim is cached — the closed-form
+    # projection runs hotter (wider run gap) than the full lineup simulation.
+    win_source = "model"
+    _mc_wp = _mc_win_pct(game_pk)
+    if _mc_wp is not None:
+        awp, hwp = _mc_wp
+        win_source = "monte_carlo"
     win_team, win_pct = (None, None)
     if awp is not None and hwp is not None:
         win_team, win_pct = (away, awp) if awp >= hwp else (home, hwp)
+    lean_team = win_team if (win_source == "monte_carlo" and win_team) else fav
     run_env = "HIGH" if (total is not None and total > 9.5) else ("LOW" if (total is not None and total < 7.5) else "NEUTRAL")
     total_lean = "OVER" if run_env == "HIGH" else ("UNDER" if run_env == "LOW" else "NEUTRAL")
 
@@ -14390,9 +14438,12 @@ def _build_sharp_card(game_pk):
     if hl is not None and hr is not None and abs(hl - hr) >= 0.06:
         drivers.append("Park HR favors " + ("LHB" if hl > hr else "RHB"))
 
-    # Headline best bet (ML / total only — props need the sim).
+    # Headline best bet (ML / total only — props need the sim). The moneyline
+    # signal must be backed by the Monte Carlo win% (not the hotter closed-form),
+    # so a "STRONG BET" ML only fires when the simulation actually supports it.
     cands = []
-    if win_pct is not None and win_pct >= 0.56 and (fav == "EVEN" or fav == win_team):
+    if (win_source == "monte_carlo" and win_pct is not None and win_pct >= 0.56
+            and (fav == "EVEN" or fav == win_team)):
         cands.append({"conf": (win_pct - 0.5) * 2 + (0.12 if fav == win_team else 0.0),
                       "type": "ML", "marketKey": "game_moneyline", "side": win_team, "line": 0,
                       "text": f"{win_team} moneyline — {round(win_pct*100)}% to win"})
@@ -14426,7 +14477,7 @@ def _build_sharp_card(game_pk):
     return {
         "success": True, "gamePk": game_pk, "awayAbbr": away, "homeAbbr": home,
         "status": status, "final": is_final,
-        "sideLean": {"team": fav, "winTeam": win_team, "winPct": win_pct},
+        "sideLean": {"team": lean_team, "winTeam": win_team, "winPct": win_pct, "source": win_source},
         "totalLean": {"lean": total_lean, "total": total, "runEnv": run_env},
         "environment": {"tier": imp.get("tier"), "runDelta": imp.get("runDelta"), "label": imp.get("label")},
         "drivers": drivers,
@@ -17909,33 +17960,46 @@ def api_tracker_portfolio(date_str):
 
 def _compute_bvp_grade(bvp_data):
     """
-    Grade batter vs pitcher matchup based on Sprint 2.1 rules.
-    Uses OPS ratio vs batter season OPS with PA thresholds.
-    Stale data (last_season > 2 years ago) is capped at 'B' — old matchup
-    history against a pitcher's previous arsenal is unreliable.
+    Grade batter vs pitcher matchup from the OPS ratio vs the batter's season
+    OPS, gated symmetrically by sample size.
+
+    Accuracy fix: previously the upside tiers (A+/A/B) had PA floors but the
+    'D' fade did not — so a 0-for-3 (raw OPS 0, ratio < 0.85) produced a false
+    fade on pure noise while a hot 3-PA sample could never reach 'A'. Now any
+    directional lean (A/B/D) requires a usable head-to-head sample (>= 10 PA);
+    absent, unknown, or tiny samples grade NEUTRAL ('C'), never a fade. Stale
+    history (old arsenal) is pulled toward neutral in BOTH directions.
     """
     if not bvp_data or not bvp_data.get('success'):
-        return 'D'
+        return 'C'
 
     pa = bvp_data.get('pa', 0)
     ratio = bvp_data.get('ops_ratio')
     if ratio is None:
-        return 'D'
+        return 'C'
+
+    # No directional lean without a usable head-to-head sample.
+    if pa < 10:
+        return 'C'
 
     if ratio >= 1.40 and pa >= 20:
         grade = 'A+'
     elif ratio >= 1.20 and pa >= 15:
         grade = 'A'
-    elif ratio >= 1.05 and pa >= 10:
+    elif ratio >= 1.05:
         grade = 'B'
-    elif ratio >= 0.85:
-        grade = 'C'
-    else:
+    elif ratio < 0.85:
         grade = 'D'
+    else:
+        grade = 'C'
 
-    # Cap stale H2H data — pitcher arsenals change year to year
-    if bvp_data.get('is_stale') and grade in ('A+', 'A'):
-        grade = 'B'
+    # Stale H2H (pitcher arsenals change year to year) → pull toward neutral
+    # in both directions rather than trusting an old-arsenal lean.
+    if bvp_data.get('is_stale'):
+        if grade in ('A+', 'A'):
+            grade = 'B'
+        elif grade == 'D':
+            grade = 'C'
     return grade
 
 
@@ -18413,8 +18477,11 @@ def _compute_cheatsheets_today(date_str):
     weakspot_cards = []
 
     def _bvp_points(grade):
-        g = str(grade or 'D').upper()
-        return {'A+': 1.0, 'A': 0.9, 'B': 0.75, 'C': 0.55, 'D': 0.35}.get(g, 0.45)
+        # Absent/unknown BvP is NEUTRAL ('C'), not a fade — a hitter facing a
+        # pitcher with no head-to-head history shouldn't be penalised here (BvP
+        # is 30% of the composite).
+        g = str(grade or 'C').upper()
+        return {'A+': 1.0, 'A': 0.9, 'B': 0.75, 'C': 0.55, 'D': 0.35}.get(g, 0.55)
 
     def _pitch_adv_points(status):
         s = str(status or 'neutral').lower()
@@ -18604,10 +18671,18 @@ def _compute_cheatsheets_today(date_str):
                 score = _matchup_score(b, opp_fg, opp_sv, pitcher_hand=opp_hand)
                 l10_pct = _l10_hit_pct_for_player(pid, l10_memo)
                 bvp_data = _fetch_bvp(pid, opp_id) if pid and opp_id else None
-                bvp_grade = _compute_bvp_grade(bvp_data) if bvp_data else 'D'
+                bvp_grade = _compute_bvp_grade(bvp_data) if bvp_data else 'C'
+                # Real pitch-type matchup (day-cached; uses the cheap handedness
+                # proxy unless PITCH_ADV_USE_PYBASEBALL is enabled) instead of a
+                # hardcoded 'neutral' — the pitch-adv term was a constant 10% of
+                # the composite and added no ranking signal.
+                pitch_adv = (
+                    _pitch_type_advantage(pid, opp_id, batter_name=name, pitcher_name=opp_name)
+                    if (pid and opp_id) else {'status': 'neutral'}
+                )
                 matchup_grade = _cheatsheet_matchup_grade(
                     score.get('tier'),
-                    pitch_adv={'status': 'neutral'},
+                    pitch_adv=pitch_adv,
                     bvp_grade=bvp_grade,
                     bvp_pa=(bvp_data or {}).get('pa', 0),
                 )
@@ -18621,7 +18696,7 @@ def _compute_cheatsheets_today(date_str):
                     + l10_score * 0.25
                     + split_score * 0.20
                     + park_score * 0.15
-                    + _pitch_adv_points('neutral') * 0.10
+                    + _pitch_adv_points(pitch_adv.get('status')) * 0.10
                 )
                 comp_pct = round(comp * 100.0, 1)
                 model_prob = max(0.01, min(0.99, (score.get('score') or 50) / 100.0))
@@ -20530,7 +20605,7 @@ def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_s
     pitcher_edge = (pit_mult * k_adj) - 1.0
     pitcher_contrib = pitcher_edge * W["pitcher"]
 
-    # ── COMPONENT 8: Recent form (Phase 1) ───────────────────────────────────
+    # ── COMPONENT 8: Recent form (L7) + year-over-year trend ──────────────────
     form_edge   = 0.0
     form_label  = "no data"
     if form and isinstance(form, dict):
@@ -20539,7 +20614,23 @@ def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_s
         if rw is not None:
             form_edge  = _clamp((rw - _LEAGUE_WOBA) / _LEAGUE_WOBA, -0.25, 0.25)
             form_label = f"L7 wOBA {rw:.3f}"
-    form_contrib = form_edge * W["form"]
+    # Year-over-year skill trend from the real FanGraphs 2021-2026 data: the
+    # change in season wOBA vs the player's PRIOR season is a genuine step
+    # forward/back that L7 recent form alone misses. Bounded tighter than L7 and
+    # blended at half weight so it nudges (max ~±0.4% on the composite) rather
+    # than dominates; current-season level already lives in the other components.
+    yoy_edge = 0.0
+    try:
+        _prior_woba = _batx_prior_woba(name)
+        if _prior_woba is not None and fg_woba:
+            yoy_edge = _clamp((fg_woba - _prior_woba) / _LEAGUE_WOBA, -0.12, 0.12)
+            _arrow = '↑' if yoy_edge > 0 else ('↓' if yoy_edge < 0 else '·')
+            _yoy_txt = f"YoY {_arrow} wOBA {fg_woba:.3f} vs {_prior_woba:.3f}"
+            form_label = _yoy_txt if form_label == "no data" else f"{form_label} | {_yoy_txt}"
+    except Exception:
+        pass
+    form_combined = _clamp(form_edge + yoy_edge * 0.5, -0.30, 0.30)
+    form_contrib = form_combined * W["form"]
 
     # ── COMPONENT 9: BvP (recency-weighted H2H) ──────────────────────────────
     bvp_edge    = 0.0
@@ -20914,6 +21005,21 @@ def _project_pitcher(pitcher_name, pitcher_id, pitcher_fg, pitcher_sv, pitcher_s
         if arsenal_k_mult != 1.0:
             k_proj = round(k_proj * arsenal_k_mult, 2)
 
+    # ── Year-over-year K% trend shade ─────────────────────────────────────────
+    # K% is the stickiest pitcher skill, so a genuine season-over-season step
+    # (new pitch, velo gain/loss) is real K signal the last-5-start recent form
+    # doesn't capture as a multi-month trajectory. Real FanGraphs 2021-2026 data,
+    # bounded like the stuff/arsenal shades so it refines rather than dominates.
+    yoy_k_mult = 1.0
+    _prior_kpct = _pitcher_prior_kpct(pitcher_name)
+    if _prior_kpct and kpct:
+        yoy_k_mult = _clamp(
+            1.0 + ((kpct - _prior_kpct) / max(_prior_kpct, 0.12)) * 0.18,
+            0.95, 1.07,
+        )
+        if yoy_k_mult != 1.0:
+            k_proj = round(k_proj * yoy_k_mult, 2)
+
     # ── Catcher framing × HP umpire K shade ───────────────────────────────────
     # Combined multiplier captures the (framer × strike-zone bias) interaction.
     fu_mult, fu_meta = (1.0, None)
@@ -20953,6 +21059,10 @@ def _project_pitcher(pitcher_name, pitcher_id, pitcher_fg, pitcher_sv, pitcher_s
         "framing_ump_k_mult": fu_mult,
         # Pitch-mix (arsenal) swing-and-miss shade
         "arsenal_k_mult":  arsenal_k_mult,
+        # Year-over-year K% trend shade (real FG 2025 -> 2026)
+        "yoy_k_mult":      yoy_k_mult,
+        "kpct_prior":      round(_prior_kpct, 3) if _prior_kpct else None,
+        "kpct_current":    round(kpct, 3) if kpct else None,
         "arsenal_whiff":   ars_summary.get("whiff")   if ars_summary else None,
         "arsenal_putaway": ars_summary.get("putaway") if ars_summary else None,
         "arsenal_pitches": ars_summary.get("pitches") if ars_summary else None,
@@ -21191,7 +21301,7 @@ def api_props_projections(game_pk):
                 form = _fetch_rolling_form(bid, False) if bid else None
                 bvp  = _fetch_bvp(bid, opp_pid)      if (bid and opp_pid) else None
                 pitch_adv = _pitch_type_advantage(bid, opp_pid, batter_name=name, pitcher_name=opp_pname) if (bid and opp_pid) else {"status": "neutral", "note": "Neutral matchup"}
-                bvp_grade = _compute_bvp_grade(bvp) if bvp else 'D'
+                bvp_grade = _compute_bvp_grade(bvp) if bvp else 'C'
                 injury = _get_player_injury(bid) if bid else None
                 # Handedness-aware HR park factor: a switch hitter bats opposite
                 # the starter's throwing hand. Only the HR component meaningfully
@@ -22091,6 +22201,11 @@ def _empty_consistency_payload(date_str):
     }
 
 
+_prior_season_log_cache = {}      # player_id -> 2025 game-log list (static → session-cached)
+_prior_season_log_lock = threading.Lock()
+_PRIOR_CONSISTENCY_YEAR = 2026 - 1  # prior full season for season-over-season context
+
+
 def _compute_consistency_payload(date_str):
     now = time.time()
     raw_games = fetch_schedule(date_str)
@@ -22137,19 +22252,35 @@ def _compute_consistency_payload(date_str):
         player_tasks[player_id] = (row.get('marketKey') == 'pitcher_strikeouts')
 
     logs_by_player = {}
+    prior_logs_by_player = {}
+    # Prior season (2025) is static — reuse the session cache and only fetch misses.
+    with _prior_season_log_lock:
+        for pid in player_tasks:
+            if pid in _prior_season_log_cache:
+                prior_logs_by_player[pid] = _prior_season_log_cache[pid]
     with ThreadPoolExecutor(max_workers=12) as ex:
-        fut_map = {}
+        fut_map = {}          # current season (2026)
+        prior_fut_map = {}    # prior season (2025) — only uncached players
         for player_id, is_pitcher in player_tasks.items():
-            if is_pitcher:
-                fut_map[ex.submit(_fetch_pitcher_gamelog, int(player_id), None, None)] = player_id
-            else:
-                fut_map[ex.submit(_fetch_batter_gamelog, int(player_id), None, None)] = player_id
+            fn = _fetch_pitcher_gamelog if is_pitcher else _fetch_batter_gamelog
+            fut_map[ex.submit(fn, int(player_id), None, None)] = player_id
+            if player_id not in prior_logs_by_player:
+                prior_fut_map[ex.submit(fn, int(player_id), _PRIOR_CONSISTENCY_YEAR, None)] = player_id
         for fut in as_completed(fut_map):
             player_id = fut_map[fut]
             try:
                 logs_by_player[player_id] = fut.result() or []
             except Exception:
                 logs_by_player[player_id] = []
+        for fut in as_completed(prior_fut_map):
+            player_id = prior_fut_map[fut]
+            try:
+                plog = fut.result() or []
+            except Exception:
+                plog = []
+            prior_logs_by_player[player_id] = plog
+            with _prior_season_log_lock:
+                _prior_season_log_cache[player_id] = plog
 
     market_labels = {
         'batter_hits': 'Hits', 'batter_total_bases': 'Total Bases', 'batter_home_runs': 'Home Runs',
@@ -22191,6 +22322,24 @@ def _compute_consistency_payload(date_str):
             'season': _consistency_window_summary(values, row.get('line'), None),
             'sampleSize': len(values),
         }
+        # Season-over-season context: the same over-rate computed on the player's
+        # full PRIOR season (real 2025 game logs), plus the year-over-year delta —
+        # so a hot current line can be read against last year's established level.
+        prior_logs = prior_logs_by_player.get(player_id, [])
+        prior_values = [_consistency_stat_value(lr, market_key) for lr in prior_logs]
+        prior_values = [v for v in prior_values if v is not None]
+        prior_summary = _consistency_window_summary(prior_values, row.get('line'), None)
+        sheet_row['priorSeason'] = {
+            'year': _PRIOR_CONSISTENCY_YEAR,
+            'pct': prior_summary['pct'],
+            'over': prior_summary['over'],
+            'total': prior_summary['total'],
+        }
+        _cur_season_pct = sheet_row['season'].get('pct')
+        sheet_row['yoyDelta'] = (
+            round(_cur_season_pct - prior_summary['pct'], 3)
+            if (_cur_season_pct is not None and prior_summary['pct'] is not None) else None
+        )
         _form = _consistency_recent_form(values, row.get('line'), 10)
         sheet_row['sparkline'] = _form['spark']
         sheet_row['streakOver'] = _form['streakOver']
@@ -22408,7 +22557,26 @@ def _compute_dashboard_quick_props(game_pk, limit=3, date_hint=None):
     away_abbr = away_t.get("team", {}).get("abbreviation", "AWAY")
     home_abbr = home_t.get("team", {}).get("abbreviation", "HOME")
 
-    tagged = [(b, away_abbr) for b in away_bats[:6]] + [(b, home_abbr) for b in home_bats[:6]]
+    # Opposing-starter context for the model matchup score: away batters face the
+    # home starter (hp) and home batters face the away starter (ap).
+    _ap = (_pitchers or {}).get('ap', {}) if isinstance(_pitchers, dict) else {}
+    _hp = (_pitchers or {}).get('hp', {}) if isinstance(_pitchers, dict) else {}
+
+    def _opp_ctx(opp):
+        nm = (opp or {}).get('fullName') or ''
+        hand = 'R'
+        try:
+            if (opp or {}).get('id'):
+                hand = (pitcher_stats_mlb(opp.get('id')).get('pitchHand') or 'R')
+        except Exception:
+            hand = 'R'
+        return (fg_pitcher(nm) or {}), (sv_pitcher(nm) or {}), hand
+
+    _home_opp = _opp_ctx(_hp)   # away batters face the home starter
+    _away_opp = _opp_ctx(_ap)   # home batters face the away starter
+
+    tagged = ([(b, away_abbr, 'away') for b in away_bats[:6]]
+              + [(b, home_abbr, 'home') for b in home_bats[:6]])
 
     market_config = [
         ("hits", "hits", "Hits", [("0.5", "batter_hits"), ("1.5", "batter_hits")]),
@@ -22417,13 +22585,18 @@ def _compute_dashboard_quick_props(game_pk, limit=3, date_hint=None):
         ("rbi", "rbi", "RBIs", [("0.5", "batter_rbis"), ("1.5", "batter_rbis")]),
     ]
 
-    def _score_batter(batter, team):
+    def _score_batter(batter, team, side):
         pid = batter.get("id")
         name = batter.get("name", "")
         if not pid:
             return []
         trends = _build_player_trends(int(pid), False)
         rates = trends.get("over_rates", {})
+        opp_fg, opp_sv, opp_hand = _home_opp if side == 'away' else _away_opp
+        try:
+            mu_score = float((_matchup_score(batter, opp_fg, opp_sv, pitcher_hand=opp_hand) or {}).get("score") or 50.0)
+        except Exception:
+            mu_score = 50.0
         best = {}
 
         for market, mkey, mlabel, line_pairs in market_config:
@@ -22434,8 +22607,11 @@ def _compute_dashboard_quick_props(game_pk, limit=3, date_hint=None):
                 if pct is None or tot < 5 or pct < 0.60:
                     continue
                 if market not in best or pct > best[market]["l10_pct"]:
-                    edge = pct - 0.5
-                    hub = _hub_rating(pct, edge, pct)
+                    # Model-aware quality = recent form blended with the model
+                    # matchup score. This strip fetches no odds, so we do NOT
+                    # fabricate an EV% (the old code reported (l10-0.5)*100 as
+                    # "EV", which is recent hit rate, not expected value).
+                    quality = 0.55 * pct + 0.45 * (mu_score / 100.0)
                     best[market] = {
                         "player": name,
                         "playerId": pid,
@@ -22446,22 +22622,24 @@ def _compute_dashboard_quick_props(game_pk, limit=3, date_hint=None):
                         "line": float(line_str),
                         "l10_pct": round(pct, 3),
                         "l10_total": tot,
-                        "hubRating": hub,
-                        "evPct": round(edge * 100, 1),
+                        "matchupScore": round(mu_score, 1),
+                        "quality": round(quality, 4),
+                        "hubRating": max(0, min(100, round(quality * 100))),
+                        "evPct": None,
                     }
 
         return list(best.values())
 
     all_picks = []
     with ThreadPoolExecutor(max_workers=8) as ex:
-        futs = {ex.submit(_score_batter, b, t): (b, t) for b, t in tagged}
+        futs = {ex.submit(_score_batter, b, t, s): (b, t) for b, t, s in tagged}
         for fut in as_completed(futs):
             try:
                 all_picks.extend(fut.result())
             except Exception:
                 pass
 
-    all_picks.sort(key=lambda x: x.get("l10_pct", 0), reverse=True)
+    all_picks.sort(key=lambda x: x.get("quality", x.get("l10_pct", 0)), reverse=True)
     return gdata, all_picks[:limit]
 
 
@@ -23036,6 +23214,119 @@ _breakout_cache = {"key": None, "ts": 0.0, "payload": None}
 _breakout_cache_lock = threading.Lock()
 _BREAKOUT_TTL = 3600   # 1h — underlying Savant/FG caches refresh at most daily
 
+_breakout_fg_base = {}        # name_key -> {ev90_cur, ev90_prior, kpct_prior, woba_prior}
+_breakout_prior_lock = threading.Lock()
+
+
+def _batx_prior_woba(name):
+    """Prior-season (2025) FanGraphs wOBA for a batter, by normalized name, for
+    the BATX form component's year-over-year trend. Shares the memoized FG
+    baseline cache built by _breakout_fg_baselines()."""
+    if not name:
+        return None
+    key = ' '.join(_ascii_fold(str(name)).lower().split())
+    return _breakout_fg_baselines().get(key, {}).get('woba_prior')
+
+
+_pitcher_prior_kpct_base = {}      # name_key -> prior-season (2025) K% (decimal)
+_pitcher_prior_kpct_loaded = False
+_pitcher_prior_kpct_lock = threading.Lock()
+
+
+def _pitcher_prior_kpct(name):
+    """Prior-season (2025) FanGraphs K% for a pitcher (decimal), by normalized
+    name, for the pitcher projection's year-over-year K-trend shade. K% is the
+    stickiest pitcher skill, so a real season-over-season step is signal the
+    last-5-start recent form doesn't capture. Built once from FG 2025, memoized."""
+    global _pitcher_prior_kpct_loaded
+    if not name:
+        return None
+    if not _pitcher_prior_kpct_loaded:
+        with _pitcher_prior_kpct_lock:
+            if not _pitcher_prior_kpct_loaded:
+                try:
+                    import fangraphs_loader as _fl
+                    _fl._load_all()
+                    df = _fl._cache.get('pit_2025')
+                    if df is not None and 'Name' in df.columns and 'K%' in df.columns:
+                        for _, r in df.iterrows():
+                            nm, kp = r.get('Name'), r.get('K%')
+                            if nm is None or kp is None:
+                                continue
+                            try:
+                                kpf = float(kp)
+                            except (TypeError, ValueError):
+                                continue
+                            key = ' '.join(_ascii_fold(str(nm)).lower().split())
+                            if key and 0.0 < kpf < 1.0:
+                                _pitcher_prior_kpct_base[key] = kpf
+                except Exception:
+                    print(f"[pitcher_prior_kpct] {traceback.format_exc()}")
+                _pitcher_prior_kpct_loaded = True
+    return _pitcher_prior_kpct_base.get(' '.join(_ascii_fold(str(name)).lower().split()))
+
+
+def _breakout_fg_baselines():
+    """Per-name FanGraphs baselines for the breakout detector: current-season
+    (2026) and prior-season (2025) EV90, plus prior-season K%.
+
+    FanGraphs carries Statcast-derived EV90 / Barrel% / HardHit% for 2021-2026,
+    so the detector's headline year-over-year EV90 ('stickiness') and
+    K%-improvement deltas are REAL. The endpoint previously fabricated the prior
+    (ev95-0.5, kpct+0.5), making every player's delta a constant and firing the
+    'regression trap' penalty on every good hitter. Built once and memoized."""
+    with _breakout_prior_lock:
+        if _breakout_fg_base:
+            return _breakout_fg_base
+        try:
+            import fangraphs_loader as _fl
+            _fl._load_all()
+
+            def _key(nm):
+                return ' '.join(_ascii_fold(str(nm)).lower().split())
+
+            def _f(v):
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    return None
+
+            prior = _fl._cache.get('bat_2025')
+            if prior is not None and 'Name' in prior.columns:
+                has_ev90 = 'EV90' in prior.columns
+                has_k = 'K%' in prior.columns
+                has_woba = 'wOBA' in prior.columns
+                for _, r in prior.iterrows():
+                    k = _key(r.get('Name'))
+                    if not k:
+                        continue
+                    ent = _breakout_fg_base.setdefault(k, {})
+                    if has_ev90:
+                        ev = _f(r.get('EV90'))
+                        if ev and ev > 50:
+                            ent['ev90_prior'] = ev
+                    if has_k:
+                        kp = _f(r.get('K%'))
+                        if kp is not None:
+                            ent['kpct_prior'] = kp * (100 if kp <= 1 else 1)
+                    if has_woba:
+                        wo = _f(r.get('wOBA'))
+                        if wo and 0.1 < wo < 0.7:
+                            ent['woba_prior'] = wo
+
+            cur = _fl._cache.get('bat')
+            if cur is not None and 'Name' in cur.columns and 'EV90' in cur.columns:
+                for _, r in cur.iterrows():
+                    k = _key(r.get('Name'))
+                    if not k:
+                        continue
+                    ev = _f(r.get('EV90'))
+                    if ev and ev > 50:
+                        _breakout_fg_base.setdefault(k, {})['ev90_cur'] = ev
+        except Exception:
+            print(f"[breakout_fg_baselines] {traceback.format_exc()}")
+        return _breakout_fg_base
+
 
 @app.route("/api/breakout/candidates")
 def api_breakout_candidates():
@@ -23061,6 +23352,7 @@ def api_breakout_candidates():
         with _fg_lock:
             fg = dict(_fg_bat)
 
+        fg_base = _breakout_fg_baselines()
         players = []
         for name_key, sc in stat.items():
             f = fg.get(name_key, {})
@@ -23079,14 +23371,27 @@ def api_breakout_candidates():
                 babip = float(f.get("fg_babip") or .295)
                 iso   = float(f.get("fg_iso") or .150)
                 kpct  = float(f.get("fg_kpct") or .22) * (100 if (f.get("fg_kpct") or 0) <= 1 else 1)
-                # Real 2026 EV95 uses avg_hit_speed proxy; fallback
-                actual_ev95 = float(sc.get("sv_ev") or 0) + 13  # approx offset
                 pa = int(f.get("fg_pa") or 0)
                 if pa < 30: continue  # not enough BIP yet
 
-                # Prior-year proxy: if no cache for 2025, assume population mean
-                ev95_prior = actual_ev95 - 0.5  # neutral placeholder
-                kpct_prior = kpct + 0.5
+                _b = fg_base.get(name_key, {})
+                # EV95 signal: use FanGraphs EV90 (90th-pctile exit velo, ~104 lg
+                # avg) for BOTH seasons — a real, scale-consistent year-over-year
+                # delta. Fall back to the Savant avg-EV proxy only when the
+                # current-season FG EV90 is unavailable.
+                ev90_cur   = _b.get('ev90_cur')
+                ev90_prior = _b.get('ev90_prior')
+                actual_ev95 = ev90_cur if ev90_cur is not None else (float(sc.get("sv_ev") or 0) + 13)
+                if ev90_prior is not None:
+                    ev95_prior          = ev90_prior      # real prior-season EV90
+                    ev_prior_available  = True
+                else:
+                    ev95_prior          = actual_ev95     # no prior → no fabricated delta
+                    ev_prior_available  = False
+                # Prior season (2025) K% — real contact-improvement signal; falls
+                # back to current (dK = 0) when 2025 data is missing.
+                kpct_prior = _b.get('kpct_prior', kpct)
+                kpct_real  = 'kpct_prior' in _b
 
                 # Compose player object
                 players.append({
@@ -23102,6 +23407,8 @@ def api_breakout_candidates():
                     "maxev": float(sc.get("sv_max_ev") or 110),
                     "kpct": round(kpct, 1),
                     "kpctPrior": round(kpct_prior, 1),
+                    "kpctPriorReal": kpct_real,
+                    "evPriorAvailable": ev_prior_available,
                     "babip": round(babip, 3),
                     "wrc": wrc,
                     "avg": round(avg, 3),
@@ -23269,18 +23576,32 @@ def _compute_pitch_mix_score(pit_pid_str, bat_pid_str):
 
 
 def _p_hr_per_ab(iso, barrel_pct, hh_pct, hr9_vs_hand, park_hr_idx, mix_score):
-    """Compute per-AB HR probability from weighted input factors.
-    Calibrated to 2024 MLB-wide HR rate ~3.2% (1 HR per 31 AB).
+    """Per-AB HR probability from weighted talent + matchup factors.
+
+    Recalibrated 2026-06 against the realized season HR/AB distribution
+    (data/fg_batting_2026.csv, AB>=80: league mean ~0.033, p90 ~0.059,
+    max ~0.100). The talent factors (ISO / Barrel% / HardHit%) reproduce that
+    distribution well on their own (corr ~0.90; elite hitters land ~0.07-0.08).
+    The previous version overshot badly — elite hitters came out at ~0.16/AB
+    (~0.51 per game) — not because of the talent model but because the matchup
+    multipliers were unbounded: pitch-mix alone could DOUBLE the rate (mix_f up
+    to 2.0) and the final cap (0.28) was ~3x the realized season max. The
+    matchup factors are now bounded to sane single-game ranges and the cap
+    reflects the empirical ceiling (~0.10) plus modest favorable-matchup
+    headroom.
     """
-    base = 0.032
-    iso_f    = (max(0.01, iso)    / 0.165) ** 0.6
-    barrel_f = (max(0.1, barrel_pct) / 8.5)  ** 0.5
-    hh_f     = (max(5.0, hh_pct)  / 40.0) ** 0.3
-    pit_f    = (max(0.1, hr9_vs_hand) / 1.25) ** 0.7
-    park_f   = park_hr_idx / 100.0
-    mix_f    = max(0.5, min(2.0, mix_score))
+    # Talent baseline — factors are ~1.0 at league-average inputs; base is the
+    # realized 2026 league HR/AB (~3.3%), which centres the population mean.
+    base = 0.035
+    iso_f    = (max(0.01, iso)        / 0.165) ** 0.6
+    barrel_f = (max(0.1, barrel_pct)  / 8.5)   ** 0.5
+    hh_f     = (max(5.0, hh_pct)      / 40.0)  ** 0.3
+    # Matchup modifiers — bounded so no single factor can dominate one game.
+    pit_f    = min(1.50, max(0.70, (max(0.1, hr9_vs_hand) / 1.25) ** 0.7))
+    park_f   = min(1.30, max(0.85, park_hr_idx / 100.0))
+    mix_f    = min(1.20, max(0.85, 1.0 + (mix_score - 1.0) * 0.35))
     p = base * iso_f * barrel_f * hh_f * pit_f * park_f * mix_f
-    return round(min(p, 0.28), 5)
+    return round(min(p, 0.13), 5)
 
 
 def _daily_hr_score(iso, barrel_pct, hh_pct, hr9_hand, park_hr_idx, mix_score, platoon_adv=0):
@@ -23729,19 +24050,20 @@ def api_hr_daily_scores():
                 except Exception:
                     pass
 
-            # Fetch lineup for this game
+            # Fetch lineup for this game. Call the lineup builder in-process
+            # rather than over a self-referential HTTP request to
+            # localhost:$PORT — that round-trip silently failed whenever the
+            # assumed port was wrong (default 10000 vs the prod bind 8080) or no
+            # server was listening, leaving scores empty, and otherwise tied up
+            # a second worker thread per game (up to 15× sequentially).
             lineup_data = {}
             try:
-                lr = requests.get(
-                    f"http://localhost:{os.environ.get('PORT', 10000)}/api/lineup/{game_pk}",
-                    timeout=8,
-                )
-                if lr.ok:
-                    lineup_data = lr.json()
+                _lu_resp = api_lineup(game_pk)
+                lineup_data = (_lu_resp.get_json() if hasattr(_lu_resp, "get_json") else None) or {}
             except Exception:
                 pass
-            away_confirmed = bool(lineup_data.get("away_confirmed") or len(lineup_data.get("away") or []) >= 9)
-            home_confirmed = bool(lineup_data.get("home_confirmed") or len(lineup_data.get("home") or []) >= 9)
+            away_confirmed = bool(lineup_data.get("awayConfirmed") or len(lineup_data.get("away") or []) >= 9)
+            home_confirmed = bool(lineup_data.get("homeConfirmed") or len(lineup_data.get("home") or []) >= 9)
             game_label = f"{away_name} @ {home_name} \u2022 {game_time_et}"
             
             for side in ("away", "home"):

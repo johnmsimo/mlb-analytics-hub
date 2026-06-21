@@ -1007,8 +1007,11 @@ function renderQuickProps(pk,d){
     var hubRating=Math.round(p.hubRating||p.hub_score||0);
     var cls=hubRating>=85?'elite':hubRating>=70?'strong':hubRating>=55?'mod':'low';
     var mkt=((p.marketLabel||mktLabels[p.market]||p.market)||'Prop')+' O'+p.line;
-    var ev=parseFloat(p.evPct||0);
-    var evTxt=(ev>=0?'+':'')+ev.toFixed(1)+'% EV';
+    // Honest recent-form + model-matchup metrics (this strip fetches no odds,
+    // so it no longer fabricates an "EV%" from the L10 hit rate).
+    var l10=Math.round((p.l10_pct||0)*100);
+    var mu=(p.matchupScore!=null)?Math.round(p.matchupScore):null;
+    var evTxt='L10 '+l10+'%'+(mu!=null?' · MU '+mu:'');
     var key=p.playerId+':'+p.market+':'+p.line;
     var saved=tracked.indexOf(key)>=0;
     var bid='qpsave-'+pk+'-'+i;
@@ -1018,7 +1021,7 @@ function renderQuickProps(pk,d){
       +'<span class="qp-name">'+p.player+'</span>'
       +'<span class="qp-mkt">'+mkt+'</span>'
       +'<span class="qp-hub '+cls+'">HUB '+hubRating+'</span>'
-      +'<span class="qp-ev '+(ev>=0?'pos':'neg')+'">'+evTxt+'</span>'
+      +'<span class="qp-ev '+(l10>=70?'pos':'neg')+'">'+evTxt+'</span>'
       +'<button class="qp-save'+(saved?' saved':'')
       +'" id="'+bid+'" onclick="qpSave(event,'+JSON.stringify(p)+',\''+bid+'\')">'
       +(saved?'✓ Saved':'💾')+'</button>'

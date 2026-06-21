@@ -54,11 +54,31 @@ import numpy as np
 
 try:
     from stacked_calibrator import apply_isotonic as _apply_isotonic
+    from stacked_calibrator import load_calibrator as _load_calibrator
     _CAL_AVAILABLE = True
 except ImportError:
     _CAL_AVAILABLE = False
     def _apply_isotonic(p: float, market_key: str = "batter_hits") -> float:
         return float(p)
+    def _load_calibrator(market_key: str = "batter_hits") -> bool:
+        return False
+
+
+def _xgb_calibrated(market_key: str) -> bool:
+    """A raw XGBClassifier's ``predict_proba`` is NOT a calibrated probability —
+    these models are uncalibrated trees whose output is bimodal/extreme (e.g.
+    ~0.0015 or ~0.998 for ordinary hitters). They are only usable once a trained
+    isotonic calibrator (``models/iso_{market}.pkl``) maps the raw score to a
+    true probability. When that calibrator is absent we return ``False`` so the
+    scorer emits nothing and callers fall back to the analytic model — strictly
+    more accurate than blending uncalibrated XGB output (which otherwise dragged
+    a true ~0.65 hitter down to ~0.30 in the stacked calibrator). Re-engages
+    automatically once an ``iso_{market}.pkl`` is committed."""
+    try:
+        return bool(_load_calibrator(market_key))
+    except Exception:
+        return False
+
 
 try:
     from fangraphs_loader import (
@@ -168,16 +188,31 @@ def _load_models() -> None:
             _loaded = True
 
 
+_MARKET_KEY_FOR = {
+    "hits": "batter_hits",
+    "k":    "pitcher_strikeouts",
+    "hr":   "batter_hr",
+    "tb":   "batter_tb",
+    "rbi":  "batter_rbi",
+}
+
+
 def xgb_ready(market: str = "hits") -> bool:
+    """A market is "ready" only when its model is loaded AND a trained isotonic
+    calibrator exists for it. A raw XGBClassifier's probabilities are
+    uncalibrated (see _xgb_calibrated), so without the calibrator we report not
+    ready and callers use the analytic model instead."""
     if not _loaded:
         _load_models()
     if market == "hits":
-        return "hits" in _models
-    if market == "k":
-        return any(k.startswith("k_") for k in _models)
-    if market in ("hr", "tb", "rbi"):
-        return market in _models
-    return False
+        model_ok = "hits" in _models
+    elif market == "k":
+        model_ok = any(k.startswith("k_") for k in _models)
+    elif market in ("hr", "tb", "rbi"):
+        model_ok = market in _models
+    else:
+        return False
+    return model_ok and _xgb_calibrated(_MARKET_KEY_FOR[market])
 
 
 # ─── XGB prediction interval (tree-level variance) ───────────────────────────────
@@ -569,9 +604,12 @@ def _score_full(
     if model is None:
         return {}
 
+    # Uncalibrated XGB output is not a probability — suppress until a trained
+    # isotonic calibrator exists for this market (see _xgb_calibrated).
+    if not _xgb_calibrated(market_key):
+        return {}
+
     raw_p = float(model.predict_proba(X)[0, 1])
-    if debug_label:
-        print(f"[xgb DEBUG] {debug_label} RAW prob = {raw_p:.4f}")
 
     # Step 2A: isotonic post-calibration
     cal_p = float(_apply_isotonic(raw_p, market_key))
@@ -603,7 +641,6 @@ def xgb_hit_prob(batter: dict, pitcher: dict) -> Optional[float]:
         _load_models()
     model = _models.get("hits")
     if model is None:
-        print("[xgb DEBUG] ❌ No hits model loaded!")
         return None
     try:
         batter_e  = _enrich_batter_from_fg(batter)
@@ -612,17 +649,7 @@ def xgb_hit_prob(batter: dict, pitcher: dict) -> Optional[float]:
         X = _build_hit_features(batter_e, pitcher_e, feat_order)
         if X is None:
             return None
-        print(f"[xgb DEBUG] Player: {batter.get('name', 'unknown')}")
-        print(f"[xgb DEBUG] xBA={batter_e.get('svxba')} EV={batter_e.get('svev')} HardHit%={batter_e.get('svhhpct')}")
-        print(f"[xgb DEBUG] l7_hits={batter_e.get('l7Hits')} l7_hit_rate={batter_e.get('l7HitRate')}")
-        print(f"[xgb DEBUG] park_factor={batter_e.get('parkFactor')} opp_xera={pitcher_e.get('svxera')}")
-        lf = _get_lineup_features(
-            mlbam_id=batter_e.get("mlbamid") or batter_e.get("xMLBAMID"),
-            player_name=batter_e.get("name") or batter_e.get("Name")
-        )
-        print(f"[xgb DEBUG] batting_order={lf['batting_order']} expected_pa={lf['expected_pa']} confirmed={lf['lineup_confirmed']}")
-        result = _score_full("hits", "batter_hits", X, line=0.5,
-                             debug_label=batter.get("name", ""))
+        result = _score_full("hits", "batter_hits", X, line=0.5)
         return result.get("prob")
     except Exception:
         return None
@@ -708,6 +735,8 @@ def xgb_hit_prob_bulk(batters: list, pitcher: dict) -> dict:
         _load_models()
     model = _models.get("hits")
     if model is None or not batters:
+        return {}
+    if not _xgb_calibrated("batter_hits"):
         return {}
     try:
         pitcher_e  = _enrich_pitcher_from_fg(pitcher)

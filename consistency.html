@@ -183,6 +183,22 @@
       return `<span class="rate ${rateClass(summary)}">${label}</span>`;
     }
 
+    // Prior full-season (e.g. 2025) over-rate + year-over-year delta, shown under
+    // the current-season cell so a hot line reads against last year's level.
+    function yoyMarkup(row){
+      const ps = row && row.priorSeason;
+      if(!ps || ps.pct == null) return '';
+      const yy = String(ps.year || '').slice(2);
+      const d = row.yoyDelta;
+      let badge = '';
+      if(d != null){
+        const col = d > 0.02 ? '#00e676' : (d < -0.02 ? '#ff5252' : '#7a8aa0');
+        const ar  = d > 0.02 ? '▲' : (d < -0.02 ? '▼' : '–');
+        badge = ` <span style="color:${col}">${ar}${d > 0 ? '+' : ''}${Math.round(d * 100)}</span>`;
+      }
+      return `<div class="small">'${yy} ${Math.round(ps.pct * 100)}% · ${ps.total || 0}g${badge}</div>`;
+    }
+
     function num(value, digits=1){
       if(value == null || value === '' || Number.isNaN(Number(value))) return '-';
       return Number(value).toFixed(digits);
@@ -279,7 +295,7 @@
           `<td>${rateMarkup(row.l5)}</td>` +
           `<td>${rateMarkup(row.l10)}</td>` +
           `<td>${rateMarkup(row.l20)}</td>` +
-          `<td>${rateMarkup(row.season)}</td>` +
+          `<td>${rateMarkup(row.season)}${yoyMarkup(row)}</td>` +
           `<td>${sparkMarkup(row.sparkline)}</td>` +
           `<td>${row.streakOver ? `<span class="streak">${row.streakOver}🔥</span>` : '-'}</td>` +
           `<td>${row.sampleSize || 0}</td>` +
