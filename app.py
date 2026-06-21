@@ -17549,6 +17549,141 @@ def api_tracker_brier_apply():
     })
 
 
+def _entry_model_prob(row):
+    """The model's probability for the SIDE that was bet, as stored on the pick.
+    Falls back through the known probability fields; returns None if absent."""
+    for k in ('modelProb', 'blendedProb', 'adjProb', 'rawProb', 'probability'):
+        v = row.get(k)
+        if v is None:
+            continue
+        try:
+            f = float(v)
+            if 0.0 <= f <= 1.0:
+                return f
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _market_brier_ece(rows, n_bins=10):
+    """Brier score + Expected Calibration Error for one market's graded picks.
+    `rows` are tracker entries already filtered to grade in (win, loss)."""
+    xs, ys = [], []
+    for r in rows:
+        p = _entry_model_prob(r)
+        if p is None:
+            continue
+        xs.append(p)
+        ys.append(1.0 if r.get('grade') == 'win' else 0.0)
+    n = len(xs)
+    if n == 0:
+        return {'n': 0, 'brier': None, 'ece': None, 'mean_pred': None,
+                'mean_actual': None, 'overconfident': None}
+    brier = sum((p - y) ** 2 for p, y in zip(xs, ys)) / n
+    ece = 0.0
+    for i in range(n_bins):
+        lo, hi = i / n_bins, (i + 1) / n_bins
+        bucket = [(p, y) for p, y in zip(xs, ys) if (lo <= p < hi) or (i == n_bins - 1 and p == 1.0)]
+        if not bucket:
+            continue
+        mp = sum(p for p, _ in bucket) / len(bucket)
+        ma = sum(y for _, y in bucket) / len(bucket)
+        ece += (len(bucket) / n) * abs(mp - ma)
+    mean_pred = sum(xs) / n
+    mean_actual = sum(ys) / n
+    return {
+        'n': n,
+        'brier': round(brier, 4),
+        'ece': round(ece, 4),
+        'mean_pred': round(mean_pred, 4),
+        'mean_actual': round(mean_actual, 4),
+        'overconfident': bool(mean_pred > mean_actual),
+    }
+
+
+_MODEL_METRICS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   'models', 'model_metrics.json')
+
+
+@app.route('/api/calibration/markets')
+def api_calibration_markets():
+    """Live model-vs-reality readout per prop market.
+
+    For each market it returns the live Brier + Expected Calibration Error (ECE)
+    computed from graded tracker picks in the look-back window, next to the
+    model's held-out (2021-24 train / 2025 test) benchmark from
+    models/model_metrics.json. The point of comparison: a market is healthy when
+    its live Brier is at/below its held-out test_brier and below baserate_brier
+    (genuine, calibrated skill carrying over to production). MIN_N gates noisy
+    early samples with a "warming up" status rather than a misleading number.
+
+    Query params: ?window=N (look-back days, default 60), ?date=YYYY-MM-DD.
+    """
+    window = int(request.args.get('window', 60) or 60)
+    date_str = request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
+    MIN_N = 20  # below this the live Brier is too noisy to act on
+
+    entries = _collect_window_entries(date_str, window)
+    by_market = {}
+    for row in entries:
+        mk = row.get('marketKey')
+        if mk and row.get('grade') in ('win', 'loss'):
+            by_market.setdefault(mk, []).append(row)
+
+    benchmarks = {}
+    try:
+        with open(_MODEL_METRICS_PATH) as f:
+            benchmarks = (json.load(f) or {}).get('by_tracker_market', {})
+    except Exception:
+        benchmarks = {}
+
+    # Union of markets that have a model benchmark and markets seen live.
+    markets = sorted(set(benchmarks) | set(by_market))
+    out = []
+    for mk in markets:
+        live = _market_brier_ece(by_market.get(mk, []))
+        bench = benchmarks.get(mk)
+        if live['n'] < MIN_N:
+            status = 'warming_up'
+        elif bench and live['brier'] is not None:
+            base = bench.get('baserate_brier')
+            test = bench.get('test_brier')
+            if base is not None and live['brier'] >= base:
+                status = 'no_edge'           # not beating a constant base rate
+            elif test is not None and live['brier'] <= test + 0.01:
+                status = 'on_track'          # matching held-out skill
+            else:
+                status = 'degraded'          # has edge but worse than held-out
+        else:
+            status = 'tracking'
+        out.append({
+            'marketKey': mk,
+            'live': live,
+            'benchmark': bench,
+            'xgb_engaged': bool(mk in ('batter_hits', 'pitcher_strikeouts')
+                                and _XGB_AVAILABLE
+                                and xgb_ready('hits' if mk == 'batter_hits' else 'k')),
+            'status': status,
+        })
+
+    return jsonify({
+        'success': True,
+        'date': date_str,
+        'window': window,
+        'min_sample': MIN_N,
+        'markets': out,
+        'legend': {
+            'warming_up': f'fewer than {MIN_N} graded picks — Brier too noisy to act on',
+            'on_track': 'live Brier matches the held-out test benchmark',
+            'degraded': 'has edge over base rate but worse than held-out — watch for drift',
+            'no_edge': 'live Brier no better than the base rate — model not adding value',
+            'tracking': 'accumulating data; no model benchmark for this market',
+        },
+        'note': 'Held-out benchmarks are out-of-sample (train 2021-24, test 2025). '
+                'Live Brier from graded tracker picks; lower is better.',
+    })
+
+
 # ── Phase 14 Closing-Line Value + ROI Simulation ──────────────────────────────
 
 def _profit_units_from_american(price):

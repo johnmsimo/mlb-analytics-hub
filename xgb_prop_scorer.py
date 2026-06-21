@@ -65,19 +65,59 @@ except ImportError:
 
 
 def _xgb_calibrated(market_key: str) -> bool:
-    """A raw XGBClassifier's ``predict_proba`` is NOT a calibrated probability —
-    these models are uncalibrated trees whose output is bimodal/extreme (e.g.
-    ~0.0015 or ~0.998 for ordinary hitters). They are only usable once a trained
-    isotonic calibrator (``models/iso_{market}.pkl``) maps the raw score to a
-    true probability. When that calibrator is absent we return ``False`` so the
-    scorer emits nothing and callers fall back to the analytic model — strictly
-    more accurate than blending uncalibrated XGB output (which otherwise dragged
-    a true ~0.65 hitter down to ~0.30 in the stacked calibrator). Re-engages
-    automatically once an ``iso_{market}.pkl`` is committed."""
+    """Whether this market's XGB probability is trustworthy as a calibrated value.
+
+    Two independent ways a market qualifies:
+
+      1. **Self-calibrated model.** The model artifact is itself a
+         ``CalibratedClassifierCV`` (isotonic/sigmoid), so ``predict_proba`` is
+         already a true probability. This is what ``regenerate_models.py`` /
+         ``train_prop_models.py`` produce. Detected at load time
+         (``_self_cal[model_key]``).
+      2. **Post-hoc isotonic.** A trained ``models/iso_{market}.pkl`` exists and
+         maps a raw score to a probability (the original two-stage design).
+
+    A raw, uncalibrated ``XGBClassifier`` qualifies under NEITHER — its
+    ``predict_proba`` is bimodal/extreme (~0.0015 or ~0.998 for ordinary
+    hitters). When a market fails both checks we return ``False`` so the scorer
+    emits nothing and callers fall back to the analytic model — strictly more
+    accurate than blending uncalibrated XGB output (which otherwise dragged a
+    true ~0.65 hitter down to ~0.30 in the stacked calibrator)."""
     try:
+        if _market_is_self_calibrated(market_key):
+            return True
         return bool(_load_calibrator(market_key))
     except Exception:
         return False
+
+
+def _is_self_calibrated(model, meta: Optional[dict]) -> bool:
+    """A model whose own predict_proba is already a calibrated probability —
+    i.e. a fitted CalibratedClassifierCV. Detected structurally (no sklearn
+    import needed) with a meta fallback."""
+    try:
+        if hasattr(model, "calibrated_classifiers_"):
+            return True
+    except Exception:
+        pass
+    m = meta or {}
+    if "Calibrated" in str(m.get("model_type", "")):
+        return True
+    if str(m.get("calibration", "")).lower() in ("isotonic", "sigmoid") or \
+       str(m.get("calibration", "")).lower().startswith("isotonic"):
+        return True
+    return False
+
+
+def _market_is_self_calibrated(market_key: str) -> bool:
+    """True if any loaded model that maps to this stacked-calibrator market_key
+    is a self-calibrated artifact."""
+    if not _loaded:
+        _load_models()
+    for mk, is_cal in _self_cal.items():
+        if is_cal and _MARKET_KEY_MAP.get(mk) == market_key:
+            return True
+    return False
 
 
 try:
@@ -139,6 +179,7 @@ _MARKET_KEY_MAP = {
 _lock = threading.Lock()
 _models: dict = {}
 _feat_cols: dict = {}
+_self_cal: dict = {}   # {model_key: bool} — True if the artifact is self-calibrated
 _loaded = False
 
 # Number of MC trials. 10 000 gives <0.005 SE on a 50% probability.
@@ -174,14 +215,18 @@ def _load_models() -> None:
                     _models[key] = payload["model"]
                     _feat_cols[key] = payload.get("features") or feat_map.get(key, [])
                     meta = payload.get("meta", {})
+                    _self_cal[key] = _is_self_calibrated(payload["model"], meta)
                     print(
                         f"[xgb_scorer] loaded {key} from {path} "
-                        f"(target={meta.get('target', 'unknown')})"
+                        f"(target={meta.get('target', 'unknown')}, "
+                        f"calibrated={_self_cal[key]})"
                     )
                 else:
                     _models[key] = payload
                     _feat_cols[key] = feat_map.get(key, [])
-                    print(f"[xgb_scorer] loaded {key} (legacy artifact)")
+                    _self_cal[key] = _is_self_calibrated(payload, None)
+                    print(f"[xgb_scorer] loaded {key} (legacy artifact, "
+                          f"calibrated={_self_cal[key]})")
         except Exception:
             print("[xgb_scorer] model load failed —", traceback.format_exc())
         finally:
