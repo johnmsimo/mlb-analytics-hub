@@ -131,6 +131,17 @@ bug** found and fixed:
   MLB's hitting game log already excludes pure defensive appearances.
 - **✅ HR Analytics — covered in A2/A3** (empty-board self-HTTP fix + data-driven `prob_hr`
   recalibration).
+- **🟠 A9 — Dashboard quick-props fabricated EV% + was form-only  ✅ FIXED.** The strip ranked
+  purely on L10 over-rate and reported `(l10_pct − 0.5)·100` as `evPct`, rendered as "+30.0% EV" —
+  that's recent hit rate, not expected value — and it was saved into the tracker as the model
+  probability, polluting calibration/CLV. Now each pick blends recent form with the model matchup
+  score (`quality = 0.55·l10 + 0.45·matchupScore/100`, hub from quality, ranked by quality), and
+  `evPct` is null (no odds fetched → nothing fabricated). Frontend shows honest "L10 x% · MU y".
+- **✅ Props hub-rating / EV — audited, sound.** `evPct = adj_prob/market_implied − 1` is the
+  correct per-unit EV (market_implied is the raw best-over-price implied prob, line-shopped). The
+  hub rating is a defensible heuristic; recent form is already inside `adj_prob` via the projection's
+  `form` adjustment, so the props hub correctly does not double-count it (the cheatsheet passes L10
+  separately only because it uses a different composite). No blind re-tuning.
 
 ## Findings (severity: 🔴 High · 🟠 Medium · 🟡 Low/Info)
 
