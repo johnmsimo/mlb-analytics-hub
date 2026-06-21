@@ -145,6 +145,7 @@ Each HTML file is loaded into a module-level string at boot via `_read_html_or_f
 - `/api/brain/*`, `/api/brain-data/*` — brain overlay upload/ingest
 - `/api/memory/*` — MLB memory store (snapshot history of Stats API pulls)
 - `/api/cache/{status,warm}` — operator dashboard
+- `/api/calibration/markets` — live model-vs-reality readout: per-market Brier + ECE from graded tracker picks alongside each model's held-out (2021-24/2025) benchmark from `models/model_metrics.json`; status flags (`warming_up` / `on_track` / `degraded` / `no_edge`) tell you whether the XGB held-out skill is carrying into production. `?window=N` (default 60).
 - `/api/status` — health metadata (cache states, AI/BQ availability)
 - `/health` — Fly.io readiness probe (returns immediately even during cold boot)
 
