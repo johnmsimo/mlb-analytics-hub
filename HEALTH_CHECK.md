@@ -143,6 +143,38 @@ bug** found and fixed:
   `form` adjustment, so the props hub correctly does not double-count it (the cheatsheet passes L10
   separately only because it uses a different composite). No blind re-tuning.
 
+## Surface accuracy upgrades (round 4 — projection core / NRFI / breakout detector)
+
+- **✅ `_project_batter` core — audited, sound.** The live engine is `_project_batter_batx`
+  (the simpler `_project_batter` is dead code — never called). BATX is well-built: named-weight
+  components, consistent decimal/fraction scales (`fg_kpct` confirmed decimal), a **humility prior**
+  (pulls the delta 30% toward neutral when no form/BvP data), `def_factor` correctly excluded from
+  HR, clamps throughout. Output matches the validated MC (Antonacci 0.10 vs MC 0.09). I tried adding
+  an opposing-pitcher HR/9 term (HR was pitcher-blind) but **reverted it** — it overshot the
+  validated MC (pushed Antonacci's HR to 0.135 vs MC 0.09), so it made accuracy worse. Discipline:
+  don't ship a change the gold-standard sim contradicts.
+- **🟠 A10 — NRFI used expected runs as a probability  ✅ FIXED.** `_compute_nrfi` set each team's
+  first-inning score rate to `i1_era/9` (expected runs λ) and used it directly as P(≥1 run). Since
+  `λ > 1−e^(−λ)`, this overstated the score rate and collapsed NRFI to ~0.25 for an average matchup
+  (vs ~0.50–0.55 markets). Applied the textbook expected-count→P(≥1) Poisson transform (no tuning
+  constant): average matchup NRFI 0.25 → 0.37, two good starters 0.52 → 0.57. (Poisson still
+  slightly overstates due to run clustering — calibrating to play-by-play 1st-inning data is a noted
+  follow-up.)
+- **🟠 A11 — Breakout detector ran on fabricated year-over-year priors  ✅ FIXED (data-enabled).**
+  `ev95_prior = ev95 − 0.5` and `kpct_prior = kpct + 0.5` were constants, so every player's
+  improvement delta was identical, and the frontend "regression trap" mirage penalty
+  (`wRC+>125 & dEV<0.8`) fired on **every** good hitter (fake dEV always 0.5). Using the
+  **FanGraphs 2021–2026 data** (which carries Statcast-derived **EV90 / Barrel% / HardHit%** for
+  every season), both core signals are now **real year-over-year deltas**: EV90 stickiness (current
+  FG 2026 EV90 vs prior 2025 EV90) and K% improvement (2026 vs 2025 K%), with honest fallback when a
+  prior season is missing and the mirage penalty gated on a real EV delta. 42/50 candidates now carry
+  real priors.
+
+> **Note (per the 2021–2026 data pointer):** FanGraphs season files include Statcast-derived EV90 /
+> Barrel% / HardHit% / maxEV for 2021–2026, so genuine year-over-year power/contact deltas are
+> available app-wide — useful anywhere a "trend vs last year" signal is wanted, not just the breakout
+> board. Prior-year *Savant* leaderboards (bat-tracking, swing/take) are still 2026-only.
+
 ## Findings (severity: 🔴 High · 🟠 Medium · 🟡 Low/Info)
 
 ### 🟠 M1 — Settings page (`/settings`) calls ~9 endpoints that don't exist → 404  ✅ FIXED
