@@ -428,8 +428,6 @@ def main(markets: list[str]):
 
     print("\n══ Fetching Statcast game logs ══")
     bg, pg = fetch_game_logs(ALL_SEASONS)
-    bg.to_parquet(os.path.join(_DATA_DIR, "train_output_bg.parquet")) if len(bg) else None
-    pg.to_parquet(os.path.join(_DATA_DIR, "train_output_pg.parquet")) if len(pg) else None
 
     print("\n══ Building feature matrices ══")
     bat = build_batter_matrix(bg) if len(bg) else pd.DataFrame()
