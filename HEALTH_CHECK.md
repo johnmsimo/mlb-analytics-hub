@@ -106,6 +106,32 @@ bug** found and fixed:
 
 ---
 
+## Surface accuracy upgrades (round 3 — BvP / Props / HR / Cheatsheets / Consistency / Pitcher)
+
+- **🟠 A5 — BvP grade was asymmetric & false-faded on noise  ✅ FIXED.** `_compute_bvp_grade`
+  gated A+/A/B on PA but had no floor on the 'D' fade, so a 0-for-3 produced a fade on pure noise
+  while a hot 3-PA sample could never reach 'A'; absent data also graded 'D'. Now any directional
+  lean needs ≥10 PA, absent/tiny samples grade neutral 'C', and stale H2H is pulled toward neutral
+  in both directions.
+- **🟠 A6 — Absent BvP penalised hitters in Cheatsheets & Props  ✅ FIXED.** Missing/None BvP
+  defaulted to a 'D' fade in `_bvp_points`, the cheatsheet `_side_rows`, and the props path — a
+  penalty at 30% of the cheatsheet composite, unfairly down-ranking hitters facing pitchers with no
+  head-to-head history (rookies/cross-league). Now neutral 'C'.
+- **🟡 A7 — Cheatsheet pitch-matchup term was a dead constant  ✅ FIXED.** The composite used
+  `_pitch_adv_points('neutral')` (a constant 10% with zero ranking signal); now wired to the real
+  `_pitch_type_advantage` (day-cached, cheap handedness proxy) for both the matchup grade and the
+  composite.
+- **🟠 A8 — Pitcher K projection ignored workload  ✅ FIXED.** The strikeout model scales
+  batters-faced by the starter's recent IP, but the caller read non-existent `l5/l3→ip/games` keys
+  from `_pitcher_recent_form` (which returns `total_ip/n_starts`), so every starter was pinned to a
+  flat 22.0 TBF. Now reads the real keys (IP/start × 4.3, ≥2-start guard): Melton 27.3 / Corbin 17.5
+  TBF, so K totals scale with real workload.
+- **✅ Consistency — audited, sound (no change).** Full-season game log (no window truncation),
+  correct l5/l10/l20/season over-rate math; the only theoretical gap (0-PA games) is moot since
+  MLB's hitting game log already excludes pure defensive appearances.
+- **✅ HR Analytics — covered in A2/A3** (empty-board self-HTTP fix + data-driven `prob_hr`
+  recalibration).
+
 ## Findings (severity: 🔴 High · 🟠 Medium · 🟡 Low/Info)
 
 ### 🟠 M1 — Settings page (`/settings`) calls ~9 endpoints that don't exist → 404  ✅ FIXED
