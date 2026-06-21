@@ -177,6 +177,13 @@ bug** found and fixed:
   composite) so it nudges rather than dominates — current-season level already lives in the
   contact/power/discipline components. Falls back to L7-only for rookies with no prior season.
 
+- **✅ A13 — Pitcher projection now carries a real year-over-year K% trend (data-enabled).**
+  `_project_pitcher` blended season + last-5-start form but had no multi-month trajectory signal.
+  Added a bounded K-rate shade from real FanGraphs 2025→2026 K% (K% is the stickiest pitcher skill;
+  slope 0.18, clamped [0.95, 1.07]) alongside the existing stuff/arsenal/framing shades. Verified:
+  Buehler (K% .163→.211) +5.3%, Melton/Abbott/Corbin −3 to −4%, all within bounds; exposed as
+  `yoy_k_mult`/`kpct_prior`/`kpct_current` in the projection meta.
+
 > **Note (per the 2021–2026 data pointer):** FanGraphs season files include Statcast-derived EV90 /
 > Barrel% / HardHit% / maxEV for 2021–2026, so genuine year-over-year power/contact deltas are
 > available app-wide — useful anywhere a "trend vs last year" signal is wanted, not just the breakout
