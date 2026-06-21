@@ -22201,6 +22201,11 @@ def _empty_consistency_payload(date_str):
     }
 
 
+_prior_season_log_cache = {}      # player_id -> 2025 game-log list (static → session-cached)
+_prior_season_log_lock = threading.Lock()
+_PRIOR_CONSISTENCY_YEAR = 2026 - 1  # prior full season for season-over-season context
+
+
 def _compute_consistency_payload(date_str):
     now = time.time()
     raw_games = fetch_schedule(date_str)
@@ -22247,19 +22252,35 @@ def _compute_consistency_payload(date_str):
         player_tasks[player_id] = (row.get('marketKey') == 'pitcher_strikeouts')
 
     logs_by_player = {}
+    prior_logs_by_player = {}
+    # Prior season (2025) is static — reuse the session cache and only fetch misses.
+    with _prior_season_log_lock:
+        for pid in player_tasks:
+            if pid in _prior_season_log_cache:
+                prior_logs_by_player[pid] = _prior_season_log_cache[pid]
     with ThreadPoolExecutor(max_workers=12) as ex:
-        fut_map = {}
+        fut_map = {}          # current season (2026)
+        prior_fut_map = {}    # prior season (2025) — only uncached players
         for player_id, is_pitcher in player_tasks.items():
-            if is_pitcher:
-                fut_map[ex.submit(_fetch_pitcher_gamelog, int(player_id), None, None)] = player_id
-            else:
-                fut_map[ex.submit(_fetch_batter_gamelog, int(player_id), None, None)] = player_id
+            fn = _fetch_pitcher_gamelog if is_pitcher else _fetch_batter_gamelog
+            fut_map[ex.submit(fn, int(player_id), None, None)] = player_id
+            if player_id not in prior_logs_by_player:
+                prior_fut_map[ex.submit(fn, int(player_id), _PRIOR_CONSISTENCY_YEAR, None)] = player_id
         for fut in as_completed(fut_map):
             player_id = fut_map[fut]
             try:
                 logs_by_player[player_id] = fut.result() or []
             except Exception:
                 logs_by_player[player_id] = []
+        for fut in as_completed(prior_fut_map):
+            player_id = prior_fut_map[fut]
+            try:
+                plog = fut.result() or []
+            except Exception:
+                plog = []
+            prior_logs_by_player[player_id] = plog
+            with _prior_season_log_lock:
+                _prior_season_log_cache[player_id] = plog
 
     market_labels = {
         'batter_hits': 'Hits', 'batter_total_bases': 'Total Bases', 'batter_home_runs': 'Home Runs',
@@ -22301,6 +22322,24 @@ def _compute_consistency_payload(date_str):
             'season': _consistency_window_summary(values, row.get('line'), None),
             'sampleSize': len(values),
         }
+        # Season-over-season context: the same over-rate computed on the player's
+        # full PRIOR season (real 2025 game logs), plus the year-over-year delta —
+        # so a hot current line can be read against last year's established level.
+        prior_logs = prior_logs_by_player.get(player_id, [])
+        prior_values = [_consistency_stat_value(lr, market_key) for lr in prior_logs]
+        prior_values = [v for v in prior_values if v is not None]
+        prior_summary = _consistency_window_summary(prior_values, row.get('line'), None)
+        sheet_row['priorSeason'] = {
+            'year': _PRIOR_CONSISTENCY_YEAR,
+            'pct': prior_summary['pct'],
+            'over': prior_summary['over'],
+            'total': prior_summary['total'],
+        }
+        _cur_season_pct = sheet_row['season'].get('pct')
+        sheet_row['yoyDelta'] = (
+            round(_cur_season_pct - prior_summary['pct'], 3)
+            if (_cur_season_pct is not None and prior_summary['pct'] is not None) else None
+        )
         _form = _consistency_recent_form(values, row.get('line'), 10)
         sheet_row['sparkline'] = _form['spark']
         sheet_row['streakOver'] = _form['streakOver']
