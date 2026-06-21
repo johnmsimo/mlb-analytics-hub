@@ -170,6 +170,13 @@ bug** found and fixed:
   prior season is missing and the mirage penalty gated on a real EV delta. 42/50 candidates now carry
   real priors.
 
+- **✅ A12 — BATX form component now carries a real year-over-year trend (data-enabled).**
+  The projection's `form` component used only L7 recent wOBA. Extended it with a real
+  season-over-season wOBA trend (FanGraphs 2025 → 2026), a genuine step forward/back that a hot/cold
+  week misses. Bounded tighter than L7 (±0.12) and blended at half weight (max ~±0.4% on the
+  composite) so it nudges rather than dominates — current-season level already lives in the
+  contact/power/discipline components. Falls back to L7-only for rookies with no prior season.
+
 > **Note (per the 2021–2026 data pointer):** FanGraphs season files include Statcast-derived EV90 /
 > Barrel% / HardHit% / maxEV for 2021–2026, so genuine year-over-year power/contact deltas are
 > available app-wide — useful anywhere a "trend vs last year" signal is wanted, not just the breakout
