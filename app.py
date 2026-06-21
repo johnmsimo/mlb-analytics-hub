@@ -22472,7 +22472,26 @@ def _compute_dashboard_quick_props(game_pk, limit=3, date_hint=None):
     away_abbr = away_t.get("team", {}).get("abbreviation", "AWAY")
     home_abbr = home_t.get("team", {}).get("abbreviation", "HOME")
 
-    tagged = [(b, away_abbr) for b in away_bats[:6]] + [(b, home_abbr) for b in home_bats[:6]]
+    # Opposing-starter context for the model matchup score: away batters face the
+    # home starter (hp) and home batters face the away starter (ap).
+    _ap = (_pitchers or {}).get('ap', {}) if isinstance(_pitchers, dict) else {}
+    _hp = (_pitchers or {}).get('hp', {}) if isinstance(_pitchers, dict) else {}
+
+    def _opp_ctx(opp):
+        nm = (opp or {}).get('fullName') or ''
+        hand = 'R'
+        try:
+            if (opp or {}).get('id'):
+                hand = (pitcher_stats_mlb(opp.get('id')).get('pitchHand') or 'R')
+        except Exception:
+            hand = 'R'
+        return (fg_pitcher(nm) or {}), (sv_pitcher(nm) or {}), hand
+
+    _home_opp = _opp_ctx(_hp)   # away batters face the home starter
+    _away_opp = _opp_ctx(_ap)   # home batters face the away starter
+
+    tagged = ([(b, away_abbr, 'away') for b in away_bats[:6]]
+              + [(b, home_abbr, 'home') for b in home_bats[:6]])
 
     market_config = [
         ("hits", "hits", "Hits", [("0.5", "batter_hits"), ("1.5", "batter_hits")]),
@@ -22481,13 +22500,18 @@ def _compute_dashboard_quick_props(game_pk, limit=3, date_hint=None):
         ("rbi", "rbi", "RBIs", [("0.5", "batter_rbis"), ("1.5", "batter_rbis")]),
     ]
 
-    def _score_batter(batter, team):
+    def _score_batter(batter, team, side):
         pid = batter.get("id")
         name = batter.get("name", "")
         if not pid:
             return []
         trends = _build_player_trends(int(pid), False)
         rates = trends.get("over_rates", {})
+        opp_fg, opp_sv, opp_hand = _home_opp if side == 'away' else _away_opp
+        try:
+            mu_score = float((_matchup_score(batter, opp_fg, opp_sv, pitcher_hand=opp_hand) or {}).get("score") or 50.0)
+        except Exception:
+            mu_score = 50.0
         best = {}
 
         for market, mkey, mlabel, line_pairs in market_config:
@@ -22498,8 +22522,11 @@ def _compute_dashboard_quick_props(game_pk, limit=3, date_hint=None):
                 if pct is None or tot < 5 or pct < 0.60:
                     continue
                 if market not in best or pct > best[market]["l10_pct"]:
-                    edge = pct - 0.5
-                    hub = _hub_rating(pct, edge, pct)
+                    # Model-aware quality = recent form blended with the model
+                    # matchup score. This strip fetches no odds, so we do NOT
+                    # fabricate an EV% (the old code reported (l10-0.5)*100 as
+                    # "EV", which is recent hit rate, not expected value).
+                    quality = 0.55 * pct + 0.45 * (mu_score / 100.0)
                     best[market] = {
                         "player": name,
                         "playerId": pid,
@@ -22510,22 +22537,24 @@ def _compute_dashboard_quick_props(game_pk, limit=3, date_hint=None):
                         "line": float(line_str),
                         "l10_pct": round(pct, 3),
                         "l10_total": tot,
-                        "hubRating": hub,
-                        "evPct": round(edge * 100, 1),
+                        "matchupScore": round(mu_score, 1),
+                        "quality": round(quality, 4),
+                        "hubRating": max(0, min(100, round(quality * 100))),
+                        "evPct": None,
                     }
 
         return list(best.values())
 
     all_picks = []
     with ThreadPoolExecutor(max_workers=8) as ex:
-        futs = {ex.submit(_score_batter, b, t): (b, t) for b, t in tagged}
+        futs = {ex.submit(_score_batter, b, t, s): (b, t) for b, t, s in tagged}
         for fut in as_completed(futs):
             try:
                 all_picks.extend(fut.result())
             except Exception:
                 pass
 
-    all_picks.sort(key=lambda x: x.get("l10_pct", 0), reverse=True)
+    all_picks.sort(key=lambda x: x.get("quality", x.get("l10_pct", 0)), reverse=True)
     return gdata, all_picks[:limit]
 
 
