@@ -13918,8 +13918,19 @@ def _compute_nrfi(game_pk):
         weather_mult += _clamp(_num(wind_out, 0.0) * 0.0045, -0.05, 0.07)
     weather_mult = _clamp(weather_mult, 0.90, 1.14)
 
-    away_score_rate_i1 = _clamp((home_i1_era / 9.0) * park * away_hand_adj * weather_mult, 0.03, 0.62)
-    home_score_rate_i1 = _clamp((away_i1_era / 9.0) * park * home_hand_adj * weather_mult, 0.03, 0.62)
+    # Convert expected first-inning runs (λ = i1_era/9, scaled by park/hand/weather)
+    # to P(>=1 run) via Poisson rather than using λ directly as the probability.
+    # The old code used λ AS the score probability — but P(>=1 run) is always less
+    # than the expected run count (λ > 1-e^-λ for all λ>0), so it overstated the
+    # score rate (an average starter's λ~0.5 became a 0.50 score rate instead of
+    # ~0.39) and collapsed NRFI to ~0.25 for an average matchup vs the ~0.50-0.55
+    # NRFI markets price. (Poisson still slightly overstates because real
+    # first-inning runs cluster; calibrating to play-by-play 1st-inning data is a
+    # follow-up.)
+    away_lambda = (home_i1_era / 9.0) * park * away_hand_adj * weather_mult
+    home_lambda = (away_i1_era / 9.0) * park * home_hand_adj * weather_mult
+    away_score_rate_i1 = _clamp(1.0 - math.exp(-max(0.0, away_lambda)), 0.03, 0.62)
+    home_score_rate_i1 = _clamp(1.0 - math.exp(-max(0.0, home_lambda)), 0.03, 0.62)
 
     nrfi_prob = _clamp((1.0 - away_score_rate_i1) * (1.0 - home_score_rate_i1), 0.03, 0.97)
     yrfi_prob = round(1.0 - nrfi_prob, 4)
