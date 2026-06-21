@@ -76,6 +76,15 @@ except ImportError:
     _STACK_AVAILABLE = False
     def stacked_calibrate(*a, **k): return None
 
+# Per-market probability recalibration fit from our own graded history.
+# Optional: a missing module leaves model probabilities untouched (identity).
+try:
+    from prop_calibration import PropCalibrator
+    _PROP_CAL_AVAILABLE = True
+except ImportError:
+    _PROP_CAL_AVAILABLE = False
+    PropCalibrator = None  # type: ignore
+
 
 # ── Best Bets signal upgrades (all optional, all free) ────────────────────────
 # Each loader is try/except so a missing module just disables that one signal —
@@ -14840,8 +14849,9 @@ def _build_team_market_rows(game_pk, capture_date, away_abbr, home_abbr,
               bookmaker, opp_book_price, opp_book_name, team, reason):
         """Build a single row and append to rows."""
         raw_mult_prob = _clamp01(raw_prob * _market_mult(market_key, adjustments))
-        adj_prob = raw_mult_prob
-        edge = (adj_prob - market_implied) if market_implied is not None else None
+        precal_prob = raw_mult_prob
+        adj_prob = _calibrate_prop_prob(market_key, precal_prob)
+        edge = _capped_edge(adj_prob, market_implied)
         score = (edge * 100.0 if edge is not None else 0) + adj_prob
         hub = _hub_rating(adj_prob, edge or 0)
         ev_pct = round(adj_prob / market_implied - 1, 4) if market_implied and market_implied > 0 else None
@@ -14856,6 +14866,8 @@ def _build_team_market_rows(game_pk, capture_date, away_abbr, home_abbr,
             'rawProb': round(raw_prob, 4),
             'rawMultProb': round(raw_mult_prob, 4),
             'adjProb': round(adj_prob, 4),
+            'preCalProb': round(precal_prob, 4),
+            'calStatus': _prop_cal_status(market_key),
             'modelMean': None,
             'edge': round(edge, 4) if edge is not None else None,
             'bookmaker': bookmaker,
@@ -15150,14 +15162,16 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                         adj_prob = logit_blend_prob(raw_mult_prob, over_imp, mk, over_imp, under_imp)
                     else:
                         adj_prob = raw_mult_prob
-                    edge = (adj_prob - market_implied) if market_implied is not None else None
+                    precal_prob = adj_prob
+                    adj_prob = _calibrate_prop_prob(mk, precal_prob)
+                    edge = _capped_edge(adj_prob, market_implied)
                     score = (edge * 100.0 if edge is not None else 0) + adj_prob
                     hub = _hub_rating(adj_prob, edge or 0)
                     mi = market_implied
                     ev_pct = round(adj_prob / mi - 1, 4) if mi and mi > 0 else None
                     temp_row = {
                         'date': capture_date, 'gamePk': game_pk, 'team': team_abbr, 'player': p.get('name'), 'playerId': p.get('id'), 'slot': p.get('slot'), 'marketKey': mk, 'line': line, 'recommendedSide': 'Over',
-                        'rawProb': round(raw_prob, 4), 'rawMultProb': round(raw_mult_prob, 4), 'adjProb': round(adj_prob, 4), 'modelMean': round(float(p.get(mean_field, 0) or 0), 3), 'edge': round(edge, 4) if edge is not None else None,
+                        'rawProb': round(raw_prob, 4), 'rawMultProb': round(raw_mult_prob, 4), 'adjProb': round(adj_prob, 4), 'preCalProb': round(precal_prob, 4), 'calStatus': _prop_cal_status(mk), 'modelMean': round(float(p.get(mean_field, 0) or 0), 3), 'edge': round(edge, 4) if edge is not None else None,
                         'bookmaker': msum.get('market_bookmaker'), 'marketPrice': msum.get('best_over_price'), 'marketImplied': market_implied,
                         'bestAvailablePrice': msum.get('best_over_price'), 'bestAvailableBook': msum.get('best_over_book'),
                         'bestOverPrice': msum.get('best_over_price'), 'bestOverBook': msum.get('best_over_book'),
@@ -15259,14 +15273,16 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                 adj_prob = logit_blend_prob(raw_mult_prob, over_imp, 'pitcher_strikeouts', over_imp, under_imp)
             else:
                 adj_prob = raw_mult_prob
-            edge = (adj_prob - market_implied) if market_implied is not None else None
+            precal_prob = adj_prob
+            adj_prob = _calibrate_prop_prob('pitcher_strikeouts', precal_prob)
+            edge = _capped_edge(adj_prob, market_implied)
             score = (edge * 100.0 if edge is not None else 0) + adj_prob
             hub = _hub_rating(adj_prob, edge or 0)
             mi = market_implied
             ev_pct = round(adj_prob / mi - 1, 4) if mi and mi > 0 else None
             temp_row = {
                 'date': capture_date, 'gamePk': game_pk, 'team': team_abbr, 'player': sp.get('name'), 'playerId': sp.get('id'), 'marketKey': 'pitcher_strikeouts', 'line': line, 'recommendedSide': 'Over',
-                'rawProb': round(raw_prob, 4), 'rawMultProb': round(raw_mult_prob, 4), 'adjProb': round(adj_prob, 4), 'modelMean': round(float(sp.get('mean_k', 0) or 0), 3), 'edge': round(edge, 4) if edge is not None else None, 'xgbKProb': round(_xgb_k, 4) if _xgb_k is not None else None, 'mcKProb': round(_mc_k_prob, 4) if _xgb_k is not None else None,
+                'rawProb': round(raw_prob, 4), 'rawMultProb': round(raw_mult_prob, 4), 'adjProb': round(adj_prob, 4), 'preCalProb': round(precal_prob, 4), 'calStatus': _prop_cal_status('pitcher_strikeouts'), 'modelMean': round(float(sp.get('mean_k', 0) or 0), 3), 'edge': round(edge, 4) if edge is not None else None, 'xgbKProb': round(_xgb_k, 4) if _xgb_k is not None else None, 'mcKProb': round(_mc_k_prob, 4) if _xgb_k is not None else None,
                 'bookmaker': msum.get('market_bookmaker'), 'marketPrice': msum.get('best_over_price'), 'marketImplied': market_implied,
                 'bestAvailablePrice': msum.get('best_over_price'), 'bestAvailableBook': msum.get('best_over_book'),
                 'bestOverPrice': msum.get('best_over_price'), 'bestOverBook': msum.get('best_over_book'),
@@ -15354,7 +15370,8 @@ def _build_tracker_rows_quick(game_obj, capture_date, adjustments=None):
                 ('batter_hits', 0.5, base_hit),
                 ('batter_total_bases', 1.5, base_tb2),
             ]:
-                adj_prob = _clamp01(raw_prob * _market_mult(mk, adjustments))
+                precal_prob = _clamp01(raw_prob * _market_mult(mk, adjustments))
+                adj_prob = _calibrate_prop_prob(mk, precal_prob)
                 row_data = {
                     'date': capture_date,
                     'gamePk': game_pk,
@@ -15366,6 +15383,8 @@ def _build_tracker_rows_quick(game_obj, capture_date, adjustments=None):
                     'recommendedSide': 'Over',
                     'rawProb': round(raw_prob, 4),
                     'adjProb': round(adj_prob, 4),
+                    'preCalProb': round(precal_prob, 4),
+                    'calStatus': _prop_cal_status(mk),
                     'modelMean': None,
                     'edge': None,
                     'bookmaker': None,
@@ -15995,6 +16014,140 @@ def _collect_window_entries(end_date_str, window_days):
         if ds in dates:
             rows.extend(_normalize_tracker_day(payload).get('entries', []))
     return rows
+
+
+# ── Per-market probability recalibration ──────────────────────────────────────
+# Displayed edge is only meaningful if the model probability is calibrated. We
+# fit a per-market correction from our own graded history (the same data behind
+# /api/calibration/markets) and apply it BEFORE edge/EV/hub are computed.
+#
+# Feedback-loop safety: the calibrator is fit on the PRE-calibration probability
+# (`preCalProb`, persisted on every row). Historical rows predate calibration so
+# their stored `adjProb` *is* the pre-calibration value and is used as fallback;
+# once `preCalProb` exists we never re-read the (now calibrated) `adjProb`.
+EDGE_DISPLAY_CAP = 0.30          # no single prop should advertise a >30pt edge
+_PROP_CAL_WINDOW_DAYS = 120
+_PROP_CAL_TTL_SEC = 1800         # rebuild at most every 30 min
+_prop_cal_state = {"cal": None, "built_at": 0.0, "date": None}
+_prop_cal_lock = threading.Lock()
+
+
+def _entry_precal_prob(row):
+    """The pre-calibration model prob a calibrator should be fit on."""
+    for k in ('preCalProb', 'adjProb', 'rawMultProb', 'rawProb', 'modelProb'):
+        v = row.get(k)
+        if v is None:
+            continue
+        try:
+            f = float(v)
+            if 0.0 <= f <= 1.0:
+                return f
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _build_prop_calibrator(date_str):
+    if not _PROP_CAL_AVAILABLE:
+        return None
+    try:
+        entries = _collect_window_entries(date_str, _PROP_CAL_WINDOW_DAYS)
+        by_market = {}
+        for row in entries:
+            mk = row.get('marketKey')
+            if not mk or row.get('grade') not in ('win', 'loss'):
+                continue
+            p = _entry_precal_prob(row)
+            if p is None:
+                continue
+            by_market.setdefault(mk, []).append((p, 1.0 if row.get('grade') == 'win' else 0.0))
+        return PropCalibrator.fit_from_entries(by_market)
+    except Exception as ex:
+        logging.warning(f"[prop-cal] build failed: {ex}")
+        return None
+
+
+def _get_prop_calibrator():
+    """Cached PropCalibrator, rebuilt every _PROP_CAL_TTL_SEC or on date change."""
+    if not _PROP_CAL_AVAILABLE:
+        return None
+    now = time.time()
+    date_str = datetime.now(ET).strftime('%Y-%m-%d')
+    with _prop_cal_lock:
+        fresh = (_prop_cal_state["cal"] is not None
+                 and _prop_cal_state["date"] == date_str
+                 and (now - _prop_cal_state["built_at"]) < _PROP_CAL_TTL_SEC)
+        if not fresh:
+            _prop_cal_state["cal"] = _build_prop_calibrator(date_str)
+            _prop_cal_state["built_at"] = now
+            _prop_cal_state["date"] = date_str
+        return _prop_cal_state["cal"]
+
+
+def _calibrate_prop_prob(market_key, prob):
+    """Apply the per-market calibration to a model probability (identity-safe)."""
+    if prob is None:
+        return prob
+    cal = _get_prop_calibrator()
+    if cal is None:
+        return prob
+    try:
+        out = cal.calibrate(market_key, prob)
+        return out if out is not None else prob
+    except Exception:
+        return prob
+
+
+def _prop_cal_status(market_key):
+    cal = _get_prop_calibrator()
+    if cal is None:
+        return "warming_up"
+    try:
+        return cal.status(market_key)
+    except Exception:
+        return "warming_up"
+
+
+def _capped_edge(adj_prob, market_implied):
+    """Edge vs market with the display cap applied (None-safe)."""
+    if market_implied is None:
+        return None
+    edge = adj_prob - market_implied
+    return max(-EDGE_DISPLAY_CAP, min(EDGE_DISPLAY_CAP, edge))
+
+
+def _pitcher_k9(fg, sv=None):
+    """Plausible K/9 for a pitcher, guarding against sparse-data artifacts.
+
+    When a pitcher has little data the derived `fg_k9` can collapse to an
+    implausible value (e.g. a spot starter showing K/9 == ERA). A modern MLB
+    starter sits roughly in [4.5, 16]; outside that we reconstruct K/9 from the
+    strikeout rate (K/9 ≈ K% × ~38.5 PA/9IP) and only fall back to the raw
+    value (or None) if no usable rate exists — never a misleading number."""
+    try:
+        k9 = float(fg.get("fg_k9")) if fg else None
+    except (TypeError, ValueError):
+        k9 = None
+    if k9 is not None and 4.5 <= k9 <= 16.0:
+        return round(k9, 2)
+    kpct = None
+    for src in (fg or {}, sv or {}):
+        for key in ("fg_kpct", "sv_k_pct", "k_pct"):
+            v = src.get(key)
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                continue
+            if f > 1.0:           # stored as a percent (22.0) not a fraction
+                f /= 100.0
+            if 0.05 <= f <= 0.45:
+                kpct = f
+                break
+        if kpct is not None:
+            break
+    if kpct is not None:
+        return round(kpct * 38.5, 2)
+    return round(k9, 2) if (k9 is not None and k9 > 0) else None
 
 
 def _market_calibration(entries, current_adj):
@@ -17666,12 +17819,18 @@ def api_calibration_markets():
             'status': status,
         })
 
+    # The live correction actually applied to displayed probabilities.
+    cal = _get_prop_calibrator()
+    calibration_applied = cal.summary() if cal is not None else {}
+
     return jsonify({
         'success': True,
         'date': date_str,
         'window': window,
         'min_sample': MIN_N,
         'markets': out,
+        'calibration_applied': calibration_applied,
+        'edge_display_cap': EDGE_DISPLAY_CAP,
         'legend': {
             'warming_up': f'fewer than {MIN_N} graded picks — Brier too noisy to act on',
             'on_track': 'live Brier matches the held-out test benchmark',
@@ -21474,7 +21633,7 @@ def api_props_projections(game_pk):
                     "opp_pitcher":  opp_pname,
                     "opp_hand":     opp_hand,
                     "opp_era":      opp_pfg.get("fg_era") or opp_psv.get("sv_era_p"),
-                    "opp_k9":       opp_pfg.get("fg_k9"),
+                    "opp_k9":       _pitcher_k9(opp_pfg, opp_psv),
                     "avg":          b.get("avg") or bfg.get("fg_avg"),
                     "obp":          b.get("obp") or bfg.get("fg_obp"),
                     "slg":          b.get("slg") or bfg.get("fg_slg"),

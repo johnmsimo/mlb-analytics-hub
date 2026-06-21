@@ -61,6 +61,7 @@ app.py                          ~22.7k LOC Flask app — routes, caches, project
 ├── brain_merge_patch.py        "Brain" overlay system — merges user-uploaded CSVs into FG/Savant caches
 ├── xgb_prop_scorer.py          Loads models/*.pkl; exposes xgb_hit_prob / xgb_k_prob / xgb_hr_prob / xgb_tb_prob / xgb_rbi_prob
 ├── stacked_calibrator.py       Meta-learner that blends XGB + BATX into one probability + 95% CI + verdict tier
+├── prop_calibration.py         Per-market probability recalibration fit from graded tracker history (isotonic / log-odds recentre) — corrects displayed adjProb/edge before EV/hub
 ├── xgb_prop_pipeline.py        Full XGB training pipeline (Statcast+FG features → calibrated isotonic)
 ├── xgb_training_pipeline.py    Legacy training script (uses pickle; do NOT use for production)
 ├── train_hr_tb_rbi.py          Trains HR/TB/RBI prop models
@@ -145,7 +146,9 @@ Each HTML file is loaded into a module-level string at boot via `_read_html_or_f
 - `/api/brain/*`, `/api/brain-data/*` — brain overlay upload/ingest
 - `/api/memory/*` — MLB memory store (snapshot history of Stats API pulls)
 - `/api/cache/{status,warm}` — operator dashboard
-- `/api/calibration/markets` — live model-vs-reality readout: per-market Brier + ECE from graded tracker picks alongside each model's held-out (2021-24/2025) benchmark from `models/model_metrics.json`; status flags (`warming_up` / `on_track` / `degraded` / `no_edge`) tell you whether the XGB held-out skill is carrying into production. `?window=N` (default 60).
+- `/api/calibration/markets` — live model-vs-reality readout: per-market Brier + ECE from graded tracker picks alongside each model's held-out (2021-24/2025) benchmark from `models/model_metrics.json`; status flags (`warming_up` / `on_track` / `degraded` / `no_edge`) tell you whether the XGB held-out skill is carrying into production. `?window=N` (default 60). The response also reports `calibration_applied` — the per-market correction `prop_calibration.py` is actively applying to displayed `adjProb` (see below) — and `edge_display_cap`.
+
+**Live recalibration (`prop_calibration.py`).** Every prop/team-market row built by `_build_tracker_rows_for_game` / `_build_team_market_rows` runs its model probability through `_calibrate_prop_prob(market_key, prob)` before edge/EV/hub are computed, so displayed edge reflects realized accuracy rather than raw-model optimism. The per-market correction (isotonic when ≥80 graded picks and sklearn present, else a log-odds recentre to the realized base rate, else identity below 20) is fit from graded tracker history and cached for 30 min. Each row now persists `preCalProb` (the pre-calibration value — what the calibrator is *fit* on, so re-fitting never compounds a prior correction) and `calStatus`. Displayed edge is clamped to ±`EDGE_DISPLAY_CAP` (0.30) so a miscalibrated blowout can't advertise a 40-point edge.
 - `/api/status` — health metadata (cache states, AI/BQ availability)
 - `/health` — Fly.io readiness probe (returns immediately even during cold boot)
 
