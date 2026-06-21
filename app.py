@@ -18459,8 +18459,11 @@ def _compute_cheatsheets_today(date_str):
     weakspot_cards = []
 
     def _bvp_points(grade):
-        g = str(grade or 'D').upper()
-        return {'A+': 1.0, 'A': 0.9, 'B': 0.75, 'C': 0.55, 'D': 0.35}.get(g, 0.45)
+        # Absent/unknown BvP is NEUTRAL ('C'), not a fade — a hitter facing a
+        # pitcher with no head-to-head history shouldn't be penalised here (BvP
+        # is 30% of the composite).
+        g = str(grade or 'C').upper()
+        return {'A+': 1.0, 'A': 0.9, 'B': 0.75, 'C': 0.55, 'D': 0.35}.get(g, 0.55)
 
     def _pitch_adv_points(status):
         s = str(status or 'neutral').lower()
@@ -18650,10 +18653,18 @@ def _compute_cheatsheets_today(date_str):
                 score = _matchup_score(b, opp_fg, opp_sv, pitcher_hand=opp_hand)
                 l10_pct = _l10_hit_pct_for_player(pid, l10_memo)
                 bvp_data = _fetch_bvp(pid, opp_id) if pid and opp_id else None
-                bvp_grade = _compute_bvp_grade(bvp_data) if bvp_data else 'D'
+                bvp_grade = _compute_bvp_grade(bvp_data) if bvp_data else 'C'
+                # Real pitch-type matchup (day-cached; uses the cheap handedness
+                # proxy unless PITCH_ADV_USE_PYBASEBALL is enabled) instead of a
+                # hardcoded 'neutral' — the pitch-adv term was a constant 10% of
+                # the composite and added no ranking signal.
+                pitch_adv = (
+                    _pitch_type_advantage(pid, opp_id, batter_name=name, pitcher_name=opp_name)
+                    if (pid and opp_id) else {'status': 'neutral'}
+                )
                 matchup_grade = _cheatsheet_matchup_grade(
                     score.get('tier'),
-                    pitch_adv={'status': 'neutral'},
+                    pitch_adv=pitch_adv,
                     bvp_grade=bvp_grade,
                     bvp_pa=(bvp_data or {}).get('pa', 0),
                 )
@@ -18667,7 +18678,7 @@ def _compute_cheatsheets_today(date_str):
                     + l10_score * 0.25
                     + split_score * 0.20
                     + park_score * 0.15
-                    + _pitch_adv_points('neutral') * 0.10
+                    + _pitch_adv_points(pitch_adv.get('status')) * 0.10
                 )
                 comp_pct = round(comp * 100.0, 1)
                 model_prob = max(0.01, min(0.99, (score.get('score') or 50) / 100.0))
@@ -21237,7 +21248,7 @@ def api_props_projections(game_pk):
                 form = _fetch_rolling_form(bid, False) if bid else None
                 bvp  = _fetch_bvp(bid, opp_pid)      if (bid and opp_pid) else None
                 pitch_adv = _pitch_type_advantage(bid, opp_pid, batter_name=name, pitcher_name=opp_pname) if (bid and opp_pid) else {"status": "neutral", "note": "Neutral matchup"}
-                bvp_grade = _compute_bvp_grade(bvp) if bvp else 'D'
+                bvp_grade = _compute_bvp_grade(bvp) if bvp else 'C'
                 injury = _get_player_injury(bid) if bid else None
                 # Handedness-aware HR park factor: a switch hitter bats opposite
                 # the starter's throwing hand. Only the HR component meaningfully
