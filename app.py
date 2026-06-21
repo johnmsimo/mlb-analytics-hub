@@ -17942,33 +17942,46 @@ def api_tracker_portfolio(date_str):
 
 def _compute_bvp_grade(bvp_data):
     """
-    Grade batter vs pitcher matchup based on Sprint 2.1 rules.
-    Uses OPS ratio vs batter season OPS with PA thresholds.
-    Stale data (last_season > 2 years ago) is capped at 'B' — old matchup
-    history against a pitcher's previous arsenal is unreliable.
+    Grade batter vs pitcher matchup from the OPS ratio vs the batter's season
+    OPS, gated symmetrically by sample size.
+
+    Accuracy fix: previously the upside tiers (A+/A/B) had PA floors but the
+    'D' fade did not — so a 0-for-3 (raw OPS 0, ratio < 0.85) produced a false
+    fade on pure noise while a hot 3-PA sample could never reach 'A'. Now any
+    directional lean (A/B/D) requires a usable head-to-head sample (>= 10 PA);
+    absent, unknown, or tiny samples grade NEUTRAL ('C'), never a fade. Stale
+    history (old arsenal) is pulled toward neutral in BOTH directions.
     """
     if not bvp_data or not bvp_data.get('success'):
-        return 'D'
+        return 'C'
 
     pa = bvp_data.get('pa', 0)
     ratio = bvp_data.get('ops_ratio')
     if ratio is None:
-        return 'D'
+        return 'C'
+
+    # No directional lean without a usable head-to-head sample.
+    if pa < 10:
+        return 'C'
 
     if ratio >= 1.40 and pa >= 20:
         grade = 'A+'
     elif ratio >= 1.20 and pa >= 15:
         grade = 'A'
-    elif ratio >= 1.05 and pa >= 10:
+    elif ratio >= 1.05:
         grade = 'B'
-    elif ratio >= 0.85:
-        grade = 'C'
-    else:
+    elif ratio < 0.85:
         grade = 'D'
+    else:
+        grade = 'C'
 
-    # Cap stale H2H data — pitcher arsenals change year to year
-    if bvp_data.get('is_stale') and grade in ('A+', 'A'):
-        grade = 'B'
+    # Stale H2H (pitcher arsenals change year to year) → pull toward neutral
+    # in both directions rather than trusting an old-arsenal lean.
+    if bvp_data.get('is_stale'):
+        if grade in ('A+', 'A'):
+            grade = 'B'
+        elif grade == 'D':
+            grade = 'C'
     return grade
 
 
