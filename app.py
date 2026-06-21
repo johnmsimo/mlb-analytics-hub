@@ -23140,6 +23140,38 @@ _breakout_cache = {"key": None, "ts": 0.0, "payload": None}
 _breakout_cache_lock = threading.Lock()
 _BREAKOUT_TTL = 3600   # 1h — underlying Savant/FG caches refresh at most daily
 
+_breakout_prior_kpct = {}        # name_key -> prior-season (2025) K% in PERCENT
+_breakout_prior_lock = threading.Lock()
+
+
+def _prior_year_kpct_map():
+    """Real prior-season (2025) K% by normalized name, for the breakout detector's
+    K%-improvement signal. The endpoint previously faked the prior (kpct + 0.5),
+    making every player's year-over-year delta a constant — useless for detecting
+    real contact gains. Built once from the FanGraphs 2025 batting cache."""
+    with _breakout_prior_lock:
+        if _breakout_prior_kpct:
+            return _breakout_prior_kpct
+        try:
+            import fangraphs_loader as _fl
+            _fl._load_all()
+            df = _fl._cache.get('bat_2025')
+            if df is not None and 'Name' in df.columns and 'K%' in df.columns:
+                for _, r in df.iterrows():
+                    nm, kp = r.get('Name'), r.get('K%')
+                    if nm is None or kp is None:
+                        continue
+                    try:
+                        kpf = float(kp)
+                    except (TypeError, ValueError):
+                        continue
+                    key = ' '.join(_ascii_fold(str(nm)).lower().split())
+                    if key:
+                        _breakout_prior_kpct[key] = kpf * (100 if kpf <= 1 else 1)
+        except Exception:
+            print(f"[breakout_prior_kpct] {traceback.format_exc()}")
+        return _breakout_prior_kpct
+
 
 @app.route("/api/breakout/candidates")
 def api_breakout_candidates():
@@ -23165,6 +23197,7 @@ def api_breakout_candidates():
         with _fg_lock:
             fg = dict(_fg_bat)
 
+        prior_kpct_map = _prior_year_kpct_map()
         players = []
         for name_key, sc in stat.items():
             f = fg.get(name_key, {})
@@ -23188,9 +23221,16 @@ def api_breakout_candidates():
                 pa = int(f.get("fg_pa") or 0)
                 if pa < 30: continue  # not enough BIP yet
 
-                # Prior-year proxy: if no cache for 2025, assume population mean
-                ev95_prior = actual_ev95 - 0.5  # neutral placeholder
-                kpct_prior = kpct + 0.5
+                # Prior season (2025) K% — real year-over-year contact signal.
+                # Falls back to the current value (dK = 0) when 2025 data is
+                # missing, rather than fabricating a +0.5 improvement for everyone.
+                kpct_prior  = prior_kpct_map.get(name_key, kpct)
+                kpct_real   = name_key in prior_kpct_map
+                # EV95 year-over-year needs prior-season Statcast, which isn't in
+                # the repo. Don't fabricate a delta — flag it so the frontend
+                # scores EV95 on its absolute level and skips the EV-trend mirage
+                # penalty (which previously fired on every wRC+>125 hitter).
+                ev95_prior  = actual_ev95
 
                 # Compose player object
                 players.append({
@@ -23206,6 +23246,8 @@ def api_breakout_candidates():
                     "maxev": float(sc.get("sv_max_ev") or 110),
                     "kpct": round(kpct, 1),
                     "kpctPrior": round(kpct_prior, 1),
+                    "kpctPriorReal": kpct_real,
+                    "evPriorAvailable": False,
                     "babip": round(babip, 3),
                     "wrc": wrc,
                     "avg": round(avg, 3),

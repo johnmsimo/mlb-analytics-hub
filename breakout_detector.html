@@ -297,8 +297,10 @@ function scorePlayer(p){
   // Penalties — fake signals
   // BABIP fluke
   const babipPen = p.babip > .340 && p.hh < 44 ? -15 : 0;
-  // wRC+ up but EV95 flat
-  const mirage = p.wrc > 125 && dEV < 0.8 ? -10 : 0;
+  // wRC+ up but EV95 flat — only meaningful when a REAL prior-year EV95 exists.
+  // (Prior-year Statcast isn't available, so dEV is not a true year-over-year
+  // delta; applying this off a fabricated dEV penalised every wRC+>125 hitter.)
+  const mirage = (p.evPriorAvailable && p.wrc > 125 && dEV < 0.8) ? -10 : 0;
   // BA > xBA (luck)
   const luck = p.avg - p.xba > .020 ? -8 : 0;
 
