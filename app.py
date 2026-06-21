@@ -9914,8 +9914,93 @@ def _batter_pitch_profile(batter_id):
     return profile
 
 
+_ARSENAL_MIN_USAGE    = 7.0    # ignore pitches thrown <7% of the time
+_ARSENAL_MIN_COVERAGE = 35.0   # need batter data covering >=35% of the arsenal
+
+
+def _arsenal_matchup_from_stats(pitcher_id, batter_id):
+    """Real pitch-arsenal matchup: the batter's wOBA-by-pitch-type weighted by
+    the pitcher's ACTUAL usage of each pitch. Returns a verdict dict, or None
+    when arsenal data is too thin (caller falls back to the handedness proxy).
+
+    Both Savant leaderboards (`_sv_pit_arsenal_stats`, `_sv_bat_arsenal_stats`)
+    are keyed by MLBAM id and share the same `pitch_name` vocabulary, so the
+    join needs no name matching."""
+    try:
+        with _sv_lock:
+            pit_ars = _sv_pit_arsenal_stats.get(str(int(pitcher_id)))
+            bat_ars = _sv_bat_arsenal_stats.get(str(int(batter_id)))
+        if not pit_ars or not bat_ars:
+            return None
+
+        # Usage-weighted expected wOBA for this batter vs this exact arsenal.
+        num = den = 0.0
+        per_pitch = []
+        for pitch, pstat in pit_ars.items():
+            usage = _safe_f(pstat.get("usage"), 0.0)
+            if usage < _ARSENAL_MIN_USAGE:
+                continue
+            b = bat_ars.get(pitch)
+            if not b:
+                continue
+            bw = _safe_f(b.get("woba"), None)
+            if bw is None:
+                continue
+            num += usage * bw
+            den += usage
+            per_pitch.append({
+                "pitch": pitch,
+                "usage": round(usage, 1),
+                "batter_woba": round(bw, 3),
+                "whiff_pct": _safe_f(b.get("whiff_pct"), None),
+            })
+        if den < _ARSENAL_MIN_COVERAGE or not per_pitch:
+            return None
+
+        matchup_woba = num / den
+        # Baseline = the batter's own average wOBA across every pitch type they
+        # have data on, so the verdict reflects whether THIS arsenal skews toward
+        # the batter's strengths rather than just raw quality.
+        baseline_vals = [_safe_f(v.get("woba"), None) for v in bat_ars.values()]
+        baseline_vals = [x for x in baseline_vals if x is not None]
+        baseline = (sum(baseline_vals) / len(baseline_vals)) if baseline_vals else _LEAGUE_WOBA
+
+        driver = max(per_pitch, key=lambda r: r["usage"])         # most-thrown pitch w/ data
+        signed = sorted(per_pitch, key=lambda r: r["batter_woba"])
+        worst, best = signed[0], signed[-1]
+
+        delta = matchup_woba - baseline
+        if delta >= 0.020:
+            status, d = "favorable", best
+            note = (f"Strong vs this arsenal — {matchup_woba:.3f} xwOBA "
+                    f"(thrives on {d['pitch']}: {d['batter_woba']:.3f} at {d['usage']:.0f}% usage)")
+        elif delta <= -0.020:
+            status, d = "unfavorable", worst
+            note = (f"Weak vs this arsenal — {matchup_woba:.3f} xwOBA "
+                    f"(struggles vs {d['pitch']}: {d['batter_woba']:.3f} at {d['usage']:.0f}% usage)")
+        else:
+            status = "neutral"
+            note = f"Neutral arsenal matchup — {matchup_woba:.3f} xwOBA vs the mix"
+
+        return {
+            "status": status,
+            "note": note,
+            "primary_pitch": driver["pitch"],
+            "primary_pitch_label": driver["pitch"],
+            "usage_pct": round(driver["usage"], 1),
+            "matchup_woba": round(matchup_woba, 3),
+            "baseline_woba": round(baseline, 3),
+            "source": "arsenal",
+            "pitches": sorted(per_pitch, key=lambda r: r["usage"], reverse=True)[:5],
+        }
+    except Exception as ex:
+        print(f"[arsenal_matchup] {batter_id} vs {pitcher_id}: {ex}")
+        return None
+
+
 def _pitch_type_advantage(batter_id, pitcher_id, batter_name='', pitcher_name=''):
-    """Classify batter performance vs pitcher's primary pitch type."""
+    """Batter vs the pitcher's REAL arsenal (usage-weighted wOBA by pitch type),
+    falling back to the handedness-split proxy when arsenal data is thin."""
     if not batter_id or not pitcher_id:
         return {"status": "neutral", "note": "Neutral matchup"}
 
@@ -9926,6 +10011,17 @@ def _pitch_type_advantage(batter_id, pitcher_id, batter_name='', pitcher_name=''
         if cached and cached[0] == today:
             return cached[1]
 
+    out = _arsenal_matchup_from_stats(pitcher_id, batter_id) \
+        or _pitch_type_advantage_proxy(batter_id, pitcher_id, batter_name, pitcher_name)
+
+    with _pitch_adv_lock:
+        _pitch_adv_cache[key] = (today, out)
+    return out
+
+
+def _pitch_type_advantage_proxy(batter_id, pitcher_id, batter_name='', pitcher_name=''):
+    """Legacy fallback: the pitcher's single most-used pitch × the batter's AVG
+    vs that pitch (or a handedness split when pitch-type Statcast is missing)."""
     out = {"status": "neutral", "note": "Neutral matchup"}
     try:
         p_name = (pitcher_name or '').strip()
@@ -9996,8 +10092,6 @@ def _pitch_type_advantage(batter_id, pitcher_id, batter_name='', pitcher_name=''
         print(f"[pitch_adv] {batter_id} vs {pitcher_id}: {ex}")
         out = {"status": "neutral", "note": "Neutral matchup"}
 
-    with _pitch_adv_lock:
-        _pitch_adv_cache[key] = (today, out)
     return out
 
 
