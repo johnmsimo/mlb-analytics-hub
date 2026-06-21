@@ -23653,10 +23653,14 @@ def api_breakout_candidates():
             x = xst.get(name_key, {})
             try:
                 ev95 = float(sc.get("sv_hh_pct") or 0)  # proxy — your sv_hh_pct = ev95 percent
-                brl  = float(sc.get("sv_brl_pct") or 0)
-                if brl and brl <= 1: brl *= 100
-                hh   = float(sc.get("sv_hh_pct") or 0)
-                if hh and hh <= 1: hh *= 100
+                # sv_brl_pct / sv_hh_pct come straight from the Savant
+                # `brl_percent` / `ev95percent` columns, which are ALREADY in
+                # percent units. The old `if v <= 1: v *= 100` heuristic wrongly
+                # treated a genuine sub-1% barrel rate (e.g. a slap hitter at
+                # 0.3%) as a fraction and inflated it 100× to 30%. Trust the
+                # source units and just clamp to a sane physical ceiling.
+                brl  = min(max(float(sc.get("sv_brl_pct") or 0), 0.0), 35.0)
+                hh   = min(max(float(sc.get("sv_hh_pct")  or 0), 0.0), 100.0)
                 xwoba = float(x.get("sv_xwoba") or f.get("fg_woba") or 0)
                 woba  = float(f.get("fg_woba") or xwoba)
                 xba   = float(x.get("sv_xba") or 0)
@@ -24384,9 +24388,18 @@ def api_hr_daily_scores():
                     try:
                         fgb = fg_batter(bname)
                         svb = sv_batter(bname)
-                        iso        = _num(fgb.get("fg_iso"), 0.0) or max(0.0, _num(svb.get("sv_xslg"), 0.380) - _num(svb.get("sv_xba"), 0.250))
-                        barrel_pct = _num(svb.get("sv_brl_pct"), 8.5)
-                        hh_pct     = _num(svb.get("sv_hh_pct"), 40.0)
+                        iso_raw    = _num(fgb.get("fg_iso"), 0.0) or max(0.0, _num(svb.get("sv_xslg"), 0.380) - _num(svb.get("sv_xba"), 0.250))
+                        barrel_raw = _num(svb.get("sv_brl_pct"), 8.5)
+                        hh_raw     = _num(svb.get("sv_hh_pct"), 40.0)
+                        # Min-PA gate via regression to league mean: a 2-PA debut
+                        # can otherwise post a 1.000 ISO / 50% barrel and top the
+                        # board. _shrink returns the league mean when PA is 0 and
+                        # barely touches a full-season sample. Barrel/HH stabilize
+                        # faster than ISO, hence smaller prior_n.
+                        pa = _num(fgb.get("fg_pa"), 0)
+                        iso        = _shrink(iso_raw,    pa, _HR_LEAGUE["iso_mu"],    150)
+                        barrel_pct = _shrink(barrel_raw, pa, _HR_LEAGUE["barrel_mu"],  60)
+                        hh_pct     = _shrink(hh_raw,     pa, _HR_LEAGUE["hh_mu"],      50)
                         fgp_hr9    = _num(fg_pitcher(opp_name).get("fg_hr9"), 1.25) if opp_name else 1.25
 
                         hand_splits = _fetch_pitcher_hr9_by_hand(opp_pid)
@@ -24445,6 +24458,8 @@ def api_hr_daily_scores():
                             "iso":         round(iso, 3),
                             "barrel_pct":  round(barrel_pct, 1),
                             "hh_pct":      round(hh_pct, 1),
+                            "pa":          int(pa),
+                            "sampleReliable": bool(pa >= 80),
                             "hr9_vs_hand": round(hr9_vs_hand, 3),
                             "park_hr_idx":      park_hr_idx,
                             "mix_score":        mix_score,

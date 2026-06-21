@@ -134,12 +134,12 @@ Each HTML file is loaded into a module-level string at boot via `_read_html_or_f
 - `/api/tracker/*` — full CRUD for picks, settings, performance, bankroll, calibration, Brier, attribution, value, portfolio, bet slip, closing-line capture
 - `/api/cheatsheets/today` — daily cheatsheet (cached, async refresh)
 - `/api/cheatsheet` — BQ-backed Vertex/Gemini cheatsheet
-- `/api/breakout/candidates` — Statcast breakout scores (day-cached, 1h TTL)
+- `/api/breakout/candidates` — Statcast breakout scores (day-cached, 1h TTL). `sv_brl_pct`/`sv_hh_pct` are read in their native percent units (no `<=1 → ×100` rescale — that bug inflated genuine sub-1% barrel rates 100×) and clamped to physical ceilings; players still gated at `fg_pa < 30`.
 - `/api/sharp-card/<game_pk>` — server-side Sharp Card rollup (side/total/environment/drivers/best-bet/grade); also locks + grades the verdict into `sharp_card_history.json`
 - `/api/sharp-card/accuracy` — rolling hit-rate of recorded Sharp Card best bets
 - `/api/umpire/<game_pk>` — HP umpire stats
 - `/api/bullpen/fatigue/<game_pk>`, `/api/f5/<game_pk>`, `/api/lineup-status/<game_pk>`
-- `/api/hr-analytics/*` — HR sim, pitch mix, scouting writeup, daily scores
+- `/api/hr-analytics/*` — HR sim, pitch mix, scouting writeup, daily scores. `/daily-scores` regresses each batter's `iso`/`barrel_pct`/`hh_pct` toward league means via `_shrink(obs, fg_pa, mu, prior_n)` (prior_n 150/60/50) so a tiny-sample debut can't post a 1.000 ISO / 50% barrel and top the board; rows carry `pa` + `sampleReliable` (pa ≥ 80).
 - `/api/pipeline/{status,games,matchup,run}` — matchup pipeline blueprint
 - `/api/nrfi/{odds,devig,odds-cache-status}` — live NRFI odds + devig (from `nrfi_odds_routes.py`)
 - `/api/matchup`, `/api/insights/<game_pk>`, `/api/projected-boxscore/<game_pk>` — Vertex/Gemini + BigQuery-backed
