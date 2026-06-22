@@ -9032,20 +9032,15 @@ def _pitcher_k_projection_vs_lineup(pitcher_id, pitcher_name, opposing_lineup,
             "oppKPct":      _safe_f(fg_pit.get("opp_kpct_proxy"), 22.0),
             "oppWoba":      _safe_f(fg_pit.get("opp_woba_proxy"), 0.320),
         }
-        # Fold in recent form when available
+        # Fold in rolling form (l{3,5,10}Ks / l5KRate / l{3,5}IP / daysRest).
+        # NOTE: the previous code read rf.get("l3"/"l5"/"l10"/"days_rest"), keys
+        # _pitcher_recent_form never returns, so every rolling feature silently
+        # fell back to its default. _pitcher_rolling_k_features returns the
+        # correct keys, computed to match the model's training definitions.
         try:
-            rf = _pitcher_recent_form(pitcher_id) if pitcher_id else None
-            if rf:
-                l3 = rf.get("l3") or {}; l5 = rf.get("l5") or {}; l10 = rf.get("l10") or {}
-                pitcher_dict.update({
-                    "l3Ks":      _safe_f(l3.get("k_total"),  4.5),
-                    "l5Ks":      _safe_f(l5.get("k_total"),  4.5),
-                    "l10Ks":     _safe_f(l10.get("k_total"), 4.5),
-                    "l5KRate":   _safe_f(l5.get("kpct"),     0.22),
-                    "l3IP":      _safe_f(l3.get("ip"),       5.0),
-                    "l5IP":      _safe_f(l5.get("ip"),       5.0),
-                    "daysRest":  _safe_f(rf.get("days_rest"), 5.0),
-                })
+            _kf = _pitcher_rolling_k_features(pitcher_id) if pitcher_id else None
+            if _kf:
+                pitcher_dict.update(_kf)
         except Exception:
             pass
 
@@ -15333,6 +15328,15 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
         # ── FanGraphs enrichment for pitcher K props (done once per starter) ──
         if k_xgb_ready:
             sp = {**sp, **enrich_pitcher(sp)}   # merges real FG stats into sp dict
+            # Rolling form (l{3,5,10}Ks / l5KRate / l{3,5}IP / daysRest) — 7 of the
+            # k-model's 12 features. Without this they serve as constant defaults
+            # and the model's form signal is dead (train/serve skew).
+            try:
+                _kf = _pitcher_rolling_k_features(sp.get('id'))
+                if _kf:
+                    sp.update(_kf)
+            except Exception:
+                pass
             # Arsenal pitch-mix (usage-weighted whiff%/putaway%) for the K model.
             try:
                 _ars = _arsenal_whiff_summary(sp.get('id'))
@@ -21173,6 +21177,7 @@ def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_s
 
 # ── Pitcher recent form cache ─────────────────────────────────────────────────
 _pitcher_recent_cache = {}   # pid → {ts, era_recent, k9_recent, whip_recent, starts}
+_pitcher_kform_cache  = {}   # pid → rolling K-prop features for the XGB k-model
 
 def _pitcher_recent_form(pitcher_id, n_starts=5):
     """
@@ -21244,6 +21249,77 @@ def _pitcher_recent_form(pitcher_id, n_starts=5):
         print(f"[pitcher_recent_form] pid={pitcher_id}: {ex}")
         _pitcher_recent_cache[cache_key] = {}
         return {}
+
+
+def _pitcher_rolling_k_features(pitcher_id):
+    """Per-start rolling K features for the XGB k-model, computed to MATCH
+    regenerate_models.build_pitcher_matrix so there is no train/serve skew.
+
+    Training rolls l{3,5,10}_ks as the MEAN strikeouts over the pitcher's prior
+    starts, l5_k_rate as the mean per-start K/BF, l{3,5}_ip as mean innings, and
+    days_rest as days since the previous appearance. At serve the upcoming start
+    isn't played yet, so the most recent N completed appearances ARE those prior
+    starts (no shift needed). Returns {} on failure → callers keep the model's
+    neutral defaults.
+
+    Without this the scorer fed constants (l3Ks=4.5, l5KRate=0.22, …) for 7 of
+    the k-model's 12 features at inference — the model's whole rolling-form
+    signal was dead, which is why pitcher_strikeouts read no_edge live despite a
+    0.70+ held-out AUC.
+    """
+    if not pitcher_id:
+        return {}
+    ck = f"{pitcher_id}_{datetime.now(ET).strftime('%Y-%m-%d')}"
+    if ck in _pitcher_kform_cache:
+        return _pitcher_kform_cache[ck]
+    _evict_if_large(_pitcher_kform_cache, 500)
+    out = {}
+    try:
+        yr = datetime.now().year
+        r = requests.get(
+            f"{MLB_API}/people/{pitcher_id}/stats",
+            params={"stats": "gameLog", "group": "pitching", "season": yr},
+            timeout=8,
+        )
+        r.raise_for_status()
+        sl = r.json().get("stats") or []
+        splits = sl[0].get("splits", []) if sl else []
+        games = []
+        for sp in splits:
+            st = sp.get("stat", {})
+            ip = parse_ip(st.get("inningsPitched", "0"))
+            if ip <= 0:                       # any real appearance (mirrors training rows)
+                continue
+            ks = _safe_f(st.get("strikeOuts"), 0.0)
+            bf = _safe_f(st.get("battersFaced"), 0.0) or (ip * 4.3)
+            games.append({"date": sp.get("date"), "ks": ks, "ip": ip,
+                          "krate": (ks / bf) if bf > 0 else 0.0})
+        if not games:
+            _pitcher_kform_cache[ck] = {}
+            return {}
+
+        def _mean(vals):
+            return sum(vals) / len(vals) if vals else None
+
+        l3, l5, l10 = games[-3:], games[-5:], games[-10:]
+        out = {
+            "l3Ks":    round(_mean([g["ks"]    for g in l3]),  3),
+            "l5Ks":    round(_mean([g["ks"]    for g in l5]),  3),
+            "l10Ks":   round(_mean([g["ks"]    for g in l10]), 3),
+            "l5KRate": round(_mean([g["krate"] for g in l5]),  4),
+            "l3IP":    round(_mean([g["ip"]    for g in l3]),  2),
+            "l5IP":    round(_mean([g["ip"]    for g in l5]),  2),
+        }
+        try:
+            d_last = datetime.strptime(games[-1]["date"], "%Y-%m-%d").date()
+            out["daysRest"] = float(max(0, min(14, (datetime.now(ET).date() - d_last).days)))
+        except Exception:
+            out["daysRest"] = 5.0
+    except Exception as ex:
+        print(f"[pitcher_kform] pid={pitcher_id}: {ex}")
+        out = {}
+    _pitcher_kform_cache[ck] = out
+    return out
 
 
 # ── Pitcher projection tuning constants ───────────────────────────────────────
@@ -21848,7 +21924,8 @@ def api_props_projections(game_pk):
                          "fgbbpct": pfg.get("fg_bbpct"), "svwhiffpct": psv.get("sv_whiff"),
                          "name": pname,
                          "arsenalWhiff": proj.get("arsenal_whiff"),
-                         "arsenalPutaway": proj.get("arsenal_putaway")},
+                         "arsenalPutaway": proj.get("arsenal_putaway"),
+                         **_pitcher_rolling_k_features(pid)},
                         line=ln
                     ) if _XGB_AVAILABLE and xgb_ready('k') else None
                     for ln in [3.5, 4.5, 5.5]
