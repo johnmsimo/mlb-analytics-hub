@@ -234,6 +234,8 @@ If you touch any of these settings, re-read the rationale comments first.
 
 Tracker picks (`data/daily_tracker.json[date].entries[]`) carry: `id`, `savedAt`, `gradedAt`, `source`, `gamePk`, `player`, `marketKey`, `line`, `side`, `price`, `book`, `stakeDollars`, `stakeUnits`, `profitDollars`, `profitUnits`, `grade` (`pending` / `win` / `loss` / `push`), `hubRating`, `edge`, `modelProb`, `impliedProb`, `clvEdge`, plus optional metadata. Deduplication when `id` is absent uses the composite key `(date, gamePk, player, marketKey, line)`. `_tracker_pick_payload()` adds a derived `sideLabel` for the UI.
 
+**Primary KPI = Closing Line Value.** `_tracker_live_summary()` emits a `primaryKpi` block (`metric:'clv'`, `value`=`clv_positive_rate` "beat-close %", `avg_clv`, `n`=graded-with-CLV) and the `tracker.html` hero leads with **Beat Close %** + **Avg CLV** (hit-rate / P&L demoted to supporting stats). CLV — does our taken price beat the closing line (`clvEdge = closingImplied − openingImplied`, positive = good) — is the lowest-variance, market-anchored measure of edge, unlike small-sample win/loss. The hero shows the CLV sample size (`n=`) so a tiny sample can't masquerade as skill; the picks board has a `Sort: CLV` option. Note the UI color convention: positive `clvEdge` is green (`clvColor()`), matching the backend which counts `clvEdge>0` as +CLV.
+
 ## Name matching
 
 Player names are normalized to lowercase and matched with `difflib.get_close_matches(cutoff=0.78)` in `_fuzzy_lookup()`. Savant uses `"Last, First"` format; `_sv_key()` converts to `"First Last"` for consistent lookups. When adding new stat sources, follow the same convention. `_ascii_fold()` strips accents so names like "Acuña" match "Acuna".

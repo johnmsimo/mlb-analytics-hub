@@ -16481,6 +16481,16 @@ def _tracker_live_summary(entries, adjustments=None):
     summary['at_risk'] = pending_risk
     summary['avg_clv'] = avg_clv
     summary['clv_positive_rate'] = round(len(positive_clv) / max(1, len(clv_rows)), 4) if clv_rows else None
+    # Closing Line Value is the primary KPI: lowest-variance, market-anchored
+    # measure of edge (does our price beat the close), unlike small-sample
+    # win/loss. Surfaced explicitly so the UI hero + exports lead with it.
+    summary['primaryKpi'] = {
+        'metric': 'clv',
+        'label': 'Beat Close %',
+        'value': summary['clv_positive_rate'],
+        'avg_clv': avg_clv,
+        'n': len(clv_rows),
+    }
     summary['bankroll'] = {
         'starting_bankroll': float(adjustments.get('bankroll') or 0),
         'live_bankroll': live_bankroll,
