@@ -4896,6 +4896,184 @@ def api_tracker_blend_debug():
     })
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# Best-prop recommender — click a game, get the top player-prop target.
+#
+# Reuses the full per-prop engine (_build_tracker_rows_for_game) that already
+# produces hubRating / edge / EV / adjProb / confidenceTier / bvpGrade / MC
+# percentiles for every batter market + pitcher-K line, then ranks those rows
+# to surface THE recommended pick (plus the best batter prop and best pitcher-K
+# prop) with auto-generated reasoning. Cached per game for a few minutes so a
+# repeat click is instant.
+# ──────────────────────────────────────────────────────────────────────────
+_PROP_MARKET_LABEL = {
+    'batter_hits':        'Hits',
+    'batter_total_bases': 'Total Bases',
+    'batter_home_runs':   'Home Run',
+    'batter_rbis':        'RBIs',
+    'pitcher_strikeouts': 'Strikeouts',
+}
+_PLAYER_PROP_MARKETS = set(_PROP_MARKET_LABEL)
+
+_best_prop_cache: dict = {}
+_best_prop_lock = threading.Lock()
+_BEST_PROP_TTL = 600  # seconds
+
+
+def _odds_str(price):
+    try:
+        p = int(round(float(price)))
+    except (TypeError, ValueError):
+        return None
+    return f"+{p}" if p > 0 else str(p)
+
+
+def _best_prop_rank_key(r):
+    """Sort key (desc): positive-edge rows first by edge, else by model conviction."""
+    edge = r.get('edge')
+    has_edge = edge is not None
+    return (
+        1 if (has_edge and edge > 0) else 0,
+        (float(edge) if has_edge else -1.0),
+        float(r.get('hubRating') or 0),
+        float(r.get('adjProb') or 0),
+    )
+
+
+def _best_prop_reasoning(r):
+    """Auto-generate a recommendation summary + driver chips from a prop row."""
+    mk = r.get('marketKey')
+    label = _PROP_MARKET_LABEL.get(mk, (mk or '').replace('_', ' ').title())
+    player = r.get('player')
+    line = r.get('line')
+    side = r.get('recommendedSide', 'Over')
+    adj = r.get('adjProb')
+    edge = r.get('edge')
+    ev = r.get('evPct')
+    tier = r.get('confidenceTier')
+    bvp = r.get('bvpGrade')
+    mean = r.get('modelMean')
+    mi = r.get('marketImplied')
+    price = r.get('bestOverPrice')
+    book = r.get('bestOverBook')
+    mc_over = r.get('mc_prob_over')
+
+    drivers = []
+    if adj is not None:
+        drivers.append(f"Model {adj * 100:.0f}% to cash the {side}")
+    if mean is not None:
+        drivers.append(f"Projects {mean:g} {label.lower()} into a {line} line")
+    if edge is not None and mi:
+        drivers.append(f"+{edge * 100:.1f}-pt edge over market implied {mi * 100:.0f}%")
+    if ev is not None:
+        tail = f" at {_odds_str(price)} ({book})" if (price and book) else ""
+        drivers.append(f"+{ev * 100:.1f}% expected value{tail}")
+    if mc_over is not None:
+        drivers.append(f"Sims clear the line {mc_over * 100:.0f}% of the time")
+    if bvp in ('A', 'B'):
+        drivers.append(f"Favorable matchup history (BvP grade {bvp})")
+    if tier:
+        drivers.append(f"{tier}-tier confidence")
+
+    parts = [f"Take {player} {side} {line} {label}."]
+    if adj is not None:
+        s = f" Model gives it {adj * 100:.0f}%"
+        if edge is not None and edge > 0:
+            s += f" — a +{edge * 100:.1f}-pt edge on the market"
+        s += "."
+        parts.append(s)
+    if price and book:
+        parts.append(f" Best price {_odds_str(price)} at {book}.")
+    return {'summary': ''.join(parts), 'drivers': drivers}
+
+
+def _best_prop_pack(r):
+    rsn = _best_prop_reasoning(r)
+    return {
+        'player':          r.get('player'),
+        'playerId':        r.get('playerId'),
+        'team':            r.get('team'),
+        'marketKey':       r.get('marketKey'),
+        'marketLabel':     _PROP_MARKET_LABEL.get(r.get('marketKey'), r.get('marketKey')),
+        'line':            r.get('line'),
+        'side':            r.get('recommendedSide', 'Over'),
+        'adjProb':         r.get('adjProb'),
+        'edge':            r.get('edge'),
+        'evPct':           r.get('evPct'),
+        'hubRating':       r.get('hubRating'),
+        'confidenceTier':  r.get('confidenceTier'),
+        'bvpGrade':        r.get('bvpGrade'),
+        'modelMean':       r.get('modelMean'),
+        'marketImplied':   r.get('marketImplied'),
+        'bestOverPrice':   r.get('bestOverPrice'),
+        'bestOverBook':    r.get('bestOverBook'),
+        'opp':             r.get('opp'),
+        'summary':         rsn['summary'],
+        'drivers':         rsn['drivers'],
+    }
+
+
+@app.route('/api/best-prop/<int:game_pk>')
+def api_best_prop(game_pk):
+    """Rank every batter/pitcher prop for a game and recommend the top target(s)."""
+    t0 = time.time()
+    use_odds = (request.args.get('odds', '1') not in ('0', 'false', 'no'))
+    now = time.time()
+    ck = (game_pk, bool(use_odds))
+    with _best_prop_lock:
+        hit = _best_prop_cache.get(ck)
+        if hit and (now - hit[0]) < _BEST_PROP_TTL:
+            return jsonify(hit[1])
+
+    try:
+        game_obj = fetch_schedule_game(game_pk)
+    except Exception as ex:
+        return jsonify({'success': False, 'error': f'schedule fetch failed: {ex}'}), 502
+    if not game_obj:
+        return jsonify({'success': False, 'error': 'game not found'}), 404
+    game_date = ((game_obj.get('gameDate') or '').split('T')[0] or
+                 datetime.now(ET).strftime('%Y-%m-%d'))
+    teams = game_obj.get('teams', {})
+    away_t = (teams.get('away', {}) or {}).get('team', {}) or {}
+    home_t = (teams.get('home', {}) or {}).get('team', {}) or {}
+    away_abbr = away_t.get('abbreviation') or away_t.get('name') or 'AWAY'
+    home_abbr = home_t.get('abbreviation') or home_t.get('name') or 'HOME'
+
+    try:
+        _maybe_refresh_fg()
+        rows = _build_tracker_rows_for_game(
+            game_pk, game_date, _sched=[game_obj], include_odds=use_odds) or []
+    except Exception as ex:
+        logging.error(f"[best-prop] {game_pk} {ex}")
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+    cand = [r for r in rows
+            if r.get('marketKey') in _PLAYER_PROP_MARKETS and (r.get('adjProb') or 0) > 0]
+    cand.sort(key=_best_prop_rank_key, reverse=True)
+
+    qual = [r for r in cand if (r.get('adjProb') or 0) >= 0.50]
+    headline = qual[0] if qual else (cand[0] if cand else None)
+    top_batter = next((r for r in cand if str(r.get('marketKey')).startswith('batter_')), None)
+    top_pitcher = next((r for r in cand if r.get('marketKey') == 'pitcher_strikeouts'), None)
+
+    payload = {
+        'success': True,
+        'gamePk': game_pk,
+        'gameDate': game_date,
+        'matchup': f"{away_abbr} @ {home_abbr}",
+        'recommendation': _best_prop_pack(headline) if headline else None,
+        'topBatter': _best_prop_pack(top_batter) if top_batter else None,
+        'topPitcherK': _best_prop_pack(top_pitcher) if top_pitcher else None,
+        'board': [_best_prop_pack(r) for r in cand[:6]],
+        'oddsUsed': bool(use_odds and any(r.get('marketImplied') for r in cand)),
+        'candidateCount': len(cand),
+        'tookSec': round(time.time() - t0, 2),
+    }
+    with _best_prop_lock:
+        _best_prop_cache[ck] = (now, payload)
+    return jsonify(payload)
+
+
 def _mlb_memory_status_payload():
     payload = _mlb_memory_store_payload()
     latest = payload.get("latest") if isinstance(payload.get("latest"), dict) else None
@@ -21915,6 +22093,7 @@ def api_props_projections(game_pk):
                     "id":           b.get("id"),
                     "bats":         b.get("bats", ""),
                     "opp_pitcher":  opp_pname,
+                    "opp_pitcher_id": opp_pid,
                     "opp_hand":     opp_hand,
                     "opp_era":      opp_pfg.get("fg_era") or opp_psv.get("sv_era_p"),
                     "opp_k9":       _pitcher_k9(opp_pfg, opp_psv),
@@ -25115,6 +25294,426 @@ def _load_batter_statcast(batter_id, seasons=None):
     with _batter_statcast_lock:
         _batter_statcast_cache[cache_key] = combined
     return combined
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Matchup EV Lab — batted-ball event log + batted-ball quality profile
+#
+# Powers the interactive exit-velocity log (per-batted-ball table + L10/season
+# summary tiles) and the batted-ball quality panel (GB/FB/LD/PU%, HardHit, AvgEV,
+# Barrel%, Blast%, PullBarrel%) shown automatically against the pitcher being
+# faced on the BvP explorer, props board, and pitcher deep-dive.
+#
+# Source: the batter's per-batted-ball Statcast log (current + prior season),
+# pulled once per day and cached. Filters mirror the reference UIs: a rolling
+# game window (L5/L10/L25/season), pitcher arm (R/L), pitch type(s), day/night,
+# and a specific pitcher (direct BvP). "Balls in play only" — we keep type=='X'
+# rows with a recorded launch_speed.
+# ──────────────────────────────────────────────────────────────────────────
+_batter_bbe_cache: dict = {}
+_batter_bbe_lock = threading.Lock()
+
+# Statcast columns the EV lab needs (kept when present in the pull).
+_BBE_COLS = ("game_date", "game_pk", "pitcher", "p_throws", "stand",
+             "pitch_type", "pitch_name", "release_speed", "launch_speed",
+             "launch_angle", "hit_distance_sc", "bat_speed",
+             "launch_speed_angle", "bb_type", "events", "description",
+             "hc_x", "hc_y")
+
+# Human pitch-type labels for the filter chips + table.
+_BBE_PITCH_LABELS = {
+    "FF": "Four-seam FB", "FA": "Fastball", "SI": "Sinker", "FT": "Two-seam FB",
+    "FC": "Cutter", "SL": "Slider", "ST": "Sweeper", "SV": "Slurve",
+    "CU": "Curveball", "KC": "Knuckle Curve", "CS": "Slow Curve",
+    "CH": "Changeup", "FS": "Splitter", "FO": "Forkball", "SC": "Screwball",
+    "KN": "Knuckleball", "EP": "Eephus",
+}
+
+_BBE_WINDOWS = {"l5": 5, "l10": 10, "l25": 25}
+
+
+def _bbe_pitch_label(code):
+    if code is None or (isinstance(code, float) and pd.isna(code)):
+        return "Other"
+    c = str(code).strip().upper()
+    return _BBE_PITCH_LABELS.get(c, c or "Other")
+
+
+def _load_batter_bbe(batter_id, seasons=2):
+    """Per-batted-ball Statcast log for the EV lab. Cached per (id, today).
+
+    Returns a DataFrame (sorted most-recent first) of balls in play with the
+    columns in `_BBE_COLS` that the pull provides, or None on failure.
+    """
+    today = datetime.now().strftime("%Y-%m-%d")
+    cache_key = (int(batter_id), today, int(seasons))
+    with _batter_bbe_lock:
+        if cache_key in _batter_bbe_cache:
+            return _batter_bbe_cache[cache_key]
+
+    try:
+        import pybaseball as pb
+    except Exception as ex:
+        logging.warning(f"[EVLab] pybaseball import failed: {ex}")
+        with _batter_bbe_lock:
+            _batter_bbe_cache[cache_key] = None
+        return None
+
+    current_year = datetime.now().year
+    season_years = list(range(current_year - int(seasons) + 1, current_year + 1))
+
+    def _pull_one(yr):
+        try:
+            start = f"{yr}-03-01"
+            end = today if yr == current_year else f"{yr}-11-30"
+            df = pb.statcast_batter(start_dt=start, end_dt=end, player_id=int(batter_id))
+            if df is None or df.empty:
+                return None
+            # Balls in play only: type 'X' == batted ball, with a recorded EV.
+            if "type" in df.columns:
+                df = df[df["type"] == "X"]
+            if "launch_speed" in df.columns:
+                df = df[df["launch_speed"].notna()]
+            if df.empty:
+                return None
+            keep = [c for c in _BBE_COLS if c in df.columns]
+            return df[keep].copy()
+        except Exception as ex:
+            logging.warning(f"[EVLab] statcast pull failed bid={batter_id} yr={yr}: {ex}")
+            return None
+
+    frames = []
+    with ThreadPoolExecutor(max_workers=min(len(season_years), 4)) as ex:
+        for fut in as_completed({ex.submit(_pull_one, yr): yr for yr in season_years}):
+            d = fut.result()
+            if d is not None and not d.empty:
+                frames.append(d)
+
+    combined = pd.concat(frames, ignore_index=True) if frames else None
+    if combined is not None and not combined.empty:
+        try:
+            combined["game_date"] = pd.to_datetime(combined["game_date"], errors="coerce")
+            combined = combined.sort_values("game_date", ascending=False).reset_index(drop=True)
+        except Exception:
+            pass
+    with _batter_bbe_lock:
+        _batter_bbe_cache[cache_key] = combined
+    return combined
+
+
+# Generic MLBAM id → full name resolver (pitchers + batters) via the Stats API.
+_people_name_cache: dict = {}
+_people_name_lock = threading.Lock()
+
+
+def _resolve_people_names(ids):
+    """Batch-resolve MLBAM person ids → full names. Cached per process."""
+    out, missing = {}, []
+    with _people_name_lock:
+        for pid in ids:
+            if pid in _people_name_cache:
+                out[pid] = _people_name_cache[pid]
+            else:
+                missing.append(pid)
+    for i in range(0, len(missing), 40):
+        chunk = missing[i:i + 40]
+        try:
+            r = requests.get(f"{MLB_API}/people",
+                             params={"personIds": ",".join(str(int(x)) for x in chunk)},
+                             timeout=8)
+            if r.ok:
+                for p in (r.json().get("people") or []):
+                    pid = p.get("id")
+                    if pid is not None:
+                        nm = p.get("fullName")
+                        out[pid] = nm
+                        with _people_name_lock:
+                            _people_name_cache[pid] = nm
+        except Exception:
+            pass
+    for pid in missing:
+        out.setdefault(pid, None)
+    return out
+
+
+# game_pk → 'day'/'night' (Stats API). Cached; only hit when a day/night filter
+# is active so the common (no-filter) path makes zero extra calls.
+_game_daynight_cache: dict = {}
+
+
+def _game_daynight(game_pk):
+    if game_pk in _game_daynight_cache:
+        return _game_daynight_cache[game_pk]
+    val = None
+    try:
+        r = requests.get(f"{MLB_API}/schedule",
+                         params={"gamePk": int(game_pk), "sportId": 1}, timeout=6)
+        if r.ok:
+            dates = r.json().get("dates", [])
+            if dates and dates[0].get("games"):
+                val = ((dates[0]["games"][0].get("dayNight") or "").lower() or None)
+    except Exception:
+        pass
+    _game_daynight_cache[game_pk] = val
+    return val
+
+
+def _evlab_parse_params():
+    """Parse the shared EV-lab filter query params off the current request."""
+    window = (request.args.get("window") or "l10").strip().lower()
+    if window not in _BBE_WINDOWS and window not in ("season", "all", "2yr"):
+        window = "l10"
+    arm = (request.args.get("arm") or "ALL").strip().upper()
+    if arm not in ("R", "L"):
+        arm = "ALL"
+    daynight = (request.args.get("daynight") or "all").strip().lower()
+    if daynight not in ("day", "night"):
+        daynight = "all"
+    pitcher_id = request.args.get("pitcher_id", type=int)
+    pitches_raw = (request.args.get("pitches") or "").strip()
+    pitches = [p.strip().upper() for p in pitches_raw.split(",") if p.strip()] if pitches_raw else []
+    return {"window": window, "arm": arm, "daynight": daynight,
+            "pitcher_id": pitcher_id, "pitches": pitches}
+
+
+def _evlab_base_filter(df, arm, pitcher_id, pitches, daynight):
+    """Apply every filter EXCEPT the rolling game window (arm/pitcher/pitch/D-N)."""
+    if df is None or df.empty:
+        return df
+    out = df
+    if arm in ("R", "L") and "p_throws" in out.columns:
+        out = out[out["p_throws"] == arm]
+    if pitcher_id and "pitcher" in out.columns:
+        out = out[out["pitcher"] == int(pitcher_id)]
+    if pitches and "pitch_type" in out.columns:
+        want = set(pitches)
+        out = out[out["pitch_type"].astype(str).str.upper().isin(want)]
+    if daynight in ("day", "night") and "game_pk" in out.columns and not out.empty:
+        pks = list(dict.fromkeys(int(x) for x in out["game_pk"].dropna().tolist()))
+        # Bound the schedule fan-out; skip the filter on absurdly large samples.
+        if 0 < len(pks) <= 80:
+            with ThreadPoolExecutor(max_workers=8) as exr:
+                vals = list(exr.map(_game_daynight, pks))
+            keep = {pk for pk, v in zip(pks, vals) if v == daynight}
+            out = out[out["game_pk"].astype("Int64").isin(keep)]
+    return out
+
+
+def _evlab_apply_window(df, window):
+    """Restrict to the last-N games / current season. df must be date-sorted desc."""
+    if df is None or df.empty:
+        return df
+    if window in _BBE_WINDOWS and "game_pk" in df.columns:
+        n = _BBE_WINDOWS[window]
+        seen = []
+        for gp in df["game_pk"].dropna().tolist():
+            gp = int(gp)
+            if gp not in seen:
+                seen.append(gp)
+            if len(seen) >= n:
+                break
+        return df[df["game_pk"].astype("Int64").isin(set(seen))]
+    if window == "season" and "game_date" in df.columns:
+        cy = datetime.now().year
+        return df[pd.to_datetime(df["game_date"], errors="coerce").dt.year == cy]
+    return df  # "2yr"/"all" — no date restriction
+
+
+def _evlab_facets(df):
+    """Filter-chip metadata derived from the FULL (unfiltered) log."""
+    if df is None or df.empty:
+        return {"pitch_types": [], "arms": [], "bat_speed_available": False}
+    pts = []
+    if "pitch_type" in df.columns:
+        vc = df["pitch_type"].astype(str).str.upper().value_counts()
+        for code, cnt in vc.items():
+            if not code or code in ("NAN", "NONE"):
+                continue
+            pts.append({"code": code, "name": _bbe_pitch_label(code), "count": int(cnt)})
+    arms = []
+    if "p_throws" in df.columns:
+        arms = sorted({str(a).upper()[:1] for a in df["p_throws"].dropna().tolist() if str(a)})
+    bs_ok = "bat_speed" in df.columns and bool(df["bat_speed"].notna().any())
+    return {"pitch_types": pts, "arms": arms, "bat_speed_available": bs_ok}
+
+
+def _evlab_ev_summary(rdf):
+    """Avg EV + barrel% over a batted-ball frame."""
+    if rdf is None or rdf.empty:
+        return {"avg_ev": None, "barrel_pct": None, "n": 0}
+    n = len(rdf)
+    avg_ev = round(float(rdf["launch_speed"].mean()), 1) if "launch_speed" in rdf.columns else None
+    barrels = int((rdf["launch_speed_angle"] == 6).sum()) if "launch_speed_angle" in rdf.columns else 0
+    return {"avg_ev": avg_ev,
+            "barrel_pct": round(100.0 * barrels / n, 1) if n else None,
+            "n": n}
+
+
+def _evlab_rows(rdf, cap=250):
+    """Build the per-batted-ball table rows (most recent first), names resolved."""
+    if rdf is None or rdf.empty:
+        return []
+    rdf = rdf.head(cap)
+    pids = sorted({int(x) for x in rdf["pitcher"].dropna().tolist()}) if "pitcher" in rdf.columns else []
+    names = _resolve_people_names(pids) if pids else {}
+    rows = []
+    for _, r in rdf.iterrows():
+        pid = int(r["pitcher"]) if ("pitcher" in rdf.columns and pd.notna(r.get("pitcher"))) else None
+        ev = _safe_f(r.get("launch_speed"), None)
+        gd = r.get("game_date")
+        rows.append({
+            "date": pd.to_datetime(gd).strftime("%m-%d") if pd.notna(gd) else "",
+            "game_pk": int(r["game_pk"]) if ("game_pk" in rdf.columns and pd.notna(r.get("game_pk"))) else None,
+            "pitcher": (names.get(pid) or "—") if pid else "—",
+            "pitcher_id": pid,
+            "arm": (str(r.get("p_throws")) or "")[:1].upper(),
+            "pitch_type": str(r.get("pitch_type")).upper() if pd.notna(r.get("pitch_type")) else "",
+            "pitch_name": _bbe_pitch_label(r.get("pitch_type")),
+            "ev": round(ev, 2) if ev is not None else None,
+            "angle": round(_safe_f(r.get("launch_angle"), 0.0), 2) if pd.notna(r.get("launch_angle")) else None,
+            "distance": round(_safe_f(r.get("hit_distance_sc"), 0.0), 1) if pd.notna(r.get("hit_distance_sc")) else None,
+            "bat_speed": round(_safe_f(r.get("bat_speed"), 0.0), 1) if pd.notna(r.get("bat_speed")) else None,
+            "pitch_velo": round(_safe_f(r.get("release_speed"), 0.0), 1) if pd.notna(r.get("release_speed")) else None,
+            "is_barrel": bool(r.get("launch_speed_angle") == 6),
+            "is_hr": str(r.get("events")) == "home_run",
+            "result": str(r.get("events") or "").replace("_", " "),
+        })
+    return rows
+
+
+def _evlab_profile(rdf):
+    """Batted-ball type distribution + contact quality over a frame."""
+    def _pct(num, den):
+        return round(100.0 * float(num) / float(den), 1) if den else None
+
+    if rdf is None or rdf.empty:
+        return {"n": 0, "gb_pct": None, "fb_pct": None, "ld_pct": None,
+                "pu_pct": None, "hr_fb_pct": None, "hard_hit_pct": None,
+                "avg_ev": None, "barrel_pct": None, "blast_pct": None,
+                "pull_barrel_pct": None}
+    n = len(rdf)
+    bb = rdf["bb_type"].astype(str) if "bb_type" in rdf.columns else pd.Series([], dtype=str)
+    gb = int((bb == "ground_ball").sum())
+    fb = int((bb == "fly_ball").sum())
+    ld = int((bb == "line_drive").sum())
+    pu = int((bb == "popup").sum())
+    bbn = gb + fb + ld + pu
+    hr = int((rdf["events"].astype(str) == "home_run").sum()) if "events" in rdf.columns else 0
+    hardhit = int((rdf["launch_speed"] >= 95).sum()) if "launch_speed" in rdf.columns else 0
+    barrels_mask = (rdf["launch_speed_angle"] == 6) if "launch_speed_angle" in rdf.columns else None
+    barrels = int(barrels_mask.sum()) if barrels_mask is not None else 0
+
+    out = {
+        "n": n,
+        "gb_pct": _pct(gb, bbn), "fb_pct": _pct(fb, bbn),
+        "ld_pct": _pct(ld, bbn), "pu_pct": _pct(pu, bbn),
+        "hr_fb_pct": _pct(hr, fb),
+        "hard_hit_pct": _pct(hardhit, n),
+        "avg_ev": round(float(rdf["launch_speed"].mean()), 1) if "launch_speed" in rdf.columns else None,
+        "barrel_pct": _pct(barrels, n),
+        "blast_pct": None,
+        "pull_barrel_pct": None,
+    }
+
+    # Blast% — squared-up contact on a fast swing (needs bat-tracking columns).
+    # squared_up = achieved EV / potential EV >= 0.80; fast swing = bat_speed >= 75.
+    if {"bat_speed", "release_speed", "launch_speed"}.issubset(rdf.columns):
+        sub = rdf.dropna(subset=["bat_speed", "release_speed", "launch_speed"])
+        if len(sub):
+            max_ev = 1.23 * sub["bat_speed"] + 0.2116 * sub["release_speed"]
+            squared = (sub["launch_speed"] / max_ev) >= 0.80
+            fast = sub["bat_speed"] >= 75.0
+            out["blast_pct"] = _pct(int((squared & fast).sum()), len(sub))
+
+    # Pull-barrel% — barrels hit to the batter's pull field (needs spray coords).
+    if barrels_mask is not None and {"hc_x", "hc_y", "stand"}.issubset(rdf.columns):
+        sub = rdf.dropna(subset=["hc_x", "hc_y"])
+        if len(sub):
+            hcx = sub["hc_x"].astype(float)
+            hcy = sub["hc_y"].astype(float)
+            spray = _np_mod.degrees(_np_mod.arctan2(hcx - 125.42, 198.27 - hcy))
+            stand = sub["stand"].astype(str)
+            pulled = ((stand == "R") & (spray <= -15)) | ((stand == "L") & (spray >= 15))
+            sub_barrel = (sub["launch_speed_angle"] == 6) if "launch_speed_angle" in sub.columns else False
+            out["pull_barrel_pct"] = _pct(int((pulled & sub_barrel).sum()), n)
+    return out
+
+
+@app.route("/api/player/<int:batter_id>/exit-velocity", methods=["GET"])
+def api_player_exit_velocity(batter_id):
+    """Per-batted-ball exit-velocity log + L10/season summary tiles.
+
+    Query: window (l5|l10|l25|season|2yr), arm (R|L|ALL), pitches (CSV of
+    pitch_type codes), daynight (day|night|all), pitcher_id (direct BvP).
+    """
+    try:
+        p = _evlab_parse_params()
+        df = _load_batter_bbe(batter_id)
+        if df is None or df.empty:
+            return jsonify({"success": False, "rows": [],
+                            "summary": {}, "facets": {},
+                            "filters": p, "note": "No Statcast batted-ball data"})
+
+        nm = _resolve_people_names([batter_id]).get(batter_id)
+        bats = ""
+        if "stand" in df.columns:
+            modes = df["stand"].dropna()
+            if len(modes):
+                bats = str(modes.mode().iloc[0]) if len(modes.mode()) else str(modes.iloc[0])
+
+        base = _evlab_base_filter(df, p["arm"], p["pitcher_id"], p["pitches"], p["daynight"])
+        window_rows = _evlab_apply_window(base, p["window"])
+        cy = datetime.now().year
+        season_rows = base[pd.to_datetime(base["game_date"], errors="coerce").dt.year == cy] \
+            if (base is not None and not base.empty and "game_date" in base.columns) else base
+
+        win_sum = _evlab_ev_summary(window_rows)
+        szn_sum = _evlab_ev_summary(season_rows)
+        return jsonify({
+            "success": True,
+            "batter": {"id": batter_id, "name": nm, "bats": bats},
+            "filters": p,
+            "facets": _evlab_facets(df),
+            "summary": {
+                "window_avg_ev": win_sum["avg_ev"],
+                "window_barrel_pct": win_sum["barrel_pct"],
+                "window_n": win_sum["n"],
+                "season_avg_ev": szn_sum["avg_ev"],
+                "season_barrel_pct": szn_sum["barrel_pct"],
+                "season_n": szn_sum["n"],
+                "season_year": cy,
+            },
+            "rows": _evlab_rows(window_rows),
+        })
+    except Exception as ex:
+        logging.error(f"[api_player_exit_velocity] bid={batter_id} {ex}")
+        return jsonify({"success": False, "error": str(ex), "rows": []}), 500
+
+
+@app.route("/api/player/<int:batter_id>/batted-ball-profile", methods=["GET"])
+def api_player_batted_ball_profile(batter_id):
+    """Batted-ball type distribution + contact quality (GB/FB/LD/PU, HardHit,
+    AvgEV, Barrel%, Blast%, PullBarrel%) under the same EV-lab filters."""
+    try:
+        p = _evlab_parse_params()
+        df = _load_batter_bbe(batter_id)
+        if df is None or df.empty:
+            return jsonify({"success": False, "metrics": {}, "facets": {},
+                            "filters": p, "note": "No Statcast batted-ball data"})
+        base = _evlab_base_filter(df, p["arm"], p["pitcher_id"], p["pitches"], p["daynight"])
+        window_rows = _evlab_apply_window(base, p["window"])
+        facets = _evlab_facets(df)
+        return jsonify({
+            "success": True,
+            "batter": {"id": batter_id},
+            "filters": p,
+            "facets": facets,
+            "metrics": _evlab_profile(window_rows),
+            "bat_speed_available": facets.get("bat_speed_available", False),
+        })
+    except Exception as ex:
+        logging.error(f"[api_player_batted_ball_profile] bid={batter_id} {ex}")
+        return jsonify({"success": False, "error": str(ex), "metrics": {}}), 500
 
 
 def _aggregate_pa_outcomes(df):

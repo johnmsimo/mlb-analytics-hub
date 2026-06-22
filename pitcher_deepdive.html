@@ -1105,6 +1105,21 @@ function buildArsenalPane(s, pitcherId){
     ${matchups}`;
 }
 // ── THREATS PANE (top damage threats vs this pitcher) ────────────────────
+function pitcherHandFor(pid){
+  if(typeof PD!=='undefined' && PD){
+    if(PD.awayPitcher && PD.awayPitcher.id===pid) return PD.awayPitcher.throws||PD.awayPitcher.hand||PD.awayPitcher.pitchHand||'';
+    if(PD.homePitcher && PD.homePitcher.id===pid) return PD.homePitcher.throws||PD.homePitcher.hand||PD.homePitcher.pitchHand||'';
+  }
+  const side=MATCHUPS[pid];
+  if(side && side.pitcher) return side.pitcher.hand||side.pitcher.throws||side.pitcher.pitchHand||'';
+  return '';
+}
+
+function openEvLab(batterId, batterName, pitcherId, pitcherName, pitchHand){
+  if(!window.MatchupEVLab) return;
+  MatchupEVLab.openModal({batterId:batterId, batterName:batterName, pitcherId:pitcherId||null, pitcherName:pitcherName||'', pitchHand:pitchHand||''});
+}
+
 function buildThreatsPane(pitcherId){
   const side = MATCHUPS[pitcherId];
   if(!side){
@@ -1112,6 +1127,8 @@ function buildThreatsPane(pitcherId){
   }
   const threats = side.threats || [];
   const oppTeam = side.opponent || '';
+  const pHand = pitcherHandFor(pitcherId);
+  const pName = (side.pitcher && side.pitcher.name) || 'this pitcher';
   if(!threats.length){
     return`<div class="na">NO OPPOSING LINEUP POSTED YET<br><span style="font-size:.6rem">Check back after ~2 hours before first pitch</span></div>`;
   }
@@ -1170,6 +1187,10 @@ function buildThreatsPane(pitcherId){
         <div class="th-proj-cell"><div class="v ${probCls(b.rbiProb)}">${(b.rbiProb*100).toFixed(0)}%</div><div class="lbl">1+ RBI</div></div>
       </div>
       ${ (() => { const bx=lookupBatX(b.name); return bx ? batxOUPills(bx.proj, bx.proj?.adjustments, b.name) : (PROPS_DATA ? '' : '<div style="grid-column:1/-1;font-size:.52rem;color:var(--mu);opacity:.6">BAT X loading…</div>'); })() }
+      <div style="grid-column:1/-1;margin-top:6px">
+        <button onclick="openEvLab(${b.id}, '${(b.name||'').replace(/'/g,"\\'")}', ${pitcherId}, '${pName.replace(/'/g,"\\'")}', '${(pHand||'').replace(/'/g,"\\'")}')"
+          style="cursor:pointer;font-size:.56rem;letter-spacing:.04em;font-weight:700;color:#c7b3ff;background:rgba(124,58,237,.12);border:1px solid rgba(124,58,237,.4);border-radius:6px;padding:4px 10px">📊 EV LAB vs ${(pName.split(' ').pop())}</button>
+      </div>
     </div>`;
   }).join('');
 
@@ -1189,6 +1210,7 @@ function buildThreatsPane(pitcherId){
 }
 
 </script>
+<script src="/static/matchup_evlab.js" defer></script>
 <script src="/static/mobile-nav.js" defer></script>
 </body>
 </html>

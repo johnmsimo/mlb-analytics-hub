@@ -514,6 +514,9 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
   <div id="mainContent" style="display:none">
   <div id="matchHeader" style="margin-bottom:16px;font-family:'Orbitron',monospace;font-size:.72rem;color:var(--mu);letter-spacing:3px"></div>
 
+  <!-- ── Best Prop Recommendation ── -->
+  <div id="bestPropBox" style="margin-bottom:16px"></div>
+
   <!-- ── Major Market Odds Panel ── -->
   <div id="majorMarketsPanel" style="margin-bottom:18px;display:none"></div>
 
@@ -1197,6 +1200,9 @@ async function selectGame(pk, awayAbbr, homeAbbr) {
   gel('matchHeader').innerHTML =
     `${awayAbbr} <span style="color:var(--c)">@</span> ${homeAbbr} &nbsp;·&nbsp; GAME ${pk}`;
   gel('lastUpdate').textContent = `UPDATED ${new Date().toLocaleTimeString()}`;
+
+  // Best-prop recommendation: rank every prop in this game and surface the top target.
+  if (window.BestProp) BestProp.render('bestPropBox', pk);
 
   // Kick off umpire + trends in parallel (non-blocking)
   loadUmpire(pk);
@@ -2239,6 +2245,17 @@ async function retryZoneChart(ev, playerId, playerName) {
   await openZoneChart(playerId, playerName || 'PLAYER');
 }
 
+function openEvLab(batterId, batterName, pitcherId, pitcherName, pitchHand) {
+  if (!window.MatchupEVLab) return;
+  MatchupEVLab.openModal({
+    batterId: batterId,
+    batterName: batterName,
+    pitcherId: pitcherId || null,
+    pitcherName: pitcherName || '',
+    pitchHand: pitchHand || ''
+  });
+}
+
 async function openSprayChart(playerId, playerName) {
   const modal = gel('sprayChartModal');
   const title = gel('sprayChartTitle');
@@ -2750,6 +2767,7 @@ function batterCard(b) {
     <button class="ls-btn" onclick="openLineShop('${(b.name||'').replace(/'/g,"\\'")}', ${b.gamePk || 'null'})"><span>📚 LINE SHOPPING</span><span>OPEN ▸</span></button>
     <button class="ls-btn" onclick="openSprayChart(${pid}, '${(b.name||'').replace(/'/g,"\\'")}')"><span>🗺️ SPRAY CHART</span><span>OPEN ▸</span></button>
     <button class="ls-btn" onclick="openZoneChart(${pid}, '${(b.name||'').replace(/'/g,"\\'")}')"><span>⚾ STRIKE ZONE</span><span>OPEN ▸</span></button>
+    <button class="ls-btn" onclick="openEvLab(${pid}, '${(b.name||'').replace(/'/g,"\\'")}', ${b.opp_pitcher_id||'null'}, '${(b.opp_pitcher||'').replace(/'/g,"\\'")}', '${(b.opp_hand||'').replace(/'/g,"\\'")}')"><span>📊 EV LAB</span><span>OPEN ▸</span></button>
     ${hrPanel}
     ${batxHtml}
     ${trnd}
@@ -3426,6 +3444,8 @@ if (typeof renderBatters !== 'undefined') {
   }
 }
 </script>
+<script src="/static/matchup_evlab.js" defer></script>
+<script src="/static/best_prop.js" defer></script>
 <script src="/static/mobile-nav.js" defer></script>
 <script>
 // ── PrizePicks ────────────────────────────────────────────────────────────────
