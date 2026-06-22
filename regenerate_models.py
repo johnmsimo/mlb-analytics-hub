@@ -81,7 +81,18 @@ HITS_FEATURES = [
     "opp_xera", "opp_k_pct", "opp_bb_pct", "opp_whiff",
     "bats_L", "throws_R", "platoon_adv",
     "l7_hits", "l14_hits", "l7_hit_rate",
+    # Playing-time / lineup role — THE dominant signal for "≥1 hit in a game"
+    # and already served live by the scorer (lineup_loader). Reconstructed
+    # historically from Statcast at-bat order; expected_pa uses the SAME
+    # slot→PA table the scorer feeds, so there is no train/serve skew.
+    "batting_order", "expected_pa",
 ]
+
+# Mirror of lineup_loader._PA_BY_SLOT / _DEFAULT_PA so the historical
+# reconstruction of expected_pa matches inference exactly.
+_PA_BY_SLOT = {1: 4.60, 2: 4.52, 3: 4.44, 4: 4.36, 5: 4.28,
+               6: 4.18, 7: 4.08, 8: 3.96, 9: 3.84}
+_DEFAULT_PA = 4.20
 K_FEATURES = [
     "sv_xera", "sv_era", "sv_k_pct", "sv_bb_pct", "sv_whiff_pct",
     "l3_ks", "l5_ks", "l5_k_rate", "l10_ks", "l3_ip", "l5_ip", "days_rest",
@@ -166,6 +177,18 @@ def _agg_chunk(sc: pd.DataFrame, season: int) -> tuple[pd.DataFrame, pd.DataFram
                   p_throws=("p_throws", "first") if "p_throws" in pa.columns else ("is_pa", "size"))
              .reset_index())
     bat = bat.merge(side_first, on=["game_pk", "inning_topbot"], how="left")
+
+    # ── Lineup slot (1-9) from at-bat order within each side: the batter whose
+    #    first at_bat_number is smallest leads off. Late subs / pinch hitters
+    #    rank past 9 and clip to 9 (a low-PA role). Mirrors the serve-time
+    #    batting_order so expected_pa stays train/serve consistent.
+    fab = (pa.groupby(["game_pk", "inning_topbot", "batter"], as_index=False)["at_bat_number"]
+             .min())
+    fab["batting_order"] = (fab.groupby(["game_pk", "inning_topbot"])["at_bat_number"]
+                            .rank(method="first").clip(upper=9))
+    bat = bat.merge(fab[["game_pk", "inning_topbot", "batter", "batting_order"]],
+                    on=["game_pk", "inning_topbot", "batter"], how="left")
+
     bat["hit_over_0.5"] = (bat["hits"] >= 1).astype(int)
     bat["season"] = season
 
@@ -272,6 +295,10 @@ def load_fg_pitching(season: int) -> pd.DataFrame:
 
 def build_batter_matrix(bg: pd.DataFrame) -> pd.DataFrame:
     bg = bg.sort_values(["batter", "game_date"]).copy()
+    # Lineup-role features (reconstructed in _agg_chunk). expected_pa via the
+    # serve-time slot→PA table; unknown slot (0) → league-default PA.
+    bg["batting_order"] = pd.to_numeric(bg.get("batting_order"), errors="coerce").fillna(0).astype(int)
+    bg["expected_pa"] = bg["batting_order"].map(_PA_BY_SLOT).fillna(_DEFAULT_PA)
     bg["ab_safe"] = bg["ab"].clip(lower=1)
     bg["l7_hits"] = bg.groupby("batter")["hits"].transform(
         lambda x: x.shift(1).rolling(7, min_periods=1).mean())
@@ -465,8 +492,19 @@ def main(markets: list[str]):
             shipped.append(mkey)
 
     if feat_map:
-        with open(os.path.join(_MODEL_DIR, "xgb_feature_cols.json"), "w") as f:
-            json.dump(feat_map, f, indent=2)
+        # Merge into the existing map so a partial run (e.g. --markets hits)
+        # never drops the feature lists of markets it didn't retrain.
+        fcols_path = os.path.join(_MODEL_DIR, "xgb_feature_cols.json")
+        merged = {}
+        if os.path.exists(fcols_path):
+            try:
+                with open(fcols_path) as f:
+                    merged = json.load(f) or {}
+            except Exception:
+                merged = {}
+        merged.update(feat_map)
+        with open(fcols_path, "w") as f:
+            json.dump(merged, f, indent=2)
     summary = {k: (v["artifact"]["meta"] if v else None) for k, v in results.items()}
     with open(os.path.join(_DATA_DIR, "regen_summary.json"), "w") as f:
         json.dump(summary, f, indent=2)

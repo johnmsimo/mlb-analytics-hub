@@ -1,13 +1,13 @@
 {
-  "generated_at_utc": "2026-06-21T10:49:07.188461",
-  "note": "Held-out (2021-24 train / 2025 test) benchmarks from regenerate_models.py. Compare live tracker Brier against test_brier; both should beat baserate_brier.",
+  "generated_at_utc": "2026-06-21T23:52:04.887407",
+  "note": "Held-out (2021-24 train / 2025 test) benchmarks from regenerate_models.py. Compare live tracker Brier against test_brier; both should beat baserate_brier. 2026-06-21: hits model retrained with lineup-role features (batting_order, expected_pa) reconstructed from Statcast at-bat order — test AUC 0.5912→0.6223, test Brier 0.2371→0.2311.",
   "models": {
     "hits": {
       "tracker_market": "batter_hits",
       "line": 0.5,
-      "test_auc": 0.5912,
-      "train_auc": 0.6182,
-      "test_brier": 0.2371,
+      "test_auc": 0.6223,
+      "train_auc": 0.6467,
+      "test_brier": 0.2311,
       "baserate_brier": 0.2432,
       "n_train": 190463,
       "n_test": 47178,
@@ -50,8 +50,8 @@
   "by_tracker_market": {
     "batter_hits": {
       "representative": "hits",
-      "test_auc": 0.5912,
-      "test_brier": 0.2371,
+      "test_auc": 0.6223,
+      "test_brier": 0.2311,
       "baserate_brier": 0.2432
     },
     "pitcher_strikeouts": {

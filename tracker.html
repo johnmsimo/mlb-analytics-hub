@@ -267,11 +267,11 @@ details[open] summary::before{transform:rotate(90deg)}
 
 <!-- ── HERO STATS ─────────────────────────────────────────────────────── -->
 <div class="hero">
-  <div class="hstat"><div class="hstat-v" id="hPicks">0</div><div class="hstat-l">Picks</div></div>
+  <div class="hstat green"><div class="hstat-v" id="hCLVRate">—</div><div class="hstat-l">Beat Close % <span title="Closing Line Value: the share of graded bets whose price beat the closing line. The sharpest, lowest-variance measure of edge — the primary KPI.">ⓘ</span></div></div>
+  <div class="hstat gold"><div class="hstat-v" id="hAvgCLV">—</div><div class="hstat-l">Avg CLV</div></div>
+  <div class="hstat"><div class="hstat-v" id="hHitRate">—</div><div class="hstat-l">Hit Rate</div></div>
+  <div class="hstat"><div class="hstat-v" id="hProfit">$0</div><div class="hstat-l">P/L $</div></div>
   <div class="hstat"><div class="hstat-v" id="hGraded">0</div><div class="hstat-l">Graded</div></div>
-  <div class="hstat green"><div class="hstat-v" id="hHitRate">—</div><div class="hstat-l">Hit Rate</div></div>
-  <div class="hstat gold"><div class="hstat-v" id="hProfit">$0</div><div class="hstat-l">P/L $</div></div>
-  <div class="hstat"><div class="hstat-v" id="hRisk">$0</div><div class="hstat-l">At Risk</div></div>
   <div class="hstat"><div class="hstat-v" id="hBankroll">—</div><div class="hstat-l">Bankroll</div></div>
 </div>
 
@@ -316,6 +316,7 @@ details[open] summary::before{transform:rotate(90deg)}
             <option value="adjProb">Sort: Adj Prob</option>
             <option value="hub">Sort: HUB Rating</option>
             <option value="ev">Sort: EV%</option>
+            <option value="clv">Sort: CLV</option>
             <option value="profit">Sort: P/L $</option>
           </select>
         </div>
@@ -971,11 +972,17 @@ function tierBadge(t) {
 }
 
 // ── CLV color ─────────────────────────────────────────────────────────────────
+// clvEdge = closingImplied − openingImplied; positive = you beat the close = good
+// (matches the backend, which counts clvEdge>0 as +CLV and ranks highest as best).
+function clvColor(v) {
+  if (v==null) return 'var(--mu)';
+  const n = parseFloat(v);
+  return n > 0 ? 'var(--g)' : n < 0 ? 'var(--r)' : 'var(--mu)';
+}
 function clvHtml(v) {
   if (v==null) return '—';
   const n = parseFloat(v);
-  const col = n < 0 ? 'var(--g)' : n > 0 ? 'var(--r)' : 'var(--mu)';
-  return `<span style="color:${col}">${n<0?'':'+'}${(n*100).toFixed(1)}%</span>`;
+  return `<span style="color:${clvColor(n)}">${n<0?'':'+'}${(n*100).toFixed(1)}%</span>`;
 }
 
 // ── Load / render day ─────────────────────────────────────────────────────────
@@ -1086,17 +1093,32 @@ function renderSummary(d) {
     const bk = s.bankroll || {};
     const vs = s.value || {};
     console.log('[renderSummary] summary keys:', Object.keys(s), 'bankroll:', bk, 'value:', vs);
-    $('hPicks').textContent    = s.picks || 0;
+    // ── Primary KPI: Closing Line Value ──────────────────────────────────────
+    const clvRate = (s.clv_positive_rate!=null) ? s.clv_positive_rate : vs.clv_positive_rate;
+    const avgClv  = (s.avg_clv!=null) ? s.avg_clv : vs.avg_clv;
+    const nClv    = vs.graded_with_clv || 0;
+    $('hCLVRate').textContent = (clvRate!=null) ? pct(clvRate) : '—';
+    $('hCLVRate').style.color = (clvRate==null) ? 'var(--mu)' : (clvRate>=0.5?'var(--g)':'var(--r)');
+    if (avgClv!=null) {
+      const sign = avgClv>0?'+':'';
+      $('hAvgCLV').textContent = sign + (avgClv*100).toFixed(1) + '%';
+      $('hAvgCLV').style.color = clvColor(avgClv);
+    } else {
+      $('hAvgCLV').textContent = '—';
+    }
+    // sample-size hint on the primary KPI so a 2-bet 100% can't masquerade as skill
+    const clvLabel = document.querySelector('#hCLVRate').closest('.hstat').querySelector('.hstat-l');
+    if (clvLabel) clvLabel.firstChild.textContent = nClv ? `Beat Close % (n=${nClv}) ` : 'Beat Close % ';
+    // ── Supporting metrics ───────────────────────────────────────────────────
     $('hGraded').textContent   = s.graded || 0;
     $('hHitRate').textContent  = s.hit_rate!=null ? pct(s.hit_rate) : '—';
     const profit = parseFloat(vs.dollars||0);
     $('hProfit').textContent   = money(profit);
     $('hProfit').style.color   = profit>0?'var(--g)':profit<0?'var(--r)':'var(--txt)';
-    $('hRisk').textContent     = money(bk.planned_stake||0);
     $('hBankroll').textContent = money(bk.live_bankroll||bk.starting_bankroll||0);
   } catch(e) {
     console.error('[renderSummary] Error:', e);
-    $('hPicks').textContent = $('hGraded').textContent = $('hHitRate').textContent = $('hProfit').textContent = $('hRisk').textContent = $('hBankroll').textContent = '—';
+    $('hCLVRate').textContent = $('hAvgCLV').textContent = $('hGraded').textContent = $('hHitRate').textContent = $('hProfit').textContent = $('hBankroll').textContent = '—';
   }
 }
 
@@ -1215,6 +1237,12 @@ function renderBoard() {
       if (srt === 'hub')    return hubRating(b.adjProb,b.edge) - hubRating(a.adjProb,a.edge);
       if (srt === 'ev')     return (evPercent(b.adjProb,b.marketImplied)||0) - (evPercent(a.adjProb,a.marketImplied)||0);
       if (srt === 'profit') return (parseFloat(b.profitDollars)||0) - (parseFloat(a.profitDollars)||0);
+      if (srt === 'clv') {
+        // CLV-first: graded picks with CLV ranked by edge; ungraded sink to bottom.
+        const ca = a.clvEdge==null ? -Infinity : parseFloat(a.clvEdge);
+        const cb = b.clvEdge==null ? -Infinity : parseFloat(b.clvEdge);
+        return cb - ca;
+      }
       return (parseFloat(b.score)||0) - (parseFloat(a.score)||0); // default: score
     });
 

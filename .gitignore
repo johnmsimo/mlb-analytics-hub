@@ -19,3 +19,9 @@ data/player_signal_images/
 data/player_signals.json
 # Atomic-write tmp files orphaned by SIGTERM mid-write (see _save_json)
 data/*.tmp
+
+# Date-stamped runtime artifacts — regenerated at runtime, not deploy inputs
+# (see CLAUDE.md "Data persistence"). The static reference CSVs stay tracked.
+data/lineups_*.json
+data/umpires_*.json
+data/mlb_matchups_*.csv

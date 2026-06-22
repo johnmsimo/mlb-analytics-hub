@@ -19,7 +19,9 @@
     "platoon_adv",
     "l7_hits",
     "l14_hits",
-    "l7_hit_rate"
+    "l7_hit_rate",
+    "batting_order",
+    "expected_pa"
   ],
   "hits_over_0.5": [
     "sv_xba",
@@ -41,7 +43,9 @@
     "platoon_adv",
     "l7_hits",
     "l14_hits",
-    "l7_hit_rate"
+    "l7_hit_rate",
+    "batting_order",
+    "expected_pa"
   ],
   "k_3.5": [
     "sv_xera",

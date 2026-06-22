@@ -1,0 +1,26 @@
+{
+  "hits": {
+    "market": "hits",
+    "target": "hit_over_0.5",
+    "line": 0.5,
+    "test_auc": 0.6223,
+    "train_auc": 0.6467,
+    "test_brier": 0.2311,
+    "baserate_brier": 0.2432,
+    "test_logloss": 0.6546,
+    "n_train": 190463,
+    "n_test": 47178,
+    "pos_rate": 0.5772,
+    "train_seasons": [
+      2021,
+      2022,
+      2023,
+      2024
+    ],
+    "test_season": 2025,
+    "calibration": "isotonic_cv4",
+    "xgboost_version": "3.2.0",
+    "exported_at_utc": "2026-06-21T23:52:04.887407",
+    "model_type": "CalibratedClassifierCV(XGBClassifier)"
+  }
+}

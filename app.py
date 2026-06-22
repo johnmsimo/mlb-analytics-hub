@@ -76,6 +76,15 @@ except ImportError:
     _STACK_AVAILABLE = False
     def stacked_calibrate(*a, **k): return None
 
+# Per-market probability recalibration fit from our own graded history.
+# Optional: a missing module leaves model probabilities untouched (identity).
+try:
+    from prop_calibration import PropCalibrator
+    _PROP_CAL_AVAILABLE = True
+except ImportError:
+    _PROP_CAL_AVAILABLE = False
+    PropCalibrator = None  # type: ignore
+
 
 # ── Best Bets signal upgrades (all optional, all free) ────────────────────────
 # Each loader is try/except so a missing module just disables that one signal —
@@ -9023,20 +9032,15 @@ def _pitcher_k_projection_vs_lineup(pitcher_id, pitcher_name, opposing_lineup,
             "oppKPct":      _safe_f(fg_pit.get("opp_kpct_proxy"), 22.0),
             "oppWoba":      _safe_f(fg_pit.get("opp_woba_proxy"), 0.320),
         }
-        # Fold in recent form when available
+        # Fold in rolling form (l{3,5,10}Ks / l5KRate / l{3,5}IP / daysRest).
+        # NOTE: the previous code read rf.get("l3"/"l5"/"l10"/"days_rest"), keys
+        # _pitcher_recent_form never returns, so every rolling feature silently
+        # fell back to its default. _pitcher_rolling_k_features returns the
+        # correct keys, computed to match the model's training definitions.
         try:
-            rf = _pitcher_recent_form(pitcher_id) if pitcher_id else None
-            if rf:
-                l3 = rf.get("l3") or {}; l5 = rf.get("l5") or {}; l10 = rf.get("l10") or {}
-                pitcher_dict.update({
-                    "l3Ks":      _safe_f(l3.get("k_total"),  4.5),
-                    "l5Ks":      _safe_f(l5.get("k_total"),  4.5),
-                    "l10Ks":     _safe_f(l10.get("k_total"), 4.5),
-                    "l5KRate":   _safe_f(l5.get("kpct"),     0.22),
-                    "l3IP":      _safe_f(l3.get("ip"),       5.0),
-                    "l5IP":      _safe_f(l5.get("ip"),       5.0),
-                    "daysRest":  _safe_f(rf.get("days_rest"), 5.0),
-                })
+            _kf = _pitcher_rolling_k_features(pitcher_id) if pitcher_id else None
+            if _kf:
+                pitcher_dict.update(_kf)
         except Exception:
             pass
 
@@ -9905,8 +9909,93 @@ def _batter_pitch_profile(batter_id):
     return profile
 
 
+_ARSENAL_MIN_USAGE    = 7.0    # ignore pitches thrown <7% of the time
+_ARSENAL_MIN_COVERAGE = 35.0   # need batter data covering >=35% of the arsenal
+
+
+def _arsenal_matchup_from_stats(pitcher_id, batter_id):
+    """Real pitch-arsenal matchup: the batter's wOBA-by-pitch-type weighted by
+    the pitcher's ACTUAL usage of each pitch. Returns a verdict dict, or None
+    when arsenal data is too thin (caller falls back to the handedness proxy).
+
+    Both Savant leaderboards (`_sv_pit_arsenal_stats`, `_sv_bat_arsenal_stats`)
+    are keyed by MLBAM id and share the same `pitch_name` vocabulary, so the
+    join needs no name matching."""
+    try:
+        with _sv_lock:
+            pit_ars = _sv_pit_arsenal_stats.get(str(int(pitcher_id)))
+            bat_ars = _sv_bat_arsenal_stats.get(str(int(batter_id)))
+        if not pit_ars or not bat_ars:
+            return None
+
+        # Usage-weighted expected wOBA for this batter vs this exact arsenal.
+        num = den = 0.0
+        per_pitch = []
+        for pitch, pstat in pit_ars.items():
+            usage = _safe_f(pstat.get("usage"), 0.0)
+            if usage < _ARSENAL_MIN_USAGE:
+                continue
+            b = bat_ars.get(pitch)
+            if not b:
+                continue
+            bw = _safe_f(b.get("woba"), None)
+            if bw is None:
+                continue
+            num += usage * bw
+            den += usage
+            per_pitch.append({
+                "pitch": pitch,
+                "usage": round(usage, 1),
+                "batter_woba": round(bw, 3),
+                "whiff_pct": _safe_f(b.get("whiff_pct"), None),
+            })
+        if den < _ARSENAL_MIN_COVERAGE or not per_pitch:
+            return None
+
+        matchup_woba = num / den
+        # Baseline = the batter's own average wOBA across every pitch type they
+        # have data on, so the verdict reflects whether THIS arsenal skews toward
+        # the batter's strengths rather than just raw quality.
+        baseline_vals = [_safe_f(v.get("woba"), None) for v in bat_ars.values()]
+        baseline_vals = [x for x in baseline_vals if x is not None]
+        baseline = (sum(baseline_vals) / len(baseline_vals)) if baseline_vals else _LEAGUE_WOBA
+
+        driver = max(per_pitch, key=lambda r: r["usage"])         # most-thrown pitch w/ data
+        signed = sorted(per_pitch, key=lambda r: r["batter_woba"])
+        worst, best = signed[0], signed[-1]
+
+        delta = matchup_woba - baseline
+        if delta >= 0.020:
+            status, d = "favorable", best
+            note = (f"Strong vs this arsenal — {matchup_woba:.3f} xwOBA "
+                    f"(thrives on {d['pitch']}: {d['batter_woba']:.3f} at {d['usage']:.0f}% usage)")
+        elif delta <= -0.020:
+            status, d = "unfavorable", worst
+            note = (f"Weak vs this arsenal — {matchup_woba:.3f} xwOBA "
+                    f"(struggles vs {d['pitch']}: {d['batter_woba']:.3f} at {d['usage']:.0f}% usage)")
+        else:
+            status = "neutral"
+            note = f"Neutral arsenal matchup — {matchup_woba:.3f} xwOBA vs the mix"
+
+        return {
+            "status": status,
+            "note": note,
+            "primary_pitch": driver["pitch"],
+            "primary_pitch_label": driver["pitch"],
+            "usage_pct": round(driver["usage"], 1),
+            "matchup_woba": round(matchup_woba, 3),
+            "baseline_woba": round(baseline, 3),
+            "source": "arsenal",
+            "pitches": sorted(per_pitch, key=lambda r: r["usage"], reverse=True)[:5],
+        }
+    except Exception as ex:
+        print(f"[arsenal_matchup] {batter_id} vs {pitcher_id}: {ex}")
+        return None
+
+
 def _pitch_type_advantage(batter_id, pitcher_id, batter_name='', pitcher_name=''):
-    """Classify batter performance vs pitcher's primary pitch type."""
+    """Batter vs the pitcher's REAL arsenal (usage-weighted wOBA by pitch type),
+    falling back to the handedness-split proxy when arsenal data is thin."""
     if not batter_id or not pitcher_id:
         return {"status": "neutral", "note": "Neutral matchup"}
 
@@ -9917,6 +10006,17 @@ def _pitch_type_advantage(batter_id, pitcher_id, batter_name='', pitcher_name=''
         if cached and cached[0] == today:
             return cached[1]
 
+    out = _arsenal_matchup_from_stats(pitcher_id, batter_id) \
+        or _pitch_type_advantage_proxy(batter_id, pitcher_id, batter_name, pitcher_name)
+
+    with _pitch_adv_lock:
+        _pitch_adv_cache[key] = (today, out)
+    return out
+
+
+def _pitch_type_advantage_proxy(batter_id, pitcher_id, batter_name='', pitcher_name=''):
+    """Legacy fallback: the pitcher's single most-used pitch × the batter's AVG
+    vs that pitch (or a handedness split when pitch-type Statcast is missing)."""
     out = {"status": "neutral", "note": "Neutral matchup"}
     try:
         p_name = (pitcher_name or '').strip()
@@ -9987,8 +10087,6 @@ def _pitch_type_advantage(batter_id, pitcher_id, batter_name='', pitcher_name=''
         print(f"[pitch_adv] {batter_id} vs {pitcher_id}: {ex}")
         out = {"status": "neutral", "note": "Neutral matchup"}
 
-    with _pitch_adv_lock:
-        _pitch_adv_cache[key] = (today, out)
     return out
 
 
@@ -14840,8 +14938,9 @@ def _build_team_market_rows(game_pk, capture_date, away_abbr, home_abbr,
               bookmaker, opp_book_price, opp_book_name, team, reason):
         """Build a single row and append to rows."""
         raw_mult_prob = _clamp01(raw_prob * _market_mult(market_key, adjustments))
-        adj_prob = raw_mult_prob
-        edge = (adj_prob - market_implied) if market_implied is not None else None
+        precal_prob = raw_mult_prob
+        adj_prob = _calibrate_prop_prob(market_key, precal_prob)
+        edge = _capped_edge(adj_prob, market_implied)
         score = (edge * 100.0 if edge is not None else 0) + adj_prob
         hub = _hub_rating(adj_prob, edge or 0)
         ev_pct = round(adj_prob / market_implied - 1, 4) if market_implied and market_implied > 0 else None
@@ -14856,6 +14955,8 @@ def _build_team_market_rows(game_pk, capture_date, away_abbr, home_abbr,
             'rawProb': round(raw_prob, 4),
             'rawMultProb': round(raw_mult_prob, 4),
             'adjProb': round(adj_prob, 4),
+            'preCalProb': round(precal_prob, 4),
+            'calStatus': _prop_cal_status(market_key),
             'modelMean': None,
             'edge': round(edge, 4) if edge is not None else None,
             'bookmaker': bookmaker,
@@ -15150,14 +15251,16 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                         adj_prob = logit_blend_prob(raw_mult_prob, over_imp, mk, over_imp, under_imp)
                     else:
                         adj_prob = raw_mult_prob
-                    edge = (adj_prob - market_implied) if market_implied is not None else None
+                    precal_prob = adj_prob
+                    adj_prob = _calibrate_prop_prob(mk, precal_prob)
+                    edge = _capped_edge(adj_prob, market_implied)
                     score = (edge * 100.0 if edge is not None else 0) + adj_prob
                     hub = _hub_rating(adj_prob, edge or 0)
                     mi = market_implied
                     ev_pct = round(adj_prob / mi - 1, 4) if mi and mi > 0 else None
                     temp_row = {
                         'date': capture_date, 'gamePk': game_pk, 'team': team_abbr, 'player': p.get('name'), 'playerId': p.get('id'), 'slot': p.get('slot'), 'marketKey': mk, 'line': line, 'recommendedSide': 'Over',
-                        'rawProb': round(raw_prob, 4), 'rawMultProb': round(raw_mult_prob, 4), 'adjProb': round(adj_prob, 4), 'modelMean': round(float(p.get(mean_field, 0) or 0), 3), 'edge': round(edge, 4) if edge is not None else None,
+                        'rawProb': round(raw_prob, 4), 'rawMultProb': round(raw_mult_prob, 4), 'adjProb': round(adj_prob, 4), 'preCalProb': round(precal_prob, 4), 'calStatus': _prop_cal_status(mk), 'modelMean': round(float(p.get(mean_field, 0) or 0), 3), 'edge': round(edge, 4) if edge is not None else None,
                         'bookmaker': msum.get('market_bookmaker'), 'marketPrice': msum.get('best_over_price'), 'marketImplied': market_implied,
                         'bestAvailablePrice': msum.get('best_over_price'), 'bestAvailableBook': msum.get('best_over_book'),
                         'bestOverPrice': msum.get('best_over_price'), 'bestOverBook': msum.get('best_over_book'),
@@ -15225,6 +15328,15 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
         # ── FanGraphs enrichment for pitcher K props (done once per starter) ──
         if k_xgb_ready:
             sp = {**sp, **enrich_pitcher(sp)}   # merges real FG stats into sp dict
+            # Rolling form (l{3,5,10}Ks / l5KRate / l{3,5}IP / daysRest) — 7 of the
+            # k-model's 12 features. Without this they serve as constant defaults
+            # and the model's form signal is dead (train/serve skew).
+            try:
+                _kf = _pitcher_rolling_k_features(sp.get('id'))
+                if _kf:
+                    sp.update(_kf)
+            except Exception:
+                pass
             # Arsenal pitch-mix (usage-weighted whiff%/putaway%) for the K model.
             try:
                 _ars = _arsenal_whiff_summary(sp.get('id'))
@@ -15259,14 +15371,16 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                 adj_prob = logit_blend_prob(raw_mult_prob, over_imp, 'pitcher_strikeouts', over_imp, under_imp)
             else:
                 adj_prob = raw_mult_prob
-            edge = (adj_prob - market_implied) if market_implied is not None else None
+            precal_prob = adj_prob
+            adj_prob = _calibrate_prop_prob('pitcher_strikeouts', precal_prob)
+            edge = _capped_edge(adj_prob, market_implied)
             score = (edge * 100.0 if edge is not None else 0) + adj_prob
             hub = _hub_rating(adj_prob, edge or 0)
             mi = market_implied
             ev_pct = round(adj_prob / mi - 1, 4) if mi and mi > 0 else None
             temp_row = {
                 'date': capture_date, 'gamePk': game_pk, 'team': team_abbr, 'player': sp.get('name'), 'playerId': sp.get('id'), 'marketKey': 'pitcher_strikeouts', 'line': line, 'recommendedSide': 'Over',
-                'rawProb': round(raw_prob, 4), 'rawMultProb': round(raw_mult_prob, 4), 'adjProb': round(adj_prob, 4), 'modelMean': round(float(sp.get('mean_k', 0) or 0), 3), 'edge': round(edge, 4) if edge is not None else None, 'xgbKProb': round(_xgb_k, 4) if _xgb_k is not None else None, 'mcKProb': round(_mc_k_prob, 4) if _xgb_k is not None else None,
+                'rawProb': round(raw_prob, 4), 'rawMultProb': round(raw_mult_prob, 4), 'adjProb': round(adj_prob, 4), 'preCalProb': round(precal_prob, 4), 'calStatus': _prop_cal_status('pitcher_strikeouts'), 'modelMean': round(float(sp.get('mean_k', 0) or 0), 3), 'edge': round(edge, 4) if edge is not None else None, 'xgbKProb': round(_xgb_k, 4) if _xgb_k is not None else None, 'mcKProb': round(_mc_k_prob, 4) if _xgb_k is not None else None,
                 'bookmaker': msum.get('market_bookmaker'), 'marketPrice': msum.get('best_over_price'), 'marketImplied': market_implied,
                 'bestAvailablePrice': msum.get('best_over_price'), 'bestAvailableBook': msum.get('best_over_book'),
                 'bestOverPrice': msum.get('best_over_price'), 'bestOverBook': msum.get('best_over_book'),
@@ -15354,7 +15468,8 @@ def _build_tracker_rows_quick(game_obj, capture_date, adjustments=None):
                 ('batter_hits', 0.5, base_hit),
                 ('batter_total_bases', 1.5, base_tb2),
             ]:
-                adj_prob = _clamp01(raw_prob * _market_mult(mk, adjustments))
+                precal_prob = _clamp01(raw_prob * _market_mult(mk, adjustments))
+                adj_prob = _calibrate_prop_prob(mk, precal_prob)
                 row_data = {
                     'date': capture_date,
                     'gamePk': game_pk,
@@ -15366,6 +15481,8 @@ def _build_tracker_rows_quick(game_obj, capture_date, adjustments=None):
                     'recommendedSide': 'Over',
                     'rawProb': round(raw_prob, 4),
                     'adjProb': round(adj_prob, 4),
+                    'preCalProb': round(precal_prob, 4),
+                    'calStatus': _prop_cal_status(mk),
                     'modelMean': None,
                     'edge': None,
                     'bookmaker': None,
@@ -15997,6 +16114,140 @@ def _collect_window_entries(end_date_str, window_days):
     return rows
 
 
+# ── Per-market probability recalibration ──────────────────────────────────────
+# Displayed edge is only meaningful if the model probability is calibrated. We
+# fit a per-market correction from our own graded history (the same data behind
+# /api/calibration/markets) and apply it BEFORE edge/EV/hub are computed.
+#
+# Feedback-loop safety: the calibrator is fit on the PRE-calibration probability
+# (`preCalProb`, persisted on every row). Historical rows predate calibration so
+# their stored `adjProb` *is* the pre-calibration value and is used as fallback;
+# once `preCalProb` exists we never re-read the (now calibrated) `adjProb`.
+EDGE_DISPLAY_CAP = 0.30          # no single prop should advertise a >30pt edge
+_PROP_CAL_WINDOW_DAYS = 120
+_PROP_CAL_TTL_SEC = 1800         # rebuild at most every 30 min
+_prop_cal_state = {"cal": None, "built_at": 0.0, "date": None}
+_prop_cal_lock = threading.Lock()
+
+
+def _entry_precal_prob(row):
+    """The pre-calibration model prob a calibrator should be fit on."""
+    for k in ('preCalProb', 'adjProb', 'rawMultProb', 'rawProb', 'modelProb'):
+        v = row.get(k)
+        if v is None:
+            continue
+        try:
+            f = float(v)
+            if 0.0 <= f <= 1.0:
+                return f
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _build_prop_calibrator(date_str):
+    if not _PROP_CAL_AVAILABLE:
+        return None
+    try:
+        entries = _collect_window_entries(date_str, _PROP_CAL_WINDOW_DAYS)
+        by_market = {}
+        for row in entries:
+            mk = row.get('marketKey')
+            if not mk or row.get('grade') not in ('win', 'loss'):
+                continue
+            p = _entry_precal_prob(row)
+            if p is None:
+                continue
+            by_market.setdefault(mk, []).append((p, 1.0 if row.get('grade') == 'win' else 0.0))
+        return PropCalibrator.fit_from_entries(by_market)
+    except Exception as ex:
+        logging.warning(f"[prop-cal] build failed: {ex}")
+        return None
+
+
+def _get_prop_calibrator():
+    """Cached PropCalibrator, rebuilt every _PROP_CAL_TTL_SEC or on date change."""
+    if not _PROP_CAL_AVAILABLE:
+        return None
+    now = time.time()
+    date_str = datetime.now(ET).strftime('%Y-%m-%d')
+    with _prop_cal_lock:
+        fresh = (_prop_cal_state["cal"] is not None
+                 and _prop_cal_state["date"] == date_str
+                 and (now - _prop_cal_state["built_at"]) < _PROP_CAL_TTL_SEC)
+        if not fresh:
+            _prop_cal_state["cal"] = _build_prop_calibrator(date_str)
+            _prop_cal_state["built_at"] = now
+            _prop_cal_state["date"] = date_str
+        return _prop_cal_state["cal"]
+
+
+def _calibrate_prop_prob(market_key, prob):
+    """Apply the per-market calibration to a model probability (identity-safe)."""
+    if prob is None:
+        return prob
+    cal = _get_prop_calibrator()
+    if cal is None:
+        return prob
+    try:
+        out = cal.calibrate(market_key, prob)
+        return out if out is not None else prob
+    except Exception:
+        return prob
+
+
+def _prop_cal_status(market_key):
+    cal = _get_prop_calibrator()
+    if cal is None:
+        return "warming_up"
+    try:
+        return cal.status(market_key)
+    except Exception:
+        return "warming_up"
+
+
+def _capped_edge(adj_prob, market_implied):
+    """Edge vs market with the display cap applied (None-safe)."""
+    if market_implied is None:
+        return None
+    edge = adj_prob - market_implied
+    return max(-EDGE_DISPLAY_CAP, min(EDGE_DISPLAY_CAP, edge))
+
+
+def _pitcher_k9(fg, sv=None):
+    """Plausible K/9 for a pitcher, guarding against sparse-data artifacts.
+
+    When a pitcher has little data the derived `fg_k9` can collapse to an
+    implausible value (e.g. a spot starter showing K/9 == ERA). A modern MLB
+    starter sits roughly in [4.5, 16]; outside that we reconstruct K/9 from the
+    strikeout rate (K/9 ≈ K% × ~38.5 PA/9IP) and only fall back to the raw
+    value (or None) if no usable rate exists — never a misleading number."""
+    try:
+        k9 = float(fg.get("fg_k9")) if fg else None
+    except (TypeError, ValueError):
+        k9 = None
+    if k9 is not None and 4.5 <= k9 <= 16.0:
+        return round(k9, 2)
+    kpct = None
+    for src in (fg or {}, sv or {}):
+        for key in ("fg_kpct", "sv_k_pct", "k_pct"):
+            v = src.get(key)
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                continue
+            if f > 1.0:           # stored as a percent (22.0) not a fraction
+                f /= 100.0
+            if 0.05 <= f <= 0.45:
+                kpct = f
+                break
+        if kpct is not None:
+            break
+    if kpct is not None:
+        return round(kpct * 38.5, 2)
+    return round(k9, 2) if (k9 is not None and k9 > 0) else None
+
+
 def _market_calibration(entries, current_adj):
     by_market = {}
     for row in entries:
@@ -16234,6 +16485,16 @@ def _tracker_live_summary(entries, adjustments=None):
     summary['at_risk'] = pending_risk
     summary['avg_clv'] = avg_clv
     summary['clv_positive_rate'] = round(len(positive_clv) / max(1, len(clv_rows)), 4) if clv_rows else None
+    # Closing Line Value is the primary KPI: lowest-variance, market-anchored
+    # measure of edge (does our price beat the close), unlike small-sample
+    # win/loss. Surfaced explicitly so the UI hero + exports lead with it.
+    summary['primaryKpi'] = {
+        'metric': 'clv',
+        'label': 'Beat Close %',
+        'value': summary['clv_positive_rate'],
+        'avg_clv': avg_clv,
+        'n': len(clv_rows),
+    }
     summary['bankroll'] = {
         'starting_bankroll': float(adjustments.get('bankroll') or 0),
         'live_bankroll': live_bankroll,
@@ -17666,12 +17927,18 @@ def api_calibration_markets():
             'status': status,
         })
 
+    # The live correction actually applied to displayed probabilities.
+    cal = _get_prop_calibrator()
+    calibration_applied = cal.summary() if cal is not None else {}
+
     return jsonify({
         'success': True,
         'date': date_str,
         'window': window,
         'min_sample': MIN_N,
         'markets': out,
+        'calibration_applied': calibration_applied,
+        'edge_display_cap': EDGE_DISPLAY_CAP,
         'legend': {
             'warming_up': f'fewer than {MIN_N} graded picks — Brier too noisy to act on',
             'on_track': 'live Brier matches the held-out test benchmark',
@@ -17681,6 +17948,110 @@ def api_calibration_markets():
         },
         'note': 'Held-out benchmarks are out-of-sample (train 2021-24, test 2025). '
                 'Live Brier from graded tracker picks; lower is better.',
+    })
+
+
+@app.route('/api/diag/serve-parity')
+def api_diag_serve_parity():
+    """Serve-parity self-test: flags XGB model features that land on their
+    DEFAULTS at inference (the live caller isn't supplying them) — the
+    train/serve gap that silently kills held-out skill in production.
+
+    It builds the entity dicts the SAME way the live scoring paths do — k
+    starters get FG enrichment + rolling form + arsenal (the tracker-capture
+    path); hit batters get the name-only dict the projection path actually
+    passes — runs them through the model's feature builders, and reports per
+    feature how often its value equals the empty-input default across the
+    sampled slate. A feature at default_rate ≥ 0.85 is a serve gap. Read-only.
+    ?games=N (default 3, max 6)."""
+    if not _XGB_AVAILABLE:
+        return jsonify({'success': False, 'error': 'xgb scorer unavailable'}), 200
+    try:
+        from xgb_prop_scorer import feature_default_report
+    except Exception:
+        return jsonify({'success': False, 'error': 'feature_default_report unavailable'}), 200
+
+    n_games = max(1, min(6, int(request.args.get('games', 3) or 3)))
+    date_str = datetime.now(ET).strftime('%Y-%m-%d')
+    games = (fetch_schedule(date_str) or [])[:n_games]
+
+    agg = {'hits': {}, 'k_4.5': {}}
+    counts = {'hits': 0, 'k_4.5': 0}
+
+    def _accumulate(rep):
+        if not rep:
+            return
+        mk = rep['market']
+        counts[mk] += 1
+        for f in rep['features']:
+            slot = agg[mk].setdefault(f['feature'],
+                                      {'default_hits': 0, 'default': f['default'],
+                                       'example_value': f['default']})
+            if f['is_default']:
+                slot['default_hits'] += 1
+            elif slot['example_value'] == slot['default']:
+                slot['example_value'] = f['value']   # remember a real non-default value
+
+    for g in games:
+        teams = g.get('teams') or {}
+        away, home = teams.get('away') or {}, teams.get('home') or {}
+        ap, hp = (away.get('probablePitcher') or {}), (home.get('probablePitcher') or {})
+        gpk = g.get('gamePk')
+        # ── K starters (mirror tracker-capture enrichment) ──
+        for pp in (ap, hp):
+            pid, pname = pp.get('id'), pp.get('fullName')
+            if not pid or not pname:
+                continue
+            sp = {'name': pname, 'id': pid}
+            try:
+                kf = _pitcher_rolling_k_features(pid)
+                if kf:
+                    sp.update(kf)
+            except Exception:
+                pass
+            try:
+                ars = _arsenal_whiff_summary(pid)
+                if ars:
+                    sp['arsenalWhiff'], sp['arsenalPutaway'] = ars.get('whiff'), ars.get('putaway')
+            except Exception:
+                pass
+            _accumulate(feature_default_report('k', pitcher=sp))
+        # ── Hit batters (mirror projection path: name-only batter dict) ──
+        try:
+            _lu = api_lineup(gpk)
+            lud = _lu.get_json() if hasattr(_lu, 'get_json') else (_lu or {})
+        except Exception:
+            lud = {}
+        for side, opp_pp in (('away', hp), ('home', ap)):
+            ph = opp_pp.get('pitchHand')
+            opp_hand = ph.get('code') if isinstance(ph, dict) else (ph or 'R')
+            for b in (lud.get(side) or [])[:9]:
+                bname = b.get('name') or b.get('fullName')
+                if not bname:
+                    continue
+                _accumulate(feature_default_report(
+                    'hits', batter={'name': bname},
+                    pitcher={'name': opp_pp.get('fullName', ''), 'pitchHand': opp_hand}))
+
+    out = {}
+    for mk in ('hits', 'k_4.5'):
+        n = counts[mk]
+        feats = []
+        for fname, s in agg[mk].items():
+            rate = round(s['default_hits'] / n, 3) if n else None
+            feats.append({'feature': fname, 'default_rate': rate, 'default': s['default'],
+                          'example_value': s['example_value'],
+                          'serve_gap': bool(rate is not None and rate >= 0.85)})
+        feats.sort(key=lambda x: -((x['default_rate'] or 0)))
+        out[mk] = {'entities_sampled': n,
+                   'serve_gaps': [f['feature'] for f in feats if f['serve_gap']],
+                   'features': feats}
+    return jsonify({
+        'success': True, 'date': date_str, 'games_sampled': len(games),
+        'note': 'default_rate = fraction of sampled entities where the feature == '
+                'its empty-input default; ≥0.85 is flagged as a serve_gap (the live '
+                'caller likely is not supplying that feature).',
+        'markets': out,
     })
 
 
@@ -20910,6 +21281,7 @@ def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_s
 
 # ── Pitcher recent form cache ─────────────────────────────────────────────────
 _pitcher_recent_cache = {}   # pid → {ts, era_recent, k9_recent, whip_recent, starts}
+_pitcher_kform_cache  = {}   # pid → rolling K-prop features for the XGB k-model
 
 def _pitcher_recent_form(pitcher_id, n_starts=5):
     """
@@ -20981,6 +21353,77 @@ def _pitcher_recent_form(pitcher_id, n_starts=5):
         print(f"[pitcher_recent_form] pid={pitcher_id}: {ex}")
         _pitcher_recent_cache[cache_key] = {}
         return {}
+
+
+def _pitcher_rolling_k_features(pitcher_id):
+    """Per-start rolling K features for the XGB k-model, computed to MATCH
+    regenerate_models.build_pitcher_matrix so there is no train/serve skew.
+
+    Training rolls l{3,5,10}_ks as the MEAN strikeouts over the pitcher's prior
+    starts, l5_k_rate as the mean per-start K/BF, l{3,5}_ip as mean innings, and
+    days_rest as days since the previous appearance. At serve the upcoming start
+    isn't played yet, so the most recent N completed appearances ARE those prior
+    starts (no shift needed). Returns {} on failure → callers keep the model's
+    neutral defaults.
+
+    Without this the scorer fed constants (l3Ks=4.5, l5KRate=0.22, …) for 7 of
+    the k-model's 12 features at inference — the model's whole rolling-form
+    signal was dead, which is why pitcher_strikeouts read no_edge live despite a
+    0.70+ held-out AUC.
+    """
+    if not pitcher_id:
+        return {}
+    ck = f"{pitcher_id}_{datetime.now(ET).strftime('%Y-%m-%d')}"
+    if ck in _pitcher_kform_cache:
+        return _pitcher_kform_cache[ck]
+    _evict_if_large(_pitcher_kform_cache, 500)
+    out = {}
+    try:
+        yr = datetime.now().year
+        r = requests.get(
+            f"{MLB_API}/people/{pitcher_id}/stats",
+            params={"stats": "gameLog", "group": "pitching", "season": yr},
+            timeout=8,
+        )
+        r.raise_for_status()
+        sl = r.json().get("stats") or []
+        splits = sl[0].get("splits", []) if sl else []
+        games = []
+        for sp in splits:
+            st = sp.get("stat", {})
+            ip = parse_ip(st.get("inningsPitched", "0"))
+            if ip <= 0:                       # any real appearance (mirrors training rows)
+                continue
+            ks = _safe_f(st.get("strikeOuts"), 0.0)
+            bf = _safe_f(st.get("battersFaced"), 0.0) or (ip * 4.3)
+            games.append({"date": sp.get("date"), "ks": ks, "ip": ip,
+                          "krate": (ks / bf) if bf > 0 else 0.0})
+        if not games:
+            _pitcher_kform_cache[ck] = {}
+            return {}
+
+        def _mean(vals):
+            return sum(vals) / len(vals) if vals else None
+
+        l3, l5, l10 = games[-3:], games[-5:], games[-10:]
+        out = {
+            "l3Ks":    round(_mean([g["ks"]    for g in l3]),  3),
+            "l5Ks":    round(_mean([g["ks"]    for g in l5]),  3),
+            "l10Ks":   round(_mean([g["ks"]    for g in l10]), 3),
+            "l5KRate": round(_mean([g["krate"] for g in l5]),  4),
+            "l3IP":    round(_mean([g["ip"]    for g in l3]),  2),
+            "l5IP":    round(_mean([g["ip"]    for g in l5]),  2),
+        }
+        try:
+            d_last = datetime.strptime(games[-1]["date"], "%Y-%m-%d").date()
+            out["daysRest"] = float(max(0, min(14, (datetime.now(ET).date() - d_last).days)))
+        except Exception:
+            out["daysRest"] = 5.0
+    except Exception as ex:
+        print(f"[pitcher_kform] pid={pitcher_id}: {ex}")
+        out = {}
+    _pitcher_kform_cache[ck] = out
+    return out
 
 
 # ── Pitcher projection tuning constants ───────────────────────────────────────
@@ -21474,7 +21917,7 @@ def api_props_projections(game_pk):
                     "opp_pitcher":  opp_pname,
                     "opp_hand":     opp_hand,
                     "opp_era":      opp_pfg.get("fg_era") or opp_psv.get("sv_era_p"),
-                    "opp_k9":       opp_pfg.get("fg_k9"),
+                    "opp_k9":       _pitcher_k9(opp_pfg, opp_psv),
                     "avg":          b.get("avg") or bfg.get("fg_avg"),
                     "obp":          b.get("obp") or bfg.get("fg_obp"),
                     "slg":          b.get("slg") or bfg.get("fg_slg"),
@@ -21585,7 +22028,8 @@ def api_props_projections(game_pk):
                          "fgbbpct": pfg.get("fg_bbpct"), "svwhiffpct": psv.get("sv_whiff"),
                          "name": pname,
                          "arsenalWhiff": proj.get("arsenal_whiff"),
-                         "arsenalPutaway": proj.get("arsenal_putaway")},
+                         "arsenalPutaway": proj.get("arsenal_putaway"),
+                         **_pitcher_rolling_k_features(pid)},
                         line=ln
                     ) if _XGB_AVAILABLE and xgb_ready('k') else None
                     for ln in [3.5, 4.5, 5.5]
@@ -23494,10 +23938,14 @@ def api_breakout_candidates():
             x = xst.get(name_key, {})
             try:
                 ev95 = float(sc.get("sv_hh_pct") or 0)  # proxy — your sv_hh_pct = ev95 percent
-                brl  = float(sc.get("sv_brl_pct") or 0)
-                if brl and brl <= 1: brl *= 100
-                hh   = float(sc.get("sv_hh_pct") or 0)
-                if hh and hh <= 1: hh *= 100
+                # sv_brl_pct / sv_hh_pct come straight from the Savant
+                # `brl_percent` / `ev95percent` columns, which are ALREADY in
+                # percent units. The old `if v <= 1: v *= 100` heuristic wrongly
+                # treated a genuine sub-1% barrel rate (e.g. a slap hitter at
+                # 0.3%) as a fraction and inflated it 100× to 30%. Trust the
+                # source units and just clamp to a sane physical ceiling.
+                brl  = min(max(float(sc.get("sv_brl_pct") or 0), 0.0), 35.0)
+                hh   = min(max(float(sc.get("sv_hh_pct")  or 0), 0.0), 100.0)
                 xwoba = float(x.get("sv_xwoba") or f.get("fg_woba") or 0)
                 woba  = float(f.get("fg_woba") or xwoba)
                 xba   = float(x.get("sv_xba") or 0)
@@ -24225,9 +24673,18 @@ def api_hr_daily_scores():
                     try:
                         fgb = fg_batter(bname)
                         svb = sv_batter(bname)
-                        iso        = _num(fgb.get("fg_iso"), 0.0) or max(0.0, _num(svb.get("sv_xslg"), 0.380) - _num(svb.get("sv_xba"), 0.250))
-                        barrel_pct = _num(svb.get("sv_brl_pct"), 8.5)
-                        hh_pct     = _num(svb.get("sv_hh_pct"), 40.0)
+                        iso_raw    = _num(fgb.get("fg_iso"), 0.0) or max(0.0, _num(svb.get("sv_xslg"), 0.380) - _num(svb.get("sv_xba"), 0.250))
+                        barrel_raw = _num(svb.get("sv_brl_pct"), 8.5)
+                        hh_raw     = _num(svb.get("sv_hh_pct"), 40.0)
+                        # Min-PA gate via regression to league mean: a 2-PA debut
+                        # can otherwise post a 1.000 ISO / 50% barrel and top the
+                        # board. _shrink returns the league mean when PA is 0 and
+                        # barely touches a full-season sample. Barrel/HH stabilize
+                        # faster than ISO, hence smaller prior_n.
+                        pa = _num(fgb.get("fg_pa"), 0)
+                        iso        = _shrink(iso_raw,    pa, _HR_LEAGUE["iso_mu"],    150)
+                        barrel_pct = _shrink(barrel_raw, pa, _HR_LEAGUE["barrel_mu"],  60)
+                        hh_pct     = _shrink(hh_raw,     pa, _HR_LEAGUE["hh_mu"],      50)
                         fgp_hr9    = _num(fg_pitcher(opp_name).get("fg_hr9"), 1.25) if opp_name else 1.25
 
                         hand_splits = _fetch_pitcher_hr9_by_hand(opp_pid)
@@ -24286,6 +24743,8 @@ def api_hr_daily_scores():
                             "iso":         round(iso, 3),
                             "barrel_pct":  round(barrel_pct, 1),
                             "hh_pct":      round(hh_pct, 1),
+                            "pa":          int(pa),
+                            "sampleReliable": bool(pa >= 80),
                             "hr9_vs_hand": round(hr9_vs_hand, 3),
                             "park_hr_idx":      park_hr_idx,
                             "mix_score":        mix_score,
