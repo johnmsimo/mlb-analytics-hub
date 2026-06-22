@@ -514,6 +514,9 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
   <div id="mainContent" style="display:none">
   <div id="matchHeader" style="margin-bottom:16px;font-family:'Orbitron',monospace;font-size:.72rem;color:var(--mu);letter-spacing:3px"></div>
 
+  <!-- ── Best Prop Recommendation ── -->
+  <div id="bestPropBox" style="margin-bottom:16px"></div>
+
   <!-- ── Major Market Odds Panel ── -->
   <div id="majorMarketsPanel" style="margin-bottom:18px;display:none"></div>
 
@@ -1197,6 +1200,9 @@ async function selectGame(pk, awayAbbr, homeAbbr) {
   gel('matchHeader').innerHTML =
     `${awayAbbr} <span style="color:var(--c)">@</span> ${homeAbbr} &nbsp;·&nbsp; GAME ${pk}`;
   gel('lastUpdate').textContent = `UPDATED ${new Date().toLocaleTimeString()}`;
+
+  // Best-prop recommendation: rank every prop in this game and surface the top target.
+  if (window.BestProp) BestProp.render('bestPropBox', pk);
 
   // Kick off umpire + trends in parallel (non-blocking)
   loadUmpire(pk);
@@ -3439,6 +3445,7 @@ if (typeof renderBatters !== 'undefined') {
 }
 </script>
 <script src="/static/matchup_evlab.js" defer></script>
+<script src="/static/best_prop.js" defer></script>
 <script src="/static/mobile-nav.js" defer></script>
 <script>
 // ── PrizePicks ────────────────────────────────────────────────────────────────

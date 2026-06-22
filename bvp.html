@@ -627,7 +627,9 @@ async function selectGame(idx) {
   currentGame = gamesData[idx];
   selectedBatter = null;
   renderGameStrip();
-  document.getElementById('detailPanel').innerHTML = `<div class="empty-state"><div class="empty-icon">⚾</div><div style="font-size:.9rem">Select a batter from the lineup</div></div>`;
+  document.getElementById('detailPanel').innerHTML = `<div id="bestPropBox" style="margin-bottom:14px"></div><div class="empty-state"><div class="empty-icon">⚾</div><div style="font-size:.9rem">Select a batter from the lineup for a full breakdown</div></div>`;
+  // Best-prop recommendation for the whole game (top Hit / top K target).
+  if (window.BestProp && currentGame && currentGame.gamePk) BestProp.render('bestPropBox', currentGame.gamePk);
 
   const lp = document.getElementById('lineupPanel');
   lp.innerHTML = '<div class="loading-row"><div class="spinner" style="margin:auto"></div></div>';
@@ -2521,6 +2523,7 @@ async function loadPitcherBadge(pitcherId, elementId) {
 loadGames();
 </script>
 <script src="/static/matchup_evlab.js" defer></script>
+<script src="/static/best_prop.js" defer></script>
 <script src="/static/mobile-nav.js" defer></script>
 </body>
 </html>

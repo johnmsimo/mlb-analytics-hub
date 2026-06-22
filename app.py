@@ -4896,6 +4896,184 @@ def api_tracker_blend_debug():
     })
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# Best-prop recommender — click a game, get the top player-prop target.
+#
+# Reuses the full per-prop engine (_build_tracker_rows_for_game) that already
+# produces hubRating / edge / EV / adjProb / confidenceTier / bvpGrade / MC
+# percentiles for every batter market + pitcher-K line, then ranks those rows
+# to surface THE recommended pick (plus the best batter prop and best pitcher-K
+# prop) with auto-generated reasoning. Cached per game for a few minutes so a
+# repeat click is instant.
+# ──────────────────────────────────────────────────────────────────────────
+_PROP_MARKET_LABEL = {
+    'batter_hits':        'Hits',
+    'batter_total_bases': 'Total Bases',
+    'batter_home_runs':   'Home Run',
+    'batter_rbis':        'RBIs',
+    'pitcher_strikeouts': 'Strikeouts',
+}
+_PLAYER_PROP_MARKETS = set(_PROP_MARKET_LABEL)
+
+_best_prop_cache: dict = {}
+_best_prop_lock = threading.Lock()
+_BEST_PROP_TTL = 600  # seconds
+
+
+def _odds_str(price):
+    try:
+        p = int(round(float(price)))
+    except (TypeError, ValueError):
+        return None
+    return f"+{p}" if p > 0 else str(p)
+
+
+def _best_prop_rank_key(r):
+    """Sort key (desc): positive-edge rows first by edge, else by model conviction."""
+    edge = r.get('edge')
+    has_edge = edge is not None
+    return (
+        1 if (has_edge and edge > 0) else 0,
+        (float(edge) if has_edge else -1.0),
+        float(r.get('hubRating') or 0),
+        float(r.get('adjProb') or 0),
+    )
+
+
+def _best_prop_reasoning(r):
+    """Auto-generate a recommendation summary + driver chips from a prop row."""
+    mk = r.get('marketKey')
+    label = _PROP_MARKET_LABEL.get(mk, (mk or '').replace('_', ' ').title())
+    player = r.get('player')
+    line = r.get('line')
+    side = r.get('recommendedSide', 'Over')
+    adj = r.get('adjProb')
+    edge = r.get('edge')
+    ev = r.get('evPct')
+    tier = r.get('confidenceTier')
+    bvp = r.get('bvpGrade')
+    mean = r.get('modelMean')
+    mi = r.get('marketImplied')
+    price = r.get('bestOverPrice')
+    book = r.get('bestOverBook')
+    mc_over = r.get('mc_prob_over')
+
+    drivers = []
+    if adj is not None:
+        drivers.append(f"Model {adj * 100:.0f}% to cash the {side}")
+    if mean is not None:
+        drivers.append(f"Projects {mean:g} {label.lower()} into a {line} line")
+    if edge is not None and mi:
+        drivers.append(f"+{edge * 100:.1f}-pt edge over market implied {mi * 100:.0f}%")
+    if ev is not None:
+        tail = f" at {_odds_str(price)} ({book})" if (price and book) else ""
+        drivers.append(f"+{ev * 100:.1f}% expected value{tail}")
+    if mc_over is not None:
+        drivers.append(f"Sims clear the line {mc_over * 100:.0f}% of the time")
+    if bvp in ('A', 'B'):
+        drivers.append(f"Favorable matchup history (BvP grade {bvp})")
+    if tier:
+        drivers.append(f"{tier}-tier confidence")
+
+    parts = [f"Take {player} {side} {line} {label}."]
+    if adj is not None:
+        s = f" Model gives it {adj * 100:.0f}%"
+        if edge is not None and edge > 0:
+            s += f" — a +{edge * 100:.1f}-pt edge on the market"
+        s += "."
+        parts.append(s)
+    if price and book:
+        parts.append(f" Best price {_odds_str(price)} at {book}.")
+    return {'summary': ''.join(parts), 'drivers': drivers}
+
+
+def _best_prop_pack(r):
+    rsn = _best_prop_reasoning(r)
+    return {
+        'player':          r.get('player'),
+        'playerId':        r.get('playerId'),
+        'team':            r.get('team'),
+        'marketKey':       r.get('marketKey'),
+        'marketLabel':     _PROP_MARKET_LABEL.get(r.get('marketKey'), r.get('marketKey')),
+        'line':            r.get('line'),
+        'side':            r.get('recommendedSide', 'Over'),
+        'adjProb':         r.get('adjProb'),
+        'edge':            r.get('edge'),
+        'evPct':           r.get('evPct'),
+        'hubRating':       r.get('hubRating'),
+        'confidenceTier':  r.get('confidenceTier'),
+        'bvpGrade':        r.get('bvpGrade'),
+        'modelMean':       r.get('modelMean'),
+        'marketImplied':   r.get('marketImplied'),
+        'bestOverPrice':   r.get('bestOverPrice'),
+        'bestOverBook':    r.get('bestOverBook'),
+        'opp':             r.get('opp'),
+        'summary':         rsn['summary'],
+        'drivers':         rsn['drivers'],
+    }
+
+
+@app.route('/api/best-prop/<int:game_pk>')
+def api_best_prop(game_pk):
+    """Rank every batter/pitcher prop for a game and recommend the top target(s)."""
+    t0 = time.time()
+    use_odds = (request.args.get('odds', '1') not in ('0', 'false', 'no'))
+    now = time.time()
+    ck = (game_pk, bool(use_odds))
+    with _best_prop_lock:
+        hit = _best_prop_cache.get(ck)
+        if hit and (now - hit[0]) < _BEST_PROP_TTL:
+            return jsonify(hit[1])
+
+    try:
+        game_obj = fetch_schedule_game(game_pk)
+    except Exception as ex:
+        return jsonify({'success': False, 'error': f'schedule fetch failed: {ex}'}), 502
+    if not game_obj:
+        return jsonify({'success': False, 'error': 'game not found'}), 404
+    game_date = ((game_obj.get('gameDate') or '').split('T')[0] or
+                 datetime.now(ET).strftime('%Y-%m-%d'))
+    teams = game_obj.get('teams', {})
+    away_t = (teams.get('away', {}) or {}).get('team', {}) or {}
+    home_t = (teams.get('home', {}) or {}).get('team', {}) or {}
+    away_abbr = away_t.get('abbreviation') or away_t.get('name') or 'AWAY'
+    home_abbr = home_t.get('abbreviation') or home_t.get('name') or 'HOME'
+
+    try:
+        _maybe_refresh_fg()
+        rows = _build_tracker_rows_for_game(
+            game_pk, game_date, _sched=[game_obj], include_odds=use_odds) or []
+    except Exception as ex:
+        logging.error(f"[best-prop] {game_pk} {ex}")
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+    cand = [r for r in rows
+            if r.get('marketKey') in _PLAYER_PROP_MARKETS and (r.get('adjProb') or 0) > 0]
+    cand.sort(key=_best_prop_rank_key, reverse=True)
+
+    qual = [r for r in cand if (r.get('adjProb') or 0) >= 0.50]
+    headline = qual[0] if qual else (cand[0] if cand else None)
+    top_batter = next((r for r in cand if str(r.get('marketKey')).startswith('batter_')), None)
+    top_pitcher = next((r for r in cand if r.get('marketKey') == 'pitcher_strikeouts'), None)
+
+    payload = {
+        'success': True,
+        'gamePk': game_pk,
+        'gameDate': game_date,
+        'matchup': f"{away_abbr} @ {home_abbr}",
+        'recommendation': _best_prop_pack(headline) if headline else None,
+        'topBatter': _best_prop_pack(top_batter) if top_batter else None,
+        'topPitcherK': _best_prop_pack(top_pitcher) if top_pitcher else None,
+        'board': [_best_prop_pack(r) for r in cand[:6]],
+        'oddsUsed': bool(use_odds and any(r.get('marketImplied') for r in cand)),
+        'candidateCount': len(cand),
+        'tookSec': round(time.time() - t0, 2),
+    }
+    with _best_prop_lock:
+        _best_prop_cache[ck] = (now, payload)
+    return jsonify(payload)
+
+
 def _mlb_memory_status_payload():
     payload = _mlb_memory_store_payload()
     latest = payload.get("latest") if isinstance(payload.get("latest"), dict) else None
