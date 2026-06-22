@@ -17951,6 +17951,110 @@ def api_calibration_markets():
     })
 
 
+@app.route('/api/diag/serve-parity')
+def api_diag_serve_parity():
+    """Serve-parity self-test: flags XGB model features that land on their
+    DEFAULTS at inference (the live caller isn't supplying them) — the
+    train/serve gap that silently kills held-out skill in production.
+
+    It builds the entity dicts the SAME way the live scoring paths do — k
+    starters get FG enrichment + rolling form + arsenal (the tracker-capture
+    path); hit batters get the name-only dict the projection path actually
+    passes — runs them through the model's feature builders, and reports per
+    feature how often its value equals the empty-input default across the
+    sampled slate. A feature at default_rate ≥ 0.85 is a serve gap. Read-only.
+    ?games=N (default 3, max 6)."""
+    if not _XGB_AVAILABLE:
+        return jsonify({'success': False, 'error': 'xgb scorer unavailable'}), 200
+    try:
+        from xgb_prop_scorer import feature_default_report
+    except Exception:
+        return jsonify({'success': False, 'error': 'feature_default_report unavailable'}), 200
+
+    n_games = max(1, min(6, int(request.args.get('games', 3) or 3)))
+    date_str = datetime.now(ET).strftime('%Y-%m-%d')
+    games = (fetch_schedule(date_str) or [])[:n_games]
+
+    agg = {'hits': {}, 'k_4.5': {}}
+    counts = {'hits': 0, 'k_4.5': 0}
+
+    def _accumulate(rep):
+        if not rep:
+            return
+        mk = rep['market']
+        counts[mk] += 1
+        for f in rep['features']:
+            slot = agg[mk].setdefault(f['feature'],
+                                      {'default_hits': 0, 'default': f['default'],
+                                       'example_value': f['default']})
+            if f['is_default']:
+                slot['default_hits'] += 1
+            elif slot['example_value'] == slot['default']:
+                slot['example_value'] = f['value']   # remember a real non-default value
+
+    for g in games:
+        teams = g.get('teams') or {}
+        away, home = teams.get('away') or {}, teams.get('home') or {}
+        ap, hp = (away.get('probablePitcher') or {}), (home.get('probablePitcher') or {})
+        gpk = g.get('gamePk')
+        # ── K starters (mirror tracker-capture enrichment) ──
+        for pp in (ap, hp):
+            pid, pname = pp.get('id'), pp.get('fullName')
+            if not pid or not pname:
+                continue
+            sp = {'name': pname, 'id': pid}
+            try:
+                kf = _pitcher_rolling_k_features(pid)
+                if kf:
+                    sp.update(kf)
+            except Exception:
+                pass
+            try:
+                ars = _arsenal_whiff_summary(pid)
+                if ars:
+                    sp['arsenalWhiff'], sp['arsenalPutaway'] = ars.get('whiff'), ars.get('putaway')
+            except Exception:
+                pass
+            _accumulate(feature_default_report('k', pitcher=sp))
+        # ── Hit batters (mirror projection path: name-only batter dict) ──
+        try:
+            _lu = api_lineup(gpk)
+            lud = _lu.get_json() if hasattr(_lu, 'get_json') else (_lu or {})
+        except Exception:
+            lud = {}
+        for side, opp_pp in (('away', hp), ('home', ap)):
+            ph = opp_pp.get('pitchHand')
+            opp_hand = ph.get('code') if isinstance(ph, dict) else (ph or 'R')
+            for b in (lud.get(side) or [])[:9]:
+                bname = b.get('name') or b.get('fullName')
+                if not bname:
+                    continue
+                _accumulate(feature_default_report(
+                    'hits', batter={'name': bname},
+                    pitcher={'name': opp_pp.get('fullName', ''), 'pitchHand': opp_hand}))
+
+    out = {}
+    for mk in ('hits', 'k_4.5'):
+        n = counts[mk]
+        feats = []
+        for fname, s in agg[mk].items():
+            rate = round(s['default_hits'] / n, 3) if n else None
+            feats.append({'feature': fname, 'default_rate': rate, 'default': s['default'],
+                          'example_value': s['example_value'],
+                          'serve_gap': bool(rate is not None and rate >= 0.85)})
+        feats.sort(key=lambda x: -((x['default_rate'] or 0)))
+        out[mk] = {'entities_sampled': n,
+                   'serve_gaps': [f['feature'] for f in feats if f['serve_gap']],
+                   'features': feats}
+    return jsonify({
+        'success': True, 'date': date_str, 'games_sampled': len(games),
+        'note': 'default_rate = fraction of sampled entities where the feature == '
+                'its empty-input default; ≥0.85 is flagged as a serve_gap (the live '
+                'caller likely is not supplying that feature).',
+        'markets': out,
+    })
+
+
 # ── Phase 14 Closing-Line Value + ROI Simulation ──────────────────────────────
 
 def _profit_units_from_american(price):

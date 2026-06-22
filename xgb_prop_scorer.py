@@ -849,3 +849,45 @@ def xgb_rbi_prob_full(batter: dict, pitcher: dict) -> dict:
 
 enrich_batter  = _enrich_batter_from_fg
 enrich_pitcher = _enrich_pitcher_from_fg
+
+
+# ── Serve-parity diagnostic ──────────────────────────────────────────────────
+# A model only earns its held-out skill in production if the live caller feeds
+# the same features it trained on. This reports, for one prediction, which
+# features landed on their default (i.e. weren't supplied). The defaults are
+# DERIVED from an empty-input build, so they can never drift from the real
+# _sf() defaults — whatever `_build_*_features({}, …)` produces IS the default.
+# Mirrors the enrichment in xgb_hit_prob / xgb_k_prob so the report reflects
+# exactly what those entry points see.
+_PARITY_K_REF = "k_4.5"   # all k_* lines share one builder + feature order
+
+
+def feature_default_report(market, batter=None, pitcher=None):
+    if not _loaded:
+        _load_models()
+    is_k = str(market).startswith("k") or market in ("strikeouts", "pitcher_strikeouts")
+    key = _PARITY_K_REF if is_k else "hits"
+    feat_order = _feat_cols.get(key) or []
+    if _models.get(key) is None or not feat_order:
+        return None
+    try:
+        if is_k:
+            real = _build_k_features(_enrich_pitcher_from_fg(pitcher or {}), feat_order)
+            base = _build_k_features({}, feat_order)
+        else:
+            real = _build_hit_features(_enrich_batter_from_fg(batter or {}),
+                                       _enrich_pitcher_from_fg(pitcher or {}), feat_order)
+            base = _build_hit_features({}, {}, feat_order)
+        if real is None or base is None:
+            return None
+        real, base = real[0], base[0]
+        feats, n_def = [], 0
+        for i, f in enumerate(feat_order):
+            is_def = abs(float(real[i]) - float(base[i])) < 1e-6
+            n_def += int(is_def)
+            feats.append({"feature": f, "value": round(float(real[i]), 4),
+                          "default": round(float(base[i]), 4), "is_default": bool(is_def)})
+        return {"market": key, "n_features": len(feat_order), "n_default": n_def,
+                "default_rate": round(n_def / len(feat_order), 4), "features": feats}
+    except Exception:
+        return None
