@@ -1831,6 +1831,9 @@ function renderDetail(data) {
       <div class="sz-card"><div class="sz-title">Hot Zones (SLG)</div><div class="context-loading">Loading zone profile…</div></div>
     </div>
 
+    <div class="section-label">Matchup EV Lab <span style="font-size:.6rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— exit velocity &amp; batted-ball profile vs ${pitcherName||'pitcher'}</span></div>
+    <div id="matchupEvLab" style="margin-bottom:8px"></div>
+
     <div class="section-label">Prop Signals <span style="font-size:.6rem;color:var(--mu);font-weight:400;text-transform:none;letter-spacing:0">— recent form based</span></div>
     <div class="prop-signal-grid" id="propSignalGrid">
       <div class="prop-signal-box"><div class="prop-signal-type">HIT</div><div class="prop-signal-val" style="color:var(--mu)">—</div></div>
@@ -1863,6 +1866,18 @@ function renderDetail(data) {
   loadContextData(batterId, pitcherId, proj, gamePk, pitcherSide);
   loadAiVerdict(batterId, pitcherId);
   loadSprayZone(batterId);
+
+  // Matchup EV Lab — auto-mount the exit-velocity + batted-ball panels vs the
+  // pitcher being faced. Pull the pitcher's throwing hand so Arm defaults right.
+  let evLabHand = null;
+  if (currentLineup && currentLineup.pitchers) {
+    const ap = currentLineup.pitchers.awayPitcher || {}, hp = currentLineup.pitchers.homePitcher || {};
+    if (ap.id === pitcherId) evLabHand = ap.throws || ap.pitchHand;
+    else if (hp.id === pitcherId) evLabHand = hp.throws || hp.pitchHand;
+  }
+  if (window.MatchupEVLab) {
+    MatchupEVLab.mount('matchupEvLab', { batterId: batterId, batterName: batterName, pitcherId: pitcherId, pitcherName: pitcherName, pitchHand: evLabHand });
+  }
 }
 
 // ── Spray chart + strike-zone hot-zone heatmap (lazy-loaded) ──────────────────
@@ -2505,6 +2520,7 @@ async function loadPitcherBadge(pitcherId, elementId) {
 
 loadGames();
 </script>
+<script src="/static/matchup_evlab.js" defer></script>
 <script src="/static/mobile-nav.js" defer></script>
 </body>
 </html>
