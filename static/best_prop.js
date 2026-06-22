@@ -21,6 +21,9 @@
 .bestprop *{box-sizing:border-box}
 .bp-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}
 .bp-kicker{font-size:10px;letter-spacing:.14em;text-transform:uppercase;font-weight:800;color:#c7b3ff}
+.bp-odds{font-size:9px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;border-radius:999px;padding:2px 7px;border:1px solid;white-space:nowrap}
+.bp-odds.live{color:#7be0a6;background:#10341f;border-color:rgba(31,157,85,.4)}
+.bp-odds.off{color:#ffd479;background:#2a2410;border-color:rgba(202,165,61,.4)}
 .bp-sub{font-size:10.5px;color:#8b97a8;margin-left:auto}
 .bp-msg{padding:18px 8px;text-align:center;color:#8b97a8;font-size:12px}
 .bp-card{display:flex;gap:12px;align-items:flex-start;background:#0f1623;border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:11px 12px}
@@ -67,6 +70,24 @@
   }
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+
+  // ODDS_API_KEY status — global to the app, so fetch once and reuse.
+  var _oddsStatusP = null;
+  function oddsStatus() {
+    if (!_oddsStatusP) {
+      _oddsStatusP = fetch('/api/odds/cache/status')
+        .then(function (r) { return r.json(); })
+        .catch(function () { return null; });
+    }
+    return _oddsStatusP;
+  }
+  function oddsIndicator(status) {
+    var live = !!(status && status.keyConfigured);
+    return live
+      ? '<span class="bp-odds live" title="ODDS_API_KEY configured — live posted lines available">odds: live ✓</span>'
+      : '<span class="bp-odds off" title="ODDS_API_KEY not configured — recommendations are model-only">odds: not configured</span>';
+  }
+
   function pctSigned(v) { return (v == null || isNaN(v)) ? '' : (v >= 0 ? '+' : '') + (v * 100).toFixed(1) + '%'; }
 
   function pickCardHtml(rec) {
@@ -119,18 +140,23 @@
       el.innerHTML = '<div class="bestprop"><div class="bp-top"><span class="bp-kicker">⭐ ' + esc(title) + '</span></div>' +
         '<div class="bp-msg">Analyzing matchup &amp; ranking props…</div></div>';
       var odds = (opts.odds === false) ? '0' : '1';
-      fetch('/api/best-prop/' + gamePk + '?odds=' + odds).then(function (r) { return r.json(); }).then(function (d) {
+      Promise.all([
+        fetch('/api/best-prop/' + gamePk + '?odds=' + odds).then(function (r) { return r.json(); }),
+        oddsStatus()
+      ]).then(function (res) {
+        var d = res[0], status = res[1];
         if (!el.isConnected) return;
+        var ind = oddsIndicator(status);
         if (!d || !d.success || !d.recommendation) {
           el.querySelector('.bestprop').innerHTML =
-            '<div class="bp-top"><span class="bp-kicker">⭐ ' + esc(title) + '</span></div>' +
+            '<div class="bp-top"><span class="bp-kicker">⭐ ' + esc(title) + '</span>' + ind + '</div>' +
             '<div class="bp-msg">' + esc((d && d.error) ? d.error : 'No prop recommendation available for this game yet.') + '</div>';
           return;
         }
         var sub = (d.oddsUsed ? 'ranked vs market' : 'model-only (no odds posted)') + (d.matchup ? ' · ' + esc(d.matchup) : '');
         var boardId = 'bpboard_' + gamePk + '_' + Math.floor(Math.random() * 1e6);
         var html =
-          '<div class="bp-top"><span class="bp-kicker">⭐ ' + esc(title) + '</span><span class="bp-sub">' + sub + '</span></div>' +
+          '<div class="bp-top"><span class="bp-kicker">⭐ ' + esc(title) + '</span>' + ind + '<span class="bp-sub">' + sub + '</span></div>' +
           pickCardHtml(d.recommendation) +
           '<div class="bp-splits">' + miniHtml('Top Hit Target', d.topBatter) + miniHtml('Top Strikeout Target', d.topPitcherK) + '</div>' +
           (d.board && d.board.length ? '<div class="bp-more" data-board="' + boardId + '">▾ Show full ranked board (' + d.board.length + ')</div>' +
