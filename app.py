@@ -8970,6 +8970,50 @@ def _fetch_rolling_form(player_id, is_pitcher):
     return result
 
 
+_hit_form_cache = {}
+_hit_form_lock = threading.Lock()
+
+
+def _batter_recent_hit_form(batter_id):
+    """Flat L7/L14 hit-form features in the EXACT scale the hits XGB model
+    trained on (regenerate_models.build_batter_matrix):
+
+      l7Hits / l14Hits — mean hits PER GAME over the last 7 / 14 completed games
+      l7HitRate        — mean of per-game (hits / max(AB,1)) over the last 7
+
+    The model's _build_hit_features reads these flat keys, but the only producer
+    of rolling form (_fetch_rolling_form) returns *nested* l7/l14 dicts, so every
+    call site was silently feeding the empty-input defaults — the train/serve gap
+    that flattened the hits model to `no_edge` in production. Sourced from the
+    same MLB game-log feed used for training; daily-cached per batter. Returns {}
+    when no game log exists so the builder keeps its neutral default (no
+    fabricated signal)."""
+    if not batter_id:
+        return {}
+    today = datetime.now().date()
+    with _hit_form_lock:
+        c = _hit_form_cache.get(batter_id)
+        if c and c[0] == today:
+            return c[1]
+    out = {}
+    try:
+        # newest-last; 14 games covers both windows. No shift at serve — the most
+        # recent completed games ARE the prior-game window training shifted to.
+        splits = _fetch_game_log_raw(batter_id, "hitting", 14)
+        games = [(int((sp.get("stat", {})).get("hits", 0) or 0),
+                  int((sp.get("stat", {})).get("atBats", 0) or 0)) for sp in splits]
+        if games:
+            last7, last14 = games[-7:], games[-14:]
+            out["l7Hits"]    = round(sum(h for h, _ in last7) / len(last7), 4)
+            out["l14Hits"]   = round(sum(h for h, _ in last14) / len(last14), 4)
+            out["l7HitRate"] = round(sum(h / max(ab, 1) for h, ab in last7) / len(last7), 4)
+    except Exception:
+        out = {}
+    with _hit_form_lock:
+        _hit_form_cache[batter_id] = (today, out)
+    return out
+
+
 def _compute_bvp_confidence(bvp_data, batter_obj, pitcher_hand, mix_score, mix_rows):
     """0-100 confidence score for the BvP projection.
 
@@ -15461,8 +15505,17 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                     _full = {}
                     _xgb_market, _full_fn, _model_line = _xgb_batter_market_map().get(mk, (None, None, None))
                     if _full_fn and xgb_ready(_xgb_market):
+                        # Serve-parity: feed the hits model its recent-form features
+                        # (l7/l14 hits) — `p` already carries `slot`+`id`, so the
+                        # scorer resolves lineup role from the explicit slot. Power
+                        # markets (hr/tb/rbi) pull their own momentum elsewhere.
+                        _xgb_bp = p
+                        if _xgb_market == 'hits' and p.get('id'):
+                            _rf = _batter_recent_hit_form(p.get('id'))
+                            if _rf:
+                                _xgb_bp = {**p, **_rf}
                         try:
-                            _full = _full_fn(p, opp_pitcher) or {}
+                            _full = _full_fn(_xgb_bp, opp_pitcher) or {}
                         except Exception:
                             _full = {}
                         _mc_batter = _full.get('mc') or {}
@@ -18605,6 +18658,140 @@ def api_tracker_close(date_str):
     day['closingCapturedAt'] = datetime.now().isoformat()
     _tracker_commit_day(date_str, day)
     return jsonify({'success': True, 'date': date_str, 'updated': updated_count[0], 'entries': day.get('entries', []), 'summary': _tracker_summary(day.get('entries', [])), 'closingCapturedAt': day.get('closingCapturedAt')})
+
+
+def _fetch_event_odds_live(event_id):
+    """Force-fetch ONE event's odds straight from the Odds API, bypassing the
+    frozen daily snapshot, and write the fresh books into the per-event cache.
+
+    This is what makes a TRUE closing line possible. _ensure_daily_odds_snapshot
+    builds one snapshot in the morning and then serves cache-only for the rest
+    of the day, so opening and "closing" would otherwise read identical prices
+    (clvEdge ≈ 0). Costs one Odds API credit per call, so callers MUST gate it to
+    near first pitch for games that actually carry pending picks. Returns the
+    fresh books list (or [] on failure)."""
+    if not ODDS_API_KEY or not event_id:
+        return []
+    try:
+        rr = requests.get(
+            f'https://api.the-odds-api.com/v4/sports/baseball_mlb/events/{event_id}/odds',
+            params={
+                'apiKey': ODDS_API_KEY,
+                'regions': ODDS_REGION,
+                'markets': _ODDS_ALL_MARKETS,
+                'oddsFormat': 'american',
+                'dateFormat': 'iso',
+            },
+            timeout=15,
+        )
+        rr.raise_for_status()
+        _record_odds_credits(rr)
+        books = rr.json().get('bookmakers', []) or []
+        with _ODDS_CACHE_LOCK:
+            _ODDS_GAME_CACHE[event_id] = {
+                'all': books,
+                'ts': time.time(),
+                'cache_date': _odds_today_key(),
+            }
+        try:
+            _odds_io_executor.submit(_persist_odds_caches)
+        except Exception:
+            pass
+        return books
+    except Exception as ex:
+        print(f'[_fetch_event_odds_live {event_id}] {ex}')
+        return []
+
+
+_TRACKER_CLOSING_CAPTURE_STARTED = False
+_TRACKER_CLOSING_CAPTURE_LOCK = threading.Lock()
+# (date, gamePk) tuples whose closing line we've already captured today — keeps
+# the worker from re-spending credits on a game once its window has passed.
+_TRACKER_CLOSING_CAPTURED_GAMES = set()
+
+
+def _tracker_closing_capture_once():
+    """Capture a TRUE closing line for each game around first pitch.
+
+    For any game that (a) carries pending tracker picks, (b) is inside its
+    first-pitch window, and (c) hasn't been captured yet, force-refresh its odds
+    (bypassing the frozen daily snapshot) and then run the standard close pass so
+    the fresh line lands as closingPrice / closingImplied / clvEdge. Credit cost
+    is capped at ~1 per game per day. Without this, clvEdge is self-referential
+    (opening and closing read the same morning snapshot) and the Beat-Close% KPI
+    is meaningless."""
+    if not ODDS_API_KEY:
+        return
+    today = datetime.now(ET).strftime('%Y-%m-%d')
+    store = _tracker_store()
+    raw_day = store.get(today)
+    if not raw_day:
+        return
+    day = _normalize_tracker_day(raw_day)
+    pending_gpks = {r.get('gamePk') for r in day.get('entries', [])
+                    if r.get('grade') == 'pending' and r.get('gamePk')}
+    if not pending_gpks:
+        return
+    try:
+        sched = fetch_schedule(today)
+    except Exception:
+        return
+    now_utc = datetime.now(timezone.utc)
+    lead = timedelta(minutes=int(os.getenv('TRACKER_CLOSING_LEAD_MIN', '12') or 12))
+    grace = timedelta(minutes=int(os.getenv('TRACKER_CLOSING_GRACE_MIN', '8') or 8))
+    refreshed = False
+    for g in sched:
+        gpk = g.get('gamePk')
+        if gpk not in pending_gpks or (today, gpk) in _TRACKER_CLOSING_CAPTURED_GAMES:
+            continue
+        try:
+            first_pitch = datetime.fromisoformat((g.get('gameDate') or '').replace('Z', '+00:00'))
+        except Exception:
+            continue
+        # Tight window bracketing first pitch — that line IS the closing line.
+        if not (first_pitch - lead <= now_utc <= first_pitch + grace):
+            continue
+        away = (g.get('teams') or {}).get('away', {}).get('team', {}).get('name', '')
+        home = (g.get('teams') or {}).get('home', {}).get('team', {}).get('name', '')
+        event, _ = _find_odds_event(away, home)
+        if not event or not event.get('id'):
+            continue
+        if _fetch_event_odds_live(event.get('id')):
+            _TRACKER_CLOSING_CAPTURED_GAMES.add((today, gpk))
+            refreshed = True
+    # One close pass writes the freshest available line for every pending pick.
+    # Games not yet in their window keep reading the frozen snapshot (closing ≈
+    # opening) until their own window arrives and overwrites it with the truth.
+    if refreshed:
+        _auth_headers = {'X-Admin-Token': _ADMIN_TOKEN} if _ADMIN_TOKEN else {}
+        try:
+            with app.test_request_context(f'/api/tracker/close/{today}', method='POST', headers=_auth_headers):
+                api_tracker_close(today)
+        except Exception:
+            print(f'[tracker_closing_capture {today}] {traceback.format_exc()}')
+
+
+def _start_tracker_closing_capture_worker():
+    global _TRACKER_CLOSING_CAPTURE_STARTED
+    if str(os.getenv('TRACKER_CLOSING_CAPTURE_ENABLED', '1')).strip().lower() not in ('1', 'true', 'yes'):
+        return
+    with _TRACKER_CLOSING_CAPTURE_LOCK:
+        if _TRACKER_CLOSING_CAPTURE_STARTED:
+            return
+        _TRACKER_CLOSING_CAPTURE_STARTED = True
+    # Tight interval so we land inside each game's first-pitch window.
+    interval_min = max(1, int(os.getenv('TRACKER_CLOSING_CAPTURE_MINUTES', '3') or 3))
+
+    def _runner():
+        time.sleep(20)
+        while True:
+            try:
+                _tracker_closing_capture_once()
+            except Exception:
+                print(f'[tracker_closing_capture] {traceback.format_exc()}')
+            time.sleep(interval_min * 60)
+
+    threading.Thread(target=_runner, daemon=True).start()
 
 
 @app.route('/api/tracker/value/dashboard/<date_str>')
@@ -22334,8 +22521,15 @@ def api_props_projections(game_pk):
                 slot = int(b.get("slot") or 9)
                 xgb_hit_p = None
                 if _XGB_AVAILABLE and xgb_ready('hits'):
+                    # Serve-parity: supply lineup slot + recent form so the hits
+                    # model isn't run on a name-only dict (which defaults 6 of its
+                    # features). FG enrichment inside the scorer fills the rest.
+                    _xgb_bd = {"name": name, "slot": slot}
+                    if bid:
+                        _xgb_bd["id"] = bid
+                        _xgb_bd.update(_batter_recent_hit_form(bid))
                     xgb_hit_p = xgb_hit_prob(
-                        {"name": name},
+                        _xgb_bd,
                         {"name": opp_pname, "pitchHand": opp_hand},
                     )
                 wx_adj = _safe_f((proj.get("adjustments") or {}).get("weather"), 0.0)
@@ -27025,14 +27219,15 @@ def api_matchup_vertex():
                 _sv_b  = sv_batter(_batter_name)  or {}
                 _fg_p  = fg_pitcher(_pitcher_name) or {}
                 _sv_p  = sv_pitcher(_pitcher_name) or {}
-                _form  = _fetch_rolling_form(batter_id, False) or {}
+                # Recent form in the model's trained scale. _fetch_rolling_form
+                # returns nested l7/l14 dicts (no flat l7Hits keys), so the old
+                # `_form.get("l7Hits")` always resolved to None → defaulted.
+                _rf = _batter_recent_hit_form(batter_id)
                 _xgb_bdict = {
                     **_fg_b, **_sv_b,
                     "name":      _batter_name,
                     "bats":      bq_stats.get("bats") or _fg_b.get("fg_bats") or "R",
-                    "l7Hits":    _form.get("l7Hits"),
-                    "l14Hits":   _form.get("l14Hits"),
-                    "l7HitRate": _form.get("l7HitRate"),
+                    **_rf,
                 }
                 _xgb_pdict = {
                     **_fg_p, **_sv_p,
@@ -27742,6 +27937,7 @@ _launch_startup_loaders()
 _start_injury_worker()
 _start_tracker_auto_sync_worker()
 _start_tracker_auto_capture_worker()
+_start_tracker_closing_capture_worker()
 _start_mlb_memory_worker()
 
 # Start daily pipeline scheduler (runs at 8 AM ET + on boot)
