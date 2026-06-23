@@ -7845,7 +7845,10 @@ def api_bvp_projection(batter_id, pitcher_id):
         # Used to surface model agreement and improve calibration once trained.
         _xgb_extras = {}
         try:
-            _bdict = {**bstats, **fg_bat, **sv_bat, "name": batter_name, "bats": bats_code}
+            # Heater momentum (recent EV/barrel) for the HR model — only pulled
+            # when the HR model is live, since it costs a Statcast lookup.
+            _mom = _batter_momentum_features(batter_id) if (batter_id and xgb_ready("hr")) else {}
+            _bdict = {**bstats, **fg_bat, **sv_bat, "name": batter_name, "bats": bats_code, **_mom}
             _pdict = {**pstats, **fg_pit, **sv_pit, "name": pitcher_name, "pitchHand": pitcher_hand}
             if xgb_ready("hr"):
                 _xgb_extras["xgbHrProb"]  = xgb_hr_prob(_bdict, _pdict)
@@ -25206,6 +25209,105 @@ _batter_statcast_lock = threading.Lock()
 # arsenal-prior pulls drop. Keyed by (batter_id, today, vs_pitcher_id).
 _batter_recent_statcast_cache: dict = {}
 _batter_recent_statcast_lock = threading.Lock()
+
+# Heater-momentum features (Gap 1), daily-cached per batter.
+_batter_momentum_cache: dict = {}
+_batter_momentum_lock = threading.Lock()
+
+
+def _batter_momentum_features(batter_id):
+    """Serve-time "heater" momentum for the XGB hits model — recent exit velo,
+    hard-hit rate, and whiff rate vs the batter's own 30-game baseline.
+
+    Computed from pybaseball.statcast_batter (all pitches) and aggregated the
+    SAME way regenerate_models._agg_chunk / build_batter_matrix do, so there is
+    no train/serve skew: per-game g_ev = mean(launch_speed) on batted balls,
+    g_hh = share ≥95mph, g_whiff = swinging-strikes / swings; then the most
+    recent completed games form l7/l30 means (at serve the upcoming game isn't
+    played, so the recent games ARE the prior games — no shift, matching the
+    shifted training rolls). Returns {} on any failure → scorer keeps neutral
+    defaults (l7Ev 88, l7HH .35, l7Whiff .11, momentum 1.0).
+    """
+    try:
+        bid = int(batter_id)
+    except Exception:
+        return {}
+    today = datetime.now().strftime("%Y-%m-%d")
+    with _batter_momentum_lock:
+        cached = _batter_momentum_cache.get((bid, today))
+        if cached is not None:
+            return cached
+
+    out = {}
+    try:
+        import pybaseball as pb
+        cur = datetime.now().year
+        # Two seasons covers the spring carry-over for early-season form.
+        df = pb.statcast_batter(start_dt=f"{cur-1}-03-01", end_dt=today, player_id=bid)
+        if df is not None and not df.empty and "game_date" in df.columns:
+            d = df.copy()
+            desc = d.get("description")
+            if desc is not None:
+                desc = desc.astype(str)
+                d["_is_swstr"] = desc.isin(["swinging_strike", "swinging_strike_blocked", "foul_tip"])
+                d["_is_swing"] = desc.isin(["swinging_strike", "swinging_strike_blocked",
+                                            "foul_tip", "foul", "hit_into_play"])
+            else:
+                d["_is_swstr"] = False
+                d["_is_swing"] = False
+            ls = pd.to_numeric(d.get("launch_speed"), errors="coerce")
+            d["_ls"] = ls
+            d["_hh"] = (ls >= 95.0).astype(float)
+            lsa = pd.to_numeric(d.get("launch_speed_angle"), errors="coerce")
+            # barrel = Statcast launch_speed_angle == 6, as a share of batted balls
+            d["_brl"] = ((lsa == 6) & ls.notna()).astype(float)
+            g = d.groupby("game_date")
+            per_game = pd.DataFrame({
+                "g_ev": g["_ls"].mean(),
+                "g_hh": g.apply(lambda x: float(x["_hh"][x["_ls"].notna()].mean())
+                                if x["_ls"].notna().any() else float("nan")),
+                "g_barrel": g.apply(lambda x: float(x["_brl"][x["_ls"].notna()].mean())
+                                    if x["_ls"].notna().any() else float("nan")),
+                "_sw": g["_is_swing"].sum(),
+                "_ws": g["_is_swstr"].sum(),
+            })
+            per_game["g_whiff"] = per_game["_ws"] / per_game["_sw"].clip(lower=1)
+            per_game = per_game.sort_index()  # oldest → newest by date
+
+            def _recent_mean(col, n):
+                vals = per_game[col].dropna()
+                if vals.empty:
+                    return None
+                return float(vals.iloc[-n:].mean())
+
+            l7_ev = _recent_mean("g_ev", 7)
+            l30_ev = _recent_mean("g_ev", 30)
+            l7_hh = _recent_mean("g_hh", 7)
+            l7_whiff = _recent_mean("g_whiff", 7)
+            l30_whiff = _recent_mean("g_whiff", 30)
+            l7_barrel = _recent_mean("g_barrel", 7)
+            l30_barrel = _recent_mean("g_barrel", 30)
+            if l7_ev is not None:
+                out["l7Ev"] = round(l7_ev, 2)
+            if l7_hh is not None:
+                out["l7HH"] = round(l7_hh, 4)
+            if l7_whiff is not None:
+                out["l7Whiff"] = round(l7_whiff, 4)
+            if l7_barrel is not None:
+                out["l7Barrel"] = round(l7_barrel, 4)
+            if l7_ev and l30_ev:
+                out["evMomentum"] = round(min(1.15, max(0.85, l7_ev / l30_ev)), 4)
+            if l7_whiff is not None and l30_whiff:
+                out["whiffMomentum"] = round(min(2.0, max(0.5, l7_whiff / l30_whiff)), 4)
+            if l7_barrel is not None and l30_barrel:
+                out["barrelMomentum"] = round(min(2.5, max(0.4, l7_barrel / l30_barrel)), 4)
+    except Exception as ex:
+        logging.warning(f"[BatterMomentum] bid={batter_id}: {ex}")
+        out = {}
+
+    with _batter_momentum_lock:
+        _batter_momentum_cache[(bid, today)] = out
+    return out
 
 
 def _recent_statcast_for_batter(batter_id, pitcher_id=None, n=10, seasons=2):

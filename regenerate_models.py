@@ -86,6 +86,11 @@ HITS_FEATURES = [
     # historically from Statcast at-bat order; expected_pa uses the SAME
     # slot→PA table the scorer feeds, so there is no train/serve skew.
     "batting_order", "expected_pa",
+    # NOTE: "heater" momentum (l7_ev/l7_hh/l7_whiff/ev_momentum/whiff_momentum)
+    # was tested here and left OUT — it was flat on the ≥1-hit market (held-out
+    # 0.6221 vs 0.6223). Momentum lives in HR_FEATURES, where it helps. The
+    # rolling columns are still computed in build_batter_matrix (HR consumes the
+    # EV/barrel ones); they're simply not selected for the hits model.
 ]
 
 # Mirror of lineup_loader._PA_BY_SLOT / _DEFAULT_PA so the historical
@@ -98,12 +103,30 @@ K_FEATURES = [
     "l3_ks", "l5_ks", "l5_k_rate", "l10_ks", "l3_ip", "l5_ip", "days_rest",
 ]
 
+# Home-run (≥1 HR in a game). Power/loft skills + opposing pitcher HR-allowed
+# profile + handedness + lineup volume + "heater" momentum (recent EV / barrel
+# vs the batter's own 30-game baseline). Every feature is served live by the
+# scorer's _build_hr_features from the SAME source + scale.
+HR_FEATURES = [
+    "sv_xslg", "sv_iso", "sv_ev", "sv_brl_pct", "sv_hh_pct", "sv_la",
+    "sv_hrfb", "sv_fb_pct", "sv_maxev", "sv_k_pct",
+    "opp_hr9", "opp_hrfb", "opp_fb_pct", "opp_barrel", "opp_xera",
+    "bats_L", "throws_R", "platoon_adv",
+    "batting_order", "expected_pa",
+    "l7_ev", "l7_barrel", "ev_momentum", "barrel_momentum",
+]
+
 XGB_PARAMS_HITS = dict(n_estimators=300, max_depth=4, learning_rate=0.04,
                        subsample=0.80, colsample_bytree=0.80,
                        min_child_weight=3, gamma=0.05)
 XGB_PARAMS_K = dict(n_estimators=350, max_depth=4, learning_rate=0.035,
                     subsample=0.78, colsample_bytree=0.78,
                     min_child_weight=4, gamma=0.08)
+# HR is rare (~12% of games) → shallower/heavier regularisation + scale_pos_weight
+# (added in train_market) to keep the calibrated probabilities honest.
+XGB_PARAMS_HR = dict(n_estimators=320, max_depth=4, learning_rate=0.03,
+                     subsample=0.80, colsample_bytree=0.75,
+                     min_child_weight=5, gamma=0.10)
 
 MARKETS = {
     "hits":  dict(file_key="xgb_hits_over_0.5", features=HITS_FEATURES,
@@ -118,6 +141,9 @@ MARKETS = {
     "k_5.5": dict(file_key="xgb_k_over_5.5", features=K_FEATURES,
                   target="k_over_5.5", source="pitcher", line=5.5,
                   params=XGB_PARAMS_K),
+    "hr":    dict(file_key="xgb_hr_over_0.5", features=HR_FEATURES,
+                  target="hr_over_0.5", source="batter", line=0.5,
+                  params=XGB_PARAMS_HR),
 }
 
 
@@ -171,12 +197,41 @@ def _agg_chunk(sc: pd.DataFrame, season: int) -> tuple[pd.DataFrame, pd.DataFram
 
     bat = (pa.groupby(["game_pk", "game_date", "batter"])
              .agg(hits=("is_hit", "sum"), ab=("is_ab", "sum"), pa=("is_pa", "sum"),
-                  tb=("tb", "sum"),
+                  tb=("tb", "sum"), hr=("is_hr", "sum"),
                   inning_topbot=("inning_topbot", "first"),
                   stand=("stand", "first") if "stand" in pa.columns else ("is_pa", "size"),
                   p_throws=("p_throws", "first") if "p_throws" in pa.columns else ("is_pa", "size"))
              .reset_index())
     bat = bat.merge(side_first, on=["game_pk", "inning_topbot"], how="left")
+
+    # ── Per-game contact-quality + swing-and-miss (momentum inputs). Computed
+    #    from the SAME raw Statcast columns the live scorer reads via
+    #    statcast_batter (launch_speed, launch_speed_angle, description), so the
+    #    rolling form built downstream is train/serve identical. barrel = the
+    #    Statcast barrel classification (launch_speed_angle == 6).
+    if "launch_speed" in sc.columns:
+        bb = sc.dropna(subset=["launch_speed"]).copy()
+        if "launch_speed_angle" not in bb.columns:
+            bb["launch_speed_angle"] = np.nan
+        if len(bb):
+            bb["launch_speed_angle"] = pd.to_numeric(bb["launch_speed_angle"], errors="coerce")
+            g_ev = (bb.groupby(["game_pk", "batter"])
+                      .agg(g_ev=("launch_speed", "mean"),
+                           g_hh=("launch_speed", lambda x: float((x >= 95.0).mean())),
+                           g_barrel=("launch_speed_angle", lambda x: float((x.fillna(-1) == 6).mean())))
+                      .reset_index())
+            bat = bat.merge(g_ev, on=["game_pk", "batter"], how="left")
+    if "description" in sc.columns:
+        desc = sc["description"].astype(str)
+        sc["_is_swstr"] = desc.isin(["swinging_strike", "swinging_strike_blocked", "foul_tip"])
+        sc["_is_swing"] = desc.isin(["swinging_strike", "swinging_strike_blocked",
+                                     "foul_tip", "foul", "hit_into_play"])
+        gw = (sc.groupby(["game_pk", "batter"])
+                .agg(_sw=("_is_swing", "sum"), _ws=("_is_swstr", "sum"))
+                .reset_index())
+        gw["g_whiff"] = gw["_ws"] / gw["_sw"].clip(lower=1)
+        bat = bat.merge(gw[["game_pk", "batter", "g_whiff"]],
+                        on=["game_pk", "batter"], how="left")
 
     # ── Lineup slot (1-9) from at-bat order within each side: the batter whose
     #    first at_bat_number is smallest leads off. Late subs / pinch hitters
@@ -190,6 +245,7 @@ def _agg_chunk(sc: pd.DataFrame, season: int) -> tuple[pd.DataFrame, pd.DataFram
                     on=["game_pk", "inning_topbot", "batter"], how="left")
 
     bat["hit_over_0.5"] = (bat["hits"] >= 1).astype(int)
+    bat["hr_over_0.5"] = (bat["hr"] >= 1).astype(int)
     bat["season"] = season
 
     pit = (pa.groupby(["game_pk", "game_date", "pitcher"])
@@ -261,6 +317,11 @@ def load_fg_batting(season: int) -> pd.DataFrame:
     out["sv_la"] = pd.to_numeric(df.get("LA"), errors="coerce")
     out["sv_k_pct"] = _norm_pct(df.get("K%"))    # ×100 → percent scale
     out["sv_bb_pct"] = _norm_pct(df.get("BB%"))  # ×100 → percent scale
+    # HR-specific power/loft skills (raw FG values, unscaled — matches serve).
+    out["sv_iso"] = pd.to_numeric(df.get("ISO"), errors="coerce")
+    out["sv_hrfb"] = pd.to_numeric(df.get("HR/FB"), errors="coerce")   # fraction
+    out["sv_fb_pct"] = pd.to_numeric(df.get("FB%"), errors="coerce")   # fraction
+    out["sv_maxev"] = pd.to_numeric(df.get("maxEV"), errors="coerce")
     bats = df.get("Bats")
     out["bats_L"] = (bats == "L").astype(int) if bats is not None else 0
     out = out.dropna(subset=["mlbam"])
@@ -282,6 +343,11 @@ def load_fg_pitching(season: int) -> pd.DataFrame:
     out["sv_k_pct"] = _norm_pct(df.get("K%"))
     out["sv_bb_pct"] = _norm_pct(df.get("BB%"))
     out["sv_whiff_pct"] = _norm_pct(df.get("SwStr%"))
+    # HR-allowed profile (raw FG values, unscaled — matches serve).
+    out["p_hr9"] = pd.to_numeric(df.get("HR/9"), errors="coerce")
+    out["p_hrfb"] = pd.to_numeric(df.get("HR/FB"), errors="coerce")   # fraction
+    out["p_fb_pct"] = pd.to_numeric(df.get("FB%"), errors="coerce")   # fraction
+    out["p_barrel"] = pd.to_numeric(df.get("Barrel%"), errors="coerce")  # fraction
     throws = df.get("Throws")
     out["throws_R"] = (throws == "R").astype(int) if throws is not None else 1
     out = out.dropna(subset=["mlbam"])
@@ -308,6 +374,37 @@ def build_batter_matrix(bg: pd.DataFrame) -> pd.DataFrame:
     bg["l7_hit_rate"] = bg.groupby("batter")["hit_rate_game"].transform(
         lambda x: x.shift(1).rolling(7, min_periods=1).mean())
 
+    # ── True-talent latency / "heater" momentum. Recent contact quality vs the
+    #    batter's own 30-game baseline. Each rolling window is shifted by one so
+    #    the upcoming game's outcome never leaks; at serve the most recent
+    #    completed games ARE these prior games (no shift), matching exactly.
+    for src in ("g_ev", "g_hh", "g_whiff", "g_barrel"):
+        if src not in bg.columns:
+            bg[src] = np.nan
+    bg["l7_ev"] = bg.groupby("batter")["g_ev"].transform(
+        lambda x: x.shift(1).rolling(7, min_periods=1).mean())
+    bg["l30_ev"] = bg.groupby("batter")["g_ev"].transform(
+        lambda x: x.shift(1).rolling(30, min_periods=3).mean())
+    bg["l7_hh"] = bg.groupby("batter")["g_hh"].transform(
+        lambda x: x.shift(1).rolling(7, min_periods=1).mean())
+    bg["l7_whiff"] = bg.groupby("batter")["g_whiff"].transform(
+        lambda x: x.shift(1).rolling(7, min_periods=1).mean())
+    bg["l30_whiff"] = bg.groupby("batter")["g_whiff"].transform(
+        lambda x: x.shift(1).rolling(30, min_periods=3).mean())
+    # Barrel momentum — the strongest "heater" signal for home runs.
+    bg["l7_barrel"] = bg.groupby("batter")["g_barrel"].transform(
+        lambda x: x.shift(1).rolling(7, min_periods=1).mean())
+    bg["l30_barrel"] = bg.groupby("batter")["g_barrel"].transform(
+        lambda x: x.shift(1).rolling(30, min_periods=3).mean())
+    # Momentum ratio = recent / baseline (>1 = heating up). Neutral 1.0 when the
+    # baseline is missing/zero, so an early-season batter is simply "no signal".
+    bg["ev_momentum"] = (bg["l7_ev"] / bg["l30_ev"]).replace([np.inf, -np.inf], np.nan)
+    bg["whiff_momentum"] = (bg["l7_whiff"] / bg["l30_whiff"]).replace([np.inf, -np.inf], np.nan)
+    bg["barrel_momentum"] = (bg["l7_barrel"] / bg["l30_barrel"]).replace([np.inf, -np.inf], np.nan)
+    bg["ev_momentum"] = bg["ev_momentum"].fillna(1.0).clip(0.85, 1.15)
+    bg["whiff_momentum"] = bg["whiff_momentum"].fillna(1.0).clip(0.5, 2.0)
+    bg["barrel_momentum"] = bg["barrel_momentum"].fillna(1.0).clip(0.4, 2.5)
+
     frames = []
     for season in sorted(bg["season"].unique()):
         sub = bg[bg["season"] == season].copy()
@@ -324,7 +421,10 @@ def build_batter_matrix(bg: pd.DataFrame) -> pd.DataFrame:
             opp = fp.rename(columns={
                 "sv_xera": "opp_xera", "sv_k_pct": "opp_k_pct",
                 "sv_bb_pct": "opp_bb_pct", "sv_whiff_pct": "opp_whiff",
-            })[["mlbam", "opp_xera", "opp_k_pct", "opp_bb_pct", "opp_whiff", "throws_R"]]
+                "p_hr9": "opp_hr9", "p_hrfb": "opp_hrfb",
+                "p_fb_pct": "opp_fb_pct", "p_barrel": "opp_barrel",
+            })[["mlbam", "opp_xera", "opp_k_pct", "opp_bb_pct", "opp_whiff",
+                "opp_hr9", "opp_hrfb", "opp_fb_pct", "opp_barrel", "throws_R"]]
             sub = sub.merge(opp, left_on="opp_starter", right_on="mlbam",
                             how="left", suffixes=("", "_op"))
         # handedness / platoon from real stand + opposing starter throws
@@ -397,6 +497,7 @@ def train_market(mkey: str, cfg: dict, df: pd.DataFrame) -> Optional[dict]:
     med = tr[feats].median()
     tr[feats] = tr[feats].fillna(med)
     te[feats] = te[feats].fillna(med)
+    train_medians = {c: round(float(med[c]), 5) for c in feats}
 
     Xtr, ytr = tr[feats].values.astype(np.float32), tr[target].values.astype(int)
     Xte, yte = te[feats].values.astype(np.float32), te[target].values.astype(int)
@@ -438,6 +539,7 @@ def train_market(mkey: str, cfg: dict, df: pd.DataFrame) -> Optional[dict]:
             "pos_rate": round(float(pos), 4),
             "train_seasons": TRAIN_SEASONS, "test_season": TEST_SEASON,
             "calibration": "isotonic_cv4",
+            "train_medians": train_medians,
             "xgboost_version": xgb.__version__,
             "exported_at_utc": datetime.utcnow().isoformat(),
             "model_type": "CalibratedClassifierCV(XGBClassifier)",
