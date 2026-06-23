@@ -28,3 +28,7 @@ data/mlb_matchups_*.csv
 # Smart-Consensus per-model Brier — derived from the graded tracker at runtime;
 # production learns its own, so a dev-generated copy must not be committed.
 data/model_accuracies.json
+# Tracker state — captured/graded at runtime on the Fly volume (which shadows
+# any committed copy), so a dev/test copy is dead weight and only misleads
+# local inspection. Production owns this file.
+data/daily_tracker.json
