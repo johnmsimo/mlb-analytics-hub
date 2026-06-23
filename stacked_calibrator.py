@@ -174,46 +174,67 @@ def _exp_pa_uncertainty(exp_pa: float) -> float:
 
 
 # ─── Smart Consensus (Step 3) ───────────────────────────────────────────
+# Dynamic Brier-weighting between XGB and BATX. The weights only shift away from
+# the coverage heuristic when there is *measured* per-model accuracy on disk —
+# we never fabricate one model's skill from the other's. Until the tracker has
+# accumulated graded picks carrying both per-model probabilities (see
+# update_model_accuracies), _get_consensus_weights returns None and the blend
+# falls back to the original, well-tested coverage heuristic.
 _ACCURACY_PATH = "/app/data/model_accuracies.json" if os.path.exists("/app/data") else os.path.join(_HERE, "data", "model_accuracies.json")
-_model_accuracies = {}
+_model_accuracies = None  # None = not yet loaded; {} = loaded, no real data
 
-def load_model_accuracies():
+def load_model_accuracies(force: bool = False):
     global _model_accuracies
-    if _model_accuracies: return
+    if _model_accuracies is not None and not force:
+        return
+    _model_accuracies = {}
     if os.path.exists(_ACCURACY_PATH):
         try:
-            with open(_ACCURACY_PATH, 'r') as f: 
-                _model_accuracies = json.load(f)
-        except Exception: _model_accuracies = {}
-    else:
-        # Default baseline (Lower is better: Brier 0.25 = random guessing)
-        _model_accuracies = {
-            "default": {"xgb": 0.21, "batx": 0.22, "steamer": 0.23}
-        }
+            with open(_ACCURACY_PATH, 'r') as f:
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                _model_accuracies = loaded
+        except Exception:
+            _model_accuracies = {}
 
 def _get_consensus_weights(market_key):
+    """Inverse-Brier weights (w_xgb, w_batx) from *measured* accuracy, or None
+    when no real data exists for this market (caller uses the heuristic)."""
     load_model_accuracies()
-    acc = _model_accuracies.get(market_key, _model_accuracies.get("default", {}))
-    # Inverse Brier Score weighting
-    inv_xgb = 1.0 / (float(acc.get("xgb", 0.22)) + 1e-6)
-    inv_batx = 1.0 / (float(acc.get("batx", 0.23)) + 1e-6)
+    acc = _model_accuracies.get(market_key) or _model_accuracies.get("default")
+    if not acc:
+        return None
+    try:
+        xgb_b = float(acc.get("xgb"))
+        batx_b = float(acc.get("batx"))
+        n = int(acc.get("n", 0))
+    except (TypeError, ValueError):
+        return None
+    # Require a minimum graded sample before trusting the measured Brier.
+    if n < 40 or xgb_b <= 0 or batx_b <= 0:
+        return None
+    inv_xgb = 1.0 / xgb_b
+    inv_batx = 1.0 / batx_b
     total = inv_xgb + inv_batx
+    if total <= 0:
+        return None
     return inv_xgb / total, inv_batx / total
 
 def _logistic_blend(xgb_p: float, batx_p: float,
                     coverage: float, exp_pa: float, bvp_pa: float,
                     market_key: str = "default") -> float:
-    # Get accuracy-based weights (Step 3: Smart Consensus)
-    acc_w_xgb, acc_w_batx = _get_consensus_weights(market_key)
-    
-    # Heuristic weight adjustment based on feature coverage
-    # If coverage is low, we lean more on BATX (which is more context-independent)
+    # Coverage heuristic: low XGB coverage -> lean on the context-light BATX.
     h_w_xgb = _clamp(_coverage_weight(coverage) - _bvp_pa_weight(bvp_pa), 0.15, 0.85)
-    
-    # Final weight is 70% accuracy-driven, 30% heuristic-driven
-    w_xgb = _clamp(0.7 * acc_w_xgb + 0.3 * h_w_xgb, 0.10, 0.90)
+
+    acc_weights = _get_consensus_weights(market_key)
+    if acc_weights is None:
+        # No measured per-model accuracy yet -> original behavior, unchanged.
+        w_xgb = h_w_xgb
+    else:
+        # Blend measured skill (70%) with the coverage heuristic (30%).
+        w_xgb = _clamp(0.7 * acc_weights[0] + 0.3 * h_w_xgb, 0.10, 0.90)
     w_batx = 1.0 - w_xgb
-    
+
     z = w_xgb * _logit(xgb_p) + w_batx * _logit(batx_p)
     p = _sigmoid(z)
     div = abs(_logit(xgb_p) - _logit(batx_p))
@@ -274,29 +295,56 @@ def _analytic_ci(xgb_p: float, batx_p: float,
     return _ci_from_sigma(blended, sigma_logit)
 
 
-# ─── Verdict tiering ────────────────────────────────
-_TIERS = (
-    (0.78, "STRONG_BET",  "STRONG BET",  "green"),
-    (0.66, "LEAN_OVER",   "LEAN OVER",   "teal"),
-    (0.55, "PASS",        "PASS",        "gray"),
-    (0.40, "LEAN_UNDER",  "LEAN UNDER",  "amber"),
-    (0.00, "STRONG_FADE", "STRONG FADE", "red"),
+# ─── Verdict tiering (market-aware) ──────────────────
+# Per-market base rate (P(over) for a typical *starter* at the standard line).
+# The verdict is the probability's position RELATIVE to this base rate, so the
+# same thresholds work for hits (~0.66), total bases (~0.40), RBI (~0.34) and
+# home runs (~0.13) instead of the old absolute thresholds that only made sense
+# for hits. Keyed by both book keys and the scorer's short names.
+_MARKET_BASE_RATE = {
+    "batter_hits":        0.66,
+    "batter_total_bases": 0.40, "batter_tb":  0.40,
+    "batter_rbis":        0.34, "batter_rbi": 0.34,
+    "batter_home_runs":   0.13, "batter_hr":  0.13,
+    "pitcher_strikeouts": 0.50,
+}
+_DEFAULT_BASE_RATE = 0.50
+
+
+def _base_rate_for(market_key: str) -> float:
+    return _MARKET_BASE_RATE.get(market_key, _DEFAULT_BASE_RATE)
+
+
+# Thresholds on the ratio prob / base_rate. Chosen so that at the hits base rate
+# (0.66) they reproduce the original absolute tiers 0.78/0.66/0.55/0.40 exactly
+# (0.66×1.182=0.78, ×1.0=0.66, ×0.833=0.55, ×0.606=0.40) — hits behavior is
+# preserved while the tiers generalize to every market's own base rate.
+_TIER_RATIOS = (
+    (1.182, "STRONG_BET",  "STRONG BET",  "green"),
+    (1.000, "LEAN_OVER",   "LEAN OVER",   "teal"),
+    (0.833, "PASS",        "PASS",        "gray"),
+    (0.606, "LEAN_UNDER",  "LEAN UNDER",  "amber"),
+    (0.000, "STRONG_FADE", "STRONG FADE", "red"),
 )
 
 
-def _tier_for(p: float) -> tuple[str, str, str]:
-    for thresh, key, label, color in _TIERS:
-        if p >= thresh:
+def _tier_for(p: float, base_rate: float = 0.66) -> tuple[str, str, str]:
+    ratio = p / max(1e-6, base_rate)
+    for thresh, key, label, color in _TIER_RATIOS:
+        if ratio >= thresh:
             return key, label, color
     return "STRONG_FADE", "STRONG FADE", "red"
 
 
 def _demote_if_wide_ci(p: float, ci_lo: float, ci_hi: float,
-                       confidence: float) -> tuple[str, str, str]:
+                       confidence: float, base_rate: float = 0.66) -> tuple[str, str, str]:
     ci_width = ci_hi - ci_lo
-    base_key, base_label, base_color = _tier_for(p)
-    if ci_lo < 0.50 < ci_hi and base_key != "PASS":
-        return "PASS", "PASS · STRADDLES 50%", "gray"
+    base_key, base_label, base_color = _tier_for(p, base_rate)
+    # CI straddles the market's base rate → we can't say the player is above or
+    # below average, so there's no edge to bet (market-aware analogue of the old
+    # "straddles 50%" guard).
+    if ci_lo < base_rate < ci_hi and base_key != "PASS":
+        return "PASS", "PASS · STRADDLES BASE", "gray"
     if confidence < 0.55:
         if base_key == "STRONG_BET":
             return "LEAN_OVER",   "LEAN OVER · LOW CONF",  "teal"
@@ -379,7 +427,8 @@ def calibrate(xgb_p: Optional[float], batx_p: Optional[float], *,
     sample_conf = _clamp(bvp_pa / 80.0, 0.0, 1.0)
     confidence  = round(0.55 * width_conf + 0.30 * cov_conf + 0.15 * sample_conf, 3)
 
-    tier_key, tier_label, tier_color = _demote_if_wide_ci(blended, ci_lo, ci_hi, confidence)
+    base_rate = _base_rate_for(market_key)
+    tier_key, tier_label, tier_color = _demote_if_wide_ci(blended, ci_lo, ci_hi, confidence, base_rate)
 
     return {
         "probability":   round(blended, 3),
@@ -601,25 +650,84 @@ def train_from_tracker(
 
 # ─── CLI ─────────────────────────────────────────────────
 
-def update_model_accuracies(tracker_path="data/daily_tracker.json"):
-    """Re-calculate Brier scores for all sources and save to JSON (Smart Consensus)."""
-    if not os.path.exists(tracker_path): return
-    
-    # Note: Currently the tracker only saves 'blendedProb'. 
-    # To really track XGB vs BATX, we'd need to save those separately in the tracker.
-    # For now, we update the 'default' or per-market entries based on aggregate metrics.
-    # This is a placeholder for the automated update loop.
+def update_model_accuracies(tracker_path="data/daily_tracker.json", min_n: int = 40):
+    """Measure per-model Brier (XGB vs BATX) from graded tracker history and
+    persist it for the consensus weighter.
+
+    Honest by construction: a market is written ONLY when its graded picks
+    actually carry *both* per-model probabilities. We never derive one model's
+    skill from the other's. Until the scoring path persists `xgbProb`/`batxProb`
+    onto entries, this writes an empty file and the consensus falls back to the
+    coverage heuristic (no behavior change). Returns the stats dict it wrote.
+    """
+    if not os.path.exists(tracker_path):
+        return {}
+
+    try:
+        with open(tracker_path) as f:
+            tracker = json.load(f)
+    except Exception:
+        return {}
+
+    # Candidate field names for each model's probability, in priority order.
+    XGB_FIELDS = ("xgbProb", "xgbHitProb", "xgbKProb")
+    BATX_FIELDS = ("batxProb", "batxHitProb")
+
+    def _first(entry, fields):
+        for fld in fields:
+            v = entry.get(fld)
+            if v is not None:
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    pass
+        return None
+
+    def _outcome(entry):
+        g = entry.get("grade") or entry.get("outcome")
+        if g == "win":
+            return 1.0
+        if g == "loss":
+            return 0.0
+        return None  # push / pending -> excluded
+
+    # market_key -> {"xgb": [sq_err...], "batx": [sq_err...]}
+    acc = {}
+    for _date, rec in (tracker or {}).items():
+        entries = rec.get("entries") if isinstance(rec, dict) else rec
+        for e in (entries or []):
+            mk = e.get("marketKey")
+            if not mk:
+                continue
+            y = _outcome(e)
+            if y is None:
+                continue
+            xp = _first(e, XGB_FIELDS)
+            bp = _first(e, BATX_FIELDS)
+            if xp is None or bp is None:
+                continue
+            bucket = acc.setdefault(mk, {"xgb": [], "batx": []})
+            bucket["xgb"].append((xp - y) ** 2)
+            bucket["batx"].append((bp - y) ** 2)
+
     stats = {}
-    for mk in _MARKET_KEYS:
-        res = evaluate_calibration(tracker_path, mk)
-        if "brier_score" in res:
-            # Simple update for now: assume blended performance reflects consensus reliability
-            stats[mk] = {"xgb": res["brier_score"], "batx": res["brier_score"] * 1.05}
-    
+    for mk, b in acc.items():
+        n = len(b["xgb"])
+        if n < min_n:
+            continue
+        stats[mk] = {
+            "xgb": round(sum(b["xgb"]) / n, 5),
+            "batx": round(sum(b["batx"]) / n, 5),
+            "n": n,
+        }
+
     os.makedirs(os.path.dirname(_ACCURACY_PATH), exist_ok=True)
     with open(_ACCURACY_PATH, 'w') as f:
         json.dump(stats, f, indent=2)
-    print(f"[SmartConsensus] Updated model accuracies at {_ACCURACY_PATH}")
+    # Invalidate the in-process cache so the next blend picks up fresh weights.
+    load_model_accuracies(force=True)
+    print(f"[SmartConsensus] Wrote {len(stats)} market(s) to {_ACCURACY_PATH}")
+    return stats
 if __name__ == "__main__":
     import argparse
 

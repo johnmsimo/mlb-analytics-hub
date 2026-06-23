@@ -443,6 +443,8 @@ def _enrich_batter_from_fg(d: dict) -> dict:
         "SwStr%": "svsspct", "LA": "svla", "K%": "fgkpct",
         "BB%": "fgbbpct", "wOBA": "fgwoba", "SLG": "fgslg",
         "Bats": "fgbats", "xMLBAMID": "mlbamid", "playerid": "fgId",
+        # HR power/loft skills (raw FG values; consumed by _build_hr_features).
+        "ISO": "fgiso", "HR/FB": "fghrfb", "FB%": "fgfbpct", "maxEV": "fgmaxev",
     }
     enriched = dict(d)
     for fg_col, scorer_key in fg_map.items():
@@ -483,6 +485,8 @@ def _enrich_pitcher_from_fg(d: dict) -> dict:
         "xERA": "svxera", "ERA": "fgera", "K%": "fgkpct",
         "BB%": "fgbbpct", "SwStr%": "svwhiffpct",
         "playerid": "fgId", "xMLBAMID": "mlbamid",
+        # HR-allowed profile (raw FG values; consumed by _build_hr_features).
+        "HR/9": "fghr9", "HR/FB": "fghrfb", "FB%": "fgfbpct", "Barrel%": "fgbrlpct",
     }
     enriched = dict(d)
     for fg_col, scorer_key in fg_map.items():
@@ -626,6 +630,80 @@ def _build_k_features(pitcher: dict, feat_order: list) -> Optional[np.ndarray]:
         except Exception:
             return None
     return np.array([[raw[c] for c in k_features]], dtype=np.float32)
+
+
+def _build_batter_market_features(batter: dict, pitcher: dict, feat_order: list) -> Optional[np.ndarray]:
+    """Shared feature builder for the power/run batter markets (HR, TB, RBI).
+
+    Produces the SUPERSET of keys those three models use; each model selects its
+    own columns via `feat_order`. Scales mirror regenerate_models exactly:
+    Barrel%/HardHit%/HR-FB/FB% are raw FG fractions (NOT ×100); K%/BB% are
+    percent-scaled. Defaults are the batter-market train medians (identical
+    across HR/TB/RBI since they share the same training rows) so an un-enriched
+    call contributes a neutral row."""
+    bat_side = (batter.get("fgbats") or batter.get("bats") or "R").upper()[:1]
+    pit_hand = (pitcher.get("pitchHand") or pitcher.get("throws") or "R").upper()[:1]
+    platoon  = 1 if (bat_side == "L" and pit_hand == "R") or (bat_side == "R" and pit_hand == "L") else 0
+    mlbam_id    = batter.get("mlbamid") or batter.get("xMLBAMID")
+    player_name = batter.get("name") or batter.get("Name") or batter.get("PlayerName")
+    lineup_feats  = _get_lineup_features(mlbam_id=mlbam_id, player_name=player_name)
+    expected_pa   = lineup_feats["expected_pa"]
+    batting_order = lineup_feats["batting_order"]
+    raw = {
+        "sv_xba":     _sf(batter,  "svxba",  "xAVG",          default=0.2427),
+        "sv_xwoba":   _sf(batter,  "svxwoba","xwOBA","fgwoba",default=0.3171),
+        "sv_xslg":    _sf(batter,  "svxslg", "xSLG", "fgslg", default=0.406),
+        "sv_iso":     _sf(batter,  "fgiso",  "ISO",           default=0.158),
+        "sv_ev":      _sf(batter,  "svev",   "EV",            default=88.87),
+        "sv_brl_pct": _sf(batter,  "svbrlpct","Barrel%",      default=0.076),   # fraction
+        "sv_hh_pct":  _sf(batter,  "svhhpct","HardHit%",      default=0.396),   # fraction
+        "sv_la":      _sf(batter,  "svla",   "LA",            default=13.16),
+        "sv_hrfb":    _sf(batter,  "fghrfb", "HR/FB",         default=0.120),   # fraction
+        "sv_fb_pct":  _sf(batter,  "fgfbpct","FB%",           default=0.376),   # fraction
+        "sv_maxev":   _sf(batter,  "fgmaxev","maxEV",         default=110.6),
+        "sv_k_pct":   _sf(batter,  "fgkpct", "K%", "svkpct",  default=22.37),   # percent
+        "sv_bb_pct":  _sf(batter,  "fgbbpct","BB%", "svbbpct",default=8.27),    # percent
+        "opp_hr9":    _sf(pitcher, "fghr9",  "HR/9",          default=1.174),
+        "opp_hrfb":   _sf(pitcher, "fghrfb", "HR/FB",         default=0.123),   # fraction
+        "opp_fb_pct": _sf(pitcher, "fgfbpct","FB%",           default=0.373),   # fraction
+        "opp_barrel": _sf(pitcher, "fgbrlpct","Barrel%",      default=0.079),   # fraction
+        "opp_xera":   _sf(pitcher, "svxera", "xERA","fgera",  default=4.158),
+        "opp_k_pct":  _sf(pitcher, "fgkpct", "K%", "svkpct",  default=22.29),   # percent
+        "opp_bb_pct": _sf(pitcher, "fgbbpct","BB%", "svbbpct",default=7.33),    # percent
+        "bats_L":     1 if bat_side == "L" else 0,
+        "throws_R":   1 if pit_hand == "R" else 0,
+        "platoon_adv":platoon,
+        "batting_order": float(batting_order),
+        "expected_pa":   expected_pa,
+        "l7_hits":        _sf(batter, "l7Hits", "l7hits",                       default=0.8571),
+        "l7_ev":          _sf(batter, "l7Ev",          "l7_ev",          default=83.12),
+        "l7_barrel":      _sf(batter, "l7Barrel",      "l7_barrel",      default=0.0347),
+        "ev_momentum":    _sf(batter, "evMomentum",    "ev_momentum",    default=1.0),
+        "barrel_momentum":_sf(batter, "barrelMomentum","barrel_momentum",default=0.954),
+    }
+    # Percent-scale the rate stats that training ×100s; leave the FG fraction
+    # rates (barrel/hardhit/hr-fb/fb) untouched.
+    for pct_key in ("sv_k_pct", "sv_bb_pct", "opp_k_pct", "opp_bb_pct"):
+        if 0 < raw[pct_key] <= 1.0:
+            raw[pct_key] *= 100.0
+    if not feat_order:
+        return None
+    try:
+        return np.array([[raw.get(c, 0.0) for c in feat_order]], dtype=np.float32)
+    except Exception:
+        return None
+
+
+# HR/TB/RBI all share one builder; each model's saved feature list selects its
+# own columns. Thin aliases keep the per-market call sites + parity diag explicit.
+def _build_hr_features(batter, pitcher, feat_order):
+    return _build_batter_market_features(batter, pitcher, feat_order)
+
+def _build_tb_features(batter, pitcher, feat_order):
+    return _build_batter_market_features(batter, pitcher, feat_order)
+
+def _build_rbi_features(batter, pitcher, feat_order):
+    return _build_batter_market_features(batter, pitcher, feat_order)
 
 
 # ─── Internal full-output scorer (shared by all markets) ────────────────────────
@@ -817,7 +895,9 @@ def _predict_batter_market_full(
         batter_e  = _enrich_batter_from_fg(batter)
         pitcher_e = _enrich_pitcher_from_fg(pitcher)
         feat_order = _feat_cols.get(model_key, [])
-        X = _build_hit_features(batter_e, pitcher_e, feat_order)
+        builder = (_build_batter_market_features
+                   if model_key in ("hr", "tb", "rbi") else _build_hit_features)
+        X = builder(batter_e, pitcher_e, feat_order)
         if X is None:
             return {}
         return _score_full(model_key, market_key, X, line=line)
@@ -866,7 +946,11 @@ def feature_default_report(market, batter=None, pitcher=None):
     if not _loaded:
         _load_models()
     is_k = str(market).startswith("k") or market in ("strikeouts", "pitcher_strikeouts")
-    key = _PARITY_K_REF if is_k else "hits"
+    _BATTER_POWER = {"hr": "hr", "batter_hr": "hr", "home_runs": "hr", "batter_home_runs": "hr",
+                     "tb": "tb", "batter_tb": "tb", "total_bases": "tb", "batter_total_bases": "tb",
+                     "rbi": "rbi", "batter_rbi": "rbi", "rbis": "rbi", "batter_rbis": "rbi"}
+    power_key = _BATTER_POWER.get(market)
+    key = _PARITY_K_REF if is_k else (power_key if power_key else "hits")
     feat_order = _feat_cols.get(key) or []
     if _models.get(key) is None or not feat_order:
         return None
@@ -874,6 +958,10 @@ def feature_default_report(market, batter=None, pitcher=None):
         if is_k:
             real = _build_k_features(_enrich_pitcher_from_fg(pitcher or {}), feat_order)
             base = _build_k_features({}, feat_order)
+        elif power_key:
+            real = _build_batter_market_features(_enrich_batter_from_fg(batter or {}),
+                                                 _enrich_pitcher_from_fg(pitcher or {}), feat_order)
+            base = _build_batter_market_features({}, {}, feat_order)
         else:
             real = _build_hit_features(_enrich_batter_from_fg(batter or {}),
                                        _enrich_pitcher_from_fg(pitcher or {}), feat_order)

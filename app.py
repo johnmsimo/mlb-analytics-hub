@@ -70,11 +70,15 @@ if _XGB_AVAILABLE:
 # Graceful fallback to deterministic logistic blend when no trained isotonic
 # is on disk (typical until enough graded picks accumulate).
 try:
-    from stacked_calibrator import calibrate as stacked_calibrate
+    from stacked_calibrator import (
+        calibrate as stacked_calibrate,
+        update_model_accuracies as _update_model_accuracies,
+    )
     _STACK_AVAILABLE = True
 except ImportError:
     _STACK_AVAILABLE = False
     def stacked_calibrate(*a, **k): return None
+    def _update_model_accuracies(*a, **k): return {}
 
 # Per-market probability recalibration fit from our own graded history.
 # Optional: a missing module leaves model probabilities untouched (identity).
@@ -84,6 +88,15 @@ try:
 except ImportError:
     _PROP_CAL_AVAILABLE = False
     PropCalibrator = None  # type: ignore
+
+# Consolidated betting math (de-vig, EV, fractional Kelly). Optional: if it is
+# missing the /api/v1/edges enrichment is skipped, everything else is unaffected.
+try:
+    import value_engine
+    _VALUE_ENGINE_AVAILABLE = True
+except ImportError:
+    value_engine = None  # type: ignore
+    _VALUE_ENGINE_AVAILABLE = False
 
 
 # ── Best Bets signal upgrades (all optional, all free) ────────────────────────
@@ -7836,7 +7849,16 @@ def api_bvp_projection(batter_id, pitcher_id):
         # Used to surface model agreement and improve calibration once trained.
         _xgb_extras = {}
         try:
-            _bdict = {**bstats, **fg_bat, **sv_bat, "name": batter_name, "bats": bats_code}
+            # Heater momentum (recent EV/barrel) for the power batter models —
+            # only pulled when at least one is live, since it costs a Statcast
+            # lookup. Shared by the HR/TB/RBI scorers via _bdict.
+            _mom = (_batter_momentum_features(batter_id)
+                    if (batter_id and (xgb_ready("hr") or xgb_ready("tb") or xgb_ready("rbi")))
+                    else {})
+            _bform = batter_form or {}
+            _bdict = {**bstats, **fg_bat, **sv_bat, "name": batter_name, "bats": bats_code,
+                      "l7Hits": _bform.get("l7Hits"), "l14Hits": _bform.get("l14Hits"),
+                      "l7HitRate": _bform.get("l7HitRate"), **_mom}
             _pdict = {**pstats, **fg_pit, **sv_pit, "name": pitcher_name, "pitchHand": pitcher_hand}
             if xgb_ready("hr"):
                 _xgb_extras["xgbHrProb"]  = xgb_hr_prob(_bdict, _pdict)
@@ -13814,6 +13836,17 @@ _BATTER_FALLBACK_LINE = {
 }
 _K_PROB_FIELD_FOR = {3.5: 'p_4plus_k', 4.5: 'p_5plus_k', 5.5: 'p_6plus_k'}
 
+# Book market → (scorer short name, full-output fn, the exact line the committed
+# XGB model is trained on). The XGB point probability is only valid AT that line,
+# so the stacked fusion only fires when the row's line matches.
+def _xgb_batter_market_map():
+    return {
+        'batter_hits':        ('hits', xgb_hit_prob_full, 0.5),
+        'batter_total_bases': ('tb',   xgb_tb_prob_full,  1.5),
+        'batter_home_runs':   ('hr',   xgb_hr_prob_full,  0.5),
+        'batter_rbis':        ('rbi',  xgb_rbi_prob_full, 0.5),
+    }
+
 
 def _parse_prop_markets(bookmakers, valid_names):
     grouped = {}
@@ -15419,7 +15452,47 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                         raw_prob = _poisson_over_prob(float(p.get(mean_field, 0) or 0), line)
                     if raw_prob < 0.10:
                         continue
-                    raw_mult_prob = _clamp01(raw_prob * _market_mult(mk, adjustments))
+                    # ── XGB + stacked fusion, computed UP-FRONT so it can drive the
+                    #    live number for hits/hr/tb/rbi at each model's trained line.
+                    #    `base_prob` is the model probability fed into the existing
+                    #    market-blend + prop_calibration pipeline (so edge/EV/hub all
+                    #    reflect the fusion). Off-line markets keep the analytic prob.
+                    _mc_batter = None
+                    _full = {}
+                    _xgb_market, _full_fn, _model_line = _xgb_batter_market_map().get(mk, (None, None, None))
+                    if _full_fn and xgb_ready(_xgb_market):
+                        try:
+                            _full = _full_fn(p, opp_pitcher) or {}
+                        except Exception:
+                            _full = {}
+                        _mc_batter = _full.get('mc') or {}
+                    _xgb_p = _full.get('prob') if _full else None
+                    _at_model_line = (_model_line is not None and float(line) == _model_line)
+                    _stk = None
+                    base_prob = raw_prob          # analytic / MC estimate (default)
+                    model_source = 'mc'
+                    if _xgb_p is not None and _at_model_line:
+                        if _STACK_AVAILABLE:
+                            try:
+                                _slot = int(p.get('slot') or 5)
+                                _exp_pa = _LINEUP_PA_WEIGHTS[_slot - 1] if 1 <= _slot <= 9 else 4.2
+                            except Exception:
+                                _exp_pa = 4.2
+                            _mc_ci = ((_full.get('p_lo'), _full.get('p_hi'))
+                                      if _full.get('p_lo') is not None and _full.get('p_hi') is not None else None)
+                            try:
+                                _stk = stacked_calibrate(float(_xgb_p), float(raw_prob),
+                                                         coverage=0.5, exp_pa=_exp_pa, bvp_pa=0,
+                                                         market_key=mk, mc_ci=_mc_ci)
+                            except Exception:
+                                _stk = None
+                        if _stk and _stk.get('probability') is not None:
+                            base_prob = float(_stk['probability'])
+                            model_source = 'stacked'
+                        else:
+                            base_prob = 0.5 * float(_xgb_p) + 0.5 * float(raw_prob)
+                            model_source = 'xgb_blend'
+                    raw_mult_prob = _clamp01(base_prob * _market_mult(mk, adjustments))
                     market = find_market(player_name, mk, line)
                     msum = _market_price_summary(market_props, player_name, mk, line)
                     market_implied = msum.get('market_implied')
@@ -15450,24 +15523,7 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                         'score': round(score, 4), 'hubRating': hub, 'evPct': ev_pct, 'opp': opp_name, 'reason': _projection_reason_short(p.get('name'), mk, adj_prob, edge, opp_name), 'status': 'pending', 'actual': None, 'grade': 'pending', 'openingPrice': msum.get('best_over_price'), 'openingImplied': market_implied, 'closingPrice': None, 'closingImplied': None, 'closingBookmaker': None, 'closingCapturedAt': None, 'clvEdge': None, 'profitUnits': None, 'profitDollars': None,
                         'parlayId': None, 'parlayLeg': None
                     }
-                    # ── MC fields (Step 4) ──────────────────────────────────────────────────
-                    # xgb_ready() speaks the scorer's short market names
-                    # (hits/tb/hr/rbi), not the book market keys (batter_*), so
-                    # translate before gating — otherwise the guard is always
-                    # False and the MC distribution fields stay null.
-                    _mc_batter = None
-                    _xgb_market, _full_fn = {
-                        'batter_hits':        ('hits', xgb_hit_prob_full),
-                        'batter_total_bases': ('tb',   xgb_tb_prob_full),
-                        'batter_home_runs':   ('hr',   xgb_hr_prob_full),
-                        'batter_rbis':        ('rbi',  xgb_rbi_prob_full),
-                    }.get(mk, (None, None))
-                    if _full_fn and xgb_ready(_xgb_market):
-                        try:
-                            _full = _full_fn(p, opp_pitcher) or {}
-                        except Exception:
-                            _full = {}
-                        _mc_batter = _full.get('mc') or {}
+                    # ── MC distribution + stacked fields (all precomputed above) ─────────────
                     temp_row['mc_prob_over']  = _mc_batter.get('mc_prob_over')  if _mc_batter else None
                     temp_row['mc_prob_under'] = _mc_batter.get('mc_prob_under') if _mc_batter else None
                     temp_row['mc_mean']       = _mc_batter.get('mc_mean')       if _mc_batter else None
@@ -15478,6 +15534,19 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                     temp_row['mc_std']        = _mc_batter.get('mc_std')        if _mc_batter else None
                     temp_row['mc_n_sims']     = _mc_batter.get('n_sims')        if _mc_batter else None
                     temp_row['mc_anchored']   = _mc_batter.get('anchored')      if _mc_batter else None
+                    # Stacked fusion: persist the per-model legs (so update_model_accuracies
+                    # can measure XGB-vs-analytic Brier and shift the consensus weight) and
+                    # the verdict tier (now market-aware → valid for all four markets).
+                    if _xgb_p is not None and _at_model_line:
+                        temp_row['modelSource'] = model_source
+                        temp_row['xgbProb']     = round(float(_xgb_p), 4)
+                        temp_row['batxProb']    = round(float(raw_prob), 4)
+                        if _stk:
+                            temp_row['stackedProb']       = _stk.get('probability')
+                            temp_row['stackCiLo']         = _stk.get('ci_lo')
+                            temp_row['stackCiHi']         = _stk.get('ci_hi')
+                            temp_row['stackVerdict']      = _stk.get('verdict')
+                            temp_row['stackVerdictLabel'] = _stk.get('verdict_label')
                     # ────────────────────────────────────────────────────────────────────────
                     # Phase 1: Add schema fields
                     temp_row['id'] = str(uuid4())
@@ -15802,6 +15871,14 @@ def _tracker_auto_sync_once():
                 api_tracker_grade(ds)
         except Exception:
             print(f'[tracker_auto_sync_once {ds}] {traceback.format_exc()}')
+
+    # Refresh the smart-consensus per-model Brier from freshly graded picks that
+    # carry both xgbProb and batxProb (hits/hr/tb/rbi). No-op until ≥40 such
+    # graded picks exist per market; otherwise the blend keeps the heuristic.
+    try:
+        _update_model_accuracies(tracker_path=TRACKER_STORE)
+    except Exception:
+        print(f'[tracker_auto_sync_once consensus] {traceback.format_exc()}')
 
 
 def _start_tracker_auto_sync_worker():
@@ -17365,6 +17442,7 @@ def _edge_finder_payload(date_str, min_edge=0.02, market=None, limit=150):
             'grade': _edge_letter_grade(edge_f),
             'bestPrice': p.get('bestOverPrice') or p.get('bestAvailablePrice') or p.get('marketPrice'),
             'bestBook': p.get('bestOverBook') or p.get('bestAvailableBook') or p.get('bookmaker'),
+            'bestUnderPrice': p.get('bestUnderPrice'),
             'bookmaker': p.get('bookmaker'),
             'reason': p.get('reason'),
         })
@@ -17415,6 +17493,111 @@ def api_edges_today():
         return jsonify(_edge_finder_payload(date_str, min_edge=min_edge, market=market, limit=limit))
     except Exception as ex:
         print(f'[api_edges_today] {traceback.format_exc()}')
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
+def _v1_edges_payload(date_str, min_ev=0.03, market=None, limit=150):
+    """Quant edges feed: the edge-finder board, but each play enriched with the
+    de-vig'd fair probability, true EV against the best available price, and a
+    Quarter-Kelly stake (% of bankroll, dollars, units). Filtered by EV (not raw
+    edge) so the list is exactly the +EV plays a bettor would act on — the pure
+    JSON backbone for a mobile/Telegram/Discord client."""
+    try:
+        min_ev = float(min_ev)
+    except (TypeError, ValueError):
+        min_ev = 0.03
+
+    # Pull the full edge board (min_edge=0 so the EV filter, not edge, decides).
+    base = _edge_finder_payload(date_str, min_edge=0.0, market=market, limit=10000)
+
+    adj = _get_adjustments()
+    bankroll = float(adj.get('bankroll', 1000.0) or 1000.0)
+    kelly_frac = float(adj.get('kelly_fraction', 0.25) or 0.25)
+    max_bet_pct = float(adj.get('max_bet_pct', 0.05) or 0.05)
+    unit_pct = float(adj.get('unit_size_pct', 0.01) or 0.01)
+
+    out = []
+    for e in base.get('edges', []) or []:
+        price = e.get('bestPrice')
+        model_prob = e.get('modelProb')
+        if price is None or model_prob is None:
+            continue
+
+        ev = e.get('evPct')
+        fairp = None
+        if _VALUE_ENGINE_AVAILABLE:
+            # Re-derive EV against the *best available* price for consistency,
+            # and de-vig the two-way market for a fair-line reference.
+            ev_calc = value_engine.expected_value(model_prob, price)
+            if ev_calc is not None:
+                ev = round(ev_calc, 4)
+            # De-vig the two-way market when the paired under price is available;
+            # otherwise fair_prob falls back to the raw vig-included implied.
+            fairp = value_engine.fair_prob(price, e.get('bestUnderPrice'),
+                                           method='multiplicative')
+            stake = value_engine.kelly_stake(
+                model_prob, price,
+                bankroll=bankroll, fraction=kelly_frac,
+                max_pct=max_bet_pct, unit_pct=unit_pct,
+            )
+        else:
+            stake = {'full_kelly_pct': None, 'stake_pct': None,
+                     'stake_dollars': None, 'stake_units': None, 'fraction': kelly_frac}
+
+        if ev is None or float(ev) < min_ev:
+            continue
+
+        row = dict(e)
+        row['evPct'] = ev
+        row['fairProb'] = round(fairp, 4) if fairp is not None else None
+        row['fullKellyPct'] = stake['full_kelly_pct']
+        row['kellyFraction'] = stake.get('fraction', kelly_frac)
+        row['stakePct'] = stake['stake_pct']
+        row['stakeDollars'] = stake['stake_dollars']
+        row['stakeUnits'] = stake['stake_units']
+        # conviction tier the roadmap asked for (gold = high conviction)
+        row['conviction'] = ('gold' if float(ev) >= 0.10
+                             else 'green' if float(ev) >= 0.05 else 'lean')
+        out.append(row)
+
+    out.sort(key=lambda x: (-(x.get('evPct') or 0), -(x.get('edge') or 0)))
+    out = out[:int(limit)]
+
+    return {
+        'success': True,
+        'date': date_str,
+        'minEv': min_ev,
+        'market': market,
+        'count': len(out),
+        'bankroll': bankroll,
+        'kellyFraction': kelly_frac,
+        'valueEngine': _VALUE_ENGINE_AVAILABLE,
+        'cached': base.get('cached', False),
+        'computing': base.get('computing', False),
+        'message': base.get('message'),
+        'generatedAt': datetime.now(timezone.utc).isoformat(),
+        'edges': out,
+    }
+
+
+@app.route('/api/v1/edges')
+def api_v1_edges():
+    """JSON edges feed (EV-thresholded + Quarter-Kelly stakes). Params: date,
+    minEv (default 0.03), market, limit (default 150)."""
+    date_str = request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
+    market = request.args.get('market')
+    try:
+        min_ev = float(request.args.get('minEv', 0.03))
+    except (TypeError, ValueError):
+        min_ev = 0.03
+    try:
+        limit = int(request.args.get('limit', 150))
+    except (TypeError, ValueError):
+        limit = 150
+    try:
+        return jsonify(_v1_edges_payload(date_str, min_ev=min_ev, market=market, limit=limit))
+    except Exception as ex:
+        print(f'[api_v1_edges] {traceback.format_exc()}')
         return jsonify({'success': False, 'error': str(ex)}), 500
 
 
@@ -18040,6 +18223,57 @@ def _market_brier_ece(rows, n_bins=10):
     }
 
 
+# ── Calibration drift guard (post stacked-prob switchover) ───────────────────
+# When adjProb for hits/hr/tb/rbi flipped from MC-driven to stacked-XGB-driven
+# (modelSource='stacked'), the prop_calibration isotonic — fit on the OLD
+# preCalProb distribution — is briefly applied to the new one. This guard
+# isolates the post-switchover cohort and flags any market whose realized
+# calibration has drifted, so a miscalibrated displayed prob can't quietly leak
+# into edges/EV until the calibrator re-fits.
+_DRIFT_MIN_N         = 25     # graded stacked picks needed before trusting the gap
+_DRIFT_GAP_THRESHOLD = 0.06   # |mean_pred − mean_actual| flagged as miscalibration
+_DRIFT_ECE_THRESHOLD = 0.10   # bucketed calibration error flagged as drift
+_DRIFT_BRIER_REGRESS = 0.02   # stacked Brier worse than the legacy cohort by this
+
+
+def _market_calibration_drift(rows):
+    """Compare the post-switchover (modelSource='stacked') cohort's realized
+    calibration against the legacy cohort for one market's graded picks.
+    Returns the per-cohort calibration plus a `drifted` flag + human reason."""
+    stacked = [r for r in rows if r.get('modelSource') == 'stacked']
+    legacy  = [r for r in rows if r.get('modelSource') != 'stacked']
+    s_cal = _market_brier_ece(stacked)
+    l_cal = _market_brier_ece(legacy)
+
+    drifted, reasons = False, []
+    gap = None
+    if s_cal['n'] >= _DRIFT_MIN_N and s_cal['mean_pred'] is not None:
+        gap = round(s_cal['mean_pred'] - s_cal['mean_actual'], 4)
+        if abs(gap) >= _DRIFT_GAP_THRESHOLD:
+            drifted = True
+            reasons.append(
+                f"predicted {s_cal['mean_pred']:.3f} vs actual {s_cal['mean_actual']:.3f} "
+                f"({'over' if gap > 0 else 'under'}-confident by {abs(gap):.3f})")
+        if s_cal['ece'] is not None and s_cal['ece'] >= _DRIFT_ECE_THRESHOLD:
+            drifted = True
+            reasons.append(f"ECE {s_cal['ece']:.3f} ≥ {_DRIFT_ECE_THRESHOLD}")
+        if (l_cal['n'] >= _DRIFT_MIN_N and l_cal['brier'] is not None
+                and s_cal['brier'] is not None
+                and s_cal['brier'] - l_cal['brier'] >= _DRIFT_BRIER_REGRESS):
+            drifted = True
+            reasons.append(
+                f"stacked Brier {s_cal['brier']:.3f} worse than legacy {l_cal['brier']:.3f}")
+
+    return {
+        'stacked': s_cal,
+        'legacy': l_cal,
+        'gap': gap,
+        'direction': (None if gap is None else ('overconfident' if gap > 0 else 'underconfident')),
+        'drifted': bool(drifted),
+        'reason': '; '.join(reasons) if reasons else None,
+    }
+
+
 _MODEL_METRICS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                    'models', 'model_metrics.json')
 
@@ -18095,6 +18329,9 @@ def api_calibration_markets():
                 status = 'degraded'          # has edge but worse than held-out
         else:
             status = 'tracking'
+        drift = _market_calibration_drift(by_market.get(mk, []))
+        if drift['drifted']:
+            status = 'drift'             # switchover hurt this market's calibration
         out.append({
             'marketKey': mk,
             'live': live,
@@ -18103,11 +18340,22 @@ def api_calibration_markets():
                                 and _XGB_AVAILABLE
                                 and xgb_ready('hits' if mk == 'batter_hits' else 'k')),
             'status': status,
+            'drift': drift,
         })
 
     # The live correction actually applied to displayed probabilities.
     cal = _get_prop_calibrator()
     calibration_applied = cal.summary() if cal is not None else {}
+
+    # Drift guard summary: markets whose post-switchover (stacked) cohort is
+    # miscalibrated. Empty list = no drift detected (or not enough graded
+    # stacked picks yet to judge).
+    drift_alerts = [
+        {'marketKey': m['marketKey'], 'gap': m['drift']['gap'],
+         'direction': m['drift']['direction'], 'reason': m['drift']['reason'],
+         'n_stacked': m['drift']['stacked']['n']}
+        for m in out if m['drift']['drifted']
+    ]
 
     return jsonify({
         'success': True,
@@ -18117,12 +18365,21 @@ def api_calibration_markets():
         'markets': out,
         'calibration_applied': calibration_applied,
         'edge_display_cap': EDGE_DISPLAY_CAP,
+        'drift_alerts': drift_alerts,
+        'drift_guard': {
+            'min_n': _DRIFT_MIN_N,
+            'gap_threshold': _DRIFT_GAP_THRESHOLD,
+            'ece_threshold': _DRIFT_ECE_THRESHOLD,
+            'brier_regression': _DRIFT_BRIER_REGRESS,
+        },
         'legend': {
             'warming_up': f'fewer than {MIN_N} graded picks — Brier too noisy to act on',
             'on_track': 'live Brier matches the held-out test benchmark',
             'degraded': 'has edge over base rate but worse than held-out — watch for drift',
             'no_edge': 'live Brier no better than the base rate — model not adding value',
             'tracking': 'accumulating data; no model benchmark for this market',
+            'drift': 'post-switchover (stacked) cohort miscalibrated vs realized outcomes — '
+                     'see the per-market drift block; resolves as prop_calibration re-fits',
         },
         'note': 'Held-out benchmarks are out-of-sample (train 2021-24, test 2025). '
                 'Live Brier from graded tracker picks; lower is better.',
@@ -25091,6 +25348,105 @@ _batter_statcast_lock = threading.Lock()
 # arsenal-prior pulls drop. Keyed by (batter_id, today, vs_pitcher_id).
 _batter_recent_statcast_cache: dict = {}
 _batter_recent_statcast_lock = threading.Lock()
+
+# Heater-momentum features (Gap 1), daily-cached per batter.
+_batter_momentum_cache: dict = {}
+_batter_momentum_lock = threading.Lock()
+
+
+def _batter_momentum_features(batter_id):
+    """Serve-time "heater" momentum for the XGB hits model — recent exit velo,
+    hard-hit rate, and whiff rate vs the batter's own 30-game baseline.
+
+    Computed from pybaseball.statcast_batter (all pitches) and aggregated the
+    SAME way regenerate_models._agg_chunk / build_batter_matrix do, so there is
+    no train/serve skew: per-game g_ev = mean(launch_speed) on batted balls,
+    g_hh = share ≥95mph, g_whiff = swinging-strikes / swings; then the most
+    recent completed games form l7/l30 means (at serve the upcoming game isn't
+    played, so the recent games ARE the prior games — no shift, matching the
+    shifted training rolls). Returns {} on any failure → scorer keeps neutral
+    defaults (l7Ev 88, l7HH .35, l7Whiff .11, momentum 1.0).
+    """
+    try:
+        bid = int(batter_id)
+    except Exception:
+        return {}
+    today = datetime.now().strftime("%Y-%m-%d")
+    with _batter_momentum_lock:
+        cached = _batter_momentum_cache.get((bid, today))
+        if cached is not None:
+            return cached
+
+    out = {}
+    try:
+        import pybaseball as pb
+        cur = datetime.now().year
+        # Two seasons covers the spring carry-over for early-season form.
+        df = pb.statcast_batter(start_dt=f"{cur-1}-03-01", end_dt=today, player_id=bid)
+        if df is not None and not df.empty and "game_date" in df.columns:
+            d = df.copy()
+            desc = d.get("description")
+            if desc is not None:
+                desc = desc.astype(str)
+                d["_is_swstr"] = desc.isin(["swinging_strike", "swinging_strike_blocked", "foul_tip"])
+                d["_is_swing"] = desc.isin(["swinging_strike", "swinging_strike_blocked",
+                                            "foul_tip", "foul", "hit_into_play"])
+            else:
+                d["_is_swstr"] = False
+                d["_is_swing"] = False
+            ls = pd.to_numeric(d.get("launch_speed"), errors="coerce")
+            d["_ls"] = ls
+            d["_hh"] = (ls >= 95.0).astype(float)
+            lsa = pd.to_numeric(d.get("launch_speed_angle"), errors="coerce")
+            # barrel = Statcast launch_speed_angle == 6, as a share of batted balls
+            d["_brl"] = ((lsa == 6) & ls.notna()).astype(float)
+            g = d.groupby("game_date")
+            per_game = pd.DataFrame({
+                "g_ev": g["_ls"].mean(),
+                "g_hh": g.apply(lambda x: float(x["_hh"][x["_ls"].notna()].mean())
+                                if x["_ls"].notna().any() else float("nan")),
+                "g_barrel": g.apply(lambda x: float(x["_brl"][x["_ls"].notna()].mean())
+                                    if x["_ls"].notna().any() else float("nan")),
+                "_sw": g["_is_swing"].sum(),
+                "_ws": g["_is_swstr"].sum(),
+            })
+            per_game["g_whiff"] = per_game["_ws"] / per_game["_sw"].clip(lower=1)
+            per_game = per_game.sort_index()  # oldest → newest by date
+
+            def _recent_mean(col, n):
+                vals = per_game[col].dropna()
+                if vals.empty:
+                    return None
+                return float(vals.iloc[-n:].mean())
+
+            l7_ev = _recent_mean("g_ev", 7)
+            l30_ev = _recent_mean("g_ev", 30)
+            l7_hh = _recent_mean("g_hh", 7)
+            l7_whiff = _recent_mean("g_whiff", 7)
+            l30_whiff = _recent_mean("g_whiff", 30)
+            l7_barrel = _recent_mean("g_barrel", 7)
+            l30_barrel = _recent_mean("g_barrel", 30)
+            if l7_ev is not None:
+                out["l7Ev"] = round(l7_ev, 2)
+            if l7_hh is not None:
+                out["l7HH"] = round(l7_hh, 4)
+            if l7_whiff is not None:
+                out["l7Whiff"] = round(l7_whiff, 4)
+            if l7_barrel is not None:
+                out["l7Barrel"] = round(l7_barrel, 4)
+            if l7_ev and l30_ev:
+                out["evMomentum"] = round(min(1.15, max(0.85, l7_ev / l30_ev)), 4)
+            if l7_whiff is not None and l30_whiff:
+                out["whiffMomentum"] = round(min(2.0, max(0.5, l7_whiff / l30_whiff)), 4)
+            if l7_barrel is not None and l30_barrel:
+                out["barrelMomentum"] = round(min(2.5, max(0.4, l7_barrel / l30_barrel)), 4)
+    except Exception as ex:
+        logging.warning(f"[BatterMomentum] bid={batter_id}: {ex}")
+        out = {}
+
+    with _batter_momentum_lock:
+        _batter_momentum_cache[(bid, today)] = out
+    return out
 
 
 def _recent_statcast_for_batter(batter_id, pitcher_id=None, n=10, seasons=2):
