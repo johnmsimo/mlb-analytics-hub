@@ -7845,10 +7845,16 @@ def api_bvp_projection(batter_id, pitcher_id):
         # Used to surface model agreement and improve calibration once trained.
         _xgb_extras = {}
         try:
-            # Heater momentum (recent EV/barrel) for the HR model — only pulled
-            # when the HR model is live, since it costs a Statcast lookup.
-            _mom = _batter_momentum_features(batter_id) if (batter_id and xgb_ready("hr")) else {}
-            _bdict = {**bstats, **fg_bat, **sv_bat, "name": batter_name, "bats": bats_code, **_mom}
+            # Heater momentum (recent EV/barrel) for the power batter models —
+            # only pulled when at least one is live, since it costs a Statcast
+            # lookup. Shared by the HR/TB/RBI scorers via _bdict.
+            _mom = (_batter_momentum_features(batter_id)
+                    if (batter_id and (xgb_ready("hr") or xgb_ready("tb") or xgb_ready("rbi")))
+                    else {})
+            _bform = batter_form or {}
+            _bdict = {**bstats, **fg_bat, **sv_bat, "name": batter_name, "bats": bats_code,
+                      "l7Hits": _bform.get("l7Hits"), "l14Hits": _bform.get("l14Hits"),
+                      "l7HitRate": _bform.get("l7HitRate"), **_mom}
             _pdict = {**pstats, **fg_pit, **sv_pit, "name": pitcher_name, "pitchHand": pitcher_hand}
             if xgb_ready("hr"):
                 _xgb_extras["xgbHrProb"]  = xgb_hr_prob(_bdict, _pdict)

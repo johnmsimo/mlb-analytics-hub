@@ -116,6 +116,29 @@ HR_FEATURES = [
     "l7_ev", "l7_barrel", "ev_momentum", "barrel_momentum",
 ]
 
+# Total bases (≥2 TB in a game). Broader than HR — rewards extra-base power AND
+# volume of contact, so it carries the hit/contact skills alongside the power and
+# loft ones, plus lineup PA volume and EV/barrel momentum.
+TB_FEATURES = [
+    "sv_xba", "sv_xwoba", "sv_xslg", "sv_iso", "sv_ev", "sv_brl_pct",
+    "sv_hh_pct", "sv_la", "sv_k_pct", "sv_bb_pct",
+    "opp_xera", "opp_k_pct", "opp_bb_pct", "opp_hr9", "opp_barrel",
+    "bats_L", "throws_R", "platoon_adv",
+    "batting_order", "expected_pa",
+    "l7_hits", "l7_ev", "l7_barrel", "ev_momentum", "barrel_momentum",
+]
+
+# RBI (≥1 RBI in a game). Heavily lineup-context driven (cleanup spots get the
+# most chances), so batting_order / expected_pa matter most, alongside power.
+RBI_FEATURES = [
+    "sv_xslg", "sv_iso", "sv_xwoba", "sv_ev", "sv_brl_pct", "sv_hh_pct",
+    "sv_la", "sv_hrfb", "sv_k_pct",
+    "opp_xera", "opp_k_pct", "opp_hr9", "opp_barrel",
+    "bats_L", "throws_R", "platoon_adv",
+    "batting_order", "expected_pa",
+    "l7_ev", "l7_barrel", "ev_momentum", "barrel_momentum",
+]
+
 XGB_PARAMS_HITS = dict(n_estimators=300, max_depth=4, learning_rate=0.04,
                        subsample=0.80, colsample_bytree=0.80,
                        min_child_weight=3, gamma=0.05)
@@ -127,6 +150,13 @@ XGB_PARAMS_K = dict(n_estimators=350, max_depth=4, learning_rate=0.035,
 XGB_PARAMS_HR = dict(n_estimators=320, max_depth=4, learning_rate=0.03,
                      subsample=0.80, colsample_bytree=0.75,
                      min_child_weight=5, gamma=0.10)
+# TB pos_rate ~0.30, RBI ~0.28 — less rare than HR, so a touch more depth/rounds.
+XGB_PARAMS_TB = dict(n_estimators=340, max_depth=4, learning_rate=0.035,
+                     subsample=0.80, colsample_bytree=0.80,
+                     min_child_weight=4, gamma=0.06)
+XGB_PARAMS_RBI = dict(n_estimators=340, max_depth=4, learning_rate=0.035,
+                      subsample=0.80, colsample_bytree=0.78,
+                      min_child_weight=4, gamma=0.08)
 
 MARKETS = {
     "hits":  dict(file_key="xgb_hits_over_0.5", features=HITS_FEATURES,
@@ -144,6 +174,12 @@ MARKETS = {
     "hr":    dict(file_key="xgb_hr_over_0.5", features=HR_FEATURES,
                   target="hr_over_0.5", source="batter", line=0.5,
                   params=XGB_PARAMS_HR),
+    "tb":    dict(file_key="xgb_tb_over_1.5", features=TB_FEATURES,
+                  target="tb_over_1.5", source="batter", line=1.5,
+                  params=XGB_PARAMS_TB),
+    "rbi":   dict(file_key="xgb_rbi_over_0.5", features=RBI_FEATURES,
+                  target="rbi_over_0.5", source="batter", line=0.5,
+                  params=XGB_PARAMS_RBI),
 }
 
 
@@ -182,11 +218,22 @@ def _agg_chunk(sc: pd.DataFrame, season: int) -> tuple[pd.DataFrame, pd.DataFram
         "grounded_into_double_play", "double_play", "force_out",
         "fielders_choice", "fielders_choice_out", "strikeout_double_play",
     ]).astype(int)
-    sc["tb"] = sc["is_hit"] + sc["is_hr"] + sc["is_double"] + sc["is_triple"]
+    # Total bases: single 1, double 2, triple 3, HR 4.
+    sc["tb"] = sc["is_hit"] + sc["is_double"] + 2 * sc["is_triple"] + 3 * sc["is_hr"]
 
     pa = sc[sc["is_pa"] == 1].copy()
     if len(pa) == 0:
         return pd.DataFrame(), pd.DataFrame()
+
+    # RBI proxy: runs scored by the batting team during the plate appearance
+    # (post_bat_score − bat_score on the PA-ending pitch). This matches official
+    # RBI for the overwhelming majority of PAs; it can marginally overcount runs
+    # that score on errors/wild pitches mid-AB — acceptable noise for "≥1 RBI".
+    if "post_bat_score" in pa.columns and "bat_score" in pa.columns:
+        pa["rbi"] = (pd.to_numeric(pa["post_bat_score"], errors="coerce")
+                     - pd.to_numeric(pa["bat_score"], errors="coerce")).clip(lower=0).fillna(0)
+    else:
+        pa["rbi"] = 0.0
 
     # ── Starter per (game, side): pitcher with the smallest at_bat_number.
     #    A batter in inning_topbot=='Top' faces the home pitcher (Top-side
@@ -197,7 +244,7 @@ def _agg_chunk(sc: pd.DataFrame, season: int) -> tuple[pd.DataFrame, pd.DataFram
 
     bat = (pa.groupby(["game_pk", "game_date", "batter"])
              .agg(hits=("is_hit", "sum"), ab=("is_ab", "sum"), pa=("is_pa", "sum"),
-                  tb=("tb", "sum"), hr=("is_hr", "sum"),
+                  tb=("tb", "sum"), hr=("is_hr", "sum"), rbi=("rbi", "sum"),
                   inning_topbot=("inning_topbot", "first"),
                   stand=("stand", "first") if "stand" in pa.columns else ("is_pa", "size"),
                   p_throws=("p_throws", "first") if "p_throws" in pa.columns else ("is_pa", "size"))
@@ -246,6 +293,8 @@ def _agg_chunk(sc: pd.DataFrame, season: int) -> tuple[pd.DataFrame, pd.DataFram
 
     bat["hit_over_0.5"] = (bat["hits"] >= 1).astype(int)
     bat["hr_over_0.5"] = (bat["hr"] >= 1).astype(int)
+    bat["tb_over_1.5"] = (bat["tb"] >= 2).astype(int)
+    bat["rbi_over_0.5"] = (bat["rbi"] >= 1).astype(int)
     bat["season"] = season
 
     pit = (pa.groupby(["game_pk", "game_date", "pitcher"])
