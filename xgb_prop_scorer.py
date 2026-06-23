@@ -151,6 +151,50 @@ except ImportError:
     def _get_lineup_features(**kw) -> dict:
         return {"expected_pa": 4.20, "batting_order": 0, "lineup_confirmed": 0}
 
+# Mirror of lineup_loader._PA_BY_SLOT / regenerate_models._PA_BY_SLOT so an
+# explicitly-supplied batting-order slot maps to the SAME expected_pa the models
+# trained on (no train/serve skew).
+_PA_BY_SLOT = {1: 4.60, 2: 4.52, 3: 4.44, 4: 4.36, 5: 4.28,
+               6: 4.18, 7: 4.08, 8: 3.96, 9: 3.84}
+_DEFAULT_PA = 4.20
+
+
+def _resolve_lineup_role(d: dict, mlbam_id, player_name: str) -> dict:
+    """Lineup role (batting_order / expected_pa / lineup_confirmed) for the hits
+    and power models.
+
+    Prefers an explicit lineup slot supplied by the live caller — the
+    tracker-capture and projection paths already know each hitter's slot, so this
+    avoids depending on the lineups_{date}.json cache resolving. When that cache
+    is stale or a batter isn't matched, get_lineup_features() collapses EVERY
+    batter to its league-default (batting_order 0 / expected_pa 4.20), which is
+    exactly the serve gap /api/diag/serve-parity flags. Falls back to the lineup
+    loader only when no explicit slot is passed."""
+    bo_explicit = d.get("batting_order")
+    if bo_explicit is None:
+        bo_explicit = d.get("slot")
+    if bo_explicit is not None:
+        try:
+            bo = int(bo_explicit)
+        except (TypeError, ValueError):
+            bo = 0
+        epa = d.get("expected_pa")
+        try:
+            epa = float(epa) if epa is not None else _PA_BY_SLOT.get(bo, _DEFAULT_PA)
+        except (TypeError, ValueError):
+            epa = _PA_BY_SLOT.get(bo, _DEFAULT_PA)
+        lc = d.get("lineup_confirmed")
+        if lc is None:
+            # A known 1-9 slot means we have this batter's lineup position —
+            # treat as confirmed (matches training, where order was always known).
+            lc = 1 if 1 <= bo <= 9 else 0
+        return {"expected_pa": float(epa), "batting_order": float(bo),
+                "lineup_confirmed": float(lc)}
+    lf = _get_lineup_features(mlbam_id=mlbam_id, player_name=player_name)
+    return {"expected_pa": float(lf.get("expected_pa", _DEFAULT_PA)),
+            "batting_order": float(lf.get("batting_order", 0) or 0),
+            "lineup_confirmed": float(lf.get("lineup_confirmed", 0) or 0)}
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _MODEL_DIR = os.path.join(_HERE, "models")
 _FEAT_FILE = os.path.join(_MODEL_DIR, "xgb_feature_cols.json")
@@ -533,7 +577,7 @@ def _build_hit_features(batter: dict, pitcher: dict, feat_order: list) -> Option
     platoon  = 1 if (bat_side == "L" and pit_hand == "R") or (bat_side == "R" and pit_hand == "L") else 0
     mlbam_id    = batter.get("mlbamid") or batter.get("xMLBAMID")
     player_name = batter.get("name") or batter.get("Name") or batter.get("PlayerName")
-    lineup_feats     = _get_lineup_features(mlbam_id=mlbam_id, player_name=player_name)
+    lineup_feats     = _resolve_lineup_role(batter, mlbam_id, player_name)
     expected_pa      = lineup_feats["expected_pa"]
     batting_order    = lineup_feats["batting_order"]
     lineup_confirmed = lineup_feats["lineup_confirmed"]
@@ -646,7 +690,7 @@ def _build_batter_market_features(batter: dict, pitcher: dict, feat_order: list)
     platoon  = 1 if (bat_side == "L" and pit_hand == "R") or (bat_side == "R" and pit_hand == "L") else 0
     mlbam_id    = batter.get("mlbamid") or batter.get("xMLBAMID")
     player_name = batter.get("name") or batter.get("Name") or batter.get("PlayerName")
-    lineup_feats  = _get_lineup_features(mlbam_id=mlbam_id, player_name=player_name)
+    lineup_feats  = _resolve_lineup_role(batter, mlbam_id, player_name)
     expected_pa   = lineup_feats["expected_pa"]
     batting_order = lineup_feats["batting_order"]
     raw = {

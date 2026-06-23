@@ -8970,6 +8970,50 @@ def _fetch_rolling_form(player_id, is_pitcher):
     return result
 
 
+_hit_form_cache = {}
+_hit_form_lock = threading.Lock()
+
+
+def _batter_recent_hit_form(batter_id):
+    """Flat L7/L14 hit-form features in the EXACT scale the hits XGB model
+    trained on (regenerate_models.build_batter_matrix):
+
+      l7Hits / l14Hits — mean hits PER GAME over the last 7 / 14 completed games
+      l7HitRate        — mean of per-game (hits / max(AB,1)) over the last 7
+
+    The model's _build_hit_features reads these flat keys, but the only producer
+    of rolling form (_fetch_rolling_form) returns *nested* l7/l14 dicts, so every
+    call site was silently feeding the empty-input defaults — the train/serve gap
+    that flattened the hits model to `no_edge` in production. Sourced from the
+    same MLB game-log feed used for training; daily-cached per batter. Returns {}
+    when no game log exists so the builder keeps its neutral default (no
+    fabricated signal)."""
+    if not batter_id:
+        return {}
+    today = datetime.now().date()
+    with _hit_form_lock:
+        c = _hit_form_cache.get(batter_id)
+        if c and c[0] == today:
+            return c[1]
+    out = {}
+    try:
+        # newest-last; 14 games covers both windows. No shift at serve — the most
+        # recent completed games ARE the prior-game window training shifted to.
+        splits = _fetch_game_log_raw(batter_id, "hitting", 14)
+        games = [(int((sp.get("stat", {})).get("hits", 0) or 0),
+                  int((sp.get("stat", {})).get("atBats", 0) or 0)) for sp in splits]
+        if games:
+            last7, last14 = games[-7:], games[-14:]
+            out["l7Hits"]    = round(sum(h for h, _ in last7) / len(last7), 4)
+            out["l14Hits"]   = round(sum(h for h, _ in last14) / len(last14), 4)
+            out["l7HitRate"] = round(sum(h / max(ab, 1) for h, ab in last7) / len(last7), 4)
+    except Exception:
+        out = {}
+    with _hit_form_lock:
+        _hit_form_cache[batter_id] = (today, out)
+    return out
+
+
 def _compute_bvp_confidence(bvp_data, batter_obj, pitcher_hand, mix_score, mix_rows):
     """0-100 confidence score for the BvP projection.
 
@@ -15461,8 +15505,17 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                     _full = {}
                     _xgb_market, _full_fn, _model_line = _xgb_batter_market_map().get(mk, (None, None, None))
                     if _full_fn and xgb_ready(_xgb_market):
+                        # Serve-parity: feed the hits model its recent-form features
+                        # (l7/l14 hits) — `p` already carries `slot`+`id`, so the
+                        # scorer resolves lineup role from the explicit slot. Power
+                        # markets (hr/tb/rbi) pull their own momentum elsewhere.
+                        _xgb_bp = p
+                        if _xgb_market == 'hits' and p.get('id'):
+                            _rf = _batter_recent_hit_form(p.get('id'))
+                            if _rf:
+                                _xgb_bp = {**p, **_rf}
                         try:
-                            _full = _full_fn(p, opp_pitcher) or {}
+                            _full = _full_fn(_xgb_bp, opp_pitcher) or {}
                         except Exception:
                             _full = {}
                         _mc_batter = _full.get('mc') or {}
@@ -22334,8 +22387,15 @@ def api_props_projections(game_pk):
                 slot = int(b.get("slot") or 9)
                 xgb_hit_p = None
                 if _XGB_AVAILABLE and xgb_ready('hits'):
+                    # Serve-parity: supply lineup slot + recent form so the hits
+                    # model isn't run on a name-only dict (which defaults 6 of its
+                    # features). FG enrichment inside the scorer fills the rest.
+                    _xgb_bd = {"name": name, "slot": slot}
+                    if bid:
+                        _xgb_bd["id"] = bid
+                        _xgb_bd.update(_batter_recent_hit_form(bid))
                     xgb_hit_p = xgb_hit_prob(
-                        {"name": name},
+                        _xgb_bd,
                         {"name": opp_pname, "pitchHand": opp_hand},
                     )
                 wx_adj = _safe_f((proj.get("adjustments") or {}).get("weather"), 0.0)
@@ -27025,14 +27085,15 @@ def api_matchup_vertex():
                 _sv_b  = sv_batter(_batter_name)  or {}
                 _fg_p  = fg_pitcher(_pitcher_name) or {}
                 _sv_p  = sv_pitcher(_pitcher_name) or {}
-                _form  = _fetch_rolling_form(batter_id, False) or {}
+                # Recent form in the model's trained scale. _fetch_rolling_form
+                # returns nested l7/l14 dicts (no flat l7Hits keys), so the old
+                # `_form.get("l7Hits")` always resolved to None → defaulted.
+                _rf = _batter_recent_hit_form(batter_id)
                 _xgb_bdict = {
                     **_fg_b, **_sv_b,
                     "name":      _batter_name,
                     "bats":      bq_stats.get("bats") or _fg_b.get("fg_bats") or "R",
-                    "l7Hits":    _form.get("l7Hits"),
-                    "l14Hits":   _form.get("l14Hits"),
-                    "l7HitRate": _form.get("l7HitRate"),
+                    **_rf,
                 }
                 _xgb_pdict = {
                     **_fg_p, **_sv_p,
