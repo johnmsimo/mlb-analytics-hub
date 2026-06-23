@@ -25,3 +25,6 @@ data/*.tmp
 data/lineups_*.json
 data/umpires_*.json
 data/mlb_matchups_*.csv
+# Smart-Consensus per-model Brier — derived from the graded tracker at runtime;
+# production learns its own, so a dev-generated copy must not be committed.
+data/model_accuracies.json

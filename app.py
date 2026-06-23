@@ -70,11 +70,15 @@ if _XGB_AVAILABLE:
 # Graceful fallback to deterministic logistic blend when no trained isotonic
 # is on disk (typical until enough graded picks accumulate).
 try:
-    from stacked_calibrator import calibrate as stacked_calibrate
+    from stacked_calibrator import (
+        calibrate as stacked_calibrate,
+        update_model_accuracies as _update_model_accuracies,
+    )
     _STACK_AVAILABLE = True
 except ImportError:
     _STACK_AVAILABLE = False
     def stacked_calibrate(*a, **k): return None
+    def _update_model_accuracies(*a, **k): return {}
 
 # Per-market probability recalibration fit from our own graded history.
 # Optional: a missing module leaves model probabilities untouched (identity).
@@ -13832,6 +13836,17 @@ _BATTER_FALLBACK_LINE = {
 }
 _K_PROB_FIELD_FOR = {3.5: 'p_4plus_k', 4.5: 'p_5plus_k', 5.5: 'p_6plus_k'}
 
+# Book market → (scorer short name, full-output fn, the exact line the committed
+# XGB model is trained on). The XGB point probability is only valid AT that line,
+# so the stacked fusion only fires when the row's line matches.
+def _xgb_batter_market_map():
+    return {
+        'batter_hits':        ('hits', xgb_hit_prob_full, 0.5),
+        'batter_total_bases': ('tb',   xgb_tb_prob_full,  1.5),
+        'batter_home_runs':   ('hr',   xgb_hr_prob_full,  0.5),
+        'batter_rbis':        ('rbi',  xgb_rbi_prob_full, 0.5),
+    }
+
 
 def _parse_prop_markets(bookmakers, valid_names):
     grouped = {}
@@ -15474,12 +15489,8 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                     # translate before gating — otherwise the guard is always
                     # False and the MC distribution fields stay null.
                     _mc_batter = None
-                    _xgb_market, _full_fn = {
-                        'batter_hits':        ('hits', xgb_hit_prob_full),
-                        'batter_total_bases': ('tb',   xgb_tb_prob_full),
-                        'batter_home_runs':   ('hr',   xgb_hr_prob_full),
-                        'batter_rbis':        ('rbi',  xgb_rbi_prob_full),
-                    }.get(mk, (None, None))
+                    _full = {}
+                    _xgb_market, _full_fn, _model_line = _xgb_batter_market_map().get(mk, (None, None, None))
                     if _full_fn and xgb_ready(_xgb_market):
                         try:
                             _full = _full_fn(p, opp_pitcher) or {}
@@ -15496,6 +15507,43 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                     temp_row['mc_std']        = _mc_batter.get('mc_std')        if _mc_batter else None
                     temp_row['mc_n_sims']     = _mc_batter.get('n_sims')        if _mc_batter else None
                     temp_row['mc_anchored']   = _mc_batter.get('anchored')      if _mc_batter else None
+                    # ── Stacked calibrator fusion (hits/hr/tb/rbi) ───────────────────────────
+                    # Fuse the XGB point probability with the analytic/MC prob (raw_prob)
+                    # into one calibrated prob + verdict tier, but only AT the line the XGB
+                    # model is trained on (its prob is invalid at other lines). Persists
+                    # xgbProb/batxProb so stacked_calibrator.update_model_accuracies can
+                    # measure per-model Brier and shift the smart-consensus weight once
+                    # these picks grade. Does not alter adjProb/edge (the tuned MC + market
+                    # + prop_calibration pipeline) — it records the verdict alongside.
+                    _xgb_p = _full.get('prob') if _full else None
+                    if _xgb_p is not None and _model_line is not None and float(line) == _model_line:
+                        temp_row['xgbProb']  = round(float(_xgb_p), 4)
+                        temp_row['batxProb'] = round(float(raw_prob), 4)
+                        if _STACK_AVAILABLE:
+                            try:
+                                _slot = int(p.get('slot') or 5)
+                                _exp_pa = _LINEUP_PA_WEIGHTS[_slot - 1] if 1 <= _slot <= 9 else 4.2
+                            except Exception:
+                                _exp_pa = 4.2
+                            _mc_ci = ((_full.get('p_lo'), _full.get('p_hi'))
+                                      if _full.get('p_lo') is not None and _full.get('p_hi') is not None else None)
+                            try:
+                                _stk = stacked_calibrate(float(_xgb_p), float(raw_prob),
+                                                         coverage=0.5, exp_pa=_exp_pa, bvp_pa=0,
+                                                         market_key=mk, mc_ci=_mc_ci)
+                            except Exception:
+                                _stk = None
+                            if _stk:
+                                temp_row['stackedProb'] = _stk.get('probability')
+                                temp_row['stackCiLo']   = _stk.get('ci_lo')
+                                temp_row['stackCiHi']   = _stk.get('ci_hi')
+                                # The verdict TIER thresholds (STRONG_BET/FADE) are
+                                # calibrated to the hits base rate (~0.66); they'd
+                                # mislabel TB/HR/RBI (base ~0.33/0.11/0.29). Keep the
+                                # tier only for hits; the prob + CI are valid for all.
+                                if mk == 'batter_hits':
+                                    temp_row['stackVerdict']      = _stk.get('verdict')
+                                    temp_row['stackVerdictLabel'] = _stk.get('verdict_label')
                     # ────────────────────────────────────────────────────────────────────────
                     # Phase 1: Add schema fields
                     temp_row['id'] = str(uuid4())
@@ -15820,6 +15868,14 @@ def _tracker_auto_sync_once():
                 api_tracker_grade(ds)
         except Exception:
             print(f'[tracker_auto_sync_once {ds}] {traceback.format_exc()}')
+
+    # Refresh the smart-consensus per-model Brier from freshly graded picks that
+    # carry both xgbProb and batxProb (hits/hr/tb/rbi). No-op until ≥40 such
+    # graded picks exist per market; otherwise the blend keeps the heuristic.
+    try:
+        _update_model_accuracies(tracker_path=TRACKER_STORE)
+    except Exception:
+        print(f'[tracker_auto_sync_once consensus] {traceback.format_exc()}')
 
 
 def _start_tracker_auto_sync_worker():
