@@ -60,7 +60,8 @@ app.py                          ~22.7k LOC Flask app — routes, caches, project
 ├── pipeline_routes.py          /api/pipeline/* Blueprint (status/games/matchup/run)
 ├── brain_merge_patch.py        "Brain" overlay system — merges user-uploaded CSVs into FG/Savant caches
 ├── xgb_prop_scorer.py          Loads models/*.pkl; exposes xgb_hit_prob / xgb_k_prob / xgb_hr_prob / xgb_tb_prob / xgb_rbi_prob
-├── stacked_calibrator.py       Meta-learner that blends XGB + BATX into one probability + 95% CI + verdict tier
+├── stacked_calibrator.py       Meta-learner that blends XGB + BATX into one probability + 95% CI + verdict tier. Smart-Consensus: shifts the XGB/BATX blend by *measured* per-model Brier (`data/model_accuracies.json`, written by `update_model_accuracies`) only once ≥40 graded picks carry both per-model probs — otherwise falls back to the coverage heuristic (no fabricated skill)
+├── value_engine.py             Single source of truth for betting math — american↔decimal↔implied, two-way de-vig (multiplicative + Buchdahl power), EV, fractional/Quarter-Kelly staking. Pure-Python, self-tested (`python value_engine.py`). Backs `/api/v1/edges`
 ├── prop_calibration.py         Per-market probability recalibration fit from graded tracker history (isotonic / log-odds recentre) — corrects displayed adjProb/edge before EV/hub
 ├── xgb_prop_pipeline.py        Full XGB training pipeline (Statcast+FG features → calibrated isotonic)
 ├── xgb_training_pipeline.py    Legacy training script (uses pickle; do NOT use for production)
@@ -129,6 +130,8 @@ Each HTML file is loaded into a module-level string at boot via `_read_html_or_f
 - `/api/game-projection/<game_pk>` — Gemini-narrative + deterministic projection
 - `/api/props/projections/<game_pk>` — per-batter prop projections with hub ratings
 - `/api/props/scan/today` — cross-game MC grades for all props
+- `/api/edges/today` — slate-wide edge-ranked board (positive-value plays + letter grades), reuses the cached props-scan
+- `/api/v1/edges` — quant JSON feed: the edge board filtered by **EV** (default `minEv=0.03`), each play enriched via `value_engine` with de-vig'd `fairProb`, true EV vs best price, and a Quarter-Kelly `stakePct`/`stakeUnits`/`stakeDollars` (sized from tracker bankroll/kelly_fraction/max_bet_pct). Backbone for a mobile/Telegram/Discord client. Degrades gracefully (no odds → empty list, still 200)
 - `/api/props/line-shopping/<game_pk>`, `/api/props/matchup-scores/<game_pk>`, `/api/props/trends/<game_pk>`, `/api/props/quick/<game_pk>`
 - `/api/projections/monte-carlo` — full MC slate with per-game top props
 - `/api/tracker/*` — full CRUD for picks, settings, performance, bankroll, calibration, Brier, attribution, value, portfolio, bet slip, closing-line capture

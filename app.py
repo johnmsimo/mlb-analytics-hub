@@ -85,6 +85,15 @@ except ImportError:
     _PROP_CAL_AVAILABLE = False
     PropCalibrator = None  # type: ignore
 
+# Consolidated betting math (de-vig, EV, fractional Kelly). Optional: if it is
+# missing the /api/v1/edges enrichment is skipped, everything else is unaffected.
+try:
+    import value_engine
+    _VALUE_ENGINE_AVAILABLE = True
+except ImportError:
+    value_engine = None  # type: ignore
+    _VALUE_ENGINE_AVAILABLE = False
+
 
 # ── Best Bets signal upgrades (all optional, all free) ────────────────────────
 # Each loader is try/except so a missing module just disables that one signal —
@@ -17365,6 +17374,7 @@ def _edge_finder_payload(date_str, min_edge=0.02, market=None, limit=150):
             'grade': _edge_letter_grade(edge_f),
             'bestPrice': p.get('bestOverPrice') or p.get('bestAvailablePrice') or p.get('marketPrice'),
             'bestBook': p.get('bestOverBook') or p.get('bestAvailableBook') or p.get('bookmaker'),
+            'bestUnderPrice': p.get('bestUnderPrice'),
             'bookmaker': p.get('bookmaker'),
             'reason': p.get('reason'),
         })
@@ -17415,6 +17425,111 @@ def api_edges_today():
         return jsonify(_edge_finder_payload(date_str, min_edge=min_edge, market=market, limit=limit))
     except Exception as ex:
         print(f'[api_edges_today] {traceback.format_exc()}')
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
+def _v1_edges_payload(date_str, min_ev=0.03, market=None, limit=150):
+    """Quant edges feed: the edge-finder board, but each play enriched with the
+    de-vig'd fair probability, true EV against the best available price, and a
+    Quarter-Kelly stake (% of bankroll, dollars, units). Filtered by EV (not raw
+    edge) so the list is exactly the +EV plays a bettor would act on — the pure
+    JSON backbone for a mobile/Telegram/Discord client."""
+    try:
+        min_ev = float(min_ev)
+    except (TypeError, ValueError):
+        min_ev = 0.03
+
+    # Pull the full edge board (min_edge=0 so the EV filter, not edge, decides).
+    base = _edge_finder_payload(date_str, min_edge=0.0, market=market, limit=10000)
+
+    adj = _get_adjustments()
+    bankroll = float(adj.get('bankroll', 1000.0) or 1000.0)
+    kelly_frac = float(adj.get('kelly_fraction', 0.25) or 0.25)
+    max_bet_pct = float(adj.get('max_bet_pct', 0.05) or 0.05)
+    unit_pct = float(adj.get('unit_size_pct', 0.01) or 0.01)
+
+    out = []
+    for e in base.get('edges', []) or []:
+        price = e.get('bestPrice')
+        model_prob = e.get('modelProb')
+        if price is None or model_prob is None:
+            continue
+
+        ev = e.get('evPct')
+        fairp = None
+        if _VALUE_ENGINE_AVAILABLE:
+            # Re-derive EV against the *best available* price for consistency,
+            # and de-vig the two-way market for a fair-line reference.
+            ev_calc = value_engine.expected_value(model_prob, price)
+            if ev_calc is not None:
+                ev = round(ev_calc, 4)
+            # De-vig the two-way market when the paired under price is available;
+            # otherwise fair_prob falls back to the raw vig-included implied.
+            fairp = value_engine.fair_prob(price, e.get('bestUnderPrice'),
+                                           method='multiplicative')
+            stake = value_engine.kelly_stake(
+                model_prob, price,
+                bankroll=bankroll, fraction=kelly_frac,
+                max_pct=max_bet_pct, unit_pct=unit_pct,
+            )
+        else:
+            stake = {'full_kelly_pct': None, 'stake_pct': None,
+                     'stake_dollars': None, 'stake_units': None, 'fraction': kelly_frac}
+
+        if ev is None or float(ev) < min_ev:
+            continue
+
+        row = dict(e)
+        row['evPct'] = ev
+        row['fairProb'] = round(fairp, 4) if fairp is not None else None
+        row['fullKellyPct'] = stake['full_kelly_pct']
+        row['kellyFraction'] = stake.get('fraction', kelly_frac)
+        row['stakePct'] = stake['stake_pct']
+        row['stakeDollars'] = stake['stake_dollars']
+        row['stakeUnits'] = stake['stake_units']
+        # conviction tier the roadmap asked for (gold = high conviction)
+        row['conviction'] = ('gold' if float(ev) >= 0.10
+                             else 'green' if float(ev) >= 0.05 else 'lean')
+        out.append(row)
+
+    out.sort(key=lambda x: (-(x.get('evPct') or 0), -(x.get('edge') or 0)))
+    out = out[:int(limit)]
+
+    return {
+        'success': True,
+        'date': date_str,
+        'minEv': min_ev,
+        'market': market,
+        'count': len(out),
+        'bankroll': bankroll,
+        'kellyFraction': kelly_frac,
+        'valueEngine': _VALUE_ENGINE_AVAILABLE,
+        'cached': base.get('cached', False),
+        'computing': base.get('computing', False),
+        'message': base.get('message'),
+        'generatedAt': datetime.now(timezone.utc).isoformat(),
+        'edges': out,
+    }
+
+
+@app.route('/api/v1/edges')
+def api_v1_edges():
+    """JSON edges feed (EV-thresholded + Quarter-Kelly stakes). Params: date,
+    minEv (default 0.03), market, limit (default 150)."""
+    date_str = request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
+    market = request.args.get('market')
+    try:
+        min_ev = float(request.args.get('minEv', 0.03))
+    except (TypeError, ValueError):
+        min_ev = 0.03
+    try:
+        limit = int(request.args.get('limit', 150))
+    except (TypeError, ValueError):
+        limit = 150
+    try:
+        return jsonify(_v1_edges_payload(date_str, min_ev=min_ev, market=market, limit=limit))
+    except Exception as ex:
+        print(f'[api_v1_edges] {traceback.format_exc()}')
         return jsonify({'success': False, 'error': str(ex)}), 500
 
 
