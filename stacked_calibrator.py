@@ -295,29 +295,56 @@ def _analytic_ci(xgb_p: float, batx_p: float,
     return _ci_from_sigma(blended, sigma_logit)
 
 
-# ─── Verdict tiering ────────────────────────────────
-_TIERS = (
-    (0.78, "STRONG_BET",  "STRONG BET",  "green"),
-    (0.66, "LEAN_OVER",   "LEAN OVER",   "teal"),
-    (0.55, "PASS",        "PASS",        "gray"),
-    (0.40, "LEAN_UNDER",  "LEAN UNDER",  "amber"),
-    (0.00, "STRONG_FADE", "STRONG FADE", "red"),
+# ─── Verdict tiering (market-aware) ──────────────────
+# Per-market base rate (P(over) for a typical *starter* at the standard line).
+# The verdict is the probability's position RELATIVE to this base rate, so the
+# same thresholds work for hits (~0.66), total bases (~0.40), RBI (~0.34) and
+# home runs (~0.13) instead of the old absolute thresholds that only made sense
+# for hits. Keyed by both book keys and the scorer's short names.
+_MARKET_BASE_RATE = {
+    "batter_hits":        0.66,
+    "batter_total_bases": 0.40, "batter_tb":  0.40,
+    "batter_rbis":        0.34, "batter_rbi": 0.34,
+    "batter_home_runs":   0.13, "batter_hr":  0.13,
+    "pitcher_strikeouts": 0.50,
+}
+_DEFAULT_BASE_RATE = 0.50
+
+
+def _base_rate_for(market_key: str) -> float:
+    return _MARKET_BASE_RATE.get(market_key, _DEFAULT_BASE_RATE)
+
+
+# Thresholds on the ratio prob / base_rate. Chosen so that at the hits base rate
+# (0.66) they reproduce the original absolute tiers 0.78/0.66/0.55/0.40 exactly
+# (0.66×1.182=0.78, ×1.0=0.66, ×0.833=0.55, ×0.606=0.40) — hits behavior is
+# preserved while the tiers generalize to every market's own base rate.
+_TIER_RATIOS = (
+    (1.182, "STRONG_BET",  "STRONG BET",  "green"),
+    (1.000, "LEAN_OVER",   "LEAN OVER",   "teal"),
+    (0.833, "PASS",        "PASS",        "gray"),
+    (0.606, "LEAN_UNDER",  "LEAN UNDER",  "amber"),
+    (0.000, "STRONG_FADE", "STRONG FADE", "red"),
 )
 
 
-def _tier_for(p: float) -> tuple[str, str, str]:
-    for thresh, key, label, color in _TIERS:
-        if p >= thresh:
+def _tier_for(p: float, base_rate: float = 0.66) -> tuple[str, str, str]:
+    ratio = p / max(1e-6, base_rate)
+    for thresh, key, label, color in _TIER_RATIOS:
+        if ratio >= thresh:
             return key, label, color
     return "STRONG_FADE", "STRONG FADE", "red"
 
 
 def _demote_if_wide_ci(p: float, ci_lo: float, ci_hi: float,
-                       confidence: float) -> tuple[str, str, str]:
+                       confidence: float, base_rate: float = 0.66) -> tuple[str, str, str]:
     ci_width = ci_hi - ci_lo
-    base_key, base_label, base_color = _tier_for(p)
-    if ci_lo < 0.50 < ci_hi and base_key != "PASS":
-        return "PASS", "PASS · STRADDLES 50%", "gray"
+    base_key, base_label, base_color = _tier_for(p, base_rate)
+    # CI straddles the market's base rate → we can't say the player is above or
+    # below average, so there's no edge to bet (market-aware analogue of the old
+    # "straddles 50%" guard).
+    if ci_lo < base_rate < ci_hi and base_key != "PASS":
+        return "PASS", "PASS · STRADDLES BASE", "gray"
     if confidence < 0.55:
         if base_key == "STRONG_BET":
             return "LEAN_OVER",   "LEAN OVER · LOW CONF",  "teal"
@@ -400,7 +427,8 @@ def calibrate(xgb_p: Optional[float], batx_p: Optional[float], *,
     sample_conf = _clamp(bvp_pa / 80.0, 0.0, 1.0)
     confidence  = round(0.55 * width_conf + 0.30 * cov_conf + 0.15 * sample_conf, 3)
 
-    tier_key, tier_label, tier_color = _demote_if_wide_ci(blended, ci_lo, ci_hi, confidence)
+    base_rate = _base_rate_for(market_key)
+    tier_key, tier_label, tier_color = _demote_if_wide_ci(blended, ci_lo, ci_hi, confidence, base_rate)
 
     return {
         "probability":   round(blended, 3),

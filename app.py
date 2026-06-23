@@ -15452,7 +15452,47 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                         raw_prob = _poisson_over_prob(float(p.get(mean_field, 0) or 0), line)
                     if raw_prob < 0.10:
                         continue
-                    raw_mult_prob = _clamp01(raw_prob * _market_mult(mk, adjustments))
+                    # ── XGB + stacked fusion, computed UP-FRONT so it can drive the
+                    #    live number for hits/hr/tb/rbi at each model's trained line.
+                    #    `base_prob` is the model probability fed into the existing
+                    #    market-blend + prop_calibration pipeline (so edge/EV/hub all
+                    #    reflect the fusion). Off-line markets keep the analytic prob.
+                    _mc_batter = None
+                    _full = {}
+                    _xgb_market, _full_fn, _model_line = _xgb_batter_market_map().get(mk, (None, None, None))
+                    if _full_fn and xgb_ready(_xgb_market):
+                        try:
+                            _full = _full_fn(p, opp_pitcher) or {}
+                        except Exception:
+                            _full = {}
+                        _mc_batter = _full.get('mc') or {}
+                    _xgb_p = _full.get('prob') if _full else None
+                    _at_model_line = (_model_line is not None and float(line) == _model_line)
+                    _stk = None
+                    base_prob = raw_prob          # analytic / MC estimate (default)
+                    model_source = 'mc'
+                    if _xgb_p is not None and _at_model_line:
+                        if _STACK_AVAILABLE:
+                            try:
+                                _slot = int(p.get('slot') or 5)
+                                _exp_pa = _LINEUP_PA_WEIGHTS[_slot - 1] if 1 <= _slot <= 9 else 4.2
+                            except Exception:
+                                _exp_pa = 4.2
+                            _mc_ci = ((_full.get('p_lo'), _full.get('p_hi'))
+                                      if _full.get('p_lo') is not None and _full.get('p_hi') is not None else None)
+                            try:
+                                _stk = stacked_calibrate(float(_xgb_p), float(raw_prob),
+                                                         coverage=0.5, exp_pa=_exp_pa, bvp_pa=0,
+                                                         market_key=mk, mc_ci=_mc_ci)
+                            except Exception:
+                                _stk = None
+                        if _stk and _stk.get('probability') is not None:
+                            base_prob = float(_stk['probability'])
+                            model_source = 'stacked'
+                        else:
+                            base_prob = 0.5 * float(_xgb_p) + 0.5 * float(raw_prob)
+                            model_source = 'xgb_blend'
+                    raw_mult_prob = _clamp01(base_prob * _market_mult(mk, adjustments))
                     market = find_market(player_name, mk, line)
                     msum = _market_price_summary(market_props, player_name, mk, line)
                     market_implied = msum.get('market_implied')
@@ -15483,20 +15523,7 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                         'score': round(score, 4), 'hubRating': hub, 'evPct': ev_pct, 'opp': opp_name, 'reason': _projection_reason_short(p.get('name'), mk, adj_prob, edge, opp_name), 'status': 'pending', 'actual': None, 'grade': 'pending', 'openingPrice': msum.get('best_over_price'), 'openingImplied': market_implied, 'closingPrice': None, 'closingImplied': None, 'closingBookmaker': None, 'closingCapturedAt': None, 'clvEdge': None, 'profitUnits': None, 'profitDollars': None,
                         'parlayId': None, 'parlayLeg': None
                     }
-                    # ── MC fields (Step 4) ──────────────────────────────────────────────────
-                    # xgb_ready() speaks the scorer's short market names
-                    # (hits/tb/hr/rbi), not the book market keys (batter_*), so
-                    # translate before gating — otherwise the guard is always
-                    # False and the MC distribution fields stay null.
-                    _mc_batter = None
-                    _full = {}
-                    _xgb_market, _full_fn, _model_line = _xgb_batter_market_map().get(mk, (None, None, None))
-                    if _full_fn and xgb_ready(_xgb_market):
-                        try:
-                            _full = _full_fn(p, opp_pitcher) or {}
-                        except Exception:
-                            _full = {}
-                        _mc_batter = _full.get('mc') or {}
+                    # ── MC distribution + stacked fields (all precomputed above) ─────────────
                     temp_row['mc_prob_over']  = _mc_batter.get('mc_prob_over')  if _mc_batter else None
                     temp_row['mc_prob_under'] = _mc_batter.get('mc_prob_under') if _mc_batter else None
                     temp_row['mc_mean']       = _mc_batter.get('mc_mean')       if _mc_batter else None
@@ -15507,43 +15534,19 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                     temp_row['mc_std']        = _mc_batter.get('mc_std')        if _mc_batter else None
                     temp_row['mc_n_sims']     = _mc_batter.get('n_sims')        if _mc_batter else None
                     temp_row['mc_anchored']   = _mc_batter.get('anchored')      if _mc_batter else None
-                    # ── Stacked calibrator fusion (hits/hr/tb/rbi) ───────────────────────────
-                    # Fuse the XGB point probability with the analytic/MC prob (raw_prob)
-                    # into one calibrated prob + verdict tier, but only AT the line the XGB
-                    # model is trained on (its prob is invalid at other lines). Persists
-                    # xgbProb/batxProb so stacked_calibrator.update_model_accuracies can
-                    # measure per-model Brier and shift the smart-consensus weight once
-                    # these picks grade. Does not alter adjProb/edge (the tuned MC + market
-                    # + prop_calibration pipeline) — it records the verdict alongside.
-                    _xgb_p = _full.get('prob') if _full else None
-                    if _xgb_p is not None and _model_line is not None and float(line) == _model_line:
-                        temp_row['xgbProb']  = round(float(_xgb_p), 4)
-                        temp_row['batxProb'] = round(float(raw_prob), 4)
-                        if _STACK_AVAILABLE:
-                            try:
-                                _slot = int(p.get('slot') or 5)
-                                _exp_pa = _LINEUP_PA_WEIGHTS[_slot - 1] if 1 <= _slot <= 9 else 4.2
-                            except Exception:
-                                _exp_pa = 4.2
-                            _mc_ci = ((_full.get('p_lo'), _full.get('p_hi'))
-                                      if _full.get('p_lo') is not None and _full.get('p_hi') is not None else None)
-                            try:
-                                _stk = stacked_calibrate(float(_xgb_p), float(raw_prob),
-                                                         coverage=0.5, exp_pa=_exp_pa, bvp_pa=0,
-                                                         market_key=mk, mc_ci=_mc_ci)
-                            except Exception:
-                                _stk = None
-                            if _stk:
-                                temp_row['stackedProb'] = _stk.get('probability')
-                                temp_row['stackCiLo']   = _stk.get('ci_lo')
-                                temp_row['stackCiHi']   = _stk.get('ci_hi')
-                                # The verdict TIER thresholds (STRONG_BET/FADE) are
-                                # calibrated to the hits base rate (~0.66); they'd
-                                # mislabel TB/HR/RBI (base ~0.33/0.11/0.29). Keep the
-                                # tier only for hits; the prob + CI are valid for all.
-                                if mk == 'batter_hits':
-                                    temp_row['stackVerdict']      = _stk.get('verdict')
-                                    temp_row['stackVerdictLabel'] = _stk.get('verdict_label')
+                    # Stacked fusion: persist the per-model legs (so update_model_accuracies
+                    # can measure XGB-vs-analytic Brier and shift the consensus weight) and
+                    # the verdict tier (now market-aware → valid for all four markets).
+                    if _xgb_p is not None and _at_model_line:
+                        temp_row['modelSource'] = model_source
+                        temp_row['xgbProb']     = round(float(_xgb_p), 4)
+                        temp_row['batxProb']    = round(float(raw_prob), 4)
+                        if _stk:
+                            temp_row['stackedProb']       = _stk.get('probability')
+                            temp_row['stackCiLo']         = _stk.get('ci_lo')
+                            temp_row['stackCiHi']         = _stk.get('ci_hi')
+                            temp_row['stackVerdict']      = _stk.get('verdict')
+                            temp_row['stackVerdictLabel'] = _stk.get('verdict_label')
                     # ────────────────────────────────────────────────────────────────────────
                     # Phase 1: Add schema fields
                     temp_row['id'] = str(uuid4())
