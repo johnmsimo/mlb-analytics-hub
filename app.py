@@ -18660,6 +18660,140 @@ def api_tracker_close(date_str):
     return jsonify({'success': True, 'date': date_str, 'updated': updated_count[0], 'entries': day.get('entries', []), 'summary': _tracker_summary(day.get('entries', [])), 'closingCapturedAt': day.get('closingCapturedAt')})
 
 
+def _fetch_event_odds_live(event_id):
+    """Force-fetch ONE event's odds straight from the Odds API, bypassing the
+    frozen daily snapshot, and write the fresh books into the per-event cache.
+
+    This is what makes a TRUE closing line possible. _ensure_daily_odds_snapshot
+    builds one snapshot in the morning and then serves cache-only for the rest
+    of the day, so opening and "closing" would otherwise read identical prices
+    (clvEdge ≈ 0). Costs one Odds API credit per call, so callers MUST gate it to
+    near first pitch for games that actually carry pending picks. Returns the
+    fresh books list (or [] on failure)."""
+    if not ODDS_API_KEY or not event_id:
+        return []
+    try:
+        rr = requests.get(
+            f'https://api.the-odds-api.com/v4/sports/baseball_mlb/events/{event_id}/odds',
+            params={
+                'apiKey': ODDS_API_KEY,
+                'regions': ODDS_REGION,
+                'markets': _ODDS_ALL_MARKETS,
+                'oddsFormat': 'american',
+                'dateFormat': 'iso',
+            },
+            timeout=15,
+        )
+        rr.raise_for_status()
+        _record_odds_credits(rr)
+        books = rr.json().get('bookmakers', []) or []
+        with _ODDS_CACHE_LOCK:
+            _ODDS_GAME_CACHE[event_id] = {
+                'all': books,
+                'ts': time.time(),
+                'cache_date': _odds_today_key(),
+            }
+        try:
+            _odds_io_executor.submit(_persist_odds_caches)
+        except Exception:
+            pass
+        return books
+    except Exception as ex:
+        print(f'[_fetch_event_odds_live {event_id}] {ex}')
+        return []
+
+
+_TRACKER_CLOSING_CAPTURE_STARTED = False
+_TRACKER_CLOSING_CAPTURE_LOCK = threading.Lock()
+# (date, gamePk) tuples whose closing line we've already captured today — keeps
+# the worker from re-spending credits on a game once its window has passed.
+_TRACKER_CLOSING_CAPTURED_GAMES = set()
+
+
+def _tracker_closing_capture_once():
+    """Capture a TRUE closing line for each game around first pitch.
+
+    For any game that (a) carries pending tracker picks, (b) is inside its
+    first-pitch window, and (c) hasn't been captured yet, force-refresh its odds
+    (bypassing the frozen daily snapshot) and then run the standard close pass so
+    the fresh line lands as closingPrice / closingImplied / clvEdge. Credit cost
+    is capped at ~1 per game per day. Without this, clvEdge is self-referential
+    (opening and closing read the same morning snapshot) and the Beat-Close% KPI
+    is meaningless."""
+    if not ODDS_API_KEY:
+        return
+    today = datetime.now(ET).strftime('%Y-%m-%d')
+    store = _tracker_store()
+    raw_day = store.get(today)
+    if not raw_day:
+        return
+    day = _normalize_tracker_day(raw_day)
+    pending_gpks = {r.get('gamePk') for r in day.get('entries', [])
+                    if r.get('grade') == 'pending' and r.get('gamePk')}
+    if not pending_gpks:
+        return
+    try:
+        sched = fetch_schedule(today)
+    except Exception:
+        return
+    now_utc = datetime.now(timezone.utc)
+    lead = timedelta(minutes=int(os.getenv('TRACKER_CLOSING_LEAD_MIN', '12') or 12))
+    grace = timedelta(minutes=int(os.getenv('TRACKER_CLOSING_GRACE_MIN', '8') or 8))
+    refreshed = False
+    for g in sched:
+        gpk = g.get('gamePk')
+        if gpk not in pending_gpks or (today, gpk) in _TRACKER_CLOSING_CAPTURED_GAMES:
+            continue
+        try:
+            first_pitch = datetime.fromisoformat((g.get('gameDate') or '').replace('Z', '+00:00'))
+        except Exception:
+            continue
+        # Tight window bracketing first pitch — that line IS the closing line.
+        if not (first_pitch - lead <= now_utc <= first_pitch + grace):
+            continue
+        away = (g.get('teams') or {}).get('away', {}).get('team', {}).get('name', '')
+        home = (g.get('teams') or {}).get('home', {}).get('team', {}).get('name', '')
+        event, _ = _find_odds_event(away, home)
+        if not event or not event.get('id'):
+            continue
+        if _fetch_event_odds_live(event.get('id')):
+            _TRACKER_CLOSING_CAPTURED_GAMES.add((today, gpk))
+            refreshed = True
+    # One close pass writes the freshest available line for every pending pick.
+    # Games not yet in their window keep reading the frozen snapshot (closing ≈
+    # opening) until their own window arrives and overwrites it with the truth.
+    if refreshed:
+        _auth_headers = {'X-Admin-Token': _ADMIN_TOKEN} if _ADMIN_TOKEN else {}
+        try:
+            with app.test_request_context(f'/api/tracker/close/{today}', method='POST', headers=_auth_headers):
+                api_tracker_close(today)
+        except Exception:
+            print(f'[tracker_closing_capture {today}] {traceback.format_exc()}')
+
+
+def _start_tracker_closing_capture_worker():
+    global _TRACKER_CLOSING_CAPTURE_STARTED
+    if str(os.getenv('TRACKER_CLOSING_CAPTURE_ENABLED', '1')).strip().lower() not in ('1', 'true', 'yes'):
+        return
+    with _TRACKER_CLOSING_CAPTURE_LOCK:
+        if _TRACKER_CLOSING_CAPTURE_STARTED:
+            return
+        _TRACKER_CLOSING_CAPTURE_STARTED = True
+    # Tight interval so we land inside each game's first-pitch window.
+    interval_min = max(1, int(os.getenv('TRACKER_CLOSING_CAPTURE_MINUTES', '3') or 3))
+
+    def _runner():
+        time.sleep(20)
+        while True:
+            try:
+                _tracker_closing_capture_once()
+            except Exception:
+                print(f'[tracker_closing_capture] {traceback.format_exc()}')
+            time.sleep(interval_min * 60)
+
+    threading.Thread(target=_runner, daemon=True).start()
+
+
 @app.route('/api/tracker/value/dashboard/<date_str>')
 def api_tracker_value_dashboard(date_str):
     window = int(request.args.get('window', 14) or 14)
@@ -27803,6 +27937,7 @@ _launch_startup_loaders()
 _start_injury_worker()
 _start_tracker_auto_sync_worker()
 _start_tracker_auto_capture_worker()
+_start_tracker_closing_capture_worker()
 _start_mlb_memory_worker()
 
 # Start daily pipeline scheduler (runs at 8 AM ET + on boot)

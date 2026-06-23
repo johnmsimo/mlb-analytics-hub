@@ -45,6 +45,8 @@ Container build (used by Fly.io / `Dockerfile`): a multi-stage Python 3.11-slim 
 
 **Tracker / capture knobs:** `TRACKER_AUTO_SYNC_ENABLED`, `TRACKER_AUTO_SYNC_MINUTES`, `TRACKER_CAPTURE_BUDGET_SEC`, `TRACKER_CAPTURE_INCLUDE_ODDS`, `TRACKER_CAPTURE_BACKGROUND`, `TRACKER_SIMS`.
 
+**Closing-line capture knobs (true CLV):** `TRACKER_CLOSING_CAPTURE_ENABLED` (default 1), `TRACKER_CLOSING_CAPTURE_MINUTES` (worker interval, default 3), `TRACKER_CLOSING_LEAD_MIN` / `TRACKER_CLOSING_GRACE_MIN` (the window before/after first pitch in which the closing line is captured, default 12/8). The closing-capture worker (`_tracker_closing_capture_once`) force-refreshes each game's odds from the Odds API **around its own first pitch** (`_fetch_event_odds_live`, bypassing the frozen daily snapshot) for games carrying pending picks, then runs the standard close pass. Without this the daily odds snapshot is built once and frozen, so opening and "closing" read identical prices and `clvEdge` is ≈0 by construction (the Beat-Close% KPI is meaningless). Credit cost is capped at ~1 Odds API credit per game per day; in-memory `_TRACKER_CLOSING_CAPTURED_GAMES` prevents re-spending once a game's window passes.
+
 **MLB memory store knobs:** `MLB_MEMORY_KEEP_SNAPSHOTS`, `MLB_MEMORY_MAX_BYTES`.
 
 A `.env` file in the repo root is auto-loaded by `_load_local_env_file()` at boot (`app.py:14`).
