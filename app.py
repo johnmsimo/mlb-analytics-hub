@@ -18223,6 +18223,57 @@ def _market_brier_ece(rows, n_bins=10):
     }
 
 
+# ── Calibration drift guard (post stacked-prob switchover) ───────────────────
+# When adjProb for hits/hr/tb/rbi flipped from MC-driven to stacked-XGB-driven
+# (modelSource='stacked'), the prop_calibration isotonic — fit on the OLD
+# preCalProb distribution — is briefly applied to the new one. This guard
+# isolates the post-switchover cohort and flags any market whose realized
+# calibration has drifted, so a miscalibrated displayed prob can't quietly leak
+# into edges/EV until the calibrator re-fits.
+_DRIFT_MIN_N         = 25     # graded stacked picks needed before trusting the gap
+_DRIFT_GAP_THRESHOLD = 0.06   # |mean_pred − mean_actual| flagged as miscalibration
+_DRIFT_ECE_THRESHOLD = 0.10   # bucketed calibration error flagged as drift
+_DRIFT_BRIER_REGRESS = 0.02   # stacked Brier worse than the legacy cohort by this
+
+
+def _market_calibration_drift(rows):
+    """Compare the post-switchover (modelSource='stacked') cohort's realized
+    calibration against the legacy cohort for one market's graded picks.
+    Returns the per-cohort calibration plus a `drifted` flag + human reason."""
+    stacked = [r for r in rows if r.get('modelSource') == 'stacked']
+    legacy  = [r for r in rows if r.get('modelSource') != 'stacked']
+    s_cal = _market_brier_ece(stacked)
+    l_cal = _market_brier_ece(legacy)
+
+    drifted, reasons = False, []
+    gap = None
+    if s_cal['n'] >= _DRIFT_MIN_N and s_cal['mean_pred'] is not None:
+        gap = round(s_cal['mean_pred'] - s_cal['mean_actual'], 4)
+        if abs(gap) >= _DRIFT_GAP_THRESHOLD:
+            drifted = True
+            reasons.append(
+                f"predicted {s_cal['mean_pred']:.3f} vs actual {s_cal['mean_actual']:.3f} "
+                f"({'over' if gap > 0 else 'under'}-confident by {abs(gap):.3f})")
+        if s_cal['ece'] is not None and s_cal['ece'] >= _DRIFT_ECE_THRESHOLD:
+            drifted = True
+            reasons.append(f"ECE {s_cal['ece']:.3f} ≥ {_DRIFT_ECE_THRESHOLD}")
+        if (l_cal['n'] >= _DRIFT_MIN_N and l_cal['brier'] is not None
+                and s_cal['brier'] is not None
+                and s_cal['brier'] - l_cal['brier'] >= _DRIFT_BRIER_REGRESS):
+            drifted = True
+            reasons.append(
+                f"stacked Brier {s_cal['brier']:.3f} worse than legacy {l_cal['brier']:.3f}")
+
+    return {
+        'stacked': s_cal,
+        'legacy': l_cal,
+        'gap': gap,
+        'direction': (None if gap is None else ('overconfident' if gap > 0 else 'underconfident')),
+        'drifted': bool(drifted),
+        'reason': '; '.join(reasons) if reasons else None,
+    }
+
+
 _MODEL_METRICS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                    'models', 'model_metrics.json')
 
@@ -18278,6 +18329,9 @@ def api_calibration_markets():
                 status = 'degraded'          # has edge but worse than held-out
         else:
             status = 'tracking'
+        drift = _market_calibration_drift(by_market.get(mk, []))
+        if drift['drifted']:
+            status = 'drift'             # switchover hurt this market's calibration
         out.append({
             'marketKey': mk,
             'live': live,
@@ -18286,11 +18340,22 @@ def api_calibration_markets():
                                 and _XGB_AVAILABLE
                                 and xgb_ready('hits' if mk == 'batter_hits' else 'k')),
             'status': status,
+            'drift': drift,
         })
 
     # The live correction actually applied to displayed probabilities.
     cal = _get_prop_calibrator()
     calibration_applied = cal.summary() if cal is not None else {}
+
+    # Drift guard summary: markets whose post-switchover (stacked) cohort is
+    # miscalibrated. Empty list = no drift detected (or not enough graded
+    # stacked picks yet to judge).
+    drift_alerts = [
+        {'marketKey': m['marketKey'], 'gap': m['drift']['gap'],
+         'direction': m['drift']['direction'], 'reason': m['drift']['reason'],
+         'n_stacked': m['drift']['stacked']['n']}
+        for m in out if m['drift']['drifted']
+    ]
 
     return jsonify({
         'success': True,
@@ -18300,12 +18365,21 @@ def api_calibration_markets():
         'markets': out,
         'calibration_applied': calibration_applied,
         'edge_display_cap': EDGE_DISPLAY_CAP,
+        'drift_alerts': drift_alerts,
+        'drift_guard': {
+            'min_n': _DRIFT_MIN_N,
+            'gap_threshold': _DRIFT_GAP_THRESHOLD,
+            'ece_threshold': _DRIFT_ECE_THRESHOLD,
+            'brier_regression': _DRIFT_BRIER_REGRESS,
+        },
         'legend': {
             'warming_up': f'fewer than {MIN_N} graded picks — Brier too noisy to act on',
             'on_track': 'live Brier matches the held-out test benchmark',
             'degraded': 'has edge over base rate but worse than held-out — watch for drift',
             'no_edge': 'live Brier no better than the base rate — model not adding value',
             'tracking': 'accumulating data; no model benchmark for this market',
+            'drift': 'post-switchover (stacked) cohort miscalibrated vs realized outcomes — '
+                     'see the per-market drift block; resolves as prop_calibration re-fits',
         },
         'note': 'Held-out benchmarks are out-of-sample (train 2021-24, test 2025). '
                 'Live Brier from graded tracker picks; lower is better.',
