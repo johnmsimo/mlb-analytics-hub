@@ -949,6 +949,99 @@ function renderLineup(pk, d){
   el.innerHTML=cols(d.away, 'AWAY', d.awayConfirmed)+cols(d.home, 'HOME', d.homeConfirmed);
 }
 
+// ── Lineup prop spotlight: Hit/HR (XGB) + SB (model) badges + analysis popover.
+// Fetches /api/lineup-props on demand (per game) and overlays emoji badges +
+// a tap-to-open report onto the card lineup.
+var LINEUP_PROPS_BY_PK={};
+function loadCardLineupProps(pk){
+  if(LINEUP_PROPS_BY_PK[pk]!==undefined) return;  // already loading/loaded
+  LINEUP_PROPS_BY_PK[pk]=null;
+  fetch('/api/lineup-props/'+pk).then(function(r){return r.json();}).then(function(d){
+    LINEUP_PROPS_BY_PK[pk]=(d&&d.success)?d:null;
+    if(LINEUPS[pk]) renderCardLineup(pk, LINEUPS[pk]);
+  }).catch(function(){ LINEUP_PROPS_BY_PK[pk]=null; });
+}
+// Align model rows to the displayed lineup (by MLBAM id, name fallback) and
+// pick the Hit/HR/SB leaders. HR/SB only badge a leader clearing 10%.
+function cardPropInfo(pk, side, arr){
+  var lp=LINEUP_PROPS_BY_PK[pk]; if(!lp) return null;
+  var src=side==='away'?lp.away:lp.home; if(!src||!src.length) return null;
+  var byId={}, byName={};
+  src.forEach(function(r){ if(r.id!=null)byId[r.id]=r; if(r.name)byName[(''+r.name).toLowerCase()]=r; });
+  var rows=arr.map(function(p){ return (p.id!=null&&byId[p.id])||byName[(''+(p.name||'')).toLowerCase()]||null; });
+  var best={hit:-1,hr:-1,sb:-1}, bv={hit:-1,hr:-1,sb:-1};
+  rows.forEach(function(m,i){ if(!m)return;
+    if(m.hitProb!=null&&m.hitProb>bv.hit){bv.hit=m.hitProb;best.hit=i;}
+    if(m.hrProb !=null&&m.hrProb >bv.hr ){bv.hr =m.hrProb ;best.hr =i;}
+    if(m.sbProb !=null&&m.sbProb >bv.sb ){bv.sb =m.sbProb ;best.sb =i;}
+  });
+  if(bv.hr<0.10)best.hr=-1; if(bv.sb<0.10)best.sb=-1;
+  return {leaders:best, rows:rows, opp:(side==='away'?lp.awayVsPitcher:lp.homeVsPitcher)};
+}
+var _cardPop=null;
+function _ensureCardPop(){
+  if(_cardPop) return _cardPop;
+  _cardPop=document.createElement('div');
+  _cardPop.style.cssText='position:fixed;z-index:99999;max-width:280px;min-width:220px;display:none;'
+    +'background:linear-gradient(180deg,#0d1f33,#0a1626);border:1px solid rgba(0,229,255,.4);'
+    +'border-radius:11px;padding:11px 12px;box-shadow:0 14px 40px rgba(0,0,0,.6);color:#dfe7f5';
+  document.body.appendChild(_cardPop);
+  document.addEventListener('click',function(e){
+    if(_cardPop.style.display==='none')return;
+    if(_cardPop.contains(e.target))return;
+    if(e.target.closest&&e.target.closest('.cl-name-clk'))return;
+    _hideCardPop();
+  });
+  document.addEventListener('keydown',function(e){ if(e.key==='Escape')_hideCardPop(); });
+  window.addEventListener('scroll',_hideCardPop,true);
+  return _cardPop;
+}
+function _hideCardPop(){ if(_cardPop)_cardPop.style.display='none'; }
+function showCardProp(ev, pk, side, idx){
+  ev.stopPropagation();
+  var lu=LINEUPS[pk]; if(!lu)return;
+  var arr=((side==='away'?lu.away:lu.home)||[]).slice(0,9);
+  var p=arr[idx]; if(!p)return;
+  var info=cardPropInfo(pk, side, arr);
+  var m=info?info.rows[idx]:null, lead=info?info.leaders:{hit:-1,hr:-1,sb:-1};
+  var opp=info?info.opp:null;
+  function chip(prob,src){ if(prob==null)return '<span style="margin-left:auto;color:#6a8db0;font-size:.6rem">—</span>';
+    var c=prob>=.30?'#00e676':prob>=.15?'#ffd740':'#67e8f9';
+    return '<span style="margin-left:auto;font-family:Orbitron,monospace;font-size:.66rem;font-weight:700;color:'+c+'">'+Math.round(prob*100)+'%</span>'
+      +'<span style="font-size:.46rem;color:#6a8db0;margin-left:4px">'+(src||'')+'</span>'; }
+  function card(emoji,label,isLead,prob,src,note){
+    var col=isLead?'#00e676':'#34506e';
+    return '<div style="border:1px solid '+col+'66;background:'+col+'18;border-radius:8px;padding:6px 9px;margin-top:6px">'
+      +'<div style="display:flex;align-items:center;gap:6px"><span style="font-size:.8rem">'+emoji+'</span>'
+      +'<span style="font-family:Orbitron,monospace;font-size:.55rem;letter-spacing:.6px;color:'+(isLead?'#00e676':'#9fb3c8')+'">'+label+'</span>'+chip(prob,src)+'</div>'
+      +(isLead?'<div style="font-family:Orbitron,monospace;font-size:.48rem;color:#00e676;margin-top:2px">★ LINEUP LEADER</div>':'')
+      +(note?'<div style="font-size:.55rem;color:#9fb3c8;margin-top:3px">'+note+'</div>':'')+'</div>';
+  }
+  var tl=side==='away'?'AWAY':'HOME';
+  var head='<div style="display:flex;align-items:center;gap:7px;margin-bottom:3px">'
+    +'<span style="font-family:Orbitron,monospace;font-size:.72rem;color:#67e8f9">'+(p.name||'Player')+'</span>'
+    +'<span style="font-size:.52rem;color:#9fb3c8">'+(p.pos||'')+(p.bats?(' · '+p.bats+'HB'):'')+'</span>'
+    +'<span style="font-size:.5rem;color:#6a8db0;margin-left:auto">'+tl+' · #'+(p.slot||idx+1)+'</span></div>';
+  var body;
+  if(!m){
+    body='<div style="font-size:.6rem;color:#9fb3c8;margin-top:4px">Model probabilities loading or unavailable for this matchup.</div>';
+  } else {
+    body=card('🎯','HIT',idx===lead.hit,m.hitProb,m.hitProb!=null?'XGB':'', m.hitProb!=null?'Calibrated ≥1-hit probability.':'')
+      +card('💣','HOME RUN',idx===lead.hr,m.hrProb,m.hrProb!=null?'XGB':'', m.hrProb!=null?'Calibrated HR probability.':'')
+      +card('💨','STOLEN BASE',idx===lead.sb,m.sbProb,m.sbProb!=null?'model':'', m.sbReason||'');
+  }
+  var oppLine=opp&&opp.name?'<div style="font-size:.52rem;color:#6a8db0;margin-top:7px">vs '+opp.name+(opp.hand?(' ('+opp.hand+'HP)'):'')+'</div>':'';
+  var pop=_ensureCardPop();
+  pop.innerHTML=head
+    +'<div style="font-size:.5rem;color:#6a8db0;margin-bottom:1px">PROP SPOTLIGHT — '+(m?'XGB + SB model':'model')+'</div>'
+    +body+oppLine;
+  pop.style.display='block';
+  var r=(ev.target&&ev.target.getBoundingClientRect)?ev.target.getBoundingClientRect():{left:20,bottom:80,top:60};
+  var pw=pop.offsetWidth||240, ph=pop.offsetHeight||200;
+  pop.style.left=Math.min(Math.max(8,r.left), window.innerWidth-pw-8)+'px';
+  var top=r.bottom+6; if(top+ph>window.innerHeight-8) top=Math.max(8, r.top-ph-6);
+  pop.style.top=top+'px';
+}
 function renderCardLineup(pk, d){
   var el=document.getElementById('cl-'+pk); if(!el) return;
   if(!d||!d.success){ el.innerHTML='<div class="cl-pending">Lineup preview unavailable</div>'; return; }
@@ -957,23 +1050,37 @@ function renderCardLineup(pk, d){
     if(source==='projected') return '<span class="lu-badge-projected">~ PROJECTED</span>';
     return '<span class="lu-badge-roster">ROSTER</span>';
   }
-  function preview(arr, label, source){
+  function preview(arr, label, source, side){
     var bdg=badge(source);
     if(!arr||!arr.length){
       return '<div class="cl-team"><div class="cl-team-label">'+label+' '+bdg+'</div><div class="cl-pending">Not yet posted</div></div>';
     }
+    var info=cardPropInfo(pk, side, arr.slice(0,9));
     var rows=arr.slice(0,9).map(function(p,i){
       var pos=((p.pos||p.position)||'').replace('Designated Hitter','DH').replace('Pitcher','P');
       pos=pos.length>3?pos.substring(0,2):pos;
       var name=(p.name||'?').split(' ').pop();
       var hand=p.bats||'';
-      return '<div class="cl-player"><span class="cl-slot">'+(p.slot||i+1)+'</span><span class="cl-pos">'+(pos||'?')+'</span><span class="cl-name">'+name+'</span><span class="cl-hand">'+hand+'</span></div>';
+      var emo='', nameCell;
+      if(info){
+        var L=info.leaders;
+        if(i===L.hit) emo+=' 🎯';
+        if(i===L.hr)  emo+=' 💣';
+        if(i===L.sb)  emo+=' 💨';
+        nameCell='<span class="cl-name cl-name-clk" style="cursor:pointer;border-bottom:1px dotted rgba(0,229,255,.5)" onclick="showCardProp(event,'+pk+',\''+side+'\','+i+')">'+name+'</span>'+emo;
+      } else {
+        nameCell='<span class="cl-name">'+name+'</span>';
+      }
+      return '<div class="cl-player"><span class="cl-slot">'+(p.slot||i+1)+'</span><span class="cl-pos">'+(pos||'?')+'</span>'+nameCell+'<span class="cl-hand">'+hand+'</span></div>';
     }).join('');
     return '<div class="cl-team"><div class="cl-team-label">'+label+' '+bdg+'</div>'+rows+'</div>';
   }
   var awaySource=d.awaySource||(d.awayConfirmed?'confirmed':'projected');
   var homeSource=d.homeSource||(d.homeConfirmed?'confirmed':'projected');
-  el.innerHTML='<div class="cl-grid">'+preview(d.away,'AWAY',awaySource)+preview(d.home,'HOME',homeSource)+'</div>';
+  el.innerHTML='<div class="cl-grid">'+preview(d.away,'AWAY',awaySource,'away')+preview(d.home,'HOME',homeSource,'home')+'</div>'
+    +(LINEUP_PROPS_BY_PK[pk]?'<div style="font-size:.5rem;color:var(--mu);text-align:center;margin-top:6px">🎯 hit · 💣 HR (XGB) · 💨 SB (model) — tap a name for analysis</div>':'');
+  // Lazy-load model probabilities the first time this lineup renders.
+  if(LINEUP_PROPS_BY_PK[pk]===undefined) loadCardLineupProps(pk);
 }
 
 var QP_DATA={};
