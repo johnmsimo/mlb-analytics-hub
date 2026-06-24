@@ -745,6 +745,7 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 <script>
 var GPK=parseInt(window.location.pathname.split('/').pop());
 var GD=null,PD=null,AL=[],HL=[];
+var LINEUP_PROPS=null; // per-batter Hit/HR (XGB) + SB (model) probs from /api/lineup-props
 var PMD=null;
 var _lineupRetries=0;
 var PL={ff:"4-Seam",si:"Sinker",fc:"Cutter",st:"Sweeper",sl:"Slider",cu:"Curveball",ch:"Changeup",fs:"Splitter",kn:"Knuckleball",sv:"Slurve"};
@@ -997,7 +998,19 @@ function _fetchLineups(){
     }
   });
 }
-function loadLineups(){ _lineupRetries=0; _fetchLineups(); }
+function loadLineups(){ _lineupRetries=0; _fetchLineups(); loadLineupProps(); }
+// Fetch the calibrated per-batter Hit/HR (XGB) + SB (model) probabilities that
+// drive the lineup emoji badges + analysis popover. Re-renders the active tab
+// once loaded so badges upgrade from the stat-based fallback to model output.
+function loadLineupProps(){
+  fetch('/api/lineup-props/'+GPK).then(function(r){return r.json();}).then(function(d){
+    if(!d || !d.success) return;
+    LINEUP_PROPS=d;
+    var tabs=document.querySelectorAll('.tb2');
+    var activeSide = (tabs[1] && tabs[1].classList.contains('ac')) ? 'home' : 'away';
+    if((activeSide==='away'?AL:HL).length) showTab(activeSide);
+  }).catch(function(){});
+}
 
 function renderHeader(){
   var g=GD;
@@ -1648,7 +1661,8 @@ function playerPropScores(p){
     hrOk: (isFinite(brl)&&brl>=7) || hr>=10 || (isFinite(xslg)&&xslg>=0.46),
     sbOk: sb>=8 };
 }
-function propLeaders(lu){
+// Stat-based leaders (fallback when the model endpoint hasn't loaded / XGB off).
+function statLeaders(lu){
   var best={hit:-1,hr:-1,sb:-1}, bv={hit:-1e9,hr:-1e9,sb:-1e9};
   (lu||[]).forEach(function(p,i){
     if(!(p.slot>0)) return;
@@ -1659,6 +1673,37 @@ function propLeaders(lu){
   });
   return best;
 }
+// Model probabilities from /api/lineup-props, aligned to the displayed lineup
+// (matched by MLBAM id, name fallback). Returns null when unavailable.
+function lineupModelProps(side, lu){
+  var src = LINEUP_PROPS && (side==='away'?LINEUP_PROPS.away:LINEUP_PROPS.home);
+  if(!src || !src.length) return null;
+  var byId={}, byName={};
+  src.forEach(function(r){ if(r.id!=null) byId[r.id]=r; if(r.name) byName[(''+r.name).toLowerCase()]=r; });
+  return (lu||[]).map(function(p){
+    return (p.id!=null && byId[p.id]) || byName[(''+(p.name||'')).toLowerCase()] || null;
+  });
+}
+// Leaders from the calibrated XGB (hit/HR) + SB model. HR/SB only badge a
+// leader that clears a meaningful probability so weak lineups aren't over-flagged.
+function modelLeaders(lu, mp){
+  var best={hit:-1,hr:-1,sb:-1}, bv={hit:-1,hr:-1,sb:-1};
+  (lu||[]).forEach(function(p,i){
+    if(!(p.slot>0)) return;
+    var m=mp[i]; if(!m) return;
+    if(m.hitProb!=null && m.hitProb>bv.hit){bv.hit=m.hitProb;best.hit=i;}
+    if(m.hrProb !=null && m.hrProb >bv.hr ){bv.hr =m.hrProb ;best.hr =i;}
+    if(m.sbProb !=null && m.sbProb >bv.sb ){bv.sb =m.sbProb ;best.sb =i;}
+  });
+  if(bv.hr < 0.10) best.hr=-1;   // no real HR threat in this lineup
+  if(bv.sb < 0.10) best.sb=-1;   // no real SB threat
+  return best;
+}
+function propLeaders(lu, side){
+  var mp = lineupModelProps(side, lu);
+  if(mp && mp.some(function(x){return x;})) return modelLeaders(lu, mp);
+  return statLeaders(lu);
+}
 function _oppPitcherFor(side){
   if(typeof PD==='undefined' || !PD) return null;
   return side==='away' ? PD.homePitcher : PD.awayPitcher;
@@ -1667,38 +1712,54 @@ function _f3(v){ var n=_pn(v); return isFinite(n)?n.toFixed(3).replace(/^0/,''):
 function _f1(v){ var n=_pn(v); return isFinite(n)?n.toFixed(1):'—'; }
 function _pct(v){ var n=_pn(v); return isFinite(n)?n.toFixed(1)+'%':'—'; }
 // Build the per-player analysis report (Hit / HR / SB cards + opp context).
-function playerPropReport(p, opp, leaders, idx){
+// `m` is the model row from /api/lineup-props when available (real calibrated
+// probabilities); otherwise the cards fall back to the descriptive stat lines.
+function playerPropReport(p, opp, leaders, idx, m){
   var st=(opp&&opp.stats)||{};
   var owhip=_pn(st.fg_whip||st.whip), oera=_pn(st.sv_xera||st.fg_era||st.era), ok9=_pn(st.fg_k9||st.k9);
   var oppName=opp&&opp.name?opp.name:'opposing SP';
   var xba=isFinite(_pn(p.sv_xba))?_pn(p.sv_xba):_pn(p.avg);
   var hr=_pn(p.hr)||0, sb=_pn(p.fg_sb)||0, brl=_pn(p.sv_brl_pct);
-  function card(emoji,label,lead,statsLine,verdict){
+  function probChip(prob, src){
+    if(prob==null) return '';
+    var pc=prob>=0.30?'#00e676':prob>=0.15?'#ffd740':'#67e8f9';
+    return '<span style="margin-left:auto;font-family:Orbitron,monospace;font-size:.62rem;font-weight:700;color:'+pc+'">'
+      +Math.round(prob*100)+'%</span><span style="font-size:.46rem;color:var(--mu);margin-left:4px">'+(src||'')+'</span>';
+  }
+  function card(emoji,label,lead,prob,src,statsLine,verdict){
     var col=lead?'#00e676':'#3a5a7a';
     return '<div style="border:1px solid '+col+'55;background:'+col+'14;border-radius:8px;padding:7px 9px;margin-top:7px">'
       +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">'
       +'<span style="font-size:.82rem">'+emoji+'</span>'
       +'<span style="font-family:Orbitron,monospace;font-size:.56rem;letter-spacing:.8px;color:'+(lead?'#00e676':'var(--mu)')+'">'+label+'</span>'
-      +(lead?'<span style="margin-left:auto;font-family:Orbitron,monospace;font-size:.5rem;color:#00e676;border:1px solid #00e67666;border-radius:999px;padding:1px 6px">LINEUP LEADER</span>':'')+'</div>'
+      +probChip(prob,src)+'</div>'
+      +(lead?'<div style="font-family:Orbitron,monospace;font-size:.5rem;color:#00e676;margin-bottom:3px">★ LINEUP LEADER</div>':'')
       +'<div style="font-size:.62rem;color:var(--t);line-height:1.5">'+statsLine+'</div>'
       +'<div style="font-size:.58rem;color:var(--mu);margin-top:3px">'+verdict+'</div></div>';
   }
+  var hitProb = m&&m.hitProb!=null?m.hitProb:null;
+  var hrProb  = m&&m.hrProb !=null?m.hrProb :null;
+  var sbProb  = m&&m.sbProb !=null?m.sbProb :null;
   // Hit
-  var hitVerdict = isFinite(xba)
-    ? (xba>=0.290?'Elite expected-contact profile.':xba>=0.265?'Above-average contact quality.':'League-average contact.')
-      + (isFinite(owhip)?(owhip>=1.30?' '+oppName+' allows traffic ('+owhip.toFixed(2)+' WHIP).':owhip<=1.10?' '+oppName+' limits baserunners ('+owhip.toFixed(2)+' WHIP).':''):'')
-    : 'No expected-stats sample yet.';
+  var hitVerdict = (hitProb!=null?'Calibrated XGB ≥1-hit probability. ':'')
+    + (isFinite(xba)
+       ? (xba>=0.290?'Elite expected-contact profile.':xba>=0.265?'Above-average contact quality.':'League-average contact.')
+         + (isFinite(owhip)?(owhip>=1.30?' '+oppName+' allows traffic ('+owhip.toFixed(2)+' WHIP).':owhip<=1.10?' '+oppName+' limits baserunners ('+owhip.toFixed(2)+' WHIP).':''):'')
+       : 'No expected-stats sample yet.');
   var hitStats='xBA <strong>'+_f3(xba)+'</strong> · EV '+_f1(p.sv_ev)+' · HH% '+_pct(p.sv_hh_pct)+' · xwOBA '+_f3(isFinite(_pn(p.sv_xwoba))?p.sv_xwoba:p.fg_woba);
   // HR
-  var hrVerdict = (isFinite(brl)&&brl>=10?'Top-tier barrel rate — real over-the-fence pop.':isFinite(brl)&&brl>=7?'Solid barrel rate.':'Modest power profile.')
+  var hrVerdict = (hrProb!=null?'Calibrated XGB HR probability. ':'')
+    + (isFinite(brl)&&brl>=10?'Top-tier barrel rate — real over-the-fence pop.':isFinite(brl)&&brl>=7?'Solid barrel rate.':'Modest power profile.')
     + (isFinite(oera)?(oera>=4.5?' '+oppName+' is homer-prone ('+oera.toFixed(2)+' xERA).':''):'');
   var hrStats='Barrel% <strong>'+_pct(p.sv_brl_pct)+'</strong> · EV '+_f1(p.sv_ev)+' · xSLG '+_f3(isFinite(_pn(p.sv_xslg))?p.sv_xslg:p.slg)+' · '+hr+' HR';
   // SB
-  var sbVerdict = sb>=20?'Premier base-stealer — constant pressure on the battery.':sb>=8?'Legitimate stolen-base threat.':'Limited running game.';
-  var sbStats='Season SB <strong>'+(isFinite(sb)?Math.round(sb):0)+'</strong>';
-  return card('🎯','HIT', idx===leaders.hit, hitStats, hitVerdict)
-       + card('💣','HOME RUN', idx===leaders.hr, hrStats, hrVerdict)
-       + card('💨','STOLEN BASE', idx===leaders.sb, sbStats, sbVerdict)
+  var sbVerdict = (m&&m.sbReason?('Model: '+m.sbReason+'. '):'')
+    + (sb>=20?'Premier base-stealer — constant pressure on the battery.':sb>=8?'Legitimate stolen-base threat.':'Limited running game.');
+  var sbStats='Season SB <strong>'+(isFinite(sb)?Math.round(sb):(m?m.seasonSb:0))+'</strong>';
+  var srcXgb=(m&&m.hitProb!=null)?'XGB':'', srcSb=(m&&m.sbProb!=null)?'model':'';
+  return card('🎯','HIT', idx===leaders.hit, hitProb, srcXgb, hitStats, hitVerdict)
+       + card('💣','HOME RUN', idx===leaders.hr, hrProb, (m&&m.hrProb!=null)?'XGB':'', hrStats, hrVerdict)
+       + card('💨','STOLEN BASE', idx===leaders.sb, sbProb, srcSb, sbStats, sbVerdict)
        + '<div style="font-size:.54rem;color:var(--mu);margin-top:7px">vs '+oppName
          +(isFinite(oera)?' · '+oera.toFixed(2)+' xERA':'')+(isFinite(ok9)?' · '+ok9.toFixed(1)+' K/9':'')+(isFinite(owhip)?' · '+owhip.toFixed(2)+' WHIP':'')+'</div>';
 }
@@ -1728,14 +1789,16 @@ function showPlayerProp(side, idx, ev){
   var p=lu&&lu[idx]; if(!p) return;
   var pop=_ensurePropPop();
   var opp=_oppPitcherFor(side);
-  var leaders=propLeaders(lu);
+  var leaders=propLeaders(lu, side);
+  var mp=lineupModelProps(side, lu);
+  var m=mp?mp[idx]:null;
   var tl=side==='away'?(GD?GD.awayAbbr:'AWAY'):(GD?GD.homeAbbr:'HOME');
   pop.innerHTML='<div style="display:flex;align-items:center;gap:7px;margin-bottom:2px">'
     +'<span style="font-family:Orbitron,monospace;font-size:.74rem;color:#67e8f9">'+(p.name||'Player')+'</span>'
     +'<span class="pos-tag">'+(p.pos||'')+'</span>'
     +'<span style="font-size:.54rem;color:var(--mu);margin-left:auto">'+tl+' · #'+(p.slot||idx+1)+'</span></div>'
-    +'<div style="font-size:.54rem;color:var(--mu);margin-bottom:4px">PROP SPOTLIGHT — model reasoning</div>'
-    +playerPropReport(p, opp, leaders, idx);
+    +'<div style="font-size:.54rem;color:var(--mu);margin-bottom:4px">PROP SPOTLIGHT — '+(m?'XGB + SB model':'model reasoning')+'</div>'
+    +playerPropReport(p, opp, leaders, idx, m);
   // Position under the clicked name, clamped to the viewport.
   pop.style.display='block';
   var r=(ev&&ev.target&&ev.target.getBoundingClientRect)?ev.target.getBoundingClientRect():{left:20,bottom:80,top:60};
@@ -1750,7 +1813,7 @@ function showTab(side){
   document.querySelectorAll('.tb2').forEach(function(b,i){b.classList.toggle('ac',(i===0&&side==='away')||(i===1&&side==='home'));});
   var lu=side==='away'?AL:HL;
   if(!lu||!lu.length){document.getElementById('luP').innerHTML='<p class="na">Lineup not yet posted. Check back ~3h before first pitch.</p>';return;}
-  var LEAD=propLeaders(lu);
+  var LEAD=propLeaders(lu, side);
   var hasFg=lu.some(function(p){return p.fg_woba&&p.fg_woba!=='N/A';});
   var hasSvX=lu.some(function(p){return p.sv_xba&&p.sv_xba!=='N/A';});
   var hasSvSc=lu.some(function(p){return p.sv_ev&&p.sv_ev!=='N/A';});
@@ -1788,7 +1851,7 @@ function showTab(side){
   document.getElementById('luP').innerHTML=
     lineupStatusBanner(lu)
     +'<div style="overflow-x:auto"><table class="lu-table"><thead>'+hdr+'</thead><tbody>'+rows+'</tbody></table></div>'
-    +'<div class="legend"><span style="color:var(--mu)">🎯 Top hit · 💣 Top HR · 💨 Top SB threat — tap any name for the prop analysis</span></div>'
+    +'<div class="legend"><span style="color:var(--mu)">🎯 Top hit · 💣 Top HR (XGB) · 💨 Top SB threat (model) — tap any name for the prop analysis</span></div>'
     +(hasFg||hasSvX||hasSvSc?'<div class="legend">'
       +(hasFg?'<span style="color:var(--fg)">&#9889; Orange = FanGraphs (wOBA/wRC+/WAR)</span>':'')
       +(hasSvX||hasSvSc?'<span style="color:var(--sv)">&#127987;&#65039; Cyan = Baseball Savant (xStats/EV/HH%/Brl%)</span>':'')
