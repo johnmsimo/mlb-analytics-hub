@@ -156,6 +156,123 @@ function fmtAvg(v) {
 }
 function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
+// ── Prop spotlight: Hit/HR (XGB) + SB (model) badges & analysis popover ───
+// Mirrors the deep-dive lineup feature: emoji badges for the lineup's best
+// Hit/HR/SB threats (from /api/lineup-props) and a click-to-open report.
+let GS_PROPS = null;                         // /api/lineup-props payload
+const GS_ABBR = { away:'AWAY', home:'HOME' };
+const GS_CTX = { away:{bats:[],opp:null,leaders:{hit:-1,hr:-1,sb:-1}},
+                 home:{bats:[],opp:null,leaders:{hit:-1,hr:-1,sb:-1}} };
+function gsKey(b){
+  if(b && b.id!=null) return 'id'+b.id;
+  return 'nm'+String((b&&(b.name||b.fullName))||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+}
+function gsModelRow(side, b){
+  const src = GS_PROPS && (side==='away'?GS_PROPS.away:GS_PROPS.home);
+  if(!src) return null;
+  if(b && b.id!=null){ const m=src.find(r=>r.id===b.id); if(m) return m; }
+  const nm=String((b&&(b.name||b.fullName))||'').toLowerCase();
+  return src.find(r=>String(r.name||'').toLowerCase()===nm) || null;
+}
+function gsStatScore(b){
+  const xba=num(b.sv_xba)!=null?num(b.sv_xba):num(b.avg);
+  const brl=num(b.sv_brl_pct), xslg=num(b.sv_xslg)!=null?num(b.sv_xslg):num(b.slg);
+  const hr=num(b.hr,0)||0, sb=num(b.fg_sb,0)||0;
+  return { hit:((xba!=null?xba:.25)-.25)*4,
+           hr:((brl!=null?brl:5)-6)*.09 + ((xslg!=null?xslg:.4)-.4)*3 + hr*.03, sb:sb,
+           hitOk:xba!=null, hrOk:(brl!=null&&brl>=7)||hr>=10||(xslg!=null&&xslg>=.46), sbOk:sb>=8 };
+}
+function gsComputeLeaders(side, bats){
+  let best={hit:-1,hr:-1,sb:-1}, bv={hit:-1e9,hr:-1e9,sb:-1e9}, usedModel=false;
+  (bats||[]).forEach((b,i)=>{
+    const m=gsModelRow(side,b); if(!m) return; usedModel=true;
+    if(m.hitProb!=null&&m.hitProb>bv.hit){bv.hit=m.hitProb;best.hit=i;}
+    if(m.hrProb !=null&&m.hrProb >bv.hr ){bv.hr =m.hrProb ;best.hr =i;}
+    if(m.sbProb !=null&&m.sbProb >bv.sb ){bv.sb =m.sbProb ;best.sb =i;}
+  });
+  if(usedModel){ if(bv.hr<0.10)best.hr=-1; if(bv.sb<0.10)best.sb=-1; return best; }
+  best={hit:-1,hr:-1,sb:-1}; bv={hit:-1e9,hr:-1e9,sb:-1e9};
+  (bats||[]).forEach((b,i)=>{ const s=gsStatScore(b);
+    if(s.hitOk&&s.hit>bv.hit){bv.hit=s.hit;best.hit=i;}
+    if(s.hrOk &&s.hr >bv.hr ){bv.hr =s.hr ;best.hr =i;}
+    if(s.sbOk &&s.sb >bv.sb ){bv.sb =s.sb ;best.sb =i;}
+  });
+  return best;
+}
+function gsBadges(side, b){
+  const ctx=GS_CTX[side]; if(!ctx) return '';
+  const k=gsKey(b);
+  const i=(ctx.bats||[]).findIndex(x=>gsKey(x)===k);
+  if(i<0) return '';
+  let e='';
+  if(i===ctx.leaders.hit) e+=' <span title="Top hit probability">🎯</span>';
+  if(i===ctx.leaders.hr)  e+=' <span title="Top HR probability">💣</span>';
+  if(i===ctx.leaders.sb)  e+=' <span title="Top stolen-base threat">💨</span>';
+  return e;
+}
+let _gsPop=null;
+function _gsEnsurePop(){
+  if(_gsPop) return _gsPop;
+  _gsPop=document.createElement('div');
+  _gsPop.style.cssText='position:fixed;z-index:9999;max-width:300px;min-width:230px;display:none;'
+    +'background:linear-gradient(180deg,#13182b,#0b0f1c);border:1px solid rgba(0,229,255,.35);'
+    +'border-radius:11px;padding:11px 12px;box-shadow:0 14px 40px rgba(0,0,0,.55);color:#dfe7f5';
+  document.body.appendChild(_gsPop);
+  document.addEventListener('click',e=>{ if(_gsPop.style.display==='none')return;
+    if(_gsPop.contains(e.target))return; if(e.target.closest&&e.target.closest('.gs-name'))return; _gsHidePop(); });
+  document.addEventListener('keydown',e=>{ if(e.key==='Escape')_gsHidePop(); });
+  window.addEventListener('scroll',_gsHidePop,true);
+  return _gsPop;
+}
+function _gsHidePop(){ if(_gsPop)_gsPop.style.display='none'; }
+function _g3(v){ const n=num(v); return n==null?'—':n.toFixed(3).replace(/^0/,''); }
+function _g1(v){ const n=num(v); return n==null?'—':n.toFixed(1); }
+function gsReport(b, opp, leaders, idx, m){
+  const st=(opp&&opp.stats)||{};
+  const owhip=num(st.fg_whip||st.whip), oera=num(st.sv_xera||st.fg_era||st.era), ok9=num(st.fg_k9||st.k9);
+  const oppName=opp&&opp.name?opp.name:'opposing SP';
+  const xba=num(b.sv_xba)!=null?num(b.sv_xba):num(b.avg);
+  const hr=num(b.hr,0)||0, sb=num(b.fg_sb,0)||0, brl=num(b.sv_brl_pct);
+  const chip=(prob,src)=>{ if(prob==null)return ''; const c=prob>=.30?'#00e676':prob>=.15?'#ffd740':'#67e8f9';
+    return `<span style="margin-left:auto;font-family:Orbitron,monospace;font-size:.62rem;font-weight:700;color:${c}">${Math.round(prob*100)}%</span><span style="font-size:.46rem;color:#8aa;margin-left:4px">${src||''}</span>`; };
+  const card=(emoji,label,lead,prob,src,stats,verdict)=>{ const col=lead?'#00e676':'#3a5a7a';
+    return `<div style="border:1px solid ${col}55;background:${col}14;border-radius:8px;padding:7px 9px;margin-top:7px">`
+      +`<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px"><span style="font-size:.82rem">${emoji}</span>`
+      +`<span style="font-family:Orbitron,monospace;font-size:.56rem;letter-spacing:.8px;color:${lead?'#00e676':'#8aa'}">${label}</span>${chip(prob,src)}</div>`
+      +(lead?'<div style="font-family:Orbitron,monospace;font-size:.5rem;color:#00e676;margin-bottom:3px">★ LINEUP LEADER</div>':'')
+      +`<div style="font-size:.62rem;line-height:1.5">${stats}</div>`
+      +`<div style="font-size:.58rem;color:#8aa;margin-top:3px">${verdict}</div></div>`; };
+  const hitP=m&&m.hitProb!=null?m.hitProb:null, hrP=m&&m.hrProb!=null?m.hrProb:null, sbP=m&&m.sbProb!=null?m.sbProb:null;
+  const hitV=(hitP!=null?'Calibrated XGB ≥1-hit probability. ':'')+(xba!=null?(xba>=.290?'Elite expected-contact profile.':xba>=.265?'Above-average contact.':'League-average contact.'):'No xStats sample yet.');
+  const hitS=`xBA <strong>${_g3(xba)}</strong> · EV ${_g1(b.sv_ev)} · xwOBA ${_g3(num(b.sv_xwoba)!=null?b.sv_xwoba:b.fg_woba)}`;
+  const hrV=(hrP!=null?'Calibrated XGB HR probability. ':'')+((brl!=null&&brl>=10)?'Top-tier barrel rate.':(brl!=null&&brl>=7)?'Solid barrel rate.':'Modest power.');
+  const hrS=`Barrel% <strong>${brl!=null?brl.toFixed(1)+'%':'—'}</strong> · EV ${_g1(b.sv_ev)} · ${hr} HR`;
+  const sbV=(m&&m.sbReason?('Model: '+m.sbReason+'. '):'')+(sb>=20?'Premier base-stealer.':sb>=8?'Legit SB threat.':'Limited running game.');
+  const sbS=`Season SB <strong>${sb||(m?m.seasonSb:0)}</strong>`;
+  return card('🎯','HIT',idx===leaders.hit,hitP,hitP!=null?'XGB':'',hitS,hitV)
+    +card('💣','HOME RUN',idx===leaders.hr,hrP,hrP!=null?'XGB':'',hrS,hrV)
+    +card('💨','STOLEN BASE',idx===leaders.sb,sbP,sbP!=null?'model':'',sbS,sbV)
+    +`<div style="font-size:.54rem;color:#8aa;margin-top:7px">vs ${esc(oppName)}${oera!=null?' · '+oera.toFixed(2)+' xERA':''}${ok9!=null?' · '+ok9.toFixed(1)+' K/9':''}${owhip!=null?' · '+owhip.toFixed(2)+' WHIP':''}</div>`;
+}
+function showGsProp(side, key, ev){
+  if(ev) ev.stopPropagation();
+  const ctx=GS_CTX[side]; if(!ctx) return;
+  const idx=(ctx.bats||[]).findIndex(x=>gsKey(x)===key);
+  const b=ctx.bats[idx]; if(!b) return;
+  const m=gsModelRow(side,b);
+  const pop=_gsEnsurePop();
+  const tl=side==='away'?GS_ABBR.away:GS_ABBR.home;
+  pop.innerHTML=`<div style="display:flex;align-items:center;gap:7px;margin-bottom:2px"><span style="font-family:Orbitron,monospace;font-size:.74rem;color:#67e8f9">${esc(b.name||b.fullName||'Player')}</span><span style="font-size:.54rem;color:#8aa;margin-left:auto">${tl}${b.slot?' · #'+b.slot:''}</span></div>`
+    +`<div style="font-size:.54rem;color:#8aa;margin-bottom:4px">PROP SPOTLIGHT — ${m?'XGB + SB model':'model reasoning'}</div>`
+    +gsReport(b, ctx.opp, ctx.leaders, idx, m);
+  pop.style.display='block';
+  const r=(ev&&ev.target&&ev.target.getBoundingClientRect)?ev.target.getBoundingClientRect():{left:20,bottom:80,top:60};
+  const pw=pop.offsetWidth||260, ph=pop.offsetHeight||220;
+  pop.style.left=Math.min(Math.max(8,r.left), window.innerWidth-pw-8)+'px';
+  let top=r.bottom+6; if(top+ph>window.innerHeight-8) top=Math.max(8,r.top-ph-6);
+  pop.style.top=top+'px';
+}
+
 // ── Run Environment ─────────────────────────────────────────────────────
 function windImpact(dir, mph) {
   if (!dir || !mph) return {pts:0, note:'', favors:''};
@@ -295,10 +412,14 @@ function renderPitcher(p) {
 }
 
 // ── Batter row with real insight ────────────────────────────────────────
-function renderBatter(b, pStats, teamLogo) {
+function renderBatter(b, pStats, teamLogo, side) {
   const pf = pfScore(b, pStats);
   const hand = (b.bats || b.fg_bats || 'R').toString().toUpperCase().charAt(0) || 'R';
   const star = pf >= 58 ? '<span class="bp-star">⭐</span>' : '';
+  const badges = side ? gsBadges(side, b) : '';
+  const nameHtml = side
+    ? `<span class="bp-name gs-name" style="cursor:pointer;border-bottom:1px dotted rgba(0,229,255,.5)" onclick="showGsProp('${side}','${gsKey(b)}',event)" title="Tap for prop analysis">${esc(b.name||b.fullName||'—')}</span>${badges} ${star}`
+    : `<span class="bp-name">${esc(b.name||b.fullName||'—')} ${star}</span>`;
   // Odds from PF: only show if we actually have signal
   const hasSignal = num(b.sv_xwoba)!==null || num(b.fg_woba)!==null || num(b.fg_iso)!==null;
   const odds = hasSignal ? ('+' + Math.round(Math.max(250, 2500 - pf * 28))) : '—';
@@ -312,7 +433,7 @@ function renderBatter(b, pStats, teamLogo) {
     <div class="bp">
       <img class="bp-logo" src="${teamLogo||''}" alt="" loading="lazy" width="24" height="24" onerror="this.style.visibility='hidden'">
       <div class="bp-info">
-        <span class="bp-name">${esc(b.name||b.fullName||'—')} ${star}</span>
+        ${nameHtml}
         <span class="pf-tag ${pfCls(pf)}">PF ${pf.toFixed(1)}</span>
         <span class="bh-tag ${hand}">${hand}HB</span>
         <span class="bp-line">o0.5 HR</span>
@@ -379,16 +500,26 @@ async function load(silent) {
     return;
   }
   try {
-    const [gd, pp, bd] = await Promise.all([
+    const [gd, pp, bd, lp] = await Promise.all([
       fetch('/api/game-projection/' + GPK).then(r=>r.json()).catch(()=>({})),
       fetch('/api/pitchers/' + GPK).then(r=>r.json()).catch(()=>({})),
       fetch('/api/game/' + GPK).then(r=>r.json()).catch(()=>({})),
+      fetch('/api/lineup-props/' + GPK).then(r=>r.json()).catch(()=>({})),
     ]);
 
     const awayP = pp.awayPitcher || {};
     const homeP = pp.homePitcher || {};
     const awayBats = ((bd.awayBatters)||[]).filter(b=>b.name||b.fullName);
     const homeBats = ((bd.homeBatters)||[]).filter(b=>b.name||b.fullName);
+
+    // Prop-spotlight context: model probabilities + per-side opponent + leaders.
+    GS_PROPS = (lp && lp.success) ? lp : null;
+    GS_ABBR.away = gd.awayAbbr || 'AWAY';
+    GS_ABBR.home = gd.homeAbbr || 'HOME';
+    GS_CTX.home = { bats:homeBats, leaders:gsComputeLeaders('home', homeBats),
+      opp:{ name:(awayP.name||'Away SP'), hand:(awayP.stats||{}).pitchHand||'R', stats:awayP.stats||{} } };
+    GS_CTX.away = { bats:awayBats, leaders:gsComputeLeaders('away', awayBats),
+      opp:{ name:(homeP.name||'Home SP'), hand:(homeP.stats||{}).pitchHand||'R', stats:homeP.stats||{} } };
 
     const isLive = (gd.status === 'Live' || gd.status === 'In Progress');
     if (isLive && !_isLive) { _isLive = true; startLive(); }
@@ -433,7 +564,7 @@ async function load(silent) {
     html += renderPitcher(awayP.name ? awayP : {name:awayPName, stats:{}});
     if (homeBats.length) {
       const sorted = [...homeBats].sort((a,b)=>pfScore(b,awayP.stats||{})-pfScore(a,awayP.stats||{}));
-      sorted.slice(0,3).forEach(b=>{ html += renderBatter(b, awayP.stats||{}, homeLogo); });
+      sorted.slice(0,3).forEach(b=>{ html += renderBatter(b, awayP.stats||{}, homeLogo, 'home'); });
     } else {
       html += '<div class="na">LINEUP NOT YET POSTED — check back ~1hr before first pitch</div>';
     }
@@ -444,7 +575,8 @@ async function load(silent) {
     html += renderPitcher(homeP.name ? homeP : {name:homePName, stats:{}});
     if (awayBats.length) {
       const sorted = [...awayBats].sort((a,b)=>pfScore(b,homeP.stats||{})-pfScore(a,homeP.stats||{}));
-      sorted.slice(0,3).forEach(b=>{ html += renderBatter(b, homeP.stats||{}, awayLogo); });
+      sorted.slice(0,3).forEach(b=>{ html += renderBatter(b, homeP.stats||{}, awayLogo, 'away'); });
+      html += '<div style="font-size:.5rem;color:#8aa;text-align:center;margin:8px 0 2px">🎯 hit · 💣 HR (XGB) · 💨 SB (model) — tap a name for analysis</div>';
     } else {
       html += '<div class="na">LINEUP NOT YET POSTED — check back ~1hr before first pitch</div>';
     }

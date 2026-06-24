@@ -34,6 +34,8 @@ from typing import Optional
 
 LEAGUE_SPRINT_SPEED = 27.0   # ft/s, roughly MLB average
 _DEFAULT_EXPECTED_PA = 4.2   # league-average PA per game
+LEAGUE_SB_RATE = 0.016       # ~league stolen bases per plate appearance
+SB_PRIOR_PA = 150            # shrinkage strength (PA of league-prior weight)
 
 
 def _num(v, default: float = 0.0) -> float:
@@ -46,12 +48,17 @@ def _num(v, default: float = 0.0) -> float:
         return default
 
 
-def sb_rate_per_pa(season_sb, season_pa) -> float:
+def sb_rate_per_pa(season_sb, season_pa,
+                   league_rate: float = LEAGUE_SB_RATE,
+                   prior_pa: float = SB_PRIOR_PA) -> float:
+    """Per-PA stolen-base rate, regressed toward the league rate so a tiny
+    sample (e.g. 4 SB in 60 PA) doesn't extrapolate to an elite-runner rate.
+    Equivalent to a Beta-style prior: (sb + prior_pa·league_rate)/(pa + prior_pa)."""
     sb = max(0.0, _num(season_sb))
     pa = _num(season_pa)
     if pa <= 0:
         return 0.0
-    return sb / pa
+    return (sb + prior_pa * league_rate) / (pa + prior_pa)
 
 
 def _hand_mult(opp_hand: Optional[str]) -> float:
