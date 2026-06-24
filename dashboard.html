@@ -2548,7 +2548,9 @@ function shiftGamesDate(days){selectedGamesDate=shiftDate(selectedGamesDate,days
 function _renderSharpChip(pk, d){
   var el=document.getElementById('sharp-'+pk);
   if(!el || !d || !d.success || !d.bestBet) return;
-  var b=d.bestBet, tierCol=b.tier==='STRONG BET'?'#00e676':b.tier==='LEAN'?'#ffd740':'#00e5ff';
+  var b=d.bestBet;
+  var tierCol=b.tier==='STRONG BET'?'#00e676':b.tier==='LEAN'?'#ffd740':b.tier==='SLIGHT LEAN'?'#00e5ff':'#6a8db0';
+  var icon=b.tier==='NO EDGE'?'○':'⚡';
   var gradeHtml='';
   if(d.grade){
     var gc=d.grade==='WON'?'#00e676':d.grade==='LOST'?'#f44336':'#6a8db0';
@@ -2557,7 +2559,7 @@ function _renderSharpChip(pk, d){
   el.style.border='1px solid '+tierCol+'40';
   el.style.background=tierCol+'12';
   var txt=(b.text||'').replace(/^Best bet:\s*/,'');
-  el.innerHTML='<span class="sc-tier" style="color:'+tierCol+'">⚡ '+b.tier+'</span>'
+  el.innerHTML='<span class="sc-tier" style="color:'+tierCol+'">'+icon+' '+b.tier+'</span>'
     +'<span style="color:var(--t)">'+txt+'</span>'+gradeHtml;
 }
 function loadSharpChips(games){

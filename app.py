@@ -14815,15 +14815,42 @@ def _build_sharp_card(game_pk):
         top = cands[0]
         tier = "STRONG BET" if top["conf"] >= 0.45 else ("LEAN" if top["conf"] >= 0.22 else "SLIGHT LEAN")
         best = {"type": top["type"], "marketKey": top["marketKey"], "side": top["side"],
-                "line": top["line"], "tier": tier, "text": "Best bet: " + top["text"]}
+                "line": top["line"], "tier": tier, "tracked": True, "text": "Best bet: " + top["text"]}
 
-    # Grade vs final when available.
+    # Every game card should surface a Sharp Card chip, not just the ones that
+    # clear the edge bar. When no candidate qualified, fall back to the strongest
+    # available directional lean so neutral matchups still render a chip (the tier
+    # honestly reflects the thin/zero edge). The fallback is DISPLAY-ONLY
+    # (`tracked: False`): only the genuine `best` above is persisted and counted
+    # toward the Sharp Card accuracy KPI, so weak leans can't dilute the record.
+    display = best
+    if display is None:
+        if win_pct is not None and win_team:
+            edge_pp = abs(win_pct - 0.5)
+            ftier = "LEAN" if edge_pp >= 0.04 else "NO EDGE"
+            lead = "Lean " if ftier == "LEAN" else "Slight lean "
+            display = {"type": "ML", "marketKey": "game_moneyline", "side": win_team, "line": 0,
+                       "tier": ftier, "tracked": False,
+                       "text": f"{lead}{win_team} — {round(win_pct*100)}% to win"}
+        elif total is not None:
+            side = "Over" if total >= 8.5 else "Under"
+            display = {"type": "TOTAL", "marketKey": "game_total", "side": side,
+                       "line": round(total * 2) / 2, "tier": "NO EDGE", "tracked": False,
+                       "text": f"Lean {side.lower()} — model total {total:.1f}"}
+        else:
+            display = {"type": "NONE", "marketKey": None, "side": None, "line": None,
+                       "tier": "NO EDGE", "tracked": False,
+                       "text": "No model edge — matchup too close to call"}
+
+    # Grade vs final when available (grades the displayed chip; NONE/no-line
+    # fallbacks return no grade from _grade_game_bet, which is correct).
     status = gd.get("status") or ""
     is_final = status in ("Final", "Game Over", "Completed Early")
     ascore, hscore = gd.get("awayScore"), gd.get("homeScore")
-    grade = _grade_game_bet(best, away, home, ascore, hscore) if (is_final and best) else None
+    grade = _grade_game_bet(display, away, home, ascore, hscore) if (is_final and display) else None
 
     # Persist the verdict (pre-game lock + post-game grade) for the hit-rate log.
+    # Only the genuine `best` is recorded — the display-only fallback is excluded.
     date_str = g.get("officialDate") or (g.get("gameDate") or "")[:10]
     _record_sharp_verdict(game_pk, date_str, away, home, best, is_final, ascore, hscore)
 
@@ -14834,7 +14861,7 @@ def _build_sharp_card(game_pk):
         "totalLean": {"lean": total_lean, "total": total, "runEnv": run_env},
         "environment": {"tier": imp.get("tier"), "runDelta": imp.get("runDelta"), "label": imp.get("label")},
         "drivers": drivers,
-        "bestBet": best,
+        "bestBet": display,
         "grade": grade,
     }
 
