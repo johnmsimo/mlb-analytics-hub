@@ -65,6 +65,16 @@ except ImportError:
 if _XGB_AVAILABLE:
     from xgb_prop_scorer import _load_models as _xgb_load_models
     _xgb_load_models()
+
+# Stolen-base probability model — small, pure-Python estimator (no XGB artifact
+# exists for SB). Graceful shim keeps boot working if the module is absent.
+try:
+    from sb_model import sb_probability as _sb_probability
+    _SB_MODEL_AVAILABLE = True
+except ImportError:
+    _SB_MODEL_AVAILABLE = False
+    def _sb_probability(*a, **k):  # type: ignore
+        return {"prob": 0.0, "tier": "LOW", "reason": "", "seasonSb": 0, "lambda": 0.0}
     
 # Stacked calibrator — combines XGB+BATX into a single verdict + 95% CI.
 # Graceful fallback to deterministic logistic blend when no trained isotonic
@@ -14815,15 +14825,42 @@ def _build_sharp_card(game_pk):
         top = cands[0]
         tier = "STRONG BET" if top["conf"] >= 0.45 else ("LEAN" if top["conf"] >= 0.22 else "SLIGHT LEAN")
         best = {"type": top["type"], "marketKey": top["marketKey"], "side": top["side"],
-                "line": top["line"], "tier": tier, "text": "Best bet: " + top["text"]}
+                "line": top["line"], "tier": tier, "tracked": True, "text": "Best bet: " + top["text"]}
 
-    # Grade vs final when available.
+    # Every game card should surface a Sharp Card chip, not just the ones that
+    # clear the edge bar. When no candidate qualified, fall back to the strongest
+    # available directional lean so neutral matchups still render a chip (the tier
+    # honestly reflects the thin/zero edge). The fallback is DISPLAY-ONLY
+    # (`tracked: False`): only the genuine `best` above is persisted and counted
+    # toward the Sharp Card accuracy KPI, so weak leans can't dilute the record.
+    display = best
+    if display is None:
+        if win_pct is not None and win_team:
+            edge_pp = abs(win_pct - 0.5)
+            ftier = "LEAN" if edge_pp >= 0.04 else "NO EDGE"
+            lead = "Lean " if ftier == "LEAN" else "Slight lean "
+            display = {"type": "ML", "marketKey": "game_moneyline", "side": win_team, "line": 0,
+                       "tier": ftier, "tracked": False,
+                       "text": f"{lead}{win_team} — {round(win_pct*100)}% to win"}
+        elif total is not None:
+            side = "Over" if total >= 8.5 else "Under"
+            display = {"type": "TOTAL", "marketKey": "game_total", "side": side,
+                       "line": round(total * 2) / 2, "tier": "NO EDGE", "tracked": False,
+                       "text": f"Lean {side.lower()} — model total {total:.1f}"}
+        else:
+            display = {"type": "NONE", "marketKey": None, "side": None, "line": None,
+                       "tier": "NO EDGE", "tracked": False,
+                       "text": "No model edge — matchup too close to call"}
+
+    # Grade vs final when available (grades the displayed chip; NONE/no-line
+    # fallbacks return no grade from _grade_game_bet, which is correct).
     status = gd.get("status") or ""
     is_final = status in ("Final", "Game Over", "Completed Early")
     ascore, hscore = gd.get("awayScore"), gd.get("homeScore")
-    grade = _grade_game_bet(best, away, home, ascore, hscore) if (is_final and best) else None
+    grade = _grade_game_bet(display, away, home, ascore, hscore) if (is_final and display) else None
 
     # Persist the verdict (pre-game lock + post-game grade) for the hit-rate log.
+    # Only the genuine `best` is recorded — the display-only fallback is excluded.
     date_str = g.get("officialDate") or (g.get("gameDate") or "")[:10]
     _record_sharp_verdict(game_pk, date_str, away, home, best, is_final, ascore, hscore)
 
@@ -14834,7 +14871,7 @@ def _build_sharp_card(game_pk):
         "totalLean": {"lean": total_lean, "total": total, "runEnv": run_env},
         "environment": {"tier": imp.get("tier"), "runDelta": imp.get("runDelta"), "label": imp.get("label")},
         "drivers": drivers,
-        "bestBet": best,
+        "bestBet": display,
         "grade": grade,
     }
 
@@ -22347,6 +22384,102 @@ def _matchup_score(batter, pitcher_fg, pitcher_sv, pitcher_hand='R'):
         "platoon_bonus": platoon_bonus,
         "platoon_note": _batter_hand_note(batter, pitcher_hand),
     }
+
+
+# ── Route: Lineup prop spotlight (Hit / HR / SB per batter) ───────────────────
+# Lightweight per-batter probabilities for the deep-dive lineup badges: HIT and
+# HR come straight from the calibrated XGB scorer (same models the prop board
+# uses), SB from the small `sb_model`. Cached briefly so tab-switching / reloads
+# don't re-score the slate.
+_LINEUP_PROPS_CACHE = {}
+_LINEUP_PROPS_TTL = 300  # seconds
+_PA_BY_SLOT_SB = {1: 4.65, 2: 4.55, 3: 4.45, 4: 4.35, 5: 4.22,
+                  6: 4.10, 7: 3.98, 8: 3.88, 9: 3.78}
+
+
+@app.route('/api/lineup-props/<int:game_pk>')
+def api_lineup_props(game_pk):
+    try:
+        cached = _LINEUP_PROPS_CACHE.get(game_pk)
+        if cached and (time.time() - cached["ts"]) < _LINEUP_PROPS_TTL:
+            return jsonify(cached["payload"])
+
+        date_hint = request.args.get('date')
+        gdata, away_bats, home_bats, away_t, home_t, pitchers = _props_fetch_game(game_pk, date_hint=date_hint)
+        if not gdata:
+            return jsonify({"success": False, "error": "Game not found"}), 404
+
+        ap_info = pitchers.get("ap") or {}
+        hp_info = pitchers.get("hp") or {}
+        ap_name = ap_info.get("fullName", "TBD")
+        hp_name = hp_info.get("fullName", "TBD")
+        ap_id = ap_info.get("id"); hp_id = hp_info.get("id")
+        ap_hand = ((pitcher_stats_mlb(ap_id) if ap_id else {}).get("pitchHand") or "R").upper()
+        hp_hand = ((pitcher_stats_mlb(hp_id) if hp_id else {}).get("pitchHand") or "R").upper()
+
+        hit_ready = bool(_XGB_AVAILABLE and xgb_ready("hits"))
+        hr_ready = bool(_XGB_AVAILABLE and xgb_ready("hr"))
+
+        def _score_side(batters, opp_name, opp_hand):
+            pdict = {"name": opp_name, "pitchHand": opp_hand}
+            out = []
+            for b in (batters or []):
+                name = (b.get("name") or "").strip()
+                slot = b.get("slot") or 0
+                if not name:
+                    continue
+                # FG/Savant enrichment + lineup role happen inside the scorer
+                # (keyed by name + slot), matching the live slate-scan path.
+                bdict = {"name": name, "bats": b.get("bats") or "S",
+                         "slot": slot, "id": b.get("id")}
+                hit_p = None; hr_p = None
+                if hit_ready:
+                    try: hit_p = xgb_hit_prob(bdict, pdict)
+                    except Exception: hit_p = None
+                if hr_ready:
+                    try: hr_p = xgb_hr_prob(bdict, pdict)
+                    except Exception: hr_p = None
+
+                # SB model — season SB/PA scaled by expected PA + opposing hand.
+                fgb = fg_batter(name) or {}
+                season_sb = _safe_f(b.get("fg_sb"), None)
+                if season_sb is None:
+                    season_sb = _safe_f(fgb.get("fg_sb"), 0.0)
+                season_pa = _safe_f(b.get("fg_pa"), None)
+                if not season_pa:
+                    season_pa = _safe_f(fgb.get("fg_pa"), 0.0)
+                obp = _safe_f(b.get("obp"), None)
+                exp_pa = _PA_BY_SLOT_SB.get(int(slot) if (slot and 1 <= int(slot) <= 9) else 0, 4.2)
+                sb = _sb_probability(season_sb, season_pa, expected_pa=exp_pa,
+                                     opp_hand=opp_hand, obp=obp)
+
+                out.append({
+                    "id": b.get("id"), "name": name, "slot": slot,
+                    "pos": b.get("pos"),
+                    "hitProb": round(hit_p, 4) if hit_p is not None else None,
+                    "hrProb": round(hr_p, 4) if hr_p is not None else None,
+                    "sbProb": sb.get("prob"), "sbTier": sb.get("tier"),
+                    "sbReason": sb.get("reason"), "seasonSb": sb.get("seasonSb"),
+                })
+            return out
+
+        # away batters face the HOME starter; home batters face the AWAY starter.
+        away_rows = _score_side(away_bats, hp_name, hp_hand)
+        home_rows = _score_side(home_bats, ap_name, ap_hand)
+
+        payload = {
+            "success": True, "gamePk": game_pk,
+            "models": {"hit": hit_ready, "hr": hr_ready, "sb": _SB_MODEL_AVAILABLE},
+            # Opposing starter each lineup faces (away batters vs home SP, etc.).
+            "awayVsPitcher": {"name": hp_name, "hand": hp_hand},
+            "homeVsPitcher": {"name": ap_name, "hand": ap_hand},
+            "away": away_rows, "home": home_rows,
+        }
+        _LINEUP_PROPS_CACHE[game_pk] = {"ts": time.time(), "payload": payload}
+        return jsonify(payload)
+    except Exception as ex:
+        print(f"[api_lineup_props] {traceback.format_exc()}")
+        return jsonify({"success": False, "error": str(ex)}), 500
 
 
 # ── Route: Prop projections ───────────────────────────────────────────────────
