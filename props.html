@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>Prop Projections | MLB Analytics Hub</title>
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/tokens.css">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{--c:#00e5ff;--m:#e040fb;--g:#00e676;--o:#ff9800;--r:#f44336;--bg:#050a18;--card:#0a1628;--b:rgba(0,229,255,.18);--t:#e0f0ff;--mu:#6a8db0;--fg:#fa6400;--sv:#00b8d4;--elite:#00e676;--strong:#00b8d4;--mod:#ffd740}
@@ -60,10 +61,21 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .bcard::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--c),var(--m))}
 .bcard:hover{transform:translateY(-4px);border-color:var(--c);box-shadow:0 0 28px rgba(0,229,255,.14)}
 .bcard-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px}
+/* ── Player headshot ── */
+.bcard-photo-wrap{flex-shrink:0;width:52px;height:52px;border-radius:50%;border:1.5px solid rgba(0,229,255,.25);background:rgba(0,0,0,.5);overflow:hidden;display:flex;align-items:center;justify-content:center}
+.bcard-photo{width:100%;height:100%;object-fit:cover;object-position:top center}
+.bcard-photo-initials{font-family:'Orbitron',monospace;font-size:.65rem;color:var(--mu);letter-spacing:1px}
+.bcard-top-left{display:flex;align-items:flex-start;gap:10px;flex:1;min-width:0}
+.bcard-top-info{flex:1;min-width:0}
 .bcard-name{font-weight:700;font-size:.9rem}
 .bcard-meta{font-size:.62rem;color:var(--mu);margin-top:2px}
 .bcard-slot{font-family:'Orbitron',monospace;font-size:1.1rem;color:var(--c);font-weight:900;line-height:1}
 .bcard-vs{font-size:.6rem;color:var(--mu);padding:5px 10px;background:rgba(0,0,0,.3);border-radius:6px;border:1px solid rgba(255,255,255,.05);margin-bottom:12px}
+/* ── Pitcher headshot in panel ── */
+.ppanel-top{display:flex;align-items:flex-start;gap:10px;margin-bottom:14px}
+.ppanel-photo-wrap{flex-shrink:0;width:48px;height:48px;border-radius:50%;border:1.5px solid rgba(250,100,0,.3);background:rgba(0,0,0,.5);overflow:hidden;display:flex;align-items:center;justify-content:center}
+.ppanel-photo{width:100%;height:100%;object-fit:cover;object-position:top center}
+.ppanel-info{flex:1;min-width:0}
 .proj-grid{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;margin-bottom:10px}
 .pcell{text-align:center;padding:8px 4px;background:rgba(0,0,0,.25);border-radius:8px;border:1px solid rgba(255,255,255,.04)}
 .plbl{font-size:.5rem;color:var(--mu);letter-spacing:1.5px;font-family:'Orbitron',monospace;margin-bottom:4px}
@@ -446,6 +458,7 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 <link rel="stylesheet" href="/static/mobile.css">
 </head>
 <body>
+<script src="/static/global-nav.js" defer></script>
 
 <nav>
   <div class="logo">⚾ PROP PROJECTIONS</div>
@@ -1141,6 +1154,7 @@ async function loadFullScan() {
     renderProj(d);
     gel('matchHeader').innerHTML = `${d.matchup || 'FULL SLATE'} · ${d.gameCount || 0} GAMES · ${(d.props || []).length || 0} PROPS`;
     gel('lastUpdate').textContent = `FULL SCAN ${d.cached ? 'CACHED' : 'BUILT'} · ${new Date().toLocaleTimeString()}`;
+    if (window.setNavAsOf) setNavAsOf(new Date());
     gel('umpBanner').classList.remove('visible');
     gel('lineupAlertBar').classList.remove('visible');
   } catch(e) {
@@ -1624,6 +1638,7 @@ async function loadProjections() {
     if (!PROJ_DATA.success) throw new Error(PROJ_DATA.error || 'Failed');
     renderProj(PROJ_DATA);
     renderMajorMarketsPanel(PROJ_DATA.game_lines || {});
+    if (window.setNavAsOf) setNavAsOf(new Date());
   } catch(e) {
     gel('batterGrid').innerHTML = errHTML(e.message);
     renderMajorMarketsPanel({});
@@ -2717,6 +2732,15 @@ function batterCard(b) {
   const injBadge = injuryBadgeHtml(b.injuryStatus, b.injuryDescription);
   const verify = verifyStatusHtml(b.injuryStatus);
 
+  // MLB headshot
+  const photoUrl = pid
+    ? `https://img.mlbstatic.com/mlb-photos/image/upload/d_people:generic:headshot:67:current.png/w_120,q_auto:best/v1/people/${pid}/headshot/67/current`
+    : '';
+  const initials = (b.name||'?').split(' ').map(w=>w[0]||'').join('').slice(0,2).toUpperCase();
+  const photoHtml = photoUrl
+    ? `<div class="bcard-photo-wrap"><img class="bcard-photo" src="${photoUrl}" alt="${esc(b.name||'')}" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><span class="bcard-photo-initials" style="display:none">${initials}</span></div>`
+    : `<div class="bcard-photo-wrap" style="display:flex"><span class="bcard-photo-initials">${initials}</span></div>`;
+
   // BAT X composite section
   let batxHtml = '';
   if (adj) {
@@ -2739,7 +2763,14 @@ function batterCard(b) {
 
   return `<div class="bcard">
     <div class="bcard-top">
-      <div><div class="bcard-name">${esc(b.name||'—')}${signalBadge(b.name)} ${injBadge}</div><div class="bcard-meta">${esc(b.pos||'')} · ${esc(b.team||'')}</div>${verify}</div>
+      <div class="bcard-top-left">
+        ${photoHtml}
+        <div class="bcard-top-info">
+          <div class="bcard-name">${esc(b.name||'—')}${signalBadge(b.name)} ${injBadge}</div>
+          <div class="bcard-meta">${esc(b.pos||'')} · ${esc(b.team||'')}</div>
+          ${verify}
+        </div>
+      </div>
       <div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:4px">
         <div class="bcard-slot">${b.slot||'?'}</div>
         ${hub != null ? hubBadge(hub) : ''}
@@ -2833,19 +2864,33 @@ function pitcherPanel(p) {
   // Recent form row
   const recentRow = (pr.recent_starts && pr.recent_starts > 0)
     ? `<div class="form-recent-row">
-        Last ${pr.recent_starts} starts: 
-        <strong style="color:var(--c)">${pr.recent_ip} IP</strong> · 
-        <strong style="color:#f44336">${pr.recent_er} ER</strong> · 
-        <strong style="color:var(--m)">${pr.recent_k} K</strong> · 
+        Last ${pr.recent_starts} starts:
+        <strong style="color:var(--c)">${pr.recent_ip} IP</strong> ·
+        <strong style="color:#f44336">${pr.recent_er} ER</strong> ·
+        <strong style="color:var(--m)">${pr.recent_k} K</strong> ·
         ERA: <strong style="${flag==='struggling'?'color:#f44336':flag==='dealing'?'color:var(--g)':''}">${pr.era_recent??'—'}</strong>
-        <span style="color:var(--mu)"> vs season ${pr.era_season??'—'}</span> · 
+        <span style="color:var(--mu)"> vs season ${pr.era_season??'—'}</span> ·
         Blended: <strong style="color:var(--c)">${pr.era_blended??'—'}</strong>
       </div>`
     : '';
 
+  // Pitcher headshot
+  const pitPhotoUrl = pid
+    ? `https://img.mlbstatic.com/mlb-photos/image/upload/d_people:generic:headshot:67:current.png/w_120,q_auto:best/v1/people/${pid}/headshot/67/current`
+    : '';
+  const pitInitials = (p.name||'?').split(' ').map(w=>w[0]||'').join('').slice(0,2).toUpperCase();
+  const pitPhotoHtml = pitPhotoUrl
+    ? `<div class="ppanel-photo-wrap"><img class="ppanel-photo" src="${pitPhotoUrl}" alt="${esc(p.name||'')}" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><span class="bcard-photo-initials" style="display:none">${pitInitials}</span></div>`
+    : `<div class="ppanel-photo-wrap" style="display:flex"><span class="bcard-photo-initials">${pitInitials}</span></div>`;
+
   return `<div class="ppanel">
-    <div class="pp-name">${p.name||'—'}${formBadge}</div>
-    <div class="pp-meta">${p.team||''} · ${p.role||'SP'} · ${p.pitchHand||'R'}HP</div>
+    <div class="ppanel-top">
+      ${pitPhotoHtml}
+      <div class="ppanel-info">
+        <div class="pp-name">${p.name||'—'}${formBadge}</div>
+        <div class="pp-meta">${p.team||''} · ${p.role||'SP'} · ${p.pitchHand||'R'}HP</div>
+      </div>
+    </div>
     ${recentRow}
     <div class="pp-projs">
       <div class="pp-proj${recCls(recK,'k')}">${recTag(recK,'k')}<div class="pp-plbl">PROJ K</div><div class="pp-pval kv">${f1(pr.k)}</div>${recLine(recK,'k')}</div>

@@ -675,6 +675,7 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .pp-promo{background:#78350f;color:#fcd34d;border-radius:8px;padding:1px 7px;font-size:.62rem;font-family:'Orbitron',monospace}
 </style>
 <link rel="stylesheet" href="/static/mobile.css">
+<link rel="stylesheet" href="/static/tokens.css">
 </head>
 <body>
 <nav>
@@ -946,7 +947,7 @@ function loadGame(){
   fetch('/api/game-summary/' + GPK).then(function(r){return r.json();}).then(function(d){
     if(!d.success)throw new Error(d.error||'failed');
     if(!d.game)throw new Error('Game not found');
-    GD=d.game;renderHeader();renderEdge();renderWx();renderPark();renderMatchup();populateSels();_simReady.game=true;_checkSimButtonReady();
+    GD=d.game;renderHeader();renderEdge();renderWx();renderPark();renderMatchup();populateSels();_simReady.game=true;_checkSimButtonReady();if(window.setNavAsOf)setNavAsOf(new Date());
     if(GP_DATA){ renderGameProjection(GP_DATA); }
   }).catch(function(e){document.getElementById('mhTeams').innerHTML='<p style="color:var(--m);font-family:Orbitron;font-size:.85rem">'+e.message+'</p>';});
 }
@@ -1793,9 +1794,12 @@ function showPlayerProp(side, idx, ev){
   var mp=lineupModelProps(side, lu);
   var m=mp?mp[idx]:null;
   var tl=side==='away'?(GD?GD.awayAbbr:'AWAY'):(GD?GD.homeAbbr:'HOME');
-  pop.innerHTML='<div style="display:flex;align-items:center;gap:7px;margin-bottom:2px">'
-    +'<span style="font-family:Orbitron,monospace;font-size:.74rem;color:#67e8f9">'+(p.name||'Player')+'</span>'
-    +'<span class="pos-tag">'+(p.pos||'')+'</span>'
+  var _popPhotoHtml = p.id
+    ? '<img src="https://img.mlbstatic.com/mlb-photos/image/upload/d_people:generic:headshot:67:current.png/w_60,q_auto:best/v1/people/'+p.id+'/headshot/67/current" alt="" loading="lazy" style="width:36px;height:36px;border-radius:50%;object-fit:cover;object-position:top center;border:1px solid rgba(103,232,249,.3);flex-shrink:0" onerror="this.style.display=\'none\'">'
+    : '';
+  pop.innerHTML='<div style="display:flex;align-items:center;gap:8px;margin-bottom:2px">'+_popPhotoHtml
+    +'<div><span style="font-family:Orbitron,monospace;font-size:.74rem;color:#67e8f9">'+(p.name||'Player')+'</span>'
+    +' <span class="pos-tag">'+(p.pos||'')+'</span></div>'
     +'<span style="font-size:.54rem;color:var(--mu);margin-left:auto">'+tl+' · #'+(p.slot||idx+1)+'</span></div>'
     +'<div style="font-size:.54rem;color:var(--mu);margin-bottom:4px">PROP SPOTLIGHT — '+(m?'XGB + SB model':'model reasoning')+'</div>'
     +playerPropReport(p, opp, leaders, idx, m);
@@ -1842,8 +1846,11 @@ function showTab(side){
     if(i===LEAD.hit) emo+=' <span title="Top hit probability in this lineup">🎯</span>';
     if(i===LEAD.hr)  emo+=' <span title="Top home-run probability in this lineup">💣</span>';
     if(i===LEAD.sb)  emo+=' <span title="Top stolen-base threat in this lineup">💨</span>';
+    var photoHtml = p.id
+      ? '<img src="https://img.mlbstatic.com/mlb-photos/image/upload/d_people:generic:headshot:67:current.png/w_60,q_auto:best/v1/people/'+p.id+'/headshot/67/current" alt="" loading="lazy" style="width:28px;height:28px;border-radius:50%;object-fit:cover;object-position:top center;border:1px solid rgba(0,229,255,.2);flex-shrink:0" onerror="this.style.display=\'none\'">'
+      : '';
     var nameCell='<span class="pp-name" style="cursor:pointer;border-bottom:1px dotted rgba(0,229,255,.55)" onclick="showPlayerProp(\''+side+'\','+i+',event)" title="Click for prop analysis">'+p.name+'</span>'+emo;
-    return '<tr><td class="on">'+(i+1)+'</td><td>'+nameCell+addBtn+'</td><td><span class="pos-tag">'+p.pos+'</span></td>'
+    return '<tr><td class="on">'+(i+1)+'</td><td><div style="display:flex;align-items:center;gap:7px">'+photoHtml+'<div>'+nameCell+addBtn+'</div></div></td><td><span class="pos-tag">'+p.pos+'</span></td>'
       +'<td class="'+avc(p.avg)+'">'+pv(p.avg,'---')+'</td>'
       +'<td>'+pv(p.obp,'---')+'</td><td>'+pv(p.slg,'---')+'</td><td>'+pv(p.ops,'---')+'</td>'
       +'<td>'+p.ab+'</td><td>'+p.hr+'</td><td>'+p.rbi+'</td>'+fc+sc+'</tr>';
@@ -7193,6 +7200,7 @@ function renderHRPicksPanel(){
 // ═══════════════════════════════════════════════════════════════
 
 </script>
+<script src="/static/global-nav.js" defer></script>
 <script src="/static/mobile-nav.js" defer>
 // ════════════════════════════════════════════════════════════
 // PRIZEPICKS TAB  — filters to loaded game teams
