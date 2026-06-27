@@ -86,6 +86,9 @@
       <div class="actions">
         <a class="toplink" href="/">Dashboard</a>
         <a class="toplink" href="/props">Props</a>
+        <a class="toplink" href="/value-bets">Value Bets</a>
+        <a class="toplink" href="/edge-lab">Edge Lab</a>
+        <a class="toplink" href="/consistency">Consistency</a>
         <a class="toplink" href="/tracker">Tracker</a>
         <button class="btn" id="csvBtn" onclick="exportTracker('csv')">Export CSV</button>
         <button class="btn" id="pdfBtn" onclick="exportTracker('pdf')">Export PDF</button>
@@ -105,7 +108,7 @@
         <table>
           <thead>
             <tr>
-              <th>Player</th><th>Team</th><th>Slot</th><th>Matchup</th><th>vs Hand</th><th>L10 %</th><th>Grade</th><th>Hub</th><th>EV %</th>
+              <th>Player</th><th>Team</th><th>Slot</th><th>Matchup</th><th>vs Hand</th><th>L10 %</th><th>Grade</th><th>Hub</th><th>EV %</th><th></th>
             </tr>
           </thead>
           <tbody id="hitsBody"></tbody>
@@ -119,7 +122,7 @@
         <table>
           <thead>
             <tr>
-              <th>Game</th><th>Rank</th><th>Player</th><th>Team</th><th>Slot</th><th>Score</th><th>Grade</th><th>L10 %</th><th>Hub</th>
+              <th>Game</th><th>Rank</th><th>Player</th><th>Team</th><th>Slot</th><th>Score</th><th>Grade</th><th>L10 %</th><th>Hub</th><th></th>
             </tr>
           </thead>
           <tbody id="matchBody"></tbody>

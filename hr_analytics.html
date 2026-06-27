@@ -365,6 +365,7 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .zone-empty{color:var(--muted);font-size:13px;text-align:center;padding:24px 10px}
 .sz-meta{font-size:11px;color:var(--muted);text-align:center;margin-top:8px}
 </style>
+<link rel="stylesheet" href="/static/mobile.css">
 </head>
 <body>
 <nav>
@@ -377,10 +378,13 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
   </div>
   <div class="nav-r">
     <div class="live-dot"><div class="dot"></div>LIVE</div>
-    <a href="/dashboard">Dashboard</a>
+    <a href="/">Dashboard</a>
     <a href="/props">Props</a>
-    <a href="/bvp">BvP</a>
+    <a href="/value-bets">Value Bets</a>
+    <a href="/nrfi">NRFI</a>
+    <a href="/batter-vs-pitcher">BvP</a>
     <a href="/hr-analytics" style="color:#3fb950;font-weight:700">HR</a>
+    <a href="/tracker">Tracker</a>
   </div>
 </nav>
 
@@ -1401,5 +1405,6 @@ async function regenScouting(s){
 // ──────────────────────────────────────────────────────
 loadDailyScores();
 </script>
+<script src="/static/mobile-nav.js" defer></script>
 </body>
 </html>

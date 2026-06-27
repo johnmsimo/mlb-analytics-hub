@@ -143,6 +143,7 @@
               <th>Sample</th>
               <th>Hub</th>
               <th>EV</th>
+              <th></th>
             </tr>
           </thead>
           <tbody id="sheetBody"></tbody>
@@ -266,7 +267,7 @@
 
       if(!sheet){
         meta.innerHTML = '';
-        body.innerHTML = '<tr><td colspan="15" class="empty">No consistency sheets are available.</td></tr>';
+        body.innerHTML = '<tr><td colspan="16" class="empty">No consistency sheets are available.</td></tr>';
         return;
       }
 
@@ -278,13 +279,14 @@
       ].join('');
 
       if(!rows.length){
-        body.innerHTML = '<tr><td colspan="15" class="empty">No rows match the current filters.</td></tr>';
+        body.innerHTML = '<tr><td colspan="16" class="empty">No rows match the current filters.</td></tr>';
         return;
       }
 
-      body.innerHTML = rows.map((row, idx) => {
+      body.innerHTML = rows.map((row) => {
         const ev = Number(row.evPct || 0);
         const evClass = ev >= 0 ? 'pos' : 'neg';
+        const origIdx = sheet.rows.indexOf(row);
         return '<tr>' +
           `<td><div class="player">${esc(row.player || '-')}</div><div class="small">ID ${esc(row.playerId || '-')}</div></td>` +
           `<td>${esc(row.team || '-')}</td>` +
@@ -301,7 +303,7 @@
           `<td>${row.sampleSize || 0}</td>` +
           `<td><span class="hub">${row.hubRating == null ? '-' : num(row.hubRating, 0)}</span></td>` +
           `<td class="ev ${evClass}">${num(ev, 1)}%</td>` +
-          `<td><button class="btn parlay-btn" onclick="addConsistencyRowToParlay(${idx})">+ Parlay</button></td>` +
+          `<td><button class="btn parlay-btn" onclick="addConsistencyRowToParlay(${origIdx})">+ Parlay</button></td>` +
         '</tr>';
       }).join('');
     }
@@ -357,7 +359,7 @@
           status.textContent = `Updated ${data.generatedAt || 'now'} | ${data.cached ? 'cached' : 'fresh'} payload for ${data.date || etToday()}`;
         }
       }catch(err){
-        document.getElementById('sheetBody').innerHTML = `<tr><td colspan="15" class="empty">${err.message}</td></tr>`;
+        document.getElementById('sheetBody').innerHTML = `<tr><td colspan="16" class="empty">${err.message}</td></tr>`;
         document.getElementById('sheetMeta').innerHTML = '';
         status.textContent = 'Error: ' + err.message;
       }finally{

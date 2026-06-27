@@ -258,9 +258,9 @@ function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').
 // Falls back to embedded sample if API unreachable.
 // ============================================================
 
-const API_BASE = '';  // e.g. 'https://your-render-app.onrender.com'
+const API_BASE = '';  // empty = current host (relative URL)
 
-// Sample 2026 live snapshot (replace via fetch at runtime)
+// Sample 2026 live snapshot (replaced at runtime via tryFetchLive)
 const PLAYERS = [
   {name:"Angel Martínez",team:"CLE",pos:"OF",ev95:106.8,ev95Prior:103.9,brl:13.2,xwoba:.402,woba:.376,hh:52.1,maxev:114.2,kpct:18.4,kpctPrior:22.1,babip:.331,wrc:148,avg:.312,xba:.298,iso:.241},
   {name:"Ryan Jeffers",team:"MIN",pos:"C",ev95:107.4,ev95Prior:104.2,brl:15.1,xwoba:.398,woba:.371,hh:54.8,maxev:115.1,kpct:20.3,kpctPrior:23.7,babip:.288,wrc:142,avg:.289,xba:.283,iso:.268},
@@ -454,7 +454,6 @@ document.getElementById('search').addEventListener('input', e => { state.search 
 
 // Attempt live fetch from your Flask backend (graceful fallback to sample)
 async function tryFetchLive(){
-  if (!API_BASE) return;
   try {
     const r = await fetch(API_BASE + '/api/breakout/candidates');
     if (!r.ok) return;

@@ -4892,7 +4892,7 @@ function renderHitRateMatrix() {
   }
 
   function buildRows(players, teamLabel) {
-    if(!players || !players.length) return '<tr><td colspan="6" class="na">No simulation data</td></tr>';
+    if(!players || !players.length) return '<tr><td colspan="7" class="na">No simulation data</td></tr>';
     return players.sort(function(a,b){return (a.slot||99)-(b.slot||99);}).map(function(p) {
       var s = p;
       var mean = f === 'hits' ? s.mean_hits : f === 'tb' ? s.mean_tb : f === 'hr' ? s.mean_hr :
@@ -4913,7 +4913,7 @@ function renderHitRateMatrix() {
     if(!ps || !ps.name) return '';
     var meanK = ps.mean_k != null ? parseFloat(ps.mean_k).toFixed(2) : '—';
     var meanTd = '<td style="color:var(--m);font-family:Orbitron,monospace;font-size:.65rem">' + meanK + '</td>';
-    return '<tr class="pitcher-divider"><td colspan="6">⚾ ' + teamLabel + ' STARTER STRIKEOUTS</td></tr>'
+    return '<tr class="pitcher-divider"><td colspan="7">⚾ ' + teamLabel + ' STARTER STRIKEOUTS</td></tr>'
       + '<tr>'
       + '<td class="slot-num">SP</td>'
       + '<td class="player-name"><span class="pos-tag" style="background:rgba(224,64,251,.1);color:var(--m);border-color:rgba(224,64,251,.22)">' + teamLabel + '</span> ' + ps.name + '</td>'
@@ -4932,9 +4932,9 @@ function renderHitRateMatrix() {
 
   var bodyRows = '';
   if(isBatter) {
-    bodyRows += '<tr class="team-divider"><td colspan="6">▸ ' + (m.awayAbbr||'AWAY') + ' BATTERS</td></tr>';
+    bodyRows += '<tr class="team-divider"><td colspan="7">▸ ' + (m.awayAbbr||'AWAY') + ' BATTERS</td></tr>';
     bodyRows += buildRows(away, m.awayAbbr||'AWAY');
-    bodyRows += '<tr class="team-divider"><td colspan="6">▸ ' + (m.homeAbbr||'HOME') + ' BATTERS</td></tr>';
+    bodyRows += '<tr class="team-divider"><td colspan="7">▸ ' + (m.homeAbbr||'HOME') + ' BATTERS</td></tr>';
     bodyRows += buildRows(home, m.homeAbbr||'HOME');
   }
   if(isPitcher) {
