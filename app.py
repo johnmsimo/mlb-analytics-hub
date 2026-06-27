@@ -1029,6 +1029,7 @@ VALUE_BETS_HTML = _read_html_or_fallback('value_bets.html')
 NRFI_HTML = _read_html_or_fallback('nrfi.html')
 TOOLS_HTML = _read_html_or_fallback('tools.html')
 EDGE_LAB_HTML = _read_html_or_fallback('edge_lab.html')
+STREAK_HTML = _read_html_or_fallback('streak.html')
 DATA_DIR = os.environ.get('DATA_DIR') or (
     '/app/data' if os.path.isdir('/app/data') else os.path.join(_HERE, 'data')
 )
@@ -4616,6 +4617,10 @@ def value_bets_page():
 @app.route('/nrfi')
 def nrfi_page():
     return NRFI_HTML
+
+@app.route('/streak')
+def streak_page():
+    return STREAK_HTML
 
 @app.route('/tools')
 def tools_page():
@@ -13178,6 +13183,10 @@ def _odds_bool_env(env_key, default='1'):
 # Per-game odds snapshot: cache 24h by default (single fetch reused everywhere)
 _ODDS_EVENTS_CACHE: dict = {}          # {'data': [...], 'ts': float}
 _ODDS_GAME_CACHE:  dict = {}           # {event_id: {'all': [...], 'ts': float}}
+# First-seen best over price today, keyed by (date_str, player, market_key, line).
+# Populated on first call to _market_price_summary per key each calendar day.
+_OPENING_PRICE_CACHE: dict = {}
+_OPENING_PRICE_LOCK = threading.Lock()
 _ODDS_EVENTS_TTL  = _odds_ttl_seconds('ODDS_EVENTS_TTL_SEC', 6 * 60 * 60)
 _ODDS_GAME_TTL    = _odds_ttl_seconds('ODDS_GAME_TTL_SEC', 24 * 60 * 60)
 _ODDS_NRFI_TTL    = _odds_ttl_seconds('ODDS_NRFI_TTL_SEC', 5 * 60)
@@ -14006,6 +14015,25 @@ def _market_price_summary(market_props, player, mk, line):
 
     books = {it.get('bookmaker') for it in all_items if it.get('bookmaker')}
 
+    # Track first-seen price for line-movement display (daily reset via date key).
+    opening_over_price = None
+    if best_over_price is not None:
+        today_str = datetime.now(ET).strftime('%Y-%m-%d')
+        _key = (today_str, str(player), str(mk), str(line))
+        with _OPENING_PRICE_LOCK:
+            if _key not in _OPENING_PRICE_CACHE:
+                _OPENING_PRICE_CACHE[_key] = best_over_price
+                # Prune stale dates (keep only today)
+                stale = [k for k in _OPENING_PRICE_CACHE if k[0] != today_str]
+                for k in stale:
+                    del _OPENING_PRICE_CACHE[k]
+            opening_over_price = _OPENING_PRICE_CACHE[_key]
+
+    line_move = None
+    if best_over_price is not None and opening_over_price is not None:
+        # Positive = line moved in bettor's favour (price improved)
+        line_move = best_over_price - opening_over_price
+
     return {
         'best_over_price': best_over_price,
         'best_over_book': best_over_book,
@@ -14016,6 +14044,8 @@ def _market_price_summary(market_props, player, mk, line):
         'market_implied': _american_to_implied(best_over_price),
         'market_bookmaker': best_over_book,
         'line_varies': bool(line_range and line_range[0] != line_range[1]),
+        'opening_over_price': opening_over_price,
+        'line_move': line_move,
     }
 
 
@@ -22834,14 +22864,16 @@ def api_props_projections(game_pk):
                 for ln in (_market_lines_for_player(market_props, player_name, mk) or []):
                     msum = _market_price_summary(market_props, player_name, mk, ln)
                     out.append({
-                        'marketKey':     mk,
-                        'line':          ln,
-                        'overPrice':     msum.get('best_over_price'),
-                        'overBook':      msum.get('best_over_book'),
-                        'underPrice':    msum.get('best_under_price'),
-                        'underBook':     msum.get('best_under_book'),
-                        'marketImplied': msum.get('market_implied'),
-                        'bookCount':     msum.get('book_count'),
+                        'marketKey':        mk,
+                        'line':             ln,
+                        'overPrice':        msum.get('best_over_price'),
+                        'overBook':         msum.get('best_over_book'),
+                        'underPrice':       msum.get('best_under_price'),
+                        'underBook':        msum.get('best_under_book'),
+                        'marketImplied':    msum.get('market_implied'),
+                        'bookCount':        msum.get('book_count'),
+                        'openingOverPrice': msum.get('opening_over_price'),
+                        'lineMove':         msum.get('line_move'),
                     })
             return out
 

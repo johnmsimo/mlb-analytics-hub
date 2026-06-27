@@ -17,6 +17,7 @@
     { href: '/breakout-detector',    label: '🚀 Breakouts' },
     { href: '/hr-analytics',         label: '💥 HR Analytics' },
     { href: '/pitcher-deep-dive',    label: '🎯 Pitcher Dive' },
+    { href: '/streak',               label: '🔥 100% Club' },
   ];
 
   function currentHref() {

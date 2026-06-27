@@ -1499,7 +1499,9 @@ function trendPillsForBatter(playerId) {
     const tot  = data.l5.total;
     const cls  = pct >= 0.70 ? 'hot' : pct >= 0.50 ? 'warm' : pct < 0.35 ? 'cold' : 'neutral';
     const icon = pct >= 0.70 ? '🔥' : pct < 0.35 ? '❄' : '';
-    return `<span class="tpill ${cls}" title="L10: ${data.l10.over}/${data.l10.total}">${icon}${w.label} ${over}/${tot} L5</span>`;
+    const l10txt = (data.l10 && data.l10.total > 0)
+      ? `<span style="opacity:.65"> · ${data.l10.over}/${data.l10.total} L10</span>` : '';
+    return `<span class="tpill ${cls}">${icon}${w.label} ${over}/${tot} L5${l10txt}</span>`;
   }).filter(Boolean).join('');
 
   if (!pills) return '';
@@ -1535,7 +1537,9 @@ function trendPillsForPitcher(playerId) {
     const tot  = data.l5.total;
     const cls  = pct >= 0.70 ? 'hot' : pct >= 0.50 ? 'warm' : pct < 0.35 ? 'cold' : 'neutral';
     const icon = pct >= 0.70 ? '🔥' : pct < 0.35 ? '❄' : '';
-    return `<span class="tpill ${cls}" title="L10: ${data.l10.over}/${data.l10.total}">${icon}${w.label} ${over}/${tot} L5</span>`;
+    const l10txt = (data.l10 && data.l10.total > 0)
+      ? `<span style="opacity:.65"> · ${data.l10.over}/${data.l10.total} L10</span>` : '';
+    return `<span class="tpill ${cls}">${icon}${w.label} ${over}/${tot} L5${l10txt}</span>`;
   }).filter(Boolean).join('');
 
   if (!pills) return '';
@@ -2795,6 +2799,43 @@ function batterCard(b) {
       <div class="fstat"><div class="fstat-lbl">EV</div><div class="fstat-val">${b.sv_ev ? Number(b.sv_ev).toFixed(1) : '—'}</div></div>
       <div class="fstat"><div class="fstat-lbl">EXP PA</div><div class="fstat-val">${p.expected_pa ?? '—'}</div></div>
     </div>
+    ${(()=>{
+      const om = Array.isArray(b.oddsMarkets) ? b.oddsMarkets : [];
+      if (!om.length) return '';
+      // Best over price across all markets
+      let bestPx = null, bestBk = '', bestMkt = '', bestOpen = null, bestMove = null;
+      let bookSet = new Set();
+      om.forEach(m => {
+        if (m.overBook) bookSet.add(m.overBook);
+        if (m.underBook) bookSet.add(m.underBook);
+        if (m.overPrice != null && (bestPx === null || m.overPrice > bestPx)) {
+          bestPx = m.overPrice; bestBk = m.overBook || '';
+          bestMkt = m.marketLabel || m.marketKey || '';
+          bestOpen = m.openingOverPrice ?? null;
+          bestMove = m.lineMove ?? null;
+        }
+      });
+      const nBooks = bookSet.size || (b.bookCount ?? 0);
+      if (bestPx == null) return '';
+      const pxCls = bestPx >= 0 ? 'color:var(--g)' : 'color:var(--mu)';
+      const pxStr = bestPx > 0 ? '+'+bestPx : String(bestPx);
+      // Line movement: ▲ improved (moved toward bettor), ▼ worsened
+      let moveHtml = '';
+      if (bestMove != null && Math.abs(bestMove) >= 1) {
+        const mvDir = bestMove > 0 ? '▲' : '▼';
+        const mvCol = bestMove > 0 ? 'var(--g)' : 'var(--r)';
+        const mvStr = (bestMove > 0 ? '+' : '') + bestMove;
+        moveHtml = `<span style="color:${mvCol};font-size:.6rem;font-family:'JetBrains Mono',monospace" title="vs opening ${bestOpen}">${mvDir}${mvStr}</span>`;
+      }
+      return `<div style="display:flex;align-items:center;gap:8px;padding:5px 10px;margin:6px 0 2px;background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.12);border-radius:8px;font-size:.63rem">
+        <span style="color:var(--mu)">BEST ODDS</span>
+        <span style="${pxCls};font-weight:700;font-family:'JetBrains Mono',monospace">${pxStr}</span>
+        ${bestBk ? `<span style="color:var(--c);font-size:.58rem">@ ${bestBk.toUpperCase()}</span>` : ''}
+        ${moveHtml}
+        <span style="color:var(--mu);margin-left:auto">${bestMkt}</span>
+        <span style="color:var(--mu)">${nBooks} book${nBooks===1?'':'s'}</span>
+      </div>`;
+    })()}
     <button class="ls-btn" onclick="openLineShop('${(b.name||'').replace(/'/g,"\\'")}', ${b.gamePk || 'null'})"><span>📚 LINE SHOPPING</span><span>OPEN ▸</span></button>
     <button class="ls-btn" onclick="openSprayChart(${pid}, '${(b.name||'').replace(/'/g,"\\'")}')"><span>🗺️ SPRAY CHART</span><span>OPEN ▸</span></button>
     <button class="ls-btn" onclick="openZoneChart(${pid}, '${(b.name||'').replace(/'/g,"\\'")}')"><span>⚾ STRIKE ZONE</span><span>OPEN ▸</span></button>

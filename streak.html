@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>100% Club — MLB Analytics Hub</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/mobile.css">
+<link rel="stylesheet" href="/static/tokens.css">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--t);font-family:var(--font-b);min-height:100vh}
+
+/* NAV */
+nav{display:flex;align-items:center;gap:12px;padding:0 24px;height:57px;background:rgba(5,10,24,.97);border-bottom:1px solid var(--b);position:sticky;top:0;z-index:100;backdrop-filter:blur(12px)}
+.nav-brand{font-family:var(--font-d);font-size:.85rem;letter-spacing:3px;color:var(--c);text-decoration:none}
+.nav-back{color:var(--mu);font-size:.72rem;text-decoration:none;letter-spacing:1px;padding:4px 10px;border:1px solid rgba(255,255,255,.08);border-radius:6px}
+.nav-back:hover{color:var(--t);border-color:rgba(0,229,255,.3)}
+
+/* PAGE HEADER */
+.page-hero{padding:28px 24px 20px;border-bottom:1px solid var(--b2)}
+.page-hero h1{font-family:var(--font-d);font-size:1.3rem;letter-spacing:3px;color:var(--g);margin-bottom:6px}
+.page-hero p{font-size:.78rem;color:var(--mu);max-width:520px}
+
+/* TOOLBAR */
+.toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:14px 24px;border-bottom:1px solid var(--b2)}
+.tb-label{font-size:.66rem;color:var(--mu);letter-spacing:1px;text-transform:uppercase}
+.chip-group{display:flex;gap:5px;flex-wrap:wrap}
+.chip{padding:4px 12px;border-radius:999px;border:1px solid rgba(255,255,255,.1);background:transparent;color:var(--mu);font-size:.68rem;font-family:var(--font-b);cursor:pointer;transition:all .15s}
+.chip.active,.chip:hover{border-color:rgba(0,229,255,.4);background:rgba(0,229,255,.1);color:var(--c)}
+.chip.active{font-weight:600}
+.tb-right{margin-left:auto;display:flex;align-items:center;gap:10px}
+#resultCount{font-size:.7rem;color:var(--mu);font-family:var(--font-m)}
+.sort-sel{background:rgba(0,0,0,.4);border:1px solid rgba(255,255,255,.1);border-radius:8px;color:var(--t);padding:5px 10px;font-size:.68rem}
+
+/* GRID */
+.streak-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px;padding:20px 24px}
+
+/* CARD */
+.sc{background:var(--card);border:1px solid var(--b2);border-radius:14px;padding:14px;transition:border-color .2s,transform .15s;position:relative;overflow:hidden}
+.sc:hover{border-color:rgba(0,229,255,.25);transform:translateY(-1px)}
+.sc.hot{border-color:rgba(0,230,118,.3);background:linear-gradient(135deg,var(--card),rgba(0,230,118,.04))}
+.sc.on-fire{border-color:rgba(255,215,64,.4);background:linear-gradient(135deg,var(--card),rgba(255,215,64,.06))}
+
+/* Header row: photo + name + streak badge */
+.sc-head{display:flex;align-items:flex-start;gap:10px;margin-bottom:10px}
+.sc-photo{width:44px;height:44px;border-radius:50%;object-fit:cover;object-position:top center;border:1.5px solid rgba(0,229,255,.2);flex-shrink:0;background:rgba(0,0,0,.5)}
+.sc-initials{width:44px;height:44px;border-radius:50%;border:1.5px solid rgba(0,229,255,.15);background:rgba(0,229,255,.06);display:flex;align-items:center;justify-content:center;font-family:var(--font-d);font-size:.62rem;color:var(--mu);flex-shrink:0}
+.sc-info{flex:1;min-width:0}
+.sc-name{font-weight:700;font-size:.84rem;color:var(--t);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sc-meta{font-size:.64rem;color:var(--mu);margin-top:2px}
+.sc-streak{margin-left:auto;flex-shrink:0;font-family:var(--font-d);font-size:.56rem;letter-spacing:.5px;padding:3px 8px;border-radius:999px;background:rgba(0,230,118,.12);border:1px solid rgba(0,230,118,.3);color:var(--g);white-space:nowrap}
+.sc-streak.on-fire{background:rgba(255,215,64,.15);border-color:rgba(255,215,64,.4);color:var(--y)}
+
+/* Market */
+.sc-mkt{display:flex;align-items:center;gap:6px;margin-bottom:10px;font-size:.68rem}
+.sc-mkt-label{color:var(--mu)}
+.sc-mkt-line{font-family:var(--font-m);color:var(--c);font-weight:600}
+
+/* Rate bars */
+.rate-row{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+.rate-block{flex:1;min-width:70px}
+.rate-lbl{font-size:.56rem;color:var(--mu);letter-spacing:.8px;text-transform:uppercase;margin-bottom:3px}
+.rate-num{font-family:var(--font-m);font-size:.82rem;font-weight:700}
+.rate-num.fire{color:var(--g)}
+.rate-num.warm{color:var(--c)}
+.rate-num.cold{color:var(--r)}
+.rate-bar{height:3px;border-radius:2px;background:rgba(255,255,255,.08);margin-top:3px;overflow:hidden}
+.rate-fill{height:100%;border-radius:2px;transition:width .4s var(--ease)}
+
+/* Sparkline */
+.sparkline{display:flex;gap:3px;align-items:flex-end;height:20px;margin-bottom:10px}
+.spark-dot{width:9px;border-radius:2px;transition:opacity .2s}
+
+/* Actions */
+.sc-actions{display:flex;gap:7px;margin-top:8px}
+.sc-btn{flex:1;padding:6px 8px;border-radius:8px;font-size:.65rem;font-weight:600;cursor:pointer;transition:all .15s;border:1px solid;text-align:center}
+.sc-track{border-color:rgba(0,229,255,.35);background:rgba(0,229,255,.08);color:var(--c)}
+.sc-track:hover{background:rgba(0,229,255,.18)}
+.sc-track.saved{border-color:rgba(0,230,118,.4);background:rgba(0,230,118,.1);color:var(--g)}
+.sc-props{border-color:rgba(255,255,255,.1);background:transparent;color:var(--mu);text-decoration:none;display:flex;align-items:center;justify-content:center}
+.sc-props:hover{border-color:rgba(0,229,255,.3);color:var(--c)}
+
+/* Empty / spinner */
+.empty{text-align:center;padding:60px 24px;color:var(--mu);font-size:.82rem}
+.empty h3{font-family:var(--font-d);font-size:.9rem;color:var(--mu);letter-spacing:2px;margin-bottom:8px}
+.spinner-wrap{text-align:center;padding:60px;color:var(--mu)}
+.spin{display:inline-block;width:32px;height:32px;border:3px solid rgba(0,229,255,.15);border-top-color:var(--c);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Stat row at bottom of card */
+.sc-stat-row{display:flex;gap:10px;font-size:.62rem;color:var(--mu);border-top:1px solid var(--b2);padding-top:8px;margin-top:4px;flex-wrap:wrap}
+.sc-stat-row span{white-space:nowrap}
+.sc-stat-row strong{color:var(--t)}
+</style>
+</head>
+<body>
+
+<nav>
+  <a class="nav-brand" href="/">MLB HUB</a>
+  <a class="nav-back" href="/">← HOME</a>
+</nav>
+
+<div class="page-hero">
+  <h1>🔥 100% CLUB</h1>
+  <p>Players hitting their props at elite rates over recent games. Sorted by window hit rate, filtered by minimum sample.</p>
+</div>
+
+<div class="toolbar">
+  <span class="tb-label">Window</span>
+  <div class="chip-group" id="windowChips">
+    <button class="chip active" data-window="l5">L5</button>
+    <button class="chip" data-window="l10">L10</button>
+    <button class="chip" data-window="l20">L20</button>
+    <button class="chip" data-window="season">Season</button>
+  </div>
+  <span class="tb-label" style="margin-left:12px">Min %</span>
+  <div class="chip-group" id="pctChips">
+    <button class="chip active" data-pct="1.0">100%</button>
+    <button class="chip" data-pct="0.8">80%+</button>
+    <button class="chip" data-pct="0.7">70%+</button>
+    <button class="chip" data-pct="0.6">60%+</button>
+  </div>
+  <div class="tb-right">
+    <label style="font-size:.66rem;color:var(--mu)">Sort
+      <select class="sort-sel" id="sortSel" onchange="renderCards()">
+        <option value="winPct">Hit Rate</option>
+        <option value="streak">Streak</option>
+        <option value="ev">EV%</option>
+        <option value="hub">Hub Rating</option>
+      </select>
+    </label>
+    <span id="resultCount">—</span>
+  </div>
+</div>
+
+<div id="cardGrid" class="streak-grid">
+  <div class="spinner-wrap"><div class="spin"></div></div>
+</div>
+
+<script src="/static/global-nav.js" defer></script>
+<script src="/static/mobile-nav.js" defer></script>
+<script>
+'use strict';
+
+var ROWS = [];
+var CUR_WINDOW = 'l5';
+var CUR_MIN_PCT = 1.0;
+var TRACKED_KEYS = new Set();
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+function esc(s){ var d=document.createElement('div'); d.textContent=String(s||''); return d.innerHTML; }
+
+function fmtPct(v){ return v!=null ? Math.round(v*100)+'%' : '—'; }
+
+function rateCls(pct){
+  return pct >= 0.80 ? 'fire' : pct >= 0.60 ? 'warm' : pct < 0.40 ? 'cold' : '';
+}
+
+function rateBarColor(pct){
+  return pct >= 0.80 ? '#00e676' : pct >= 0.60 ? '#00e5ff' : pct < 0.40 ? '#f44336' : '#6a8db0';
+}
+
+function sparklineHtml(arr){
+  if (!Array.isArray(arr) || !arr.length) return '';
+  return arr.map(function(v){
+    var h = Math.max(4, Math.round((v ? 1 : 0.3) * 20));
+    var col = v ? '#00e676' : '#3a5a7a';
+    return '<div class="spark-dot" style="height:'+h+'px;background:'+col+'"></div>';
+  }).join('');
+}
+
+function photoHtml(row){
+  var pid = row.playerId;
+  var initials = (row.player||'?').split(' ').map(function(w){return w[0]||'';}).join('').slice(0,2).toUpperCase();
+  if (!pid) return '<div class="sc-initials">'+esc(initials)+'</div>';
+  var url = 'https://img.mlbstatic.com/mlb-photos/image/upload/d_people:generic:headshot:67:current.png/w_120,q_auto:best/v1/people/'+pid+'/headshot/67/current';
+  return '<img class="sc-photo" src="'+url+'" alt="'+esc(row.player||'')+'" loading="lazy" onerror="this.outerHTML=\'<div class=sc-initials>'+initials+'</div>\'">';
+}
+
+function mkTrackerKey(row){ return 'streak|'+row.player+'|'+row.marketKey+'|'+row.line; }
+
+function rateBlock(label, data){
+  if (!data || !data.total) return '';
+  var pct = data.pct != null ? data.pct : (data.over/data.total);
+  var cls = rateCls(pct);
+  var col = rateBarColor(pct);
+  return '<div class="rate-block">'
+    +'<div class="rate-lbl">'+label+'</div>'
+    +'<div class="rate-num '+cls+'">'+data.over+'/'+data.total+'</div>'
+    +'<div class="rate-bar"><div class="rate-fill" style="width:'+Math.round(pct*100)+'%;background:'+col+'"></div></div>'
+    +'</div>';
+}
+
+// ── Render ────────────────────────────────────────────────────────────────────
+function renderCards(){
+  var sort = document.getElementById('sortSel').value;
+  var sorted = ROWS.slice().sort(function(a,b){
+    if (sort === 'streak') return (b.streakOver||0)-(a.streakOver||0);
+    if (sort === 'ev') return (b.evPct||0)-(a.evPct||0);
+    if (sort === 'hub') return (b.hubRating||0)-(a.hubRating||0);
+    // default: winPct for selected window
+    var aw = a[CUR_WINDOW]||{}; var bw = b[CUR_WINDOW]||{};
+    var ap = aw.pct != null ? aw.pct : (aw.total ? aw.over/aw.total : 0);
+    var bp = bw.pct != null ? bw.pct : (bw.total ? bw.over/bw.total : 0);
+    return bp - ap;
+  });
+
+  document.getElementById('resultCount').textContent = sorted.length + ' player' + (sorted.length===1?'':'s');
+
+  if (!sorted.length){
+    document.getElementById('cardGrid').innerHTML = '<div class="empty"><h3>NO MEMBERS</h3><p>No players meet the current filter. Try lowering the minimum hit rate.</p></div>';
+    return;
+  }
+
+  document.getElementById('cardGrid').innerHTML = sorted.map(function(row, idx){
+    var winData = row[CUR_WINDOW] || {};
+    var winPct  = winData.pct != null ? winData.pct : (winData.total ? winData.over/winData.total : 0);
+    var streak  = row.streakOver || 0;
+    var isOnFire = streak >= 7;
+    var cardCls  = isOnFire ? 'sc on-fire' : winPct >= 0.8 ? 'sc hot' : 'sc';
+
+    var streakLabel = streak >= 3
+      ? '<span class="sc-streak'+(isOnFire?' on-fire':'')+'">'+(isOnFire?'🔥 ':'')+''+streak+' STREAK</span>'
+      : '';
+
+    var l5h  = row.l5  ? rateBlock('L5',  row.l5)  : '';
+    var l10h = row.l10 ? rateBlock('L10', row.l10) : '';
+    var seah = row.season ? rateBlock('SZN', row.season) : '';
+
+    var spark = sparklineHtml(row.sparkline);
+    var isSaved = TRACKED_KEYS.has(mkTrackerKey(row));
+    var marketLbl = row.marketLabel || row.marketKey || '—';
+    var evStr = row.evPct != null ? 'EV '+(row.evPct*100).toFixed(1)+'%' : '';
+    var gpk = row.gamePk;
+
+    return '<div class="'+cardCls+'" id="sc-'+idx+'">'
+      +'<div class="sc-head">'
+        +photoHtml(row)
+        +'<div class="sc-info">'
+          +'<div class="sc-name">'+esc(row.player||'—')+'</div>'
+          +'<div class="sc-meta">'+esc(row.team||'')+(row.slot?' · #'+row.slot:'')+' · '+esc(row.gameLabel||row.opp||'')+'</div>'
+        +'</div>'
+        +streakLabel
+      +'</div>'
+      +'<div class="sc-mkt">'
+        +'<span class="sc-mkt-label">'+esc(marketLbl)+'</span>'
+        +'<span class="sc-mkt-line">OVER '+row.line+'</span>'
+        +(row.hubRating!=null?'<span style="margin-left:auto;font-size:.6rem;color:var(--mu)">Hub '+(row.hubRating*10).toFixed(0)+'</span>':'')
+        +(evStr?'<span style="font-size:.6rem;color:var(--o)">'+evStr+'</span>':'')
+      +'</div>'
+      +'<div class="rate-row">'+l5h+l10h+seah+'</div>'
+      +(spark?'<div class="sparkline">'+spark+'</div>':'')
+      +'<div class="sc-actions">'
+        +'<button class="sc-btn sc-track'+(isSaved?' saved':'')+'" id="track-'+idx+'" onclick="trackRow('+idx+',this)">'+(isSaved?'✓ TRACKED':'+ TRACK')+'</button>'
+        +(gpk?'<a class="sc-btn sc-props" href="/props?game='+gpk+'">PROPS →</a>':'')
+        +(gpk?'<a class="sc-btn sc-props" href="/deep-dive/'+gpk+'">DIVE →</a>':'')
+      +'</div>'
+      +'<div class="sc-stat-row">'
+        +(row.sampleSize?'<span>Sample <strong>'+row.sampleSize+'G</strong></span>':'')
+        +(row.opp?'<span>vs <strong>'+esc(row.opp)+'</strong></span>':'')
+      +'</div>'
+    +'</div>';
+  }).join('');
+}
+
+// ── Data load ─────────────────────────────────────────────────────────────────
+function load(){
+  document.getElementById('cardGrid').innerHTML = '<div class="spinner-wrap"><div class="spin"></div></div>';
+  var url = '/api/hot-hand/today?window='+CUR_WINDOW+'&minPct='+CUR_MIN_PCT+'&minTotal=3';
+  fetch(url).then(function(r){return r.json();}).then(function(d){
+    if (!d.success) throw new Error(d.error||'API error');
+    ROWS = d.players || [];
+    if (d.computing){
+      document.getElementById('cardGrid').innerHTML = '<div class="empty"><h3>COMPUTING…</h3><p>Trend data is being built. Refreshing in 8 seconds.</p></div>';
+      setTimeout(load, 8000);
+      return;
+    }
+    if (window.setNavAsOf) setNavAsOf(new Date());
+    renderCards();
+  }).catch(function(e){
+    document.getElementById('cardGrid').innerHTML = '<div class="empty"><h3>ERROR</h3><p>'+esc(e.message)+'</p></div>';
+  });
+}
+
+// ── Track ─────────────────────────────────────────────────────────────────────
+function trackRow(idx, btn){
+  var row = ROWS[idx]; if (!row) return;
+  if (TRACKED_KEYS.has(mkTrackerKey(row))){ btn.textContent='✓ TRACKED'; return; }
+  btn.disabled = true; btn.textContent = '…';
+  fetch('/api/tracker/pick', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({
+      player: row.player, playerId: row.playerId, team: row.team,
+      gamePk: row.gamePk, marketKey: row.marketKey, line: row.line,
+      recommendedSide: 'Over', hubRating: row.hubRating, evPct: row.evPct,
+      source: 'streak_page'
+    })
+  }).then(function(r){return r.json();}).then(function(d){
+    if (d.success){
+      TRACKED_KEYS.add(mkTrackerKey(row));
+      btn.textContent='✓ TRACKED'; btn.classList.add('saved'); btn.disabled=false;
+    } else { btn.disabled=false; btn.textContent='+ TRACK'; alert('Failed: '+(d.error||'error')); }
+  }).catch(function(e){ btn.disabled=false; btn.textContent='+ TRACK'; alert('Failed: '+e.message); });
+}
+
+// ── Chip wiring ───────────────────────────────────────────────────────────────
+document.getElementById('windowChips').addEventListener('click', function(e){
+  var btn = e.target.closest('.chip'); if (!btn) return;
+  document.querySelectorAll('#windowChips .chip').forEach(function(c){c.classList.remove('active');});
+  btn.classList.add('active');
+  CUR_WINDOW = btn.getAttribute('data-window');
+  load();
+});
+document.getElementById('pctChips').addEventListener('click', function(e){
+  var btn = e.target.closest('.chip'); if (!btn) return;
+  document.querySelectorAll('#pctChips .chip').forEach(function(c){c.classList.remove('active');});
+  btn.classList.add('active');
+  CUR_MIN_PCT = parseFloat(btn.getAttribute('data-pct'));
+  load();
+});
+
+load();
+setInterval(load, 300000);
+</script>
+</body>
+</html>

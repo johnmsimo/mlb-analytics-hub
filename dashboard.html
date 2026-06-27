@@ -417,8 +417,8 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
 <!-- ── Top Edges widget (Edge Lab) ── -->
 <div id="edgesWidget" style="margin:12px 24px 0;border:1px solid var(--b);border-radius:14px;background:var(--card);overflow:hidden">
   <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--b)">
-    <span style="font-family:'Orbitron',monospace;font-size:.7rem;letter-spacing:2px;color:var(--o)">📈 TOP EDGES</span>
-    <span id="edgSub" style="font-size:.66rem;color:var(--mu)">biggest model edges vs the book</span>
+    <span style="font-family:'Orbitron',monospace;font-size:.7rem;letter-spacing:2px;color:var(--o)">⚡ DISCOVER FEED</span>
+    <span id="edgSub" style="font-size:.66rem;color:var(--mu)">+EV plays ranked by expected value</span>
     <a href="/edge-lab" style="margin-left:auto;font-size:.64rem;color:var(--c);text-decoration:none">EDGE LAB →</a>
   </div>
   <div id="edgStrip" style="display:flex;gap:10px;overflow-x:auto;padding:12px 14px;scrollbar-width:thin">
@@ -2804,25 +2804,41 @@ var EDG_ROWS = [];
 function loadEdgesWidget(){
   var strip = document.getElementById('edgStrip');
   if(!strip) return;
-  fetch('/api/edges/today?minEdge=0.03').then(function(r){return r.json();}).then(function(d){
+  fetch('/api/v1/edges?minEv=0.03&limit=25').then(function(r){return r.json();}).then(function(d){
     if(!d.success) throw new Error(d.error||'failed');
     EDG_ROWS = d.edges || [];
     var sub = document.getElementById('edgSub');
-    if(sub) sub.textContent = d.count + ' positive-value plays';
+    if(sub) sub.textContent = EDG_ROWS.length + ' +EV plays · EV-ranked';
     if(!EDG_ROWS.length){
-      strip.innerHTML = '<span style="color:var(--mu);font-size:.7rem">No edges right now'+(d.computing?' (computing…)':'')+'.</span>';
+      strip.innerHTML = '<span style="color:var(--mu);font-size:.7rem">No +EV plays right now'+(d.computing?' (computing…)':'')+'.</span>';
       if(d.computing) setTimeout(loadEdgesWidget, 6000);
       return;
     }
-    strip.innerHTML = EDG_ROWS.slice(0,20).map(function(e,i){
-      return '<div style="flex:0 0 auto;min-width:184px;border:1px solid var(--b);border-radius:10px;padding:9px 11px;background:rgba(255,255,255,.02)">'+
-        '<div style="display:flex;align-items:center;gap:6px"><span style="font-weight:800;font-size:.72rem;color:var(--g)">'+esc(e.grade||'-')+'</span><span style="font-weight:700;font-size:.82rem;color:var(--t)">'+esc(e.player)+'</span></div>'+
-        '<div style="font-size:.66rem;color:var(--mu);margin:2px 0 6px">'+esc(e.marketLabel||e.marketKey)+' '+esc(e.side||'Over')+' '+e.line+'</div>'+
-        '<div style="display:flex;align-items:center;gap:8px">'+
-          '<span style="font-size:.7rem;color:var(--g);font-weight:700">+'+Number(e.edgePct||0).toFixed(1)+'%</span>'+
-          (e.evPct!=null?'<span style="font-size:.66rem;color:var(--o)">EV '+(e.evPct*100).toFixed(0)+'%</span>':'')+
+    strip.innerHTML = EDG_ROWS.map(function(e,i){
+      var conv = e.conviction || 'lean';
+      var convColor = conv==='gold'?'#ffd740':conv==='green'?'#00e676':'#6a8db0';
+      var convLabel = conv==='gold'?'★ GOLD':conv==='green'?'✓ GREEN':'→ LEAN';
+      var evPct = e.evPct != null ? (e.evPct*100).toFixed(1) : null;
+      var stake = e.stakeDollars != null ? '$'+Number(e.stakeDollars).toFixed(0) : null;
+      var fairP = e.fairProb != null ? (e.fairProb*100).toFixed(0)+'%' : null;
+      var bestPx = e.bestPrice != null ? (e.bestPrice>0?'+':'')+e.bestPrice : null;
+      var bestBk = e.bestBook ? e.bestBook.slice(0,6).toUpperCase() : '';
+      return '<div style="flex:0 0 auto;min-width:195px;max-width:195px;border:1px solid '+convColor+'55;border-radius:10px;padding:10px 11px;background:rgba(255,255,255,.02)">'+
+        '<div style="display:flex;align-items:center;gap:5px;margin-bottom:4px">'+
+          '<span style="font-family:Orbitron,monospace;font-size:.5rem;letter-spacing:.8px;color:'+convColor+'">'+convLabel+'</span>'+
+          (evPct?'<span style="margin-left:auto;font-family:Orbitron,monospace;font-size:.62rem;color:'+convColor+';font-weight:700">EV +'+evPct+'%</span>':'')+
+        '</div>'+
+        '<div style="font-weight:700;font-size:.82rem;color:var(--t);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(e.player||'')+'</div>'+
+        '<div style="font-size:.64rem;color:var(--mu);margin:2px 0 6px">'+esc(e.marketLabel||e.marketKey||'')+' '+(e.side||'Over')+' '+e.line+'</div>'+
+        '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">'+
+          (bestPx?'<span style="font-size:.68rem;color:var(--g);font-weight:700">'+bestPx+(bestBk?' @ '+bestBk:'')+'</span>':'')+
+          (fairP?'<span style="font-size:.62rem;color:var(--mu)">fair '+fairP+'</span>':'')+
+        '</div>'+
+        '<div style="display:flex;align-items:center;gap:6px;margin-top:6px">'+
+          (stake?'<span style="font-size:.62rem;color:var(--o)">Kelly '+stake+'</span>':'')+
           '<button onclick="trackEdgeW('+i+',this)" style="margin-left:auto;border:1px solid rgba(0,229,255,.3);background:rgba(0,229,255,.08);color:var(--c);border-radius:7px;padding:3px 8px;font-size:.62rem;cursor:pointer">+ TRACK</button>'+
-        '</div></div>';
+        '</div>'+
+      '</div>';
     }).join('');
     if(d.computing) setTimeout(loadEdgesWidget, 6000);
   }).catch(function(){ strip.innerHTML = '<span style="color:var(--mu);font-size:.7rem">Edges unavailable</span>'; });
