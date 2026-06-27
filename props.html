@@ -63,6 +63,37 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .star-btn{background:none;border:none;cursor:pointer;font-size:1.05rem;line-height:1;padding:2px 4px;transition:transform .15s;opacity:.55}
 .star-btn:hover{opacity:1;transform:scale(1.2)}
 .star-btn.starred{opacity:1;filter:drop-shadow(0 0 4px rgba(255,215,0,.6))}
+/* ── Player Compare ── */
+.cmp-btn{background:none;border:1px solid rgba(0,229,255,.2);border-radius:6px;cursor:pointer;font-size:.7rem;line-height:1;padding:2px 6px;transition:all .15s;color:var(--mu)}
+.cmp-btn:hover{border-color:rgba(0,229,255,.5);color:var(--c)}
+.cmp-btn.in-cmp{border-color:rgba(0,229,255,.55);color:var(--c);background:rgba(0,229,255,.12)}
+.cmp-bar{position:fixed;bottom:80px;left:50%;transform:translateX(-50%) translateY(120px);z-index:2000;display:flex;align-items:center;gap:10px;padding:10px 16px;border-radius:16px;background:rgba(8,14,28,.97);backdrop-filter:blur(16px);border:1px solid rgba(0,229,255,.4);box-shadow:0 8px 32px rgba(0,0,0,.55);transition:transform .3s cubic-bezier(.34,1.56,.64,1);pointer-events:none;white-space:nowrap}
+.cmp-bar.show{transform:translateX(-50%) translateY(0);pointer-events:all}
+.cmp-slot{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:8px;border:1px solid rgba(0,229,255,.22);background:rgba(0,229,255,.06);font-size:.68rem;color:var(--t);font-family:'Orbitron',monospace;letter-spacing:.5px;min-width:120px}
+.cmp-slot.empty{color:var(--mu);border-style:dashed;font-size:.63rem}
+.cmp-vs{font-family:'Orbitron',monospace;font-size:.6rem;color:var(--mu);letter-spacing:2px}
+.cmp-x{background:none;border:none;color:var(--mu);cursor:pointer;font-size:.8rem;padding:0 1px;line-height:1;flex-shrink:0}
+.cmp-x:hover{color:var(--r)}
+.cmp-view-btn{padding:6px 14px;border-radius:8px;border:1px solid rgba(0,229,255,.4);background:rgba(0,229,255,.12);color:var(--c);font-family:'Orbitron',monospace;font-size:.58rem;letter-spacing:1.5px;cursor:pointer;transition:all .2s}
+.cmp-view-btn:hover{background:rgba(0,229,255,.22)}
+.cmp-view-btn:disabled{opacity:.4;cursor:default}
+.cmp-clear-btn{padding:6px 10px;border-radius:8px;border:1px solid rgba(244,67,54,.3);background:rgba(244,67,54,.07);color:var(--r);font-family:'Orbitron',monospace;font-size:.55rem;letter-spacing:1px;cursor:pointer}
+.cmp-modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:3500;background:rgba(2,6,16,.9);backdrop-filter:blur(8px)}
+.cmp-modal.show{display:flex}
+.cmp-modal-box{background:var(--card);border:1px solid var(--b);border-radius:20px;max-width:780px;width:96%;max-height:90vh;overflow-y:auto;padding:24px}
+.cmp-modal-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
+.cmp-modal-title{font-family:'Orbitron',monospace;font-size:.78rem;letter-spacing:2px;color:var(--c)}
+.cmp-table{width:100%;border-collapse:collapse;font-size:.82rem}
+.cmp-table th{font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:1.5px;color:var(--mu);padding:6px 12px;text-align:center;border-bottom:1px solid var(--b)}
+.cmp-table th:first-child{text-align:left;width:38%}
+.cmp-table td{padding:9px 12px;text-align:center;border-bottom:1px solid rgba(255,255,255,.04);font-family:'Orbitron',monospace;font-size:.72rem}
+.cmp-table td:first-child{text-align:left;color:var(--mu);font-size:.65rem;letter-spacing:.8px;font-family:'Inter',sans-serif}
+.cmp-table tr:last-child td{border-bottom:none}
+.cmp-table .cmp-winner{color:var(--g);font-weight:700}
+.cmp-table .cmp-loser{color:rgba(255,255,255,.35)}
+.cmp-section-hdr td{font-family:'Orbitron',monospace;font-size:.55rem;letter-spacing:2px;color:var(--c);background:rgba(0,229,255,.05);padding:6px 12px;text-align:left!important;border-top:1px solid rgba(0,229,255,.12)!important;border-bottom:none!important}
+.cmp-photo{width:42px;height:42px;border-radius:50%;object-fit:cover;object-position:top center;border:1.5px solid rgba(0,229,255,.25);display:block;margin:0 auto}
+.cmp-name-cell{display:flex;flex-direction:column;align-items:center;gap:5px;padding:10px 4px 6px}
 .batter-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(288px,1fr));gap:16px}
 .bcard{background:var(--card);border:1px solid var(--b);border-radius:14px;padding:18px;transition:all .25s;position:relative;overflow:hidden}
 .bcard::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--c),var(--m))}
@@ -857,6 +888,106 @@ function toggleWatchlistFilter(btn) {
 }
 // Init watchlist count badge
 (function(){ const el = document.getElementById('watchlistCount'); if(el) el.textContent = WATCHLIST.size; })();
+
+// ── Player Comparison ──────────────────────────────────────────────────────
+let COMPARE_SLOT = [];
+
+function _refreshCompareBar() {
+  const bar = document.getElementById('compareBar');
+  if (!bar) return;
+  const s0 = document.getElementById('cmpSlot0');
+  const s1 = document.getElementById('cmpSlot1');
+  const viewBtn = document.getElementById('cmpViewBtn');
+  if (!COMPARE_SLOT.length) { bar.classList.remove('show'); return; }
+  bar.classList.add('show');
+  s0.className = 'cmp-slot' + (COMPARE_SLOT[0] ? '' : ' empty');
+  s1.className = 'cmp-slot' + (COMPARE_SLOT[1] ? '' : ' empty');
+  s0.innerHTML = COMPARE_SLOT[0]
+    ? `${esc(COMPARE_SLOT[0].name||'—')} <button class="cmp-x" onclick="removeFromCompare(0)">✕</button>`
+    : '+ Pick player';
+  s1.innerHTML = COMPARE_SLOT[1]
+    ? `${esc(COMPARE_SLOT[1].name||'—')} <button class="cmp-x" onclick="removeFromCompare(1)">✕</button>`
+    : '+ Pick player';
+  if (viewBtn) viewBtn.disabled = COMPARE_SLOT.length < 2;
+  document.querySelectorAll('.cmp-btn').forEach(btn => {
+    const n = (btn.dataset.name||'').toLowerCase();
+    const inSlot = COMPARE_SLOT.some(s => s && (s.name||'').toLowerCase() === n);
+    btn.classList.toggle('in-cmp', inSlot);
+  });
+}
+
+function addToCompare(nameRaw) {
+  const batters = window.__lastBatters || [];
+  const b = batters.find(x => (x.name||'').toLowerCase() === nameRaw.toLowerCase());
+  if (!b) return;
+  const idx = COMPARE_SLOT.findIndex(s => s && (s.name||'').toLowerCase() === (b.name||'').toLowerCase());
+  if (idx >= 0) { COMPARE_SLOT.splice(idx, 1); }
+  else if (COMPARE_SLOT.length >= 2) { COMPARE_SLOT[1] = b; }
+  else { COMPARE_SLOT.push(b); }
+  _refreshCompareBar();
+}
+
+function removeFromCompare(idx) { COMPARE_SLOT.splice(idx, 1); _refreshCompareBar(); }
+function clearCompare() { COMPARE_SLOT = []; _refreshCompareBar(); closeCompareModal(); }
+
+function openCompareModal() {
+  if (COMPARE_SLOT.length < 2) return;
+  const modal = document.getElementById('compareModal');
+  if (!modal) return;
+  const [a, b] = COMPARE_SLOT;
+  const pa = a.proj || {}, pb = b.proj || {};
+  const fmt = (v, d=2) => v != null ? Number(v).toFixed(d) : '—';
+  const row = (label, va, vb, higherWins=true) => {
+    const na = parseFloat(va), nb = parseFloat(vb);
+    let ac = '', bc = '';
+    if (!isNaN(na) && !isNaN(nb) && na !== nb) {
+      if (higherWins) { ac = na > nb ? 'cmp-winner' : 'cmp-loser'; bc = nb > na ? 'cmp-winner' : 'cmp-loser'; }
+      else { ac = na < nb ? 'cmp-winner' : 'cmp-loser'; bc = nb < na ? 'cmp-winner' : 'cmp-loser'; }
+    }
+    return `<tr><td>${label}</td><td class="${ac}">${va}</td><td class="${bc}">${vb}</td></tr>`;
+  };
+  const sectionRow = label => `<tr class="cmp-section-hdr"><td colspan="3">${label}</td></tr>`;
+  const photo = pid => pid
+    ? `<img class="cmp-photo" src="https://img.mlbstatic.com/mlb-photos/image/upload/d_people:generic:headshot:67:current.png/w_120,q_auto:best/v1/people/${pid}/headshot/67/current" onerror="this.style.display='none'">`
+    : '';
+  const aHub = PLAYER_HUB_MAP[(a.name||'').toLowerCase()] ?? a.scanHubRating;
+  const bHub = PLAYER_HUB_MAP[(b.name||'').toLowerCase()] ?? b.scanHubRating;
+  const aEv  = PLAYER_EV_MAP[(a.name||'').toLowerCase()] ?? a.scanEvPct;
+  const bEv  = PLAYER_EV_MAP[(b.name||'').toLowerCase()] ?? b.scanEvPct;
+  document.getElementById('cmpTableWrap').innerHTML = `
+    <table class="cmp-table">
+      <thead><tr>
+        <th>STAT</th>
+        <th><div class="cmp-name-cell">${photo(a.id)}<span>${esc(a.name||'—')}</span><span style="font-size:.6rem;color:var(--mu)">${esc(a.team||'')} · ${esc(a.pos||'')}</span></div></th>
+        <th><div class="cmp-name-cell">${photo(b.id)}<span>${esc(b.name||'—')}</span><span style="font-size:.6rem;color:var(--mu)">${esc(b.team||'')} · ${esc(b.pos||'')}</span></div></th>
+      </tr></thead>
+      <tbody>
+        ${sectionRow('LINEUP')}
+        ${row('Lineup Slot', a.slot??'—', b.slot??'—', false)}
+        ${row('Exp PA', pa.expected_pa??'—', pb.expected_pa??'—')}
+        ${sectionRow('PROJECTIONS')}
+        ${row('Hits', fmt(pa.hits), fmt(pb.hits))}
+        ${row('Home Runs', fmt(pa.hr,3), fmt(pb.hr,3))}
+        ${row('Total Bases', fmt(pa.tb), fmt(pb.tb))}
+        ${row('RBI', fmt(pa.rbi), fmt(pb.rbi))}
+        ${row('H+R+RBI', fmt(pa.hrr), fmt(pb.hrr))}
+        ${sectionRow('RATINGS')}
+        ${row('Hub Rating', aHub != null ? aHub.toFixed(0) : '—', bHub != null ? bHub.toFixed(0) : '—')}
+        ${row('EV%', aEv != null ? aEv.toFixed(1)+'%' : '—', bEv != null ? bEv.toFixed(1)+'%' : '—')}
+        ${sectionRow('STATCAST')}
+        ${row('xwOBA', a.sv_xwoba ? Number(a.sv_xwoba).toFixed(3) : '—', b.sv_xwoba ? Number(b.sv_xwoba).toFixed(3) : '—')}
+        ${row('Exit Velo', a.sv_ev ? Number(a.sv_ev).toFixed(1) : '—', b.sv_ev ? Number(b.sv_ev).toFixed(1) : '—')}
+        ${row('Barrel%', a.sv_brl_pct != null ? Number(a.sv_brl_pct).toFixed(1)+'%' : '—', b.sv_brl_pct != null ? Number(b.sv_brl_pct).toFixed(1)+'%' : '—')}
+        ${row('Hard Hit%', a.sv_hh_pct != null ? Number(a.sv_hh_pct).toFixed(1)+'%' : '—', b.sv_hh_pct != null ? Number(b.sv_hh_pct).toFixed(1)+'%' : '—')}
+        ${sectionRow('VS PITCHER')}
+        ${row('Opp ERA', a.opp_era ? Number(a.opp_era).toFixed(2) : '—', b.opp_era ? Number(b.opp_era).toFixed(2) : '—', false)}
+        ${row('Opp K/9', a.opp_k9 ? Number(a.opp_k9).toFixed(1) : '—', b.opp_k9 ? Number(b.opp_k9).toFixed(1) : '—')}
+      </tbody>
+    </table>`;
+  modal.classList.add('show');
+}
+function closeCompareModal() { const m = document.getElementById('compareModal'); if (m) m.classList.remove('show'); }
+
 let PROJ_DATA     = null;
 let MTCH_DATA     = null;
 let VAL_DATA      = null;
@@ -2832,7 +2963,7 @@ function batterCard(b) {
         </div>
       </div>
       <div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:4px">
-        <div style="display:flex;align-items:center;gap:4px">${starBtn}<div class="bcard-slot">${b.slot||'?'}</div></div>
+        <div style="display:flex;align-items:center;gap:4px">${starBtn}<button class="cmp-btn${COMPARE_SLOT.some(s=>s&&(s.name||'').toLowerCase()===(b.name||'').toLowerCase())?' in-cmp':''}" data-name="${esc(b.name||'')}" onclick="addToCompare('${(b.name||'').replace(/'/g,"\\'")}')" title="Compare player">⚖</button><div class="bcard-slot">${b.slot||'?'}</div></div>
         ${hub != null ? hubBadge(hub) : ''}
         ${ev  != null ? evHtml(ev)    : ''}
         ${bvpBadgeHtml(b.bvpGrade, b.bvpTooltip)}
@@ -3726,5 +3857,29 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 </script>
+
+<!-- ── Player Compare Bar ── -->
+<div class="cmp-bar" id="compareBar" role="region" aria-label="Player comparison">
+  <span class="cmp-slot empty" id="cmpSlot0">+ Pick player</span>
+  <span class="cmp-vs">VS</span>
+  <span class="cmp-slot empty" id="cmpSlot1">+ Pick player</span>
+  <button class="cmp-view-btn" id="cmpViewBtn" onclick="openCompareModal()" disabled>VIEW →</button>
+  <button class="cmp-clear-btn" onclick="clearCompare()">✕ CLEAR</button>
+</div>
+
+<!-- ── Player Compare Modal ── -->
+<div class="cmp-modal" id="compareModal" onclick="if(event.target===this)closeCompareModal()" role="dialog" aria-modal="true" aria-label="Player comparison">
+  <div class="cmp-modal-box">
+    <div class="cmp-modal-hdr">
+      <span class="cmp-modal-title">⚖ PLAYER COMPARISON</span>
+      <button onclick="closeCompareModal()" style="background:none;border:none;color:var(--mu);cursor:pointer;font-size:1.1rem;padding:2px 6px">✕</button>
+    </div>
+    <div id="cmpTableWrap"></div>
+    <div style="margin-top:16px;display:flex;gap:8px;justify-content:flex-end">
+      <button class="cmp-clear-btn" onclick="clearCompare()">✕ CLEAR ALL</button>
+      <button class="cmp-view-btn" onclick="closeCompareModal()">CLOSE</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>

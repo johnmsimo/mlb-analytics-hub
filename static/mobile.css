@@ -250,6 +250,66 @@
     font-size: 0.5rem !important;
     padding: 7px 9px !important;
   }
+
+  /* ── Props page: single-column cards on very small screens ── */
+  .batter-grid {
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+  }
+
+  /* ── Props: compact sticky sort bar ── */
+  .sort-sticky-wrap {
+    top: 50px !important;
+    padding: 5px 0 4px !important;
+  }
+  .sortbar {
+    gap: 5px !important;
+  }
+  .sort-btn {
+    font-size: 0.5rem !important;
+    padding: 4px 8px !important;
+    letter-spacing: 0.5px !important;
+  }
+  .sort-lbl {
+    display: none !important;
+  }
+
+  /* ── Props: compare bar stacks tighter on tiny screens ── */
+  .cmp-bar {
+    bottom: 70px !important;
+    padding: 8px 10px !important;
+    gap: 7px !important;
+    max-width: 96vw !important;
+  }
+  .cmp-slot {
+    min-width: 80px !important;
+    font-size: 0.58rem !important;
+    padding: 4px 7px !important;
+  }
+
+  /* ── Tracker: perf tabs scroll horizontally instead of wrapping ── */
+  .perf-tabs {
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
+    scrollbar-width: none !important;
+    -ms-overflow-style: none !important;
+    padding-bottom: 2px !important;
+  }
+  .perf-tabs::-webkit-scrollbar { display: none; }
+
+  /* ── Tracker: ctrl / action bar horizontal scroll ── */
+  .ctrl {
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
+    scrollbar-width: none !important;
+  }
+  .ctrl::-webkit-scrollbar { display: none; }
+
+  /* ── Tracker: tighten hero 2-col grid ── */
+  .hero {
+    grid-template-columns: 1fr 1fr !important;
+    gap: 8px !important;
+  }
 }
 
 /* Hide bottom tab bar above tablet width — desktop keeps its existing nav */
