@@ -359,8 +359,38 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
 .toast.err{border-color:rgba(239,83,80,.35);color:#ffc9c7}
 @media(max-width:700px){.settings-two{grid-template-columns:1fr}}
 
+/* ── News Ticker ─────────────────────────────────────── */
+.news-ticker-wrap{background:rgba(0,0,0,.42);border-bottom:1px solid rgba(255,152,0,.14);padding:5px 0;overflow:hidden;position:relative}
+.news-ticker-inner{display:flex;align-items:center;gap:0}
+.news-ticker-label{font-family:Orbitron,monospace;font-size:.56rem;letter-spacing:2px;color:var(--o);white-space:nowrap;padding:0 14px 0 16px;flex-shrink:0;border-right:1px solid rgba(255,152,0,.22);margin-right:14px}
+.news-ticker-track-wrap{overflow:hidden;flex:1;position:relative;height:20px}
+.news-ticker-track{position:absolute;top:0;left:0;white-space:nowrap;animation:tickerScroll 60s linear infinite;font-size:.64rem;color:var(--mu);line-height:20px}
+.news-ticker-track:hover{animation-play-state:paused}
+@keyframes tickerScroll{from{transform:translateX(100vw)}to{transform:translateX(-100%)}}
+.ticker-sep{color:rgba(0,229,255,.25);margin:0 18px}
+.ticker-il{color:#ff9800}.ticker-activ{color:#00e676}.ticker-trade{color:#e040fb}.ticker-other{color:var(--mu)}
+
+/* ── Top Plays Today ─────────────────────────────────── */
+.tp-wrap{margin:12px 24px 0}
+.tp-hdr{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--b)}
+.tp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;padding:12px 14px}
+.tp-card{border-radius:10px;padding:11px 13px;display:flex;flex-direction:column;gap:6px;position:relative;overflow:hidden;cursor:default}
+.tp-card.gold{border:1px solid rgba(255,215,0,.45);background:linear-gradient(135deg,rgba(255,215,0,.06),rgba(255,152,0,.03))}
+.tp-card.green{border:1px solid rgba(0,230,118,.35);background:rgba(0,230,118,.04)}
+.tp-card.lean{border:1px solid rgba(0,229,255,.2);background:rgba(0,229,255,.03)}
+.tp-conv{font-family:Orbitron,monospace;font-size:.5rem;letter-spacing:1.2px;font-weight:700}
+.tp-conv.gold{color:#ffd740}.tp-conv.green{color:#00e676}.tp-conv.lean{color:var(--c)}
+.tp-player{font-weight:700;font-size:.84rem;color:var(--t);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tp-market{font-size:.62rem;color:var(--mu)}
+.tp-ev{font-family:Orbitron,monospace;font-size:.78rem;font-weight:700;color:#00e676}
+.tp-foot{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.tp-px{font-size:.68rem;font-weight:700;color:var(--g)}
+.tp-bk{font-size:.6rem;color:var(--mu)}
+.tp-kelly{font-size:.6rem;color:var(--o)}
+
 </style>
 <link rel="stylesheet" href="/static/mobile.css">
+<link rel="stylesheet" href="/static/tokens.css">
 </head>
 <body>
 <nav>
@@ -381,6 +411,15 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
     <div class="ss"><div class="ss-v" id="shh">-</div><div class="ss-l">100% CLUB</div></div>
     <div class="ss"><div class="ss-v" id="sm">-</div><div class="ss-l" id="sml">MEMORY</div></div>
     <div class="ss ss-click" onclick="openDailySummaryPanel()" title="Open final daily summary in Settings"><div class="ss-v" id="sd">-</div><div class="ss-l" id="sdl">DAILY SUMMARY</div></div>
+  </div>
+</div>
+<!-- ── MLB News Ticker ── -->
+<div class="news-ticker-wrap" id="newsTicker">
+  <div class="news-ticker-inner">
+    <span class="news-ticker-label">📰 MLB NEWS</span>
+    <div class="news-ticker-track-wrap">
+      <div class="news-ticker-track" id="tickerTrack">Loading transactions…</div>
+    </div>
   </div>
 </div>
 <div class="topnav">
@@ -416,12 +455,23 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
 <!-- ── Top Edges widget (Edge Lab) ── -->
 <div id="edgesWidget" style="margin:12px 24px 0;border:1px solid var(--b);border-radius:14px;background:var(--card);overflow:hidden">
   <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--b)">
-    <span style="font-family:'Orbitron',monospace;font-size:.7rem;letter-spacing:2px;color:var(--o)">📈 TOP EDGES</span>
-    <span id="edgSub" style="font-size:.66rem;color:var(--mu)">biggest model edges vs the book</span>
+    <span style="font-family:'Orbitron',monospace;font-size:.7rem;letter-spacing:2px;color:var(--o)">⚡ DISCOVER FEED</span>
+    <span id="edgSub" style="font-size:.66rem;color:var(--mu)">+EV plays ranked by expected value</span>
     <a href="/edge-lab" style="margin-left:auto;font-size:.64rem;color:var(--c);text-decoration:none">EDGE LAB →</a>
   </div>
   <div id="edgStrip" style="display:flex;gap:10px;overflow-x:auto;padding:12px 14px;scrollbar-width:thin">
     <span style="color:var(--mu);font-size:.7rem">Loading edges…</span>
+  </div>
+</div>
+<!-- ── Today's Top 5 Plays ── -->
+<div class="tp-wrap" id="topPlaysWidget" style="border:1px solid var(--b);border-radius:14px;background:var(--card);overflow:hidden">
+  <div class="tp-hdr">
+    <span style="font-family:Orbitron,monospace;font-size:.7rem;letter-spacing:2px;color:#ffd740">🏆 TODAY&#39;S TOP PLAYS</span>
+    <span id="tpSub" style="font-size:.66rem;color:var(--mu)">Highest EV plays from the model</span>
+    <a href="/props" style="margin-left:auto;font-size:.64rem;color:var(--c);text-decoration:none">ALL PROPS →</a>
+  </div>
+  <div class="tp-grid" id="topPlaysGrid">
+    <span style="color:var(--mu);font-size:.7rem;padding:8px">Loading top plays…</span>
   </div>
 </div>
 <div class="main">
@@ -827,18 +877,22 @@ function mkCard(g){
   // Team record display
   var aRec=g.awayRecord?'<span class="team-record">('+g.awayRecord+')</span>':'';
   var hRec=g.homeRecord?'<span class="team-record">('+g.homeRecord+')</span>':'';
-  // Final score block or VS display
+  // Final/live score block or VS display
+  var isLive=g.status==='Live';
   var aWin=isFinal&&g.awayScore!=null&&g.homeScore!=null&&Number(g.awayScore)>Number(g.homeScore);
   var hWin=isFinal&&g.homeScore!=null&&g.awayScore!=null&&Number(g.homeScore)>Number(g.awayScore);
-  var matchupBlock=isFinal
+  var aLead=isLive&&g.awayScore!=null&&g.homeScore!=null&&Number(g.awayScore)>Number(g.homeScore);
+  var hLead=isLive&&g.homeScore!=null&&g.awayScore!=null&&Number(g.homeScore)>Number(g.awayScore);
+  var showScore=(isFinal||isLive)&&g.awayScore!=null&&g.homeScore!=null;
+  var matchupBlock=showScore
     ?'<div class="mu final-mu">'
-      +'<div class="tb"><div class="tlw">'+aL+'</div><div class="ta '+(aWin?'team-win':'')+'">'+g.awayAbbr+'</div>'+aRec+'</div>'
-      +'<div class="final-score-block">'
-        +'<div class="final-score '+(aWin?'score-win':'score-loss')+'">'+g.awayScore+'</div>'
+      +'<div class="tb"><div class="tlw">'+aL+'</div><div class="ta '+(aWin||aLead?'team-win':'')+'">'+g.awayAbbr+'</div>'+aRec+'</div>'
+      +'<div id="mu-score-'+g.gamePk+'" class="final-score-block">'
+        +'<div class="final-score '+((aWin||aLead)?'score-win':'score-loss')+'">'+g.awayScore+'</div>'
         +'<div class="final-score-sep">—</div>'
-        +'<div class="final-score '+(hWin?'score-win':'score-loss')+'">'+g.homeScore+'</div>'
+        +'<div class="final-score '+((hWin||hLead)?'score-win':'score-loss')+'">'+g.homeScore+'</div>'
       +'</div>'
-      +'<div class="tb"><div class="tlw">'+hL+'</div><div class="ta '+(hWin?'team-win':'')+'">'+g.homeAbbr+'</div>'+hRec+'</div>'
+      +'<div class="tb"><div class="tlw">'+hL+'</div><div class="ta '+(hWin||hLead?'team-win':'')+'">'+g.homeAbbr+'</div>'+hRec+'</div>'
     +'</div>'
     :'<div class="mu"><div class="tb"><div class="tlw">'+aL+'</div><div class="ta">'+g.awayAbbr+'</div>'+aRec+'</div>'
       +'<div class="vs">VS</div>'
@@ -2681,7 +2735,7 @@ function loadSharpChips(games){
       .finally(function(){ setTimeout(next, 500); });
   })();
 }
-function load(dateStr){if(dateStr) selectedGamesDate=dateStr;syncDateUI();apiFetchJson('/api/games/today?date='+encodeURIComponent(selectedGamesDate)).then(function(d){if(!d.success)throw new Error(d.error||'API error');var gs=d.games||[];window.__lastGames=gs;var activeGs=gs.filter(function(g){return !g.isPostponed&&!g.isCancelled&&!g.isSuspended&&g.status!=='Postponed'&&g.status!=='Cancelled'&&g.status!=='Suspended';});document.getElementById('sg').textContent=activeGs.length||0;document.getElementById('sl').textContent=activeGs.filter(function(g){return g.status==='Live'}).length;var edges=activeGs.map(function(g){return g.edge});document.getElementById('se').textContent=edges.length?(edges.reduce(function(a,b){return a+b},0)/edges.length).toFixed(1):'--';document.getElementById('sh').textContent=activeGs.filter(function(g){return g.edge>=8}).length;if(!gs.length){document.getElementById('gc').innerHTML='<div class="ng"><h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px">NO GAMES FOR '+fmtDateLabel(selectedGamesDate).toUpperCase()+'</h3></div>';}else{document.getElementById('gc').innerHTML='<div class="grid">'+gs.map(mkCard).join('')+'</div>';setTimeout(function(){document.querySelectorAll('.fill').forEach(function(e){e.style.width=e.getAttribute('data-w')+'%'})},150);if(window.initLiveCards)initLiveCards(gs);loadSharpChips(gs);}if(document.getElementById('nrfiView').classList.contains('active')) loadNRFIBoard(activeGs);}).catch(function(e){document.getElementById('gc').innerHTML='<div class="sw"><div style="background:rgba(224,64,251,.08);border:1px solid rgba(224,64,251,.3);border-radius:12px;padding:24px 32px;text-align:center"><h3 style="color:var(--m);font-family:Orbitron;margin-bottom:8px">CONNECTION ERROR</h3><p style="color:var(--mu);font-size:.82rem">'+e.message+'</p></div></div>'})}
+function load(dateStr){if(dateStr) selectedGamesDate=dateStr;syncDateUI();apiFetchJson('/api/games/today?date='+encodeURIComponent(selectedGamesDate)).then(function(d){if(!d.success)throw new Error(d.error||'API error');var gs=d.games||[];window.__lastGames=gs;var activeGs=gs.filter(function(g){return !g.isPostponed&&!g.isCancelled&&!g.isSuspended&&g.status!=='Postponed'&&g.status!=='Cancelled'&&g.status!=='Suspended';});document.getElementById('sg').textContent=activeGs.length||0;document.getElementById('sl').textContent=activeGs.filter(function(g){return g.status==='Live'}).length;var edges=activeGs.map(function(g){return g.edge});document.getElementById('se').textContent=edges.length?(edges.reduce(function(a,b){return a+b},0)/edges.length).toFixed(1):'--';document.getElementById('sh').textContent=activeGs.filter(function(g){return g.edge>=8}).length;if(!gs.length){document.getElementById('gc').innerHTML='<div class="ng"><h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px">NO GAMES FOR '+fmtDateLabel(selectedGamesDate).toUpperCase()+'</h3></div>';}else{document.getElementById('gc').innerHTML='<div class="grid">'+gs.map(mkCard).join('')+'</div>';setTimeout(function(){document.querySelectorAll('.fill').forEach(function(e){e.style.width=e.getAttribute('data-w')+'%'})},150);if(window.initLiveCards)initLiveCards(gs);loadSharpChips(gs);}if(window.setNavAsOf)setNavAsOf(new Date());if(document.getElementById('nrfiView').classList.contains('active')) loadNRFIBoard(activeGs);}).catch(function(e){document.getElementById('gc').innerHTML='<div class="sw"><div style="background:rgba(224,64,251,.08);border:1px solid rgba(224,64,251,.3);border-radius:12px;padding:24px 32px;text-align:center"><h3 style="color:var(--m);font-family:Orbitron;margin-bottom:8px">CONNECTION ERROR</h3><p style="color:var(--mu);font-size:.82rem">'+e.message+'</p></div></div>'})}
 function initNRFI(){ if(NRFI_LAST_DATE===selectedGamesDate && NRFI_ROWS.length) return; loadNRFIBoard(window.__lastGames||[]); }
 function loadNRFIBoard(games){
   var meta=document.getElementById('nrfiMeta'), body=document.getElementById('nrfiBody');
@@ -2803,25 +2857,41 @@ var EDG_ROWS = [];
 function loadEdgesWidget(){
   var strip = document.getElementById('edgStrip');
   if(!strip) return;
-  fetch('/api/edges/today?minEdge=0.03').then(function(r){return r.json();}).then(function(d){
+  fetch('/api/v1/edges?minEv=0.03&limit=25').then(function(r){return r.json();}).then(function(d){
     if(!d.success) throw new Error(d.error||'failed');
     EDG_ROWS = d.edges || [];
     var sub = document.getElementById('edgSub');
-    if(sub) sub.textContent = d.count + ' positive-value plays';
+    if(sub) sub.textContent = EDG_ROWS.length + ' +EV plays · EV-ranked';
     if(!EDG_ROWS.length){
-      strip.innerHTML = '<span style="color:var(--mu);font-size:.7rem">No edges right now'+(d.computing?' (computing…)':'')+'.</span>';
+      strip.innerHTML = '<span style="color:var(--mu);font-size:.7rem">No +EV plays right now'+(d.computing?' (computing…)':'')+'.</span>';
       if(d.computing) setTimeout(loadEdgesWidget, 6000);
       return;
     }
-    strip.innerHTML = EDG_ROWS.slice(0,20).map(function(e,i){
-      return '<div style="flex:0 0 auto;min-width:184px;border:1px solid var(--b);border-radius:10px;padding:9px 11px;background:rgba(255,255,255,.02)">'+
-        '<div style="display:flex;align-items:center;gap:6px"><span style="font-weight:800;font-size:.72rem;color:var(--g)">'+esc(e.grade||'-')+'</span><span style="font-weight:700;font-size:.82rem;color:var(--t)">'+esc(e.player)+'</span></div>'+
-        '<div style="font-size:.66rem;color:var(--mu);margin:2px 0 6px">'+esc(e.marketLabel||e.marketKey)+' '+esc(e.side||'Over')+' '+e.line+'</div>'+
-        '<div style="display:flex;align-items:center;gap:8px">'+
-          '<span style="font-size:.7rem;color:var(--g);font-weight:700">+'+Number(e.edgePct||0).toFixed(1)+'%</span>'+
-          (e.evPct!=null?'<span style="font-size:.66rem;color:var(--o)">EV '+(e.evPct*100).toFixed(0)+'%</span>':'')+
+    strip.innerHTML = EDG_ROWS.map(function(e,i){
+      var conv = e.conviction || 'lean';
+      var convColor = conv==='gold'?'#ffd740':conv==='green'?'#00e676':'#6a8db0';
+      var convLabel = conv==='gold'?'★ GOLD':conv==='green'?'✓ GREEN':'→ LEAN';
+      var evPct = e.evPct != null ? (e.evPct*100).toFixed(1) : null;
+      var stake = e.stakeDollars != null ? '$'+Number(e.stakeDollars).toFixed(0) : null;
+      var fairP = e.fairProb != null ? (e.fairProb*100).toFixed(0)+'%' : null;
+      var bestPx = e.bestPrice != null ? (e.bestPrice>0?'+':'')+e.bestPrice : null;
+      var bestBk = e.bestBook ? e.bestBook.slice(0,6).toUpperCase() : '';
+      return '<div style="flex:0 0 auto;min-width:195px;max-width:195px;border:1px solid '+convColor+'55;border-radius:10px;padding:10px 11px;background:rgba(255,255,255,.02)">'+
+        '<div style="display:flex;align-items:center;gap:5px;margin-bottom:4px">'+
+          '<span style="font-family:Orbitron,monospace;font-size:.5rem;letter-spacing:.8px;color:'+convColor+'">'+convLabel+'</span>'+
+          (evPct?'<span style="margin-left:auto;font-family:Orbitron,monospace;font-size:.62rem;color:'+convColor+';font-weight:700">EV +'+evPct+'%</span>':'')+
+        '</div>'+
+        '<div style="font-weight:700;font-size:.82rem;color:var(--t);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(e.player||'')+'</div>'+
+        '<div style="font-size:.64rem;color:var(--mu);margin:2px 0 6px">'+esc(e.marketLabel||e.marketKey||'')+' '+(e.side||'Over')+' '+e.line+'</div>'+
+        '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">'+
+          (bestPx?'<span style="font-size:.68rem;color:var(--g);font-weight:700">'+bestPx+(bestBk?' @ '+bestBk:'')+'</span>':'')+
+          (fairP?'<span style="font-size:.62rem;color:var(--mu)">fair '+fairP+'</span>':'')+
+        '</div>'+
+        '<div style="display:flex;align-items:center;gap:6px;margin-top:6px">'+
+          (stake?'<span style="font-size:.62rem;color:var(--o)">Kelly '+stake+'</span>':'')+
           '<button onclick="trackEdgeW('+i+',this)" style="margin-left:auto;border:1px solid rgba(0,229,255,.3);background:rgba(0,229,255,.08);color:var(--c);border-radius:7px;padding:3px 8px;font-size:.62rem;cursor:pointer">+ TRACK</button>'+
-        '</div></div>';
+        '</div>'+
+      '</div>';
     }).join('');
     if(d.computing) setTimeout(loadEdgesWidget, 6000);
   }).catch(function(){ strip.innerHTML = '<span style="color:var(--mu);font-size:.7rem">Edges unavailable</span>'; });
@@ -2841,6 +2911,97 @@ function trackEdgeW(i, btn){
 }
 loadEdgesWidget();
 setInterval(loadEdgesWidget, 300000);
+
+// ── MLB News Ticker ────────────────────────────────────────────────────────────
+function loadNewsTicker() {
+  fetch('/api/news/ticker').then(function(r){return r.json();}).then(function(d) {
+    var track = document.getElementById('tickerTrack');
+    if (!track) return;
+    var items = d.items || [];
+    if (!items.length) { track.textContent = 'No recent transactions.'; return; }
+    var typeMap = {
+      'il placement':'ticker-il', 'il transfer':'ticker-il',
+      'recalled':'ticker-activ', 'recall':'ticker-activ', 'activated':'ticker-activ', 'activation':'ticker-activ',
+      'trade':'ticker-trade', 'traded':'ticker-trade',
+    };
+    var html = items.map(function(item) {
+      var cls = 'ticker-other';
+      var tl = (item.type||'').toLowerCase();
+      Object.keys(typeMap).forEach(function(k){ if(tl.indexOf(k)>=0) cls=typeMap[k]; });
+      return '<span class="'+cls+'"><strong>'+esc(item.player||'')+'</strong> — '+esc(item.description||'')+'</span><span class="ticker-sep">•</span>';
+    }).join('');
+    track.innerHTML = html;
+    // Adjust animation duration based on content length
+    var approxWidth = track.textContent.length * 7;
+    var dur = Math.max(30, Math.min(120, approxWidth / 80));
+    track.style.animation = 'tickerScroll ' + dur + 's linear infinite';
+  }).catch(function(){
+    var track = document.getElementById('tickerTrack');
+    if(track) track.textContent = 'MLB transactions unavailable';
+  });
+}
+loadNewsTicker();
+setInterval(loadNewsTicker, 600000);
+
+// ── Today's Top Plays ──────────────────────────────────────────────────────────
+var TP_ROWS = [];
+function loadTopPlays() {
+  var grid = document.getElementById('topPlaysGrid');
+  if (!grid) return;
+  fetch('/api/v1/edges?minEv=0.03&limit=5').then(function(r){return r.json();}).then(function(d) {
+    TP_ROWS = d.edges || [];
+    var sub = document.getElementById('tpSub');
+    if (sub) sub.textContent = TP_ROWS.length ? 'Top ' + TP_ROWS.length + ' plays by EV — updated ' + new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : 'No +EV plays computed yet';
+    if (!TP_ROWS.length) {
+      grid.innerHTML = '<span style="color:var(--mu);font-size:.7rem;padding:4px">' + (d.computing ? 'Computing projections…' : 'No +EV plays yet — run the props scan first.') + '</span>';
+      if (d.computing) setTimeout(loadTopPlays, 8000);
+      return;
+    }
+    grid.innerHTML = TP_ROWS.map(function(e, i) {
+      var conv = e.conviction || 'lean';
+      var convLabel = conv==='gold' ? '★ GOLD' : conv==='green' ? '✓ GREEN' : '→ LEAN';
+      var evPct = e.evPct != null ? '+' + (e.evPct*100).toFixed(1) + '% EV' : '';
+      var bestPx = e.bestPrice != null ? (e.bestPrice>0?'+':'')+e.bestPrice : '';
+      var bestBk = e.bestBook ? e.bestBook.slice(0,8).toUpperCase() : '';
+      var stake = e.stakeDollars != null ? 'Kelly $'+Number(e.stakeDollars).toFixed(0) : '';
+      var mktLabel = e.marketLabel || (e.marketKey||'').replace('batter_','').replace('_',' ');
+      return '<div class="tp-card ' + conv + '">' +
+        '<div style="display:flex;align-items:center;justify-content:space-between">' +
+          '<span class="tp-conv ' + conv + '">' + convLabel + '</span>' +
+          '<span style="font-family:Orbitron,monospace;font-size:.5rem;color:var(--mu)">#' + (i+1) + '</span>' +
+        '</div>' +
+        '<div class="tp-player">' + esc(e.player||'') + '</div>' +
+        '<div class="tp-market">' + esc(mktLabel) + ' ' + (e.side||'Over') + ' ' + e.line + '</div>' +
+        '<div class="tp-ev">' + evPct + '</div>' +
+        '<div class="tp-foot">' +
+          (bestPx ? '<span class="tp-px">' + bestPx + '</span>' : '') +
+          (bestBk ? '<span class="tp-bk">@ ' + bestBk + '</span>' : '') +
+          (stake  ? '<span class="tp-kelly">' + stake + '</span>' : '') +
+          '<button onclick="trackTopPlay('+i+',this)" style="margin-left:auto;border:1px solid rgba(0,229,255,.3);background:rgba(0,229,255,.08);color:var(--c);border-radius:7px;padding:3px 9px;font-size:.6rem;cursor:pointer;font-family:Orbitron,monospace">+ TRACK</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+    if (d.computing) setTimeout(loadTopPlays, 8000);
+  }).catch(function() {
+    var grid = document.getElementById('topPlaysGrid');
+    if (grid) grid.innerHTML = '<span style="color:var(--mu);font-size:.7rem;padding:4px">Top plays unavailable</span>';
+  });
+}
+function trackTopPlay(i, btn) {
+  var e = TP_ROWS[i]; if (!e) return;
+  btn.disabled = true; btn.textContent = '…';
+  fetch('/api/tracker/pick', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({player:e.player, playerId:e.playerId, team:e.team, gamePk:e.gamePk,
+      marketKey:e.marketKey, line:e.line, recommendedSide:e.side||'Over', adjProb:e.modelProb,
+      edge:e.edge, marketImplied:e.marketImplied, hubRating:e.hubRating, evPct:e.evPct,
+      bestOverPrice:e.bestPrice, bookmaker:e.bestBook, source:'top_plays'})
+  }).then(function(r){return r.json();}).then(function(d){
+    if (d.success) { btn.textContent='✓ SAVED'; btn.style.color='var(--g)'; btn.style.borderColor='rgba(0,230,118,.35)'; }
+    else { btn.disabled=false; btn.textContent='+ TRACK'; }
+  }).catch(function(){ btn.disabled=false; btn.textContent='+ TRACK'; });
+}
+loadTopPlays();
+setInterval(loadTopPlays, 300000);
 </script>
 <!-- LIVE GAMEPLAY PATCH -->
 <style>
@@ -2964,6 +3125,40 @@ setInterval(loadEdgesWidget, 300000);
       },30000);
     });
   };
+})();
+
+// \u2500\u2500 Bulk live score poll \u2014 updates score blocks in card headers every 45s \u2500\u2500\u2500\u2500\u2500\u2500
+(function(){
+  var _liveScoreTimer=null;
+  function _updateScoreBlock(pk,aScore,hScore){
+    var el=document.getElementById('mu-score-'+pk);
+    if(!el) return;
+    var a=Number(aScore||0), h=Number(hScore||0);
+    var aWin=a>h, hWin=h>a;
+    el.innerHTML='<div class="final-score '+(aWin?'score-win':'score-loss')+'">'+a+'</div>'
+      +'<div class="final-score-sep">\u2014</div>'
+      +'<div class="final-score '+(hWin?'score-win':'score-loss')+'">'+h+'</div>';
+    // Update LIVE count in the strip
+    var liveCount=(window.__lastGames||[]).filter(function(g){return g.status==='Live';}).length;
+    var slEl=document.getElementById('sl'); if(slEl) slEl.textContent=liveCount;
+  }
+  function pollBulkLiveScores(){
+    fetch('/api/games/live-scores?date='+(window.selectedGamesDate||etTodayStr()))
+      .then(function(r){return r.json();})
+      .then(function(d){
+        if(!d.success||!d.games) return;
+        d.games.forEach(function(g){
+          if(g.abstractGameState==='Live') _updateScoreBlock(g.gamePk,g.awayScore,g.homeScore);
+        });
+      }).catch(function(){});
+  }
+  window.startBulkLivePoll=function(){
+    if(_liveScoreTimer) clearInterval(_liveScoreTimer);
+    _liveScoreTimer=setInterval(pollBulkLiveScores,45000);
+  };
+  window.stopBulkLivePoll=function(){ if(_liveScoreTimer){clearInterval(_liveScoreTimer);_liveScoreTimer=null;} };
+  // Auto-start on page load
+  window.startBulkLivePoll();
 })();
 </script>
 <a class="tracker-fab" href="/tracker" target="_blank" rel="noopener noreferrer" style="position:fixed;right:16px;bottom:16px;z-index:99;background:linear-gradient(90deg,#003b2b,#00754f);border:1px solid rgba(0,230,118,.3);color:#eaf6ff;padding:12px 14px;border-radius:999px;font-family:Orbitron,sans-serif;font-size:.62rem;letter-spacing:1.5px;text-decoration:none;box-shadow:0 12px 30px rgba(0,0,0,.35)">📋 BET TRACKER</a>
@@ -3617,6 +3812,7 @@ setInterval(loadEdgesWidget, 300000);
   }
 })();
 </script>
+<script src="/static/global-nav.js" defer></script>
 <script src="/static/mobile-nav.js" defer></script>
 
 </body>

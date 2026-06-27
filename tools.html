@@ -72,6 +72,7 @@
     .info-box strong{color:var(--t)}
   </style>
 <link rel="stylesheet" href="/static/mobile.css">
+<link rel="stylesheet" href="/static/tokens.css">
 </head>
 <body>
 <div class="wrap">
@@ -96,6 +97,8 @@
     <button class="tab" onclick="switchTab('ev',this)">EV Calculator</button>
     <button class="tab" onclick="switchTab('parlay',this)">Parlay Calculator</button>
     <button class="tab" onclick="switchTab('signals',this)">Player Signals</button>
+    <button class="tab" onclick="switchTab('clv',this)">CLV Converter</button>
+    <button class="tab" onclick="switchTab('sgp',this)">SGP Builder</button>
   </div>
 
   <!-- NO-VIG -->
@@ -236,6 +239,73 @@
       <div id="pl-result"></div>
       <div class="info-box" style="margin-top:14px">
         <strong>Correlated parlays:</strong> Legs within the same game (e.g. NRFI + low-scoring team) can be correlated — meaning if one hits, the other is more likely to hit. Standard parlay calculators assume independence; correlated plays can have higher true EV than shown.
+      </div>
+    </div>
+  </div>
+  <!-- CLV CONVERTER -->
+  <div class="panel" id="panel-clv">
+    <div class="calc-card">
+      <div class="calc-title">Closing Line Value (CLV) Converter</div>
+      <div class="calc-desc">Enter the price you took and the closing price. CLV measures whether you beat the market — the most reliable indicator of long-run edge.</div>
+      <div class="form-grid">
+        <div class="field">
+          <label>Your Opening Price (American)</label>
+          <input id="clv-open" type="number" placeholder="-115" oninput="calcCLV()">
+        </div>
+        <div class="field">
+          <label>Closing Price (American)</label>
+          <input id="clv-close" type="number" placeholder="-130" oninput="calcCLV()">
+        </div>
+        <div class="field">
+          <label>Stake ($)</label>
+          <input id="clv-stake" type="number" placeholder="100" oninput="calcCLV()">
+        </div>
+      </div>
+      <div id="clv-result"></div>
+      <div class="info-box">
+        <strong>How to read CLV:</strong><br>
+        <strong>Positive CLV</strong> = you got a better price than closing → you were on the right side of the market.<br>
+        <strong>Negative CLV</strong> = market moved against you → steam moved the other way after you bet.<br>
+        <strong>Why it matters:</strong> Consistent positive CLV (closing at worse odds than you took) is the #1 predictor of long-run profitability — more reliable than win rate over small samples.
+        Long-run, every +1% CLV edge translates to roughly +1% ROI on flat stakes.
+      </div>
+    </div>
+  </div>
+
+  <!-- SGP BUILDER -->
+  <div class="panel" id="panel-sgp">
+    <div class="calc-card" style="max-width:860px">
+      <div class="calc-title">Same-Game Parlay (SGP) Builder</div>
+      <div class="calc-desc">Select a game, pick prop legs, and see correlation-adjusted fair odds vs. what books typically charge for SGPs.</div>
+
+      <!-- Game selector -->
+      <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:16px">
+        <div class="field" style="flex:1;min-width:200px">
+          <label>Select Today's Game</label>
+          <select id="sgp-game" onchange="sgpLoadGame()">
+            <option value="">— loading games —</option>
+          </select>
+        </div>
+        <button class="calc-btn" style="width:auto;padding:10px 18px" onclick="sgpLoadGame()">Load Props</button>
+      </div>
+
+      <div id="sgp-loading" style="display:none;color:var(--mu);font-size:.8rem;padding:8px 0">Loading player props…</div>
+      <div id="sgp-error" style="display:none;color:var(--r);font-size:.8rem;padding:8px 0"></div>
+
+      <!-- Player props grid -->
+      <div id="sgp-props" style="display:none">
+        <div style="font-size:.72rem;color:var(--mu);margin-bottom:8px">Select 2–5 legs to build your SGP. Correlations are estimated from same-team / market relationships.</div>
+        <div id="sgp-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px;margin-bottom:14px;max-height:400px;overflow-y:auto;padding-right:4px"></div>
+
+        <!-- SGP result -->
+        <div id="sgp-result"></div>
+      </div>
+
+      <div class="info-box">
+        <strong>Correlation adjustment:</strong> Same-game prop legs aren't independent — a batter hitting increases their RBI chance (positive correlation).
+        Books price SGPs with a 10-15% vig penalty <em>on top of</em> standard vig to account for this.
+        This tool shows you the correlation-adjusted fair price and compares it to a typical book's SGP offer.<br>
+        <strong>Formula:</strong> P(A∩B) ≈ P(A)·P(B) + r·√(P(A)·Q(A)·P(B)·Q(B)) where r is the estimated pairwise correlation.
       </div>
     </div>
   </div>
@@ -631,8 +701,264 @@ const _origSwitchTab = switchTab;
 switchTab = function(id, btn) {
   _origSwitchTab(id, btn);
   if (id === 'signals') refreshSignalsStore();
+  if (id === 'sgp' && !_sgpGamesLoaded) sgpLoadGames();
 };
+
+/* ── CLV Converter ────────────────────────────────────── */
+function calcCLV() {
+  const open = parseFloat(document.getElementById('clv-open').value);
+  const close = parseFloat(document.getElementById('clv-close').value);
+  const stake = parseFloat(document.getElementById('clv-stake').value) || 100;
+  const el = document.getElementById('clv-result');
+
+  if (isNaN(open) || isNaN(close)) { el.innerHTML = ''; return; }
+
+  const openImpl  = americanToImplied(open);
+  const closeImpl = americanToImplied(close);
+  const clvEdge   = closeImpl - openImpl; // positive = you got the better of it
+  const openDec   = americanToDecimal(open);
+  const closeDec  = americanToDecimal(close);
+
+  // EV per $100 assuming closing line is "true" probability
+  const truePr = closeImpl;
+  const ev = truePr * (stake * (openDec - 1)) - (1 - truePr) * stake;
+
+  // Rolling CLV → ROI mapping (approximate: 1% CLV ≈ 1% ROI long-run)
+  const roiEst = (clvEdge * 100).toFixed(2);
+  const verdict = clvEdge > 0.03 ? { txt: 'STRONG +CLV', cls: 'pos' }
+                : clvEdge > 0.01 ? { txt: 'POSITIVE +CLV', cls: 'pos' }
+                : clvEdge > -0.01 ? { txt: 'FLAT', cls: '' }
+                : clvEdge > -0.03 ? { txt: 'NEGATIVE −CLV', cls: 'neg' }
+                : { txt: 'STEAM MOVED AGAINST', cls: 'neg' };
+
+  el.innerHTML = `
+    <div class="result">
+      <div class="result-grid">
+        <div class="result-item">
+          <div class="result-val ${clvEdge >= 0 ? 'pos' : 'neg'}">${clvEdge >= 0 ? '+' : ''}${(clvEdge * 100).toFixed(2)}%</div>
+          <div class="result-lbl">CLV Edge</div>
+        </div>
+        <div class="result-item">
+          <div class="result-val ${verdict.cls}">${verdict.txt}</div>
+          <div class="result-lbl">Verdict</div>
+        </div>
+        <div class="result-item">
+          <div class="result-val">${fmtPct(openImpl)}</div>
+          <div class="result-lbl">Your Implied Prob</div>
+        </div>
+        <div class="result-item">
+          <div class="result-val">${fmtPct(closeImpl)}</div>
+          <div class="result-lbl">Closing Implied Prob</div>
+        </div>
+        <div class="result-item">
+          <div class="result-val ${ev >= 0 ? 'pos' : 'neg'}">${fmtMoney(ev)}</div>
+          <div class="result-lbl">EV @ $${stake.toFixed(0)}</div>
+        </div>
+        <div class="result-item">
+          <div class="result-val ${clvEdge >= 0 ? 'pos' : 'neg'}">${clvEdge >= 0 ? '+' : ''}${roiEst}%</div>
+          <div class="result-lbl">Est. Long-Run ROI</div>
+        </div>
+      </div>
+      <div class="result-note">
+        Opening: ${open > 0 ? '+' : ''}${Math.round(open)} (impl. ${fmtPct(openImpl)}) →
+        Closing: ${close > 0 ? '+' : ''}${Math.round(close)} (impl. ${fmtPct(closeImpl)}).
+        ${clvEdge >= 0
+          ? `You beat the close by ${(clvEdge*100).toFixed(2)}% implied — market validated your position.`
+          : `Market moved ${(-clvEdge*100).toFixed(2)}% against you after your bet.`}
+      </div>
+    </div>`;
+}
+
+/* ── SGP Builder ────────────────────────────────────── */
+let _sgpGamesLoaded = false;
+let _sgpLegs = []; // [{player, team, market, line, prob, teamId}]
+const _SGP_MK_LABELS = {
+  batter_hits: 'Hits', batter_home_runs: 'HR', batter_total_bases: 'TB',
+  batter_rbis: 'RBI', batter_runs_scored: 'Runs', batter_strikeouts: 'Ks',
+  pitcher_strikeouts: 'Pitcher Ks', pitcher_hits_allowed: 'H Allowed',
+};
+function sgpMkLabel(mk) { return _SGP_MK_LABELS[mk] || mk.replace(/_/g,' '); }
+
+async function sgpLoadGames() {
+  _sgpGamesLoaded = true;
+  try {
+    const resp = await fetch('/api/games/today');
+    const data = await resp.json();
+    const games = data.games || data || [];
+    const sel = document.getElementById('sgp-game');
+    sel.innerHTML = '<option value="">— select a game —</option>';
+    games.forEach(g => {
+      const away = (g.teams?.away?.team?.abbreviation || g.away || '?');
+      const home = (g.teams?.home?.team?.abbreviation || g.home || '?');
+      const pk = g.gamePk || g.game_pk || '';
+      if (pk) sel.innerHTML += `<option value="${pk}">${away} @ ${home}</option>`;
+    });
+  } catch(e) {
+    document.getElementById('sgp-error').textContent = 'Failed to load games: ' + e.message;
+    document.getElementById('sgp-error').style.display = '';
+  }
+}
+
+async function sgpLoadGame() {
+  const pk = document.getElementById('sgp-game').value;
+  if (!pk) return;
+  const loadEl = document.getElementById('sgp-loading');
+  const errEl = document.getElementById('sgp-error');
+  const propsEl = document.getElementById('sgp-props');
+  loadEl.style.display = ''; errEl.style.display = 'none'; propsEl.style.display = 'none';
+  _sgpLegs = [];
+
+  try {
+    const resp = await fetch(`/api/props/projections/${pk}`);
+    const data = await resp.json();
+    // Handle various response shapes
+    const players = data.players || data.batters || data.projections || [];
+    if (!players.length) {
+      errEl.textContent = 'No prop data for this game yet (try after lineups post around noon ET).';
+      errEl.style.display = ''; loadEl.style.display = 'none'; return;
+    }
+
+    const grid = document.getElementById('sgp-grid');
+    grid.innerHTML = '';
+
+    players.forEach((p, pi) => {
+      const markets = p.markets || p.props || [];
+      const pName = p.player || p.name || '?';
+      const pTeam = p.team || p.teamAbbr || '?';
+      const pId = p.playerId || p.player_id || pi;
+
+      markets.forEach((m, mi) => {
+        const mk = m.marketKey || m.market_key || m.market || '';
+        const line = m.line ?? m.Line ?? '';
+        const prob = parseFloat(m.adjProb ?? m.modelProb ?? m.prob ?? 0);
+        if (!prob || prob < 0.30 || prob > 0.90) return; // skip extreme / missing
+        const decOdds = 1 / prob;
+        const amOdds = fmtOddsAmerican(decOdds);
+        const legId = `sgp-leg-${pi}-${mi}`;
+        const card = document.createElement('div');
+        card.style.cssText = 'background:rgba(255,255,255,.03);border:1px solid var(--b);border-radius:10px;padding:10px 12px;cursor:pointer;transition:.15s;display:flex;align-items:flex-start;gap:9px';
+        card.innerHTML = `
+          <input type="checkbox" id="${legId}" style="margin-top:3px;accent-color:var(--c);width:15px;height:15px;flex-shrink:0"
+            data-player="${pName}" data-team="${pTeam}" data-market="${mk}" data-line="${line}" data-prob="${prob}">
+          <label for="${legId}" style="cursor:pointer;flex:1">
+            <div style="font-size:.82rem;font-weight:700;color:var(--t)">${pName}</div>
+            <div style="font-size:.7rem;color:var(--mu);margin:2px 0">${pTeam} · ${sgpMkLabel(mk)} Over ${line}</div>
+            <div style="display:flex;gap:8px;font-size:.72rem">
+              <span style="color:var(--c)">${(prob*100).toFixed(1)}% model</span>
+              <span style="color:var(--mu)">${amOdds} fair</span>
+            </div>
+          </label>`;
+        card.querySelector('input').addEventListener('change', sgpRecalc);
+        grid.appendChild(card);
+      });
+    });
+
+    loadEl.style.display = 'none';
+    propsEl.style.display = '';
+  } catch(e) {
+    errEl.textContent = 'Failed to load props: ' + e.message;
+    errEl.style.display = ''; loadEl.style.display = 'none';
+  }
+}
+
+function sgpRecalc() {
+  const checked = document.querySelectorAll('#sgp-grid input[type=checkbox]:checked');
+  const el = document.getElementById('sgp-result');
+  if (checked.length < 2) { el.innerHTML = ''; return; }
+  if (checked.length > 5) { el.innerHTML = '<div style="color:var(--o);font-size:.8rem;padding:8px">Maximum 5 legs for SGP analysis.</div>'; return; }
+
+  const legs = Array.from(checked).map(c => ({
+    player: c.dataset.player, team: c.dataset.team,
+    market: c.dataset.market, line: c.dataset.line,
+    prob: parseFloat(c.dataset.prob),
+  }));
+
+  // Independent combined probability
+  const indepProb = legs.reduce((acc, l) => acc * l.prob, 1);
+
+  // Pairwise correlation estimates
+  let totalCorr = 0, pairs = 0;
+  for (let i = 0; i < legs.length; i++) {
+    for (let j = i+1; j < legs.length; j++) {
+      const a = legs[i], b = legs[j];
+      let r = 0;
+      const sameTeam = a.team === b.team;
+      const aHitting = a.market.startsWith('batter_');
+      const bHitting = b.market.startsWith('batter_');
+      const aPitcher = a.market.startsWith('pitcher_');
+      const bPitcher = b.market.startsWith('pitcher_');
+      if (sameTeam && aHitting && bHitting) r = 0.20; // same-team hitters: positive
+      else if (sameTeam && (aHitting||bHitting) && (aPitcher||bPitcher)) r = -0.15; // hitter vs their pitcher
+      else if (!sameTeam && aHitting && bHitting) r = 0.05; // different teams, mild positive
+      else if ((aPitcher||bPitcher) && (aHitting||bHitting)) r = -0.10; // pitching vs opposing hitting
+      totalCorr += r;
+      pairs++;
+    }
+  }
+  const avgCorr = pairs > 0 ? totalCorr / pairs : 0;
+
+  // Correlation-adjusted joint probability using bivariate Bernoulli approximation
+  let adjProb = indepProb;
+  if (pairs === 1) {
+    const [a, b] = legs;
+    const qa = 1 - a.prob, qb = 1 - b.prob;
+    adjProb = a.prob * b.prob + avgCorr * Math.sqrt(a.prob * qa * b.prob * qb);
+  } else if (pairs > 1) {
+    // Multi-leg: scale adjustment proportionally to average correlation
+    const indepBase = indepProb;
+    adjProb = Math.max(0.001, Math.min(0.999, indepBase * (1 + avgCorr * 0.5)));
+  }
+
+  const indepAm  = fmtOddsAmerican(1 / indepProb);
+  const adjAm    = fmtOddsAmerican(1 / adjProb);
+  // Typical book SGP adds ~10-12% vig penalty on top of standard vig
+  const bookProb  = adjProb * 0.88;
+  const bookAm    = fmtOddsAmerican(1 / bookProb);
+  const corrDir   = avgCorr > 0.02 ? `<span style="color:var(--g)">↑ positive (same-team synergy)</span>`
+                  : avgCorr < -0.02 ? `<span style="color:var(--r)">↓ negative (pitcher–hitter conflict)</span>`
+                  : `<span style="color:var(--mu)">≈ near-zero (independent legs)</span>`;
+
+  el.innerHTML = `
+    <div class="result">
+      <div style="font-size:.72rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--mu);margin-bottom:10px">${legs.length}-Leg SGP Analysis</div>
+      <div class="result-grid">
+        <div class="result-item">
+          <div class="result-val">${(indepProb*100).toFixed(2)}%</div>
+          <div class="result-lbl">Independent Prob</div>
+        </div>
+        <div class="result-item">
+          <div class="result-val pos">${(adjProb*100).toFixed(2)}%</div>
+          <div class="result-lbl">Corr-Adjusted Prob</div>
+        </div>
+        <div class="result-item">
+          <div class="result-val">${indepAm}</div>
+          <div class="result-lbl">Indep Fair Odds</div>
+        </div>
+        <div class="result-item">
+          <div class="result-val pos">${adjAm}</div>
+          <div class="result-lbl">Corr-Adj Fair Odds</div>
+        </div>
+        <div class="result-item">
+          <div class="result-val warn">${bookAm}</div>
+          <div class="result-lbl">Typical Book Price</div>
+        </div>
+        <div class="result-item">
+          <div class="result-val">${avgCorr >= 0 ? '+' : ''}${(avgCorr*100).toFixed(0)}%</div>
+          <div class="result-lbl">Avg Correlation</div>
+        </div>
+      </div>
+      <div class="result-note">
+        Correlation direction: ${corrDir}<br>
+        Fair price (adjusted): <strong>${adjAm}</strong> vs typical book SGP: <strong style="color:var(--o)">${bookAm}</strong>.
+        The difference represents the book's SGP vig (~10-12% penalty) above standard pricing.
+        ${adjProb > bookProb * 1.05
+          ? '<strong style="color:var(--g)">If this SGP is offered near fair price, it may have positive EV.</strong>'
+          : '<span style="color:var(--mu)">No obvious edge vs standard book SGP pricing.</span>'}
+      </div>
+    </div>`;
+}
 </script>
+<script src="/static/global-nav.js" defer></script>
 <script src="/static/mobile-nav.js" defer></script>
 </body>
 </html>

@@ -1,0 +1,44 @@
+/* MLB Analytics Hub — canonical design tokens.
+   Include this before any page stylesheet so variables are available everywhere. */
+
+:root {
+  /* Backgrounds */
+  --bg:    #050a18;
+  --card:  #0a1628;
+  --card2: #0b1322;
+
+  /* Brand / accent */
+  --c:  #00e5ff;   /* primary cyan */
+  --c2: #0097a7;
+  --m:  #e040fb;   /* magenta */
+  --g:  #00e676;   /* green / positive */
+  --g2: #00c853;
+  --r:  #f44336;   /* red / negative */
+  --r2: #d32f2f;
+  --o:  #ff9800;   /* orange / warning */
+  --y:  #ffd740;   /* yellow */
+  --sv: #00b8d4;   /* Savant teal */
+  --fg: #fa6400;   /* FanGraphs orange */
+
+  /* Typography */
+  --t:  #e0f0ff;   /* primary text */
+  --mu: #6a8db0;   /* muted text */
+
+  /* Borders */
+  --b:  rgba(0,229,255,.18);
+  --b2: rgba(255,255,255,.06);
+
+  /* Hub / verdict tier colours */
+  --elite:  #00e676;
+  --strong: #00b8d4;
+  --mod:    #ffd740;
+  --low:    #6a8db0;
+
+  /* Fonts */
+  --font-d: 'Orbitron', monospace;
+  --font-b: 'Inter', system-ui, sans-serif;
+  --font-m: 'JetBrains Mono', 'Courier New', monospace;
+
+  /* Transitions */
+  --ease: cubic-bezier(.16,1,.3,1);
+}

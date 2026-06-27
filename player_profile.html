@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Player Profile — MLB Analytics Hub</title>
+  <style>
+    :root{--bg:#070d18;--card:#101a2a;--card2:#0b1322;--b:#223149;--t:#dfe9ff;--mu:#8ea4c8;--c:#00e5ff;--g:#00e676;--r:#ff5252;--o:#ff9800;--y:#ffd740}
+    *{box-sizing:border-box}
+    body{margin:0;background:radial-gradient(circle at 10% 0%,#0f1d36,transparent 40%),var(--bg);color:var(--t);font-family:'Inter',system-ui,sans-serif;min-height:100vh}
+    .wrap{max-width:1100px;margin:0 auto;padding:18px}
+
+    .back-bar{display:flex;align-items:center;gap:10px;margin-bottom:18px;flex-wrap:wrap}
+    .back-btn{color:var(--mu);text-decoration:none;font-size:.8rem;border:1px solid var(--b);border-radius:999px;padding:5px 13px;transition:.15s}
+    .back-btn:hover{color:var(--c);border-color:rgba(0,229,255,.3)}
+    .bc{font-size:.75rem;color:var(--mu)}
+
+    .hero{display:flex;gap:18px;align-items:flex-start;background:linear-gradient(135deg,var(--card),var(--card2));border:1px solid var(--b);border-radius:18px;padding:20px 24px;margin-bottom:16px;flex-wrap:wrap}
+    .hero-photo{width:80px;height:80px;border-radius:50%;object-fit:cover;object-position:top center;border:2px solid rgba(0,229,255,.3);flex-shrink:0;background:rgba(0,229,255,.06)}
+    .hero-init{width:80px;height:80px;border-radius:50%;background:rgba(0,229,255,.1);border:2px solid rgba(0,229,255,.2);display:none;align-items:center;justify-content:center;font-size:1.6rem;font-weight:700;color:var(--c);flex-shrink:0}
+    .hero-info{flex:1;min-width:200px}
+    .hero-name{font-size:1.5rem;font-weight:800;color:var(--t);margin-bottom:5px}
+    .hero-meta{font-size:.8rem;color:var(--mu);display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+    .hero-meta span{display:flex;align-items:center;gap:4px}
+    .hero-acts{display:flex;gap:8px;flex-wrap:wrap}
+    .act-btn{padding:6px 14px;border-radius:999px;border:1px solid rgba(0,229,255,.25);color:var(--c);background:rgba(0,229,255,.07);font-size:.75rem;text-decoration:none;transition:.15s;white-space:nowrap}
+    .act-btn:hover{background:rgba(0,229,255,.15);border-color:rgba(0,229,255,.5)}
+
+    .stats-row{display:grid;grid-template-columns:repeat(auto-fill,minmax(88px,1fr));gap:10px;margin-bottom:16px}
+    .stat-box{background:var(--card);border:1px solid var(--b);border-radius:12px;padding:12px;text-align:center}
+    .stat-val{font-size:1.2rem;font-weight:800;color:var(--c)}
+    .stat-val.elite{color:var(--g)}
+    .stat-val.good{color:var(--c)}
+    .stat-val.warn{color:var(--o)}
+    .stat-val.poor{color:var(--r)}
+    .stat-lbl{font-size:.6rem;letter-spacing:.06em;text-transform:uppercase;color:var(--mu);margin-top:3px}
+
+    .cols{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px}
+    @media(max-width:720px){.cols{grid-template-columns:1fr}}
+
+    .card{background:var(--card);border:1px solid var(--b);border-radius:14px;padding:16px;margin-bottom:14px}
+    .card:last-child{margin-bottom:0}
+    .card-title{font-size:.7rem;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--c);margin-bottom:12px}
+
+    .mgrids{display:grid;grid-template-columns:repeat(auto-fill,minmax(95px,1fr));gap:8px}
+    .mitem{text-align:center;padding:8px;background:rgba(255,255,255,.03);border-radius:8px;border:1px solid rgba(34,49,73,.5)}
+    .mval{font-size:1rem;font-weight:700;color:var(--c)}
+    .mval.elite{color:var(--g)}
+    .mval.good{color:var(--c)}
+    .mval.warn{color:var(--o)}
+    .mval.poor{color:var(--r)}
+    .mlbl{font-size:.58rem;color:var(--mu);letter-spacing:.06em;text-transform:uppercase;margin-top:2px}
+
+    .platoon-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .plat-side{background:rgba(255,255,255,.03);border:1px solid var(--b);border-radius:10px;padding:12px}
+    .plat-lbl{font-size:.65rem;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--mu);margin-bottom:8px}
+    .plat-row{display:flex;justify-content:space-between;font-size:.72rem;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.04)}
+    .plat-row:last-child{border-bottom:none}
+    .plat-row span:last-child{font-weight:700;color:var(--t)}
+
+    .gtable{width:100%;border-collapse:collapse;font-size:.71rem}
+    .gtable th{padding:6px 8px;text-align:left;color:var(--mu);font-weight:600;letter-spacing:.04em;font-size:.6rem;border-bottom:1px solid var(--b);white-space:nowrap;text-transform:uppercase;background:rgba(255,255,255,.02)}
+    .gtable td{padding:6px 8px;border-bottom:1px solid rgba(34,49,73,.4);white-space:nowrap}
+    .gtable tr:last-child td{border-bottom:none}
+    .gtable tr:hover td{background:rgba(0,229,255,.03)}
+    .g-hit{color:var(--g);font-weight:700}
+    .g-nohit{color:var(--mu)}
+
+    .ai-line{font-size:.78rem;color:var(--mu);padding:5px 0;border-bottom:1px solid rgba(255,255,255,.04);line-height:1.5}
+    .ai-line:last-child{border-bottom:none}
+
+    .opp-card{display:flex;align-items:center;gap:12px;background:rgba(255,255,255,.03);border:1px solid var(--b);border-radius:10px;padding:12px;margin-bottom:14px}
+    .opp-photo{width:44px;height:44px;border-radius:50%;object-fit:cover;object-position:top center;border:1px solid rgba(0,229,255,.2)}
+    .opp-name{font-size:.88rem;font-weight:700}
+    .opp-meta{font-size:.7rem;color:var(--mu)}
+
+    .empty{color:var(--mu);font-size:.78rem;padding:8px 0}
+    .load-wrap{text-align:center;padding:60px;color:var(--mu)}
+    .spin{width:28px;height:28px;border:3px solid rgba(0,229,255,.15);border-top-color:var(--c);border-radius:50%;animation:sp .8s linear infinite;margin:0 auto 12px}
+    @keyframes sp{to{transform:rotate(360deg)}}
+
+    .tabs-inner{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap}
+    .tab-inner{border:1px solid var(--b);background:rgba(255,255,255,.03);color:var(--mu);padding:6px 14px;border-radius:999px;cursor:pointer;font-size:.78rem;transition:.15s}
+    .tab-inner.on{color:var(--c);border-color:rgba(0,229,255,.35);background:rgba(0,229,255,.08)}
+    .tab-panel{display:none}
+    .tab-panel.on{display:block}
+
+    .badge{display:inline-block;padding:2px 7px;border-radius:6px;font-size:.62rem;font-weight:700;letter-spacing:.04em;margin:2px}
+    .badge-elite{background:rgba(0,230,118,.15);border:1px solid rgba(0,230,118,.3);color:var(--g)}
+    .badge-good{background:rgba(0,229,255,.1);border:1px solid rgba(0,229,255,.25);color:var(--c)}
+    .badge-avg{background:rgba(142,164,200,.1);border:1px solid rgba(142,164,200,.2);color:var(--mu)}
+  </style>
+  <link rel="stylesheet" href="/static/mobile.css">
+  <link rel="stylesheet" href="/static/tokens.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="back-bar">
+    <a class="back-btn" href="/props">← Props</a>
+    <a class="back-btn" href="/">Dashboard</a>
+    <a class="back-btn" href="/streak">🔥 Streak</a>
+    <span class="bc" id="bcName">Player Profile</span>
+  </div>
+
+  <div id="loadState" class="load-wrap"><div class="spin"></div>Loading player profile…</div>
+  <div id="content" style="display:none"></div>
+  <div id="errState" style="display:none;text-align:center;padding:40px;color:var(--r)"></div>
+</div>
+
+<script>
+const PLAYER_ID = window.location.pathname.split('/').filter(Boolean).pop();
+const MLB_PHOTO = id => `https://img.mlbstatic.com/mlb-photos/image/upload/d_people:generic:headshot:67:current.png/w_120,q_auto:best/v1/people/${id}/headshot/67/current`;
+
+const $ = id => document.getElementById(id);
+function safe(v){ return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function fmt3(v){ if(v==null||v==='---'||v==='')return'—'; const n=parseFloat(v); return isNaN(n)?String(v):n.toFixed(3); }
+function fmt2(v){ if(v==null||v==='---')return'—'; const n=parseFloat(v); return isNaN(n)?String(v):n.toFixed(2); }
+function fmtN(v){ if(v==null)return'—'; const n=parseInt(v); return isNaN(n)?'—':String(n); }
+function fmtPct(v, mult){ const n=parseFloat(v); return isNaN(n)?'—':(n*(mult||1)).toFixed(1)+'%'; }
+function inits(n){ return (n||'').split(' ').map(p=>p[0]||'').join('').slice(0,2).toUpperCase(); }
+
+function tierClass(val, [e,g,a]){
+  const n=parseFloat(val);
+  if(isNaN(n))return '';
+  if(n>=e)return 'elite';
+  if(n>=g)return 'good';
+  if(n>=a)return '';
+  return 'warn';
+}
+function tierClassInv(val, [e,g,a]){ // lower is better (ERA, K%)
+  const n=parseFloat(val);
+  if(isNaN(n))return '';
+  if(n<=e)return 'elite';
+  if(n<=g)return 'good';
+  if(n<=a)return '';
+  return 'warn';
+}
+
+async function load(){
+  try {
+    const [data, bdData] = await Promise.all([
+      fetch(`/api/player/${PLAYER_ID}?includeForm=1`).then(r=>r.json()),
+      fetch(`/api/player/${PLAYER_ID}/performance-badges`).then(r=>r.json()).catch(()=>({})),
+    ]);
+    if(!data.success){
+      $('errState').style.display='';
+      $('errState').textContent='Player not found: '+(data.error||'unknown');
+      $('loadState').style.display='none';
+      return;
+    }
+    render(data, bdData.badges||{});
+    if(window.setNavAsOf) setNavAsOf(new Date());
+  } catch(err){
+    $('errState').style.display='';
+    $('errState').textContent='Failed to load: '+err.message;
+    $('loadState').style.display='none';
+  }
+}
+
+function render(d, badges){
+  document.title = d.name+' — MLB Analytics Hub';
+  $('bcName').textContent = d.name;
+
+  const fg=d.fg||{}, sv=d.sv||{}, s=d.season||{};
+  const logs=d.gameLogs||[], plat=d.platoon||{}, aiL=d.aiLines||[];
+  const opp=d.oppPitcher;
+  const ip=d.isPitcher;
+
+  // ── Hero ──
+  const photoHtml=`<img class="hero-photo" src="${MLB_PHOTO(d.id)}" alt=""
+    loading="lazy"
+    onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+    <div class="hero-init" style="display:none">${inits(d.name)}</div>`;
+
+  const gamePk=opp&&opp.gamePk?opp.gamePk:'';
+  const actHtml=`
+    <a class="act-btn" href="${gamePk?`/props?game=${gamePk}`:'/props'}">📊 Props</a>
+    ${gamePk?`<a class="act-btn" href="/deep-dive/${gamePk}">🔍 Deep Dive</a>`:''}
+    <a class="act-btn" href="/batter-vs-pitcher${opp&&opp.id?`?batter=${PLAYER_ID}&pitcher=${opp.id}`:''}">⚔️ BvP</a>
+    <a class="act-btn" href="/streak">🔥 Streak</a>
+    <a class="act-btn" href="/tracker">📋 Track</a>`;
+
+  const metaHtml=`
+    <span>⚾ <strong style="color:var(--t)">${safe(d.team)}</strong></span>
+    <span>${safe(d.pos)}</span>
+    <span>${ip?'Throws':'Bats'} ${safe(ip?d.throws:d.bats)}</span>
+    ${opp?`<span>Today vs <strong style="color:var(--t)">${safe(opp.name)}</strong> (${safe(opp.team)})</span>`:''}`;
+
+  // ── Season stats ──
+  let statsHtml='';
+  if(!ip){
+    const opsN=parseFloat(s.ops||0);
+    const avgN=parseFloat(s.avg||0);
+    statsHtml=`
+      <div class="stat-box"><div class="stat-val ${tierClass(avgN,[.300,.260,.230])}">${fmt3(s.avg)}</div><div class="stat-lbl">AVG</div></div>
+      <div class="stat-box"><div class="stat-val">${fmt3(s.obp)}</div><div class="stat-lbl">OBP</div></div>
+      <div class="stat-box"><div class="stat-val">${fmt3(s.slg)}</div><div class="stat-lbl">SLG</div></div>
+      <div class="stat-box"><div class="stat-val ${tierClass(opsN,[.900,.800,.700])}">${fmt3(s.ops)}</div><div class="stat-lbl">OPS</div></div>
+      <div class="stat-box"><div class="stat-val">${fmtN(s.homeRuns)}</div><div class="stat-lbl">HR</div></div>
+      <div class="stat-box"><div class="stat-val">${fmtN(s.rbi)}</div><div class="stat-lbl">RBI</div></div>
+      <div class="stat-box"><div class="stat-val">${fmtN(s.runs)}</div><div class="stat-lbl">R</div></div>
+      <div class="stat-box"><div class="stat-val">${fmtN(s.stolenBases)}</div><div class="stat-lbl">SB</div></div>`;
+  } else {
+    statsHtml=`
+      <div class="stat-box"><div class="stat-val ${tierClassInv(s.era,[2.8,3.5,4.5])}">${fmt2(s.era)}</div><div class="stat-lbl">ERA</div></div>
+      <div class="stat-box"><div class="stat-val ${tierClassInv(s.whip,[1.0,1.2,1.4])}">${fmt2(s.whip)}</div><div class="stat-lbl">WHIP</div></div>
+      <div class="stat-box"><div class="stat-val">${s.inningsPitched||'—'}</div><div class="stat-lbl">IP</div></div>
+      <div class="stat-box"><div class="stat-val">${fmtN(s.wins)}-${fmtN(s.losses)}</div><div class="stat-lbl">W-L</div></div>`;
+  }
+
+  // ── FG metrics ──
+  let fgHtml='';
+  if(!ip){
+    const wrc=fg.fg_wrc??fg.wrc_plus;
+    const kp=fg.fg_k_pct??fg.k_pct;
+    const bbp=fg.fg_bb_pct??fg.bb_pct;
+    const iso=fg.fg_iso??fg.iso;
+    const bab=fg.fg_babip??fg.babip;
+    fgHtml=`
+      <div class="mitem"><div class="mval ${tierClass(wrc,[140,115,90])}">${wrc!=null?Math.round(wrc):'—'}</div><div class="mlbl">wRC+</div></div>
+      <div class="mitem"><div class="mval ${tierClass(iso,[.220,.170,.120])}">${iso!=null?parseFloat(iso).toFixed(3):'—'}</div><div class="mlbl">ISO</div></div>
+      <div class="mitem"><div class="mval">${bbp!=null?(parseFloat(bbp)*100).toFixed(1)+'%':'—'}</div><div class="mlbl">BB%</div></div>
+      <div class="mitem"><div class="mval ${tierClassInv(kp!=null?parseFloat(kp)*100:null,[18,22,28])}">${kp!=null?(parseFloat(kp)*100).toFixed(1)+'%':'—'}</div><div class="mlbl">K%</div></div>
+      <div class="mitem"><div class="mval">${bab!=null?parseFloat(bab).toFixed(3):'—'}</div><div class="mlbl">BABIP</div></div>`;
+  } else {
+    const fip=fg.fg_fip??fg.fip;
+    const xfip=fg.fg_xfip??fg.xfip;
+    const kp=fg.fg_k_pct??fg.k_pct;
+    const bbp=fg.fg_bb_pct??fg.bb_pct;
+    fgHtml=`
+      <div class="mitem"><div class="mval ${tierClassInv(fip,[3.0,3.8,4.5])}">${fip!=null?parseFloat(fip).toFixed(2):'—'}</div><div class="mlbl">FIP</div></div>
+      <div class="mitem"><div class="mval">${xfip!=null?parseFloat(xfip).toFixed(2):'—'}</div><div class="mlbl">xFIP</div></div>
+      <div class="mitem"><div class="mval ${tierClass(kp!=null?parseFloat(kp)*100:null,[28,22,18])}">${kp!=null?(parseFloat(kp)*100).toFixed(1)+'%':'—'}</div><div class="mlbl">K%</div></div>
+      <div class="mitem"><div class="mval">${bbp!=null?(parseFloat(bbp)*100).toFixed(1)+'%':'—'}</div><div class="mlbl">BB%</div></div>`;
+  }
+
+  // ── Savant metrics ──
+  let svHtml='';
+  if(!ip){
+    const xba=sv.sv_xba??sv.xba;
+    const xslg=sv.sv_xslg??sv.xslg;
+    const brl=sv.sv_brl_pct??sv.brl_pct;
+    const hh=sv.sv_hh_pct??sv.hh_pct;
+    const ev=sv.sv_ev??sv.launch_speed;
+    const la=sv.sv_la??sv.launch_angle;
+    svHtml=`
+      <div class="mitem"><div class="mval ${tierClass(xba,[.300,.260,.230])}">${xba!=null?parseFloat(xba).toFixed(3):'—'}</div><div class="mlbl">xBA</div></div>
+      <div class="mitem"><div class="mval">${xslg!=null?parseFloat(xslg).toFixed(3):'—'}</div><div class="mlbl">xSLG</div></div>
+      <div class="mitem"><div class="mval ${tierClass(brl,[10,7,4])}">${brl!=null?parseFloat(brl).toFixed(1)+'%':'—'}</div><div class="mlbl">Barrel%</div></div>
+      <div class="mitem"><div class="mval ${tierClass(hh,[45,38,32])}">${hh!=null?parseFloat(hh).toFixed(1)+'%':'—'}</div><div class="mlbl">Hard Hit%</div></div>
+      <div class="mitem"><div class="mval ${tierClass(ev,[93,90,87])}">${ev!=null?parseFloat(ev).toFixed(1):'—'}</div><div class="mlbl">Avg EV</div></div>
+      <div class="mitem"><div class="mval">${la!=null?parseFloat(la).toFixed(1)+'°':'—'}</div><div class="mlbl">Avg LA</div></div>`;
+  } else {
+    const xera=sv.sv_xera??sv.xera;
+    const brl=sv.sv_brl_pct??sv.brl_pct;
+    const whiff=sv.sv_whiff_pct??sv.whiff_pct;
+    svHtml=`
+      <div class="mitem"><div class="mval">${xera!=null?parseFloat(xera).toFixed(2):'—'}</div><div class="mlbl">xERA</div></div>
+      <div class="mitem"><div class="mval">${brl!=null?parseFloat(brl).toFixed(1)+'%':'—'}</div><div class="mlbl">Barrel%</div></div>
+      <div class="mitem"><div class="mval ${tierClass(whiff,[30,25,20])}">${whiff!=null?parseFloat(whiff).toFixed(1)+'%':'—'}</div><div class="mlbl">Whiff%</div></div>`;
+  }
+
+  // ── Game log ──
+  let logHtml='<div class="empty">No recent game log available.</div>';
+  if(logs.length){
+    if(!ip){
+      const rows=[...logs].reverse().slice(0,15).map(g=>{
+        const hc=parseInt(g.h||g.hits||0)>=1?'g-hit':'g-nohit';
+        return `<tr>
+          <td>${g.date||'—'}</td>
+          <td style="color:var(--mu)">${safe(g.opp||g.opponent||'')}</td>
+          <td>${g.ab??'—'}</td>
+          <td class="${hc}">${g.h??g.hits??'—'}</td>
+          <td style="color:${parseInt(g.hr||0)>0?'var(--o)':'inherit'}">${g.hr??0}</td>
+          <td>${g.rbi??'—'}</td>
+          <td>${g.bb??'—'}</td>
+          <td>${g.k??'—'}</td>
+          <td>${g.tb??'—'}</td>
+          <td style="color:var(--mu)">${g.avg||'—'}</td>
+        </tr>`;
+      }).join('');
+      logHtml=`<div style="overflow-x:auto"><table class="gtable">
+        <thead><tr><th>Date</th><th>Opp</th><th>AB</th><th>H</th><th>HR</th><th>RBI</th><th>BB</th><th>K</th><th>TB</th><th>AVG</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>`;
+    } else {
+      const rows=[...logs].reverse().slice(0,15).map(g=>`<tr>
+        <td>${g.date||'—'}</td>
+        <td style="color:var(--mu)">${safe(g.opp||'')}</td>
+        <td>${g.ip||'—'}</td>
+        <td>${g.h??'—'}</td>
+        <td>${g.er??'—'}</td>
+        <td style="color:${parseInt(g.k||0)>=6?'var(--g)':'inherit'}">${g.k??'—'}</td>
+        <td>${g.bb??'—'}</td>
+        <td style="color:var(--mu)">${g.era||'—'}</td>
+      </tr>`).join('');
+      logHtml=`<div style="overflow-x:auto"><table class="gtable">
+        <thead><tr><th>Date</th><th>Opp</th><th>IP</th><th>H</th><th>ER</th><th>K</th><th>BB</th><th>ERA</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>`;
+    }
+  }
+
+  // ── Platoon splits ──
+  const vl=plat.vl||{}, vr=plat.vr||{};
+  let platHtml='<div class="empty">No platoon data available.</div>';
+  if(Object.keys(vl).length||Object.keys(vr).length){
+    const side=(lbl,dat)=>`<div class="plat-side">
+      <div class="plat-lbl">${lbl}</div>
+      ${[['avg','AVG'],['obp','OBP'],['slg','SLG'],['ops','OPS'],['hr','HR'],['pa','PA']].map(([k,l])=>`
+        <div class="plat-row"><span>${l}</span><span>${fmt3(dat[k])}</span></div>`).join('')}
+    </div>`;
+    platHtml=`<div class="platoon-grid">${side('vs LHP',vl)}${side('vs RHP',vr)}</div>`;
+  }
+
+  // ── AI Scout ──
+  const aiHtml=aiL.length?aiL.map(l=>`<div class="ai-line">${safe(l)}</div>`).join(''):'<div class="empty">No scout report available.</div>';
+
+  // ── Opp pitcher ──
+  const oppHtml=opp?`<div class="opp-card">
+    <img class="opp-photo" src="${MLB_PHOTO(opp.id)}" alt="" loading="lazy" onerror="this.style.display='none'">
+    <div>
+      <div class="opp-name">${safe(opp.name)}</div>
+      <div class="opp-meta">Today's probable starter · ${safe(opp.team)}</div>
+    </div>
+    ${opp.gamePk?`<a class="act-btn" href="/deep-dive/${opp.gamePk}" style="margin-left:auto">Matchup →</a>`:''}
+  </div>`:'';
+
+  $('content').innerHTML=`
+    <div class="hero">
+      <div style="position:relative;flex-shrink:0">${photoHtml}</div>
+      <div class="hero-info">
+        <div class="hero-name">${safe(d.name)}</div>
+        <div class="hero-meta">${metaHtml}</div>
+        <div class="hero-acts">${actHtml}</div>
+      </div>
+    </div>
+
+    <div class="stats-row">${statsHtml}</div>
+
+    ${oppHtml}
+
+    <div class="tabs-inner">
+      <button class="tab-inner on" onclick="sw('overview',this)">Overview</button>
+      <button class="tab-inner" onclick="sw('log',this)">Game Log</button>
+      <button class="tab-inner" onclick="sw('splits',this)">Splits</button>
+      <button class="tab-inner" onclick="sw('scout',this)">Scout Report</button>
+    </div>
+
+    <div class="tab-panel on" id="tp-overview">
+      <div class="cols">
+        <div>
+          <div class="card"><div class="card-title">FanGraphs Advanced</div><div class="mgrids">${fgHtml}</div></div>
+          <div class="card"><div class="card-title">Statcast Metrics</div><div class="mgrids">${svHtml}</div></div>
+        </div>
+        <div>
+          <div class="card"><div class="card-title">Platoon Splits (Season)</div>${platHtml}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tab-panel" id="tp-log">
+      <div class="card"><div class="card-title">Recent Game Log (Last 15)</div>${logHtml}</div>
+    </div>
+
+    <div class="tab-panel" id="tp-splits">
+      <div class="card"><div class="card-title">Platoon Splits</div>${platHtml}</div>
+    </div>
+
+    <div class="tab-panel" id="tp-scout">
+      <div class="card"><div class="card-title">AI Scout Report</div>${aiHtml}</div>
+    </div>`;
+
+  $('content').style.display='';
+  $('loadState').style.display='none';
+}
+
+function sw(id, btn){
+  document.querySelectorAll('.tab-inner').forEach(b=>b.classList.remove('on'));
+  document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('on'));
+  btn.classList.add('on');
+  document.getElementById('tp-'+id).classList.add('on');
+}
+
+load();
+</script>
+<script src="/static/global-nav.js" defer></script>
+<script src="/static/mobile-nav.js" defer></script>
+</body>
+</html>

@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>Prop Projections | MLB Analytics Hub</title>
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/tokens.css">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{--c:#00e5ff;--m:#e040fb;--g:#00e676;--o:#ff9800;--r:#f44336;--bg:#050a18;--card:#0a1628;--b:rgba(0,229,255,.18);--t:#e0f0ff;--mu:#6a8db0;--fg:#fa6400;--sv:#00b8d4;--elite:#00e676;--strong:#00b8d4;--mod:#ffd740}
@@ -50,20 +51,69 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .subtabs{display:flex;gap:8px;margin-bottom:18px}
 .stab{padding:7px 18px;border-radius:999px;border:1px solid var(--b);background:rgba(255,255,255,.02);color:var(--mu);font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:1.5px;cursor:pointer;transition:all .2s}
 .stab.active{background:rgba(0,229,255,.1);border-color:rgba(0,229,255,.35);color:var(--c)}
-.sortbar{display:flex;align-items:center;gap:8px;margin-bottom:18px;flex-wrap:wrap}
+.sortbar{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap}
 .sort-lbl{font-family:'Orbitron',monospace;font-size:.58rem;color:var(--mu);letter-spacing:2px}
 .sort-btn{padding:5px 12px;border-radius:999px;border:1px solid var(--b);background:rgba(255,255,255,.02);color:var(--mu);font-family:'Orbitron',monospace;font-size:.58rem;letter-spacing:1px;cursor:pointer;transition:all .15s}
 .sort-btn:hover{border-color:rgba(0,229,255,.25);color:var(--t)}
 .sort-btn.active{background:rgba(0,229,255,.1);border-color:rgba(0,229,255,.35);color:var(--c)}
+.sort-btn.watchlist-btn{border-color:rgba(255,215,0,.28);color:#ffd740}
+.sort-btn.watchlist-btn.active{background:rgba(255,215,0,.12);border-color:rgba(255,215,0,.48);color:#ffd740}
+.bcard.bcard-starred{border-color:rgba(255,215,0,.38);background:linear-gradient(135deg,var(--card),rgba(255,215,0,.03))}
+.bcard.bcard-starred::before{background:linear-gradient(90deg,#ffd740,rgba(255,152,0,.6))}
+.star-btn{background:none;border:none;cursor:pointer;font-size:1.05rem;line-height:1;padding:2px 4px;transition:transform .15s;opacity:.55}
+.star-btn:hover{opacity:1;transform:scale(1.2)}
+.star-btn.starred{opacity:1;filter:drop-shadow(0 0 4px rgba(255,215,0,.6))}
+/* ── Player Compare ── */
+.cmp-btn{background:none;border:1px solid rgba(0,229,255,.2);border-radius:6px;cursor:pointer;font-size:.7rem;line-height:1;padding:2px 6px;transition:all .15s;color:var(--mu)}
+.cmp-btn:hover{border-color:rgba(0,229,255,.5);color:var(--c)}
+.cmp-btn.in-cmp{border-color:rgba(0,229,255,.55);color:var(--c);background:rgba(0,229,255,.12)}
+.cmp-bar{position:fixed;bottom:80px;left:50%;transform:translateX(-50%) translateY(120px);z-index:2000;display:flex;align-items:center;gap:10px;padding:10px 16px;border-radius:16px;background:rgba(8,14,28,.97);backdrop-filter:blur(16px);border:1px solid rgba(0,229,255,.4);box-shadow:0 8px 32px rgba(0,0,0,.55);transition:transform .3s cubic-bezier(.34,1.56,.64,1);pointer-events:none;white-space:nowrap}
+.cmp-bar.show{transform:translateX(-50%) translateY(0);pointer-events:all}
+.cmp-slot{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:8px;border:1px solid rgba(0,229,255,.22);background:rgba(0,229,255,.06);font-size:.68rem;color:var(--t);font-family:'Orbitron',monospace;letter-spacing:.5px;min-width:120px}
+.cmp-slot.empty{color:var(--mu);border-style:dashed;font-size:.63rem}
+.cmp-vs{font-family:'Orbitron',monospace;font-size:.6rem;color:var(--mu);letter-spacing:2px}
+.cmp-x{background:none;border:none;color:var(--mu);cursor:pointer;font-size:.8rem;padding:0 1px;line-height:1;flex-shrink:0}
+.cmp-x:hover{color:var(--r)}
+.cmp-view-btn{padding:6px 14px;border-radius:8px;border:1px solid rgba(0,229,255,.4);background:rgba(0,229,255,.12);color:var(--c);font-family:'Orbitron',monospace;font-size:.58rem;letter-spacing:1.5px;cursor:pointer;transition:all .2s}
+.cmp-view-btn:hover{background:rgba(0,229,255,.22)}
+.cmp-view-btn:disabled{opacity:.4;cursor:default}
+.cmp-clear-btn{padding:6px 10px;border-radius:8px;border:1px solid rgba(244,67,54,.3);background:rgba(244,67,54,.07);color:var(--r);font-family:'Orbitron',monospace;font-size:.55rem;letter-spacing:1px;cursor:pointer}
+.cmp-modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:3500;background:rgba(2,6,16,.9);backdrop-filter:blur(8px)}
+.cmp-modal.show{display:flex}
+.cmp-modal-box{background:var(--card);border:1px solid var(--b);border-radius:20px;max-width:780px;width:96%;max-height:90vh;overflow-y:auto;padding:24px}
+.cmp-modal-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
+.cmp-modal-title{font-family:'Orbitron',monospace;font-size:.78rem;letter-spacing:2px;color:var(--c)}
+.cmp-table{width:100%;border-collapse:collapse;font-size:.82rem}
+.cmp-table th{font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:1.5px;color:var(--mu);padding:6px 12px;text-align:center;border-bottom:1px solid var(--b)}
+.cmp-table th:first-child{text-align:left;width:38%}
+.cmp-table td{padding:9px 12px;text-align:center;border-bottom:1px solid rgba(255,255,255,.04);font-family:'Orbitron',monospace;font-size:.72rem}
+.cmp-table td:first-child{text-align:left;color:var(--mu);font-size:.65rem;letter-spacing:.8px;font-family:'Inter',sans-serif}
+.cmp-table tr:last-child td{border-bottom:none}
+.cmp-table .cmp-winner{color:var(--g);font-weight:700}
+.cmp-table .cmp-loser{color:rgba(255,255,255,.35)}
+.cmp-section-hdr td{font-family:'Orbitron',monospace;font-size:.55rem;letter-spacing:2px;color:var(--c);background:rgba(0,229,255,.05);padding:6px 12px;text-align:left!important;border-top:1px solid rgba(0,229,255,.12)!important;border-bottom:none!important}
+.cmp-photo{width:42px;height:42px;border-radius:50%;object-fit:cover;object-position:top center;border:1.5px solid rgba(0,229,255,.25);display:block;margin:0 auto}
+.cmp-name-cell{display:flex;flex-direction:column;align-items:center;gap:5px;padding:10px 4px 6px}
 .batter-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(288px,1fr));gap:16px}
 .bcard{background:var(--card);border:1px solid var(--b);border-radius:14px;padding:18px;transition:all .25s;position:relative;overflow:hidden}
 .bcard::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--c),var(--m))}
 .bcard:hover{transform:translateY(-4px);border-color:var(--c);box-shadow:0 0 28px rgba(0,229,255,.14)}
 .bcard-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px}
+/* ── Player headshot ── */
+.bcard-photo-wrap{flex-shrink:0;width:52px;height:52px;border-radius:50%;border:1.5px solid rgba(0,229,255,.25);background:rgba(0,0,0,.5);overflow:hidden;display:flex;align-items:center;justify-content:center}
+.bcard-photo{width:100%;height:100%;object-fit:cover;object-position:top center}
+.bcard-photo-initials{font-family:'Orbitron',monospace;font-size:.65rem;color:var(--mu);letter-spacing:1px}
+.bcard-top-left{display:flex;align-items:flex-start;gap:10px;flex:1;min-width:0}
+.bcard-top-info{flex:1;min-width:0}
 .bcard-name{font-weight:700;font-size:.9rem}
 .bcard-meta{font-size:.62rem;color:var(--mu);margin-top:2px}
 .bcard-slot{font-family:'Orbitron',monospace;font-size:1.1rem;color:var(--c);font-weight:900;line-height:1}
 .bcard-vs{font-size:.6rem;color:var(--mu);padding:5px 10px;background:rgba(0,0,0,.3);border-radius:6px;border:1px solid rgba(255,255,255,.05);margin-bottom:12px}
+/* ── Pitcher headshot in panel ── */
+.ppanel-top{display:flex;align-items:flex-start;gap:10px;margin-bottom:14px}
+.ppanel-photo-wrap{flex-shrink:0;width:48px;height:48px;border-radius:50%;border:1.5px solid rgba(250,100,0,.3);background:rgba(0,0,0,.5);overflow:hidden;display:flex;align-items:center;justify-content:center}
+.ppanel-photo{width:100%;height:100%;object-fit:cover;object-position:top center}
+.ppanel-info{flex:1;min-width:0}
 .proj-grid{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;margin-bottom:10px}
 .pcell{text-align:center;padding:8px 4px;background:rgba(0,0,0,.25);border-radius:8px;border:1px solid rgba(255,255,255,.04)}
 .plbl{font-size:.5rem;color:var(--mu);letter-spacing:1.5px;font-family:'Orbitron',monospace;margin-bottom:4px}
@@ -276,8 +326,10 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .props-pr-leg-pill.over{background:rgba(76,175,80,.1);border:1px solid rgba(76,175,80,.25);color:#4caf50}
 .props-pr-leg-pill.under{background:rgba(244,67,54,.08);border:1px solid rgba(244,67,54,.2);color:#f44336}
 .props-pr-empty{padding:16px;text-align:center;font-size:.68rem;color:var(--mu);font-family:'Orbitron',monospace;letter-spacing:1px}
+/* ── Sticky Sort + Filter Bar ── */
+.sort-sticky-wrap{position:sticky;top:58px;z-index:50;background:rgba(5,10,24,.97);backdrop-filter:blur(14px);border-bottom:1px solid rgba(0,229,255,.1);padding:8px 0 6px;margin:0 0 14px}
 /* ── Power Filter Bar ── */
-.pfbar{margin-bottom:14px}
+.pfbar{margin-bottom:0}
 .pfbar-toggle{display:inline-flex;align-items:center;gap:7px;padding:6px 14px;border-radius:8px;border:1px solid rgba(0,229,255,.2);background:rgba(0,229,255,.04);color:var(--c);font-family:'Orbitron',monospace;font-size:.6rem;letter-spacing:1.5px;cursor:pointer;transition:all .2s}
 .pfbar-toggle:hover{border-color:rgba(0,229,255,.4);background:rgba(0,229,255,.1)}
 .pfbar-toggle.has-active{border-color:rgba(0,229,255,.5);background:rgba(0,229,255,.12);box-shadow:0 0 12px rgba(0,229,255,.12)}
@@ -446,6 +498,7 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 <link rel="stylesheet" href="/static/mobile.css">
 </head>
 <body>
+<script src="/static/global-nav.js" defer></script>
 
 <nav>
   <div class="logo">⚾ PROP PROJECTIONS</div>
@@ -573,6 +626,7 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
         <button class="stab" id="stab-pitchers" onclick="switchSub('pitchers')">PITCHERS</button>
       </div>
       <div id="sub-batters">
+        <div class="sort-sticky-wrap" id="sortStickyWrap">
         <div class="sortbar">
           <span class="sort-lbl">SORT BY:</span>
           <button class="sort-btn active" onclick="sortBatters(this,'hits')">HITS</button>
@@ -581,6 +635,7 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
           <button class="sort-btn" onclick="sortBatters(this,'rbi')">RBI</button>
           <button class="sort-btn" onclick="sortBatters(this,'hrr')">H+R+RBI</button>
           <button class="sort-btn" onclick="sortBatters(this,'slot')">SLOT ORDER</button>
+          <button class="sort-btn watchlist-btn" id="watchlistFilterBtn" onclick="toggleWatchlistFilter(this)" title="Show only starred players">⭐ WATCHLIST (<span id="watchlistCount">0</span>)</button>
         </div>
         <!-- ── Power Filter Bar ── -->
         <div class="pfbar" id="pfBar">
@@ -629,6 +684,7 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
             <button class="pfchip pfchip-clear" onclick="clearPFFilters()">✕ CLEAR</button>
           </div>
         </div>
+        </div><!-- /sort-sticky-wrap -->
         <div class="batter-grid" id="batterGrid"></div>
       </div>
       <div id="sub-pitchers" style="display:none">
@@ -800,6 +856,138 @@ let CUR_HOME      = '';
 let CUR_AWAY      = '';
 let FULL_SCAN_MODE = false;
 let PF_FILTERS    = new Set();
+// ── Watchlist (localStorage) ──────────────────────────────────────────────────
+let WATCHLIST = new Set(JSON.parse(localStorage.getItem('mlb_watchlist') || '[]'));
+let WATCHLIST_FILTER_ON = false;
+function _saveWatchlist() {
+  localStorage.setItem('mlb_watchlist', JSON.stringify([...WATCHLIST]));
+  const countEl = document.getElementById('watchlistCount');
+  if (countEl) countEl.textContent = WATCHLIST.size;
+}
+function toggleStar(nameKey, btn) {
+  if (WATCHLIST.has(nameKey)) {
+    WATCHLIST.delete(nameKey);
+    btn.textContent = '☆'; btn.classList.remove('starred');
+    btn.title = 'Add to watchlist';
+    const card = btn.closest('.bcard');
+    if (card) card.classList.remove('bcard-starred');
+    if (WATCHLIST_FILTER_ON) renderBatters(window.__lastBatters || [], SORT_KEY);
+  } else {
+    WATCHLIST.add(nameKey);
+    btn.textContent = '⭐'; btn.classList.add('starred');
+    btn.title = 'Remove from watchlist';
+    const card = btn.closest('.bcard');
+    if (card) card.classList.add('bcard-starred');
+  }
+  _saveWatchlist();
+}
+function toggleWatchlistFilter(btn) {
+  WATCHLIST_FILTER_ON = !WATCHLIST_FILTER_ON;
+  btn.classList.toggle('active', WATCHLIST_FILTER_ON);
+  renderBatters(window.__lastBatters || [], SORT_KEY);
+}
+// Init watchlist count badge
+(function(){ const el = document.getElementById('watchlistCount'); if(el) el.textContent = WATCHLIST.size; })();
+
+// ── Player Comparison ──────────────────────────────────────────────────────
+let COMPARE_SLOT = [];
+
+function _refreshCompareBar() {
+  const bar = document.getElementById('compareBar');
+  if (!bar) return;
+  const s0 = document.getElementById('cmpSlot0');
+  const s1 = document.getElementById('cmpSlot1');
+  const viewBtn = document.getElementById('cmpViewBtn');
+  if (!COMPARE_SLOT.length) { bar.classList.remove('show'); return; }
+  bar.classList.add('show');
+  s0.className = 'cmp-slot' + (COMPARE_SLOT[0] ? '' : ' empty');
+  s1.className = 'cmp-slot' + (COMPARE_SLOT[1] ? '' : ' empty');
+  s0.innerHTML = COMPARE_SLOT[0]
+    ? `${esc(COMPARE_SLOT[0].name||'—')} <button class="cmp-x" onclick="removeFromCompare(0)">✕</button>`
+    : '+ Pick player';
+  s1.innerHTML = COMPARE_SLOT[1]
+    ? `${esc(COMPARE_SLOT[1].name||'—')} <button class="cmp-x" onclick="removeFromCompare(1)">✕</button>`
+    : '+ Pick player';
+  if (viewBtn) viewBtn.disabled = COMPARE_SLOT.length < 2;
+  document.querySelectorAll('.cmp-btn').forEach(btn => {
+    const n = (btn.dataset.name||'').toLowerCase();
+    const inSlot = COMPARE_SLOT.some(s => s && (s.name||'').toLowerCase() === n);
+    btn.classList.toggle('in-cmp', inSlot);
+  });
+}
+
+function addToCompare(nameRaw) {
+  const batters = window.__lastBatters || [];
+  const b = batters.find(x => (x.name||'').toLowerCase() === nameRaw.toLowerCase());
+  if (!b) return;
+  const idx = COMPARE_SLOT.findIndex(s => s && (s.name||'').toLowerCase() === (b.name||'').toLowerCase());
+  if (idx >= 0) { COMPARE_SLOT.splice(idx, 1); }
+  else if (COMPARE_SLOT.length >= 2) { COMPARE_SLOT[1] = b; }
+  else { COMPARE_SLOT.push(b); }
+  _refreshCompareBar();
+}
+
+function removeFromCompare(idx) { COMPARE_SLOT.splice(idx, 1); _refreshCompareBar(); }
+function clearCompare() { COMPARE_SLOT = []; _refreshCompareBar(); closeCompareModal(); }
+
+function openCompareModal() {
+  if (COMPARE_SLOT.length < 2) return;
+  const modal = document.getElementById('compareModal');
+  if (!modal) return;
+  const [a, b] = COMPARE_SLOT;
+  const pa = a.proj || {}, pb = b.proj || {};
+  const fmt = (v, d=2) => v != null ? Number(v).toFixed(d) : '—';
+  const row = (label, va, vb, higherWins=true) => {
+    const na = parseFloat(va), nb = parseFloat(vb);
+    let ac = '', bc = '';
+    if (!isNaN(na) && !isNaN(nb) && na !== nb) {
+      if (higherWins) { ac = na > nb ? 'cmp-winner' : 'cmp-loser'; bc = nb > na ? 'cmp-winner' : 'cmp-loser'; }
+      else { ac = na < nb ? 'cmp-winner' : 'cmp-loser'; bc = nb < na ? 'cmp-winner' : 'cmp-loser'; }
+    }
+    return `<tr><td>${label}</td><td class="${ac}">${va}</td><td class="${bc}">${vb}</td></tr>`;
+  };
+  const sectionRow = label => `<tr class="cmp-section-hdr"><td colspan="3">${label}</td></tr>`;
+  const photo = pid => pid
+    ? `<img class="cmp-photo" src="https://img.mlbstatic.com/mlb-photos/image/upload/d_people:generic:headshot:67:current.png/w_120,q_auto:best/v1/people/${pid}/headshot/67/current" onerror="this.style.display='none'">`
+    : '';
+  const aHub = PLAYER_HUB_MAP[(a.name||'').toLowerCase()] ?? a.scanHubRating;
+  const bHub = PLAYER_HUB_MAP[(b.name||'').toLowerCase()] ?? b.scanHubRating;
+  const aEv  = PLAYER_EV_MAP[(a.name||'').toLowerCase()] ?? a.scanEvPct;
+  const bEv  = PLAYER_EV_MAP[(b.name||'').toLowerCase()] ?? b.scanEvPct;
+  document.getElementById('cmpTableWrap').innerHTML = `
+    <table class="cmp-table">
+      <thead><tr>
+        <th>STAT</th>
+        <th><div class="cmp-name-cell">${photo(a.id)}<span>${esc(a.name||'—')}</span><span style="font-size:.6rem;color:var(--mu)">${esc(a.team||'')} · ${esc(a.pos||'')}</span></div></th>
+        <th><div class="cmp-name-cell">${photo(b.id)}<span>${esc(b.name||'—')}</span><span style="font-size:.6rem;color:var(--mu)">${esc(b.team||'')} · ${esc(b.pos||'')}</span></div></th>
+      </tr></thead>
+      <tbody>
+        ${sectionRow('LINEUP')}
+        ${row('Lineup Slot', a.slot??'—', b.slot??'—', false)}
+        ${row('Exp PA', pa.expected_pa??'—', pb.expected_pa??'—')}
+        ${sectionRow('PROJECTIONS')}
+        ${row('Hits', fmt(pa.hits), fmt(pb.hits))}
+        ${row('Home Runs', fmt(pa.hr,3), fmt(pb.hr,3))}
+        ${row('Total Bases', fmt(pa.tb), fmt(pb.tb))}
+        ${row('RBI', fmt(pa.rbi), fmt(pb.rbi))}
+        ${row('H+R+RBI', fmt(pa.hrr), fmt(pb.hrr))}
+        ${sectionRow('RATINGS')}
+        ${row('Hub Rating', aHub != null ? aHub.toFixed(0) : '—', bHub != null ? bHub.toFixed(0) : '—')}
+        ${row('EV%', aEv != null ? aEv.toFixed(1)+'%' : '—', bEv != null ? bEv.toFixed(1)+'%' : '—')}
+        ${sectionRow('STATCAST')}
+        ${row('xwOBA', a.sv_xwoba ? Number(a.sv_xwoba).toFixed(3) : '—', b.sv_xwoba ? Number(b.sv_xwoba).toFixed(3) : '—')}
+        ${row('Exit Velo', a.sv_ev ? Number(a.sv_ev).toFixed(1) : '—', b.sv_ev ? Number(b.sv_ev).toFixed(1) : '—')}
+        ${row('Barrel%', a.sv_brl_pct != null ? Number(a.sv_brl_pct).toFixed(1)+'%' : '—', b.sv_brl_pct != null ? Number(b.sv_brl_pct).toFixed(1)+'%' : '—')}
+        ${row('Hard Hit%', a.sv_hh_pct != null ? Number(a.sv_hh_pct).toFixed(1)+'%' : '—', b.sv_hh_pct != null ? Number(b.sv_hh_pct).toFixed(1)+'%' : '—')}
+        ${sectionRow('VS PITCHER')}
+        ${row('Opp ERA', a.opp_era ? Number(a.opp_era).toFixed(2) : '—', b.opp_era ? Number(b.opp_era).toFixed(2) : '—', false)}
+        ${row('Opp K/9', a.opp_k9 ? Number(a.opp_k9).toFixed(1) : '—', b.opp_k9 ? Number(b.opp_k9).toFixed(1) : '—')}
+      </tbody>
+    </table>`;
+  modal.classList.add('show');
+}
+function closeCompareModal() { const m = document.getElementById('compareModal'); if (m) m.classList.remove('show'); }
+
 let PROJ_DATA     = null;
 let MTCH_DATA     = null;
 let VAL_DATA      = null;
@@ -1141,6 +1329,7 @@ async function loadFullScan() {
     renderProj(d);
     gel('matchHeader').innerHTML = `${d.matchup || 'FULL SLATE'} · ${d.gameCount || 0} GAMES · ${(d.props || []).length || 0} PROPS`;
     gel('lastUpdate').textContent = `FULL SCAN ${d.cached ? 'CACHED' : 'BUILT'} · ${new Date().toLocaleTimeString()}`;
+    if (window.setNavAsOf) setNavAsOf(new Date());
     gel('umpBanner').classList.remove('visible');
     gel('lineupAlertBar').classList.remove('visible');
   } catch(e) {
@@ -1485,7 +1674,9 @@ function trendPillsForBatter(playerId) {
     const tot  = data.l5.total;
     const cls  = pct >= 0.70 ? 'hot' : pct >= 0.50 ? 'warm' : pct < 0.35 ? 'cold' : 'neutral';
     const icon = pct >= 0.70 ? '🔥' : pct < 0.35 ? '❄' : '';
-    return `<span class="tpill ${cls}" title="L10: ${data.l10.over}/${data.l10.total}">${icon}${w.label} ${over}/${tot} L5</span>`;
+    const l10txt = (data.l10 && data.l10.total > 0)
+      ? `<span style="opacity:.65"> · ${data.l10.over}/${data.l10.total} L10</span>` : '';
+    return `<span class="tpill ${cls}">${icon}${w.label} ${over}/${tot} L5${l10txt}</span>`;
   }).filter(Boolean).join('');
 
   if (!pills) return '';
@@ -1521,7 +1712,9 @@ function trendPillsForPitcher(playerId) {
     const tot  = data.l5.total;
     const cls  = pct >= 0.70 ? 'hot' : pct >= 0.50 ? 'warm' : pct < 0.35 ? 'cold' : 'neutral';
     const icon = pct >= 0.70 ? '🔥' : pct < 0.35 ? '❄' : '';
-    return `<span class="tpill ${cls}" title="L10: ${data.l10.over}/${data.l10.total}">${icon}${w.label} ${over}/${tot} L5</span>`;
+    const l10txt = (data.l10 && data.l10.total > 0)
+      ? `<span style="opacity:.65"> · ${data.l10.over}/${data.l10.total} L10</span>` : '';
+    return `<span class="tpill ${cls}">${icon}${w.label} ${over}/${tot} L5${l10txt}</span>`;
   }).filter(Boolean).join('');
 
   if (!pills) return '';
@@ -1624,6 +1817,7 @@ async function loadProjections() {
     if (!PROJ_DATA.success) throw new Error(PROJ_DATA.error || 'Failed');
     renderProj(PROJ_DATA);
     renderMajorMarketsPanel(PROJ_DATA.game_lines || {});
+    if (window.setNavAsOf) setNavAsOf(new Date());
   } catch(e) {
     gel('batterGrid').innerHTML = errHTML(e.message);
     renderMajorMarketsPanel({});
@@ -1901,8 +2095,17 @@ function applyPFFilters() {
 }
 
 function renderBatters(batters, key) {
-  if (!batters.length) { gel('batterGrid').innerHTML = noData('NO BATTER DATA AVAILABLE'); return; }
-  const sorted = [...batters].sort((a,b) => {
+  window.__lastBatters = batters;
+  let filtered = batters;
+  if (WATCHLIST_FILTER_ON) {
+    filtered = batters.filter(b => WATCHLIST.has((b.name||'').toLowerCase()));
+    if (!filtered.length) {
+      gel('batterGrid').innerHTML = '<div style="text-align:center;padding:40px 20px;color:var(--mu);font-family:Orbitron,monospace;font-size:.72rem;letter-spacing:2px">NO STARRED PLAYERS<br><span style="font-size:.62rem;opacity:.6;font-family:sans-serif;letter-spacing:0">Star players with ☆ to add them to your watchlist</span></div>';
+      return;
+    }
+  }
+  if (!filtered.length) { gel('batterGrid').innerHTML = noData('NO BATTER DATA AVAILABLE'); return; }
+  const sorted = [...filtered].sort((a,b) => {
     if (key === 'slot') return (a.slot||9)-(b.slot||9);
     if (key === 'scanHub') {
       return (b.scanHubRating ?? PLAYER_HUB_MAP[(b.name||'').toLowerCase()] ?? 0) - (a.scanHubRating ?? PLAYER_HUB_MAP[(a.name||'').toLowerCase()] ?? 0);
@@ -2716,6 +2919,18 @@ function batterCard(b) {
   const hrPanel = p.hr != null ? hrProfilePanel(b, p) : '';
   const injBadge = injuryBadgeHtml(b.injuryStatus, b.injuryDescription);
   const verify = verifyStatusHtml(b.injuryStatus);
+  const isStarred = WATCHLIST.has((b.name||'').toLowerCase());
+  const starClass = isStarred ? 'star-btn starred' : 'star-btn';
+  const starBtn = `<button class="${starClass}" onclick="toggleStar('${(b.name||'').replace(/'/g,"\\'").toLowerCase()}',this)" title="${isStarred?'Remove from watchlist':'Add to watchlist'}">${isStarred?'⭐':'☆'}</button>`;
+
+  // MLB headshot
+  const photoUrl = pid
+    ? `https://img.mlbstatic.com/mlb-photos/image/upload/d_people:generic:headshot:67:current.png/w_120,q_auto:best/v1/people/${pid}/headshot/67/current`
+    : '';
+  const initials = (b.name||'?').split(' ').map(w=>w[0]||'').join('').slice(0,2).toUpperCase();
+  const photoHtml = photoUrl
+    ? `<div class="bcard-photo-wrap"><img class="bcard-photo" src="${photoUrl}" alt="${esc(b.name||'')}" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><span class="bcard-photo-initials" style="display:none">${initials}</span></div>`
+    : `<div class="bcard-photo-wrap" style="display:flex"><span class="bcard-photo-initials">${initials}</span></div>`;
 
   // BAT X composite section
   let batxHtml = '';
@@ -2737,11 +2952,18 @@ function batterCard(b) {
     </div>`;
   }
 
-  return `<div class="bcard">
+  return `<div class="bcard${isStarred?' bcard-starred':''}">
     <div class="bcard-top">
-      <div><div class="bcard-name">${esc(b.name||'—')}${signalBadge(b.name)} ${injBadge}</div><div class="bcard-meta">${esc(b.pos||'')} · ${esc(b.team||'')}</div>${verify}</div>
+      <div class="bcard-top-left">
+        ${photoHtml}
+        <div class="bcard-top-info">
+          <div class="bcard-name">${esc(b.name||'—')}${signalBadge(b.name)} ${injBadge}</div>
+          <div class="bcard-meta">${esc(b.pos||'')} · ${esc(b.team||'')}</div>
+          ${verify}
+        </div>
+      </div>
       <div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:4px">
-        <div class="bcard-slot">${b.slot||'?'}</div>
+        <div style="display:flex;align-items:center;gap:4px">${starBtn}<button class="cmp-btn${COMPARE_SLOT.some(s=>s&&(s.name||'').toLowerCase()===(b.name||'').toLowerCase())?' in-cmp':''}" data-name="${esc(b.name||'')}" onclick="addToCompare('${(b.name||'').replace(/'/g,"\\'")}')" title="Compare player">⚖</button><div class="bcard-slot">${b.slot||'?'}</div></div>
         ${hub != null ? hubBadge(hub) : ''}
         ${ev  != null ? evHtml(ev)    : ''}
         ${bvpBadgeHtml(b.bvpGrade, b.bvpTooltip)}
@@ -2764,6 +2986,69 @@ function batterCard(b) {
       <div class="fstat"><div class="fstat-lbl">EV</div><div class="fstat-val">${b.sv_ev ? Number(b.sv_ev).toFixed(1) : '—'}</div></div>
       <div class="fstat"><div class="fstat-lbl">EXP PA</div><div class="fstat-val">${p.expected_pa ?? '—'}</div></div>
     </div>
+    ${(()=>{
+      const om = Array.isArray(b.oddsMarkets) ? b.oddsMarkets : [];
+      if (!om.length) return '';
+      // Best over price across all markets
+      let bestPx = null, bestBk = '', bestMkt = '', bestOpen = null, bestMove = null, bestHistory = null;
+      let bookSet = new Set();
+      om.forEach(m => {
+        if (m.overBook) bookSet.add(m.overBook);
+        if (m.underBook) bookSet.add(m.underBook);
+        if (m.overPrice != null && (bestPx === null || m.overPrice > bestPx)) {
+          bestPx = m.overPrice; bestBk = m.overBook || '';
+          bestMkt = m.marketLabel || m.marketKey || '';
+          bestOpen = m.openingOverPrice ?? null;
+          bestMove = m.lineMove ?? null;
+          bestHistory = Array.isArray(m.priceHistory) ? m.priceHistory : null;
+        }
+      });
+      const nBooks = bookSet.size || (b.bookCount ?? 0);
+      if (bestPx == null) return '';
+      const pxCls = bestPx >= 0 ? 'color:var(--g)' : 'color:var(--mu)';
+      const pxStr = bestPx > 0 ? '+'+bestPx : String(bestPx);
+      // Line movement + steam/sharp badges
+      let moveHtml = '';
+      if (bestMove != null && Math.abs(bestMove) >= 1) {
+        const mvDir = bestMove > 0 ? '▲' : '▼';
+        const mvCol = bestMove > 0 ? 'var(--g)' : '#ef5350';
+        const mvStr = (bestMove > 0 ? '+' : '') + bestMove;
+        const absMv = Math.abs(bestMove);
+        // Steam badge: line moved 10+ cents against bettor = heavy action on the over
+        // Shift badge: line improved 10+ cents = possible reverse line movement
+        let steamBadge = '';
+        if (absMv >= 10 && bestMove < 0) {
+          steamBadge = `<span style="font-family:Orbitron,monospace;font-size:.46rem;letter-spacing:.8px;padding:1px 5px;border-radius:4px;background:rgba(255,152,0,.18);border:1px solid rgba(255,152,0,.45);color:#ffb74d" title="Line moved ${absMv} cents against bettor — possible steam">🔥 STEAM</span>`;
+        } else if (absMv >= 10 && bestMove > 0) {
+          steamBadge = `<span style="font-family:Orbitron,monospace;font-size:.46rem;letter-spacing:.8px;padding:1px 5px;border-radius:4px;background:rgba(0,230,118,.1);border:1px solid rgba(0,230,118,.35);color:#00e676" title="Line shifted ${absMv} cents in bettor's favor">📈 SHIFT</span>`;
+        }
+        moveHtml = `<span style="color:${mvCol};font-size:.6rem;font-family:'JetBrains Mono',monospace" title="vs opening ${bestOpen}">${mvDir}${mvStr}</span>${steamBadge}`;
+      }
+      // Build sparkline SVG from priceHistory if ≥2 points
+      let sparkHtml = '';
+      if (bestHistory && bestHistory.length >= 2) {
+        const prices = bestHistory.map(pt => pt[1]);
+        const mn = Math.min(...prices), mx = Math.max(...prices);
+        const rng = mx - mn || 1;
+        const W = 48, H = 18;
+        const pts = prices.map((p, i) => {
+          const x = Math.round(i / (prices.length - 1) * W);
+          const y = Math.round(H - ((p - mn) / rng) * H);
+          return `${x},${y}`;
+        }).join(' ');
+        const lineCol = prices[prices.length-1] > prices[0] ? '#00e676' : prices[prices.length-1] < prices[0] ? '#f44336' : '#6a8db0';
+        sparkHtml = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="flex-shrink:0;vertical-align:middle;margin:0 2px" title="Price history"><polyline points="${pts}" fill="none" stroke="${lineCol}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+      }
+      return `<div style="display:flex;align-items:center;gap:8px;padding:5px 10px;margin:6px 0 2px;background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.12);border-radius:8px;font-size:.63rem">
+        <span style="color:var(--mu)">BEST ODDS</span>
+        <span style="${pxCls};font-weight:700;font-family:'JetBrains Mono',monospace">${pxStr}</span>
+        ${bestBk ? `<span style="color:var(--c);font-size:.58rem">@ ${bestBk.toUpperCase()}</span>` : ''}
+        ${moveHtml}
+        ${sparkHtml}
+        <span style="color:var(--mu);margin-left:auto">${bestMkt}</span>
+        <span style="color:var(--mu)">${nBooks} book${nBooks===1?'':'s'}</span>
+      </div>`;
+    })()}
     <button class="ls-btn" onclick="openLineShop('${(b.name||'').replace(/'/g,"\\'")}', ${b.gamePk || 'null'})"><span>📚 LINE SHOPPING</span><span>OPEN ▸</span></button>
     <button class="ls-btn" onclick="openSprayChart(${pid}, '${(b.name||'').replace(/'/g,"\\'")}')"><span>🗺️ SPRAY CHART</span><span>OPEN ▸</span></button>
     <button class="ls-btn" onclick="openZoneChart(${pid}, '${(b.name||'').replace(/'/g,"\\'")}')"><span>⚾ STRIKE ZONE</span><span>OPEN ▸</span></button>
@@ -2833,19 +3118,33 @@ function pitcherPanel(p) {
   // Recent form row
   const recentRow = (pr.recent_starts && pr.recent_starts > 0)
     ? `<div class="form-recent-row">
-        Last ${pr.recent_starts} starts: 
-        <strong style="color:var(--c)">${pr.recent_ip} IP</strong> · 
-        <strong style="color:#f44336">${pr.recent_er} ER</strong> · 
-        <strong style="color:var(--m)">${pr.recent_k} K</strong> · 
+        Last ${pr.recent_starts} starts:
+        <strong style="color:var(--c)">${pr.recent_ip} IP</strong> ·
+        <strong style="color:#f44336">${pr.recent_er} ER</strong> ·
+        <strong style="color:var(--m)">${pr.recent_k} K</strong> ·
         ERA: <strong style="${flag==='struggling'?'color:#f44336':flag==='dealing'?'color:var(--g)':''}">${pr.era_recent??'—'}</strong>
-        <span style="color:var(--mu)"> vs season ${pr.era_season??'—'}</span> · 
+        <span style="color:var(--mu)"> vs season ${pr.era_season??'—'}</span> ·
         Blended: <strong style="color:var(--c)">${pr.era_blended??'—'}</strong>
       </div>`
     : '';
 
+  // Pitcher headshot
+  const pitPhotoUrl = pid
+    ? `https://img.mlbstatic.com/mlb-photos/image/upload/d_people:generic:headshot:67:current.png/w_120,q_auto:best/v1/people/${pid}/headshot/67/current`
+    : '';
+  const pitInitials = (p.name||'?').split(' ').map(w=>w[0]||'').join('').slice(0,2).toUpperCase();
+  const pitPhotoHtml = pitPhotoUrl
+    ? `<div class="ppanel-photo-wrap"><img class="ppanel-photo" src="${pitPhotoUrl}" alt="${esc(p.name||'')}" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><span class="bcard-photo-initials" style="display:none">${pitInitials}</span></div>`
+    : `<div class="ppanel-photo-wrap" style="display:flex"><span class="bcard-photo-initials">${pitInitials}</span></div>`;
+
   return `<div class="ppanel">
-    <div class="pp-name">${p.name||'—'}${formBadge}</div>
-    <div class="pp-meta">${p.team||''} · ${p.role||'SP'} · ${p.pitchHand||'R'}HP</div>
+    <div class="ppanel-top">
+      ${pitPhotoHtml}
+      <div class="ppanel-info">
+        <div class="pp-name">${p.name||'—'}${formBadge}</div>
+        <div class="pp-meta">${p.team||''} · ${p.role||'SP'} · ${p.pitchHand||'R'}HP</div>
+      </div>
+    </div>
     ${recentRow}
     <div class="pp-projs">
       <div class="pp-proj${recCls(recK,'k')}">${recTag(recK,'k')}<div class="pp-plbl">PROJ K</div><div class="pp-pval kv">${f1(pr.k)}</div>${recLine(recK,'k')}</div>
@@ -3558,5 +3857,29 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 </script>
+
+<!-- ── Player Compare Bar ── -->
+<div class="cmp-bar" id="compareBar" role="region" aria-label="Player comparison">
+  <span class="cmp-slot empty" id="cmpSlot0">+ Pick player</span>
+  <span class="cmp-vs">VS</span>
+  <span class="cmp-slot empty" id="cmpSlot1">+ Pick player</span>
+  <button class="cmp-view-btn" id="cmpViewBtn" onclick="openCompareModal()" disabled>VIEW →</button>
+  <button class="cmp-clear-btn" onclick="clearCompare()">✕ CLEAR</button>
+</div>
+
+<!-- ── Player Compare Modal ── -->
+<div class="cmp-modal" id="compareModal" onclick="if(event.target===this)closeCompareModal()" role="dialog" aria-modal="true" aria-label="Player comparison">
+  <div class="cmp-modal-box">
+    <div class="cmp-modal-hdr">
+      <span class="cmp-modal-title">⚖ PLAYER COMPARISON</span>
+      <button onclick="closeCompareModal()" style="background:none;border:none;color:var(--mu);cursor:pointer;font-size:1.1rem;padding:2px 6px">✕</button>
+    </div>
+    <div id="cmpTableWrap"></div>
+    <div style="margin-top:16px;display:flex;gap:8px;justify-content:flex-end">
+      <button class="cmp-clear-btn" onclick="clearCompare()">✕ CLEAR ALL</button>
+      <button class="cmp-view-btn" onclick="closeCompareModal()">CLOSE</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>

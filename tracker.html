@@ -175,6 +175,23 @@ tr:hover td{background:rgba(0,229,255,.03)}
 .modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
 .export-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 
+/* ── Share card ── */
+.share-card-preview{background:linear-gradient(135deg,#0d1a2e,#091424);border:2px solid rgba(0,229,255,.3);border-radius:16px;padding:20px;max-width:380px;margin:0 auto 16px;font-family:'Inter',system-ui,sans-serif}
+.sc-header{display:flex;align-items:center;gap:10px;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid rgba(0,229,255,.15)}
+.sc-logo{font-size:.68rem;font-weight:700;letter-spacing:.1em;color:rgba(0,229,255,.6);text-transform:uppercase}
+.sc-date{font-size:.65rem;color:rgba(142,164,200,.6);margin-top:1px}
+.sc-player{font-size:1.1rem;font-weight:800;color:#dfe9ff;margin-bottom:2px}
+.sc-market{font-size:.78rem;color:rgba(0,229,255,.8);margin-bottom:12px}
+.sc-metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px}
+.sc-metric{text-align:center}
+.sc-metric-val{font-size:1rem;font-weight:700;color:#dfe9ff}
+.sc-metric-lbl{font-size:.58rem;letter-spacing:.05em;text-transform:uppercase;color:rgba(142,164,200,.7);margin-top:2px}
+.sc-conviction{display:inline-block;padding:3px 10px;border-radius:6px;font-size:.65rem;font-weight:700;letter-spacing:.06em}
+.sc-conviction.gold{background:rgba(255,215,64,.15);border:1px solid rgba(255,215,64,.4);color:#ffd740}
+.sc-conviction.green{background:rgba(0,230,118,.15);border:1px solid rgba(0,230,118,.35);color:#00e676}
+.sc-conviction.lean{background:rgba(106,141,176,.12);border:1px solid rgba(106,141,176,.25);color:#8ea4c8}
+.sc-footer{font-size:.6rem;color:rgba(106,141,176,.4);text-align:center;margin-top:10px}
+
 /* ── Parlay card ── */
 .parlay-card{background:var(--bg3);border:1px solid rgba(179,136,255,.25);border-radius:10px;padding:10px 12px;margin-bottom:8px}
 .parlay-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
@@ -229,6 +246,7 @@ details[open] summary::before{transform:rotate(90deg)}
 .footer{text-align:center;color:var(--faint);font-size:.65rem;padding:16px 0 6px}
 </style>
 <link rel="stylesheet" href="/static/mobile.css">
+<link rel="stylesheet" href="/static/tokens.css">
 </head>
 <body>
 <div class="wrap">
@@ -265,6 +283,7 @@ details[open] summary::before{transform:rotate(90deg)}
   <button class="btn gold" id="syncPerfBtn">📊 Sync Performance</button>
   <button class="btn sm" id="exportCsvBtn">⬇ CSV</button>
   <button class="btn sm" id="exportPdfBtn">⬇ PDF</button>
+  <button class="btn sm" id="exportAllCsvBtn" title="Download all picks across every date as one CSV">⬇ All History</button>
   <span class="pill" id="datePill" style="margin-left:auto">Awaiting live day</span>
 </div>
 
@@ -546,13 +565,17 @@ details[open] summary::before{transform:rotate(90deg)}
         <div class="chart-wrap"><canvas id="roiChart"></canvas></div>
       </div>
       <div class="panel" style="padding:12px">
-        <div class="panel-sub" style="margin-bottom:8px">Top CLV Performers</div>
-        <div class="tw">
-          <table id="clvTbl">
-            <thead><tr><th>Player</th><th>Market</th><th>Open</th><th>Close</th><th>CLV</th><th>P/L $</th></tr></thead>
-            <tbody id="clvBody"><tr><td colspan="6" class="empty">No CLV data.</td></tr></tbody>
-          </table>
-        </div>
+        <div class="panel-sub" style="margin-bottom:8px">Avg CLV Trend</div>
+        <div class="chart-wrap"><canvas id="clvTrendChart"></canvas></div>
+      </div>
+    </div>
+    <div class="panel" style="padding:12px;margin-bottom:12px">
+      <div class="panel-sub" style="margin-bottom:8px">Top CLV Performers</div>
+      <div class="tw">
+        <table id="clvTbl">
+          <thead><tr><th>Player</th><th>Market</th><th>Open</th><th>Close</th><th>CLV</th><th>P/L $</th></tr></thead>
+          <tbody id="clvBody"><tr><td colspan="6" class="empty">No CLV data.</td></tr></tbody>
+        </table>
       </div>
     </div>
   </div>
@@ -605,8 +628,9 @@ details[open] summary::before{transform:rotate(90deg)}
     </div>
     <div class="two" style="margin-bottom:12px">
       <div class="panel" style="padding:12px">
-        <div class="panel-sub" style="margin-bottom:8px">By Market</div>
-        <div class="tw">
+        <div class="panel-sub" style="margin-bottom:8px">By Market — ROI</div>
+        <div class="chart-wrap" style="height:180px"><canvas id="attrMktChart"></canvas></div>
+        <div class="tw" style="margin-top:10px">
           <table id="attrMktTbl">
             <thead><tr><th>Market</th><th>Bets</th><th>Win</th><th>Loss</th><th>Hit Rate</th><th>Risk $</th><th>Profit $</th><th>ROI</th><th>Avg CLV</th></tr></thead>
             <tbody id="attrMktBody"><tr><td colspan="9" class="empty">No data.</td></tr></tbody>
@@ -1480,6 +1504,11 @@ function renderPickCards(picks) {
         ${grade!=='pending'?`<div>P/L <span style="color:${profit>=0?'var(--g)':'var(--r)'}">${money(profit)}</span></div>`:''}
       </div>
       ${r.reason?`<div class="pcard-reason">${safe(r.reason)}</div>`:''}
+      <div style="display:flex;justify-content:flex-end;margin-top:8px">
+        <button class="btn sm" onclick='openShareModal(${JSON.stringify(r)})' title="Share this pick" style="font-size:.65rem;padding:4px 10px;opacity:.7">
+          ↑ Share
+        </button>
+      </div>
     </div>`;
   }).join('');
 }
@@ -1758,6 +1787,7 @@ async function loadVal() {
     $('valPill').textContent=`${w}d window · ${s.graded_with_clv||0} with CLV`;
     const series=d.overallSeries||[];
     lineChart('roiChart',series.map(x=>x.date),series.map(x=>parseFloat(x.roi||0)*100),'ROI %','#00e676');
+    lineChart('clvTrendChart',series.map(x=>x.date),series.map(x=>x.avg_clv!=null?parseFloat(x.avg_clv)*100:null),'Avg CLV %','#ffd740');
     const topClv=(d.topCLV||[]).slice(0,8);
     $('clvBody').innerHTML=topClv.length?topClv.map(r=>`<tr>
       <td>${safe(r.player)}</td><td>${mkTag(r.marketKey)}</td>
@@ -1823,6 +1853,11 @@ async function loadAttr() {
       <td>${r.roi!=null?pct(r.roi):'—'}</td>
       <td>${r.avg_clv!=null?pct(r.avg_clv):'—'}</td>
     </tr>`).join(''):'<tr><td colspan="9" class="empty">No market attribution data.</td></tr>';
+    if(mktRows.length){
+      const mktLabels=mktRows.map(r=>MARKET_LABELS[r.bucket||r.market||r.marketKey]||(r.bucket||r.market||r.marketKey||'?'));
+      const mktRoi=mktRows.map(r=>r.roi!=null?parseFloat(r.roi)*100:0);
+      barChart('attrMktChart',mktLabels,mktRoi,'ROI %');
+    }
     const tierRows=dash.tierAudit||[];
     $('attrTierBody').innerHTML=tierRows.length?tierRows.map(r=>`<tr>
       <td>${tierBadge(r.bucket||r.tier)}</td><td>${r.bets||0}</td>
@@ -2072,6 +2107,7 @@ function wire() {
     ['captureDayBtn', captureDay], ['captureCloseBtn', captureClose], ['gradeDayBtn', gradeDay],
     ['manualPickBtn', openManualPick], ['syncPerfBtn', syncPerformance],
     ['exportCsvBtn', ()=>exportTracker('csv')], ['exportPdfBtn', ()=>exportTracker('pdf')],
+    ['exportAllCsvBtn', ()=>{ status('Downloading all history…'); window.location.href='/api/tracker/export/all'; }],
     ['btExportCsvBtn', ()=>exportTracker('csv')], ['btExportPdfBtn', ()=>exportTracker('pdf')],
     ['saveManualPickBtn', saveManualPick], ['clearParlayBtn', ()=>{st.parlay=[]; renderBoard(); renderParlayBuilder();}], ['saveParlayBtn', saveParlay], ['saveAdjBtn', saveAdj],
     ['loadCalBtn', loadCal], ['applyCalBtn', applyCal],
@@ -2262,7 +2298,133 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // Global error fallback — surfaces any JS crash in the status bar
 window.addEventListener('error', e => { try { status('JS Error: '+e.message, true); } catch{} console.error(e); });
-window.addEventListener('unhandledrejection', e => { try { status('Error: '+(e.reason?.message||e.reason), true); } catch{} console.error(e); });</script>
+window.addEventListener('unhandledrejection', e => { try { status('Error: '+(e.reason?.message||e.reason), true); } catch{} console.error(e); });
+
+/* ── Share Pick Card ─────────────────────────────────────────────────────── */
+function openShareModal(r) {
+  const el = $('shareModal');
+  if (!el) return;
+  el.dataset.pickJson = JSON.stringify(r);
+  el.classList.add('show');
+
+  const pct_ = v => v != null ? (parseFloat(v)*100).toFixed(1)+'%' : '—';
+  const ev = (r.adjProb != null && r.marketImplied != null)
+    ? ((parseFloat(r.adjProb) - parseFloat(r.marketImplied)) / parseFloat(r.marketImplied) * 100).toFixed(1)
+    : null;
+
+  // Conviction tier
+  const edge = parseFloat(r.edge || 0);
+  const conv = edge >= 0.10 ? 'gold' : edge >= 0.05 ? 'green' : 'lean';
+  const convLabel = conv === 'gold' ? '★ GOLD' : conv === 'green' ? '✓ GREEN' : '→ LEAN';
+
+  const grade = r.grade || 'pending';
+  const gradeEmoji = grade === 'win' ? '✅' : grade === 'loss' ? '❌' : grade === 'push' ? '➖' : '⏳';
+  const dateStr = new Date().toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'});
+  const bookStr = (r.bestOverPrice ?? r.best_over_price) != null
+    ? `${r.bestOverPrice ?? r.best_over_price} @ ${r.bestOverBook ?? r.best_over_book ?? 'book'}`
+    : (r.openingPrice ? String(r.openingPrice) : '—');
+
+  $('sharePreview').innerHTML = `
+    <div class="share-card-preview">
+      <div class="sc-header">
+        <div>
+          <div class="sc-logo">MLB Analytics Hub</div>
+          <div class="sc-date">${dateStr}</div>
+        </div>
+        <span class="sc-conviction ${conv}">${convLabel}</span>
+      </div>
+      <div class="sc-player">${safe(r.player || '?')}</div>
+      <div class="sc-market">${safe(r.team||'')} · ${mkLabel(r.marketKey)} Over ${safe(r.line)} ${gradeEmoji}</div>
+      <div class="sc-metrics">
+        <div class="sc-metric">
+          <div class="sc-metric-val" style="color:${parseFloat(r.adjProb||0)>=.60?'#00e676':'#00e5ff'}">${pct_(r.adjProb)}</div>
+          <div class="sc-metric-lbl">Model Prob</div>
+        </div>
+        <div class="sc-metric">
+          <div class="sc-metric-val" style="color:${edge>0?'#00e676':'#ff5252'}">${edge>=0?'+':''}${(edge*100).toFixed(1)}%</div>
+          <div class="sc-metric-lbl">Edge</div>
+        </div>
+        <div class="sc-metric">
+          <div class="sc-metric-val" style="color:${ev!=null&&parseFloat(ev)>0?'#00e676':'#8ea4c8'}">${ev!=null?`${parseFloat(ev)>0?'+':''}${ev}%`:'—'}</div>
+          <div class="sc-metric-lbl">EV%</div>
+        </div>
+      </div>
+      <div style="font-size:.72rem;color:rgba(142,164,200,.7);text-align:center">Best odds: ${bookStr}</div>
+      <div class="sc-footer">mlb-analytics-hub · not financial advice</div>
+    </div>`;
+}
+
+function closeShareModal() {
+  $('shareModal')?.classList.remove('show');
+}
+
+function copyShareText() {
+  const raw = $('shareModal')?.dataset.pickJson;
+  if (!raw) return;
+  const r = JSON.parse(raw);
+  const edge = parseFloat(r.edge||0);
+  const prob = r.adjProb != null ? (parseFloat(r.adjProb)*100).toFixed(1) : null;
+  const bookStr = (r.bestOverPrice ?? r.best_over_price) != null
+    ? `${r.bestOverPrice ?? r.best_over_price} @ ${r.bestOverBook ?? r.best_over_book ?? 'book'}`
+    : (r.openingPrice || '—');
+  const grade = r.grade && r.grade !== 'pending' ? ` · ${r.grade.toUpperCase()}` : '';
+  const text = [
+    `⚾ MLB Analytics Hub Pick`,
+    `━━━━━━━━━━━━━━━━━━━━━━`,
+    `${r.player || '?'} — ${mkLabel(r.marketKey)} Over ${r.line}${grade}`,
+    `📊 Model: ${prob ? prob+'%' : '—'} | Edge: ${edge>=0?'+':''}${(edge*100).toFixed(1)}%`,
+    `💰 Best Price: ${bookStr}`,
+    `📈 Hub Rating: ${hubRating(r.adjProb, r.edge)}`,
+    `━━━━━━━━━━━━━━━━━━━━━━`,
+    `Via MLB Analytics Hub`,
+  ].join('\n');
+
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(text).then(() => {
+      const btn = document.getElementById('copyShareBtn');
+      if (btn) { btn.textContent = 'Copied!'; setTimeout(() => { btn.textContent = 'Copy Text'; }, 2000); }
+    });
+  } else {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select(); document.execCommand('copy');
+    document.body.removeChild(ta);
+  }
+}
+
+async function nativeShare() {
+  const raw = $('shareModal')?.dataset.pickJson;
+  if (!raw) return;
+  const r = JSON.parse(raw);
+  const edge = parseFloat(r.edge||0);
+  const text = `${r.player} — ${mkLabel(r.marketKey)} Over ${r.line} · Edge: ${edge>=0?'+':''}${(edge*100).toFixed(1)}% · Via MLB Analytics Hub`;
+  try {
+    if (navigator.share) {
+      await navigator.share({ title: 'MLB Pick', text });
+    } else {
+      copyShareText();
+    }
+  } catch (_) { copyShareText(); }
+}
+</script>
+
+<!-- Share Pick Modal -->
+<div class="modal" id="shareModal" onclick="closeShareModal()">
+  <div class="modal-card" style="max-width:440px" onclick="event.stopPropagation()">
+    <div class="modal-head">
+      <span style="font-size:.78rem;font-weight:700;color:var(--c);letter-spacing:.05em">SHARE PICK</span>
+      <button class="btn sm" onclick="closeShareModal()">✕</button>
+    </div>
+    <div id="sharePreview"></div>
+    <div class="modal-actions">
+      <button id="copyShareBtn" class="btn sm" onclick="copyShareText()">Copy Text</button>
+      <button class="btn sm primary" onclick="nativeShare()">↑ Share</button>
+    </div>
+    <div style="font-size:.65rem;color:var(--mu);text-align:center;margin-top:8px">Screenshot the card above or use "Copy Text" for social posts.</div>
+  </div>
+</div>
+
+<script src="/static/global-nav.js" defer></script>
 <script src="/static/mobile-nav.js" defer></script>
 </body>
 </html>

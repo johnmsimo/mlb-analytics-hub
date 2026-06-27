@@ -1029,6 +1029,8 @@ VALUE_BETS_HTML = _read_html_or_fallback('value_bets.html')
 NRFI_HTML = _read_html_or_fallback('nrfi.html')
 TOOLS_HTML = _read_html_or_fallback('tools.html')
 EDGE_LAB_HTML = _read_html_or_fallback('edge_lab.html')
+STREAK_HTML = _read_html_or_fallback('streak.html')
+PLAYER_PROFILE_HTML = _read_html_or_fallback('player_profile.html')
 DATA_DIR = os.environ.get('DATA_DIR') or (
     '/app/data' if os.path.isdir('/app/data') else os.path.join(_HERE, 'data')
 )
@@ -4617,6 +4619,14 @@ def value_bets_page():
 def nrfi_page():
     return NRFI_HTML
 
+@app.route('/streak')
+def streak_page():
+    return STREAK_HTML
+
+@app.route('/player/<int:player_id>')
+def player_profile_page(player_id):
+    return PLAYER_PROFILE_HTML
+
 @app.route('/tools')
 def tools_page():
     html = _read_html_or_fallback('tools.html')
@@ -5755,6 +5765,84 @@ def api_games_today():
     except Exception as ex:
         logging.error(f"[api_games_today] {traceback.format_exc()}")
         return jsonify({"success":False,"error":str(ex),"games":[]}), 500
+
+
+@app.route("/api/games/live-scores")
+def api_games_live_scores():
+    """Lightweight bulk endpoint: returns live score/inning state for all today's games."""
+    try:
+        date_str = _normalize_date_str(request.args.get('date'))
+        raw = fetch_schedule(date_str)
+        results = []
+        for g in raw:
+            gs = g.get('status', {})
+            state = gs.get('abstractGameState', 'Preview')  # Live / Final / Preview
+            detail = gs.get('detailedState', '')
+            pk = g.get('gamePk')
+            ls = g.get('linescore') or {}
+            teams_ls = ls.get('teams') or {}
+            away_ls = teams_ls.get('away') or {}
+            home_ls = teams_ls.get('home') or {}
+            results.append({
+                'gamePk': pk,
+                'abstractGameState': state,
+                'detailedState': detail,
+                'awayScore': away_ls.get('runs', 0),
+                'homeScore': home_ls.get('runs', 0),
+                'currentInning': ls.get('currentInning', 0),
+                'inningHalf': ls.get('inningHalf', 'Top'),
+                'outs': ls.get('outs', 0),
+            })
+        return jsonify({'success': True, 'games': results})
+    except Exception as ex:
+        logging.error(f"[api_games_live_scores] {traceback.format_exc()}")
+        return jsonify({'success': False, 'error': str(ex), 'games': []}), 500
+
+
+@app.route("/api/news/ticker")
+def api_news_ticker():
+    """Recent MLB transactions (IL moves, activations, trades) for the dashboard news ticker."""
+    try:
+        today = datetime.now(ET).strftime('%Y-%m-%d')
+        txs = _memory_collect_transactions(today, days_back=2, max_rows=200)
+        _RELEVANT_TYPES = {
+            'il placement', 'il transfer', 'recalled', 'recall', 'activated', 'activation',
+            'optioned', 'option', 'selected', 'designated', 'dfa', 'trade', 'signed',
+            'released', 'outrighted',
+        }
+        _RELEVANT_WORDS = [
+            'placed', 'recalled', 'activated', 'transferred', 'selected', 'optioned',
+            'designated', 'signed', 'traded', 'released', 'injured', 'reinstated',
+        ]
+        items = []
+        seen = set()
+        for tx in txs:
+            player = tx.get('player') or ''
+            desc = (tx.get('description') or '').strip()
+            tx_type = (tx.get('type') or '').lower()
+            if not player or not desc:
+                continue
+            dedup_key = (player, desc[:60])
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+            desc_lower = desc.lower()
+            if (
+                any(t in tx_type for t in _RELEVANT_TYPES) or
+                any(w in desc_lower for w in _RELEVANT_WORDS)
+            ):
+                items.append({
+                    'player': player,
+                    'type': tx.get('type') or '',
+                    'description': desc,
+                    'date': tx.get('date') or today,
+                })
+            if len(items) >= 50:
+                break
+        return jsonify({'success': True, 'items': items, 'date': today})
+    except Exception as ex:
+        logging.error(f"[api_news_ticker] {traceback.format_exc()}")
+        return jsonify({'success': False, 'items': [], 'error': str(ex)}), 500
 
 
 @app.route("/api/game-summary/<int:game_pk>")
@@ -13178,6 +13266,14 @@ def _odds_bool_env(env_key, default='1'):
 # Per-game odds snapshot: cache 24h by default (single fetch reused everywhere)
 _ODDS_EVENTS_CACHE: dict = {}          # {'data': [...], 'ts': float}
 _ODDS_GAME_CACHE:  dict = {}           # {event_id: {'all': [...], 'ts': float}}
+# First-seen best over price today, keyed by (date_str, player, market_key, line).
+# Populated on first call to _market_price_summary per key each calendar day.
+_OPENING_PRICE_CACHE: dict = {}
+_OPENING_PRICE_LOCK = threading.Lock()
+# Timestamped price history for sparklines. Same key structure as _OPENING_PRICE_CACHE.
+# Each value is a list of [iso_timestamp, american_price] tuples, oldest first.
+_PRICE_HISTORY_CACHE: dict = {}
+_PRICE_HISTORY_LOCK = threading.Lock()
 _ODDS_EVENTS_TTL  = _odds_ttl_seconds('ODDS_EVENTS_TTL_SEC', 6 * 60 * 60)
 _ODDS_GAME_TTL    = _odds_ttl_seconds('ODDS_GAME_TTL_SEC', 24 * 60 * 60)
 _ODDS_NRFI_TTL    = _odds_ttl_seconds('ODDS_NRFI_TTL_SEC', 5 * 60)
@@ -14006,6 +14102,39 @@ def _market_price_summary(market_props, player, mk, line):
 
     books = {it.get('bookmaker') for it in all_items if it.get('bookmaker')}
 
+    # Track first-seen price for line-movement display (daily reset via date key).
+    opening_over_price = None
+    if best_over_price is not None:
+        today_str = datetime.now(ET).strftime('%Y-%m-%d')
+        _key = (today_str, str(player), str(mk), str(line))
+        with _OPENING_PRICE_LOCK:
+            if _key not in _OPENING_PRICE_CACHE:
+                _OPENING_PRICE_CACHE[_key] = best_over_price
+                # Prune stale dates (keep only today)
+                stale = [k for k in _OPENING_PRICE_CACHE if k[0] != today_str]
+                for k in stale:
+                    del _OPENING_PRICE_CACHE[k]
+            opening_over_price = _OPENING_PRICE_CACHE[_key]
+
+    line_move = None
+    if best_over_price is not None and opening_over_price is not None:
+        # Positive = line moved in bettor's favour (price improved)
+        line_move = best_over_price - opening_over_price
+
+    # Track timestamped price history for sparklines (appended when price changes).
+    price_history = []
+    if best_over_price is not None:
+        today_str2 = datetime.now(ET).strftime('%Y-%m-%d')
+        _hist_key = (today_str2, str(player), str(mk), str(line))
+        with _PRICE_HISTORY_LOCK:
+            hist = _PRICE_HISTORY_CACHE.setdefault(_hist_key, [])
+            if not hist or hist[-1][1] != best_over_price:
+                hist.append([datetime.now(ET).isoformat(), best_over_price])
+                stale_h = [k for k in _PRICE_HISTORY_CACHE if k[0] != today_str2]
+                for k in stale_h:
+                    del _PRICE_HISTORY_CACHE[k]
+            price_history = list(hist)
+
     return {
         'best_over_price': best_over_price,
         'best_over_book': best_over_book,
@@ -14016,6 +14145,9 @@ def _market_price_summary(market_props, player, mk, line):
         'market_implied': _american_to_implied(best_over_price),
         'market_bookmaker': best_over_book,
         'line_varies': bool(line_range and line_range[0] != line_range[1]),
+        'opening_over_price': opening_over_price,
+        'line_move': line_move,
+        'price_history': price_history,
     }
 
 
@@ -17805,6 +17937,47 @@ def api_tracker_export(date_str):
         mimetype='application/pdf',
         headers={'Content-Disposition': f'attachment; filename=tracker-summary-{date_str}.pdf'}
     )
+
+
+@app.route('/api/tracker/export/all')
+def api_tracker_export_all():
+    """Export every pick across all tracked dates as a single CSV."""
+    fields = [
+        'id', 'date', 'savedAt', 'source', 'player', 'playerId', 'gamePk', 'team', 'opp',
+        'marketKey', 'line', 'recommendedSide', 'rawProb', 'adjProb', 'modelMean', 'edge',
+        'evPct', 'hubRating', 'bookmaker', 'marketPrice', 'marketImplied',
+        'bestAvailablePrice', 'bestAvailableBook', 'openingPrice', 'openingImplied',
+        'stakeDollars', 'kellyFraction', 'confidenceTier', 'status', 'actual', 'grade',
+        'gradedAt', 'closingPrice', 'closingImplied', 'closingBookmaker', 'closingCapturedAt',
+        'clvEdge', 'profitDollars', 'profitUnits', 'reason',
+    ]
+    try:
+        store = _tracker_store()
+        all_rows = []
+        for date_key in sorted(store.keys()):
+            day = _normalize_tracker_day(store.get(date_key))
+            for row in day.get('entries', []):
+                r = dict(row)
+                r.setdefault('date', date_key)
+                if isinstance(r.get('matchupStorylines'), list):
+                    r['matchupStorylines'] = ' | '.join(str(x) for x in r['matchupStorylines'])
+                if isinstance(r.get('legs'), list):
+                    r['legs'] = json.dumps(r['legs'])
+                all_rows.append(r)
+        all_rows.sort(key=lambda x: (x.get('date') or '', x.get('savedAt') or ''))
+        output = io.StringIO()
+        writer = csvmod.DictWriter(output, fieldnames=fields, extrasaction='ignore')
+        writer.writeheader()
+        writer.writerows(all_rows)
+        today = datetime.now(ET).strftime('%Y-%m-%d')
+        return Response(
+            output.getvalue(),
+            mimetype='text/csv',
+            headers={'Content-Disposition': f'attachment; filename=tracker-all-history-{today}.csv'},
+        )
+    except Exception as ex:
+        logging.error(f"[api_tracker_export_all] {traceback.format_exc()}")
+        return jsonify({'success': False, 'error': str(ex)}), 500
 
 
 @app.route('/api/consistency/today')
@@ -22834,14 +23007,17 @@ def api_props_projections(game_pk):
                 for ln in (_market_lines_for_player(market_props, player_name, mk) or []):
                     msum = _market_price_summary(market_props, player_name, mk, ln)
                     out.append({
-                        'marketKey':     mk,
-                        'line':          ln,
-                        'overPrice':     msum.get('best_over_price'),
-                        'overBook':      msum.get('best_over_book'),
-                        'underPrice':    msum.get('best_under_price'),
-                        'underBook':     msum.get('best_under_book'),
-                        'marketImplied': msum.get('market_implied'),
-                        'bookCount':     msum.get('book_count'),
+                        'marketKey':        mk,
+                        'line':             ln,
+                        'overPrice':        msum.get('best_over_price'),
+                        'overBook':         msum.get('best_over_book'),
+                        'underPrice':       msum.get('best_under_price'),
+                        'underBook':        msum.get('best_under_book'),
+                        'marketImplied':    msum.get('market_implied'),
+                        'bookCount':        msum.get('book_count'),
+                        'openingOverPrice': msum.get('opening_over_price'),
+                        'lineMove':         msum.get('line_move'),
+                        'priceHistory':     msum.get('price_history', []),
                     })
             return out
 
