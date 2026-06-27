@@ -493,6 +493,19 @@ function manualRefresh() {
   load(true).finally(()=>setTimeout(()=>{ btn.disabled=false; btn.textContent='↻ REFRESH'; },700));
 }
 
+// ── Parlay handler (global scope so onclick= can reach it) ────────────
+function addToParlay(leg) {
+  try {
+    let legs = [];
+    try { legs = JSON.parse(localStorage.getItem('pendingParlayLegs')) || []; } catch {}
+    legs.push({ ...leg, savedAt: Date.now(), source: leg.source || 'gameside_deepdive' });
+    localStorage.setItem('pendingParlayLegs', JSON.stringify(legs));
+    window.location.href = '/tracker';
+  } catch(e) {
+    alert('Failed to add to parlay: ' + e.message);
+  }
+}
+
 // ── Main loader ────────────────────────────────────────────────────────
 async function load(silent) {
   if (!GPK || isNaN(parseInt(GPK))) {
@@ -600,22 +613,6 @@ async function load(silent) {
           <div class=\"tpods\">${odds} @ ${book}</div>
           ${hasSignal ? `<button class='save-btn parlay-btn' style='margin-top:6px' onclick=\"addToParlay({player:'${esc(b.name||b.fullName)}',team:'${esc(b.team||'')}',marketKey:'player_home_runs',line:'0.5',gamePk:GPK})\">＋ PARLAY</button>` : ''}
         </div>`;
-      // --- Unified Parlay Handler ---
-      function addToParlay(leg) {
-        try {
-          let legs = [];
-          try { legs = JSON.parse(localStorage.getItem('pendingParlayLegs')) || []; } catch {}
-          legs.push({
-            ...leg,
-            savedAt: Date.now(),
-            source: leg.source || 'gameside_deepdive',
-          });
-          localStorage.setItem('pendingParlayLegs', JSON.stringify(legs));
-          window.location.href = '/tracker';
-        } catch(e) {
-          alert('Failed to add to parlay: ' + e.message);
-        }
-      }
       });
       html += '</div>';
     }
