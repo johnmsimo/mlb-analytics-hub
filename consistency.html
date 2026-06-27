@@ -143,6 +143,7 @@
               <th>Sample</th>
               <th>Hub</th>
               <th>EV</th>
+              <th></th>
             </tr>
           </thead>
           <tbody id="sheetBody"></tbody>
@@ -266,7 +267,7 @@
 
       if(!sheet){
         meta.innerHTML = '';
-        body.innerHTML = '<tr><td colspan="15" class="empty">No consistency sheets are available.</td></tr>';
+        body.innerHTML = '<tr><td colspan="16" class="empty">No consistency sheets are available.</td></tr>';
         return;
       }
 
@@ -278,7 +279,7 @@
       ].join('');
 
       if(!rows.length){
-        body.innerHTML = '<tr><td colspan="15" class="empty">No rows match the current filters.</td></tr>';
+        body.innerHTML = '<tr><td colspan="16" class="empty">No rows match the current filters.</td></tr>';
         return;
       }
 
@@ -357,7 +358,7 @@
           status.textContent = `Updated ${data.generatedAt || 'now'} | ${data.cached ? 'cached' : 'fresh'} payload for ${data.date || etToday()}`;
         }
       }catch(err){
-        document.getElementById('sheetBody').innerHTML = `<tr><td colspan="15" class="empty">${err.message}</td></tr>`;
+        document.getElementById('sheetBody').innerHTML = `<tr><td colspan="16" class="empty">${err.message}</td></tr>`;
         document.getElementById('sheetMeta').innerHTML = '';
         status.textContent = 'Error: ' + err.message;
       }finally{

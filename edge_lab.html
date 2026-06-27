@@ -100,6 +100,9 @@
       <div class="actions">
         <a class="toplink" href="/">Dashboard</a>
         <a class="toplink" href="/props">Props</a>
+        <a class="toplink" href="/value-bets">Value Bets</a>
+        <a class="toplink" href="/nrfi">NRFI</a>
+        <a class="toplink" href="/cheatsheets">Cheatsheets</a>
         <a class="toplink" href="/consistency">Consistency</a>
         <a class="toplink" href="/tracker">Tracker</a>
         <button class="btn" id="refreshBtn" onclick="loadActive(true)">Refresh</button>
@@ -369,7 +372,7 @@
         if(d.computing) setTimeout(()=>loadEdges(false),6000);
         setStatus(`Edge Finder · ${d.count} plays · ${d.date}`);
       }catch(e){
-        document.getElementById('edgeBody').innerHTML=`<tr><td colspan="13" class="empty">${esc(e.message)}</td></tr>`;
+        document.getElementById('edgeBody').innerHTML=`<tr><td colspan="14" class="empty">${esc(e.message)}</td></tr>`;
         setStatus('Error: '+e.message);
       }finally{btn.disabled=false;}
     }
