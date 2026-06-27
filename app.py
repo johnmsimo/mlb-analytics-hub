@@ -1030,6 +1030,7 @@ NRFI_HTML = _read_html_or_fallback('nrfi.html')
 TOOLS_HTML = _read_html_or_fallback('tools.html')
 EDGE_LAB_HTML = _read_html_or_fallback('edge_lab.html')
 STREAK_HTML = _read_html_or_fallback('streak.html')
+PLAYER_PROFILE_HTML = _read_html_or_fallback('player_profile.html')
 DATA_DIR = os.environ.get('DATA_DIR') or (
     '/app/data' if os.path.isdir('/app/data') else os.path.join(_HERE, 'data')
 )
@@ -4621,6 +4622,10 @@ def nrfi_page():
 @app.route('/streak')
 def streak_page():
     return STREAK_HTML
+
+@app.route('/player/<int:player_id>')
+def player_profile_page(player_id):
+    return PLAYER_PROFILE_HTML
 
 @app.route('/tools')
 def tools_page():
