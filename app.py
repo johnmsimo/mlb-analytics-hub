@@ -5767,6 +5767,38 @@ def api_games_today():
         return jsonify({"success":False,"error":str(ex),"games":[]}), 500
 
 
+@app.route("/api/games/live-scores")
+def api_games_live_scores():
+    """Lightweight bulk endpoint: returns live score/inning state for all today's games."""
+    try:
+        date_str = _normalize_date_str(request.args.get('date'))
+        raw = fetch_schedule(date_str)
+        results = []
+        for g in raw:
+            gs = g.get('status', {})
+            state = gs.get('abstractGameState', 'Preview')  # Live / Final / Preview
+            detail = gs.get('detailedState', '')
+            pk = g.get('gamePk')
+            ls = g.get('linescore') or {}
+            teams_ls = ls.get('teams') or {}
+            away_ls = teams_ls.get('away') or {}
+            home_ls = teams_ls.get('home') or {}
+            results.append({
+                'gamePk': pk,
+                'abstractGameState': state,
+                'detailedState': detail,
+                'awayScore': away_ls.get('runs', 0),
+                'homeScore': home_ls.get('runs', 0),
+                'currentInning': ls.get('currentInning', 0),
+                'inningHalf': ls.get('inningHalf', 'Top'),
+                'outs': ls.get('outs', 0),
+            })
+        return jsonify({'success': True, 'games': results})
+    except Exception as ex:
+        logging.error(f"[api_games_live_scores] {traceback.format_exc()}")
+        return jsonify({'success': False, 'error': str(ex), 'games': []}), 500
+
+
 @app.route("/api/game-summary/<int:game_pk>")
 def api_game_summary(game_pk):
     t0 = time.perf_counter()
@@ -13192,6 +13224,10 @@ _ODDS_GAME_CACHE:  dict = {}           # {event_id: {'all': [...], 'ts': float}}
 # Populated on first call to _market_price_summary per key each calendar day.
 _OPENING_PRICE_CACHE: dict = {}
 _OPENING_PRICE_LOCK = threading.Lock()
+# Timestamped price history for sparklines. Same key structure as _OPENING_PRICE_CACHE.
+# Each value is a list of [iso_timestamp, american_price] tuples, oldest first.
+_PRICE_HISTORY_CACHE: dict = {}
+_PRICE_HISTORY_LOCK = threading.Lock()
 _ODDS_EVENTS_TTL  = _odds_ttl_seconds('ODDS_EVENTS_TTL_SEC', 6 * 60 * 60)
 _ODDS_GAME_TTL    = _odds_ttl_seconds('ODDS_GAME_TTL_SEC', 24 * 60 * 60)
 _ODDS_NRFI_TTL    = _odds_ttl_seconds('ODDS_NRFI_TTL_SEC', 5 * 60)
@@ -14039,6 +14075,20 @@ def _market_price_summary(market_props, player, mk, line):
         # Positive = line moved in bettor's favour (price improved)
         line_move = best_over_price - opening_over_price
 
+    # Track timestamped price history for sparklines (appended when price changes).
+    price_history = []
+    if best_over_price is not None:
+        today_str2 = datetime.now(ET).strftime('%Y-%m-%d')
+        _hist_key = (today_str2, str(player), str(mk), str(line))
+        with _PRICE_HISTORY_LOCK:
+            hist = _PRICE_HISTORY_CACHE.setdefault(_hist_key, [])
+            if not hist or hist[-1][1] != best_over_price:
+                hist.append([datetime.now(ET).isoformat(), best_over_price])
+                stale_h = [k for k in _PRICE_HISTORY_CACHE if k[0] != today_str2]
+                for k in stale_h:
+                    del _PRICE_HISTORY_CACHE[k]
+            price_history = list(hist)
+
     return {
         'best_over_price': best_over_price,
         'best_over_book': best_over_book,
@@ -14051,6 +14101,7 @@ def _market_price_summary(market_props, player, mk, line):
         'line_varies': bool(line_range and line_range[0] != line_range[1]),
         'opening_over_price': opening_over_price,
         'line_move': line_move,
+        'price_history': price_history,
     }
 
 
@@ -22879,6 +22930,7 @@ def api_props_projections(game_pk):
                         'bookCount':        msum.get('book_count'),
                         'openingOverPrice': msum.get('opening_over_price'),
                         'lineMove':         msum.get('line_move'),
+                        'priceHistory':     msum.get('price_history', []),
                     })
             return out
 

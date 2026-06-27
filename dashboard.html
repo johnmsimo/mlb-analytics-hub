@@ -828,18 +828,22 @@ function mkCard(g){
   // Team record display
   var aRec=g.awayRecord?'<span class="team-record">('+g.awayRecord+')</span>':'';
   var hRec=g.homeRecord?'<span class="team-record">('+g.homeRecord+')</span>':'';
-  // Final score block or VS display
+  // Final/live score block or VS display
+  var isLive=g.status==='Live';
   var aWin=isFinal&&g.awayScore!=null&&g.homeScore!=null&&Number(g.awayScore)>Number(g.homeScore);
   var hWin=isFinal&&g.homeScore!=null&&g.awayScore!=null&&Number(g.homeScore)>Number(g.awayScore);
-  var matchupBlock=isFinal
+  var aLead=isLive&&g.awayScore!=null&&g.homeScore!=null&&Number(g.awayScore)>Number(g.homeScore);
+  var hLead=isLive&&g.homeScore!=null&&g.awayScore!=null&&Number(g.homeScore)>Number(g.awayScore);
+  var showScore=(isFinal||isLive)&&g.awayScore!=null&&g.homeScore!=null;
+  var matchupBlock=showScore
     ?'<div class="mu final-mu">'
-      +'<div class="tb"><div class="tlw">'+aL+'</div><div class="ta '+(aWin?'team-win':'')+'">'+g.awayAbbr+'</div>'+aRec+'</div>'
-      +'<div class="final-score-block">'
-        +'<div class="final-score '+(aWin?'score-win':'score-loss')+'">'+g.awayScore+'</div>'
+      +'<div class="tb"><div class="tlw">'+aL+'</div><div class="ta '+(aWin||aLead?'team-win':'')+'">'+g.awayAbbr+'</div>'+aRec+'</div>'
+      +'<div id="mu-score-'+g.gamePk+'" class="final-score-block">'
+        +'<div class="final-score '+((aWin||aLead)?'score-win':'score-loss')+'">'+g.awayScore+'</div>'
         +'<div class="final-score-sep">—</div>'
-        +'<div class="final-score '+(hWin?'score-win':'score-loss')+'">'+g.homeScore+'</div>'
+        +'<div class="final-score '+((hWin||hLead)?'score-win':'score-loss')+'">'+g.homeScore+'</div>'
       +'</div>'
-      +'<div class="tb"><div class="tlw">'+hL+'</div><div class="ta '+(hWin?'team-win':'')+'">'+g.homeAbbr+'</div>'+hRec+'</div>'
+      +'<div class="tb"><div class="tlw">'+hL+'</div><div class="ta '+(hWin||hLead?'team-win':'')+'">'+g.homeAbbr+'</div>'+hRec+'</div>'
     +'</div>'
     :'<div class="mu"><div class="tb"><div class="tlw">'+aL+'</div><div class="ta">'+g.awayAbbr+'</div>'+aRec+'</div>'
       +'<div class="vs">VS</div>'
@@ -2981,6 +2985,40 @@ setInterval(loadEdgesWidget, 300000);
       },30000);
     });
   };
+})();
+
+// \u2500\u2500 Bulk live score poll \u2014 updates score blocks in card headers every 45s \u2500\u2500\u2500\u2500\u2500\u2500
+(function(){
+  var _liveScoreTimer=null;
+  function _updateScoreBlock(pk,aScore,hScore){
+    var el=document.getElementById('mu-score-'+pk);
+    if(!el) return;
+    var a=Number(aScore||0), h=Number(hScore||0);
+    var aWin=a>h, hWin=h>a;
+    el.innerHTML='<div class="final-score '+(aWin?'score-win':'score-loss')+'">'+a+'</div>'
+      +'<div class="final-score-sep">\u2014</div>'
+      +'<div class="final-score '+(hWin?'score-win':'score-loss')+'">'+h+'</div>';
+    // Update LIVE count in the strip
+    var liveCount=(window.__lastGames||[]).filter(function(g){return g.status==='Live';}).length;
+    var slEl=document.getElementById('sl'); if(slEl) slEl.textContent=liveCount;
+  }
+  function pollBulkLiveScores(){
+    fetch('/api/games/live-scores?date='+(window.selectedGamesDate||etTodayStr()))
+      .then(function(r){return r.json();})
+      .then(function(d){
+        if(!d.success||!d.games) return;
+        d.games.forEach(function(g){
+          if(g.abstractGameState==='Live') _updateScoreBlock(g.gamePk,g.awayScore,g.homeScore);
+        });
+      }).catch(function(){});
+  }
+  window.startBulkLivePoll=function(){
+    if(_liveScoreTimer) clearInterval(_liveScoreTimer);
+    _liveScoreTimer=setInterval(pollBulkLiveScores,45000);
+  };
+  window.stopBulkLivePoll=function(){ if(_liveScoreTimer){clearInterval(_liveScoreTimer);_liveScoreTimer=null;} };
+  // Auto-start on page load
+  window.startBulkLivePoll();
 })();
 </script>
 <a class="tracker-fab" href="/tracker" target="_blank" rel="noopener noreferrer" style="position:fixed;right:16px;bottom:16px;z-index:99;background:linear-gradient(90deg,#003b2b,#00754f);border:1px solid rgba(0,230,118,.3);color:#eaf6ff;padding:12px 14px;border-radius:999px;font-family:Orbitron,sans-serif;font-size:.62rem;letter-spacing:1.5px;text-decoration:none;box-shadow:0 12px 30px rgba(0,0,0,.35)">📋 BET TRACKER</a>

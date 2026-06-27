@@ -2803,7 +2803,7 @@ function batterCard(b) {
       const om = Array.isArray(b.oddsMarkets) ? b.oddsMarkets : [];
       if (!om.length) return '';
       // Best over price across all markets
-      let bestPx = null, bestBk = '', bestMkt = '', bestOpen = null, bestMove = null;
+      let bestPx = null, bestBk = '', bestMkt = '', bestOpen = null, bestMove = null, bestHistory = null;
       let bookSet = new Set();
       om.forEach(m => {
         if (m.overBook) bookSet.add(m.overBook);
@@ -2813,6 +2813,7 @@ function batterCard(b) {
           bestMkt = m.marketLabel || m.marketKey || '';
           bestOpen = m.openingOverPrice ?? null;
           bestMove = m.lineMove ?? null;
+          bestHistory = Array.isArray(m.priceHistory) ? m.priceHistory : null;
         }
       });
       const nBooks = bookSet.size || (b.bookCount ?? 0);
@@ -2827,11 +2828,27 @@ function batterCard(b) {
         const mvStr = (bestMove > 0 ? '+' : '') + bestMove;
         moveHtml = `<span style="color:${mvCol};font-size:.6rem;font-family:'JetBrains Mono',monospace" title="vs opening ${bestOpen}">${mvDir}${mvStr}</span>`;
       }
+      // Build sparkline SVG from priceHistory if ≥2 points
+      let sparkHtml = '';
+      if (bestHistory && bestHistory.length >= 2) {
+        const prices = bestHistory.map(pt => pt[1]);
+        const mn = Math.min(...prices), mx = Math.max(...prices);
+        const rng = mx - mn || 1;
+        const W = 48, H = 18;
+        const pts = prices.map((p, i) => {
+          const x = Math.round(i / (prices.length - 1) * W);
+          const y = Math.round(H - ((p - mn) / rng) * H);
+          return `${x},${y}`;
+        }).join(' ');
+        const lineCol = prices[prices.length-1] > prices[0] ? '#00e676' : prices[prices.length-1] < prices[0] ? '#f44336' : '#6a8db0';
+        sparkHtml = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="flex-shrink:0;vertical-align:middle;margin:0 2px" title="Price history"><polyline points="${pts}" fill="none" stroke="${lineCol}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+      }
       return `<div style="display:flex;align-items:center;gap:8px;padding:5px 10px;margin:6px 0 2px;background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.12);border-radius:8px;font-size:.63rem">
         <span style="color:var(--mu)">BEST ODDS</span>
         <span style="${pxCls};font-weight:700;font-family:'JetBrains Mono',monospace">${pxStr}</span>
         ${bestBk ? `<span style="color:var(--c);font-size:.58rem">@ ${bestBk.toUpperCase()}</span>` : ''}
         ${moveHtml}
+        ${sparkHtml}
         <span style="color:var(--mu);margin-left:auto">${bestMkt}</span>
         <span style="color:var(--mu)">${nBooks} book${nBooks===1?'':'s'}</span>
       </div>`;
