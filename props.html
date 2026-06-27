@@ -56,6 +56,13 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .sort-btn{padding:5px 12px;border-radius:999px;border:1px solid var(--b);background:rgba(255,255,255,.02);color:var(--mu);font-family:'Orbitron',monospace;font-size:.58rem;letter-spacing:1px;cursor:pointer;transition:all .15s}
 .sort-btn:hover{border-color:rgba(0,229,255,.25);color:var(--t)}
 .sort-btn.active{background:rgba(0,229,255,.1);border-color:rgba(0,229,255,.35);color:var(--c)}
+.sort-btn.watchlist-btn{border-color:rgba(255,215,0,.28);color:#ffd740}
+.sort-btn.watchlist-btn.active{background:rgba(255,215,0,.12);border-color:rgba(255,215,0,.48);color:#ffd740}
+.bcard.bcard-starred{border-color:rgba(255,215,0,.38);background:linear-gradient(135deg,var(--card),rgba(255,215,0,.03))}
+.bcard.bcard-starred::before{background:linear-gradient(90deg,#ffd740,rgba(255,152,0,.6))}
+.star-btn{background:none;border:none;cursor:pointer;font-size:1.05rem;line-height:1;padding:2px 4px;transition:transform .15s;opacity:.55}
+.star-btn:hover{opacity:1;transform:scale(1.2)}
+.star-btn.starred{opacity:1;filter:drop-shadow(0 0 4px rgba(255,215,0,.6))}
 .batter-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(288px,1fr));gap:16px}
 .bcard{background:var(--card);border:1px solid var(--b);border-radius:14px;padding:18px;transition:all .25s;position:relative;overflow:hidden}
 .bcard::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--c),var(--m))}
@@ -594,6 +601,7 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
           <button class="sort-btn" onclick="sortBatters(this,'rbi')">RBI</button>
           <button class="sort-btn" onclick="sortBatters(this,'hrr')">H+R+RBI</button>
           <button class="sort-btn" onclick="sortBatters(this,'slot')">SLOT ORDER</button>
+          <button class="sort-btn watchlist-btn" id="watchlistFilterBtn" onclick="toggleWatchlistFilter(this)" title="Show only starred players">⭐ WATCHLIST (<span id="watchlistCount">0</span>)</button>
         </div>
         <!-- ── Power Filter Bar ── -->
         <div class="pfbar" id="pfBar">
@@ -813,6 +821,38 @@ let CUR_HOME      = '';
 let CUR_AWAY      = '';
 let FULL_SCAN_MODE = false;
 let PF_FILTERS    = new Set();
+// ── Watchlist (localStorage) ──────────────────────────────────────────────────
+let WATCHLIST = new Set(JSON.parse(localStorage.getItem('mlb_watchlist') || '[]'));
+let WATCHLIST_FILTER_ON = false;
+function _saveWatchlist() {
+  localStorage.setItem('mlb_watchlist', JSON.stringify([...WATCHLIST]));
+  const countEl = document.getElementById('watchlistCount');
+  if (countEl) countEl.textContent = WATCHLIST.size;
+}
+function toggleStar(nameKey, btn) {
+  if (WATCHLIST.has(nameKey)) {
+    WATCHLIST.delete(nameKey);
+    btn.textContent = '☆'; btn.classList.remove('starred');
+    btn.title = 'Add to watchlist';
+    const card = btn.closest('.bcard');
+    if (card) card.classList.remove('bcard-starred');
+    if (WATCHLIST_FILTER_ON) renderBatters(window.__lastBatters || [], SORT_KEY);
+  } else {
+    WATCHLIST.add(nameKey);
+    btn.textContent = '⭐'; btn.classList.add('starred');
+    btn.title = 'Remove from watchlist';
+    const card = btn.closest('.bcard');
+    if (card) card.classList.add('bcard-starred');
+  }
+  _saveWatchlist();
+}
+function toggleWatchlistFilter(btn) {
+  WATCHLIST_FILTER_ON = !WATCHLIST_FILTER_ON;
+  btn.classList.toggle('active', WATCHLIST_FILTER_ON);
+  renderBatters(window.__lastBatters || [], SORT_KEY);
+}
+// Init watchlist count badge
+(function(){ const el = document.getElementById('watchlistCount'); if(el) el.textContent = WATCHLIST.size; })();
 let PROJ_DATA     = null;
 let MTCH_DATA     = null;
 let VAL_DATA      = null;
@@ -1920,8 +1960,17 @@ function applyPFFilters() {
 }
 
 function renderBatters(batters, key) {
-  if (!batters.length) { gel('batterGrid').innerHTML = noData('NO BATTER DATA AVAILABLE'); return; }
-  const sorted = [...batters].sort((a,b) => {
+  window.__lastBatters = batters;
+  let filtered = batters;
+  if (WATCHLIST_FILTER_ON) {
+    filtered = batters.filter(b => WATCHLIST.has((b.name||'').toLowerCase()));
+    if (!filtered.length) {
+      gel('batterGrid').innerHTML = '<div style="text-align:center;padding:40px 20px;color:var(--mu);font-family:Orbitron,monospace;font-size:.72rem;letter-spacing:2px">NO STARRED PLAYERS<br><span style="font-size:.62rem;opacity:.6;font-family:sans-serif;letter-spacing:0">Star players with ☆ to add them to your watchlist</span></div>';
+      return;
+    }
+  }
+  if (!filtered.length) { gel('batterGrid').innerHTML = noData('NO BATTER DATA AVAILABLE'); return; }
+  const sorted = [...filtered].sort((a,b) => {
     if (key === 'slot') return (a.slot||9)-(b.slot||9);
     if (key === 'scanHub') {
       return (b.scanHubRating ?? PLAYER_HUB_MAP[(b.name||'').toLowerCase()] ?? 0) - (a.scanHubRating ?? PLAYER_HUB_MAP[(a.name||'').toLowerCase()] ?? 0);
@@ -2735,6 +2784,9 @@ function batterCard(b) {
   const hrPanel = p.hr != null ? hrProfilePanel(b, p) : '';
   const injBadge = injuryBadgeHtml(b.injuryStatus, b.injuryDescription);
   const verify = verifyStatusHtml(b.injuryStatus);
+  const isStarred = WATCHLIST.has((b.name||'').toLowerCase());
+  const starClass = isStarred ? 'star-btn starred' : 'star-btn';
+  const starBtn = `<button class="${starClass}" onclick="toggleStar('${(b.name||'').replace(/'/g,"\\'").toLowerCase()}',this)" title="${isStarred?'Remove from watchlist':'Add to watchlist'}">${isStarred?'⭐':'☆'}</button>`;
 
   // MLB headshot
   const photoUrl = pid
@@ -2765,7 +2817,7 @@ function batterCard(b) {
     </div>`;
   }
 
-  return `<div class="bcard">
+  return `<div class="bcard${isStarred?' bcard-starred':''}">
     <div class="bcard-top">
       <div class="bcard-top-left">
         ${photoHtml}
@@ -2776,7 +2828,7 @@ function batterCard(b) {
         </div>
       </div>
       <div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:4px">
-        <div class="bcard-slot">${b.slot||'?'}</div>
+        <div style="display:flex;align-items:center;gap:4px">${starBtn}<div class="bcard-slot">${b.slot||'?'}</div></div>
         ${hub != null ? hubBadge(hub) : ''}
         ${ev  != null ? evHtml(ev)    : ''}
         ${bvpBadgeHtml(b.bvpGrade, b.bvpTooltip)}

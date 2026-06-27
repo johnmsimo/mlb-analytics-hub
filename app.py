@@ -5799,6 +5799,52 @@ def api_games_live_scores():
         return jsonify({'success': False, 'error': str(ex), 'games': []}), 500
 
 
+@app.route("/api/news/ticker")
+def api_news_ticker():
+    """Recent MLB transactions (IL moves, activations, trades) for the dashboard news ticker."""
+    try:
+        today = datetime.now(ET).strftime('%Y-%m-%d')
+        txs = _memory_collect_transactions(today, days_back=2, max_rows=200)
+        _RELEVANT_TYPES = {
+            'il placement', 'il transfer', 'recalled', 'recall', 'activated', 'activation',
+            'optioned', 'option', 'selected', 'designated', 'dfa', 'trade', 'signed',
+            'released', 'outrighted',
+        }
+        _RELEVANT_WORDS = [
+            'placed', 'recalled', 'activated', 'transferred', 'selected', 'optioned',
+            'designated', 'signed', 'traded', 'released', 'injured', 'reinstated',
+        ]
+        items = []
+        seen = set()
+        for tx in txs:
+            player = tx.get('player') or ''
+            desc = (tx.get('description') or '').strip()
+            tx_type = (tx.get('type') or '').lower()
+            if not player or not desc:
+                continue
+            dedup_key = (player, desc[:60])
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+            desc_lower = desc.lower()
+            if (
+                any(t in tx_type for t in _RELEVANT_TYPES) or
+                any(w in desc_lower for w in _RELEVANT_WORDS)
+            ):
+                items.append({
+                    'player': player,
+                    'type': tx.get('type') or '',
+                    'description': desc,
+                    'date': tx.get('date') or today,
+                })
+            if len(items) >= 50:
+                break
+        return jsonify({'success': True, 'items': items, 'date': today})
+    except Exception as ex:
+        logging.error(f"[api_news_ticker] {traceback.format_exc()}")
+        return jsonify({'success': False, 'items': [], 'error': str(ex)}), 500
+
+
 @app.route("/api/game-summary/<int:game_pk>")
 def api_game_summary(game_pk):
     t0 = time.perf_counter()

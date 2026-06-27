@@ -359,6 +359,35 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
 .toast.err{border-color:rgba(239,83,80,.35);color:#ffc9c7}
 @media(max-width:700px){.settings-two{grid-template-columns:1fr}}
 
+/* ── News Ticker ─────────────────────────────────────── */
+.news-ticker-wrap{background:rgba(0,0,0,.42);border-bottom:1px solid rgba(255,152,0,.14);padding:5px 0;overflow:hidden;position:relative}
+.news-ticker-inner{display:flex;align-items:center;gap:0}
+.news-ticker-label{font-family:Orbitron,monospace;font-size:.56rem;letter-spacing:2px;color:var(--o);white-space:nowrap;padding:0 14px 0 16px;flex-shrink:0;border-right:1px solid rgba(255,152,0,.22);margin-right:14px}
+.news-ticker-track-wrap{overflow:hidden;flex:1;position:relative;height:20px}
+.news-ticker-track{position:absolute;top:0;left:0;white-space:nowrap;animation:tickerScroll 60s linear infinite;font-size:.64rem;color:var(--mu);line-height:20px}
+.news-ticker-track:hover{animation-play-state:paused}
+@keyframes tickerScroll{from{transform:translateX(100vw)}to{transform:translateX(-100%)}}
+.ticker-sep{color:rgba(0,229,255,.25);margin:0 18px}
+.ticker-il{color:#ff9800}.ticker-activ{color:#00e676}.ticker-trade{color:#e040fb}.ticker-other{color:var(--mu)}
+
+/* ── Top Plays Today ─────────────────────────────────── */
+.tp-wrap{margin:12px 24px 0}
+.tp-hdr{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--b)}
+.tp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;padding:12px 14px}
+.tp-card{border-radius:10px;padding:11px 13px;display:flex;flex-direction:column;gap:6px;position:relative;overflow:hidden;cursor:default}
+.tp-card.gold{border:1px solid rgba(255,215,0,.45);background:linear-gradient(135deg,rgba(255,215,0,.06),rgba(255,152,0,.03))}
+.tp-card.green{border:1px solid rgba(0,230,118,.35);background:rgba(0,230,118,.04)}
+.tp-card.lean{border:1px solid rgba(0,229,255,.2);background:rgba(0,229,255,.03)}
+.tp-conv{font-family:Orbitron,monospace;font-size:.5rem;letter-spacing:1.2px;font-weight:700}
+.tp-conv.gold{color:#ffd740}.tp-conv.green{color:#00e676}.tp-conv.lean{color:var(--c)}
+.tp-player{font-weight:700;font-size:.84rem;color:var(--t);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tp-market{font-size:.62rem;color:var(--mu)}
+.tp-ev{font-family:Orbitron,monospace;font-size:.78rem;font-weight:700;color:#00e676}
+.tp-foot{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.tp-px{font-size:.68rem;font-weight:700;color:var(--g)}
+.tp-bk{font-size:.6rem;color:var(--mu)}
+.tp-kelly{font-size:.6rem;color:var(--o)}
+
 </style>
 <link rel="stylesheet" href="/static/mobile.css">
 <link rel="stylesheet" href="/static/tokens.css">
@@ -382,6 +411,15 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
     <div class="ss"><div class="ss-v" id="shh">-</div><div class="ss-l">100% CLUB</div></div>
     <div class="ss"><div class="ss-v" id="sm">-</div><div class="ss-l" id="sml">MEMORY</div></div>
     <div class="ss ss-click" onclick="openDailySummaryPanel()" title="Open final daily summary in Settings"><div class="ss-v" id="sd">-</div><div class="ss-l" id="sdl">DAILY SUMMARY</div></div>
+  </div>
+</div>
+<!-- ── MLB News Ticker ── -->
+<div class="news-ticker-wrap" id="newsTicker">
+  <div class="news-ticker-inner">
+    <span class="news-ticker-label">📰 MLB NEWS</span>
+    <div class="news-ticker-track-wrap">
+      <div class="news-ticker-track" id="tickerTrack">Loading transactions…</div>
+    </div>
   </div>
 </div>
 <div class="topnav">
@@ -423,6 +461,17 @@ footer .footstack{display:flex;flex-direction:column;gap:8px;align-items:center;
   </div>
   <div id="edgStrip" style="display:flex;gap:10px;overflow-x:auto;padding:12px 14px;scrollbar-width:thin">
     <span style="color:var(--mu);font-size:.7rem">Loading edges…</span>
+  </div>
+</div>
+<!-- ── Today's Top 5 Plays ── -->
+<div class="tp-wrap" id="topPlaysWidget" style="border:1px solid var(--b);border-radius:14px;background:var(--card);overflow:hidden">
+  <div class="tp-hdr">
+    <span style="font-family:Orbitron,monospace;font-size:.7rem;letter-spacing:2px;color:#ffd740">🏆 TODAY&#39;S TOP PLAYS</span>
+    <span id="tpSub" style="font-size:.66rem;color:var(--mu)">Highest EV plays from the model</span>
+    <a href="/props" style="margin-left:auto;font-size:.64rem;color:var(--c);text-decoration:none">ALL PROPS →</a>
+  </div>
+  <div class="tp-grid" id="topPlaysGrid">
+    <span style="color:var(--mu);font-size:.7rem;padding:8px">Loading top plays…</span>
   </div>
 </div>
 <div class="main">
@@ -2862,6 +2911,97 @@ function trackEdgeW(i, btn){
 }
 loadEdgesWidget();
 setInterval(loadEdgesWidget, 300000);
+
+// ── MLB News Ticker ────────────────────────────────────────────────────────────
+function loadNewsTicker() {
+  fetch('/api/news/ticker').then(function(r){return r.json();}).then(function(d) {
+    var track = document.getElementById('tickerTrack');
+    if (!track) return;
+    var items = d.items || [];
+    if (!items.length) { track.textContent = 'No recent transactions.'; return; }
+    var typeMap = {
+      'il placement':'ticker-il', 'il transfer':'ticker-il',
+      'recalled':'ticker-activ', 'recall':'ticker-activ', 'activated':'ticker-activ', 'activation':'ticker-activ',
+      'trade':'ticker-trade', 'traded':'ticker-trade',
+    };
+    var html = items.map(function(item) {
+      var cls = 'ticker-other';
+      var tl = (item.type||'').toLowerCase();
+      Object.keys(typeMap).forEach(function(k){ if(tl.indexOf(k)>=0) cls=typeMap[k]; });
+      return '<span class="'+cls+'"><strong>'+esc(item.player||'')+'</strong> — '+esc(item.description||'')+'</span><span class="ticker-sep">•</span>';
+    }).join('');
+    track.innerHTML = html;
+    // Adjust animation duration based on content length
+    var approxWidth = track.textContent.length * 7;
+    var dur = Math.max(30, Math.min(120, approxWidth / 80));
+    track.style.animation = 'tickerScroll ' + dur + 's linear infinite';
+  }).catch(function(){
+    var track = document.getElementById('tickerTrack');
+    if(track) track.textContent = 'MLB transactions unavailable';
+  });
+}
+loadNewsTicker();
+setInterval(loadNewsTicker, 600000);
+
+// ── Today's Top Plays ──────────────────────────────────────────────────────────
+var TP_ROWS = [];
+function loadTopPlays() {
+  var grid = document.getElementById('topPlaysGrid');
+  if (!grid) return;
+  fetch('/api/v1/edges?minEv=0.03&limit=5').then(function(r){return r.json();}).then(function(d) {
+    TP_ROWS = d.edges || [];
+    var sub = document.getElementById('tpSub');
+    if (sub) sub.textContent = TP_ROWS.length ? 'Top ' + TP_ROWS.length + ' plays by EV — updated ' + new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : 'No +EV plays computed yet';
+    if (!TP_ROWS.length) {
+      grid.innerHTML = '<span style="color:var(--mu);font-size:.7rem;padding:4px">' + (d.computing ? 'Computing projections…' : 'No +EV plays yet — run the props scan first.') + '</span>';
+      if (d.computing) setTimeout(loadTopPlays, 8000);
+      return;
+    }
+    grid.innerHTML = TP_ROWS.map(function(e, i) {
+      var conv = e.conviction || 'lean';
+      var convLabel = conv==='gold' ? '★ GOLD' : conv==='green' ? '✓ GREEN' : '→ LEAN';
+      var evPct = e.evPct != null ? '+' + (e.evPct*100).toFixed(1) + '% EV' : '';
+      var bestPx = e.bestPrice != null ? (e.bestPrice>0?'+':'')+e.bestPrice : '';
+      var bestBk = e.bestBook ? e.bestBook.slice(0,8).toUpperCase() : '';
+      var stake = e.stakeDollars != null ? 'Kelly $'+Number(e.stakeDollars).toFixed(0) : '';
+      var mktLabel = e.marketLabel || (e.marketKey||'').replace('batter_','').replace('_',' ');
+      return '<div class="tp-card ' + conv + '">' +
+        '<div style="display:flex;align-items:center;justify-content:space-between">' +
+          '<span class="tp-conv ' + conv + '">' + convLabel + '</span>' +
+          '<span style="font-family:Orbitron,monospace;font-size:.5rem;color:var(--mu)">#' + (i+1) + '</span>' +
+        '</div>' +
+        '<div class="tp-player">' + esc(e.player||'') + '</div>' +
+        '<div class="tp-market">' + esc(mktLabel) + ' ' + (e.side||'Over') + ' ' + e.line + '</div>' +
+        '<div class="tp-ev">' + evPct + '</div>' +
+        '<div class="tp-foot">' +
+          (bestPx ? '<span class="tp-px">' + bestPx + '</span>' : '') +
+          (bestBk ? '<span class="tp-bk">@ ' + bestBk + '</span>' : '') +
+          (stake  ? '<span class="tp-kelly">' + stake + '</span>' : '') +
+          '<button onclick="trackTopPlay('+i+',this)" style="margin-left:auto;border:1px solid rgba(0,229,255,.3);background:rgba(0,229,255,.08);color:var(--c);border-radius:7px;padding:3px 9px;font-size:.6rem;cursor:pointer;font-family:Orbitron,monospace">+ TRACK</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+    if (d.computing) setTimeout(loadTopPlays, 8000);
+  }).catch(function() {
+    var grid = document.getElementById('topPlaysGrid');
+    if (grid) grid.innerHTML = '<span style="color:var(--mu);font-size:.7rem;padding:4px">Top plays unavailable</span>';
+  });
+}
+function trackTopPlay(i, btn) {
+  var e = TP_ROWS[i]; if (!e) return;
+  btn.disabled = true; btn.textContent = '…';
+  fetch('/api/tracker/pick', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({player:e.player, playerId:e.playerId, team:e.team, gamePk:e.gamePk,
+      marketKey:e.marketKey, line:e.line, recommendedSide:e.side||'Over', adjProb:e.modelProb,
+      edge:e.edge, marketImplied:e.marketImplied, hubRating:e.hubRating, evPct:e.evPct,
+      bestOverPrice:e.bestPrice, bookmaker:e.bestBook, source:'top_plays'})
+  }).then(function(r){return r.json();}).then(function(d){
+    if (d.success) { btn.textContent='✓ SAVED'; btn.style.color='var(--g)'; btn.style.borderColor='rgba(0,230,118,.35)'; }
+    else { btn.disabled=false; btn.textContent='+ TRACK'; }
+  }).catch(function(){ btn.disabled=false; btn.textContent='+ TRACK'; });
+}
+loadTopPlays();
+setInterval(loadTopPlays, 300000);
 </script>
 <!-- LIVE GAMEPLAY PATCH -->
 <style>
