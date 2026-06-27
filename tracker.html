@@ -283,6 +283,7 @@ details[open] summary::before{transform:rotate(90deg)}
   <button class="btn gold" id="syncPerfBtn">📊 Sync Performance</button>
   <button class="btn sm" id="exportCsvBtn">⬇ CSV</button>
   <button class="btn sm" id="exportPdfBtn">⬇ PDF</button>
+  <button class="btn sm" id="exportAllCsvBtn" title="Download all picks across every date as one CSV">⬇ All History</button>
   <span class="pill" id="datePill" style="margin-left:auto">Awaiting live day</span>
 </div>
 
@@ -2106,6 +2107,7 @@ function wire() {
     ['captureDayBtn', captureDay], ['captureCloseBtn', captureClose], ['gradeDayBtn', gradeDay],
     ['manualPickBtn', openManualPick], ['syncPerfBtn', syncPerformance],
     ['exportCsvBtn', ()=>exportTracker('csv')], ['exportPdfBtn', ()=>exportTracker('pdf')],
+    ['exportAllCsvBtn', ()=>{ status('Downloading all history…'); window.location.href='/api/tracker/export/all'; }],
     ['btExportCsvBtn', ()=>exportTracker('csv')], ['btExportPdfBtn', ()=>exportTracker('pdf')],
     ['saveManualPickBtn', saveManualPick], ['clearParlayBtn', ()=>{st.parlay=[]; renderBoard(); renderParlayBuilder();}], ['saveParlayBtn', saveParlay], ['saveAdjBtn', saveAdj],
     ['loadCalBtn', loadCal], ['applyCalBtn', applyCal],

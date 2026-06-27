@@ -17939,6 +17939,47 @@ def api_tracker_export(date_str):
     )
 
 
+@app.route('/api/tracker/export/all')
+def api_tracker_export_all():
+    """Export every pick across all tracked dates as a single CSV."""
+    fields = [
+        'id', 'date', 'savedAt', 'source', 'player', 'playerId', 'gamePk', 'team', 'opp',
+        'marketKey', 'line', 'recommendedSide', 'rawProb', 'adjProb', 'modelMean', 'edge',
+        'evPct', 'hubRating', 'bookmaker', 'marketPrice', 'marketImplied',
+        'bestAvailablePrice', 'bestAvailableBook', 'openingPrice', 'openingImplied',
+        'stakeDollars', 'kellyFraction', 'confidenceTier', 'status', 'actual', 'grade',
+        'gradedAt', 'closingPrice', 'closingImplied', 'closingBookmaker', 'closingCapturedAt',
+        'clvEdge', 'profitDollars', 'profitUnits', 'reason',
+    ]
+    try:
+        store = _tracker_store()
+        all_rows = []
+        for date_key in sorted(store.keys()):
+            day = _normalize_tracker_day(store.get(date_key))
+            for row in day.get('entries', []):
+                r = dict(row)
+                r.setdefault('date', date_key)
+                if isinstance(r.get('matchupStorylines'), list):
+                    r['matchupStorylines'] = ' | '.join(str(x) for x in r['matchupStorylines'])
+                if isinstance(r.get('legs'), list):
+                    r['legs'] = json.dumps(r['legs'])
+                all_rows.append(r)
+        all_rows.sort(key=lambda x: (x.get('date') or '', x.get('savedAt') or ''))
+        output = io.StringIO()
+        writer = csvmod.DictWriter(output, fieldnames=fields, extrasaction='ignore')
+        writer.writeheader()
+        writer.writerows(all_rows)
+        today = datetime.now(ET).strftime('%Y-%m-%d')
+        return Response(
+            output.getvalue(),
+            mimetype='text/csv',
+            headers={'Content-Disposition': f'attachment; filename=tracker-all-history-{today}.csv'},
+        )
+    except Exception as ex:
+        logging.error(f"[api_tracker_export_all] {traceback.format_exc()}")
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
 @app.route('/api/consistency/today')
 def api_consistency_today():
     date_str = request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')

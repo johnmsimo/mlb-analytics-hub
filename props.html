@@ -51,7 +51,7 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .subtabs{display:flex;gap:8px;margin-bottom:18px}
 .stab{padding:7px 18px;border-radius:999px;border:1px solid var(--b);background:rgba(255,255,255,.02);color:var(--mu);font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:1.5px;cursor:pointer;transition:all .2s}
 .stab.active{background:rgba(0,229,255,.1);border-color:rgba(0,229,255,.35);color:var(--c)}
-.sortbar{display:flex;align-items:center;gap:8px;margin-bottom:18px;flex-wrap:wrap}
+.sortbar{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap}
 .sort-lbl{font-family:'Orbitron',monospace;font-size:.58rem;color:var(--mu);letter-spacing:2px}
 .sort-btn{padding:5px 12px;border-radius:999px;border:1px solid var(--b);background:rgba(255,255,255,.02);color:var(--mu);font-family:'Orbitron',monospace;font-size:.58rem;letter-spacing:1px;cursor:pointer;transition:all .15s}
 .sort-btn:hover{border-color:rgba(0,229,255,.25);color:var(--t)}
@@ -295,8 +295,10 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .props-pr-leg-pill.over{background:rgba(76,175,80,.1);border:1px solid rgba(76,175,80,.25);color:#4caf50}
 .props-pr-leg-pill.under{background:rgba(244,67,54,.08);border:1px solid rgba(244,67,54,.2);color:#f44336}
 .props-pr-empty{padding:16px;text-align:center;font-size:.68rem;color:var(--mu);font-family:'Orbitron',monospace;letter-spacing:1px}
+/* ── Sticky Sort + Filter Bar ── */
+.sort-sticky-wrap{position:sticky;top:58px;z-index:50;background:rgba(5,10,24,.97);backdrop-filter:blur(14px);border-bottom:1px solid rgba(0,229,255,.1);padding:8px 0 6px;margin:0 0 14px}
 /* ── Power Filter Bar ── */
-.pfbar{margin-bottom:14px}
+.pfbar{margin-bottom:0}
 .pfbar-toggle{display:inline-flex;align-items:center;gap:7px;padding:6px 14px;border-radius:8px;border:1px solid rgba(0,229,255,.2);background:rgba(0,229,255,.04);color:var(--c);font-family:'Orbitron',monospace;font-size:.6rem;letter-spacing:1.5px;cursor:pointer;transition:all .2s}
 .pfbar-toggle:hover{border-color:rgba(0,229,255,.4);background:rgba(0,229,255,.1)}
 .pfbar-toggle.has-active{border-color:rgba(0,229,255,.5);background:rgba(0,229,255,.12);box-shadow:0 0 12px rgba(0,229,255,.12)}
@@ -593,6 +595,7 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
         <button class="stab" id="stab-pitchers" onclick="switchSub('pitchers')">PITCHERS</button>
       </div>
       <div id="sub-batters">
+        <div class="sort-sticky-wrap" id="sortStickyWrap">
         <div class="sortbar">
           <span class="sort-lbl">SORT BY:</span>
           <button class="sort-btn active" onclick="sortBatters(this,'hits')">HITS</button>
@@ -650,6 +653,7 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
             <button class="pfchip pfchip-clear" onclick="clearPFFilters()">✕ CLEAR</button>
           </div>
         </div>
+        </div><!-- /sort-sticky-wrap -->
         <div class="batter-grid" id="batterGrid"></div>
       </div>
       <div id="sub-pitchers" style="display:none">
@@ -2872,13 +2876,22 @@ function batterCard(b) {
       if (bestPx == null) return '';
       const pxCls = bestPx >= 0 ? 'color:var(--g)' : 'color:var(--mu)';
       const pxStr = bestPx > 0 ? '+'+bestPx : String(bestPx);
-      // Line movement: ▲ improved (moved toward bettor), ▼ worsened
+      // Line movement + steam/sharp badges
       let moveHtml = '';
       if (bestMove != null && Math.abs(bestMove) >= 1) {
         const mvDir = bestMove > 0 ? '▲' : '▼';
-        const mvCol = bestMove > 0 ? 'var(--g)' : 'var(--r)';
+        const mvCol = bestMove > 0 ? 'var(--g)' : '#ef5350';
         const mvStr = (bestMove > 0 ? '+' : '') + bestMove;
-        moveHtml = `<span style="color:${mvCol};font-size:.6rem;font-family:'JetBrains Mono',monospace" title="vs opening ${bestOpen}">${mvDir}${mvStr}</span>`;
+        const absMv = Math.abs(bestMove);
+        // Steam badge: line moved 10+ cents against bettor = heavy action on the over
+        // Shift badge: line improved 10+ cents = possible reverse line movement
+        let steamBadge = '';
+        if (absMv >= 10 && bestMove < 0) {
+          steamBadge = `<span style="font-family:Orbitron,monospace;font-size:.46rem;letter-spacing:.8px;padding:1px 5px;border-radius:4px;background:rgba(255,152,0,.18);border:1px solid rgba(255,152,0,.45);color:#ffb74d" title="Line moved ${absMv} cents against bettor — possible steam">🔥 STEAM</span>`;
+        } else if (absMv >= 10 && bestMove > 0) {
+          steamBadge = `<span style="font-family:Orbitron,monospace;font-size:.46rem;letter-spacing:.8px;padding:1px 5px;border-radius:4px;background:rgba(0,230,118,.1);border:1px solid rgba(0,230,118,.35);color:#00e676" title="Line shifted ${absMv} cents in bettor's favor">📈 SHIFT</span>`;
+        }
+        moveHtml = `<span style="color:${mvCol};font-size:.6rem;font-family:'JetBrains Mono',monospace" title="vs opening ${bestOpen}">${mvDir}${mvStr}</span>${steamBadge}`;
       }
       // Build sparkline SVG from priceHistory if ≥2 points
       let sparkHtml = '';
