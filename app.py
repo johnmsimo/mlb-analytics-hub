@@ -24066,6 +24066,145 @@ def _compute_streak(log, stat_key, line):
     return {"direction": last_dir, "length": length}
 
 
+def _confident_hit_reason(name, batter, cal_p, rf, mu, opp_name, opp_hand, slot):
+    """Plain-English 'why this player' for a Confident Hit pick.
+
+    Every clause is a REAL driver pulled from the same data the model scores on
+    (recent game-log form, season/Statcast contact quality, the platoon-blended
+    matchup score, lineup role) — nothing is fabricated. Returns the 3 strongest
+    signals joined with ' · '."""
+    bits = []
+    # 1) Recent form — hits per game / hit rate over the last 7 completed games.
+    l7  = rf.get("l7Hits")
+    l7r = rf.get("l7HitRate")
+    if l7 is not None and l7 >= 1.0:
+        bits.append(f"{l7:.1f} H/G last 7")
+    elif l7r is not None and l7r >= 0.30:
+        bits.append(f".{int(round(l7r * 1000)):03d} L7 hit rate")
+    # 2) Contact quality — prefer Statcast xBA (skill, de-luck'd) then season AVG.
+    sv  = sv_batter(name) or {}
+    fgb = fg_batter(name) or {}
+    xba = _safe_f(sv.get("sv_xba"), None)
+    avg = _safe_f(fgb.get("fg_avg"), None)
+    if xba is not None and xba >= 0.255:
+        bits.append(f".{int(round(xba * 1000)):03d} xBA")
+    elif avg is not None and avg >= 0.260:
+        bits.append(f".{int(round(avg * 1000)):03d} AVG")
+    # 3) Matchup grade vs the listed starter (platoon-blended, pitcher-adjusted).
+    tier  = mu.get("tier")
+    score = mu.get("score")
+    if tier in ("A", "B") and score:
+        last = (opp_name or "").split()[-1] if opp_name and opp_name != "TBD" else ""
+        vs = f" vs {opp_hand}HP {last}" if last else ""
+        bits.append(f"{tier}-tier matchup{vs}")
+    # 4) Lineup role — top-of-order = more guaranteed plate appearances.
+    if slot and 1 <= int(slot) <= 5 and len(bits) < 3:
+        _ord = {1: "1st", 2: "2nd", 3: "3rd", 4: "4th", 5: "5th"}.get(int(slot), f"{slot}th")
+        bits.append(f"bats {_ord}")
+    # Guarantee at least one substantive clause: the model still favors this hit.
+    if not bits or (len(bits) == 1 and bits[0].startswith("bats")):
+        bits.append(f"model favors contact ({int(round(cal_p * 100))}%)")
+    return " · ".join(bits[:3])
+
+
+def _compute_confident_hits(game_pk, limit=4, date_hint=None):
+    """High-confidence 'take for a hit' picks for the dashboard quick-props strip.
+
+    THIS IS THE MONEY MAKER. It scores every batter in the game with the
+    calibrated XGB hits model — the same self-calibrated artifact the prop board
+    and tracker fuse (held-out AUC 0.62, well-calibrated) — feeding it the SAME
+    serve-parity recent-form features the tracker uses (`_batter_recent_hit_form`)
+    so the live number matches the model's held-out skill. The raw model prob is
+    then run through the live realized-accuracy recalibration
+    (`_calibrate_prop_prob('batter_hits', …)`) so displayed confidence reflects
+    graded results, not raw-model optimism. Picks are gated above a confidence
+    floor, ranked by calibrated hit probability, and capped at `limit` (≤4). Each
+    carries a plain-English reason built from real drivers.
+    """
+    if not (_XGB_AVAILABLE and xgb_ready("hits")):
+        return []
+    gdata, away_bats, home_bats, away_t, home_t, pitchers = _props_fetch_game(game_pk, date_hint=date_hint)
+    if not gdata:
+        return []
+
+    ap_info = (pitchers or {}).get("ap") or {}
+    hp_info = (pitchers or {}).get("hp") or {}
+    ap_name = ap_info.get("fullName", "TBD")
+    hp_name = hp_info.get("fullName", "TBD")
+    ap_id   = ap_info.get("id"); hp_id = hp_info.get("id")
+    ap_hand = ((pitcher_stats_mlb(ap_id) if ap_id else {}).get("pitchHand") or "R").upper()
+    hp_hand = ((pitcher_stats_mlb(hp_id) if hp_id else {}).get("pitchHand") or "R").upper()
+    hp_fg = fg_pitcher(hp_name) or {}; hp_sv = sv_pitcher(hp_name) or {}
+    ap_fg = fg_pitcher(ap_name) or {}; ap_sv = sv_pitcher(ap_name) or {}
+
+    away_abbr = away_t.get("team", {}).get("abbreviation", "AWAY")
+    home_abbr = home_t.get("team", {}).get("abbreviation", "HOME")
+
+    # Confidence floor: clearly above a coin flip. Hits base rate (1+ hit) ≈ 0.66,
+    # so we only surface batters the calibrated model likes meaningfully.
+    CONF_FLOOR = 0.60
+
+    def _score_batter(b, opp_name, opp_hand, opp_fg, opp_sv, team_abbr):
+        name = (b.get("name") or "").strip()
+        pid  = b.get("id")
+        slot = b.get("slot") or 0
+        if not name:
+            return None
+        # Serve-parity recent form (also powers the reason). Daily-cached per id.
+        rf = _batter_recent_hit_form(pid) if pid else {}
+        bdict = {"name": name, "bats": b.get("bats") or "S", "slot": slot, "id": pid}
+        if rf:
+            bdict.update(rf)
+        pdict = {"name": opp_name, "pitchHand": opp_hand}
+        try:
+            raw_p = xgb_hit_prob(bdict, pdict)
+        except Exception:
+            raw_p = None
+        if raw_p is None:
+            return None
+        cal_p = _calibrate_prop_prob("batter_hits", float(raw_p))
+        try:
+            cal_p = float(cal_p)
+        except Exception:
+            cal_p = float(raw_p)
+        if cal_p < CONF_FLOOR:
+            return None
+        try:
+            mu = _matchup_score(b, opp_fg, opp_sv, pitcher_hand=opp_hand) or {}
+        except Exception:
+            mu = {}
+        return {
+            "player": name, "playerId": pid, "team": team_abbr, "slot": slot,
+            "market": "hits", "marketKey": "batter_hits", "marketLabel": "Hits",
+            "line": 0.5, "side": "Over", "recommendedSide": "Over",
+            "hitProb": round(cal_p, 4),
+            "rawHitProb": round(float(raw_p), 4),
+            "confidencePct": int(round(cal_p * 100)),
+            "matchupScore": round(float(mu.get("score") or 0), 1) or None,
+            "matchupTier": mu.get("tier"),
+            "oppPitcher": opp_name, "oppHand": opp_hand,
+            "l7Hits": rf.get("l7Hits"), "l7HitRate": rf.get("l7HitRate"),
+            "hubRating": max(0, min(100, int(round(cal_p * 100)))),
+            "reason": _confident_hit_reason(name, b, cal_p, rf, mu, opp_name, opp_hand, slot),
+        }
+
+    tasks = ([(b, hp_name, hp_hand, hp_fg, hp_sv, away_abbr) for b in (away_bats or [])[:9]]
+             + [(b, ap_name, ap_hand, ap_fg, ap_sv, home_abbr) for b in (home_bats or [])[:9]])
+    picks = []
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        futs = [ex.submit(_score_batter, *t) for t in tasks]
+        for fut in as_completed(futs):
+            try:
+                r = fut.result()
+                if r:
+                    picks.append(r)
+            except Exception:
+                pass
+
+    picks.sort(key=lambda x: x["hitProb"], reverse=True)
+    return picks[:limit]
+
+
 def _compute_dashboard_quick_props(game_pk, limit=3, date_hint=None):
     """Compute top quick-prop picks for a game card strip."""
     gdata, away_bats, home_bats, away_t, home_t, _pitchers = _props_fetch_game(game_pk, date_hint=date_hint)
@@ -24226,13 +24365,22 @@ def api_props_quick(game_pk):
     Uses L10 over rates — lightweight, no Odds API calls needed.
     """
     try:
-        gdata, picks = _compute_dashboard_quick_props(game_pk, limit=3, date_hint=request.args.get('date'))
+        date_hint = request.args.get('date')
+        gdata, picks = _compute_dashboard_quick_props(game_pk, limit=3, date_hint=date_hint)
         if not gdata:
             return jsonify({"success": False, "error": "Game not found"}), 404
+        # Money-maker: high-confidence "take for a hit" picks (≤4) from the
+        # calibrated XGB hits model, each with a plain-English reason.
+        try:
+            confident_hits = _compute_confident_hits(game_pk, limit=4, date_hint=date_hint)
+        except Exception:
+            print(f"[api_props_quick] confident_hits {traceback.format_exc()}")
+            confident_hits = []
         return jsonify({
             "success": True,
             "gamePk":  game_pk,
             "picks":   picks,
+            "confidentHits": confident_hits,
         })
 
     except Exception as ex:

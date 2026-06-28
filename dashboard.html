@@ -129,6 +129,24 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .qp-save:hover{background:rgba(0,229,255,.08);color:var(--c);border-color:rgba(0,229,255,.4)}
 .qp-save.saved{background:rgba(0,230,118,.1);color:#00e676;border-color:rgba(0,230,118,.3);cursor:default}
 .qp-loading{text-align:center;padding:8px 4px;font-family:Orbitron,monospace;font-size:.58rem;color:var(--mu);letter-spacing:2px}
+/* ── Confident Hits (money-maker block) ── */
+.ch-wrap{margin-bottom:10px;border:1px solid rgba(0,230,118,.28);border-radius:9px;background:linear-gradient(180deg,rgba(0,230,118,.06),rgba(0,230,118,.015));padding:7px 8px 4px}
+.ch-head{display:flex;align-items:center;gap:6px;font-family:Orbitron,monospace;font-size:.6rem;font-weight:700;letter-spacing:1.4px;color:#00e676;margin-bottom:5px;text-transform:uppercase}
+.ch-head .ch-sub{color:var(--mu);font-weight:600;letter-spacing:.6px;font-size:.52rem}
+.ch-row{display:flex;flex-direction:column;gap:3px;padding:6px 4px;border-top:1px solid rgba(0,230,118,.1)}
+.ch-row:first-of-type{border-top:none}
+.ch-top{display:flex;align-items:center;gap:8px}
+.ch-name{flex:1;color:var(--t);font-weight:700;font-size:.74rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ch-name .ch-team{color:var(--mu);font-weight:600;font-size:.56rem;margin-left:4px}
+.ch-mkt{font-family:Orbitron,monospace;font-size:.52rem;color:var(--mu);letter-spacing:.6px;white-space:nowrap}
+.ch-conf{font-family:Orbitron,monospace;font-size:.72rem;font-weight:800;padding:2px 8px;border-radius:6px;white-space:nowrap}
+.ch-conf.elite{background:rgba(0,230,118,.2);color:#00e676;border:1px solid rgba(0,230,118,.4)}
+.ch-conf.strong{background:rgba(0,229,255,.14);color:var(--c);border:1px solid rgba(0,229,255,.3)}
+.ch-conf.solid{background:rgba(255,193,7,.12);color:#ffc107;border:1px solid rgba(255,193,7,.28)}
+.ch-reason{color:var(--mu);font-size:.62rem;line-height:1.35;padding-right:2px}
+.ch-save{align-self:flex-start;background:rgba(0,230,118,.08);border:1px solid rgba(0,230,118,.3);border-radius:6px;color:#00e676;font-size:.56rem;padding:3px 9px;cursor:pointer;transition:all .15s;font-family:Orbitron,monospace;letter-spacing:.5px;white-space:nowrap}
+.ch-save:hover{background:rgba(0,230,118,.16)}
+.ch-save.saved{background:rgba(0,230,118,.18);cursor:default}
 
 
 .series-bdg{font-family:Orbitron,monospace;font-size:.52rem;letter-spacing:1.5px;padding:2px 7px;border-radius:10px;font-weight:700}
@@ -1156,15 +1174,63 @@ function toggleQuickProps(e,pk){
       if(s)s.innerHTML='<div class="qp-loading">Props unavailable</div>';
     });
 }
+function chConfClass(p){ return p>=70?'elite':p>=65?'strong':'solid'; }
+function renderConfidentHits(pk,hits){
+  if(!hits||!hits.length)return '';
+  var tracked=window.__trackedQPIds||[];
+  var rows=hits.slice(0,4).map(function(h,i){
+    var pct=(h.confidencePct!=null)?h.confidencePct:Math.round((h.hitProb||0)*100);
+    var cls=chConfClass(pct);
+    var key=h.playerId+':hits:'+h.line;
+    var saved=tracked.indexOf(key)>=0;
+    var bid='chsave-'+pk+'-'+i;
+    return '<div class="ch-row">'
+      +'<div class="ch-top">'
+        +'<span class="ch-name">'+h.player+'<span class="ch-team">'+(h.team||'')+'</span></span>'
+        +'<span class="ch-mkt">1+ HIT</span>'
+        +'<span class="ch-conf '+cls+'">'+pct+'%</span>'
+      +'</div>'
+      +'<div class="ch-reason">'+(h.reason||'model-projected contact edge')+'</div>'
+      +'<button class="ch-save'+(saved?' saved':'')+'" id="'+bid+'" onclick="chSave(event,'+JSON.stringify(h).replace(/"/g,'&quot;')+',\''+bid+'\')">'
+      +(saved?'✓ Tracked':'+ Track Hit')+'</button>'
+    +'</div>';
+  }).join('');
+  return '<div class="ch-wrap">'
+    +'<div class="ch-head">🎯 Confident Hits<span class="ch-sub">— take for a hit</span></div>'
+    +rows
+  +'</div>';
+}
+function chSave(e,h,btnId){
+  e.stopPropagation();
+  var btn=document.getElementById(btnId);
+  if(btn&&btn.classList.contains('saved'))return;
+  var payload={
+    player:h.player,playerId:h.playerId,team:h.team,
+    marketKey:'batter_hits',line:h.line,recommendedSide:'Over',source:'dashboard',
+    adjProb:h.hitProb||null,hubRating:h.hubRating||h.confidencePct||0
+  };
+  fetch('/api/tracker/pick',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(d.success&&btn){
+        btn.classList.add('saved');btn.textContent='✓ Tracked';
+        var key=h.playerId+':hits:'+h.line;
+        if(!window.__trackedQPIds)window.__trackedQPIds=[];
+        if(window.__trackedQPIds.indexOf(key)<0)window.__trackedQPIds.push(key);
+      }
+    })
+    .catch(function(){if(btn)btn.textContent='Err';});
+}
 function renderQuickProps(pk,d){
   var strip=document.getElementById('qp-'+pk);
   if(!strip)return;
+  var confHtml=renderConfidentHits(pk,(d&&d.confidentHits)||[]);
   var picks=(d&&d.quickProps)||[];
   if(!picks.length && d && d.picks) picks=d.picks;
-  if(!picks.length){strip.innerHTML='<div class="qp-loading">No standout props found</div>';return;}
+  if(!picks.length){strip.innerHTML=confHtml||'<div class="qp-loading">No standout props found</div>';return;}
   var mktLabels={hits:'Hits',hr:'HR',tb:'Tot.Bases',rbi:'RBIs'};
   var tracked=window.__trackedQPIds||[];
-  strip.innerHTML=picks.map(function(p,i){
+  strip.innerHTML=confHtml+picks.map(function(p,i){
     var hubRating=Math.round(p.hubRating||p.hub_score||0);
     var cls=hubRating>=85?'elite':hubRating>=70?'strong':hubRating>=55?'mod':'low';
     var mkt=((p.marketLabel||mktLabels[p.market]||p.market)||'Prop')+' O'+p.line;
