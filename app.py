@@ -24066,6 +24066,406 @@ def _compute_streak(log, stat_key, line):
     return {"direction": last_dir, "length": length}
 
 
+def _confident_hits_exp_pa(slot):
+    """Expected plate appearances for a lineup slot — the dominant volume driver
+    of P(1+ hit) (leadoff ≈4.6 PA / 67% hit-game rate vs the 9-hole ≈3.9 PA /
+    ~51%). Mirrors `_LINEUP_PA_WEIGHTS` used everywhere else."""
+    try:
+        s = int(slot)
+    except Exception:
+        s = 0
+    if 1 <= s <= len(_LINEUP_PA_WEIGHTS):
+        return float(_LINEUP_PA_WEIGHTS[s - 1])
+    return 4.2
+
+
+def _confident_hits_analytic_prob(b, opp_fg, opp_hand, exp_pa):
+    """Structural 'book model' second estimate of P(1+ hit), independent of XGB.
+
+    This is the same math sportsbooks/sharp models use: a per-PA hit rate
+    compounded over expected plate appearances via 1−(1−p)^PA. The per-PA rate is
+    the batter's platoon-blended AVG converted to per-PA (×AB/PA≈1−BB%), then
+    tilted by the opposing starter's strikeout + BABIP-against profile (more Ks /
+    weaker contact allowed ⇒ fewer hits). Giving the stacked calibrator a genuine
+    SECOND model (not a re-expression of XGB) is what lets the fusion add skill.
+    Returns None when inputs are too thin to trust (so we fall back to XGB-only).
+    """
+    try:
+        avg_vs = platoon_blend_v2(b, opp_hand, 'avg')
+        avg_vs = float(avg_vs or 0)
+        if avg_vs <= 0:
+            return None
+        fgb = fg_batter(b.get("name", "")) or {}
+        bb = _safe_f(fgb.get("fg_bbpct"), 0.08)
+        if bb > 1:
+            bb /= 100.0
+        # AVG is per-AB; (1−BB%) approximates AB/PA (HBP/SF are minor) → hits/PA.
+        hit_pa = avg_vs * max(0.80, 1.0 - bb)
+        # Opposing starter tilt — league hits/PA in play ≈ (1−.22)·.295 ≈ .230.
+        opp_k = _safe_f((opp_fg or {}).get("fg_kpct"), 0.22)
+        if opp_k > 1:
+            opp_k /= 100.0
+        opp_babip = _safe_f((opp_fg or {}).get("fg_babip"), 0.295)
+        opp_hit_pa = max(0.0, 1.0 - opp_k) * opp_babip
+        tilt = _clamp((opp_hit_pa / 0.230) if opp_hit_pa else 1.0, 0.82, 1.18)
+        hit_pa = max(0.0, min(0.60, hit_pa * tilt))
+        p = _binomial_over_zero(hit_pa * exp_pa, exp_pa)
+        return p if p and p > 0 else None
+    except Exception:
+        return None
+
+
+def _arsenal_hit_tilt(adv):
+    """Convert the batter-vs-this-pitcher's-arsenal matchup into a bounded
+    logit-scale nudge on the hit probability. Only REAL arsenal data moves the
+    number (source=='arsenal' — the usage-weighted wOBA join); the handedness
+    proxy is too weak to tilt a hit prob, so it returns 0. A batter who hits this
+    exact pitch mix better than their own baseline gets a positive nudge; worse,
+    negative. Capped at ±0.24 logits (≈ ±5 points near a 0.65 prob) so the
+    matchup sharpens the ranking without overwhelming the model."""
+    if not adv or adv.get("source") != "arsenal":
+        return 0.0
+    mw = adv.get("matchup_woba")
+    bw = adv.get("baseline_woba")
+    if mw is None or bw is None:
+        return 0.0
+    try:
+        delta = float(mw) - float(bw)
+    except (TypeError, ValueError):
+        return 0.0
+    delta = max(-0.060, min(0.060, delta))
+    return 4.0 * delta
+
+
+def _confident_hit_reason(name, batter, cal_p, rf, mu, opp_name, opp_hand, slot,
+                          exp_pa=None, confirmed=True, adv=None):
+    """Plain-English 'why this player' for a Confident Hit pick.
+
+    Every clause is a REAL driver pulled from the same data the model scores on
+    (recent game-log form, season/Statcast contact quality, the platoon-blended
+    matchup score, lineup role + expected PA volume) — nothing is fabricated.
+    Appends a lineup-confirmation caveat when the lineup is only projected, which
+    is the single biggest real-world edge sharp bettors apply (never bet a
+    volume prop on an unconfirmed lineup — late scratches kill it)."""
+    bits = []
+    # 1) Recent form — hits per game / hit rate over the last 7 completed games.
+    l7  = rf.get("l7Hits")
+    l7r = rf.get("l7HitRate")
+    if l7 is not None and l7 >= 1.0:
+        bits.append(f"{l7:.1f} H/G last 7")
+    elif l7r is not None and l7r >= 0.30:
+        bits.append(f".{int(round(l7r * 1000)):03d} L7 hit rate")
+    # 2) Arsenal matchup — how well the batter hits THIS pitcher's actual pitch
+    #    mix (usage-weighted wOBA join). Lead with it when favorable: it is the
+    #    other half of what makes a hit likely besides current form.
+    if adv and adv.get("source") == "arsenal":
+        st = adv.get("status")
+        mw = adv.get("matchup_woba")
+        pp = adv.get("primary_pitch")
+        if st == "favorable" and mw is not None:
+            extra = f" ({mw:.3f} xwOBA vs the mix)" if mw else ""
+            bits.append(f"crushes this arsenal{extra}")
+        elif st == "favorable":
+            bits.append("strong vs this arsenal")
+        elif st == "neutral" and pp and len(bits) < 1:
+            bits.append(f"handles the {pp}")
+    # 3) Contact quality — prefer Statcast xBA (skill, de-luck'd) then season AVG.
+    sv  = sv_batter(name) or {}
+    fgb = fg_batter(name) or {}
+    xba = _safe_f(sv.get("sv_xba"), None)
+    avg = _safe_f(fgb.get("fg_avg"), None)
+    if len(bits) < 3 and xba is not None and xba >= 0.255:
+        bits.append(f".{int(round(xba * 1000)):03d} xBA")
+    elif len(bits) < 3 and avg is not None and avg >= 0.260:
+        bits.append(f".{int(round(avg * 1000)):03d} AVG")
+    # 4) Matchup grade vs the listed starter (platoon-blended, pitcher-adjusted).
+    tier  = mu.get("tier")
+    score = mu.get("score")
+    if tier in ("A", "B") and score and len(bits) < 3:
+        last = (opp_name or "").split()[-1] if opp_name and opp_name != "TBD" else ""
+        vs = f" vs {opp_hand}HP {last}" if last else ""
+        bits.append(f"{tier}-tier matchup{vs}")
+    # 5) Lineup role + expected PA volume — the dominant driver of 1+ hit.
+    if slot and 1 <= int(slot) <= 5 and len(bits) < 3:
+        _ord = {1: "1st", 2: "2nd", 3: "3rd", 4: "4th", 5: "5th"}.get(int(slot), f"{slot}th")
+        pa_txt = f" (~{exp_pa:.1f} PA)" if exp_pa else ""
+        bits.append(f"bats {_ord}{pa_txt}")
+    # Guarantee at least one substantive clause: the model still favors this hit.
+    if not bits or (len(bits) == 1 and bits[0].startswith("bats")):
+        bits.append(f"model favors contact ({int(round(cal_p * 100))}%)")
+    out = " · ".join(bits[:3])
+    if not confirmed:
+        out += " · ⚠ proj. lineup — confirm before betting"
+    return out
+
+
+def _compute_confident_hits(game_pk, limit=4, date_hint=None):
+    """High-confidence 'take for a hit' picks for the dashboard quick-props strip.
+
+    THIS IS THE MONEY MAKER. It ranks batters purely by their PROBABILITY OF
+    GETTING A HIT (not by EV/odds — those are attached afterward as info only).
+    That probability is driven by the two things that decide a hit:
+
+      • RECENT FORM — the calibrated XGB hits model is fed the same serve-parity
+        `_batter_recent_hit_form` features (L7/L14 hits per game, L7 hit rate) the
+        tracker uses, so a hot bat is reflected in the live number.
+      • ARSENAL MATCHUP — the hit prob is then tilted by how well the batter hits
+        THIS pitcher's actual pitch mix: a usage-weighted wOBA join of the
+        batter's wOBA-by-pitch-type against the pitcher's real per-pitch usage
+        (`_pitch_type_advantage` → `_arsenal_matchup_from_stats`). A batter who
+        crushes the exact pitches this guy throws rises; one who can't, falls.
+
+    Supporting structure (so the number is honest, not a recency mirage):
+      1. ENSEMBLE — the XGB model is fused with a structural PA model (per-PA hit
+         rate compounded over expected plate appearances, 1−(1−p)^PA) via the same
+         `stacked_calibrate` the prop board uses (park-factor adjusted).
+      2. CALIBRATION — fused prob run through the live realized-accuracy
+         recalibration so confidence reflects graded results, not model optimism.
+      3. VOLUME — expected PA (lineup slot) is a dominant driver; top-of-order
+         hitters record a hit far more often purely on plate-appearance count.
+      4. LINEUP DISCIPLINE — each pick tagged confirmed vs projected.
+
+    Picks are gated above a confidence floor, ranked by the (form + arsenal)
+    hit probability, and capped at `limit` (≤4). Each carries a plain-English
+    reason that leads with recent form and the arsenal verdict.
+    """
+    if not (_XGB_AVAILABLE and xgb_ready("hits")):
+        return []
+    gdata, away_bats, home_bats, away_t, home_t, pitchers = _props_fetch_game(game_pk, date_hint=date_hint)
+    if not gdata:
+        return []
+
+    ap_info = (pitchers or {}).get("ap") or {}
+    hp_info = (pitchers or {}).get("hp") or {}
+    ap_name = ap_info.get("fullName", "TBD")
+    hp_name = hp_info.get("fullName", "TBD")
+    ap_id   = ap_info.get("id"); hp_id = hp_info.get("id")
+    ap_hand = ((pitcher_stats_mlb(ap_id) if ap_id else {}).get("pitchHand") or "R").upper()
+    hp_hand = ((pitcher_stats_mlb(hp_id) if hp_id else {}).get("pitchHand") or "R").upper()
+    hp_fg = fg_pitcher(hp_name) or {}; hp_sv = sv_pitcher(hp_name) or {}
+    ap_fg = fg_pitcher(ap_name) or {}; ap_sv = sv_pitcher(ap_name) or {}
+
+    away_abbr = away_t.get("team", {}).get("abbreviation", "AWAY")
+    home_abbr = home_t.get("team", {}).get("abbreviation", "HOME")
+    home_id   = (home_t.get("team") or {}).get("id")
+    # Hit-environment park factor (BABIP/hits). BPP microclimate when available,
+    # else the static park index — passed into the stacked fusion.
+    try:
+        park_factor = float(_resolve_park_factor(home_abbr, home_id, hand="R", stat="H") or 1.0)
+    except Exception:
+        park_factor = 1.0
+
+    # Confirmed-lineup status per side: a side is "confirmed" only once the
+    # official batting order is posted (≥9 batters, none flagged pending).
+    def _side_confirmed(bats):
+        return bool(bats) and len(bats) >= 9 and all(
+            (x.get("lineup_status") or "confirmed") == "confirmed" for x in bats[:9])
+    away_conf = _side_confirmed(away_bats)
+    home_conf = _side_confirmed(home_bats)
+
+    # Confidence floor: clearly above a coin flip. Hits base rate (1+ hit) ≈ 0.66,
+    # so we only surface batters the calibrated model likes meaningfully.
+    CONF_FLOOR = 0.60
+
+    def _score_batter(b, opp_name, opp_hand, opp_fg, opp_sv, opp_pid, team_abbr, confirmed):
+        name = (b.get("name") or "").strip()
+        pid  = b.get("id")
+        slot = b.get("slot") or 0
+        if not name:
+            return None
+        exp_pa = _confident_hits_exp_pa(slot)
+        # Serve-parity recent form (also powers the reason). Daily-cached per id.
+        rf = _batter_recent_hit_form(pid) if pid else {}
+        bdict = {"name": name, "bats": b.get("bats") or "S", "slot": slot, "id": pid}
+        if rf:
+            bdict.update(rf)
+        pdict = {"name": opp_name, "pitchHand": opp_hand}
+        # Model 1: calibrated XGB hits probability.
+        try:
+            xgb_p = xgb_hit_prob(bdict, pdict)
+        except Exception:
+            xgb_p = None
+        if xgb_p is None:
+            return None
+        xgb_p = float(xgb_p)
+        # Model 2: structural per-PA × expected-PA "book model".
+        batx_p = _confident_hits_analytic_prob(b, opp_fg, opp_hand, exp_pa)
+        # Fuse the two via the same stacked calibrator the prop board uses.
+        fused = xgb_p
+        model_source = "xgb"
+        if batx_p is not None:
+            if _STACK_AVAILABLE:
+                try:
+                    stk = stacked_calibrate(
+                        xgb_p, float(batx_p), coverage=0.6, exp_pa=exp_pa,
+                        bvp_pa=0, park_factor=park_factor, market_key="batter_hits")
+                except Exception:
+                    stk = None
+                if stk and stk.get("probability") is not None:
+                    fused = float(stk["probability"]); model_source = "stacked"
+                else:
+                    fused = 0.5 * xgb_p + 0.5 * float(batx_p); model_source = "blend"
+            else:
+                fused = 0.5 * xgb_p + 0.5 * float(batx_p); model_source = "blend"
+        # Live realized-accuracy recalibration on the fused probability.
+        cal_p = _calibrate_prop_prob("batter_hits", fused)
+        try:
+            cal_p = float(cal_p)
+        except Exception:
+            cal_p = fused
+        # ── Arsenal matchup: tilt the hit prob by how well this batter hits THIS
+        #    pitcher's actual pitch mix (usage-weighted wOBA). This + recent form
+        #    are the two drivers the ranking is meant to reflect. Real arsenal
+        #    data only (handedness proxy = no tilt). Applied on the logit scale.
+        adv = None
+        if pid and opp_pid:
+            try:
+                adv = _pitch_type_advantage(int(pid), int(opp_pid), name, opp_name)
+            except Exception:
+                adv = None
+        tilt = _arsenal_hit_tilt(adv)
+        if tilt:
+            try:
+                cal_p = 1.0 / (1.0 + math.exp(-(_logit(cal_p) + tilt)))
+            except Exception:
+                pass
+        cal_p = max(0.03, min(0.97, cal_p))
+        if cal_p < CONF_FLOOR:
+            return None
+        try:
+            mu = _matchup_score(b, opp_fg, opp_sv, pitcher_hand=opp_hand) or {}
+        except Exception:
+            mu = {}
+        _ars_status = adv.get("status") if (adv and adv.get("source") == "arsenal") else None
+        return {
+            "player": name, "playerId": pid, "team": team_abbr, "slot": slot,
+            "market": "hits", "marketKey": "batter_hits", "marketLabel": "Hits",
+            "line": 0.5, "side": "Over", "recommendedSide": "Over",
+            "hitProb": round(cal_p, 4),
+            "xgbProb": round(xgb_p, 4),
+            "analyticProb": round(float(batx_p), 4) if batx_p is not None else None,
+            "modelSource": model_source,
+            "expPa": round(exp_pa, 1),
+            "confidencePct": int(round(cal_p * 100)),
+            "lineupConfirmed": bool(confirmed),
+            "matchupScore": round(float(mu.get("score") or 0), 1) or None,
+            "matchupTier": mu.get("tier"),
+            "arsenalStatus": _ars_status,
+            "arsenalApplied": bool(_ars_status),
+            "arsenalWoba": adv.get("matchup_woba") if _ars_status else None,
+            "arsenalBaseline": adv.get("baseline_woba") if _ars_status else None,
+            "arsenalPrimaryPitch": adv.get("primary_pitch") if _ars_status else None,
+            "arsenalTilt": round(tilt, 3) if tilt else 0,
+            "oppPitcher": opp_name, "oppHand": opp_hand,
+            "l7Hits": rf.get("l7Hits"), "l7HitRate": rf.get("l7HitRate"),
+            "hubRating": max(0, min(100, int(round(cal_p * 100)))),
+            "reason": _confident_hit_reason(name, b, cal_p, rf, mu, opp_name,
+                                            opp_hand, slot, exp_pa=exp_pa,
+                                            confirmed=confirmed, adv=adv),
+        }
+
+    tasks = ([(b, hp_name, hp_hand, hp_fg, hp_sv, hp_id, away_abbr, away_conf) for b in (away_bats or [])[:9]]
+             + [(b, ap_name, ap_hand, ap_fg, ap_sv, ap_id, home_abbr, home_conf) for b in (home_bats or [])[:9]])
+    picks = []
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        futs = [ex.submit(_score_batter, *t) for t in tasks]
+        for fut in as_completed(futs):
+            try:
+                r = fut.result()
+                if r:
+                    picks.append(r)
+            except Exception:
+                pass
+
+    # Rank by calibrated probability; confirmed lineups break ties (sharper bet).
+    picks.sort(key=lambda x: (x["hitProb"], x.get("lineupConfirmed", False)), reverse=True)
+    top = picks[:limit]
+
+    # ── Odds / EV layer (best-effort) ────────────────────────────────────────
+    # Price each shown pick against the live 'to record a hit' market, de-vig it,
+    # and compute true EV + a Quarter-Kelly stake. This turns a confident pick
+    # into an actionable bet: a 70% model prob at -300 (75% implied) is a FADE,
+    # while the same prob at -130 is +EV. Degrades silently with no odds/key.
+    try:
+        _enrich_confident_hits_with_odds(top, away_t, home_t)
+    except Exception:
+        print(f"[confident_hits] odds enrich {traceback.format_exc()}")
+    return top
+
+
+def _enrich_confident_hits_with_odds(picks, away_t, home_t):
+    """Attach market price, de-vig'd fair prob, true EV, edge, value grade and a
+    Quarter-Kelly stake to each Confident Hit (market_key=batter_hits, line 0.5).
+
+    All betting math goes through `value_engine` — the single source of truth —
+    so the numbers agree with /api/v1/edges and the tracker. Best-effort: any
+    pick without a posted price simply keeps its model fields (no fabricated
+    odds), and the whole step is a no-op when ODDS_API_KEY is unset."""
+    if not picks or not ODDS_API_KEY:
+        return
+    away_full = (away_t.get("team") or {}).get("name", "")
+    home_full = (home_t.get("team") or {}).get("name", "")
+    event, _ = _find_odds_event(away_full, home_full)
+    if not event:
+        return
+    books = _load_event_odds(event.get("id"), featured_only=False) or []
+    if not books:
+        return
+    valid_names = {p["player"] for p in picks if p.get("player")}
+    market_props = _parse_prop_markets(books, valid_names)
+    if not market_props:
+        return
+
+    adj         = _get_adjustments()
+    bankroll    = float(adj.get('bankroll', 1000.0) or 1000.0)
+    kelly_frac  = float(adj.get('kelly_fraction', 0.25) or 0.25)
+    max_bet_pct = float(adj.get('max_bet_pct', 0.05) or 0.05)
+    unit_pct    = float(adj.get('unit_size_pct', 0.01) or 0.01)
+
+    for p in picks:
+        msum = _market_price_summary(market_props, p["player"], "batter_hits", 0.5)
+        over_price = msum.get("best_over_price")
+        if over_price is None:
+            continue
+        under_price    = msum.get("best_under_price")
+        market_implied = msum.get("market_implied")
+        model_prob     = float(p["hitProb"])
+
+        fairp = ev = edge = None
+        stake = None
+        if _VALUE_ENGINE_AVAILABLE:
+            fairp = value_engine.fair_prob(over_price, under_price, method='multiplicative')
+            ev    = value_engine.expected_value(model_prob, over_price)
+            stake = value_engine.kelly_stake(
+                model_prob, over_price, bankroll=bankroll, fraction=kelly_frac,
+                max_pct=max_bet_pct, unit_pct=unit_pct)
+        else:
+            fairp = _american_to_implied(over_price)
+        # Edge vs the de-vig'd fair line (true edge, not vs the juiced implied).
+        if fairp is not None:
+            edge = model_prob - float(fairp)
+
+        p["bestPrice"]      = over_price
+        p["bestBook"]       = msum.get("best_over_book")
+        p["bestUnderPrice"] = under_price
+        p["bookCount"]      = msum.get("book_count")
+        p["marketImplied"]  = round(float(market_implied), 4) if market_implied is not None else None
+        p["fairProb"]       = round(float(fairp), 4) if fairp is not None else None
+        p["edge"]           = round(edge, 4) if edge is not None else None
+        p["valueGrade"]     = (value_engine.edge_grade(edge)
+                               if (edge is not None and _VALUE_ENGINE_AVAILABLE) else None)
+        p["evPct"]          = round(float(ev), 4) if ev is not None else None
+        p["isPlusEv"]       = bool(ev is not None and ev > 0)
+        if ev is not None:
+            p["conviction"] = ('gold' if ev >= 0.10 else 'green' if ev >= 0.05
+                               else 'lean' if ev > 0 else 'fade')
+        if stake:
+            p["fullKellyPct"]  = stake["full_kelly_pct"]
+            p["stakePct"]      = stake["stake_pct"]
+            p["stakeDollars"]  = stake["stake_dollars"]
+            p["stakeUnits"]    = stake["stake_units"]
+
+
 def _compute_dashboard_quick_props(game_pk, limit=3, date_hint=None):
     """Compute top quick-prop picks for a game card strip."""
     gdata, away_bats, home_bats, away_t, home_t, _pitchers = _props_fetch_game(game_pk, date_hint=date_hint)
@@ -24226,13 +24626,22 @@ def api_props_quick(game_pk):
     Uses L10 over rates — lightweight, no Odds API calls needed.
     """
     try:
-        gdata, picks = _compute_dashboard_quick_props(game_pk, limit=3, date_hint=request.args.get('date'))
+        date_hint = request.args.get('date')
+        gdata, picks = _compute_dashboard_quick_props(game_pk, limit=3, date_hint=date_hint)
         if not gdata:
             return jsonify({"success": False, "error": "Game not found"}), 404
+        # Money-maker: high-confidence "take for a hit" picks (≤4) from the
+        # calibrated XGB hits model, each with a plain-English reason.
+        try:
+            confident_hits = _compute_confident_hits(game_pk, limit=4, date_hint=date_hint)
+        except Exception:
+            print(f"[api_props_quick] confident_hits {traceback.format_exc()}")
+            confident_hits = []
         return jsonify({
             "success": True,
             "gamePk":  game_pk,
             "picks":   picks,
+            "confidentHits": confident_hits,
         })
 
     except Exception as ex:
