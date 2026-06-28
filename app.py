@@ -8871,21 +8871,49 @@ def parse_ip(ipval):
         return 0.0
 
 
-def _fetch_game_log_raw(player_id, group, n=30):
-    """Fetch the last *n* game log entries from MLB Stats API. Returns list of stat dicts."""
-    year = datetime.now().year
+_GAMELOG_SPLITS_CACHE = {}     # (player_id, group, season) -> (date, splits)
+_GAMELOG_SPLITS_LOCK = threading.Lock()
+
+
+def _gamelog_splits_cached(player_id, group, season=None):
+    """Raw season game-log `splits` for a player, daily-cached and SHARED across
+    every game-log consumer (recent-form, rolling-form, batter/pitcher trends).
+
+    Before this, each consumer issued its own uncached MLB Stats API call, so a
+    single game card fetched the same batter's log 2–3× — and a full slate hit
+    the endpoint hundreds of times on every cold open. Caching the raw splits
+    once per (player, group, season) per day collapses that to one call."""
+    if season is None:
+        season = datetime.now().year
+    today = datetime.now().date()
+    try:
+        ck = (int(player_id), group, int(season))
+    except (TypeError, ValueError):
+        return []
+    with _GAMELOG_SPLITS_LOCK:
+        c = _GAMELOG_SPLITS_CACHE.get(ck)
+        if c and c[0] == today:
+            return c[1]
     try:
         r = requests.get(
             f"{MLB_API}/people/{player_id}/stats",
-            params={"stats": "gameLog", "group": group, "season": year},
-            timeout=10,
+            params={"stats": "gameLog", "season": season, "group": group, "gameType": "R"},
+            timeout=8,
         )
         if not r.ok:
             return []
-        splits = (r.json().get("stats") or [{}])[0].get("splits", [])
-        return splits[-n:]
+        splits = (r.json().get("stats") or [{}])[0].get("splits", []) or []
     except Exception:
         return []
+    with _GAMELOG_SPLITS_LOCK:
+        _GAMELOG_SPLITS_CACHE[ck] = (today, splits)
+    return splits
+
+
+def _fetch_game_log_raw(player_id, group, n=30):
+    """Fetch the last *n* game log entries from MLB Stats API. Returns list of stat dicts."""
+    splits = _gamelog_splits_cached(player_id, group)
+    return splits[-n:] if n else splits
 
 
 def _fetch_rolling_form(player_id, is_pitcher):
@@ -23564,16 +23592,8 @@ def api_umpire(game_pk):
 # ── L5/L10 helpers ────────────────────────────────────────────────────────────
 def _fetch_batter_gamelog(player_id, season=None, limit=10):
     """Returns recent game log entries for a batter, newest-last order."""
-    if season is None:
-        season = datetime.now().year
     try:
-        r = requests.get(
-            f"{MLB_API}/people/{player_id}/stats",
-            params={"stats": "gameLog", "season": season, "group": "hitting", "gameType": "R"},
-            timeout=8,
-        )
-        r.raise_for_status()
-        splits = r.json().get("stats", [{}])[0].get("splits", [])
+        splits = _gamelog_splits_cached(player_id, "hitting", season)
         out = []
         chosen = splits if limit is None else splits[-int(limit):]
         for s in chosen:
@@ -23598,16 +23618,8 @@ def _fetch_batter_gamelog(player_id, season=None, limit=10):
 
 def _fetch_pitcher_gamelog(player_id, season=None, limit=10):
     """Returns recent game log entries for a pitcher, newest-last order."""
-    if season is None:
-        season = datetime.now().year
     try:
-        r = requests.get(
-            f"{MLB_API}/people/{player_id}/stats",
-            params={"stats": "gameLog", "season": season, "group": "pitching", "gameType": "R"},
-            timeout=8,
-        )
-        r.raise_for_status()
-        splits = r.json().get("stats", [{}])[0].get("splits", [])
+        splits = _gamelog_splits_cached(player_id, "pitching", season)
         out = []
         chosen = splits if limit is None else splits[-int(limit):]
         for s in chosen:
@@ -24199,7 +24211,7 @@ def _confident_hit_reason(name, batter, cal_p, rf, mu, opp_name, opp_hand, slot,
     return out
 
 
-def _compute_confident_hits(game_pk, limit=4, date_hint=None):
+def _compute_confident_hits(game_pk, limit=4, date_hint=None, prefetch=None):
     """High-confidence 'take for a hit' picks for the dashboard quick-props strip.
 
     THIS IS THE MONEY MAKER. It ranks batters purely by their PROBABILITY OF
@@ -24231,7 +24243,9 @@ def _compute_confident_hits(game_pk, limit=4, date_hint=None):
     """
     if not (_XGB_AVAILABLE and xgb_ready("hits")):
         return []
-    gdata, away_bats, home_bats, away_t, home_t, pitchers = _props_fetch_game(game_pk, date_hint=date_hint)
+    gdata, away_bats, home_bats, away_t, home_t, pitchers = (
+        prefetch if prefetch is not None
+        else _props_fetch_game(game_pk, date_hint=date_hint))
     if not gdata:
         return []
 
@@ -24332,10 +24346,6 @@ def _compute_confident_hits(game_pk, limit=4, date_hint=None):
         cal_p = max(0.03, min(0.97, cal_p))
         if cal_p < CONF_FLOOR:
             return None
-        try:
-            mu = _matchup_score(b, opp_fg, opp_sv, pitcher_hand=opp_hand) or {}
-        except Exception:
-            mu = {}
         _ars_status = adv.get("status") if (adv and adv.get("source") == "arsenal") else None
         return {
             "player": name, "playerId": pid, "team": team_abbr, "slot": slot,
@@ -24348,8 +24358,6 @@ def _compute_confident_hits(game_pk, limit=4, date_hint=None):
             "expPa": round(exp_pa, 1),
             "confidencePct": int(round(cal_p * 100)),
             "lineupConfirmed": bool(confirmed),
-            "matchupScore": round(float(mu.get("score") or 0), 1) or None,
-            "matchupTier": mu.get("tier"),
             "arsenalStatus": _ars_status,
             "arsenalApplied": bool(_ars_status),
             "arsenalWoba": adv.get("matchup_woba") if _ars_status else None,
@@ -24359,13 +24367,18 @@ def _compute_confident_hits(game_pk, limit=4, date_hint=None):
             "oppPitcher": opp_name, "oppHand": opp_hand,
             "l7Hits": rf.get("l7Hits"), "l7HitRate": rf.get("l7HitRate"),
             "hubRating": max(0, min(100, int(round(cal_p * 100)))),
-            "reason": _confident_hit_reason(name, b, cal_p, rf, mu, opp_name,
-                                            opp_hand, slot, exp_pa=exp_pa,
-                                            confirmed=confirmed, adv=adv),
+            # Stash inputs so the (expensive) matchup score + reason are built only
+            # for the final top-N picks, not every batter in the lineup.
+            "_fin": {"b": b, "rf": rf, "adv": adv, "opp_fg": opp_fg,
+                     "opp_sv": opp_sv, "opp_hand": opp_hand, "opp_name": opp_name,
+                     "exp_pa": exp_pa, "confirmed": confirmed, "cal_p": cal_p,
+                     "slot": slot, "name": name},
         }
 
-    tasks = ([(b, hp_name, hp_hand, hp_fg, hp_sv, hp_id, away_abbr, away_conf) for b in (away_bats or [])[:9]]
-             + [(b, ap_name, ap_hand, ap_fg, ap_sv, ap_id, home_abbr, home_conf) for b in (home_bats or [])[:9]])
+    # Only the top of each order are realistic 'best hit' candidates (volume +
+    # quality); 8–9 hitters rarely clear the floor and just add latency.
+    tasks = ([(b, hp_name, hp_hand, hp_fg, hp_sv, hp_id, away_abbr, away_conf) for b in (away_bats or [])[:7]]
+             + [(b, ap_name, ap_hand, ap_fg, ap_sv, ap_id, home_abbr, home_conf) for b in (home_bats or [])[:7]])
     picks = []
     with ThreadPoolExecutor(max_workers=8) as ex:
         futs = [ex.submit(_score_batter, *t) for t in tasks]
@@ -24380,6 +24393,29 @@ def _compute_confident_hits(game_pk, limit=4, date_hint=None):
     # Rank by calibrated probability; confirmed lineups break ties (sharper bet).
     picks.sort(key=lambda x: (x["hitProb"], x.get("lineupConfirmed", False)), reverse=True)
     top = picks[:limit]
+
+    # Finalize ONLY the shown picks: the matchup score + plain-English reason are
+    # the expensive per-batter extras, so we build them for ≤4 picks, not all 14.
+    for p in top:
+        fin = p.pop("_fin", None)
+        if not fin:
+            p.setdefault("matchupScore", None); p.setdefault("matchupTier", None)
+            p.setdefault("reason", "model-projected contact edge")
+            continue
+        try:
+            mu = _matchup_score(fin["b"], fin["opp_fg"], fin["opp_sv"],
+                                pitcher_hand=fin["opp_hand"]) or {}
+        except Exception:
+            mu = {}
+        p["matchupScore"] = round(float(mu.get("score") or 0), 1) or None
+        p["matchupTier"] = mu.get("tier")
+        p["reason"] = _confident_hit_reason(
+            fin["name"], fin["b"], fin["cal_p"], fin["rf"], mu, fin["opp_name"],
+            fin["opp_hand"], fin["slot"], exp_pa=fin["exp_pa"],
+            confirmed=fin["confirmed"], adv=fin["adv"])
+    # Drop any stashed inputs from non-shown picks (defensive; top already popped).
+    for p in picks:
+        p.pop("_fin", None)
 
     # ── Odds / EV layer (best-effort) ────────────────────────────────────────
     # Price each shown pick against the live 'to record a hit' market, de-vig it,
@@ -24466,9 +24502,11 @@ def _enrich_confident_hits_with_odds(picks, away_t, home_t):
             p["stakeUnits"]    = stake["stake_units"]
 
 
-def _compute_dashboard_quick_props(game_pk, limit=3, date_hint=None):
+def _compute_dashboard_quick_props(game_pk, limit=3, date_hint=None, prefetch=None):
     """Compute top quick-prop picks for a game card strip."""
-    gdata, away_bats, home_bats, away_t, home_t, _pitchers = _props_fetch_game(game_pk, date_hint=date_hint)
+    gdata, away_bats, home_bats, away_t, home_t, _pitchers = (
+        prefetch if prefetch is not None
+        else _props_fetch_game(game_pk, date_hint=date_hint))
     if not gdata:
         return None, []
 
@@ -24618,31 +24656,99 @@ def api_props_trends(game_pk):
         return jsonify({"success": False, "error": str(ex)}), 500
 
 
-# ── Route: Quick props for dashboard inline strip ─────────────────────────────
-@app.route("/api/props/quick/<int:game_pk>")
-def api_props_quick(game_pk):
-    """
-    Returns top 3 batter prop edges for a game card inline strip.
-    Uses L10 over rates — lightweight, no Odds API calls needed.
-    """
-    try:
-        date_hint = request.args.get('date')
-        gdata, picks = _compute_dashboard_quick_props(game_pk, limit=3, date_hint=date_hint)
-        if not gdata:
-            return jsonify({"success": False, "error": "Game not found"}), 404
-        # Money-maker: high-confidence "take for a hit" picks (≤4) from the
-        # calibrated XGB hits model, each with a plain-English reason.
+# ── Quick-props response cache (stale-while-revalidate) ───────────────────────
+# The strip got heavy (legacy multi-market picks + the XGB/arsenal Confident Hits
+# + live odds), so we cache the whole payload per (game, date) and serve it
+# instantly. Within FRESH_TTL we return as-is; within STALE_TTL we return the
+# cached copy immediately AND refresh in the background so the next open is
+# current — the user never waits on a cold recompute and never misses a window.
+_QUICK_PROPS_CACHE = {}            # (game_pk, date) -> {"ts": float, "payload": {...}}
+_QUICK_PROPS_REFRESHING = set()    # keys with an in-flight background refresh
+_QUICK_PROPS_LOCK = threading.Lock()
+_QUICK_PROPS_FRESH_TTL = 90        # serve cached without refreshing
+_QUICK_PROPS_STALE_TTL = 600       # serve cached + refresh in background
+
+
+def _build_quick_props_payload(game_pk, date_hint):
+    """Fetch the game ONCE, then compute the legacy picks and the Confident Hits
+    CONCURRENTLY (they previously ran serially and each re-fetched the game)."""
+    bundle = _props_fetch_game(game_pk, date_hint=date_hint)
+    if not bundle or not bundle[0]:
+        return None
+    picks, confident_hits = [], []
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        f_qp = ex.submit(_compute_dashboard_quick_props, game_pk, 3, date_hint, bundle)
+        f_ch = ex.submit(_compute_confident_hits, game_pk, 4, date_hint, bundle)
         try:
-            confident_hits = _compute_confident_hits(game_pk, limit=4, date_hint=date_hint)
+            _g, picks = f_qp.result()
+        except Exception:
+            print(f"[api_props_quick] quick_props {traceback.format_exc()}")
+            picks = []
+        try:
+            confident_hits = f_ch.result()
         except Exception:
             print(f"[api_props_quick] confident_hits {traceback.format_exc()}")
             confident_hits = []
-        return jsonify({
-            "success": True,
-            "gamePk":  game_pk,
-            "picks":   picks,
-            "confidentHits": confident_hits,
-        })
+    return {
+        "success": True,
+        "gamePk": game_pk,
+        "picks": picks or [],
+        "confidentHits": confident_hits or [],
+        "generatedAt": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _schedule_quick_props_refresh(game_pk, date_hint, ck):
+    """Kick a single background recompute for a stale cache entry (deduped)."""
+    with _QUICK_PROPS_LOCK:
+        if ck in _QUICK_PROPS_REFRESHING:
+            return
+        _QUICK_PROPS_REFRESHING.add(ck)
+
+    def _run():
+        try:
+            payload = _build_quick_props_payload(game_pk, date_hint)
+            if payload:
+                with _QUICK_PROPS_LOCK:
+                    _QUICK_PROPS_CACHE[ck] = {"ts": time.time(), "payload": payload}
+        except Exception:
+            print(f"[quick_props_refresh] {traceback.format_exc()}")
+        finally:
+            with _QUICK_PROPS_LOCK:
+                _QUICK_PROPS_REFRESHING.discard(ck)
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+# ── Route: Quick props for dashboard inline strip ─────────────────────────────
+@app.route("/api/props/quick/<int:game_pk>")
+def api_props_quick(game_pk):
+    """Top batter prop edges + Confident Hits for a game card strip.
+
+    Cached per (game, date) with stale-while-revalidate so repeat opens are
+    instant and a cold recompute never blocks the user."""
+    try:
+        date_hint = request.args.get('date')
+        ck = (game_pk, date_hint or '')
+        now = time.time()
+        with _QUICK_PROPS_LOCK:
+            ent = _QUICK_PROPS_CACHE.get(ck)
+        if ent:
+            age = now - ent["ts"]
+            if age < _QUICK_PROPS_FRESH_TTL:
+                return jsonify(ent["payload"])
+            if age < _QUICK_PROPS_STALE_TTL:
+                # Serve stale instantly; refresh in the background.
+                _schedule_quick_props_refresh(game_pk, date_hint, ck)
+                stale = dict(ent["payload"]); stale["cached"] = True
+                return jsonify(stale)
+
+        payload = _build_quick_props_payload(game_pk, date_hint)
+        if payload is None:
+            return jsonify({"success": False, "error": "Game not found"}), 404
+        with _QUICK_PROPS_LOCK:
+            _QUICK_PROPS_CACHE[ck] = {"ts": time.time(), "payload": payload}
+        return jsonify(payload)
 
     except Exception as ex:
         print(f"[api_props_quick] {traceback.format_exc()}")
