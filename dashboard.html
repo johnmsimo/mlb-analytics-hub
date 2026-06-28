@@ -162,6 +162,9 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .ch-ars{font-family:Orbitron,monospace;font-size:.5rem;font-weight:800;letter-spacing:.4px;border-radius:4px;padding:1px 5px;white-space:nowrap}
 .ch-ars.pos{color:#0a0e14;background:#ffd54f}
 .ch-ars.neg{color:#8a98aa;background:rgba(106,141,176,.1);border:1px solid rgba(106,141,176,.2)}
+.ch-status{font-size:.54rem;letter-spacing:.3px;margin-top:1px}
+.ch-status.ok{color:#ffd54f}
+.ch-status.thin{color:#6a8db0;font-style:italic}
 .ch-save{align-self:flex-start;background:rgba(0,230,118,.08);border:1px solid rgba(0,230,118,.3);border-radius:6px;color:#00e676;font-size:.56rem;padding:3px 9px;cursor:pointer;transition:all .15s;font-family:Orbitron,monospace;letter-spacing:.5px;white-space:nowrap}
 .ch-save:hover{background:rgba(0,230,118,.16)}
 .ch-save.saved{background:rgba(0,230,118,.18);cursor:default}
@@ -1230,6 +1233,15 @@ function renderConfidentHits(pk,hits){
       else if(h.isPlusEv===false) parts.push('<span class="ch-fade">below market — pass</span>');
       oddsLine='<div class="ch-odds">'+parts.join('')+'</div>';
     }
+    // Tiny status line: was the pitch-arsenal matchup actually applied, or did
+    // we fall back to recent form only (Savant arsenal data thin for this pair)?
+    var statusLine;
+    if(h.arsenalApplied){
+      var pp=h.arsenalPrimaryPitch?(' · '+h.arsenalPrimaryPitch+'-led mix'):'';
+      statusLine='<div class="ch-status ok">🎯 arsenal matchup applied'+pp+'</div>';
+    } else {
+      statusLine='<div class="ch-status thin">form-only · arsenal data thin for this matchup</div>';
+    }
     // Bettors want +EV first: badge the value verdict next to confidence.
     var evBadge=(h.bestPrice!=null && h.isPlusEv)?'<span class="ch-bet" title="Model probability beats the de-vigged market — positive expected value">+EV</span>':'';
     return '<div class="ch-row'+(h.lineupConfirmed===false?' proj':'')+(h.isPlusEv?' plusev':'')+'">'
@@ -1242,6 +1254,7 @@ function renderConfidentHits(pk,hits){
         +'<span class="ch-conf '+cls+'">'+pct+'%</span>'
       +'</div>'
       +'<div class="ch-reason">'+(h.reason||'model-projected contact edge')+'</div>'
+      +statusLine
       +oddsLine
       +'<button class="ch-save'+(saved?' saved':'')+'" id="'+bid+'" onclick="chSave(event,'+JSON.stringify(h).replace(/"/g,'&quot;')+',\''+bid+'\')">'
       +(saved?'✓ Tracked':'+ Track Hit')+'</button>'

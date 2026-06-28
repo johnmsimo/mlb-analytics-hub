@@ -24351,6 +24351,7 @@ def _compute_confident_hits(game_pk, limit=4, date_hint=None):
             "matchupScore": round(float(mu.get("score") or 0), 1) or None,
             "matchupTier": mu.get("tier"),
             "arsenalStatus": _ars_status,
+            "arsenalApplied": bool(_ars_status),
             "arsenalWoba": adv.get("matchup_woba") if _ars_status else None,
             "arsenalBaseline": adv.get("baseline_woba") if _ars_status else None,
             "arsenalPrimaryPitch": adv.get("primary_pitch") if _ars_status else None,
