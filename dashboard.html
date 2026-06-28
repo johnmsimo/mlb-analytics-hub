@@ -131,7 +131,12 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .qp-loading{text-align:center;padding:8px 4px;font-family:Orbitron,monospace;font-size:.58rem;color:var(--mu);letter-spacing:2px}
 /* ── Confident Hits (money-maker block) ── */
 .ch-wrap{margin-bottom:10px;border:1px solid rgba(0,230,118,.28);border-radius:9px;background:linear-gradient(180deg,rgba(0,230,118,.06),rgba(0,230,118,.015));padding:7px 8px 4px}
-.ch-head{display:flex;align-items:center;gap:6px;font-family:Orbitron,monospace;font-size:.6rem;font-weight:700;letter-spacing:1.4px;color:#00e676;margin-bottom:5px;text-transform:uppercase}
+.ch-head{display:flex;align-items:center;justify-content:space-between;gap:6px;font-family:Orbitron,monospace;font-size:.6rem;font-weight:700;letter-spacing:1.4px;color:#00e676;margin-bottom:5px;text-transform:uppercase}
+.ch-head-l{display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ch-sort{display:inline-flex;gap:0;flex:0 0 auto;border:1px solid rgba(0,230,118,.25);border-radius:6px;overflow:hidden}
+.ch-sortbtn{background:transparent;border:none;color:var(--mu);font-family:Orbitron,monospace;font-size:.5rem;font-weight:700;letter-spacing:.5px;padding:2px 7px;cursor:pointer;transition:all .15s;text-transform:uppercase}
+.ch-sortbtn:hover{color:var(--t)}
+.ch-sortbtn.on{background:rgba(0,230,118,.16);color:#00e676}
 .ch-head .ch-sub{color:var(--mu);font-weight:600;letter-spacing:.6px;font-size:.52rem}
 .ch-row{display:flex;flex-direction:column;gap:3px;padding:6px 4px;border-top:1px solid rgba(0,230,118,.1)}
 .ch-row:first-of-type{border-top:none}
@@ -162,6 +167,7 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .ch-ars{font-family:Orbitron,monospace;font-size:.5rem;font-weight:800;letter-spacing:.4px;border-radius:4px;padding:1px 5px;white-space:nowrap}
 .ch-ars.pos{color:#0a0e14;background:#ffd54f}
 .ch-ars.neg{color:#8a98aa;background:rgba(106,141,176,.1);border:1px solid rgba(106,141,176,.2)}
+.ch-plat{font-family:Orbitron,monospace;font-size:.5rem;font-weight:800;letter-spacing:.4px;border-radius:4px;padding:1px 5px;white-space:nowrap;color:#0a0e14;background:#4dd0e1}
 .ch-status{font-size:.54rem;letter-spacing:.3px;margin-top:1px}
 .ch-status.ok{color:#ffd54f}
 .ch-status.thin{color:#6a8db0;font-style:italic}
@@ -1196,10 +1202,25 @@ function toggleQuickProps(e,pk){
     });
 }
 function chConfClass(p){ return p>=70?'elite':p>=65?'strong':'solid'; }
+var CH_SORT='prob';   // 'prob' = highest hit probability · 'tilt' = biggest matchup exploit
+function setChSort(mode){
+  if(CH_SORT===mode) return;
+  CH_SORT=mode;
+  // Re-render every open Quick Props strip so the new order applies everywhere.
+  Object.keys(QP_DATA).forEach(function(pk){
+    var s=document.getElementById('qp-'+pk);
+    if(s && s.classList.contains('open')) renderQuickProps(pk, QP_DATA[pk]);
+  });
+}
 function renderConfidentHits(pk,hits){
   if(!hits||!hits.length)return '';
   var tracked=window.__trackedQPIds||[];
-  var rows=hits.slice(0,4).map(function(h,i){
+  // Order the shown picks by the active sort: raw hit probability (default) or
+  // the matchup tilt (biggest arsenal/platoon/weak-spot exploit first).
+  var sorted=(hits||[]).slice();
+  if(CH_SORT==='tilt') sorted.sort(function(a,b){return (b.matchupTilt||0)-(a.matchupTilt||0)||(b.hitProb||0)-(a.hitProb||0);});
+  else sorted.sort(function(a,b){return (b.hitProb||0)-(a.hitProb||0);});
+  var rows=sorted.slice(0,4).map(function(h,i){
     var pct=(h.confidencePct!=null)?h.confidencePct:Math.round((h.hitProb||0)*100);
     var cls=chConfClass(pct);
     var key=h.playerId+':hits:'+h.line;
@@ -1216,6 +1237,12 @@ function renderConfidentHits(pk,hits){
       arsBadge='<span class="ch-ars pos" title="Hits this pitcher’s arsenal well'+wt+'">🎯 ARSENAL+</span>';
     } else if(h.arsenalStatus==='unfavorable'){
       arsBadge='<span class="ch-ars neg" title="Struggles vs this pitcher’s arsenal">ARSENAL−</span>';
+    }
+    // Platoon-advantage chip (only when the matchup actually helps).
+    var platBadge='';
+    if(h.platoonAdv==='favorable' && (h.platoonTilt||0)>0.01){
+      var va=(h.pitcherVsHandAvg!=null)?(' · SP yields .'+String(Math.round(h.pitcherVsHandAvg*1000)).padStart(3,'0')+' to '+(h.batSide||'')+'HB'):'';
+      platBadge='<span class="ch-plat" title="Platoon edge'+va+'">↔ PLATOON</span>';
     }
     // ── Odds / EV line (only when the market is priced) ──
     var oddsLine='';
@@ -1249,6 +1276,7 @@ function renderConfidentHits(pk,hits){
         +'<span class="ch-name">'+h.player+'<span class="ch-team">'+(h.team||'')+'</span></span>'
         +'<span class="ch-mkt">1+ HIT'+paTxt+'</span>'
         +arsBadge
+        +platBadge
         +evBadge
         +lineupBadge
         +'<span class="ch-conf '+cls+'">'+pct+'%</span>'
@@ -1260,8 +1288,12 @@ function renderConfidentHits(pk,hits){
       +(saved?'✓ Tracked':'+ Track Hit')+'</button>'
     +'</div>';
   }).join('');
+  var toggle='<span class="ch-sort" onclick="event.stopPropagation()">'
+    +'<button class="ch-sortbtn'+(CH_SORT==='prob'?' on':'')+'" onclick="setChSort(\'prob\')" title="Sort by highest hit probability">Prob</button>'
+    +'<button class="ch-sortbtn'+(CH_SORT==='tilt'?' on':'')+'" onclick="setChSort(\'tilt\')" title="Sort by biggest matchup exploit (arsenal · platoon · weak spot)">Matchup</button>'
+    +'</span>';
   return '<div class="ch-wrap">'
-    +'<div class="ch-head">🎯 Confident Hits<span class="ch-sub">— take for a hit</span></div>'
+    +'<div class="ch-head"><span class="ch-head-l">🎯 Confident Hits<span class="ch-sub">— take for a hit</span></span>'+toggle+'</div>'
     +rows
   +'</div>';
 }
@@ -2869,7 +2901,44 @@ function loadSharpChips(games){
       .finally(function(){ setTimeout(next, 500); });
   })();
 }
-function load(dateStr){if(dateStr) selectedGamesDate=dateStr;syncDateUI();apiFetchJson('/api/games/today?date='+encodeURIComponent(selectedGamesDate)).then(function(d){if(!d.success)throw new Error(d.error||'API error');var gs=d.games||[];window.__lastGames=gs;var activeGs=gs.filter(function(g){return !g.isPostponed&&!g.isCancelled&&!g.isSuspended&&g.status!=='Postponed'&&g.status!=='Cancelled'&&g.status!=='Suspended';});document.getElementById('sg').textContent=activeGs.length||0;document.getElementById('sl').textContent=activeGs.filter(function(g){return g.status==='Live'}).length;var edges=activeGs.map(function(g){return g.edge});document.getElementById('se').textContent=edges.length?(edges.reduce(function(a,b){return a+b},0)/edges.length).toFixed(1):'--';document.getElementById('sh').textContent=activeGs.filter(function(g){return g.edge>=8}).length;if(!gs.length){document.getElementById('gc').innerHTML='<div class="ng"><h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px">NO GAMES FOR '+fmtDateLabel(selectedGamesDate).toUpperCase()+'</h3></div>';}else{document.getElementById('gc').innerHTML='<div class="grid">'+gs.map(mkCard).join('')+'</div>';setTimeout(function(){document.querySelectorAll('.fill').forEach(function(e){e.style.width=e.getAttribute('data-w')+'%'})},150);if(window.initLiveCards)initLiveCards(gs);loadSharpChips(gs);}if(window.setNavAsOf)setNavAsOf(new Date());if(document.getElementById('nrfiView').classList.contains('active')) loadNRFIBoard(activeGs);}).catch(function(e){document.getElementById('gc').innerHTML='<div class="sw"><div style="background:rgba(224,64,251,.08);border:1px solid rgba(224,64,251,.3);border-radius:12px;padding:24px 32px;text-align:center"><h3 style="color:var(--m);font-family:Orbitron;margin-bottom:8px">CONNECTION ERROR</h3><p style="color:var(--mu);font-size:.82rem">'+e.message+'</p></div></div>'})}
+// Gently pre-warm Quick Props (incl. Confident Hits) for the slate in the
+// background so the first expand is instant instead of a multi-second compute.
+// One game at a time, cancellable when the date changes, skips already-cached.
+var QP_WARM_TOKEN=0;
+function prewarmQuickProps(games){
+  var token=++QP_WARM_TOKEN;
+  var list=(games||[]).filter(function(g){
+    return !g.isPostponed&&!g.isCancelled&&!g.isSuspended
+      && g.status!=='Final'&&g.status!=='Game Over'&&g.status!=='Completed Early';
+  });
+  // Warm the games starting SOONEST first — those are the ones closest to first
+  // pitch where you're about to bet. Live games sort ahead (gameDate already
+  // passed), then upcoming by start time; missing dates sink to the end.
+  list.sort(function(a,b){
+    var ta=Date.parse(a.gameStartIso||'')||Infinity;
+    var tb=Date.parse(b.gameStartIso||'')||Infinity;
+    return ta-tb;
+  });
+  var i=0;
+  (function next(){
+    if(token!==QP_WARM_TOKEN) return;           // a newer slate load supersedes us
+    if(i>=list.length) return;
+    var g=list[i++];
+    if(QP_DATA[g.gamePk]){ setTimeout(next, 60); return; }
+    fetch('/api/props/quick/'+g.gamePk+'?date='+encodeURIComponent(selectedGamesDate))
+      .then(function(r){return r.json();})
+      .then(function(d){
+        if(token===QP_WARM_TOKEN && d && d.success){
+          QP_DATA[g.gamePk]=d;
+          var s=document.getElementById('qp-'+g.gamePk);
+          if(s&&s.classList.contains('open')) renderQuickProps(g.gamePk,d);
+        }
+      })
+      .catch(function(){})
+      .finally(function(){ setTimeout(next, 1100); });
+  })();
+}
+function load(dateStr){if(dateStr) selectedGamesDate=dateStr;syncDateUI();apiFetchJson('/api/games/today?date='+encodeURIComponent(selectedGamesDate)).then(function(d){if(!d.success)throw new Error(d.error||'API error');var gs=d.games||[];window.__lastGames=gs;var activeGs=gs.filter(function(g){return !g.isPostponed&&!g.isCancelled&&!g.isSuspended&&g.status!=='Postponed'&&g.status!=='Cancelled'&&g.status!=='Suspended';});document.getElementById('sg').textContent=activeGs.length||0;document.getElementById('sl').textContent=activeGs.filter(function(g){return g.status==='Live'}).length;var edges=activeGs.map(function(g){return g.edge});document.getElementById('se').textContent=edges.length?(edges.reduce(function(a,b){return a+b},0)/edges.length).toFixed(1):'--';document.getElementById('sh').textContent=activeGs.filter(function(g){return g.edge>=8}).length;if(!gs.length){document.getElementById('gc').innerHTML='<div class="ng"><h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px">NO GAMES FOR '+fmtDateLabel(selectedGamesDate).toUpperCase()+'</h3></div>';}else{document.getElementById('gc').innerHTML='<div class="grid">'+gs.map(mkCard).join('')+'</div>';setTimeout(function(){document.querySelectorAll('.fill').forEach(function(e){e.style.width=e.getAttribute('data-w')+'%'})},150);if(window.initLiveCards)initLiveCards(gs);loadSharpChips(gs);prewarmQuickProps(gs);}if(window.setNavAsOf)setNavAsOf(new Date());if(document.getElementById('nrfiView').classList.contains('active')) loadNRFIBoard(activeGs);}).catch(function(e){document.getElementById('gc').innerHTML='<div class="sw"><div style="background:rgba(224,64,251,.08);border:1px solid rgba(224,64,251,.3);border-radius:12px;padding:24px 32px;text-align:center"><h3 style="color:var(--m);font-family:Orbitron;margin-bottom:8px">CONNECTION ERROR</h3><p style="color:var(--mu);font-size:.82rem">'+e.message+'</p></div></div>'})}
 function initNRFI(){ if(NRFI_LAST_DATE===selectedGamesDate && NRFI_ROWS.length) return; loadNRFIBoard(window.__lastGames||[]); }
 function loadNRFIBoard(games){
   var meta=document.getElementById('nrfiMeta'), body=document.getElementById('nrfiBody');

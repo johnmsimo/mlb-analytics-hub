@@ -4520,7 +4520,7 @@ def parse_game(g, prefer_live_weather=True):
             "awayPitcher": ap_n, "homePitcher": hp_n,
             "awayRecord": away_record, "homeRecord": home_record,
             "awayScore": away_score, "homeScore": home_score,
-            "venue": ven.get("name",""), "gameTime": gt_fmt,
+            "venue": ven.get("name",""), "gameTime": gt_fmt, "gameStartIso": gt,
             "parkFactor": pf, "hrParkFactor": hrpf,
             "hrParkFactorLHB": hrpf_l, "hrParkFactorRHB": hrpf_r,
             "edge": edge, "barPct": bar,
@@ -8871,21 +8871,49 @@ def parse_ip(ipval):
         return 0.0
 
 
-def _fetch_game_log_raw(player_id, group, n=30):
-    """Fetch the last *n* game log entries from MLB Stats API. Returns list of stat dicts."""
-    year = datetime.now().year
+_GAMELOG_SPLITS_CACHE = {}     # (player_id, group, season) -> (date, splits)
+_GAMELOG_SPLITS_LOCK = threading.Lock()
+
+
+def _gamelog_splits_cached(player_id, group, season=None):
+    """Raw season game-log `splits` for a player, daily-cached and SHARED across
+    every game-log consumer (recent-form, rolling-form, batter/pitcher trends).
+
+    Before this, each consumer issued its own uncached MLB Stats API call, so a
+    single game card fetched the same batter's log 2–3× — and a full slate hit
+    the endpoint hundreds of times on every cold open. Caching the raw splits
+    once per (player, group, season) per day collapses that to one call."""
+    if season is None:
+        season = datetime.now().year
+    today = datetime.now().date()
+    try:
+        ck = (int(player_id), group, int(season))
+    except (TypeError, ValueError):
+        return []
+    with _GAMELOG_SPLITS_LOCK:
+        c = _GAMELOG_SPLITS_CACHE.get(ck)
+        if c and c[0] == today:
+            return c[1]
     try:
         r = requests.get(
             f"{MLB_API}/people/{player_id}/stats",
-            params={"stats": "gameLog", "group": group, "season": year},
-            timeout=10,
+            params={"stats": "gameLog", "season": season, "group": group, "gameType": "R"},
+            timeout=8,
         )
         if not r.ok:
             return []
-        splits = (r.json().get("stats") or [{}])[0].get("splits", [])
-        return splits[-n:]
+        splits = (r.json().get("stats") or [{}])[0].get("splits", []) or []
     except Exception:
         return []
+    with _GAMELOG_SPLITS_LOCK:
+        _GAMELOG_SPLITS_CACHE[ck] = (today, splits)
+    return splits
+
+
+def _fetch_game_log_raw(player_id, group, n=30):
+    """Fetch the last *n* game log entries from MLB Stats API. Returns list of stat dicts."""
+    splits = _gamelog_splits_cached(player_id, group)
+    return splits[-n:] if n else splits
 
 
 def _fetch_rolling_form(player_id, is_pitcher):
@@ -23564,16 +23592,8 @@ def api_umpire(game_pk):
 # ── L5/L10 helpers ────────────────────────────────────────────────────────────
 def _fetch_batter_gamelog(player_id, season=None, limit=10):
     """Returns recent game log entries for a batter, newest-last order."""
-    if season is None:
-        season = datetime.now().year
     try:
-        r = requests.get(
-            f"{MLB_API}/people/{player_id}/stats",
-            params={"stats": "gameLog", "season": season, "group": "hitting", "gameType": "R"},
-            timeout=8,
-        )
-        r.raise_for_status()
-        splits = r.json().get("stats", [{}])[0].get("splits", [])
+        splits = _gamelog_splits_cached(player_id, "hitting", season)
         out = []
         chosen = splits if limit is None else splits[-int(limit):]
         for s in chosen:
@@ -23598,16 +23618,8 @@ def _fetch_batter_gamelog(player_id, season=None, limit=10):
 
 def _fetch_pitcher_gamelog(player_id, season=None, limit=10):
     """Returns recent game log entries for a pitcher, newest-last order."""
-    if season is None:
-        season = datetime.now().year
     try:
-        r = requests.get(
-            f"{MLB_API}/people/{player_id}/stats",
-            params={"stats": "gameLog", "season": season, "group": "pitching", "gameType": "R"},
-            timeout=8,
-        )
-        r.raise_for_status()
-        splits = r.json().get("stats", [{}])[0].get("splits", [])
+        splits = _gamelog_splits_cached(player_id, "pitching", season)
         out = []
         chosen = splits if limit is None else splits[-int(limit):]
         for s in chosen:
@@ -24137,8 +24149,134 @@ def _arsenal_hit_tilt(adv):
     return 4.0 * delta
 
 
+_PIT_PLATOON_CACHE = {}      # pitcher_id -> (date, {vsL_avg, vsR_avg, vsL_ops, ...})
+_PIT_PLATOON_LOCK = threading.Lock()
+_LEAGUE_BAA = 0.245          # league batting-average-against (the hit baseline)
+
+
+def _pitcher_platoon_splits(pitcher_id):
+    """Season vs-LHB / vs-RHB splits for a pitcher (AVG-against + OPS-against +
+    sample), daily-cached. This is the 'pitcher weak spot' signal: a starter who
+    yields a high average to one handedness is a prime hit target for batters of
+    that side. One MLB Stats API call per starter per day."""
+    if not pitcher_id:
+        return {}
+    try:
+        pid = int(pitcher_id)
+    except (TypeError, ValueError):
+        return {}
+    today = datetime.now().date()
+    with _PIT_PLATOON_LOCK:
+        c = _PIT_PLATOON_CACHE.get(pid)
+        if c and c[0] == today:
+            return c[1]
+    out = {}
+    try:
+        year = datetime.now().year
+        r = requests.get(
+            f"{MLB_API}/people/{pid}/stats",
+            params={"stats": "statSplits", "group": "pitching",
+                    "sitCodes": "l,r", "season": year}, timeout=8)
+        if r.ok:
+            for sg in (r.json().get("stats") or []):
+                for sp in sg.get("splits", []):
+                    code = ((sp.get("split") or {}).get("code") or "").lower()
+                    st = sp.get("stat") or {}
+                    avg = _safe_f(st.get("avg"), None)
+                    ops = _safe_f(st.get("ops"), None)
+                    ab = int(st.get("atBats", 0) or 0)
+                    if code == "l":
+                        out.update({"vsL_avg": avg, "vsL_ops": ops, "vsL_ab": ab})
+                    elif code == "r":
+                        out.update({"vsR_avg": avg, "vsR_ops": ops, "vsR_ab": ab})
+    except Exception:
+        out = {}
+    with _PIT_PLATOON_LOCK:
+        _PIT_PLATOON_CACHE[pid] = (today, out)
+    return out
+
+
+def _confident_hits_matchup_tilt(bats, opp_hand, opp_fg, opp_sv, pit_splits, adv):
+    """Combine the DECISIVE matchup factors into one bounded logit tilt on the
+    hit probability, plus reasoning clauses. Three independent levers:
+
+      • ARSENAL — how the batter hits this pitcher's actual pitch mix (`adv`).
+      • PLATOON + PITCHER WEAK SPOT — the batter's handedness edge AND how badly
+        this pitcher actually pitches to that side (vs-hand AVG-against split).
+        A lefty vs a RHP who yields .300 to LHB is a prime hit target.
+      • GENERAL HITTABILITY — WHIP / BABIP-against / xERA vs league (a soft SP
+        lifts everyone's hit odds; an ace suppresses them).
+
+    Total capped at ±0.40 logits so the matchup sharpens the ranking decisively
+    without overriding the calibrated model. Returns (tilt, info)."""
+    info = {"clauses": []}
+    tilt = 0.0
+
+    # 1) Arsenal (real data only).
+    a_tilt = _arsenal_hit_tilt(adv)
+    tilt += a_tilt
+    info["arsenalTilt"] = round(a_tilt, 3)
+
+    # 2) Platoon direction + pitcher vs-hand vulnerability.
+    bh = (bats or "S").upper()
+    ph = (opp_hand or "R").upper()
+    if ph not in ("L", "R"):
+        ph = "R"
+    eff = bh if bh in ("L", "R") else ("L" if ph == "R" else "R")  # switch bats opposite
+    platoon_adv = (eff != ph)
+    info["platoonAdv"] = "favorable" if platoon_adv else "unfavorable"
+    info["batSide"] = eff
+    base = 0.05 if platoon_adv else -0.05
+    vs_avg = vs_ab = None
+    if pit_splits:
+        if eff == "L":
+            vs_avg, vs_ab = pit_splits.get("vsL_avg"), (pit_splits.get("vsL_ab") or 0)
+        else:
+            vs_avg, vs_ab = pit_splits.get("vsR_avg"), (pit_splits.get("vsR_ab") or 0)
+    vuln_tilt = 0.0
+    if vs_avg is not None and (vs_ab or 0) >= 30:
+        vuln_tilt = _clamp((float(vs_avg) - _LEAGUE_BAA) / 0.060, -1.2, 1.2) * 0.12
+        info["vsHandAvg"] = round(float(vs_avg), 3)
+        if float(vs_avg) >= 0.270:
+            info["clauses"].append(("weak", f"{ph}HP yields .{int(round(float(vs_avg) * 1000)):03d} to {eff}HB"))
+    platoon_tilt = _clamp(base + vuln_tilt, -0.16, 0.16)
+    tilt += platoon_tilt
+    info["platoonTilt"] = round(platoon_tilt, 3)
+    if platoon_adv and not any(c[0] == "weak" for c in info["clauses"]):
+        info["clauses"].append(("platoon", f"platoon edge ({eff}HB vs {ph}HP)"))
+
+    # 3) General hittability (pitcher weak spot, season-wide).
+    whip = _safe_f((opp_fg or {}).get("fg_whip"), None)
+    babip = _safe_f((opp_fg or {}).get("fg_babip"), None)
+    xera = _safe_f((opp_sv or {}).get("sv_xera"), None)
+    hz, n = 0.0, 0
+    if whip is not None:
+        hz += _clamp((whip - 1.27) / 0.30, -1, 1); n += 1
+    if babip is not None:
+        hz += _clamp((babip - 0.295) / 0.040, -1, 1); n += 1
+    if xera is not None:
+        hz += _clamp((xera - 4.20) / 1.20, -1, 1); n += 1
+    weak_tilt = 0.0
+    if n:
+        weak_tilt = _clamp((hz / n) * 0.10, -0.10, 0.10)
+        tilt += weak_tilt
+        if (hz / n) >= 0.5 and not any(c[0] == "weak" for c in info["clauses"]):
+            wbits = []
+            if whip and whip >= 1.35:
+                wbits.append(f"{whip:.2f} WHIP")
+            if xera and xera >= 4.6:
+                wbits.append(f"{xera:.2f} xERA")
+            if wbits:
+                info["clauses"].append(("weak", "hittable SP — " + ", ".join(wbits)))
+    info["weakTilt"] = round(weak_tilt, 3)
+
+    tilt = _clamp(tilt, -0.40, 0.40)
+    info["totalTilt"] = round(tilt, 3)
+    return tilt, info
+
+
 def _confident_hit_reason(name, batter, cal_p, rf, mu, opp_name, opp_hand, slot,
-                          exp_pa=None, confirmed=True, adv=None):
+                          exp_pa=None, confirmed=True, adv=None, minfo=None):
     """Plain-English 'why this player' for a Confident Hit pick.
 
     Every clause is a REAL driver pulled from the same data the model scores on
@@ -24169,6 +24307,16 @@ def _confident_hit_reason(name, batter, cal_p, rf, mu, opp_name, opp_hand, slot,
             bits.append("strong vs this arsenal")
         elif st == "neutral" and pp and len(bits) < 1:
             bits.append(f"handles the {pp}")
+    # 2.5) Pitcher weak spot + platoon edge — decisive matchup factors. Lead with
+    #      a concrete vulnerability ('RHP yields .305 to LHB' / 'hittable SP') over
+    #      the bare platoon-direction note.
+    if minfo and minfo.get("clauses") and len(bits) < 3:
+        weak_c = next((c[1] for c in minfo["clauses"] if c[0] == "weak"), None)
+        plat_c = next((c[1] for c in minfo["clauses"] if c[0] == "platoon"), None)
+        if weak_c:
+            bits.append(weak_c)
+        if plat_c and len(bits) < 3 and weak_c is None:
+            bits.append(plat_c)
     # 3) Contact quality — prefer Statcast xBA (skill, de-luck'd) then season AVG.
     sv  = sv_batter(name) or {}
     fgb = fg_batter(name) or {}
@@ -24199,7 +24347,7 @@ def _confident_hit_reason(name, batter, cal_p, rf, mu, opp_name, opp_hand, slot,
     return out
 
 
-def _compute_confident_hits(game_pk, limit=4, date_hint=None):
+def _compute_confident_hits(game_pk, limit=4, date_hint=None, prefetch=None):
     """High-confidence 'take for a hit' picks for the dashboard quick-props strip.
 
     THIS IS THE MONEY MAKER. It ranks batters purely by their PROBABILITY OF
@@ -24231,7 +24379,9 @@ def _compute_confident_hits(game_pk, limit=4, date_hint=None):
     """
     if not (_XGB_AVAILABLE and xgb_ready("hits")):
         return []
-    gdata, away_bats, home_bats, away_t, home_t, pitchers = _props_fetch_game(game_pk, date_hint=date_hint)
+    gdata, away_bats, home_bats, away_t, home_t, pitchers = (
+        prefetch if prefetch is not None
+        else _props_fetch_game(game_pk, date_hint=date_hint))
     if not gdata:
         return []
 
@@ -24244,6 +24394,15 @@ def _compute_confident_hits(game_pk, limit=4, date_hint=None):
     hp_hand = ((pitcher_stats_mlb(hp_id) if hp_id else {}).get("pitchHand") or "R").upper()
     hp_fg = fg_pitcher(hp_name) or {}; hp_sv = sv_pitcher(hp_name) or {}
     ap_fg = fg_pitcher(ap_name) or {}; ap_sv = sv_pitcher(ap_name) or {}
+    # Pitcher weak-spot splits (vs-LHB / vs-RHB AVG-against) — fetched ONCE per
+    # starter (concurrently), daily-cached, shared across every batter facing them.
+    with ThreadPoolExecutor(max_workers=2) as _sx:
+        _hpf = _sx.submit(_pitcher_platoon_splits, hp_id)
+        _apf = _sx.submit(_pitcher_platoon_splits, ap_id)
+        try: hp_splits = _hpf.result()
+        except Exception: hp_splits = {}
+        try: ap_splits = _apf.result()
+        except Exception: ap_splits = {}
 
     away_abbr = away_t.get("team", {}).get("abbreviation", "AWAY")
     home_abbr = home_t.get("team", {}).get("abbreviation", "HOME")
@@ -24267,7 +24426,7 @@ def _compute_confident_hits(game_pk, limit=4, date_hint=None):
     # so we only surface batters the calibrated model likes meaningfully.
     CONF_FLOOR = 0.60
 
-    def _score_batter(b, opp_name, opp_hand, opp_fg, opp_sv, opp_pid, team_abbr, confirmed):
+    def _score_batter(b, opp_name, opp_hand, opp_fg, opp_sv, opp_pid, opp_splits, team_abbr, confirmed):
         name = (b.get("name") or "").strip()
         pid  = b.get("id")
         slot = b.get("slot") or 0
@@ -24313,17 +24472,17 @@ def _compute_confident_hits(game_pk, limit=4, date_hint=None):
             cal_p = float(cal_p)
         except Exception:
             cal_p = fused
-        # ── Arsenal matchup: tilt the hit prob by how well this batter hits THIS
-        #    pitcher's actual pitch mix (usage-weighted wOBA). This + recent form
-        #    are the two drivers the ranking is meant to reflect. Real arsenal
-        #    data only (handedness proxy = no tilt). Applied on the logit scale.
+        # ── Decisive matchup factors: arsenal + platoon advantage + pitcher weak
+        #    spots, combined into one bounded logit tilt. With recent form (in the
+        #    model) these are what the ranking is built to reflect.
         adv = None
         if pid and opp_pid:
             try:
                 adv = _pitch_type_advantage(int(pid), int(opp_pid), name, opp_name)
             except Exception:
                 adv = None
-        tilt = _arsenal_hit_tilt(adv)
+        tilt, minfo = _confident_hits_matchup_tilt(
+            b.get("bats"), opp_hand, opp_fg, opp_sv, opp_splits, adv)
         if tilt:
             try:
                 cal_p = 1.0 / (1.0 + math.exp(-(_logit(cal_p) + tilt)))
@@ -24332,10 +24491,6 @@ def _compute_confident_hits(game_pk, limit=4, date_hint=None):
         cal_p = max(0.03, min(0.97, cal_p))
         if cal_p < CONF_FLOOR:
             return None
-        try:
-            mu = _matchup_score(b, opp_fg, opp_sv, pitcher_hand=opp_hand) or {}
-        except Exception:
-            mu = {}
         _ars_status = adv.get("status") if (adv and adv.get("source") == "arsenal") else None
         return {
             "player": name, "playerId": pid, "team": team_abbr, "slot": slot,
@@ -24348,24 +24503,34 @@ def _compute_confident_hits(game_pk, limit=4, date_hint=None):
             "expPa": round(exp_pa, 1),
             "confidencePct": int(round(cal_p * 100)),
             "lineupConfirmed": bool(confirmed),
-            "matchupScore": round(float(mu.get("score") or 0), 1) or None,
-            "matchupTier": mu.get("tier"),
             "arsenalStatus": _ars_status,
             "arsenalApplied": bool(_ars_status),
             "arsenalWoba": adv.get("matchup_woba") if _ars_status else None,
             "arsenalBaseline": adv.get("baseline_woba") if _ars_status else None,
             "arsenalPrimaryPitch": adv.get("primary_pitch") if _ars_status else None,
-            "arsenalTilt": round(tilt, 3) if tilt else 0,
+            # Decisive matchup signals (recent form is inside the model probability).
+            "matchupTilt": round(tilt, 3) if tilt else 0,
+            "arsenalTilt": minfo.get("arsenalTilt", 0),
+            "platoonAdv": minfo.get("platoonAdv"),
+            "platoonTilt": minfo.get("platoonTilt", 0),
+            "batSide": minfo.get("batSide"),
+            "pitcherVsHandAvg": minfo.get("vsHandAvg"),
+            "pitcherWeakTilt": minfo.get("weakTilt", 0),
             "oppPitcher": opp_name, "oppHand": opp_hand,
             "l7Hits": rf.get("l7Hits"), "l7HitRate": rf.get("l7HitRate"),
             "hubRating": max(0, min(100, int(round(cal_p * 100)))),
-            "reason": _confident_hit_reason(name, b, cal_p, rf, mu, opp_name,
-                                            opp_hand, slot, exp_pa=exp_pa,
-                                            confirmed=confirmed, adv=adv),
+            # Stash inputs so the (expensive) matchup score + reason are built only
+            # for the final top-N picks, not every batter in the lineup.
+            "_fin": {"b": b, "rf": rf, "adv": adv, "minfo": minfo, "opp_fg": opp_fg,
+                     "opp_sv": opp_sv, "opp_hand": opp_hand, "opp_name": opp_name,
+                     "exp_pa": exp_pa, "confirmed": confirmed, "cal_p": cal_p,
+                     "slot": slot, "name": name},
         }
 
-    tasks = ([(b, hp_name, hp_hand, hp_fg, hp_sv, hp_id, away_abbr, away_conf) for b in (away_bats or [])[:9]]
-             + [(b, ap_name, ap_hand, ap_fg, ap_sv, ap_id, home_abbr, home_conf) for b in (home_bats or [])[:9]])
+    # Only the top of each order are realistic 'best hit' candidates (volume +
+    # quality); 8–9 hitters rarely clear the floor and just add latency.
+    tasks = ([(b, hp_name, hp_hand, hp_fg, hp_sv, hp_id, hp_splits, away_abbr, away_conf) for b in (away_bats or [])[:7]]
+             + [(b, ap_name, ap_hand, ap_fg, ap_sv, ap_id, ap_splits, home_abbr, home_conf) for b in (home_bats or [])[:7]])
     picks = []
     with ThreadPoolExecutor(max_workers=8) as ex:
         futs = [ex.submit(_score_batter, *t) for t in tasks]
@@ -24380,6 +24545,29 @@ def _compute_confident_hits(game_pk, limit=4, date_hint=None):
     # Rank by calibrated probability; confirmed lineups break ties (sharper bet).
     picks.sort(key=lambda x: (x["hitProb"], x.get("lineupConfirmed", False)), reverse=True)
     top = picks[:limit]
+
+    # Finalize ONLY the shown picks: the matchup score + plain-English reason are
+    # the expensive per-batter extras, so we build them for ≤4 picks, not all 14.
+    for p in top:
+        fin = p.pop("_fin", None)
+        if not fin:
+            p.setdefault("matchupScore", None); p.setdefault("matchupTier", None)
+            p.setdefault("reason", "model-projected contact edge")
+            continue
+        try:
+            mu = _matchup_score(fin["b"], fin["opp_fg"], fin["opp_sv"],
+                                pitcher_hand=fin["opp_hand"]) or {}
+        except Exception:
+            mu = {}
+        p["matchupScore"] = round(float(mu.get("score") or 0), 1) or None
+        p["matchupTier"] = mu.get("tier")
+        p["reason"] = _confident_hit_reason(
+            fin["name"], fin["b"], fin["cal_p"], fin["rf"], mu, fin["opp_name"],
+            fin["opp_hand"], fin["slot"], exp_pa=fin["exp_pa"],
+            confirmed=fin["confirmed"], adv=fin["adv"], minfo=fin.get("minfo"))
+    # Drop any stashed inputs from non-shown picks (defensive; top already popped).
+    for p in picks:
+        p.pop("_fin", None)
 
     # ── Odds / EV layer (best-effort) ────────────────────────────────────────
     # Price each shown pick against the live 'to record a hit' market, de-vig it,
@@ -24466,9 +24654,11 @@ def _enrich_confident_hits_with_odds(picks, away_t, home_t):
             p["stakeUnits"]    = stake["stake_units"]
 
 
-def _compute_dashboard_quick_props(game_pk, limit=3, date_hint=None):
+def _compute_dashboard_quick_props(game_pk, limit=3, date_hint=None, prefetch=None):
     """Compute top quick-prop picks for a game card strip."""
-    gdata, away_bats, home_bats, away_t, home_t, _pitchers = _props_fetch_game(game_pk, date_hint=date_hint)
+    gdata, away_bats, home_bats, away_t, home_t, _pitchers = (
+        prefetch if prefetch is not None
+        else _props_fetch_game(game_pk, date_hint=date_hint))
     if not gdata:
         return None, []
 
@@ -24618,31 +24808,99 @@ def api_props_trends(game_pk):
         return jsonify({"success": False, "error": str(ex)}), 500
 
 
-# ── Route: Quick props for dashboard inline strip ─────────────────────────────
-@app.route("/api/props/quick/<int:game_pk>")
-def api_props_quick(game_pk):
-    """
-    Returns top 3 batter prop edges for a game card inline strip.
-    Uses L10 over rates — lightweight, no Odds API calls needed.
-    """
-    try:
-        date_hint = request.args.get('date')
-        gdata, picks = _compute_dashboard_quick_props(game_pk, limit=3, date_hint=date_hint)
-        if not gdata:
-            return jsonify({"success": False, "error": "Game not found"}), 404
-        # Money-maker: high-confidence "take for a hit" picks (≤4) from the
-        # calibrated XGB hits model, each with a plain-English reason.
+# ── Quick-props response cache (stale-while-revalidate) ───────────────────────
+# The strip got heavy (legacy multi-market picks + the XGB/arsenal Confident Hits
+# + live odds), so we cache the whole payload per (game, date) and serve it
+# instantly. Within FRESH_TTL we return as-is; within STALE_TTL we return the
+# cached copy immediately AND refresh in the background so the next open is
+# current — the user never waits on a cold recompute and never misses a window.
+_QUICK_PROPS_CACHE = {}            # (game_pk, date) -> {"ts": float, "payload": {...}}
+_QUICK_PROPS_REFRESHING = set()    # keys with an in-flight background refresh
+_QUICK_PROPS_LOCK = threading.Lock()
+_QUICK_PROPS_FRESH_TTL = 90        # serve cached without refreshing
+_QUICK_PROPS_STALE_TTL = 600       # serve cached + refresh in background
+
+
+def _build_quick_props_payload(game_pk, date_hint):
+    """Fetch the game ONCE, then compute the legacy picks and the Confident Hits
+    CONCURRENTLY (they previously ran serially and each re-fetched the game)."""
+    bundle = _props_fetch_game(game_pk, date_hint=date_hint)
+    if not bundle or not bundle[0]:
+        return None
+    picks, confident_hits = [], []
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        f_qp = ex.submit(_compute_dashboard_quick_props, game_pk, 3, date_hint, bundle)
+        f_ch = ex.submit(_compute_confident_hits, game_pk, 4, date_hint, bundle)
         try:
-            confident_hits = _compute_confident_hits(game_pk, limit=4, date_hint=date_hint)
+            _g, picks = f_qp.result()
+        except Exception:
+            print(f"[api_props_quick] quick_props {traceback.format_exc()}")
+            picks = []
+        try:
+            confident_hits = f_ch.result()
         except Exception:
             print(f"[api_props_quick] confident_hits {traceback.format_exc()}")
             confident_hits = []
-        return jsonify({
-            "success": True,
-            "gamePk":  game_pk,
-            "picks":   picks,
-            "confidentHits": confident_hits,
-        })
+    return {
+        "success": True,
+        "gamePk": game_pk,
+        "picks": picks or [],
+        "confidentHits": confident_hits or [],
+        "generatedAt": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _schedule_quick_props_refresh(game_pk, date_hint, ck):
+    """Kick a single background recompute for a stale cache entry (deduped)."""
+    with _QUICK_PROPS_LOCK:
+        if ck in _QUICK_PROPS_REFRESHING:
+            return
+        _QUICK_PROPS_REFRESHING.add(ck)
+
+    def _run():
+        try:
+            payload = _build_quick_props_payload(game_pk, date_hint)
+            if payload:
+                with _QUICK_PROPS_LOCK:
+                    _QUICK_PROPS_CACHE[ck] = {"ts": time.time(), "payload": payload}
+        except Exception:
+            print(f"[quick_props_refresh] {traceback.format_exc()}")
+        finally:
+            with _QUICK_PROPS_LOCK:
+                _QUICK_PROPS_REFRESHING.discard(ck)
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+# ── Route: Quick props for dashboard inline strip ─────────────────────────────
+@app.route("/api/props/quick/<int:game_pk>")
+def api_props_quick(game_pk):
+    """Top batter prop edges + Confident Hits for a game card strip.
+
+    Cached per (game, date) with stale-while-revalidate so repeat opens are
+    instant and a cold recompute never blocks the user."""
+    try:
+        date_hint = request.args.get('date')
+        ck = (game_pk, date_hint or '')
+        now = time.time()
+        with _QUICK_PROPS_LOCK:
+            ent = _QUICK_PROPS_CACHE.get(ck)
+        if ent:
+            age = now - ent["ts"]
+            if age < _QUICK_PROPS_FRESH_TTL:
+                return jsonify(ent["payload"])
+            if age < _QUICK_PROPS_STALE_TTL:
+                # Serve stale instantly; refresh in the background.
+                _schedule_quick_props_refresh(game_pk, date_hint, ck)
+                stale = dict(ent["payload"]); stale["cached"] = True
+                return jsonify(stale)
+
+        payload = _build_quick_props_payload(game_pk, date_hint)
+        if payload is None:
+            return jsonify({"success": False, "error": "Game not found"}), 404
+        with _QUICK_PROPS_LOCK:
+            _QUICK_PROPS_CACHE[ck] = {"ts": time.time(), "payload": payload}
+        return jsonify(payload)
 
     except Exception as ex:
         print(f"[api_props_quick] {traceback.format_exc()}")
