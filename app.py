@@ -24315,7 +24315,91 @@ def _compute_confident_hits(game_pk, limit=4, date_hint=None):
 
     # Rank by calibrated probability; confirmed lineups break ties (sharper bet).
     picks.sort(key=lambda x: (x["hitProb"], x.get("lineupConfirmed", False)), reverse=True)
-    return picks[:limit]
+    top = picks[:limit]
+
+    # ── Odds / EV layer (best-effort) ────────────────────────────────────────
+    # Price each shown pick against the live 'to record a hit' market, de-vig it,
+    # and compute true EV + a Quarter-Kelly stake. This turns a confident pick
+    # into an actionable bet: a 70% model prob at -300 (75% implied) is a FADE,
+    # while the same prob at -130 is +EV. Degrades silently with no odds/key.
+    try:
+        _enrich_confident_hits_with_odds(top, away_t, home_t)
+    except Exception:
+        print(f"[confident_hits] odds enrich {traceback.format_exc()}")
+    return top
+
+
+def _enrich_confident_hits_with_odds(picks, away_t, home_t):
+    """Attach market price, de-vig'd fair prob, true EV, edge, value grade and a
+    Quarter-Kelly stake to each Confident Hit (market_key=batter_hits, line 0.5).
+
+    All betting math goes through `value_engine` — the single source of truth —
+    so the numbers agree with /api/v1/edges and the tracker. Best-effort: any
+    pick without a posted price simply keeps its model fields (no fabricated
+    odds), and the whole step is a no-op when ODDS_API_KEY is unset."""
+    if not picks or not ODDS_API_KEY:
+        return
+    away_full = (away_t.get("team") or {}).get("name", "")
+    home_full = (home_t.get("team") or {}).get("name", "")
+    event, _ = _find_odds_event(away_full, home_full)
+    if not event:
+        return
+    books = _load_event_odds(event.get("id"), featured_only=False) or []
+    if not books:
+        return
+    valid_names = {p["player"] for p in picks if p.get("player")}
+    market_props = _parse_prop_markets(books, valid_names)
+    if not market_props:
+        return
+
+    adj         = _get_adjustments()
+    bankroll    = float(adj.get('bankroll', 1000.0) or 1000.0)
+    kelly_frac  = float(adj.get('kelly_fraction', 0.25) or 0.25)
+    max_bet_pct = float(adj.get('max_bet_pct', 0.05) or 0.05)
+    unit_pct    = float(adj.get('unit_size_pct', 0.01) or 0.01)
+
+    for p in picks:
+        msum = _market_price_summary(market_props, p["player"], "batter_hits", 0.5)
+        over_price = msum.get("best_over_price")
+        if over_price is None:
+            continue
+        under_price    = msum.get("best_under_price")
+        market_implied = msum.get("market_implied")
+        model_prob     = float(p["hitProb"])
+
+        fairp = ev = edge = None
+        stake = None
+        if _VALUE_ENGINE_AVAILABLE:
+            fairp = value_engine.fair_prob(over_price, under_price, method='multiplicative')
+            ev    = value_engine.expected_value(model_prob, over_price)
+            stake = value_engine.kelly_stake(
+                model_prob, over_price, bankroll=bankroll, fraction=kelly_frac,
+                max_pct=max_bet_pct, unit_pct=unit_pct)
+        else:
+            fairp = _american_to_implied(over_price)
+        # Edge vs the de-vig'd fair line (true edge, not vs the juiced implied).
+        if fairp is not None:
+            edge = model_prob - float(fairp)
+
+        p["bestPrice"]      = over_price
+        p["bestBook"]       = msum.get("best_over_book")
+        p["bestUnderPrice"] = under_price
+        p["bookCount"]      = msum.get("book_count")
+        p["marketImplied"]  = round(float(market_implied), 4) if market_implied is not None else None
+        p["fairProb"]       = round(float(fairp), 4) if fairp is not None else None
+        p["edge"]           = round(edge, 4) if edge is not None else None
+        p["valueGrade"]     = (value_engine.edge_grade(edge)
+                               if (edge is not None and _VALUE_ENGINE_AVAILABLE) else None)
+        p["evPct"]          = round(float(ev), 4) if ev is not None else None
+        p["isPlusEv"]       = bool(ev is not None and ev > 0)
+        if ev is not None:
+            p["conviction"] = ('gold' if ev >= 0.10 else 'green' if ev >= 0.05
+                               else 'lean' if ev > 0 else 'fade')
+        if stake:
+            p["fullKellyPct"]  = stake["full_kelly_pct"]
+            p["stakePct"]      = stake["stake_pct"]
+            p["stakeDollars"]  = stake["stake_dollars"]
+            p["stakeUnits"]    = stake["stake_units"]
 
 
 def _compute_dashboard_quick_props(game_pk, limit=3, date_hint=None):

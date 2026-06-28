@@ -147,6 +147,18 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .ch-row.proj{opacity:.9}
 .ch-proj{font-family:Orbitron,monospace;font-size:.5rem;font-weight:700;letter-spacing:.5px;color:#ffb300;background:rgba(255,179,0,.1);border:1px solid rgba(255,179,0,.3);border-radius:4px;padding:1px 5px;white-space:nowrap}
 .ch-conf-badge{font-family:Orbitron,monospace;font-size:.5rem;font-weight:700;letter-spacing:.5px;color:#00e676;background:rgba(0,230,118,.1);border:1px solid rgba(0,230,118,.28);border-radius:4px;padding:1px 5px;white-space:nowrap}
+.ch-row.plusev{background:linear-gradient(180deg,rgba(0,230,118,.05),transparent)}
+.ch-bet{font-family:Orbitron,monospace;font-size:.5rem;font-weight:800;letter-spacing:.5px;color:#0a0e14;background:#00e676;border-radius:4px;padding:1px 5px;white-space:nowrap}
+.ch-odds{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:1px;font-size:.6rem}
+.ch-price{font-family:Orbitron,monospace;font-weight:700;color:var(--t);background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:4px;padding:1px 6px}
+.ch-ev{font-family:Orbitron,monospace;font-weight:700}
+.ch-ev.pos{color:#00e676}
+.ch-ev.neg{color:#8a98aa}
+.ch-grade{font-family:Orbitron,monospace;font-weight:800;font-size:.56rem;border-radius:4px;padding:1px 5px}
+.ch-grade.g-pos{color:#00e676;background:rgba(0,230,118,.12);border:1px solid rgba(0,230,118,.3)}
+.ch-grade.g-neg{color:#8a98aa;background:rgba(106,141,176,.08);border:1px solid rgba(106,141,176,.18)}
+.ch-stake{font-family:Orbitron,monospace;font-weight:700;color:#00e5ff;background:rgba(0,229,255,.1);border:1px solid rgba(0,229,255,.25);border-radius:4px;padding:1px 6px}
+.ch-fade{color:#8a98aa;font-size:.58rem;font-style:italic}
 .ch-save{align-self:flex-start;background:rgba(0,230,118,.08);border:1px solid rgba(0,230,118,.3);border-radius:6px;color:#00e676;font-size:.56rem;padding:3px 9px;cursor:pointer;transition:all .15s;font-family:Orbitron,monospace;letter-spacing:.5px;white-space:nowrap}
 .ch-save:hover{background:rgba(0,230,118,.16)}
 .ch-save.saved{background:rgba(0,230,118,.18);cursor:default}
@@ -1191,14 +1203,34 @@ function renderConfidentHits(pk,hits){
     var lineupBadge=(h.lineupConfirmed===false)
       ? '<span class="ch-proj" title="Lineup not yet official — confirm before betting">⚠ PROJ</span>'
       : '<span class="ch-conf-badge" title="Confirmed in the official lineup">✓ LIVE</span>';
-    return '<div class="ch-row'+(h.lineupConfirmed===false?' proj':'')+'">'
+    // ── Odds / EV line (only when the market is priced) ──
+    var oddsLine='';
+    if(h.bestPrice!=null){
+      var px=(h.bestPrice>0?'+':'')+h.bestPrice;
+      var bk=h.bestBook?(' '+String(h.bestBook).slice(0,4).toUpperCase()):'';
+      var parts=['<span class="ch-price">'+px+bk+'</span>'];
+      if(h.evPct!=null){
+        var evp=(h.evPct*100);
+        var evCls=evp>0?'pos':'neg';
+        parts.push('<span class="ch-ev '+evCls+'">'+(evp>0?'+':'')+evp.toFixed(1)+'% EV</span>');
+      }
+      if(h.valueGrade) parts.push('<span class="ch-grade g-'+(h.isPlusEv?'pos':'neg')+'">'+h.valueGrade+'</span>');
+      if(h.isPlusEv && h.stakeUnits!=null) parts.push('<span class="ch-stake">'+h.stakeUnits+'u</span>');
+      else if(h.isPlusEv===false) parts.push('<span class="ch-fade">below market — pass</span>');
+      oddsLine='<div class="ch-odds">'+parts.join('')+'</div>';
+    }
+    // Bettors want +EV first: badge the value verdict next to confidence.
+    var evBadge=(h.bestPrice!=null && h.isPlusEv)?'<span class="ch-bet" title="Model probability beats the de-vigged market — positive expected value">+EV</span>':'';
+    return '<div class="ch-row'+(h.lineupConfirmed===false?' proj':'')+(h.isPlusEv?' plusev':'')+'">'
       +'<div class="ch-top">'
         +'<span class="ch-name">'+h.player+'<span class="ch-team">'+(h.team||'')+'</span></span>'
         +'<span class="ch-mkt">1+ HIT'+paTxt+'</span>'
+        +evBadge
         +lineupBadge
         +'<span class="ch-conf '+cls+'">'+pct+'%</span>'
       +'</div>'
       +'<div class="ch-reason">'+(h.reason||'model-projected contact edge')+'</div>'
+      +oddsLine
       +'<button class="ch-save'+(saved?' saved':'')+'" id="'+bid+'" onclick="chSave(event,'+JSON.stringify(h).replace(/"/g,'&quot;')+',\''+bid+'\')">'
       +(saved?'✓ Tracked':'+ Track Hit')+'</button>'
     +'</div>';
@@ -1215,7 +1247,10 @@ function chSave(e,h,btnId){
   var payload={
     player:h.player,playerId:h.playerId,team:h.team,
     marketKey:'batter_hits',line:h.line,recommendedSide:'Over',source:'dashboard',
-    adjProb:h.hitProb||null,hubRating:h.hubRating||h.confidencePct||0
+    adjProb:h.hitProb||null,hubRating:h.hubRating||h.confidencePct||0,
+    price:(h.bestPrice!=null?h.bestPrice:null),book:(h.bestBook||null),
+    edge:(h.edge!=null?h.edge:null),evPct:(h.evPct!=null?h.evPct:null),
+    impliedProb:(h.marketImplied!=null?h.marketImplied:null)
   };
   fetch('/api/tracker/pick',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
     .then(function(r){return r.json();})
