@@ -4520,7 +4520,7 @@ def parse_game(g, prefer_live_weather=True):
             "awayPitcher": ap_n, "homePitcher": hp_n,
             "awayRecord": away_record, "homeRecord": home_record,
             "awayScore": away_score, "homeScore": home_score,
-            "venue": ven.get("name",""), "gameTime": gt_fmt,
+            "venue": ven.get("name",""), "gameTime": gt_fmt, "gameStartIso": gt,
             "parkFactor": pf, "hrParkFactor": hrpf,
             "hrParkFactorLHB": hrpf_l, "hrParkFactorRHB": hrpf_r,
             "edge": edge, "barPct": bar,
@@ -24149,8 +24149,134 @@ def _arsenal_hit_tilt(adv):
     return 4.0 * delta
 
 
+_PIT_PLATOON_CACHE = {}      # pitcher_id -> (date, {vsL_avg, vsR_avg, vsL_ops, ...})
+_PIT_PLATOON_LOCK = threading.Lock()
+_LEAGUE_BAA = 0.245          # league batting-average-against (the hit baseline)
+
+
+def _pitcher_platoon_splits(pitcher_id):
+    """Season vs-LHB / vs-RHB splits for a pitcher (AVG-against + OPS-against +
+    sample), daily-cached. This is the 'pitcher weak spot' signal: a starter who
+    yields a high average to one handedness is a prime hit target for batters of
+    that side. One MLB Stats API call per starter per day."""
+    if not pitcher_id:
+        return {}
+    try:
+        pid = int(pitcher_id)
+    except (TypeError, ValueError):
+        return {}
+    today = datetime.now().date()
+    with _PIT_PLATOON_LOCK:
+        c = _PIT_PLATOON_CACHE.get(pid)
+        if c and c[0] == today:
+            return c[1]
+    out = {}
+    try:
+        year = datetime.now().year
+        r = requests.get(
+            f"{MLB_API}/people/{pid}/stats",
+            params={"stats": "statSplits", "group": "pitching",
+                    "sitCodes": "l,r", "season": year}, timeout=8)
+        if r.ok:
+            for sg in (r.json().get("stats") or []):
+                for sp in sg.get("splits", []):
+                    code = ((sp.get("split") or {}).get("code") or "").lower()
+                    st = sp.get("stat") or {}
+                    avg = _safe_f(st.get("avg"), None)
+                    ops = _safe_f(st.get("ops"), None)
+                    ab = int(st.get("atBats", 0) or 0)
+                    if code == "l":
+                        out.update({"vsL_avg": avg, "vsL_ops": ops, "vsL_ab": ab})
+                    elif code == "r":
+                        out.update({"vsR_avg": avg, "vsR_ops": ops, "vsR_ab": ab})
+    except Exception:
+        out = {}
+    with _PIT_PLATOON_LOCK:
+        _PIT_PLATOON_CACHE[pid] = (today, out)
+    return out
+
+
+def _confident_hits_matchup_tilt(bats, opp_hand, opp_fg, opp_sv, pit_splits, adv):
+    """Combine the DECISIVE matchup factors into one bounded logit tilt on the
+    hit probability, plus reasoning clauses. Three independent levers:
+
+      • ARSENAL — how the batter hits this pitcher's actual pitch mix (`adv`).
+      • PLATOON + PITCHER WEAK SPOT — the batter's handedness edge AND how badly
+        this pitcher actually pitches to that side (vs-hand AVG-against split).
+        A lefty vs a RHP who yields .300 to LHB is a prime hit target.
+      • GENERAL HITTABILITY — WHIP / BABIP-against / xERA vs league (a soft SP
+        lifts everyone's hit odds; an ace suppresses them).
+
+    Total capped at ±0.40 logits so the matchup sharpens the ranking decisively
+    without overriding the calibrated model. Returns (tilt, info)."""
+    info = {"clauses": []}
+    tilt = 0.0
+
+    # 1) Arsenal (real data only).
+    a_tilt = _arsenal_hit_tilt(adv)
+    tilt += a_tilt
+    info["arsenalTilt"] = round(a_tilt, 3)
+
+    # 2) Platoon direction + pitcher vs-hand vulnerability.
+    bh = (bats or "S").upper()
+    ph = (opp_hand or "R").upper()
+    if ph not in ("L", "R"):
+        ph = "R"
+    eff = bh if bh in ("L", "R") else ("L" if ph == "R" else "R")  # switch bats opposite
+    platoon_adv = (eff != ph)
+    info["platoonAdv"] = "favorable" if platoon_adv else "unfavorable"
+    info["batSide"] = eff
+    base = 0.05 if platoon_adv else -0.05
+    vs_avg = vs_ab = None
+    if pit_splits:
+        if eff == "L":
+            vs_avg, vs_ab = pit_splits.get("vsL_avg"), (pit_splits.get("vsL_ab") or 0)
+        else:
+            vs_avg, vs_ab = pit_splits.get("vsR_avg"), (pit_splits.get("vsR_ab") or 0)
+    vuln_tilt = 0.0
+    if vs_avg is not None and (vs_ab or 0) >= 30:
+        vuln_tilt = _clamp((float(vs_avg) - _LEAGUE_BAA) / 0.060, -1.2, 1.2) * 0.12
+        info["vsHandAvg"] = round(float(vs_avg), 3)
+        if float(vs_avg) >= 0.270:
+            info["clauses"].append(("weak", f"{ph}HP yields .{int(round(float(vs_avg) * 1000)):03d} to {eff}HB"))
+    platoon_tilt = _clamp(base + vuln_tilt, -0.16, 0.16)
+    tilt += platoon_tilt
+    info["platoonTilt"] = round(platoon_tilt, 3)
+    if platoon_adv and not any(c[0] == "weak" for c in info["clauses"]):
+        info["clauses"].append(("platoon", f"platoon edge ({eff}HB vs {ph}HP)"))
+
+    # 3) General hittability (pitcher weak spot, season-wide).
+    whip = _safe_f((opp_fg or {}).get("fg_whip"), None)
+    babip = _safe_f((opp_fg or {}).get("fg_babip"), None)
+    xera = _safe_f((opp_sv or {}).get("sv_xera"), None)
+    hz, n = 0.0, 0
+    if whip is not None:
+        hz += _clamp((whip - 1.27) / 0.30, -1, 1); n += 1
+    if babip is not None:
+        hz += _clamp((babip - 0.295) / 0.040, -1, 1); n += 1
+    if xera is not None:
+        hz += _clamp((xera - 4.20) / 1.20, -1, 1); n += 1
+    weak_tilt = 0.0
+    if n:
+        weak_tilt = _clamp((hz / n) * 0.10, -0.10, 0.10)
+        tilt += weak_tilt
+        if (hz / n) >= 0.5 and not any(c[0] == "weak" for c in info["clauses"]):
+            wbits = []
+            if whip and whip >= 1.35:
+                wbits.append(f"{whip:.2f} WHIP")
+            if xera and xera >= 4.6:
+                wbits.append(f"{xera:.2f} xERA")
+            if wbits:
+                info["clauses"].append(("weak", "hittable SP — " + ", ".join(wbits)))
+    info["weakTilt"] = round(weak_tilt, 3)
+
+    tilt = _clamp(tilt, -0.40, 0.40)
+    info["totalTilt"] = round(tilt, 3)
+    return tilt, info
+
+
 def _confident_hit_reason(name, batter, cal_p, rf, mu, opp_name, opp_hand, slot,
-                          exp_pa=None, confirmed=True, adv=None):
+                          exp_pa=None, confirmed=True, adv=None, minfo=None):
     """Plain-English 'why this player' for a Confident Hit pick.
 
     Every clause is a REAL driver pulled from the same data the model scores on
@@ -24181,6 +24307,16 @@ def _confident_hit_reason(name, batter, cal_p, rf, mu, opp_name, opp_hand, slot,
             bits.append("strong vs this arsenal")
         elif st == "neutral" and pp and len(bits) < 1:
             bits.append(f"handles the {pp}")
+    # 2.5) Pitcher weak spot + platoon edge — decisive matchup factors. Lead with
+    #      a concrete vulnerability ('RHP yields .305 to LHB' / 'hittable SP') over
+    #      the bare platoon-direction note.
+    if minfo and minfo.get("clauses") and len(bits) < 3:
+        weak_c = next((c[1] for c in minfo["clauses"] if c[0] == "weak"), None)
+        plat_c = next((c[1] for c in minfo["clauses"] if c[0] == "platoon"), None)
+        if weak_c:
+            bits.append(weak_c)
+        if plat_c and len(bits) < 3 and weak_c is None:
+            bits.append(plat_c)
     # 3) Contact quality — prefer Statcast xBA (skill, de-luck'd) then season AVG.
     sv  = sv_batter(name) or {}
     fgb = fg_batter(name) or {}
@@ -24258,6 +24394,15 @@ def _compute_confident_hits(game_pk, limit=4, date_hint=None, prefetch=None):
     hp_hand = ((pitcher_stats_mlb(hp_id) if hp_id else {}).get("pitchHand") or "R").upper()
     hp_fg = fg_pitcher(hp_name) or {}; hp_sv = sv_pitcher(hp_name) or {}
     ap_fg = fg_pitcher(ap_name) or {}; ap_sv = sv_pitcher(ap_name) or {}
+    # Pitcher weak-spot splits (vs-LHB / vs-RHB AVG-against) — fetched ONCE per
+    # starter (concurrently), daily-cached, shared across every batter facing them.
+    with ThreadPoolExecutor(max_workers=2) as _sx:
+        _hpf = _sx.submit(_pitcher_platoon_splits, hp_id)
+        _apf = _sx.submit(_pitcher_platoon_splits, ap_id)
+        try: hp_splits = _hpf.result()
+        except Exception: hp_splits = {}
+        try: ap_splits = _apf.result()
+        except Exception: ap_splits = {}
 
     away_abbr = away_t.get("team", {}).get("abbreviation", "AWAY")
     home_abbr = home_t.get("team", {}).get("abbreviation", "HOME")
@@ -24281,7 +24426,7 @@ def _compute_confident_hits(game_pk, limit=4, date_hint=None, prefetch=None):
     # so we only surface batters the calibrated model likes meaningfully.
     CONF_FLOOR = 0.60
 
-    def _score_batter(b, opp_name, opp_hand, opp_fg, opp_sv, opp_pid, team_abbr, confirmed):
+    def _score_batter(b, opp_name, opp_hand, opp_fg, opp_sv, opp_pid, opp_splits, team_abbr, confirmed):
         name = (b.get("name") or "").strip()
         pid  = b.get("id")
         slot = b.get("slot") or 0
@@ -24327,17 +24472,17 @@ def _compute_confident_hits(game_pk, limit=4, date_hint=None, prefetch=None):
             cal_p = float(cal_p)
         except Exception:
             cal_p = fused
-        # ── Arsenal matchup: tilt the hit prob by how well this batter hits THIS
-        #    pitcher's actual pitch mix (usage-weighted wOBA). This + recent form
-        #    are the two drivers the ranking is meant to reflect. Real arsenal
-        #    data only (handedness proxy = no tilt). Applied on the logit scale.
+        # ── Decisive matchup factors: arsenal + platoon advantage + pitcher weak
+        #    spots, combined into one bounded logit tilt. With recent form (in the
+        #    model) these are what the ranking is built to reflect.
         adv = None
         if pid and opp_pid:
             try:
                 adv = _pitch_type_advantage(int(pid), int(opp_pid), name, opp_name)
             except Exception:
                 adv = None
-        tilt = _arsenal_hit_tilt(adv)
+        tilt, minfo = _confident_hits_matchup_tilt(
+            b.get("bats"), opp_hand, opp_fg, opp_sv, opp_splits, adv)
         if tilt:
             try:
                 cal_p = 1.0 / (1.0 + math.exp(-(_logit(cal_p) + tilt)))
@@ -24363,13 +24508,20 @@ def _compute_confident_hits(game_pk, limit=4, date_hint=None, prefetch=None):
             "arsenalWoba": adv.get("matchup_woba") if _ars_status else None,
             "arsenalBaseline": adv.get("baseline_woba") if _ars_status else None,
             "arsenalPrimaryPitch": adv.get("primary_pitch") if _ars_status else None,
-            "arsenalTilt": round(tilt, 3) if tilt else 0,
+            # Decisive matchup signals (recent form is inside the model probability).
+            "matchupTilt": round(tilt, 3) if tilt else 0,
+            "arsenalTilt": minfo.get("arsenalTilt", 0),
+            "platoonAdv": minfo.get("platoonAdv"),
+            "platoonTilt": minfo.get("platoonTilt", 0),
+            "batSide": minfo.get("batSide"),
+            "pitcherVsHandAvg": minfo.get("vsHandAvg"),
+            "pitcherWeakTilt": minfo.get("weakTilt", 0),
             "oppPitcher": opp_name, "oppHand": opp_hand,
             "l7Hits": rf.get("l7Hits"), "l7HitRate": rf.get("l7HitRate"),
             "hubRating": max(0, min(100, int(round(cal_p * 100)))),
             # Stash inputs so the (expensive) matchup score + reason are built only
             # for the final top-N picks, not every batter in the lineup.
-            "_fin": {"b": b, "rf": rf, "adv": adv, "opp_fg": opp_fg,
+            "_fin": {"b": b, "rf": rf, "adv": adv, "minfo": minfo, "opp_fg": opp_fg,
                      "opp_sv": opp_sv, "opp_hand": opp_hand, "opp_name": opp_name,
                      "exp_pa": exp_pa, "confirmed": confirmed, "cal_p": cal_p,
                      "slot": slot, "name": name},
@@ -24377,8 +24529,8 @@ def _compute_confident_hits(game_pk, limit=4, date_hint=None, prefetch=None):
 
     # Only the top of each order are realistic 'best hit' candidates (volume +
     # quality); 8–9 hitters rarely clear the floor and just add latency.
-    tasks = ([(b, hp_name, hp_hand, hp_fg, hp_sv, hp_id, away_abbr, away_conf) for b in (away_bats or [])[:7]]
-             + [(b, ap_name, ap_hand, ap_fg, ap_sv, ap_id, home_abbr, home_conf) for b in (home_bats or [])[:7]])
+    tasks = ([(b, hp_name, hp_hand, hp_fg, hp_sv, hp_id, hp_splits, away_abbr, away_conf) for b in (away_bats or [])[:7]]
+             + [(b, ap_name, ap_hand, ap_fg, ap_sv, ap_id, ap_splits, home_abbr, home_conf) for b in (home_bats or [])[:7]])
     picks = []
     with ThreadPoolExecutor(max_workers=8) as ex:
         futs = [ex.submit(_score_batter, *t) for t in tasks]
@@ -24412,7 +24564,7 @@ def _compute_confident_hits(game_pk, limit=4, date_hint=None, prefetch=None):
         p["reason"] = _confident_hit_reason(
             fin["name"], fin["b"], fin["cal_p"], fin["rf"], mu, fin["opp_name"],
             fin["opp_hand"], fin["slot"], exp_pa=fin["exp_pa"],
-            confirmed=fin["confirmed"], adv=fin["adv"])
+            confirmed=fin["confirmed"], adv=fin["adv"], minfo=fin.get("minfo"))
     # Drop any stashed inputs from non-shown picks (defensive; top already popped).
     for p in picks:
         p.pop("_fin", None)

@@ -162,6 +162,7 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .ch-ars{font-family:Orbitron,monospace;font-size:.5rem;font-weight:800;letter-spacing:.4px;border-radius:4px;padding:1px 5px;white-space:nowrap}
 .ch-ars.pos{color:#0a0e14;background:#ffd54f}
 .ch-ars.neg{color:#8a98aa;background:rgba(106,141,176,.1);border:1px solid rgba(106,141,176,.2)}
+.ch-plat{font-family:Orbitron,monospace;font-size:.5rem;font-weight:800;letter-spacing:.4px;border-radius:4px;padding:1px 5px;white-space:nowrap;color:#0a0e14;background:#4dd0e1}
 .ch-status{font-size:.54rem;letter-spacing:.3px;margin-top:1px}
 .ch-status.ok{color:#ffd54f}
 .ch-status.thin{color:#6a8db0;font-style:italic}
@@ -1217,6 +1218,12 @@ function renderConfidentHits(pk,hits){
     } else if(h.arsenalStatus==='unfavorable'){
       arsBadge='<span class="ch-ars neg" title="Struggles vs this pitcher’s arsenal">ARSENAL−</span>';
     }
+    // Platoon-advantage chip (only when the matchup actually helps).
+    var platBadge='';
+    if(h.platoonAdv==='favorable' && (h.platoonTilt||0)>0.01){
+      var va=(h.pitcherVsHandAvg!=null)?(' · SP yields .'+String(Math.round(h.pitcherVsHandAvg*1000)).padStart(3,'0')+' to '+(h.batSide||'')+'HB'):'';
+      platBadge='<span class="ch-plat" title="Platoon edge'+va+'">↔ PLATOON</span>';
+    }
     // ── Odds / EV line (only when the market is priced) ──
     var oddsLine='';
     if(h.bestPrice!=null){
@@ -1249,6 +1256,7 @@ function renderConfidentHits(pk,hits){
         +'<span class="ch-name">'+h.player+'<span class="ch-team">'+(h.team||'')+'</span></span>'
         +'<span class="ch-mkt">1+ HIT'+paTxt+'</span>'
         +arsBadge
+        +platBadge
         +evBadge
         +lineupBadge
         +'<span class="ch-conf '+cls+'">'+pct+'%</span>'
@@ -2878,6 +2886,14 @@ function prewarmQuickProps(games){
   var list=(games||[]).filter(function(g){
     return !g.isPostponed&&!g.isCancelled&&!g.isSuspended
       && g.status!=='Final'&&g.status!=='Game Over'&&g.status!=='Completed Early';
+  });
+  // Warm the games starting SOONEST first — those are the ones closest to first
+  // pitch where you're about to bet. Live games sort ahead (gameDate already
+  // passed), then upcoming by start time; missing dates sink to the end.
+  list.sort(function(a,b){
+    var ta=Date.parse(a.gameStartIso||'')||Infinity;
+    var tb=Date.parse(b.gameStartIso||'')||Infinity;
+    return ta-tb;
   });
   var i=0;
   (function next(){
