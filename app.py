@@ -24115,8 +24115,30 @@ def _confident_hits_analytic_prob(b, opp_fg, opp_hand, exp_pa):
         return None
 
 
+def _arsenal_hit_tilt(adv):
+    """Convert the batter-vs-this-pitcher's-arsenal matchup into a bounded
+    logit-scale nudge on the hit probability. Only REAL arsenal data moves the
+    number (source=='arsenal' — the usage-weighted wOBA join); the handedness
+    proxy is too weak to tilt a hit prob, so it returns 0. A batter who hits this
+    exact pitch mix better than their own baseline gets a positive nudge; worse,
+    negative. Capped at ±0.24 logits (≈ ±5 points near a 0.65 prob) so the
+    matchup sharpens the ranking without overwhelming the model."""
+    if not adv or adv.get("source") != "arsenal":
+        return 0.0
+    mw = adv.get("matchup_woba")
+    bw = adv.get("baseline_woba")
+    if mw is None or bw is None:
+        return 0.0
+    try:
+        delta = float(mw) - float(bw)
+    except (TypeError, ValueError):
+        return 0.0
+    delta = max(-0.060, min(0.060, delta))
+    return 4.0 * delta
+
+
 def _confident_hit_reason(name, batter, cal_p, rf, mu, opp_name, opp_hand, slot,
-                          exp_pa=None, confirmed=True):
+                          exp_pa=None, confirmed=True, adv=None):
     """Plain-English 'why this player' for a Confident Hit pick.
 
     Every clause is a REAL driver pulled from the same data the model scores on
@@ -24133,23 +24155,37 @@ def _confident_hit_reason(name, batter, cal_p, rf, mu, opp_name, opp_hand, slot,
         bits.append(f"{l7:.1f} H/G last 7")
     elif l7r is not None and l7r >= 0.30:
         bits.append(f".{int(round(l7r * 1000)):03d} L7 hit rate")
-    # 2) Contact quality — prefer Statcast xBA (skill, de-luck'd) then season AVG.
+    # 2) Arsenal matchup — how well the batter hits THIS pitcher's actual pitch
+    #    mix (usage-weighted wOBA join). Lead with it when favorable: it is the
+    #    other half of what makes a hit likely besides current form.
+    if adv and adv.get("source") == "arsenal":
+        st = adv.get("status")
+        mw = adv.get("matchup_woba")
+        pp = adv.get("primary_pitch")
+        if st == "favorable" and mw is not None:
+            extra = f" ({mw:.3f} xwOBA vs the mix)" if mw else ""
+            bits.append(f"crushes this arsenal{extra}")
+        elif st == "favorable":
+            bits.append("strong vs this arsenal")
+        elif st == "neutral" and pp and len(bits) < 1:
+            bits.append(f"handles the {pp}")
+    # 3) Contact quality — prefer Statcast xBA (skill, de-luck'd) then season AVG.
     sv  = sv_batter(name) or {}
     fgb = fg_batter(name) or {}
     xba = _safe_f(sv.get("sv_xba"), None)
     avg = _safe_f(fgb.get("fg_avg"), None)
-    if xba is not None and xba >= 0.255:
+    if len(bits) < 3 and xba is not None and xba >= 0.255:
         bits.append(f".{int(round(xba * 1000)):03d} xBA")
-    elif avg is not None and avg >= 0.260:
+    elif len(bits) < 3 and avg is not None and avg >= 0.260:
         bits.append(f".{int(round(avg * 1000)):03d} AVG")
-    # 3) Matchup grade vs the listed starter (platoon-blended, pitcher-adjusted).
+    # 4) Matchup grade vs the listed starter (platoon-blended, pitcher-adjusted).
     tier  = mu.get("tier")
     score = mu.get("score")
-    if tier in ("A", "B") and score:
+    if tier in ("A", "B") and score and len(bits) < 3:
         last = (opp_name or "").split()[-1] if opp_name and opp_name != "TBD" else ""
         vs = f" vs {opp_hand}HP {last}" if last else ""
         bits.append(f"{tier}-tier matchup{vs}")
-    # 4) Lineup role + expected PA volume — the dominant driver of 1+ hit.
+    # 5) Lineup role + expected PA volume — the dominant driver of 1+ hit.
     if slot and 1 <= int(slot) <= 5 and len(bits) < 3:
         _ord = {1: "1st", 2: "2nd", 3: "3rd", 4: "4th", 5: "5th"}.get(int(slot), f"{slot}th")
         pa_txt = f" (~{exp_pa:.1f} PA)" if exp_pa else ""
@@ -24166,28 +24202,32 @@ def _confident_hit_reason(name, batter, cal_p, rf, mu, opp_name, opp_hand, slot,
 def _compute_confident_hits(game_pk, limit=4, date_hint=None):
     """High-confidence 'take for a hit' picks for the dashboard quick-props strip.
 
-    THIS IS THE MONEY MAKER, built to mirror how sharp books actually price a
-    'to record a hit' prop:
+    THIS IS THE MONEY MAKER. It ranks batters purely by their PROBABILITY OF
+    GETTING A HIT (not by EV/odds — those are attached afterward as info only).
+    That probability is driven by the two things that decide a hit:
 
-      1. ENSEMBLE, not one model. Each batter is scored by BOTH (a) the
-         calibrated XGB hits model (the self-calibrated artifact the prop board /
-         tracker fuse — held-out AUC 0.62, fed the same serve-parity
-         `_batter_recent_hit_form` features so the live number matches held-out
-         skill) and (b) a structural PA model — per-PA hit rate compounded over
-         expected plate appearances (1−(1−p)^PA), the textbook sportsbook
-         formulation. The two are fused by the SAME `stacked_calibrate` the rest
-         of the app uses (CI/coverage-aware weighting, park-factor adjusted).
-      2. CALIBRATION. The fused prob is run through the live realized-accuracy
-         recalibration (`_calibrate_prop_prob('batter_hits', …)`) so displayed
-         confidence reflects graded results, not raw-model optimism.
-      3. VOLUME. Expected PA (lineup slot) is the dominant driver — top-of-order
+      • RECENT FORM — the calibrated XGB hits model is fed the same serve-parity
+        `_batter_recent_hit_form` features (L7/L14 hits per game, L7 hit rate) the
+        tracker uses, so a hot bat is reflected in the live number.
+      • ARSENAL MATCHUP — the hit prob is then tilted by how well the batter hits
+        THIS pitcher's actual pitch mix: a usage-weighted wOBA join of the
+        batter's wOBA-by-pitch-type against the pitcher's real per-pitch usage
+        (`_pitch_type_advantage` → `_arsenal_matchup_from_stats`). A batter who
+        crushes the exact pitches this guy throws rises; one who can't, falls.
+
+    Supporting structure (so the number is honest, not a recency mirage):
+      1. ENSEMBLE — the XGB model is fused with a structural PA model (per-PA hit
+         rate compounded over expected plate appearances, 1−(1−p)^PA) via the same
+         `stacked_calibrate` the prop board uses (park-factor adjusted).
+      2. CALIBRATION — fused prob run through the live realized-accuracy
+         recalibration so confidence reflects graded results, not model optimism.
+      3. VOLUME — expected PA (lineup slot) is a dominant driver; top-of-order
          hitters record a hit far more often purely on plate-appearance count.
-      4. LINEUP DISCIPLINE. Each pick is tagged confirmed vs projected; projected
-         lineups carry a caveat (the #1 real-world edge — never bet a volume prop
-         on an unconfirmed lineup).
+      4. LINEUP DISCIPLINE — each pick tagged confirmed vs projected.
 
-    Picks are gated above a confidence floor, ranked by calibrated hit
-    probability, and capped at `limit` (≤4). Each carries a plain-English reason.
+    Picks are gated above a confidence floor, ranked by the (form + arsenal)
+    hit probability, and capped at `limit` (≤4). Each carries a plain-English
+    reason that leads with recent form and the arsenal verdict.
     """
     if not (_XGB_AVAILABLE and xgb_ready("hits")):
         return []
@@ -24227,7 +24267,7 @@ def _compute_confident_hits(game_pk, limit=4, date_hint=None):
     # so we only surface batters the calibrated model likes meaningfully.
     CONF_FLOOR = 0.60
 
-    def _score_batter(b, opp_name, opp_hand, opp_fg, opp_sv, team_abbr, confirmed):
+    def _score_batter(b, opp_name, opp_hand, opp_fg, opp_sv, opp_pid, team_abbr, confirmed):
         name = (b.get("name") or "").strip()
         pid  = b.get("id")
         slot = b.get("slot") or 0
@@ -24273,12 +24313,30 @@ def _compute_confident_hits(game_pk, limit=4, date_hint=None):
             cal_p = float(cal_p)
         except Exception:
             cal_p = fused
+        # ── Arsenal matchup: tilt the hit prob by how well this batter hits THIS
+        #    pitcher's actual pitch mix (usage-weighted wOBA). This + recent form
+        #    are the two drivers the ranking is meant to reflect. Real arsenal
+        #    data only (handedness proxy = no tilt). Applied on the logit scale.
+        adv = None
+        if pid and opp_pid:
+            try:
+                adv = _pitch_type_advantage(int(pid), int(opp_pid), name, opp_name)
+            except Exception:
+                adv = None
+        tilt = _arsenal_hit_tilt(adv)
+        if tilt:
+            try:
+                cal_p = 1.0 / (1.0 + math.exp(-(_logit(cal_p) + tilt)))
+            except Exception:
+                pass
+        cal_p = max(0.03, min(0.97, cal_p))
         if cal_p < CONF_FLOOR:
             return None
         try:
             mu = _matchup_score(b, opp_fg, opp_sv, pitcher_hand=opp_hand) or {}
         except Exception:
             mu = {}
+        _ars_status = adv.get("status") if (adv and adv.get("source") == "arsenal") else None
         return {
             "player": name, "playerId": pid, "team": team_abbr, "slot": slot,
             "market": "hits", "marketKey": "batter_hits", "marketLabel": "Hits",
@@ -24292,16 +24350,21 @@ def _compute_confident_hits(game_pk, limit=4, date_hint=None):
             "lineupConfirmed": bool(confirmed),
             "matchupScore": round(float(mu.get("score") or 0), 1) or None,
             "matchupTier": mu.get("tier"),
+            "arsenalStatus": _ars_status,
+            "arsenalWoba": adv.get("matchup_woba") if _ars_status else None,
+            "arsenalBaseline": adv.get("baseline_woba") if _ars_status else None,
+            "arsenalPrimaryPitch": adv.get("primary_pitch") if _ars_status else None,
+            "arsenalTilt": round(tilt, 3) if tilt else 0,
             "oppPitcher": opp_name, "oppHand": opp_hand,
             "l7Hits": rf.get("l7Hits"), "l7HitRate": rf.get("l7HitRate"),
             "hubRating": max(0, min(100, int(round(cal_p * 100)))),
             "reason": _confident_hit_reason(name, b, cal_p, rf, mu, opp_name,
                                             opp_hand, slot, exp_pa=exp_pa,
-                                            confirmed=confirmed),
+                                            confirmed=confirmed, adv=adv),
         }
 
-    tasks = ([(b, hp_name, hp_hand, hp_fg, hp_sv, away_abbr, away_conf) for b in (away_bats or [])[:9]]
-             + [(b, ap_name, ap_hand, ap_fg, ap_sv, home_abbr, home_conf) for b in (home_bats or [])[:9]])
+    tasks = ([(b, hp_name, hp_hand, hp_fg, hp_sv, hp_id, away_abbr, away_conf) for b in (away_bats or [])[:9]]
+             + [(b, ap_name, ap_hand, ap_fg, ap_sv, ap_id, home_abbr, home_conf) for b in (home_bats or [])[:9]])
     picks = []
     with ThreadPoolExecutor(max_workers=8) as ex:
         futs = [ex.submit(_score_batter, *t) for t in tasks]

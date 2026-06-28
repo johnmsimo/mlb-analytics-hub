@@ -159,6 +159,9 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .ch-grade.g-neg{color:#8a98aa;background:rgba(106,141,176,.08);border:1px solid rgba(106,141,176,.18)}
 .ch-stake{font-family:Orbitron,monospace;font-weight:700;color:#00e5ff;background:rgba(0,229,255,.1);border:1px solid rgba(0,229,255,.25);border-radius:4px;padding:1px 6px}
 .ch-fade{color:#8a98aa;font-size:.58rem;font-style:italic}
+.ch-ars{font-family:Orbitron,monospace;font-size:.5rem;font-weight:800;letter-spacing:.4px;border-radius:4px;padding:1px 5px;white-space:nowrap}
+.ch-ars.pos{color:#0a0e14;background:#ffd54f}
+.ch-ars.neg{color:#8a98aa;background:rgba(106,141,176,.1);border:1px solid rgba(106,141,176,.2)}
 .ch-save{align-self:flex-start;background:rgba(0,230,118,.08);border:1px solid rgba(0,230,118,.3);border-radius:6px;color:#00e676;font-size:.56rem;padding:3px 9px;cursor:pointer;transition:all .15s;font-family:Orbitron,monospace;letter-spacing:.5px;white-space:nowrap}
 .ch-save:hover{background:rgba(0,230,118,.16)}
 .ch-save.saved{background:rgba(0,230,118,.18);cursor:default}
@@ -1203,6 +1206,14 @@ function renderConfidentHits(pk,hits){
     var lineupBadge=(h.lineupConfirmed===false)
       ? '<span class="ch-proj" title="Lineup not yet official — confirm before betting">⚠ PROJ</span>'
       : '<span class="ch-conf-badge" title="Confirmed in the official lineup">✓ LIVE</span>';
+    // Arsenal matchup chip — how well this batter hits THIS pitcher's pitch mix.
+    var arsBadge='';
+    if(h.arsenalStatus==='favorable'){
+      var wt=(h.arsenalWoba!=null)?(' '+h.arsenalWoba.toFixed(3)+' xwOBA vs his mix'):'';
+      arsBadge='<span class="ch-ars pos" title="Hits this pitcher’s arsenal well'+wt+'">🎯 ARSENAL+</span>';
+    } else if(h.arsenalStatus==='unfavorable'){
+      arsBadge='<span class="ch-ars neg" title="Struggles vs this pitcher’s arsenal">ARSENAL−</span>';
+    }
     // ── Odds / EV line (only when the market is priced) ──
     var oddsLine='';
     if(h.bestPrice!=null){
@@ -1225,6 +1236,7 @@ function renderConfidentHits(pk,hits){
       +'<div class="ch-top">'
         +'<span class="ch-name">'+h.player+'<span class="ch-team">'+(h.team||'')+'</span></span>'
         +'<span class="ch-mkt">1+ HIT'+paTxt+'</span>'
+        +arsBadge
         +evBadge
         +lineupBadge
         +'<span class="ch-conf '+cls+'">'+pct+'%</span>'
