@@ -24066,13 +24066,65 @@ def _compute_streak(log, stat_key, line):
     return {"direction": last_dir, "length": length}
 
 
-def _confident_hit_reason(name, batter, cal_p, rf, mu, opp_name, opp_hand, slot):
+def _confident_hits_exp_pa(slot):
+    """Expected plate appearances for a lineup slot — the dominant volume driver
+    of P(1+ hit) (leadoff ≈4.6 PA / 67% hit-game rate vs the 9-hole ≈3.9 PA /
+    ~51%). Mirrors `_LINEUP_PA_WEIGHTS` used everywhere else."""
+    try:
+        s = int(slot)
+    except Exception:
+        s = 0
+    if 1 <= s <= len(_LINEUP_PA_WEIGHTS):
+        return float(_LINEUP_PA_WEIGHTS[s - 1])
+    return 4.2
+
+
+def _confident_hits_analytic_prob(b, opp_fg, opp_hand, exp_pa):
+    """Structural 'book model' second estimate of P(1+ hit), independent of XGB.
+
+    This is the same math sportsbooks/sharp models use: a per-PA hit rate
+    compounded over expected plate appearances via 1−(1−p)^PA. The per-PA rate is
+    the batter's platoon-blended AVG converted to per-PA (×AB/PA≈1−BB%), then
+    tilted by the opposing starter's strikeout + BABIP-against profile (more Ks /
+    weaker contact allowed ⇒ fewer hits). Giving the stacked calibrator a genuine
+    SECOND model (not a re-expression of XGB) is what lets the fusion add skill.
+    Returns None when inputs are too thin to trust (so we fall back to XGB-only).
+    """
+    try:
+        avg_vs = platoon_blend_v2(b, opp_hand, 'avg')
+        avg_vs = float(avg_vs or 0)
+        if avg_vs <= 0:
+            return None
+        fgb = fg_batter(b.get("name", "")) or {}
+        bb = _safe_f(fgb.get("fg_bbpct"), 0.08)
+        if bb > 1:
+            bb /= 100.0
+        # AVG is per-AB; (1−BB%) approximates AB/PA (HBP/SF are minor) → hits/PA.
+        hit_pa = avg_vs * max(0.80, 1.0 - bb)
+        # Opposing starter tilt — league hits/PA in play ≈ (1−.22)·.295 ≈ .230.
+        opp_k = _safe_f((opp_fg or {}).get("fg_kpct"), 0.22)
+        if opp_k > 1:
+            opp_k /= 100.0
+        opp_babip = _safe_f((opp_fg or {}).get("fg_babip"), 0.295)
+        opp_hit_pa = max(0.0, 1.0 - opp_k) * opp_babip
+        tilt = _clamp((opp_hit_pa / 0.230) if opp_hit_pa else 1.0, 0.82, 1.18)
+        hit_pa = max(0.0, min(0.60, hit_pa * tilt))
+        p = _binomial_over_zero(hit_pa * exp_pa, exp_pa)
+        return p if p and p > 0 else None
+    except Exception:
+        return None
+
+
+def _confident_hit_reason(name, batter, cal_p, rf, mu, opp_name, opp_hand, slot,
+                          exp_pa=None, confirmed=True):
     """Plain-English 'why this player' for a Confident Hit pick.
 
     Every clause is a REAL driver pulled from the same data the model scores on
     (recent game-log form, season/Statcast contact quality, the platoon-blended
-    matchup score, lineup role) — nothing is fabricated. Returns the 3 strongest
-    signals joined with ' · '."""
+    matchup score, lineup role + expected PA volume) — nothing is fabricated.
+    Appends a lineup-confirmation caveat when the lineup is only projected, which
+    is the single biggest real-world edge sharp bettors apply (never bet a
+    volume prop on an unconfirmed lineup — late scratches kill it)."""
     bits = []
     # 1) Recent form — hits per game / hit rate over the last 7 completed games.
     l7  = rf.get("l7Hits")
@@ -24097,29 +24149,45 @@ def _confident_hit_reason(name, batter, cal_p, rf, mu, opp_name, opp_hand, slot)
         last = (opp_name or "").split()[-1] if opp_name and opp_name != "TBD" else ""
         vs = f" vs {opp_hand}HP {last}" if last else ""
         bits.append(f"{tier}-tier matchup{vs}")
-    # 4) Lineup role — top-of-order = more guaranteed plate appearances.
+    # 4) Lineup role + expected PA volume — the dominant driver of 1+ hit.
     if slot and 1 <= int(slot) <= 5 and len(bits) < 3:
         _ord = {1: "1st", 2: "2nd", 3: "3rd", 4: "4th", 5: "5th"}.get(int(slot), f"{slot}th")
-        bits.append(f"bats {_ord}")
+        pa_txt = f" (~{exp_pa:.1f} PA)" if exp_pa else ""
+        bits.append(f"bats {_ord}{pa_txt}")
     # Guarantee at least one substantive clause: the model still favors this hit.
     if not bits or (len(bits) == 1 and bits[0].startswith("bats")):
         bits.append(f"model favors contact ({int(round(cal_p * 100))}%)")
-    return " · ".join(bits[:3])
+    out = " · ".join(bits[:3])
+    if not confirmed:
+        out += " · ⚠ proj. lineup — confirm before betting"
+    return out
 
 
 def _compute_confident_hits(game_pk, limit=4, date_hint=None):
     """High-confidence 'take for a hit' picks for the dashboard quick-props strip.
 
-    THIS IS THE MONEY MAKER. It scores every batter in the game with the
-    calibrated XGB hits model — the same self-calibrated artifact the prop board
-    and tracker fuse (held-out AUC 0.62, well-calibrated) — feeding it the SAME
-    serve-parity recent-form features the tracker uses (`_batter_recent_hit_form`)
-    so the live number matches the model's held-out skill. The raw model prob is
-    then run through the live realized-accuracy recalibration
-    (`_calibrate_prop_prob('batter_hits', …)`) so displayed confidence reflects
-    graded results, not raw-model optimism. Picks are gated above a confidence
-    floor, ranked by calibrated hit probability, and capped at `limit` (≤4). Each
-    carries a plain-English reason built from real drivers.
+    THIS IS THE MONEY MAKER, built to mirror how sharp books actually price a
+    'to record a hit' prop:
+
+      1. ENSEMBLE, not one model. Each batter is scored by BOTH (a) the
+         calibrated XGB hits model (the self-calibrated artifact the prop board /
+         tracker fuse — held-out AUC 0.62, fed the same serve-parity
+         `_batter_recent_hit_form` features so the live number matches held-out
+         skill) and (b) a structural PA model — per-PA hit rate compounded over
+         expected plate appearances (1−(1−p)^PA), the textbook sportsbook
+         formulation. The two are fused by the SAME `stacked_calibrate` the rest
+         of the app uses (CI/coverage-aware weighting, park-factor adjusted).
+      2. CALIBRATION. The fused prob is run through the live realized-accuracy
+         recalibration (`_calibrate_prop_prob('batter_hits', …)`) so displayed
+         confidence reflects graded results, not raw-model optimism.
+      3. VOLUME. Expected PA (lineup slot) is the dominant driver — top-of-order
+         hitters record a hit far more often purely on plate-appearance count.
+      4. LINEUP DISCIPLINE. Each pick is tagged confirmed vs projected; projected
+         lineups carry a caveat (the #1 real-world edge — never bet a volume prop
+         on an unconfirmed lineup).
+
+    Picks are gated above a confidence floor, ranked by calibrated hit
+    probability, and capped at `limit` (≤4). Each carries a plain-English reason.
     """
     if not (_XGB_AVAILABLE and xgb_ready("hits")):
         return []
@@ -24139,34 +24207,72 @@ def _compute_confident_hits(game_pk, limit=4, date_hint=None):
 
     away_abbr = away_t.get("team", {}).get("abbreviation", "AWAY")
     home_abbr = home_t.get("team", {}).get("abbreviation", "HOME")
+    home_id   = (home_t.get("team") or {}).get("id")
+    # Hit-environment park factor (BABIP/hits). BPP microclimate when available,
+    # else the static park index — passed into the stacked fusion.
+    try:
+        park_factor = float(_resolve_park_factor(home_abbr, home_id, hand="R", stat="H") or 1.0)
+    except Exception:
+        park_factor = 1.0
+
+    # Confirmed-lineup status per side: a side is "confirmed" only once the
+    # official batting order is posted (≥9 batters, none flagged pending).
+    def _side_confirmed(bats):
+        return bool(bats) and len(bats) >= 9 and all(
+            (x.get("lineup_status") or "confirmed") == "confirmed" for x in bats[:9])
+    away_conf = _side_confirmed(away_bats)
+    home_conf = _side_confirmed(home_bats)
 
     # Confidence floor: clearly above a coin flip. Hits base rate (1+ hit) ≈ 0.66,
     # so we only surface batters the calibrated model likes meaningfully.
     CONF_FLOOR = 0.60
 
-    def _score_batter(b, opp_name, opp_hand, opp_fg, opp_sv, team_abbr):
+    def _score_batter(b, opp_name, opp_hand, opp_fg, opp_sv, team_abbr, confirmed):
         name = (b.get("name") or "").strip()
         pid  = b.get("id")
         slot = b.get("slot") or 0
         if not name:
             return None
+        exp_pa = _confident_hits_exp_pa(slot)
         # Serve-parity recent form (also powers the reason). Daily-cached per id.
         rf = _batter_recent_hit_form(pid) if pid else {}
         bdict = {"name": name, "bats": b.get("bats") or "S", "slot": slot, "id": pid}
         if rf:
             bdict.update(rf)
         pdict = {"name": opp_name, "pitchHand": opp_hand}
+        # Model 1: calibrated XGB hits probability.
         try:
-            raw_p = xgb_hit_prob(bdict, pdict)
+            xgb_p = xgb_hit_prob(bdict, pdict)
         except Exception:
-            raw_p = None
-        if raw_p is None:
+            xgb_p = None
+        if xgb_p is None:
             return None
-        cal_p = _calibrate_prop_prob("batter_hits", float(raw_p))
+        xgb_p = float(xgb_p)
+        # Model 2: structural per-PA × expected-PA "book model".
+        batx_p = _confident_hits_analytic_prob(b, opp_fg, opp_hand, exp_pa)
+        # Fuse the two via the same stacked calibrator the prop board uses.
+        fused = xgb_p
+        model_source = "xgb"
+        if batx_p is not None:
+            if _STACK_AVAILABLE:
+                try:
+                    stk = stacked_calibrate(
+                        xgb_p, float(batx_p), coverage=0.6, exp_pa=exp_pa,
+                        bvp_pa=0, park_factor=park_factor, market_key="batter_hits")
+                except Exception:
+                    stk = None
+                if stk and stk.get("probability") is not None:
+                    fused = float(stk["probability"]); model_source = "stacked"
+                else:
+                    fused = 0.5 * xgb_p + 0.5 * float(batx_p); model_source = "blend"
+            else:
+                fused = 0.5 * xgb_p + 0.5 * float(batx_p); model_source = "blend"
+        # Live realized-accuracy recalibration on the fused probability.
+        cal_p = _calibrate_prop_prob("batter_hits", fused)
         try:
             cal_p = float(cal_p)
         except Exception:
-            cal_p = float(raw_p)
+            cal_p = fused
         if cal_p < CONF_FLOOR:
             return None
         try:
@@ -24178,18 +24284,24 @@ def _compute_confident_hits(game_pk, limit=4, date_hint=None):
             "market": "hits", "marketKey": "batter_hits", "marketLabel": "Hits",
             "line": 0.5, "side": "Over", "recommendedSide": "Over",
             "hitProb": round(cal_p, 4),
-            "rawHitProb": round(float(raw_p), 4),
+            "xgbProb": round(xgb_p, 4),
+            "analyticProb": round(float(batx_p), 4) if batx_p is not None else None,
+            "modelSource": model_source,
+            "expPa": round(exp_pa, 1),
             "confidencePct": int(round(cal_p * 100)),
+            "lineupConfirmed": bool(confirmed),
             "matchupScore": round(float(mu.get("score") or 0), 1) or None,
             "matchupTier": mu.get("tier"),
             "oppPitcher": opp_name, "oppHand": opp_hand,
             "l7Hits": rf.get("l7Hits"), "l7HitRate": rf.get("l7HitRate"),
             "hubRating": max(0, min(100, int(round(cal_p * 100)))),
-            "reason": _confident_hit_reason(name, b, cal_p, rf, mu, opp_name, opp_hand, slot),
+            "reason": _confident_hit_reason(name, b, cal_p, rf, mu, opp_name,
+                                            opp_hand, slot, exp_pa=exp_pa,
+                                            confirmed=confirmed),
         }
 
-    tasks = ([(b, hp_name, hp_hand, hp_fg, hp_sv, away_abbr) for b in (away_bats or [])[:9]]
-             + [(b, ap_name, ap_hand, ap_fg, ap_sv, home_abbr) for b in (home_bats or [])[:9]])
+    tasks = ([(b, hp_name, hp_hand, hp_fg, hp_sv, away_abbr, away_conf) for b in (away_bats or [])[:9]]
+             + [(b, ap_name, ap_hand, ap_fg, ap_sv, home_abbr, home_conf) for b in (home_bats or [])[:9]])
     picks = []
     with ThreadPoolExecutor(max_workers=8) as ex:
         futs = [ex.submit(_score_batter, *t) for t in tasks]
@@ -24201,7 +24313,8 @@ def _compute_confident_hits(game_pk, limit=4, date_hint=None):
             except Exception:
                 pass
 
-    picks.sort(key=lambda x: x["hitProb"], reverse=True)
+    # Rank by calibrated probability; confirmed lineups break ties (sharper bet).
+    picks.sort(key=lambda x: (x["hitProb"], x.get("lineupConfirmed", False)), reverse=True)
     return picks[:limit]
 
 
