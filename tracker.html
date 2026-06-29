@@ -36,7 +36,7 @@ input:focus,select:focus{border-color:var(--c)}
 .top-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 
 /* ── Buttons ── */
-.btn{padding:7px 14px;border-radius:8px;border:1px solid var(--line2);background:var(--bg3);color:var(--txt);transition:all .15s;white-space:nowrap}
+.btn{padding:7px 14px;border-radius:8px;border:1px solid var(--line2);background:var(--bg3);color:var(--txt);transition:all .15s;white-space:nowrap;flex-shrink:0}
 .btn:hover{border-color:var(--c);color:var(--c)}
 .btn.primary{background:var(--c2);border-color:var(--c);color:#fff}
 .btn.primary:hover{background:var(--c);color:var(--bg)}
@@ -73,6 +73,7 @@ input:focus,select:focus{border-color:var(--c)}
 
 /* ── Control row ── */
 .ctrl{display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+.ctrl>input,.ctrl>.pill,.ctrl-sep{flex-shrink:0}
 .ctrl-sep{width:1px;height:20px;background:var(--line2);margin:0 4px}
 
 /* ── Main grid ── */

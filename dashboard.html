@@ -141,7 +141,8 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .ch-row{display:flex;flex-direction:column;gap:3px;padding:6px 4px;border-top:1px solid rgba(0,230,118,.1)}
 .ch-row:first-of-type{border-top:none}
 .ch-top{display:flex;align-items:center;gap:8px}
-.ch-name{flex:1;color:var(--t);font-weight:700;font-size:.74rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ch-name{flex:1;min-width:0;color:var(--t);font-weight:700;font-size:.74rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ch-tags{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:3px}
 .ch-name .ch-team{color:var(--mu);font-weight:600;font-size:.56rem;margin-left:4px}
 .ch-mkt{font-family:Orbitron,monospace;font-size:.52rem;color:var(--mu);letter-spacing:.6px;white-space:nowrap}
 .ch-conf{font-family:Orbitron,monospace;font-size:.72rem;font-weight:800;padding:2px 8px;border-radius:6px;white-space:nowrap}
@@ -1216,13 +1217,24 @@ function renderConfidentHits(pk,hits){
   if(!hits||!hits.length)return '';
   var tracked=window.__trackedQPIds||[];
   // Order the shown picks by the active sort: raw hit probability (default) or
-  // the matchup tilt (biggest arsenal/platoon/weak-spot exploit first).
+  // the matchup score (biggest arsenal/platoon/weak-spot exploit first), falling
+  // back to matchup tilt then hit prob when scores tie.
+  var inMatchup=(CH_SORT==='tilt');
   var sorted=(hits||[]).slice();
-  if(CH_SORT==='tilt') sorted.sort(function(a,b){return (b.matchupTilt||0)-(a.matchupTilt||0)||(b.hitProb||0)-(a.hitProb||0);});
+  if(inMatchup) sorted.sort(function(a,b){return (b.matchupScore||0)-(a.matchupScore||0)||(b.matchupTilt||0)-(a.matchupTilt||0)||(b.hitProb||0)-(a.hitProb||0);});
   else sorted.sort(function(a,b){return (b.hitProb||0)-(a.hitProb||0);});
   var rows=sorted.slice(0,4).map(function(h,i){
     var pct=(h.confidencePct!=null)?h.confidencePct:Math.round((h.hitProb||0)*100);
     var cls=chConfClass(pct);
+    // The Prob/Matchup toggle changes BOTH the order and the headline metric so
+    // switching it is visibly meaningful: Prob shows the hit % (sorted by it),
+    // Matchup shows the 0–100 matchup score (sorted by it).
+    var muScore=(h.matchupScore!=null)?Math.round(h.matchupScore):null;
+    var confVal, confCls;
+    if(inMatchup){
+      var ms=(muScore!=null)?muScore:pct;
+      confVal='MU '+ms; confCls=chConfClass(ms);
+    } else { confVal=pct+'%'; confCls=cls; }
     var key=h.playerId+':hits:'+h.line;
     var saved=tracked.indexOf(key)>=0;
     var bid='chsave-'+pk+'-'+i;
@@ -1274,12 +1286,14 @@ function renderConfidentHits(pk,hits){
     return '<div class="ch-row'+(h.lineupConfirmed===false?' proj':'')+(h.isPlusEv?' plusev':'')+'">'
       +'<div class="ch-top">'
         +'<span class="ch-name">'+h.player+'<span class="ch-team">'+(h.team||'')+'</span></span>'
+        +'<span class="ch-conf '+confCls+'">'+confVal+'</span>'
+      +'</div>'
+      +'<div class="ch-tags">'
         +'<span class="ch-mkt">1+ HIT'+paTxt+'</span>'
         +arsBadge
         +platBadge
         +evBadge
         +lineupBadge
-        +'<span class="ch-conf '+cls+'">'+pct+'%</span>'
       +'</div>'
       +'<div class="ch-reason">'+(h.reason||'model-projected contact edge')+'</div>'
       +statusLine
