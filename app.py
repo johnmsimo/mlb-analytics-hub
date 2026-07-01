@@ -15703,6 +15703,17 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
     def process_hitters(arr, team_abbr, opp_name, opp_pitcher):
         for p in arr:
             player_name = p.get('name')
+            # Fetched once per player (day-cached by (batter, pitcher) inside
+            # _fetch_bvp) so every market/line below can pass the REAL BvP PA
+            # count into the stacked fusion instead of a hardcoded 0 — see
+            # bvp_pa usage a few lines down.
+            _bvp_data = None
+            if opp_pitcher and opp_pitcher.get('id') and p.get('id'):
+                try:
+                    _bvp_data = _fetch_bvp(p.get('id'), opp_pitcher.get('id'))
+                except Exception:
+                    _bvp_data = None
+            _bvp_pa = int((_bvp_data or {}).get('pa') or 0)
             for mk, mean_field in _BATTER_MEAN_FIELD_FOR_MK.items():
                 # Use actual market lines from Odds API; fall back to single default
                 mkt_lines = _market_lines_for_player(market_props, player_name, mk)
@@ -15754,7 +15765,7 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                                       if _full.get('p_lo') is not None and _full.get('p_hi') is not None else None)
                             try:
                                 _stk = stacked_calibrate(float(_xgb_p), float(raw_prob),
-                                                         coverage=0.5, exp_pa=_exp_pa, bvp_pa=0,
+                                                         coverage=0.5, exp_pa=_exp_pa, bvp_pa=_bvp_pa,
                                                          market_key=mk, mc_ci=_mc_ci)
                             except Exception:
                                 _stk = None
@@ -15828,11 +15839,7 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                     temp_row['stakeDollars'] = stake_profile.get('stake_dollars')
                     # Phase 2: Add tier and BvP grade
                     temp_row['confidenceTier'] = _confidence_tier(temp_row)
-                    if opp_pitcher and opp_pitcher.get('id'):
-                        bvp_data = _fetch_bvp(p.get('id'), opp_pitcher.get('id'))
-                        temp_row['bvpGrade'] = _compute_bvp_grade(bvp_data)
-                    else:
-                        temp_row['bvpGrade'] = None
+                    temp_row['bvpGrade'] = _compute_bvp_grade(_bvp_data) if _bvp_data else None
                     rows.append(temp_row)
 
     # Away batters face the home pitcher; home batters face the away pitcher.
