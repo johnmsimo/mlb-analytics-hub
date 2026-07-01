@@ -11477,6 +11477,14 @@ MARKET_MODEL_WEIGHTS = {
     "batter_stolen_bases":   0.45,
     "nrfi":                  0.35,
     "yrfi":                  0.40,
+    # Full-game moneyline/totals markets are among the most efficient in all
+    # of sports betting (deep, heavily-traded, closely watched by sharps) —
+    # trust the market far more than the in-house sim here.
+    "h2h":                   0.20,
+    "totals":                0.20,
+    # First-5 markets are thinner/less efficient than full-game.
+    "f5_h2h":                0.30,
+    "f5_totals":             0.30,
     # Alt-lines/micro-props — model dominates
     "default":               0.50,
 }
@@ -15390,7 +15398,21 @@ def _build_team_market_rows(game_pk, capture_date, away_abbr, home_abbr,
               bookmaker, opp_book_price, opp_book_name, team, reason):
         """Build a single row and append to rows."""
         raw_mult_prob = _clamp01(raw_prob * _market_mult(market_key, adjustments))
-        precal_prob = raw_mult_prob
+        # Team/game-level markets used to skip market blending entirely (unlike
+        # every batter/pitcher prop, which runs through logit_blend_prob) even
+        # though the de-vigged book price is right here — the model's own win%/
+        # total was taken at face value. Since h2h/totals are among the most
+        # efficient markets in sports betting, running unblended sim output
+        # straight to production is what produced the huge overconfidence
+        # (predicted >> realized) measured on these markets in
+        # /api/calibration/markets.
+        if market_implied and market_implied > 0:
+            over_imp = market_implied
+            under_imp = _american_to_implied(opp_book_price) or (1 - over_imp)
+            blended_prob = logit_blend_prob(raw_mult_prob, over_imp, market_key, over_imp, under_imp)
+        else:
+            blended_prob = raw_mult_prob
+        precal_prob = blended_prob
         adj_prob = _calibrate_prop_prob(market_key, precal_prob)
         edge = _capped_edge(adj_prob, market_implied)
         score = (edge * 100.0 if edge is not None else 0) + adj_prob
@@ -15681,6 +15703,17 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
     def process_hitters(arr, team_abbr, opp_name, opp_pitcher):
         for p in arr:
             player_name = p.get('name')
+            # Fetched once per player (day-cached by (batter, pitcher) inside
+            # _fetch_bvp) so every market/line below can pass the REAL BvP PA
+            # count into the stacked fusion instead of a hardcoded 0 — see
+            # bvp_pa usage a few lines down.
+            _bvp_data = None
+            if opp_pitcher and opp_pitcher.get('id') and p.get('id'):
+                try:
+                    _bvp_data = _fetch_bvp(p.get('id'), opp_pitcher.get('id'))
+                except Exception:
+                    _bvp_data = None
+            _bvp_pa = int((_bvp_data or {}).get('pa') or 0)
             for mk, mean_field in _BATTER_MEAN_FIELD_FOR_MK.items():
                 # Use actual market lines from Odds API; fall back to single default
                 mkt_lines = _market_lines_for_player(market_props, player_name, mk)
@@ -15732,7 +15765,7 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                                       if _full.get('p_lo') is not None and _full.get('p_hi') is not None else None)
                             try:
                                 _stk = stacked_calibrate(float(_xgb_p), float(raw_prob),
-                                                         coverage=0.5, exp_pa=_exp_pa, bvp_pa=0,
+                                                         coverage=0.5, exp_pa=_exp_pa, bvp_pa=_bvp_pa,
                                                          market_key=mk, mc_ci=_mc_ci)
                             except Exception:
                                 _stk = None
@@ -15806,11 +15839,7 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                     temp_row['stakeDollars'] = stake_profile.get('stake_dollars')
                     # Phase 2: Add tier and BvP grade
                     temp_row['confidenceTier'] = _confidence_tier(temp_row)
-                    if opp_pitcher and opp_pitcher.get('id'):
-                        bvp_data = _fetch_bvp(p.get('id'), opp_pitcher.get('id'))
-                        temp_row['bvpGrade'] = _compute_bvp_grade(bvp_data)
-                    else:
-                        temp_row['bvpGrade'] = None
+                    temp_row['bvpGrade'] = _compute_bvp_grade(_bvp_data) if _bvp_data else None
                     rows.append(temp_row)
 
     # Away batters face the home pitcher; home batters face the away pitcher.
@@ -15917,11 +15946,16 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
             temp_row['stakeDollars'] = stake_profile.get('stake_dollars')
             # Phase 2: Add tier and BvP grade
             temp_row['confidenceTier'] = _confidence_tier(temp_row)
-            if away_pitcher and away_pitcher.get('id'):
-                bvp_data = _fetch_bvp(sp.get('id'), away_pitcher.get('id'))
-                temp_row['bvpGrade'] = _compute_bvp_grade(bvp_data)
-            else:
-                temp_row['bvpGrade'] = None
+            # _fetch_bvp(batter_id, pitcher_id) grades a BATTER's history against
+            # an opposing pitcher; there's no batter side here (this loop is
+            # scoring the pitcher's own K prop). The old call passed sp's own id
+            # as the "batter" against away_pitcher's id — for sp=away_sp that's a
+            # pitcher queried against himself, and post-universal-DH starting
+            # pitchers essentially never have MLB Stats API hitting splits
+            # either way, so this always silently graded 'C' with no real
+            # signal. No batter-vs-pitcher equivalent exists for a K prop, so
+            # leave it unset rather than report a meaningless grade.
+            temp_row['bvpGrade'] = None
             rows.append(temp_row)
 
     # ── Team / game-level markets (h2h, totals, F5, NRFI/YRFI) ──────────────

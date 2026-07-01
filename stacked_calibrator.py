@@ -239,8 +239,16 @@ def _logistic_blend(xgb_p: float, batx_p: float,
     p = _sigmoid(z)
     div = abs(_logit(xgb_p) - _logit(batx_p))
     if div > 0.55 and (coverage < 0.40 or bvp_pa < 5):
+        # Shrink toward THIS market's base rate, not the hits-specific league
+        # prior. bvp_pa < 5 is true for the overwhelming majority of matchups
+        # (batter-vs-pitcher history rarely reaches 5 PA), so this guard fires
+        # on almost every disagreement — using the hits prior (0.66) here for
+        # home runs (~0.13) / total bases (~0.40) / RBI (~0.34) systematically
+        # dragged those markets' probabilities up toward a coin-flip-on-hits
+        # rate, which is the dominant source of the observed overconfidence
+        # (mean predicted >> realized) on those props in production.
         shrink_w = _clamp((div - 0.55) * 0.30, 0.0, 0.35)
-        p = (1 - shrink_w) * p + shrink_w * LEAGUE_PRIOR_HIT1
+        p = (1 - shrink_w) * p + shrink_w * _base_rate_for(market_key)
     return p
 
 
@@ -380,9 +388,15 @@ def calibrate(xgb_p: Optional[float], batx_p: Optional[float], *,
         The 'source' field is suffixed with '+mc' when this path is taken.
     """
     if xgb_p is None and batx_p is None:
+        # Same market-aware base rate as everywhere else in this module — this
+        # branch used to return the hits prior (0.66) for every market, so a
+        # no-data HR/TB/RBI call reported a ~66% probability against true
+        # rates of 13/40/34%.
+        no_data_rate = _base_rate_for(market_key)
+        ci_lo, ci_hi = _ci_from_sigma(no_data_rate, 0.45)
         return {
-            "probability":   LEAGUE_PRIOR_HIT1,
-            "ci_lo": 0.35,   "ci_hi": 0.85,
+            "probability":   no_data_rate,
+            "ci_lo": ci_lo,  "ci_hi": ci_hi,
             "verdict":       "PASS",
             "verdict_label": "PASS · NO DATA",
             "verdict_color": "gray",

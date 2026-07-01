@@ -585,9 +585,25 @@ def _aggregate_statcast_chunk(sc: pd.DataFrame, season: int) -> tuple[pd.DataFra
     sc["is_triple"] = (sc["events"] == "triple").astype(int)
     sc["tb"]        = sc["is_hit"] + sc["is_hr"] + sc["is_double"] + sc["is_triple"]
 
+    for c in ("inning_topbot", "at_bat_number"):
+        if c not in sc.columns:
+            sc[c] = np.nan
+
+    pa_rows = sc[sc["is_pa"] == 1]
+
+    # ─ Opposing STARTER per (game, side): the pitcher with the smallest
+    #   at_bat_number on that half-inning side (Top faces the home starter,
+    #   Bot faces the away starter). This is the join key build_batter_matrix
+    #   needs to attach opp_xera/opp_k_pct/opp_xwoba/opp_whiff onto each
+    #   batter-game row below — without it those columns can never be merged
+    #   in and silently zero-fill for every row (see _prep_matrix).
+    side_first = (pa_rows.sort_values("at_bat_number")
+                         .groupby(["game_pk", "inning_topbot"])["pitcher"]
+                         .first().reset_index().rename(columns={"pitcher": "opp_starter"}))
+
     # ─ Batter game aggregation ───────────────────────────────────────────────
     bat_agg = (
-        sc[sc["is_pa"] == 1]
+        pa_rows
         .groupby(["game_pk", "game_date", "batter"])
         .agg(
             hits=("is_hit",  "sum"),
@@ -599,9 +615,11 @@ def _aggregate_statcast_chunk(sc: pd.DataFrame, season: int) -> tuple[pd.DataFra
             away_team=("away_team", "first"),
             p_throws=("p_throws",   "first"),
             stand=("stand",         "first"),
+            inning_topbot=("inning_topbot", "first"),
         )
         .reset_index()
     )
+    bat_agg = bat_agg.merge(side_first, on=["game_pk", "inning_topbot"], how="left")
     # RBI requires retrosheet/baseball-reference; approximated from events
     if "post_bat_score" in sc.columns and "bat_score" in sc.columns:
         sc["rbi_est"] = (sc["post_bat_score"] - sc["bat_score"]).clip(0, 4)
@@ -769,21 +787,35 @@ def build_batter_matrix(
     svb = svb[sv_cols]
 
     bg = bg.merge(svb, left_on="batter", right_on="player_id", how="left")
+    if "player_id" in bg.columns:
+        bg = bg.drop(columns=["player_id"])
 
-    # Opponent Statcast pitcher
+    # Opponent Statcast pitcher — joined on each batter-game row's opposing
+    # STARTING pitcher (bat_agg["opp_starter"], computed in
+    # _aggregate_statcast_chunk as the pitcher with the smallest at_bat_number
+    # on that half-inning side). Previously this dataframe was built and
+    # renamed but NEVER merged into bg, so opp_xera/opp_k_pct/opp_xwoba/
+    # opp_whiff were always absent -> _prep_matrix zero-filled them for every
+    # training row, while the live scorer feeds real values for these columns
+    # (a serve/train mismatch on 4 features across every batter market).
     svp = sv_pit[sv_pit["season"] == season].copy()
     if "player_id" in svp.columns:
         svp["player_id"] = svp["player_id"].astype(int)
     svp = svp.rename(columns={
-        "xera": "sv_xera", "k_percent": "sv_k_pct_p",
+        "xera": "sv_xera", "k_percent": "sv_k_pct_p", "bb_percent": "sv_bb_pct_p",
         "est_woba": "sv_xwoba_p", "whiff_percent": "sv_whiff_p",
     })
-    pit_cols = [c for c in ["player_id","sv_xera","sv_k_pct_p","sv_xwoba_p","sv_whiff_p"]
+    pit_cols = [c for c in
+                ["player_id","sv_xera","sv_k_pct_p","sv_bb_pct_p","sv_xwoba_p","sv_whiff_p"]
                 if c in svp.columns]
     svp = svp[pit_cols].rename(columns={
-        "sv_xera": "opp_xera", "sv_k_pct_p": "opp_k_pct",
+        "sv_xera": "opp_xera", "sv_k_pct_p": "opp_k_pct", "sv_bb_pct_p": "opp_bb_pct",
         "sv_xwoba_p": "opp_xwoba", "sv_whiff_p": "opp_whiff",
     })
+    if "opp_starter" in bg.columns:
+        bg = bg.merge(svp, left_on="opp_starter", right_on="player_id", how="left")
+        if "player_id" in bg.columns:
+            bg = bg.drop(columns=["player_id"])
 
     # Fill gap columns with league-average defaults for missing features
     for col, default in [
