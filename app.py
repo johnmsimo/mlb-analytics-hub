@@ -15946,11 +15946,16 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
             temp_row['stakeDollars'] = stake_profile.get('stake_dollars')
             # Phase 2: Add tier and BvP grade
             temp_row['confidenceTier'] = _confidence_tier(temp_row)
-            if away_pitcher and away_pitcher.get('id'):
-                bvp_data = _fetch_bvp(sp.get('id'), away_pitcher.get('id'))
-                temp_row['bvpGrade'] = _compute_bvp_grade(bvp_data)
-            else:
-                temp_row['bvpGrade'] = None
+            # _fetch_bvp(batter_id, pitcher_id) grades a BATTER's history against
+            # an opposing pitcher; there's no batter side here (this loop is
+            # scoring the pitcher's own K prop). The old call passed sp's own id
+            # as the "batter" against away_pitcher's id — for sp=away_sp that's a
+            # pitcher queried against himself, and post-universal-DH starting
+            # pitchers essentially never have MLB Stats API hitting splits
+            # either way, so this always silently graded 'C' with no real
+            # signal. No batter-vs-pitcher equivalent exists for a K prop, so
+            # leave it unset rather than report a meaningless grade.
+            temp_row['bvpGrade'] = None
             rows.append(temp_row)
 
     # ── Team / game-level markets (h2h, totals, F5, NRFI/YRFI) ──────────────
