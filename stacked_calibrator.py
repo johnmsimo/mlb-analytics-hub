@@ -239,8 +239,16 @@ def _logistic_blend(xgb_p: float, batx_p: float,
     p = _sigmoid(z)
     div = abs(_logit(xgb_p) - _logit(batx_p))
     if div > 0.55 and (coverage < 0.40 or bvp_pa < 5):
+        # Shrink toward THIS market's base rate, not the hits-specific league
+        # prior. bvp_pa < 5 is true for the overwhelming majority of matchups
+        # (batter-vs-pitcher history rarely reaches 5 PA), so this guard fires
+        # on almost every disagreement — using the hits prior (0.66) here for
+        # home runs (~0.13) / total bases (~0.40) / RBI (~0.34) systematically
+        # dragged those markets' probabilities up toward a coin-flip-on-hits
+        # rate, which is the dominant source of the observed overconfidence
+        # (mean predicted >> realized) on those props in production.
         shrink_w = _clamp((div - 0.55) * 0.30, 0.0, 0.35)
-        p = (1 - shrink_w) * p + shrink_w * LEAGUE_PRIOR_HIT1
+        p = (1 - shrink_w) * p + shrink_w * _base_rate_for(market_key)
     return p
 
 

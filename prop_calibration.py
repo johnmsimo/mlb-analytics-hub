@@ -81,6 +81,7 @@ class MarketCalibrator:
         self.shift = 0.0                # log-odds shift for the fallback
         self.brier = None
         self.baserate_brier = None
+        self.calibrated_brier = None    # Brier of the corrected output (see status())
 
     # -- fitting ---------------------------------------------------------------
     def fit(self, pairs):
@@ -114,6 +115,7 @@ class MarketCalibrator:
                 iso.fit(xs, ys)
                 self._iso = iso
                 self.kind = "isotonic"
+                self._fit_calibrated_brier(clean)
                 return self
             except Exception:
                 self._iso = None  # fall through to the log-odds recentre
@@ -122,7 +124,29 @@ class MarketCalibrator:
         # base rate (removes the systematic over/under bias).
         self.shift = _logit(self.mean_actual) - _logit(self.mean_pred)
         self.kind = "logodds_shift"
+        self._fit_calibrated_brier(clean)
         return self
+
+    def _fit_calibrated_brier(self, clean):
+        """Brier of THIS calibrator's own output, not the raw input.
+
+        `self.brier` (raw) answers "does the model have any skill at all", but
+        `status()` needs "did the correction actually help" — those are
+        different questions. A model that is well-discriminated but badly
+        *scaled* (e.g. confidently overconfident) can have raw Brier worse
+        than the base rate even though isotonic/log-odds recentring fixes it
+        completely; scoring status() off the raw Brier mislabels exactly that
+        case as "no_edge" despite the correction working. This is in-sample
+        (same pairs used to fit), so it's optimistic, but it is the right
+        comparison for "is the corrected output beating blind base-rate
+        guessing" rather than conflating that with raw calibration error.
+        """
+        try:
+            self.calibrated_brier = sum(
+                (self.apply(p) - y) ** 2 for p, y in clean
+            ) / len(clean)
+        except Exception:
+            self.calibrated_brier = None
 
     # -- applying --------------------------------------------------------------
     def apply(self, prob):
@@ -154,8 +178,9 @@ class MarketCalibrator:
         """Health flag mirroring /api/calibration/markets semantics."""
         if self.n < SHRINK_MIN_N:
             return "warming_up"
-        if self.brier is not None and self.baserate_brier is not None:
-            if self.brier >= self.baserate_brier:
+        brier = self.calibrated_brier if self.calibrated_brier is not None else self.brier
+        if brier is not None and self.baserate_brier is not None:
+            if brier >= self.baserate_brier:
                 return "no_edge"
         return "calibrated"
 
@@ -168,6 +193,8 @@ class MarketCalibrator:
             "mean_actual": round(self.mean_actual, 4) if self.mean_actual is not None else None,
             "shift": round(self.shift, 4),
             "status": self.status(),
+            "calibrated_brier": round(self.calibrated_brier, 4) if self.calibrated_brier is not None else None,
+            "baserate_brier": round(self.baserate_brier, 4) if self.baserate_brier is not None else None,
         }
 
 

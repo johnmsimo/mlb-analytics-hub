@@ -11477,6 +11477,14 @@ MARKET_MODEL_WEIGHTS = {
     "batter_stolen_bases":   0.45,
     "nrfi":                  0.35,
     "yrfi":                  0.40,
+    # Full-game moneyline/totals markets are among the most efficient in all
+    # of sports betting (deep, heavily-traded, closely watched by sharps) —
+    # trust the market far more than the in-house sim here.
+    "h2h":                   0.20,
+    "totals":                0.20,
+    # First-5 markets are thinner/less efficient than full-game.
+    "f5_h2h":                0.30,
+    "f5_totals":             0.30,
     # Alt-lines/micro-props — model dominates
     "default":               0.50,
 }
@@ -15390,7 +15398,21 @@ def _build_team_market_rows(game_pk, capture_date, away_abbr, home_abbr,
               bookmaker, opp_book_price, opp_book_name, team, reason):
         """Build a single row and append to rows."""
         raw_mult_prob = _clamp01(raw_prob * _market_mult(market_key, adjustments))
-        precal_prob = raw_mult_prob
+        # Team/game-level markets used to skip market blending entirely (unlike
+        # every batter/pitcher prop, which runs through logit_blend_prob) even
+        # though the de-vigged book price is right here — the model's own win%/
+        # total was taken at face value. Since h2h/totals are among the most
+        # efficient markets in sports betting, running unblended sim output
+        # straight to production is what produced the huge overconfidence
+        # (predicted >> realized) measured on these markets in
+        # /api/calibration/markets.
+        if market_implied and market_implied > 0:
+            over_imp = market_implied
+            under_imp = _american_to_implied(opp_book_price) or (1 - over_imp)
+            blended_prob = logit_blend_prob(raw_mult_prob, over_imp, market_key, over_imp, under_imp)
+        else:
+            blended_prob = raw_mult_prob
+        precal_prob = blended_prob
         adj_prob = _calibrate_prop_prob(market_key, precal_prob)
         edge = _capped_edge(adj_prob, market_implied)
         score = (edge * 100.0 if edge is not None else 0) + adj_prob
