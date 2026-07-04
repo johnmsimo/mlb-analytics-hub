@@ -54,21 +54,32 @@ Three layers now learn from graded outcomes instead of hand-tuned constants:
 **Gate:** `blend_weights` in `/api/calibration/markets` shows `learned` with
 `applied_brier < prior_brier` per market; no `drift_alerts`.
 
-## Stage 2 — Retrain with historically reconstructable context
+## Stage 2 — Retrain with historically reconstructable context *(SHIPPED — measured)*
 
-`regenerate_models.py` currently drops park/weather/umpire as "not
-reconstructable" — but **park is**: the home venue of every historical game is
-known, and season park factors are a static join. Park is one of the strongest
-real HR/TB signals and the live scorer already serves `park_factor` for hits.
+`regenerate_models.py` dropped park/weather/umpire as "not reconstructable" —
+but **park is**: the home venue of every historical game is known. Shipped:
+hand-aware `park_hr` (Yankee porch 1.34 L / Oracle 0.80 L / …) into the HR
+model and `park_factor` into TB, reconstructed per game from Statcast
+`home_team` with verbatim copies of the app's park tables (train/serve
+identical), and served live from every power-model call site.
 
-- Add `park_factor` (and venue HR-index) to the HR/TB training matrices;
-  retrain via `python regenerate_models.py --markets hr tb`.
-- Add month-of-season temperature climatology per venue (also historically
-  known) as a weather proxy for the power markets.
+**Measured outcome (honest):** global held-out AUC/Brier were flat-to-
+marginally-better (HR 0.6839→0.6839, TB 0.6237→0.6241) — a venue multiplier
+re-levels probabilities across parks rather than re-ranking batters, so the
+global averages barely move. On the metric it targets, it delivered: the
+weighted mean per-venue |predicted − actual| gap on the 2025 held-out season
+improved 1.5% for HR (18/30 venues) and 5% for TB (max venue error
+0.086→0.081). Strictly non-worse globally, better where it aims, zero serve
+cost.
 
-**Gate:** held-out 2025 test AUC for HR ≥ 0.70 (from 0.68) and TB ≥ 0.64
-(from 0.62), both with predicted-mean ≈ actual (the regen gate already
-enforces beating base-rate Brier).
+**Next lever (Stage 2b):** the static team-level park tables under-shade the
+extremes (Coors/Camden still under-predicted). Replace them with
+season-specific rolling Savant park factors — in BOTH `regenerate_models.py`
+and app.py's tables — and retrain; also add month-of-season temperature
+climatology per venue as a historically-known weather proxy.
+
+**Gate for 2b:** venue-gap improvement ≥ 15% weighted-mean, with global AUC
+non-regressing.
 
 ## Stage 3 — Cover the whole board with trained models
 

@@ -155,7 +155,8 @@
     "l7_ev",
     "l7_barrel",
     "ev_momentum",
-    "barrel_momentum"
+    "barrel_momentum",
+    "park_hr"
   ],
   "hr_over_0.5": [
     "sv_xslg",
@@ -181,7 +182,8 @@
     "l7_ev",
     "l7_barrel",
     "ev_momentum",
-    "barrel_momentum"
+    "barrel_momentum",
+    "park_hr"
   ],
   "tb": [
     "sv_xba",
@@ -208,7 +210,8 @@
     "l7_ev",
     "l7_barrel",
     "ev_momentum",
-    "barrel_momentum"
+    "barrel_momentum",
+    "park_factor"
   ],
   "tb_over_1.5": [
     "sv_xba",
@@ -235,7 +238,8 @@
     "l7_ev",
     "l7_barrel",
     "ev_momentum",
-    "barrel_momentum"
+    "barrel_momentum",
+    "park_factor"
   ],
   "rbi": [
     "sv_xslg",

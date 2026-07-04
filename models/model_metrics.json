@@ -1,5 +1,5 @@
 {
-  "generated_at_utc": "2026-07-04T17:34:19.331200",
+  "generated_at_utc": "2026-07-04T18:13:49.181815",
   "note": "Held-out (2021-24 train / 2025 test) benchmarks from regenerate_models.py. Compare live tracker Brier against test_brier; both should beat baserate_brier.",
   "models": {
     "hits": {
@@ -54,10 +54,10 @@
       "tracker_market": "batter_home_runs",
       "line": 0.5,
       "test_auc": 0.6839,
-      "train_auc": 0.6947,
+      "train_auc": 0.6952,
       "test_brier": 0.0948,
       "baserate_brier": 0.099,
-      "test_logloss": 0.3274,
+      "test_logloss": 0.3273,
       "n_train": 190463,
       "n_test": 47178,
       "test_season": 2025
@@ -65,11 +65,11 @@
     "tb": {
       "tracker_market": "batter_total_bases",
       "line": 1.5,
-      "test_auc": 0.6237,
-      "train_auc": 0.6437,
-      "test_brier": 0.2134,
+      "test_auc": 0.6241,
+      "train_auc": 0.6443,
+      "test_brier": 0.2133,
       "baserate_brier": 0.2228,
-      "test_logloss": 0.6154,
+      "test_logloss": 0.6153,
       "n_train": 190463,
       "n_test": 47178,
       "test_season": 2025
@@ -108,8 +108,8 @@
     },
     "batter_total_bases": {
       "representative": "tb",
-      "test_auc": 0.6237,
-      "test_brier": 0.2134,
+      "test_auc": 0.6241,
+      "test_brier": 0.2133,
       "baserate_brier": 0.2228
     },
     "pitcher_strikeouts": {

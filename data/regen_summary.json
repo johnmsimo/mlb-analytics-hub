@@ -3,11 +3,11 @@
     "market": "tb",
     "target": "tb_over_1.5",
     "line": 1.5,
-    "test_auc": 0.6237,
-    "train_auc": 0.6437,
-    "test_brier": 0.2134,
+    "test_auc": 0.6241,
+    "train_auc": 0.6443,
+    "test_brier": 0.2133,
     "baserate_brier": 0.2228,
-    "test_logloss": 0.6154,
+    "test_logloss": 0.6153,
     "n_train": 190463,
     "n_test": 47178,
     "pos_rate": 0.3363,
@@ -44,10 +44,11 @@
       "l7_ev": 83.12165,
       "l7_barrel": 0.03469,
       "ev_momentum": 1.0,
-      "barrel_momentum": 0.95406
+      "barrel_momentum": 0.95406,
+      "park_factor": 0.98
     },
     "xgboost_version": "3.2.0",
-    "exported_at_utc": "2026-06-23T16:32:31.056508",
+    "exported_at_utc": "2026-07-04T18:13:49.122099",
     "model_type": "CalibratedClassifierCV(XGBClassifier)"
   },
   "rbi": {
@@ -199,10 +200,10 @@
     "target": "hr_over_0.5",
     "line": 0.5,
     "test_auc": 0.6839,
-    "train_auc": 0.6947,
+    "train_auc": 0.6952,
     "test_brier": 0.0948,
     "baserate_brier": 0.099,
-    "test_logloss": 0.3274,
+    "test_logloss": 0.3273,
     "n_train": 190463,
     "n_test": 47178,
     "pos_rate": 0.1111,
@@ -238,10 +239,11 @@
       "l7_ev": 83.12165,
       "l7_barrel": 0.03469,
       "ev_momentum": 1.0,
-      "barrel_momentum": 0.95406
+      "barrel_momentum": 0.95406,
+      "park_hr": 0.99
     },
     "xgboost_version": "3.2.0",
-    "exported_at_utc": "2026-06-23T14:10:00.812528",
+    "exported_at_utc": "2026-07-04T18:13:42.149511",
     "model_type": "CalibratedClassifierCV(XGBClassifier)"
   }
 }
