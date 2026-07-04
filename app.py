@@ -38,10 +38,11 @@ _load_local_env_file(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.
 # XGBoost prop scorer — loaded once at startup; falls back gracefully if models missing
 try:
     from xgb_prop_scorer import (
-        xgb_hit_prob, xgb_k_prob, xgb_ready,
+        xgb_hit_prob, xgb_k_prob, xgb_ready, xgb_line_ready,
         xgb_hr_prob, xgb_tb_prob, xgb_rbi_prob,
         xgb_hit_prob_full, xgb_k_prob_full,
         xgb_hr_prob_full, xgb_tb_prob_full, xgb_rbi_prob_full,
+        xgb_batter_prob_full,
         enrich_batter, enrich_pitcher,
     )
     _XGB_AVAILABLE = True
@@ -57,7 +58,9 @@ except ImportError:
     def xgb_hr_prob_full(*a, **k):  return {}
     def xgb_tb_prob_full(*a, **k):  return {}
     def xgb_rbi_prob_full(*a, **k): return {}
+    def xgb_batter_prob_full(*a, **k): return {}
     def xgb_ready(_=None):       return False
+    def xgb_line_ready(*a, **k): return False
     def enrich_batter(d, **k):   return d
     def enrich_pitcher(d, **k):  return d
 
@@ -14040,16 +14043,17 @@ _BATTER_FALLBACK_LINE = {
 }
 _K_PROB_FIELD_FOR = {3.5: 'p_4plus_k', 4.5: 'p_5plus_k', 5.5: 'p_6plus_k'}
 
-# Book market → (scorer short name, full-output fn, the exact line the committed
-# XGB model is trained on). The XGB point probability is only valid AT that line,
-# so the stacked fusion only fires when the row's line matches.
-def _xgb_batter_market_map():
-    return {
-        'batter_hits':        ('hits', xgb_hit_prob_full, 0.5),
-        'batter_total_bases': ('tb',   xgb_tb_prob_full,  1.5),
-        'batter_home_runs':   ('hr',   xgb_hr_prob_full,  0.5),
-        'batter_rbis':        ('rbi',  xgb_rbi_prob_full, 0.5),
-    }
+# Book market → scorer family. Line routing is handled inside the scorer
+# (xgb_batter_prob_full / xgb_line_ready): each (family, line) maps to the
+# model trained at exactly that threshold — hits 0.5/1.5, TB 1.5/2.5/3.5,
+# RBI 0.5/1.5, HR 0.5 — and unmapped lines return {} so the analytic
+# probability stands. The XGB point probability is only valid AT its line.
+_XGB_FAMILY_FOR_MK = {
+    'batter_hits':        'hits',
+    'batter_total_bases': 'tb',
+    'batter_home_runs':   'hr',
+    'batter_rbis':        'rbi',
+}
 
 
 def _parse_prop_markets(bookmakers, valid_names):
@@ -15751,12 +15755,12 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                     #    reflect the fusion). Off-line markets keep the analytic prob.
                     _mc_batter = None
                     _full = {}
-                    _xgb_market, _full_fn, _model_line = _xgb_batter_market_map().get(mk, (None, None, None))
-                    if _full_fn and xgb_ready(_xgb_market):
-                        # Serve-parity: feed the hits model its recent-form features
-                        # (l7/l14 hits) — `p` already carries `slot`+`id`, so the
-                        # scorer resolves lineup role from the explicit slot. Power
-                        # markets (hr/tb/rbi) pull their own momentum elsewhere.
+                    _xgb_market = _XGB_FAMILY_FOR_MK.get(mk)
+                    if _xgb_market and xgb_line_ready(_xgb_market, line):
+                        # Serve-parity: feed the hits models their recent-form
+                        # features (l7/l14 hits) — `p` already carries `slot`+`id`,
+                        # so the scorer resolves lineup role from the explicit slot.
+                        # Power markets (hr/tb/rbi) pull their own momentum elsewhere.
                         _xgb_bp = p
                         if _xgb_market == 'hits' and p.get('id'):
                             _rf = _batter_recent_hit_form(p.get('id'))
@@ -15769,12 +15773,12 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                                        'parkFactor': PARK_FACTORS.get(home_team_id, 1.0),
                                        'parkHr': _hr_park_factor_hand(home_team_id, p.get('bats'))}
                         try:
-                            _full = _full_fn(_xgb_bp, opp_pitcher) or {}
+                            _full = xgb_batter_prob_full(_xgb_market, line, _xgb_bp, opp_pitcher) or {}
                         except Exception:
                             _full = {}
                         _mc_batter = _full.get('mc') or {}
                     _xgb_p = _full.get('prob') if _full else None
-                    _at_model_line = (_model_line is not None and float(line) == _model_line)
+                    _at_model_line = bool(_full)   # scorer returned a model trained at THIS line
                     _stk = None
                     base_prob = raw_prob          # analytic / MC estimate (default)
                     model_source = 'mc'
@@ -15790,7 +15794,7 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                             try:
                                 _stk = stacked_calibrate(float(_xgb_p), float(raw_prob),
                                                          coverage=0.5, exp_pa=_exp_pa, bvp_pa=_bvp_pa,
-                                                         market_key=mk, mc_ci=_mc_ci)
+                                                         market_key=mk, line=line, mc_ci=_mc_ci)
                             except Exception:
                                 _stk = None
                         if _stk and _stk.get('probability') is not None:

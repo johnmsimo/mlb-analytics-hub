@@ -229,6 +229,30 @@ MARKETS = {
     "rbi":   dict(file_key="xgb_rbi_over_0.5", features=RBI_FEATURES,
                   target="rbi_over_0.5", source="batter", line=0.5,
                   params=XGB_PARAMS_RBI),
+    # ── Alt-line variants (Stage 3): same family features/params, different
+    #    target threshold, so the stacked fusion covers the whole board instead
+    #    of only each market's standard line.
+    "hits_1.5": dict(file_key="xgb_hits_over_1.5", features=HITS_FEATURES,
+                     target="hit_over_1.5", source="batter", line=1.5,
+                     params=XGB_PARAMS_HITS),
+    "tb_2.5":  dict(file_key="xgb_tb_over_2.5", features=TB_FEATURES,
+                    target="tb_over_2.5", source="batter", line=2.5,
+                    params=XGB_PARAMS_TB),
+    "tb_3.5":  dict(file_key="xgb_tb_over_3.5", features=TB_FEATURES,
+                    target="tb_over_3.5", source="batter", line=3.5,
+                    params=XGB_PARAMS_HR),   # rare event (~11%) — HR-style regularization
+    "rbi_1.5": dict(file_key="xgb_rbi_over_1.5", features=RBI_FEATURES,
+                    target="rbi_over_1.5", source="batter", line=1.5,
+                    params=XGB_PARAMS_HR),   # rare event (~10%)
+    "k_2.5":   dict(file_key="xgb_k_over_2.5", features=K_FEATURES,
+                    target="k_over_2.5", source="pitcher", line=2.5,
+                    params=XGB_PARAMS_K),
+    "k_6.5":   dict(file_key="xgb_k_over_6.5", features=K_FEATURES,
+                    target="k_over_6.5", source="pitcher", line=6.5,
+                    params=XGB_PARAMS_K),
+    "k_7.5":   dict(file_key="xgb_k_over_7.5", features=K_FEATURES,
+                    target="k_over_7.5", source="pitcher", line=7.5,
+                    params=XGB_PARAMS_K),
 }
 
 
@@ -342,17 +366,24 @@ def _agg_chunk(sc: pd.DataFrame, season: int) -> tuple[pd.DataFrame, pd.DataFram
                     on=["game_pk", "inning_topbot", "batter"], how="left")
 
     bat["hit_over_0.5"] = (bat["hits"] >= 1).astype(int)
+    bat["hit_over_1.5"] = (bat["hits"] >= 2).astype(int)
     bat["hr_over_0.5"] = (bat["hr"] >= 1).astype(int)
     bat["tb_over_1.5"] = (bat["tb"] >= 2).astype(int)
+    bat["tb_over_2.5"] = (bat["tb"] >= 3).astype(int)
+    bat["tb_over_3.5"] = (bat["tb"] >= 4).astype(int)
     bat["rbi_over_0.5"] = (bat["rbi"] >= 1).astype(int)
+    bat["rbi_over_1.5"] = (bat["rbi"] >= 2).astype(int)
     bat["season"] = season
 
     pit = (pa.groupby(["game_pk", "game_date", "pitcher"])
              .agg(ks=("is_k", "sum"), bf=("is_pa", "sum"))
              .reset_index())
+    pit["k_over_2.5"] = (pit["ks"] >= 3).astype(int)
     pit["k_over_3.5"] = (pit["ks"] >= 4).astype(int)
     pit["k_over_4.5"] = (pit["ks"] >= 5).astype(int)
     pit["k_over_5.5"] = (pit["ks"] >= 6).astype(int)
+    pit["k_over_6.5"] = (pit["ks"] >= 7).astype(int)
+    pit["k_over_7.5"] = (pit["ks"] >= 8).astype(int)
     pit["season"] = season
     return bat, pit
 
@@ -668,13 +699,20 @@ def train_market(mkey: str, cfg: dict, df: pd.DataFrame) -> Optional[dict]:
 # Model key → tracker marketKey. This is what lets /api/calibration/markets
 # line the live tracker Brier up against the right held-out benchmark.
 TRACKER_MARKET = {
-    "hits":  "batter_hits",
+    "hits":     "batter_hits",
+    "hits_1.5": "batter_hits",
+    "k_2.5": "pitcher_strikeouts",
     "k_3.5": "pitcher_strikeouts",
     "k_4.5": "pitcher_strikeouts",
     "k_5.5": "pitcher_strikeouts",
-    "hr":    "batter_home_runs",
-    "tb":    "batter_total_bases",
-    "rbi":   "batter_rbis",
+    "k_6.5": "pitcher_strikeouts",
+    "k_7.5": "pitcher_strikeouts",
+    "hr":      "batter_home_runs",
+    "tb":      "batter_total_bases",
+    "tb_2.5":  "batter_total_bases",
+    "tb_3.5":  "batter_total_bases",
+    "rbi":     "batter_rbis",
+    "rbi_1.5": "batter_rbis",
 }
 # The line the tracker most commonly grades against, per tracker market —
 # used to pick the representative model when several lines share a market.

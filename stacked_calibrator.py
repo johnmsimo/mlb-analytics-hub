@@ -318,8 +318,34 @@ _MARKET_BASE_RATE = {
 }
 _DEFAULT_BASE_RATE = 0.50
 
+# Line-aware overrides for the alt-line models (Stage 3). The market-level
+# table above is the STANDARD line's typical-starter P(over); an alt line has
+# a very different base (2+ hits ≈ 0.25, not 0.66), so verdict tiers must
+# anchor to the line actually priced. Values are the market's starter base
+# scaled by the training pos-rate ratio between the alt and standard lines
+# (regenerate_models meta), rounded; keyed by both book and scorer names.
+_MARKET_LINE_BASE_RATE = {
+    ("batter_hits", 1.5):        0.25,
+    ("batter_total_bases", 2.5): 0.24, ("batter_tb", 2.5): 0.24,
+    ("batter_total_bases", 3.5): 0.14, ("batter_tb", 3.5): 0.14,
+    ("batter_rbis", 1.5):        0.12, ("batter_rbi", 1.5): 0.12,
+    ("pitcher_strikeouts", 2.5): 0.85,
+    ("pitcher_strikeouts", 3.5): 0.73,
+    ("pitcher_strikeouts", 4.5): 0.57,
+    ("pitcher_strikeouts", 5.5): 0.41,
+    ("pitcher_strikeouts", 6.5): 0.28,
+    ("pitcher_strikeouts", 7.5): 0.17,
+}
 
-def _base_rate_for(market_key: str) -> float:
+
+def _base_rate_for(market_key: str, line=None) -> float:
+    if line is not None:
+        try:
+            v = _MARKET_LINE_BASE_RATE.get((market_key, float(line)))
+            if v is not None:
+                return v
+        except (TypeError, ValueError):
+            pass
     return _MARKET_BASE_RATE.get(market_key, _DEFAULT_BASE_RATE)
 
 
@@ -374,6 +400,7 @@ def calibrate(xgb_p: Optional[float], batx_p: Optional[float], *,
               bvp_pa: float = 0.0,
               park_factor: float = 1.0,
               market_key: str = "batter_hits",
+              line: Optional[float] = None,
               mc_ci: Optional[tuple] = None) -> dict:
     """Combine XGB + BATX into a single calibrated probability with verdict.
 
@@ -392,7 +419,7 @@ def calibrate(xgb_p: Optional[float], batx_p: Optional[float], *,
         # branch used to return the hits prior (0.66) for every market, so a
         # no-data HR/TB/RBI call reported a ~66% probability against true
         # rates of 13/40/34%.
-        no_data_rate = _base_rate_for(market_key)
+        no_data_rate = _base_rate_for(market_key, line)
         ci_lo, ci_hi = _ci_from_sigma(no_data_rate, 0.45)
         return {
             "probability":   no_data_rate,
@@ -441,7 +468,7 @@ def calibrate(xgb_p: Optional[float], batx_p: Optional[float], *,
     sample_conf = _clamp(bvp_pa / 80.0, 0.0, 1.0)
     confidence  = round(0.55 * width_conf + 0.30 * cov_conf + 0.15 * sample_conf, 3)
 
-    base_rate = _base_rate_for(market_key)
+    base_rate = _base_rate_for(market_key, line)
     tier_key, tier_label, tier_color = _demote_if_wide_ci(blended, ci_lo, ci_hi, confidence, base_rate)
 
     return {

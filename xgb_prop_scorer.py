@@ -200,24 +200,48 @@ _MODEL_DIR = os.path.join(_HERE, "models")
 _FEAT_FILE = os.path.join(_MODEL_DIR, "xgb_feature_cols.json")
 
 _MODEL_PATHS = {
-    "hits":  os.path.join(_MODEL_DIR, "xgb_hits_over_0.5.pkl"),
+    "hits":     os.path.join(_MODEL_DIR, "xgb_hits_over_0.5.pkl"),
+    "hits_1.5": os.path.join(_MODEL_DIR, "xgb_hits_over_1.5.pkl"),
+    "k_2.5": os.path.join(_MODEL_DIR, "xgb_k_over_2.5.pkl"),
     "k_3.5": os.path.join(_MODEL_DIR, "xgb_k_over_3.5.pkl"),
     "k_4.5": os.path.join(_MODEL_DIR, "xgb_k_over_4.5.pkl"),
     "k_5.5": os.path.join(_MODEL_DIR, "xgb_k_over_5.5.pkl"),
-    "hr":    os.path.join(_MODEL_DIR, "xgb_hr_over_0.5.pkl"),
-    "tb":    os.path.join(_MODEL_DIR, "xgb_tb_over_1.5.pkl"),
-    "rbi":   os.path.join(_MODEL_DIR, "xgb_rbi_over_0.5.pkl"),
+    "k_6.5": os.path.join(_MODEL_DIR, "xgb_k_over_6.5.pkl"),
+    "k_7.5": os.path.join(_MODEL_DIR, "xgb_k_over_7.5.pkl"),
+    "hr":      os.path.join(_MODEL_DIR, "xgb_hr_over_0.5.pkl"),
+    "tb":      os.path.join(_MODEL_DIR, "xgb_tb_over_1.5.pkl"),
+    "tb_2.5":  os.path.join(_MODEL_DIR, "xgb_tb_over_2.5.pkl"),
+    "tb_3.5":  os.path.join(_MODEL_DIR, "xgb_tb_over_3.5.pkl"),
+    "rbi":     os.path.join(_MODEL_DIR, "xgb_rbi_over_0.5.pkl"),
+    "rbi_1.5": os.path.join(_MODEL_DIR, "xgb_rbi_over_1.5.pkl"),
 }
 
 # Map scorer model keys -> stacked_calibrator market keys
 _MARKET_KEY_MAP = {
-    "hits":  "batter_hits",
+    "hits":     "batter_hits",
+    "hits_1.5": "batter_hits",
+    "k_2.5": "pitcher_strikeouts",
     "k_3.5": "pitcher_strikeouts",
     "k_4.5": "pitcher_strikeouts",
     "k_5.5": "pitcher_strikeouts",
-    "hr":    "batter_hr",
-    "tb":    "batter_tb",
-    "rbi":   "batter_rbi",
+    "k_6.5": "pitcher_strikeouts",
+    "k_7.5": "pitcher_strikeouts",
+    "hr":      "batter_hr",
+    "tb":      "batter_tb",
+    "tb_2.5":  "batter_tb",
+    "tb_3.5":  "batter_tb",
+    "rbi":     "batter_rbi",
+    "rbi_1.5": "batter_rbi",
+}
+
+# (family, line) -> model key for the batter markets. The XGB probability is
+# only a valid P(over) AT its trained threshold, so callers route by the row's
+# actual line and fall back to the analytic model for unmapped lines.
+_BATTER_LINE_MODELS = {
+    ("hits", 0.5): "hits", ("hits", 1.5): "hits_1.5",
+    ("tb", 1.5): "tb", ("tb", 2.5): "tb_2.5", ("tb", 3.5): "tb_3.5",
+    ("hr", 0.5): "hr",
+    ("rbi", 0.5): "rbi", ("rbi", 1.5): "rbi_1.5",
 }
 
 _lock = threading.Lock()
@@ -302,6 +326,22 @@ def xgb_ready(market: str = "hits") -> bool:
     else:
         return False
     return model_ok and _xgb_calibrated(_MARKET_KEY_FOR[market])
+
+
+def xgb_line_ready(family: str, line) -> bool:
+    """Line-aware readiness: True only when a calibrated model trained at THIS
+    exact threshold is loaded. Off-line rows must fall back to the analytic
+    model rather than borrow a neighbouring line's probability."""
+    if not _loaded:
+        _load_models()
+    try:
+        line = float(line)
+    except (TypeError, ValueError):
+        return False
+    key = f"k_{line}" if family == "k" else _BATTER_LINE_MODELS.get((family, line))
+    if key is None or key not in _models:
+        return False
+    return _xgb_calibrated(_MARKET_KEY_MAP.get(key, ""))
 
 
 # ─── XGB prediction interval (tree-level variance) ───────────────────────────────
@@ -857,7 +897,9 @@ def xgb_k_prob(pitcher: dict, line: float = 4.5) -> Optional[float]:
                     candidates.append((abs(float(k[2:]) - line), k))
                 except ValueError:
                     pass
-        if not candidates:
+        # A neighbouring line's P(over) is only a usable stand-in when it is
+        # close; borrowing across >1 strikeout mislabels the probability.
+        if not candidates or min(candidates)[0] > 1.0:
             return None
         line_key = min(candidates)[1]
     try:
@@ -883,7 +925,7 @@ def xgb_k_prob_full(pitcher: dict, line: float = 4.5) -> dict:
     line_key = f"k_{line}"
     if line_key not in _models:
         candidates = [(abs(float(k[2:]) - line), k) for k in _models if k.startswith("k_")]
-        if not candidates:
+        if not candidates or min(candidates)[0] > 1.0:
             return {}
         line_key = min(candidates)[1]
     try:
@@ -943,14 +985,29 @@ def _predict_batter_market_full(
         batter_e  = _enrich_batter_from_fg(batter)
         pitcher_e = _enrich_pitcher_from_fg(pitcher)
         feat_order = _feat_cols.get(model_key, [])
-        builder = (_build_batter_market_features
-                   if model_key in ("hr", "tb", "rbi") else _build_hit_features)
+        builder = (_build_hit_features if model_key.startswith("hits")
+                   else _build_batter_market_features)
         X = builder(batter_e, pitcher_e, feat_order)
         if X is None:
             return {}
         return _score_full(model_key, market_key, X, line=line)
     except Exception:
         return {}
+
+
+def xgb_batter_prob_full(family: str, line, batter: dict, pitcher: dict) -> dict:
+    """Line-aware full output for a batter market family (hits/hr/tb/rbi).
+    Routes (family, line) to the model trained at exactly that threshold;
+    returns {} for unmapped lines so callers keep the analytic probability."""
+    try:
+        line = float(line)
+    except (TypeError, ValueError):
+        return {}
+    model_key = _BATTER_LINE_MODELS.get((family, line))
+    if model_key is None:
+        return {}
+    return _predict_batter_market_full(
+        model_key, _MARKET_KEY_MAP.get(model_key, "batter_hits"), line, batter, pitcher)
 
 
 def xgb_hr_prob(batter: dict, pitcher: dict) -> Optional[float]:
