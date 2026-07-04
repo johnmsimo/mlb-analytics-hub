@@ -325,15 +325,15 @@ _DEFAULT_BASE_RATE = 0.50
 # scaled by the training pos-rate ratio between the alt and standard lines
 # (regenerate_models meta), rounded; keyed by both book and scorer names.
 _MARKET_LINE_BASE_RATE = {
-    ("batter_hits", 1.5):        0.25,
-    ("batter_total_bases", 2.5): 0.24, ("batter_tb", 2.5): 0.24,
-    ("batter_total_bases", 3.5): 0.14, ("batter_tb", 3.5): 0.14,
+    ("batter_hits", 1.5):        0.23,
+    ("batter_total_bases", 2.5): 0.23, ("batter_tb", 2.5): 0.23,
+    ("batter_total_bases", 3.5): 0.17, ("batter_tb", 3.5): 0.17,
     ("batter_rbis", 1.5):        0.12, ("batter_rbi", 1.5): 0.12,
-    ("pitcher_strikeouts", 2.5): 0.85,
+    ("pitcher_strikeouts", 2.5): 0.87,
     ("pitcher_strikeouts", 3.5): 0.73,
     ("pitcher_strikeouts", 4.5): 0.57,
     ("pitcher_strikeouts", 5.5): 0.41,
-    ("pitcher_strikeouts", 6.5): 0.28,
+    ("pitcher_strikeouts", 6.5): 0.27,
     ("pitcher_strikeouts", 7.5): 0.17,
 }
 

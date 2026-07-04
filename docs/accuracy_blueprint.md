@@ -81,17 +81,33 @@ climatology per venue as a historically-known weather proxy.
 **Gate for 2b:** venue-gap improvement ≥ 15% weighted-mean, with global AUC
 non-regressing.
 
-## Stage 3 — Cover the whole board with trained models
+## Stage 3 — Cover the whole board with trained models *(SHIPPED — measured)*
 
-The stacked fusion only fires at each model's trained line; off-line markets
-(TB 2.5, hits 1.5, K alt-lines beyond 3.5/4.5/5.5) fall back to analytic
-probs. Train the alt-line variants (the pipeline already parameterizes line —
-it's a config addition per market) so every price on the board gets a
-held-out-validated probability.
+The stacked fusion previously fired only at each model's trained line;
+off-line prices fell back to unvalidated analytic probs. Shipped seven
+alt-line models, all passing the held-out gate — several discriminate
+*better* than their standard-line siblings:
 
-**Gate:** share of tracker rows with `modelSource='stacked'` rises above 80%
-of prop volume; alt-line markets appear in `/api/calibration/markets` with
-their own benchmarks.
+| model | held-out AUC | Brier skill vs base |
+|-------|-------------|---------------------|
+| hits 1.5 | 0.633 | +0.006 |
+| tb 2.5 | 0.640 | +0.006 |
+| tb 3.5 | 0.663 | +0.005 |
+| rbi 1.5 | 0.626 | +0.002 |
+| k 2.5 | 0.716 | +0.009 |
+| k 6.5 | 0.737 | +0.026 |
+| k 7.5 | 0.759 | +0.017 |
+
+Routing is line-exact (`xgb_line_ready` / `xgb_batter_prob_full`): a row only
+gets an XGB probability from a model trained at that threshold; the K
+nearest-line fallback is capped at 1.0 K (a 9.5 line can no longer silently
+borrow the 5.5 model). Verdict tiers anchor to line-aware base rates derived
+from training positive rates, so a 31% probability reads STRONG_BET at TB 2.5
+(base .23) and LEAN_UNDER at TB 1.5 (base .40). Benchmarks flow into
+`/api/calibration/markets` automatically via `TRACKER_MARKET`.
+
+**Live gate to watch:** share of tracker rows with `modelSource='stacked'`
+rising toward 80%+ of prop volume as alt-line prices get captured.
 
 ## Stage 4 — Signal no one else is modeling yet
 
