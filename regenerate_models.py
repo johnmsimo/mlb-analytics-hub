@@ -598,6 +598,77 @@ def train_market(mkey: str, cfg: dict, df: pd.DataFrame) -> Optional[dict]:
             "brier_base": brier_base, "features": feats}
 
 
+# Model key → tracker marketKey. This is what lets /api/calibration/markets
+# line the live tracker Brier up against the right held-out benchmark.
+TRACKER_MARKET = {
+    "hits":  "batter_hits",
+    "k_3.5": "pitcher_strikeouts",
+    "k_4.5": "pitcher_strikeouts",
+    "k_5.5": "pitcher_strikeouts",
+    "hr":    "batter_home_runs",
+    "tb":    "batter_total_bases",
+    "rbi":   "batter_rbis",
+}
+# The line the tracker most commonly grades against, per tracker market —
+# used to pick the representative model when several lines share a market.
+_REPRESENTATIVE = {"pitcher_strikeouts": "k_4.5"}
+
+_METRICS_PATH = os.path.join(_MODEL_DIR, "model_metrics.json")
+_METRIC_KEYS = ("line", "test_auc", "train_auc", "test_brier", "baserate_brier",
+                "test_logloss", "n_train", "n_test", "test_season")
+
+
+def write_model_metrics(metas: dict) -> dict:
+    """Merge per-market held-out metas into models/model_metrics.json.
+
+    That file is the benchmark /api/calibration/markets compares live tracker
+    Brier against — if a shipped model is missing here, its market can never
+    be flagged no_edge/degraded in production. Merging (never overwriting)
+    means a partial run (--markets hr) can't drop the benchmarks of markets it
+    didn't retrain. `metas` maps model key (hits/k_4.5/hr/…) → artifact meta.
+    """
+    existing = {}
+    if os.path.exists(_METRICS_PATH):
+        try:
+            with open(_METRICS_PATH) as f:
+                existing = json.load(f) or {}
+        except Exception:
+            existing = {}
+    models = existing.get("models", {})
+    for mkey, meta in metas.items():
+        if not meta or mkey not in TRACKER_MARKET:
+            continue
+        entry = {"tracker_market": TRACKER_MARKET[mkey]}
+        entry.update({k: meta.get(k) for k in _METRIC_KEYS if meta.get(k) is not None})
+        models[mkey] = entry
+
+    # Rebuild the tracker-market rollup from the merged model map.
+    by_tracker = {}
+    for tmk in sorted({v["tracker_market"] for v in models.values()}):
+        keys = sorted(k for k, v in models.items() if v["tracker_market"] == tmk)
+        rep = _REPRESENTATIVE.get(tmk) if _REPRESENTATIVE.get(tmk) in keys else keys[0]
+        m = models[rep]
+        roll = {"representative": rep,
+                "test_auc": m.get("test_auc"),
+                "test_brier": m.get("test_brier"),
+                "baserate_brier": m.get("baserate_brier")}
+        if len(keys) > 1:
+            roll["all_lines"] = {k: models[k].get("test_auc") for k in keys}
+        by_tracker[tmk] = roll
+
+    out = {
+        "generated_at_utc": datetime.utcnow().isoformat(),
+        "note": ("Held-out (2021-24 train / 2025 test) benchmarks from "
+                 "regenerate_models.py. Compare live tracker Brier against "
+                 "test_brier; both should beat baserate_brier."),
+        "models": models,
+        "by_tracker_market": by_tracker,
+    }
+    with open(_METRICS_PATH, "w") as f:
+        json.dump(out, f, indent=2)
+    return out
+
+
 def main(markets: list[str]):
     print("═" * 70)
     print(f" Honest XGB regeneration — {datetime.utcnow():%Y-%m-%d %H:%M} UTC")
@@ -656,11 +727,27 @@ def main(markets: list[str]):
         merged.update(feat_map)
         with open(fcols_path, "w") as f:
             json.dump(merged, f, indent=2)
-    summary = {k: (v["artifact"]["meta"] if v else None) for k, v in results.items()}
-    with open(os.path.join(_DATA_DIR, "regen_summary.json"), "w") as f:
+    # Merge (not overwrite) so a partial run keeps the other markets' summaries.
+    summary_path = os.path.join(_DATA_DIR, "regen_summary.json")
+    summary = {}
+    if os.path.exists(summary_path):
+        try:
+            with open(summary_path) as f:
+                summary = json.load(f) or {}
+        except Exception:
+            summary = {}
+    summary.update({k: v["artifact"]["meta"] for k, v in results.items() if v})
+    with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)
+
+    # Refresh the held-out benchmarks the live calibration monitor reads —
+    # only for markets that actually shipped (a HOLD model has no benchmark
+    # to compare live picks against).
+    write_model_metrics({k: results[k]["artifact"]["meta"] for k in shipped})
+
     print(f"\n  Shipped: {shipped or 'NONE'}")
     print(f"  Summary → data/regen_summary.json")
+    print(f"  Benchmarks → models/model_metrics.json")
     return results
 
 

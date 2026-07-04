@@ -18602,6 +18602,15 @@ def _market_calibration_drift(rows):
 _MODEL_METRICS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                    'models', 'model_metrics.json')
 
+# Tracker marketKey → xgb_ready() scorer key, for the xgb_engaged flag.
+_XGB_MARKET_FOR_TRACKER = {
+    'batter_hits':        'hits',
+    'pitcher_strikeouts': 'k',
+    'batter_home_runs':   'hr',
+    'batter_total_bases': 'tb',
+    'batter_rbis':        'rbi',
+}
+
 
 @app.route('/api/calibration/markets')
 def api_calibration_markets():
@@ -18661,9 +18670,9 @@ def api_calibration_markets():
             'marketKey': mk,
             'live': live,
             'benchmark': bench,
-            'xgb_engaged': bool(mk in ('batter_hits', 'pitcher_strikeouts')
+            'xgb_engaged': bool(mk in _XGB_MARKET_FOR_TRACKER
                                 and _XGB_AVAILABLE
-                                and xgb_ready('hits' if mk == 'batter_hits' else 'k')),
+                                and xgb_ready(_XGB_MARKET_FOR_TRACKER[mk])),
             'status': status,
             'drift': drift,
         })
@@ -18720,9 +18729,11 @@ def api_diag_serve_parity():
     It builds the entity dicts the SAME way the live scoring paths do — k
     starters get FG enrichment + rolling form + arsenal (the tracker-capture
     path); hit batters get the name-only dict the projection path actually
-    passes — runs them through the model's feature builders, and reports per
-    feature how often its value equals the empty-input default across the
-    sampled slate. A feature at default_rate ≥ 0.85 is a serve gap. Read-only.
+    passes; hr/tb/rbi batters get name + bats + heater momentum (the deep-dive
+    path, sampled from the top of each lineup to bound the Statcast pulls) —
+    runs them through the model's feature builders, and reports per feature how
+    often its value equals the empty-input default across the sampled slate.
+    A feature at default_rate ≥ 0.85 is a serve gap. Read-only.
     ?games=N (default 3, max 6)."""
     if not _XGB_AVAILABLE:
         return jsonify({'success': False, 'error': 'xgb scorer unavailable'}), 200
@@ -18735,8 +18746,13 @@ def api_diag_serve_parity():
     date_str = datetime.now(ET).strftime('%Y-%m-%d')
     games = (fetch_schedule(date_str) or [])[:n_games]
 
-    agg = {'hits': {}, 'k_4.5': {}}
-    counts = {'hits': 0, 'k_4.5': 0}
+    parity_markets = ('hits', 'k_4.5', 'hr', 'tb', 'rbi')
+    agg = {mk: {} for mk in parity_markets}
+    counts = {mk: 0 for mk in parity_markets}
+    # Power markets need the momentum Statcast pull (day-cached, but a network
+    # hit when cold) — sample the top of each lineup so a cold-cache run stays
+    # inside the request budget. 5/side detects a default_rate≥0.85 gap fine.
+    _POWER_BATTERS_PER_SIDE = 5
 
     def _accumulate(rep):
         if not rep:
@@ -18785,16 +18801,27 @@ def api_diag_serve_parity():
         for side, opp_pp in (('away', hp), ('home', ap)):
             ph = opp_pp.get('pitchHand')
             opp_hand = ph.get('code') if isinstance(ph, dict) else (ph or 'R')
-            for b in (lud.get(side) or [])[:9]:
+            for idx, b in enumerate((lud.get(side) or [])[:9]):
                 bname = b.get('name') or b.get('fullName')
                 if not bname:
                     continue
+                opp = {'name': opp_pp.get('fullName', ''), 'pitchHand': opp_hand}
                 _accumulate(feature_default_report(
-                    'hits', batter={'name': bname},
-                    pitcher={'name': opp_pp.get('fullName', ''), 'pitchHand': opp_hand}))
+                    'hits', batter={'name': bname}, pitcher=opp))
+                # ── HR/TB/RBI (mirror deep-dive path: name + bats + momentum) ──
+                if idx < _POWER_BATTERS_PER_SIDE:
+                    bd = {'name': bname, 'bats': b.get('bats') or 'R'}
+                    try:
+                        mom = _batter_momentum_features(b.get('id'))
+                        if mom:
+                            bd.update(mom)
+                    except Exception:
+                        pass
+                    for pmk in ('hr', 'tb', 'rbi'):
+                        _accumulate(feature_default_report(pmk, batter=bd, pitcher=opp))
 
     out = {}
-    for mk in ('hits', 'k_4.5'):
+    for mk in parity_markets:
         n = counts[mk]
         feats = []
         for fname, s in agg[mk].items():
