@@ -99,6 +99,15 @@ except ImportError:
     _PROP_CAL_AVAILABLE = False
     PropCalibrator = None  # type: ignore
 
+# Learned model-vs-market blend weights fit from our own graded history.
+# Optional: a missing module keeps the hand-tuned MARKET_MODEL_WEIGHTS table.
+try:
+    from market_blend_learner import BlendWeights
+    _BLEND_LEARN_AVAILABLE = True
+except ImportError:
+    _BLEND_LEARN_AVAILABLE = False
+    BlendWeights = None  # type: ignore
+
 # Consolidated betting math (de-vig, EV, fractional Kelly). Optional: if it is
 # missing the /api/v1/edges enrichment is skipped, everything else is unaffected.
 try:
@@ -11530,7 +11539,9 @@ def logit_blend_prob(p_model: float,
     def _sigmoid(x):
         return 1.0 / (1.0 + math.exp(-x))
 
-    w = MARKET_MODEL_WEIGHTS.get(market_key, MARKET_MODEL_WEIGHTS["default"])
+    # Learned per-market weight when enough graded history exists; the
+    # hand-tuned MARKET_MODEL_WEIGHTS entry is the prior it shrinks toward.
+    w = _blend_weight_for(market_key)
 
     # De-vig market probability if raw over/under implied given
     if over_implied and under_implied and over_implied > 0 and under_implied > 0:
@@ -16753,6 +16764,81 @@ def _capped_edge(adj_prob, market_implied):
     return max(-EDGE_DISPLAY_CAP, min(EDGE_DISPLAY_CAP, edge))
 
 
+# ── Learned model-vs-market blend weights ─────────────────────────────────────
+# MARKET_MODEL_WEIGHTS was hand-tuned; the Brier-optimal mix is measurable from
+# our own graded picks (same principle as Smart-Consensus). Feedback-loop safe:
+# the fit reads the persisted PRE-blend model prob (rawMultProb) and the market
+# fair prob recomputed from the persisted opening prices — neither depends on
+# the weight being applied, so re-fitting never compounds a prior correction.
+_blend_weights_state = {"bw": None, "built_at": 0.0, "date": None}
+_blend_weights_lock = threading.Lock()
+
+
+def _build_blend_weights(date_str):
+    if not _BLEND_LEARN_AVAILABLE:
+        return None
+    try:
+        entries = _collect_window_entries(date_str, _PROP_CAL_WINDOW_DAYS)
+        by_market = {}
+        for row in entries:
+            mk, grade = row.get('marketKey'), row.get('grade')
+            if not mk or grade not in ('win', 'loss'):
+                continue
+            side = str(row.get('side') or row.get('recommendedSide') or '').strip().lower()
+            if not (side.startswith('over') or side.startswith('under')):
+                continue  # h2h/f5 sides aren't over/under-symmetric — skip
+            pm = row.get('rawMultProb')          # pre-blend Over-side model prob
+            over_imp = row.get('openingImplied') or row.get('marketImplied')
+            under_imp = _american_to_implied(row.get('bestUnderPrice')
+                                             or row.get('best_under_price'))
+            if pm is None or not over_imp or not under_imp:
+                continue
+            try:
+                fair_over, _ = devig_power(float(over_imp), float(under_imp))
+            except Exception:
+                continue
+            if not fair_over or not (0.0 < float(fair_over) < 1.0):
+                continue
+            y_pick = 1.0 if grade == 'win' else 0.0
+            y_over = y_pick if side.startswith('over') else (1.0 - y_pick)
+            by_market.setdefault(mk, []).append((pm, float(fair_over), y_over))
+        return BlendWeights.fit_from_entries(
+            by_market, MARKET_MODEL_WEIGHTS, MARKET_MODEL_WEIGHTS["default"])
+    except Exception as ex:
+        logging.warning(f"[blend-learn] build failed: {ex}")
+        return None
+
+
+def _get_blend_weights():
+    """Cached BlendWeights, rebuilt every _PROP_CAL_TTL_SEC or on date change."""
+    if not _BLEND_LEARN_AVAILABLE:
+        return None
+    now = time.time()
+    date_str = datetime.now(ET).strftime('%Y-%m-%d')
+    with _blend_weights_lock:
+        fresh = (_blend_weights_state["bw"] is not None
+                 and _blend_weights_state["date"] == date_str
+                 and (now - _blend_weights_state["built_at"]) < _PROP_CAL_TTL_SEC)
+        if not fresh:
+            _blend_weights_state["bw"] = _build_blend_weights(date_str)
+            _blend_weights_state["built_at"] = now
+            _blend_weights_state["date"] = date_str
+        return _blend_weights_state["bw"]
+
+
+def _blend_weight_for(market_key):
+    """The model weight logit_blend_prob should use — learned when the market
+    has enough graded history, the hand-tuned prior otherwise."""
+    prior = MARKET_MODEL_WEIGHTS.get(market_key, MARKET_MODEL_WEIGHTS["default"])
+    bw = _get_blend_weights()
+    if bw is None:
+        return prior
+    try:
+        return float(bw.weight(market_key, prior))
+    except Exception:
+        return prior
+
+
 def _pitcher_k9(fg, sv=None):
     """Plausible K/9 for a pitcher, guarding against sparse-data artifacts.
 
@@ -18681,6 +18767,11 @@ def api_calibration_markets():
     cal = _get_prop_calibrator()
     calibration_applied = cal.summary() if cal is not None else {}
 
+    # The model-vs-market blend weight in force per market (learned from
+    # graded history when n ≥ market_blend_learner.MIN_N, prior otherwise).
+    bw = _get_blend_weights()
+    blend_weights = bw.summary() if bw is not None else {}
+
     # Drift guard summary: markets whose post-switchover (stacked) cohort is
     # miscalibrated. Empty list = no drift detected (or not enough graded
     # stacked picks yet to judge).
@@ -18698,6 +18789,7 @@ def api_calibration_markets():
         'min_sample': MIN_N,
         'markets': out,
         'calibration_applied': calibration_applied,
+        'blend_weights': blend_weights,
         'edge_display_cap': EDGE_DISPLAY_CAP,
         'drift_alerts': drift_alerts,
         'drift_guard': {
