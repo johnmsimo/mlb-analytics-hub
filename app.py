@@ -7836,6 +7836,7 @@ def api_bvp_projection(batter_id, pitcher_id):
 
         # ── 4. Game context: park factor + dome + live weather ────────────────
         park_factor = 1.0
+        _park_home_id = None   # home team id for hand-aware park_hr (power models)
         weather     = {}
         if game_pk:
             try:
@@ -7851,6 +7852,7 @@ def api_bvp_projection(batter_id, pitcher_id):
                         home_id = (((gm.get("teams") or {}).get("home") or {}).get("team") or {}).get("id")
                         if home_id:
                             park_factor = PARK_FACTORS.get(home_id, 1.0)
+                            _park_home_id = home_id
                         venue   = gm.get("venue") or {}
                         venue_id = venue.get("id")
                         # Pull lat/lon and game hour for live weather lookup
@@ -7965,7 +7967,12 @@ def api_bvp_projection(batter_id, pitcher_id):
             _bform = batter_form or {}
             _bdict = {**bstats, **fg_bat, **sv_bat, "name": batter_name, "bats": bats_code,
                       "l7Hits": _bform.get("l7Hits"), "l14Hits": _bform.get("l14Hits"),
-                      "l7HitRate": _bform.get("l7HitRate"), **_mom}
+                      "l7HitRate": _bform.get("l7HitRate"),
+                      # Venue context for the power models' park features.
+                      "parkFactor": park_factor,
+                      "parkHr": (_hr_park_factor_hand(_park_home_id, bats_code)
+                                 if _park_home_id else 1.0),
+                      **_mom}
             _pdict = {**pstats, **fg_pit, **sv_pit, "name": pitcher_name, "pitchHand": pitcher_hand}
             if xgb_ready("hr"):
                 _xgb_extras["xgbHrProb"]  = xgb_hr_prob(_bdict, _pdict)
@@ -15755,6 +15762,12 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                             _rf = _batter_recent_hit_form(p.get('id'))
                             if _rf:
                                 _xgb_bp = {**p, **_rf}
+                        elif _xgb_market in ('hr', 'tb', 'rbi'):
+                            # Venue context for the power models' trained park
+                            # features (park_hr hand-aware from the batter side).
+                            _xgb_bp = {**p,
+                                       'parkFactor': PARK_FACTORS.get(home_team_id, 1.0),
+                                       'parkHr': _hr_park_factor_hand(home_team_id, p.get('bats'))}
                         try:
                             _full = _full_fn(_xgb_bp, opp_pitcher) or {}
                         except Exception:
@@ -18865,6 +18878,8 @@ def api_diag_serve_parity():
         away, home = teams.get('away') or {}, teams.get('home') or {}
         ap, hp = (away.get('probablePitcher') or {}), (home.get('probablePitcher') or {})
         gpk = g.get('gamePk')
+        _home_tid = ((home.get('team') or {}).get('id'))
+        _pf = PARK_FACTORS.get(_home_tid, 1.0) if _home_tid else 1.0
         # ── K starters (mirror tracker-capture enrichment) ──
         for pp in (ap, hp):
             pid, pname = pp.get('id'), pp.get('fullName')
@@ -18900,9 +18915,12 @@ def api_diag_serve_parity():
                 opp = {'name': opp_pp.get('fullName', ''), 'pitchHand': opp_hand}
                 _accumulate(feature_default_report(
                     'hits', batter={'name': bname}, pitcher=opp))
-                # ── HR/TB/RBI (mirror deep-dive path: name + bats + momentum) ──
+                # ── HR/TB/RBI (mirror deep-dive path: name + bats + park + momentum) ──
                 if idx < _POWER_BATTERS_PER_SIDE:
-                    bd = {'name': bname, 'bats': b.get('bats') or 'R'}
+                    bd = {'name': bname, 'bats': b.get('bats') or 'R',
+                          'parkFactor': _pf,
+                          'parkHr': (_hr_park_factor_hand(_home_tid, b.get('bats'))
+                                     if _home_tid else 1.0)}
                     try:
                         mom = _batter_momentum_features(b.get('id'))
                         if mom:
@@ -22773,6 +22791,8 @@ def api_lineup_props(game_pk):
 
         hit_ready = bool(_XGB_AVAILABLE and xgb_ready("hits"))
         hr_ready = bool(_XGB_AVAILABLE and xgb_ready("hr"))
+        _home_tid = (((gdata.get("teams") or {}).get("home") or {}).get("team") or {}).get("id")
+        _pf = PARK_FACTORS.get(_home_tid, 1.0) if _home_tid else 1.0
 
         def _score_side(batters, opp_name, opp_hand):
             pdict = {"name": opp_name, "pitchHand": opp_hand}
@@ -22785,7 +22805,10 @@ def api_lineup_props(game_pk):
                 # FG/Savant enrichment + lineup role happen inside the scorer
                 # (keyed by name + slot), matching the live slate-scan path.
                 bdict = {"name": name, "bats": b.get("bats") or "S",
-                         "slot": slot, "id": b.get("id")}
+                         "slot": slot, "id": b.get("id"),
+                         "parkFactor": _pf,
+                         "parkHr": (_hr_park_factor_hand(_home_tid, b.get("bats"))
+                                    if _home_tid else 1.0)}
                 hit_p = None; hr_p = None
                 if hit_ready:
                     try: hit_p = xgb_hit_prob(bdict, pdict)

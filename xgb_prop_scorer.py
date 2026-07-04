@@ -724,6 +724,10 @@ def _build_batter_market_features(batter: dict, pitcher: dict, feat_order: list)
         "l7_barrel":      _sf(batter, "l7Barrel",      "l7_barrel",      default=0.0347),
         "ev_momentum":    _sf(batter, "evMomentum",    "ev_momentum",    default=1.0),
         "barrel_momentum":_sf(batter, "barrelMomentum","barrel_momentum",default=0.954),
+        # Venue context (supplied by the caller from the game's home team id;
+        # neutral 1.0 when unknown). park_hr is the hand-aware HR multiplier.
+        "park_factor":    _sf(batter, "parkFactor", "park_factor",       default=1.0),
+        "park_hr":        _sf(batter, "parkHr",     "park_hr",           default=1.0),
     }
     # Percent-scale the rate stats that training ×100s; leave the FG fraction
     # rates (barrel/hardhit/hr-fb/fb) untouched.

@@ -114,6 +114,9 @@ HR_FEATURES = [
     "bats_L", "throws_R", "platoon_adv",
     "batting_order", "expected_pa",
     "l7_ev", "l7_barrel", "ev_momentum", "barrel_momentum",
+    # Hand-aware HR park multiplier — the venue IS known historically (the
+    # game's home team), so unlike weather/umpire this reconstructs exactly.
+    "park_hr",
 ]
 
 # Total bases (≥2 TB in a game). Broader than HR — rewards extra-base power AND
@@ -126,6 +129,7 @@ TB_FEATURES = [
     "bats_L", "throws_R", "platoon_adv",
     "batting_order", "expected_pa",
     "l7_hits", "l7_ev", "l7_barrel", "ev_momentum", "barrel_momentum",
+    "park_factor",
 ]
 
 # RBI (≥1 RBI in a game). Heavily lineup-context driven (cleanup spots get the
@@ -138,6 +142,51 @@ RBI_FEATURES = [
     "batting_order", "expected_pa",
     "l7_ev", "l7_barrel", "ev_momentum", "barrel_momentum",
 ]
+
+# ── Park factors — VERBATIM copies of app.py's PARK_FACTORS /
+#    HR_PARK_FACTORS / HR_PARK_FACTORS_HAND, keyed by MLBAM home-team id.
+#    Train/serve parity demands the identical source and scale: the live
+#    scorer is fed these exact values via parkFactor / parkHr, so the
+#    historical reconstruction must use them too. If app.py's tables change,
+#    change these with them (and retrain).
+PARK_FACTORS = {
+    133: 1.08, 144: 0.92, 110: 0.97, 111: 1.04, 112: 0.97, 137: 0.95, 109: 1.06,
+    145: 1.03, 116: 1.00, 158: 0.97, 142: 1.00, 147: 0.97, 143: 1.03, 140: 1.05,
+    146: 0.95, 121: 0.97, 136: 0.93, 138: 1.02, 141: 0.98, 139: 0.99, 108: 0.96,
+    117: 0.97, 135: 0.98, 120: 0.98, 134: 0.97, 119: 0.95, 118: 1.02, 114: 1.01,
+    113: 0.94, 115: 1.00,
+}
+HR_PARK_FACTORS = {
+    109: 114, 144: 94,  110: 108, 111: 101, 112: 109, 137: 92,
+    115: 112, 116: 100, 117: 103, 118: 108, 119: 104, 108: 95,
+    146: 95,  158: 99,  142: 99,  121: 100, 147: 118, 133: 107,
+    143: 111, 134: 95,  136: 95,  138: 98,  139: 96,  140: 112,
+    141: 102, 120: 99,  135: 97,  145: 95,  113: 100, 114: 98,
+}
+HR_PARK_FACTORS_HAND = {
+    147: {"L": 134, "R": 100}, 137: {"L": 80,  "R": 96},
+    111: {"L": 90,  "R": 104}, 110: {"L": 112, "R": 95},
+    117: {"L": 99,  "R": 110}, 134: {"L": 104, "R": 92},
+    143: {"L": 114, "R": 108}, 116: {"L": 96,  "R": 92},
+}
+# Statcast `home_team` abbreviation → MLBAM team id (both old and new codes).
+TEAM_ABBR_TO_ID = {
+    "LAA": 108, "AZ": 109, "ARI": 109, "BAL": 110, "BOS": 111, "CHC": 112,
+    "CIN": 113, "CLE": 114, "COL": 115, "DET": 116, "HOU": 117, "KC": 118,
+    "KCR": 118, "LAD": 119, "WSH": 120, "WSN": 120, "NYM": 121, "OAK": 133,
+    "ATH": 133, "PIT": 134, "SD": 135, "SDP": 135, "SEA": 136, "SF": 137,
+    "SFG": 137, "STL": 138, "TB": 139, "TBR": 139, "TEX": 140, "TOR": 141,
+    "MIN": 142, "PHI": 143, "ATL": 144, "CWS": 145, "CHW": 145, "MIA": 146,
+    "NYY": 147, "MIL": 158,
+}
+# Hand-resolved HR park multipliers (mirror app._hr_park_factor_hand: curated
+# split when listed, symmetric index otherwise; /100, rounded to 2dp).
+_PARK_HR_BY_HAND = {
+    hand: {tid: round(HR_PARK_FACTORS_HAND.get(tid, {}).get(
+               hand, HR_PARK_FACTORS.get(tid, 100)) / 100.0, 2)
+           for tid in PARK_FACTORS}
+    for hand in ("L", "R")
+}
 
 XGB_PARAMS_HITS = dict(n_estimators=300, max_depth=4, learning_rate=0.04,
                        subsample=0.80, colsample_bytree=0.80,
@@ -247,7 +296,8 @@ def _agg_chunk(sc: pd.DataFrame, season: int) -> tuple[pd.DataFrame, pd.DataFram
                   tb=("tb", "sum"), hr=("is_hr", "sum"), rbi=("rbi", "sum"),
                   inning_topbot=("inning_topbot", "first"),
                   stand=("stand", "first") if "stand" in pa.columns else ("is_pa", "size"),
-                  p_throws=("p_throws", "first") if "p_throws" in pa.columns else ("is_pa", "size"))
+                  p_throws=("p_throws", "first") if "p_throws" in pa.columns else ("is_pa", "size"),
+                  home_team=("home_team", "first") if "home_team" in pa.columns else ("is_pa", "size"))
              .reset_index())
     bat = bat.merge(side_first, on=["game_pk", "inning_topbot"], how="left")
 
@@ -453,6 +503,23 @@ def build_batter_matrix(bg: pd.DataFrame) -> pd.DataFrame:
     bg["ev_momentum"] = bg["ev_momentum"].fillna(1.0).clip(0.85, 1.15)
     bg["whiff_momentum"] = bg["whiff_momentum"].fillna(1.0).clip(0.5, 2.0)
     bg["barrel_momentum"] = bg["barrel_momentum"].fillna(1.0).clip(0.4, 2.5)
+
+    # ── Park factors from the game's home team — exactly reconstructable
+    #    historically (unlike weather/umpire). Same tables the live scorer is
+    #    fed via parkFactor/parkHr; park_hr uses the batter's real stand for
+    #    the curated handedness splits (Yankee porch, Oracle RF, …).
+    if "home_team" in bg.columns:
+        hid = bg["home_team"].astype(str).str.upper().map(TEAM_ABBR_TO_ID)
+        bg["park_factor"] = pd.to_numeric(hid.map(PARK_FACTORS), errors="coerce").fillna(1.0)
+        stand_l = bg.get("stand").astype(str).eq("L") if "stand" in bg.columns else False
+        bg["park_hr"] = np.where(
+            stand_l,
+            pd.to_numeric(hid.map(_PARK_HR_BY_HAND["L"]), errors="coerce"),
+            pd.to_numeric(hid.map(_PARK_HR_BY_HAND["R"]), errors="coerce"))
+        bg["park_hr"] = pd.Series(bg["park_hr"]).fillna(1.0)
+    else:
+        bg["park_factor"] = 1.0
+        bg["park_hr"] = 1.0
 
     frames = []
     for season in sorted(bg["season"].unique()):
