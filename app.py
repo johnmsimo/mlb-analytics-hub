@@ -16753,6 +16753,28 @@ def _entry_precal_prob(row):
     return None
 
 
+# Backfill prior (written by calibration_backfill.py): out-of-sample
+# (prob, outcome) pairs from scoring the committed models over the current
+# season to date. Used only to TOP UP a market below the target sample so the
+# isotonic layer engages from day one instead of after weeks of graded picks;
+# real tracker picks displace backfill at 4:1 (fully retired at ~150 picks).
+# The backfill probs are the XGB output rather than the full fused preCalProb
+# (close but not identical distribution) — hence prior, never peer.
+_PROP_CAL_BACKFILL_TARGET = 600
+_PROP_CAL_BACKFILL_DISPLACE = 4
+
+
+def _load_calibration_backfill():
+    try:
+        path = os.path.join(DATA_DIR, 'calibration_backfill.json')
+        if not os.path.exists(path):
+            return {}
+        with open(path) as f:
+            return (json.load(f) or {}).get('markets') or {}
+    except Exception:
+        return {}
+
+
 def _build_prop_calibrator(date_str):
     if not _PROP_CAL_AVAILABLE:
         return None
@@ -16767,6 +16789,20 @@ def _build_prop_calibrator(date_str):
             if p is None:
                 continue
             by_market.setdefault(mk, []).append((p, 1.0 if row.get('grade') == 'win' else 0.0))
+
+        backfill = _load_calibration_backfill()
+        for mk, pool in backfill.items():
+            n_real = len(by_market.get(mk, []))
+            room = _PROP_CAL_BACKFILL_TARGET - _PROP_CAL_BACKFILL_DISPLACE * n_real
+            if room <= 0 or not pool:
+                continue
+            # Deterministic spread over the season (every k-th pair) rather
+            # than random, so rebuilds are stable within the TTL window.
+            take = min(room, len(pool))
+            step = max(1, len(pool) // take)
+            sampled = pool[::step][:take]
+            by_market.setdefault(mk, []).extend(
+                (float(p), float(y)) for p, y in sampled)
         return PropCalibrator.fit_from_entries(by_market)
     except Exception as ex:
         logging.warning(f"[prop-cal] build failed: {ex}")

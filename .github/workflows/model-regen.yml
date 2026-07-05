@@ -45,6 +45,9 @@ jobs:
       - name: Regenerate all models (held-out ship gate inside)
         run: python regenerate_models.py
 
+      - name: Refresh calibration backfill (season-to-date out-of-sample pairs)
+        run: python calibration_backfill.py
+
       - name: Open PR with refreshed artifacts
         uses: peter-evans/create-pull-request@v6
         with:
@@ -69,4 +72,5 @@ jobs:
             models/xgb_feature_cols.json
             data/regen_summary.json
             data/park_factors_learned.json
+            data/calibration_backfill.json
             data/savant_bat_tracking_*.csv

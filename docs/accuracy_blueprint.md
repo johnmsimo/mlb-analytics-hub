@@ -176,14 +176,29 @@ which is what "most accurate in sports analytics" means in practice.
 | 4 | Bat-tracking features | **Shipped, marginal** (tb alt lines +0.001, rest flat, ranks 19–30). Zero serve cost; early-season upside unmeasurable in full-season holdout; re-measured weekly |
 | 5 | Weekly regen automation | **Shipped** (`model-regen.yml` — retrain + gate + PR, Mondays) |
 
-### What remains between here and the Stage 5 bar
+### Stage 6 — Un-gating the volume-gated layers (calibration backfill)
 
-The remaining accuracy gains are **volume-gated, not code-gated**: Smart-
-Consensus engages at ≥40 graded picks/market, the blend learner at ≥60, the
-isotonic recalibrator at ≥80, and the industry-leading bar itself (rolling
-90-day Beat-Close% > 52.4%, n ≥ 500 with CLV) needs months of graded picks.
-Keep auto-capture + closing-line capture on, review the weekly regen PR, and
-watch `/api/calibration/markets` — every layer is built and armed.
+The volume gates themselves turned out to be code-addressable: the isotonic
+recalibrator needs (model prob → outcome) pairs, and the current season's
+games are already played, out-of-sample (models train through 2024), and
+feature-reconstructable. `calibration_backfill.py` scores every committed
+model over the season to date and grades against actual outcomes —
+thousands of pairs per market on day one instead of ≥80 graded picks after
+weeks. `_build_prop_calibrator` consumes them as a *prior*: top-up to 600
+pairs, displaced 4:1 by real tracker picks (which carry the exact fused
+`preCalProb` distribution), fully retired at ~150 picks/market. Refreshed
+weekly by the regen workflow.
+
+### What remains genuinely time-gated
+
+Only the market-anchored layers that need real prices: Smart-Consensus
+(≥40 graded picks carrying both per-model probs), the blend learner (≥60,
+needs de-vig'd opening prices), and the industry-leading bar itself
+(rolling 90-day Beat-Close% > 52.4%, n ≥ 500 with CLV — needs real closing
+lines, which cannot be backfilled without a paid historical-odds source).
+Keep auto-capture + closing-line capture on, review the weekly regen PR,
+and watch `/api/calibration/markets`. Displayed-probability calibration —
+the thing users see — is armed from day one via the backfill.
 
 Stages 0-1 (shipped) are the foundation: they guarantee that every point of
 skill added by Stages 2-4 survives into production and that any decay is
