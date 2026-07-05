@@ -1,6 +1,6 @@
 {
-  "generated_at_utc": "2026-06-21T23:52:04.887407",
-  "note": "Held-out (2021-24 train / 2025 test) benchmarks from regenerate_models.py. Compare live tracker Brier against test_brier; both should beat baserate_brier. 2026-06-21: hits model retrained with lineup-role features (batting_order, expected_pa) reconstructed from Statcast at-bat order — test AUC 0.5912→0.6223, test Brier 0.2371→0.2311.",
+  "generated_at_utc": "2026-07-04T19:13:46.770776",
+  "note": "Held-out (2021-24 train / 2025 test) benchmarks from regenerate_models.py. Compare live tracker Brier against test_brier; both should beat baserate_brier.",
   "models": {
     "hits": {
       "tracker_market": "batter_hits",
@@ -9,6 +9,7 @@
       "train_auc": 0.6467,
       "test_brier": 0.2311,
       "baserate_brier": 0.2432,
+      "test_logloss": 0.6546,
       "n_train": 190463,
       "n_test": 47178,
       "test_season": 2025
@@ -20,6 +21,7 @@
       "train_auc": 0.7684,
       "test_brier": 0.1805,
       "baserate_brier": 0.201,
+      "test_logloss": 0.5392,
       "n_train": 17278,
       "n_test": 4525,
       "test_season": 2025
@@ -31,6 +33,7 @@
       "train_auc": 0.7609,
       "test_brier": 0.2146,
       "baserate_brier": 0.2471,
+      "test_logloss": 0.6176,
       "n_train": 17278,
       "n_test": 4525,
       "test_season": 2025
@@ -42,6 +45,127 @@
       "train_auc": 0.7637,
       "test_brier": 0.2024,
       "baserate_brier": 0.2376,
+      "test_logloss": 0.5912,
+      "n_train": 17278,
+      "n_test": 4525,
+      "test_season": 2025
+    },
+    "hr": {
+      "tracker_market": "batter_home_runs",
+      "line": 0.5,
+      "test_auc": 0.6838,
+      "train_auc": 0.6954,
+      "test_brier": 0.0948,
+      "baserate_brier": 0.099,
+      "test_logloss": 0.3273,
+      "n_train": 190463,
+      "n_test": 47178,
+      "test_season": 2025
+    },
+    "tb": {
+      "tracker_market": "batter_total_bases",
+      "line": 1.5,
+      "test_auc": 0.6242,
+      "train_auc": 0.6448,
+      "test_brier": 0.2133,
+      "baserate_brier": 0.2228,
+      "test_logloss": 0.6152,
+      "n_train": 190463,
+      "n_test": 47178,
+      "test_season": 2025
+    },
+    "rbi": {
+      "tracker_market": "batter_rbis",
+      "line": 0.5,
+      "test_auc": 0.6073,
+      "train_auc": 0.6286,
+      "test_brier": 0.2006,
+      "baserate_brier": 0.2066,
+      "test_logloss": 0.5887,
+      "n_train": 190463,
+      "n_test": 47178,
+      "test_season": 2025
+    },
+    "hits_1.5": {
+      "tracker_market": "batter_hits",
+      "line": 1.5,
+      "test_auc": 0.6328,
+      "train_auc": 0.6598,
+      "test_brier": 0.1564,
+      "baserate_brier": 0.162,
+      "test_logloss": 0.4862,
+      "n_train": 190463,
+      "n_test": 47178,
+      "test_season": 2025
+    },
+    "tb_2.5": {
+      "tracker_market": "batter_total_bases",
+      "line": 2.5,
+      "test_auc": 0.6407,
+      "train_auc": 0.6614,
+      "test_brier": 0.1512,
+      "baserate_brier": 0.1571,
+      "test_logloss": 0.4739,
+      "n_train": 190463,
+      "n_test": 47178,
+      "test_season": 2025
+    },
+    "tb_3.5": {
+      "tracker_market": "batter_total_bases",
+      "line": 3.5,
+      "test_auc": 0.6638,
+      "train_auc": 0.676,
+      "test_brier": 0.1145,
+      "baserate_brier": 0.1192,
+      "test_logloss": 0.3814,
+      "n_train": 190463,
+      "n_test": 47178,
+      "test_season": 2025
+    },
+    "rbi_1.5": {
+      "tracker_market": "batter_rbis",
+      "line": 1.5,
+      "test_auc": 0.626,
+      "train_auc": 0.6554,
+      "test_brier": 0.0907,
+      "baserate_brier": 0.0924,
+      "test_logloss": 0.3225,
+      "n_train": 190463,
+      "n_test": 47178,
+      "test_season": 2025
+    },
+    "k_2.5": {
+      "tracker_market": "pitcher_strikeouts",
+      "line": 2.5,
+      "test_auc": 0.7159,
+      "train_auc": 0.8065,
+      "test_brier": 0.1133,
+      "baserate_brier": 0.1225,
+      "test_logloss": 0.3741,
+      "n_train": 17278,
+      "n_test": 4525,
+      "test_season": 2025
+    },
+    "k_6.5": {
+      "tracker_market": "pitcher_strikeouts",
+      "line": 6.5,
+      "test_auc": 0.7368,
+      "train_auc": 0.7854,
+      "test_brier": 0.1616,
+      "baserate_brier": 0.1875,
+      "test_logloss": 0.4939,
+      "n_train": 17278,
+      "n_test": 4525,
+      "test_season": 2025
+    },
+    "k_7.5": {
+      "tracker_market": "pitcher_strikeouts",
+      "line": 7.5,
+      "test_auc": 0.7592,
+      "train_auc": 0.8152,
+      "test_brier": 0.1147,
+      "baserate_brier": 0.1317,
+      "test_logloss": 0.3742,
       "n_train": 17278,
       "n_test": 4525,
       "test_season": 2025
@@ -52,7 +176,38 @@
       "representative": "hits",
       "test_auc": 0.6223,
       "test_brier": 0.2311,
-      "baserate_brier": 0.2432
+      "baserate_brier": 0.2432,
+      "all_lines": {
+        "hits": 0.6223,
+        "hits_1.5": 0.6328
+      }
+    },
+    "batter_home_runs": {
+      "representative": "hr",
+      "test_auc": 0.6838,
+      "test_brier": 0.0948,
+      "baserate_brier": 0.099
+    },
+    "batter_rbis": {
+      "representative": "rbi",
+      "test_auc": 0.6073,
+      "test_brier": 0.2006,
+      "baserate_brier": 0.2066,
+      "all_lines": {
+        "rbi": 0.6073,
+        "rbi_1.5": 0.626
+      }
+    },
+    "batter_total_bases": {
+      "representative": "tb",
+      "test_auc": 0.6242,
+      "test_brier": 0.2133,
+      "baserate_brier": 0.2228,
+      "all_lines": {
+        "tb": 0.6242,
+        "tb_2.5": 0.6407,
+        "tb_3.5": 0.6638
+      }
     },
     "pitcher_strikeouts": {
       "representative": "k_4.5",
@@ -60,9 +215,12 @@
       "test_brier": 0.2146,
       "baserate_brier": 0.2471,
       "all_lines": {
+        "k_2.5": 0.7159,
         "k_3.5": 0.6989,
         "k_4.5": 0.7095,
-        "k_5.5": 0.7246
+        "k_5.5": 0.7246,
+        "k_6.5": 0.7368,
+        "k_7.5": 0.7592
       }
     }
   }

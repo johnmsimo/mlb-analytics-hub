@@ -38,10 +38,11 @@ _load_local_env_file(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.
 # XGBoost prop scorer — loaded once at startup; falls back gracefully if models missing
 try:
     from xgb_prop_scorer import (
-        xgb_hit_prob, xgb_k_prob, xgb_ready,
+        xgb_hit_prob, xgb_k_prob, xgb_ready, xgb_line_ready,
         xgb_hr_prob, xgb_tb_prob, xgb_rbi_prob,
         xgb_hit_prob_full, xgb_k_prob_full,
         xgb_hr_prob_full, xgb_tb_prob_full, xgb_rbi_prob_full,
+        xgb_batter_prob_full,
         enrich_batter, enrich_pitcher,
     )
     _XGB_AVAILABLE = True
@@ -57,7 +58,9 @@ except ImportError:
     def xgb_hr_prob_full(*a, **k):  return {}
     def xgb_tb_prob_full(*a, **k):  return {}
     def xgb_rbi_prob_full(*a, **k): return {}
+    def xgb_batter_prob_full(*a, **k): return {}
     def xgb_ready(_=None):       return False
+    def xgb_line_ready(*a, **k): return False
     def enrich_batter(d, **k):   return d
     def enrich_pitcher(d, **k):  return d
 
@@ -98,6 +101,15 @@ try:
 except ImportError:
     _PROP_CAL_AVAILABLE = False
     PropCalibrator = None  # type: ignore
+
+# Learned model-vs-market blend weights fit from our own graded history.
+# Optional: a missing module keeps the hand-tuned MARKET_MODEL_WEIGHTS table.
+try:
+    from market_blend_learner import BlendWeights
+    _BLEND_LEARN_AVAILABLE = True
+except ImportError:
+    _BLEND_LEARN_AVAILABLE = False
+    BlendWeights = None  # type: ignore
 
 # Consolidated betting math (de-vig, EV, fractional Kelly). Optional: if it is
 # missing the /api/v1/edges enrichment is skipped, everything else is unaffected.
@@ -2000,14 +2012,53 @@ HR_PARK_FACTORS_HAND = {
 }
 
 
+# Learned season-specific park factors (written by regenerate_models.py from
+# its own Statcast pull — home-vs-road per team, recency-weighted trailing 3
+# seasons, shrunk toward 1.0). When present these provide the LEVEL for the
+# XGB park features; the curated hand asymmetry below is applied as a ratio on
+# top. Missing file / missing team → the static tables above.
+_LEARNED_PARK: dict = {}
+try:
+    _lp_path = os.path.join(DATA_DIR, 'park_factors_learned.json')
+    if os.path.exists(_lp_path):
+        with open(_lp_path) as _f:
+            _LEARNED_PARK = {int(k): v for k, v in
+                             ((json.load(_f) or {}).get('factors') or {}).items()}
+except Exception:
+    _LEARNED_PARK = {}
+
+
+def _park_factor_for(home_team_id):
+    """General (TB-based) park factor — learned season-specific level when
+    available, static PARK_FACTORS otherwise. Feeds the XGB park_factor
+    feature; train-side regenerate_models applies the same precedence."""
+    try:
+        rec = _LEARNED_PARK.get(int(home_team_id))
+        if rec and rec.get('pf'):
+            return float(rec['pf'])
+    except (TypeError, ValueError):
+        pass
+    return PARK_FACTORS.get(home_team_id, 1.0)
+
+
 def _hr_park_factor_hand(home_team_id, hand):
-    """HR park multiplier (1.0 = neutral) for a batter of the given hand. Uses
-    the curated handedness table when available, else the symmetric HR index."""
+    """HR park multiplier (1.0 = neutral) for a batter of the given hand.
+    Level: learned hr_pf when available, else the static HR index. The curated
+    LHB/RHB asymmetry is applied as a ratio around the symmetric level so it
+    survives the switch to learned levels."""
     h = "L" if str(hand or "R").upper().startswith("L") else "R"
     rec = HR_PARK_FACTORS_HAND.get(home_team_id)
+    sym = HR_PARK_FACTORS.get(home_team_id, 100) / 100.0
+    asym = ((rec[h] / 100.0) / sym) if (rec and h in rec and sym > 0) else 1.0
+    try:
+        learned = _LEARNED_PARK.get(int(home_team_id))
+        if learned and learned.get('hr_pf'):
+            return round(float(learned['hr_pf']) * asym, 2)
+    except (TypeError, ValueError):
+        pass
     if rec and h in rec:
         return round(rec[h] / 100.0, 2)
-    return round(HR_PARK_FACTORS.get(home_team_id, 100) / 100.0, 2)
+    return round(sym, 2)
 
 _fg_lock = threading.Lock()
 _fg_cond = threading.Condition(_fg_lock)   # notified when FG load completes
@@ -7827,6 +7878,7 @@ def api_bvp_projection(batter_id, pitcher_id):
 
         # ── 4. Game context: park factor + dome + live weather ────────────────
         park_factor = 1.0
+        _park_home_id = None   # home team id for hand-aware park_hr (power models)
         weather     = {}
         if game_pk:
             try:
@@ -7842,6 +7894,7 @@ def api_bvp_projection(batter_id, pitcher_id):
                         home_id = (((gm.get("teams") or {}).get("home") or {}).get("team") or {}).get("id")
                         if home_id:
                             park_factor = PARK_FACTORS.get(home_id, 1.0)
+                            _park_home_id = home_id
                         venue   = gm.get("venue") or {}
                         venue_id = venue.get("id")
                         # Pull lat/lon and game hour for live weather lookup
@@ -7956,7 +8009,14 @@ def api_bvp_projection(batter_id, pitcher_id):
             _bform = batter_form or {}
             _bdict = {**bstats, **fg_bat, **sv_bat, "name": batter_name, "bats": bats_code,
                       "l7Hits": _bform.get("l7Hits"), "l14Hits": _bform.get("l14Hits"),
-                      "l7HitRate": _bform.get("l7HitRate"), **_mom}
+                      "l7HitRate": _bform.get("l7HitRate"),
+                      # Venue context for the power models' park features
+                      # (learned season-specific level when available).
+                      "parkFactor": (_park_factor_for(_park_home_id)
+                                     if _park_home_id else park_factor),
+                      "parkHr": (_hr_park_factor_hand(_park_home_id, bats_code)
+                                 if _park_home_id else 1.0),
+                      **_mom}
             _pdict = {**pstats, **fg_pit, **sv_pit, "name": pitcher_name, "pitchHand": pitcher_hand}
             if xgb_ready("hr"):
                 _xgb_extras["xgbHrProb"]  = xgb_hr_prob(_bdict, _pdict)
@@ -11530,7 +11590,9 @@ def logit_blend_prob(p_model: float,
     def _sigmoid(x):
         return 1.0 / (1.0 + math.exp(-x))
 
-    w = MARKET_MODEL_WEIGHTS.get(market_key, MARKET_MODEL_WEIGHTS["default"])
+    # Learned per-market weight when enough graded history exists; the
+    # hand-tuned MARKET_MODEL_WEIGHTS entry is the prior it shrinks toward.
+    w = _blend_weight_for(market_key)
 
     # De-vig market probability if raw over/under implied given
     if over_implied and under_implied and over_implied > 0 and under_implied > 0:
@@ -14022,16 +14084,17 @@ _BATTER_FALLBACK_LINE = {
 }
 _K_PROB_FIELD_FOR = {3.5: 'p_4plus_k', 4.5: 'p_5plus_k', 5.5: 'p_6plus_k'}
 
-# Book market → (scorer short name, full-output fn, the exact line the committed
-# XGB model is trained on). The XGB point probability is only valid AT that line,
-# so the stacked fusion only fires when the row's line matches.
-def _xgb_batter_market_map():
-    return {
-        'batter_hits':        ('hits', xgb_hit_prob_full, 0.5),
-        'batter_total_bases': ('tb',   xgb_tb_prob_full,  1.5),
-        'batter_home_runs':   ('hr',   xgb_hr_prob_full,  0.5),
-        'batter_rbis':        ('rbi',  xgb_rbi_prob_full, 0.5),
-    }
+# Book market → scorer family. Line routing is handled inside the scorer
+# (xgb_batter_prob_full / xgb_line_ready): each (family, line) maps to the
+# model trained at exactly that threshold — hits 0.5/1.5, TB 1.5/2.5/3.5,
+# RBI 0.5/1.5, HR 0.5 — and unmapped lines return {} so the analytic
+# probability stands. The XGB point probability is only valid AT its line.
+_XGB_FAMILY_FOR_MK = {
+    'batter_hits':        'hits',
+    'batter_total_bases': 'tb',
+    'batter_home_runs':   'hr',
+    'batter_rbis':        'rbi',
+}
 
 
 def _parse_prop_markets(bookmakers, valid_names):
@@ -15733,24 +15796,30 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                     #    reflect the fusion). Off-line markets keep the analytic prob.
                     _mc_batter = None
                     _full = {}
-                    _xgb_market, _full_fn, _model_line = _xgb_batter_market_map().get(mk, (None, None, None))
-                    if _full_fn and xgb_ready(_xgb_market):
-                        # Serve-parity: feed the hits model its recent-form features
-                        # (l7/l14 hits) — `p` already carries `slot`+`id`, so the
-                        # scorer resolves lineup role from the explicit slot. Power
-                        # markets (hr/tb/rbi) pull their own momentum elsewhere.
+                    _xgb_market = _XGB_FAMILY_FOR_MK.get(mk)
+                    if _xgb_market and xgb_line_ready(_xgb_market, line):
+                        # Serve-parity: feed the hits models their recent-form
+                        # features (l7/l14 hits) — `p` already carries `slot`+`id`,
+                        # so the scorer resolves lineup role from the explicit slot.
+                        # Power markets (hr/tb/rbi) pull their own momentum elsewhere.
                         _xgb_bp = p
                         if _xgb_market == 'hits' and p.get('id'):
                             _rf = _batter_recent_hit_form(p.get('id'))
                             if _rf:
                                 _xgb_bp = {**p, **_rf}
+                        elif _xgb_market in ('hr', 'tb', 'rbi'):
+                            # Venue context for the power models' trained park
+                            # features (park_hr hand-aware from the batter side).
+                            _xgb_bp = {**p,
+                                       'parkFactor': _park_factor_for(home_team_id),
+                                       'parkHr': _hr_park_factor_hand(home_team_id, p.get('bats'))}
                         try:
-                            _full = _full_fn(_xgb_bp, opp_pitcher) or {}
+                            _full = xgb_batter_prob_full(_xgb_market, line, _xgb_bp, opp_pitcher) or {}
                         except Exception:
                             _full = {}
                         _mc_batter = _full.get('mc') or {}
                     _xgb_p = _full.get('prob') if _full else None
-                    _at_model_line = (_model_line is not None and float(line) == _model_line)
+                    _at_model_line = bool(_full)   # scorer returned a model trained at THIS line
                     _stk = None
                     base_prob = raw_prob          # analytic / MC estimate (default)
                     model_source = 'mc'
@@ -15766,7 +15835,7 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                             try:
                                 _stk = stacked_calibrate(float(_xgb_p), float(raw_prob),
                                                          coverage=0.5, exp_pa=_exp_pa, bvp_pa=_bvp_pa,
-                                                         market_key=mk, mc_ci=_mc_ci)
+                                                         market_key=mk, line=line, mc_ci=_mc_ci)
                             except Exception:
                                 _stk = None
                         if _stk and _stk.get('probability') is not None:
@@ -16684,6 +16753,28 @@ def _entry_precal_prob(row):
     return None
 
 
+# Backfill prior (written by calibration_backfill.py): out-of-sample
+# (prob, outcome) pairs from scoring the committed models over the current
+# season to date. Used only to TOP UP a market below the target sample so the
+# isotonic layer engages from day one instead of after weeks of graded picks;
+# real tracker picks displace backfill at 4:1 (fully retired at ~150 picks).
+# The backfill probs are the XGB output rather than the full fused preCalProb
+# (close but not identical distribution) — hence prior, never peer.
+_PROP_CAL_BACKFILL_TARGET = 600
+_PROP_CAL_BACKFILL_DISPLACE = 4
+
+
+def _load_calibration_backfill():
+    try:
+        path = os.path.join(DATA_DIR, 'calibration_backfill.json')
+        if not os.path.exists(path):
+            return {}
+        with open(path) as f:
+            return (json.load(f) or {}).get('markets') or {}
+    except Exception:
+        return {}
+
+
 def _build_prop_calibrator(date_str):
     if not _PROP_CAL_AVAILABLE:
         return None
@@ -16698,6 +16789,20 @@ def _build_prop_calibrator(date_str):
             if p is None:
                 continue
             by_market.setdefault(mk, []).append((p, 1.0 if row.get('grade') == 'win' else 0.0))
+
+        backfill = _load_calibration_backfill()
+        for mk, pool in backfill.items():
+            n_real = len(by_market.get(mk, []))
+            room = _PROP_CAL_BACKFILL_TARGET - _PROP_CAL_BACKFILL_DISPLACE * n_real
+            if room <= 0 or not pool:
+                continue
+            # Deterministic spread over the season (every k-th pair) rather
+            # than random, so rebuilds are stable within the TTL window.
+            take = min(room, len(pool))
+            step = max(1, len(pool) // take)
+            sampled = pool[::step][:take]
+            by_market.setdefault(mk, []).extend(
+                (float(p), float(y)) for p, y in sampled)
         return PropCalibrator.fit_from_entries(by_market)
     except Exception as ex:
         logging.warning(f"[prop-cal] build failed: {ex}")
@@ -16751,6 +16856,81 @@ def _capped_edge(adj_prob, market_implied):
         return None
     edge = adj_prob - market_implied
     return max(-EDGE_DISPLAY_CAP, min(EDGE_DISPLAY_CAP, edge))
+
+
+# ── Learned model-vs-market blend weights ─────────────────────────────────────
+# MARKET_MODEL_WEIGHTS was hand-tuned; the Brier-optimal mix is measurable from
+# our own graded picks (same principle as Smart-Consensus). Feedback-loop safe:
+# the fit reads the persisted PRE-blend model prob (rawMultProb) and the market
+# fair prob recomputed from the persisted opening prices — neither depends on
+# the weight being applied, so re-fitting never compounds a prior correction.
+_blend_weights_state = {"bw": None, "built_at": 0.0, "date": None}
+_blend_weights_lock = threading.Lock()
+
+
+def _build_blend_weights(date_str):
+    if not _BLEND_LEARN_AVAILABLE:
+        return None
+    try:
+        entries = _collect_window_entries(date_str, _PROP_CAL_WINDOW_DAYS)
+        by_market = {}
+        for row in entries:
+            mk, grade = row.get('marketKey'), row.get('grade')
+            if not mk or grade not in ('win', 'loss'):
+                continue
+            side = str(row.get('side') or row.get('recommendedSide') or '').strip().lower()
+            if not (side.startswith('over') or side.startswith('under')):
+                continue  # h2h/f5 sides aren't over/under-symmetric — skip
+            pm = row.get('rawMultProb')          # pre-blend Over-side model prob
+            over_imp = row.get('openingImplied') or row.get('marketImplied')
+            under_imp = _american_to_implied(row.get('bestUnderPrice')
+                                             or row.get('best_under_price'))
+            if pm is None or not over_imp or not under_imp:
+                continue
+            try:
+                fair_over, _ = devig_power(float(over_imp), float(under_imp))
+            except Exception:
+                continue
+            if not fair_over or not (0.0 < float(fair_over) < 1.0):
+                continue
+            y_pick = 1.0 if grade == 'win' else 0.0
+            y_over = y_pick if side.startswith('over') else (1.0 - y_pick)
+            by_market.setdefault(mk, []).append((pm, float(fair_over), y_over))
+        return BlendWeights.fit_from_entries(
+            by_market, MARKET_MODEL_WEIGHTS, MARKET_MODEL_WEIGHTS["default"])
+    except Exception as ex:
+        logging.warning(f"[blend-learn] build failed: {ex}")
+        return None
+
+
+def _get_blend_weights():
+    """Cached BlendWeights, rebuilt every _PROP_CAL_TTL_SEC or on date change."""
+    if not _BLEND_LEARN_AVAILABLE:
+        return None
+    now = time.time()
+    date_str = datetime.now(ET).strftime('%Y-%m-%d')
+    with _blend_weights_lock:
+        fresh = (_blend_weights_state["bw"] is not None
+                 and _blend_weights_state["date"] == date_str
+                 and (now - _blend_weights_state["built_at"]) < _PROP_CAL_TTL_SEC)
+        if not fresh:
+            _blend_weights_state["bw"] = _build_blend_weights(date_str)
+            _blend_weights_state["built_at"] = now
+            _blend_weights_state["date"] = date_str
+        return _blend_weights_state["bw"]
+
+
+def _blend_weight_for(market_key):
+    """The model weight logit_blend_prob should use — learned when the market
+    has enough graded history, the hand-tuned prior otherwise."""
+    prior = MARKET_MODEL_WEIGHTS.get(market_key, MARKET_MODEL_WEIGHTS["default"])
+    bw = _get_blend_weights()
+    if bw is None:
+        return prior
+    try:
+        return float(bw.weight(market_key, prior))
+    except Exception:
+        return prior
 
 
 def _pitcher_k9(fg, sv=None):
@@ -18602,6 +18782,15 @@ def _market_calibration_drift(rows):
 _MODEL_METRICS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                    'models', 'model_metrics.json')
 
+# Tracker marketKey → xgb_ready() scorer key, for the xgb_engaged flag.
+_XGB_MARKET_FOR_TRACKER = {
+    'batter_hits':        'hits',
+    'pitcher_strikeouts': 'k',
+    'batter_home_runs':   'hr',
+    'batter_total_bases': 'tb',
+    'batter_rbis':        'rbi',
+}
+
 
 @app.route('/api/calibration/markets')
 def api_calibration_markets():
@@ -18661,9 +18850,9 @@ def api_calibration_markets():
             'marketKey': mk,
             'live': live,
             'benchmark': bench,
-            'xgb_engaged': bool(mk in ('batter_hits', 'pitcher_strikeouts')
+            'xgb_engaged': bool(mk in _XGB_MARKET_FOR_TRACKER
                                 and _XGB_AVAILABLE
-                                and xgb_ready('hits' if mk == 'batter_hits' else 'k')),
+                                and xgb_ready(_XGB_MARKET_FOR_TRACKER[mk])),
             'status': status,
             'drift': drift,
         })
@@ -18671,6 +18860,11 @@ def api_calibration_markets():
     # The live correction actually applied to displayed probabilities.
     cal = _get_prop_calibrator()
     calibration_applied = cal.summary() if cal is not None else {}
+
+    # The model-vs-market blend weight in force per market (learned from
+    # graded history when n ≥ market_blend_learner.MIN_N, prior otherwise).
+    bw = _get_blend_weights()
+    blend_weights = bw.summary() if bw is not None else {}
 
     # Drift guard summary: markets whose post-switchover (stacked) cohort is
     # miscalibrated. Empty list = no drift detected (or not enough graded
@@ -18689,6 +18883,7 @@ def api_calibration_markets():
         'min_sample': MIN_N,
         'markets': out,
         'calibration_applied': calibration_applied,
+        'blend_weights': blend_weights,
         'edge_display_cap': EDGE_DISPLAY_CAP,
         'drift_alerts': drift_alerts,
         'drift_guard': {
@@ -18720,9 +18915,11 @@ def api_diag_serve_parity():
     It builds the entity dicts the SAME way the live scoring paths do — k
     starters get FG enrichment + rolling form + arsenal (the tracker-capture
     path); hit batters get the name-only dict the projection path actually
-    passes — runs them through the model's feature builders, and reports per
-    feature how often its value equals the empty-input default across the
-    sampled slate. A feature at default_rate ≥ 0.85 is a serve gap. Read-only.
+    passes; hr/tb/rbi batters get name + bats + heater momentum (the deep-dive
+    path, sampled from the top of each lineup to bound the Statcast pulls) —
+    runs them through the model's feature builders, and reports per feature how
+    often its value equals the empty-input default across the sampled slate.
+    A feature at default_rate ≥ 0.85 is a serve gap. Read-only.
     ?games=N (default 3, max 6)."""
     if not _XGB_AVAILABLE:
         return jsonify({'success': False, 'error': 'xgb scorer unavailable'}), 200
@@ -18735,8 +18932,13 @@ def api_diag_serve_parity():
     date_str = datetime.now(ET).strftime('%Y-%m-%d')
     games = (fetch_schedule(date_str) or [])[:n_games]
 
-    agg = {'hits': {}, 'k_4.5': {}}
-    counts = {'hits': 0, 'k_4.5': 0}
+    parity_markets = ('hits', 'k_4.5', 'hr', 'tb', 'rbi')
+    agg = {mk: {} for mk in parity_markets}
+    counts = {mk: 0 for mk in parity_markets}
+    # Power markets need the momentum Statcast pull (day-cached, but a network
+    # hit when cold) — sample the top of each lineup so a cold-cache run stays
+    # inside the request budget. 5/side detects a default_rate≥0.85 gap fine.
+    _POWER_BATTERS_PER_SIDE = 5
 
     def _accumulate(rep):
         if not rep:
@@ -18757,6 +18959,8 @@ def api_diag_serve_parity():
         away, home = teams.get('away') or {}, teams.get('home') or {}
         ap, hp = (away.get('probablePitcher') or {}), (home.get('probablePitcher') or {})
         gpk = g.get('gamePk')
+        _home_tid = ((home.get('team') or {}).get('id'))
+        _pf = _park_factor_for(_home_tid) if _home_tid else 1.0
         # ── K starters (mirror tracker-capture enrichment) ──
         for pp in (ap, hp):
             pid, pname = pp.get('id'), pp.get('fullName')
@@ -18785,16 +18989,30 @@ def api_diag_serve_parity():
         for side, opp_pp in (('away', hp), ('home', ap)):
             ph = opp_pp.get('pitchHand')
             opp_hand = ph.get('code') if isinstance(ph, dict) else (ph or 'R')
-            for b in (lud.get(side) or [])[:9]:
+            for idx, b in enumerate((lud.get(side) or [])[:9]):
                 bname = b.get('name') or b.get('fullName')
                 if not bname:
                     continue
+                opp = {'name': opp_pp.get('fullName', ''), 'pitchHand': opp_hand}
                 _accumulate(feature_default_report(
-                    'hits', batter={'name': bname},
-                    pitcher={'name': opp_pp.get('fullName', ''), 'pitchHand': opp_hand}))
+                    'hits', batter={'name': bname}, pitcher=opp))
+                # ── HR/TB/RBI (mirror deep-dive path: name + bats + park + momentum) ──
+                if idx < _POWER_BATTERS_PER_SIDE:
+                    bd = {'name': bname, 'bats': b.get('bats') or 'R',
+                          'parkFactor': _pf,
+                          'parkHr': (_hr_park_factor_hand(_home_tid, b.get('bats'))
+                                     if _home_tid else 1.0)}
+                    try:
+                        mom = _batter_momentum_features(b.get('id'))
+                        if mom:
+                            bd.update(mom)
+                    except Exception:
+                        pass
+                    for pmk in ('hr', 'tb', 'rbi'):
+                        _accumulate(feature_default_report(pmk, batter=bd, pitcher=opp))
 
     out = {}
-    for mk in ('hits', 'k_4.5'):
+    for mk in parity_markets:
         n = counts[mk]
         feats = []
         for fname, s in agg[mk].items():
@@ -22654,6 +22872,8 @@ def api_lineup_props(game_pk):
 
         hit_ready = bool(_XGB_AVAILABLE and xgb_ready("hits"))
         hr_ready = bool(_XGB_AVAILABLE and xgb_ready("hr"))
+        _home_tid = (((gdata.get("teams") or {}).get("home") or {}).get("team") or {}).get("id")
+        _pf = _park_factor_for(_home_tid) if _home_tid else 1.0
 
         def _score_side(batters, opp_name, opp_hand):
             pdict = {"name": opp_name, "pitchHand": opp_hand}
@@ -22666,7 +22886,10 @@ def api_lineup_props(game_pk):
                 # FG/Savant enrichment + lineup role happen inside the scorer
                 # (keyed by name + slot), matching the live slate-scan path.
                 bdict = {"name": name, "bats": b.get("bats") or "S",
-                         "slot": slot, "id": b.get("id")}
+                         "slot": slot, "id": b.get("id"),
+                         "parkFactor": _pf,
+                         "parkHr": (_hr_park_factor_hand(_home_tid, b.get("bats"))
+                                    if _home_tid else 1.0)}
                 hit_p = None; hr_p = None
                 if hit_ready:
                     try: hit_p = xgb_hit_prob(bdict, pdict)

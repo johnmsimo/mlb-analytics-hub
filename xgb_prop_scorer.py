@@ -136,6 +136,13 @@ except ImportError:
     def get_pitcher_projection(*a, **kw): return {}
 
 try:
+    from savant_bat_tracking import bat_tracking as _sv_bat_tracking
+    _BT_AVAILABLE = True
+except ImportError:
+    _BT_AVAILABLE = False
+    def _sv_bat_tracking(*a, **kw): return {}
+
+try:
     from umpire_loader import get_umpire_features as _get_ump_features
     _UMP_AVAILABLE = True
 except ImportError:
@@ -200,24 +207,48 @@ _MODEL_DIR = os.path.join(_HERE, "models")
 _FEAT_FILE = os.path.join(_MODEL_DIR, "xgb_feature_cols.json")
 
 _MODEL_PATHS = {
-    "hits":  os.path.join(_MODEL_DIR, "xgb_hits_over_0.5.pkl"),
+    "hits":     os.path.join(_MODEL_DIR, "xgb_hits_over_0.5.pkl"),
+    "hits_1.5": os.path.join(_MODEL_DIR, "xgb_hits_over_1.5.pkl"),
+    "k_2.5": os.path.join(_MODEL_DIR, "xgb_k_over_2.5.pkl"),
     "k_3.5": os.path.join(_MODEL_DIR, "xgb_k_over_3.5.pkl"),
     "k_4.5": os.path.join(_MODEL_DIR, "xgb_k_over_4.5.pkl"),
     "k_5.5": os.path.join(_MODEL_DIR, "xgb_k_over_5.5.pkl"),
-    "hr":    os.path.join(_MODEL_DIR, "xgb_hr_over_0.5.pkl"),
-    "tb":    os.path.join(_MODEL_DIR, "xgb_tb_over_1.5.pkl"),
-    "rbi":   os.path.join(_MODEL_DIR, "xgb_rbi_over_0.5.pkl"),
+    "k_6.5": os.path.join(_MODEL_DIR, "xgb_k_over_6.5.pkl"),
+    "k_7.5": os.path.join(_MODEL_DIR, "xgb_k_over_7.5.pkl"),
+    "hr":      os.path.join(_MODEL_DIR, "xgb_hr_over_0.5.pkl"),
+    "tb":      os.path.join(_MODEL_DIR, "xgb_tb_over_1.5.pkl"),
+    "tb_2.5":  os.path.join(_MODEL_DIR, "xgb_tb_over_2.5.pkl"),
+    "tb_3.5":  os.path.join(_MODEL_DIR, "xgb_tb_over_3.5.pkl"),
+    "rbi":     os.path.join(_MODEL_DIR, "xgb_rbi_over_0.5.pkl"),
+    "rbi_1.5": os.path.join(_MODEL_DIR, "xgb_rbi_over_1.5.pkl"),
 }
 
 # Map scorer model keys -> stacked_calibrator market keys
 _MARKET_KEY_MAP = {
-    "hits":  "batter_hits",
+    "hits":     "batter_hits",
+    "hits_1.5": "batter_hits",
+    "k_2.5": "pitcher_strikeouts",
     "k_3.5": "pitcher_strikeouts",
     "k_4.5": "pitcher_strikeouts",
     "k_5.5": "pitcher_strikeouts",
-    "hr":    "batter_hr",
-    "tb":    "batter_tb",
-    "rbi":   "batter_rbi",
+    "k_6.5": "pitcher_strikeouts",
+    "k_7.5": "pitcher_strikeouts",
+    "hr":      "batter_hr",
+    "tb":      "batter_tb",
+    "tb_2.5":  "batter_tb",
+    "tb_3.5":  "batter_tb",
+    "rbi":     "batter_rbi",
+    "rbi_1.5": "batter_rbi",
+}
+
+# (family, line) -> model key for the batter markets. The XGB probability is
+# only a valid P(over) AT its trained threshold, so callers route by the row's
+# actual line and fall back to the analytic model for unmapped lines.
+_BATTER_LINE_MODELS = {
+    ("hits", 0.5): "hits", ("hits", 1.5): "hits_1.5",
+    ("tb", 1.5): "tb", ("tb", 2.5): "tb_2.5", ("tb", 3.5): "tb_3.5",
+    ("hr", 0.5): "hr",
+    ("rbi", 0.5): "rbi", ("rbi", 1.5): "rbi_1.5",
 }
 
 _lock = threading.Lock()
@@ -302,6 +333,22 @@ def xgb_ready(market: str = "hits") -> bool:
     else:
         return False
     return model_ok and _xgb_calibrated(_MARKET_KEY_FOR[market])
+
+
+def xgb_line_ready(family: str, line) -> bool:
+    """Line-aware readiness: True only when a calibrated model trained at THIS
+    exact threshold is loaded. Off-line rows must fall back to the analytic
+    model rather than borrow a neighbouring line's probability."""
+    if not _loaded:
+        _load_models()
+    try:
+        line = float(line)
+    except (TypeError, ValueError):
+        return False
+    key = f"k_{line}" if family == "k" else _BATTER_LINE_MODELS.get((family, line))
+    if key is None or key not in _models:
+        return False
+    return _xgb_calibrated(_MARKET_KEY_MAP.get(key, ""))
 
 
 # ─── XGB prediction interval (tree-level variance) ───────────────────────────────
@@ -693,6 +740,16 @@ def _build_batter_market_features(batter: dict, pitcher: dict, feat_order: list)
     lineup_feats  = _resolve_lineup_role(batter, mlbam_id, player_name)
     expected_pa   = lineup_feats["expected_pa"]
     batting_order = lineup_feats["batting_order"]
+    # Bat-tracking (2024+): looked up here so EVERY caller gets serve parity.
+    # No row (below-min-swings batter) → NaN, matching training where bt_* is
+    # never imputed and XGB's missing-branch handles it.
+    bt = {}
+    if _BT_AVAILABLE and (player_name or mlbam_id):
+        try:
+            bt = _sv_bat_tracking(name=player_name, player_id=mlbam_id) or {}
+        except Exception:
+            bt = {}
+    _NAN = float("nan")
     raw = {
         "sv_xba":     _sf(batter,  "svxba",  "xAVG",          default=0.2427),
         "sv_xwoba":   _sf(batter,  "svxwoba","xwOBA","fgwoba",default=0.3171),
@@ -724,6 +781,19 @@ def _build_batter_market_features(batter: dict, pitcher: dict, feat_order: list)
         "l7_barrel":      _sf(batter, "l7Barrel",      "l7_barrel",      default=0.0347),
         "ev_momentum":    _sf(batter, "evMomentum",    "ev_momentum",    default=1.0),
         "barrel_momentum":_sf(batter, "barrelMomentum","barrel_momentum",default=0.954),
+        # Venue context (supplied by the caller from the game's home team id;
+        # neutral 1.0 when unknown). park_hr is the hand-aware HR multiplier.
+        "park_factor":    _sf(batter, "parkFactor", "park_factor",       default=1.0),
+        "park_hr":        _sf(batter, "parkHr",     "park_hr",           default=1.0),
+        # Bat-tracking (NaN = unknown, matching un-imputed training).
+        "bt_bat_speed":   _sf(batter, "btBatSpeed", "bt_bat_speed",
+                              default=(bt.get("bat_speed") if bt.get("bat_speed") is not None else _NAN)),
+        "bt_fast_swing":  _sf(batter, "btFastSwing", "bt_fast_swing",
+                              default=(bt.get("fast_swing_pct") if bt.get("fast_swing_pct") is not None else _NAN)),
+        "bt_squared_up":  _sf(batter, "btSquaredUp", "bt_squared_up",
+                              default=(bt.get("squared_up_pct") if bt.get("squared_up_pct") is not None else _NAN)),
+        "bt_blast":       _sf(batter, "btBlast", "bt_blast",
+                              default=(bt.get("blast_pct") if bt.get("blast_pct") is not None else _NAN)),
     }
     # Percent-scale the rate stats that training ×100s; leave the FG fraction
     # rates (barrel/hardhit/hr-fb/fb) untouched.
@@ -853,7 +923,9 @@ def xgb_k_prob(pitcher: dict, line: float = 4.5) -> Optional[float]:
                     candidates.append((abs(float(k[2:]) - line), k))
                 except ValueError:
                     pass
-        if not candidates:
+        # A neighbouring line's P(over) is only a usable stand-in when it is
+        # close; borrowing across >1 strikeout mislabels the probability.
+        if not candidates or min(candidates)[0] > 1.0:
             return None
         line_key = min(candidates)[1]
     try:
@@ -879,7 +951,7 @@ def xgb_k_prob_full(pitcher: dict, line: float = 4.5) -> dict:
     line_key = f"k_{line}"
     if line_key not in _models:
         candidates = [(abs(float(k[2:]) - line), k) for k in _models if k.startswith("k_")]
-        if not candidates:
+        if not candidates or min(candidates)[0] > 1.0:
             return {}
         line_key = min(candidates)[1]
     try:
@@ -939,14 +1011,29 @@ def _predict_batter_market_full(
         batter_e  = _enrich_batter_from_fg(batter)
         pitcher_e = _enrich_pitcher_from_fg(pitcher)
         feat_order = _feat_cols.get(model_key, [])
-        builder = (_build_batter_market_features
-                   if model_key in ("hr", "tb", "rbi") else _build_hit_features)
+        builder = (_build_hit_features if model_key.startswith("hits")
+                   else _build_batter_market_features)
         X = builder(batter_e, pitcher_e, feat_order)
         if X is None:
             return {}
         return _score_full(model_key, market_key, X, line=line)
     except Exception:
         return {}
+
+
+def xgb_batter_prob_full(family: str, line, batter: dict, pitcher: dict) -> dict:
+    """Line-aware full output for a batter market family (hits/hr/tb/rbi).
+    Routes (family, line) to the model trained at exactly that threshold;
+    returns {} for unmapped lines so callers keep the analytic probability."""
+    try:
+        line = float(line)
+    except (TypeError, ValueError):
+        return {}
+    model_key = _BATTER_LINE_MODELS.get((family, line))
+    if model_key is None:
+        return {}
+    return _predict_batter_market_full(
+        model_key, _MARKET_KEY_MAP.get(model_key, "batter_hits"), line, batter, pitcher)
 
 
 def xgb_hr_prob(batter: dict, pitcher: dict) -> Optional[float]:
@@ -1015,10 +1102,15 @@ def feature_default_report(market, batter=None, pitcher=None):
         real, base = real[0], base[0]
         feats, n_def = [], 0
         for i, f in enumerate(feat_order):
-            is_def = abs(float(real[i]) - float(base[i])) < 1e-6
+            rv, bv = float(real[i]), float(base[i])
+            # NaN is the legit "unknown" value for bt_* features — both-NaN
+            # means the caller supplied nothing, i.e. the default.
+            is_def = (math.isnan(rv) and math.isnan(bv)) or abs(rv - bv) < 1e-6
             n_def += int(is_def)
-            feats.append({"feature": f, "value": round(float(real[i]), 4),
-                          "default": round(float(base[i]), 4), "is_default": bool(is_def)})
+            feats.append({"feature": f,
+                          "value": None if math.isnan(rv) else round(rv, 4),
+                          "default": None if math.isnan(bv) else round(bv, 4),
+                          "is_default": bool(is_def)})
         return {"market": key, "n_features": len(feat_order), "n_default": n_def,
                 "default_rate": round(n_def / len(feat_order), 4), "features": feats}
     except Exception:

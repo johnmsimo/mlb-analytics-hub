@@ -114,6 +114,11 @@ HR_FEATURES = [
     "bats_L", "throws_R", "platoon_adv",
     "batting_order", "expected_pa",
     "l7_ev", "l7_barrel", "ev_momentum", "barrel_momentum",
+    # Hand-aware HR park multiplier — the venue IS known historically (the
+    # game's home team), so unlike weather/umpire this reconstructs exactly.
+    "park_hr",
+    # Bat-tracking (2024+; NaN before — never imputed, see train_market).
+    "bt_bat_speed", "bt_fast_swing", "bt_squared_up", "bt_blast",
 ]
 
 # Total bases (≥2 TB in a game). Broader than HR — rewards extra-base power AND
@@ -126,6 +131,9 @@ TB_FEATURES = [
     "bats_L", "throws_R", "platoon_adv",
     "batting_order", "expected_pa",
     "l7_hits", "l7_ev", "l7_barrel", "ev_momentum", "barrel_momentum",
+    "park_factor",
+    # Bat-tracking (2024+; NaN before — never imputed, see train_market).
+    "bt_bat_speed", "bt_fast_swing", "bt_squared_up", "bt_blast",
 ]
 
 # RBI (≥1 RBI in a game). Heavily lineup-context driven (cleanup spots get the
@@ -137,7 +145,128 @@ RBI_FEATURES = [
     "bats_L", "throws_R", "platoon_adv",
     "batting_order", "expected_pa",
     "l7_ev", "l7_barrel", "ev_momentum", "barrel_momentum",
+    # Bat-tracking (2024+; NaN before — never imputed, see train_market).
+    "bt_bat_speed", "bt_fast_swing", "bt_squared_up", "bt_blast",
 ]
+
+# ── Park factors — VERBATIM copies of app.py's PARK_FACTORS /
+#    HR_PARK_FACTORS / HR_PARK_FACTORS_HAND, keyed by MLBAM home-team id.
+#    Train/serve parity demands the identical source and scale: the live
+#    scorer is fed these exact values via parkFactor / parkHr, so the
+#    historical reconstruction must use them too. If app.py's tables change,
+#    change these with them (and retrain).
+PARK_FACTORS = {
+    133: 1.08, 144: 0.92, 110: 0.97, 111: 1.04, 112: 0.97, 137: 0.95, 109: 1.06,
+    145: 1.03, 116: 1.00, 158: 0.97, 142: 1.00, 147: 0.97, 143: 1.03, 140: 1.05,
+    146: 0.95, 121: 0.97, 136: 0.93, 138: 1.02, 141: 0.98, 139: 0.99, 108: 0.96,
+    117: 0.97, 135: 0.98, 120: 0.98, 134: 0.97, 119: 0.95, 118: 1.02, 114: 1.01,
+    113: 0.94, 115: 1.00,
+}
+HR_PARK_FACTORS = {
+    109: 114, 144: 94,  110: 108, 111: 101, 112: 109, 137: 92,
+    115: 112, 116: 100, 117: 103, 118: 108, 119: 104, 108: 95,
+    146: 95,  158: 99,  142: 99,  121: 100, 147: 118, 133: 107,
+    143: 111, 134: 95,  136: 95,  138: 98,  139: 96,  140: 112,
+    141: 102, 120: 99,  135: 97,  145: 95,  113: 100, 114: 98,
+}
+HR_PARK_FACTORS_HAND = {
+    147: {"L": 134, "R": 100}, 137: {"L": 80,  "R": 96},
+    111: {"L": 90,  "R": 104}, 110: {"L": 112, "R": 95},
+    117: {"L": 99,  "R": 110}, 134: {"L": 104, "R": 92},
+    143: {"L": 114, "R": 108}, 116: {"L": 96,  "R": 92},
+}
+# Statcast `home_team` abbreviation → MLBAM team id (both old and new codes).
+TEAM_ABBR_TO_ID = {
+    "LAA": 108, "AZ": 109, "ARI": 109, "BAL": 110, "BOS": 111, "CHC": 112,
+    "CIN": 113, "CLE": 114, "COL": 115, "DET": 116, "HOU": 117, "KC": 118,
+    "KCR": 118, "LAD": 119, "WSH": 120, "WSN": 120, "NYM": 121, "OAK": 133,
+    "ATH": 133, "PIT": 134, "SD": 135, "SDP": 135, "SEA": 136, "SF": 137,
+    "SFG": 137, "STL": 138, "TB": 139, "TBR": 139, "TEX": 140, "TOR": 141,
+    "MIN": 142, "PHI": 143, "ATL": 144, "CWS": 145, "CHW": 145, "MIA": 146,
+    "NYY": 147, "MIL": 158,
+}
+# Hand-resolved HR park multipliers (mirror app._hr_park_factor_hand: curated
+# split when listed, symmetric index otherwise; /100, rounded to 2dp).
+_PARK_HR_BY_HAND = {
+    hand: {tid: round(HR_PARK_FACTORS_HAND.get(tid, {}).get(
+               hand, HR_PARK_FACTORS.get(tid, 100)) / 100.0, 2)
+           for tid in PARK_FACTORS}
+    for hand in ("L", "R")
+}
+# Curated LHB/RHB asymmetry as a RATIO around the park's symmetric level, so it
+# can be applied on top of a learned (season-specific) level.
+_HAND_ASYM_RATIO = {
+    hand: {tid: round(_PARK_HR_BY_HAND[hand][tid]
+                      / max(0.01, HR_PARK_FACTORS.get(tid, 100) / 100.0), 4)
+           for tid in PARK_FACTORS}
+    for hand in ("L", "R")
+}
+
+
+# ── Learned season-specific park factors (Stage 2b) ─────────────────────────
+# The static tables above are a multi-year average; the extremes (Coors,
+# Camden, the A's Sacramento move) drift season to season. These factors are
+# computed from the SAME Statcast pull the models train on, using the classic
+# home-vs-road comparison per team (all PAs in team T's home games vs all PAs
+# in T's road games — both sides bat in both, so team quality cancels).
+# Leakage-safe: season S training rows use a trailing window ENDING S-1.
+# Limitation: keyed by team, so a mid-window venue change (ATH 2025) is only
+# recency-weighted in, not isolated.
+_PARK_TRAIL_WINDOW = 3          # trailing seasons pooled
+_PARK_RECENCY_W = {0: 3.0, 1: 2.0, 2: 1.0}   # season lag -> weight
+_PARK_SHRINK = 0.70             # shrink pooled ratio toward 1.0
+_PARK_MIN_PA = 3000             # below this pooled PA the learned factor is unused
+
+
+def compute_park_factor_counts(bg: pd.DataFrame) -> dict:
+    """Per (season, team_id) home/road counts for park-factor ratios.
+    Returns {(season, tid): {pa_h, tb_h, hr_h, pa_r, tb_r, hr_r}}."""
+    if "home_team" not in bg.columns or "away_team" not in bg.columns:
+        return {}
+    d = bg.copy()
+    d["_hid"] = d["home_team"].astype(str).str.upper().map(TEAM_ABBR_TO_ID)
+    d["_aid"] = d["away_team"].astype(str).str.upper().map(TEAM_ABBR_TO_ID)
+    counts: dict = {}
+    for side, tid_col in (("h", "_hid"), ("r", "_aid")):
+        g = (d.dropna(subset=[tid_col])
+              .groupby(["season", tid_col])
+              .agg(pa=("pa", "sum"), tb=("tb", "sum"), hr=("hr", "sum")))
+        for (season, tid), row in g.iterrows():
+            slot = counts.setdefault((int(season), int(tid)),
+                                     {"pa_h": 0, "tb_h": 0, "hr_h": 0,
+                                      "pa_r": 0, "tb_r": 0, "hr_r": 0})
+            slot[f"pa_{side}"] = float(row["pa"])
+            slot[f"tb_{side}"] = float(row["tb"])
+            slot[f"hr_{side}"] = float(row["hr"])
+    return counts
+
+
+def trailing_park_factors(counts: dict, upto_season: int) -> dict:
+    """Recency-weighted pooled park factors from the trailing window ending at
+    `upto_season` (inclusive). Returns {tid: {"pf": tb_factor, "hr_pf": hr_factor}}
+    — shrunk toward 1.0; teams without enough pooled PA are omitted (callers
+    fall back to the static tables)."""
+    out = {}
+    tids = {tid for (_, tid) in counts}
+    for tid in tids:
+        agg = {"pa_h": 0.0, "tb_h": 0.0, "hr_h": 0.0,
+               "pa_r": 0.0, "tb_r": 0.0, "hr_r": 0.0}
+        for lag, w in _PARK_RECENCY_W.items():
+            season = upto_season - lag
+            c = counts.get((season, tid))
+            if not c:
+                continue
+            for k in agg:
+                agg[k] += w * c[k]
+        if agg["pa_h"] < _PARK_MIN_PA or agg["pa_r"] < _PARK_MIN_PA:
+            continue
+        tb_ratio = (agg["tb_h"] / agg["pa_h"]) / max(1e-9, agg["tb_r"] / agg["pa_r"])
+        hr_ratio = (agg["hr_h"] / agg["pa_h"]) / max(1e-9, agg["hr_r"] / agg["pa_r"])
+        out[int(tid)] = {
+            "pf":    round(1.0 + (tb_ratio - 1.0) * _PARK_SHRINK, 3),
+            "hr_pf": round(1.0 + (hr_ratio - 1.0) * _PARK_SHRINK, 3),
+        }
+    return out
 
 XGB_PARAMS_HITS = dict(n_estimators=300, max_depth=4, learning_rate=0.04,
                        subsample=0.80, colsample_bytree=0.80,
@@ -180,6 +309,30 @@ MARKETS = {
     "rbi":   dict(file_key="xgb_rbi_over_0.5", features=RBI_FEATURES,
                   target="rbi_over_0.5", source="batter", line=0.5,
                   params=XGB_PARAMS_RBI),
+    # ── Alt-line variants (Stage 3): same family features/params, different
+    #    target threshold, so the stacked fusion covers the whole board instead
+    #    of only each market's standard line.
+    "hits_1.5": dict(file_key="xgb_hits_over_1.5", features=HITS_FEATURES,
+                     target="hit_over_1.5", source="batter", line=1.5,
+                     params=XGB_PARAMS_HITS),
+    "tb_2.5":  dict(file_key="xgb_tb_over_2.5", features=TB_FEATURES,
+                    target="tb_over_2.5", source="batter", line=2.5,
+                    params=XGB_PARAMS_TB),
+    "tb_3.5":  dict(file_key="xgb_tb_over_3.5", features=TB_FEATURES,
+                    target="tb_over_3.5", source="batter", line=3.5,
+                    params=XGB_PARAMS_HR),   # rare event (~11%) — HR-style regularization
+    "rbi_1.5": dict(file_key="xgb_rbi_over_1.5", features=RBI_FEATURES,
+                    target="rbi_over_1.5", source="batter", line=1.5,
+                    params=XGB_PARAMS_HR),   # rare event (~10%)
+    "k_2.5":   dict(file_key="xgb_k_over_2.5", features=K_FEATURES,
+                    target="k_over_2.5", source="pitcher", line=2.5,
+                    params=XGB_PARAMS_K),
+    "k_6.5":   dict(file_key="xgb_k_over_6.5", features=K_FEATURES,
+                    target="k_over_6.5", source="pitcher", line=6.5,
+                    params=XGB_PARAMS_K),
+    "k_7.5":   dict(file_key="xgb_k_over_7.5", features=K_FEATURES,
+                    target="k_over_7.5", source="pitcher", line=7.5,
+                    params=XGB_PARAMS_K),
 }
 
 
@@ -247,7 +400,9 @@ def _agg_chunk(sc: pd.DataFrame, season: int) -> tuple[pd.DataFrame, pd.DataFram
                   tb=("tb", "sum"), hr=("is_hr", "sum"), rbi=("rbi", "sum"),
                   inning_topbot=("inning_topbot", "first"),
                   stand=("stand", "first") if "stand" in pa.columns else ("is_pa", "size"),
-                  p_throws=("p_throws", "first") if "p_throws" in pa.columns else ("is_pa", "size"))
+                  p_throws=("p_throws", "first") if "p_throws" in pa.columns else ("is_pa", "size"),
+                  home_team=("home_team", "first") if "home_team" in pa.columns else ("is_pa", "size"),
+                  away_team=("away_team", "first") if "away_team" in pa.columns else ("is_pa", "size"))
              .reset_index())
     bat = bat.merge(side_first, on=["game_pk", "inning_topbot"], how="left")
 
@@ -292,17 +447,24 @@ def _agg_chunk(sc: pd.DataFrame, season: int) -> tuple[pd.DataFrame, pd.DataFram
                     on=["game_pk", "inning_topbot", "batter"], how="left")
 
     bat["hit_over_0.5"] = (bat["hits"] >= 1).astype(int)
+    bat["hit_over_1.5"] = (bat["hits"] >= 2).astype(int)
     bat["hr_over_0.5"] = (bat["hr"] >= 1).astype(int)
     bat["tb_over_1.5"] = (bat["tb"] >= 2).astype(int)
+    bat["tb_over_2.5"] = (bat["tb"] >= 3).astype(int)
+    bat["tb_over_3.5"] = (bat["tb"] >= 4).astype(int)
     bat["rbi_over_0.5"] = (bat["rbi"] >= 1).astype(int)
+    bat["rbi_over_1.5"] = (bat["rbi"] >= 2).astype(int)
     bat["season"] = season
 
     pit = (pa.groupby(["game_pk", "game_date", "pitcher"])
              .agg(ks=("is_k", "sum"), bf=("is_pa", "sum"))
              .reset_index())
+    pit["k_over_2.5"] = (pit["ks"] >= 3).astype(int)
     pit["k_over_3.5"] = (pit["ks"] >= 4).astype(int)
     pit["k_over_4.5"] = (pit["ks"] >= 5).astype(int)
     pit["k_over_5.5"] = (pit["ks"] >= 6).astype(int)
+    pit["k_over_6.5"] = (pit["ks"] >= 7).astype(int)
+    pit["k_over_7.5"] = (pit["ks"] >= 8).astype(int)
     pit["season"] = season
     return bat, pit
 
@@ -373,6 +535,29 @@ def load_fg_batting(season: int) -> pd.DataFrame:
     out["sv_maxev"] = pd.to_numeric(df.get("maxEV"), errors="coerce")
     bats = df.get("Bats")
     out["bats_L"] = (bats == "L").astype(int) if bats is not None else 0
+    out = out.dropna(subset=["mlbam"])
+    out["mlbam"] = out["mlbam"].astype(int)
+    return out.drop_duplicates(subset=["mlbam"])
+
+
+def load_bat_tracking(season: int) -> pd.DataFrame:
+    """Season bat-tracking leaderboard (Statcast, 2024+) keyed by MLBAM id.
+    Pre-2024 seasons have no file → empty frame → rows keep NaN, which the
+    trainer deliberately does NOT impute for bt_* features (XGB's native
+    missing-handling learns the pre-bat-tracking-era direction instead of
+    training on fabricated medians)."""
+    path = os.path.join(_DATA_DIR, f"savant_bat_tracking_{season}.csv")
+    if not os.path.exists(path):
+        return pd.DataFrame()
+    df = pd.read_csv(path, low_memory=False)
+    if "id" not in df.columns:
+        return pd.DataFrame()
+    out = pd.DataFrame()
+    out["mlbam"] = pd.to_numeric(df["id"], errors="coerce")
+    out["bt_bat_speed"]  = pd.to_numeric(df.get("avg_bat_speed"), errors="coerce")
+    out["bt_fast_swing"] = pd.to_numeric(df.get("hard_swing_rate"), errors="coerce")
+    out["bt_squared_up"] = pd.to_numeric(df.get("squared_up_per_swing"), errors="coerce")
+    out["bt_blast"]      = pd.to_numeric(df.get("blast_per_swing"), errors="coerce")
     out = out.dropna(subset=["mlbam"])
     out["mlbam"] = out["mlbam"].astype(int)
     return out.drop_duplicates(subset=["mlbam"])
@@ -454,6 +639,48 @@ def build_batter_matrix(bg: pd.DataFrame) -> pd.DataFrame:
     bg["whiff_momentum"] = bg["whiff_momentum"].fillna(1.0).clip(0.5, 2.0)
     bg["barrel_momentum"] = bg["barrel_momentum"].fillna(1.0).clip(0.4, 2.5)
 
+    # ── Park factors from the game's home team — exactly reconstructable
+    #    historically (unlike weather/umpire). Level comes from the LEARNED
+    #    season-specific factors when the trailing window (ending the row's
+    #    season minus one — leakage-safe) has data; static tables otherwise
+    #    (all of 2021, thin teams). park_hr applies the curated LHB/RHB
+    #    asymmetry ratio on top of the level using the batter's real stand.
+    if "home_team" in bg.columns:
+        hid = pd.to_numeric(bg["home_team"].astype(str).str.upper().map(TEAM_ABBR_TO_ID),
+                            errors="coerce")
+        stand_l = bg.get("stand").astype(str).eq("L") if "stand" in bg.columns else \
+            pd.Series(False, index=bg.index)
+        pf_static = pd.to_numeric(hid.map(PARK_FACTORS), errors="coerce").fillna(1.0)
+        hr_static = pd.Series(np.where(
+            stand_l,
+            pd.to_numeric(hid.map(_PARK_HR_BY_HAND["L"]), errors="coerce"),
+            pd.to_numeric(hid.map(_PARK_HR_BY_HAND["R"]), errors="coerce")),
+            index=bg.index).fillna(1.0)
+        counts = compute_park_factor_counts(bg)
+        pf = pf_static.copy()
+        park_hr = hr_static.copy()
+        for season in sorted(pd.to_numeric(bg["season"], errors="coerce").dropna().unique()):
+            learned = trailing_park_factors(counts, int(season) - 1)
+            if not learned:
+                continue
+            mask = bg["season"] == season
+            l_pf = hid[mask].map(lambda t: (learned.get(int(t)) or {}).get("pf") if pd.notna(t) else None)
+            l_hr = hid[mask].map(lambda t: (learned.get(int(t)) or {}).get("hr_pf") if pd.notna(t) else None)
+            asym = pd.Series(np.where(
+                stand_l[mask],
+                hid[mask].map(_HAND_ASYM_RATIO["L"]),
+                hid[mask].map(_HAND_ASYM_RATIO["R"])), index=bg.index[mask])
+            asym = pd.to_numeric(asym, errors="coerce").fillna(1.0)
+            l_pf = pd.to_numeric(l_pf, errors="coerce")
+            l_hr = pd.to_numeric(l_hr, errors="coerce")
+            pf.loc[mask] = l_pf.fillna(pf_static[mask])
+            park_hr.loc[mask] = (l_hr * asym).round(3).fillna(hr_static[mask])
+        bg["park_factor"] = pf
+        bg["park_hr"] = park_hr
+    else:
+        bg["park_factor"] = 1.0
+        bg["park_hr"] = 1.0
+
     frames = []
     for season in sorted(bg["season"].unique()):
         sub = bg[bg["season"] == season].copy()
@@ -465,6 +692,11 @@ def build_batter_matrix(bg: pd.DataFrame) -> pd.DataFrame:
         # batter own skills
         sub = sub.merge(fb, left_on="batter", right_on="mlbam", how="inner",
                         suffixes=("", "_fb"))
+        # bat-tracking skills (2024+; earlier seasons stay NaN by design)
+        bt = load_bat_tracking(season)
+        if not bt.empty:
+            sub = sub.merge(bt, left_on="batter", right_on="mlbam",
+                            how="left", suffixes=("", "_bt"))
         # opponent starter skills
         if not fp.empty:
             opp = fp.rename(columns={
@@ -544,9 +776,16 @@ def train_market(mkey: str, cfg: dict, df: pd.DataFrame) -> Optional[dict]:
         return None
 
     med = tr[feats].median()
-    tr[feats] = tr[feats].fillna(med)
-    te[feats] = te[feats].fillna(med)
-    train_medians = {c: round(float(med[c]), 5) for c in feats}
+    # bt_* features are structurally missing before 2024 (bat tracking didn't
+    # exist) — imputing the pooled median would fabricate values for most of
+    # the training era. Leave them NaN; XGBoost's native missing-handling
+    # learns the correct default direction, and serve passes NaN when a
+    # batter has no bat-tracking row (below-min-swings or pre-season).
+    impute_cols = [c for c in feats if not c.startswith("bt_")]
+    tr[impute_cols] = tr[impute_cols].fillna(med[impute_cols])
+    te[impute_cols] = te[impute_cols].fillna(med[impute_cols])
+    train_medians = {c: (round(float(med[c]), 5) if pd.notna(med[c]) else None)
+                     for c in feats}
 
     Xtr, ytr = tr[feats].values.astype(np.float32), tr[target].values.astype(int)
     Xte, yte = te[feats].values.astype(np.float32), te[target].values.astype(int)
@@ -598,6 +837,84 @@ def train_market(mkey: str, cfg: dict, df: pd.DataFrame) -> Optional[dict]:
             "brier_base": brier_base, "features": feats}
 
 
+# Model key → tracker marketKey. This is what lets /api/calibration/markets
+# line the live tracker Brier up against the right held-out benchmark.
+TRACKER_MARKET = {
+    "hits":     "batter_hits",
+    "hits_1.5": "batter_hits",
+    "k_2.5": "pitcher_strikeouts",
+    "k_3.5": "pitcher_strikeouts",
+    "k_4.5": "pitcher_strikeouts",
+    "k_5.5": "pitcher_strikeouts",
+    "k_6.5": "pitcher_strikeouts",
+    "k_7.5": "pitcher_strikeouts",
+    "hr":      "batter_home_runs",
+    "tb":      "batter_total_bases",
+    "tb_2.5":  "batter_total_bases",
+    "tb_3.5":  "batter_total_bases",
+    "rbi":     "batter_rbis",
+    "rbi_1.5": "batter_rbis",
+}
+# The line the tracker most commonly grades against, per tracker market —
+# used to pick the representative model when several lines share a market.
+_REPRESENTATIVE = {"pitcher_strikeouts": "k_4.5"}
+
+_METRICS_PATH = os.path.join(_MODEL_DIR, "model_metrics.json")
+_METRIC_KEYS = ("line", "test_auc", "train_auc", "test_brier", "baserate_brier",
+                "test_logloss", "n_train", "n_test", "test_season")
+
+
+def write_model_metrics(metas: dict) -> dict:
+    """Merge per-market held-out metas into models/model_metrics.json.
+
+    That file is the benchmark /api/calibration/markets compares live tracker
+    Brier against — if a shipped model is missing here, its market can never
+    be flagged no_edge/degraded in production. Merging (never overwriting)
+    means a partial run (--markets hr) can't drop the benchmarks of markets it
+    didn't retrain. `metas` maps model key (hits/k_4.5/hr/…) → artifact meta.
+    """
+    existing = {}
+    if os.path.exists(_METRICS_PATH):
+        try:
+            with open(_METRICS_PATH) as f:
+                existing = json.load(f) or {}
+        except Exception:
+            existing = {}
+    models = existing.get("models", {})
+    for mkey, meta in metas.items():
+        if not meta or mkey not in TRACKER_MARKET:
+            continue
+        entry = {"tracker_market": TRACKER_MARKET[mkey]}
+        entry.update({k: meta.get(k) for k in _METRIC_KEYS if meta.get(k) is not None})
+        models[mkey] = entry
+
+    # Rebuild the tracker-market rollup from the merged model map.
+    by_tracker = {}
+    for tmk in sorted({v["tracker_market"] for v in models.values()}):
+        keys = sorted(k for k, v in models.items() if v["tracker_market"] == tmk)
+        rep = _REPRESENTATIVE.get(tmk) if _REPRESENTATIVE.get(tmk) in keys else keys[0]
+        m = models[rep]
+        roll = {"representative": rep,
+                "test_auc": m.get("test_auc"),
+                "test_brier": m.get("test_brier"),
+                "baserate_brier": m.get("baserate_brier")}
+        if len(keys) > 1:
+            roll["all_lines"] = {k: models[k].get("test_auc") for k in keys}
+        by_tracker[tmk] = roll
+
+    out = {
+        "generated_at_utc": datetime.utcnow().isoformat(),
+        "note": ("Held-out (2021-24 train / 2025 test) benchmarks from "
+                 "regenerate_models.py. Compare live tracker Brier against "
+                 "test_brier; both should beat baserate_brier."),
+        "models": models,
+        "by_tracker_market": by_tracker,
+    }
+    with open(_METRICS_PATH, "w") as f:
+        json.dump(out, f, indent=2)
+    return out
+
+
 def main(markets: list[str]):
     print("═" * 70)
     print(f" Honest XGB regeneration — {datetime.utcnow():%Y-%m-%d %H:%M} UTC")
@@ -611,6 +928,28 @@ def main(markets: list[str]):
     bat = build_batter_matrix(bg) if len(bg) else pd.DataFrame()
     pit = build_pitcher_matrix(pg) if len(pg) else pd.DataFrame()
     print(f"  batter matrix={bat.shape}  pitcher matrix={pit.shape}")
+
+    # Export the learned park factors for the serve side (app.py loads
+    # data/park_factors_learned.json and falls back to its static tables).
+    # Trailing window ends at the last completed season — correct for serving
+    # the following season, no leakage (those games are played).
+    if len(bg):
+        learned = trailing_park_factors(compute_park_factor_counts(bg), TEST_SEASON)
+        if learned:
+            park_path = os.path.join(_DATA_DIR, "park_factors_learned.json")
+            with open(park_path, "w") as f:
+                json.dump({
+                    "asof_season": TEST_SEASON,
+                    "recency_weights": _PARK_RECENCY_W,
+                    "shrink": _PARK_SHRINK,
+                    "note": ("Learned home-vs-road park factors (pf=TB-based, "
+                             "hr_pf=HR-based), recency-weighted over the trailing "
+                             "3 seasons, shrunk toward 1.0. Keyed by MLBAM team id. "
+                             "app.py applies the curated LHB/RHB asymmetry ratio "
+                             "on top of hr_pf."),
+                    "factors": {str(t): v for t, v in sorted(learned.items())},
+                }, f, indent=2)
+            print(f"  Park factors → {park_path} ({len(learned)} teams)")
 
     results, feat_map = {}, {}
     for mkey in markets:
@@ -656,11 +995,27 @@ def main(markets: list[str]):
         merged.update(feat_map)
         with open(fcols_path, "w") as f:
             json.dump(merged, f, indent=2)
-    summary = {k: (v["artifact"]["meta"] if v else None) for k, v in results.items()}
-    with open(os.path.join(_DATA_DIR, "regen_summary.json"), "w") as f:
+    # Merge (not overwrite) so a partial run keeps the other markets' summaries.
+    summary_path = os.path.join(_DATA_DIR, "regen_summary.json")
+    summary = {}
+    if os.path.exists(summary_path):
+        try:
+            with open(summary_path) as f:
+                summary = json.load(f) or {}
+        except Exception:
+            summary = {}
+    summary.update({k: v["artifact"]["meta"] for k, v in results.items() if v})
+    with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)
+
+    # Refresh the held-out benchmarks the live calibration monitor reads —
+    # only for markets that actually shipped (a HOLD model has no benchmark
+    # to compare live picks against).
+    write_model_metrics({k: results[k]["artifact"]["meta"] for k in shipped})
+
     print(f"\n  Shipped: {shipped or 'NONE'}")
     print(f"  Summary → data/regen_summary.json")
+    print(f"  Benchmarks → models/model_metrics.json")
     return results
 
 
