@@ -117,6 +117,8 @@ HR_FEATURES = [
     # Hand-aware HR park multiplier — the venue IS known historically (the
     # game's home team), so unlike weather/umpire this reconstructs exactly.
     "park_hr",
+    # Bat-tracking (2024+; NaN before — never imputed, see train_market).
+    "bt_bat_speed", "bt_fast_swing", "bt_squared_up", "bt_blast",
 ]
 
 # Total bases (≥2 TB in a game). Broader than HR — rewards extra-base power AND
@@ -130,6 +132,8 @@ TB_FEATURES = [
     "batting_order", "expected_pa",
     "l7_hits", "l7_ev", "l7_barrel", "ev_momentum", "barrel_momentum",
     "park_factor",
+    # Bat-tracking (2024+; NaN before — never imputed, see train_market).
+    "bt_bat_speed", "bt_fast_swing", "bt_squared_up", "bt_blast",
 ]
 
 # RBI (≥1 RBI in a game). Heavily lineup-context driven (cleanup spots get the
@@ -141,6 +145,8 @@ RBI_FEATURES = [
     "bats_L", "throws_R", "platoon_adv",
     "batting_order", "expected_pa",
     "l7_ev", "l7_barrel", "ev_momentum", "barrel_momentum",
+    # Bat-tracking (2024+; NaN before — never imputed, see train_market).
+    "bt_bat_speed", "bt_fast_swing", "bt_squared_up", "bt_blast",
 ]
 
 # ── Park factors — VERBATIM copies of app.py's PARK_FACTORS /
@@ -187,6 +193,80 @@ _PARK_HR_BY_HAND = {
            for tid in PARK_FACTORS}
     for hand in ("L", "R")
 }
+# Curated LHB/RHB asymmetry as a RATIO around the park's symmetric level, so it
+# can be applied on top of a learned (season-specific) level.
+_HAND_ASYM_RATIO = {
+    hand: {tid: round(_PARK_HR_BY_HAND[hand][tid]
+                      / max(0.01, HR_PARK_FACTORS.get(tid, 100) / 100.0), 4)
+           for tid in PARK_FACTORS}
+    for hand in ("L", "R")
+}
+
+
+# ── Learned season-specific park factors (Stage 2b) ─────────────────────────
+# The static tables above are a multi-year average; the extremes (Coors,
+# Camden, the A's Sacramento move) drift season to season. These factors are
+# computed from the SAME Statcast pull the models train on, using the classic
+# home-vs-road comparison per team (all PAs in team T's home games vs all PAs
+# in T's road games — both sides bat in both, so team quality cancels).
+# Leakage-safe: season S training rows use a trailing window ENDING S-1.
+# Limitation: keyed by team, so a mid-window venue change (ATH 2025) is only
+# recency-weighted in, not isolated.
+_PARK_TRAIL_WINDOW = 3          # trailing seasons pooled
+_PARK_RECENCY_W = {0: 3.0, 1: 2.0, 2: 1.0}   # season lag -> weight
+_PARK_SHRINK = 0.70             # shrink pooled ratio toward 1.0
+_PARK_MIN_PA = 3000             # below this pooled PA the learned factor is unused
+
+
+def compute_park_factor_counts(bg: pd.DataFrame) -> dict:
+    """Per (season, team_id) home/road counts for park-factor ratios.
+    Returns {(season, tid): {pa_h, tb_h, hr_h, pa_r, tb_r, hr_r}}."""
+    if "home_team" not in bg.columns or "away_team" not in bg.columns:
+        return {}
+    d = bg.copy()
+    d["_hid"] = d["home_team"].astype(str).str.upper().map(TEAM_ABBR_TO_ID)
+    d["_aid"] = d["away_team"].astype(str).str.upper().map(TEAM_ABBR_TO_ID)
+    counts: dict = {}
+    for side, tid_col in (("h", "_hid"), ("r", "_aid")):
+        g = (d.dropna(subset=[tid_col])
+              .groupby(["season", tid_col])
+              .agg(pa=("pa", "sum"), tb=("tb", "sum"), hr=("hr", "sum")))
+        for (season, tid), row in g.iterrows():
+            slot = counts.setdefault((int(season), int(tid)),
+                                     {"pa_h": 0, "tb_h": 0, "hr_h": 0,
+                                      "pa_r": 0, "tb_r": 0, "hr_r": 0})
+            slot[f"pa_{side}"] = float(row["pa"])
+            slot[f"tb_{side}"] = float(row["tb"])
+            slot[f"hr_{side}"] = float(row["hr"])
+    return counts
+
+
+def trailing_park_factors(counts: dict, upto_season: int) -> dict:
+    """Recency-weighted pooled park factors from the trailing window ending at
+    `upto_season` (inclusive). Returns {tid: {"pf": tb_factor, "hr_pf": hr_factor}}
+    — shrunk toward 1.0; teams without enough pooled PA are omitted (callers
+    fall back to the static tables)."""
+    out = {}
+    tids = {tid for (_, tid) in counts}
+    for tid in tids:
+        agg = {"pa_h": 0.0, "tb_h": 0.0, "hr_h": 0.0,
+               "pa_r": 0.0, "tb_r": 0.0, "hr_r": 0.0}
+        for lag, w in _PARK_RECENCY_W.items():
+            season = upto_season - lag
+            c = counts.get((season, tid))
+            if not c:
+                continue
+            for k in agg:
+                agg[k] += w * c[k]
+        if agg["pa_h"] < _PARK_MIN_PA or agg["pa_r"] < _PARK_MIN_PA:
+            continue
+        tb_ratio = (agg["tb_h"] / agg["pa_h"]) / max(1e-9, agg["tb_r"] / agg["pa_r"])
+        hr_ratio = (agg["hr_h"] / agg["pa_h"]) / max(1e-9, agg["hr_r"] / agg["pa_r"])
+        out[int(tid)] = {
+            "pf":    round(1.0 + (tb_ratio - 1.0) * _PARK_SHRINK, 3),
+            "hr_pf": round(1.0 + (hr_ratio - 1.0) * _PARK_SHRINK, 3),
+        }
+    return out
 
 XGB_PARAMS_HITS = dict(n_estimators=300, max_depth=4, learning_rate=0.04,
                        subsample=0.80, colsample_bytree=0.80,
@@ -321,7 +401,8 @@ def _agg_chunk(sc: pd.DataFrame, season: int) -> tuple[pd.DataFrame, pd.DataFram
                   inning_topbot=("inning_topbot", "first"),
                   stand=("stand", "first") if "stand" in pa.columns else ("is_pa", "size"),
                   p_throws=("p_throws", "first") if "p_throws" in pa.columns else ("is_pa", "size"),
-                  home_team=("home_team", "first") if "home_team" in pa.columns else ("is_pa", "size"))
+                  home_team=("home_team", "first") if "home_team" in pa.columns else ("is_pa", "size"),
+                  away_team=("away_team", "first") if "away_team" in pa.columns else ("is_pa", "size"))
              .reset_index())
     bat = bat.merge(side_first, on=["game_pk", "inning_topbot"], how="left")
 
@@ -459,6 +540,29 @@ def load_fg_batting(season: int) -> pd.DataFrame:
     return out.drop_duplicates(subset=["mlbam"])
 
 
+def load_bat_tracking(season: int) -> pd.DataFrame:
+    """Season bat-tracking leaderboard (Statcast, 2024+) keyed by MLBAM id.
+    Pre-2024 seasons have no file → empty frame → rows keep NaN, which the
+    trainer deliberately does NOT impute for bt_* features (XGB's native
+    missing-handling learns the pre-bat-tracking-era direction instead of
+    training on fabricated medians)."""
+    path = os.path.join(_DATA_DIR, f"savant_bat_tracking_{season}.csv")
+    if not os.path.exists(path):
+        return pd.DataFrame()
+    df = pd.read_csv(path, low_memory=False)
+    if "id" not in df.columns:
+        return pd.DataFrame()
+    out = pd.DataFrame()
+    out["mlbam"] = pd.to_numeric(df["id"], errors="coerce")
+    out["bt_bat_speed"]  = pd.to_numeric(df.get("avg_bat_speed"), errors="coerce")
+    out["bt_fast_swing"] = pd.to_numeric(df.get("hard_swing_rate"), errors="coerce")
+    out["bt_squared_up"] = pd.to_numeric(df.get("squared_up_per_swing"), errors="coerce")
+    out["bt_blast"]      = pd.to_numeric(df.get("blast_per_swing"), errors="coerce")
+    out = out.dropna(subset=["mlbam"])
+    out["mlbam"] = out["mlbam"].astype(int)
+    return out.drop_duplicates(subset=["mlbam"])
+
+
 def load_fg_pitching(season: int) -> pd.DataFrame:
     path = os.path.join(_DATA_DIR, f"fg_pitching_{season}.csv")
     if not os.path.exists(path):
@@ -536,18 +640,43 @@ def build_batter_matrix(bg: pd.DataFrame) -> pd.DataFrame:
     bg["barrel_momentum"] = bg["barrel_momentum"].fillna(1.0).clip(0.4, 2.5)
 
     # ── Park factors from the game's home team — exactly reconstructable
-    #    historically (unlike weather/umpire). Same tables the live scorer is
-    #    fed via parkFactor/parkHr; park_hr uses the batter's real stand for
-    #    the curated handedness splits (Yankee porch, Oracle RF, …).
+    #    historically (unlike weather/umpire). Level comes from the LEARNED
+    #    season-specific factors when the trailing window (ending the row's
+    #    season minus one — leakage-safe) has data; static tables otherwise
+    #    (all of 2021, thin teams). park_hr applies the curated LHB/RHB
+    #    asymmetry ratio on top of the level using the batter's real stand.
     if "home_team" in bg.columns:
-        hid = bg["home_team"].astype(str).str.upper().map(TEAM_ABBR_TO_ID)
-        bg["park_factor"] = pd.to_numeric(hid.map(PARK_FACTORS), errors="coerce").fillna(1.0)
-        stand_l = bg.get("stand").astype(str).eq("L") if "stand" in bg.columns else False
-        bg["park_hr"] = np.where(
+        hid = pd.to_numeric(bg["home_team"].astype(str).str.upper().map(TEAM_ABBR_TO_ID),
+                            errors="coerce")
+        stand_l = bg.get("stand").astype(str).eq("L") if "stand" in bg.columns else \
+            pd.Series(False, index=bg.index)
+        pf_static = pd.to_numeric(hid.map(PARK_FACTORS), errors="coerce").fillna(1.0)
+        hr_static = pd.Series(np.where(
             stand_l,
             pd.to_numeric(hid.map(_PARK_HR_BY_HAND["L"]), errors="coerce"),
-            pd.to_numeric(hid.map(_PARK_HR_BY_HAND["R"]), errors="coerce"))
-        bg["park_hr"] = pd.Series(bg["park_hr"]).fillna(1.0)
+            pd.to_numeric(hid.map(_PARK_HR_BY_HAND["R"]), errors="coerce")),
+            index=bg.index).fillna(1.0)
+        counts = compute_park_factor_counts(bg)
+        pf = pf_static.copy()
+        park_hr = hr_static.copy()
+        for season in sorted(pd.to_numeric(bg["season"], errors="coerce").dropna().unique()):
+            learned = trailing_park_factors(counts, int(season) - 1)
+            if not learned:
+                continue
+            mask = bg["season"] == season
+            l_pf = hid[mask].map(lambda t: (learned.get(int(t)) or {}).get("pf") if pd.notna(t) else None)
+            l_hr = hid[mask].map(lambda t: (learned.get(int(t)) or {}).get("hr_pf") if pd.notna(t) else None)
+            asym = pd.Series(np.where(
+                stand_l[mask],
+                hid[mask].map(_HAND_ASYM_RATIO["L"]),
+                hid[mask].map(_HAND_ASYM_RATIO["R"])), index=bg.index[mask])
+            asym = pd.to_numeric(asym, errors="coerce").fillna(1.0)
+            l_pf = pd.to_numeric(l_pf, errors="coerce")
+            l_hr = pd.to_numeric(l_hr, errors="coerce")
+            pf.loc[mask] = l_pf.fillna(pf_static[mask])
+            park_hr.loc[mask] = (l_hr * asym).round(3).fillna(hr_static[mask])
+        bg["park_factor"] = pf
+        bg["park_hr"] = park_hr
     else:
         bg["park_factor"] = 1.0
         bg["park_hr"] = 1.0
@@ -563,6 +692,11 @@ def build_batter_matrix(bg: pd.DataFrame) -> pd.DataFrame:
         # batter own skills
         sub = sub.merge(fb, left_on="batter", right_on="mlbam", how="inner",
                         suffixes=("", "_fb"))
+        # bat-tracking skills (2024+; earlier seasons stay NaN by design)
+        bt = load_bat_tracking(season)
+        if not bt.empty:
+            sub = sub.merge(bt, left_on="batter", right_on="mlbam",
+                            how="left", suffixes=("", "_bt"))
         # opponent starter skills
         if not fp.empty:
             opp = fp.rename(columns={
@@ -642,9 +776,16 @@ def train_market(mkey: str, cfg: dict, df: pd.DataFrame) -> Optional[dict]:
         return None
 
     med = tr[feats].median()
-    tr[feats] = tr[feats].fillna(med)
-    te[feats] = te[feats].fillna(med)
-    train_medians = {c: round(float(med[c]), 5) for c in feats}
+    # bt_* features are structurally missing before 2024 (bat tracking didn't
+    # exist) — imputing the pooled median would fabricate values for most of
+    # the training era. Leave them NaN; XGBoost's native missing-handling
+    # learns the correct default direction, and serve passes NaN when a
+    # batter has no bat-tracking row (below-min-swings or pre-season).
+    impute_cols = [c for c in feats if not c.startswith("bt_")]
+    tr[impute_cols] = tr[impute_cols].fillna(med[impute_cols])
+    te[impute_cols] = te[impute_cols].fillna(med[impute_cols])
+    train_medians = {c: (round(float(med[c]), 5) if pd.notna(med[c]) else None)
+                     for c in feats}
 
     Xtr, ytr = tr[feats].values.astype(np.float32), tr[target].values.astype(int)
     Xte, yte = te[feats].values.astype(np.float32), te[target].values.astype(int)
@@ -787,6 +928,28 @@ def main(markets: list[str]):
     bat = build_batter_matrix(bg) if len(bg) else pd.DataFrame()
     pit = build_pitcher_matrix(pg) if len(pg) else pd.DataFrame()
     print(f"  batter matrix={bat.shape}  pitcher matrix={pit.shape}")
+
+    # Export the learned park factors for the serve side (app.py loads
+    # data/park_factors_learned.json and falls back to its static tables).
+    # Trailing window ends at the last completed season — correct for serving
+    # the following season, no leakage (those games are played).
+    if len(bg):
+        learned = trailing_park_factors(compute_park_factor_counts(bg), TEST_SEASON)
+        if learned:
+            park_path = os.path.join(_DATA_DIR, "park_factors_learned.json")
+            with open(park_path, "w") as f:
+                json.dump({
+                    "asof_season": TEST_SEASON,
+                    "recency_weights": _PARK_RECENCY_W,
+                    "shrink": _PARK_SHRINK,
+                    "note": ("Learned home-vs-road park factors (pf=TB-based, "
+                             "hr_pf=HR-based), recency-weighted over the trailing "
+                             "3 seasons, shrunk toward 1.0. Keyed by MLBAM team id. "
+                             "app.py applies the curated LHB/RHB asymmetry ratio "
+                             "on top of hr_pf."),
+                    "factors": {str(t): v for t, v in sorted(learned.items())},
+                }, f, indent=2)
+            print(f"  Park factors → {park_path} ({len(learned)} teams)")
 
     results, feat_map = {}, {}
     for mkey in markets:

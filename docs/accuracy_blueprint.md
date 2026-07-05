@@ -72,14 +72,21 @@ improved 1.5% for HR (18/30 venues) and 5% for TB (max venue error
 0.086→0.081). Strictly non-worse globally, better where it aims, zero serve
 cost.
 
-**Next lever (Stage 2b):** the static team-level park tables under-shade the
-extremes (Coors/Camden still under-predicted). Replace them with
-season-specific rolling Savant park factors — in BOTH `regenerate_models.py`
-and app.py's tables — and retrain; also add month-of-season temperature
-climatology per venue as a historically-known weather proxy.
-
-**Gate for 2b:** venue-gap improvement ≥ 15% weighted-mean, with global AUC
-non-regressing.
+**Stage 2b (learned season-specific park factors) — RUN, gate NOT met,
+hypothesis refuted.** Implemented home-vs-road learned factors from our own
+Statcast pull (recency-weighted trailing 3 seasons, shrunk toward 1.0,
+leakage-safe: season S trains on factors ending S−1; exported to
+`data/park_factors_learned.json` for serve with static fallback). Measured
+against the ≥15% venue-gap gate: HR −2.9%, TB −1.2%, TB2.5 +4.2% — **the
+venue miscalibration is not park-level-driven.** Park is a rank-14–19
+feature in these models, so even corrected levels barely move venue
+calibration; the residual venue gaps are model bias, not table staleness.
+The learned infrastructure ships anyway: global AUC/Brier identical within
+noise, and it self-adapts to venue changes (Sacramento, Steinbrenner) where
+the static table was demonstrably stale (Coors TB 1.088 learned vs 1.00
+static). The right lever for venue-level calibration is a per-venue
+recalibration layer in `prop_calibration`, fed by graded picks — logged as
+future work, gated on graded volume per venue.
 
 ## Stage 3 — Cover the whole board with trained models *(SHIPPED — measured)*
 
@@ -109,19 +116,30 @@ from training positive rates, so a 31% probability reads STRONG_BET at TB 2.5
 **Live gate to watch:** share of tracker rows with `modelSource='stacked'`
 rising toward 80%+ of prop volume as alt-line prices get captured.
 
-## Stage 4 — Signal no one else is modeling yet
+## Stage 4 — Signal no one else is modeling yet *(SHIPPED — measured honestly)*
 
-- **Bat-tracking**: `savant_bat_tracking_{year}.csv` is already ingested.
-  Swing speed, squared-up rate, and blast rate are leading indicators of
-  contact quality that most competitors have not folded into prop models —
-  wire them into `_build_batter_market_features` + `regenerate_models.py`
-  (both sides, per the serve-parity rule) and let the held-out gate decide.
-- **Brain overlays**: the `/api/brain/*` ingest path lets proprietary data
-  (internal projections, scouting) flow into the same caches the models read
-  — a structural data advantage competitors can't replicate.
+**Bat-tracking (shipped, marginal by the numbers, kept for structure).**
+Season bat speed / fast-swing rate / squared-up rate / blast rate
+(2024–2025 leaderboards pulled for training; 2026 served live) are wired
+through `_build_batter_market_features` with a key property: **pre-2024
+training rows are never imputed** — `bt_*` features stay NaN and XGBoost's
+native missing-branch learns the pre-bat-tracking era, and a batter without
+a bat-tracking row at serve passes NaN too (identical semantics, no
+fabricated medians). The scorer does the lookup itself (local day-cached
+CSV), so every call site has parity for free.
 
-**Gate:** feature-importance rank of bat-tracking features in retrained
-models; held-out AUC/Brier improvements pass the regen ship gate.
+Measured on 2025 held-out: tb_2.5 +0.0011 AUC (0.6407), tb_3.5 +0.0008
+(0.6638), everything else flat within ±0.0002, nothing regressed.
+Feature-importance ranks 19–30 — season-level bat tracking is largely
+collinear with the EV/barrel/ISO skills the models already carry. Kept
+because it costs nothing at serve and its expected live edge is
+early-season (bat speed stabilizes in ~50 swings vs ~200+ PA for xSLG),
+which a full-season holdout structurally can't measure. The weekly regen
+loop re-measures it every run.
+
+- **Brain overlays** (still open): the `/api/brain/*` ingest path lets
+  proprietary data flow into the same caches the models read — a structural
+  data advantage competitors can't replicate.
 
 ## Stage 5 — Compounding: volume × automation
 
@@ -131,12 +149,14 @@ recalibration (≥80/market). The compounding loop:
 
 1. Auto-capture grades the full board daily (`TRACKER_AUTO_SYNC_ENABLED=1`).
 2. Closing-line capture prices every pick against the close (true CLV).
-3. Weekly `regenerate_models.py` run refreshes artifacts + benchmarks in one
-   command; drift guard flags any regression within ~25 graded picks.
+3. **Weekly regen is automated** (`.github/workflows/model-regen.yml`,
+   Mondays 09:00 UTC + manual dispatch): retrains every market, refreshes
+   bat-tracking leaderboards + learned park factors + benchmarks, and opens
+   a PR — the held-out ship gate runs inside, and nothing reaches production
+   unreviewed. Drift guard flags any live regression within ~25 graded picks.
 
 Nothing in this loop requires manual tuning — the operator's job reduces to
-reading `/api/calibration/markets` and shipping retrains when Stage 2-4
-features land.
+reviewing the weekly regen PR and reading `/api/calibration/markets`.
 
 **Gate (the industry-leading bar):** rolling 90-day Beat-Close% > 52.4% with
 n ≥ 500 graded-with-CLV picks, and per-market live Brier at or below the
@@ -146,14 +166,24 @@ which is what "most accurate in sports analytics" means in practice.
 
 ---
 
-### Priority order (reliability-per-effort)
+### Status ledger (all stages executed; measured outcomes)
 
-| # | Item | Effort | Expected impact |
-|---|------|--------|-----------------|
-| 1 | Stage 2 park-factor retrain (HR/TB) | one training run | biggest single model-skill gain available |
-| 2 | Stage 3 alt-line models | config + training runs | extends validated skill to the whole board |
-| 3 | Stage 4 bat-tracking features | moderate (two-sided wiring) | novel signal, first-mover accuracy edge |
-| 4 | Stage 5 weekly regen automation | small (CI/cron) | locks in compounding, prevents decay |
+| # | Item | Outcome |
+|---|------|---------|
+| 1 | Stage 2 park-factor retrain (HR/TB) | **Shipped.** Park features rank 11; venue calibration gap improved (HR −1.5%, TB −5% at the time); global AUC level |
+| 2b | Learned season-specific park factors | **Infrastructure shipped, gate NOT met** (HR −2.9%, TB −1.2%, TB2.5 +4.2% venue gap). Hypothesis refuted: venue gap is model bias, not table staleness. Kept for self-adapting venue changes |
+| 3 | Alt-line models (7 new) | **Shipped.** All pass held-out gate; k_7.5 AUC 0.759, tb_3.5 0.663; whole board now stacked-fusion-covered |
+| 4 | Bat-tracking features | **Shipped, marginal** (tb alt lines +0.001, rest flat, ranks 19–30). Zero serve cost; early-season upside unmeasurable in full-season holdout; re-measured weekly |
+| 5 | Weekly regen automation | **Shipped** (`model-regen.yml` — retrain + gate + PR, Mondays) |
+
+### What remains between here and the Stage 5 bar
+
+The remaining accuracy gains are **volume-gated, not code-gated**: Smart-
+Consensus engages at ≥40 graded picks/market, the blend learner at ≥60, the
+isotonic recalibrator at ≥80, and the industry-leading bar itself (rolling
+90-day Beat-Close% > 52.4%, n ≥ 500 with CLV) needs months of graded picks.
+Keep auto-capture + closing-line capture on, review the weekly regen PR, and
+watch `/api/calibration/markets` — every layer is built and armed.
 
 Stages 0-1 (shipped) are the foundation: they guarantee that every point of
 skill added by Stages 2-4 survives into production and that any decay is

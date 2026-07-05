@@ -156,7 +156,11 @@
     "l7_barrel",
     "ev_momentum",
     "barrel_momentum",
-    "park_hr"
+    "park_hr",
+    "bt_bat_speed",
+    "bt_fast_swing",
+    "bt_squared_up",
+    "bt_blast"
   ],
   "hr_over_0.5": [
     "sv_xslg",
@@ -183,7 +187,11 @@
     "l7_barrel",
     "ev_momentum",
     "barrel_momentum",
-    "park_hr"
+    "park_hr",
+    "bt_bat_speed",
+    "bt_fast_swing",
+    "bt_squared_up",
+    "bt_blast"
   ],
   "tb": [
     "sv_xba",
@@ -211,7 +219,11 @@
     "l7_barrel",
     "ev_momentum",
     "barrel_momentum",
-    "park_factor"
+    "park_factor",
+    "bt_bat_speed",
+    "bt_fast_swing",
+    "bt_squared_up",
+    "bt_blast"
   ],
   "tb_over_1.5": [
     "sv_xba",
@@ -239,7 +251,11 @@
     "l7_barrel",
     "ev_momentum",
     "barrel_momentum",
-    "park_factor"
+    "park_factor",
+    "bt_bat_speed",
+    "bt_fast_swing",
+    "bt_squared_up",
+    "bt_blast"
   ],
   "rbi": [
     "sv_xslg",
@@ -263,7 +279,11 @@
     "l7_ev",
     "l7_barrel",
     "ev_momentum",
-    "barrel_momentum"
+    "barrel_momentum",
+    "bt_bat_speed",
+    "bt_fast_swing",
+    "bt_squared_up",
+    "bt_blast"
   ],
   "rbi_over_0.5": [
     "sv_xslg",
@@ -287,7 +307,11 @@
     "l7_ev",
     "l7_barrel",
     "ev_momentum",
-    "barrel_momentum"
+    "barrel_momentum",
+    "bt_bat_speed",
+    "bt_fast_swing",
+    "bt_squared_up",
+    "bt_blast"
   ],
   "hits_1.5": [
     "sv_xba",
@@ -363,7 +387,11 @@
     "l7_barrel",
     "ev_momentum",
     "barrel_momentum",
-    "park_factor"
+    "park_factor",
+    "bt_bat_speed",
+    "bt_fast_swing",
+    "bt_squared_up",
+    "bt_blast"
   ],
   "tb_over_2.5": [
     "sv_xba",
@@ -391,7 +419,11 @@
     "l7_barrel",
     "ev_momentum",
     "barrel_momentum",
-    "park_factor"
+    "park_factor",
+    "bt_bat_speed",
+    "bt_fast_swing",
+    "bt_squared_up",
+    "bt_blast"
   ],
   "tb_3.5": [
     "sv_xba",
@@ -419,7 +451,11 @@
     "l7_barrel",
     "ev_momentum",
     "barrel_momentum",
-    "park_factor"
+    "park_factor",
+    "bt_bat_speed",
+    "bt_fast_swing",
+    "bt_squared_up",
+    "bt_blast"
   ],
   "tb_over_3.5": [
     "sv_xba",
@@ -447,7 +483,11 @@
     "l7_barrel",
     "ev_momentum",
     "barrel_momentum",
-    "park_factor"
+    "park_factor",
+    "bt_bat_speed",
+    "bt_fast_swing",
+    "bt_squared_up",
+    "bt_blast"
   ],
   "rbi_1.5": [
     "sv_xslg",
@@ -471,7 +511,11 @@
     "l7_ev",
     "l7_barrel",
     "ev_momentum",
-    "barrel_momentum"
+    "barrel_momentum",
+    "bt_bat_speed",
+    "bt_fast_swing",
+    "bt_squared_up",
+    "bt_blast"
   ],
   "rbi_over_1.5": [
     "sv_xslg",
@@ -495,7 +539,11 @@
     "l7_ev",
     "l7_barrel",
     "ev_momentum",
-    "barrel_momentum"
+    "barrel_momentum",
+    "bt_bat_speed",
+    "bt_fast_swing",
+    "bt_squared_up",
+    "bt_blast"
   ],
   "k_2.5": [
     "sv_xera",

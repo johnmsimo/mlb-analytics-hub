@@ -1,0 +1,72 @@
+name: Weekly model regeneration
+
+# Stage 5 of docs/accuracy_blueprint.md — the anti-decay loop. Retrains every
+# XGB prop model from scratch (Statcast + FG CSVs), applies the held-out ship
+# gate (a model only ships if it beats base-rate Brier on the 2025 test
+# season), refreshes the learned park factors and bat-tracking leaderboards,
+# and opens a PR with the new artifacts + benchmarks for review. Nothing
+# reaches production unreviewed: deploy happens only when the PR merges.
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'   # Mondays 09:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  regen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # Pins mirror docs/xgb_model_regeneration.md — the artifacts are
+      # CalibratedClassifierCV pickles, so xgboost/sklearn must match runtime.
+      - name: Install training dependencies
+        run: pip install xgboost==3.2.0 scikit-learn==1.6.1 pandas numpy joblib pybaseball
+
+      - name: Refresh bat-tracking leaderboards (current + prior season)
+        run: |
+          python - <<'PY'
+          from datetime import datetime
+          from savant_bat_tracking import fetch_and_save
+          y = datetime.utcnow().year
+          for yr in (y - 1, y):
+              print(yr, fetch_and_save(yr))
+          PY
+
+      - name: Regenerate all models (held-out ship gate inside)
+        run: python regenerate_models.py
+
+      - name: Open PR with refreshed artifacts
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: auto/model-regen
+          title: 'Weekly model regeneration (automated)'
+          commit-message: 'Weekly model regeneration (automated)'
+          body: |
+            Automated weekly retrain from `regenerate_models.py`.
+
+            - Only models that beat their base-rate Brier on the held-out
+              test season were shipped (the gate prints per-market in the
+              run log — check it before merging).
+            - `models/model_metrics.json` benchmarks and
+              `data/park_factors_learned.json` were refreshed by the pipeline.
+            - Compare each market's `test_auc`/`test_brier` against the
+              previous values in the diff; investigate any regression before
+              merging. `/api/calibration/markets` picks the new benchmarks up
+              automatically after deploy.
+          add-paths: |
+            models/*.pkl
+            models/model_metrics.json
+            models/xgb_feature_cols.json
+            data/regen_summary.json
+            data/park_factors_learned.json
+            data/savant_bat_tracking_*.csv

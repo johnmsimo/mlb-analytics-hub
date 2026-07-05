@@ -2012,14 +2012,53 @@ HR_PARK_FACTORS_HAND = {
 }
 
 
+# Learned season-specific park factors (written by regenerate_models.py from
+# its own Statcast pull — home-vs-road per team, recency-weighted trailing 3
+# seasons, shrunk toward 1.0). When present these provide the LEVEL for the
+# XGB park features; the curated hand asymmetry below is applied as a ratio on
+# top. Missing file / missing team → the static tables above.
+_LEARNED_PARK: dict = {}
+try:
+    _lp_path = os.path.join(DATA_DIR, 'park_factors_learned.json')
+    if os.path.exists(_lp_path):
+        with open(_lp_path) as _f:
+            _LEARNED_PARK = {int(k): v for k, v in
+                             ((json.load(_f) or {}).get('factors') or {}).items()}
+except Exception:
+    _LEARNED_PARK = {}
+
+
+def _park_factor_for(home_team_id):
+    """General (TB-based) park factor — learned season-specific level when
+    available, static PARK_FACTORS otherwise. Feeds the XGB park_factor
+    feature; train-side regenerate_models applies the same precedence."""
+    try:
+        rec = _LEARNED_PARK.get(int(home_team_id))
+        if rec and rec.get('pf'):
+            return float(rec['pf'])
+    except (TypeError, ValueError):
+        pass
+    return PARK_FACTORS.get(home_team_id, 1.0)
+
+
 def _hr_park_factor_hand(home_team_id, hand):
-    """HR park multiplier (1.0 = neutral) for a batter of the given hand. Uses
-    the curated handedness table when available, else the symmetric HR index."""
+    """HR park multiplier (1.0 = neutral) for a batter of the given hand.
+    Level: learned hr_pf when available, else the static HR index. The curated
+    LHB/RHB asymmetry is applied as a ratio around the symmetric level so it
+    survives the switch to learned levels."""
     h = "L" if str(hand or "R").upper().startswith("L") else "R"
     rec = HR_PARK_FACTORS_HAND.get(home_team_id)
+    sym = HR_PARK_FACTORS.get(home_team_id, 100) / 100.0
+    asym = ((rec[h] / 100.0) / sym) if (rec and h in rec and sym > 0) else 1.0
+    try:
+        learned = _LEARNED_PARK.get(int(home_team_id))
+        if learned and learned.get('hr_pf'):
+            return round(float(learned['hr_pf']) * asym, 2)
+    except (TypeError, ValueError):
+        pass
     if rec and h in rec:
         return round(rec[h] / 100.0, 2)
-    return round(HR_PARK_FACTORS.get(home_team_id, 100) / 100.0, 2)
+    return round(sym, 2)
 
 _fg_lock = threading.Lock()
 _fg_cond = threading.Condition(_fg_lock)   # notified when FG load completes
@@ -7971,8 +8010,10 @@ def api_bvp_projection(batter_id, pitcher_id):
             _bdict = {**bstats, **fg_bat, **sv_bat, "name": batter_name, "bats": bats_code,
                       "l7Hits": _bform.get("l7Hits"), "l14Hits": _bform.get("l14Hits"),
                       "l7HitRate": _bform.get("l7HitRate"),
-                      # Venue context for the power models' park features.
-                      "parkFactor": park_factor,
+                      # Venue context for the power models' park features
+                      # (learned season-specific level when available).
+                      "parkFactor": (_park_factor_for(_park_home_id)
+                                     if _park_home_id else park_factor),
                       "parkHr": (_hr_park_factor_hand(_park_home_id, bats_code)
                                  if _park_home_id else 1.0),
                       **_mom}
@@ -15770,7 +15811,7 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                             # Venue context for the power models' trained park
                             # features (park_hr hand-aware from the batter side).
                             _xgb_bp = {**p,
-                                       'parkFactor': PARK_FACTORS.get(home_team_id, 1.0),
+                                       'parkFactor': _park_factor_for(home_team_id),
                                        'parkHr': _hr_park_factor_hand(home_team_id, p.get('bats'))}
                         try:
                             _full = xgb_batter_prob_full(_xgb_market, line, _xgb_bp, opp_pitcher) or {}
@@ -18883,7 +18924,7 @@ def api_diag_serve_parity():
         ap, hp = (away.get('probablePitcher') or {}), (home.get('probablePitcher') or {})
         gpk = g.get('gamePk')
         _home_tid = ((home.get('team') or {}).get('id'))
-        _pf = PARK_FACTORS.get(_home_tid, 1.0) if _home_tid else 1.0
+        _pf = _park_factor_for(_home_tid) if _home_tid else 1.0
         # ── K starters (mirror tracker-capture enrichment) ──
         for pp in (ap, hp):
             pid, pname = pp.get('id'), pp.get('fullName')
@@ -22796,7 +22837,7 @@ def api_lineup_props(game_pk):
         hit_ready = bool(_XGB_AVAILABLE and xgb_ready("hits"))
         hr_ready = bool(_XGB_AVAILABLE and xgb_ready("hr"))
         _home_tid = (((gdata.get("teams") or {}).get("home") or {}).get("team") or {}).get("id")
-        _pf = PARK_FACTORS.get(_home_tid, 1.0) if _home_tid else 1.0
+        _pf = _park_factor_for(_home_tid) if _home_tid else 1.0
 
         def _score_side(batters, opp_name, opp_hand):
             pdict = {"name": opp_name, "pitchHand": opp_hand}

@@ -186,6 +186,7 @@ def bat_tracking(name=None, player_id=None, year=None):
         "swing_length":         _f(row, "swing_length", "avg_swing_length"),
         "fast_swing_pct":       _f(row, "hard_swing_rate", "fast_swing_rate"),
         "squared_up_pct":       _f(row, "squared_up_per_swing", "squared_up_swing_rate"),
+        "blast_pct":            _f(row, "blast_per_swing", "blast_swing_rate"),
         "bat_speed_percentile": pct,
         "batter_rv":            _f(row, "batter_run_value"),
     }
