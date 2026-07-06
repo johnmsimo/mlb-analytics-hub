@@ -1831,6 +1831,7 @@ PARK_CF_BEARING = {
     3312: 68,   # Target Field — CF to ENE
     3313: 75,   # Yankee Stadium — CF to ENE
     4705: 138,  # Truist Park — CF to SE
+    2529: 60,   # Sutter Health Park (Athletics) — CF to ENE toward downtown Sacramento
 }
 
 
@@ -1881,20 +1882,59 @@ def _wind_field_geometry(venue_id, wind_deg, wind_speed):
     return {"out": out, "cross": cross, "field": field, "emoji": emoji}
 
 
-def _scoring_environment(temp, wind_out, park_factor, rain_chance, dome=False):
+def _conditions_hit_effects(temp, wind_out, park_factor, hr_park_factor, dome=False):
+    """Per-hit-type effect estimates (percent vs a neutral 70°F / calm /
+    1.00-park game) for the game-conditions strip: how much these conditions
+    move HR and run scoring. Coefficients are the same magnitudes the run
+    model uses (≈1% HR per °F above 70 per published drag studies is scaled
+    down to 0.4 to stay conservative; 10 mph out ≈ +12% HR ≈ the low end of
+    the Wrigley wind studies). Estimates only — clamped so a windy cold day
+    reads as a lean, not a guarantee."""
+    hr = 0.0
+    runs = 0.0
+    try:
+        hr += (float(hr_park_factor) - 1.0) * 100.0
+    except (TypeError, ValueError):
+        pass
+    try:
+        runs += (float(park_factor) - 1.0) * 100.0
+    except (TypeError, ValueError):
+        pass
+    if not dome:
+        try:
+            t = float(temp)
+            hr += (t - 70.0) * 0.4
+            runs += (t - 70.0) * 0.25
+        except (TypeError, ValueError):
+            pass
+        if isinstance(wind_out, (int, float)):
+            hr += float(wind_out) * 1.2
+            runs += float(wind_out) * 0.5
+    return {
+        'hrPct': round(max(-30.0, min(30.0, hr))),
+        'runsPct': round(max(-20.0, min(20.0, runs))),
+    }
+
+
+def _scoring_environment(temp, wind_out, park_factor, rain_chance, dome=False,
+                         hr_park_factor=None):
     """Blend temperature, the out-to-CF wind component, and the park run factor
     into a single per-team run delta plus a plain-language verdict. This is the
     composite "scoring environment" the deep-dive surfaces above the raw cards.
 
     All deltas are runs-per-team relative to a neutral 70F / calm / 1.00-park
     baseline and are clamped so no single driver can dominate the read.
+    Also carries `hrPct` / `runsPct` per-hit-type estimates (see
+    `_conditions_hit_effects`) for the props-page conditions strip.
     """
+    effects = _conditions_hit_effects(temp, wind_out, park_factor, hr_park_factor, dome=dome)
     drivers = []
     if dome:
         return {
             "runDelta": 0.0, "tier": "CONTROLLED", "color": "neutral",
             "label": "Indoor / roof closed — weather neutralized",
             "drivers": ["Climate-controlled air: no wind or temperature effect"],
+            **effects,
         }
 
     temp_d = 0.0
@@ -1952,6 +1992,7 @@ def _scoring_environment(temp, wind_out, park_factor, rain_chance, dome=False):
     return {
         "runDelta": total, "tier": tier, "color": color,
         "label": label, "drivers": drivers,
+        **effects,
     }
 
 
@@ -4584,7 +4625,7 @@ def parse_game(g, prefer_live_weather=True):
             "venueId": venue_id,
             "weatherImpact": _scoring_environment(
                 wx.get("temp"), wx.get("wind_out"), pf, wx.get("rain_chance"),
-                dome=(venue_id in DOME_VENUES),
+                dome=(venue_id in DOME_VENUES), hr_park_factor=hrpf,
             ),
             "weatherIcon": wi,
             "injuryAlert": injury_alert,
@@ -23970,10 +24011,52 @@ def _gamelog_opp_abbr(split):
             or opp.get("name", ""))
 
 
+_DAYNIGHT_MAP_CACHE = {"date": None, "season": None, "map": {}}
+_DAYNIGHT_MAP_LOCK = threading.Lock()
+
+
+def _gamepk_daynight_map(season):
+    """gamePk -> 'day'/'night' for a season, daily-cached (one schedule call).
+
+    The gameLog splits' nested `game.dayNight` is unreliable — it reads 'day'
+    for every game — so the hit-history day/night split derives from the
+    schedule endpoint, which carries the real value."""
+    today = datetime.now().date()
+    with _DAYNIGHT_MAP_LOCK:
+        c = _DAYNIGHT_MAP_CACHE
+        if c["date"] == today and c["season"] == season and c["map"]:
+            return c["map"]
+    m = {}
+    try:
+        r = requests.get(f"{MLB_API}/schedule", params={
+            "sportId": 1,
+            "startDate": f"{season}-03-01", "endDate": f"{season}-11-30",
+            "gameType": "R",
+            "fields": "dates,games,gamePk,dayNight",
+        }, timeout=12)
+        for d in r.json().get("dates", []):
+            for g in d.get("games", []):
+                if g.get("gamePk") and g.get("dayNight"):
+                    m[int(g["gamePk"])] = g["dayNight"]
+    except Exception:
+        with _DAYNIGHT_MAP_LOCK:
+            return dict(_DAYNIGHT_MAP_CACHE["map"])
+    with _DAYNIGHT_MAP_LOCK:
+        _DAYNIGHT_MAP_CACHE.update({"date": today, "season": season, "map": m})
+        return dict(m)
+
+
+def _gamelog_day_flag(split, dn_map):
+    gpk = (split.get("game") or {}).get("gamePk")
+    dn = dn_map.get(gpk) if gpk else None
+    return (dn == "day") if dn else None
+
+
 def _fetch_batter_gamelog(player_id, season=None, limit=10):
     """Returns recent game log entries for a batter, newest-last order."""
     try:
         splits = _gamelog_splits_cached(player_id, "hitting", season)
+        dn_map = _gamepk_daynight_map(int(season or datetime.now().year))
         out = []
         chosen = splits if limit is None else splits[-int(limit):]
         for s in chosen:
@@ -23981,6 +24064,8 @@ def _fetch_batter_gamelog(player_id, season=None, limit=10):
             out.append({
                 "date": s.get("date", ""),
                 "opp":  _gamelog_opp_abbr(s),
+                "home": bool(s.get("isHome")),
+                "day":  _gamelog_day_flag(s, dn_map),
                 "ab":   int(st.get("atBats", 0)),
                 "h":    int(st.get("hits", 0)),
                 "hr":   int(st.get("homeRuns", 0)),
@@ -24000,6 +24085,7 @@ def _fetch_pitcher_gamelog(player_id, season=None, limit=10):
     """Returns recent game log entries for a pitcher, newest-last order."""
     try:
         splits = _gamelog_splits_cached(player_id, "pitching", season)
+        dn_map = _gamepk_daynight_map(int(season or datetime.now().year))
         out = []
         chosen = splits if limit is None else splits[-int(limit):]
         for s in chosen:
@@ -24013,6 +24099,8 @@ def _fetch_pitcher_gamelog(player_id, season=None, limit=10):
             out.append({
                 "date": s.get("date", ""),
                 "opp":  _gamelog_opp_abbr(s),
+                "home": bool(s.get("isHome")),
+                "day":  _gamelog_day_flag(s, dn_map),
                 "ip":   round(ip_dec, 2),
                 "k":    int(st.get("strikeOuts", 0)),
                 "bb":   int(st.get("baseOnBalls", 0)),
@@ -24229,6 +24317,8 @@ def api_props_hit_history(player_id):
             row = {
                 'date': g.get('date', ''),
                 'opp': g.get('opp', ''),
+                'home': bool(g.get('home')),
+                'day': g.get('day'),
                 'value': value,
                 'result': _hit_history_result(value, line),
                 'recorded': None,

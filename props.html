@@ -455,6 +455,16 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .zc-stats-table{width:100%;margin-top:10px;border-collapse:collapse;font-size:.58rem}
 .zc-stats-table th{background:rgba(0,0,0,.2);padding:6px;text-align:left;color:var(--mu);letter-spacing:1px;font-family:'Orbitron',monospace}
 .zc-stats-table td{padding:5px;border-bottom:1px solid rgba(0,229,255,.1);color:var(--t)}
+/* ── Game Conditions strip ── */
+.cond-strip{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;padding:9px 14px;margin-bottom:16px;background:rgba(0,0,0,.25);border:1px solid var(--b);border-radius:10px}
+.cond-lbl{font-family:'Orbitron',monospace;font-size:.56rem;letter-spacing:1.6px;color:var(--mu)}
+.cond-item{font-size:.66rem;color:var(--t);white-space:nowrap}
+.cond-item .cv{font-family:'JetBrains Mono',monospace;font-weight:700}
+.cond-sep{width:1px;height:14px;background:rgba(255,255,255,.12)}
+.cond-tier{margin-left:auto;font-family:'Orbitron',monospace;font-size:.56rem;letter-spacing:1.2px;padding:3px 10px;border-radius:999px;border:1px solid}
+.cond-tier.good{color:var(--g);border-color:rgba(0,230,118,.4);background:rgba(0,230,118,.08)}
+.cond-tier.bad{color:#ff7070;border-color:rgba(244,67,54,.4);background:rgba(244,67,54,.08)}
+.cond-tier.neutral{color:var(--mu);border-color:rgba(255,255,255,.18);background:rgba(255,255,255,.03)}
 /* ── Hit History chart ── */
 .hh-modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:3000;background:rgba(2,6,16,.82);backdrop-filter:blur(4px)}
 .hh-modal.show{display:flex}
@@ -468,6 +478,8 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .hh-chip.active{background:rgba(0,229,255,.18);border-color:rgba(0,229,255,.45);color:var(--c)}
 .hh-chip:hover{border-color:rgba(0,229,255,.35)}
 .hh-chip.mode-close.active{background:rgba(255,213,79,.16);border-color:rgba(255,213,79,.5);color:#ffd54f}
+.hh-filter-row{display:flex;align-items:center;gap:8px;flex-basis:100%;padding-top:8px;margin-top:2px;border-top:1px solid rgba(255,255,255,.07)}
+.hh-chip.hh-filter.active{background:rgba(0,230,118,.14);border-color:rgba(0,230,118,.5);color:var(--g)}
 .hh-sep{width:1px;height:18px;background:rgba(255,255,255,.14)}
 .hh-step{display:flex;align-items:center;gap:6px}
 .hh-step button{width:24px;height:24px;border-radius:6px;border:1px solid rgba(0,229,255,.25);background:rgba(0,229,255,.06);color:var(--c);font-size:.8rem;cursor:pointer;line-height:1}
@@ -616,6 +628,9 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 
   <div id="mainContent" style="display:none">
   <div id="matchHeader" style="margin-bottom:16px;font-family:'Orbitron',monospace;font-size:.72rem;color:var(--mu);letter-spacing:3px"></div>
+
+  <!-- ── Game Conditions strip (venue · weather · field-relative wind · park effects) ── -->
+  <div id="condStrip" class="cond-strip" style="display:none"></div>
 
   <!-- ── Best Prop Recommendation ── -->
   <div id="bestPropBox" style="margin-bottom:16px"></div>
@@ -916,6 +931,7 @@ let CUR_DATE      = '';
 let CUR_GAME      = null;
 let CUR_HOME      = '';
 let CUR_AWAY      = '';
+let GAMES_BY_PK   = {};   // gamePk -> /api/games/today game object (weather, park, conditions)
 let FULL_SCAN_MODE = false;
 let PF_FILTERS    = new Set();
 // ── Watchlist (localStorage) ──────────────────────────────────────────────────
@@ -1400,6 +1416,8 @@ async function loadFullScan() {
 }
 
 function renderChips(games) {
+  GAMES_BY_PK = {};
+  (games || []).forEach(g => { if (g.gamePk) GAMES_BY_PK[g.gamePk] = g; });
   if (!games.length) { chips('<div style="color:var(--mu);font-family:Orbitron,monospace;font-size:.68rem;letter-spacing:2px;padding:10px">NO GAMES SCHEDULED</div>'); return; }
   chips(games.map(g => {
     const live = g.status === 'Live';
@@ -1451,6 +1469,7 @@ async function selectGame(pk, awayAbbr, homeAbbr) {
   gel('matchHeader').innerHTML =
     `${awayAbbr} <span style="color:var(--c)">@</span> ${homeAbbr} &nbsp;·&nbsp; GAME ${pk}`;
   gel('lastUpdate').textContent = `UPDATED ${new Date().toLocaleTimeString()}`;
+  renderConditionsStrip(GAMES_BY_PK[pk]);
 
   // Best-prop recommendation: rank every prop in this game and surface the top target.
   if (window.BestProp) BestProp.render('bestPropBox', pk);
@@ -1463,6 +1482,49 @@ async function selectGame(pk, awayAbbr, homeAbbr) {
 
   const activeTab = document.querySelector('.tab.active')?.dataset.tab || 'projections';
   await loadTab(activeTab);
+}
+
+// ── Game Conditions strip ──────────────────────────────────────────────────────
+function condPct(v) {
+  if (v == null) return '';
+  const col = v > 0 ? 'var(--g)' : v < 0 ? '#ff7070' : 'var(--mu)';
+  return `<span class="cv" style="color:${col}">${v > 0 ? '+' : ''}${v}%</span>`;
+}
+
+function renderConditionsStrip(g) {
+  const el = gel('condStrip');
+  if (!el) return;
+  if (!g) { el.style.display = 'none'; return; }
+  const wi = g.weatherImpact || {};
+  const isDome = g.temp === 'DOME' || wi.tier === 'CONTROLLED';
+  const bits = [`<span class="cond-lbl">GAME CONDITIONS</span>`,
+    `<span class="cond-item">🏟 ${esc(g.venue || '')}</span>`];
+  if (isDome) {
+    bits.push('<span class="cond-sep"></span>',
+      `<span class="cond-item">🔒 Dome / roof — weather neutralized</span>`);
+  } else {
+    if (g.temp != null && g.temp !== 'N/A')
+      bits.push('<span class="cond-sep"></span>',
+        `<span class="cond-item">🌡 <span class="cv">${g.temp}°F</span>${g.condition ? ' ' + esc(g.condition) : ''}</span>`);
+    const wf = g.windField
+      ? `${g.windEmoji || ''} <span class="cv">${g.windSpeed} mph</span> ${esc(g.windField)}`
+      : (g.wind && g.wind !== 'N/A' ? `💨 <span class="cv">${esc(g.wind)}</span>` : '');
+    if (wf) bits.push('<span class="cond-sep"></span>', `<span class="cond-item">${wf}</span>`);
+    if (g.rainChance != null && g.rainChance !== 'N/A' && Number(g.rainChance) >= 30)
+      bits.push('<span class="cond-sep"></span>',
+        `<span class="cond-item">🌧 <span class="cv" style="color:#ffb74d">${g.rainChance}%</span> rain</span>`);
+  }
+  if (wi.hrPct != null || wi.runsPct != null) {
+    bits.push('<span class="cond-sep"></span>');
+    if (wi.hrPct != null) bits.push(`<span class="cond-item">HR ${condPct(wi.hrPct)}</span>`);
+    if (wi.runsPct != null) bits.push(`<span class="cond-item">RUNS ${condPct(wi.runsPct)}</span>`);
+  }
+  if (wi.tier) {
+    const tip = (wi.drivers || []).join(' · ');
+    bits.push(`<span class="cond-tier ${wi.color || 'neutral'}" title="${esc(tip)}">${esc(wi.tier)}</span>`);
+  }
+  el.innerHTML = bits.join('');
+  el.style.display = 'flex';
 }
 
 // ── Lineup Change Polling ─────────────────────────────────────────────────────
@@ -2508,12 +2570,52 @@ function openHitHistory(pid, name, kind) {
   openHitHistoryAt(pid, name, kind, market, hhBookLine(pid, kind, market));
 }
 
+function hhOppAbbr(pid, kind) {
+  // today's opponent for the H2H filter chip, from the loaded game context
+  const pool = kind === 'pitcher' ? (PROJ_DATA?.pitchers || []) : (PROJ_DATA?.batters || []);
+  const team = (pool.find(x => x.id === pid) || {}).team;
+  if (!team || !CUR_AWAY || !CUR_HOME) return null;
+  if (team === CUR_AWAY) return CUR_HOME;
+  if (team === CUR_HOME) return CUR_AWAY;
+  return null;
+}
+
 function openHitHistoryAt(pid, name, kind, market, line) {
   if (!pid) return;
-  HH_STATE = { pid, name, kind, market, line, n: 20, mode: 'line' };
+  HH_STATE = { pid, name, kind, market, line, n: 20, mode: 'line',
+               fHA: null, fDN: null, fH2H: false, oppAbbr: hhOppAbbr(pid, kind) };
   gel('hitHistModal').classList.add('show');
   gel('hitHistTitle').textContent = `📊 ${name} · HIT HISTORY`;
   hhRefresh();
+}
+
+function hhToggleHA(v) { HH_STATE.fHA = HH_STATE.fHA === v ? null : v; hhRefresh(); }
+function hhToggleDN(v) { HH_STATE.fDN = HH_STATE.fDN === v ? null : v; hhRefresh(); }
+function hhToggleH2H() { HH_STATE.fH2H = !HH_STATE.fH2H; hhRefresh(); }
+
+function hhApplyFilters(games) {
+  const s = HH_STATE;
+  return (games || []).filter(g =>
+    (!s.fH2H || g.opp === s.oppAbbr) &&
+    (!s.fHA || g.home === (s.fHA === 'home')) &&
+    (!s.fDN || g.day === (s.fDN === 'day')));
+}
+
+function hhFiltersActive() {
+  const s = HH_STATE;
+  return !!(s.fH2H || s.fHA || s.fDN);
+}
+
+function hhSummarize(games, mode) {
+  let overs = 0, decided = 0, pushes = 0, coverage = 0;
+  (games || []).forEach(g => {
+    const res = mode === 'closing' ? (g.recorded ? g.recorded.result : null) : g.result;
+    if (mode === 'closing' && g.recorded) coverage++;
+    if (res === 'over') { overs++; decided++; }
+    else if (res === 'under') { decided++; }
+    else if (res === 'push') { pushes++; }
+  });
+  return { overs, decided, pushes, coverage, rate: decided ? overs / decided : null };
 }
 
 function closeHitHistory(ev) {
@@ -2550,33 +2652,48 @@ function hhControlsHtml() {
     `<button class="hh-chip${s.n === n ? ' active' : ''}" onclick="hhSetN(${n})">${lbl}</button>`).join('');
   const modes = `<button class="hh-chip${s.mode === 'line' ? ' active' : ''}" onclick="hhSetMode('line')">LINE</button>
     <button class="hh-chip mode-close${s.mode === 'closing' ? ' active' : ''}" onclick="hhSetMode('closing')">CLOSING LINES</button>`;
+  const filters = [
+    s.oppAbbr ? `<button class="hh-chip hh-filter${s.fH2H ? ' active' : ''}" onclick="hhToggleH2H()">VS ${esc(s.oppAbbr)}</button>` : '',
+    `<button class="hh-chip hh-filter${s.fHA === 'home' ? ' active' : ''}" onclick="hhToggleHA('home')">HOME</button>`,
+    `<button class="hh-chip hh-filter${s.fHA === 'away' ? ' active' : ''}" onclick="hhToggleHA('away')">AWAY</button>`,
+    `<button class="hh-chip hh-filter${s.fDN === 'day' ? ' active' : ''}" onclick="hhToggleDN('day')">DAY</button>`,
+    `<button class="hh-chip hh-filter${s.fDN === 'night' ? ' active' : ''}" onclick="hhToggleDN('night')">NIGHT</button>`,
+  ].filter(Boolean).join('');
   return `${mkts}<span class="hh-sep"></span>${wins}<span class="hh-sep"></span>
     <span class="hh-step"><button onclick="hhStepLine(-1)">−</button><span class="hh-step-val">${s.line}</span><button onclick="hhStepLine(1)">＋</button></span>
-    <span class="hh-sep"></span>${modes}`;
+    <span class="hh-sep"></span>${modes}
+    <span class="hh-filter-row"><span class="hh-kpi-sub" style="letter-spacing:1.4px">FILTERS</span>${filters}</span>`;
 }
 
-function hhRenderKpi(d) {
+function hhRenderKpi(d, games) {
   const s = HH_STATE;
-  const sum = s.mode === 'closing' ? d.summary.closing : d.summary.line;
-  const games = d.games || [];
+  const sum = hhSummarize(games, s.mode);
   const rate = sum.rate;
   const rateCol = rate == null ? 'var(--mu)' : rate >= 0.5 ? 'var(--g)' : 'var(--r)';
   const rateStr = rate == null ? '—' : (rate * 100).toFixed(1) + '%';
   const pushes = sum.pushes ? ` · ${sum.pushes} push` : '';
-  const sample = s.mode === 'closing'
-    ? `closing lines recorded for ${sum.coverage} of ${games.length} games`
-    : `${games.length} of ${d.seasonGames} games`;
+  const filtered = hhFiltersActive();
+  let sample;
+  if (s.mode === 'closing') {
+    sample = `closing lines recorded for ${sum.coverage} of ${games.length} games` +
+      (filtered ? ` (filtered from ${(d.games || []).length})` : '');
+  } else {
+    sample = filtered
+      ? `${games.length} of ${(d.games || []).length} games match filters`
+      : `${games.length} of ${d.seasonGames} games`;
+  }
   gel('hitHistKpi').innerHTML = `
     <span class="hh-kpi-sub">HIT RATE</span>
     <span class="hh-kpi-rate" style="color:${rateCol}">${rateStr} <span style="font-size:.68rem;color:var(--t)">(${sum.overs}/${sum.decided})</span></span>
     <span class="hh-kpi-sub">${sample}${pushes}</span>`;
 }
 
-function hhRenderChart(d) {
+function hhRenderChart(d, games) {
   const s = HH_STATE;
-  const games = d.games || [];
   if (!games.length) {
-    gel('hitHistBody').innerHTML = '<div class="hh-empty">NO GAME LOG DATA THIS SEASON</div>';
+    gel('hitHistBody').innerHTML = hhFiltersActive()
+      ? '<div class="hh-empty">NO GAMES MATCH THESE FILTERS</div>'
+      : '<div class="hh-empty">NO GAME LOG DATA THIS SEASON</div>';
     return;
   }
   const H = 150;
@@ -2589,7 +2706,7 @@ function hhRenderChart(d) {
     const cls = res || 'na';
     const dt = (g.date || '').slice(5).replace('-', '/');
     const cp = g.recorded?.closingPrice;
-    const tip = `${g.date} vs ${g.opp} — ${g.value}` +
+    const tip = `${g.date} ${g.home ? 'vs' : '@'} ${g.opp}${g.day ? ' (day)' : ''} — ${g.value}` +
       (gl != null ? ` (line ${gl})` : ' (no recorded line)') +
       (cp != null ? ` · close ${cp > 0 ? '+' + cp : cp}${g.recorded.closingBook ? ' @ ' + g.recorded.closingBook : ''}` : '');
     const tick = gl != null ? `<div class="hh-tick" style="bottom:${px(gl)}px"></div>` : '';
@@ -2600,7 +2717,7 @@ function hhRenderChart(d) {
       <div class="hh-lbl">${esc(g.opp || '')}<br>${dt}</div>
     </div>`;
   }).join('');
-  const pending = `<div class="hh-col" title="Today's game — pending">
+  const pending = hhFiltersActive() ? '' : `<div class="hh-col" title="Today's game — pending">
     <div class="hh-barzone"><div class="hh-pending">?</div></div>
     <div class="hh-lbl">TODAY</div>
   </div>`;
@@ -2616,8 +2733,9 @@ async function hhRefresh() {
   gel('hitHistControls').innerHTML = hhControlsHtml();
   try {
     const d = await hhFetch();
-    hhRenderKpi(d);
-    hhRenderChart(d);
+    const games = hhApplyFilters(d.games || []);
+    hhRenderKpi(d, games);
+    hhRenderChart(d, games);
   } catch (e) {
     gel('hitHistKpi').innerHTML = '';
     gel('hitHistBody').innerHTML = `<div class="hh-empty" style="color:var(--r)">Error: ${esc(e.message)}</div>`;
