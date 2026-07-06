@@ -33,6 +33,7 @@ Container build (used by Fly.io / `Dockerfile`): a multi-stage Python 3.11-slim 
 **Odds API:**
 - `ODDS_API_KEY` — The Odds API key. Routes degrade gracefully when absent.
 - `ODDS_REGION` (default `us`).
+- `ODDS_INCLUDE_ALT_MARKETS` (default 1) — adds the five `*_alternate` market keys (hits/TB/HR/RBI/K ladders, e.g. K 1.5–9.5 per book) to every event-odds request. Powers the line-shopping ladder matrix; costs ~5 extra Odds API credits per game per day in the snapshot (and per closing-capture refresh). Set 0 to fall back to primary lines only — the UI degrades to the legacy single-line table.
 - TTL tuning: `ODDS_EVENTS_TTL_SEC` (default 21600), `ODDS_GAME_TTL_SEC` (default 86400), `ODDS_NRFI_TTL_SEC` (default 300).
 
 **Infra / operational:**
@@ -135,7 +136,7 @@ Each HTML file is loaded into a module-level string at boot via `_read_html_or_f
 - `/api/props/scan/today` — cross-game MC grades for all props
 - `/api/edges/today` — slate-wide edge-ranked board (positive-value plays + letter grades), reuses the cached props-scan
 - `/api/v1/edges` — quant JSON feed: the edge board filtered by **EV** (default `minEv=0.03`), each play enriched via `value_engine` with de-vig'd `fairProb`, true EV vs best price, and a Quarter-Kelly `stakePct`/`stakeUnits`/`stakeDollars` (sized from tracker bankroll/kelly_fraction/max_bet_pct). Backbone for a mobile/Telegram/Discord client. Degrades gracefully (no odds → empty list, still 200)
-- `/api/props/line-shopping/<game_pk>`, `/api/props/matchup-scores/<game_pk>`, `/api/props/trends/<game_pk>`, `/api/props/quick/<game_pk>`
+- `/api/props/line-shopping/<game_pk>`, `/api/props/matchup-scores/<game_pk>`, `/api/props/trends/<game_pk>`, `/api/props/quick/<game_pk>`. Line-shopping groups now carry a `lines[]` ladder (per distinct line: per-book over/under with best-price flags, merged across the primary and `*_alternate` markets and deduped per book), plus `primary_line` (the primary-market line offered by the most books) and `all_books`. The legacy `books`/`best_over_price`/`line_range`/`book_count` fields are computed from primary-market rows ONLY — deepdive's strike engine and the props best-odds pill read them as "the main line's price", and an alt-ladder extreme (4+ hits +2000) must never leak in. Alt rows keep `market_key='*_alternate'` in `_parse_prop_markets` output (with `base_key`/`is_alt`) for the same reason.
 - `/api/props/hit-history/<player_id>` — per-game prop values vs a line for the props-page HIT HISTORY bar chart (`?market=<tracker key>&line=&n=&season=&player=`). Grades each game two ways: vs the **current** line applied retroactively, and vs each game's **recorded** line from that day's tracker capture (`_hit_history_recorded_rows`; the closing-capture worker refreshes its price at first pitch). `summary.closing.coverage` reports how many games actually carry a recorded line — the UI's LINE ⇄ CLOSING LINES toggle excludes uncovered games from the closing hit rate instead of silently falling back to the current line
 - `/api/projections/monte-carlo` — full MC slate with per-game top props
 - `/api/tracker/*` — full CRUD for picks, settings, performance, bankroll, calibration, Brier, attribution, value, portfolio, bet slip, closing-line capture

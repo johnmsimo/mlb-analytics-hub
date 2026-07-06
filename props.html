@@ -389,6 +389,20 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .ls-best{background:rgba(0,230,118,.1);border:1px solid rgba(0,230,118,.3);color:var(--g)}
 .ls-model{margin-top:8px;font-size:.58rem;color:var(--mu);line-height:1.5}
 .ls-empty{padding:18px;text-align:center;color:var(--mu);font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:1.3px}
+/* line-ladder × book matrix */
+.lsm-wrap{overflow-x:auto}
+.lsm-table th{text-align:center;white-space:nowrap}
+.lsm-table td{text-align:center;white-space:nowrap;font-family:'JetBrains Mono',monospace;font-size:.6rem}
+.lsm-table td.lsm-line{text-align:left;font-weight:700;color:#ffd54f;font-size:.66rem}
+.lsm-px{display:block;line-height:1.5;padding:0 4px;border-radius:4px}
+.lsm-best-o{background:rgba(0,230,118,.14);color:var(--g);font-weight:700}
+.lsm-best-u{background:rgba(0,229,255,.12);color:var(--c);font-weight:700}
+.lsm-none{color:rgba(255,255,255,.18)}
+.lsm-alt{font-family:'Orbitron',monospace;font-size:.44rem;letter-spacing:.8px;padding:1px 4px;border-radius:4px;background:rgba(255,152,0,.14);border:1px solid rgba(255,152,0,.4);color:#ffb74d;vertical-align:middle}
+.lsm-main{font-family:'Orbitron',monospace;font-size:.44rem;letter-spacing:.8px;padding:1px 4px;border-radius:4px;background:rgba(0,229,255,.12);border:1px solid rgba(0,229,255,.4);color:var(--c);vertical-align:middle}
+.lsm-primary td{background:rgba(0,229,255,.045)}
+.lsm-chart{border:1px solid rgba(0,229,255,.25);background:rgba(0,229,255,.06);border-radius:6px;cursor:pointer;font-size:.62rem;padding:2px 6px}
+.lsm-chart:hover{border-color:rgba(0,229,255,.5)}
 /* ── Spray Chart ── */
 .sc-modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:3000;background:rgba(2,6,16,.82);backdrop-filter:blur(4px)}
 .sc-modal.show{display:flex}
@@ -2346,7 +2360,92 @@ function _modelHint(playerName, marketKey) {
   return `Model over prob ${p} · EV ${ev} · line ${r.line ?? '—'}`;
 }
 
-async function openLineShop(playerName, gamePk) {
+const LS_BOOK_ABBR = {
+  'FanDuel': 'FD', 'DraftKings': 'DK', 'BetMGM': 'MGM', 'Caesars': 'CZR', 'BetRivers': 'BR',
+  'Bovada': 'BOV', 'MyBookie.ag': 'MYB', 'BetOnline.ag': 'BOL', 'LowVig.ag': 'LV',
+  'Fanatics': 'FAN', 'ESPN BET': 'ESPN', 'Hard Rock Bet': 'HR', 'PointsBet (US)': 'PB',
+  'Unibet': 'UNI', 'William Hill (US)': 'WH', 'Caesars Sportsbook': 'CZR', 'Fliff': 'FLF',
+  'Pinnacle': 'PIN', 'BetUS': 'BUS', 'Bally Bet': 'BLY', 'Wind Creek (Betfred PA)': 'WC',
+};
+function lsBookAbbr(b) { return LS_BOOK_ABBR[b] || String(b || '').replace(/[^A-Za-z]/g, '').slice(0, 4).toUpperCase(); }
+
+// hit-history market keys the ladder can deep-link into
+const LS_HH_MARKETS = new Set(['batter_hits', 'batter_total_bases', 'batter_home_runs',
+  'batter_rbis', 'batter_runs_scored', 'batter_hits_runs_rbis', 'pitcher_strikeouts']);
+
+function lsLadderPanel(g, playerName, pid, kind) {
+  const lines = g.lines || [];
+  const bookCols = g.all_books || [];
+  const modelHint = _modelHint(playerName, g.market_key);
+  const altCount = lines.filter(l => !l.has_primary).length;
+  const meta = `${lines.length} line${lines.length === 1 ? '' : 's'} · ${bookCols.length} books` +
+    (altCount ? ` · ${altCount} alt` : '') +
+    (g.primary_line != null ? ` · main ${g.primary_line}` : '');
+  const canChart = pid && LS_HH_MARKETS.has(g.market_key);
+  const head = `<tr><th>LINE</th>${bookCols.map(b => `<th title="${esc(b)}">${lsBookAbbr(b)}</th>`).join('')}<th>BEST</th>${canChart ? '<th></th>' : ''}</tr>`;
+  const rows = lines.map(L => {
+    const byBook = {};
+    (L.books || []).forEach(b => { byBook[b.bookmaker] = b; });
+    const cells = bookCols.map(bk => {
+      const b = byBook[bk];
+      if (!b) return '<td class="lsm-none">—</td>';
+      const o = b.over_price != null ? `<span class="lsm-px${b.is_best_over ? ' lsm-best-o' : ''}">O ${_fmtOdds(b.over_price)}</span>` : '';
+      const u = b.under_price != null ? `<span class="lsm-px${b.is_best_under ? ' lsm-best-u' : ''}">U ${_fmtOdds(b.under_price)}</span>` : '';
+      return `<td>${o}${u}</td>`;
+    }).join('');
+    const best = `<td>${L.best_over_price != null ? `<span class="lsm-px lsm-best-o">O ${_fmtOdds(L.best_over_price)}</span>` : ''}${L.best_under_price != null ? `<span class="lsm-px lsm-best-u">U ${_fmtOdds(L.best_under_price)}</span>` : ''}</td>`;
+    const chart = canChart
+      ? `<td><button class="lsm-chart" title="Hit history at this line" onclick="openHitHistoryAt(${pid}, '${(playerName || '').replace(/'/g, "\\'")}', '${kind}', '${g.market_key}', ${L.line})">📊</button></td>`
+      : '';
+    const isMain = g.primary_line != null && L.line === g.primary_line;
+    return `<tr class="${isMain ? 'lsm-primary' : ''}">
+      <td class="lsm-line">${L.line}${!L.has_primary ? ' <span class="lsm-alt">ALT</span>' : ''}${isMain ? ' <span class="lsm-main">MAIN</span>' : ''}</td>
+      ${cells}${best}${chart}
+    </tr>`;
+  }).join('');
+  return `<div class="ls-market">
+    <div class="ls-market-h">
+      <div class="ls-market-lbl">${g.market_label || g.market_key}</div>
+      <div class="ls-meta">${meta}</div>
+    </div>
+    <div class="lsm-wrap"><table class="ls-table lsm-table">
+      <thead>${head}</thead>
+      <tbody>${rows || '<tr><td colspan="99">No rows</td></tr>'}</tbody>
+    </table></div>
+    ${modelHint ? `<div class="ls-model">${modelHint}</div>` : ''}
+  </div>`;
+}
+
+function lsLegacyPanel(g, playerName) {
+  const lr = Array.isArray(g.line_range) ? `Line ${g.line_range[0]}-${g.line_range[1]}` : 'Line —';
+  const meta = `${lr} · ${g.book_count || 0} books${g.line_varies ? ' · varies' : ''}`;
+  const rows = (g.books || []).map(b => {
+    const book = b.bookmaker || '—';
+    const line = b.line != null ? b.line : '—';
+    const over = _fmtOdds(b.over_price);
+    const under = _fmtOdds(b.under_price);
+    return `<tr>
+      <td>${book}</td>
+      <td>${line}</td>
+      <td>${over} ${b.is_best_over ? '<span class="ls-pill ls-best">BEST O</span>' : ''}</td>
+      <td>${under} ${b.is_best_under ? '<span class="ls-pill ls-best">BEST U</span>' : ''}</td>
+    </tr>`;
+  }).join('');
+  const modelHint = _modelHint(playerName, g.market_key);
+  return `<div class="ls-market">
+    <div class="ls-market-h">
+      <div class="ls-market-lbl">${g.market_label || g.market_key}</div>
+      <div class="ls-meta">${meta}</div>
+    </div>
+    <table class="ls-table">
+      <thead><tr><th>BOOK</th><th>LINE</th><th>OVER</th><th>UNDER</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="4">No rows</td></tr>'}</tbody>
+    </table>
+    ${modelHint ? `<div class="ls-model">${modelHint}</div>` : ''}
+  </div>`;
+}
+
+async function openLineShop(playerName, gamePk, pid = null, kind = 'batter') {
   if (!playerName) return;
   const modal = gel('lineShopModal');
   const title = gel('lineShopTitle');
@@ -2366,34 +2465,9 @@ async function openLineShop(playerName, gamePk) {
     }
 
     groups.sort((a, b) => _lsMarketOrder(a.market_key) - _lsMarketOrder(b.market_key));
-    body.innerHTML = groups.map(g => {
-      const lr = Array.isArray(g.line_range) ? `Line ${g.line_range[0]}-${g.line_range[1]}` : 'Line —';
-      const meta = `${lr} · ${g.book_count || 0} books${g.line_varies ? ' · varies' : ''}`;
-      const rows = (g.books || []).map(b => {
-        const book = b.bookmaker || '—';
-        const line = b.line != null ? b.line : '—';
-        const over = _fmtOdds(b.over_price);
-        const under = _fmtOdds(b.under_price);
-        return `<tr>
-          <td>${book}</td>
-          <td>${line}</td>
-          <td>${over} ${b.is_best_over ? '<span class="ls-pill ls-best">BEST O</span>' : ''}</td>
-          <td>${under} ${b.is_best_under ? '<span class="ls-pill ls-best">BEST U</span>' : ''}</td>
-        </tr>`;
-      }).join('');
-      const modelHint = _modelHint(playerName, g.market_key);
-      return `<div class="ls-market">
-        <div class="ls-market-h">
-          <div class="ls-market-lbl">${g.market_label || g.market_key}</div>
-          <div class="ls-meta">${meta}</div>
-        </div>
-        <table class="ls-table">
-          <thead><tr><th>BOOK</th><th>LINE</th><th>OVER</th><th>UNDER</th></tr></thead>
-          <tbody>${rows || '<tr><td colspan="4">No rows</td></tr>'}</tbody>
-        </table>
-        ${modelHint ? `<div class="ls-model">${modelHint}</div>` : ''}
-      </div>`;
-    }).join('');
+    body.innerHTML = groups.map(g =>
+      (g.lines && g.lines.length) ? lsLadderPanel(g, playerName, pid, kind) : lsLegacyPanel(g, playerName)
+    ).join('');
   } catch (e) {
     body.innerHTML = `<div class="ls-empty" style="color:var(--r)">Error: ${e.message}</div>`;
   }
@@ -2431,7 +2505,12 @@ function hhBookLine(pid, kind, market) {
 function openHitHistory(pid, name, kind) {
   if (!pid) return;
   const market = HH_MARKETS[kind][0][0];
-  HH_STATE = { pid, name, kind, market, line: hhBookLine(pid, kind, market), n: 20, mode: 'line' };
+  openHitHistoryAt(pid, name, kind, market, hhBookLine(pid, kind, market));
+}
+
+function openHitHistoryAt(pid, name, kind, market, line) {
+  if (!pid) return;
+  HH_STATE = { pid, name, kind, market, line, n: 20, mode: 'line' };
   gel('hitHistModal').classList.add('show');
   gel('hitHistTitle').textContent = `📊 ${name} · HIT HISTORY`;
   hhRefresh();
@@ -3236,7 +3315,7 @@ function batterCard(b) {
         <span style="color:var(--mu)">${nBooks} book${nBooks===1?'':'s'}</span>
       </div>`;
     })()}
-    <button class="ls-btn" onclick="openLineShop('${(b.name||'').replace(/'/g,"\\'")}', ${b.gamePk || 'null'})"><span>📚 LINE SHOPPING</span><span>OPEN ▸</span></button>
+    <button class="ls-btn" onclick="openLineShop('${(b.name||'').replace(/'/g,"\\'")}', ${b.gamePk || 'null'}, ${pid || 'null'}, 'batter')"><span>📚 LINE SHOPPING</span><span>OPEN ▸</span></button>
     <button class="ls-btn" onclick="openSprayChart(${pid}, '${(b.name||'').replace(/'/g,"\\'")}')"><span>🗺️ SPRAY CHART</span><span>OPEN ▸</span></button>
     <button class="ls-btn" onclick="openZoneChart(${pid}, '${(b.name||'').replace(/'/g,"\\'")}')"><span>⚾ STRIKE ZONE</span><span>OPEN ▸</span></button>
     <button class="ls-btn" onclick="openHitHistory(${pid||'null'}, '${(b.name||'').replace(/'/g,"\\'")}', 'batter')"><span>📊 HIT HISTORY</span><span>OPEN ▸</span></button>
@@ -3355,6 +3434,7 @@ function pitcherPanel(p) {
     ${pr.k != null ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px">
       ${[3.5, 4.5, 5.5, 6.5].map(line => `<button class="save-btn parlay-btn" data-player="${esc(p.name||'')}" data-team="${esc(p.team||'')}" data-market-key="pitcher_strikeouts" data-line="${line}" data-game-pk="${p.gamePk||''}">＋ K ${line}</button>`).join('')}
     </div>` : ''}
+    <button class="ls-btn" onclick="openLineShop('${(p.name||'').replace(/'/g,"\\'")}', ${p.gamePk || 'null'}, ${pid || 'null'}, 'pitcher')"><span>📚 LINE SHOPPING</span><span>OPEN ▸</span></button>
     <button class="ls-btn" onclick="openHitHistory(${pid||'null'}, '${(p.name||'').replace(/'/g,"\\'")}', 'pitcher')"><span>📊 K HIT HISTORY</span><span>OPEN ▸</span></button>
     ${trnd}
   </div>`;

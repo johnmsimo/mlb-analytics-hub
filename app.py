@@ -13425,11 +13425,21 @@ def _record_odds_credits(resp):
             _ODDS_SNAPSHOT_META['lastCreditAt'] = datetime.now(timezone.utc).isoformat()
     except Exception:
         pass
-_ODDS_ALL_MARKETS = (
+_ODDS_PRIMARY_MARKETS = (
     'h2h,spreads,totals,h2h_1st_1_innings,'
     'batter_hits,batter_total_bases,batter_home_runs,batter_rbis,'
     'batter_runs_scored,batter_stolen_bases,batter_hits_runs_rbis,pitcher_strikeouts'
 )
+# Alternate-line ladders (e.g. K 1.5..9.5 per book) for the line-shopping matrix.
+# Each key bills as one extra market per event request, so the daily snapshot
+# costs ~5 more credits per game per day with these on; disable with
+# ODDS_INCLUDE_ALT_MARKETS=0 to fall back to primary lines only.
+_ODDS_ALT_MARKETS = (
+    'batter_hits_alternate,batter_total_bases_alternate,'
+    'batter_home_runs_alternate,batter_rbis_alternate,pitcher_strikeouts_alternate'
+)
+_ODDS_INCLUDE_ALT = _odds_bool_env('ODDS_INCLUDE_ALT_MARKETS', '1')
+_ODDS_ALL_MARKETS = _ODDS_PRIMARY_MARKETS + (',' + _ODDS_ALT_MARKETS if _ODDS_INCLUDE_ALT else '')
 
 
 def _odds_today_key():
@@ -14116,7 +14126,13 @@ def _parse_prop_markets(bookmakers, valid_names):
                 point = o.get('point')
                 key = (player, mk, point, bkt)
                 if key not in grouped:
-                    grouped[key] = {'player': player, 'market_key': mk, 'line': point, 'bookmaker': bkt, 'over_price': None, 'under_price': None}
+                    is_alt = mk.endswith('_alternate')
+                    grouped[key] = {
+                        'player': player, 'market_key': mk,
+                        'base_key': mk[:-len('_alternate')] if is_alt else mk,
+                        'is_alt': is_alt,
+                        'line': point, 'bookmaker': bkt, 'over_price': None, 'under_price': None,
+                    }
                 grouped[key][f'{side}_price'] = o.get('price')
     out = []
     for item in grouped.values():
@@ -14140,13 +14156,8 @@ def _find_best_available_price(market_props, player, mk, line, side='over'):
     
     if not candidates:
         return None, None
-    
-    if side == 'over':
-        # For positive prices, higher is better; for negative, closer to 0 is better
-        best_price, best_book = max(candidates, key=lambda x: x[0] if x[0] > 0 else (1000 + x[0]))
-    else:
-        best_price, best_book = max(candidates, key=lambda x: x[0] if x[0] > 0 else (1000 + x[0]))
-    
+
+    best_price, best_book = max(candidates, key=lambda x: _american_price_score(x[0]))
     return best_price, best_book
 
 
@@ -14268,7 +14279,7 @@ def _group_line_shopping(market_props):
     grouped = {}
     for item in market_props or []:
         player = item.get('player')
-        mk = item.get('market_key')
+        mk = item.get('base_key') or item.get('market_key')
         if not player or not mk:
             continue
         key = (player, mk)
@@ -14284,11 +14295,18 @@ def _group_line_shopping(market_props):
             'under_price': item.get('under_price'),
             'over_implied': item.get('over_implied'),
             'under_implied': item.get('under_implied'),
+            'is_alt': bool(item.get('is_alt')),
         }
         grouped.setdefault(key, []).append(row)
 
     out = []
-    for (player, mk), books in grouped.items():
+    for (player, mk), rows in grouped.items():
+        # Legacy fields (books / best prices / line_range / book_count) are
+        # computed from PRIMARY-market rows only, exactly as before alternate
+        # markets existed — deepdive's strike engine and the props cards read
+        # best_over_price as "the main line's best price" and an alt ladder
+        # extreme (e.g. 4+ hits +2000) must never leak into that.
+        books = [b for b in rows if not b.get('is_alt')]
         best_over = None
         best_under = None
         line_vals = []
@@ -14319,6 +14337,62 @@ def _group_line_shopping(market_props):
                 'is_best_under': is_best_under,
             })
 
+        # Line ladder across primary + alternate rows: one entry per distinct
+        # line, each with per-book prices and best-price flags. A book quoting
+        # the same line in both the primary and alternate market is deduped to
+        # its best price per side.
+        ladder = {}
+        for b in rows:
+            ln = b.get('line')
+            if ln is None:
+                continue
+            ent = ladder.setdefault(ln, {'line': ln, 'has_primary': False, '_by_book': {}})
+            if not b.get('is_alt'):
+                ent['has_primary'] = True
+            bk = b.get('bookmaker') or '—'
+            cur = ent['_by_book'].get(bk)
+            if cur is None:
+                ent['_by_book'][bk] = {
+                    'bookmaker': bk,
+                    'over_price': b.get('over_price'), 'under_price': b.get('under_price'),
+                    'over_implied': b.get('over_implied'), 'under_implied': b.get('under_implied'),
+                    'is_alt': bool(b.get('is_alt')),
+                }
+            else:
+                for side in ('over', 'under'):
+                    px = b.get(f'{side}_price')
+                    if px is not None and _american_price_score(px) > _american_price_score(cur.get(f'{side}_price')):
+                        cur[f'{side}_price'] = px
+                        cur[f'{side}_implied'] = b.get(f'{side}_implied')
+                if not b.get('is_alt'):
+                    cur['is_alt'] = False
+
+        lines_out = []
+        for ln in sorted(ladder):
+            ent = ladder[ln]
+            lbooks = sorted(ent.pop('_by_book').values(), key=lambda x: str(x.get('bookmaker') or ''))
+            lo = max((b['over_price'] for b in lbooks if b.get('over_price') is not None),
+                     key=_american_price_score, default=None)
+            lu = max((b['under_price'] for b in lbooks if b.get('under_price') is not None),
+                     key=_american_price_score, default=None)
+            for b in lbooks:
+                b['is_best_over'] = b.get('over_price') is not None and b['over_price'] == lo
+                b['is_best_under'] = b.get('under_price') is not None and b['under_price'] == lu
+            ent.update({'best_over_price': lo, 'best_under_price': lu,
+                        'book_count': len(lbooks), 'books': lbooks})
+            lines_out.append(ent)
+
+        # Consensus/primary line = the primary-market line offered by the most books.
+        primary_line = None
+        primary_counts = {}
+        for b in books:
+            if b.get('line') is not None:
+                primary_counts[b['line']] = primary_counts.get(b['line'], 0) + 1
+        if primary_counts:
+            primary_line = max(primary_counts.items(), key=lambda kv: (kv[1], -kv[0]))[0]
+
+        all_books = sorted({b.get('bookmaker') for ln in lines_out for b in ln['books'] if b.get('bookmaker')})
+
         out.append({
             'player': player,
             'market_key': mk,
@@ -14329,6 +14403,9 @@ def _group_line_shopping(market_props):
             'book_count': len(uniq_books),
             'line_varies': bool(line_range and line_range[0] != line_range[1]),
             'books': normalized_books,
+            'lines': lines_out,
+            'primary_line': primary_line,
+            'all_books': all_books,
         })
 
     out.sort(key=lambda x: (x.get('player', ''), x.get('market_key', '')))
@@ -14340,9 +14417,21 @@ def _group_line_shopping(market_props):
 
 
 def _american_price_score(price):
+    """Bettor-payout ordering for American odds: higher score = better price.
+
+    Positive odds score as profit per 100 staked (+110 → 110); negative as
+    10000/|p| (-105 → 95.2, -150 → 66.7). That makes +110 correctly beat
+    -105 — the old `1000+p` scale ranked ANY negative price above ANY
+    positive one, so a book at -105 was flagged "best" over one at +110.
+    Same-sign ordering is unchanged (positive: higher better; negative:
+    closer to zero better)."""
     try:
         p = float(price)
-        return p if p > 0 else (1000 + p)
+        if p > 0:
+            return p
+        if p < 0:
+            return 10000.0 / abs(p)
+        return -999999
     except Exception:
         return -999999
 
