@@ -441,6 +441,42 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .zc-stats-table{width:100%;margin-top:10px;border-collapse:collapse;font-size:.58rem}
 .zc-stats-table th{background:rgba(0,0,0,.2);padding:6px;text-align:left;color:var(--mu);letter-spacing:1px;font-family:'Orbitron',monospace}
 .zc-stats-table td{padding:5px;border-bottom:1px solid rgba(0,229,255,.1);color:var(--t)}
+/* ── Hit History chart ── */
+.hh-modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:3000;background:rgba(2,6,16,.82);backdrop-filter:blur(4px)}
+.hh-modal.show{display:flex}
+.hh-card{width:min(920px,94vw);max-height:88vh;overflow:auto;background:var(--card);border:1px solid var(--b);border-radius:14px;padding:14px;box-shadow:0 16px 44px rgba(0,0,0,.45)}
+.hh-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+.hh-title{font-family:'Orbitron',monospace;font-size:.74rem;letter-spacing:2px;color:var(--c)}
+.hh-close{padding:6px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.04);color:var(--mu);font-family:'Orbitron',monospace;font-size:.56rem;letter-spacing:1px;cursor:pointer}
+.hh-close:hover{border-color:rgba(0,229,255,.3);color:var(--c)}
+.hh-controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px;padding:10px;background:rgba(0,0,0,.2);border-radius:10px}
+.hh-chip{padding:5px 12px;border-radius:999px;border:1px solid rgba(0,229,255,.2);background:rgba(0,229,255,.06);color:var(--mu);font-family:'Orbitron',monospace;font-size:.56rem;letter-spacing:.8px;cursor:pointer;transition:all .15s}
+.hh-chip.active{background:rgba(0,229,255,.18);border-color:rgba(0,229,255,.45);color:var(--c)}
+.hh-chip:hover{border-color:rgba(0,229,255,.35)}
+.hh-chip.mode-close.active{background:rgba(255,213,79,.16);border-color:rgba(255,213,79,.5);color:#ffd54f}
+.hh-sep{width:1px;height:18px;background:rgba(255,255,255,.14)}
+.hh-step{display:flex;align-items:center;gap:6px}
+.hh-step button{width:24px;height:24px;border-radius:6px;border:1px solid rgba(0,229,255,.25);background:rgba(0,229,255,.06);color:var(--c);font-size:.8rem;cursor:pointer;line-height:1}
+.hh-step button:hover{border-color:rgba(0,229,255,.5)}
+.hh-step-val{min-width:34px;text-align:center;font-family:'JetBrains Mono',monospace;font-size:.74rem;color:#ffd54f;font-weight:700}
+.hh-kpi{display:flex;flex-wrap:wrap;gap:14px;align-items:baseline;margin:2px 4px 10px}
+.hh-kpi-rate{font-family:'Orbitron',monospace;font-size:1.05rem;font-weight:700}
+.hh-kpi-sub{font-size:.58rem;color:var(--mu);font-family:'Orbitron',monospace;letter-spacing:1px}
+.hh-chart-wrap{padding:10px 8px 6px;background:rgba(0,0,0,.22);border:1px solid rgba(255,255,255,.06);border-radius:10px;overflow-x:auto}
+.hh-chart{display:flex;align-items:flex-end;gap:5px;min-width:100%}
+.hh-col{flex:1 1 0;min-width:24px;max-width:64px;display:flex;flex-direction:column;align-items:center;margin:0 auto}
+.hh-barzone{position:relative;height:150px;width:100%;display:flex;align-items:flex-end;justify-content:center}
+.hh-bar{width:80%;border-radius:4px 4px 0 0;position:relative;min-height:3px}
+.hh-bar.over{background:linear-gradient(180deg,#00e676,#00a35a)}
+.hh-bar.under{background:linear-gradient(180deg,#ef5350,#b8271d)}
+.hh-bar.push{background:#6a8db0}
+.hh-bar.na{background:rgba(255,255,255,.13)}
+.hh-bar-val{position:absolute;top:-15px;left:50%;transform:translateX(-50%);font-family:'JetBrains Mono',monospace;font-size:.6rem;color:var(--t);font-weight:700}
+.hh-tick{position:absolute;left:-2px;right:-2px;border-top:2px dashed rgba(255,213,79,.85);z-index:2;pointer-events:none}
+.hh-lbl{margin-top:5px;height:26px;font-size:.48rem;color:var(--mu);text-align:center;line-height:1.3;font-family:'Orbitron',monospace;letter-spacing:.3px;white-space:nowrap}
+.hh-pending{width:80%;height:56px;border:2px dashed rgba(255,255,255,.25);border-radius:4px;display:flex;align-items:center;justify-content:center;color:var(--mu);font-family:'Orbitron',monospace;font-size:.7rem}
+.hh-note{margin-top:8px;font-size:.56rem;color:var(--mu);line-height:1.55}
+.hh-empty{padding:18px;text-align:center;color:var(--mu);font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:1.3px}
 /* ── Pitcher trend section ── */
 .pp-trends{margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.06)}
 .pp-trend-hd{font-family:'Orbitron',monospace;font-size:.58rem;color:var(--mu);letter-spacing:2px;margin-bottom:8px}
@@ -828,6 +864,18 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
     <div class="zc-legend" id="zoneChartLegend"></div>
     <table class="zc-stats-table" id="zoneChartStats"><thead><tr><th>Zone</th><th>Pitches</th><th>Swing</th><th>Whiff</th><th>BA</th><th>SLG</th></tr></thead><tbody id="zoneChartTableBody"></tbody></table>
     <div id="zoneChartBody" class="sc-empty">Loading zone chart data...</div>
+  </div>
+</div>
+
+<div class="hh-modal" id="hitHistModal" onclick="closeHitHistory(event)">
+  <div class="hh-card" onclick="event.stopPropagation()">
+    <div class="hh-head">
+      <div class="hh-title" id="hitHistTitle">📊 HIT HISTORY</div>
+      <button class="hh-close" onclick="closeHitHistory()">CLOSE</button>
+    </div>
+    <div class="hh-controls" id="hitHistControls"></div>
+    <div class="hh-kpi" id="hitHistKpi"></div>
+    <div id="hitHistBody" class="hh-empty">Loading game history…</div>
   </div>
 </div>
 
@@ -2358,6 +2406,145 @@ function closeLineShop(ev) {
   modal.classList.remove('show');
 }
 
+// ── Hit History chart (per-game bars vs line, with closing-line mode) ─────────
+const HH_MARKETS = {
+  batter: [
+    ['batter_hits', 'HITS'], ['batter_total_bases', 'TB'], ['batter_home_runs', 'HR'],
+    ['batter_rbis', 'RBI'], ['batter_runs_scored', 'RUNS'], ['batter_hits_runs_rbis', 'H+R+RBI'],
+  ],
+  pitcher: [['pitcher_strikeouts', 'STRIKEOUTS']],
+};
+const HH_FALLBACK_LINE = {
+  batter_hits: 0.5, batter_total_bases: 1.5, batter_home_runs: 0.5, batter_rbis: 0.5,
+  batter_runs_scored: 0.5, batter_hits_runs_rbis: 1.5, pitcher_strikeouts: 4.5,
+};
+let HH_STATE = null;   // {pid, name, kind, market, line, n, mode}
+let HH_CACHE = {};     // pid|market|n|line -> API payload
+
+function hhBookLine(pid, kind, market) {
+  const pool = kind === 'pitcher' ? (PROJ_DATA?.pitchers || []) : (PROJ_DATA?.batters || []);
+  const pl = pool.find(x => x.id === pid);
+  const m = (pl?.oddsMarkets || []).find(x => x.marketKey === market && x.line != null);
+  return m ? Number(m.line) : (HH_FALLBACK_LINE[market] ?? 0.5);
+}
+
+function openHitHistory(pid, name, kind) {
+  if (!pid) return;
+  const market = HH_MARKETS[kind][0][0];
+  HH_STATE = { pid, name, kind, market, line: hhBookLine(pid, kind, market), n: 20, mode: 'line' };
+  gel('hitHistModal').classList.add('show');
+  gel('hitHistTitle').textContent = `📊 ${name} · HIT HISTORY`;
+  hhRefresh();
+}
+
+function closeHitHistory(ev) {
+  if (ev && ev.target && ev.currentTarget && ev.target !== ev.currentTarget) return;
+  gel('hitHistModal')?.classList.remove('show');
+}
+
+function hhSetMarket(mk) {
+  HH_STATE.market = mk;
+  HH_STATE.line = hhBookLine(HH_STATE.pid, HH_STATE.kind, mk);
+  hhRefresh();
+}
+function hhSetN(n) { HH_STATE.n = n; hhRefresh(); }
+function hhSetMode(m) { HH_STATE.mode = m; hhRefresh(); }
+function hhStepLine(d) { HH_STATE.line = Math.max(0.5, HH_STATE.line + d); hhRefresh(); }
+
+async function hhFetch() {
+  const s = HH_STATE;
+  const key = [s.pid, s.market, s.n, s.line].join('|');
+  if (HH_CACHE[key]) return HH_CACHE[key];
+  const qs = new URLSearchParams({ market: s.market, line: s.line, n: s.n, player: s.name });
+  const r = await fetch(`/api/props/hit-history/${s.pid}?${qs}`);
+  const d = await r.json();
+  if (!d.success) throw new Error(d.error || 'Failed to load history');
+  HH_CACHE[key] = d;
+  return d;
+}
+
+function hhControlsHtml() {
+  const s = HH_STATE;
+  const mkts = HH_MARKETS[s.kind].map(([mk, lbl]) =>
+    `<button class="hh-chip${s.market === mk ? ' active' : ''}" onclick="hhSetMarket('${mk}')">${lbl}</button>`).join('');
+  const wins = [[10, 'L10'], [20, 'L20'], [162, 'SEASON']].map(([n, lbl]) =>
+    `<button class="hh-chip${s.n === n ? ' active' : ''}" onclick="hhSetN(${n})">${lbl}</button>`).join('');
+  const modes = `<button class="hh-chip${s.mode === 'line' ? ' active' : ''}" onclick="hhSetMode('line')">LINE</button>
+    <button class="hh-chip mode-close${s.mode === 'closing' ? ' active' : ''}" onclick="hhSetMode('closing')">CLOSING LINES</button>`;
+  return `${mkts}<span class="hh-sep"></span>${wins}<span class="hh-sep"></span>
+    <span class="hh-step"><button onclick="hhStepLine(-1)">−</button><span class="hh-step-val">${s.line}</span><button onclick="hhStepLine(1)">＋</button></span>
+    <span class="hh-sep"></span>${modes}`;
+}
+
+function hhRenderKpi(d) {
+  const s = HH_STATE;
+  const sum = s.mode === 'closing' ? d.summary.closing : d.summary.line;
+  const games = d.games || [];
+  const rate = sum.rate;
+  const rateCol = rate == null ? 'var(--mu)' : rate >= 0.5 ? 'var(--g)' : 'var(--r)';
+  const rateStr = rate == null ? '—' : (rate * 100).toFixed(1) + '%';
+  const pushes = sum.pushes ? ` · ${sum.pushes} push` : '';
+  const sample = s.mode === 'closing'
+    ? `closing lines recorded for ${sum.coverage} of ${games.length} games`
+    : `${games.length} of ${d.seasonGames} games`;
+  gel('hitHistKpi').innerHTML = `
+    <span class="hh-kpi-sub">HIT RATE</span>
+    <span class="hh-kpi-rate" style="color:${rateCol}">${rateStr} <span style="font-size:.68rem;color:var(--t)">(${sum.overs}/${sum.decided})</span></span>
+    <span class="hh-kpi-sub">${sample}${pushes}</span>`;
+}
+
+function hhRenderChart(d) {
+  const s = HH_STATE;
+  const games = d.games || [];
+  if (!games.length) {
+    gel('hitHistBody').innerHTML = '<div class="hh-empty">NO GAME LOG DATA THIS SEASON</div>';
+    return;
+  }
+  const H = 150;
+  const gradeLine = g => s.mode === 'closing' ? (g.recorded ? g.recorded.line : null) : d.line;
+  const maxV = Math.max(...games.map(g => g.value ?? 0), ...games.map(g => gradeLine(g) ?? 0), d.line, 1) + 1;
+  const px = v => Math.max(3, Math.round((v / maxV) * H));
+  const cols = games.map(g => {
+    const gl = gradeLine(g);
+    const res = s.mode === 'closing' ? (g.recorded ? g.recorded.result : null) : g.result;
+    const cls = res || 'na';
+    const dt = (g.date || '').slice(5).replace('-', '/');
+    const cp = g.recorded?.closingPrice;
+    const tip = `${g.date} vs ${g.opp} — ${g.value}` +
+      (gl != null ? ` (line ${gl})` : ' (no recorded line)') +
+      (cp != null ? ` · close ${cp > 0 ? '+' + cp : cp}${g.recorded.closingBook ? ' @ ' + g.recorded.closingBook : ''}` : '');
+    const tick = gl != null ? `<div class="hh-tick" style="bottom:${px(gl)}px"></div>` : '';
+    return `<div class="hh-col" title="${esc(tip)}">
+      <div class="hh-barzone">${tick}
+        <div class="hh-bar ${cls}" style="height:${px(g.value ?? 0)}px"><span class="hh-bar-val">${g.value ?? '—'}</span></div>
+      </div>
+      <div class="hh-lbl">${esc(g.opp || '')}<br>${dt}</div>
+    </div>`;
+  }).join('');
+  const pending = `<div class="hh-col" title="Today's game — pending">
+    <div class="hh-barzone"><div class="hh-pending">?</div></div>
+    <div class="hh-lbl">TODAY</div>
+  </div>`;
+  const note = s.mode === 'closing'
+    ? `Each game is graded against the line recorded by that day's tracker capture (refreshed at close by the closing-line worker). Grey bars have no recorded line and are excluded from the hit rate.`
+    : `All games graded against the current line (${d.line}) applied retroactively. Dashed marks show the line on each bar.`;
+  gel('hitHistBody').innerHTML = `<div class="hh-chart-wrap"><div class="hh-chart">${cols}${pending}</div></div>
+    <div class="hh-note">${note}</div>`;
+  gel('hitHistBody').classList.remove('hh-empty');
+}
+
+async function hhRefresh() {
+  gel('hitHistControls').innerHTML = hhControlsHtml();
+  try {
+    const d = await hhFetch();
+    hhRenderKpi(d);
+    hhRenderChart(d);
+  } catch (e) {
+    gel('hitHistKpi').innerHTML = '';
+    gel('hitHistBody').innerHTML = `<div class="hh-empty" style="color:var(--r)">Error: ${esc(e.message)}</div>`;
+  }
+}
+
 async function loadSprayChartData(playerId, forceRefresh = false) {
   const hasCached = Object.prototype.hasOwnProperty.call(SPRAY_CHART_DATA, playerId);
   if (!forceRefresh && hasCached) return SPRAY_CHART_DATA[playerId];
@@ -3052,6 +3239,7 @@ function batterCard(b) {
     <button class="ls-btn" onclick="openLineShop('${(b.name||'').replace(/'/g,"\\'")}', ${b.gamePk || 'null'})"><span>📚 LINE SHOPPING</span><span>OPEN ▸</span></button>
     <button class="ls-btn" onclick="openSprayChart(${pid}, '${(b.name||'').replace(/'/g,"\\'")}')"><span>🗺️ SPRAY CHART</span><span>OPEN ▸</span></button>
     <button class="ls-btn" onclick="openZoneChart(${pid}, '${(b.name||'').replace(/'/g,"\\'")}')"><span>⚾ STRIKE ZONE</span><span>OPEN ▸</span></button>
+    <button class="ls-btn" onclick="openHitHistory(${pid||'null'}, '${(b.name||'').replace(/'/g,"\\'")}', 'batter')"><span>📊 HIT HISTORY</span><span>OPEN ▸</span></button>
     <button class="ls-btn" onclick="openEvLab(${pid}, '${(b.name||'').replace(/'/g,"\\'")}', ${b.opp_pitcher_id||'null'}, '${(b.opp_pitcher||'').replace(/'/g,"\\'")}', '${(b.opp_hand||'').replace(/'/g,"\\'")}')"><span>📊 EV LAB</span><span>OPEN ▸</span></button>
     ${hrPanel}
     ${batxHtml}
@@ -3167,6 +3355,7 @@ function pitcherPanel(p) {
     ${pr.k != null ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px">
       ${[3.5, 4.5, 5.5, 6.5].map(line => `<button class="save-btn parlay-btn" data-player="${esc(p.name||'')}" data-team="${esc(p.team||'')}" data-market-key="pitcher_strikeouts" data-line="${line}" data-game-pk="${p.gamePk||''}">＋ K ${line}</button>`).join('')}
     </div>` : ''}
+    <button class="ls-btn" onclick="openHitHistory(${pid||'null'}, '${(p.name||'').replace(/'/g,"\\'")}', 'pitcher')"><span>📊 K HIT HISTORY</span><span>OPEN ▸</span></button>
     ${trnd}
   </div>`;
 }

@@ -23847,6 +23847,40 @@ def api_umpire(game_pk):
 
 
 # ── L5/L10 helpers ────────────────────────────────────────────────────────────
+_TEAM_ABBR_CACHE = {"date": None, "map": {}}
+_TEAM_ABBR_LOCK = threading.Lock()
+
+
+def _team_abbr_by_id():
+    """teamId -> abbreviation for all MLB teams, daily-cached. The gameLog
+    splits' `opponent` object carries only id + name (no abbreviation), so
+    game-log consumers need this map for short opponent labels."""
+    today = datetime.now().date()
+    with _TEAM_ABBR_LOCK:
+        if _TEAM_ABBR_CACHE["date"] == today and _TEAM_ABBR_CACHE["map"]:
+            return _TEAM_ABBR_CACHE["map"]
+    m = {}
+    try:
+        r = requests.get(f"{MLB_API}/teams", params={"sportId": 1}, timeout=8)
+        for t in r.json().get("teams", []):
+            if t.get("id") and t.get("abbreviation"):
+                m[int(t["id"])] = t["abbreviation"]
+    except Exception:
+        with _TEAM_ABBR_LOCK:
+            return dict(_TEAM_ABBR_CACHE["map"])
+    with _TEAM_ABBR_LOCK:
+        _TEAM_ABBR_CACHE["date"] = today
+        _TEAM_ABBR_CACHE["map"] = m
+        return dict(m)
+
+
+def _gamelog_opp_abbr(split):
+    opp = split.get("opponent", {}) or {}
+    return (opp.get("abbreviation")
+            or _team_abbr_by_id().get(opp.get("id"))
+            or opp.get("name", ""))
+
+
 def _fetch_batter_gamelog(player_id, season=None, limit=10):
     """Returns recent game log entries for a batter, newest-last order."""
     try:
@@ -23857,7 +23891,7 @@ def _fetch_batter_gamelog(player_id, season=None, limit=10):
             st = s.get("stat", {})
             out.append({
                 "date": s.get("date", ""),
-                "opp":  s.get("opponent", {}).get("abbreviation", ""),
+                "opp":  _gamelog_opp_abbr(s),
                 "ab":   int(st.get("atBats", 0)),
                 "h":    int(st.get("hits", 0)),
                 "hr":   int(st.get("homeRuns", 0)),
@@ -23889,7 +23923,7 @@ def _fetch_pitcher_gamelog(player_id, season=None, limit=10):
                 ip_dec = _safe_f(ip_raw, 0)
             out.append({
                 "date": s.get("date", ""),
-                "opp":  s.get("opponent", {}).get("abbreviation", ""),
+                "opp":  _gamelog_opp_abbr(s),
                 "ip":   round(ip_dec, 2),
                 "k":    int(st.get("strikeOuts", 0)),
                 "bb":   int(st.get("baseOnBalls", 0)),
@@ -23972,6 +24006,178 @@ def _consistency_recent_form(values, line, limit=10):
         else:
             break
     return {'spark': spark, 'streakOver': streak}
+
+
+# ── Prop hit history (per-game bars vs line, with recorded closing lines) ─────
+# Markets the hit-history chart supports → which game-log group feeds them.
+_HIT_HISTORY_MARKETS = {
+    'batter_hits': 'hitting',
+    'batter_total_bases': 'hitting',
+    'batter_home_runs': 'hitting',
+    'batter_rbis': 'hitting',
+    'batter_runs_scored': 'hitting',
+    'batter_hits_runs_rbis': 'hitting',
+    'batter_stolen_bases': 'hitting',
+    'pitcher_strikeouts': 'pitching',
+}
+
+_HIT_HISTORY_DEFAULT_LINE = {
+    'batter_hits': 0.5, 'batter_total_bases': 1.5, 'batter_home_runs': 0.5,
+    'batter_rbis': 0.5, 'batter_runs_scored': 0.5, 'batter_hits_runs_rbis': 1.5,
+    'batter_stolen_bases': 0.5, 'pitcher_strikeouts': 4.5,
+}
+
+
+def _hit_history_recorded_rows(player_id, player_name, market_key, dates):
+    """date -> that day's tracker-capture row for (player, market).
+
+    The daily tracker capture snapshots every slate prop at its offered line,
+    and the closing-capture worker refreshes the price at first pitch — so a
+    row here IS the line/price that was actually bettable that day. Matched by
+    playerId when the row carries one, by normalized name otherwise. When a
+    date has several rows (e.g. re-capture), prefer one with a closing price.
+    """
+    out = {}
+    if not dates:
+        return out
+    try:
+        store = _tracker_store()
+    except Exception:
+        return out
+    name_l = (player_name or '').strip().lower()
+    for ds in set(dates):
+        day = _normalize_tracker_day(store.get(ds)) if store.get(ds) else None
+        if not day:
+            continue
+        best = None
+        for row in day.get('entries', []):
+            if row.get('marketKey') != market_key:
+                continue
+            rid = row.get('playerId')
+            matched = False
+            if rid is not None and player_id is not None:
+                try:
+                    matched = int(rid) == int(player_id)
+                except (TypeError, ValueError):
+                    matched = False
+            if not matched:
+                matched = bool(name_l) and (row.get('player') or '').strip().lower() == name_l
+            if not matched or row.get('line') is None:
+                continue
+            if best is None or (row.get('closingPrice') is not None and best.get('closingPrice') is None):
+                best = row
+        if best:
+            out[ds] = best
+    return out
+
+
+def _hit_history_result(value, line):
+    if value is None or line is None:
+        return None
+    if float(value) > float(line):
+        return 'over'
+    if float(value) < float(line):
+        return 'under'
+    return 'push'
+
+
+def _hit_history_rate(results):
+    """Hit-rate summary over a list of over/under/push results (None = excluded)."""
+    decided = [r for r in results if r in ('over', 'under')]
+    pushes = sum(1 for r in results if r == 'push')
+    overs = sum(1 for r in decided if r == 'over')
+    return {
+        'overs': overs,
+        'decided': len(decided),
+        'pushes': pushes,
+        'rate': round(overs / len(decided), 3) if decided else None,
+    }
+
+
+@app.route('/api/props/hit-history/<int:player_id>')
+def api_props_hit_history(player_id):
+    """Per-game prop values vs a line, graded two ways (PropsMadness-style chart).
+
+    `?market=` tracker market key, `?line=` the line to grade against (defaults
+    per market), `?n=` games window (default 20), `?season=`, `?player=` name
+    fallback for tracker matching. Each game carries the stat value, its result
+    vs the CURRENT line (applied retroactively), and — where the daily tracker
+    capture recorded that day's offered line — the RECORDED line + closing
+    price with its own result. `summary.closing.coverage` says how many games
+    have a recorded line, so the UI can show an honest closing-mode sample
+    instead of silently falling back.
+    """
+    market = (request.args.get('market') or 'batter_hits').strip()
+    group = _HIT_HISTORY_MARKETS.get(market)
+    if not group:
+        return jsonify({'success': False, 'error': f'unsupported market: {market}'}), 400
+    try:
+        line = float(request.args.get('line'))
+    except (TypeError, ValueError):
+        line = _HIT_HISTORY_DEFAULT_LINE[market]
+    try:
+        n = max(1, min(int(request.args.get('n', 20)), 162))
+    except (TypeError, ValueError):
+        n = 20
+    try:
+        season = int(request.args.get('season', datetime.now().year))
+    except (TypeError, ValueError):
+        season = datetime.now().year
+    player_name = (request.args.get('player') or '').strip()
+
+    try:
+        if group == 'pitching':
+            log = _fetch_pitcher_gamelog(player_id, season=season, limit=n)
+        else:
+            log = _fetch_batter_gamelog(player_id, season=season, limit=n)
+        season_total = len(_gamelog_splits_cached(player_id, group, season))
+        recorded = _hit_history_recorded_rows(
+            player_id, player_name, market, [g.get('date') for g in log if g.get('date')])
+
+        games = []
+        for g in log:
+            value = _consistency_stat_value(g, market)
+            row = {
+                'date': g.get('date', ''),
+                'opp': g.get('opp', ''),
+                'value': value,
+                'result': _hit_history_result(value, line),
+                'recorded': None,
+            }
+            rec = recorded.get(g.get('date'))
+            if rec is not None:
+                row['recorded'] = {
+                    'line': rec.get('line'),
+                    'result': _hit_history_result(value, rec.get('line')),
+                    'closingPrice': rec.get('closingPrice'),
+                    'closingBook': rec.get('closingBookmaker'),
+                    'openingPrice': rec.get('openingPrice'),
+                }
+            games.append(row)
+
+        closing_results = [
+            (g['recorded'] or {}).get('result') for g in games if g.get('recorded')]
+        closing_summary = _hit_history_rate(closing_results)
+        closing_summary['coverage'] = len(closing_results)
+
+        return jsonify({
+            'success': True,
+            'playerId': player_id,
+            'player': player_name,
+            'market': market,
+            'line': line,
+            'season': season,
+            'n': n,
+            'seasonGames': season_total,
+            'games': games,
+            'summary': {
+                'line': _hit_history_rate([g['result'] for g in games]),
+                'closing': closing_summary,
+            },
+        })
+    except Exception as ex:
+        print(f"[api_props_hit_history] pid={player_id} {traceback.format_exc()}")
+        return jsonify({'success': False, 'error': str(ex)}), 500
 
 
 def _empty_consistency_payload(date_str):
