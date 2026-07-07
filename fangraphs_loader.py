@@ -242,28 +242,56 @@ def _get_proj_with_fallback(proj_cache_keys, player_id=None, name=None):
     return {}
 
 
+# Result memo for the public getters. Every lookup below runs pandas boolean
+# scans (str.lower == / str.contains) across up to six season CSVs — ~65ms per
+# call — and hot paths (the XGB scorer's per-batter pitcher enrichment) ask for
+# the SAME player dozens of times per request. The CSVs are loaded once per
+# process and never change, so memoized results can't go stale. Values are
+# copied on the way out so callers can mutate their dict freely.
+_LOOKUP_MEMO = {}
+_LOOKUP_MEMO_MAX = 20000
+
+
+def _memoized(kind, player_id, name, build):
+    key = (kind,
+           str(player_id).strip() if player_id else None,
+           name.lower().strip() if isinstance(name, str) else None)
+    hit = _LOOKUP_MEMO.get(key)
+    if hit is not None:
+        return dict(hit)
+    val = build() or {}
+    if len(_LOOKUP_MEMO) >= _LOOKUP_MEMO_MAX:
+        _LOOKUP_MEMO.clear()
+    _LOOKUP_MEMO[key] = val
+    return dict(val)
+
+
 def get_batter_stats(player_id=None, name=None):
     _load_all()
     bat_keys = [k for k, _, _ in BAT_SEASON_PATHS]
-    return _get_stats_with_fallback(bat_keys, "bat", player_id=player_id, name=name)
+    return _memoized("bat", player_id, name,
+                     lambda: _get_stats_with_fallback(bat_keys, "bat", player_id=player_id, name=name))
 
 
 def get_pitcher_stats(player_id=None, name=None):
     _load_all()
     pit_keys = [k for k, _, _ in PIT_SEASON_PATHS]
-    return _get_stats_with_fallback(pit_keys, "pit", player_id=player_id, name=name)
+    return _memoized("pit", player_id, name,
+                     lambda: _get_stats_with_fallback(pit_keys, "pit", player_id=player_id, name=name))
 
 
 def get_batter_projection(player_id=None, name=None):
     _load_all()
     proj_keys = [k for k, _, _, _ in PROJ_BAT_PATHS]
-    return _get_proj_with_fallback(proj_keys, player_id=player_id, name=name)
+    return _memoized("proj_bat", player_id, name,
+                     lambda: _get_proj_with_fallback(proj_keys, player_id=player_id, name=name))
 
 
 def get_pitcher_projection(player_id=None, name=None):
     _load_all()
     proj_keys = [k for k, _, _, _ in PROJ_PIT_PATHS]
-    return _get_proj_with_fallback(proj_keys, player_id=player_id, name=name)
+    return _memoized("proj_pit", player_id, name,
+                     lambda: _get_proj_with_fallback(proj_keys, player_id=player_id, name=name))
 
 
 def get_key_batter_features(player_id=None, name=None):

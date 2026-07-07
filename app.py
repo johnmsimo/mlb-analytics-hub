@@ -212,7 +212,26 @@ from brain_merge_patch import (
 )
 
 
+# ── Pooled HTTP session ───────────────────────────────────────────────────────
+# Every outbound call was `requests.get`, which opens a fresh TCP+TLS
+# connection per call — measured at 500-700ms each to statsapi.mlb.com before
+# any bytes move. The app makes thousands of these per hour (game fetches,
+# gamelogs, boxscores, the memory-store collector), so route module-level
+# requests.get through one Session with keep-alive pools. Session.get has the
+# identical signature and urllib3's pools are thread-safe; cookie state is
+# shared but the MLB/Odds/open-meteo APIs are cookie-indifferent.
+_HTTP_SESSION = requests.Session()
+_HTTP_SESSION.mount('https://', requests.adapters.HTTPAdapter(pool_connections=16, pool_maxsize=32))
+_HTTP_SESSION.mount('http://', requests.adapters.HTTPAdapter(pool_connections=8, pool_maxsize=16))
+requests.get = _HTTP_SESSION.get
+
 app = Flask(__name__)
+
+# PROFILE_REQUESTS=1 wraps every request in cProfile and prints the top
+# cumulative functions to stdout — dev-only diagnostic, never set in prod.
+if os.getenv('PROFILE_REQUESTS') == '1':
+    from werkzeug.middleware.profiler import ProfilerMiddleware
+    app.wsgi_app = ProfilerMiddleware(app.wsgi_app, restrictions=[35], sort_by=('cumulative',))
 CORS(app)
 
 
@@ -224,6 +243,30 @@ def _attach_request_id():
 @app.after_request
 def _add_request_id_header(response):
     response.headers['X-Request-Id'] = getattr(g, 'request_id', '-')
+    return response
+
+
+@app.after_request
+def _gzip_json(response):
+    """Gzip large JSON payloads (trends ~38KB, deepdive matchup >1MB) when the
+    client accepts it. Level 5 is ~5-10x smaller for these payloads at <5ms."""
+    try:
+        if (response.status_code != 200
+                or response.direct_passthrough
+                or 'gzip' in (response.headers.get('Content-Encoding') or '')
+                or not (response.mimetype or '').startswith('application/json')
+                or 'gzip' not in (request.headers.get('Accept-Encoding') or '')):
+            return response
+        data = response.get_data()
+        if len(data) < 4096:
+            return response
+        import gzip as _gz
+        response.set_data(_gz.compress(data, compresslevel=5))
+        response.headers['Content-Encoding'] = 'gzip'
+        response.headers['Content-Length'] = len(response.get_data())
+        response.headers.add('Vary', 'Accept-Encoding')
+    except Exception:
+        pass
     return response
 
 
@@ -3628,12 +3671,28 @@ def _top_team_injury(team_id):
 
 
 # ── MLB API Helpers ───────────────────────────────────────────────────────────
+_SCHEDULE_CACHE = {}
+_SCHEDULE_CACHE_LOCK = threading.Lock()
+_SCHEDULE_TTL = 120  # short — lineups/probables update, but 3+ calls/request was waste
+
+
 def fetch_schedule(date_str):
+    """Hydrated schedule for a date, TTL-cached. This was fetched 3+ times per
+    projections request (game fetch + travel walk-back) at ~600ms per call."""
+    now = time.time()
+    with _SCHEDULE_CACHE_LOCK:
+        hit = _SCHEDULE_CACHE.get(date_str)
+        if hit and now - hit[0] < _SCHEDULE_TTL:
+            return hit[1]
     url = (f"{MLB_API}/schedule?sportId=1&date={date_str}"
         "&hydrate=team,probablePitcher,lineups,linescore,venue(location),weather")
     r = requests.get(url, timeout=10); r.raise_for_status()
     dates = r.json().get("dates", [])
-    return dates[0].get("games", []) if dates else []
+    games = dates[0].get("games", []) if dates else []
+    with _SCHEDULE_CACHE_LOCK:
+        _evict_if_large(_SCHEDULE_CACHE, 20)
+        _SCHEDULE_CACHE[date_str] = (now, games)
+    return games
 
 
 def fetch_schedule_game(game_pk):
@@ -3648,6 +3707,10 @@ def fetch_schedule_game(game_pk):
     return games[0] if games else None
 
 
+_PREV_VENUE_CACHE = {}
+_PREV_VENUE_LOCK = threading.Lock()
+
+
 def _team_previous_venue(team_id, today_iso):
     """Find yesterday's game venue for a team. Used by travel-features shading.
 
@@ -3657,6 +3720,11 @@ def _team_previous_venue(team_id, today_iso):
     """
     if not team_id or not today_iso:
         return None
+    ck = (int(team_id), today_iso[:10])
+    with _PREV_VENUE_LOCK:
+        hit = _PREV_VENUE_CACHE.get(ck)
+    if hit is not None:
+        return hit[1]
     try:
         base = datetime.strptime(today_iso[:10], "%Y-%m-%d")
     except Exception:
@@ -3691,14 +3759,22 @@ def _team_previous_venue(team_id, today_iso):
                     was_night = dt.astimezone(ET).hour >= 17
                 except Exception:
                     pass
-                return {
+                res = {
                     "lat": lat,
                     "lon": lon,
                     "was_home": was_home,
                     "was_night": was_night,
                     "game_date": game_date,
                 }
+                with _PREV_VENUE_LOCK:
+                    _evict_if_large(_PREV_VENUE_CACHE, 200)
+                    _PREV_VENUE_CACHE[ck] = (time.time(), res)
+                return res
         # Schedule fetched but team didn't play; keep walking back.
+    # Negative-cache the miss too — the walk-back is 3 schedule fetches.
+    with _PREV_VENUE_LOCK:
+        _evict_if_large(_PREV_VENUE_CACHE, 200)
+        _PREV_VENUE_CACHE[ck] = (time.time(), None)
     return None
 
 
@@ -21850,7 +21926,38 @@ def api_ai_boxscore(game_pk):
         }), 500
 
 # ── Shared helper: fetch game + lineup ───────────────────────────────────────
+_PROPS_GAME_CACHE = {}
+_PROPS_GAME_CACHE_LOCK = threading.Lock()
+_PROPS_GAME_TTL = 60  # short: lineups post/change; every game-view endpoint calls this
+
+
 def _props_fetch_game(game_pk, date_hint=None, gdata_override=None):
+    """TTL-cached front for _props_fetch_game_uncached. Six endpoints call this
+    on every game view (projections, trends, matchup-scores, line-shopping,
+    analyzer, quick) and each uncached call is a schedule + boxscore fetch.
+    Batter lists are copied on the way out because callers annotate the dicts."""
+    if gdata_override is not None:
+        return _props_fetch_game_uncached(game_pk, date_hint=date_hint, gdata_override=gdata_override)
+    ck = (int(game_pk), date_hint or '')
+    now = time.time()
+    with _PROPS_GAME_CACHE_LOCK:
+        hit = _PROPS_GAME_CACHE.get(ck)
+    if hit and now - hit[0] < _PROPS_GAME_TTL:
+        gdata, away_bats, home_bats, away_t, home_t, pitchers = hit[1]
+        return (gdata, [dict(b) for b in away_bats], [dict(b) for b in home_bats],
+                away_t, home_t, dict(pitchers))
+    res = _props_fetch_game_uncached(game_pk, date_hint=date_hint)
+    if res and res[0]:
+        with _PROPS_GAME_CACHE_LOCK:
+            _evict_if_large(_PROPS_GAME_CACHE, 40)
+            _PROPS_GAME_CACHE[ck] = (now, res)
+        gdata, away_bats, home_bats, away_t, home_t, pitchers = res
+        return (gdata, [dict(b) for b in away_bats], [dict(b) for b in home_bats],
+                away_t, home_t, dict(pitchers))
+    return res
+
+
+def _props_fetch_game_uncached(game_pk, date_hint=None, gdata_override=None):
     """Fetch schedule entry + boxscore lineups, preferring the requested date.
 
     Pass gdata_override to skip the schedule fetch when the caller already has
@@ -23071,9 +23178,26 @@ def api_lineup_props(game_pk):
 
 
 # ── Route: Prop projections ───────────────────────────────────────────────────
+_PROJ_RESP_CACHE = {}
+_PROJ_RESP_LOCK = threading.Lock()
+_PROJ_RESP_TTL = 90  # lineup poller re-hits every 10 min; 90s keeps tab flips instant
+
+
 @app.route('/api/props/projections/<int:game_pk>')
 def api_props_projections(game_pk):
     t0 = time.perf_counter()
+    _resp_ck = (int(game_pk), request.args.get('date') or '')
+    with _PROJ_RESP_LOCK:
+        _hit = _PROJ_RESP_CACHE.get(_resp_ck)
+    if _hit and time.time() - _hit[0] < _PROJ_RESP_TTL:
+        return jsonify(_hit[1])
+    _pp_marks = []
+    _pp_last = [t0]
+
+    def _pp_mark(label):
+        now = time.perf_counter()
+        _pp_marks.append(f"{label}={int((now - _pp_last[0]) * 1000)}ms")
+        _pp_last[0] = now
     try:
         # Keep endpoint responsive during cold starts; refresh in background.
         _maybe_refresh_fg()
@@ -23084,6 +23208,7 @@ def api_props_projections(game_pk):
         gdata, away_bats, home_bats, away_t, home_t, pitchers = _props_fetch_game(game_pk, date_hint=date_hint)
         if not gdata:
             return jsonify({"success": False, "error": "Game not found"}), 404
+        _pp_mark('game')
 
         away_abbr = away_t.get("team", {}).get("abbreviation", "AWAY")
         home_abbr = home_t.get("team", {}).get("abbreviation", "HOME")
@@ -23109,6 +23234,7 @@ def api_props_projections(game_pk):
             "spread":    _best_spread(featured, away_full, home_full),
         }
 
+        _pp_mark('odds')
         ap_info = pitchers["ap"]; hp_info = pitchers["hp"]
         ap_name = ap_info.get("fullName", "TBD")
         hp_name = hp_info.get("fullName", "TBD")
@@ -23118,6 +23244,7 @@ def api_props_projections(game_pk):
         ap_sv = sv_pitcher(ap_name); hp_sv = sv_pitcher(hp_name)
         ap_st = pitcher_stats_mlb(ap_id) if ap_id else {}
         hp_st = pitcher_stats_mlb(hp_id) if hp_id else {}
+        _pp_mark('pitcher_stats')
 
         # ── Pitcher hands — the key new inputs ────────────────────────────────
         ap_hand = (ap_st.get("pitchHand") or "R").upper()
@@ -23192,6 +23319,7 @@ def api_props_projections(game_pk):
 
         away_travel = _team_travel(away_team_id, is_home_today=False)
         home_travel = _team_travel(home_team_id, is_home_today=True)
+        _pp_mark('wx_travel')
 
         # ── Build batter projections (now passes pitcher_hand) ─────────────────
         away_confirmed = len(away_bats) >= 9 and all((b.get("lineup_status") or "confirmed") == "confirmed" for b in away_bats[:9])
@@ -23314,6 +23442,9 @@ def api_props_projections(game_pk):
                     "proj":         proj,
                 }
 
+            if os.getenv('PROFILE_REQUESTS') == '1':
+                # inline so the request profiler can see per-batter work
+                return [_enrich_one(b) for b in batters_top]
             workers = min(9, max(1, len(batters_top)))
             with ThreadPoolExecutor(max_workers=workers) as ex:
                 return list(ex.map(_enrich_one, batters_top))
@@ -23321,6 +23452,7 @@ def api_props_projections(game_pk):
         away_proj = enrich_batters(away_bats, hp_fg, hp_sv, hp_st, home_abbr, hp_name, hp_id, own_abbr=away_abbr, lineup_confirmed=away_confirmed, team_travel=away_travel)
         home_proj = enrich_batters(home_bats, ap_fg, ap_sv, ap_st, away_abbr, ap_name, ap_id, own_abbr=home_abbr, lineup_confirmed=home_confirmed, team_travel=home_travel)
         all_batters = away_proj + home_proj
+        _pp_mark('enrich_batters')
 
         injury_summary_rows = []
         for bb in all_batters:
@@ -23388,6 +23520,7 @@ def api_props_projections(game_pk):
                 "proj":        proj,
             })
 
+        _pp_mark('pitchers')
         for pp in pitchers_out:
             st = (pp.get("injuryStatus") or "").upper()
             if not st:
@@ -23446,7 +23579,7 @@ def api_props_projections(game_pk):
                 p.get('name'),
                 ['pitcher_strikeouts', 'pitcher_outs_recorded', 'pitcher_earned_runs'])
 
-        return jsonify({
+        _payload = {
             "success":     True,
             "gamePk":      game_pk,
             "matchup":     f"{away_abbr} @ {home_abbr}",
@@ -23474,7 +23607,11 @@ def api_props_projections(game_pk):
             },
             "game_lines":  game_lines,
             "timestamp":   datetime.now(timezone.utc).isoformat(),
-        })
+        }
+        with _PROJ_RESP_LOCK:
+            _evict_if_large(_PROJ_RESP_CACHE, 40)
+            _PROJ_RESP_CACHE[_resp_ck] = (time.time(), _payload)
+        return jsonify(_payload)
 
     except Exception as ex:
         print(f"[api_props_projections] {traceback.format_exc()}")
@@ -23482,7 +23619,7 @@ def api_props_projections(game_pk):
     finally:
         ms = int((time.perf_counter() - t0) * 1000)
         if ms >= 1000:
-            print(f"[perf] /api/props/projections/{game_pk} {ms}ms")
+            print(f"[perf] /api/props/projections/{game_pk} {ms}ms ({' '.join(_pp_marks)})")
 
 
 @app.route('/api/props/scan/today')
@@ -25786,6 +25923,11 @@ def _compute_dashboard_quick_props(game_pk, limit=3, date_hint=None, prefetch=No
 
 
 # ── Route: L5/L10 trends for all players in a game ───────────────────────────
+_TRENDS_RESP_CACHE = {}
+_TRENDS_RESP_LOCK = threading.Lock()
+_TRENDS_RESP_TTL = 300  # gamelog-derived; changes at most once per game day
+
+
 @app.route("/api/props/trends/<int:game_pk>")
 def api_props_trends(game_pk):
     """
@@ -25794,6 +25936,11 @@ def api_props_trends(game_pk):
     """
     try:
         date_hint = request.args.get('date')
+        _resp_ck = (int(game_pk), date_hint or '')
+        with _TRENDS_RESP_LOCK:
+            _hit = _TRENDS_RESP_CACHE.get(_resp_ck)
+        if _hit and time.time() - _hit[0] < _TRENDS_RESP_TTL:
+            return jsonify(_hit[1])
         # Get lineups + pitchers
         gdata, away_bats, home_bats, away_t, home_t, pitchers = _props_fetch_game(game_pk, date_hint=date_hint)
         if not gdata:
@@ -25829,13 +25976,17 @@ def api_props_trends(game_pk):
                     results[str(pid)] = {"name": name, "error": str(fe)}
         _gdata2, quick_props = _compute_dashboard_quick_props(game_pk, limit=3, date_hint=date_hint)
 
-        return jsonify({
+        _payload = {
             "success":  True,
             "gamePk":   game_pk,
             "players":  results,
             "quickProps": quick_props,
             "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+        }
+        with _TRENDS_RESP_LOCK:
+            _evict_if_large(_TRENDS_RESP_CACHE, 40)
+            _TRENDS_RESP_CACHE[_resp_ck] = (time.time(), _payload)
+        return jsonify(_payload)
 
     except Exception as ex:
         print(f"[api_props_trends] {traceback.format_exc()}")
@@ -27514,6 +27665,40 @@ def _preload_caches():
         except Exception as ex:
             print(f"[STARTUP] brain overlay load failed: {ex}")
     threading.Thread(target=_load_brain_overlays_when_ready, daemon=True).start()
+
+    def _prewarm_projections_when_ready():
+        """Prebuild the props projections payload for today's slate once FG and
+        Savant are loaded, so the first game a user opens serves from the
+        response cache instead of paying the full cold build. Low priority:
+        one game at a time, and each build populates the per-player day caches
+        the other endpoints reuse."""
+        deadline = time.time() + 240
+        while time.time() < deadline:
+            with _fg_lock:
+                fg_ok = _fg_loaded
+            with _sv_lock:
+                sv_ok = _sv_loaded
+            if fg_ok and sv_ok:
+                break
+            time.sleep(5)
+        try:
+            today = datetime.now(ET).strftime('%Y-%m-%d')
+            games = fetch_schedule(today) or []
+            warmed = 0
+            for gm in games[:10]:
+                pk = gm.get('gamePk')
+                if not pk:
+                    continue
+                try:
+                    with app.test_request_context(f'/api/props/projections/{pk}'):
+                        api_props_projections(pk)
+                    warmed += 1
+                except Exception:
+                    pass
+            print(f"[STARTUP] projections prewarm complete: {warmed}/{min(len(games), 10)} games")
+        except Exception as ex:
+            print(f"[STARTUP] projections prewarm failed: {ex}")
+    threading.Thread(target=_prewarm_projections_when_ready, daemon=True).start()
 
     _start_odds_snapshot_worker()
 

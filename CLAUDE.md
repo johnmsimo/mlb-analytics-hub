@@ -260,6 +260,22 @@ Tracker picks (`data/daily_tracker.json[date].entries[]`) carry: `id`, `savedAt`
 
 Player names are normalized to lowercase and matched with `difflib.get_close_matches(cutoff=0.78)` in `_fuzzy_lookup()`. Savant uses `"Last, First"` format; `_sv_key()` converts to `"First Last"` for consistent lookups. When adding new stat sources, follow the same convention. `_ascii_fold()` strips accents so names like "Acuña" match "Acuna".
 
+## Performance architecture
+
+Measured on a live slate (before → after the 2026-07 perf pass): props projections 20s cold / 7.8s warm → ~4s first build / **3ms** cached; props page open→cards ~14s → **0.3s**; game switch → **~1-2s**. The load-bearing pieces, in order of importance — do not remove them casually:
+
+- **Pooled HTTP session** (`_HTTP_SESSION`, app.py top): module-level `requests.get` is rebound to a keep-alive `Session.get`. A fresh TCP+TLS handshake to statsapi.mlb.com measured 500-700ms per call and the app makes thousands per hour; connection reuse is the single biggest systemic win. Anything importing `requests` in-process (pybaseball, brain) shares the pool.
+- **fangraphs_loader lookup memo** (`_memoized`): `get_batter_stats`/`get_pitcher_stats`/projection getters ran pandas boolean scans (~65ms) per call, and the XGB scorer's `_enrich_pitcher_from_fg` asks for the SAME pitcher dozens of times per request (was 2.5s/request). CSVs load once per process, so the memo never goes stale; results are copied out, `{}` misses are negative-cached.
+- **`fetch_schedule` 120s TTL cache** — was fetched 3+×/request (game fetch + travel walk-back). `_team_previous_venue` is day-cached per (team, date) incl. negative results.
+- **`_props_fetch_game` 60s cache** — six endpoints call it per game view (projections/trends/matchup-scores/line-shopping/analyzer/quick); each uncached call is schedule+boxscore. Batter lists are copied out because callers annotate the dicts.
+- **Response caches**: projections (`_PROJ_RESP_CACHE`, 90s), trends (300s), analyzer (600s), quick-props (SWR 90s/600s). Tab flips and the lineup poller serve from these.
+- **Slate prewarm** (`_prewarm_projections_when_ready` in `_preload_caches`): after FG+Savant load, prebuilds projections for today's first 10 games via `app.test_request_context`, which also populates every per-player day cache — the user's first click of the day is warm.
+- **gzip after_request**: JSON >4KB compresses ~10× (trends 38KB→3.4KB; deepdive matchup payload is >1MB).
+- **Non-blocking Google Fonts**: every page's fonts stylesheet uses preconnect + `media="print" onload` swap; a slow fonts.googleapis.com no longer stalls first paint (it was render-blocking in the head).
+- **Diagnostics**: `PROFILE_REQUESTS=1` wraps every request in cProfile (and runs the projections batter-enrich pool inline so the profiler can see it); the projections route logs `[perf] ... (game=..ms odds=..ms enrich_batters=..ms ...)` phase marks for any request ≥1s.
+
+Known remaining cost: a from-scratch projections build is ~2-4s of real CPU (XGB + BATX × 18 batters) — that's what the prewarm and the 90s response cache absorb. The MLB memory-store worker (every 3h) makes ~250 pooled calls in the background; it shares CPU with requests, so if p99s spike on that cadence, that's why.
+
 ## Working with this codebase
 
 - **Editing `app.py`**: it's huge but well-grouped — use the section map above plus `grep -n '^@app.route'` to navigate. Most route handlers follow the same shape: pull from caches, call helpers, jsonify.
