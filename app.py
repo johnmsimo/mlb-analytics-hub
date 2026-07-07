@@ -212,7 +212,26 @@ from brain_merge_patch import (
 )
 
 
+# ── Pooled HTTP session ───────────────────────────────────────────────────────
+# Every outbound call was `requests.get`, which opens a fresh TCP+TLS
+# connection per call — measured at 500-700ms each to statsapi.mlb.com before
+# any bytes move. The app makes thousands of these per hour (game fetches,
+# gamelogs, boxscores, the memory-store collector), so route module-level
+# requests.get through one Session with keep-alive pools. Session.get has the
+# identical signature and urllib3's pools are thread-safe; cookie state is
+# shared but the MLB/Odds/open-meteo APIs are cookie-indifferent.
+_HTTP_SESSION = requests.Session()
+_HTTP_SESSION.mount('https://', requests.adapters.HTTPAdapter(pool_connections=16, pool_maxsize=32))
+_HTTP_SESSION.mount('http://', requests.adapters.HTTPAdapter(pool_connections=8, pool_maxsize=16))
+requests.get = _HTTP_SESSION.get
+
 app = Flask(__name__)
+
+# PROFILE_REQUESTS=1 wraps every request in cProfile and prints the top
+# cumulative functions to stdout — dev-only diagnostic, never set in prod.
+if os.getenv('PROFILE_REQUESTS') == '1':
+    from werkzeug.middleware.profiler import ProfilerMiddleware
+    app.wsgi_app = ProfilerMiddleware(app.wsgi_app, restrictions=[35], sort_by=('cumulative',))
 CORS(app)
 
 
@@ -224,6 +243,30 @@ def _attach_request_id():
 @app.after_request
 def _add_request_id_header(response):
     response.headers['X-Request-Id'] = getattr(g, 'request_id', '-')
+    return response
+
+
+@app.after_request
+def _gzip_json(response):
+    """Gzip large JSON payloads (trends ~38KB, deepdive matchup >1MB) when the
+    client accepts it. Level 5 is ~5-10x smaller for these payloads at <5ms."""
+    try:
+        if (response.status_code != 200
+                or response.direct_passthrough
+                or 'gzip' in (response.headers.get('Content-Encoding') or '')
+                or not (response.mimetype or '').startswith('application/json')
+                or 'gzip' not in (request.headers.get('Accept-Encoding') or '')):
+            return response
+        data = response.get_data()
+        if len(data) < 4096:
+            return response
+        import gzip as _gz
+        response.set_data(_gz.compress(data, compresslevel=5))
+        response.headers['Content-Encoding'] = 'gzip'
+        response.headers['Content-Length'] = len(response.get_data())
+        response.headers.add('Vary', 'Accept-Encoding')
+    except Exception:
+        pass
     return response
 
 
@@ -1831,6 +1874,7 @@ PARK_CF_BEARING = {
     3312: 68,   # Target Field — CF to ENE
     3313: 75,   # Yankee Stadium — CF to ENE
     4705: 138,  # Truist Park — CF to SE
+    2529: 60,   # Sutter Health Park (Athletics) — CF to ENE toward downtown Sacramento
 }
 
 
@@ -1881,20 +1925,59 @@ def _wind_field_geometry(venue_id, wind_deg, wind_speed):
     return {"out": out, "cross": cross, "field": field, "emoji": emoji}
 
 
-def _scoring_environment(temp, wind_out, park_factor, rain_chance, dome=False):
+def _conditions_hit_effects(temp, wind_out, park_factor, hr_park_factor, dome=False):
+    """Per-hit-type effect estimates (percent vs a neutral 70°F / calm /
+    1.00-park game) for the game-conditions strip: how much these conditions
+    move HR and run scoring. Coefficients are the same magnitudes the run
+    model uses (≈1% HR per °F above 70 per published drag studies is scaled
+    down to 0.4 to stay conservative; 10 mph out ≈ +12% HR ≈ the low end of
+    the Wrigley wind studies). Estimates only — clamped so a windy cold day
+    reads as a lean, not a guarantee."""
+    hr = 0.0
+    runs = 0.0
+    try:
+        hr += (float(hr_park_factor) - 1.0) * 100.0
+    except (TypeError, ValueError):
+        pass
+    try:
+        runs += (float(park_factor) - 1.0) * 100.0
+    except (TypeError, ValueError):
+        pass
+    if not dome:
+        try:
+            t = float(temp)
+            hr += (t - 70.0) * 0.4
+            runs += (t - 70.0) * 0.25
+        except (TypeError, ValueError):
+            pass
+        if isinstance(wind_out, (int, float)):
+            hr += float(wind_out) * 1.2
+            runs += float(wind_out) * 0.5
+    return {
+        'hrPct': round(max(-30.0, min(30.0, hr))),
+        'runsPct': round(max(-20.0, min(20.0, runs))),
+    }
+
+
+def _scoring_environment(temp, wind_out, park_factor, rain_chance, dome=False,
+                         hr_park_factor=None):
     """Blend temperature, the out-to-CF wind component, and the park run factor
     into a single per-team run delta plus a plain-language verdict. This is the
     composite "scoring environment" the deep-dive surfaces above the raw cards.
 
     All deltas are runs-per-team relative to a neutral 70F / calm / 1.00-park
     baseline and are clamped so no single driver can dominate the read.
+    Also carries `hrPct` / `runsPct` per-hit-type estimates (see
+    `_conditions_hit_effects`) for the props-page conditions strip.
     """
+    effects = _conditions_hit_effects(temp, wind_out, park_factor, hr_park_factor, dome=dome)
     drivers = []
     if dome:
         return {
             "runDelta": 0.0, "tier": "CONTROLLED", "color": "neutral",
             "label": "Indoor / roof closed — weather neutralized",
             "drivers": ["Climate-controlled air: no wind or temperature effect"],
+            **effects,
         }
 
     temp_d = 0.0
@@ -1952,6 +2035,7 @@ def _scoring_environment(temp, wind_out, park_factor, rain_chance, dome=False):
     return {
         "runDelta": total, "tier": tier, "color": color,
         "label": label, "drivers": drivers,
+        **effects,
     }
 
 
@@ -3587,12 +3671,28 @@ def _top_team_injury(team_id):
 
 
 # ── MLB API Helpers ───────────────────────────────────────────────────────────
+_SCHEDULE_CACHE = {}
+_SCHEDULE_CACHE_LOCK = threading.Lock()
+_SCHEDULE_TTL = 120  # short — lineups/probables update, but 3+ calls/request was waste
+
+
 def fetch_schedule(date_str):
+    """Hydrated schedule for a date, TTL-cached. This was fetched 3+ times per
+    projections request (game fetch + travel walk-back) at ~600ms per call."""
+    now = time.time()
+    with _SCHEDULE_CACHE_LOCK:
+        hit = _SCHEDULE_CACHE.get(date_str)
+        if hit and now - hit[0] < _SCHEDULE_TTL:
+            return hit[1]
     url = (f"{MLB_API}/schedule?sportId=1&date={date_str}"
         "&hydrate=team,probablePitcher,lineups,linescore,venue(location),weather")
     r = requests.get(url, timeout=10); r.raise_for_status()
     dates = r.json().get("dates", [])
-    return dates[0].get("games", []) if dates else []
+    games = dates[0].get("games", []) if dates else []
+    with _SCHEDULE_CACHE_LOCK:
+        _evict_if_large(_SCHEDULE_CACHE, 20)
+        _SCHEDULE_CACHE[date_str] = (now, games)
+    return games
 
 
 def fetch_schedule_game(game_pk):
@@ -3607,6 +3707,10 @@ def fetch_schedule_game(game_pk):
     return games[0] if games else None
 
 
+_PREV_VENUE_CACHE = {}
+_PREV_VENUE_LOCK = threading.Lock()
+
+
 def _team_previous_venue(team_id, today_iso):
     """Find yesterday's game venue for a team. Used by travel-features shading.
 
@@ -3616,6 +3720,11 @@ def _team_previous_venue(team_id, today_iso):
     """
     if not team_id or not today_iso:
         return None
+    ck = (int(team_id), today_iso[:10])
+    with _PREV_VENUE_LOCK:
+        hit = _PREV_VENUE_CACHE.get(ck)
+    if hit is not None:
+        return hit[1]
     try:
         base = datetime.strptime(today_iso[:10], "%Y-%m-%d")
     except Exception:
@@ -3650,14 +3759,22 @@ def _team_previous_venue(team_id, today_iso):
                     was_night = dt.astimezone(ET).hour >= 17
                 except Exception:
                     pass
-                return {
+                res = {
                     "lat": lat,
                     "lon": lon,
                     "was_home": was_home,
                     "was_night": was_night,
                     "game_date": game_date,
                 }
+                with _PREV_VENUE_LOCK:
+                    _evict_if_large(_PREV_VENUE_CACHE, 200)
+                    _PREV_VENUE_CACHE[ck] = (time.time(), res)
+                return res
         # Schedule fetched but team didn't play; keep walking back.
+    # Negative-cache the miss too — the walk-back is 3 schedule fetches.
+    with _PREV_VENUE_LOCK:
+        _evict_if_large(_PREV_VENUE_CACHE, 200)
+        _PREV_VENUE_CACHE[ck] = (time.time(), None)
     return None
 
 
@@ -4584,7 +4701,7 @@ def parse_game(g, prefer_live_weather=True):
             "venueId": venue_id,
             "weatherImpact": _scoring_environment(
                 wx.get("temp"), wx.get("wind_out"), pf, wx.get("rain_chance"),
-                dome=(venue_id in DOME_VENUES),
+                dome=(venue_id in DOME_VENUES), hr_park_factor=hrpf,
             ),
             "weatherIcon": wi,
             "injuryAlert": injury_alert,
@@ -13425,11 +13542,21 @@ def _record_odds_credits(resp):
             _ODDS_SNAPSHOT_META['lastCreditAt'] = datetime.now(timezone.utc).isoformat()
     except Exception:
         pass
-_ODDS_ALL_MARKETS = (
+_ODDS_PRIMARY_MARKETS = (
     'h2h,spreads,totals,h2h_1st_1_innings,'
     'batter_hits,batter_total_bases,batter_home_runs,batter_rbis,'
     'batter_runs_scored,batter_stolen_bases,batter_hits_runs_rbis,pitcher_strikeouts'
 )
+# Alternate-line ladders (e.g. K 1.5..9.5 per book) for the line-shopping matrix.
+# Each key bills as one extra market per event request, so the daily snapshot
+# costs ~5 more credits per game per day with these on; disable with
+# ODDS_INCLUDE_ALT_MARKETS=0 to fall back to primary lines only.
+_ODDS_ALT_MARKETS = (
+    'batter_hits_alternate,batter_total_bases_alternate,'
+    'batter_home_runs_alternate,batter_rbis_alternate,pitcher_strikeouts_alternate'
+)
+_ODDS_INCLUDE_ALT = _odds_bool_env('ODDS_INCLUDE_ALT_MARKETS', '1')
+_ODDS_ALL_MARKETS = _ODDS_PRIMARY_MARKETS + (',' + _ODDS_ALT_MARKETS if _ODDS_INCLUDE_ALT else '')
 
 
 def _odds_today_key():
@@ -14116,7 +14243,13 @@ def _parse_prop_markets(bookmakers, valid_names):
                 point = o.get('point')
                 key = (player, mk, point, bkt)
                 if key not in grouped:
-                    grouped[key] = {'player': player, 'market_key': mk, 'line': point, 'bookmaker': bkt, 'over_price': None, 'under_price': None}
+                    is_alt = mk.endswith('_alternate')
+                    grouped[key] = {
+                        'player': player, 'market_key': mk,
+                        'base_key': mk[:-len('_alternate')] if is_alt else mk,
+                        'is_alt': is_alt,
+                        'line': point, 'bookmaker': bkt, 'over_price': None, 'under_price': None,
+                    }
                 grouped[key][f'{side}_price'] = o.get('price')
     out = []
     for item in grouped.values():
@@ -14140,13 +14273,8 @@ def _find_best_available_price(market_props, player, mk, line, side='over'):
     
     if not candidates:
         return None, None
-    
-    if side == 'over':
-        # For positive prices, higher is better; for negative, closer to 0 is better
-        best_price, best_book = max(candidates, key=lambda x: x[0] if x[0] > 0 else (1000 + x[0]))
-    else:
-        best_price, best_book = max(candidates, key=lambda x: x[0] if x[0] > 0 else (1000 + x[0]))
-    
+
+    best_price, best_book = max(candidates, key=lambda x: _american_price_score(x[0]))
     return best_price, best_book
 
 
@@ -14268,7 +14396,7 @@ def _group_line_shopping(market_props):
     grouped = {}
     for item in market_props or []:
         player = item.get('player')
-        mk = item.get('market_key')
+        mk = item.get('base_key') or item.get('market_key')
         if not player or not mk:
             continue
         key = (player, mk)
@@ -14284,11 +14412,18 @@ def _group_line_shopping(market_props):
             'under_price': item.get('under_price'),
             'over_implied': item.get('over_implied'),
             'under_implied': item.get('under_implied'),
+            'is_alt': bool(item.get('is_alt')),
         }
         grouped.setdefault(key, []).append(row)
 
     out = []
-    for (player, mk), books in grouped.items():
+    for (player, mk), rows in grouped.items():
+        # Legacy fields (books / best prices / line_range / book_count) are
+        # computed from PRIMARY-market rows only, exactly as before alternate
+        # markets existed — deepdive's strike engine and the props cards read
+        # best_over_price as "the main line's best price" and an alt ladder
+        # extreme (e.g. 4+ hits +2000) must never leak into that.
+        books = [b for b in rows if not b.get('is_alt')]
         best_over = None
         best_under = None
         line_vals = []
@@ -14319,6 +14454,62 @@ def _group_line_shopping(market_props):
                 'is_best_under': is_best_under,
             })
 
+        # Line ladder across primary + alternate rows: one entry per distinct
+        # line, each with per-book prices and best-price flags. A book quoting
+        # the same line in both the primary and alternate market is deduped to
+        # its best price per side.
+        ladder = {}
+        for b in rows:
+            ln = b.get('line')
+            if ln is None:
+                continue
+            ent = ladder.setdefault(ln, {'line': ln, 'has_primary': False, '_by_book': {}})
+            if not b.get('is_alt'):
+                ent['has_primary'] = True
+            bk = b.get('bookmaker') or '—'
+            cur = ent['_by_book'].get(bk)
+            if cur is None:
+                ent['_by_book'][bk] = {
+                    'bookmaker': bk,
+                    'over_price': b.get('over_price'), 'under_price': b.get('under_price'),
+                    'over_implied': b.get('over_implied'), 'under_implied': b.get('under_implied'),
+                    'is_alt': bool(b.get('is_alt')),
+                }
+            else:
+                for side in ('over', 'under'):
+                    px = b.get(f'{side}_price')
+                    if px is not None and _american_price_score(px) > _american_price_score(cur.get(f'{side}_price')):
+                        cur[f'{side}_price'] = px
+                        cur[f'{side}_implied'] = b.get(f'{side}_implied')
+                if not b.get('is_alt'):
+                    cur['is_alt'] = False
+
+        lines_out = []
+        for ln in sorted(ladder):
+            ent = ladder[ln]
+            lbooks = sorted(ent.pop('_by_book').values(), key=lambda x: str(x.get('bookmaker') or ''))
+            lo = max((b['over_price'] for b in lbooks if b.get('over_price') is not None),
+                     key=_american_price_score, default=None)
+            lu = max((b['under_price'] for b in lbooks if b.get('under_price') is not None),
+                     key=_american_price_score, default=None)
+            for b in lbooks:
+                b['is_best_over'] = b.get('over_price') is not None and b['over_price'] == lo
+                b['is_best_under'] = b.get('under_price') is not None and b['under_price'] == lu
+            ent.update({'best_over_price': lo, 'best_under_price': lu,
+                        'book_count': len(lbooks), 'books': lbooks})
+            lines_out.append(ent)
+
+        # Consensus/primary line = the primary-market line offered by the most books.
+        primary_line = None
+        primary_counts = {}
+        for b in books:
+            if b.get('line') is not None:
+                primary_counts[b['line']] = primary_counts.get(b['line'], 0) + 1
+        if primary_counts:
+            primary_line = max(primary_counts.items(), key=lambda kv: (kv[1], -kv[0]))[0]
+
+        all_books = sorted({b.get('bookmaker') for ln in lines_out for b in ln['books'] if b.get('bookmaker')})
+
         out.append({
             'player': player,
             'market_key': mk,
@@ -14329,6 +14520,9 @@ def _group_line_shopping(market_props):
             'book_count': len(uniq_books),
             'line_varies': bool(line_range and line_range[0] != line_range[1]),
             'books': normalized_books,
+            'lines': lines_out,
+            'primary_line': primary_line,
+            'all_books': all_books,
         })
 
     out.sort(key=lambda x: (x.get('player', ''), x.get('market_key', '')))
@@ -14340,9 +14534,21 @@ def _group_line_shopping(market_props):
 
 
 def _american_price_score(price):
+    """Bettor-payout ordering for American odds: higher score = better price.
+
+    Positive odds score as profit per 100 staked (+110 → 110); negative as
+    10000/|p| (-105 → 95.2, -150 → 66.7). That makes +110 correctly beat
+    -105 — the old `1000+p` scale ranked ANY negative price above ANY
+    positive one, so a book at -105 was flagged "best" over one at +110.
+    Same-sign ordering is unchanged (positive: higher better; negative:
+    closer to zero better)."""
     try:
         p = float(price)
-        return p if p > 0 else (1000 + p)
+        if p > 0:
+            return p
+        if p < 0:
+            return 10000.0 / abs(p)
+        return -999999
     except Exception:
         return -999999
 
@@ -21720,7 +21926,38 @@ def api_ai_boxscore(game_pk):
         }), 500
 
 # ── Shared helper: fetch game + lineup ───────────────────────────────────────
+_PROPS_GAME_CACHE = {}
+_PROPS_GAME_CACHE_LOCK = threading.Lock()
+_PROPS_GAME_TTL = 60  # short: lineups post/change; every game-view endpoint calls this
+
+
 def _props_fetch_game(game_pk, date_hint=None, gdata_override=None):
+    """TTL-cached front for _props_fetch_game_uncached. Six endpoints call this
+    on every game view (projections, trends, matchup-scores, line-shopping,
+    analyzer, quick) and each uncached call is a schedule + boxscore fetch.
+    Batter lists are copied on the way out because callers annotate the dicts."""
+    if gdata_override is not None:
+        return _props_fetch_game_uncached(game_pk, date_hint=date_hint, gdata_override=gdata_override)
+    ck = (int(game_pk), date_hint or '')
+    now = time.time()
+    with _PROPS_GAME_CACHE_LOCK:
+        hit = _PROPS_GAME_CACHE.get(ck)
+    if hit and now - hit[0] < _PROPS_GAME_TTL:
+        gdata, away_bats, home_bats, away_t, home_t, pitchers = hit[1]
+        return (gdata, [dict(b) for b in away_bats], [dict(b) for b in home_bats],
+                away_t, home_t, dict(pitchers))
+    res = _props_fetch_game_uncached(game_pk, date_hint=date_hint)
+    if res and res[0]:
+        with _PROPS_GAME_CACHE_LOCK:
+            _evict_if_large(_PROPS_GAME_CACHE, 40)
+            _PROPS_GAME_CACHE[ck] = (now, res)
+        gdata, away_bats, home_bats, away_t, home_t, pitchers = res
+        return (gdata, [dict(b) for b in away_bats], [dict(b) for b in home_bats],
+                away_t, home_t, dict(pitchers))
+    return res
+
+
+def _props_fetch_game_uncached(game_pk, date_hint=None, gdata_override=None):
     """Fetch schedule entry + boxscore lineups, preferring the requested date.
 
     Pass gdata_override to skip the schedule fetch when the caller already has
@@ -22941,9 +23178,26 @@ def api_lineup_props(game_pk):
 
 
 # ── Route: Prop projections ───────────────────────────────────────────────────
+_PROJ_RESP_CACHE = {}
+_PROJ_RESP_LOCK = threading.Lock()
+_PROJ_RESP_TTL = 90  # lineup poller re-hits every 10 min; 90s keeps tab flips instant
+
+
 @app.route('/api/props/projections/<int:game_pk>')
 def api_props_projections(game_pk):
     t0 = time.perf_counter()
+    _resp_ck = (int(game_pk), request.args.get('date') or '')
+    with _PROJ_RESP_LOCK:
+        _hit = _PROJ_RESP_CACHE.get(_resp_ck)
+    if _hit and time.time() - _hit[0] < _PROJ_RESP_TTL:
+        return jsonify(_hit[1])
+    _pp_marks = []
+    _pp_last = [t0]
+
+    def _pp_mark(label):
+        now = time.perf_counter()
+        _pp_marks.append(f"{label}={int((now - _pp_last[0]) * 1000)}ms")
+        _pp_last[0] = now
     try:
         # Keep endpoint responsive during cold starts; refresh in background.
         _maybe_refresh_fg()
@@ -22954,6 +23208,7 @@ def api_props_projections(game_pk):
         gdata, away_bats, home_bats, away_t, home_t, pitchers = _props_fetch_game(game_pk, date_hint=date_hint)
         if not gdata:
             return jsonify({"success": False, "error": "Game not found"}), 404
+        _pp_mark('game')
 
         away_abbr = away_t.get("team", {}).get("abbreviation", "AWAY")
         home_abbr = home_t.get("team", {}).get("abbreviation", "HOME")
@@ -22979,6 +23234,7 @@ def api_props_projections(game_pk):
             "spread":    _best_spread(featured, away_full, home_full),
         }
 
+        _pp_mark('odds')
         ap_info = pitchers["ap"]; hp_info = pitchers["hp"]
         ap_name = ap_info.get("fullName", "TBD")
         hp_name = hp_info.get("fullName", "TBD")
@@ -22988,6 +23244,7 @@ def api_props_projections(game_pk):
         ap_sv = sv_pitcher(ap_name); hp_sv = sv_pitcher(hp_name)
         ap_st = pitcher_stats_mlb(ap_id) if ap_id else {}
         hp_st = pitcher_stats_mlb(hp_id) if hp_id else {}
+        _pp_mark('pitcher_stats')
 
         # ── Pitcher hands — the key new inputs ────────────────────────────────
         ap_hand = (ap_st.get("pitchHand") or "R").upper()
@@ -23062,6 +23319,7 @@ def api_props_projections(game_pk):
 
         away_travel = _team_travel(away_team_id, is_home_today=False)
         home_travel = _team_travel(home_team_id, is_home_today=True)
+        _pp_mark('wx_travel')
 
         # ── Build batter projections (now passes pitcher_hand) ─────────────────
         away_confirmed = len(away_bats) >= 9 and all((b.get("lineup_status") or "confirmed") == "confirmed" for b in away_bats[:9])
@@ -23184,6 +23442,9 @@ def api_props_projections(game_pk):
                     "proj":         proj,
                 }
 
+            if os.getenv('PROFILE_REQUESTS') == '1':
+                # inline so the request profiler can see per-batter work
+                return [_enrich_one(b) for b in batters_top]
             workers = min(9, max(1, len(batters_top)))
             with ThreadPoolExecutor(max_workers=workers) as ex:
                 return list(ex.map(_enrich_one, batters_top))
@@ -23191,6 +23452,7 @@ def api_props_projections(game_pk):
         away_proj = enrich_batters(away_bats, hp_fg, hp_sv, hp_st, home_abbr, hp_name, hp_id, own_abbr=away_abbr, lineup_confirmed=away_confirmed, team_travel=away_travel)
         home_proj = enrich_batters(home_bats, ap_fg, ap_sv, ap_st, away_abbr, ap_name, ap_id, own_abbr=home_abbr, lineup_confirmed=home_confirmed, team_travel=home_travel)
         all_batters = away_proj + home_proj
+        _pp_mark('enrich_batters')
 
         injury_summary_rows = []
         for bb in all_batters:
@@ -23258,6 +23520,7 @@ def api_props_projections(game_pk):
                 "proj":        proj,
             })
 
+        _pp_mark('pitchers')
         for pp in pitchers_out:
             st = (pp.get("injuryStatus") or "").upper()
             if not st:
@@ -23316,7 +23579,7 @@ def api_props_projections(game_pk):
                 p.get('name'),
                 ['pitcher_strikeouts', 'pitcher_outs_recorded', 'pitcher_earned_runs'])
 
-        return jsonify({
+        _payload = {
             "success":     True,
             "gamePk":      game_pk,
             "matchup":     f"{away_abbr} @ {home_abbr}",
@@ -23344,7 +23607,11 @@ def api_props_projections(game_pk):
             },
             "game_lines":  game_lines,
             "timestamp":   datetime.now(timezone.utc).isoformat(),
-        })
+        }
+        with _PROJ_RESP_LOCK:
+            _evict_if_large(_PROJ_RESP_CACHE, 40)
+            _PROJ_RESP_CACHE[_resp_ck] = (time.time(), _payload)
+        return jsonify(_payload)
 
     except Exception as ex:
         print(f"[api_props_projections] {traceback.format_exc()}")
@@ -23352,7 +23619,7 @@ def api_props_projections(game_pk):
     finally:
         ms = int((time.perf_counter() - t0) * 1000)
         if ms >= 1000:
-            print(f"[perf] /api/props/projections/{game_pk} {ms}ms")
+            print(f"[perf] /api/props/projections/{game_pk} {ms}ms ({' '.join(_pp_marks)})")
 
 
 @app.route('/api/props/scan/today')
@@ -23491,6 +23758,386 @@ def api_batting_order_matchups(game_pk):
     except Exception as ex:
         print(f"[api_batting_order_matchups] {traceback.format_exc()}")
         return jsonify({"success": False, "error": str(ex)}), 500
+
+
+# ── Matchup Analyzer — percentile pitcher-vs-lineup + arsenal join ────────────
+
+def _pctnorm(v):
+    """Normalize a rate that may arrive as a fraction (0.22) or percent (22.0)
+    to PERCENT scale. FG CSVs are inconsistent across seasons/sources."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f * 100.0 if 0 < f <= 1.0 else f
+
+
+def _pct_rank(sorted_vals, v, higher_better=True):
+    """1-99 percentile of v within a sorted population; direction-aware so a
+    HIGHER returned rank is always BETTER for the side being ranked."""
+    if v is None or not sorted_vals:
+        return None
+    below = sum(1 for x in sorted_vals if x < v)
+    equal = sum(1 for x in sorted_vals if x == v)
+    frac = (below + equal / 2.0) / len(sorted_vals)
+    if not higher_better:
+        frac = 1.0 - frac
+    return int(max(1, min(99, round(frac * 100))))
+
+
+def _bat_arsenal_mean_whiff(bat_ars):
+    """Batter's mean whiff% across pitch types with data (>=3 types)."""
+    vals = [_safe_f(p.get('whiff_pct'), None) for p in (bat_ars or {}).values()]
+    vals = [v for v in vals if v is not None]
+    return round(sum(vals) / len(vals), 1) if len(vals) >= 3 else None
+
+
+_ANALYZER_POP_CACHE = {'date': None, 'pop': None}
+_ANALYZER_POP_LOCK = threading.Lock()
+
+
+def _analyzer_populations():
+    """Sorted league-wide distributions used to place a value on a 1-99
+    percentile bar. Built from the in-memory FG/Savant caches (qualified:
+    batters >=100 PA, pitchers >=30 IP for FG rates; Savant leaderboards are
+    already min-qualified) and cached for the day."""
+    today = datetime.now().date()
+    with _ANALYZER_POP_LOCK:
+        c = _ANALYZER_POP_CACHE
+        if c['date'] == today and c['pop']:
+            return c['pop']
+    with _fg_lock:
+        fg_bat = {k: dict(v) for k, v in _fg_bat.items()}
+        fg_pit = {k: dict(v) for k, v in _fg_pit.items()}
+    with _sv_lock:
+        sv_bx = {k: dict(v) for k, v in _sv_bat_xstats.items()}
+        sv_bs = {k: dict(v) for k, v in _sv_bat_statcast.items()}
+        sv_px = {k: dict(v) for k, v in _sv_pit_xstats.items()}
+        bat_ars = {k: dict(v) for k, v in _sv_bat_arsenal_stats.items()}
+        pit_ars = {k: dict(v) for k, v in _sv_pit_arsenal_stats.items()}
+
+    def _col(rows, key, norm=None, qual=None):
+        out = []
+        for r in rows:
+            if qual and not qual(r):
+                continue
+            v = norm(r.get(key)) if norm else _safe_f(r.get(key), None)
+            if v is not None:
+                out.append(float(v))
+        return sorted(out)
+
+    bat_q = lambda r: _safe_f(r.get('fg_pa'), 0) >= 100
+    pit_q = lambda r: _safe_f(r.get('fg_ip'), 0) >= 30
+    pop = {
+        'bat': {
+            'kpct':  _col(fg_bat.values(), 'fg_kpct', _pctnorm, bat_q),
+            'bbpct': _col(fg_bat.values(), 'fg_bbpct', _pctnorm, bat_q),
+            'wrc':   _col(fg_bat.values(), 'fg_wrc', None, bat_q),
+            'xwoba': _col(sv_bx.values(), 'sv_xwoba'),
+            'brl':   _col(sv_bs.values(), 'sv_brl_pct'),
+            'whiff': sorted(v for v in (_bat_arsenal_mean_whiff(a) for a in bat_ars.values()) if v is not None),
+        },
+        'pit': {
+            'kpct':  _col(fg_pit.values(), 'fg_kpct', _pctnorm, pit_q),
+            'bbpct': _col(fg_pit.values(), 'fg_bbpct', _pctnorm, pit_q),
+            'xwoba': _col(sv_px.values(), 'sv_xwoba_p'),
+            # sv_whiff is sparsely populated on the pitcher-xstats leaderboard,
+            # so the whiff population comes from the arsenal rows (same scale
+            # and same computation as the per-pitcher fallback value).
+            'whiff': _col(sv_px.values(), 'sv_whiff') or sorted(
+                v for v in (_pit_arsenal_weighted_whiff(a) for a in pit_ars.values()) if v is not None),
+            'xera':  _col(sv_px.values(), 'sv_xera'),
+        },
+    }
+    with _ANALYZER_POP_LOCK:
+        _ANALYZER_POP_CACHE.update({'date': today, 'pop': pop})
+    return pop
+
+
+def _lineup_weighted(bat_rows, getter):
+    """PA-weighted lineup aggregate of a per-batter value; None-safe."""
+    num = den = 0.0
+    for b in bat_rows:
+        v = getter(b)
+        if v is None:
+            continue
+        w = max(50.0, _safe_f(b.get('_fg', {}).get('fg_pa'), 0) or 0)
+        num += w * float(v)
+        den += w
+    return (num / den) if den else None
+
+
+_ANALYZER_EDGE_GAP = 15  # percentile-rank gap before a side is colored
+
+
+def _analyzer_row(label, pit_val, pit_pct, bat_val, bat_pct, fmt='pct1',
+                  pit_label=None, bat_label=None):
+    edge = 'even'
+    if pit_pct is not None and bat_pct is not None:
+        if pit_pct - bat_pct >= _ANALYZER_EDGE_GAP:
+            edge = 'pitcher'
+        elif bat_pct - pit_pct >= _ANALYZER_EDGE_GAP:
+            edge = 'batter'
+    return {
+        'stat': label, 'fmt': fmt, 'edge': edge,
+        'pitcher': {'value': pit_val, 'pct': pit_pct, 'label': pit_label or label},
+        'lineup': {'value': bat_val, 'pct': bat_pct, 'label': bat_label or label},
+    }
+
+
+_PITCH_CODE_NAMES = {
+    'ff': '4-Seam Fastball', 'si': 'Sinker', 'fc': 'Cutter', 'ch': 'Changeup',
+    'sl': 'Slider', 'cu': 'Curveball', 'st': 'Sweeper', 'fs': 'Splitter',
+    'kc': 'Knuckle Curve', 'sv': 'Slurve', 'kn': 'Knuckleball',
+}
+
+_PIT_HAND_CACHE = {}
+_PIT_HAND_LOCK = threading.Lock()
+
+
+def _pitcher_hand_cached(pitcher_id):
+    """L/R for a pitcher via the people API, day-cached (the schedule's
+    probablePitcher object carries only id/fullName — no pitchHand)."""
+    if not pitcher_id:
+        return None
+    today = datetime.now().date()
+    with _PIT_HAND_LOCK:
+        hit = _PIT_HAND_CACHE.get(int(pitcher_id))
+        if hit and hit[0] == today:
+            return hit[1]
+    hand = None
+    try:
+        r = requests.get(f"{MLB_API}/people/{int(pitcher_id)}", timeout=8)
+        ppl = r.json().get('people', [])
+        if ppl:
+            hand = ((ppl[0].get('pitchHand') or {}).get('code') or '').upper()[:1] or None
+    except Exception:
+        hand = None
+    with _PIT_HAND_LOCK:
+        _evict_if_large(_PIT_HAND_CACHE, 200)
+        _PIT_HAND_CACHE[int(pitcher_id)] = (today, hand)
+    return hand
+
+
+def _pit_arsenal_weighted_whiff(pars):
+    """Usage-weighted whiff% across a pitcher's arsenal rows."""
+    wn = wd = 0.0
+    for pstat in (pars or {}).values():
+        u = _safe_f(pstat.get('usage'), 0.0)
+        w = _safe_f(pstat.get('whiff_pct'), None)
+        if u > 0 and w is not None:
+            wn += u * w
+            wd += u
+    return round(wn / wd, 1) if wd else None
+
+
+def _analyzer_side(pit_info, opp_bats, opp_abbr, pop):
+    """One analyzer panel: this starting pitcher vs the opposing lineup."""
+    pit_name = pit_info.get('fullName', 'TBD')
+    pit_id = pit_info.get('id')
+    ph = pit_info.get('pitchHand')
+    if isinstance(ph, dict):
+        ph = ph.get('code')
+    fgp = fg_pitcher(pit_name) or {}
+    svp = sv_pitcher(pit_name) or {}
+    pit_hand = str(ph or fgp.get('fg_throws') or _pitcher_hand_cached(pit_id) or 'R').upper()[:1]
+    bats = []
+    for b in (opp_bats or [])[:9]:
+        nm = b.get('name', '')
+        bats.append({**b, '_fg': fg_batter(nm) or {}, '_sv': sv_batter(nm) or {}})
+    with _sv_lock:
+        bat_ars_all = {k: dict(v) for k, v in _sv_bat_arsenal_stats.items()}
+
+    # ── percentile rows (higher pct = better for that side) ──
+    p_k = _pctnorm(fgp.get('fg_kpct'))
+    l_k = _lineup_weighted(bats, lambda b: _pctnorm(b['_fg'].get('fg_kpct')))
+    p_bb = _pctnorm(fgp.get('fg_bbpct'))
+    l_bb = _lineup_weighted(bats, lambda b: _pctnorm(b['_fg'].get('fg_bbpct')))
+    p_wh = _safe_f(svp.get('sv_whiff'), None)
+    if p_wh is None and pit_id:
+        with _sv_lock:
+            pars = dict(_sv_pit_arsenal_stats.get(str(pit_id)) or {})
+        p_wh = _pit_arsenal_weighted_whiff(pars)
+    l_wh = _lineup_weighted(bats, lambda b: _bat_arsenal_mean_whiff(bat_ars_all.get(str(b.get('id')))))
+    p_xw = _safe_f(svp.get('sv_xwoba_p'), None)
+    l_xw = _lineup_weighted(bats, lambda b: _safe_f(b['_sv'].get('sv_xwoba'), None))
+    p_xe = _safe_f(svp.get('sv_xera'), None) or _safe_f(fgp.get('fg_era'), None)
+    l_wrc = _lineup_weighted(bats, lambda b: _safe_f(b['_fg'].get('fg_wrc'), None))
+
+    r1 = lambda v: round(v, 1) if v is not None else None
+    r3 = lambda v: round(v, 3) if v is not None else None
+    rows = [
+        _analyzer_row('K%', r1(p_k), _pct_rank(pop['pit']['kpct'], p_k, True),
+                      r1(l_k), _pct_rank(pop['bat']['kpct'], l_k, False)),
+        _analyzer_row('BB%', r1(p_bb), _pct_rank(pop['pit']['bbpct'], p_bb, False),
+                      r1(l_bb), _pct_rank(pop['bat']['bbpct'], l_bb, True)),
+        _analyzer_row('Whiff%', r1(p_wh), _pct_rank(pop['pit']['whiff'], p_wh, True),
+                      r1(l_wh), _pct_rank(pop['bat']['whiff'], l_wh, False)),
+        _analyzer_row('xwOBA', r3(p_xw), _pct_rank(pop['pit']['xwoba'], p_xw, False),
+                      r3(l_xw), _pct_rank(pop['bat']['xwoba'], l_xw, True), fmt='num3'),
+        _analyzer_row('OVERALL', round(p_xe, 2) if p_xe is not None else None,
+                      _pct_rank(pop['pit']['xera'], p_xe, False),
+                      round(l_wrc) if l_wrc is not None else None,
+                      _pct_rank(pop['bat']['wrc'], l_wrc, True),
+                      fmt='raw', pit_label='xERA', bat_label='wRC+'),
+    ]
+
+    # ── by-pitch-type: pitcher arsenal vs lineup performance on that pitch ──
+    # _get_pitch_arsenal returns MLBAM-named outcome rows ("Sinker") PLUS
+    # code-keyed velo/usage rows ("si") from the name-keyed caches — merge the
+    # code rows into their named twin (velo lives only on the code row) and
+    # drop the code-only leftovers.
+    arsenal = _get_pitch_arsenal(pitcher_id=pit_id, pitcher_name=pit_name)
+    for code, full in _PITCH_CODE_NAMES.items():
+        if code in arsenal and full in arsenal:
+            for k in ('velo', 'use_pct'):
+                if arsenal[code].get(k) is not None and arsenal[full].get(k) is None:
+                    arsenal[full][k] = arsenal[code][k]
+            del arsenal[code]
+    pitch_types = []
+    for pt, ps in sorted(arsenal.items(), key=lambda kv: -_safe_f(kv[1].get('usage') or kv[1].get('use_pct'), 0)):
+        usage = _safe_f(ps.get('usage') or ps.get('use_pct'), None)
+        if usage is None or usage < 3:
+            continue
+        if ps.get('woba') is None and ps.get('whiff_pct') is None and ps.get('ba') is None:
+            continue   # code-only leftover with no outcome data
+        lw_num = lw_den = 0.0
+        wh_num = wh_den = 0.0
+        cover = 0
+        for b in bats:
+            ba = (bat_ars_all.get(str(b.get('id'))) or {}).get(pt)
+            if not ba:
+                continue
+            cover += 1
+            w = max(50.0, _safe_f(b['_fg'].get('fg_pa'), 0) or 0)
+            bw = _safe_f(ba.get('woba'), None)
+            if bw is not None:
+                lw_num += w * bw
+                lw_den += w
+            bwh = _safe_f(ba.get('whiff_pct'), None)
+            if bwh is not None:
+                wh_num += w * bwh
+                wh_den += w
+        pitch_types.append({
+            'pitch': pt,
+            'usage': round(usage, 1),
+            'velo': _safe_f(ps.get('velo'), None),
+            'pitcher': {
+                'woba': _safe_f(ps.get('woba'), None),
+                'whiff_pct': _safe_f(ps.get('whiff_pct'), None),
+                'ba': _safe_f(ps.get('ba'), None),
+            },
+            'lineup': {
+                'woba': round(lw_num / lw_den, 3) if lw_den else None,
+                'whiff_pct': round(wh_num / wh_den, 1) if wh_den else None,
+                'coverage': cover,
+            },
+        })
+
+    # ── per-batter table (#7): lineup vs THIS pitcher ──
+    def _bat_row(b):
+        fgb, svb = b['_fg'], b['_sv']
+        bid = b.get('id')
+        k = _pctnorm(fgb.get('fg_kpct'))
+        bb = _pctnorm(fgb.get('fg_bbpct'))
+        xw = _safe_f(svb.get('sv_xwoba'), None)
+        brl = _safe_f(svb.get('sv_brl_pct'), None)
+        wh = _bat_arsenal_mean_whiff(bat_ars_all.get(str(bid)))
+        split_avg = b.get('vs_l_avg') if pit_hand == 'L' else b.get('vs_r_avg')
+        try:
+            ars = _arsenal_matchup_from_stats(pit_id, bid) if (pit_id and bid) else None
+        except Exception:
+            ars = None
+        return {
+            'slot': b.get('slot'), 'id': bid, 'name': b.get('name'),
+            'bats': b.get('bats', 'R'), 'pa': _safe_f(fgb.get('fg_pa'), None),
+            'kpct': r1(k), 'kpctPct': _pct_rank(pop['bat']['kpct'], k, False),
+            'bbpct': r1(bb), 'bbpctPct': _pct_rank(pop['bat']['bbpct'], bb, True),
+            'whiff': r1(wh), 'whiffPct': _pct_rank(pop['bat']['whiff'], wh, False),
+            'xwoba': r3(xw), 'xwobaPct': _pct_rank(pop['bat']['xwoba'], xw, True),
+            'brl': r1(brl), 'brlPct': _pct_rank(pop['bat']['brl'], brl, True),
+            'splitAvg': split_avg if split_avg not in (None, 'N/A', '') else None,
+            'arsenal': {
+                'status': (ars or {}).get('status'),
+                'matchupWoba': (ars or {}).get('matchup_woba'),
+                'baselineWoba': (ars or {}).get('baseline_woba'),
+            } if ars else None,
+            'bvp': None,
+        }
+
+    batter_rows = [_bat_row(b) for b in bats]
+    if pit_id:
+        def _bvp_one(row):
+            try:
+                res = _fetch_bvp(int(row['id']), int(pit_id)) or {}
+                if res.get('pa'):
+                    row['bvp'] = {'pa': res.get('pa'), 'avg': res.get('avg'),
+                                  'ops': res.get('ops'), 'hr': res.get('hr', 0),
+                                  'grade': res.get('grade')}
+            except Exception:
+                pass
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            list(ex.map(_bvp_one, [r for r in batter_rows if r.get('id')]))
+
+    return {
+        'pitcher': {'id': pit_id, 'name': pit_name, 'hand': pit_hand,
+                    'ip': _safe_f(fgp.get('fg_ip'), None)},
+        'lineupTeam': opp_abbr,
+        'lineupPa': round(sum(_safe_f(b['_fg'].get('fg_pa'), 0) or 0 for b in bats)),
+        'rows': rows,
+        'pitchTypes': pitch_types,
+        'batters': batter_rows,
+    }
+
+
+_ANALYZER_RESP_CACHE = {}
+_ANALYZER_RESP_LOCK = threading.Lock()
+_ANALYZER_RESP_TTL = 600
+
+
+@app.route('/api/matchup-analyzer/<int:game_pk>')
+def api_matchup_analyzer(game_pk):
+    """Percentile-bar Matchup Analyzer: each starting pitcher vs the opposing
+    lineup — shared-stat percentile rows (1-99, higher = better for that
+    side), the by-pitch-type arsenal join, and the per-batter
+    lineup-vs-this-pitcher table (plate discipline percentiles, platoon
+    split, arsenal verdict, career BvP)."""
+    try:
+        _maybe_refresh_fg()
+        _maybe_refresh_savant()
+        date_hint = request.args.get('date')
+        ck = (game_pk, date_hint or '')
+        now = time.time()
+        with _ANALYZER_RESP_LOCK:
+            hit = _ANALYZER_RESP_CACHE.get(ck)
+            if hit and now - hit[0] < _ANALYZER_RESP_TTL:
+                return jsonify(hit[1])
+
+        gdata, away_bats, home_bats, away_t, home_t, pitchers = _props_fetch_game(game_pk, date_hint=date_hint)
+        if not gdata:
+            return jsonify({'success': False, 'error': 'Game not found'}), 404
+        away_abbr = (away_t.get('team', {}) or {}).get('abbreviation', 'AWAY')
+        home_abbr = (home_t.get('team', {}) or {}).get('abbreviation', 'HOME')
+        pop = _analyzer_populations()
+
+        payload = {
+            'success': True,
+            'gamePk': game_pk,
+            'awayAbbr': away_abbr,
+            'homeAbbr': home_abbr,
+            # away starter faces the HOME lineup and vice versa
+            'awaySp': _analyzer_side(pitchers.get('ap', {}) or {}, home_bats, home_abbr, pop),
+            'homeSp': _analyzer_side(pitchers.get('hp', {}) or {}, away_bats, away_abbr, pop),
+            'edgeGap': _ANALYZER_EDGE_GAP,
+            'generatedAt': datetime.now(timezone.utc).isoformat(),
+        }
+        with _ANALYZER_RESP_LOCK:
+            _ANALYZER_RESP_CACHE[ck] = (now, payload)
+            _evict_if_large(_ANALYZER_RESP_CACHE, 40)
+        return jsonify(payload)
+    except Exception as ex:
+        print(f"[api_matchup_analyzer] {traceback.format_exc()}")
+        return jsonify({'success': False, 'error': str(ex)}), 500
 
 
 # ── Route: Matchup scores (v2 — platoon-aware) ────────────────────────────────
@@ -23847,17 +24494,95 @@ def api_umpire(game_pk):
 
 
 # ── L5/L10 helpers ────────────────────────────────────────────────────────────
+_TEAM_ABBR_CACHE = {"date": None, "map": {}}
+_TEAM_ABBR_LOCK = threading.Lock()
+
+
+def _team_abbr_by_id():
+    """teamId -> abbreviation for all MLB teams, daily-cached. The gameLog
+    splits' `opponent` object carries only id + name (no abbreviation), so
+    game-log consumers need this map for short opponent labels."""
+    today = datetime.now().date()
+    with _TEAM_ABBR_LOCK:
+        if _TEAM_ABBR_CACHE["date"] == today and _TEAM_ABBR_CACHE["map"]:
+            return _TEAM_ABBR_CACHE["map"]
+    m = {}
+    try:
+        r = requests.get(f"{MLB_API}/teams", params={"sportId": 1}, timeout=8)
+        for t in r.json().get("teams", []):
+            if t.get("id") and t.get("abbreviation"):
+                m[int(t["id"])] = t["abbreviation"]
+    except Exception:
+        with _TEAM_ABBR_LOCK:
+            return dict(_TEAM_ABBR_CACHE["map"])
+    with _TEAM_ABBR_LOCK:
+        _TEAM_ABBR_CACHE["date"] = today
+        _TEAM_ABBR_CACHE["map"] = m
+        return dict(m)
+
+
+def _gamelog_opp_abbr(split):
+    opp = split.get("opponent", {}) or {}
+    return (opp.get("abbreviation")
+            or _team_abbr_by_id().get(opp.get("id"))
+            or opp.get("name", ""))
+
+
+_DAYNIGHT_MAP_CACHE = {"date": None, "season": None, "map": {}}
+_DAYNIGHT_MAP_LOCK = threading.Lock()
+
+
+def _gamepk_daynight_map(season):
+    """gamePk -> 'day'/'night' for a season, daily-cached (one schedule call).
+
+    The gameLog splits' nested `game.dayNight` is unreliable — it reads 'day'
+    for every game — so the hit-history day/night split derives from the
+    schedule endpoint, which carries the real value."""
+    today = datetime.now().date()
+    with _DAYNIGHT_MAP_LOCK:
+        c = _DAYNIGHT_MAP_CACHE
+        if c["date"] == today and c["season"] == season and c["map"]:
+            return c["map"]
+    m = {}
+    try:
+        r = requests.get(f"{MLB_API}/schedule", params={
+            "sportId": 1,
+            "startDate": f"{season}-03-01", "endDate": f"{season}-11-30",
+            "gameType": "R",
+            "fields": "dates,games,gamePk,dayNight",
+        }, timeout=12)
+        for d in r.json().get("dates", []):
+            for g in d.get("games", []):
+                if g.get("gamePk") and g.get("dayNight"):
+                    m[int(g["gamePk"])] = g["dayNight"]
+    except Exception:
+        with _DAYNIGHT_MAP_LOCK:
+            return dict(_DAYNIGHT_MAP_CACHE["map"])
+    with _DAYNIGHT_MAP_LOCK:
+        _DAYNIGHT_MAP_CACHE.update({"date": today, "season": season, "map": m})
+        return dict(m)
+
+
+def _gamelog_day_flag(split, dn_map):
+    gpk = (split.get("game") or {}).get("gamePk")
+    dn = dn_map.get(gpk) if gpk else None
+    return (dn == "day") if dn else None
+
+
 def _fetch_batter_gamelog(player_id, season=None, limit=10):
     """Returns recent game log entries for a batter, newest-last order."""
     try:
         splits = _gamelog_splits_cached(player_id, "hitting", season)
+        dn_map = _gamepk_daynight_map(int(season or datetime.now().year))
         out = []
         chosen = splits if limit is None else splits[-int(limit):]
         for s in chosen:
             st = s.get("stat", {})
             out.append({
                 "date": s.get("date", ""),
-                "opp":  s.get("opponent", {}).get("abbreviation", ""),
+                "opp":  _gamelog_opp_abbr(s),
+                "home": bool(s.get("isHome")),
+                "day":  _gamelog_day_flag(s, dn_map),
                 "ab":   int(st.get("atBats", 0)),
                 "h":    int(st.get("hits", 0)),
                 "hr":   int(st.get("homeRuns", 0)),
@@ -23877,6 +24602,7 @@ def _fetch_pitcher_gamelog(player_id, season=None, limit=10):
     """Returns recent game log entries for a pitcher, newest-last order."""
     try:
         splits = _gamelog_splits_cached(player_id, "pitching", season)
+        dn_map = _gamepk_daynight_map(int(season or datetime.now().year))
         out = []
         chosen = splits if limit is None else splits[-int(limit):]
         for s in chosen:
@@ -23889,7 +24615,9 @@ def _fetch_pitcher_gamelog(player_id, season=None, limit=10):
                 ip_dec = _safe_f(ip_raw, 0)
             out.append({
                 "date": s.get("date", ""),
-                "opp":  s.get("opponent", {}).get("abbreviation", ""),
+                "opp":  _gamelog_opp_abbr(s),
+                "home": bool(s.get("isHome")),
+                "day":  _gamelog_day_flag(s, dn_map),
                 "ip":   round(ip_dec, 2),
                 "k":    int(st.get("strikeOuts", 0)),
                 "bb":   int(st.get("baseOnBalls", 0)),
@@ -23972,6 +24700,192 @@ def _consistency_recent_form(values, line, limit=10):
         else:
             break
     return {'spark': spark, 'streakOver': streak}
+
+
+# ── Prop hit history (per-game bars vs line, with recorded closing lines) ─────
+# Markets the hit-history chart supports → which game-log group feeds them.
+_HIT_HISTORY_MARKETS = {
+    'batter_hits': 'hitting',
+    'batter_total_bases': 'hitting',
+    'batter_home_runs': 'hitting',
+    'batter_rbis': 'hitting',
+    'batter_runs_scored': 'hitting',
+    'batter_hits_runs_rbis': 'hitting',
+    'batter_stolen_bases': 'hitting',
+    'pitcher_strikeouts': 'pitching',
+}
+
+_HIT_HISTORY_DEFAULT_LINE = {
+    'batter_hits': 0.5, 'batter_total_bases': 1.5, 'batter_home_runs': 0.5,
+    'batter_rbis': 0.5, 'batter_runs_scored': 0.5, 'batter_hits_runs_rbis': 1.5,
+    'batter_stolen_bases': 0.5, 'pitcher_strikeouts': 4.5,
+}
+
+
+def _hit_history_recorded_rows(player_id, player_name, market_key, dates):
+    """date -> that day's tracker-capture row for (player, market).
+
+    The daily tracker capture snapshots every slate prop at its offered line,
+    and the closing-capture worker refreshes the price at first pitch — so a
+    row here IS the line/price that was actually bettable that day. Matched by
+    playerId when the row carries one, by normalized name otherwise. When a
+    date has several rows (e.g. re-capture), prefer one with a closing price.
+    """
+    out = {}
+    if not dates:
+        return out
+    try:
+        store = _tracker_store()
+    except Exception:
+        return out
+    name_l = (player_name or '').strip().lower()
+    for ds in set(dates):
+        day = _normalize_tracker_day(store.get(ds)) if store.get(ds) else None
+        if not day:
+            continue
+        best = None
+        for row in day.get('entries', []):
+            if row.get('marketKey') != market_key:
+                continue
+            rid = row.get('playerId')
+            matched = False
+            if rid is not None and player_id is not None:
+                try:
+                    matched = int(rid) == int(player_id)
+                except (TypeError, ValueError):
+                    matched = False
+            if not matched:
+                matched = bool(name_l) and (row.get('player') or '').strip().lower() == name_l
+            if not matched or row.get('line') is None:
+                continue
+            if best is None or (row.get('closingPrice') is not None and best.get('closingPrice') is None):
+                best = row
+        if best:
+            out[ds] = best
+    return out
+
+
+def _hit_history_result(value, line):
+    if value is None or line is None:
+        return None
+    if float(value) > float(line):
+        return 'over'
+    if float(value) < float(line):
+        return 'under'
+    return 'push'
+
+
+def _hit_history_rate(results):
+    """Hit-rate summary over a list of over/under/push results (None = excluded)."""
+    decided = [r for r in results if r in ('over', 'under')]
+    pushes = sum(1 for r in results if r == 'push')
+    overs = sum(1 for r in decided if r == 'over')
+    return {
+        'overs': overs,
+        'decided': len(decided),
+        'pushes': pushes,
+        'rate': round(overs / len(decided), 3) if decided else None,
+    }
+
+
+@app.route('/api/props/hit-history/<int:player_id>')
+def api_props_hit_history(player_id):
+    """Per-game prop values vs a line, graded two ways (PropsMadness-style chart).
+
+    `?market=` tracker market key, `?line=` the line to grade against (defaults
+    per market), `?n=` games window (default 20), `?season=`, `?player=` name
+    fallback for tracker matching. Each game carries the stat value, its result
+    vs the CURRENT line (applied retroactively), and — where the daily tracker
+    capture recorded that day's offered line — the RECORDED line + closing
+    price with its own result. `summary.closing.coverage` says how many games
+    have a recorded line, so the UI can show an honest closing-mode sample
+    instead of silently falling back.
+    """
+    market = (request.args.get('market') or 'batter_hits').strip()
+    group = _HIT_HISTORY_MARKETS.get(market)
+    if not group:
+        return jsonify({'success': False, 'error': f'unsupported market: {market}'}), 400
+    try:
+        line = float(request.args.get('line'))
+    except (TypeError, ValueError):
+        line = _HIT_HISTORY_DEFAULT_LINE[market]
+    try:
+        n = max(1, min(int(request.args.get('n', 20)), 162))
+    except (TypeError, ValueError):
+        n = 20
+    try:
+        season = int(request.args.get('season', datetime.now().year))
+    except (TypeError, ValueError):
+        season = datetime.now().year
+    player_name = (request.args.get('player') or '').strip()
+    try:
+        teammate_id = int(request.args.get('teammate'))
+    except (TypeError, ValueError):
+        teammate_id = None
+
+    try:
+        if group == 'pitching':
+            log = _fetch_pitcher_gamelog(player_id, season=season, limit=n)
+        else:
+            log = _fetch_batter_gamelog(player_id, season=season, limit=n)
+        season_total = len(_gamelog_splits_cached(player_id, group, season))
+        recorded = _hit_history_recorded_rows(
+            player_id, player_name, market, [g.get('date') for g in log if g.get('date')])
+
+        # Teammate-in-lineup flag: the teammate appeared that day iff their own
+        # game log has a split on the same date (same team, so same game).
+        teammate_dates = None
+        if teammate_id and teammate_id != player_id:
+            teammate_dates = {s.get('date') for s in _gamelog_splits_cached(teammate_id, 'hitting', season)}
+
+        games = []
+        for g in log:
+            value = _consistency_stat_value(g, market)
+            row = {
+                'date': g.get('date', ''),
+                'opp': g.get('opp', ''),
+                'home': bool(g.get('home')),
+                'day': g.get('day'),
+                'tm': (g.get('date') in teammate_dates) if teammate_dates is not None else None,
+                'value': value,
+                'result': _hit_history_result(value, line),
+                'recorded': None,
+            }
+            rec = recorded.get(g.get('date'))
+            if rec is not None:
+                row['recorded'] = {
+                    'line': rec.get('line'),
+                    'result': _hit_history_result(value, rec.get('line')),
+                    'closingPrice': rec.get('closingPrice'),
+                    'closingBook': rec.get('closingBookmaker'),
+                    'openingPrice': rec.get('openingPrice'),
+                }
+            games.append(row)
+
+        closing_results = [
+            (g['recorded'] or {}).get('result') for g in games if g.get('recorded')]
+        closing_summary = _hit_history_rate(closing_results)
+        closing_summary['coverage'] = len(closing_results)
+
+        return jsonify({
+            'success': True,
+            'playerId': player_id,
+            'player': player_name,
+            'market': market,
+            'line': line,
+            'season': season,
+            'n': n,
+            'seasonGames': season_total,
+            'teammate': teammate_id,
+            'games': games,
+            'summary': {
+                'line': _hit_history_rate([g['result'] for g in games]),
+                'closing': closing_summary,
+            },
+        })
+    except Exception as ex:
+        print(f"[api_props_hit_history] pid={player_id} {traceback.format_exc()}")
+        return jsonify({'success': False, 'error': str(ex)}), 500
 
 
 def _empty_consistency_payload(date_str):
@@ -25009,6 +25923,11 @@ def _compute_dashboard_quick_props(game_pk, limit=3, date_hint=None, prefetch=No
 
 
 # ── Route: L5/L10 trends for all players in a game ───────────────────────────
+_TRENDS_RESP_CACHE = {}
+_TRENDS_RESP_LOCK = threading.Lock()
+_TRENDS_RESP_TTL = 300  # gamelog-derived; changes at most once per game day
+
+
 @app.route("/api/props/trends/<int:game_pk>")
 def api_props_trends(game_pk):
     """
@@ -25017,6 +25936,11 @@ def api_props_trends(game_pk):
     """
     try:
         date_hint = request.args.get('date')
+        _resp_ck = (int(game_pk), date_hint or '')
+        with _TRENDS_RESP_LOCK:
+            _hit = _TRENDS_RESP_CACHE.get(_resp_ck)
+        if _hit and time.time() - _hit[0] < _TRENDS_RESP_TTL:
+            return jsonify(_hit[1])
         # Get lineups + pitchers
         gdata, away_bats, home_bats, away_t, home_t, pitchers = _props_fetch_game(game_pk, date_hint=date_hint)
         if not gdata:
@@ -25052,13 +25976,17 @@ def api_props_trends(game_pk):
                     results[str(pid)] = {"name": name, "error": str(fe)}
         _gdata2, quick_props = _compute_dashboard_quick_props(game_pk, limit=3, date_hint=date_hint)
 
-        return jsonify({
+        _payload = {
             "success":  True,
             "gamePk":   game_pk,
             "players":  results,
             "quickProps": quick_props,
             "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+        }
+        with _TRENDS_RESP_LOCK:
+            _evict_if_large(_TRENDS_RESP_CACHE, 40)
+            _TRENDS_RESP_CACHE[_resp_ck] = (time.time(), _payload)
+        return jsonify(_payload)
 
     except Exception as ex:
         print(f"[api_props_trends] {traceback.format_exc()}")
@@ -26737,6 +27665,40 @@ def _preload_caches():
         except Exception as ex:
             print(f"[STARTUP] brain overlay load failed: {ex}")
     threading.Thread(target=_load_brain_overlays_when_ready, daemon=True).start()
+
+    def _prewarm_projections_when_ready():
+        """Prebuild the props projections payload for today's slate once FG and
+        Savant are loaded, so the first game a user opens serves from the
+        response cache instead of paying the full cold build. Low priority:
+        one game at a time, and each build populates the per-player day caches
+        the other endpoints reuse."""
+        deadline = time.time() + 240
+        while time.time() < deadline:
+            with _fg_lock:
+                fg_ok = _fg_loaded
+            with _sv_lock:
+                sv_ok = _sv_loaded
+            if fg_ok and sv_ok:
+                break
+            time.sleep(5)
+        try:
+            today = datetime.now(ET).strftime('%Y-%m-%d')
+            games = fetch_schedule(today) or []
+            warmed = 0
+            for gm in games[:10]:
+                pk = gm.get('gamePk')
+                if not pk:
+                    continue
+                try:
+                    with app.test_request_context(f'/api/props/projections/{pk}'):
+                        api_props_projections(pk)
+                    warmed += 1
+                except Exception:
+                    pass
+            print(f"[STARTUP] projections prewarm complete: {warmed}/{min(len(games), 10)} games")
+        except Exception as ex:
+            print(f"[STARTUP] projections prewarm failed: {ex}")
+    threading.Thread(target=_prewarm_projections_when_ready, daemon=True).start()
 
     _start_odds_snapshot_worker()
 

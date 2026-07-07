@@ -33,6 +33,7 @@ Container build (used by Fly.io / `Dockerfile`): a multi-stage Python 3.11-slim 
 **Odds API:**
 - `ODDS_API_KEY` — The Odds API key. Routes degrade gracefully when absent.
 - `ODDS_REGION` (default `us`).
+- `ODDS_INCLUDE_ALT_MARKETS` (default 1) — adds the five `*_alternate` market keys (hits/TB/HR/RBI/K ladders, e.g. K 1.5–9.5 per book) to every event-odds request. Powers the line-shopping ladder matrix; costs ~5 extra Odds API credits per game per day in the snapshot (and per closing-capture refresh). Set 0 to fall back to primary lines only — the UI degrades to the legacy single-line table.
 - TTL tuning: `ODDS_EVENTS_TTL_SEC` (default 21600), `ODDS_GAME_TTL_SEC` (default 86400), `ODDS_NRFI_TTL_SEC` (default 300).
 
 **Infra / operational:**
@@ -135,7 +136,9 @@ Each HTML file is loaded into a module-level string at boot via `_read_html_or_f
 - `/api/props/scan/today` — cross-game MC grades for all props
 - `/api/edges/today` — slate-wide edge-ranked board (positive-value plays + letter grades), reuses the cached props-scan
 - `/api/v1/edges` — quant JSON feed: the edge board filtered by **EV** (default `minEv=0.03`), each play enriched via `value_engine` with de-vig'd `fairProb`, true EV vs best price, and a Quarter-Kelly `stakePct`/`stakeUnits`/`stakeDollars` (sized from tracker bankroll/kelly_fraction/max_bet_pct). Backbone for a mobile/Telegram/Discord client. Degrades gracefully (no odds → empty list, still 200)
-- `/api/props/line-shopping/<game_pk>`, `/api/props/matchup-scores/<game_pk>`, `/api/props/trends/<game_pk>`, `/api/props/quick/<game_pk>`
+- `/api/props/line-shopping/<game_pk>`, `/api/props/matchup-scores/<game_pk>`, `/api/props/trends/<game_pk>`, `/api/props/quick/<game_pk>`. Line-shopping groups now carry a `lines[]` ladder (per distinct line: per-book over/under with best-price flags, merged across the primary and `*_alternate` markets and deduped per book), plus `primary_line` (the primary-market line offered by the most books) and `all_books`. The legacy `books`/`best_over_price`/`line_range`/`book_count` fields are computed from primary-market rows ONLY — deepdive's strike engine and the props best-odds pill read them as "the main line's price", and an alt-ladder extreme (4+ hits +2000) must never leak in. Alt rows keep `market_key='*_alternate'` in `_parse_prop_markets` output (with `base_key`/`is_alt`) for the same reason.
+- `/api/props/hit-history/<player_id>` — per-game prop values vs a line for the props-page HIT HISTORY bar chart (`?market=<tracker key>&line=&n=&season=&player=`). Grades each game two ways: vs the **current** line applied retroactively, and vs each game's **recorded** line from that day's tracker capture (`_hit_history_recorded_rows`; the closing-capture worker refreshes its price at first pitch). `summary.closing.coverage` reports how many games actually carry a recorded line — the UI's LINE ⇄ CLOSING LINES toggle excludes uncovered games from the closing hit rate instead of silently falling back to the current line. Rows also carry `home` and `day` split flags plus (when `?teammate=<mlbam id>` is passed) a `tm` flag — teammate appeared that day, derived by intersecting the teammate's own game-log dates — for the modal's client-side conditional filters (VS-opp/H2H, HOME/AWAY, DAY/NIGHT, teammate WITH/WITHOUT — hit rate recomputed in `hhSummarize`). **`day` comes from `_gamepk_daynight_map`** (one daily-cached season schedule call): the gameLog splits' nested `game.dayNight` is unreliable — it reads `'day'` for every game — so never derive day/night from the game log itself
+- `/api/matchup-analyzer/<game_pk>` — percentile Matchup Analyzer for the props-page Matchup tab: each starting pitcher vs the opposing lineup as 1–99 percentile rows (K%, BB%, Whiff%, xwOBA, xERA-vs-wRC+; rank direction is always "higher = better for that side", populations from the in-memory FG/Savant caches via `_analyzer_populations`, day-cached), a by-pitch-type table (pitcher arsenal joined against the lineup's PA-weighted wOBA/whiff per pitch from `_sv_bat_arsenal_stats`), and a per-batter lineup-vs-this-pitcher table (plate-discipline percentiles, platoon split, `_arsenal_matchup_from_stats` verdict, career BvP via `_fetch_bvp`). Beware two data quirks handled here: `_get_pitch_arsenal` returns BOTH MLBAM-named outcome rows and code-keyed velo rows ("Sinker" + "si") that must be merged, and the schedule's `probablePitcher` has no `pitchHand` (fallback chain ends at `_pitcher_hand_cached`, a day-cached people-API call). Response cached 10 min per (game, date)
 - `/api/projections/monte-carlo` — full MC slate with per-game top props
 - `/api/tracker/*` — full CRUD for picks, settings, performance, bankroll, calibration, Brier, attribution, value, portfolio, bet slip, closing-line capture
 - `/api/cheatsheets/today` — daily cheatsheet (cached, async refresh)
@@ -256,6 +259,22 @@ Tracker picks (`data/daily_tracker.json[date].entries[]`) carry: `id`, `savedAt`
 ## Name matching
 
 Player names are normalized to lowercase and matched with `difflib.get_close_matches(cutoff=0.78)` in `_fuzzy_lookup()`. Savant uses `"Last, First"` format; `_sv_key()` converts to `"First Last"` for consistent lookups. When adding new stat sources, follow the same convention. `_ascii_fold()` strips accents so names like "Acuña" match "Acuna".
+
+## Performance architecture
+
+Measured on a live slate (before → after the 2026-07 perf pass): props projections 20s cold / 7.8s warm → ~4s first build / **3ms** cached; props page open→cards ~14s → **0.3s**; game switch → **~1-2s**. The load-bearing pieces, in order of importance — do not remove them casually:
+
+- **Pooled HTTP session** (`_HTTP_SESSION`, app.py top): module-level `requests.get` is rebound to a keep-alive `Session.get`. A fresh TCP+TLS handshake to statsapi.mlb.com measured 500-700ms per call and the app makes thousands per hour; connection reuse is the single biggest systemic win. Anything importing `requests` in-process (pybaseball, brain) shares the pool.
+- **fangraphs_loader lookup memo** (`_memoized`): `get_batter_stats`/`get_pitcher_stats`/projection getters ran pandas boolean scans (~65ms) per call, and the XGB scorer's `_enrich_pitcher_from_fg` asks for the SAME pitcher dozens of times per request (was 2.5s/request). CSVs load once per process, so the memo never goes stale; results are copied out, `{}` misses are negative-cached.
+- **`fetch_schedule` 120s TTL cache** — was fetched 3+×/request (game fetch + travel walk-back). `_team_previous_venue` is day-cached per (team, date) incl. negative results.
+- **`_props_fetch_game` 60s cache** — six endpoints call it per game view (projections/trends/matchup-scores/line-shopping/analyzer/quick); each uncached call is schedule+boxscore. Batter lists are copied out because callers annotate the dicts.
+- **Response caches**: projections (`_PROJ_RESP_CACHE`, 90s), trends (300s), analyzer (600s), quick-props (SWR 90s/600s). Tab flips and the lineup poller serve from these.
+- **Slate prewarm** (`_prewarm_projections_when_ready` in `_preload_caches`): after FG+Savant load, prebuilds projections for today's first 10 games via `app.test_request_context`, which also populates every per-player day cache — the user's first click of the day is warm.
+- **gzip after_request**: JSON >4KB compresses ~10× (trends 38KB→3.4KB; deepdive matchup payload is >1MB).
+- **Non-blocking Google Fonts**: every page's fonts stylesheet uses preconnect + `media="print" onload` swap; a slow fonts.googleapis.com no longer stalls first paint (it was render-blocking in the head).
+- **Diagnostics**: `PROFILE_REQUESTS=1` wraps every request in cProfile (and runs the projections batter-enrich pool inline so the profiler can see it); the projections route logs `[perf] ... (game=..ms odds=..ms enrich_batters=..ms ...)` phase marks for any request ≥1s.
+
+Known remaining cost: a from-scratch projections build is ~2-4s of real CPU (XGB + BATX × 18 batters) — that's what the prewarm and the 90s response cache absorb. The MLB memory-store worker (every 3h) makes ~250 pooled calls in the background; it shares CPU with requests, so if p99s spike on that cadence, that's why.
 
 ## Working with this codebase
 
