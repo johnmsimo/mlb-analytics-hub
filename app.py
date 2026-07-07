@@ -23623,6 +23623,386 @@ def api_batting_order_matchups(game_pk):
         return jsonify({"success": False, "error": str(ex)}), 500
 
 
+# ── Matchup Analyzer — percentile pitcher-vs-lineup + arsenal join ────────────
+
+def _pctnorm(v):
+    """Normalize a rate that may arrive as a fraction (0.22) or percent (22.0)
+    to PERCENT scale. FG CSVs are inconsistent across seasons/sources."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f * 100.0 if 0 < f <= 1.0 else f
+
+
+def _pct_rank(sorted_vals, v, higher_better=True):
+    """1-99 percentile of v within a sorted population; direction-aware so a
+    HIGHER returned rank is always BETTER for the side being ranked."""
+    if v is None or not sorted_vals:
+        return None
+    below = sum(1 for x in sorted_vals if x < v)
+    equal = sum(1 for x in sorted_vals if x == v)
+    frac = (below + equal / 2.0) / len(sorted_vals)
+    if not higher_better:
+        frac = 1.0 - frac
+    return int(max(1, min(99, round(frac * 100))))
+
+
+def _bat_arsenal_mean_whiff(bat_ars):
+    """Batter's mean whiff% across pitch types with data (>=3 types)."""
+    vals = [_safe_f(p.get('whiff_pct'), None) for p in (bat_ars or {}).values()]
+    vals = [v for v in vals if v is not None]
+    return round(sum(vals) / len(vals), 1) if len(vals) >= 3 else None
+
+
+_ANALYZER_POP_CACHE = {'date': None, 'pop': None}
+_ANALYZER_POP_LOCK = threading.Lock()
+
+
+def _analyzer_populations():
+    """Sorted league-wide distributions used to place a value on a 1-99
+    percentile bar. Built from the in-memory FG/Savant caches (qualified:
+    batters >=100 PA, pitchers >=30 IP for FG rates; Savant leaderboards are
+    already min-qualified) and cached for the day."""
+    today = datetime.now().date()
+    with _ANALYZER_POP_LOCK:
+        c = _ANALYZER_POP_CACHE
+        if c['date'] == today and c['pop']:
+            return c['pop']
+    with _fg_lock:
+        fg_bat = {k: dict(v) for k, v in _fg_bat.items()}
+        fg_pit = {k: dict(v) for k, v in _fg_pit.items()}
+    with _sv_lock:
+        sv_bx = {k: dict(v) for k, v in _sv_bat_xstats.items()}
+        sv_bs = {k: dict(v) for k, v in _sv_bat_statcast.items()}
+        sv_px = {k: dict(v) for k, v in _sv_pit_xstats.items()}
+        bat_ars = {k: dict(v) for k, v in _sv_bat_arsenal_stats.items()}
+        pit_ars = {k: dict(v) for k, v in _sv_pit_arsenal_stats.items()}
+
+    def _col(rows, key, norm=None, qual=None):
+        out = []
+        for r in rows:
+            if qual and not qual(r):
+                continue
+            v = norm(r.get(key)) if norm else _safe_f(r.get(key), None)
+            if v is not None:
+                out.append(float(v))
+        return sorted(out)
+
+    bat_q = lambda r: _safe_f(r.get('fg_pa'), 0) >= 100
+    pit_q = lambda r: _safe_f(r.get('fg_ip'), 0) >= 30
+    pop = {
+        'bat': {
+            'kpct':  _col(fg_bat.values(), 'fg_kpct', _pctnorm, bat_q),
+            'bbpct': _col(fg_bat.values(), 'fg_bbpct', _pctnorm, bat_q),
+            'wrc':   _col(fg_bat.values(), 'fg_wrc', None, bat_q),
+            'xwoba': _col(sv_bx.values(), 'sv_xwoba'),
+            'brl':   _col(sv_bs.values(), 'sv_brl_pct'),
+            'whiff': sorted(v for v in (_bat_arsenal_mean_whiff(a) for a in bat_ars.values()) if v is not None),
+        },
+        'pit': {
+            'kpct':  _col(fg_pit.values(), 'fg_kpct', _pctnorm, pit_q),
+            'bbpct': _col(fg_pit.values(), 'fg_bbpct', _pctnorm, pit_q),
+            'xwoba': _col(sv_px.values(), 'sv_xwoba_p'),
+            # sv_whiff is sparsely populated on the pitcher-xstats leaderboard,
+            # so the whiff population comes from the arsenal rows (same scale
+            # and same computation as the per-pitcher fallback value).
+            'whiff': _col(sv_px.values(), 'sv_whiff') or sorted(
+                v for v in (_pit_arsenal_weighted_whiff(a) for a in pit_ars.values()) if v is not None),
+            'xera':  _col(sv_px.values(), 'sv_xera'),
+        },
+    }
+    with _ANALYZER_POP_LOCK:
+        _ANALYZER_POP_CACHE.update({'date': today, 'pop': pop})
+    return pop
+
+
+def _lineup_weighted(bat_rows, getter):
+    """PA-weighted lineup aggregate of a per-batter value; None-safe."""
+    num = den = 0.0
+    for b in bat_rows:
+        v = getter(b)
+        if v is None:
+            continue
+        w = max(50.0, _safe_f(b.get('_fg', {}).get('fg_pa'), 0) or 0)
+        num += w * float(v)
+        den += w
+    return (num / den) if den else None
+
+
+_ANALYZER_EDGE_GAP = 15  # percentile-rank gap before a side is colored
+
+
+def _analyzer_row(label, pit_val, pit_pct, bat_val, bat_pct, fmt='pct1',
+                  pit_label=None, bat_label=None):
+    edge = 'even'
+    if pit_pct is not None and bat_pct is not None:
+        if pit_pct - bat_pct >= _ANALYZER_EDGE_GAP:
+            edge = 'pitcher'
+        elif bat_pct - pit_pct >= _ANALYZER_EDGE_GAP:
+            edge = 'batter'
+    return {
+        'stat': label, 'fmt': fmt, 'edge': edge,
+        'pitcher': {'value': pit_val, 'pct': pit_pct, 'label': pit_label or label},
+        'lineup': {'value': bat_val, 'pct': bat_pct, 'label': bat_label or label},
+    }
+
+
+_PITCH_CODE_NAMES = {
+    'ff': '4-Seam Fastball', 'si': 'Sinker', 'fc': 'Cutter', 'ch': 'Changeup',
+    'sl': 'Slider', 'cu': 'Curveball', 'st': 'Sweeper', 'fs': 'Splitter',
+    'kc': 'Knuckle Curve', 'sv': 'Slurve', 'kn': 'Knuckleball',
+}
+
+_PIT_HAND_CACHE = {}
+_PIT_HAND_LOCK = threading.Lock()
+
+
+def _pitcher_hand_cached(pitcher_id):
+    """L/R for a pitcher via the people API, day-cached (the schedule's
+    probablePitcher object carries only id/fullName — no pitchHand)."""
+    if not pitcher_id:
+        return None
+    today = datetime.now().date()
+    with _PIT_HAND_LOCK:
+        hit = _PIT_HAND_CACHE.get(int(pitcher_id))
+        if hit and hit[0] == today:
+            return hit[1]
+    hand = None
+    try:
+        r = requests.get(f"{MLB_API}/people/{int(pitcher_id)}", timeout=8)
+        ppl = r.json().get('people', [])
+        if ppl:
+            hand = ((ppl[0].get('pitchHand') or {}).get('code') or '').upper()[:1] or None
+    except Exception:
+        hand = None
+    with _PIT_HAND_LOCK:
+        _evict_if_large(_PIT_HAND_CACHE, 200)
+        _PIT_HAND_CACHE[int(pitcher_id)] = (today, hand)
+    return hand
+
+
+def _pit_arsenal_weighted_whiff(pars):
+    """Usage-weighted whiff% across a pitcher's arsenal rows."""
+    wn = wd = 0.0
+    for pstat in (pars or {}).values():
+        u = _safe_f(pstat.get('usage'), 0.0)
+        w = _safe_f(pstat.get('whiff_pct'), None)
+        if u > 0 and w is not None:
+            wn += u * w
+            wd += u
+    return round(wn / wd, 1) if wd else None
+
+
+def _analyzer_side(pit_info, opp_bats, opp_abbr, pop):
+    """One analyzer panel: this starting pitcher vs the opposing lineup."""
+    pit_name = pit_info.get('fullName', 'TBD')
+    pit_id = pit_info.get('id')
+    ph = pit_info.get('pitchHand')
+    if isinstance(ph, dict):
+        ph = ph.get('code')
+    fgp = fg_pitcher(pit_name) or {}
+    svp = sv_pitcher(pit_name) or {}
+    pit_hand = str(ph or fgp.get('fg_throws') or _pitcher_hand_cached(pit_id) or 'R').upper()[:1]
+    bats = []
+    for b in (opp_bats or [])[:9]:
+        nm = b.get('name', '')
+        bats.append({**b, '_fg': fg_batter(nm) or {}, '_sv': sv_batter(nm) or {}})
+    with _sv_lock:
+        bat_ars_all = {k: dict(v) for k, v in _sv_bat_arsenal_stats.items()}
+
+    # ── percentile rows (higher pct = better for that side) ──
+    p_k = _pctnorm(fgp.get('fg_kpct'))
+    l_k = _lineup_weighted(bats, lambda b: _pctnorm(b['_fg'].get('fg_kpct')))
+    p_bb = _pctnorm(fgp.get('fg_bbpct'))
+    l_bb = _lineup_weighted(bats, lambda b: _pctnorm(b['_fg'].get('fg_bbpct')))
+    p_wh = _safe_f(svp.get('sv_whiff'), None)
+    if p_wh is None and pit_id:
+        with _sv_lock:
+            pars = dict(_sv_pit_arsenal_stats.get(str(pit_id)) or {})
+        p_wh = _pit_arsenal_weighted_whiff(pars)
+    l_wh = _lineup_weighted(bats, lambda b: _bat_arsenal_mean_whiff(bat_ars_all.get(str(b.get('id')))))
+    p_xw = _safe_f(svp.get('sv_xwoba_p'), None)
+    l_xw = _lineup_weighted(bats, lambda b: _safe_f(b['_sv'].get('sv_xwoba'), None))
+    p_xe = _safe_f(svp.get('sv_xera'), None) or _safe_f(fgp.get('fg_era'), None)
+    l_wrc = _lineup_weighted(bats, lambda b: _safe_f(b['_fg'].get('fg_wrc'), None))
+
+    r1 = lambda v: round(v, 1) if v is not None else None
+    r3 = lambda v: round(v, 3) if v is not None else None
+    rows = [
+        _analyzer_row('K%', r1(p_k), _pct_rank(pop['pit']['kpct'], p_k, True),
+                      r1(l_k), _pct_rank(pop['bat']['kpct'], l_k, False)),
+        _analyzer_row('BB%', r1(p_bb), _pct_rank(pop['pit']['bbpct'], p_bb, False),
+                      r1(l_bb), _pct_rank(pop['bat']['bbpct'], l_bb, True)),
+        _analyzer_row('Whiff%', r1(p_wh), _pct_rank(pop['pit']['whiff'], p_wh, True),
+                      r1(l_wh), _pct_rank(pop['bat']['whiff'], l_wh, False)),
+        _analyzer_row('xwOBA', r3(p_xw), _pct_rank(pop['pit']['xwoba'], p_xw, False),
+                      r3(l_xw), _pct_rank(pop['bat']['xwoba'], l_xw, True), fmt='num3'),
+        _analyzer_row('OVERALL', round(p_xe, 2) if p_xe is not None else None,
+                      _pct_rank(pop['pit']['xera'], p_xe, False),
+                      round(l_wrc) if l_wrc is not None else None,
+                      _pct_rank(pop['bat']['wrc'], l_wrc, True),
+                      fmt='raw', pit_label='xERA', bat_label='wRC+'),
+    ]
+
+    # ── by-pitch-type: pitcher arsenal vs lineup performance on that pitch ──
+    # _get_pitch_arsenal returns MLBAM-named outcome rows ("Sinker") PLUS
+    # code-keyed velo/usage rows ("si") from the name-keyed caches — merge the
+    # code rows into their named twin (velo lives only on the code row) and
+    # drop the code-only leftovers.
+    arsenal = _get_pitch_arsenal(pitcher_id=pit_id, pitcher_name=pit_name)
+    for code, full in _PITCH_CODE_NAMES.items():
+        if code in arsenal and full in arsenal:
+            for k in ('velo', 'use_pct'):
+                if arsenal[code].get(k) is not None and arsenal[full].get(k) is None:
+                    arsenal[full][k] = arsenal[code][k]
+            del arsenal[code]
+    pitch_types = []
+    for pt, ps in sorted(arsenal.items(), key=lambda kv: -_safe_f(kv[1].get('usage') or kv[1].get('use_pct'), 0)):
+        usage = _safe_f(ps.get('usage') or ps.get('use_pct'), None)
+        if usage is None or usage < 3:
+            continue
+        if ps.get('woba') is None and ps.get('whiff_pct') is None and ps.get('ba') is None:
+            continue   # code-only leftover with no outcome data
+        lw_num = lw_den = 0.0
+        wh_num = wh_den = 0.0
+        cover = 0
+        for b in bats:
+            ba = (bat_ars_all.get(str(b.get('id'))) or {}).get(pt)
+            if not ba:
+                continue
+            cover += 1
+            w = max(50.0, _safe_f(b['_fg'].get('fg_pa'), 0) or 0)
+            bw = _safe_f(ba.get('woba'), None)
+            if bw is not None:
+                lw_num += w * bw
+                lw_den += w
+            bwh = _safe_f(ba.get('whiff_pct'), None)
+            if bwh is not None:
+                wh_num += w * bwh
+                wh_den += w
+        pitch_types.append({
+            'pitch': pt,
+            'usage': round(usage, 1),
+            'velo': _safe_f(ps.get('velo'), None),
+            'pitcher': {
+                'woba': _safe_f(ps.get('woba'), None),
+                'whiff_pct': _safe_f(ps.get('whiff_pct'), None),
+                'ba': _safe_f(ps.get('ba'), None),
+            },
+            'lineup': {
+                'woba': round(lw_num / lw_den, 3) if lw_den else None,
+                'whiff_pct': round(wh_num / wh_den, 1) if wh_den else None,
+                'coverage': cover,
+            },
+        })
+
+    # ── per-batter table (#7): lineup vs THIS pitcher ──
+    def _bat_row(b):
+        fgb, svb = b['_fg'], b['_sv']
+        bid = b.get('id')
+        k = _pctnorm(fgb.get('fg_kpct'))
+        bb = _pctnorm(fgb.get('fg_bbpct'))
+        xw = _safe_f(svb.get('sv_xwoba'), None)
+        brl = _safe_f(svb.get('sv_brl_pct'), None)
+        wh = _bat_arsenal_mean_whiff(bat_ars_all.get(str(bid)))
+        split_avg = b.get('vs_l_avg') if pit_hand == 'L' else b.get('vs_r_avg')
+        try:
+            ars = _arsenal_matchup_from_stats(pit_id, bid) if (pit_id and bid) else None
+        except Exception:
+            ars = None
+        return {
+            'slot': b.get('slot'), 'id': bid, 'name': b.get('name'),
+            'bats': b.get('bats', 'R'), 'pa': _safe_f(fgb.get('fg_pa'), None),
+            'kpct': r1(k), 'kpctPct': _pct_rank(pop['bat']['kpct'], k, False),
+            'bbpct': r1(bb), 'bbpctPct': _pct_rank(pop['bat']['bbpct'], bb, True),
+            'whiff': r1(wh), 'whiffPct': _pct_rank(pop['bat']['whiff'], wh, False),
+            'xwoba': r3(xw), 'xwobaPct': _pct_rank(pop['bat']['xwoba'], xw, True),
+            'brl': r1(brl), 'brlPct': _pct_rank(pop['bat']['brl'], brl, True),
+            'splitAvg': split_avg if split_avg not in (None, 'N/A', '') else None,
+            'arsenal': {
+                'status': (ars or {}).get('status'),
+                'matchupWoba': (ars or {}).get('matchup_woba'),
+                'baselineWoba': (ars or {}).get('baseline_woba'),
+            } if ars else None,
+            'bvp': None,
+        }
+
+    batter_rows = [_bat_row(b) for b in bats]
+    if pit_id:
+        def _bvp_one(row):
+            try:
+                res = _fetch_bvp(int(row['id']), int(pit_id)) or {}
+                if res.get('pa'):
+                    row['bvp'] = {'pa': res.get('pa'), 'avg': res.get('avg'),
+                                  'ops': res.get('ops'), 'hr': res.get('hr', 0),
+                                  'grade': res.get('grade')}
+            except Exception:
+                pass
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            list(ex.map(_bvp_one, [r for r in batter_rows if r.get('id')]))
+
+    return {
+        'pitcher': {'id': pit_id, 'name': pit_name, 'hand': pit_hand,
+                    'ip': _safe_f(fgp.get('fg_ip'), None)},
+        'lineupTeam': opp_abbr,
+        'lineupPa': round(sum(_safe_f(b['_fg'].get('fg_pa'), 0) or 0 for b in bats)),
+        'rows': rows,
+        'pitchTypes': pitch_types,
+        'batters': batter_rows,
+    }
+
+
+_ANALYZER_RESP_CACHE = {}
+_ANALYZER_RESP_LOCK = threading.Lock()
+_ANALYZER_RESP_TTL = 600
+
+
+@app.route('/api/matchup-analyzer/<int:game_pk>')
+def api_matchup_analyzer(game_pk):
+    """Percentile-bar Matchup Analyzer: each starting pitcher vs the opposing
+    lineup — shared-stat percentile rows (1-99, higher = better for that
+    side), the by-pitch-type arsenal join, and the per-batter
+    lineup-vs-this-pitcher table (plate discipline percentiles, platoon
+    split, arsenal verdict, career BvP)."""
+    try:
+        _maybe_refresh_fg()
+        _maybe_refresh_savant()
+        date_hint = request.args.get('date')
+        ck = (game_pk, date_hint or '')
+        now = time.time()
+        with _ANALYZER_RESP_LOCK:
+            hit = _ANALYZER_RESP_CACHE.get(ck)
+            if hit and now - hit[0] < _ANALYZER_RESP_TTL:
+                return jsonify(hit[1])
+
+        gdata, away_bats, home_bats, away_t, home_t, pitchers = _props_fetch_game(game_pk, date_hint=date_hint)
+        if not gdata:
+            return jsonify({'success': False, 'error': 'Game not found'}), 404
+        away_abbr = (away_t.get('team', {}) or {}).get('abbreviation', 'AWAY')
+        home_abbr = (home_t.get('team', {}) or {}).get('abbreviation', 'HOME')
+        pop = _analyzer_populations()
+
+        payload = {
+            'success': True,
+            'gamePk': game_pk,
+            'awayAbbr': away_abbr,
+            'homeAbbr': home_abbr,
+            # away starter faces the HOME lineup and vice versa
+            'awaySp': _analyzer_side(pitchers.get('ap', {}) or {}, home_bats, home_abbr, pop),
+            'homeSp': _analyzer_side(pitchers.get('hp', {}) or {}, away_bats, away_abbr, pop),
+            'edgeGap': _ANALYZER_EDGE_GAP,
+            'generatedAt': datetime.now(timezone.utc).isoformat(),
+        }
+        with _ANALYZER_RESP_LOCK:
+            _ANALYZER_RESP_CACHE[ck] = (now, payload)
+            _evict_if_large(_ANALYZER_RESP_CACHE, 40)
+        return jsonify(payload)
+    except Exception as ex:
+        print(f"[api_matchup_analyzer] {traceback.format_exc()}")
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
 # ── Route: Matchup scores (v2 — platoon-aware) ────────────────────────────────
 @app.route('/api/props/matchup-scores/<int:game_pk>')
 def api_props_matchup_scores(game_pk):
@@ -24301,6 +24681,10 @@ def api_props_hit_history(player_id):
     except (TypeError, ValueError):
         season = datetime.now().year
     player_name = (request.args.get('player') or '').strip()
+    try:
+        teammate_id = int(request.args.get('teammate'))
+    except (TypeError, ValueError):
+        teammate_id = None
 
     try:
         if group == 'pitching':
@@ -24311,6 +24695,12 @@ def api_props_hit_history(player_id):
         recorded = _hit_history_recorded_rows(
             player_id, player_name, market, [g.get('date') for g in log if g.get('date')])
 
+        # Teammate-in-lineup flag: the teammate appeared that day iff their own
+        # game log has a split on the same date (same team, so same game).
+        teammate_dates = None
+        if teammate_id and teammate_id != player_id:
+            teammate_dates = {s.get('date') for s in _gamelog_splits_cached(teammate_id, 'hitting', season)}
+
         games = []
         for g in log:
             value = _consistency_stat_value(g, market)
@@ -24319,6 +24709,7 @@ def api_props_hit_history(player_id):
                 'opp': g.get('opp', ''),
                 'home': bool(g.get('home')),
                 'day': g.get('day'),
+                'tm': (g.get('date') in teammate_dates) if teammate_dates is not None else None,
                 'value': value,
                 'result': _hit_history_result(value, line),
                 'recorded': None,
@@ -24348,6 +24739,7 @@ def api_props_hit_history(player_id):
             'season': season,
             'n': n,
             'seasonGames': season_total,
+            'teammate': teammate_id,
             'games': games,
             'summary': {
                 'line': _hit_history_rate([g['result'] for g in games]),

@@ -455,6 +455,26 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .zc-stats-table{width:100%;margin-top:10px;border-collapse:collapse;font-size:.58rem}
 .zc-stats-table th{background:rgba(0,0,0,.2);padding:6px;text-align:left;color:var(--mu);letter-spacing:1px;font-family:'Orbitron',monospace}
 .zc-stats-table td{padding:5px;border-bottom:1px solid rgba(0,229,255,.1);color:var(--t)}
+/* ── Matchup Analyzer ── */
+.ma-wrap{display:flex;flex-direction:column;gap:18px;margin-bottom:20px}
+.ma-panel{background:var(--card);border:1px solid var(--b);border-radius:14px;padding:14px}
+.ma-hd{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+.ma-title{font-family:'Orbitron',monospace;font-size:.72rem;letter-spacing:1.6px;color:var(--c)}
+.ma-legend{font-family:'Orbitron',monospace;font-size:.5rem;letter-spacing:1px;color:var(--mu)}
+.ma-sub{font-size:.54rem;color:var(--mu);font-family:'Orbitron',monospace;letter-spacing:.6px;font-weight:400}
+.ma-rows{display:flex;flex-direction:column;gap:9px}
+.ma-row{display:grid;grid-template-columns:74px 1fr 84px 1fr 74px;align-items:center;gap:10px}
+.ma-val{font-family:'JetBrains Mono',monospace;font-size:.7rem;font-weight:700;color:var(--t);display:flex;flex-direction:column;line-height:1.25}
+.ma-stat{font-family:'Orbitron',monospace;font-size:.56rem;letter-spacing:1.2px;color:var(--mu);text-align:center}
+.ma-bar{position:relative;height:8px;background:rgba(255,255,255,.05);border-radius:4px;display:flex}
+.ma-fill{position:relative;height:100%;border-radius:4px;min-width:2px}
+.ma-dot{position:absolute;top:50%;transform:translateY(-50%);width:20px;height:20px;border-radius:50%;border:2px solid;font-family:'JetBrains Mono',monospace;font-size:.5rem;font-weight:700;display:flex;align-items:center;justify-content:center;z-index:2}
+.ma-nodata{margin:auto;color:rgba(255,255,255,.2);font-size:.6rem}
+.ma-sec{font-family:'Orbitron',monospace;font-size:.6rem;letter-spacing:1.6px;color:var(--t);margin:16px 0 8px}
+.ma-table th{text-align:center}
+.ma-table td{text-align:center;font-family:'JetBrains Mono',monospace;font-size:.62rem}
+.ma-empty{padding:16px;text-align:center;color:var(--mu);font-family:'Orbitron',monospace;font-size:.6rem;letter-spacing:1.3px}
+@media(max-width:800px){.ma-row{grid-template-columns:56px 1fr 64px 1fr 56px;gap:6px}}
 /* ── Game Conditions strip ── */
 .cond-strip{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;padding:9px 14px;margin-bottom:16px;background:rgba(0,0,0,.25);border:1px solid var(--b);border-radius:10px}
 .cond-lbl{font-family:'Orbitron',monospace;font-size:.56rem;letter-spacing:1.6px;color:var(--mu)}
@@ -478,8 +498,9 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .hh-chip.active{background:rgba(0,229,255,.18);border-color:rgba(0,229,255,.45);color:var(--c)}
 .hh-chip:hover{border-color:rgba(0,229,255,.35)}
 .hh-chip.mode-close.active{background:rgba(255,213,79,.16);border-color:rgba(255,213,79,.5);color:#ffd54f}
-.hh-filter-row{display:flex;align-items:center;gap:8px;flex-basis:100%;padding-top:8px;margin-top:2px;border-top:1px solid rgba(255,255,255,.07)}
+.hh-filter-row{display:flex;align-items:center;gap:8px;flex-basis:100%;flex-wrap:wrap;padding-top:8px;margin-top:2px;border-top:1px solid rgba(255,255,255,.07)}
 .hh-chip.hh-filter.active{background:rgba(0,230,118,.14);border-color:rgba(0,230,118,.5);color:var(--g)}
+.hh-select{padding:4px 8px;border-radius:999px;border:1px solid rgba(0,229,255,.2);background:#0b1a2e;color:var(--t);font-family:'Orbitron',monospace;font-size:.56rem;letter-spacing:.8px;cursor:pointer;max-width:170px}
 .hh-sep{width:1px;height:18px;background:rgba(255,255,255,.14)}
 .hh-step{display:flex;align-items:center;gap:6px}
 .hh-step button{width:24px;height:24px;border-radius:6px;border:1px solid rgba(0,229,255,.25);background:rgba(0,229,255,.06);color:var(--c);font-size:.8rem;cursor:pointer;line-height:1}
@@ -759,6 +780,7 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 
     <!-- ── MATCHUP SCORES ── -->
     <div class="tabpanel" id="tab-matchup">
+      <div id="analyzerBox"></div>
       <div class="matchup-cols" id="matchupCols"></div>
       <div class="m-legend">
         <div class="leg-item"><div class="leg-dot" style="background:#7ef9c6"></div>Tier A (70+) — Strong batter advantage</div>
@@ -932,6 +954,7 @@ let CUR_GAME      = null;
 let CUR_HOME      = '';
 let CUR_AWAY      = '';
 let GAMES_BY_PK   = {};   // gamePk -> /api/games/today game object (weather, park, conditions)
+let ANALYZER_DATA = null; // /api/matchup-analyzer payload for CUR_GAME
 let FULL_SCAN_MODE = false;
 let PF_FILTERS    = new Set();
 // ── Watchlist (localStorage) ──────────────────────────────────────────────────
@@ -1312,7 +1335,7 @@ async function loadGames() {
   if (!date) return;
   CUR_DATE = date;
   FULL_SCAN_MODE = false;
-  PROJ_DATA = MTCH_DATA = VAL_DATA = null;
+  PROJ_DATA = MTCH_DATA = VAL_DATA = ANALYZER_DATA = null;
   LINE_SHOP_CACHE = {};
   SPRAY_CHART_DATA = {};
   SPRAY_CHART_FILTERS = {};
@@ -1356,7 +1379,7 @@ async function loadFullScan() {
   CUR_HOME = '';
   CUR_AWAY = '';
   FULL_SCAN_MODE = true;
-  PROJ_DATA = MTCH_DATA = null;
+  PROJ_DATA = MTCH_DATA = ANALYZER_DATA = null;
   LINE_SHOP_CACHE = {};
   SPRAY_CHART_DATA = {};
   SPRAY_CHART_FILTERS = {};
@@ -1452,7 +1475,7 @@ async function selectGame(pk, awayAbbr, homeAbbr) {
   CUR_GAME = pk;
   CUR_AWAY = awayAbbr; CUR_HOME = homeAbbr;
   FULL_SCAN_MODE = false;
-  PROJ_DATA = MTCH_DATA = VAL_DATA = null;
+  PROJ_DATA = MTCH_DATA = VAL_DATA = ANALYZER_DATA = null;
   LINE_SHOP_CACHE = {};
   SPRAY_CHART_DATA = {};
   SPRAY_CHART_FILTERS = {};
@@ -1641,7 +1664,7 @@ async function loadTab(tab) {
       if (PROJ_DATA) renderProj(PROJ_DATA);
       return;
     }
-    if (tab === 'matchup') gel('matchupCols').innerHTML = errHTML('FULL SCAN IS PROJECTIONS-ONLY. SELECT A SPECIFIC GAME FOR MATCHUP SCORES.');
+    if (tab === 'matchup') { gel('analyzerBox').innerHTML = ''; gel('matchupCols').innerHTML = errHTML('FULL SCAN IS PROJECTIONS-ONLY. SELECT A SPECIFIC GAME FOR MATCHUP SCORES.'); }
     if (tab === 'value') gel('valueTbody').innerHTML = `<tr><td colspan="14"><div class="no-tracker">FULL SCAN USES THE PROJECTIONS BOARD. SELECT A SPECIFIC GAME FOR TRACKER CROSS-REFERENCE.</div></td></tr>`;
     if (tab === 'prizepicks') { document.getElementById('ppLoading').style.display='none'; document.getElementById('ppError').style.display='block'; document.getElementById('ppError').textContent='⚠️ PrizePicks lines are independent of game selection — click Refresh to load all MLB props.'; }
     return;
@@ -2583,7 +2606,8 @@ function hhOppAbbr(pid, kind) {
 function openHitHistoryAt(pid, name, kind, market, line) {
   if (!pid) return;
   HH_STATE = { pid, name, kind, market, line, n: 20, mode: 'line',
-               fHA: null, fDN: null, fH2H: false, oppAbbr: hhOppAbbr(pid, kind) };
+               fHA: null, fDN: null, fH2H: false, oppAbbr: hhOppAbbr(pid, kind),
+               teammate: null, fTM: null };
   gel('hitHistModal').classList.add('show');
   gel('hitHistTitle').textContent = `📊 ${name} · HIT HISTORY`;
   hhRefresh();
@@ -2592,18 +2616,36 @@ function openHitHistoryAt(pid, name, kind, market, line) {
 function hhToggleHA(v) { HH_STATE.fHA = HH_STATE.fHA === v ? null : v; hhRefresh(); }
 function hhToggleDN(v) { HH_STATE.fDN = HH_STATE.fDN === v ? null : v; hhRefresh(); }
 function hhToggleH2H() { HH_STATE.fH2H = !HH_STATE.fH2H; hhRefresh(); }
+function hhToggleTM(v) { HH_STATE.fTM = HH_STATE.fTM === v ? null : v; hhRefresh(); }
+
+function hhSetTeammate(v) {
+  HH_STATE.teammate = v ? Number(v) : null;
+  if (!HH_STATE.teammate) HH_STATE.fTM = null;
+  else if (!HH_STATE.fTM) HH_STATE.fTM = 'with';
+  hhRefresh();
+}
+
+function hhTeammateOptions() {
+  // batters on the player's own team (a lineup-mate whose presence to split on)
+  const s = HH_STATE;
+  const bats = PROJ_DATA?.batters || [];
+  const me = (s.kind === 'pitcher' ? (PROJ_DATA?.pitchers || []) : bats).find(x => x.id === s.pid);
+  if (!me?.team) return [];
+  return bats.filter(b => b.team === me.team && b.id && b.id !== s.pid);
+}
 
 function hhApplyFilters(games) {
   const s = HH_STATE;
   return (games || []).filter(g =>
     (!s.fH2H || g.opp === s.oppAbbr) &&
     (!s.fHA || g.home === (s.fHA === 'home')) &&
-    (!s.fDN || g.day === (s.fDN === 'day')));
+    (!s.fDN || g.day === (s.fDN === 'day')) &&
+    (!s.fTM || (s.fTM === 'with' ? g.tm === true : g.tm === false)));
 }
 
 function hhFiltersActive() {
   const s = HH_STATE;
-  return !!(s.fH2H || s.fHA || s.fDN);
+  return !!(s.fH2H || s.fHA || s.fDN || s.fTM);
 }
 
 function hhSummarize(games, mode) {
@@ -2634,9 +2676,10 @@ function hhStepLine(d) { HH_STATE.line = Math.max(0.5, HH_STATE.line + d); hhRef
 
 async function hhFetch() {
   const s = HH_STATE;
-  const key = [s.pid, s.market, s.n, s.line].join('|');
+  const key = [s.pid, s.market, s.n, s.line, s.teammate || ''].join('|');
   if (HH_CACHE[key]) return HH_CACHE[key];
   const qs = new URLSearchParams({ market: s.market, line: s.line, n: s.n, player: s.name });
+  if (s.teammate) qs.set('teammate', s.teammate);
   const r = await fetch(`/api/props/hit-history/${s.pid}?${qs}`);
   const d = await r.json();
   if (!d.success) throw new Error(d.error || 'Failed to load history');
@@ -2659,10 +2702,18 @@ function hhControlsHtml() {
     `<button class="hh-chip hh-filter${s.fDN === 'day' ? ' active' : ''}" onclick="hhToggleDN('day')">DAY</button>`,
     `<button class="hh-chip hh-filter${s.fDN === 'night' ? ' active' : ''}" onclick="hhToggleDN('night')">NIGHT</button>`,
   ].filter(Boolean).join('');
+  const mates = hhTeammateOptions();
+  const tm = mates.length ? `<span class="hh-sep"></span>
+    <select class="hh-select" onchange="hhSetTeammate(this.value)">
+      <option value="">TEAMMATE…</option>
+      ${mates.map(m => `<option value="${m.id}"${s.teammate === m.id ? ' selected' : ''}>${esc(m.name)}</option>`).join('')}
+    </select>
+    ${s.teammate ? `<button class="hh-chip hh-filter${s.fTM === 'with' ? ' active' : ''}" onclick="hhToggleTM('with')">WITH</button>
+    <button class="hh-chip hh-filter${s.fTM === 'without' ? ' active' : ''}" onclick="hhToggleTM('without')">WITHOUT</button>` : ''}` : '';
   return `${mkts}<span class="hh-sep"></span>${wins}<span class="hh-sep"></span>
     <span class="hh-step"><button onclick="hhStepLine(-1)">−</button><span class="hh-step-val">${s.line}</span><button onclick="hhStepLine(1)">＋</button></span>
     <span class="hh-sep"></span>${modes}
-    <span class="hh-filter-row"><span class="hh-kpi-sub" style="letter-spacing:1.4px">FILTERS</span>${filters}</span>`;
+    <span class="hh-filter-row"><span class="hh-kpi-sub" style="letter-spacing:1.4px">FILTERS</span>${filters}${tm}</span>`;
 }
 
 function hhRenderKpi(d, games) {
@@ -3560,6 +3611,7 @@ function pitcherPanel(p) {
 
 // ── Matchup ───────────────────────────────────────────────────────────────────
 async function loadMatchup() {
+  loadAnalyzer();   // percentile analyzer loads in parallel, renders independently
   if (MTCH_DATA) { renderMatchup(MTCH_DATA); return; }
   gel('matchupCols').innerHTML = loadHTML('COMPUTING MATCHUP SCORES…');
   try {
@@ -3569,6 +3621,122 @@ async function loadMatchup() {
     if (!MTCH_DATA.success) throw new Error(MTCH_DATA.error || 'Failed');
     renderMatchup(MTCH_DATA);
   } catch(e) { gel('matchupCols').innerHTML = errHTML(e.message); }
+}
+
+// ── Matchup Analyzer (percentile pitcher-vs-lineup) ───────────────────────────
+async function loadAnalyzer() {
+  if (ANALYZER_DATA) { renderAnalyzer(ANALYZER_DATA); return; }
+  gel('analyzerBox').innerHTML = loadHTML('BUILDING MATCHUP ANALYZER…');
+  try {
+    const qs = CUR_DATE ? `?date=${encodeURIComponent(CUR_DATE)}` : '';
+    const r = await fetch(`/api/matchup-analyzer/${CUR_GAME}${qs}`);
+    ANALYZER_DATA = await r.json();
+    if (!ANALYZER_DATA.success) throw new Error(ANALYZER_DATA.error || 'Failed');
+    renderAnalyzer(ANALYZER_DATA);
+  } catch(e) { gel('analyzerBox').innerHTML = errHTML('ANALYZER: ' + e.message); }
+}
+
+function maFmt(v, fmt) {
+  if (v == null) return '—';
+  if (fmt === 'num3') return Number(v).toFixed(3).replace(/^0\./, '.');
+  if (fmt === 'raw') return String(v);
+  return Number(v).toFixed(1) + '%';
+}
+
+function maBar(pct, side, edge) {
+  if (pct == null) return '<div class="ma-bar"><span class="ma-nodata">—</span></div>';
+  const hot = edge === (side === 'pit' ? 'pitcher' : 'batter');
+  const col = !hot ? 'rgba(255,255,255,.28)' : side === 'pit' ? '#ff9800' : '#00e676';
+  // pitcher bar grows leftward from the stat label, batter bar rightward
+  const dir = side === 'pit' ? 'right' : 'left';
+  return `<div class="ma-bar"><div class="ma-fill" style="width:${pct}%;${dir === 'right' ? 'margin-left:auto;' : ''}background:${hot ? col : 'rgba(255,255,255,.14)'}">
+    <span class="ma-dot" style="${dir === 'right' ? 'left:-9px' : 'right:-9px'};border-color:${col};color:${hot ? '#04121f' : 'var(--t)'};background:${hot ? col : '#12233a'}">${pct}</span>
+  </div></div>`;
+}
+
+function maN3(v) { return v == null ? null : Number(v).toFixed(3).replace(/^0\./, '.'); }
+
+function maWobaCell(v, ref) {
+  if (v == null) return '—';
+  const s = maN3(v);
+  if (ref == null) return s;
+  const col = v >= ref + 0.02 ? 'var(--g)' : v <= ref - 0.02 ? '#ff7070' : 'var(--t)';
+  return `<span style="color:${col}">${s}</span>`;
+}
+
+function maPctCell(v, pct, suffix) {
+  if (v == null) return '—';
+  const col = pct == null ? 'var(--t)' : pct >= 65 ? 'var(--g)' : pct <= 35 ? '#ff7070' : 'var(--t)';
+  return `<span style="color:${col}" title="${pct != null ? pct + 'th percentile (higher = batter-friendly)' : ''}">${v}${suffix || ''}</span>`;
+}
+
+function maSidePanel(s, d) {
+  if (!s || !s.pitcher || !s.pitcher.name || s.pitcher.name === 'TBD') {
+    return '<div class="ma-panel"><div class="ma-empty">STARTER TBD — ANALYZER UNAVAILABLE</div></div>';
+  }
+  const p = s.pitcher;
+  const rows = (s.rows || []).map(r => `<div class="ma-row">
+    <div class="ma-val">${maFmt(r.pitcher.value, r.fmt)}${r.fmt === 'raw' ? `<span class="ma-sub">${r.pitcher.label}</span>` : ''}</div>
+    ${maBar(r.pitcher.pct, 'pit', r.edge)}
+    <div class="ma-stat">${r.stat}</div>
+    ${maBar(r.lineup.pct, 'bat', r.edge)}
+    <div class="ma-val" style="text-align:right">${maFmt(r.lineup.value, r.fmt)}${r.fmt === 'raw' ? `<span class="ma-sub">${r.lineup.label}</span>` : ''}</div>
+  </div>`).join('');
+
+  const pt = (s.pitchTypes || []).map(t => `<tr>
+    <td style="text-align:left;font-weight:700;color:var(--t)">${esc(t.pitch)}${t.velo ? ` <span class="ma-sub">${Math.round(t.velo)}</span>` : ''}</td>
+    <td>${t.usage != null ? t.usage + '%' : '—'}</td>
+    <td>${maWobaCell(t.pitcher.woba, null)}</td>
+    <td>${t.pitcher.whiff_pct != null ? t.pitcher.whiff_pct + '%' : '—'}</td>
+    <td>${maWobaCell(t.lineup.woba, t.pitcher.woba)}</td>
+    <td>${t.lineup.whiff_pct != null ? t.lineup.whiff_pct + '%' : '—'}</td>
+    <td class="ma-sub">${t.lineup.coverage}/9</td>
+  </tr>`).join('');
+
+  const bats = (s.batters || []).map(b => {
+    const ars = b.arsenal;
+    const arsCell = !ars || !ars.status ? '—'
+      : `<span style="color:${ars.status === 'favorable' ? 'var(--g)' : ars.status === 'unfavorable' ? '#ff7070' : 'var(--mu)'}"
+           title="usage-weighted xwOBA vs this arsenal ${maN3(ars.matchupWoba) ?? ''} (own baseline ${maN3(ars.baselineWoba) ?? ''})">${ars.status === 'favorable' ? '▲' : ars.status === 'unfavorable' ? '▼' : '—'} ${maN3(ars.matchupWoba) ?? ''}</span>`;
+    const bvp = b.bvp
+      ? `<span title="career vs ${esc(p.name)}">${b.bvp.pa} PA · ${maN3(b.bvp.avg) ?? '—'}${b.bvp.hr ? ' · ' + b.bvp.hr + ' HR' : ''}</span>`
+      : '<span class="ma-sub">—</span>';
+    return `<tr>
+      <td>${b.slot ?? ''}</td>
+      <td style="text-align:left;white-space:nowrap">${esc(b.name || '')} <span class="ma-sub">${esc(b.bats || '')}</span></td>
+      <td>${b.pa != null ? Math.round(b.pa) : '—'}</td>
+      <td>${maPctCell(b.kpct, b.kpctPct, '%')}</td>
+      <td>${maPctCell(b.bbpct, b.bbpctPct, '%')}</td>
+      <td>${maPctCell(b.whiff, b.whiffPct, '%')}</td>
+      <td>${maPctCell(maN3(b.xwoba), b.xwobaPct, '')}</td>
+      <td>${maPctCell(b.brl, b.brlPct, '%')}</td>
+      <td>${maN3(b.splitAvg) ?? '—'}</td>
+      <td>${arsCell}</td>
+      <td>${bvp}</td>
+    </tr>`;
+  }).join('');
+
+  return `<div class="ma-panel">
+    <div class="ma-hd">
+      <span class="ma-title">${esc(p.name)} <span class="ma-sub">${p.hand}HP${p.ip ? ' · ' + Math.round(p.ip) + ' IP' : ''}</span></span>
+      <span class="ma-legend"><span style="color:#ff9800">Pitcher edge</span> ◂ · ▸ <span style="color:var(--g)">Lineup edge</span></span>
+      <span class="ma-title" style="text-align:right">${esc(s.lineupTeam || '')} LINEUP <span class="ma-sub">${s.lineupPa ? s.lineupPa + ' PA' : ''}</span></span>
+    </div>
+    <div class="ma-rows">${rows || '<div class="ma-empty">NO SHARED STATS</div>'}</div>
+    ${pt ? `<div class="ma-sec">BY PITCH TYPE <span class="ma-sub">pitcher allows vs lineup hits — wOBA green = lineup edge</span></div>
+    <div class="lsm-wrap"><table class="ls-table ma-table">
+      <thead><tr><th style="text-align:left">PITCH</th><th>USE</th><th>P wOBA</th><th>P WHIFF</th><th>LU wOBA</th><th>LU WHIFF</th><th>COV</th></tr></thead>
+      <tbody>${pt}</tbody></table></div>` : ''}
+    ${bats ? `<div class="ma-sec">LINEUP VS ${esc(p.name).toUpperCase()} <span class="ma-sub">green = batter-friendly percentile, red = pitcher-friendly</span></div>
+    <div class="lsm-wrap"><table class="ls-table ma-table">
+      <thead><tr><th>#</th><th style="text-align:left">BATTER</th><th>PA</th><th>K%</th><th>BB%</th><th>WHIFF%</th><th>xwOBA</th><th>BRL%</th><th>VS ${p.hand}HP</th><th>ARSENAL</th><th>BvP</th></tr></thead>
+      <tbody>${bats}</tbody></table></div>` : ''}
+  </div>`;
+}
+
+function renderAnalyzer(d) {
+  gel('analyzerBox').innerHTML = `
+    <div class="ma-wrap">${maSidePanel(d.awaySp, d)}${maSidePanel(d.homeSp, d)}</div>`;
 }
 
 function platoonNoteColor(note) {
