@@ -43,13 +43,14 @@ try:
         xgb_hr_prob, xgb_tb_prob, xgb_rbi_prob,
         xgb_hit_prob_full, xgb_k_prob_full,
         xgb_hr_prob_full, xgb_tb_prob_full, xgb_rbi_prob_full,
-        xgb_batter_prob_full,
+        xgb_batter_prob_full, xgb_hit_prob_bulk,
         enrich_batter, enrich_pitcher,
     )
     _XGB_AVAILABLE = True
 except ImportError:
     _XGB_AVAILABLE = False
     def xgb_hit_prob(*a, **k):   return None
+    def xgb_hit_prob_bulk(*a, **k): return {}
     def xgb_k_prob(*a, **k):     return None
     def xgb_hr_prob(*a, **k):    return None
     def xgb_tb_prob(*a, **k):    return None
@@ -1171,7 +1172,11 @@ def _save_json(path, payload):
         # data-loss incident).
         tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
         with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(payload, f, indent=2)
+            # Compact separators: indent=2 roughly doubled the bytes pushed
+            # through fsync on every save, and the big stores are rewritten
+            # whole (daily_tracker.json on every pick add/grade; the ~12MB
+            # mlb_memory_store.json every collection cycle).
+            json.dump(payload, f, separators=(',', ':'))
             f.flush()
             try:
                 os.fsync(f.fileno())
@@ -1201,7 +1206,7 @@ def _tracker_commit_day(date_str, day):
     a stale in-memory snapshot can never overwrite concurrent updates to other
     dates. Returns the _save_json() success bool."""
     with _TRACKER_STORE_LOCK:
-        store = _load_json(TRACKER_STORE, {})
+        store = _tracker_store()
         store[date_str] = day
         return _save_json(TRACKER_STORE, store)
 
@@ -16394,7 +16399,7 @@ def _tracker_capture_continue_bg(date_str, remaining_games, sched, adjustments, 
         if not bg_rows:
             return
         with _TRACKER_STORE_LOCK:
-            store = _load_json(TRACKER_STORE, {})
+            store = _tracker_store()
             day = _normalize_tracker_day(store.get(date_str))
             merged = _merge_tracker_entries(day.get('entries', []), _recalc_tracker_entries(bg_rows))
             day['entries'] = merged
@@ -16492,7 +16497,7 @@ def _tracker_auto_capture_once():
     if datetime.now(ET).hour < capture_hour:
         return
 
-    store = _load_json(TRACKER_STORE, {})
+    store = _tracker_store()
     day = _normalize_tracker_day(store.get(today))
     # Already have picks for today — nothing to do. (Re-capture merges, but we
     # avoid re-hammering the MLB API once a day is populated.)
@@ -16582,7 +16587,7 @@ def api_tracker_adjustments():
 
 @app.route('/api/tracker/date/<date_str>')
 def api_tracker_date(date_str):
-    store = _load_json(TRACKER_STORE, {})
+    store = _tracker_store()
     day = _normalize_tracker_day(store.get(date_str))
     day['entries'] = _recalc_tracker_entries(day.get('entries', []))
     return jsonify({'success': True, 'date': date_str, 'adjustments': _get_adjustments(), 'capturedAt': day.get('capturedAt'), 'gradedAt': day.get('gradedAt'), 'closingCapturedAt': day.get('closingCapturedAt'), 'entries': day.get('entries', []), 'summary': _tracker_summary(day.get('entries', []))})
@@ -16684,7 +16689,7 @@ def api_tracker_capture(date_str):
                 pass
 
         with _TRACKER_STORE_LOCK:
-            store = _load_json(TRACKER_STORE, {})
+            store = _tracker_store()
             day = _normalize_tracker_day(store.get(date_str))
             entries = _merge_tracker_entries(day.get('entries', []), _recalc_tracker_entries(all_entries))
             if is_backfill:
@@ -16759,7 +16764,7 @@ def api_tracker_grade(date_str):
     denied = _check_admin_auth()
     if denied:
         return denied
-    store = _load_json(TRACKER_STORE, {})
+    store = _tracker_store()
     raw_day = store.get(date_str)
     if raw_day is None:
         return jsonify({
@@ -16880,8 +16885,44 @@ CALIBRATION_TARGETS = {
 }
 
 
+_TRACKER_READ_CACHE = {'sig': None, 'pickled': None}
+_TRACKER_READ_LOCK = threading.Lock()
+
+
 def _tracker_store():
-    return _load_json(TRACKER_STORE, {})
+    """Load the tracker store, parsing daily_tracker.json at most once per file
+    change. The file grows all season (multi-MB by late summer) and one tracker
+    page load fires several API calls that each used to re-parse it from disk.
+    The parsed store is cached against an (mtime_ns, size) signature — any
+    writer (this process via _save_json's atomic replace, or an external tool)
+    changes the signature and forces a re-parse. Every call returns a private
+    deep copy (pickle round-trip, ~3.5x faster than re-parsing JSON) because
+    callers mutate the returned days/entries in place and several run without
+    _TRACKER_STORE_LOCK; sharing one object across threads would race."""
+    import pickle
+    try:
+        with open(TRACKER_STORE, 'rb') as f:
+            st = os.fstat(f.fileno())
+            sig = (st.st_mtime_ns, st.st_size)
+            with _TRACKER_READ_LOCK:
+                cached = _TRACKER_READ_CACHE['pickled'] if _TRACKER_READ_CACHE['sig'] == sig else None
+            if cached is not None:
+                return pickle.loads(cached)
+            data = json.load(f)
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        return _load_json(TRACKER_STORE, {})
+    if not isinstance(data, dict):
+        return {}
+    try:
+        blob = pickle.dumps(data, protocol=pickle.HIGHEST_PROTOCOL)
+        with _TRACKER_READ_LOCK:
+            _TRACKER_READ_CACHE['sig'] = sig
+            _TRACKER_READ_CACHE['pickled'] = blob
+    except Exception:
+        pass
+    return data
 
 
 def _coerce_tracker_entries(entries):
@@ -18621,7 +18662,7 @@ def api_tracker_pick():
         entry.setdefault(k, v)
 
     with _TRACKER_STORE_LOCK:
-        store = _load_json(TRACKER_STORE, {})
+        store = _tracker_store()
         day   = store.setdefault(today, {'capturedAt': None, 'gradedAt': None,
                                           'closingCapturedAt': None, 'entries': []})
 
@@ -18647,7 +18688,7 @@ def api_tracker_pick_patch(pick_id):
     payload = request.get_json(silent=True) or {}
     date_hint = payload.get('date') or request.args.get('date')
     with _TRACKER_STORE_LOCK:
-        store = _load_json(TRACKER_STORE, {})
+        store = _tracker_store()
         date_str, day, entries, idx, row = _tracker_find_pick(store, pick_id, date_hint)
         if row is None:
             return jsonify({'success': False, 'error': 'Pick not found'}), 404
@@ -18680,7 +18721,7 @@ def api_tracker_pick_delete(pick_id):
         return denied
     today = request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
     with _TRACKER_STORE_LOCK:
-        store = _load_json(TRACKER_STORE, {})
+        store = _tracker_store()
         date_str, day, entries, idx, row = _tracker_find_pick(store, pick_id, today)
         if row is not None:
             day['entries'] = [e for e in entries if e.get('id') != pick_id]
@@ -18755,7 +18796,7 @@ def api_tracker_parlay():
         'parlayLeg': None,
     }
     with _TRACKER_STORE_LOCK:
-        store = _load_json(TRACKER_STORE, {})
+        store = _tracker_store()
         day = store.setdefault(today, {'capturedAt': None, 'gradedAt': None, 'closingCapturedAt': None, 'entries': []})
         day['entries'].append(entry)
         if not day.get('capturedAt'):
@@ -23333,6 +23374,7 @@ def api_props_projections(game_pk):
             batters_top = list((batters or [])[:9])
             # Opposing team's defense factor is constant for this side — resolve once.
             _side_def_factor = _def_factor_for_pitcher(opp_pid)
+            _use_xgb = _XGB_AVAILABLE and xgb_ready('hits')
 
             def _enrich_one(b):
                 name = b.get("name", "")
@@ -23371,19 +23413,19 @@ def api_props_projections(game_pk):
                     def_factor=_side_def_factor,
                 )
                 slot = int(b.get("slot") or 9)
-                xgb_hit_p = None
-                if _XGB_AVAILABLE and xgb_ready('hits'):
+                _xgb_bd = None
+                if _use_xgb:
                     # Serve-parity: supply lineup slot + recent form so the hits
                     # model isn't run on a name-only dict (which defaults 6 of its
                     # features). FG enrichment inside the scorer fills the rest.
+                    # The dict is stashed on the row; the actual prediction runs
+                    # ONCE for the whole lineup via xgb_hit_prob_bulk after the
+                    # pool (single-row predict_proba on CalibratedClassifierCV
+                    # pays the full ensemble overhead per batter).
                     _xgb_bd = {"name": name, "slot": slot}
                     if bid:
                         _xgb_bd["id"] = bid
                         _xgb_bd.update(_batter_recent_hit_form(bid))
-                    xgb_hit_p = xgb_hit_prob(
-                        _xgb_bd,
-                        {"name": opp_pname, "pitchHand": opp_hand},
-                    )
                 wx_adj = _safe_f((proj.get("adjustments") or {}).get("weather"), 0.0)
                 wind_bucket = "out" if wx_adj > 0.01 else ("in" if wx_adj < -0.01 else "calm")
                 park_bucket = "hitter" if pf >= 1.04 else ("pitcher" if pf <= 0.96 else "neutral")
@@ -23440,17 +23482,30 @@ def api_props_projections(game_pk):
                     "vs_r_avg":     b.get("vs_r_avg"),
                     "vs_l_ops":     b.get("vs_l_ops"),
                     "vs_r_ops":     b.get("vs_r_ops"),
-                    "xgbHitProb":   round(xgb_hit_p, 4) if xgb_hit_p is not None else None,
+                    "xgbHitProb":   None,
+                    "_xgbBd":       _xgb_bd,
                     "arsenal":      bat_arsenal_map,
                     "proj":         proj,
                 }
 
+            def _apply_xgb_bulk(rows):
+                """One batched predict for the whole lineup (values identical to
+                the old per-batter xgb_hit_prob calls — see xgb_hit_prob_bulk)."""
+                dicts = [r["_xgbBd"] for r in rows if r.get("_xgbBd")]
+                probs = xgb_hit_prob_bulk(dicts, {"name": opp_pname, "pitchHand": opp_hand}) if dicts else {}
+                for r in rows:
+                    bd = r.pop("_xgbBd", None)
+                    if bd:
+                        key = str(bd.get("id") or "") or bd.get("name", "")
+                        r["xgbHitProb"] = probs.get(key)
+                return rows
+
             if os.getenv('PROFILE_REQUESTS') == '1':
                 # inline so the request profiler can see per-batter work
-                return [_enrich_one(b) for b in batters_top]
+                return _apply_xgb_bulk([_enrich_one(b) for b in batters_top])
             workers = min(9, max(1, len(batters_top)))
             with ThreadPoolExecutor(max_workers=workers) as ex:
-                return list(ex.map(_enrich_one, batters_top))
+                return _apply_xgb_bulk(list(ex.map(_enrich_one, batters_top)))
 
         away_proj = enrich_batters(away_bats, hp_fg, hp_sv, hp_st, home_abbr, hp_name, hp_id, own_abbr=away_abbr, lineup_confirmed=away_confirmed, team_travel=away_travel)
         home_proj = enrich_batters(home_bats, ap_fg, ap_sv, ap_st, away_abbr, ap_name, ap_id, own_abbr=home_abbr, lineup_confirmed=home_confirmed, team_travel=home_travel)
