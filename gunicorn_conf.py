@@ -33,11 +33,14 @@ workers = 1
 
 # Threaded worker so the caches (loaded by background daemon threads)
 # don't block request handling.
-# 8 threads: ensures health checks always get a free thread even when
-# several slow API requests (Monte Carlo, Savant fetches, etc.) are
-# concurrently occupying others.
+# 12 threads (raised from 8 after the 2026-07 CPU diet — vectorized MC,
+# batched XGB — made requests I/O-dominated): the deepdive/dashboard pages
+# fire 10+ parallel /api/* calls per navigation, which used to saturate all
+# 8 threads and queue the rest. Most thread time is now spent waiting on
+# statsapi.mlb.com, where extra threads are nearly free (small stacks, GIL
+# released during I/O and numpy/XGB C calls). Health checks keep headroom.
 worker_class = "gthread"
-threads = 8
+threads = 12
 
 # Reduced from 600s. With gthread, a 600s timeout means Gunicorn waits
 # 10 minutes before declaring the worker dead — but Fly.io's watchdog

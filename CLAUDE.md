@@ -77,7 +77,7 @@ app.py                          ~22.7k LOC Flask app — routes, caches, project
 ├── badge_patch.py              Performance badge tweaks
 ├── bq_etl.py                   Standalone ETL — populates BigQuery mlb.{batters,pitchers,bvp_situational,daily_slate_view}
 ├── redis_client.py             Thin Redis wrapper with in-memory fallback (JSON values + TTLs)
-└── gunicorn_conf.py            1 worker, 8 gthreads, preload_app=False, post_fork cache preload
+└── gunicorn_conf.py            1 worker, 12 gthreads, preload_app=False, post_fork cache preload
 ```
 
 `app.py` imports these modules with `try / except ImportError` graceful-fallback shims, so a missing module does not crash boot — it just disables that feature (XGB scorer, stacked calibrator, pipeline blueprint, etc.). Preserve this pattern when adding new optional modules.
@@ -240,7 +240,7 @@ The static reference CSVs (FanGraphs/Steamer/Savant) are checked into the repo s
 
 `gunicorn_conf.py`:
 - **`workers=1`** — Savant + FG caches are ~150 MB; two workers double that and trigger OOM.
-- **`worker_class='gthread'`, `threads=8`** — non-trivial concurrency for I/O-bound MLB API calls; 8 threads guarantees `/health` always has a free thread even when Monte Carlo / Savant fetches are in flight.
+- **`worker_class='gthread'`, `threads=12`** — concurrency for I/O-bound MLB API calls (raised from 8 after the 2026-07 CPU diet made requests I/O-dominated; the deepdive/dashboard pages fire 10+ parallel `/api/*` calls per navigation, which used to saturate all 8 threads). Guarantees `/health` always has a free thread even when Savant fetches are in flight.
 - **`preload_app=False`** — preload imports `app.py` in the master, kicks off daemon cache-loader threads in the master, then forks; daemon threads don't survive fork, so workers inherit `_fg_loading=True` with no thread actually running. Caches never populate. Do not change.
 - **`timeout=120`** — Fly.io watchdog marks unhealthy long before the old 600s setting fired.
 - **`max_requests=0`** — recycling triggers a full FG/Savant reload, which blows the memory budget.
@@ -268,8 +268,8 @@ Measured on a live slate (before → after the 2026-07 perf pass): props project
 - **fangraphs_loader lookup memo** (`_memoized`): `get_batter_stats`/`get_pitcher_stats`/projection getters ran pandas boolean scans (~65ms) per call, and the XGB scorer's `_enrich_pitcher_from_fg` asks for the SAME pitcher dozens of times per request (was 2.5s/request). CSVs load once per process, so the memo never goes stale; results are copied out, `{}` misses are negative-cached.
 - **`fetch_schedule` 120s TTL cache** — was fetched 3+×/request (game fetch + travel walk-back). `_team_previous_venue` is day-cached per (team, date) incl. negative results.
 - **`_props_fetch_game` 60s cache** — six endpoints call it per game view (projections/trends/matchup-scores/line-shopping/analyzer/quick); each uncached call is schedule+boxscore. Batter lists are copied out because callers annotate the dicts.
-- **Response caches**: projections (`_PROJ_RESP_CACHE`, 90s), trends (300s), analyzer (600s), quick-props (SWR 90s/600s). Tab flips and the lineup poller serve from these.
-- **Slate prewarm** (`_prewarm_projections_when_ready` in `_preload_caches`): after FG+Savant load, prebuilds projections for today's first 10 games via `app.test_request_context`, which also populates every per-player day cache — the user's first click of the day is warm.
+- **Response caches**: projections (`_PROJ_RESP_CACHE`, SWR 90s fresh / 900s stale — a stale entry is served instantly with `stale:true` while a deduped background rebuild re-enters the route with `_rebuild=1`; the 10-min lineup poller lands inside the stale window, so an actively-viewed game never pays an inline rebuild), trends (300s), analyzer (600s), quick-props (SWR 90s/600s). Tab flips and the lineup poller serve from these.
+- **Slate prewarm** (`_prewarm_projections_when_ready` in `_preload_caches`): after FG+Savant load, prebuilds projections for the WHOLE slate via `app.test_request_context` (`?_rebuild=1` so the SWR cache check is bypassed), which also populates every per-player day cache — the user's first click of the day is warm for any game, not just the first 10.
 - **gzip after_request**: JSON >4KB compresses ~10× (trends 38KB→3.4KB; deepdive matchup payload is >1MB).
 - **Vectorized batter Monte Carlo** (`_monte_carlo_vs_sp`): one numpy multinomial per simulated game instead of a pure-Python `random.choices` per PA — distributionally identical, ~12-15× less CPU (~24ms → ~2ms per batter; ~440ms → ~36ms per game across the 18-starter enrich pass). Seeding uses a local `np.random.default_rng` per call — never reintroduce global `random.seed`, it was thread-unsafe under the batter-enrich pool.
 - **Batched + lean XGB scoring**: the projections route scores the whole lineup's hit probs with ONE `xgb_hit_prob_bulk` predict after the enrich pool (single-row `predict_proba` on a `CalibratedClassifierCV` pays the full ensemble overhead per batter — measured 13.3ms/batter → 0.66ms/batter in the batch, identical values, results keyed by MLBAM id). The single-float APIs (`xgb_hit_prob` / `xgb_k_prob` / `xgb_hr/tb/rbi_prob`) use `_score_prob` — predict + isotonic + clamp only — instead of `_score_full`, whose tree-interval + 10k-draw anchored MC they discarded anyway (2.2× per call; the `*_full` variants keep the full pipeline for the tracker/deep-dive paths that read the CI).
@@ -278,7 +278,7 @@ Measured on a live slate (before → after the 2026-07 perf pass): props project
 - **Non-blocking Google Fonts**: every page's fonts stylesheet uses preconnect + `media="print" onload` swap; a slow fonts.googleapis.com no longer stalls first paint (it was render-blocking in the head).
 - **Diagnostics**: `PROFILE_REQUESTS=1` wraps every request in cProfile (and runs the projections batter-enrich pool inline so the profiler can see it); the projections route logs `[perf] ... (game=..ms odds=..ms enrich_batters=..ms ...)` phase marks for any request ≥1s.
 
-Known remaining cost: a from-scratch projections build is ~2-4s of real CPU (XGB + BATX × 18 batters) — that's what the prewarm and the 90s response cache absorb. The MLB memory-store worker (every 3h) makes ~250 pooled calls in the background; it shares CPU with requests, so if p99s spike on that cadence, that's why.
+Known remaining cost: a from-scratch projections build is ~2-4s of real wall time (dominated by per-player network lookups on a cold day-cache) — the full-slate prewarm and the SWR response cache absorb it, so users only hit it on a brand-new (date, game) key. The MLB memory-store worker (every 3h) makes ~250 pooled calls in the background; its first run is delayed 15 min past boot (so it never competes with the cache preload/prewarm) and the auto-mode sweep paces itself with 50ms sleeps between calls (`pace_sec`). `app.json.sort_keys = False` — Flask's default key-sorting on every jsonify was pure overhead on the >1MB payloads; don't rely on JSON key order.
 
 ## Working with this codebase
 

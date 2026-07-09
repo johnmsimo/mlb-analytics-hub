@@ -228,6 +228,10 @@ _HTTP_SESSION.mount('http://', requests.adapters.HTTPAdapter(pool_connections=8,
 requests.get = _HTTP_SESSION.get
 
 app = Flask(__name__)
+# Flask's default JSON provider sorts keys on every jsonify — pure overhead on
+# the big payloads (the deepdive matchup response is >1MB) and nothing here
+# depends on key order.
+app.json.sort_keys = False
 
 # PROFILE_REQUESTS=1 wraps every request in cProfile and prints the top
 # cumulative functions to stdout — dev-only diagnostic, never set in prod.
@@ -3864,11 +3868,15 @@ def _memory_collect_schedule_window(date_str, days_back=2, max_games_per_day=30)
     return days, game_pks
 
 
-def _memory_collect_boxscores(game_pks, max_games=20):
+def _memory_collect_boxscores(game_pks, max_games=20, pace_sec=0.0):
     picked = [int(gpk) for gpk in (game_pks or []) if gpk][:max(1, int(max_games))]
     boxscores = []
     player_ids = set()
     for gpk in picked:
+        if pace_sec:
+            # Background collections yield between calls so the ~250-request
+            # sweep doesn't monopolize CPU/pool alongside live requests.
+            time.sleep(pace_sec)
         payload = _collect_mlb_endpoint(f"{MLB_API}/game/{gpk}/boxscore", timeout=12, default={})
         teams = payload.get("teams") or {}
         away = teams.get("away") or {}
@@ -3901,9 +3909,11 @@ def _memory_collect_boxscores(game_pks, max_games=20):
     return boxscores, sorted(player_ids)
 
 
-def _memory_collect_player_cards(player_ids, max_players=160):
+def _memory_collect_player_cards(player_ids, max_players=160, pace_sec=0.0):
     out = []
     for pid in (player_ids or [])[:max(1, int(max_players))]:
+        if pace_sec:
+            time.sleep(pace_sec)
         payload = _collect_mlb_endpoint(
             f"{MLB_API}/people/{pid}",
             params={
@@ -4288,7 +4298,7 @@ def _memory_collect_comprehensive_data(date_str=None, team_ids=None, mode='light
 
 
 
-def _collect_mlb_memory_snapshot(date_str=None, days_back=2, max_games_per_day=30, include_boxscores=True, max_players=160, mode='light', include_team_rosters=False, transactions_days=2):
+def _collect_mlb_memory_snapshot(date_str=None, days_back=2, max_games_per_day=30, include_boxscores=True, max_players=160, mode='light', include_team_rosters=False, transactions_days=2, pace_sec=0.0):
     _maybe_refresh_fg()
     _maybe_refresh_savant()
     _fetch_injury_status(force=False)
@@ -4344,7 +4354,7 @@ def _collect_mlb_memory_snapshot(date_str=None, days_back=2, max_games_per_day=3
     boxscores = []
     box_player_ids = []
     if include_boxscores:
-        boxscores, box_player_ids = _memory_collect_boxscores(game_pks, max_games=20)
+        boxscores, box_player_ids = _memory_collect_boxscores(game_pks, max_games=20, pace_sec=pace_sec)
 
     probable_pitcher_ids = []
     raw_today = fetch_schedule(today_et)
@@ -4357,7 +4367,7 @@ def _collect_mlb_memory_snapshot(date_str=None, days_back=2, max_games_per_day=3
             probable_pitcher_ids.append(home_pp)
 
     featured_player_ids = sorted({int(x) for x in (box_player_ids + probable_pitcher_ids) if x})
-    player_cards = _memory_collect_player_cards(featured_player_ids, max_players=max_players)
+    player_cards = _memory_collect_player_cards(featured_player_ids, max_players=max_players, pace_sec=pace_sec)
 
     team_stats = _memory_collect_team_stats(team_ids)
     team_rosters = _memory_collect_team_rosters(team_ids) if include_team_rosters else []
@@ -5315,7 +5325,7 @@ def _mlb_memory_status_payload():
     }
 
 
-def _run_mlb_memory_collect(date_str=None, days_back=2, max_games_per_day=30, include_boxscores=True, max_players=160, mode=None):
+def _run_mlb_memory_collect(date_str=None, days_back=2, max_games_per_day=30, include_boxscores=True, max_players=160, mode=None, pace_sec=0.0):
     global _mlb_memory_collecting, _mlb_memory_last_collect, _mlb_memory_last_error
     with _mlb_memory_lock:
         if _mlb_memory_collecting:
@@ -5334,6 +5344,7 @@ def _run_mlb_memory_collect(date_str=None, days_back=2, max_games_per_day=30, in
             mode=eff_mode if mode else 'manual',
             include_team_rosters=bool(defaults.get('include_team_rosters', False) if mode else False),
             transactions_days=int(defaults.get('transactions_days', 2) if mode else 2),
+            pace_sec=pace_sec,
         )
         _append_mlb_memory_snapshot(snapshot, keep=_MLB_MEMORY_KEEP_SNAPSHOTS)
         _mlb_memory_last_collect = datetime.now(timezone.utc).isoformat()
@@ -5357,11 +5368,17 @@ def _start_mlb_memory_worker(interval_sec=3 * 60 * 60):
         _mlb_memory_worker_started = True
 
     def _runner():
+        # Don't collect at boot: the first run used to fire immediately, right
+        # while the FG/Savant preload and the projections prewarm are competing
+        # for CPU and the HTTP pool. The store persists across restarts, so a
+        # 15-minute-old snapshot at boot is fine.
+        time.sleep(900)
         while True:
             try:
                 _run_mlb_memory_collect(
                     date_str=datetime.now(ET).strftime('%Y-%m-%d'),
                     mode='auto',
+                    pace_sec=0.05,
                 )
             except Exception as ex:
                 print(f'[mlb_memory_worker] {ex}')
@@ -23225,16 +23242,55 @@ def api_lineup_props(game_pk):
 _PROJ_RESP_CACHE = {}
 _PROJ_RESP_LOCK = threading.Lock()
 _PROJ_RESP_TTL = 90  # lineup poller re-hits every 10 min; 90s keeps tab flips instant
+_PROJ_RESP_STALE_TTL = 900  # serve stale + rebuild in background within this window
+_PROJ_REFRESHING = set()    # cache keys with an in-flight background rebuild
+
+
+def _schedule_projections_refresh(game_pk, date_hint, ck):
+    """Kick a single deduped background rebuild for a stale projections cache
+    entry. Re-enters the route under a test_request_context with _rebuild=1
+    (the same mechanism the startup prewarm uses) so the rebuild goes through
+    the exact request path, including the cache write at the end."""
+    with _PROJ_RESP_LOCK:
+        if ck in _PROJ_REFRESHING:
+            return
+        _PROJ_REFRESHING.add(ck)
+
+    def _run():
+        try:
+            qs = f'?_rebuild=1&date={date_hint}' if date_hint else '?_rebuild=1'
+            with app.test_request_context(f'/api/props/projections/{game_pk}{qs}'):
+                api_props_projections(game_pk)
+        except Exception:
+            print(f"[proj_swr_refresh] {traceback.format_exc()}")
+        finally:
+            with _PROJ_RESP_LOCK:
+                _PROJ_REFRESHING.discard(ck)
+
+    threading.Thread(target=_run, daemon=True).start()
 
 
 @app.route('/api/props/projections/<int:game_pk>')
 def api_props_projections(game_pk):
     t0 = time.perf_counter()
     _resp_ck = (int(game_pk), request.args.get('date') or '')
-    with _PROJ_RESP_LOCK:
-        _hit = _PROJ_RESP_CACHE.get(_resp_ck)
-    if _hit and time.time() - _hit[0] < _PROJ_RESP_TTL:
-        return jsonify(_hit[1])
+    # Stale-while-revalidate: within the fresh TTL serve the cache directly;
+    # past it (but inside the stale window) serve the stale payload instantly
+    # and rebuild in the background, so the ~2-4s from-scratch build never
+    # blocks a user once the entry exists. _rebuild=1 marks the background
+    # rebuild itself, which must skip the cache and do the real work.
+    if request.args.get('_rebuild') != '1':
+        with _PROJ_RESP_LOCK:
+            _hit = _PROJ_RESP_CACHE.get(_resp_ck)
+        if _hit:
+            _age = time.time() - _hit[0]
+            if _age < _PROJ_RESP_TTL:
+                return jsonify(_hit[1])
+            if _age < _PROJ_RESP_STALE_TTL:
+                _schedule_projections_refresh(game_pk, request.args.get('date'), _resp_ck)
+                _stale = dict(_hit[1])
+                _stale['stale'] = True
+                return jsonify(_stale)
     _pp_marks = []
     _pp_last = [t0]
 
@@ -27743,17 +27799,21 @@ def _preload_caches():
             today = datetime.now(ET).strftime('%Y-%m-%d')
             games = fetch_schedule(today) or []
             warmed = 0
-            for gm in games[:10]:
+            # Warm the WHOLE slate (was first 10): the batched XGB + vectorized
+            # MC pass made a build cheap enough that a late game's first click
+            # shouldn't be the one cold path left. _rebuild=1 bypasses the
+            # SWR cache check so the prewarm always does the real build.
+            for gm in games:
                 pk = gm.get('gamePk')
                 if not pk:
                     continue
                 try:
-                    with app.test_request_context(f'/api/props/projections/{pk}'):
+                    with app.test_request_context(f'/api/props/projections/{pk}?_rebuild=1'):
                         api_props_projections(pk)
                     warmed += 1
                 except Exception:
                     pass
-            print(f"[STARTUP] projections prewarm complete: {warmed}/{min(len(games), 10)} games")
+            print(f"[STARTUP] projections prewarm complete: {warmed}/{len(games)} games")
         except Exception as ex:
             print(f"[STARTUP] projections prewarm failed: {ex}")
     threading.Thread(target=_prewarm_projections_when_ready, daemon=True).start()
