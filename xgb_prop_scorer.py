@@ -870,6 +870,25 @@ def _score_full(
     }
 
 
+# ─── Lean prob-only scorer ───────────────────────────────────────────────────────
+
+def _score_prob(model_key: str, market_key: str, X: np.ndarray) -> Optional[float]:
+    """Lean scoring for the single-float public APIs: predict + isotonic +
+    clamp, nothing else. Returns the same value as _score_full()["prob"] —
+    the tree-ensemble interval and the 10k-draw anchored MC that _score_full
+    also computes are discarded by the float APIs, and the interval path costs
+    a second predict_proba in its fallback, so skipping both roughly halves
+    the per-call cost on the hot per-batter paths."""
+    model = _models.get(model_key)
+    if model is None:
+        return None
+    if not _xgb_calibrated(market_key):
+        return None
+    raw_p = float(model.predict_proba(X)[0, 1])
+    cal_p = float(_apply_isotonic(raw_p, market_key))
+    return round(min(0.97, max(0.03, cal_p)), 4)
+
+
 # ─── Public scoring functions ───────────────────────────────────────────────────────
 
 def xgb_hit_prob(batter: dict, pitcher: dict) -> Optional[float]:
@@ -886,8 +905,7 @@ def xgb_hit_prob(batter: dict, pitcher: dict) -> Optional[float]:
         X = _build_hit_features(batter_e, pitcher_e, feat_order)
         if X is None:
             return None
-        result = _score_full("hits", "batter_hits", X, line=0.5)
-        return result.get("prob")
+        return _score_prob("hits", "batter_hits", X)
     except Exception:
         return None
 
@@ -938,8 +956,7 @@ def xgb_k_prob(pitcher: dict, line: float = 4.5) -> Optional[float]:
         X = _build_k_features(pitcher_e, feat_order)
         if X is None:
             return None
-        result = _score_full(line_key, "pitcher_strikeouts", X, line=line)
-        return result.get("prob")
+        return _score_prob(line_key, "pitcher_strikeouts", X)
     except Exception:
         return None
 
@@ -970,6 +987,14 @@ def xgb_k_prob_full(pitcher: dict, line: float = 4.5) -> dict:
 
 
 def xgb_hit_prob_bulk(batters: list, pitcher: dict) -> dict:
+    """Batch hit probabilities for a lineup vs one pitcher — ONE predict_proba
+    for all batters instead of per-batter calls. CalibratedClassifierCV has
+    substantial fixed overhead per predict call (every calibrated fold runs a
+    full XGB predict), so batching a 9-man lineup amortizes it to near zero.
+    Values are identical to per-batter xgb_hit_prob (same enrichment, feature
+    build, isotonic and clamp). Results are keyed by str(MLBAM id) when the
+    batter dict carries one ("id"/"mlbamid"), falling back to name — id keys
+    can't collide the way names can."""
     if not _loaded:
         _load_models()
     model = _models.get("hits")
@@ -980,20 +1005,20 @@ def xgb_hit_prob_bulk(batters: list, pitcher: dict) -> dict:
     try:
         pitcher_e  = _enrich_pitcher_from_fg(pitcher)
         feat_order = _feat_cols.get("hits", [])
-        rows, names = [], []
+        rows, keys = [], []
         for b in batters:
             b_e = _enrich_batter_from_fg(b)
             X   = _build_hit_features(b_e, pitcher_e, feat_order)
             if X is not None:
                 rows.append(X[0])
-                names.append(b.get("name", ""))
+                keys.append(str(b.get("id") or b.get("mlbamid") or "") or b.get("name", ""))
         if not rows:
             return {}
         raw_probs = model.predict_proba(np.array(rows, dtype=np.float32))[:, 1]
         result = {}
-        for name, raw_p in zip(names, raw_probs):
+        for key, raw_p in zip(keys, raw_probs):
             cal_p = float(_apply_isotonic(float(raw_p), "batter_hits"))
-            result[name] = round(min(0.97, max(0.03, cal_p)), 4)
+            result[key] = round(min(0.97, max(0.03, cal_p)), 4)
         return result
     except Exception:
         return {}
@@ -1021,6 +1046,30 @@ def _predict_batter_market_full(
         return {}
 
 
+def _predict_batter_market_prob(
+    model_key: str, market_key: str, batter: dict, pitcher: dict
+) -> Optional[float]:
+    """Lean float-only variant of _predict_batter_market_full — same enrichment
+    and feature build, but _score_prob instead of the full interval+MC pipeline
+    (see _score_prob for why)."""
+    if not _loaded:
+        _load_models()
+    if _models.get(model_key) is None:
+        return None
+    try:
+        batter_e  = _enrich_batter_from_fg(batter)
+        pitcher_e = _enrich_pitcher_from_fg(pitcher)
+        feat_order = _feat_cols.get(model_key, [])
+        builder = (_build_hit_features if model_key.startswith("hits")
+                   else _build_batter_market_features)
+        X = builder(batter_e, pitcher_e, feat_order)
+        if X is None:
+            return None
+        return _score_prob(model_key, market_key, X)
+    except Exception:
+        return None
+
+
 def xgb_batter_prob_full(family: str, line, batter: dict, pitcher: dict) -> dict:
     """Line-aware full output for a batter market family (hits/hr/tb/rbi).
     Routes (family, line) to the model trained at exactly that threshold;
@@ -1037,16 +1086,13 @@ def xgb_batter_prob_full(family: str, line, batter: dict, pitcher: dict) -> dict
 
 
 def xgb_hr_prob(batter: dict, pitcher: dict) -> Optional[float]:
-    r = _predict_batter_market_full("hr", "batter_hr", 0.5, batter, pitcher)
-    return r.get("prob")
+    return _predict_batter_market_prob("hr", "batter_hr", batter, pitcher)
 
 def xgb_tb_prob(batter: dict, pitcher: dict) -> Optional[float]:
-    r = _predict_batter_market_full("tb", "batter_tb", 1.5, batter, pitcher)
-    return r.get("prob")
+    return _predict_batter_market_prob("tb", "batter_tb", batter, pitcher)
 
 def xgb_rbi_prob(batter: dict, pitcher: dict) -> Optional[float]:
-    r = _predict_batter_market_full("rbi", "batter_rbi", 0.5, batter, pitcher)
-    return r.get("prob")
+    return _predict_batter_market_prob("rbi", "batter_rbi", batter, pitcher)
 
 def xgb_hr_prob_full(batter: dict, pitcher: dict) -> dict:
     return _predict_batter_market_full("hr", "batter_hr", 0.5, batter, pitcher)

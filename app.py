@@ -1,6 +1,7 @@
 import os, threading, traceback, difflib, io, csv as csvmod, json, re, time, uuid, unicodedata, logging, glob as _glob, random
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s %(message)s')
 import requests
+import numpy as np
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
@@ -42,13 +43,14 @@ try:
         xgb_hr_prob, xgb_tb_prob, xgb_rbi_prob,
         xgb_hit_prob_full, xgb_k_prob_full,
         xgb_hr_prob_full, xgb_tb_prob_full, xgb_rbi_prob_full,
-        xgb_batter_prob_full,
+        xgb_batter_prob_full, xgb_hit_prob_bulk,
         enrich_batter, enrich_pitcher,
     )
     _XGB_AVAILABLE = True
 except ImportError:
     _XGB_AVAILABLE = False
     def xgb_hit_prob(*a, **k):   return None
+    def xgb_hit_prob_bulk(*a, **k): return {}
     def xgb_k_prob(*a, **k):     return None
     def xgb_hr_prob(*a, **k):    return None
     def xgb_tb_prob(*a, **k):    return None
@@ -226,6 +228,10 @@ _HTTP_SESSION.mount('http://', requests.adapters.HTTPAdapter(pool_connections=8,
 requests.get = _HTTP_SESSION.get
 
 app = Flask(__name__)
+# Flask's default JSON provider sorts keys on every jsonify — pure overhead on
+# the big payloads (the deepdive matchup response is >1MB) and nothing here
+# depends on key order.
+app.json.sort_keys = False
 
 # PROFILE_REQUESTS=1 wraps every request in cProfile and prints the top
 # cumulative functions to stdout — dev-only diagnostic, never set in prod.
@@ -1170,7 +1176,11 @@ def _save_json(path, payload):
         # data-loss incident).
         tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
         with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(payload, f, indent=2)
+            # Compact separators: indent=2 roughly doubled the bytes pushed
+            # through fsync on every save, and the big stores are rewritten
+            # whole (daily_tracker.json on every pick add/grade; the ~12MB
+            # mlb_memory_store.json every collection cycle).
+            json.dump(payload, f, separators=(',', ':'))
             f.flush()
             try:
                 os.fsync(f.fileno())
@@ -1200,7 +1210,7 @@ def _tracker_commit_day(date_str, day):
     a stale in-memory snapshot can never overwrite concurrent updates to other
     dates. Returns the _save_json() success bool."""
     with _TRACKER_STORE_LOCK:
-        store = _load_json(TRACKER_STORE, {})
+        store = _tracker_store()
         store[date_str] = day
         return _save_json(TRACKER_STORE, store)
 
@@ -1211,6 +1221,47 @@ def _evict_if_large(d, max_size=500):
         to_remove = len(d) - max_size + 1
         for k in list(d.keys())[:to_remove]:
             del d[k]
+
+
+# ── HTML page serving: ETag revalidation + gzip ───────────────────────────────
+# The SPA pages are big (deepdive.html ~423KB, dashboard.html ~262KB) and the
+# most-edited ones were served with `no-store`, so every navigation re-downloaded
+# the full uncompressed page. `no-cache` + a strong ETag keeps the same
+# guarantee — the browser revalidates on every navigation, so frontend edits
+# still show up without a redeploy — but an unchanged page now costs a bodyless
+# 304 instead of a full transfer, and a changed one ships gzipped (~4x smaller).
+# The gzip cache is keyed by content hash: boot-time-constant pages compress
+# exactly once, re-read pages recompress only when the file actually changes.
+_HTML_GZ_CACHE = {}
+_HTML_GZ_LOCK = threading.Lock()
+
+
+def _page_response(html):
+    import hashlib
+    body = html.encode('utf-8') if isinstance(html, str) else html
+    etag = hashlib.md5(body).hexdigest()
+    headers = {
+        'Cache-Control': 'no-cache',
+        'ETag': f'"{etag}"',
+        'Vary': 'Accept-Encoding',
+    }
+    try:
+        if request.if_none_match.contains(etag):
+            return Response(status=304, headers=headers)
+    except Exception:
+        pass
+    if len(body) >= 4096 and 'gzip' in (request.headers.get('Accept-Encoding') or ''):
+        with _HTML_GZ_LOCK:
+            gz = _HTML_GZ_CACHE.get(etag)
+        if gz is None:
+            import gzip as _gz
+            gz = _gz.compress(body, compresslevel=5)
+            with _HTML_GZ_LOCK:
+                _evict_if_large(_HTML_GZ_CACHE, 40)
+                _HTML_GZ_CACHE[etag] = gz
+        headers['Content-Encoding'] = 'gzip'
+        return Response(gz, mimetype='text/html', headers=headers)
+    return Response(body, mimetype='text/html', headers=headers)
 
 
 def _get_active_roster(team_id, ttl_sec=_ACTIVE_ROSTER_TTL):
@@ -3817,11 +3868,15 @@ def _memory_collect_schedule_window(date_str, days_back=2, max_games_per_day=30)
     return days, game_pks
 
 
-def _memory_collect_boxscores(game_pks, max_games=20):
+def _memory_collect_boxscores(game_pks, max_games=20, pace_sec=0.0):
     picked = [int(gpk) for gpk in (game_pks or []) if gpk][:max(1, int(max_games))]
     boxscores = []
     player_ids = set()
     for gpk in picked:
+        if pace_sec:
+            # Background collections yield between calls so the ~250-request
+            # sweep doesn't monopolize CPU/pool alongside live requests.
+            time.sleep(pace_sec)
         payload = _collect_mlb_endpoint(f"{MLB_API}/game/{gpk}/boxscore", timeout=12, default={})
         teams = payload.get("teams") or {}
         away = teams.get("away") or {}
@@ -3854,9 +3909,11 @@ def _memory_collect_boxscores(game_pks, max_games=20):
     return boxscores, sorted(player_ids)
 
 
-def _memory_collect_player_cards(player_ids, max_players=160):
+def _memory_collect_player_cards(player_ids, max_players=160, pace_sec=0.0):
     out = []
     for pid in (player_ids or [])[:max(1, int(max_players))]:
+        if pace_sec:
+            time.sleep(pace_sec)
         payload = _collect_mlb_endpoint(
             f"{MLB_API}/people/{pid}",
             params={
@@ -4241,7 +4298,7 @@ def _memory_collect_comprehensive_data(date_str=None, team_ids=None, mode='light
 
 
 
-def _collect_mlb_memory_snapshot(date_str=None, days_back=2, max_games_per_day=30, include_boxscores=True, max_players=160, mode='light', include_team_rosters=False, transactions_days=2):
+def _collect_mlb_memory_snapshot(date_str=None, days_back=2, max_games_per_day=30, include_boxscores=True, max_players=160, mode='light', include_team_rosters=False, transactions_days=2, pace_sec=0.0):
     _maybe_refresh_fg()
     _maybe_refresh_savant()
     _fetch_injury_status(force=False)
@@ -4297,7 +4354,7 @@ def _collect_mlb_memory_snapshot(date_str=None, days_back=2, max_games_per_day=3
     boxscores = []
     box_player_ids = []
     if include_boxscores:
-        boxscores, box_player_ids = _memory_collect_boxscores(game_pks, max_games=20)
+        boxscores, box_player_ids = _memory_collect_boxscores(game_pks, max_games=20, pace_sec=pace_sec)
 
     probable_pitcher_ids = []
     raw_today = fetch_schedule(today_et)
@@ -4310,7 +4367,7 @@ def _collect_mlb_memory_snapshot(date_str=None, days_back=2, max_games_per_day=3
             probable_pitcher_ids.append(home_pp)
 
     featured_player_ids = sorted({int(x) for x in (box_player_ids + probable_pitcher_ids) if x})
-    player_cards = _memory_collect_player_cards(featured_player_ids, max_players=max_players)
+    player_cards = _memory_collect_player_cards(featured_player_ids, max_players=max_players, pace_sec=pace_sec)
 
     team_stats = _memory_collect_team_stats(team_ids)
     team_rosters = _memory_collect_team_rosters(team_ids) if include_team_rosters else []
@@ -4712,107 +4769,67 @@ def parse_game(g, prefer_live_weather=True):
 # ── Routes ────────────────────────────────────────────────────────────────────
 @app.route("/")
 def dashboard():
-    return DASHBOARD_HTML
+    return _page_response(DASHBOARD_HTML)
 
 @app.route("/deep-dive/<int:game_pk>")
 def deep_dive(game_pk):
     # Read fresh on every request so a stale startup-time cache never shows
     # the "missing from project root" fallback after a file restore.
-    html = _read_html_or_fallback('deepdive.html')
-    return Response(html, mimetype='text/html', headers={
-        'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
-        'Pragma': 'no-cache',
-    })
+    return _page_response(_read_html_or_fallback('deepdive.html'))
 
 @app.route('/props')
 def props_page():
-    html = _read_html_or_fallback('props.html')
-    return Response(
-        html,
-        mimetype='text/html',
-        headers={
-            'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
-            'Pragma': 'no-cache',
-            'Expires': '0',
-        },
-    )
+    return _page_response(_read_html_or_fallback('props.html'))
 
 @app.route('/settings')
 def settings_page():
-    html = _read_html_or_fallback('settings.html')
-    return Response(
-        html,
-        mimetype='text/html',
-        headers={
-            'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
-            'Pragma': 'no-cache',
-            'Expires': '0',
-        },
-    )
+    return _page_response(_read_html_or_fallback('settings.html'))
 
 @app.route('/cheatsheets')
 def cheatsheets_page():
-    return CHEATSHEET_HTML
+    return _page_response(CHEATSHEET_HTML)
 
 @app.route('/tracker')
 def tracker_page():
-    html = _read_html_or_fallback('tracker.html')
-    return Response(
-        html,
-        mimetype='text/html',
-        headers={
-            'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
-            'Pragma': 'no-cache',
-            'Expires': '0',
-        },
-    )
+    return _page_response(_read_html_or_fallback('tracker.html'))
 
 @app.route('/consistency')
 def consistency_page():
-    return CONSISTENCY_HTML
+    return _page_response(CONSISTENCY_HTML)
 
 @app.route('/edge-lab')
 def edge_lab_page():
-    return _read_html_or_fallback('edge_lab.html')
+    return _page_response(_read_html_or_fallback('edge_lab.html'))
 
 @app.route('/batter-vs-pitcher')
 def bvp_page():
-    return BVP_HTML
+    return _page_response(BVP_HTML)
 
 @app.route('/value-bets')
 def value_bets_page():
-    return VALUE_BETS_HTML
+    return _page_response(VALUE_BETS_HTML)
 
 @app.route('/nrfi')
 def nrfi_page():
-    return NRFI_HTML
+    return _page_response(NRFI_HTML)
 
 @app.route('/streak')
 def streak_page():
-    return STREAK_HTML
+    return _page_response(STREAK_HTML)
 
 @app.route('/player/<int:player_id>')
 def player_profile_page(player_id):
-    return PLAYER_PROFILE_HTML
+    return _page_response(PLAYER_PROFILE_HTML)
 
 @app.route('/tools')
 def tools_page():
-    html = _read_html_or_fallback('tools.html')
-    return Response(
-        html,
-        mimetype='text/html',
-        headers={
-            'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
-            'Pragma': 'no-cache',
-            'Expires': '0',
-        },
-    )
+    return _page_response(_read_html_or_fallback('tools.html'))
 
 @app.route('/pitcher-deep-dive')
 @app.route('/pitcher-deep-dive/<int:pitcher_id>')
 def pitcher_deep_dive_page(pitcher_id=None):
     """Pitcher Analysis page (linked from dashboard header)."""
-    return PITCHER_DEEP_DIVE_HTML
+    return _page_response(PITCHER_DEEP_DIVE_HTML)
 
 @app.route("/api/status")
 def api_status():
@@ -5308,7 +5325,7 @@ def _mlb_memory_status_payload():
     }
 
 
-def _run_mlb_memory_collect(date_str=None, days_back=2, max_games_per_day=30, include_boxscores=True, max_players=160, mode=None):
+def _run_mlb_memory_collect(date_str=None, days_back=2, max_games_per_day=30, include_boxscores=True, max_players=160, mode=None, pace_sec=0.0):
     global _mlb_memory_collecting, _mlb_memory_last_collect, _mlb_memory_last_error
     with _mlb_memory_lock:
         if _mlb_memory_collecting:
@@ -5327,6 +5344,7 @@ def _run_mlb_memory_collect(date_str=None, days_back=2, max_games_per_day=30, in
             mode=eff_mode if mode else 'manual',
             include_team_rosters=bool(defaults.get('include_team_rosters', False) if mode else False),
             transactions_days=int(defaults.get('transactions_days', 2) if mode else 2),
+            pace_sec=pace_sec,
         )
         _append_mlb_memory_snapshot(snapshot, keep=_MLB_MEMORY_KEEP_SNAPSHOTS)
         _mlb_memory_last_collect = datetime.now(timezone.utc).isoformat()
@@ -5350,11 +5368,17 @@ def _start_mlb_memory_worker(interval_sec=3 * 60 * 60):
         _mlb_memory_worker_started = True
 
     def _runner():
+        # Don't collect at boot: the first run used to fire immediately, right
+        # while the FG/Savant preload and the projections prewarm are competing
+        # for CPU and the HTTP pool. The store persists across restarts, so a
+        # 15-minute-old snapshot at boot is fine.
+        time.sleep(900)
         while True:
             try:
                 _run_mlb_memory_collect(
                     date_str=datetime.now(ET).strftime('%Y-%m-%d'),
                     mode='auto',
+                    pace_sec=0.05,
                 )
             except Exception as ex:
                 print(f'[mlb_memory_worker] {ex}')
@@ -9937,11 +9961,15 @@ def _monte_carlo_vs_sp(per_pa_rates, pa_vs_sp, n_sims=4000, rng_seed=None):
     The remaining mass is distributed to outs.
     Returns percentile bands (P25/P50/P75/P90) for hits, TB, HR, RBI plus
     the probabilities of clearing standard prop lines.
-    """
-    import random
-    if rng_seed is not None:
-        random.seed(rng_seed)
 
+    Vectorized: PA outcomes are i.i.d. draws, so one multinomial per simulated
+    game is distributionally identical to drawing PA-by-PA at ~15x less CPU
+    (~24ms -> ~1.7ms per batter; the projections build runs this for all 18
+    starters). The seed feeds a local Generator — the old implementation
+    seeded the GLOBAL `random` module from the 9-thread batter-enrich pool,
+    which was neither reproducible under concurrency nor safe for other
+    `random` users.
+    """
     n_pa_int  = int(round(max(0.0, pa_vs_sp)))
     if n_pa_int <= 0:
         return None
@@ -9957,56 +9985,53 @@ def _monte_carlo_vs_sp(per_pa_rates, pa_vs_sp, n_sims=4000, rng_seed=None):
         used = sum(r.values())
     out_rate = max(0.001, 1.0 - used)
 
-    # Build a cumulative outcome distribution.
-    outcomes = ["k", "bb", "hbp", "1b", "2b", "3b", "hr", "out"]
-    weights  = [r.get("k", 0), r.get("bb", 0), r.get("hbp", 0),
-                r.get("1b", 0), r.get("2b", 0), r.get("3b", 0),
-                r.get("hr", 0), out_rate]
+    # Outcome distribution — columns: k, bb, hbp, 1b, 2b, 3b, hr, out.
+    weights = np.array([
+        max(0.0, float(r.get("k", 0) or 0)),  max(0.0, float(r.get("bb", 0) or 0)),
+        max(0.0, float(r.get("hbp", 0) or 0)), max(0.0, float(r.get("1b", 0) or 0)),
+        max(0.0, float(r.get("2b", 0) or 0)),  max(0.0, float(r.get("3b", 0) or 0)),
+        max(0.0, float(r.get("hr", 0) or 0)),  out_rate,
+    ], dtype=np.float64)
+    weights /= weights.sum()
 
-    sim_hits = []
-    sim_tb   = []
-    sim_hr   = []
-    sim_rbi  = []
-    sim_k    = []
-    sim_bb   = []
-    for _ in range(n_sims):
-        h = tb = hr = rbi = k = bb = 0
-        for _i in range(n_pa_int):
-            outcome = random.choices(outcomes, weights)[0]
-            if outcome == "k":   k += 1
-            elif outcome == "bb": bb += 1
-            elif outcome == "hbp": pass
-            elif outcome == "1b": h += 1; tb += 1; rbi += 1 if random.random() < 0.18 else 0
-            elif outcome == "2b": h += 1; tb += 2; rbi += 1 if random.random() < 0.30 else 0
-            elif outcome == "3b": h += 1; tb += 3; rbi += 1 if random.random() < 0.45 else 0
-            elif outcome == "hr": h += 1; tb += 4; hr += 1; rbi += 1 + (1 if random.random() < 0.50 else 0)
-        sim_hits.append(h)
-        sim_tb.append(tb)
-        sim_hr.append(hr)
-        sim_rbi.append(rbi)
-        sim_k.append(k)
-        sim_bb.append(bb)
+    if rng_seed is None:
+        rng = np.random.default_rng()
+    else:
+        try:
+            rng = np.random.default_rng(abs(int(rng_seed)))
+        except (TypeError, ValueError):
+            rng = np.random.default_rng(abs(hash(str(rng_seed))))
+
+    counts = rng.multinomial(n_pa_int, weights, size=n_sims)
+    n_1b, n_2b, n_3b = counts[:, 3], counts[:, 4], counts[:, 5]
+    sim_k, sim_bb, sim_hr = counts[:, 0], counts[:, 1], counts[:, 6]
+    sim_hits = n_1b + n_2b + n_3b + sim_hr
+    sim_tb   = n_1b + 2 * n_2b + 3 * n_3b + 4 * sim_hr
+    # RBI: per-hit Bernoulli runner-on chances (1B 18%, 2B 30%, 3B 45%);
+    # HR always drives in the batter plus a 50% chance of one more.
+    sim_rbi  = (rng.binomial(n_1b, 0.18) + rng.binomial(n_2b, 0.30)
+                + rng.binomial(n_3b, 0.45) + sim_hr + rng.binomial(sim_hr, 0.50))
 
     def _pctiles(arr, ps=(25, 50, 75, 90)):
-        s = sorted(arr)
+        s = np.sort(arr)
         n = len(s)
-        return {f"p{p}": s[min(n - 1, int(round(p / 100.0 * (n - 1))))] for p in ps}
+        return {f"p{p}": int(s[min(n - 1, int(round(p / 100.0 * (n - 1))))]) for p in ps}
 
     def _gte_prob(arr, threshold):
-        return round(sum(1 for x in arr if x >= threshold) / max(1, len(arr)), 3)
+        return round(float(np.mean(arr >= threshold)), 3)
 
     return {
         "nSims":  n_sims,
         "nPa":    n_pa_int,
-        "hits":   {"mean": round(sum(sim_hits) / n_sims, 2), **_pctiles(sim_hits),
+        "hits":   {"mean": round(float(sim_hits.mean()), 2), **_pctiles(sim_hits),
                    "p_ge_1": _gte_prob(sim_hits, 1), "p_ge_2": _gte_prob(sim_hits, 2)},
-        "tb":     {"mean": round(sum(sim_tb)   / n_sims, 2), **_pctiles(sim_tb),
+        "tb":     {"mean": round(float(sim_tb.mean()), 2), **_pctiles(sim_tb),
                    "p_ge_2": _gte_prob(sim_tb, 2),  "p_ge_3": _gte_prob(sim_tb, 3)},
-        "hr":     {"mean": round(sum(sim_hr)   / n_sims, 3), "p_ge_1": _gte_prob(sim_hr, 1)},
-        "rbi":    {"mean": round(sum(sim_rbi)  / n_sims, 2), "p_ge_1": _gte_prob(sim_rbi, 1),
+        "hr":     {"mean": round(float(sim_hr.mean()), 3), "p_ge_1": _gte_prob(sim_hr, 1)},
+        "rbi":    {"mean": round(float(sim_rbi.mean()), 2), "p_ge_1": _gte_prob(sim_rbi, 1),
                    "p_ge_2": _gte_prob(sim_rbi, 2)},
-        "k":      {"mean": round(sum(sim_k)    / n_sims, 2), "p_ge_1": _gte_prob(sim_k, 1)},
-        "bb":     {"mean": round(sum(sim_bb)   / n_sims, 2), "p_ge_1": _gte_prob(sim_bb, 1)},
+        "k":      {"mean": round(float(sim_k.mean()), 2), "p_ge_1": _gte_prob(sim_k, 1)},
+        "bb":     {"mean": round(float(sim_bb.mean()), 2), "p_ge_1": _gte_prob(sim_bb, 1)},
     }
 
 
@@ -16391,7 +16416,7 @@ def _tracker_capture_continue_bg(date_str, remaining_games, sched, adjustments, 
         if not bg_rows:
             return
         with _TRACKER_STORE_LOCK:
-            store = _load_json(TRACKER_STORE, {})
+            store = _tracker_store()
             day = _normalize_tracker_day(store.get(date_str))
             merged = _merge_tracker_entries(day.get('entries', []), _recalc_tracker_entries(bg_rows))
             day['entries'] = merged
@@ -16489,7 +16514,7 @@ def _tracker_auto_capture_once():
     if datetime.now(ET).hour < capture_hour:
         return
 
-    store = _load_json(TRACKER_STORE, {})
+    store = _tracker_store()
     day = _normalize_tracker_day(store.get(today))
     # Already have picks for today — nothing to do. (Re-capture merges, but we
     # avoid re-hammering the MLB API once a day is populated.)
@@ -16579,7 +16604,7 @@ def api_tracker_adjustments():
 
 @app.route('/api/tracker/date/<date_str>')
 def api_tracker_date(date_str):
-    store = _load_json(TRACKER_STORE, {})
+    store = _tracker_store()
     day = _normalize_tracker_day(store.get(date_str))
     day['entries'] = _recalc_tracker_entries(day.get('entries', []))
     return jsonify({'success': True, 'date': date_str, 'adjustments': _get_adjustments(), 'capturedAt': day.get('capturedAt'), 'gradedAt': day.get('gradedAt'), 'closingCapturedAt': day.get('closingCapturedAt'), 'entries': day.get('entries', []), 'summary': _tracker_summary(day.get('entries', []))})
@@ -16681,7 +16706,7 @@ def api_tracker_capture(date_str):
                 pass
 
         with _TRACKER_STORE_LOCK:
-            store = _load_json(TRACKER_STORE, {})
+            store = _tracker_store()
             day = _normalize_tracker_day(store.get(date_str))
             entries = _merge_tracker_entries(day.get('entries', []), _recalc_tracker_entries(all_entries))
             if is_backfill:
@@ -16756,7 +16781,7 @@ def api_tracker_grade(date_str):
     denied = _check_admin_auth()
     if denied:
         return denied
-    store = _load_json(TRACKER_STORE, {})
+    store = _tracker_store()
     raw_day = store.get(date_str)
     if raw_day is None:
         return jsonify({
@@ -16877,8 +16902,44 @@ CALIBRATION_TARGETS = {
 }
 
 
+_TRACKER_READ_CACHE = {'sig': None, 'pickled': None}
+_TRACKER_READ_LOCK = threading.Lock()
+
+
 def _tracker_store():
-    return _load_json(TRACKER_STORE, {})
+    """Load the tracker store, parsing daily_tracker.json at most once per file
+    change. The file grows all season (multi-MB by late summer) and one tracker
+    page load fires several API calls that each used to re-parse it from disk.
+    The parsed store is cached against an (mtime_ns, size) signature — any
+    writer (this process via _save_json's atomic replace, or an external tool)
+    changes the signature and forces a re-parse. Every call returns a private
+    deep copy (pickle round-trip, ~3.5x faster than re-parsing JSON) because
+    callers mutate the returned days/entries in place and several run without
+    _TRACKER_STORE_LOCK; sharing one object across threads would race."""
+    import pickle
+    try:
+        with open(TRACKER_STORE, 'rb') as f:
+            st = os.fstat(f.fileno())
+            sig = (st.st_mtime_ns, st.st_size)
+            with _TRACKER_READ_LOCK:
+                cached = _TRACKER_READ_CACHE['pickled'] if _TRACKER_READ_CACHE['sig'] == sig else None
+            if cached is not None:
+                return pickle.loads(cached)
+            data = json.load(f)
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        return _load_json(TRACKER_STORE, {})
+    if not isinstance(data, dict):
+        return {}
+    try:
+        blob = pickle.dumps(data, protocol=pickle.HIGHEST_PROTOCOL)
+        with _TRACKER_READ_LOCK:
+            _TRACKER_READ_CACHE['sig'] = sig
+            _TRACKER_READ_CACHE['pickled'] = blob
+    except Exception:
+        pass
+    return data
 
 
 def _coerce_tracker_entries(entries):
@@ -18618,7 +18679,7 @@ def api_tracker_pick():
         entry.setdefault(k, v)
 
     with _TRACKER_STORE_LOCK:
-        store = _load_json(TRACKER_STORE, {})
+        store = _tracker_store()
         day   = store.setdefault(today, {'capturedAt': None, 'gradedAt': None,
                                           'closingCapturedAt': None, 'entries': []})
 
@@ -18644,7 +18705,7 @@ def api_tracker_pick_patch(pick_id):
     payload = request.get_json(silent=True) or {}
     date_hint = payload.get('date') or request.args.get('date')
     with _TRACKER_STORE_LOCK:
-        store = _load_json(TRACKER_STORE, {})
+        store = _tracker_store()
         date_str, day, entries, idx, row = _tracker_find_pick(store, pick_id, date_hint)
         if row is None:
             return jsonify({'success': False, 'error': 'Pick not found'}), 404
@@ -18677,7 +18738,7 @@ def api_tracker_pick_delete(pick_id):
         return denied
     today = request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
     with _TRACKER_STORE_LOCK:
-        store = _load_json(TRACKER_STORE, {})
+        store = _tracker_store()
         date_str, day, entries, idx, row = _tracker_find_pick(store, pick_id, today)
         if row is not None:
             day['entries'] = [e for e in entries if e.get('id') != pick_id]
@@ -18752,7 +18813,7 @@ def api_tracker_parlay():
         'parlayLeg': None,
     }
     with _TRACKER_STORE_LOCK:
-        store = _load_json(TRACKER_STORE, {})
+        store = _tracker_store()
         day = store.setdefault(today, {'capturedAt': None, 'gradedAt': None, 'closingCapturedAt': None, 'entries': []})
         day['entries'].append(entry)
         if not day.get('capturedAt'):
@@ -23181,16 +23242,55 @@ def api_lineup_props(game_pk):
 _PROJ_RESP_CACHE = {}
 _PROJ_RESP_LOCK = threading.Lock()
 _PROJ_RESP_TTL = 90  # lineup poller re-hits every 10 min; 90s keeps tab flips instant
+_PROJ_RESP_STALE_TTL = 900  # serve stale + rebuild in background within this window
+_PROJ_REFRESHING = set()    # cache keys with an in-flight background rebuild
+
+
+def _schedule_projections_refresh(game_pk, date_hint, ck):
+    """Kick a single deduped background rebuild for a stale projections cache
+    entry. Re-enters the route under a test_request_context with _rebuild=1
+    (the same mechanism the startup prewarm uses) so the rebuild goes through
+    the exact request path, including the cache write at the end."""
+    with _PROJ_RESP_LOCK:
+        if ck in _PROJ_REFRESHING:
+            return
+        _PROJ_REFRESHING.add(ck)
+
+    def _run():
+        try:
+            qs = f'?_rebuild=1&date={date_hint}' if date_hint else '?_rebuild=1'
+            with app.test_request_context(f'/api/props/projections/{game_pk}{qs}'):
+                api_props_projections(game_pk)
+        except Exception:
+            print(f"[proj_swr_refresh] {traceback.format_exc()}")
+        finally:
+            with _PROJ_RESP_LOCK:
+                _PROJ_REFRESHING.discard(ck)
+
+    threading.Thread(target=_run, daemon=True).start()
 
 
 @app.route('/api/props/projections/<int:game_pk>')
 def api_props_projections(game_pk):
     t0 = time.perf_counter()
     _resp_ck = (int(game_pk), request.args.get('date') or '')
-    with _PROJ_RESP_LOCK:
-        _hit = _PROJ_RESP_CACHE.get(_resp_ck)
-    if _hit and time.time() - _hit[0] < _PROJ_RESP_TTL:
-        return jsonify(_hit[1])
+    # Stale-while-revalidate: within the fresh TTL serve the cache directly;
+    # past it (but inside the stale window) serve the stale payload instantly
+    # and rebuild in the background, so the ~2-4s from-scratch build never
+    # blocks a user once the entry exists. _rebuild=1 marks the background
+    # rebuild itself, which must skip the cache and do the real work.
+    if request.args.get('_rebuild') != '1':
+        with _PROJ_RESP_LOCK:
+            _hit = _PROJ_RESP_CACHE.get(_resp_ck)
+        if _hit:
+            _age = time.time() - _hit[0]
+            if _age < _PROJ_RESP_TTL:
+                return jsonify(_hit[1])
+            if _age < _PROJ_RESP_STALE_TTL:
+                _schedule_projections_refresh(game_pk, request.args.get('date'), _resp_ck)
+                _stale = dict(_hit[1])
+                _stale['stale'] = True
+                return jsonify(_stale)
     _pp_marks = []
     _pp_last = [t0]
 
@@ -23330,6 +23430,7 @@ def api_props_projections(game_pk):
             batters_top = list((batters or [])[:9])
             # Opposing team's defense factor is constant for this side — resolve once.
             _side_def_factor = _def_factor_for_pitcher(opp_pid)
+            _use_xgb = _XGB_AVAILABLE and xgb_ready('hits')
 
             def _enrich_one(b):
                 name = b.get("name", "")
@@ -23368,19 +23469,19 @@ def api_props_projections(game_pk):
                     def_factor=_side_def_factor,
                 )
                 slot = int(b.get("slot") or 9)
-                xgb_hit_p = None
-                if _XGB_AVAILABLE and xgb_ready('hits'):
+                _xgb_bd = None
+                if _use_xgb:
                     # Serve-parity: supply lineup slot + recent form so the hits
                     # model isn't run on a name-only dict (which defaults 6 of its
                     # features). FG enrichment inside the scorer fills the rest.
+                    # The dict is stashed on the row; the actual prediction runs
+                    # ONCE for the whole lineup via xgb_hit_prob_bulk after the
+                    # pool (single-row predict_proba on CalibratedClassifierCV
+                    # pays the full ensemble overhead per batter).
                     _xgb_bd = {"name": name, "slot": slot}
                     if bid:
                         _xgb_bd["id"] = bid
                         _xgb_bd.update(_batter_recent_hit_form(bid))
-                    xgb_hit_p = xgb_hit_prob(
-                        _xgb_bd,
-                        {"name": opp_pname, "pitchHand": opp_hand},
-                    )
                 wx_adj = _safe_f((proj.get("adjustments") or {}).get("weather"), 0.0)
                 wind_bucket = "out" if wx_adj > 0.01 else ("in" if wx_adj < -0.01 else "calm")
                 park_bucket = "hitter" if pf >= 1.04 else ("pitcher" if pf <= 0.96 else "neutral")
@@ -23437,17 +23538,30 @@ def api_props_projections(game_pk):
                     "vs_r_avg":     b.get("vs_r_avg"),
                     "vs_l_ops":     b.get("vs_l_ops"),
                     "vs_r_ops":     b.get("vs_r_ops"),
-                    "xgbHitProb":   round(xgb_hit_p, 4) if xgb_hit_p is not None else None,
+                    "xgbHitProb":   None,
+                    "_xgbBd":       _xgb_bd,
                     "arsenal":      bat_arsenal_map,
                     "proj":         proj,
                 }
 
+            def _apply_xgb_bulk(rows):
+                """One batched predict for the whole lineup (values identical to
+                the old per-batter xgb_hit_prob calls — see xgb_hit_prob_bulk)."""
+                dicts = [r["_xgbBd"] for r in rows if r.get("_xgbBd")]
+                probs = xgb_hit_prob_bulk(dicts, {"name": opp_pname, "pitchHand": opp_hand}) if dicts else {}
+                for r in rows:
+                    bd = r.pop("_xgbBd", None)
+                    if bd:
+                        key = str(bd.get("id") or "") or bd.get("name", "")
+                        r["xgbHitProb"] = probs.get(key)
+                return rows
+
             if os.getenv('PROFILE_REQUESTS') == '1':
                 # inline so the request profiler can see per-batter work
-                return [_enrich_one(b) for b in batters_top]
+                return _apply_xgb_bulk([_enrich_one(b) for b in batters_top])
             workers = min(9, max(1, len(batters_top)))
             with ThreadPoolExecutor(max_workers=workers) as ex:
-                return list(ex.map(_enrich_one, batters_top))
+                return _apply_xgb_bulk(list(ex.map(_enrich_one, batters_top)))
 
         away_proj = enrich_batters(away_bats, hp_fg, hp_sv, hp_st, home_abbr, hp_name, hp_id, own_abbr=away_abbr, lineup_confirmed=away_confirmed, team_travel=away_travel)
         home_proj = enrich_batters(home_bats, ap_fg, ap_sv, ap_st, away_abbr, ap_name, ap_id, own_abbr=home_abbr, lineup_confirmed=home_confirmed, team_travel=home_travel)
@@ -26486,7 +26600,7 @@ def gameside_deepdive_page(game_pk):
     """Layered deep-dive UI matching the reference mockup:
        run-env score, pitcher arsenal card with L/R splits,
        top batter prop picks with PF scores."""
-    return GAMESIDE_DEEPDIVE_HTML
+    return _page_response(GAMESIDE_DEEPDIVE_HTML)
 
 
 @app.route("/api/gameside-deepdive/<int:game_pk>")
@@ -26577,7 +26691,7 @@ def api_gameside_deepdive(game_pk):
 @app.route("/breakout-detector")
 def breakout_detector_page():
     """Live Statcast breakout signal dashboard."""
-    return BREAKOUT_DETECTOR_HTML
+    return _page_response(BREAKOUT_DETECTOR_HTML)
 
 
 _breakout_cache = {"key": None, "ts": 0.0, "payload": None}
@@ -27168,7 +27282,7 @@ def _call_claude_scouting_report(payload):
 
 @app.route("/hr-analytics")
 def hr_analytics_page():
-    return Response(HR_ANALYTICS_HTML, mimetype='text/html')
+    return _page_response(HR_ANALYTICS_HTML)
 
 
 @app.route("/api/hr-analytics/simulator")
@@ -27685,17 +27799,21 @@ def _preload_caches():
             today = datetime.now(ET).strftime('%Y-%m-%d')
             games = fetch_schedule(today) or []
             warmed = 0
-            for gm in games[:10]:
+            # Warm the WHOLE slate (was first 10): the batched XGB + vectorized
+            # MC pass made a build cheap enough that a late game's first click
+            # shouldn't be the one cold path left. _rebuild=1 bypasses the
+            # SWR cache check so the prewarm always does the real build.
+            for gm in games:
                 pk = gm.get('gamePk')
                 if not pk:
                     continue
                 try:
-                    with app.test_request_context(f'/api/props/projections/{pk}'):
+                    with app.test_request_context(f'/api/props/projections/{pk}?_rebuild=1'):
                         api_props_projections(pk)
                     warmed += 1
                 except Exception:
                     pass
-            print(f"[STARTUP] projections prewarm complete: {warmed}/{min(len(games), 10)} games")
+            print(f"[STARTUP] projections prewarm complete: {warmed}/{len(games)} games")
         except Exception as ex:
             print(f"[STARTUP] projections prewarm failed: {ex}")
     threading.Thread(target=_prewarm_projections_when_ready, daemon=True).start()
