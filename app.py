@@ -44,6 +44,7 @@ try:
         xgb_hit_prob_full, xgb_k_prob_full,
         xgb_hr_prob_full, xgb_tb_prob_full, xgb_rbi_prob_full,
         xgb_batter_prob_full, xgb_hit_prob_bulk,
+        xgb_feature_in_use,
         enrich_batter, enrich_pitcher,
     )
     _XGB_AVAILABLE = True
@@ -63,6 +64,7 @@ except ImportError:
     def xgb_batter_prob_full(*a, **k): return {}
     def xgb_ready(_=None):       return False
     def xgb_line_ready(*a, **k): return False
+    def xgb_feature_in_use(*a, **k): return False
     def enrich_batter(d, **k):   return d
     def enrich_pitcher(d, **k):  return d
 
@@ -9637,6 +9639,7 @@ def _pitcher_k_projection_vs_lineup(pitcher_id, pitcher_name, opposing_lineup,
                 pitcher_dict.setdefault("arsenalPutaway", _ars.get("putaway"))
         except Exception:
             pass
+        _maybe_stuff_plus(pitcher_dict, pitcher_id)
 
     # Blend Log5 expected K with the average of XGB per-line implied means
     # (so the displayed expected K reflects the ensemble too). When XGB is
@@ -16183,6 +16186,8 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                     sp['arsenalPutaway'] = _ars.get('putaway')
             except Exception:
                 pass
+            # Physics-based Stuff+ (no-op until a retrained K model uses it).
+            _maybe_stuff_plus(sp, sp.get('id'))
         # ─────────────────────────────────────────────────────────────────────
         for line in k_lines:
             prob_field = _K_PROB_FIELD_FOR.get(line)
@@ -19258,6 +19263,7 @@ def api_diag_serve_parity():
                     sp['arsenalWhiff'], sp['arsenalPutaway'] = ars.get('whiff'), ars.get('putaway')
             except Exception:
                 pass
+            _maybe_stuff_plus(sp, pid)
             _accumulate(feature_default_report('k', pitcher=sp))
         # ── Hit batters (mirror projection path: name-only batter dict) ──
         try:
@@ -22894,6 +22900,77 @@ def _arsenal_whiff_summary(pitcher_id):
     }
 
 
+# ── Physics-based Stuff+ (stuff_model.py) ────────────────────────────────────
+# The K models can train on `stuff_plus`: the pitcher's arsenal usage-weighted
+# EXPECTED whiff from pure pitch physics (velo/movement/spin/extension), scored
+# by the committed models/stuff_whiff.pkl and scaled to league 100 ± 10/SD.
+# Unlike season SwStr% it stabilizes in ~150 pitches and moves when a pitcher
+# adds velo or a pitch. Serve parity: the aggregation + scoring run through the
+# SAME stuff_model functions the training pipeline uses on the same raw
+# Statcast source. Callers gate on xgb_feature_in_use('stuff_plus') so the
+# Statcast pull is only paid once retrained K models actually consume it.
+_stuff_state = {"art": None, "loaded": False}
+_stuff_cache = {}          # (pid, 'YYYY-MM-DD') -> float | None
+_stuff_lock = threading.Lock()
+
+
+def _stuff_plus_for(pitcher_id):
+    """Live Stuff+ for a starter from current-season pitch physics; falls back
+    to the prior full season below the 150-pitch floor (early April); None when
+    neither qualifies — callers leave stuffPlus unset and the scorer serves
+    NaN, matching training's never-imputed policy. Day-cached per pitcher."""
+    if not pitcher_id:
+        return None
+    today = datetime.now(ET).strftime('%Y-%m-%d')
+    ck = (int(pitcher_id), today)
+    with _stuff_lock:
+        if ck in _stuff_cache:
+            return _stuff_cache[ck]
+        if not _stuff_state["loaded"]:
+            try:
+                import stuff_model as _sm
+                _stuff_state["art"] = _sm.load()
+            except Exception:
+                _stuff_state["art"] = None
+            _stuff_state["loaded"] = True
+        art = _stuff_state["art"]
+    val = None
+    if art is not None:
+        try:
+            import pybaseball as pb
+            import stuff_model as _sm
+            yr = datetime.now(ET).year
+            df = pb.statcast_pitcher(start_dt=f"{yr}-03-01", end_dt=today,
+                                     player_id=int(pitcher_id))
+            val = _sm.pitcher_stuff_plus(art, df)
+            if val is None:
+                df_prev = pb.statcast_pitcher(start_dt=f"{yr - 1}-03-01",
+                                              end_dt=f"{yr - 1}-11-30",
+                                              player_id=int(pitcher_id))
+                val = _sm.pitcher_stuff_plus(art, df_prev)
+        except Exception as ex:
+            logging.warning(f"[stuff] pid={pitcher_id}: {ex}")
+            val = None
+    with _stuff_lock:
+        _evict_if_large(_stuff_cache, 400)
+        _stuff_cache[ck] = val
+    return val
+
+
+def _maybe_stuff_plus(pitcher_dict, pitcher_id):
+    """Attach stuffPlus to a K-model pitcher dict when (a) a loaded K model
+    trains on it and (b) a score is available. Best-effort by design."""
+    try:
+        if pitcher_id and xgb_feature_in_use('stuff_plus') \
+                and 'stuffPlus' not in pitcher_dict:
+            _v = _stuff_plus_for(pitcher_id)
+            if _v is not None:
+                pitcher_dict['stuffPlus'] = _v
+    except Exception:
+        pass
+    return pitcher_dict
+
+
 # ── Pitcher projection engine (v2 — recent form weighted) ────────────────────
 def _project_pitcher(pitcher_name, pitcher_id, pitcher_fg, pitcher_sv, pitcher_stats,
                      opp_batters, park_factor, weather, blend_weights=None,
@@ -23633,12 +23710,13 @@ def api_props_projections(game_pk):
                 "injuryDescription": (pinj or {}).get("description"),
                 "xgbKProbs": {
                     str(ln): xgb_k_prob(
-                        {"fgera": pfg.get("fg_era"), "fgkpct": pfg.get("fg_kpct"),
-                         "fgbbpct": pfg.get("fg_bbpct"), "svwhiffpct": psv.get("sv_whiff"),
-                         "name": pname,
-                         "arsenalWhiff": proj.get("arsenal_whiff"),
-                         "arsenalPutaway": proj.get("arsenal_putaway"),
-                         **_pitcher_rolling_k_features(pid)},
+                        _maybe_stuff_plus(
+                            {"fgera": pfg.get("fg_era"), "fgkpct": pfg.get("fg_kpct"),
+                             "fgbbpct": pfg.get("fg_bbpct"), "svwhiffpct": psv.get("sv_whiff"),
+                             "name": pname,
+                             "arsenalWhiff": proj.get("arsenal_whiff"),
+                             "arsenalPutaway": proj.get("arsenal_putaway"),
+                             **_pitcher_rolling_k_features(pid)}, pid),
                         line=ln
                     ) if _XGB_AVAILABLE and xgb_ready('k') else None
                     for ln in [3.5, 4.5, 5.5]

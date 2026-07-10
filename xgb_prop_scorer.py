@@ -335,6 +335,16 @@ def xgb_ready(market: str = "hits") -> bool:
     return model_ok and _xgb_calibrated(_MARKET_KEY_FOR[market])
 
 
+def xgb_feature_in_use(feature: str, model_prefix: str = "k_") -> bool:
+    """True when any loaded model whose key starts with `model_prefix` trains
+    on `feature`. Lets callers skip an expensive enrichment (e.g. the live
+    Stuff+ Statcast pull) while the committed models don't consume it yet."""
+    if not _loaded:
+        _load_models()
+    return any(feature in (_feat_cols.get(k) or [])
+               for k in _models if k.startswith(model_prefix))
+
+
 def xgb_line_ready(family: str, line) -> bool:
     """Line-aware readiness: True only when a calibrated model trained at THIS
     exact threshold is loaded. Off-line rows must fall back to the analytic
@@ -702,6 +712,10 @@ def _build_k_features(pitcher: dict, feat_order: list) -> Optional[np.ndarray]:
         # Outcome-based leading indicators of K upside beyond season K rate.
         "arsenal_whiff_pct":   _sf(pitcher, "arsenalWhiff","arsenal_whiff_pct","arsenal_whiff",     default=24.5),
         "arsenal_putaway_pct": _sf(pitcher, "arsenalPutaway","arsenal_putaway_pct","arsenal_putaway", default=18.0),
+        # Physics-based Stuff+ (stuff_model.py; league 100, ±10/SD). NaN when
+        # no score is available — matching training, where a below-pitch-floor
+        # pitcher-season is NaN and never imputed (XGB missing branch).
+        "stuff_plus": _sf(pitcher, "stuffPlus", "stuff_plus", default=float("nan")),
     }
     for pct_key in ("sv_k_pct", "sv_bb_pct", "opp_lineup_k_pct"):
         if 0 < raw[pct_key] <= 1.0:
@@ -714,6 +728,7 @@ def _build_k_features(pitcher: dict, feat_order: list) -> Optional[np.ndarray]:
         "opp_lineup_k_pct","opp_lineup_xwoba",
         "ump_zone_size","ump_k_boost",
         "arsenal_whiff_pct","arsenal_putaway_pct",
+        "stuff_plus",
     ]
     if feat_order:
         try:

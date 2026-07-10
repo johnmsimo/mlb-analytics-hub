@@ -58,6 +58,8 @@ from sklearn.calibration import CalibratedClassifierCV
 from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
 import xgboost as xgb
 
+import stuff_model
+
 warnings.filterwarnings("ignore")
 
 SEED = 42
@@ -101,6 +103,14 @@ _DEFAULT_PA = 4.20
 K_FEATURES = [
     "sv_xera", "sv_era", "sv_k_pct", "sv_bb_pct", "sv_whiff_pct",
     "l3_ks", "l5_ks", "l5_k_rate", "l10_ks", "l3_ip", "l5_ip", "days_rest",
+    # Physics-based pitch quality (stuff_model.py): the pitcher's arsenal
+    # usage-weighted EXPECTED whiff from velo/movement/spin/extension, scaled
+    # to Stuff+ (league 100, ±10/SD). Leading indicator vs the outcome-based
+    # SwStr% above — stabilizes in ~150 pitches and moves when a pitcher adds
+    # velo or a pitch. NaN when a pitcher-season is below the pitch floor
+    # (never imputed — XGB missing branch, same policy as bt_*); serve passes
+    # NaN identically via _build_k_features when no score is available.
+    "stuff_plus",
 ]
 
 # Home-run (≥1 HR in a game). Power/loft skills + opposing pitcher HR-allowed
@@ -349,13 +359,23 @@ def _windows(season: int, days: int = 16):
         cur = wend + timedelta(days=1)
 
 
-def _agg_chunk(sc: pd.DataFrame, season: int) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Aggregate one raw-Statcast chunk to per-game batter + pitcher rows.
+def _agg_chunk(sc: pd.DataFrame, season: int) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Aggregate one raw-Statcast chunk to per-game batter + pitcher rows plus
+    per-(season, pitcher, pitch_type) physics SUMS for the stuff model.
     Batter rows carry opp_starter (the opposing team's starting pitcher id)."""
     need = ["batter", "pitcher", "game_pk", "events", "inning_topbot", "at_bat_number"]
     sc = sc.dropna(subset=["batter", "pitcher", "game_pk"])
     if len(sc) == 0:
-        return pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+    # Pitch-physics sums (chunk-safe; combined + finalized in main). Uses the
+    # raw pitch rows BEFORE the PA filter below — stuff is a per-pitch model.
+    try:
+        phys = stuff_model.physics_sums(sc.assign(season=season),
+                                        keys=("season", "pitcher"))
+    except Exception as e:
+        print(f"    ⚠️ physics agg failed: {e}")
+        phys = pd.DataFrame()
     for c in ("inning_topbot", "at_bat_number"):
         if c not in sc.columns:
             sc[c] = np.nan
@@ -376,7 +396,7 @@ def _agg_chunk(sc: pd.DataFrame, season: int) -> tuple[pd.DataFrame, pd.DataFram
 
     pa = sc[sc["is_pa"] == 1].copy()
     if len(pa) == 0:
-        return pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), phys
 
     # RBI proxy: runs scored by the batting team during the plate appearance
     # (post_bat_score − bat_score on the PA-ending pitch). This matches official
@@ -466,13 +486,13 @@ def _agg_chunk(sc: pd.DataFrame, season: int) -> tuple[pd.DataFrame, pd.DataFram
     pit["k_over_6.5"] = (pit["ks"] >= 7).astype(int)
     pit["k_over_7.5"] = (pit["ks"] >= 8).astype(int)
     pit["season"] = season
-    return bat, pit
+    return bat, pit, phys
 
 
-def fetch_game_logs(seasons: list[int]) -> tuple[pd.DataFrame, pd.DataFrame]:
+def fetch_game_logs(seasons: list[int]) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     import pybaseball as pb
     pb.cache.enable()
-    bf, pf = [], []
+    bf, pf, xf = [], [], []
     windows = [(s, ws, we) for s in seasons for (ws, we) in _windows(s)]
     for i, (season, ws, we) in enumerate(windows, 1):
         print(f"  [{i}/{len(windows)}] Statcast {ws} → {we}", flush=True)
@@ -484,7 +504,7 @@ def fetch_game_logs(seasons: list[int]) -> tuple[pd.DataFrame, pd.DataFrame]:
         if sc is None or len(sc) == 0:
             continue
         try:
-            b, p = _agg_chunk(sc, season)
+            b, p, x = _agg_chunk(sc, season)
         finally:
             del sc
             gc.collect()
@@ -492,10 +512,14 @@ def fetch_game_logs(seasons: list[int]) -> tuple[pd.DataFrame, pd.DataFrame]:
             bf.append(b)
         if len(p):
             pf.append(p)
+        if len(x):
+            xf.append(x)
     bg = pd.concat(bf, ignore_index=True) if bf else pd.DataFrame()
     pg = pd.concat(pf, ignore_index=True) if pf else pd.DataFrame()
-    print(f"  Batter game rows: {len(bg):,}  Pitcher game rows: {len(pg):,}")
-    return bg, pg
+    phys = pd.concat(xf, ignore_index=True) if xf else pd.DataFrame()
+    print(f"  Batter game rows: {len(bg):,}  Pitcher game rows: {len(pg):,}  "
+          f"Physics rows: {len(phys):,}")
+    return bg, pg, phys
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -724,8 +748,15 @@ def build_batter_matrix(bg: pd.DataFrame) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
-def build_pitcher_matrix(pg: pd.DataFrame) -> pd.DataFrame:
+def build_pitcher_matrix(pg: pd.DataFrame,
+                         stuff_scores: Optional[pd.DataFrame] = None) -> pd.DataFrame:
     pg = pg.sort_values(["pitcher", "game_date"]).copy()
+    # Physics-based Stuff+ per (season, pitcher) — merged like the FG season
+    # stats below (same-season aggregate, the established convention here).
+    # Pitchers below the pitch floor stay NaN and are NOT median-imputed.
+    if stuff_scores is not None and len(stuff_scores):
+        pg = pg.merge(stuff_scores[["season", "pitcher", "stuff_plus"]],
+                      on=["season", "pitcher"], how="left")
     pg["ip"] = np.clip(pg["bf"] / 4.2, 0, 9)
     pg["prev"] = pg.groupby("pitcher")["game_date"].shift(1)
     pg["days_rest"] = (pd.to_datetime(pg["game_date"]) - pd.to_datetime(pg["prev"])
@@ -781,7 +812,9 @@ def train_market(mkey: str, cfg: dict, df: pd.DataFrame) -> Optional[dict]:
     # the training era. Leave them NaN; XGBoost's native missing-handling
     # learns the correct default direction, and serve passes NaN when a
     # batter has no bat-tracking row (below-min-swings or pre-season).
-    impute_cols = [c for c in feats if not c.startswith("bt_")]
+    # stuff_plus follows the same policy: NaN means "below the pitch floor /
+    # no physics", and serve passes NaN identically.
+    impute_cols = [c for c in feats if not c.startswith(("bt_", "stuff"))]
     tr[impute_cols] = tr[impute_cols].fillna(med[impute_cols])
     te[impute_cols] = te[impute_cols].fillna(med[impute_cols])
     train_medians = {c: (round(float(med[c]), 5) if pd.notna(med[c]) else None)
@@ -922,11 +955,36 @@ def main(markets: list[str]):
     print("═" * 70)
 
     print("\n══ Fetching Statcast game logs ══")
-    bg, pg = fetch_game_logs(ALL_SEASONS)
+    bg, pg, phys = fetch_game_logs(ALL_SEASONS)
+
+    # ── Stuff model: physics → expected whiff, fit on TRAIN seasons only ──
+    # (leakage-safe: the mapping never sees test-season outcomes; the scored
+    # pitcher-season aggregates follow the same same-season convention as the
+    # FG season stats merged below). The artifact ships to serve so app.py
+    # scores current-season pitches with the IDENTICAL model + league anchor.
+    stuff_scores = None
+    if len(phys):
+        print("\n══ Fitting stuff model (physics → whiff) ══")
+        stuff_rows = stuff_model.finalize_features(phys, keys=("season", "pitcher"))
+        fit_rows = stuff_rows[stuff_rows["season"].isin(TRAIN_SEASONS)]
+        art = stuff_model.fit(fit_rows, keys=("season", "pitcher"),
+                              fit_seasons=TRAIN_SEASONS)
+        if art:
+            path = stuff_model.save(art)
+            stuff_scores = stuff_model.score_groups(art, stuff_rows,
+                                                    keys=("season", "pitcher"))
+            stuff_scores = stuff_scores[stuff_scores["n_pitches"]
+                                        >= stuff_model.MIN_PITCHES_SCORE]
+            m = art["meta"]
+            print(f"  fit rows={m['n_fit_rows']:,}  league xwhiff "
+                  f"{m['league_mean']:.3f}±{m['league_sd']:.3f}  "
+                  f"scored {len(stuff_scores):,} pitcher-seasons → {path}")
+        else:
+            print("  ⚠️ stuff fit skipped (insufficient rows)")
 
     print("\n══ Building feature matrices ══")
     bat = build_batter_matrix(bg) if len(bg) else pd.DataFrame()
-    pit = build_pitcher_matrix(pg) if len(pg) else pd.DataFrame()
+    pit = build_pitcher_matrix(pg, stuff_scores) if len(pg) else pd.DataFrame()
     print(f"  batter matrix={bat.shape}  pitcher matrix={pit.shape}")
 
     # Export the learned park factors for the serve side (app.py loads
