@@ -1351,11 +1351,17 @@ function renderQuickProps(pk,d){
     var hubRating=Math.round(p.hubRating||p.hub_score||0);
     var cls=hubRating>=85?'elite':hubRating>=70?'strong':hubRating>=55?'mod':'low';
     var mkt=((p.marketLabel||mktLabels[p.market]||p.market)||'Prop')+' O'+p.line;
-    // Honest recent-form + model-matchup metrics (this strip fetches no odds,
-    // so it no longer fabricates an "EV%" from the L10 hit rate).
-    var l10=Math.round((p.l10_pct||0)*100);
-    var mu=(p.matchupScore!=null)?Math.round(p.matchupScore):null;
-    var evTxt='L10 '+l10+'%'+(mu!=null?' · MU '+mu:'');
+    // Model-first metrics: calibrated probability leads, live price/EV when the
+    // prop is priced, L10 over-rate as a confirmation signal (no longer the driver).
+    var modelPct=(p.adjProb!=null)?Math.round(p.adjProb*100):null;
+    var l10=(p.l10_pct!=null)?Math.round(p.l10_pct*100):null;
+    var parts=[];
+    if(modelPct!=null)parts.push('MODEL '+modelPct+'%');
+    if(p.bestPrice!=null)parts.push((p.bestPrice>0?'+':'')+p.bestPrice);
+    if(p.evPct!=null){var evp=p.evPct*100;parts.push((evp>0?'+':'')+evp.toFixed(1)+'% EV');}
+    if(l10!=null)parts.push('L10 '+l10+'%');
+    var evTxt=parts.join(' · ')||'—';
+    var evPos=(p.evPct!=null)?(p.evPct>0):((p.lift!=null)?(p.lift>0):((l10||0)>=70));
     var key=p.playerId+':'+p.market+':'+p.line;
     var saved=tracked.indexOf(key)>=0;
     var bid='qpsave-'+pk+'-'+i;
@@ -1365,7 +1371,7 @@ function renderQuickProps(pk,d){
       +'<span class="qp-name">'+p.player+'</span>'
       +'<span class="qp-mkt">'+mkt+'</span>'
       +'<span class="qp-hub '+cls+'">HUB '+hubRating+'</span>'
-      +'<span class="qp-ev '+(l10>=70?'pos':'neg')+'">'+evTxt+'</span>'
+      +'<span class="qp-ev '+(evPos?'pos':'neg')+'">'+evTxt+'</span>'
       +'<button class="qp-save'+(saved?' saved':'')
       +'" id="'+bid+'" onclick="qpSave(event,'+JSON.stringify(p)+',\''+bid+'\')">'
       +(saved?'✓ Saved':'💾')+'</button>'
@@ -1381,8 +1387,12 @@ function qpSave(e,pick,btnId){
     player:pick.player,playerId:pick.playerId,team:pick.team,
     marketKey:pick.marketKey||('batter_'+pick.market),
     line:pick.line,recommendedSide:'Over',source:'dashboard',
-    adjProb:pick.l10_pct||0.5,hubRating:pick.hubRating||pick.hub_score||0,
-    evPct:(pick.evPct!=null?pick.evPct/100:null)
+    adjProb:(pick.adjProb!=null?pick.adjProb:(pick.l10_pct||0.5)),
+    hubRating:pick.hubRating||pick.hub_score||0,
+    price:(pick.bestPrice!=null?pick.bestPrice:null),book:(pick.bestBook||null),
+    edge:(pick.edge!=null?pick.edge:null),
+    evPct:(pick.evPct!=null?pick.evPct:null),
+    impliedProb:(pick.marketImplied!=null?pick.marketImplied:null)
   };
   fetch('/api/tracker/pick',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
     .then(function(r){return r.json();})
@@ -1412,9 +1422,13 @@ function addToParlayFromQP(e, pickStr) {
       line: pick.line,
       recommendedSide: 'Over',
       source: 'dashboard',
-      adjProb: pick.l10_pct || 0.5,
+      adjProb: (pick.adjProb != null ? pick.adjProb : (pick.l10_pct || 0.5)),
       hubRating: pick.hubRating || pick.hub_score || 0,
-      evPct: (pick.evPct != null ? pick.evPct / 100 : null)
+      price: (pick.bestPrice != null ? pick.bestPrice : null),
+      book: (pick.bestBook || null),
+      edge: (pick.edge != null ? pick.edge : null),
+      evPct: (pick.evPct != null ? pick.evPct : null),
+      impliedProb: (pick.marketImplied != null ? pick.marketImplied : null)
     };
     queue.push(leg);
     try { localStorage.setItem('pendingParlayLegs', JSON.stringify(queue)); } catch(e) {} window.__parlayQueue = queue;
