@@ -20795,285 +20795,173 @@ def api_cheatsheets_today():
         return jsonify({'success': False, 'error': str(ex)}), 500
 
 
-# ── Monte Carlo background cache ──────────────────────────────────────────────
-_mc_cache_lock  = threading.Lock()
-_mc_cache_data  = None
-_mc_cache_ts    = None
-_mc_computing   = False
-_mc_started_ts  = None   # watchdog: when _mc_computing was last set True
-_mc_generation  = 0      # incremented each time a new compute thread is spawned
-_MC_COMPUTE_TIMEOUT_SEC = 300  # 5 min watchdog — reset stuck flag after this
+# ── Monte Carlo projection board ──────────────────────────────────────────────
+# Backed by the props scan (_props_scan_today_payload): the same calibrated
+# pipeline that powers /props and /api/edges/today — the full per-game Monte
+# Carlo sim fused with XGB (stacked calibrator), market-blended and
+# live-recalibrated (adjProb), with edge measured against the best available
+# de-vig'd book price. The old standalone background compute is gone: when odds
+# were present it never consulted the model at all — its "edge" was
+# devig(over) − implied(over), i.e. the book's vig margin, near-identical for
+# every prop — and it duplicated the scan's slate-wide work (odds snapshot,
+# schedule, per-game odds fetches) in a second background thread. Sharing the
+# scan cache means one compute serves /props, /api/edges/today and this board,
+# and the startup prewarm (see _prewarm_projections_when_ready) makes the
+# first dashboard visit of the day serve instantly instead of polling.
+
+_MC_BOARD_MARKETS = {
+    'batter_hits', 'batter_total_bases', 'batter_home_runs',
+    'batter_rbis', 'batter_runs_scored', 'batter_stolen_bases',
+    'batter_hits_runs_rbis', 'pitcher_strikeouts',
+}
+
+# Base rates for grading model-only rows (no book line → no market edge).
+# Grading adjProb against the market's historical base rate replaces the old
+# flat 0.50, which over-graded hits 0.5 (base ~0.66 → every regular looked
+# like an A+ play) and buried HR 0.5 (base ~0.13). Values mirror the
+# stacked-calibrator line-aware base rates.
+_MC_NOODDS_BASE_RATE = {
+    ('batter_hits', 0.5): 0.66, ('batter_hits', 1.5): 0.28,
+    ('batter_total_bases', 1.5): 0.40, ('batter_total_bases', 2.5): 0.21,
+    ('batter_total_bases', 3.5): 0.11,
+    ('batter_home_runs', 0.5): 0.13,
+    ('batter_rbis', 0.5): 0.34, ('batter_rbis', 1.5): 0.12,
+    ('batter_runs_scored', 0.5): 0.45,
+}
 
 def _mc_grade(edge):
-    if edge >= 0.15: return 'A+'
-    if edge >= 0.10: return 'A'
-    if edge >= 0.06: return 'B'
-    if edge >= 0.02: return 'C'
+    """Letter grade from a REAL model-vs-market edge in probability points.
+    The old 0.15 A+ bar was tuned for the fake vig-margin 'edge' this board
+    used to display; genuine calibrated edges are display-capped at ±0.30 and
+    a sustained +6-10 pts is already elite."""
+    e = float(edge or 0)
+    if e >= 0.10:  return 'A+'
+    if e >= 0.06:  return 'A'
+    if e >= 0.035: return 'B'
+    if e >= 0.015: return 'C'
     return 'D'
 
-def _mc_rec(edge):
-    if edge >= 0.15: return 'STRONG PLAY'
-    if edge >= 0.10: return 'PLAY'
-    if edge >= 0.06: return 'LEAN'
-    if edge >= 0.02: return 'WATCH'
+def _mc_rec(edge, side='Over'):
+    e = float(edge or 0)
+    tag = ' UNDER' if side == 'Under' else ''
+    if e >= 0.10:  return 'STRONG PLAY' + tag
+    if e >= 0.06:  return 'PLAY' + tag
+    if e >= 0.035: return 'LEAN' + tag
+    if e >= 0.015: return 'WATCH' + tag
     return 'SKIP'
 
-def _mc_compute_background(generation):
-    global _mc_cache_data, _mc_cache_ts, _mc_computing, _mc_started_ts
-    try:
-        # Ensure stat caches are fresh before computing
-        _maybe_refresh_fg()
-        _maybe_refresh_savant()
-        _fetch_injury_status(force=False)
 
-        # Pre-warm the odds snapshot once here (before workers) so that each
-        # _compute_game worker can read from cache without triggering a fresh
-        # N+1 sequential HTTP fetch inside the thread pool.
-        has_odds = bool(ODDS_API_KEY)
-        if has_odds:
+def _mc_board_payload(date_str, force_refresh=False):
+    if force_refresh:
+        _trigger_props_scan_refresh_async(date_str, reason='mc_force_refresh')
+    base = _props_scan_today_payload(date_str)
+
+    rows = []
+    for p in base.get('props') or []:
+        mk = p.get('marketKey')
+        if mk not in _MC_BOARD_MARKETS:
+            continue
+        adj = p.get('adjProb')
+        if adj is None:
+            continue
+        adj = float(adj)
+        line = p.get('line')
+        mi = p.get('marketImplied')
+
+        side = 'Over'
+        prob = round(adj, 4)
+        price = p.get('bestOverPrice') or p.get('marketPrice')
+        book = p.get('bestOverBook') or p.get('bookmaker')
+        ev_pct = p.get('evPct')
+        if mi and mi > 0:
+            source = 'model+odds'
+            edge = _capped_edge(adj, mi)
+            # The model prob is two-sided: when the over is negative-value and
+            # a real under price exists, the profitable play is the UNDER —
+            # recommend that side instead of listing only overs.
+            u_imp = _american_to_implied(p.get('bestUnderPrice'))
+            if u_imp and u_imp > 0:
+                u_edge = _capped_edge(1.0 - adj, u_imp)
+                if u_edge is not None and u_edge > (edge or 0) and u_edge >= 0.015:
+                    side = 'Under'
+                    prob = round(1.0 - adj, 4)
+                    price = p.get('bestUnderPrice')
+                    book = p.get('bestUnderBook') or book
+                    edge = u_edge
+                    ev_pct = round(prob / u_imp - 1, 4)
+        else:
+            source = 'simulation'
             try:
-                _ensure_daily_odds_snapshot()
-            except Exception:
-                print(f"[mc_bg] odds snapshot pre-warm failed: {traceback.format_exc()}")
+                base_rate = _MC_NOODDS_BASE_RATE.get((mk, float(line)), 0.5)
+            except (TypeError, ValueError):
+                base_rate = 0.5
+            edge = round(adj - base_rate, 4)
+            price = None
+            book = 'Model'
+            ev_pct = None
 
-        date_str = datetime.now(ET).strftime('%Y-%m-%d')
-        url = (f"{MLB_API}/schedule?sportId=1&date={date_str}"
-               "&hydrate=team,probablePitcher,lineups")
-        resp = requests.get(url, timeout=15)
-        resp.raise_for_status()
-        dates = resp.json().get('dates', [])
-        raw   = dates[0].get('games', []) if dates else []
+        if edge is None:
+            continue
+        edge = round(float(edge), 4)
+        rows.append({
+            'player': p.get('player'), 'playerId': p.get('playerId'),
+            'team': p.get('team'), 'gamePk': p.get('gamePk'),
+            'matchup': p.get('matchup'),
+            'market': mk, 'line': line, 'side': side,
+            'bookmaker': book, 'price': price,
+            'edge': edge, 'prob': prob, 'evPct': ev_pct,
+            'hubRating': p.get('hubRating'),
+            'modelSource': p.get('modelSource') or 'mc',
+            'source': source,
+            'grade': _mc_grade(edge), 'recommendation': _mc_rec(edge, side),
+            'reasoning': p.get('reason') or '',
+        })
 
-        games, ranked = [], []
+    rows.sort(key=lambda x: x['edge'], reverse=True)
+    rows = rows[:500]
 
-        def _compute_game(g):
-            game_pk   = g.get('gamePk')
-            away_t    = g.get('teams', {}).get('away', {})
-            home_t    = g.get('teams', {}).get('home', {})
-            away_team = away_t.get('team', {})
-            home_team = home_t.get('team', {})
-            away      = away_team.get('abbreviation', '?')
-            home      = home_team.get('abbreviation', '?')
-            away_tid  = away_team.get('id')
-            home_tid  = home_team.get('id')
-            matchup   = f'{away} @ {home}'
-            away_p    = (away_t.get('probablePitcher') or {})
-            home_p    = (home_t.get('probablePitcher') or {})
-            top_props = []
-            try:
-                lineups      = g.get('lineups') or {}
-                away_hitters = lineups.get('awayBatters') or []
-                home_hitters = lineups.get('homeBatters') or []
+    games_by_pk, games = {}, []
+    for r in rows:
+        gpk = r.get('gamePk')
+        row = games_by_pk.get(gpk)
+        if row is None:
+            row = {'gamePk': gpk, 'matchup': r.get('matchup'), 'topProps': []}
+            games_by_pk[gpk] = row
+            games.append(row)
+        if len(row['topProps']) < 12:
+            row['topProps'].append(r)
+    games.sort(key=lambda x: x.get('matchup') or '')
 
-                def _parse(hitters, side):
-                    out = []
-                    for i, p in enumerate(hitters, start=1):
-                        name = (p.get('fullName') or p.get('name') or '').strip()
-                        if name: out.append({'name': name, 'slot': i, 'side': side})
-                    return out
-
-                away_lu = _parse(away_hitters, 'away')
-                home_lu = _parse(home_hitters, 'home')
-
-                def _roster(tid, side):
-                    out = []
-                    for e in _get_active_roster(tid):
-                        pos  = ((e.get('position') or {}).get('abbreviation') or '?')
-                        if pos in ('P', 'SP', 'RP', 'CP'):
-                            continue
-                        name = ((e.get('person') or {}).get('fullName') or '').strip()
-                        if name:
-                            out.append({'name': name, 'slot': 0, 'side': side})
-                        if len(out) >= 15:
-                            break
-                    return out
-
-                if len(away_lu) < 5: away_lu = _roster(away_tid, 'away')
-                if len(home_lu) < 5: home_lu = _roster(home_tid, 'home')
-
-                all_batters = away_lu + home_lu
-                print(f"[mc_bg] {matchup}: {len(away_lu)}a + {len(home_lu)}h")
-
-                if has_odds:
-                    valid_names = {b['name'] for b in all_batters if b.get('name')}
-                    if away_p.get('fullName'): valid_names.add(away_p['fullName'])
-                    if home_p.get('fullName'): valid_names.add(home_p['fullName'])
-                    event, _ = _find_odds_event(away_team.get('name',''), home_team.get('name',''))
-                    props_books = _load_event_odds(event.get('id') if event else None, featured_only=False) if event else []
-                    props_raw = _parse_prop_markets(props_books, valid_names)
-                    for p in props_raw:
-                        op = p.get('over_implied'); up = p.get('under_implied')
-                        if op is None or up is None: continue
-                        vig = op + up
-                        if vig <= 0: continue
-                        fair = op / vig; price = p.get('over_price')
-                        if price is None: continue
-                        book_impl = _american_to_implied(price)
-                        edge = round(fair - book_impl, 4) if book_impl else 0
-                        top_props.append({
-                            'player': p.get('player'), 'market': p.get('market_key'),
-                            'line': p.get('line'), 'bookmaker': p.get('bookmaker'),
-                            'price': price, 'edge': round(edge,4), 'prob': round(fair,4),
-                            'source': 'odds', 'matchup': matchup,
-                            'grade': _mc_grade(edge), 'recommendation': _mc_rec(edge),
-                            'reasoning': '',
-                        })
-                    top_props = sorted(top_props, key=lambda x: x['edge'], reverse=True)[:12]
-                else:
-                    for b in all_batters:
-                        name = b.get('name',''); slot = b.get('slot') or 5; side = b.get('side','')
-                        if not name: continue
-                        svb = sv_batter(name); fgb = fg_batter(name)
-                        xba  = _safe_f(svb.get('sv_xba')    or fgb.get('fg_avg'),  0.250)
-                        woba = _safe_f(svb.get('sv_xwoba')  or fgb.get('fg_woba'), 0.320)
-                        brl  = _safe_f(svb.get('sv_brl_pct'), 0.0)
-                        ev   = _safe_f(svb.get('sv_ev'),    88.0)
-                        slg  = _safe_f(fgb.get('fg_slg'),   0.380)
-                        wrc  = int(_safe_f(fgb.get('fg_wrc'), 100))
-                        obp  = _safe_f(fgb.get('fg_obp'),   0.320)
-                        lm = 1.06 if slot<=2 else (1.03 if slot<=4 else (0.97 if slot>=8 else 1.0))
-                        for mk, line, prob, reason in [
-                            ('batter_hits',        0.5, min(0.92, xba *3.2*lm),
-                             f"xBA {xba:.3f} · wOBA {woba:.3f} · wRC+ {wrc} → {min(0.92,xba*3.2*lm)*100:.0f}% hit prob; bats {slot} ({side})"),
-                            ('batter_total_bases', 1.5, min(0.88, woba*2.4*lm),
-                             f"xwOBA {woba:.3f} · SLG {slg:.3f} · EV {ev:.1f} mph → {min(0.88,woba*2.4*lm)*100:.0f}% TB prob vs 1.5"),
-                            ('batter_home_runs',   0.5, min(0.50, brl/100*1.8*lm),
-                             f"Barrel% {brl:.1f} · EV {ev:.1f} mph · wOBA {woba:.3f} → {min(0.50,brl/100*1.8*lm)*100:.0f}% HR prob vs 0.5"),
-                            ('batter_rbis',        0.5, min(0.72, woba*2.0*lm),
-                             f"wOBA {woba:.3f} · OBP {obp:.3f} · bats {slot} ({side}) → {min(0.72,woba*2.0*lm)*100:.0f}% RBI prob vs 0.5"),
-                        ]:
-                            if prob < 0.20: continue
-                            edge = round(prob - 0.50, 4)
-                            top_props.append({'player': name, 'market': mk, 'line': line,
-                                'bookmaker': 'Model', 'price': None, 'source': 'simulation',
-                                'matchup': matchup, 'edge': edge, 'prob': round(prob,4),
-                                'grade': _mc_grade(edge), 'recommendation': _mc_rec(edge),
-                                'reasoning': reason})
-
-                    for pit in [away_p, home_p]:
-                        pname = (pit.get('fullName') or '').strip()
-                        if not pname: continue
-                        fgp = fg_pitcher(pname); svp = sv_pitcher(pname)
-                        k9    = _safe_f(fgp.get('fg_k9'),  0.0)
-                        xfip  = _safe_f(fgp.get('fg_xfip') or fgp.get('fg_fip'), 4.0)
-                        whiff = _safe_f(svp.get('sv_whiff'), 0.0)
-                        bb9   = _safe_f(fgp.get('fg_bb9'),  3.5)
-                        ip    = _safe_f(fgp.get('fg_ip'),   0.0)
-                        k_prob = min(0.87, max(0.25,
-                            (k9/9*0.85 if k9>0 else 0.50)
-                            + ((whiff-22)/100*0.4 if whiff>22 else 0)
-                            + ((4.10-xfip)/100*0.3)))
-                        if k_prob < 0.30: continue
-                        edge   = round(k_prob - 0.50, 4)
-                        reason = (f"K/9 {k9:.1f} · xFIP {xfip:.2f} · Whiff% {whiff:.1f}% · BB/9 {bb9:.1f}"
-                                  + (f" · {ip:.0f} IP" if ip>0 else '') + f" → {k_prob*100:.0f}% K prob vs 5.5")
-                        top_props.append({'player': pname, 'market': 'pitcher_strikeouts', 'line': 5.5,
-                            'bookmaker': 'Model', 'price': None, 'source': 'simulation',
-                            'matchup': matchup, 'edge': edge, 'prob': round(k_prob,4),
-                            'grade': _mc_grade(edge), 'recommendation': _mc_rec(edge),
-                            'reasoning': reason})
-
-                    top_props = sorted(top_props, key=lambda x: x['edge'], reverse=True)
-
-            except Exception:
-                print(f"[mc_bg] {matchup}: {traceback.format_exc()}")
-            return {'gamePk': game_pk, 'matchup': matchup, 'topProps': top_props}, top_props
-
-        # Total timeout for all workers: allow up to 90 s for the entire game
-        # batch so that a single stalled network call cannot hang the whole
-        # background thread forever.
-        _MC_FUTURES_TIMEOUT = 90
-        workers = min(6, max(1, len(raw)))
-        with ThreadPoolExecutor(max_workers=workers) as ex:
-            futs = [ex.submit(_compute_game, g) for g in raw]
-            try:
-                for fut in as_completed(futs, timeout=_MC_FUTURES_TIMEOUT):
-                    game_row, top_props = fut.result()
-                    games.append(game_row)
-                    if top_props:
-                        ranked.extend(top_props)
-            except TimeoutError:
-                print(f"[mc_bg] WARNING: as_completed timed out after {_MC_FUTURES_TIMEOUT}s — using partial results")
-                for fut in futs:
-                    if fut.done() and not fut.cancelled():
-                        try:
-                            game_row, top_props = fut.result()
-                            if game_row not in games:
-                                games.append(game_row)
-                            if top_props:
-                                ranked.extend(top_props)
-                        except Exception:
-                            pass
-
-        ranked = sorted(ranked, key=lambda x: x.get('edge', 0), reverse=True)
-        games = sorted(games, key=lambda x: x.get('matchup') or '')
-        result = {'success': True, 'date': date_str, 'hasOdds': has_odds,
-                  'games': games, 'topProps': ranked[:500], 'computing': False}
-        with _mc_cache_lock:
-            if _mc_generation == generation:
-                _mc_cache_data = result
-                _mc_cache_ts   = datetime.now()
-                print(f"[mc_bg] done — {len(ranked)} props, {len(games)} games")
-            else:
-                print(f"[mc_bg] discarding stale results (gen {generation} superseded by {_mc_generation})")
-    except Exception:
-        print(f"[mc_bg] FATAL: {traceback.format_exc()}")
-    finally:
-        with _mc_cache_lock:
-            if _mc_generation == generation:
-                _mc_computing  = False
-                _mc_started_ts = None
-
-
-def _mc_maybe_refresh(force=False):
-    global _mc_computing, _mc_started_ts, _mc_generation
-    with _mc_cache_lock:
-        running    = _mc_computing
-        started_at = _mc_started_ts
-        age        = (datetime.now() - _mc_cache_ts).total_seconds() if _mc_cache_ts else 9999
-        has_data   = _mc_cache_data is not None
-
-    if running:
-        # Watchdog: if the background thread has been marked as computing for
-        # longer than the allowed ceiling, it has likely hung. Bump the generation
-        # so the stuck thread's results are discarded if it ever finishes, then
-        # reset the flag so a fresh thread can be spawned below.
-        if started_at and (datetime.now() - started_at).total_seconds() > _MC_COMPUTE_TIMEOUT_SEC:
-            print(f"[mc_bg] watchdog: resetting stuck _mc_computing flag "
-                  f"(running for >{_MC_COMPUTE_TIMEOUT_SEC}s)")
-            with _mc_cache_lock:
-                _mc_generation += 1   # invalidates the stuck thread's results
-                _mc_computing  = False
-                _mc_started_ts = None
-            # Fall through to start a new thread below
-        elif not force:
-            return  # Still within timeout and not a forced refresh — wait
-
-    if not force and has_data and age < 1800:
-        return
-
-    with _mc_cache_lock:
-        _mc_generation += 1
-        gen            = _mc_generation
-        _mc_computing  = True
-        _mc_started_ts = datetime.now()
-    threading.Thread(target=_mc_compute_background, args=(gen,), daemon=True).start()
-
+    computing = bool(base.get('computing')) or force_refresh
+    payload = {
+        'success': True, 'date': date_str, 'hasOdds': bool(ODDS_API_KEY),
+        'games': games, 'topProps': rows,
+        'computing': computing,
+        'cached': base.get('cached', False),
+        'cacheAgeSec': base.get('cacheAgeSec', 0),
+        'generatedAt': base.get('generatedAt'),
+    }
+    if computing and not rows:
+        payload['message'] = 'Computing… auto-refreshing in 20s'
+    elif base.get('message'):
+        payload['message'] = base.get('message')
+    return payload
 
 @app.route('/api/projections/monte-carlo')
 def api_projections_monte_carlo():
-    """Returns instantly from cache — background thread does all work."""
+    """Never blocks: serves from the shared props-scan cache (SWR — a stale
+    snapshot is returned instantly while the background refresher rebuilds).
+    ?refresh=1 kicks an async recompute and still returns the current snapshot
+    immediately instead of a blocking placeholder."""
     force = request.args.get('refresh') == '1'
-    _mc_maybe_refresh(force=force)
-    with _mc_cache_lock:
-        cached    = _mc_cache_data
-        computing = _mc_computing
-    if cached and not force:
-        return jsonify(dict(cached, computing=computing))
-    date_str = datetime.now(ET).strftime('%Y-%m-%d')
-    return jsonify({'success': True, 'computing': True, 'date': date_str,
-                    'hasOdds': bool(ODDS_API_KEY), 'games': [], 'topProps': [],
-                    'message': 'Computing… auto-refreshing in 20s'})
+    date_str = request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
+    try:
+        return jsonify(_mc_board_payload(date_str, force_refresh=force))
+    except Exception:
+        print(f"[api_projections_monte_carlo] {traceback.format_exc()}")
+        return jsonify({'success': True, 'computing': True, 'date': date_str,
+                        'hasOdds': bool(ODDS_API_KEY), 'games': [], 'topProps': [],
+                        'message': 'Computing… auto-refreshing in 20s'})
 
 
 @app.route('/api/lineup/<int:game_pk>')
@@ -28137,6 +28025,12 @@ def _preload_caches():
                 except Exception:
                     pass
             print(f"[STARTUP] projections prewarm complete: {warmed}/{len(games)} games")
+            # Chain the slate-wide props scan (feeds /props, /api/edges/today
+            # and the dashboard Monte Carlo board) now that every per-game
+            # projection is warm — the scan reuses those cached builds, so the
+            # first visit of the day serves instantly instead of polling
+            # "Computing…" while a cold scan runs.
+            _trigger_props_scan_refresh_async(today, reason='startup_prewarm')
         except Exception as ex:
             print(f"[STARTUP] projections prewarm failed: {ex}")
     threading.Thread(target=_prewarm_projections_when_ready, daemon=True).start()

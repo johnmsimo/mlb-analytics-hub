@@ -1512,7 +1512,7 @@ function _mcKellyCell(prob,price){
   return '<span style="font-family:Orbitron,monospace;font-size:.68rem;font-weight:700;color:'+cls+'">'+pct+'%</span>';
 }
 function _mcGCls(g){return g==='A+'?'g-ap':g==='A'?'g-a':g==='B'?'g-b':g==='C'?'g-c':'g-d';}
-function _mcRCls(r){return r==='STRONG PLAY'?'r-sp':r==='PLAY'?'r-p':r==='LEAN'?'r-l':r==='WATCH'?'r-w':'r-s';}
+function _mcRCls(r){r=String(r||'');return r.indexOf('STRONG PLAY')===0?'r-sp':r.indexOf('PLAY')===0?'r-p':r.indexOf('LEAN')===0?'r-l':r.indexOf('WATCH')===0?'r-w':'r-s';}
 function _mcECls(e){var n=parseFloat(e||0);return n>=0.06?'mc-ep':n<=-0.02?'mc-en':'mc-eu';}
 function _mcFE(e){var n=parseFloat(e||0);return(n>=0?'+':'')+(n*100).toFixed(1)+'%';}
 function _mcFP(p){return(parseFloat(p||0)*100).toFixed(1)+'%';}
@@ -1568,7 +1568,7 @@ function renderMC(d){
     +'</tr></thead><tbody id="mcTbody"></tbody></table></div>'
     +'<div id="mcTopStrip" style="display:none;padding:12px 14px 6px;border-top:1px solid rgba(0,229,255,.1)"></div>'
     +'</div>';
-  st.textContent=all.length+' props · stat model';
+  st.textContent=all.length+' props · calibrated model'+(d.cacheAgeSec?' · '+Math.round(d.cacheAgeSec/60)+'m ago':'');
   _mcRenderRows();
 }
 function _mcRenderRows(){
@@ -1619,7 +1619,7 @@ function _mcRenderRows(){
         team: p.team,
         marketKey: p.market,
         line: p.line,
-        recommendedSide: (p.recommendation && p.recommendation.toUpperCase().includes('UNDER')) ? 'Under' : 'Over',
+        recommendedSide: p.side || ((p.recommendation && p.recommendation.toUpperCase().includes('UNDER')) ? 'Under' : 'Over'),
         source: 'mc',
         adjProb: p.prob,
         hubRating: p.hubRating || 0,
@@ -1668,8 +1668,10 @@ function _mcSetF(type,val){
 }
 function _mcPoll(){
   _MC_POLL_ATTEMPTS = (_MC_POLL_ATTEMPTS || 0) + 1;
-  // Give up after 8 polls (~2.7 min at 20s intervals)
-  if(_MC_POLL_ATTEMPTS > 8){
+  // Give up after 15 polls (~5 min at 20s intervals) — a cold slate-wide scan
+  // right after a redeploy can take a few minutes; normally the startup
+  // prewarm means the very first poll already returns data.
+  if(_MC_POLL_ATTEMPTS > 15){
     if(_MC_POLL){clearInterval(_MC_POLL);_MC_POLL=null;}
     _MC_POLL_ATTEMPTS = 0;
     var wrap=document.getElementById('mcWrap'), st=document.getElementById('mcStatus');
