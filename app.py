@@ -44,6 +44,7 @@ try:
         xgb_hit_prob_full, xgb_k_prob_full,
         xgb_hr_prob_full, xgb_tb_prob_full, xgb_rbi_prob_full,
         xgb_batter_prob_full, xgb_hit_prob_bulk,
+        xgb_feature_in_use,
         enrich_batter, enrich_pitcher,
     )
     _XGB_AVAILABLE = True
@@ -63,6 +64,7 @@ except ImportError:
     def xgb_batter_prob_full(*a, **k): return {}
     def xgb_ready(_=None):       return False
     def xgb_line_ready(*a, **k): return False
+    def xgb_feature_in_use(*a, **k): return False
     def enrich_batter(d, **k):   return d
     def enrich_pitcher(d, **k):  return d
 
@@ -88,12 +90,24 @@ try:
     from stacked_calibrator import (
         calibrate as stacked_calibrate,
         update_model_accuracies as _update_model_accuracies,
+        _base_rate_for as _market_base_rate_for,
     )
     _STACK_AVAILABLE = True
 except ImportError:
     _STACK_AVAILABLE = False
     def stacked_calibrate(*a, **k): return None
     def _update_model_accuracies(*a, **k): return {}
+    def _market_base_rate_for(market_key, line=None):
+        # Mirror of stacked_calibrator's tables (standard-line starter P(over)).
+        _line = {("batter_hits", 1.5): 0.23, ("batter_total_bases", 2.5): 0.23,
+                 ("batter_total_bases", 3.5): 0.17, ("batter_rbis", 1.5): 0.12}
+        try:
+            if line is not None and (market_key, float(line)) in _line:
+                return _line[(market_key, float(line))]
+        except (TypeError, ValueError):
+            pass
+        return {"batter_hits": 0.66, "batter_total_bases": 0.40,
+                "batter_rbis": 0.34, "batter_home_runs": 0.13}.get(market_key, 0.50)
 
 # Per-market probability recalibration fit from our own graded history.
 # Optional: a missing module leaves model probabilities untouched (identity).
@@ -8159,6 +8173,7 @@ def api_bvp_projection(batter_id, pitcher_id):
                                  if _park_home_id else 1.0),
                       **_mom}
             _pdict = {**pstats, **fg_pit, **sv_pit, "name": pitcher_name, "pitchHand": pitcher_hand}
+            _maybe_opp_stuff(_pdict, pitcher_id)
             if xgb_ready("hr"):
                 _xgb_extras["xgbHrProb"]  = xgb_hr_prob(_bdict, _pdict)
             if xgb_ready("tb"):
@@ -9625,6 +9640,7 @@ def _pitcher_k_projection_vs_lineup(pitcher_id, pitcher_name, opposing_lineup,
                 pitcher_dict.setdefault("arsenalPutaway", _ars.get("putaway"))
         except Exception:
             pass
+        _maybe_stuff_plus(pitcher_dict, pitcher_id)
 
     # Blend Log5 expected K with the average of XGB per-line implied means
     # (so the displayed expected K reflects the ensemble too). When XGB is
@@ -16143,6 +16159,10 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                     rows.append(temp_row)
 
     # Away batters face the home pitcher; home batters face the away pitcher.
+    # Opposing-starter Stuff+ for the batter markets (once per starter,
+    # day-cached; no-op until a retrained HR/TB/RBI model uses it).
+    _maybe_opp_stuff(home_pitcher, home_pitcher.get('id'))
+    _maybe_opp_stuff(away_pitcher, away_pitcher.get('id'))
     process_hitters(away_props, away_abbr, home_pitcher.get('name'), home_pitcher)
     process_hitters(home_props, home_abbr, away_pitcher.get('name'), away_pitcher)
 
@@ -16171,6 +16191,8 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                     sp['arsenalPutaway'] = _ars.get('putaway')
             except Exception:
                 pass
+            # Physics-based Stuff+ (no-op until a retrained K model uses it).
+            _maybe_stuff_plus(sp, sp.get('id'))
         # ─────────────────────────────────────────────────────────────────────
         for line in k_lines:
             prob_field = _K_PROB_FIELD_FOR.get(line)
@@ -19246,6 +19268,7 @@ def api_diag_serve_parity():
                     sp['arsenalWhiff'], sp['arsenalPutaway'] = ars.get('whiff'), ars.get('putaway')
             except Exception:
                 pass
+            _maybe_stuff_plus(sp, pid)
             _accumulate(feature_default_report('k', pitcher=sp))
         # ── Hit batters (mirror projection path: name-only batter dict) ──
         try:
@@ -19261,6 +19284,7 @@ def api_diag_serve_parity():
                 if not bname:
                     continue
                 opp = {'name': opp_pp.get('fullName', ''), 'pitchHand': opp_hand}
+                _maybe_opp_stuff(opp, opp_pp.get('id'))
                 _accumulate(feature_default_report(
                     'hits', batter={'name': bname}, pitcher=opp))
                 # ── HR/TB/RBI (mirror deep-dive path: name + bats + park + momentum) ──
@@ -22882,6 +22906,92 @@ def _arsenal_whiff_summary(pitcher_id):
     }
 
 
+# ── Physics-based Stuff+ (stuff_model.py) ────────────────────────────────────
+# The K models can train on `stuff_plus`: the pitcher's arsenal usage-weighted
+# EXPECTED whiff from pure pitch physics (velo/movement/spin/extension), scored
+# by the committed models/stuff_whiff.pkl and scaled to league 100 ± 10/SD.
+# Unlike season SwStr% it stabilizes in ~150 pitches and moves when a pitcher
+# adds velo or a pitch. Serve parity: the aggregation + scoring run through the
+# SAME stuff_model functions the training pipeline uses on the same raw
+# Statcast source. Callers gate on xgb_feature_in_use('stuff_plus') so the
+# Statcast pull is only paid once retrained K models actually consume it.
+_stuff_state = {"art": None, "loaded": False}
+_stuff_cache = {}          # (pid, 'YYYY-MM-DD') -> float | None
+_stuff_lock = threading.Lock()
+
+
+def _stuff_plus_for(pitcher_id):
+    """Live Stuff+ for a starter from current-season pitch physics; falls back
+    to the prior full season below the 150-pitch floor (early April); None when
+    neither qualifies — callers leave stuffPlus unset and the scorer serves
+    NaN, matching training's never-imputed policy. Day-cached per pitcher."""
+    if not pitcher_id:
+        return None
+    today = datetime.now(ET).strftime('%Y-%m-%d')
+    ck = (int(pitcher_id), today)
+    with _stuff_lock:
+        if ck in _stuff_cache:
+            return _stuff_cache[ck]
+        if not _stuff_state["loaded"]:
+            try:
+                import stuff_model as _sm
+                _stuff_state["art"] = _sm.load()
+            except Exception:
+                _stuff_state["art"] = None
+            _stuff_state["loaded"] = True
+        art = _stuff_state["art"]
+    val = None
+    if art is not None:
+        try:
+            import pybaseball as pb
+            import stuff_model as _sm
+            yr = datetime.now(ET).year
+            df = pb.statcast_pitcher(start_dt=f"{yr}-03-01", end_dt=today,
+                                     player_id=int(pitcher_id))
+            val = _sm.pitcher_stuff_plus(art, df)
+            if val is None:
+                df_prev = pb.statcast_pitcher(start_dt=f"{yr - 1}-03-01",
+                                              end_dt=f"{yr - 1}-11-30",
+                                              player_id=int(pitcher_id))
+                val = _sm.pitcher_stuff_plus(art, df_prev)
+        except Exception as ex:
+            logging.warning(f"[stuff] pid={pitcher_id}: {ex}")
+            val = None
+    with _stuff_lock:
+        _evict_if_large(_stuff_cache, 400)
+        _stuff_cache[ck] = val
+    return val
+
+
+def _maybe_stuff_plus(pitcher_dict, pitcher_id):
+    """Attach stuffPlus to a K-model pitcher dict when (a) a loaded K model
+    trains on it and (b) a score is available. Best-effort by design."""
+    try:
+        if pitcher_id and xgb_feature_in_use('stuff_plus') \
+                and 'stuffPlus' not in pitcher_dict:
+            _v = _stuff_plus_for(pitcher_id)
+            if _v is not None:
+                pitcher_dict['stuffPlus'] = _v
+    except Exception:
+        pass
+    return pitcher_dict
+
+
+def _maybe_opp_stuff(pitcher_dict, pitcher_id):
+    """Attach stuffPlus to an OPPOSING-pitcher dict fed to the batter markets
+    (`opp_stuff_plus` in _build_batter_market_features) when a loaded HR/TB/RBI
+    model trains on it. Same day-cached score as the K path."""
+    try:
+        if pitcher_id and 'stuffPlus' not in pitcher_dict and any(
+                xgb_feature_in_use('opp_stuff_plus', p) for p in ('hr', 'tb', 'rbi')):
+            _v = _stuff_plus_for(pitcher_id)
+            if _v is not None:
+                pitcher_dict['stuffPlus'] = _v
+    except Exception:
+        pass
+    return pitcher_dict
+
+
 # ── Pitcher projection engine (v2 — recent form weighted) ────────────────────
 def _project_pitcher(pitcher_name, pitcher_id, pitcher_fg, pitcher_sv, pitcher_stats,
                      opp_batters, park_factor, weather, blend_weights=None,
@@ -23173,8 +23283,9 @@ def api_lineup_props(game_pk):
         _home_tid = (((gdata.get("teams") or {}).get("home") or {}).get("team") or {}).get("id")
         _pf = _park_factor_for(_home_tid) if _home_tid else 1.0
 
-        def _score_side(batters, opp_name, opp_hand):
+        def _score_side(batters, opp_name, opp_hand, opp_id=None):
             pdict = {"name": opp_name, "pitchHand": opp_hand}
+            _maybe_opp_stuff(pdict, opp_id)
             out = []
             for b in (batters or []):
                 name = (b.get("name") or "").strip()
@@ -23220,8 +23331,8 @@ def api_lineup_props(game_pk):
             return out
 
         # away batters face the HOME starter; home batters face the AWAY starter.
-        away_rows = _score_side(away_bats, hp_name, hp_hand)
-        home_rows = _score_side(home_bats, ap_name, ap_hand)
+        away_rows = _score_side(away_bats, hp_name, hp_hand, hp_id)
+        home_rows = _score_side(home_bats, ap_name, ap_hand, ap_id)
 
         payload = {
             "success": True, "gamePk": game_pk,
@@ -23621,12 +23732,13 @@ def api_props_projections(game_pk):
                 "injuryDescription": (pinj or {}).get("description"),
                 "xgbKProbs": {
                     str(ln): xgb_k_prob(
-                        {"fgera": pfg.get("fg_era"), "fgkpct": pfg.get("fg_kpct"),
-                         "fgbbpct": pfg.get("fg_bbpct"), "svwhiffpct": psv.get("sv_whiff"),
-                         "name": pname,
-                         "arsenalWhiff": proj.get("arsenal_whiff"),
-                         "arsenalPutaway": proj.get("arsenal_putaway"),
-                         **_pitcher_rolling_k_features(pid)},
+                        _maybe_stuff_plus(
+                            {"fgera": pfg.get("fg_era"), "fgkpct": pfg.get("fg_kpct"),
+                             "fgbbpct": pfg.get("fg_bbpct"), "svwhiffpct": psv.get("sv_whiff"),
+                             "name": pname,
+                             "arsenalWhiff": proj.get("arsenal_whiff"),
+                             "arsenalPutaway": proj.get("arsenal_putaway"),
+                             **_pitcher_rolling_k_features(pid)}, pid),
                         line=ln
                     ) if _XGB_AVAILABLE and xgb_ready('k') else None
                     for ln in [3.5, 4.5, 5.5]
@@ -25940,7 +26052,30 @@ def _enrich_confident_hits_with_odds(picks, away_t, home_t):
 
 
 def _compute_dashboard_quick_props(game_pk, limit=3, date_hint=None, prefetch=None):
-    """Compute top quick-prop picks for a game card strip."""
+    """Compute top quick-prop picks for a game card strip.
+
+    Accuracy stack — the same fused pipeline the tracker capture / props board
+    runs, per candidate (batter, market, line), replacing the old L10-hit-rate
+    heuristic (0.55·L10% + 0.45·matchup) which carried no model probability:
+
+      1. ANALYTIC LEG — full BATX projection (`_project_batter_batx`: platoon
+         blend, hand-aware park factor, weather, rolling form, BvP, opposing
+         defense) → Poisson P(over) at each line.
+      2. XGB LEG — line-exact calibrated model (`xgb_batter_prob_full`) with
+         serve-parity features: recent hit form for hits, hand-aware park HR /
+         park factor (+ scorer-side momentum) for hr/tb/rbi.
+      3. FUSION — `stacked_calibrate` (market/line-aware, real BvP PA count).
+      4. MARKET BLEND — when the prop is priced, the fused prob is blended with
+         the de-vig'd market in logit space (`logit_blend_prob`, learned
+         per-market weights) exactly like the tracker rows.
+      5. LIVE RECALIBRATION — `_calibrate_prop_prob` corrects the displayed
+         probability to realized graded accuracy.
+
+    Ranking: true edge vs the market when priced, else calibrated lift over the
+    line-aware base rate (so hits 0.5 and HR 0.5 compare fairly). The L10
+    over-rate and matchup score remain displayed confirmation signals, computed
+    only for the shown picks — they no longer drive selection.
+    """
     gdata, away_bats, home_bats, away_t, home_t, _pitchers = (
         prefetch if prefetch is not None
         else _props_fetch_game(game_pk, date_hint=date_hint))
@@ -25949,91 +26084,279 @@ def _compute_dashboard_quick_props(game_pk, limit=3, date_hint=None, prefetch=No
 
     away_abbr = away_t.get("team", {}).get("abbreviation", "AWAY")
     home_abbr = home_t.get("team", {}).get("abbreviation", "HOME")
+    home_id   = (home_t.get("team") or {}).get("id")
 
-    # Opposing-starter context for the model matchup score: away batters face the
-    # home starter (hp) and home batters face the away starter (ap).
+    # Opposing-starter context: away batters face the home starter (hp) and
+    # home batters face the away starter (ap).
     _ap = (_pitchers or {}).get('ap', {}) if isinstance(_pitchers, dict) else {}
     _hp = (_pitchers or {}).get('hp', {}) if isinstance(_pitchers, dict) else {}
 
     def _opp_ctx(opp):
         nm = (opp or {}).get('fullName') or ''
+        opid = (opp or {}).get('id')
         hand = 'R'
         try:
-            if (opp or {}).get('id'):
-                hand = (pitcher_stats_mlb(opp.get('id')).get('pitchHand') or 'R')
+            if opid:
+                hand = (pitcher_stats_mlb(opid).get('pitchHand') or 'R')
         except Exception:
             hand = 'R'
-        return (fg_pitcher(nm) or {}), (sv_pitcher(nm) or {}), hand
+        return {
+            'name': nm, 'id': opid, 'hand': (hand or 'R').upper(),
+            'fg': fg_pitcher(nm) or {}, 'sv': sv_pitcher(nm) or {},
+            'def_factor': _def_factor_for_pitcher(opid),
+        }
 
     _home_opp = _opp_ctx(_hp)   # away batters face the home starter
     _away_opp = _opp_ctx(_ap)   # home batters face the away starter
 
-    tagged = ([(b, away_abbr, 'away') for b in away_bats[:6]]
-              + [(b, home_abbr, 'home') for b in home_bats[:6]])
+    # Game context shared by every batter: hand-aware HR park factors + weather
+    # (both feed the BATX projection; the power models get park via features).
+    pf_rhb = _resolve_park_factor(home_abbr, home_id, hand="R", stat="HR")
+    pf_lhb = _resolve_park_factor(home_abbr, home_id, hand="L", stat="HR")
+    try:
+        ven   = gdata.get("venue", {}) or {}
+        coord = ((ven.get("location") or {}).get("defaultCoordinates")) or {}
+        try:
+            dt_utc = datetime.fromisoformat((gdata.get("gameDate") or "").replace("Z", "+00:00"))
+            ghour  = dt_utc.astimezone(ET).hour
+        except Exception:
+            ghour = 13
+        wx = get_weather(coord.get("latitude"), coord.get("longitude"), ghour, venue_id=ven.get("id"))
+    except Exception:
+        wx = {}
+    adjustments = _get_adjustments()
+
+    # Live prices (best-effort; cached snapshot). Lets the strip rank by TRUE
+    # edge and lets the fused prob absorb market information via the blend.
+    market_props = []
+    try:
+        if ODDS_API_KEY:
+            event, _ = _find_odds_event((away_t.get('team') or {}).get('name', ''),
+                                        (home_t.get('team') or {}).get('name', ''))
+            books = _load_event_odds(event.get('id'), featured_only=False) if event else []
+            valid_names = {b.get('name') for b in (away_bats or []) + (home_bats or []) if b.get('name')}
+            market_props = _parse_prop_markets(books, valid_names) if books else []
+    except Exception:
+        market_props = []
 
     market_config = [
-        ("hits", "hits", "Hits", [("0.5", "batter_hits"), ("1.5", "batter_hits")]),
-        ("hr", "hr", "Home Runs", [("0.5", "batter_home_runs")]),
-        ("tb", "tb", "Total Bases", [("1.5", "batter_total_bases"), ("2.5", "batter_total_bases")]),
-        ("rbi", "rbi", "RBIs", [("0.5", "batter_rbis"), ("1.5", "batter_rbis")]),
+        ("hits", "batter_hits",        "Hits",        [0.5, 1.5]),
+        ("hr",   "batter_home_runs",   "Home Runs",   [0.5]),
+        ("tb",   "batter_total_bases", "Total Bases", [1.5, 2.5]),
+        ("rbi",  "batter_rbis",        "RBIs",        [0.5, 1.5]),
     ]
+    # Physical ceilings on the ANALYTIC leg: roughly the best hitter in baseball
+    # vs the softest matchup. An unshrunk small-sample projection (a call-up
+    # slugging .900 over 15 PA) can post P(2+ hits)≈0.99 through the Poisson —
+    # no real hitter clears these, so anything above is sample noise.
+    _QP_ANALYTIC_CEILING = {
+        ("batter_hits", 0.5): 0.88, ("batter_hits", 1.5): 0.42,
+        ("batter_home_runs", 0.5): 0.30,
+        ("batter_total_bases", 1.5): 0.68, ("batter_total_bases", 2.5): 0.45,
+        ("batter_rbis", 0.5): 0.58, ("batter_rbis", 1.5): 0.25,
+    }
+    _QP_SHRINK_PRIOR_PA = 100.0   # PA pseudo-count pulling thin samples to base rate
+
+    tagged = ([(b, away_abbr, 'away') for b in (away_bats or [])[:6]]
+              + [(b, home_abbr, 'home') for b in (home_bats or [])[:6]])
 
     def _score_batter(batter, team, side):
-        pid = batter.get("id")
-        name = batter.get("name", "")
-        if not pid:
+        pid  = batter.get("id")
+        name = (batter.get("name") or "").strip()
+        if not pid or not name:
             return []
-        trends = _build_player_trends(int(pid), False)
-        rates = trends.get("over_rates", {})
-        opp_fg, opp_sv, opp_hand = _home_opp if side == 'away' else _away_opp
+        opp = _home_opp if side == 'away' else _away_opp
+        slot = int(batter.get("slot") or 9)
+        exp_pa = _LINEUP_PA_WEIGHTS[slot - 1] if 1 <= slot <= 9 else 4.2
+
+        # Day-cached per-player context (same inputs the props board uses).
+        form = None
         try:
-            mu_score = float((_matchup_score(batter, opp_fg, opp_sv, pitcher_hand=opp_hand) or {}).get("score") or 50.0)
+            form = _fetch_rolling_form(pid, False)
         except Exception:
-            mu_score = 50.0
+            pass
+        bvp = None
+        if opp.get('id'):
+            try:
+                bvp = _fetch_bvp(pid, opp['id'])
+            except Exception:
+                pass
+        bvp_pa = int((bvp or {}).get('pa') or 0)
+
+        # Hand-aware park factor: a switch hitter bats opposite the starter.
+        bhand = (batter.get("bats") or "R").upper()
+        if bhand == "S":
+            bhand = "L" if opp['hand'] == "R" else "R"
+        bpf = pf_lhb if bhand == "L" else pf_rhb
+
+        try:
+            proj = _project_batter_batx(
+                batter, opp['name'], opp['fg'], opp['sv'], bpf, wx,
+                pitcher_hand=opp['hand'], opp_pitcher_id=opp.get('id'),
+                form=form, bvp=bvp, def_factor=opp.get('def_factor', 1.0)) or {}
+        except Exception:
+            proj = {}
+        if not proj:
+            return []
+
+        pdict = {"name": opp['name'], "pitchHand": opp['hand']}
+        # Opposing-starter Stuff+ for the power models (day-cached; no-op
+        # until a retrained HR/TB/RBI model consumes it).
+        _maybe_opp_stuff(pdict, opp.get('id'))
+        # Season sample size for the shrink below (brain-patched FG lookup).
+        try:
+            fg_pa = float((fg_batter(name) or {}).get('fg_pa') or 0)
+        except (TypeError, ValueError):
+            fg_pa = 0.0
+        rf = None   # recent hit form, fetched lazily for the hits models
         best = {}
-
-        for market, mkey, mlabel, line_pairs in market_config:
-            for line_str, market_key in line_pairs:
-                l10 = rates.get(mkey, {}).get(line_str, {}).get("l10", {})
-                pct = l10.get("pct")
-                tot = l10.get("total", 0)
-                if pct is None or tot < 5 or pct < 0.60:
+        for market, mk, mlabel, lines in market_config:
+            mean = float(proj.get(market) or 0)
+            family = _XGB_FAMILY_FOR_MK.get(mk)
+            for line in lines:
+                analytic_p = _poisson_over_prob(mean, line)
+                # Small-sample discipline: shrink toward the line's base rate by
+                # season PA (a 15-PA call-up collapses to ~league average; a
+                # full-season regular keeps most of his signal), then clamp to
+                # the physical ceiling — an unshrunk hot streak can't post a
+                # 99% two-hit probability and top the strip.
+                _br = float(_market_base_rate_for(mk, line) or 0.5)
+                analytic_p = ((fg_pa * analytic_p + _QP_SHRINK_PRIOR_PA * _br)
+                              / (fg_pa + _QP_SHRINK_PRIOR_PA))
+                _ceil = _QP_ANALYTIC_CEILING.get((mk, line))
+                if _ceil is not None:
+                    analytic_p = min(analytic_p, _ceil)
+                if analytic_p < 0.02:
                     continue
-                if market not in best or pct > best[market]["l10_pct"]:
-                    # Model-aware quality = recent form blended with the model
-                    # matchup score. This strip fetches no odds, so we do NOT
-                    # fabricate an EV% (the old code reported (l10-0.5)*100 as
-                    # "EV", which is recent hit rate, not expected value).
-                    quality = 0.55 * pct + 0.45 * (mu_score / 100.0)
-                    best[market] = {
-                        "player": name,
-                        "playerId": pid,
-                        "team": team,
-                        "market": mkey,
-                        "marketKey": market_key,
-                        "marketLabel": mlabel,
-                        "line": float(line_str),
-                        "l10_pct": round(pct, 3),
-                        "l10_total": tot,
-                        "matchupScore": round(mu_score, 1),
-                        "quality": round(quality, 4),
-                        "hubRating": max(0, min(100, round(quality * 100))),
-                        "evPct": None,
-                    }
+                # Line-exact XGB with serve-parity features (mirrors the
+                # tracker capture path — see _build_tracker_rows_for_game).
+                _full = {}
+                if _XGB_AVAILABLE and family and xgb_line_ready(family, line):
+                    bdict = dict(batter)
+                    if family == 'hits':
+                        if rf is None:
+                            try:
+                                rf = _batter_recent_hit_form(pid) or {}
+                            except Exception:
+                                rf = {}
+                        bdict.update(rf)
+                    else:
+                        bdict['parkFactor'] = _park_factor_for(home_id)
+                        bdict['parkHr']     = _hr_park_factor_hand(home_id, bhand)
+                    try:
+                        _full = xgb_batter_prob_full(family, line, bdict, pdict) or {}
+                    except Exception:
+                        _full = {}
+                xgb_p = _full.get('prob') if _full else None
+                base_prob = analytic_p
+                model_source = 'batx'
+                stk = None
+                if xgb_p is not None:
+                    if _STACK_AVAILABLE:
+                        mc_ci = ((_full.get('p_lo'), _full.get('p_hi'))
+                                 if _full.get('p_lo') is not None and _full.get('p_hi') is not None else None)
+                        try:
+                            stk = stacked_calibrate(float(xgb_p), float(analytic_p),
+                                                    coverage=0.5, exp_pa=exp_pa, bvp_pa=bvp_pa,
+                                                    market_key=mk, line=line, mc_ci=mc_ci)
+                        except Exception:
+                            stk = None
+                    if stk and stk.get('probability') is not None:
+                        base_prob = float(stk['probability']); model_source = 'stacked'
+                    else:
+                        base_prob = 0.5 * float(xgb_p) + 0.5 * analytic_p; model_source = 'xgb_blend'
+                raw_mult_prob = _clamp01(base_prob * _market_mult(mk, adjustments))
 
+                # Market blend + live recalibration — identical to tracker rows.
+                msum = _market_price_summary(market_props, name, mk, line) if market_props else {}
+                market_implied = msum.get('market_implied')
+                if market_implied and market_implied > 0:
+                    under_imp = _american_to_implied(msum.get('best_under_price')) or (1 - market_implied)
+                    adj_prob = logit_blend_prob(raw_mult_prob, market_implied, mk, market_implied, under_imp)
+                else:
+                    adj_prob = raw_mult_prob
+                precal_prob = adj_prob
+                adj_prob = _calibrate_prop_prob(mk, precal_prob)
+
+                base_rate = _br
+                lift = adj_prob - base_rate
+                if lift <= 0:
+                    continue   # model doesn't beat a typical starter at this line
+                edge = _capped_edge(adj_prob, market_implied)
+                ev_pct = round(adj_prob / market_implied - 1, 4) if market_implied and market_implied > 0 else None
+                # Rank by true edge when priced, else by base-rate lift (both in
+                # probability points, so a slate mixing priced/unpriced stays sane).
+                rank = edge if edge is not None else lift
+                cand = {
+                    "player": name, "playerId": pid, "team": team, "slot": slot,
+                    "market": market, "marketKey": mk, "marketLabel": mlabel,
+                    "line": float(line), "side": "Over", "recommendedSide": "Over",
+                    "adjProb": round(adj_prob, 4),
+                    "preCalProb": round(precal_prob, 4),
+                    "modelSource": model_source,
+                    "xgbProb": round(float(xgb_p), 4) if xgb_p is not None else None,
+                    "analyticProb": round(analytic_p, 4),
+                    "stackedProb": stk.get('probability') if stk else None,
+                    "stackVerdict": stk.get('verdict') if stk else None,
+                    "calStatus": _prop_cal_status(mk),
+                    "modelMean": round(mean, 3),
+                    "baseRate": base_rate, "lift": round(lift, 4),
+                    "edge": round(edge, 4) if edge is not None else None,
+                    "evPct": ev_pct,
+                    "isPlusEv": bool(ev_pct is not None and ev_pct > 0),
+                    "bestPrice": msum.get('best_over_price'),
+                    "bestBook": msum.get('best_over_book'),
+                    "bookCount": msum.get('book_count'),
+                    "marketImplied": round(float(market_implied), 4) if market_implied else None,
+                    "_rank": rank,
+                }
+                if market not in best or cand["_rank"] > best[market]["_rank"]:
+                    best[market] = cand
         return list(best.values())
 
     all_picks = []
     with ThreadPoolExecutor(max_workers=8) as ex:
-        futs = {ex.submit(_score_batter, b, t, s): (b, t) for b, t, s in tagged}
+        futs = [ex.submit(_score_batter, b, t, s) for b, t, s in tagged]
         for fut in as_completed(futs):
             try:
                 all_picks.extend(fut.result())
             except Exception:
                 pass
 
-    all_picks.sort(key=lambda x: x.get("quality", x.get("l10_pct", 0)), reverse=True)
-    return gdata, all_picks[:limit]
+    # preCalProb tiebreak: the live recalibration is a coarse step function
+    # until graded volume accumulates, so equal adjProb/lift picks are ordered
+    # by the un-recalibrated fused probability (preserves model discrimination).
+    all_picks.sort(key=lambda x: (x.get("_rank", 0), x.get("adjProb", 0),
+                                  x.get("preCalProb", 0)), reverse=True)
+    top = all_picks[:limit]
+
+    # Finalize ONLY the shown picks: L10 over-rate + matchup score are heavy
+    # per-player extras that are now display/confirmation signals, so they're
+    # built for ≤`limit` picks instead of every batter in both lineups.
+    for p in top:
+        p.pop("_rank", None)
+        l10_pct = l10_tot = None
+        try:
+            rates = (_build_player_trends(int(p["playerId"]), False) or {}).get("over_rates", {})
+            l10 = rates.get(p["market"], {}).get(str(p["line"]), {}).get("l10", {})
+            l10_pct = l10.get("pct"); l10_tot = l10.get("total")
+        except Exception:
+            pass
+        p["l10_pct"]   = round(l10_pct, 3) if l10_pct is not None else None
+        p["l10_total"] = l10_tot
+        opp = _home_opp if p["team"] == away_abbr else _away_opp
+        try:
+            batter = next((b for b, _t, _s in tagged if b.get("id") == p["playerId"]), None)
+            mu = _matchup_score(batter, opp['fg'], opp['sv'], pitcher_hand=opp['hand']) if batter else None
+            p["matchupScore"] = round(float((mu or {}).get("score") or 0), 1) or None
+        except Exception:
+            p["matchupScore"] = None
+        p["hubRating"] = _hub_rating(p["adjProb"], p.get("edge") or 0,
+                                     l10_pct if l10_pct is not None else 0.5)
+        p["quality"] = p["adjProb"]   # legacy field: kept for older clients
+        p["reason"] = _projection_reason_short(p["player"], p["marketKey"],
+                                               p["adjProb"], p.get("edge"), opp['name'])
+    return gdata, top
 
 
 # ── Route: L5/L10 trends for all players in a game ───────────────────────────
