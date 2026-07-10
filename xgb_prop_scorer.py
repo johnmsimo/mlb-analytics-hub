@@ -800,6 +800,10 @@ def _build_batter_market_features(batter: dict, pitcher: dict, feat_order: list)
         # neutral 1.0 when unknown). park_hr is the hand-aware HR multiplier.
         "park_factor":    _sf(batter, "parkFactor", "park_factor",       default=1.0),
         "park_hr":        _sf(batter, "parkHr",     "park_hr",           default=1.0),
+        # Opposing starter's physics-based Stuff+ (stuff_model.py; league 100,
+        # ±10/SD). NaN = no score, matching un-imputed training (bt_* policy).
+        "opp_stuff_plus": _sf(pitcher, "stuffPlus", "oppStuffPlus", "opp_stuff_plus",
+                              default=_NAN),
         # Bat-tracking (NaN = unknown, matching un-imputed training).
         "bt_bat_speed":   _sf(batter, "btBatSpeed", "bt_bat_speed",
                               default=(bt.get("bat_speed") if bt.get("bat_speed") is not None else _NAN)),

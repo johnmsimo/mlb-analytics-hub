@@ -129,6 +129,10 @@ HR_FEATURES = [
     "park_hr",
     # Bat-tracking (2024+; NaN before — never imputed, see train_market).
     "bt_bat_speed", "bt_fast_swing", "bt_squared_up", "bt_blast",
+    # Opposing starter's physics-based Stuff+ (stuff_model.py) — contact/damage
+    # suppression the outcome-based opp_hr9/opp_barrel lag on. NaN below the
+    # pitch floor; never imputed (same policy as bt_*).
+    "opp_stuff_plus",
 ]
 
 # Total bases (≥2 TB in a game). Broader than HR — rewards extra-base power AND
@@ -144,6 +148,8 @@ TB_FEATURES = [
     "park_factor",
     # Bat-tracking (2024+; NaN before — never imputed, see train_market).
     "bt_bat_speed", "bt_fast_swing", "bt_squared_up", "bt_blast",
+    # Opposing starter's physics-based Stuff+ (see HR_FEATURES note).
+    "opp_stuff_plus",
 ]
 
 # RBI (≥1 RBI in a game). Heavily lineup-context driven (cleanup spots get the
@@ -157,6 +163,8 @@ RBI_FEATURES = [
     "l7_ev", "l7_barrel", "ev_momentum", "barrel_momentum",
     # Bat-tracking (2024+; NaN before — never imputed, see train_market).
     "bt_bat_speed", "bt_fast_swing", "bt_squared_up", "bt_blast",
+    # Opposing starter's physics-based Stuff+ (see HR_FEATURES note).
+    "opp_stuff_plus",
 ]
 
 # ── Park factors — VERBATIM copies of app.py's PARK_FACTORS /
@@ -617,8 +625,21 @@ def load_fg_pitching(season: int) -> pd.DataFrame:
 # 3. Feature matrices
 # ════════════════════════════════════════════════════════════════════════
 
-def build_batter_matrix(bg: pd.DataFrame) -> pd.DataFrame:
+def build_batter_matrix(bg: pd.DataFrame,
+                        stuff_scores: Optional[pd.DataFrame] = None) -> pd.DataFrame:
     bg = bg.sort_values(["batter", "game_date"]).copy()
+    # Opposing starter's physics-based Stuff+ — joined by (season, opp_starter),
+    # the same real opposing-starter key the opp_* FG stats use below. Missing
+    # (below the pitch floor / unknown starter) stays NaN, never imputed.
+    if stuff_scores is not None and len(stuff_scores) and "opp_starter" in bg.columns:
+        opp_stuff = stuff_scores[["season", "pitcher", "stuff_plus"]].rename(
+            columns={"pitcher": "opp_starter", "stuff_plus": "opp_stuff_plus"})
+        # Align key dtypes (opp_starter is float64 when any game lacked a
+        # starter; a mixed-dtype merge key raises in modern pandas).
+        opp_stuff["opp_starter"] = pd.to_numeric(opp_stuff["opp_starter"], errors="coerce").astype("float64")
+        opp_stuff["season"] = pd.to_numeric(opp_stuff["season"], errors="coerce").astype("int64")
+        bg["opp_starter"] = pd.to_numeric(bg["opp_starter"], errors="coerce").astype("float64")
+        bg = bg.merge(opp_stuff, on=["season", "opp_starter"], how="left")
     # Lineup-role features (reconstructed in _agg_chunk). expected_pa via the
     # serve-time slot→PA table; unknown slot (0) → league-default PA.
     bg["batting_order"] = pd.to_numeric(bg.get("batting_order"), errors="coerce").fillna(0).astype(int)
@@ -983,7 +1004,7 @@ def main(markets: list[str]):
             print("  ⚠️ stuff fit skipped (insufficient rows)")
 
     print("\n══ Building feature matrices ══")
-    bat = build_batter_matrix(bg) if len(bg) else pd.DataFrame()
+    bat = build_batter_matrix(bg, stuff_scores) if len(bg) else pd.DataFrame()
     pit = build_pitcher_matrix(pg, stuff_scores) if len(pg) else pd.DataFrame()
     print(f"  batter matrix={bat.shape}  pitcher matrix={pit.shape}")
 

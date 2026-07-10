@@ -8173,6 +8173,7 @@ def api_bvp_projection(batter_id, pitcher_id):
                                  if _park_home_id else 1.0),
                       **_mom}
             _pdict = {**pstats, **fg_pit, **sv_pit, "name": pitcher_name, "pitchHand": pitcher_hand}
+            _maybe_opp_stuff(_pdict, pitcher_id)
             if xgb_ready("hr"):
                 _xgb_extras["xgbHrProb"]  = xgb_hr_prob(_bdict, _pdict)
             if xgb_ready("tb"):
@@ -16158,6 +16159,10 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                     rows.append(temp_row)
 
     # Away batters face the home pitcher; home batters face the away pitcher.
+    # Opposing-starter Stuff+ for the batter markets (once per starter,
+    # day-cached; no-op until a retrained HR/TB/RBI model uses it).
+    _maybe_opp_stuff(home_pitcher, home_pitcher.get('id'))
+    _maybe_opp_stuff(away_pitcher, away_pitcher.get('id'))
     process_hitters(away_props, away_abbr, home_pitcher.get('name'), home_pitcher)
     process_hitters(home_props, home_abbr, away_pitcher.get('name'), away_pitcher)
 
@@ -19279,6 +19284,7 @@ def api_diag_serve_parity():
                 if not bname:
                     continue
                 opp = {'name': opp_pp.get('fullName', ''), 'pitchHand': opp_hand}
+                _maybe_opp_stuff(opp, opp_pp.get('id'))
                 _accumulate(feature_default_report(
                     'hits', batter={'name': bname}, pitcher=opp))
                 # ── HR/TB/RBI (mirror deep-dive path: name + bats + park + momentum) ──
@@ -22971,6 +22977,21 @@ def _maybe_stuff_plus(pitcher_dict, pitcher_id):
     return pitcher_dict
 
 
+def _maybe_opp_stuff(pitcher_dict, pitcher_id):
+    """Attach stuffPlus to an OPPOSING-pitcher dict fed to the batter markets
+    (`opp_stuff_plus` in _build_batter_market_features) when a loaded HR/TB/RBI
+    model trains on it. Same day-cached score as the K path."""
+    try:
+        if pitcher_id and 'stuffPlus' not in pitcher_dict and any(
+                xgb_feature_in_use('opp_stuff_plus', p) for p in ('hr', 'tb', 'rbi')):
+            _v = _stuff_plus_for(pitcher_id)
+            if _v is not None:
+                pitcher_dict['stuffPlus'] = _v
+    except Exception:
+        pass
+    return pitcher_dict
+
+
 # ── Pitcher projection engine (v2 — recent form weighted) ────────────────────
 def _project_pitcher(pitcher_name, pitcher_id, pitcher_fg, pitcher_sv, pitcher_stats,
                      opp_batters, park_factor, weather, blend_weights=None,
@@ -23262,8 +23283,9 @@ def api_lineup_props(game_pk):
         _home_tid = (((gdata.get("teams") or {}).get("home") or {}).get("team") or {}).get("id")
         _pf = _park_factor_for(_home_tid) if _home_tid else 1.0
 
-        def _score_side(batters, opp_name, opp_hand):
+        def _score_side(batters, opp_name, opp_hand, opp_id=None):
             pdict = {"name": opp_name, "pitchHand": opp_hand}
+            _maybe_opp_stuff(pdict, opp_id)
             out = []
             for b in (batters or []):
                 name = (b.get("name") or "").strip()
@@ -23309,8 +23331,8 @@ def api_lineup_props(game_pk):
             return out
 
         # away batters face the HOME starter; home batters face the AWAY starter.
-        away_rows = _score_side(away_bats, hp_name, hp_hand)
-        home_rows = _score_side(home_bats, ap_name, ap_hand)
+        away_rows = _score_side(away_bats, hp_name, hp_hand, hp_id)
+        home_rows = _score_side(home_bats, ap_name, ap_hand, ap_id)
 
         payload = {
             "success": True, "gamePk": game_pk,
@@ -26178,6 +26200,9 @@ def _compute_dashboard_quick_props(game_pk, limit=3, date_hint=None, prefetch=No
             return []
 
         pdict = {"name": opp['name'], "pitchHand": opp['hand']}
+        # Opposing-starter Stuff+ for the power models (day-cached; no-op
+        # until a retrained HR/TB/RBI model consumes it).
+        _maybe_opp_stuff(pdict, opp.get('id'))
         # Season sample size for the shrink below (brain-patched FG lookup).
         try:
             fg_pa = float((fg_batter(name) or {}).get('fg_pa') or 0)
