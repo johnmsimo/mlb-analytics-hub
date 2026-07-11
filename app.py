@@ -11260,45 +11260,6 @@ def _normalize_pa_probs(probs):
 # Venues with humidors that suppress HR beyond altitude correction
 HUMIDOR_VENUES = {19, 15}   # Coors (19), Chase (15)
 
-# Wind-direction azimuth mappings for each park (degrees, 0=N/out to CF)
-# Covers all 30 MLB venues. Positive along-spray = wind_out (boost).
-# FIX: previously only 3 parks; all others defaulted to 180° (due-south)
-# which is wrong for the majority of MLB venues whose CF faces north.
-_OUTFIELD_COMPASS = {
-    # venue_id: primary outfield compass direction (CF direction)
-    17:   "E",    # Wrigley — out to Lake Michigan (E/NE)
-    19:   "W",    # Coors — Rocky Mountain breeze typically W
-    3:    "E",    # Fenway — out to right/center is E
-    2:    "N",    # Oriole Park at Camden Yards — CF faces N
-    4:    "N",    # Guaranteed Rate Field (CWS) — CF faces N
-    5:    "NE",   # Progressive Field (CLE) — CF faces NE
-    7:    "NW",   # Kauffman Stadium (KC) — CF faces NW
-    1:    "N",    # Angel Stadium (LAA) — CF faces N
-    22:   "NW",   # Dodger Stadium — CF faces NW
-    2395: "NW",   # Oracle Park (SF) — CF faces NW toward McCovey Cove
-    2680: "NW",   # Petco Park (SD) — CF faces NW
-    2681: "NW",   # Citizens Bank Park (PHI) — CF faces NW
-    2889: "N",    # Busch Stadium (STL) — CF faces N
-    3289: "N",    # Citi Field (NYM) — CF faces N
-    3313: "N",    # Yankee Stadium — CF faces N
-    3309: "NE",   # Nationals Park (WSH) — CF faces NE
-    3312: "NW",   # Target Field (MIN) — CF faces NW
-    31:   "N",    # PNC Park (PIT) — CF faces N
-    2602: "NW",   # Great American Ball Park (CIN) — CF faces NW
-    2394: "NE",   # Comerica Park (DET) — CF faces NE
-    4705: "NW",   # Truist Park (ATL) — CF faces NW
-    4169: "N",    # loanDepot park (MIA) — retractable, CF faces N
-    32:   "N",    # American Family Field (MIL) — retractable, CF faces N
-    680:  "N",    # T-Mobile Park (SEA) — retractable, CF faces N
-    2392: "N",    # Daikin Park / Minute Maid (HOU) — retractable, CF faces N
-    5325: "N",    # Globe Life Field (TEX) — retractable, CF faces N
-    4321: "N",    # Globe Life Field alt ID (TEX) — retractable, CF faces N
-    14:   "N",    # Rogers Centre (TOR) — retractable, CF faces N
-    15:   "NE",   # Chase Field (ARI) — retractable, CF faces NE
-    12:   "N",    # Tropicana Field (TB) — fixed dome, mapped but unused
-    2529: "NW",   # Sutter Health Park (OAK/SAC) — CF faces NW
-}
-
 _COMPASS_DEG = {"N":0,"NNE":22.5,"NE":45,"ENE":67.5,"E":90,"ESE":112.5,
                 "SE":135,"SSE":157.5,"S":180,"SSW":202.5,"SW":225,"WSW":247.5,
                 "W":270,"WNW":292.5,"NW":315,"NNW":337.5}
@@ -11306,25 +11267,30 @@ _COMPASS_DEG = {"N":0,"NNE":22.5,"NE":45,"ENE":67.5,"E":90,"ESE":112.5,
 
 def _wind_along_spray(wind_spd: float, wind_dir: str, venue_id: int) -> float:
     """
-    Returns signed wind speed (mph) along the primary batted-ball spray axis.
+    Returns signed wind speed (mph) along the home-plate → CF axis.
     Positive = out (boost), negative = in (suppress).
-    Falls back to 0 if venue not mapped (all 30 MLB venues are now mapped above).
-    """
-    if not wind_dir or wind_spd <= 0:
-        return 0.0
-    out_dir = _OUTFIELD_COMPASS.get(venue_id)
-    if not out_dir:
-        # Generic fallback for any future expansion parks: CF roughly N (most common)
-        out_deg = 0.0
-    else:
-        out_deg = _COMPASS_DEG.get(out_dir, 0.0)
 
-    wind_deg = _COMPASS_DEG.get(wind_dir.strip().upper(), 0.0)
-    # Dot product of unit vectors
-    import math as _math
-    diff_rad = _math.radians(wind_deg - out_deg)
-    along = wind_spd * _math.cos(diff_rad)
-    return along   # positive = out
+    `wind_dir` is the meteorological compass heading the wind blows FROM
+    (Open-Meteo convention) — the ball is carried toward the OPPOSITE
+    heading, so rotate 180° before projecting onto the park's CF bearing.
+    Uses PARK_CF_BEARING (the same table `_wind_field_geometry` / the UI's
+    `wind_out` are built from) so the model and the displayed wind arrow can
+    never disagree about out vs in. Unmapped venue or unknown compass
+    direction → 0.0: neutral, never a directional guess.
+    """
+    if not wind_dir or not wind_spd or wind_spd <= 0:
+        return 0.0
+    try:
+        bearing = PARK_CF_BEARING.get(int(venue_id or 0))
+    except (TypeError, ValueError):
+        bearing = None
+    if bearing is None:
+        return 0.0
+    wind_from = _COMPASS_DEG.get(wind_dir.strip().upper())
+    if wind_from is None:
+        return 0.0
+    to_deg = (wind_from + 180.0) % 360.0
+    return wind_spd * math.cos(math.radians(to_deg - bearing))
 
 
 def build_weather_multipliers(wx: dict, venue_id: int, park_factor: float) -> dict:
@@ -11368,7 +11334,14 @@ def build_weather_multipliers(wx: dict, venue_id: int, park_factor: float) -> di
         wind_spd = 0.0
     wind_dir = str(wx.get("wind_dir", "") or "")
 
-    along = _wind_along_spray(wind_spd, wind_dir, venue_id)
+    # Prefer the payload's precomputed signed out-component (`wind_out`, from
+    # _wind_field_geometry): it uses the exact forecast degrees rather than
+    # the 16-point compass string. Fall back to reconstructing from compass.
+    try:
+        along = float(wx["wind_out"]) if wx.get("wind_out") is not None else \
+            _wind_along_spray(wind_spd, wind_dir, venue_id)
+    except (TypeError, ValueError, KeyError):
+        along = _wind_along_spray(wind_spd, wind_dir, venue_id)
     # +3.5 ft/mph along-spray → convert to HR prob multiplier
     # Typical HR margin ~5 ft → each 1.4 ft carry ≈ 1% more HR land
     carry_ft = along * 3.5
@@ -21173,69 +21146,199 @@ def api_capture_daily_slate(date_str):
         return jsonify({'success': False, 'error': str(ex), 'slate': None}), 500
 
 
+# The MC correlation matrix keys runs as 'batter_runs'; the scan/tracker use
+# 'batter_runs_scored'. Alias when looking legs up in the matrix.
+_PARLAY_CORR_MARKET_ALIAS = {'batter_runs_scored': 'batter_runs'}
+
+
+def _parlay_leg_prob_from_scan(scan_props, game_pk, player, market, line, side):
+    """Look up a leg's model win probability in the cached props-scan rows.
+
+    Returns (prob, matched_row) — prob is side-aware (Under = 1 − over prob).
+    Prefers an exact line match, then a row carrying a real book price, then
+    the first row for the (game, player, market). Returns (None, None) when
+    the scan has no row for the leg — callers must NOT substitute a guess.
+    """
+    want_pk = str(game_pk or '')
+    want_player = _ascii_fold(str(player or '')).lower().strip()
+    want_line = None
+    try:
+        want_line = float(line) if line is not None else None
+    except (TypeError, ValueError):
+        pass
+    exact, priced, first = None, None, None
+    for p in scan_props or []:
+        if p.get('marketKey') != market:
+            continue
+        if str(p.get('gamePk') or '') != want_pk:
+            continue
+        if _ascii_fold(str(p.get('player') or '')).lower().strip() != want_player:
+            continue
+        try:
+            prob = float(p.get('adjProb'))
+        except (TypeError, ValueError):
+            continue
+        if not (0.0 < prob < 1.0):
+            continue
+        if first is None:
+            first = p
+        if priced is None and p.get('marketImplied') is not None:
+            priced = p
+        if want_line is not None:
+            try:
+                if abs(float(p.get('line')) - want_line) < 1e-9:
+                    exact = p
+                    break
+            except (TypeError, ValueError):
+                pass
+    row = exact or priced or first
+    if row is None:
+        return None, None
+    prob = float(row.get('adjProb'))
+    if str(side or 'Over').strip().lower().startswith('under'):
+        prob = 1.0 - prob
+    return round(prob, 4), row
+
+
+def _parlay_same_game_corr_factor(game_pk, legs):
+    """Pairwise correlation adjustment for same-game legs from the cached MC
+    correlation matrix. For a correlated Bernoulli pair,
+        P(A∩B) = pA·pB + r·sqrt(pA(1−pA)·pB(1−pB)),
+    so each pair with a known r contributes the factor P(A∩B)/(pA·pB) to the
+    independent product (chained pairwise for 3+ legs — an approximation, but
+    directionally right where independence is systematically wrong). Under
+    legs flip the sign of r. Returns (factor, pairs_applied)."""
+    cc = _correlation_cache.get(game_pk) or _correlation_cache.get(str(game_pk))
+    if not cc or cc.get('date') != datetime.now(ET).strftime('%Y-%m-%d'):
+        return 1.0, []
+    corr_rows = (cc.get('payload') or {}).get('correlations') or []
+    if not corr_rows:
+        return 1.0, []
+
+    def _k(player, market):
+        market = _PARLAY_CORR_MARKET_ALIAS.get(market, market)
+        return (_ascii_fold(str(player or '')).lower().strip(), market)
+
+    r_by_pair = {}
+    for c in corr_rows:
+        ka = _k(c.get('playerA'), c.get('marketA'))
+        kb = _k(c.get('playerB'), c.get('marketB'))
+        try:
+            r_by_pair[frozenset((ka, kb))] = float(c.get('r'))
+        except (TypeError, ValueError):
+            continue
+
+    factor, pairs = 1.0, []
+    for i in range(len(legs)):
+        for j in range(i + 1, len(legs)):
+            a, b = legs[i], legs[j]
+            key = frozenset((_k(a['player'], a['market']), _k(b['player'], b['market'])))
+            if len(key) < 2:
+                continue   # same (player, market) twice — no self-correlation
+            r = r_by_pair.get(key)
+            if r is None:
+                continue
+            a_under = str(a.get('side', 'Over')).lower().startswith('under')
+            b_under = str(b.get('side', 'Over')).lower().startswith('under')
+            if a_under != b_under:
+                r = -r
+            pa, pb = a['win_probability'], b['win_probability']
+            joint = pa * pb + r * math.sqrt(pa * (1 - pa) * pb * (1 - pb))
+            joint = max(max(0.0, pa + pb - 1.0), min(joint, min(pa, pb)))
+            if pa * pb > 0:
+                factor *= joint / (pa * pb)
+                pairs.append({'legA': a['player'], 'legB': b['player'],
+                              'r': round(r, 3), 'factor': round(joint / (pa * pb), 4)})
+    return factor, pairs
+
+
 @app.route('/api/parlay/build', methods=['POST'])
 def api_build_parlay():
-    """Build a parlay from selected game props."""
+    """Build a parlay from selected game props, priced from the model.
+
+    Each leg's win probability comes from the cached props-scan — the same
+    calibrated adjProb pipeline behind /api/edges/today — never a hardcoded
+    heuristic. Same-game leg pairs are correlation-adjusted from the game's
+    cached Monte Carlo correlation matrix when it's available (built by
+    /api/simulate). Legs the scan can't match get win_probability: null, and
+    the combined probability is omitted rather than fabricated from them.
+    """
     try:
         req = request.get_json() or {}
-        selections = req.get('selections', [])  # List of {game_pk, player, market, projection, side}
-        
+        selections = req.get('selections', [])  # [{game_pk, player, market, line?, side?, projection?}]
+
         if not selections:
             return jsonify({'success': False, 'error': 'No selections provided', 'parlay': None})
-        
+
+        scan_props = (_props_scan_today_payload(datetime.now(ET).strftime('%Y-%m-%d'))
+                      or {}).get('props') or []
+
         parlay = {
             'id': datetime.now().isoformat().replace(':', '').replace('.', ''),
             'created_at': datetime.now(timezone.utc).isoformat(),
             'selections': [],
-            'implied_odds': 1.0,
-            'american_odds': 100,
-            'summary': {'leg_count': 0, 'break_even_prob': 0.0}
+            'implied_odds': None,
+            'american_odds': None,
+            'summary': {'leg_count': 0, 'break_even_prob': None,
+                        'unmatched_legs': 0, 'correlation_applied': False},
         }
-        
-        # Build each leg
-        prob_product = 1.0
+
+        matched_by_game = {}
+        unmatched = 0
         for sel in selections:
             game_pk = sel.get('game_pk')
             player = sel.get('player')
             market = sel.get('market')
-            raw_proj = sel.get('projection', 0)
-            try:
-                # Handle 'N/A', None, or other non-numeric projections
-                if raw_proj in (None, '', '-.--', '.---', 'N/A'):
-                    projection = 0.0
-                else:
-                    projection = float(raw_proj)
-            except Exception:
-                projection = 0.0
             side = sel.get('side', 'Over')
-            
-            # Estimate win probability
-            if market in ('batter_hits', 'batter_home_runs', 'batter_rbis'):
-                # Simple heuristic: projection value → probability
-                base_prob = 0.55 if projection >= 0.5 else 0.45
-            elif market == 'pitcher_strikeouts':
-                base_prob = 0.56 if projection >= 6.5 else 0.45
-            else:
-                base_prob = 0.52
-            
-            parlay['selections'].append({
+            prob, row = _parlay_leg_prob_from_scan(
+                scan_props, game_pk, player, market, sel.get('line'), side)
+            leg = {
                 'game_pk': game_pk,
                 'player': player,
                 'market': market,
-                'projection': projection,
+                'line': (row or {}).get('line', sel.get('line')),
                 'side': side,
-                'win_probability': base_prob,
-                'american_odds': _prob_to_american(base_prob)
-            })
-            
-            prob_product *= base_prob
-        
-        # Calculate parlay odds
+                'win_probability': prob,
+                'american_odds': _prob_to_american(prob) if prob else None,
+                'prob_source': 'model' if prob is not None else None,
+            }
+            parlay['selections'].append(leg)
+            if prob is None:
+                unmatched += 1
+            else:
+                matched_by_game.setdefault(str(game_pk or ''), []).append(leg)
+
+        # Combined probability: independent product across games, then a
+        # pairwise correlation factor within each game where the MC matrix
+        # is cached. Fabricate nothing: any unmatched leg voids the combo.
+        corr_pairs = []
+        prob_product = 1.0
+        for gpk, legs in matched_by_game.items():
+            for leg in legs:
+                prob_product *= leg['win_probability']
+            if len(legs) >= 2:
+                try:
+                    f, pairs = _parlay_same_game_corr_factor(int(gpk), legs)
+                except (TypeError, ValueError):
+                    f, pairs = 1.0, []
+                prob_product *= f
+                corr_pairs.extend(pairs)
+        prob_product = max(0.0001, min(0.9999, prob_product))
+
         parlay['summary']['leg_count'] = len(parlay['selections'])
-        parlay['summary']['break_even_prob'] = round(prob_product, 4)
-        parlay['implied_odds'] = round(prob_product, 4)
-        parlay['american_odds'] = _prob_to_american(prob_product)
-        
+        parlay['summary']['unmatched_legs'] = unmatched
+        parlay['summary']['correlation_applied'] = bool(corr_pairs)
+        if corr_pairs:
+            parlay['summary']['correlation_pairs'] = corr_pairs
+        if unmatched == 0 and matched_by_game:
+            parlay['summary']['break_even_prob'] = round(prob_product, 4)
+            parlay['implied_odds'] = round(prob_product, 4)
+            parlay['american_odds'] = _prob_to_american(prob_product)
+        else:
+            parlay['summary']['note'] = (
+                f"{unmatched} leg(s) not found in today's props scan — "
+                "combined odds omitted rather than estimated.")
+
         return jsonify({
             'success': True,
             'parlay': parlay
@@ -22188,6 +22291,30 @@ def _batter_hand_note(batter, pitcher_hand):
 
 
 # ── Batter projection engine (v2 — platoon-aware) ────────────────────────────
+def _wx_proj_mults(weather):
+    """Directional weather multipliers for the analytic batter projections.
+
+    Returns (hit_mult, tb_mult, hr_mult). Wind uses the SIGNED out-to-CF
+    component (`wind_out`, computed against the park's real CF bearing by
+    _wind_field_geometry at fetch time) — never raw wind speed, which treated
+    a 20 mph wind blowing IN as a hitting boost. Magnitudes mirror
+    build_weather_multipliers (the MC sim path): HR ≈ +0.8%/°F and ±0.4%/mph
+    of out-wind; hits are far less weather-sensitive. Unknown direction
+    (wind_out absent) counts the wind as neutral, never as a boost.
+    """
+    if not weather or weather.get("dome"):
+        return 1.0, 1.0, 1.0
+    temp_delta = _clamp(_safe_f(weather.get("temp"), 72) - 72.0, -40.0, 30.0)
+    try:
+        along = float(weather.get("wind_out")) if weather.get("wind_out") is not None else 0.0
+    except (TypeError, ValueError):
+        along = 0.0
+    hit_mult = _clamp(1.0 + temp_delta * 0.002 + along * 0.001, 0.94, 1.06)
+    tb_mult  = _clamp(1.0 + temp_delta * 0.004 + along * 0.002, 0.90, 1.10)
+    hr_mult  = _clamp(1.0 + temp_delta * 0.008 + along * 0.004, 0.80, 1.25)
+    return hit_mult, tb_mult, hr_mult
+
+
 def _project_batter(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_sv,
                     park_factor, weather, pitcher_hand='R'):
     """
@@ -22242,13 +22369,8 @@ def _project_batter(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_sv,
         platoon_k_mod = 1.0   # switch hitter, neutral
     k_adj *= platoon_k_mod
 
-    # ── Weather multiplier ────────────────────────────────────────────────────
-    dome      = weather.get("dome", False)
-    wx_mult   = 1.0
-    if not dome:
-        temp_f   = _safe_f(weather.get("temp"), 72)
-        wind_spd = _safe_f(weather.get("wind_speed"), 0)
-        wx_mult  = 1.0 + (temp_f - 72) * 0.003 + min(0.06, float(wind_spd) * 0.003)
+    # ── Weather multipliers (directional wind — see _wx_proj_mults) ──────────
+    wx_hit_mult, wx_tb_mult, wx_hr_mult = _wx_proj_mults(weather)
 
     # ── Expected PA by slot ───────────────────────────────────────────────────
     slot   = int(batter.get("slot") or 5)
@@ -22256,15 +22378,15 @@ def _project_batter(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_sv,
 
     # ── Projections ───────────────────────────────────────────────────────────
     # Hits: platoon avg replaces season avg as base
-    hits_proj = round(max(0.05, avg * exp_pa * pit_mult * k_adj * park_factor * wx_mult), 3)
+    hits_proj = round(max(0.05, avg * exp_pa * pit_mult * k_adj * park_factor * wx_hit_mult), 3)
 
     # Total Bases: built from platoon slg
-    tb_proj   = round(max(0.08, slg * exp_pa * pit_mult * k_adj * park_factor * wx_mult), 3)
+    tb_proj   = round(max(0.08, slg * exp_pa * pit_mult * k_adj * park_factor * wx_tb_mult), 3)
 
     # HR: platoon-adjusted hr rate + barrel bonus + park + weather
     hr_pf     = min(1.30, park_factor * 1.08)
     hr_proj   = round(max(0.005,
-        hr_r_adj * exp_pa * hr_pf * (1.0 + (brl - 0.06) * 0.8) * wx_mult
+        hr_r_adj * exp_pa * hr_pf * (1.0 + (brl - 0.06) * 0.8) * wx_hr_mult
     ), 4)
 
     # RBI: correlated to hits+HR, slot bonus
@@ -22406,13 +22528,13 @@ def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_s
     park_edge    = (park_factor - 1.0)
     park_contrib = park_edge * W["park"]
 
-    # ── COMPONENT 6: Weather ──────────────────────────────────────────────────
-    dome     = weather.get("dome", False)
-    temp_f   = _safe_f(weather.get("temp"), 72) if not dome else 72
-    wind_spd = _safe_f(weather.get("wind_speed"), 0) if not dome else 0
-    wx_raw   = (temp_f - 72) * 0.003 + min(0.06, float(wind_spd) * 0.003)
-    wx_mult  = 1.0 + wx_raw                   # hard multiplier used in final stats
-    wx_edge  = wx_raw
+    # ── COMPONENT 6: Weather (directional wind — see _wx_proj_mults) ─────────
+    # Uses the signed out-to-CF wind component instead of raw speed: a wind
+    # blowing in now SUPPRESSES instead of boosting. The mid-sensitivity TB
+    # multiplier doubles as the composite's weather edge; hits/HR get their
+    # own multipliers at the final projection step below.
+    wx_hit_mult, wx_tb_mult, wx_hr_mult = _wx_proj_mults(weather)
+    wx_edge  = wx_tb_mult - 1.0
     wx_contrib = wx_edge * W["weather"]
 
     # ── COMPONENT 7: Pitcher resistance ──────────────────────────────────────
@@ -22434,14 +22556,21 @@ def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_s
     pitcher_contrib = pitcher_edge * W["pitcher"]
 
     # ── COMPONENT 8: Recent form (L7) + year-over-year trend ──────────────────
+    # Shrink the raw L7 wOBA toward league average (100-PA prior) before
+    # computing the edge — a 7-game window is ~25-30 PA, and the raw value
+    # saturated the ±25% clamp on any ordinary hot/cold week. The form
+    # builder computes this shrink for display; recompute it here from
+    # raw_woba + pa so the projection uses the same regressed estimate.
     form_edge   = 0.0
     form_label  = "no data"
     if form and isinstance(form, dict):
         l7 = form.get("l7") or {}
         rw = l7.get("raw_woba") if l7 else None
-        if rw is not None:
-            form_edge  = _clamp((rw - _LEAGUE_WOBA) / _LEAGUE_WOBA, -0.25, 0.25)
-            form_label = f"L7 wOBA {rw:.3f}"
+        l7_pa = int(l7.get("pa") or 0) if l7 else 0
+        if rw is not None and l7_pa > 0:
+            sw = _shrink(float(rw), l7_pa, _LEAGUE_WOBA, _SHRINK_PA_FORM)
+            form_edge  = _clamp((sw - _LEAGUE_WOBA) / _LEAGUE_WOBA, -0.25, 0.25)
+            form_label = f"L7 wOBA {rw:.3f} (shrunk {sw:.3f}, {l7_pa} PA)"
     # Year-over-year skill trend from the real FanGraphs 2021-2026 data: the
     # change in season wOBA vs the player's PRIOR season is a genuine step
     # forward/back that L7 recent form alone misses. Bounded tighter than L7 and
@@ -22532,7 +22661,7 @@ def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_s
     composite = _clamp(1.0 + delta, 0.55, 1.55)
 
     # ── Projections ──────────────────────────────────────────────────────────
-    # Use wx_mult separately to preserve existing weather logic; pit_mult/k_adj 
+    # Weather multipliers applied per-market (hits/tb/hr sensitivity differs); pit_mult/k_adj
     # are already baked into pitcher_contrib → composite.
     # Keep legacy structure: hits, tb, hr, rbi, r, hrr
 
@@ -22544,14 +22673,14 @@ def _project_batter_batx(batter, opp_pitcher_name, opp_pitcher_fg, opp_pitcher_s
     # excluded (fielding can't take back a ball over the fence).
     def_factor = _clamp(float(def_factor or 1.0), 0.90, 1.10)
 
-    hits_proj = round(max(0.05, avg_blend * exp_pa * composite * wx_mult * def_factor), 3)
-    tb_proj   = round(max(0.08, slg       * exp_pa * composite * wx_mult * def_factor), 3)
+    hits_proj = round(max(0.05, avg_blend * exp_pa * composite * wx_hit_mult * def_factor), 3)
+    tb_proj   = round(max(0.08, slg       * exp_pa * composite * wx_tb_mult * def_factor), 3)
 
     hr_pf   = _clamp(park_factor * 1.08, 0.80, 1.35)
     pull_park_boost = 1.0 + (max(0.0, pull_edge) * max(0.0, park_factor - 1.0) * 1.25)
     pull_park_boost = _clamp(pull_park_boost, 0.95, 1.25)
     hr_proj = round(max(0.005,
-        hr_r_adj * exp_pa * hr_pf * (1.0 + (sv_brl - _LEAGUE_BRL_PCT) * 0.8) * pull_park_boost * wx_mult
+        hr_r_adj * exp_pa * hr_pf * (1.0 + (sv_brl - _LEAGUE_BRL_PCT) * 0.8) * pull_park_boost * wx_hr_mult
     ), 4)
 
     slot_rbi_bonus = max(0.8, 1.0 + (4 - abs(slot - 4)) * 0.03)
