@@ -1325,6 +1325,21 @@ async function loadModelRecordBanner() {
         return `<span class="trec-bar-pill ${cls}">${lbl} ${pct}% ${icon}</span>`;
       });
     if (!pills.length) return;
+    // Verdict-tier track record: is STRONG BET actually beating LEAN OVER in
+    // production? Picks are graded on the Over side, so the FADE tiers hitting
+    // LESS often than the BET tiers is the model discriminating correctly.
+    const V_ORDER = ['STRONG_BET', 'LEAN_OVER', 'PASS', 'LEAN_UNDER', 'STRONG_FADE'];
+    const vPills = V_ORDER
+      .map(v => [v, (d.by_verdict || {})[v]])
+      .filter(([, s]) => s && s.graded >= 5)
+      .map(([v, s]) => {
+        const pct = Math.round(s.hit_rate * 100);
+        const lbl = v.replace(/_/g, ' ');
+        return `<span class="mi-verdict ${MI_VERDICT[v] || 'mi-gray'}" style="font-size:.52rem" title="${s.wins}-${s.losses} on Over picks carrying this verdict (30d)">${lbl} ${pct}% <span style="opacity:.6">(${s.graded})</span></span>`;
+      });
+    if (vPills.length) {
+      pills.push(`<span class="trec-bar-lbl" style="margin-left:6px">BY VERDICT</span>`, ...vPills);
+    }
     gel('trecBarPills').innerHTML = pills.join('');
     if (d.total_graded) gel('trecBarNote').textContent = `${d.total_graded} GRADED · 30d`;
     gel('trecBar').style.display = '';
@@ -3653,21 +3668,7 @@ function batterCard(b) {
         }
         moveHtml = `<span style="color:${mvCol};font-size:.6rem;font-family:'JetBrains Mono',monospace" title="vs opening ${bestOpen}">${mvDir}${mvStr}</span>${steamBadge}`;
       }
-      // Build sparkline SVG from priceHistory if ≥2 points
-      let sparkHtml = '';
-      if (bestHistory && bestHistory.length >= 2) {
-        const prices = bestHistory.map(pt => pt[1]);
-        const mn = Math.min(...prices), mx = Math.max(...prices);
-        const rng = mx - mn || 1;
-        const W = 48, H = 18;
-        const pts = prices.map((p, i) => {
-          const x = Math.round(i / (prices.length - 1) * W);
-          const y = Math.round(H - ((p - mn) / rng) * H);
-          return `${x},${y}`;
-        }).join(' ');
-        const lineCol = prices[prices.length-1] > prices[0] ? '#00e676' : prices[prices.length-1] < prices[0] ? '#f44336' : '#6a8db0';
-        sparkHtml = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="flex-shrink:0;vertical-align:middle;margin:0 2px" title="Price history"><polyline points="${pts}" fill="none" stroke="${lineCol}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
-      }
+      const sparkHtml = priceSparkSvg(bestHistory);
       return `<div style="display:flex;align-items:center;gap:8px;padding:5px 10px;margin:6px 0 2px;background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.12);border-radius:8px;font-size:.63rem">
         <span style="color:var(--mu)">BEST ODDS</span>
         <span style="${pxCls};font-weight:700;font-family:'JetBrains Mono',monospace">${pxStr}</span>
@@ -4063,6 +4064,17 @@ function miCalChip(status) {
   if (status === 'warming_up') return `<span class="mi-chip" title="Not enough graded picks yet to recalibrate this market">◎ CAL WARMING UP</span>`;
   return '';
 }
+function miBlendChip(marketKey) {
+  // Learned model-vs-market blend weight (market_blend_learner): how much the
+  // displayed probability trusts our model vs the de-vig'd market price.
+  const bw = CAL_INFO && CAL_INFO.blend_weights && CAL_INFO.blend_weights[marketKey];
+  if (!bw || bw.weight == null) return '';
+  const w = Math.round(bw.weight * 100);
+  const learned = bw.kind === 'learned';
+  const tip = `Blend: ${w}% model / ${100 - w}% market price`
+    + (learned ? ` — Brier-fitted from ${bw.n} graded picks` : ` — hand-tuned prior${bw.n ? ` (${bw.n} graded, learns at 60)` : ''}`);
+  return `<span class="mi-chip ${learned ? 'info' : ''}" title="${esc(tip)}">⚖ MODEL W ${w}%</span>`;
+}
 function modelIntelPanel(best) {
   if (!best || best.adjProb == null) return '';
   const prob = Number(best.adjProb);
@@ -4097,7 +4109,7 @@ function modelIntelPanel(best) {
       ${(lo != null && hi != null) ? `<span style="color:var(--mu)">CI ${(lo*100).toFixed(0)}–${(hi*100).toFixed(0)}%</span>` : ''}
     </div>
     ${mcRow}
-    <div class="mi-chips">${miSourceChip(best.modelSource ?? (best.xgbKProb != null ? 'xgb_blend' : null))}${miConsensusChip(best)}${miCalChip(best.calStatus)}</div>
+    <div class="mi-chips">${miSourceChip(best.modelSource ?? (best.xgbKProb != null ? 'xgb_blend' : null))}${miConsensusChip(best)}${miCalChip(best.calStatus)}${miBlendChip(best.marketKey)}</div>
     ${best.reason ? `<div class="mi-reason">${esc(best.reason)}</div>` : ''}
   </div>`;
 }
@@ -4123,6 +4135,21 @@ function toggleDensity() {
   applyDensity();
 }
 
+// ── Price-history sparkline (shared by the best-odds pill + heat strip) ───────
+function priceSparkSvg(history, W = 48, H = 18) {
+  if (!Array.isArray(history) || history.length < 2) return '';
+  const prices = history.map(pt => pt[1]);
+  const mn = Math.min(...prices), mx = Math.max(...prices);
+  const rng = mx - mn || 1;
+  const pts = prices.map((p, i) => {
+    const x = Math.round(i / (prices.length - 1) * W);
+    const y = Math.round(H - ((p - mn) / rng) * H);
+    return `${x},${y}`;
+  }).join(' ');
+  const lineCol = prices[prices.length-1] > prices[0] ? '#00e676' : prices[prices.length-1] < prices[0] ? '#f44336' : '#6a8db0';
+  return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="flex-shrink:0;vertical-align:middle;margin:0 2px" title="Price history"><polyline points="${pts}" fill="none" stroke="${lineCol}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+}
+
 // ── Market Heat strip ─────────────────────────────────────────────────────────
 // Slate-wide odds-movement summary from the oddsMarkets each player already
 // carries: a ≥10-cent move against the bettor = steam (money on the over), a
@@ -4138,6 +4165,7 @@ function renderMarketHeat(d) {
         name: pl.name, move: Number(m.lineMove), line: m.line,
         mkt: MKT_LABELS[m.marketKey] || m.marketKey,
         price: m.overPrice, book: m.overBook,
+        open: m.openingOverPrice, history: m.priceHistory,
       });
     });
   });
@@ -4145,13 +4173,15 @@ function renderMarketHeat(d) {
   movers.sort((a, b) => Math.abs(b.move) - Math.abs(a.move));
   const steams = movers.filter(m => m.move < 0);
   const shifts = movers.filter(m => m.move > 0);
+  const fmtAm = v => v == null ? '?' : (v > 0 ? '+' + v : String(v));
   const pill = m => {
     const steam = m.move < 0;
-    const tip = steam
+    const tip = (steam
       ? `Over price moved ${Math.abs(m.move)} cents against the bettor since open — heavy action on the over`
-      : `Over price improved ${Math.abs(m.move)} cents since open — possible reverse line movement`;
+      : `Over price improved ${Math.abs(m.move)} cents since open — possible reverse line movement`)
+      + ` (${fmtAm(m.open)} → ${fmtAm(m.price)})`;
     return `<span class="heat-pill ${steam ? 'heat-steam' : 'heat-shift'}" title="${esc(tip)}">
-      ${steam ? '🔥' : '📈'} ${esc(m.name)} · ${esc(m.mkt)} ${m.line ?? ''} <strong>${m.move > 0 ? '+' : ''}${m.move}¢</strong></span>`;
+      ${steam ? '🔥' : '📈'} ${esc(m.name)} · ${esc(m.mkt)} ${m.line ?? ''} <strong>${m.move > 0 ? '+' : ''}${m.move}¢</strong>${priceSparkSvg(m.history, 36, 12)}</span>`;
   };
   el.innerHTML = `<span class="heat-lbl">📡 MARKET HEAT</span>
     <span class="heat-sum">${steams.length} STEAMING · ${shifts.length} SHIFTED</span>
@@ -4164,10 +4194,12 @@ function renderMarketHeat(d) {
 // Surfaces /api/calibration/markets drift_alerts: markets whose stacked-model
 // cohort is measurably miscalibrated right now, so displayed edges there
 // shouldn't be trusted until the calibrator re-fits.
+let CAL_INFO = null;   // /api/calibration/markets payload (blend weights, drift, cap)
 async function loadDriftGuard() {
   try {
     const r = await fetch('/api/calibration/markets');
     const d = await r.json();
+    if (d && d.success) CAL_INFO = d;
     const alerts = (d && d.success && Array.isArray(d.drift_alerts)) ? d.drift_alerts : [];
     const el = gel('driftBanner');
     if (!el) return;

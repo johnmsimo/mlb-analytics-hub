@@ -18412,10 +18412,33 @@ def api_tracker_model_record():
     if 'pitcher_strikeouts' in record and 'k' not in record:
         record['k'] = record['pitcher_strikeouts']
 
+    # Hit rate by stacked-calibrator verdict tier — does STRONG_BET actually
+    # outperform LEAN_OVER in production? Only stacked rows carry a verdict;
+    # picks are graded on the Over side, so the FADE tiers hitting *less* often
+    # than the BET tiers is the model working.
+    by_verdict = {}
+    for e in graded:
+        v = e.get('stackVerdict')
+        if not v:
+            continue
+        by_verdict.setdefault(v, {'wins': 0, 'losses': 0})
+        if e.get('grade') == 'win':
+            by_verdict[v]['wins'] += 1
+        else:
+            by_verdict[v]['losses'] += 1
+    verdict_record = {}
+    for v, c in by_verdict.items():
+        total = c['wins'] + c['losses']
+        verdict_record[v] = {
+            'wins': c['wins'], 'losses': c['losses'], 'graded': total,
+            'hit_rate': round(c['wins'] / total, 3) if total else 0.0,
+        }
+
     return jsonify({
         'success': True,
         'record': record,
         'summary': summary,
+        'by_verdict': verdict_record,
         'window': 30,
         'total_graded': len(graded),
     })
