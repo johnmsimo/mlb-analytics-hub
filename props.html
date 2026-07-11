@@ -400,6 +400,19 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .tool-btn:hover{border-color:rgba(0,229,255,.5);background:rgba(0,229,255,.13)}
 /* ── Density toggle: COMPACT hides deep-detail panels for fast scanning ── */
 .batter-grid.compact .batx-panel,.batter-grid.compact .hr-toggle,.batter-grid.compact .hr-profile,.batter-grid.compact .trend-row,.batter-grid.compact .parlay-row,.batter-grid.compact .mi-reason,.batter-grid.compact .mi-chips,.batter-grid.compact .form-recent-row{display:none}
+/* ── Market Heat strip (slate-wide steam/shift from odds movement) ── */
+.heat-strip{display:none;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;padding:10px 14px;background:rgba(0,0,0,.25);border:1px solid rgba(255,152,0,.18);border-radius:12px}
+.heat-strip.show{display:flex}
+.heat-lbl{font-family:'Orbitron',monospace;font-size:.6rem;letter-spacing:2px;color:var(--o);white-space:nowrap}
+.heat-sum{font-family:'Orbitron',monospace;font-size:.56rem;color:var(--mu);letter-spacing:.8px}
+.heat-pill{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;border:1px solid;font-family:'Orbitron',monospace;font-size:.54rem;letter-spacing:.5px;cursor:default}
+.heat-steam{background:rgba(255,152,0,.1);border-color:rgba(255,152,0,.4);color:#ffb74d}
+.heat-shift{background:rgba(0,230,118,.08);border-color:rgba(0,230,118,.32);color:var(--g)}
+/* ── Calibration drift-guard banner ── */
+.drift-banner{display:none;align-items:flex-start;gap:10px;padding:10px 12px;border-radius:10px;margin:0 0 12px;background:rgba(255,82,82,.07);border:1px solid rgba(255,82,82,.3)}
+.drift-banner.show{display:flex}
+.drift-title{font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:1px;color:#ff8a80;font-weight:700}
+.drift-detail{font-size:.66rem;color:var(--t);line-height:1.5}
 /* ── Sortable value-table headers ── */
 .vtbl th.vb-sort{cursor:pointer;user-select:none;transition:color .15s}
 .vtbl th.vb-sort:hover,.vtbl th.vb-sort.on{color:var(--c)}
@@ -731,6 +744,15 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
       </div>
     </div>
 
+    <!-- ── Calibration drift-guard banner (from /api/calibration/markets) ── -->
+    <div class="drift-banner" id="driftBanner">
+      <span style="font-size:1.1rem">📉</span>
+      <div>
+        <div class="drift-title">MODEL DRIFT GUARD</div>
+        <div class="drift-detail" id="driftBannerDetail"></div>
+      </div>
+    </div>
+
     <div class="tabs">
       <button class="tab active" data-tab="projections" onclick="switchTab('projections')">🎯 PROJECTIONS</button>
       <button class="tab" data-tab="matchup" onclick="switchTab('matchup')">⚔️ MATCHUP SCORES</button>
@@ -740,6 +762,8 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 
     <!-- ── PROJECTIONS ── -->
     <div class="tabpanel active" id="tab-projections">
+      <!-- ── Market Heat: slate-wide odds movement (steam / shifts) ── -->
+      <div class="heat-strip" id="marketHeatStrip"></div>
       <div class="props-picks-wrap" id="propsPicksWrap" style="display:none">
         <div class="props-picks-hd">⭐ TOP PICKS &amp; PARLAY RECOMMENDATION <span id="picksEngineTag" style="font-size:.5rem;font-family:sans-serif;opacity:.6;letter-spacing:0">BAT X ENGINE</span></div>
         <div id="propsPicksPanel"><div class="props-pr-empty">Loading projections…</div></div>
@@ -1181,6 +1205,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadModelRecordBanner();
   loadHotHandWidget();
   loadEdgesWidget();
+  loadDriftGuard();
 });
 
 // ── Top Edges widget ──────────────────────────────────────────────────────────
@@ -2025,6 +2050,7 @@ async function loadProjections() {
 function renderProj(d) {
   renderInjuryBanner(d);
   renderMajorMarketsPanel(d.game_lines || {});
+  renderMarketHeat(d);
   applyPFFilters();
   renderPitchers(d.pitchers || []);
   buildPropsPicksPanel(d);
@@ -3770,12 +3796,15 @@ function pitcherPanel(p) {
       Opp K%: <span>${p.opp_k_pct?(p.opp_k_pct*100).toFixed(1)+'%':'—'}</span>
       &nbsp;·&nbsp; Opp wOBA: <span>${p.opp_woba?Number(p.opp_woba).toFixed(3):'—'}</span>
     </div>
+    ${modelIntelPanel(PLAYER_BEST_PROP[(p.name||'').toLowerCase()])}
     ${pitchXPanel(p, pr)}
-    ${pr.k != null ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px">
+    ${pr.k != null ? `<div class="parlay-row" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px">
       ${[3.5, 4.5, 5.5, 6.5].map(line => `<button class="save-btn parlay-btn" data-player="${esc(p.name||'')}" data-team="${esc(p.team||'')}" data-market-key="pitcher_strikeouts" data-line="${line}" data-game-pk="${p.gamePk||''}">＋ K ${line}</button>`).join('')}
     </div>` : ''}
-    <button class="ls-btn" onclick="openLineShop('${(p.name||'').replace(/'/g,"\\'")}', ${p.gamePk || 'null'}, ${pid || 'null'}, 'pitcher')"><span>📚 LINE SHOPPING</span><span>OPEN ▸</span></button>
-    <button class="ls-btn" onclick="openHitHistory(${pid||'null'}, '${(p.name||'').replace(/'/g,"\\'")}', 'pitcher')"><span>📊 K HIT HISTORY</span><span>OPEN ▸</span></button>
+    <div class="bcard-tools" style="grid-template-columns:repeat(2,1fr)">
+      <button class="tool-btn" onclick="openLineShop('${(p.name||'').replace(/'/g,"\\'")}', ${p.gamePk || 'null'}, ${pid || 'null'}, 'pitcher')" title="Line shopping — book-by-book K prices">📚 LINE SHOPPING</button>
+      <button class="tool-btn" onclick="openHitHistory(${pid||'null'}, '${(p.name||'').replace(/'/g,"\\'")}', 'pitcher')" title="Game-by-game K prop history">📊 K HISTORY</button>
+    </div>
     ${trnd}
   </div>`;
 }
@@ -4017,10 +4046,13 @@ function miSourceChip(src) {
   return `<span class="mi-chip" title="Analytic / Monte Carlo projection">ANALYTIC</span>`;
 }
 function miConsensusChip(row) {
-  const x = row && row.xgbProb, b = row && row.batxProb;
+  // Batter markets persist xgbProb/batxProb; the pitcher K rows persist
+  // xgbKProb/mcKProb instead — same XGB-vs-analytic comparison.
+  const x = row && (row.xgbProb ?? row.xgbKProb);
+  const b = row && (row.batxProb ?? row.mcKProb);
   if (x == null || b == null) return '';
   const d = Math.abs(x - b);
-  const tip = `XGB ${(x*100).toFixed(1)}% vs BATX ${(b*100).toFixed(1)}%`;
+  const tip = `XGB ${(x*100).toFixed(1)}% vs ${row.xgbProb != null ? 'BATX' : 'MC'} ${(b*100).toFixed(1)}%`;
   if (d <= 0.06) return `<span class="mi-chip good" title="${tip}">✓ MODELS AGREE</span>`;
   if (d <= 0.12) return `<span class="mi-chip" title="${tip}">≈ MILD SPLIT ±${(d*100).toFixed(0)}</span>`;
   return `<span class="mi-chip warn" title="${tip} — treat the fused probability with caution">⚠ MODELS SPLIT ±${(d*100).toFixed(0)}</span>`;
@@ -4047,6 +4079,13 @@ function modelIntelPanel(best) {
   const edge = best.edge != null ? Number(best.edge) : null;
   const edgeStr = edge != null ? (edge > 0 ? '+' : '') + (edge * 100).toFixed(1) + '%' : '—';
   const edgeCol = edge == null ? 'var(--mu)' : edge > 0.02 ? 'var(--g)' : edge < -0.02 ? 'var(--r)' : 'var(--mu)';
+  // Monte Carlo distribution readout (tracker rows carry the sim percentiles)
+  const mcRow = (best.mc_mean != null && best.mc_p10 != null && best.mc_p90 != null)
+    ? `<div class="mi-stats" style="margin-top:4px;color:var(--mu)" title="Monte Carlo simulated stat distribution for this market">
+        <span>MC SIM μ ${Number(best.mc_mean).toFixed(2)}</span>
+        <span>80% RANGE ${best.mc_p10}–${best.mc_p90}</span>
+        ${best.mc_n_sims ? `<span>${Math.round(best.mc_n_sims/1000)}K SIMS</span>` : ''}
+      </div>` : '';
   return `<div class="mi-panel">
     <div class="mi-hd"><span class="mi-mkt">🧠 MODEL INTEL · ${esc(mkLbl)}${line}</span>${verdictBadge(best)}</div>
     <div class="mi-track">${ciBand}${mktMark}<div class="mi-mark model" style="left:${pos(prob)}%" title="Model ${(prob*100).toFixed(1)}%"></div></div>
@@ -4057,7 +4096,8 @@ function modelIntelPanel(best) {
       <span style="color:${edgeCol}">EDGE ${edgeStr}</span>
       ${(lo != null && hi != null) ? `<span style="color:var(--mu)">CI ${(lo*100).toFixed(0)}–${(hi*100).toFixed(0)}%</span>` : ''}
     </div>
-    <div class="mi-chips">${miSourceChip(best.modelSource)}${miConsensusChip(best)}${miCalChip(best.calStatus)}</div>
+    ${mcRow}
+    <div class="mi-chips">${miSourceChip(best.modelSource ?? (best.xgbKProb != null ? 'xgb_blend' : null))}${miConsensusChip(best)}${miCalChip(best.calStatus)}</div>
     ${best.reason ? `<div class="mi-reason">${esc(best.reason)}</div>` : ''}
   </div>`;
 }
@@ -4081,6 +4121,67 @@ function toggleDensity() {
   const next = mode === 'compact' ? 'detailed' : 'compact';
   try { localStorage.setItem(DENSITY_LS_KEY, next); } catch (e) {}
   applyDensity();
+}
+
+// ── Market Heat strip ─────────────────────────────────────────────────────────
+// Slate-wide odds-movement summary from the oddsMarkets each player already
+// carries: a ≥10-cent move against the bettor = steam (money on the over), a
+// ≥10-cent improvement = shift (possible reverse line movement / value).
+function renderMarketHeat(d) {
+  const el = gel('marketHeatStrip');
+  if (!el) return;
+  const movers = [];
+  [...(d.batters || []), ...(d.pitchers || [])].forEach(pl => {
+    (pl.oddsMarkets || []).forEach(m => {
+      if (m.lineMove == null || Math.abs(m.lineMove) < 10) return;
+      movers.push({
+        name: pl.name, move: Number(m.lineMove), line: m.line,
+        mkt: MKT_LABELS[m.marketKey] || m.marketKey,
+        price: m.overPrice, book: m.overBook,
+      });
+    });
+  });
+  if (!movers.length) { el.classList.remove('show'); el.innerHTML = ''; return; }
+  movers.sort((a, b) => Math.abs(b.move) - Math.abs(a.move));
+  const steams = movers.filter(m => m.move < 0);
+  const shifts = movers.filter(m => m.move > 0);
+  const pill = m => {
+    const steam = m.move < 0;
+    const tip = steam
+      ? `Over price moved ${Math.abs(m.move)} cents against the bettor since open — heavy action on the over`
+      : `Over price improved ${Math.abs(m.move)} cents since open — possible reverse line movement`;
+    return `<span class="heat-pill ${steam ? 'heat-steam' : 'heat-shift'}" title="${esc(tip)}">
+      ${steam ? '🔥' : '📈'} ${esc(m.name)} · ${esc(m.mkt)} ${m.line ?? ''} <strong>${m.move > 0 ? '+' : ''}${m.move}¢</strong></span>`;
+  };
+  el.innerHTML = `<span class="heat-lbl">📡 MARKET HEAT</span>
+    <span class="heat-sum">${steams.length} STEAMING · ${shifts.length} SHIFTED</span>
+    ${movers.slice(0, 5).map(pill).join('')}
+    ${movers.length > 5 ? `<span class="heat-sum">+${movers.length - 5} MORE</span>` : ''}`;
+  el.classList.add('show');
+}
+
+// ── Calibration drift guard ───────────────────────────────────────────────────
+// Surfaces /api/calibration/markets drift_alerts: markets whose stacked-model
+// cohort is measurably miscalibrated right now, so displayed edges there
+// shouldn't be trusted until the calibrator re-fits.
+async function loadDriftGuard() {
+  try {
+    const r = await fetch('/api/calibration/markets');
+    const d = await r.json();
+    const alerts = (d && d.success && Array.isArray(d.drift_alerts)) ? d.drift_alerts : [];
+    const el = gel('driftBanner');
+    if (!el) return;
+    if (!alerts.length) { el.classList.remove('show'); return; }
+    const items = alerts.map(a => {
+      const lbl = MKT_LABELS[a.marketKey] || a.marketKey;
+      const dir = a.direction === 'overconfident' ? 'model over-confident'
+                : a.direction === 'underconfident' ? 'model under-confident' : 'miscalibrated';
+      return `<strong>${esc(lbl)}</strong> (${dir}${a.n_stacked ? `, n=${a.n_stacked}` : ''}${a.reason ? ` — ${esc(a.reason)}` : ''})`;
+    }).join(' · ');
+    gel('driftBannerDetail').innerHTML =
+      `${items}. Displayed edges in these markets are unreliable until the calibrator re-fits — treat STRONG BET verdicts there as LEANs.`;
+    el.classList.add('show');
+  } catch (e) { /* banner is best-effort */ }
 }
 
 function computeHubRating(adjProb, edge) {
@@ -4169,8 +4270,12 @@ async function loadValueBets() {
     if (PROJ_DATA && gel('batterGrid') && gel('batterGrid').children.length > 0) {
       applyPFFilters();
     }
-    // Upgrade the picks panel to the calibrated edge engine now rows exist
-    if (PROJ_DATA) buildPropsPicksPanel(PROJ_DATA);
+    // Upgrade the picks panel to the calibrated edge engine now rows exist,
+    // and re-render pitcher panels so their Model Intel sections light up
+    if (PROJ_DATA) {
+      buildPropsPicksPanel(PROJ_DATA);
+      renderPitchers(PROJ_DATA.pitchers || []);
+    }
     renderValueTable(VAL_FILT);
   } catch(e) {
     gel('valueTbody').innerHTML = `<tr><td colspan="15"><div class="no-tracker" style="color:var(--r)">ERROR: ${e.message}</div></td></tr>`;
