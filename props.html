@@ -371,6 +371,53 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .hr-score.ok{border-color:rgba(255,152,0,.32);background:rgba(255,152,0,.1);color:var(--o)}
 .hr-score.low{border-color:rgba(106,141,176,.3);background:rgba(106,141,176,.09);color:var(--mu)}
 
+/* ── Model Intel panel (surfaces the stacked-calibrator verdict + CI) ── */
+.mi-panel{margin-top:8px;padding:10px 12px;background:rgba(0,0,0,.28);border:1px solid rgba(0,229,255,.14);border-radius:9px}
+.mi-hd{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;flex-wrap:wrap}
+.mi-mkt{font-family:'Orbitron',monospace;font-size:.56rem;letter-spacing:1.5px;color:var(--mu)}
+.mi-verdict{display:inline-block;padding:2px 9px;border-radius:6px;font-family:'Orbitron',monospace;font-size:.56rem;font-weight:700;letter-spacing:.8px;border:1px solid}
+.mi-green{background:rgba(0,230,118,.12);border-color:rgba(0,230,118,.45);color:var(--g)}
+.mi-teal{background:rgba(0,184,212,.12);border-color:rgba(0,184,212,.4);color:var(--sv)}
+.mi-gray{background:rgba(106,141,176,.08);border-color:rgba(106,141,176,.3);color:var(--mu)}
+.mi-amber{background:rgba(255,152,0,.1);border-color:rgba(255,152,0,.38);color:var(--o)}
+.mi-red{background:rgba(244,67,54,.1);border-color:rgba(244,67,54,.38);color:var(--r)}
+.mi-track{position:relative;height:12px;background:rgba(255,255,255,.06);border-radius:6px;margin:4px 0 3px}
+.mi-ci{position:absolute;top:0;bottom:0;background:rgba(0,229,255,.16);border-radius:6px}
+.mi-mark{position:absolute;top:-2px;bottom:-2px;width:3px;border-radius:2px}
+.mi-mark.model{background:var(--c);box-shadow:0 0 6px rgba(0,229,255,.8)}
+.mi-mark.market{background:rgba(255,255,255,.55)}
+.mi-scale{display:flex;justify-content:space-between;font-size:.48rem;color:var(--mu);font-family:'Orbitron',monospace;margin-bottom:6px}
+.mi-stats{display:flex;gap:12px;flex-wrap:wrap;font-size:.6rem;font-family:'Orbitron',monospace}
+.mi-chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
+.mi-chip{display:inline-block;padding:2px 7px;border-radius:999px;font-family:'Orbitron',monospace;font-size:.48rem;letter-spacing:.8px;border:1px solid rgba(255,255,255,.14);color:var(--mu);background:rgba(0,0,0,.18);cursor:help}
+.mi-chip.good{border-color:rgba(0,230,118,.35);color:var(--g)}
+.mi-chip.warn{border-color:rgba(255,152,0,.35);color:var(--o)}
+.mi-chip.info{border-color:rgba(0,229,255,.3);color:var(--c)}
+.mi-reason{font-size:.58rem;color:var(--mu);margin-top:7px;line-height:1.45}
+/* ── Compact card tools row (replaces the stacked full-width buttons) ── */
+.bcard-tools{display:grid;grid-template-columns:repeat(5,1fr);gap:5px;margin-top:8px}
+.tool-btn{padding:6px 3px;border-radius:7px;border:1px solid rgba(0,229,255,.2);background:rgba(0,229,255,.05);color:var(--c);font-family:'Orbitron',monospace;font-size:.48rem;letter-spacing:.4px;cursor:pointer;transition:all .18s;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tool-btn:hover{border-color:rgba(0,229,255,.5);background:rgba(0,229,255,.13)}
+/* ── Density toggle: COMPACT hides deep-detail panels for fast scanning ── */
+.batter-grid.compact .batx-panel,.batter-grid.compact .hr-toggle,.batter-grid.compact .hr-profile,.batter-grid.compact .trend-row,.batter-grid.compact .parlay-row,.batter-grid.compact .mi-reason,.batter-grid.compact .mi-chips,.batter-grid.compact .form-recent-row{display:none}
+/* ── Market Heat strip (slate-wide steam/shift from odds movement) ── */
+.heat-strip{display:none;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;padding:10px 14px;background:rgba(0,0,0,.25);border:1px solid rgba(255,152,0,.18);border-radius:12px}
+.heat-strip.show{display:flex}
+.heat-lbl{font-family:'Orbitron',monospace;font-size:.6rem;letter-spacing:2px;color:var(--o);white-space:nowrap}
+.heat-sum{font-family:'Orbitron',monospace;font-size:.56rem;color:var(--mu);letter-spacing:.8px}
+.heat-pill{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;border:1px solid;font-family:'Orbitron',monospace;font-size:.54rem;letter-spacing:.5px;cursor:default}
+.heat-steam{background:rgba(255,152,0,.1);border-color:rgba(255,152,0,.4);color:#ffb74d}
+.heat-shift{background:rgba(0,230,118,.08);border-color:rgba(0,230,118,.32);color:var(--g)}
+/* ── Calibration drift-guard banner ── */
+.drift-banner{display:none;align-items:flex-start;gap:10px;padding:10px 12px;border-radius:10px;margin:0 0 12px;background:rgba(255,82,82,.07);border:1px solid rgba(255,82,82,.3)}
+.drift-banner.show{display:flex}
+.drift-title{font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:1px;color:#ff8a80;font-weight:700}
+.drift-detail{font-size:.66rem;color:var(--t);line-height:1.5}
+/* ── Sortable value-table headers ── */
+.vtbl th.vb-sort{cursor:pointer;user-select:none;transition:color .15s}
+.vtbl th.vb-sort:hover,.vtbl th.vb-sort.on{color:var(--c)}
+.vb-model{font-family:'Orbitron',monospace;font-size:.68rem;font-weight:700;color:var(--c)}
+.vb-ci{font-size:.52rem;color:var(--mu);font-family:'JetBrains Mono',monospace;display:block;margin-top:2px}
 /* ── Line Shopping ── */
 .ls-btn{margin-top:8px;width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 10px;border-radius:8px;border:1px solid rgba(0,229,255,.24);background:rgba(0,229,255,.06);color:var(--c);font-family:'Orbitron',monospace;font-size:.56rem;letter-spacing:1px;cursor:pointer;transition:all .2s}
 .ls-btn:hover{border-color:rgba(0,229,255,.45);background:rgba(0,229,255,.12)}
@@ -582,6 +629,34 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
                     padding:1px 7px; font-size:.72rem; margin-left:5px; }
 </style>
 <link rel="stylesheet" href="/static/mobile.css">
+<style>
+/* ── Props-page mobile overrides ─────────────────────────────────────────────
+   Must load AFTER mobile.css: its global `nav .nav-r{display:none}` hides this
+   page's core controls (date picker + LOAD + FULL SCAN live in .nav-r). */
+@media (max-width: 768px){
+  nav .nav-r{display:flex !important;width:100%;justify-content:flex-start}
+  nav .nav-r .back{display:none !important}   /* bottom tab bar covers nav */
+  .date-row{width:100%;flex-wrap:wrap}
+  .dinput{flex:1;min-width:130px}
+  /* sticky offsets assume the slim one-row nav; with the date row restored the
+     nav is two rows tall, so pin the sort bar statically instead */
+  .sort-sticky-wrap{position:static !important;padding:4px 0 6px !important}
+  /* edge-lab widgets + banners carry desktop 32px gutters inline */
+  #hotHandWidget,#edgesWidget{margin:10px 12px 0 !important}
+  .srcbar,.trec-bar{padding-left:12px !important;padding-right:12px !important}
+  /* page tabs + value filters: one scrollable row beats a 3-row wrap */
+  .tabs,.vcontrols{flex-wrap:nowrap !important;overflow-x:auto;scrollbar-width:none;-ms-overflow-style:none}
+  .tabs::-webkit-scrollbar,.vcontrols::-webkit-scrollbar{display:none}
+  .tab{white-space:nowrap;padding:11px 14px}
+  .vfilter{white-space:nowrap;flex:0 0 auto}
+  /* market heat: one scrollable row of pills */
+  .heat-strip.show{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+  .heat-strip::-webkit-scrollbar{display:none}
+  .heat-lbl,.heat-sum,.heat-pill{flex:0 0 auto}
+  /* best-odds pill may two-line instead of clipping at the right edge */
+  .bo-row{flex-wrap:wrap;row-gap:2px}
+}
+</style>
 </head>
 <body>
 <script src="/static/global-nav.js" defer></script>
@@ -697,6 +772,15 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
       </div>
     </div>
 
+    <!-- ── Calibration drift-guard banner (from /api/calibration/markets) ── -->
+    <div class="drift-banner" id="driftBanner">
+      <span style="font-size:1.1rem">📉</span>
+      <div>
+        <div class="drift-title">MODEL DRIFT GUARD</div>
+        <div class="drift-detail" id="driftBannerDetail"></div>
+      </div>
+    </div>
+
     <div class="tabs">
       <button class="tab active" data-tab="projections" onclick="switchTab('projections')">🎯 PROJECTIONS</button>
       <button class="tab" data-tab="matchup" onclick="switchTab('matchup')">⚔️ MATCHUP SCORES</button>
@@ -706,8 +790,10 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 
     <!-- ── PROJECTIONS ── -->
     <div class="tabpanel active" id="tab-projections">
+      <!-- ── Market Heat: slate-wide odds movement (steam / shifts) ── -->
+      <div class="heat-strip" id="marketHeatStrip"></div>
       <div class="props-picks-wrap" id="propsPicksWrap" style="display:none">
-        <div class="props-picks-hd">⭐ TOP PICKS &amp; PARLAY RECOMMENDATION <span style="font-size:.5rem;font-family:sans-serif;opacity:.6;letter-spacing:0">BAT X ENGINE</span></div>
+        <div class="props-picks-hd">⭐ TOP PICKS &amp; PARLAY RECOMMENDATION <span id="picksEngineTag" style="font-size:.5rem;font-family:sans-serif;opacity:.6;letter-spacing:0">BAT X ENGINE</span></div>
         <div id="propsPicksPanel"><div class="props-pr-empty">Loading projections…</div></div>
       </div>
       <div class="subtabs">
@@ -725,6 +811,7 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
           <button class="sort-btn" onclick="sortBatters(this,'hrr')">H+R+RBI</button>
           <button class="sort-btn" onclick="sortBatters(this,'slot')">SLOT ORDER</button>
           <button class="sort-btn watchlist-btn" id="watchlistFilterBtn" onclick="toggleWatchlistFilter(this)" title="Show only starred players">⭐ WATCHLIST (<span id="watchlistCount">0</span>)</button>
+          <button class="sort-btn" id="densityBtn" onclick="toggleDensity(this)" title="Compact hides the deep-detail panels for fast slate scanning" style="margin-left:auto">🗜 COMPACT</button>
         </div>
         <!-- ── Power Filter Bar ── -->
         <div class="pfbar" id="pfBar">
@@ -816,9 +903,14 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
       <div class="vtbl-wrap">
         <table class="vtbl">
           <thead><tr>
-            <th>PLAYER</th><th>TEAM</th><th>MARKET</th>
-            <th>BOOK LINE</th><th>PROJECTION</th><th>EDGE</th>
-            <th>IMPL PROB</th><th>EV%</th><th>HUB</th><th>KELLY½</th><th>FAIR ODDS</th><th>SLOT</th><th>BEST PRICE</th><th>SAVE</th>
+            <th class="vb-sort" data-vbk="player" onclick="sortVB('player')">PLAYER</th><th>TEAM</th><th>MARKET</th>
+            <th>BOOK LINE</th><th class="vb-sort" data-vbk="proj" onclick="sortVB('proj')">PROJECTION</th>
+            <th class="vb-sort" data-vbk="adjProb" onclick="sortVB('adjProb')">MODEL</th>
+            <th class="vb-sort" data-vbk="edge" onclick="sortVB('edge')">EDGE</th>
+            <th class="vb-sort" data-vbk="implProb" onclick="sortVB('implProb')">IMPL PROB</th>
+            <th class="vb-sort" data-vbk="evPct" onclick="sortVB('evPct')">EV%</th>
+            <th class="vb-sort" data-vbk="hubRating" onclick="sortVB('hubRating')">HUB</th>
+            <th>KELLY½</th><th>FAIR ODDS</th><th>SLOT</th><th>BEST PRICE</th><th>SAVE</th>
           </tr></thead>
           <tbody id="valueTbody"></tbody>
         </table>
@@ -1117,6 +1209,9 @@ const MKT_LABELS = {
   batter_strikeouts:'Strikeouts (B)', pitcher_walks:'Walks',
   batterhits:'Hits', batterhomeruns:'Home Runs', battertotalbases:'Total Bases',
   batterrbis:'RBI', batterhitsrunsrbis:'H+R+RBI', pitcherstrikeouts:'Strikeouts (P)', pitcherwalks:'Walks',
+  batter_hits:'Hits', batter_home_runs:'Home Runs', batter_total_bases:'Total Bases',
+  batter_rbis:'RBI', batter_runs_scored:'Runs', batter_stolen_bases:'Stolen Bases', batter_walks:'Walks (B)',
+  h2h:'Moneyline', totals:'Total', spread:'Run Line', f5_h2h:'F5 Moneyline', f5_totals:'F5 Total',
 };
 const MKT_PROJ = {
   player_hits:'hits', player_home_runs:'hr', player_total_bases:'tb',
@@ -1124,6 +1219,7 @@ const MKT_PROJ = {
   pitcher_walks:'bb', batter_strikeouts:null,
   batterhits:'hits', batterhomeruns:'hr', battertotalbases:'tb',
   batterrbis:'rbi', batterhitsrunsrbis:'hrr', pitcherstrikeouts:'k', pitcherwalks:'bb',
+  batter_hits:'hits', batter_home_runs:'hr', batter_total_bases:'tb', batter_rbis:'rbi',
 };
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
@@ -1132,10 +1228,12 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('dateInput').value = today;
   CUR_DATE = today;
   loadTrackedKeys();
+  applyDensity();
   loadGames();
   loadModelRecordBanner();
   loadHotHandWidget();
   loadEdgesWidget();
+  loadDriftGuard();
 });
 
 // ── Top Edges widget ──────────────────────────────────────────────────────────
@@ -1149,7 +1247,7 @@ async function loadEdgesWidget(){
     if(!d.success) throw new Error(d.error||'failed');
     EDG_ROWS = d.edges || [];
     const sub = document.getElementById('edgSub');
-    if(sub) sub.textContent = `${d.count} positive-value plays`;
+    if(sub) sub.textContent = `${d.count ?? EDG_ROWS.length} positive-value plays`;
     if(!EDG_ROWS.length){
       strip.innerHTML = `<span style="color:var(--mu);font-size:.7rem">No edges right now${d.computing?' (computing…)':''}.</span>`;
       if(d.computing) setTimeout(loadEdgesWidget, 6000);
@@ -1198,7 +1296,7 @@ async function loadHotHandWidget(){
     if(!d.success) throw new Error(d.error||'failed');
     HH_ROWS = d.players || [];
     const sub = document.getElementById('hhSub');
-    if(sub) sub.textContent = `${d.count} players hitting their prop in 100% of the last 5`;
+    if(sub) sub.textContent = `${d.count ?? HH_ROWS.length} players hitting their prop in 100% of the last 5`;
     if(!HH_ROWS.length){
       strip.innerHTML = `<span style="color:var(--mu);font-size:.7rem">No 100% Club members right now${d.computing?' (computing…)':''}</span>`;
       if(d.computing) setTimeout(loadHotHandWidget, 6000);
@@ -1255,6 +1353,27 @@ async function loadModelRecordBanner() {
         return `<span class="trec-bar-pill ${cls}">${lbl} ${pct}% ${icon}</span>`;
       });
     if (!pills.length) return;
+    // Verdict-tier track record: is STRONG BET actually beating LEAN OVER in
+    // production? Picks are graded on the Over side, so the FADE tiers hitting
+    // LESS often than the BET tiers is the model discriminating correctly.
+    const V_ORDER = ['STRONG_BET', 'LEAN_OVER', 'PASS', 'LEAN_UNDER', 'STRONG_FADE'];
+    const vPills = V_ORDER
+      .map(v => [v, (d.by_verdict || {})[v]])
+      .filter(([, s]) => s && s.graded >= 5)
+      .map(([v, s]) => {
+        const pct = Math.round(s.hit_rate * 100);
+        const lbl = v.replace(/_/g, ' ');
+        // ROI decides profitability, not hit rate (40% at +150 is a winner)
+        const roi = s.roi != null
+          ? ` <span style="color:${s.roi >= 0 ? 'var(--g)' : 'var(--r)'}">${s.roi >= 0 ? '+' : ''}${s.roi.toFixed(2)}u</span>`
+          : '';
+        const tip = `${s.wins}-${s.losses} on Over picks carrying this verdict (30d)`
+          + (s.roi != null ? ` · ${s.profit_units >= 0 ? '+' : ''}${s.profit_units}u total at taken prices (${s.roi >= 0 ? '+' : ''}${s.roi.toFixed(2)}u/pick)` : '');
+        return `<span class="mi-verdict ${MI_VERDICT[v] || 'mi-gray'}" style="font-size:.52rem" title="${tip}">${lbl} ${pct}%${roi} <span style="opacity:.6">(${s.graded})</span></span>`;
+      });
+    if (vPills.length) {
+      pills.push(`<span class="trec-bar-lbl" style="margin-left:6px">BY VERDICT</span>`, ...vPills);
+    }
     gel('trecBarPills').innerHTML = pills.join('');
     if (d.total_graded) gel('trecBarNote').textContent = `${d.total_graded} GRADED · 30d`;
     gel('trecBar').style.display = '';
@@ -1508,6 +1627,9 @@ async function selectGame(pk, awayAbbr, homeAbbr) {
 
   const activeTab = document.querySelector('.tab.active')?.dataset.tab || 'projections';
   await loadTab(activeTab);
+  // Eagerly cross-reference tracker rows so hub/EV badges, Model Intel panels
+  // and the calibrated picks engine light up without visiting the VALUE tab.
+  if (activeTab !== 'value' && CUR_GAME === pk) loadValueBets().catch(() => {});
 }
 
 // ── Game Conditions strip ──────────────────────────────────────────────────────
@@ -1668,7 +1790,7 @@ async function loadTab(tab) {
       return;
     }
     if (tab === 'matchup') { gel('analyzerBox').innerHTML = ''; gel('matchupCols').innerHTML = errHTML('FULL SCAN IS PROJECTIONS-ONLY. SELECT A SPECIFIC GAME FOR MATCHUP SCORES.'); }
-    if (tab === 'value') gel('valueTbody').innerHTML = `<tr><td colspan="14"><div class="no-tracker">FULL SCAN USES THE PROJECTIONS BOARD. SELECT A SPECIFIC GAME FOR TRACKER CROSS-REFERENCE.</div></td></tr>`;
+    if (tab === 'value') gel('valueTbody').innerHTML = `<tr><td colspan="15"><div class="no-tracker">FULL SCAN USES THE PROJECTIONS BOARD. SELECT A SPECIFIC GAME FOR TRACKER CROSS-REFERENCE.</div></td></tr>`;
     if (tab === 'prizepicks') { document.getElementById('ppLoading').style.display='none'; document.getElementById('ppError').style.display='block'; document.getElementById('ppError').textContent='⚠️ PrizePicks lines are independent of game selection — click Refresh to load all MLB props.'; }
     return;
   }
@@ -1977,6 +2099,7 @@ async function loadProjections() {
 function renderProj(d) {
   renderInjuryBanner(d);
   renderMajorMarketsPanel(d.game_lines || {});
+  renderMarketHeat(d);
   applyPFFilters();
   renderPitchers(d.pitchers || []);
   buildPropsPicksPanel(d);
@@ -1984,6 +2107,126 @@ function renderProj(d) {
   if (CUR_GAME && LINEUP_STATUS[CUR_GAME]?.hasChanges) {
     applyLineupStatusToCards(LINEUP_STATUS[CUR_GAME]);
   }
+}
+
+// ── Calibrated picks engine ───────────────────────────────────────────────────
+// Ranks the tracker/scan rows (market-blended, recalibrated adjProb + edge vs a
+// real book price) instead of the raw BAT X projection-vs-line heuristic.
+let SMART_PICKS = [];
+const SMART_CAT = k => (k||'').includes('strikeout') ? 'K'
+  : (k||'').includes('home_run') ? 'HR'
+  : (k||'').includes('total_base') ? 'BASES'
+  : (k||'').includes('rbi') ? 'RBI'
+  : (k||'').includes('hit') ? 'HITS' : 'OTHER';
+
+function saveSmartPick(i) {
+  const row = SMART_PICKS[i];
+  if (row) savePickDirect(row);
+}
+
+// Steam check for a pick row: the market shortening the Over price (≥10¢ move
+// against the bettor) while our model likes the Over is sharp-side confirmation.
+function smartSteamMove(r) {
+  const nk = (r.player || '').toLowerCase();
+  const mv = ODDS_MOVE[`${nk}|${r.marketKey}|${r.line}`] ?? ODDS_MOVE[`${nk}|${r.marketKey}`];
+  return (mv != null && mv <= -10) ? mv : null;
+}
+
+function buildSmartPicksHtml() {
+  const rows = (VAL_DATA || []).filter(r => r && r.marketKey && r.adjProb != null
+    && r.marketImplied != null && r.edge != null);
+  if (rows.length < 3) return null;
+  // Rank by edge; steam confirmation breaks ties ahead of hub rating.
+  const ranked = [...rows].sort((a, b) =>
+    (b.edge ?? -9) - (a.edge ?? -9)
+    || (smartSteamMove(b) != null) - (smartSteamMove(a) != null)
+    || (b.hubRating ?? 0) - (a.hubRating ?? 0));
+
+  const seen = new Set();
+  const stars = [];
+  for (const r of ranked) {
+    if (stars.length >= 3) break;
+    if ((r.edge ?? -1) <= 0) break;                       // ranked desc — nothing positive left
+    const v = r.stackVerdict || '';
+    if (v === 'STRONG_FADE' || v === 'LEAN_UNDER') continue; // model says under — not an Over pick
+    if (SMART_CAT(r.marketKey) === 'OTHER') continue;        // props only (no h2h/totals strays)
+    const k = (r.player || '').toLowerCase() + '|' + SMART_CAT(r.marketKey);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    stars.push(r);
+  }
+  if (!stars.length) return null;
+
+  // Parlay: best positive-edge leg per market family, distinct players.
+  const legs = [];
+  const legPlayers = new Set();
+  ['HITS', 'BASES', 'K', 'HR', 'RBI'].forEach(cat => {
+    const best = ranked.find(r => (r.edge ?? -1) > 0
+      && SMART_CAT(r.marketKey) === cat
+      && (r.stackVerdict || '') !== 'STRONG_FADE' && (r.stackVerdict || '') !== 'LEAN_UNDER'
+      && !legPlayers.has((r.player || '').toLowerCase()));
+    if (best) { legs.push(best); legPlayers.add((best.player || '').toLowerCase()); }
+  });
+
+  SMART_PICKS = [...stars];
+  const legOffset = SMART_PICKS.length;
+  SMART_PICKS.push(...legs);
+
+  const rankEmoji = ['🥇', '🥈', '🥉'];
+  const catColor = c => c === 'K' ? '#ce93d8' : c === 'HR' ? '#f48fb1' : c === 'BASES' ? '#80cbc4' : c === 'RBI' ? '#ffcc80' : 'var(--c)';
+  const fmtPick = r => {
+    const lbl = MKT_LABELS[r.marketKey] || r.marketKey;
+    const side = (r.recommendedSide || 'Over').toUpperCase();
+    return `${lbl} ${side} ${r.line ?? ''}`;
+  };
+  const fmtPrice = r => {
+    const px = r.bestOverPrice ?? r.marketPrice;
+    if (px == null) return '';
+    const bk = r.bestOverBook || r.bookmaker || '';
+    return `<span style="font-family:'JetBrains Mono',monospace;color:${px >= 0 ? 'var(--g)' : 'var(--mu)'}">${px > 0 ? '+' + px : px}</span>${bk ? ` <span style="color:var(--mu);font-size:.5rem">@${esc(String(bk).toUpperCase())}</span>` : ''}`;
+  };
+  const starsHtml = stars.map((r, i) => {
+    const key = pickKey(r);
+    const saved = TRACKED_KEYS.has(key);
+    const steam = smartSteamMove(r);
+    const steamTag = steam != null
+      ? `<span class="mi-chip warn" title="Over price shortened ${Math.abs(steam)}¢ since open while the model likes the Over — market moving our way (sharp-side confirmation)">🔥 STEAM CONFIRMED</span>`
+      : '';
+    return `<div class="props-pr-bet">
+      <div class="props-pr-rank">${rankEmoji[i]}</div>
+      <div class="props-pr-body">
+        <div class="props-pr-title" style="color:${catColor(SMART_CAT(r.marketKey))}">${esc(r.player || '')}${signalBadge(r.player)} <span style="color:var(--mu);font-size:.52rem">${esc(r.team || '')}</span></div>
+        <div class="props-pr-pick">${esc(fmtPick(r))} ${fmtPrice(r)}
+          <span style="font-size:.5rem;color:var(--g)">edge +${((r.edge || 0) * 100).toFixed(1)}%</span>
+          ${r.evPct != null ? `<span style="font-size:.5rem;color:${r.evPct > 0 ? 'var(--g)' : 'var(--mu)'}">EV ${(r.evPct * 100).toFixed(1)}%</span>` : ''}
+        </div>
+        <div style="margin-top:3px;display:flex;gap:5px;align-items:center;flex-wrap:wrap">
+          ${verdictBadge(r)}${miConsensusChip(r)}${steamTag}
+          <button class="save-btn${saved ? ' saved' : ''}" data-key="${key.replace(/"/g, '&quot;')}" onclick="saveSmartPick(${i})">${saved ? '✓ SAVED' : '＋ SAVE'}</button>
+        </div>
+        ${r.reason ? `<div class="props-pr-reason">${esc(r.reason)}</div>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+
+  const parlayHtml = legs.length
+    ? legs.map((r, i) => `<div class="props-pr-leg">
+        <div class="props-pr-leg-cat" style="color:${catColor(SMART_CAT(r.marketKey))}">${SMART_CAT(r.marketKey)}</div>
+        <div class="props-pr-leg-pick">${esc(r.player || '')} — ${esc(fmtPick(r))} <span style="font-size:.5rem;color:var(--g)">+${((r.edge || 0) * 100).toFixed(1)}%</span></div>
+        <button class="save-btn${TRACKED_KEYS.has(pickKey(r)) ? ' saved' : ''}" data-key="${pickKey(r).replace(/"/g, '&quot;')}" onclick="saveSmartPick(${legOffset + i})">${TRACKED_KEYS.has(pickKey(r)) ? '✓' : '＋'}</button>
+      </div>`).join('')
+    : '<div class="props-pr-empty">—</div>';
+
+  return `<div class="props-pr-grid">
+    <div class="props-pr-card stars">
+      <div class="props-pr-sec-hd">⭐ TOP CALIBRATED EDGES <span style="font-size:.44rem;opacity:.6;letter-spacing:.5px">MODEL vs BEST BOOK PRICE</span></div>${starsHtml}
+    </div>
+    <div class="props-pr-card parlay">
+      <div class="props-pr-sec-hd">🎰 PARLAY RECOMMENDATION <span style="font-size:.48rem;font-family:sans-serif;opacity:.6;letter-spacing:0">${legs.length}-LEG · BEST EDGE PER MARKET</span></div>
+      ${parlayHtml}
+      ${legs.length >= 2 ? `<div style="margin-top:10px;padding:8px 10px;background:rgba(0,0,0,.2);border-radius:8px;font-size:.58rem;color:var(--mu);line-height:1.5">💡 <strong style="color:var(--t)">Note:</strong> legs are ranked by calibrated edge vs the best available price — correlated legs (same game stacks) compound risk.</div>` : ''}
+    </div>
+  </div>`;
 }
 
 function buildPropsPicksPanel(d) {
@@ -2001,6 +2244,18 @@ function buildPropsPicksPanel(d) {
     return;
   }
   wrap.style.display = '';
+
+  // Prefer the calibrated edge engine when scan/tracker rows are loaded: those
+  // probabilities are market-blended + recalibrated and edge is vs a real book
+  // price, unlike the BAT X heuristic below (raw projection mean vs line).
+  const smart = buildSmartPicksHtml();
+  const engineTag = document.getElementById('picksEngineTag');
+  if (smart) {
+    if (engineTag) engineTag.textContent = 'CALIBRATED EDGE ENGINE';
+    el.innerHTML = smart;
+    return;
+  }
+  if (engineTag) engineTag.textContent = 'BAT X ENGINE';
 
   const COMP_LABELS = {contact:'contact quality',power:'raw power',discipline:'plate discipline',platoon:'platoon edge',park:'park factor',weather:'weather',pitcher:'pitcher matchup',form:'recent form',bvp:'BvP history',pitch_mix:'pitch-mix matchup'};
   const candidates = [];
@@ -3435,7 +3690,7 @@ function batterCard(b) {
         if (m.underBook) bookSet.add(m.underBook);
         if (m.overPrice != null && (bestPx === null || m.overPrice > bestPx)) {
           bestPx = m.overPrice; bestBk = m.overBook || '';
-          bestMkt = m.marketLabel || m.marketKey || '';
+          bestMkt = MKT_LABELS[m.marketKey] || m.marketLabel || m.marketKey || '';
           bestOpen = m.openingOverPrice ?? null;
           bestMove = m.lineMove ?? null;
           bestHistory = Array.isArray(m.priceHistory) ? m.priceHistory : null;
@@ -3462,22 +3717,8 @@ function batterCard(b) {
         }
         moveHtml = `<span style="color:${mvCol};font-size:.6rem;font-family:'JetBrains Mono',monospace" title="vs opening ${bestOpen}">${mvDir}${mvStr}</span>${steamBadge}`;
       }
-      // Build sparkline SVG from priceHistory if ≥2 points
-      let sparkHtml = '';
-      if (bestHistory && bestHistory.length >= 2) {
-        const prices = bestHistory.map(pt => pt[1]);
-        const mn = Math.min(...prices), mx = Math.max(...prices);
-        const rng = mx - mn || 1;
-        const W = 48, H = 18;
-        const pts = prices.map((p, i) => {
-          const x = Math.round(i / (prices.length - 1) * W);
-          const y = Math.round(H - ((p - mn) / rng) * H);
-          return `${x},${y}`;
-        }).join(' ');
-        const lineCol = prices[prices.length-1] > prices[0] ? '#00e676' : prices[prices.length-1] < prices[0] ? '#f44336' : '#6a8db0';
-        sparkHtml = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="flex-shrink:0;vertical-align:middle;margin:0 2px" title="Price history"><polyline points="${pts}" fill="none" stroke="${lineCol}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
-      }
-      return `<div style="display:flex;align-items:center;gap:8px;padding:5px 10px;margin:6px 0 2px;background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.12);border-radius:8px;font-size:.63rem">
+      const sparkHtml = priceSparkSvg(bestHistory);
+      return `<div class="bo-row" style="display:flex;align-items:center;gap:8px;padding:5px 10px;margin:6px 0 2px;background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.12);border-radius:8px;font-size:.63rem">
         <span style="color:var(--mu)">BEST ODDS</span>
         <span style="${pxCls};font-weight:700;font-family:'JetBrains Mono',monospace">${pxStr}</span>
         ${bestBk ? `<span style="color:var(--c);font-size:.58rem">@ ${bestBk.toUpperCase()}</span>` : ''}
@@ -3487,15 +3728,18 @@ function batterCard(b) {
         <span style="color:var(--mu)">${nBooks} book${nBooks===1?'':'s'}</span>
       </div>`;
     })()}
-    <button class="ls-btn" onclick="openLineShop('${(b.name||'').replace(/'/g,"\\'")}', ${b.gamePk || 'null'}, ${pid || 'null'}, 'batter')"><span>📚 LINE SHOPPING</span><span>OPEN ▸</span></button>
-    <button class="ls-btn" onclick="openSprayChart(${pid}, '${(b.name||'').replace(/'/g,"\\'")}')"><span>🗺️ SPRAY CHART</span><span>OPEN ▸</span></button>
-    <button class="ls-btn" onclick="openZoneChart(${pid}, '${(b.name||'').replace(/'/g,"\\'")}')"><span>⚾ STRIKE ZONE</span><span>OPEN ▸</span></button>
-    <button class="ls-btn" onclick="openHitHistory(${pid||'null'}, '${(b.name||'').replace(/'/g,"\\'")}', 'batter')"><span>📊 HIT HISTORY</span><span>OPEN ▸</span></button>
-    <button class="ls-btn" onclick="openEvLab(${pid}, '${(b.name||'').replace(/'/g,"\\'")}', ${b.opp_pitcher_id||'null'}, '${(b.opp_pitcher||'').replace(/'/g,"\\'")}', '${(b.opp_hand||'').replace(/'/g,"\\'")}')"><span>📊 EV LAB</span><span>OPEN ▸</span></button>
+    ${modelIntelPanel(best)}
+    <div class="bcard-tools">
+      <button class="tool-btn" onclick="openLineShop('${(b.name||'').replace(/'/g,"\\'")}', ${b.gamePk || 'null'}, ${pid || 'null'}, 'batter')" title="Line shopping — book-by-book prices">📚 ODDS</button>
+      <button class="tool-btn" onclick="openSprayChart(${pid}, '${(b.name||'').replace(/'/g,"\\'")}')" title="Spray chart">🗺️ SPRAY</button>
+      <button class="tool-btn" onclick="openZoneChart(${pid}, '${(b.name||'').replace(/'/g,"\\'")}')" title="Strike zone heatmap">⚾ ZONE</button>
+      <button class="tool-btn" onclick="openHitHistory(${pid||'null'}, '${(b.name||'').replace(/'/g,"\\'")}', 'batter')" title="Game-by-game prop hit history">📊 HIST</button>
+      <button class="tool-btn" onclick="openEvLab(${pid}, '${(b.name||'').replace(/'/g,"\\'")}', ${b.opp_pitcher_id||'null'}, '${(b.opp_pitcher||'').replace(/'/g,"\\'")}', '${(b.opp_hand||'').replace(/'/g,"\\'")}')" title="EV lab — batter vs pitcher expected value">🧪 EV</button>
+    </div>
     ${hrPanel}
     ${batxHtml}
     ${trnd}
-    <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px">
+    <div class="parlay-row" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px">
       ${p.hits != null ? `<button class="save-btn parlay-btn" data-player="${esc(b.name)}" data-team="${esc(b.team||'')}" data-market-key="player_hits" data-line="${p.hits.toFixed(2)}" data-game-pk="${b.gamePk||''}">＋ H PARLAY</button>` : ''}
       ${p.hr != null   ? `<button class="save-btn parlay-btn" data-player="${esc(b.name)}" data-team="${esc(b.team||'')}" data-market-key="player_home_runs" data-line="${p.hr.toFixed(2)}" data-game-pk="${b.gamePk||''}">＋ HR PARLAY</button>` : ''}
       ${p.tb != null   ? `<button class="save-btn parlay-btn" data-player="${esc(b.name)}" data-team="${esc(b.team||'')}" data-market-key="player_total_bases" data-line="${p.tb.toFixed(2)}" data-game-pk="${b.gamePk||''}">＋ TB PARLAY</button>` : ''}
@@ -3602,12 +3846,15 @@ function pitcherPanel(p) {
       Opp K%: <span>${p.opp_k_pct?(p.opp_k_pct*100).toFixed(1)+'%':'—'}</span>
       &nbsp;·&nbsp; Opp wOBA: <span>${p.opp_woba?Number(p.opp_woba).toFixed(3):'—'}</span>
     </div>
+    ${modelIntelPanel(PLAYER_BEST_PROP[(p.name||'').toLowerCase()])}
     ${pitchXPanel(p, pr)}
-    ${pr.k != null ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px">
+    ${pr.k != null ? `<div class="parlay-row" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px">
       ${[3.5, 4.5, 5.5, 6.5].map(line => `<button class="save-btn parlay-btn" data-player="${esc(p.name||'')}" data-team="${esc(p.team||'')}" data-market-key="pitcher_strikeouts" data-line="${line}" data-game-pk="${p.gamePk||''}">＋ K ${line}</button>`).join('')}
     </div>` : ''}
-    <button class="ls-btn" onclick="openLineShop('${(p.name||'').replace(/'/g,"\\'")}', ${p.gamePk || 'null'}, ${pid || 'null'}, 'pitcher')"><span>📚 LINE SHOPPING</span><span>OPEN ▸</span></button>
-    <button class="ls-btn" onclick="openHitHistory(${pid||'null'}, '${(p.name||'').replace(/'/g,"\\'")}', 'pitcher')"><span>📊 K HIT HISTORY</span><span>OPEN ▸</span></button>
+    <div class="bcard-tools" style="grid-template-columns:repeat(2,1fr)">
+      <button class="tool-btn" onclick="openLineShop('${(p.name||'').replace(/'/g,"\\'")}', ${p.gamePk || 'null'}, ${pid || 'null'}, 'pitcher')" title="Line shopping — book-by-book K prices">📚 LINE SHOPPING</button>
+      <button class="tool-btn" onclick="openHitHistory(${pid||'null'}, '${(p.name||'').replace(/'/g,"\\'")}', 'pitcher')" title="Game-by-game K prop history">📊 K HISTORY</button>
+    </div>
     ${trnd}
   </div>`;
 }
@@ -3829,6 +4076,216 @@ async function loadPlayerSignals() {
 // Fire once at page load; cached for the session.
 loadPlayerSignals();
 
+// ── Model Intelligence (stacked-calibrator surface) ───────────────────────────
+// Renders the fields the tracker rows already carry — stackVerdict, stackedProb,
+// stackCiLo/Hi, xgbProb vs batxProb, modelSource, calStatus — none of which were
+// visible on the page before.
+const MI_VERDICT = {
+  STRONG_BET:  'mi-green', LEAN_OVER:  'mi-teal', PASS: 'mi-gray',
+  LEAN_UNDER:  'mi-amber', STRONG_FADE:'mi-red',
+};
+function verdictBadge(row) {
+  const v = row && row.stackVerdict;
+  if (!v || !MI_VERDICT[v]) return '';
+  const lbl = row.stackVerdictLabel || v.replace(/_/g, ' ');
+  return `<span class="mi-verdict ${MI_VERDICT[v]}" title="Stacked-calibrator verdict vs this market's base rate">${esc(lbl)}</span>`;
+}
+function miSourceChip(src) {
+  if (src === 'stacked')   return `<span class="mi-chip info" title="XGBoost + BATX fused through the stacked calibrator">⚡ STACKED MODEL</span>`;
+  if (src === 'xgb_blend') return `<span class="mi-chip info" title="XGBoost blended with the analytic model">⚡ XGB BLEND</span>`;
+  return `<span class="mi-chip" title="Analytic / Monte Carlo projection">ANALYTIC</span>`;
+}
+function miConsensusChip(row) {
+  // Batter markets persist xgbProb/batxProb; the pitcher K rows persist
+  // xgbKProb/mcKProb instead — same XGB-vs-analytic comparison.
+  const x = row && (row.xgbProb ?? row.xgbKProb);
+  const b = row && (row.batxProb ?? row.mcKProb);
+  if (x == null || b == null) return '';
+  const d = Math.abs(x - b);
+  const tip = `XGB ${(x*100).toFixed(1)}% vs ${row.xgbProb != null ? 'BATX' : 'MC'} ${(b*100).toFixed(1)}%`;
+  if (d <= 0.06) return `<span class="mi-chip good" title="${tip}">✓ MODELS AGREE</span>`;
+  if (d <= 0.12) return `<span class="mi-chip" title="${tip}">≈ MILD SPLIT ±${(d*100).toFixed(0)}</span>`;
+  return `<span class="mi-chip warn" title="${tip} — treat the fused probability with caution">⚠ MODELS SPLIT ±${(d*100).toFixed(0)}</span>`;
+}
+function miCalChip(status) {
+  if (status === 'calibrated') return `<span class="mi-chip good" title="Probability recalibrated against graded pick history">◎ CALIBRATED</span>`;
+  if (status === 'no_edge')    return `<span class="mi-chip warn" title="This market's calibration shows no skill vs base rate — treat edges skeptically">◎ NO EDGE (CAL)</span>`;
+  if (status === 'warming_up') return `<span class="mi-chip" title="Not enough graded picks yet to recalibrate this market">◎ CAL WARMING UP</span>`;
+  return '';
+}
+function miBlendChip(marketKey) {
+  // Learned model-vs-market blend weight (market_blend_learner): how much the
+  // displayed probability trusts our model vs the de-vig'd market price.
+  const bw = CAL_INFO && CAL_INFO.blend_weights && CAL_INFO.blend_weights[marketKey];
+  if (!bw || bw.weight == null) return '';
+  const w = Math.round(bw.weight * 100);
+  const learned = bw.kind === 'learned';
+  const tip = `Blend: ${w}% model / ${100 - w}% market price`
+    + (learned ? ` — Brier-fitted from ${bw.n} graded picks` : ` — hand-tuned prior${bw.n ? ` (${bw.n} graded, learns at 60)` : ''}`);
+  return `<span class="mi-chip ${learned ? 'info' : ''}" title="${esc(tip)}">⚖ MODEL W ${w}%</span>`;
+}
+// Model probability → fair American odds (shared by the value table + intel panel)
+function fairAmericanOdds(prob) {
+  if (!prob || prob <= 0 || prob >= 1) return '—';
+  const o = prob >= 0.5 ? Math.round(-prob * 100 / (1 - prob)) : Math.round((1 - prob) * 100 / prob);
+  return (o > 0 ? '+' : '') + o;
+}
+function modelIntelPanel(best) {
+  if (!best || best.adjProb == null) return '';
+  const prob = Number(best.adjProb);
+  const mi   = best.marketImplied != null ? Number(best.marketImplied) : null;
+  const lo   = best.stackCiLo != null ? Number(best.stackCiLo) : null;
+  const hi   = best.stackCiHi != null ? Number(best.stackCiHi) : null;
+  const mkLbl = (MKT_LABELS[best.marketKey] || best.marketKey || '').toUpperCase();
+  const line  = best.line != null ? ` ${best.line}` : '';
+  const pos   = v => clamp(v * 100, 0, 100).toFixed(1);
+  const ciBand  = (lo != null && hi != null)
+    ? `<div class="mi-ci" style="left:${pos(lo)}%;width:${Math.max(1, (hi - lo) * 100).toFixed(1)}%" title="95% CI ${(lo*100).toFixed(0)}–${(hi*100).toFixed(0)}%"></div>` : '';
+  const mktMark = mi != null
+    ? `<div class="mi-mark market" style="left:${pos(mi)}%" title="Market implied ${(mi*100).toFixed(1)}%"></div>` : '';
+  const edge = best.edge != null ? Number(best.edge) : null;
+  const edgeStr = edge != null ? (edge > 0 ? '+' : '') + (edge * 100).toFixed(1) + '%' : '—';
+  const edgeCol = edge == null ? 'var(--mu)' : edge > 0.02 ? 'var(--g)' : edge < -0.02 ? 'var(--r)' : 'var(--mu)';
+  // Monte Carlo distribution readout (tracker rows carry the sim percentiles)
+  const mcRow = (best.mc_mean != null && best.mc_p10 != null && best.mc_p90 != null)
+    ? `<div class="mi-stats" style="margin-top:4px;color:var(--mu)" title="Monte Carlo simulated stat distribution for this market">
+        <span>MC SIM μ ${Number(best.mc_mean).toFixed(2)}</span>
+        <span>80% RANGE ${best.mc_p10}–${best.mc_p90}</span>
+        ${best.mc_n_sims ? `<span>${Math.round(best.mc_n_sims/1000)}K SIMS</span>` : ''}
+      </div>` : '';
+  return `<div class="mi-panel">
+    <div class="mi-hd"><span class="mi-mkt">🧠 MODEL INTEL · ${esc(mkLbl)}${line}</span>${verdictBadge(best)}</div>
+    <div class="mi-track">${ciBand}${mktMark}<div class="mi-mark model" style="left:${pos(prob)}%" title="Model ${(prob*100).toFixed(1)}%"></div></div>
+    <div class="mi-scale"><span>0%</span><span>50%</span><span>100%</span></div>
+    <div class="mi-stats">
+      <span style="color:var(--c)">MODEL ${(prob*100).toFixed(1)}%</span>
+      ${mi != null ? `<span style="color:rgba(255,255,255,.6)">MARKET ${(mi*100).toFixed(1)}%</span>` : ''}
+      <span style="color:${edgeCol}">EDGE ${edgeStr}</span>
+      ${(() => {
+        // Fair price vs the best available book price — the juice you're saving
+        const bp = best.bestOverPrice ?? best.marketPrice;
+        const fair = fairAmericanOdds(prob);
+        if (fair === '—') return '';
+        return `<span style="color:#80cbc4" title="Model fair price${bp != null ? ` vs best book ${bp > 0 ? '+' + bp : bp}` : ''}">FAIR ${fair}</span>`;
+      })()}
+      ${(lo != null && hi != null) ? `<span style="color:var(--mu)">CI ${(lo*100).toFixed(0)}–${(hi*100).toFixed(0)}%</span>` : ''}
+    </div>
+    ${mcRow}
+    <div class="mi-chips">${miSourceChip(best.modelSource ?? (best.xgbKProb != null ? 'xgb_blend' : null))}${miConsensusChip(best)}${miCalChip(best.calStatus)}${miBlendChip(best.marketKey)}</div>
+    ${best.reason ? `<div class="mi-reason">${esc(best.reason)}</div>` : ''}
+  </div>`;
+}
+
+// ── Card density toggle (COMPACT ⇄ DETAILED, persisted) ───────────────────────
+const DENSITY_LS_KEY = 'props_card_density';
+function applyDensity() {
+  let mode = 'detailed';
+  try { mode = localStorage.getItem(DENSITY_LS_KEY) || 'detailed'; } catch (e) {}
+  const grid = gel('batterGrid');
+  if (grid) grid.classList.toggle('compact', mode === 'compact');
+  const btn = gel('densityBtn');
+  if (btn) {
+    btn.classList.toggle('active', mode === 'compact');
+    btn.innerHTML = mode === 'compact' ? '🗜 COMPACT ✓' : '🗜 COMPACT';
+  }
+}
+function toggleDensity() {
+  let mode = 'detailed';
+  try { mode = localStorage.getItem(DENSITY_LS_KEY) || 'detailed'; } catch (e) {}
+  const next = mode === 'compact' ? 'detailed' : 'compact';
+  try { localStorage.setItem(DENSITY_LS_KEY, next); } catch (e) {}
+  applyDensity();
+}
+
+// ── Price-history sparkline (shared by the best-odds pill + heat strip) ───────
+function priceSparkSvg(history, W = 48, H = 18) {
+  if (!Array.isArray(history) || history.length < 2) return '';
+  const prices = history.map(pt => pt[1]);
+  const mn = Math.min(...prices), mx = Math.max(...prices);
+  const rng = mx - mn || 1;
+  const pts = prices.map((p, i) => {
+    const x = Math.round(i / (prices.length - 1) * W);
+    const y = Math.round(H - ((p - mn) / rng) * H);
+    return `${x},${y}`;
+  }).join(' ');
+  const lineCol = prices[prices.length-1] > prices[0] ? '#00e676' : prices[prices.length-1] < prices[0] ? '#f44336' : '#6a8db0';
+  return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="flex-shrink:0;vertical-align:middle;margin:0 2px" title="Price history"><polyline points="${pts}" fill="none" stroke="${lineCol}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+}
+
+// ── Market Heat strip ─────────────────────────────────────────────────────────
+// Slate-wide odds-movement summary from the oddsMarkets each player already
+// carries: a ≥10-cent move against the bettor = steam (money on the over), a
+// ≥10-cent improvement = shift (possible reverse line movement / value).
+let ODDS_MOVE = {};   // "player|marketKey[|line]" → strongest lineMove (cents)
+function renderMarketHeat(d) {
+  const el = gel('marketHeatStrip');
+  if (!el) return;
+  const movers = [];
+  ODDS_MOVE = {};
+  [...(d.batters || []), ...(d.pitchers || [])].forEach(pl => {
+    (pl.oddsMarkets || []).forEach(m => {
+      if (m.lineMove == null) return;
+      const mv = Number(m.lineMove);
+      const nk = (pl.name || '').toLowerCase();
+      ODDS_MOVE[`${nk}|${m.marketKey}|${m.line}`] = mv;
+      const famKey = `${nk}|${m.marketKey}`;
+      if (ODDS_MOVE[famKey] == null || Math.abs(mv) > Math.abs(ODDS_MOVE[famKey])) ODDS_MOVE[famKey] = mv;
+      if (Math.abs(mv) < 10) return;
+      movers.push({
+        name: pl.name, move: mv, line: m.line,
+        mkt: MKT_LABELS[m.marketKey] || m.marketKey,
+        price: m.overPrice, book: m.overBook,
+        open: m.openingOverPrice, history: m.priceHistory,
+      });
+    });
+  });
+  if (!movers.length) { el.classList.remove('show'); el.innerHTML = ''; return; }
+  movers.sort((a, b) => Math.abs(b.move) - Math.abs(a.move));
+  const steams = movers.filter(m => m.move < 0);
+  const shifts = movers.filter(m => m.move > 0);
+  const fmtAm = v => v == null ? '?' : (v > 0 ? '+' + v : String(v));
+  const pill = m => {
+    const steam = m.move < 0;
+    const tip = (steam
+      ? `Over price moved ${Math.abs(m.move)} cents against the bettor since open — heavy action on the over`
+      : `Over price improved ${Math.abs(m.move)} cents since open — possible reverse line movement`)
+      + ` (${fmtAm(m.open)} → ${fmtAm(m.price)})`;
+    return `<span class="heat-pill ${steam ? 'heat-steam' : 'heat-shift'}" title="${esc(tip)}">
+      ${steam ? '🔥' : '📈'} ${esc(m.name)} · ${esc(m.mkt)} ${m.line ?? ''} <strong>${m.move > 0 ? '+' : ''}${m.move}¢</strong>${priceSparkSvg(m.history, 36, 12)}</span>`;
+  };
+  el.innerHTML = `<span class="heat-lbl">📡 MARKET HEAT</span>
+    <span class="heat-sum">${steams.length} STEAMING · ${shifts.length} SHIFTED</span>
+    ${movers.slice(0, 5).map(pill).join('')}
+    ${movers.length > 5 ? `<span class="heat-sum">+${movers.length - 5} MORE</span>` : ''}`;
+  el.classList.add('show');
+}
+
+// ── Calibration drift guard ───────────────────────────────────────────────────
+// Surfaces /api/calibration/markets drift_alerts: markets whose stacked-model
+// cohort is measurably miscalibrated right now, so displayed edges there
+// shouldn't be trusted until the calibrator re-fits.
+let CAL_INFO = null;   // /api/calibration/markets payload (blend weights, drift, cap)
+async function loadDriftGuard() {
+  try {
+    const r = await fetch('/api/calibration/markets');
+    const d = await r.json();
+    if (d && d.success) CAL_INFO = d;
+    const alerts = (d && d.success && Array.isArray(d.drift_alerts)) ? d.drift_alerts : [];
+    const el = gel('driftBanner');
+    if (!el) return;
+    if (!alerts.length) { el.classList.remove('show'); return; }
+    const items = alerts.map(a => {
+      const lbl = MKT_LABELS[a.marketKey] || a.marketKey;
+      const dir = a.direction === 'overconfident' ? 'model over-confident'
+                : a.direction === 'underconfident' ? 'model under-confident' : 'miscalibrated';
+      return `<strong>${esc(lbl)}</strong> (${dir}${a.n_stacked ? `, n=${a.n_stacked}` : ''}${a.reason ? ` — ${esc(a.reason)}` : ''})`;
+    }).join(' · ');
+    gel('driftBannerDetail').innerHTML =
+      `${items}. Displayed edges in these markets are unreliable until the calibrator re-fits — treat STRONG BET verdicts there as LEANs.`;
+    el.classList.add('show');
+  } catch (e) { /* banner is best-effort */ }
+}
+
 function computeHubRating(adjProb, edge) {
   const edgeBonus = Math.min((edge || 0) * 100, 20);
   const probBase  = (adjProb || 0) * 60;
@@ -3902,22 +4359,28 @@ function renderInjuryBanner(d) {
 // ── Value bets ────────────────────────────────────────────────────────────────
 async function loadValueBets() {
   if (!PROJ_DATA) {
-    gel('valueTbody').innerHTML = `<tr><td colspan="14"><div class="no-tracker">LOADING PROJECTIONS FIRST…</div></td></tr>`;
+    gel('valueTbody').innerHTML = `<tr><td colspan="15"><div class="no-tracker">LOADING PROJECTIONS FIRST…</div></td></tr>`;
     await loadProjections();
     if (!PROJ_DATA) return;
   }
-  gel('valueTbody').innerHTML = `<tr><td colspan="14">${loadHTML('CROSS-REFERENCING TRACKER ENTRIES…')}</td></tr>`;
+  gel('valueTbody').innerHTML = `<tr><td colspan="15">${loadHTML('CROSS-REFERENCING TRACKER ENTRIES…')}</td></tr>`;
   try {
     const r = await fetch(`/api/tracker/entries?date=${CUR_DATE}&gamePk=${CUR_GAME}`);
     const d = await r.json();
     VAL_DATA = buildValueBets(d.entries || []);
-    // Re-render batter cards so hub/ev badges appear (maps now populated)
+    // Re-render batter cards so hub/ev badges + Model Intel panels appear
     if (PROJ_DATA && gel('batterGrid') && gel('batterGrid').children.length > 0) {
       applyPFFilters();
     }
+    // Upgrade the picks panel to the calibrated edge engine now rows exist,
+    // and re-render pitcher panels so their Model Intel sections light up
+    if (PROJ_DATA) {
+      buildPropsPicksPanel(PROJ_DATA);
+      renderPitchers(PROJ_DATA.pitchers || []);
+    }
     renderValueTable(VAL_FILT);
   } catch(e) {
-    gel('valueTbody').innerHTML = `<tr><td colspan="14"><div class="no-tracker" style="color:var(--r)">ERROR: ${e.message}</div></td></tr>`;
+    gel('valueTbody').innerHTML = `<tr><td colspan="15"><div class="no-tracker" style="color:var(--r)">ERROR: ${e.message}</div></td></tr>`;
   }
 }
 
@@ -3941,9 +4404,15 @@ function buildValueBets(entries) {
     const implProb = (e.marketImplied != null)
       ? parseFloat(e.marketImplied)
       : (!isNaN(odds) ? (odds < 0 ? Math.abs(odds)/(Math.abs(odds)+100) : 100/(odds+100)) : null);
-    const edge     = (proj !== null && line > 0) ? (proj - line) / line : null;
+    // Prefer the tracker row's calibrated market edge (probability points vs the
+    // de-vig'd book price) — the proj-vs-line ratio is only a fallback when the
+    // row predates edge capture. Kelly/fair-odds math downstream assumes
+    // probability-point semantics.
+    const projEdge = (proj !== null && line > 0) ? (proj - line) / line : null;
+    const mktEdge  = e.edge != null ? parseFloat(e.edge) : null;
+    const edge     = (mktEdge != null && !isNaN(mktEdge)) ? mktEdge : projEdge;
     const tier     = edge===null ? '—' : edge>0.10 ? 'A' : edge>0.06 ? 'B' : edge>0.02 ? 'C' : edge>=-0.02 ? 'D' : '✗';
-    return {...e, proj, projField, edge, implProb, tier, openOdds: isNaN(odds) ? null : odds};
+    return {...e, proj, projField, edge, projEdge, implProb, tier, openOdds: isNaN(odds) ? null : odds};
   }).sort((a,b) => (b.edge??-999)-(a.edge??-999));
 
   // Build player lookup maps for batter card badges
@@ -3973,6 +4442,31 @@ function setVFilter(btn, f) {
   if (VAL_DATA) renderValueTable(f);
 }
 
+// ── Value-table column sorting ────────────────────────────────────────────────
+let VB_SORT = { key: 'edge', dir: -1 };
+function sortVB(key) {
+  if (VB_SORT.key === key) VB_SORT.dir *= -1;
+  else VB_SORT = { key, dir: key === 'player' ? 1 : -1 };
+  if (VAL_DATA) renderValueTable(VAL_FILT);
+}
+function _vbSortRows(rows) {
+  const { key: sk, dir: sd } = VB_SORT;
+  return [...rows].sort((a, b) => {
+    if (sk === 'player') return sd * String(a.player || '').localeCompare(String(b.player || ''));
+    const av = a[sk] == null ? -9e9 : Number(a[sk]);
+    const bv = b[sk] == null ? -9e9 : Number(b[sk]);
+    return sd * (av - bv);
+  });
+}
+function _vbMarkSortHeaders() {
+  document.querySelectorAll('#tab-value th.vb-sort').forEach(th => {
+    const on = th.dataset.vbk === VB_SORT.key;
+    th.classList.toggle('on', on);
+    th.querySelector('.vb-arrow')?.remove();
+    if (on) th.insertAdjacentHTML('beforeend', `<span class="vb-arrow">${VB_SORT.dir < 0 ? ' ▼' : ' ▲'}</span>`);
+  });
+}
+
 function renderValueTable(filter) {
   const all  = VAL_DATA || [];
   let rows   = all;
@@ -3995,11 +4489,15 @@ function renderValueTable(filter) {
   gel('vbTop').textContent   = topE !== null ? '+'+(topE*100).toFixed(1)+'%' : '—';
 
   if (!rows.length) {
-    gel('valueTbody').innerHTML = `<tr><td colspan="14"><div class="no-tracker">${
+    gel('valueTbody').innerHTML = `<tr><td colspan="15"><div class="no-tracker">${
       all.length===0 ? 'NO TRACKER ENTRIES FOR THIS GAME\nCAPTURE PROPS IN THE DAILY TRACKER FIRST' : 'NO ENTRIES MATCH THIS FILTER'
     }</div></td></tr>`;
+    _vbMarkSortHeaders();
     return;
   }
+
+  rows = _vbSortRows(rows);
+  _vbMarkSortHeaders();
 
   function _vbKelly(edge, implProb, overPrice){
     if(edge==null||edge<=0||!overPrice) return null;
@@ -4007,11 +4505,6 @@ function renderValueTable(filter) {
     const modelP = Math.min(0.99,(implProb||0.5)+edge);
     const full = ((b2*modelP)-(1-modelP))/b2;
     return Math.max(0,full*0.5);
-  }
-  function _vbFairPrice(prob){
-    if(!prob||prob<=0||prob>=1) return '—';
-    const o = prob>=0.5 ? Math.round(-prob*100/(1-prob)) : Math.round((1-prob)*100/prob);
-    return (o>0?'+':'')+o;
   }
 
   gel('valueTbody').innerHTML = rows.map(b => {
@@ -4045,7 +4538,7 @@ function renderValueTable(filter) {
     const kelly  = _vbKelly(b.edge, implP, oPrice);
     const kellyStr = kelly&&kelly>0 ? (kelly*100).toFixed(1)+'%' : '—';
     const kellyCls = kelly&&kelly>0.025?'kelly-hi':kelly&&kelly>0.01?'kelly-md':kelly&&kelly>0?'kelly-lo':'kelly-na';
-    const fairOdds = b.adjProb ? _vbFairPrice(+b.adjProb) : (implP ? _vbFairPrice(implP+(b.edge||0)) : '—');
+    const fairOdds = b.adjProb ? fairAmericanOdds(+b.adjProb) : (implP ? fairAmericanOdds(implP+(b.edge||0)) : '—');
     const slotNum = b.slot ?? b.battingOrder ?? null;
     const slotStr = slotNum ? '#'+slotNum : '—';
     const slotCol = slotNum<=3?'#00e676':slotNum<=6?'var(--c)':'var(--mu)';
@@ -4055,6 +4548,9 @@ function renderValueTable(filter) {
       <td>${lbl}</td>
       <td style="color:var(--mu)">${b.line??'—'}</td>
       <td class="projv">${projStr}</td>
+      <td>${b.adjProb != null
+        ? `<span class="vb-model">${(+b.adjProb*100).toFixed(1)}%</span>${(b.stackCiLo!=null&&b.stackCiHi!=null)?`<span class="vb-ci">CI ${(b.stackCiLo*100).toFixed(0)}–${(b.stackCiHi*100).toFixed(0)}</span>`:''}${b.stackVerdict?`<div style="margin-top:2px">${verdictBadge(b)}</div>`:''}`
+        : '—'}</td>
       <td class="${edgeCls}">${edgeStr}</td>
       <td style="color:var(--mu)">${b.implProb!=null?(b.implProb*100).toFixed(1)+'%':'—'}</td>
       <td>${evHtml(b.evPct)}</td>
@@ -4122,110 +4618,10 @@ async function getAdjustments() {
   return _adjCache;
 }
 
-// ── Override buildValueBets to add Kelly ──────────────────────────────────────
-var _origBuildValueBets = (typeof buildValueBets !== 'undefined') ? buildValueBets : null;
-
-async function buildValueBetsWithKelly(entries) {
-  // Run original logic first
-  const base = _origBuildValueBets ? _origBuildValueBets(entries) : entries;
-  const adj  = await getAdjustments();
-  const bankroll    = parseFloat(adj.bankroll    || 1000);
-  const fraction    = parseFloat(adj.kelly_fraction || 0.5);
-  const maxBetPct   = parseFloat(adj.max_bet_pct  || 0.03);
-
-  return base.map(b => {
-    // Use existing stakeDollars from tracker entry if already computed
-    if (b.stakeDollars != null && b.stakeDollars > 0) {
-      return {
-        ...b,
-        _kelly: { pct: b.stakePct, dollars: b.stakeDollars, fullKelly: b.fullKellyPct }
-      };
-    }
-    // Compute from edge + implied prob
-    if (b.edge != null && b.implProb != null && b.openOdds != null) {
-      // Convert implied prob to model prob: implProb + edge
-      const modelProb = Math.min(0.99, b.implProb + (b.edge || 0));
-      const kStake    = kellyStake(modelProb, b.openOdds, bankroll, fraction, maxBetPct);
-      return { ...b, _kelly: kStake };
-    }
-    return { ...b, _kelly: null };
-  });
-}
-
-// ── Override renderValueTable to show Kelly column ────────────────────────────
-var _origRenderValueTable = (typeof renderValueTable !== 'undefined') ? renderValueTable : null;
-
-function renderValueTableWithKelly(filter) {
-  // First call the original to render the table
-  if (_origRenderValueTable) _origRenderValueTable(filter);
-
-  // Now re-build with Kelly column if VAL_DATA is available
-  if (!VAL_DATA) return;
-
-  const all  = VAL_DATA;
-  let rows   = all;
-  if (filter === 'high')  rows = all.filter(b => (b.edge??-1) > 0.07);
-  else if (filter==='hits') rows = all.filter(b => (b.marketKey||'').includes('hit'));
-  else if (filter==='hr')   rows = all.filter(b => (b.marketKey||'').includes('home_run')||(b.marketKey||'').includes('homerun'));
-  else if (filter==='tb')   rows = all.filter(b => (b.marketKey||'').includes('total_base')||(b.marketKey||'').includes('totalbas'));
-  else if (filter==='k')    rows = all.filter(b => (b.marketKey||'').includes('strikeout'));
-  else if (filter==='rbi')  rows = all.filter(b => (b.marketKey||'').includes('rbi'));
-  else if (filter==='bb')   rows = all.filter(b => (b.marketKey||'').includes('walk'));
-
-  if (!rows.length) return;
-
-  // Update header to include Kelly column
-  const tbl = document.querySelector('.vtbl');
-  if (!tbl) return;
-  const hdr = tbl.querySelector('thead tr');
-  if (hdr && !hdr.querySelector('.kelly-hdr')) {
-    const th = document.createElement('th');
-    th.className = 'kelly-hdr';
-    th.textContent = 'KELLY STAKE';
-    hdr.appendChild(th);
-  }
-
-  // Get adjustments from cache (may be null first call — that's ok)
-  const adj      = _adjCache || {};
-  const bankroll = parseFloat(adj.bankroll    || 1000);
-  const fraction = parseFloat(adj.kelly_fraction || 0.5);
-  const maxBetPct= parseFloat(adj.max_bet_pct  || 0.03);
-
-  // Update each row with Kelly cell
-  const tbody = tbl.querySelector('tbody');
-  if (!tbody) return;
-  const trList = tbody.querySelectorAll('tr');
-  rows.forEach((b, i) => {
-    const tr = trList[i];
-    if (!tr) return;
-    if (tr.querySelector('.kelly-cell')) return; // already added
-    const td = document.createElement('td');
-    td.className = 'kelly-cell';
-
-    // Compute Kelly
-    let kd = null;
-    if (b.stakeDollars != null && b.stakeDollars > 0) {
-      kd = { dollars: b.stakeDollars, pct: b.stakePct, fullKelly: b.fullKellyPct };
-    } else if (b.edge != null && b.implProb != null && b.openOdds != null) {
-      const modelProb = Math.min(0.99, b.implProb + (b.edge || 0));
-      kd = kellyStake(modelProb, b.openOdds, bankroll, fraction, maxBetPct);
-    }
-
-    if (!kd || kd.dollars <= 0) {
-      td.className += ' kelly-na'; td.textContent = '—';
-    } else {
-      const cls = kd.pct >= 0.02 ? 'kelly-hi' : kd.pct >= 0.01 ? 'kelly-md' : 'kelly-lo';
-      td.className += ' ' + cls;
-      td.innerHTML = `$${kd.dollars.toFixed(2)}<br><span style="font-size:.5rem;color:var(--mu)">${(kd.pct*100).toFixed(1)}% BK · ${(kd.fullKelly*100).toFixed(1)}% FULL K</span>`;
-    }
-    tr.appendChild(td);
-  });
-}
-
-// ── Override renderValueTable and setVFilter ───────────────────────────────────
-if (typeof renderValueTable !== 'undefined') {
-  renderValueTable = renderValueTableWithKelly;
-}
+// ── Override setVFilter to pre-fetch Kelly adjustments ────────────────────────
+// (The old renderValueTableWithKelly / buildValueBetsWithKelly overrides were
+// removed: the base renderer emits the KELLY½ cell inline, and the override's
+// stray "KELLY STAKE" header misaligned the table.)
 if (typeof setVFilter !== 'undefined') {
   var _origSetVFilter = setVFilter;
   setVFilter = function(btn, f) {

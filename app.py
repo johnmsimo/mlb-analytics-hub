@@ -18412,10 +18412,45 @@ def api_tracker_model_record():
     if 'pitcher_strikeouts' in record and 'k' not in record:
         record['k'] = record['pitcher_strikeouts']
 
+    # Hit rate by stacked-calibrator verdict tier — does STRONG_BET actually
+    # outperform LEAN_OVER in production? Only stacked rows carry a verdict;
+    # picks are graded on the Over side, so the FADE tiers hitting *less* often
+    # than the BET tiers is the model working.
+    by_verdict = {}
+    for e in graded:
+        v = e.get('stackVerdict')
+        if not v:
+            continue
+        c = by_verdict.setdefault(v, {'wins': 0, 'losses': 0,
+                                      'profit_units': 0.0, 'priced': 0})
+        if e.get('grade') == 'win':
+            c['wins'] += 1
+        else:
+            c['losses'] += 1
+        # Units P&L at the taken price — hit rate alone can't tell a profitable
+        # tier from an unprofitable one (40% at +150 beats 55% at -200).
+        pu = e.get('profitUnits')
+        if pu is not None:
+            try:
+                c['profit_units'] += float(pu)
+                c['priced'] += 1
+            except (TypeError, ValueError):
+                pass
+    verdict_record = {}
+    for v, c in by_verdict.items():
+        total = c['wins'] + c['losses']
+        verdict_record[v] = {
+            'wins': c['wins'], 'losses': c['losses'], 'graded': total,
+            'hit_rate': round(c['wins'] / total, 3) if total else 0.0,
+            'profit_units': round(c['profit_units'], 2),
+            'roi': round(c['profit_units'] / c['priced'], 3) if c['priced'] else None,
+        }
+
     return jsonify({
         'success': True,
         'record': record,
         'summary': summary,
+        'by_verdict': verdict_record,
         'window': 30,
         'total_graded': len(graded),
     })
