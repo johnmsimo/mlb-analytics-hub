@@ -1335,7 +1335,13 @@ async function loadModelRecordBanner() {
       .map(([v, s]) => {
         const pct = Math.round(s.hit_rate * 100);
         const lbl = v.replace(/_/g, ' ');
-        return `<span class="mi-verdict ${MI_VERDICT[v] || 'mi-gray'}" style="font-size:.52rem" title="${s.wins}-${s.losses} on Over picks carrying this verdict (30d)">${lbl} ${pct}% <span style="opacity:.6">(${s.graded})</span></span>`;
+        // ROI decides profitability, not hit rate (40% at +150 is a winner)
+        const roi = s.roi != null
+          ? ` <span style="color:${s.roi >= 0 ? 'var(--g)' : 'var(--r)'}">${s.roi >= 0 ? '+' : ''}${s.roi.toFixed(2)}u</span>`
+          : '';
+        const tip = `${s.wins}-${s.losses} on Over picks carrying this verdict (30d)`
+          + (s.roi != null ? ` · ${s.profit_units >= 0 ? '+' : ''}${s.profit_units}u total at taken prices (${s.roi >= 0 ? '+' : ''}${s.roi.toFixed(2)}u/pick)` : '');
+        return `<span class="mi-verdict ${MI_VERDICT[v] || 'mi-gray'}" style="font-size:.52rem" title="${tip}">${lbl} ${pct}%${roi} <span style="opacity:.6">(${s.graded})</span></span>`;
       });
     if (vPills.length) {
       pills.push(`<span class="trec-bar-lbl" style="margin-left:6px">BY VERDICT</span>`, ...vPills);
@@ -2090,12 +2096,23 @@ function saveSmartPick(i) {
   if (row) savePickDirect(row);
 }
 
+// Steam check for a pick row: the market shortening the Over price (≥10¢ move
+// against the bettor) while our model likes the Over is sharp-side confirmation.
+function smartSteamMove(r) {
+  const nk = (r.player || '').toLowerCase();
+  const mv = ODDS_MOVE[`${nk}|${r.marketKey}|${r.line}`] ?? ODDS_MOVE[`${nk}|${r.marketKey}`];
+  return (mv != null && mv <= -10) ? mv : null;
+}
+
 function buildSmartPicksHtml() {
   const rows = (VAL_DATA || []).filter(r => r && r.marketKey && r.adjProb != null
     && r.marketImplied != null && r.edge != null);
   if (rows.length < 3) return null;
+  // Rank by edge; steam confirmation breaks ties ahead of hub rating.
   const ranked = [...rows].sort((a, b) =>
-    (b.edge ?? -9) - (a.edge ?? -9) || (b.hubRating ?? 0) - (a.hubRating ?? 0));
+    (b.edge ?? -9) - (a.edge ?? -9)
+    || (smartSteamMove(b) != null) - (smartSteamMove(a) != null)
+    || (b.hubRating ?? 0) - (a.hubRating ?? 0));
 
   const seen = new Set();
   const stars = [];
@@ -2143,6 +2160,10 @@ function buildSmartPicksHtml() {
   const starsHtml = stars.map((r, i) => {
     const key = pickKey(r);
     const saved = TRACKED_KEYS.has(key);
+    const steam = smartSteamMove(r);
+    const steamTag = steam != null
+      ? `<span class="mi-chip warn" title="Over price shortened ${Math.abs(steam)}¢ since open while the model likes the Over — market moving our way (sharp-side confirmation)">🔥 STEAM CONFIRMED</span>`
+      : '';
     return `<div class="props-pr-bet">
       <div class="props-pr-rank">${rankEmoji[i]}</div>
       <div class="props-pr-body">
@@ -2152,7 +2173,7 @@ function buildSmartPicksHtml() {
           ${r.evPct != null ? `<span style="font-size:.5rem;color:${r.evPct > 0 ? 'var(--g)' : 'var(--mu)'}">EV ${(r.evPct * 100).toFixed(1)}%</span>` : ''}
         </div>
         <div style="margin-top:3px;display:flex;gap:5px;align-items:center;flex-wrap:wrap">
-          ${verdictBadge(r)}${miConsensusChip(r)}
+          ${verdictBadge(r)}${miConsensusChip(r)}${steamTag}
           <button class="save-btn${saved ? ' saved' : ''}" data-key="${key.replace(/"/g, '&quot;')}" onclick="saveSmartPick(${i})">${saved ? '✓ SAVED' : '＋ SAVE'}</button>
         </div>
         ${r.reason ? `<div class="props-pr-reason">${esc(r.reason)}</div>` : ''}
@@ -4075,6 +4096,12 @@ function miBlendChip(marketKey) {
     + (learned ? ` — Brier-fitted from ${bw.n} graded picks` : ` — hand-tuned prior${bw.n ? ` (${bw.n} graded, learns at 60)` : ''}`);
   return `<span class="mi-chip ${learned ? 'info' : ''}" title="${esc(tip)}">⚖ MODEL W ${w}%</span>`;
 }
+// Model probability → fair American odds (shared by the value table + intel panel)
+function fairAmericanOdds(prob) {
+  if (!prob || prob <= 0 || prob >= 1) return '—';
+  const o = prob >= 0.5 ? Math.round(-prob * 100 / (1 - prob)) : Math.round((1 - prob) * 100 / prob);
+  return (o > 0 ? '+' : '') + o;
+}
 function modelIntelPanel(best) {
   if (!best || best.adjProb == null) return '';
   const prob = Number(best.adjProb);
@@ -4106,6 +4133,13 @@ function modelIntelPanel(best) {
       <span style="color:var(--c)">MODEL ${(prob*100).toFixed(1)}%</span>
       ${mi != null ? `<span style="color:rgba(255,255,255,.6)">MARKET ${(mi*100).toFixed(1)}%</span>` : ''}
       <span style="color:${edgeCol}">EDGE ${edgeStr}</span>
+      ${(() => {
+        // Fair price vs the best available book price — the juice you're saving
+        const bp = best.bestOverPrice ?? best.marketPrice;
+        const fair = fairAmericanOdds(prob);
+        if (fair === '—') return '';
+        return `<span style="color:#80cbc4" title="Model fair price${bp != null ? ` vs best book ${bp > 0 ? '+' + bp : bp}` : ''}">FAIR ${fair}</span>`;
+      })()}
       ${(lo != null && hi != null) ? `<span style="color:var(--mu)">CI ${(lo*100).toFixed(0)}–${(hi*100).toFixed(0)}%</span>` : ''}
     </div>
     ${mcRow}
@@ -4154,15 +4188,23 @@ function priceSparkSvg(history, W = 48, H = 18) {
 // Slate-wide odds-movement summary from the oddsMarkets each player already
 // carries: a ≥10-cent move against the bettor = steam (money on the over), a
 // ≥10-cent improvement = shift (possible reverse line movement / value).
+let ODDS_MOVE = {};   // "player|marketKey[|line]" → strongest lineMove (cents)
 function renderMarketHeat(d) {
   const el = gel('marketHeatStrip');
   if (!el) return;
   const movers = [];
+  ODDS_MOVE = {};
   [...(d.batters || []), ...(d.pitchers || [])].forEach(pl => {
     (pl.oddsMarkets || []).forEach(m => {
-      if (m.lineMove == null || Math.abs(m.lineMove) < 10) return;
+      if (m.lineMove == null) return;
+      const mv = Number(m.lineMove);
+      const nk = (pl.name || '').toLowerCase();
+      ODDS_MOVE[`${nk}|${m.marketKey}|${m.line}`] = mv;
+      const famKey = `${nk}|${m.marketKey}`;
+      if (ODDS_MOVE[famKey] == null || Math.abs(mv) > Math.abs(ODDS_MOVE[famKey])) ODDS_MOVE[famKey] = mv;
+      if (Math.abs(mv) < 10) return;
       movers.push({
-        name: pl.name, move: Number(m.lineMove), line: m.line,
+        name: pl.name, move: mv, line: m.line,
         mkt: MKT_LABELS[m.marketKey] || m.marketKey,
         price: m.overPrice, book: m.overBook,
         open: m.openingOverPrice, history: m.priceHistory,
@@ -4436,11 +4478,6 @@ function renderValueTable(filter) {
     const full = ((b2*modelP)-(1-modelP))/b2;
     return Math.max(0,full*0.5);
   }
-  function _vbFairPrice(prob){
-    if(!prob||prob<=0||prob>=1) return '—';
-    const o = prob>=0.5 ? Math.round(-prob*100/(1-prob)) : Math.round((1-prob)*100/prob);
-    return (o>0?'+':'')+o;
-  }
 
   gel('valueTbody').innerHTML = rows.map(b => {
     const edgeStr = b.edge!==null ? (b.edge>0?'+':'')+(b.edge*100).toFixed(1)+'%' : '—';
@@ -4473,7 +4510,7 @@ function renderValueTable(filter) {
     const kelly  = _vbKelly(b.edge, implP, oPrice);
     const kellyStr = kelly&&kelly>0 ? (kelly*100).toFixed(1)+'%' : '—';
     const kellyCls = kelly&&kelly>0.025?'kelly-hi':kelly&&kelly>0.01?'kelly-md':kelly&&kelly>0?'kelly-lo':'kelly-na';
-    const fairOdds = b.adjProb ? _vbFairPrice(+b.adjProb) : (implP ? _vbFairPrice(implP+(b.edge||0)) : '—');
+    const fairOdds = b.adjProb ? fairAmericanOdds(+b.adjProb) : (implP ? fairAmericanOdds(implP+(b.edge||0)) : '—');
     const slotNum = b.slot ?? b.battingOrder ?? null;
     const slotStr = slotNum ? '#'+slotNum : '—';
     const slotCol = slotNum<=3?'#00e676':slotNum<=6?'var(--c)':'var(--mu)';

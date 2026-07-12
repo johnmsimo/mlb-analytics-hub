@@ -18421,17 +18421,29 @@ def api_tracker_model_record():
         v = e.get('stackVerdict')
         if not v:
             continue
-        by_verdict.setdefault(v, {'wins': 0, 'losses': 0})
+        c = by_verdict.setdefault(v, {'wins': 0, 'losses': 0,
+                                      'profit_units': 0.0, 'priced': 0})
         if e.get('grade') == 'win':
-            by_verdict[v]['wins'] += 1
+            c['wins'] += 1
         else:
-            by_verdict[v]['losses'] += 1
+            c['losses'] += 1
+        # Units P&L at the taken price — hit rate alone can't tell a profitable
+        # tier from an unprofitable one (40% at +150 beats 55% at -200).
+        pu = e.get('profitUnits')
+        if pu is not None:
+            try:
+                c['profit_units'] += float(pu)
+                c['priced'] += 1
+            except (TypeError, ValueError):
+                pass
     verdict_record = {}
     for v, c in by_verdict.items():
         total = c['wins'] + c['losses']
         verdict_record[v] = {
             'wins': c['wins'], 'losses': c['losses'], 'graded': total,
             'hit_rate': round(c['wins'] / total, 3) if total else 0.0,
+            'profit_units': round(c['profit_units'], 2),
+            'roi': round(c['profit_units'] / c['priced'], 3) if c['priced'] else None,
         }
 
     return jsonify({
