@@ -128,6 +128,15 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
 .pcell.rec .pval,.pp-proj.rec .pp-pval,.fstat.rec .hrr-pill{color:#ffe6a0!important;text-shadow:0 0 10px rgba(255,196,0,.55)}
 .rec-tag{position:absolute;top:-8px;left:50%;transform:translateX(-50%);font-family:'Orbitron',monospace;font-size:.42rem;letter-spacing:.5px;font-weight:700;background:linear-gradient(90deg,#ffb300,#ffe082);color:#1a1300;padding:1px 7px;border-radius:7px;white-space:nowrap;box-shadow:0 1px 5px rgba(0,0,0,.45);z-index:2}
 .rec-line{margin-top:3px;font-family:'Orbitron',monospace;font-size:.5rem;font-weight:700;letter-spacing:.3px;color:#ffd24a;white-space:nowrap}
+/* Definite TAKE / SKIP verdict strip on every player card */
+.verdict-strip{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin:8px 0 2px;padding:7px 10px;border-radius:8px;font-size:.6rem;line-height:1.45}
+.verdict-strip.take{background:rgba(0,230,118,.07);border:1px solid rgba(0,230,118,.35)}
+.verdict-strip.skip{background:rgba(244,67,54,.05);border:1px solid rgba(244,67,54,.25)}
+.verdict-word{font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:1.5px;font-weight:700;white-space:nowrap}
+.verdict-strip.take .verdict-word{color:var(--g)}
+.verdict-strip.skip .verdict-word{color:#ef9a9a}
+.verdict-pick{font-weight:700;color:var(--t);font-size:.64rem}
+.verdict-why{color:var(--mu);font-size:.56rem}
 @keyframes recPulse{0%,100%{box-shadow:0 0 0 1px rgba(255,210,74,.30),0 0 7px rgba(255,196,0,.25);border-color:#ffce5a}50%{box-shadow:0 0 0 2px rgba(255,210,74,.70),0 0 20px rgba(255,196,0,.60);border-color:#ffe6a0}}
 @media(prefers-reduced-motion:reduce){.pcell.rec,.pp-proj.rec,.fstat.rec{animation:none;box-shadow:0 0 0 2px rgba(255,210,74,.6),0 0 16px rgba(255,196,0,.45)}}
 .bcard-foot{display:flex;justify-content:space-between;align-items:center;padding-top:10px;border-top:1px solid rgba(255,255,255,.06)}
@@ -647,7 +656,7 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
   /* page tabs + value filters: one scrollable row beats a 3-row wrap */
   .tabs,.vcontrols{flex-wrap:nowrap !important;overflow-x:auto;scrollbar-width:none;-ms-overflow-style:none}
   .tabs::-webkit-scrollbar,.vcontrols::-webkit-scrollbar{display:none}
-  .tab{white-space:nowrap;padding:11px 14px}
+  .tab{white-space:nowrap;padding:11px 14px;flex:0 0 auto}
   .vfilter{white-space:nowrap;flex:0 0 auto}
   /* market heat: one scrollable row of pills */
   .heat-strip.show{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
@@ -2259,6 +2268,41 @@ function buildPropsPicksPanel(d) {
 
   const COMP_LABELS = {contact:'contact quality',power:'raw power',discipline:'plate discipline',platoon:'platoon edge',park:'park factor',weather:'weather',pitcher:'pitcher matchup',form:'recent form',bvp:'BvP history',pitch_mix:'pitch-mix matchup'};
   const candidates = [];
+  const STAT_CAT   = {hits:'HITS', tb:'BASES', hr:'HR', rbi:'RBI', k:'K'};
+  const STAT_ABBR  = {hits:'H', tb:'TB', hr:'HR', rbi:'RBI', k:'K'};
+
+  // Score a player's REAL sportsbook lines (oddsMarkets): Poisson over-prob on the
+  // projection vs the book's de-vig'd price, exactly like the card takes — a pick
+  // is never advertised at a line no book actually offers. Edge is in probability
+  // points; score uses the same Hub Rating scale so real-line picks rank ahead of
+  // any projection-only fallback. Returns how many candidates were generated.
+  const pushOddsCandidates = (name, om, proj, allowUnder, reasonFor) => {
+    let n = 0;
+    (Array.isArray(om) ? om : []).forEach(m => {
+      const stat = REC_MK_STAT[m.marketKey];
+      const line = Number(m.line);
+      const mean = stat ? proj[stat] : null;
+      if (mean == null || !Number.isFinite(line)) return;
+      const pOver = _poissonOverProb(mean, line);
+      const io = _amToImplied(m.overPrice), iu = _amToImplied(m.underPrice);
+      const devig = (io != null && iu != null && io + iu > 0) ? io / (io + iu) : io;
+      if (devig == null) return;
+      const sides = [{side:'OVER', prob:pOver, edge:pOver - devig, price:m.overPrice, book:m.overBook}];
+      if (allowUnder) sides.push({side:'UNDER', prob:1 - pOver, edge:devig - pOver, price:m.underPrice, book:m.underBook});
+      sides.forEach(c => {
+        if (!(c.edge > 0.02)) return;                 // needs genuine value vs the book price
+        const hub = computeHubRating(c.prob, c.edge);
+        candidates.push({cat: STAT_CAT[stat], name,
+          pick: `${STAT_ABBR[stat]} ${c.side} ${line}`,
+          edge: c.edge, edgeIsProb: true, price: c.price, book: c.book,
+          conf: hub >= 80 ? 'elite' : hub >= REC_MIN_HUB ? 'strong' : 'lean',
+          reason: reasonFor(stat, mean, line, c),
+          score: hub});
+        n++;
+      });
+    });
+    return n;
+  };
 
   batters.forEach(b => {
     const p = b.proj; if (!p) return;
@@ -2274,8 +2318,14 @@ function buildPropsPicksPanel(d) {
       if (topDrag.length)  parts.push('tempered by ' + topDrag.join(', '));
       return parts.join('; ') + (p.platoon_note ? '. ' + p.platoon_note : '');
     };
+    // Real book lines first — only fall back to the standard default lines when
+    // this batter has no odds coverage at all.
+    const nReal = pushOddsCandidates(b.name, b.oddsMarkets, p, false,
+      (stat, mean, line) => `proj ${mean.toFixed(2)} vs line ${line}. ` + reason());
+    if (nReal > 0) return;
     const push = (cat, pick, edge, baseConf, w) => {
-      candidates.push({cat, name:b.name, pick, edge, conf:baseConf, reason:reason(), score:edge*comp*w});
+      candidates.push({cat, name:b.name, pick, edge, conf:baseConf,
+        reason: reason() + ' (model line — no book odds)', score:edge*comp*w});
     };
     if (p.hits != null) {
       const e05 = p.hits - 0.5; if (e05 > 0) push('HITS', 'H OVER 0.5',  e05, e05>0.35?'elite':e05>0.2?'strong':'lean', 1.0);
@@ -2291,12 +2341,22 @@ function buildPropsPicksPanel(d) {
 
   pitchers.forEach(pt => {
     const pr = pt.proj; if (!pr || pr.k == null) return;
-    [3.5, 4.5, 5.5, 6.5].forEach(line => {
-      const edge = pr.k - line; const eAbs = Math.abs(edge); if (eAbs < 0.1) return;
+    const kReason = (stat, mean, line, c) =>
+      (pr.form_flag ? 'Form: ' + pr.form_flag + '. ' : '') +
+      `K proj ${pr.k.toFixed(1)} vs book line ${line}` +
+      (c && c.prob != null ? ` — model ${(c.prob*100).toFixed(0)}%` : '');
+    // Real book K lines first (over AND under) — never advertise a line no book offers.
+    const nReal = pushOddsCandidates(pt.name, pt.oddsMarkets, {k: pr.k}, true, kReason);
+    if (nReal > 0) return;
+    // No odds coverage: projection-only fallback, restricted to ladder lines near
+    // the projection (a 7.7-K proj must not produce a meaningless "K OVER 3.5").
+    [2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5].forEach(line => {
+      const edge = pr.k - line; const eAbs = Math.abs(edge);
+      if (eAbs < 0.3 || eAbs > 2.0) return;
       const dir = edge >= 0 ? 'OVER' : 'UNDER';
       candidates.push({cat:'K', name:pt.name, pick:`K ${dir} ${line}`, edge:eAbs,
         conf: eAbs>1.0?'elite':eAbs>0.5?'strong':'lean',
-        reason: (pr.form_flag ? 'Form: '+pr.form_flag+'. ' : '') + 'K proj '+pr.k.toFixed(1),
+        reason: (pr.form_flag ? 'Form: '+pr.form_flag+'. ' : '') + 'K proj '+pr.k.toFixed(1)+' (model line — no book odds)',
         score: eAbs * 0.9});
     });
   });
@@ -2332,12 +2392,15 @@ function buildPropsPicksPanel(d) {
   const rankEmoji = ['🥇','🥈','🥉'];
   const catColor  = c => c==='K'?'#ce93d8':c==='HR'?'#f48fb1':c==='BASES'?'#80cbc4':'var(--c)';
 
+  const fmtEdge  = c => c.edgeIsProb ? `edge +${(c.edge*100).toFixed(1)}%` : `edge +${c.edge.toFixed(2)}`;
+  const fmtPxBk  = c => c.price == null ? ''
+    : ` <span style="font-family:'JetBrains Mono',monospace;color:${c.price >= 0 ? 'var(--g)' : 'var(--mu)'}">${c.price > 0 ? '+' + c.price : c.price}</span>${c.book ? ` <span style="color:var(--mu);font-size:.46rem">@${esc(String(c.book).toUpperCase())}</span>` : ''}`;
   const starsHtml = starPicks.length
     ? starPicks.map((c,i) => `<div class="props-pr-bet">
         <div class="props-pr-rank">${rankEmoji[i]}</div>
         <div class="props-pr-body">
           <div class="props-pr-title" style="color:${catColor(c.cat)}">${c.name}${signalBadge(c.name)}</div>
-          <div class="props-pr-pick">${c.pick} <span style="font-size:.46rem;opacity:.6">edge +${c.edge.toFixed(2)}</span></div>
+          <div class="props-pr-pick">${c.pick}${fmtPxBk(c)} <span style="font-size:.46rem;opacity:.6">${fmtEdge(c)}</span></div>
           ${c.reason ? `<div class="props-pr-reason">${c.reason}</div>` : ''}
         </div>
         <div class="props-pr-conf ${c.conf}">${confStars[c.conf]}</div>
@@ -2349,7 +2412,7 @@ function buildPropsPicksPanel(d) {
         const isOver = leg.pick.includes('OVER');
         return `<div class="props-pr-leg">
           <div class="props-pr-leg-cat" style="color:${catColor(leg.cat)}">${leg.cat}</div>
-          <div class="props-pr-leg-pick">${leg.name}${signalBadge(leg.name)} — ${leg.pick}</div>
+          <div class="props-pr-leg-pick">${leg.name}${signalBadge(leg.name)} — ${leg.pick}${fmtPxBk(leg)}</div>
           <div class="props-pr-leg-pill ${isOver?'over':'under'}">${isOver?'OVER':'UNDER'}</div>
         </div>`;
       }).join('')
@@ -3504,7 +3567,8 @@ function recPickFromBest(best) {
                                  : (best.bestUnderPrice ?? best.best_under_price);
   const book  = side === 'OVER' ? (best.bestOverBook ?? best.best_over_book)
                                  : (best.bestUnderBook ?? best.best_under_book);
-  return { stat, tier: hub >= 80 ? 'elite' : 'strong', hub, line: best.line, side, hasOdds, price, book };
+  return { stat, tier: hub >= 80 ? 'elite' : 'strong', hub, line: best.line, side, hasOdds, price, book,
+           prob: best.adjProb ?? null, edge: best.edge ?? null };
 }
 
 // Book market key → projection stat. Drives the oddsMarkets-based take below.
@@ -3531,9 +3595,9 @@ function _poissonOverProb(mean, line) {
 // devig the book's two-way price, and score the edge with the same Hub Rating
 // the backend uses — so the gate stays selective and consistent. allowUnder
 // enables "fade" picks (pitchers). Returns the recPickFromBest shape.
-function recFromOdds(oddsMarkets, proj, allowUnder) {
+function recFromOdds(oddsMarkets, proj, allowUnder, minHub) {
   if (!Array.isArray(oddsMarkets) || !oddsMarkets.length || !proj) return null;
-  let pick = null, pickHub = REC_MIN_HUB - 1e-6;
+  let pick = null, pickHub = (minHub != null ? minHub : REC_MIN_HUB) - 1e-6;
   oddsMarkets.forEach(m => {
     const stat = REC_MK_STAT[m.marketKey];
     const line = Number(m.line);
@@ -3550,7 +3614,8 @@ function recFromOdds(oddsMarkets, proj, allowUnder) {
       if (hub <= pickHub) return;
       pickHub = hub;
       pick = { stat, line, side:c.side, hub, tier: hub >= 80 ? 'elite' : 'strong',
-               hasOdds: c.price != null, price:c.price, book:c.book };
+               hasOdds: c.price != null, price:c.price, book:c.book,
+               prob: c.prob, edge: c.edge };
     });
   });
   return pick;
@@ -3573,6 +3638,11 @@ function recPickPitcher(p, pr) {
   if (eng && eng.stat === 'k' && eng.hasOdds) return eng;
   const fromOdds = recFromOdds(p && p.oddsMarkets, { k: pr && pr.k }, true);
   if (fromOdds) return fromOdds;
+  // Real book K lines exist but none clear the bar — the market prices this
+  // fairly; do NOT fabricate a projection-only take at a line the books offer.
+  const hasRealK = Array.isArray(p && p.oddsMarkets)
+    && p.oddsMarkets.some(m => REC_MK_STAT[m.marketKey] === 'k' && Number.isFinite(Number(m.line)));
+  if (hasRealK) return null;
   if (eng && eng.stat === 'k') return eng;
   if (!pr || pr.k == null) return null;
   let line = null;
@@ -3597,6 +3667,54 @@ function recLine(rec, stat) {
   return `<div class="rec-line">${rec.side === 'OVER' ? 'O' : 'U'} ${fmtLine(rec.line)}${px}${bk}</div>`;
 }
 
+// ── Definite TAKE / SKIP verdict strip ───────────────────────────────────────
+// Every player card gets an explicit call: TAKE when a pick clears the hub bar,
+// otherwise SKIP — always with the numbers behind the call spelled out.
+// `below` is the best candidate that FAILED the gate (for the skip reasoning);
+// `hasOddsData` distinguishes "priced fairly" from "no lines to grade".
+const VERDICT_STAT_LABEL = {hits:'Hits', tb:'Total Bases', hr:'Home Runs', rbi:'RBI', hrr:'H+R+RBI', k:'Strikeouts', bb:'Walks'};
+function verdictStripHtml(rec, below, hasOddsData) {
+  const pct  = v => `${(v*100).toFixed(0)}%`;
+  const spct = v => `${v >= 0 ? '+' : ''}${(v*100).toFixed(1)}%`;
+  // Promote a strong-value candidate that missed the hub gate: a ≥5-point edge
+  // vs the de-vig'd price is a take on value alone. (Hub = prob×60 + edge bonus
+  // structurally under-rates low-probability markets like pitcher Ks, where even
+  // a big edge can never reach the 60 bar.)
+  let promoted = false;
+  if (!rec && below && below.edge != null && below.edge >= 0.05) { rec = below; promoted = true; }
+  if (rec) {
+    const lbl = VERDICT_STAT_LABEL[rec.stat] || String(rec.stat || '').toUpperCase();
+    const lineStr = rec.line != null ? `${rec.side} ${fmtLine(rec.line)}` : rec.side || 'OVER';
+    const px = rec.hasOdds && rec.price != null
+      ? ` ${_fmtOdds(rec.price)}${rec.book ? ' @ ' + escW(String(rec.book).toUpperCase()) : ''}` : '';
+    const why = [];
+    if (rec.prob != null) why.push(`model ${pct(rec.prob)}`);
+    if (rec.prob != null && rec.edge != null) why.push(`fair market ${pct(rec.prob - rec.edge)}`);
+    if (rec.edge != null) why.push(`edge ${spct(rec.edge)}`);
+    if (rec.hub  != null) why.push(`hub ${Math.round(rec.hub)}`);
+    if (promoted) why.push('take on value — edge clears the +5% bar');
+    if (!rec.hasOdds) why.push('no book odds — verify the line at your book');
+    return `<div class="verdict-strip take">
+      <span class="verdict-word">✅ TAKE</span>
+      <span class="verdict-pick">${lbl} ${lineStr}${px}</span>
+      <span class="verdict-why">${why.join(' · ')}</span>
+    </div>`;
+  }
+  let why;
+  if (below && below.prob != null && below.edge != null) {
+    const lbl = VERDICT_STAT_LABEL[below.stat] || String(below.stat || '').toUpperCase();
+    why = `best case ${lbl} ${below.side} ${fmtLine(below.line)}: model ${pct(below.prob)} vs fair ${pct(below.prob - below.edge)} (edge ${spct(below.edge)}) — fails the value gate (hub ≥${REC_MIN_HUB} or edge ≥+5%)`;
+  } else if (!hasOddsData) {
+    why = 'no book lines available to grade an edge against';
+  } else {
+    why = 'no positive edge vs today’s prices';
+  }
+  return `<div class="verdict-strip skip">
+    <span class="verdict-word">⛔ SKIP</span>
+    <span class="verdict-why">${why}</span>
+  </div>`;
+}
+
 function batterCard(b) {
   const p    = b.proj || {};
   const adj  = p.adjustments || null;
@@ -3607,6 +3725,8 @@ function batterCard(b) {
   const ev   = PLAYER_EV_MAP[nKey] ?? b.scanEvPct;
   const best = PLAYER_BEST_PROP[nKey] || b.scanBestProp;
   const rec  = recForBatter(b);
+  const recBelow = rec ? null : recFromOdds(b.oddsMarkets, p, false, -1);
+  const verdict  = verdictStripHtml(rec, recBelow, Array.isArray(b.oddsMarkets) && b.oddsMarkets.length > 0);
   const bKey = best ? pickKey(best) : null;
   const bSaved = bKey && TRACKED_KEYS.has(bKey);
   const hrPanel = p.hr != null ? hrProfilePanel(b, p) : '';
@@ -3664,6 +3784,7 @@ function batterCard(b) {
       </div>
     </div>
     <div class="bcard-vs">vs ${b.opp_pitcher||'—'} (${b.opp_hand||'?'}HP) · ERA ${nd(b.opp_era)} · K/9 ${nd(b.opp_k9)}</div>
+    ${verdict}
     ${defBadgeHtml(p.defFactor)}
     ${pitchAdvBadgeHtml(b.pitchTypeAdvantage, b.pitchTypeAdvantageNote)}
     ${b.proj?.platoon_note ? `<div class="platoon-badge platoon-${platoonCls(b.proj.platoon_note)}">${b.proj.platoon_note} · split avg ${b.proj.split_avg??'—'} · ops ${b.proj.split_ops??'—'}</div>` : ''}
@@ -3757,16 +3878,31 @@ function pitchXPanel(p, pr) {
   // PITCH X — K over/under picks with reasoning
   if (!pr || !pr.k) return '';
   const kProj = pr.k;
-  const lines = [3.5, 4.5, 5.5, 6.5];
-  const pills = lines.map(line => {
+  // Prefer the pitcher's REAL sportsbook K lines (with best price/book); the
+  // generic ladder is only a fallback when no odds coverage exists.
+  const realK = (Array.isArray(p.oddsMarkets) ? p.oddsMarkets : [])
+    .filter(m => m.marketKey === 'pitcher_strikeouts' && Number.isFinite(Number(m.line)))
+    .sort((a, b) => Number(a.line) - Number(b.line));
+  const lineDefs = realK.length
+    ? realK.map(m => ({line: Number(m.line), overPrice: m.overPrice, overBook: m.overBook,
+                       underPrice: m.underPrice, underBook: m.underBook}))
+    : [3.5, 4.5, 5.5, 6.5].map(line => ({line}));
+  const pills = lineDefs.map(ld => {
+    const line = ld.line;
     const edge = kProj - line;
     const dir  = edge >= 0 ? 'OVER' : 'UNDER';
     const col  = dir === 'OVER' ? 'var(--g)' : 'var(--r)';
     const bg   = dir === 'OVER' ? 'rgba(0,230,118,.1)' : 'rgba(244,67,54,.08)';
     const bor  = dir === 'OVER' ? 'rgba(0,230,118,.3)'  : 'rgba(244,67,54,.25)';
     const edgeStr = (edge >= 0 ? '+' : '') + edge.toFixed(2);
-    return `<span class="batx-ou-pill" style="border-color:${bor};background:${bg};color:${col}">K ${line} <strong>${dir}</strong> <span style="opacity:.6;font-size:.48rem">${edgeStr}</span></span>`;
+    const px = dir === 'OVER' ? ld.overPrice : ld.underPrice;
+    const bk = dir === 'OVER' ? ld.overBook  : ld.underBook;
+    const pxStr = px != null
+      ? ` <span style="opacity:.75;font-size:.48rem;font-family:'JetBrains Mono',monospace">${px > 0 ? '+' + px : px}${bk ? ' ' + esc(String(bk).slice(0,3).toUpperCase()) : ''}</span>`
+      : '';
+    return `<span class="batx-ou-pill" style="border-color:${bor};background:${bg};color:${col}">K ${line} <strong>${dir}</strong> <span style="opacity:.6;font-size:.48rem">${edgeStr}</span>${pxStr}</span>`;
   }).join('');
+  const srcNote = realK.length ? '' : ' <span style="opacity:.5;font-size:.46rem">(model lines — no book odds)</span>';
   // Reasoning
   const flag  = pr.form_flag || 'neutral';
   const flagTxt = flag === 'struggling' ? 'pitcher trending up in ERA recently'
@@ -3778,7 +3914,7 @@ function pitchXPanel(p, pr) {
   const parts = [`${flagTxt}`, `${ip} IP projected at ${era_b} blended ERA`];
   if (opp_k) parts.push(opp_k);
   return `<div class="batx-panel" style="margin-top:12px">
-    <div class="batx-hd">PITCH X &nbsp;<span style="font-family:Orbitron,monospace;font-size:.7rem;color:var(--c)">${kProj} proj K</span></div>
+    <div class="batx-hd">PITCH X &nbsp;<span style="font-family:Orbitron,monospace;font-size:.7rem;color:var(--c)">${kProj} proj K</span>${srcNote}</div>
     <div class="batx-ou-row">${pills}</div>
     <div class="batx-note" style="margin-top:4px">${parts.join(' · ')}</div>
   </div>`;
@@ -3789,6 +3925,8 @@ function pitcherPanel(p) {
   const pid  = p.id;
   const trnd = trendPillsForPitcher(pid);
   const recK = recPickPitcher(p, pr);
+  const recKBelow = recK ? null : recFromOdds(p.oddsMarkets, {k: pr.k}, true, -1);
+  const verdictK  = verdictStripHtml(recK, recKBelow, Array.isArray(p.oddsMarkets) && p.oddsMarkets.length > 0);
 
   // Form badge
   const flag = pr.form_flag || 'neutral';
@@ -3828,6 +3966,7 @@ function pitcherPanel(p) {
         <div class="pp-meta">${p.team||''} · ${p.role||'SP'} · ${p.pitchHand||'R'}HP</div>
       </div>
     </div>
+    ${verdictK}
     ${recentRow}
     <div class="pp-projs">
       <div class="pp-proj${recCls(recK,'k')}">${recTag(recK,'k')}<div class="pp-plbl">PROJ K</div><div class="pp-pval kv">${f1(pr.k)}</div>${recLine(recK,'k')}</div>
@@ -3848,9 +3987,17 @@ function pitcherPanel(p) {
     </div>
     ${modelIntelPanel(PLAYER_BEST_PROP[(p.name||'').toLowerCase()])}
     ${pitchXPanel(p, pr)}
-    ${pr.k != null ? `<div class="parlay-row" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px">
-      ${[3.5, 4.5, 5.5, 6.5].map(line => `<button class="save-btn parlay-btn" data-player="${esc(p.name||'')}" data-team="${esc(p.team||'')}" data-market-key="pitcher_strikeouts" data-line="${line}" data-game-pk="${p.gamePk||''}">＋ K ${line}</button>`).join('')}
-    </div>` : ''}
+    ${pr.k != null ? (() => {
+      // Parlay quick-adds at the pitcher's REAL book K lines; generic ladder only
+      // when no odds coverage exists.
+      const realKLines = [...new Set((Array.isArray(p.oddsMarkets) ? p.oddsMarkets : [])
+        .filter(m => m.marketKey === 'pitcher_strikeouts' && Number.isFinite(Number(m.line)))
+        .map(m => Number(m.line)))].sort((a, b) => a - b);
+      const lines = realKLines.length ? realKLines : [3.5, 4.5, 5.5, 6.5];
+      return `<div class="parlay-row" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px">
+      ${lines.map(line => `<button class="save-btn parlay-btn" data-player="${esc(p.name||'')}" data-team="${esc(p.team||'')}" data-market-key="pitcher_strikeouts" data-line="${line}" data-game-pk="${p.gamePk||''}">＋ K ${line}</button>`).join('')}
+    </div>`;
+    })() : ''}
     <div class="bcard-tools" style="grid-template-columns:repeat(2,1fr)">
       <button class="tool-btn" onclick="openLineShop('${(p.name||'').replace(/'/g,"\\'")}', ${p.gamePk || 'null'}, ${pid || 'null'}, 'pitcher')" title="Line shopping — book-by-book K prices">📚 LINE SHOPPING</button>
       <button class="tool-btn" onclick="openHitHistory(${pid||'null'}, '${(p.name||'').replace(/'/g,"\\'")}', 'pitcher')" title="Game-by-game K prop history">📊 K HISTORY</button>
