@@ -629,6 +629,34 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
                     padding:1px 7px; font-size:.72rem; margin-left:5px; }
 </style>
 <link rel="stylesheet" href="/static/mobile.css">
+<style>
+/* ── Props-page mobile overrides ─────────────────────────────────────────────
+   Must load AFTER mobile.css: its global `nav .nav-r{display:none}` hides this
+   page's core controls (date picker + LOAD + FULL SCAN live in .nav-r). */
+@media (max-width: 768px){
+  nav .nav-r{display:flex !important;width:100%;justify-content:flex-start}
+  nav .nav-r .back{display:none !important}   /* bottom tab bar covers nav */
+  .date-row{width:100%;flex-wrap:wrap}
+  .dinput{flex:1;min-width:130px}
+  /* sticky offsets assume the slim one-row nav; with the date row restored the
+     nav is two rows tall, so pin the sort bar statically instead */
+  .sort-sticky-wrap{position:static !important;padding:4px 0 6px !important}
+  /* edge-lab widgets + banners carry desktop 32px gutters inline */
+  #hotHandWidget,#edgesWidget{margin:10px 12px 0 !important}
+  .srcbar,.trec-bar{padding-left:12px !important;padding-right:12px !important}
+  /* page tabs + value filters: one scrollable row beats a 3-row wrap */
+  .tabs,.vcontrols{flex-wrap:nowrap !important;overflow-x:auto;scrollbar-width:none;-ms-overflow-style:none}
+  .tabs::-webkit-scrollbar,.vcontrols::-webkit-scrollbar{display:none}
+  .tab{white-space:nowrap;padding:11px 14px}
+  .vfilter{white-space:nowrap;flex:0 0 auto}
+  /* market heat: one scrollable row of pills */
+  .heat-strip.show{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+  .heat-strip::-webkit-scrollbar{display:none}
+  .heat-lbl,.heat-sum,.heat-pill{flex:0 0 auto}
+  /* best-odds pill may two-line instead of clipping at the right edge */
+  .bo-row{flex-wrap:wrap;row-gap:2px}
+}
+</style>
 </head>
 <body>
 <script src="/static/global-nav.js" defer></script>
@@ -1219,7 +1247,7 @@ async function loadEdgesWidget(){
     if(!d.success) throw new Error(d.error||'failed');
     EDG_ROWS = d.edges || [];
     const sub = document.getElementById('edgSub');
-    if(sub) sub.textContent = `${d.count} positive-value plays`;
+    if(sub) sub.textContent = `${d.count ?? EDG_ROWS.length} positive-value plays`;
     if(!EDG_ROWS.length){
       strip.innerHTML = `<span style="color:var(--mu);font-size:.7rem">No edges right now${d.computing?' (computing…)':''}.</span>`;
       if(d.computing) setTimeout(loadEdgesWidget, 6000);
@@ -1268,7 +1296,7 @@ async function loadHotHandWidget(){
     if(!d.success) throw new Error(d.error||'failed');
     HH_ROWS = d.players || [];
     const sub = document.getElementById('hhSub');
-    if(sub) sub.textContent = `${d.count} players hitting their prop in 100% of the last 5`;
+    if(sub) sub.textContent = `${d.count ?? HH_ROWS.length} players hitting their prop in 100% of the last 5`;
     if(!HH_ROWS.length){
       strip.innerHTML = `<span style="color:var(--mu);font-size:.7rem">No 100% Club members right now${d.computing?' (computing…)':''}</span>`;
       if(d.computing) setTimeout(loadHotHandWidget, 6000);
@@ -3662,7 +3690,7 @@ function batterCard(b) {
         if (m.underBook) bookSet.add(m.underBook);
         if (m.overPrice != null && (bestPx === null || m.overPrice > bestPx)) {
           bestPx = m.overPrice; bestBk = m.overBook || '';
-          bestMkt = m.marketLabel || m.marketKey || '';
+          bestMkt = MKT_LABELS[m.marketKey] || m.marketLabel || m.marketKey || '';
           bestOpen = m.openingOverPrice ?? null;
           bestMove = m.lineMove ?? null;
           bestHistory = Array.isArray(m.priceHistory) ? m.priceHistory : null;
@@ -3690,7 +3718,7 @@ function batterCard(b) {
         moveHtml = `<span style="color:${mvCol};font-size:.6rem;font-family:'JetBrains Mono',monospace" title="vs opening ${bestOpen}">${mvDir}${mvStr}</span>${steamBadge}`;
       }
       const sparkHtml = priceSparkSvg(bestHistory);
-      return `<div style="display:flex;align-items:center;gap:8px;padding:5px 10px;margin:6px 0 2px;background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.12);border-radius:8px;font-size:.63rem">
+      return `<div class="bo-row" style="display:flex;align-items:center;gap:8px;padding:5px 10px;margin:6px 0 2px;background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.12);border-radius:8px;font-size:.63rem">
         <span style="color:var(--mu)">BEST ODDS</span>
         <span style="${pxCls};font-weight:700;font-family:'JetBrains Mono',monospace">${pxStr}</span>
         ${bestBk ? `<span style="color:var(--c);font-size:.58rem">@ ${bestBk.toUpperCase()}</span>` : ''}
