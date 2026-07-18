@@ -1,0 +1,38 @@
+# fly.toml for nfl-analytics-hub
+# Create the app + volume first:
+#   fly apps create nfl-analytics-hub
+#   fly volumes create nfl_data --region ewr --size 1
+#   fly secrets set ODDS_API_KEY=...
+
+app = 'nfl-analytics-hub'
+primary_region = 'ewr'
+
+[build]
+
+[env]
+  PORT = '8080'
+  REDIS_URL = 'redis://localhost:6379'
+
+[[mounts]]
+  source = 'nfl_data'
+  destination = '/app/data'
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = 'off'
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['app']
+
+  [[http_service.checks]]
+    interval = '30s'
+    timeout = '10s'
+    grace_period = '2m'
+    method = 'GET'
+    path = '/health'
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1

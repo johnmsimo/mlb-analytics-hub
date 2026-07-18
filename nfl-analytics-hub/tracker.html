@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tracker · NFL Analytics Hub</title>
+<style>
+:root{--bg:#0b1120;--panel:#131c31;--line:#24304f;--txt:#e6ecf7;--dim:#8fa1bf;--acc:#4f8ff7;--green:#2fbf71;--red:#e5484d;--gold:#e8b339}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--txt);font:14px/1.45 -apple-system,'Segoe UI',Roboto,sans-serif}
+a{color:inherit;text-decoration:none}
+.nav{display:flex;align-items:center;gap:18px;padding:14px 22px;background:var(--panel);border-bottom:1px solid #243049;position:sticky;top:0;z-index:5}
+.nav .logo{font-weight:800;font-size:16px}.nav .logo span{color:var(--acc)}
+.nav a.tab{color:var(--dim);font-weight:600;padding:6px 10px;border-radius:8px}
+.nav a.tab.on,.nav a.tab:hover{color:var(--txt);background:#1c2740}
+.wrap{max-width:1200px;margin:0 auto;padding:20px 22px}
+.hero{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px}
+.kpi{background:var(--panel);border:1px solid #22304e;border-radius:12px;padding:14px 16px}
+.kpi .v{font-size:26px;font-weight:800;margin-top:2px}
+.kpi .l{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.8px}
+.kpi.primary{border-color:var(--acc);background:linear-gradient(180deg,#14203a,#131c31)}
+.kpi .sub{color:var(--dim);font-size:11px;margin-top:3px}
+.pos{color:var(--green)}.neg{color:var(--red)}
+.bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:14px 0}
+button,input{background:#1a2440;color:var(--txt);border:1px solid #2a3a5e;border-radius:8px;padding:7px 10px;font:inherit}
+button{cursor:pointer}button:hover{border-color:var(--acc)}
+.muted{color:var(--dim);font-size:12px}
+.panel{background:var(--panel);border:1px solid #22304e;border-radius:12px;overflow:hidden;margin-bottom:16px}
+.panel h2{font-size:13px;text-transform:uppercase;letter-spacing:.8px;color:var(--dim);padding:12px 14px 0}
+.scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{color:var(--dim);text-align:left;font-weight:600;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:6px 10px;border-bottom:1px solid #1b2540;white-space:nowrap}
+.num{text-align:right}
+.g{font-weight:700;padding:1px 8px;border-radius:6px;font-size:11px;text-transform:uppercase}
+.g.win{background:#14351f;color:var(--green)}.g.loss{background:#3a1a1e;color:var(--red)}
+.g.push{background:#1a2440;color:var(--dim)}.g.pending{background:#2c2a17;color:var(--gold)}
+.del{color:var(--red);cursor:pointer;font-weight:700;padding:0 6px}
+.empty{color:var(--dim);padding:40px;text-align:center}
+.set{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:12px 14px}
+.set input{width:90px}
+</style>
+</head>
+<body>
+<nav class="nav">
+  <div class="logo">NFL <span>Analytics Hub</span></div>
+  <a class="tab" href="/">Dashboard</a>
+  <a class="tab" href="/props">Props</a>
+  <a class="tab on" href="/tracker">Tracker</a>
+</nav>
+<div class="wrap">
+  <div class="hero" id="hero"></div>
+  <div class="bar">
+    <button id="grade">Grade pending</button>
+    <button id="capture">Capture closing lines</button>
+    <span class="muted" id="msg"></span>
+  </div>
+  <div class="panel"><h2>Picks</h2><div class="scroll" id="picks"><div class="empty">Loading…</div></div></div>
+  <div class="panel"><h2>Per-market record</h2><div class="scroll" id="markets"></div></div>
+  <div class="panel"><h2>Bankroll settings</h2><div class="set" id="settings"></div></div>
+</div>
+<script>
+const $=q=>document.querySelector(q);
+const esc=x=>String(x??'').replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+const am=p=>p==null?'—':(p>0?'+':'')+p;
+const pc=(x,d=1)=>x==null?'—':(x*100).toFixed(d)+'%';
+async function refresh(){
+  const [perf,picks]=await Promise.all([
+    (await fetch('/api/tracker/performance')).json(),
+    (await fetch('/api/tracker/picks')).json()]);
+  renderHero(perf);renderPicks(picks);renderMarkets(perf);renderSettings(perf.settings);
+}
+function renderHero(p){
+  const k=p.primaryKpi||{};
+  $('#hero').innerHTML=`
+    <div class="kpi primary"><div class="l">Beat Close %</div><div class="v ${k.value>0.5?'pos':''}">${k.value!=null?pc(k.value,0):'—'}</div><div class="sub">n=${k.n} with CLV</div></div>
+    <div class="kpi primary"><div class="l">Avg CLV</div><div class="v ${k.avg_clv>0?'pos':k.avg_clv<0?'neg':''}">${k.avg_clv!=null?pc(k.avg_clv):'—'}</div><div class="sub">closing − opening implied</div></div>
+    <div class="kpi"><div class="l">Record</div><div class="v">${p.wins}-${p.losses}${p.pushes?'-'+p.pushes:''}</div><div class="sub">${p.pending} pending</div></div>
+    <div class="kpi"><div class="l">Hit rate</div><div class="v">${p.hit_rate!=null?pc(p.hit_rate,0):'—'}</div></div>
+    <div class="kpi"><div class="l">Profit</div><div class="v ${p.profitDollars>0?'pos':p.profitDollars<0?'neg':''}">$${(p.profitDollars??0).toFixed(2)}</div><div class="sub">ROI ${p.roi!=null?pc(p.roi):'—'}</div></div>`;
+}
+function renderPicks(store){
+  const days=Object.keys(store).sort().reverse();
+  let h='<table><tr><th>Date</th><th>Pick</th><th>Mkt</th><th class="num">Line</th><th></th><th class="num">Price</th><th class="num">Stake</th><th class="num">Model%</th><th class="num">CLV</th><th class="num">Actual</th><th>Grade</th><th class="num">P/L</th><th></th></tr>';
+  let any=false;
+  for(const d of days){
+    for(const e of (store[d].entries||[]).slice().reverse()){
+      any=true;
+      h+=`<tr>
+        <td class="muted">${d}</td>
+        <td>${esc(e.player)}<span class="muted"> ${esc(e.team||'')}</span></td>
+        <td>${esc(e.marketLabel||e.marketKey)}</td>
+        <td class="num">${e.line??'—'}</td>
+        <td>${esc(e.side||'')}</td>
+        <td class="num">${am(e.price)}</td>
+        <td class="num">${e.stakeDollars?'$'+e.stakeDollars:'—'}</td>
+        <td class="num">${e.modelProb!=null?pc(e.modelProb,0):'—'}</td>
+        <td class="num ${e.clvEdge>0?'pos':e.clvEdge<0?'neg':''}">${e.clvEdge!=null?pc(e.clvEdge):'—'}</td>
+        <td class="num">${e.actual??'—'}</td>
+        <td><span class="g ${e.grade}">${e.grade}</span></td>
+        <td class="num ${e.profitDollars>0?'pos':e.profitDollars<0?'neg':''}">${e.profitDollars!=null?'$'+e.profitDollars.toFixed(2):'—'}</td>
+        <td><span class="del" data-d="${d}" data-i="${e.id}">×</span></td>
+      </tr>`;
+    }
+  }
+  $('#picks').innerHTML=any?h+'</table>':'<div class="empty">No picks yet — add from the Props board.</div>';
+  document.querySelectorAll('.del').forEach(x=>x.onclick=async()=>{
+    if(!confirm('Delete pick?'))return;
+    await fetch(`/api/tracker/pick/${x.dataset.d}/${x.dataset.i}`,{method:'DELETE'});refresh();
+  });
+}
+function renderMarkets(p){
+  const m=p.per_market||{};
+  const keys=Object.keys(m);
+  if(!keys.length){$('#markets').innerHTML='<div class="empty">—</div>';return}
+  let h='<table><tr><th>Market</th><th class="num">N</th><th class="num">W</th><th class="num">L</th><th class="num">Push</th><th class="num">P/L</th></tr>';
+  for(const k of keys){const c=m[k];h+=`<tr><td>${esc(k)}</td><td class="num">${c.n}</td><td class="num">${c.wins}</td><td class="num">${c.losses}</td><td class="num">${c.pushes}</td><td class="num ${c.profit>0?'pos':c.profit<0?'neg':''}">$${c.profit.toFixed(2)}</td></tr>`}
+  $('#markets').innerHTML=h+'</table>';
+}
+function renderSettings(s){
+  $('#settings').innerHTML=`
+    <label class="muted">Bankroll $<input id="s_bankroll" value="${s.bankroll}"></label>
+    <label class="muted">Kelly fraction <input id="s_kelly" value="${s.kelly_fraction}"></label>
+    <label class="muted">Max bet % <input id="s_max" value="${s.max_bet_pct}"></label>
+    <label class="muted">Unit % <input id="s_unit" value="${s.unit_pct}"></label>
+    <button id="s_save">Save</button>`;
+  $('#s_save').onclick=async()=>{
+    await fetch('/api/tracker/settings',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({bankroll:$('#s_bankroll').value,kelly_fraction:$('#s_kelly').value,max_bet_pct:$('#s_max').value,unit_pct:$('#s_unit').value})});
+    $('#msg').textContent='Settings saved';refresh();
+  };
+}
+$('#grade').onclick=async()=>{
+  const r=await (await fetch('/api/tracker/grade',{method:'POST'})).json();
+  $('#msg').textContent=`Graded ${r.graded} picks`;refresh();
+};
+$('#capture').onclick=async()=>{
+  const r=await (await fetch('/api/tracker/closing-capture',{method:'POST'})).json();
+  $('#msg').textContent=r.reason||`Captured ${r.captured} closing lines`;refresh();
+};
+refresh();
+</script>
+</body>
+</html>
