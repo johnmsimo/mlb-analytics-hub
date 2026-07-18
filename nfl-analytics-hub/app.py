@@ -105,6 +105,11 @@ def page_tracker():
     return _page_response("tracker.html")
 
 
+@app.route("/player/<pid>")
+def page_player(pid):
+    return _page_response("player.html")
+
+
 # ------------------------------------------------------------- health/status
 
 @app.route("/health")
@@ -145,10 +150,12 @@ def _safe(fn, *a):
 from routes.games import games_bp          # noqa: E402
 from routes.props import props_bp          # noqa: E402
 from routes.tracker_routes import tracker_bp  # noqa: E402
+from routes.players import players_bp      # noqa: E402
 
 app.register_blueprint(games_bp)
 app.register_blueprint(props_bp)
 app.register_blueprint(tracker_bp)
+app.register_blueprint(players_bp)
 
 
 # ------------------------------------------------------------------- preload

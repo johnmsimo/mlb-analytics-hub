@@ -48,10 +48,15 @@ A `.env` in the repo root is auto-loaded at boot.
 
 | Route | Page | Purpose |
 |-------|------|---------|
-| `/` | dashboard.html | Weekly slate: scores, records, spread/total/ML pills |
-| `/props` | props.html | Props board: projection, P(over), best price, edge/EV/Kelly, one-click Track |
-| `/game/<id>` | game.html | Lines board (de-vig), defense-vs-position, top props |
-| `/tracker` | tracker.html | CLV hero (Beat Close % / Avg CLV), record, picks, bankroll settings |
+| `/` | dashboard.html | Weekly slate: scores, records, line pills; auto-refreshes while games are live |
+| `/props` | props.html | Props board: projection, P(over), best price, edge/EV/Kelly, add-to-slip |
+| `/game/<id>` | game.html | Lines board (de-vig) with slip buttons, defense-vs-position, top props |
+| `/player/<pid>` | player.html | Game-log chart vs an adjustable line, hit-rate splits, projection, matchup |
+| `/tracker` | tracker.html | CLV hero, live pick pacing during games, picks, bankroll settings |
+
+All pages share `static/theme.css` + `static/app.js` (mobile-first shell:
+bottom nav on phones, persistent week state, and a sportsbook-style bet slip
+that saves confirmed picks to the tracker).
 
 ## Data sources
 

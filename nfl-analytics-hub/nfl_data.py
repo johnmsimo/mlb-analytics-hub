@@ -354,6 +354,21 @@ def fetch_game_boxscore(game_id: str) -> dict:
     return _get_json(f"{ESPN_BASE}/summary?event={game_id}")
 
 
+def live_game_stats(game: dict, ttl: float = 60.0) -> list[dict]:
+    """In-progress (or just-final) player stat rows for one game, parsed from
+    the live boxscore. Short memory TTL — polled on game days."""
+    key = f"livebox:{game['game_id']}"
+    hit = _mem_get(key)
+    if hit is not None:
+        return hit
+    try:
+        rows = _parse_boxscore(fetch_game_boxscore(game["game_id"]), game)
+    except Exception:  # noqa: BLE001
+        rows = []
+    _mem_set(key, rows, ttl)
+    return rows
+
+
 # -------------------------------------------------------- player week stats
 
 def _csv_name(season: int) -> str:

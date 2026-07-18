@@ -2,134 +2,123 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Props · NFL Analytics Hub</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=Orbitron:wght@500;700;900&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<link rel="stylesheet" href="/static/theme.css">
+<script src="/static/app.js" defer></script>
 <style>
-:root{--bg:#0b1120;--panel:#131c31;--line:#24304f;--txt:#e6ecf7;--dim:#8fa1bf;--acc:#4f8ff7;--green:#2fbf71;--red:#e5484d;--gold:#e8b339}
-*{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg);color:var(--txt);font:14px/1.45 -apple-system,'Segoe UI',Roboto,sans-serif}
-a{color:inherit;text-decoration:none}
-.nav{display:flex;align-items:center;gap:18px;padding:14px 22px;background:var(--panel);border-bottom:1px solid #243049;position:sticky;top:0;z-index:5}
-.nav .logo{font-weight:800;font-size:16px}.nav .logo span{color:var(--acc)}
-.nav a.tab{color:var(--dim);font-weight:600;padding:6px 10px;border-radius:8px}
-.nav a.tab.on,.nav a.tab:hover{color:var(--txt);background:#1c2740}
-.wrap{max-width:1300px;margin:0 auto;padding:20px 22px}
-.bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
-select,button,input{background:#1a2440;color:var(--txt);border:1px solid #2a3a5e;border-radius:8px;padding:7px 10px;font:inherit}
-button{cursor:pointer}button:hover{border-color:var(--acc)}
-.muted{color:var(--dim);font-size:12px}
-.panel{background:var(--panel);border:1px solid #22304e;border-radius:12px;overflow:hidden}
-.scroll{overflow-x:auto}
-table{width:100%;border-collapse:collapse;font-size:13px}
-th{color:var(--dim);text-align:left;font-weight:600;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap;cursor:pointer;user-select:none}
-td{padding:6px 10px;border-bottom:1px solid #1b2540;white-space:nowrap}
-.num{text-align:right}
-.pos{color:var(--green)}.neg{color:var(--red)}
-.gr{font-weight:800;padding:1px 8px;border-radius:6px;background:#1a2440}
-.gr.A,.gr.Ap{color:var(--gold)}.gr.B,.gr.Bp{color:var(--green)}.gr.C,.gr.Cp{color:var(--acc)}
-.track{background:#173059;border-color:#2a4a7e;font-size:12px;padding:4px 10px}
-.track.done{background:#14351f;border-color:var(--green);color:var(--green)}
-.side{font-weight:700;text-transform:uppercase;font-size:11px}
-.empty{color:var(--dim);padding:50px;text-align:center}
-.toast{position:fixed;bottom:22px;right:22px;background:#14351f;border:1px solid var(--green);color:var(--green);padding:10px 16px;border-radius:10px;opacity:0;transition:opacity .25s;pointer-events:none}
-.toast.on{opacity:1}
+.addbtn{background:var(--volt-dim);border:1px solid var(--b-strong);color:var(--volt);border-radius:8px;font-weight:800;font-size:12px;padding:5px 11px;min-height:30px}
+.addbtn:hover{background:rgba(184,236,61,.22)}
+.addbtn.in{background:var(--card3);border-color:var(--line);color:var(--mu)}
+.pname{font-weight:700}
+.pname:hover{color:var(--volt)}
+.psub{color:var(--mu);font-size:11px}
 </style>
 </head>
 <body>
-<nav class="nav">
-  <div class="logo">NFL <span>Analytics Hub</span></div>
-  <a class="tab" href="/">Dashboard</a>
-  <a class="tab on" href="/props">Props</a>
-  <a class="tab" href="/tracker">Tracker</a>
-</nav>
-<div class="wrap">
+<main class="wrap">
+  <div class="bar" id="controls"></div>
   <div class="bar">
-    <select id="season"></select>
-    <select id="stype"><option value="REG">Regular</option><option value="POST">Playoffs</option></select>
-    <select id="week"></select>
-    <button id="go">Load</button>
     <select id="fmkt"><option value="">All markets</option></select>
     <select id="fpos"><option value="">All positions</option><option>QB</option><option>RB</option><option>WR</option><option>TE</option></select>
-    <input id="fq" placeholder="Search player / team" style="width:180px">
+    <input type="search" id="fq" placeholder="Player or team…" style="flex:1;min-width:140px;max-width:230px">
     <span class="muted" id="meta"></span>
   </div>
-  <div class="panel scroll"><table id="tbl"><tbody><tr><td class="empty">Loading…</td></tr></tbody></table></div>
-</div>
-<div class="toast" id="toast">Saved to tracker</div>
+  <div class="panel scroll" id="boardwrap"><table id="tbl"><tbody></tbody></table></div>
+</main>
 <script>
-const $=q=>document.querySelector(q);
-const esc=x=>String(x??'').replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
-const am=p=>p==null?'—':(p>0?'+':'')+p;
-let all=[],sortKey='edge',sortDir=-1,cur=null;
-function fillSel(el,vals,sel){el.innerHTML=vals.map(v=>`<option ${v==sel?'selected':''}>${v}</option>`).join('')}
-async function init(){
-  cur=await (await fetch('/api/games/current')).json();
-  fillSel($('#season'),[cur.season-1,cur.season,cur.season+1].filter(v=>v>=2022),cur.season);
-  $('#stype').value=cur.season_type||'REG';
-  fillWeeks(cur.week);
-  const labels={pass_yds:'Pass Yards',pass_tds:'Pass TDs',rush_yds:'Rush Yards',receptions:'Receptions',rec_yds:'Rec Yards',anytime_td:'Anytime TD'};
-  $('#fmkt').innerHTML='<option value="">All markets</option>'+Object.entries(labels).map(([k,v])=>`<option value="${k}">${v}</option>`).join('');
-  load();
-}
-function fillWeeks(sel){
-  const post=$('#stype').value==='POST';
-  fillSel($('#week'),post?[1,2,3,4,5]:Array.from({length:18},(_,i)=>i+1),sel||1);
-}
-$('#stype').onchange=()=>fillWeeks(1);
-$('#go').onclick=load;
-['fmkt','fpos'].forEach(id=>$('#'+id).onchange=render);
-$('#fq').oninput=render;
-async function load(){
-  $('#tbl tbody').innerHTML='<tr><td class="empty">Loading…</td></tr>';
-  const s=$('#season').value,w=$('#week').value,t=$('#stype').value;
-  const d=await (await fetch(`/api/props/board?season=${s}&week=${w}&type=${t}`)).json();
-  all=d.rows||[];
-  $('#meta').textContent=`${all.length} props · ${d.games} games${d.odds_configured?'':' · odds offline (model lines)'}`;
-  render();
-}
-function render(){
-  const mk=$('#fmkt').value,pos=$('#fpos').value,q=$('#fq').value.toLowerCase();
-  let rows=all.filter(r=>(!mk||r.marketKey===mk)&&(!pos||r.position===pos)&&(!q||r.player.toLowerCase().includes(q)||r.team.toLowerCase().includes(q)));
-  rows.sort((a,b)=>{const x=a[sortKey],y=b[sortKey];if(x==null&&y==null)return 0;if(x==null)return 1;if(y==null)return -1;return x<y?sortDir:x>y?-sortDir:0});
-  const H=(k,l)=>`<th data-k="${k}">${l}${sortKey===k?(sortDir<0?' ↓':' ↑'):''}</th>`;
-  let h='<tr>'+H('player','Player')+H('marketKey','Market')+H('line','Line')+H('modelMean','Proj')+H('probOver','P(over)')+'<th>Pick</th>'+H('bestPrice','Best')+H('edge','Edge')+H('evPct','EV')+H('kellyPct','Kelly')+H('grade','Gr')+'<th></th></tr>';
-  for(const r of rows.slice(0,400)){
-    const best=r.side==='over'?r.bestOver:r.bestUnder;
-    r.bestPrice=best?best.price:null;
-    const gcls=(r.grade||'').replace('+','p');
-    h+=`<tr>
-      <td><a href="/game/${r.gameId}?season=${r.season}">${esc(r.player)}</a> <span class="muted">${r.team} ${r.position} v ${r.opponent}</span></td>
-      <td>${esc(r.marketLabel)}</td>
-      <td class="num">${r.line}${r.noOdds?'<span class="muted">*</span>':''}</td>
-      <td class="num">${r.modelMean}</td>
-      <td class="num">${(r.probOver*100).toFixed(0)}%</td>
-      <td><span class="side ${r.side==='over'?'pos':'neg'}">${r.side}</span></td>
-      <td class="num">${best?`${am(best.price)} <span class="muted">${esc(best.book)}</span>`:'—'}</td>
-      <td class="num ${r.edge>0?'pos':r.edge<0?'neg':''}">${r.edge!=null?(r.edge*100).toFixed(1)+'%':'—'}</td>
-      <td class="num ${r.evPct>0?'pos':r.evPct<0?'neg':''}">${r.evPct!=null?(r.evPct*100).toFixed(1)+'%':'—'}</td>
-      <td class="num">${r.kellyPct?(r.kellyPct*100).toFixed(1)+'%':'—'}</td>
-      <td>${r.grade?`<span class="gr ${gcls}">${r.grade}</span>`:''}</td>
-      <td><button class="track" data-id="${esc(r.playerId)}|${esc(r.marketKey)}|${r.line}">Track</button></td>
-    </tr>`;
+document.addEventListener('DOMContentLoaded', async () => {
+  const { $, esc, am, fetchJSON, shell, weekControls, addToSlip } = NFLHub;
+  shell('props');
+
+  const LABELS = { pass_yds:'Pass Yards', pass_tds:'Pass TDs', rush_yds:'Rush Yards', receptions:'Receptions', rec_yds:'Rec Yards', anytime_td:'Anytime TD' };
+  $('#fmkt').innerHTML = '<option value="">All markets</option>' +
+    Object.entries(LABELS).map(([k,v]) => `<option value="${k}">${v}</option>`).join('');
+
+  let all = [], sortKey = 'edge', sortDir = -1, lastW = null;
+  const skeleton = () => $('#tbl tbody').innerHTML =
+    Array.from({length:8},()=>'<tr><td colspan="12" style="padding:4px 8px"><div class="skel" style="height:34px"></div></td></tr>').join('');
+
+  await weekControls($('#controls'), load);
+  ['fmkt','fpos'].forEach(id => $('#'+id).onchange = render);
+  $('#fq').oninput = render;
+
+  async function load(w) {
+    lastW = w; skeleton();
+    let d;
+    try {
+      d = await fetchJSON(`/api/props/board?season=${w.season}&week=${w.week}&type=${w.type}`);
+    } catch (e) {
+      $('#tbl tbody').innerHTML = `<tr><td class="empty">Couldn't load board (${esc(e.message)}).</td></tr>`;
+      return;
+    }
+    all = d.rows || [];
+    $('#meta').textContent = `${all.length} props · ${d.games} games` + (d.odds_configured ? '' : ' · odds offline (model lines*)');
+    render();
   }
-  $('#tbl').innerHTML=h||'<tr><td class="empty">No rows.</td></tr>';
-  document.querySelectorAll('th[data-k]').forEach(th=>th.onclick=()=>{const k=th.dataset.k;if(sortKey===k)sortDir*=-1;else{sortKey=k;sortDir=-1}render()});
-  document.querySelectorAll('.track').forEach(b=>b.onclick=()=>track(b));
-}
-async function track(btn){
-  const [pid,mk,line]=btn.dataset.id.split('|');
-  const r=all.find(x=>String(x.playerId)===pid&&x.marketKey===mk&&String(x.line)===line);
-  if(!r)return;
-  const best=r.side==='over'?r.bestOver:r.bestUnder;
-  const settings=await (await fetch('/api/tracker/settings')).json();
-  const stake=r.kellyPct?Math.round(settings.bankroll*r.kellyPct*100)/100:Math.round(settings.bankroll*0.01*100)/100;
-  const payload={...r,price:best?best.price:null,book:best?best.book:null,stakeDollars:stake,source:'props_board'};
-  const res=await fetch('/api/tracker/pick',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-  if(res.ok){btn.textContent='✓ Tracked';btn.classList.add('done');toast()}
-}
-let tt=null;
-function toast(){const t=$('#toast');t.classList.add('on');clearTimeout(tt);tt=setTimeout(()=>t.classList.remove('on'),1800)}
-init();
+
+  function render() {
+    const mk = $('#fmkt').value, pos = $('#fpos').value, q = $('#fq').value.toLowerCase();
+    const rows = all.filter(r =>
+      (!mk || r.marketKey === mk) && (!pos || r.position === pos) &&
+      (!q || r.player.toLowerCase().includes(q) || r.team.toLowerCase().includes(q)));
+    rows.sort((a,b) => { const x=a[sortKey], y=b[sortKey];
+      if (x==null&&y==null) return 0; if (x==null) return 1; if (y==null) return -1;
+      return x<y ? sortDir : x>y ? -sortDir : 0; });
+    const H = (k,l,cls='') => `<th class="sortable ${cls}" data-k="${k}">${l}${sortKey===k?(sortDir<0?' ↓':' ↑'):''}</th>`;
+    let h = '<thead><tr>' + H('player','Player') + H('marketKey','Market') + H('line','Line','num') +
+      H('modelMean','Proj','num') + H('probOver','P(O)','num') + '<th>Pick</th>' +
+      '<th class="num">Best</th>' + H('edge','Edge','num') + H('evPct','EV','num hide-sm') +
+      H('kellyPct','Kelly','num hide-sm') + H('grade','Gr') + '<th></th></tr></thead><tbody>';
+    for (const r of rows.slice(0, 400)) {
+      const best = r.side === 'over' ? r.bestOver : r.bestUnder;
+      const gcls = (r.grade || '').replace('+','p');
+      h += `<tr>
+        <td><a class="pname" href="/player/${esc(r.playerId)}?season=${r.season}">${esc(r.player)}</a>
+            <div class="psub">${r.team} ${r.position} vs ${r.opponent}</div></td>
+        <td>${esc(r.marketLabel)}</td>
+        <td class="num">${r.line}${r.noOdds ? '<span class="muted">*</span>' : ''}</td>
+        <td class="num">${r.modelMean}</td>
+        <td class="num">${(r.probOver*100).toFixed(0)}%</td>
+        <td><span class="tag ${r.side==='over'?'over':'under'}">${r.marketKey==='anytime_td'?(r.side==='over'?'YES':'NO'):r.side}</span></td>
+        <td class="num">${best ? `${am(best.price)} <span class="muted">${esc(best.book)}</span>` : '—'}</td>
+        <td class="num ${r.edge>0?'pos':r.edge<0?'neg':''}">${r.edge!=null?(r.edge*100).toFixed(1)+'%':'—'}</td>
+        <td class="num hide-sm ${r.evPct>0?'pos':r.evPct<0?'neg':''}">${r.evPct!=null?(r.evPct*100).toFixed(1)+'%':'—'}</td>
+        <td class="num hide-sm">${r.kellyPct?(r.kellyPct*100).toFixed(1)+'%':'—'}</td>
+        <td>${r.grade?`<span class="grade-b ${gcls}">${r.grade}</span>`:''}</td>
+        <td><button class="addbtn" data-k="${esc(r.playerId)}|${esc(r.marketKey)}|${r.line}">+ Slip</button></td>
+      </tr>`;
+    }
+    $('#tbl').innerHTML = h + '</tbody>' || '';
+    if (!rows.length) $('#tbl').innerHTML = '<tbody><tr><td class="empty">No props match.</td></tr></tbody>';
+    document.querySelectorAll('th.sortable').forEach(th => th.onclick = () => {
+      const k = th.dataset.k;
+      if (sortKey === k) sortDir *= -1; else { sortKey = k; sortDir = -1; }
+      render();
+    });
+    document.querySelectorAll('.addbtn').forEach(b => b.onclick = () => add(b));
+  }
+
+  function add(btn) {
+    const [pid, mk, line] = btn.dataset.k.split('|');
+    const r = all.find(x => String(x.playerId) === pid && x.marketKey === mk && String(x.line) === line);
+    if (!r) return;
+    const best = r.side === 'over' ? r.bestOver : r.bestUnder;
+    addToSlip({
+      gameId: r.gameId, season: r.season, week: r.week, gameday: r.gameday,
+      player: r.player, playerId: r.playerId, team: r.team, opponent: r.opponent,
+      position: r.position, marketKey: r.marketKey, marketLabel: r.marketLabel,
+      line: r.line, side: r.side, price: best ? best.price : null,
+      book: best ? best.book : null, modelProb: r.modelProb,
+      impliedProb: r.impliedProb, fairProb: r.fairProb, edge: r.edge,
+      evPct: r.evPct, kellyPct: r.kellyPct, modelSource: r.modelSource,
+    });
+    btn.textContent = '✓ In slip'; btn.classList.add('in');
+  }
+});
 </script>
 </body>
 </html>

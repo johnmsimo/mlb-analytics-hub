@@ -371,6 +371,58 @@ def _closing_price_for(e: dict, prop_rows: list[dict], gm: dict):
     return best[1] if best else None
 
 
+# ----------------------------------------------------------------- live pace
+
+def live_status() -> dict:
+    """Live pace for pending picks whose games are in progress: current stat
+    value vs the line, plus live scores. Polled by tracker.html on game days."""
+    store = _load()
+    pend = [e for day in store.values() for e in day.get("entries", [])
+            if e.get("grade") == "pending" and e.get("gameId")]
+    if not pend:
+        return {"live": False, "picks": []}
+    seasons = {int(e.get("season") or nfl_data.default_season()) for e in pend}
+    games: dict[str, dict] = {}
+    for season in seasons:
+        cw = nfl_data.current_week(season)
+        for g in nfl_data.fetch_week_scoreboard(season, cw["week"],
+                                                2 if cw["season_type"] == "REG" else 3):
+            games[g["game_id"]] = g
+    picks = []
+    any_live = False
+    for e in pend:
+        g = games.get(e["gameId"])
+        if not g or g["state"] == "pre":
+            continue
+        if g["state"] == "in":
+            any_live = True
+        item = {"id": e["id"], "player": e.get("player"),
+                "marketKey": e.get("marketKey"), "line": e.get("line"),
+                "side": e.get("side"), "state": g["state"],
+                "detail": g.get("status_detail"),
+                "score": f"{g['away_team']} {g['away_score'] or 0} - "
+                         f"{g['home_team']} {g['home_score'] or 0}"}
+        if e["marketKey"] in GAME_MARKETS:
+            hs, as_ = g.get("home_score") or 0, g.get("away_score") or 0
+            item["current"] = (hs + as_ if e["marketKey"] == "total"
+                               else (hs if e.get("side") == "home" else as_))
+        else:
+            row = next((r for r in nfl_data.live_game_stats(g)
+                        if r["player_id"] == str(e.get("playerId"))), None)
+            if row:
+                if e["marketKey"] == "anytime_td":
+                    item["current"] = row["rushing_tds"] + row["receiving_tds"]
+                else:
+                    item["current"] = row.get(PROP_STAT.get(e["marketKey"], ""), 0)
+            else:
+                item["current"] = 0
+        if isinstance(item.get("current"), (int, float)) and e.get("line") is not None:
+            over = item["current"] > float(e["line"])
+            item["hit"] = over if e.get("side") == "over" else not over
+        picks.append(item)
+    return {"live": any_live, "picks": picks}
+
+
 # -------------------------------------------------------------------- summary
 
 def performance_summary() -> dict:

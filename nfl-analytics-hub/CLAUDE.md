@@ -22,8 +22,11 @@ value_engine.py         betting math (devig/EV/Kelly) — verbatim copy from the
 redis_client.py         Redis wrapper with in-memory fallback — verbatim copy from the MLB hub
 routes/games.py         /api/games/*, /api/game/<id>, /api/odds/status — lines + de-vig + best-price EV
 routes/props.py         /api/props/board, /api/props/game/<id>, /api/edges/week
-routes/tracker_routes.py /api/tracker/* CRUD + performance + grade + closing-capture + settings
-dashboard/props/game/tracker.html   self-contained SPAs, fetch /api/* client-side
+routes/players.py       /api/player/<pid> — game logs + per-market projections vs next opponent + book lines
+routes/tracker_routes.py /api/tracker/* CRUD + performance + grade + closing-capture + live pace + settings
+static/theme.css        design system (volt-accent sister to the MLB hub; validated chart colors)
+static/app.js           shared shell: topbar/bottom-nav, persistent week state, bet-slip store
+dashboard/props/game/player/tracker.html   pages on the shared shell, fetch /api/* client-side
 ```
 
 ## Key invariants
@@ -63,6 +66,16 @@ dashboard/props/game/tracker.html   self-contained SPAs, fetch /api/* client-sid
 - **Graceful degradation.** No ODDS_API_KEY → every odds surface returns
   empty and routes still 200. Missing stats → projections return None and the
   row is skipped, never fabricated.
+- **Frontend shell.** Every page loads `static/theme.css` + `static/app.js`
+  and calls `NFLHub.shell(active)` — that injects topbar, mobile bottom nav,
+  and the bet-slip drawer. The slip lives in localStorage (`nfl.slip`) until
+  "Confirm picks" POSTs each row to `/api/tracker/pick`; week selection
+  persists in `nfl.week`. New pages must use the shell, not hand-rolled nav.
+  The player-page chart's over/under bar colors (`--bar-over`/`--bar-under`)
+  are CVD/contrast-validated on the card surface — don't swap them casually.
+- **Live gameday.** dashboard polls the week endpoint every 30s only while a
+  game is in progress; tracker polls `/api/tracker/live` (60s) which reads
+  `nfl_data.live_game_stats()` (60s-TTL boxscore cache) for pick pacing.
 
 ## Verification
 

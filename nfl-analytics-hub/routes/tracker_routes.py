@@ -55,6 +55,11 @@ def api_closing_capture():
     return jsonify(tracker.closing_capture_once())
 
 
+@tracker_bp.route("/api/tracker/live")
+def api_live():
+    return jsonify(tracker.live_status())
+
+
 @tracker_bp.route("/api/tracker/settings", methods=["GET", "POST"])
 def api_settings():
     if request.method == "POST":
