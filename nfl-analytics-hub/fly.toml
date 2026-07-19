@@ -1,38 +1,67 @@
-# fly.toml for nfl-analytics-hub
-# Create the app + volume first:
-#   fly apps create nfl-analytics-hub
-#   fly volumes create nfl_data --region ewr --size 1
-#   fly secrets set ODDS_API_KEY=...
-
-app = 'nfl-analytics-hub'
-primary_region = 'ewr'
+# Fly.io deployment configuration.
+# App names are globally unique; change this value if it is already taken.
+app = "nfl-analytics-hub-johnmsimo"
+primary_region = "ewr"
 
 [build]
+  dockerfile = "Dockerfile"
+
+[deploy]
+  release_command = "flask --app app db upgrade"
+  release_command_timeout = "10m"
+  strategy = "rolling"
 
 [env]
-  PORT = '8080'
-  REDIS_URL = 'redis://localhost:6379'
+  PORT = "8080"
+  DATA_DIR = "/app/data"
+  ENABLE_SCHEDULER = "false"
+  ENABLE_EXTERNAL_SYNC = "false"
+  WEATHER_PROVIDER = "nws"
+  ENABLED_PROVIDERS = "nflverse,nws"
 
+[processes]
+  web = "gunicorn app:app -c gunicorn_conf.py"
+  worker = "sh -c 'ENABLE_SCHEDULER=true python scheduler_service.py'"
+
+# The web machine's /app/data holds USER DATA that must survive restarts and
+# deploys: daily_tracker.json (picks + CLV history), odds_cache.json (paid
+# Odds API credits), and the SQLite fallback DB when DATABASE_URL is unset.
+# Create before first deploy:  fly volumes create nfl_data --region ewr --size 1
+# (The worker machine keeps ephemeral disk — its caches are rebuildable, and
+# with DATABASE_URL set to Postgres both processes share one real database.)
 [[mounts]]
-  source = 'nfl_data'
-  destination = '/app/data'
+  source = "nfl_data"
+  destination = "/app/data"
+  processes = ["web"]
 
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = 'off'
+  auto_stop_machines = "stop"
   auto_start_machines = true
   min_machines_running = 1
-  processes = ['app']
+  processes = ["web"]
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 40
+    hard_limit = 60
 
   [[http_service.checks]]
-    interval = '30s'
-    timeout = '10s'
-    grace_period = '2m'
-    method = 'GET'
-    path = '/health'
+    interval = "30s"
+    timeout = "10s"
+    grace_period = "90s"
+    method = "GET"
+    path = "/health"
 
 [[vm]]
-  memory = '1gb'
-  cpu_kind = 'shared'
+  processes = ["web"]
+  memory = "1gb"
+  cpu_kind = "shared"
+  cpus = 1
+
+[[vm]]
+  processes = ["worker"]
+  memory = "512mb"
+  cpu_kind = "shared"
   cpus = 1

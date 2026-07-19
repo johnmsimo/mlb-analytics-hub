@@ -34,10 +34,16 @@ _load_local_env_file()
 
 from flask import Flask, Response, jsonify, request  # noqa: E402
 
+from security import configure_security  # noqa: E402
+from database import configure_database, init_database  # noqa: E402
+
 import nfl_data  # noqa: E402
 
 app = Flask(__name__)
 app.json.sort_keys = False
+configure_security(app)
+configure_database(app)
+init_database(app)
 
 _BOOT_TS = time.time()
 _HTML_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -85,9 +91,59 @@ def _gzip_json(resp: Response):
 
 # --------------------------------------------------------------------- pages
 
+@app.route("/login")
+def login():
+    return _page_response("login.html")
+
+
 @app.route("/")
 def page_dashboard():
     return _page_response("dashboard.html")
+
+
+@app.route("/games")
+def page_games():
+    return _page_response("games.html")
+
+
+@app.route("/players")
+def page_players():
+    return _page_response("players.html")
+
+
+@app.route("/teams")
+def page_teams():
+    return _page_response("teams.html")
+
+
+@app.route("/projections")
+def page_projections():
+    return _page_response("projections.html")
+
+
+@app.route("/live")
+def page_live():
+    return _page_response("live.html")
+
+
+@app.route("/analytics")
+def page_analytics():
+    return _page_response("analytics.html")
+
+
+@app.route("/rankings")
+def page_rankings():
+    return _page_response("rankings.html")
+
+
+@app.route("/settings")
+def page_settings():
+    return _page_response("settings.html")
+
+
+@app.route("/admin/data")
+def page_admin_data():
+    return _page_response("admin.html")
 
 
 @app.route("/props")
@@ -114,8 +170,31 @@ def page_player(pid):
 
 @app.route("/health")
 def health():
-    """Fly.io readiness probe — must return 200 immediately, even cold."""
+    """Liveness probe: process is running."""
     return jsonify({"ok": True, "uptime_sec": round(time.time() - _BOOT_TS, 1)})
+
+
+@app.route("/ready")
+def ready():
+    """Readiness probe: database can answer a trivial query."""
+    try:
+        from sqlalchemy import text
+        from database import db
+        db.session.execute(text("SELECT 1"))
+        return jsonify({"ok": True, "database": "ready"})
+    except Exception as exc:
+        return jsonify({"ok": False, "database": "unavailable", "error": str(exc)}), 503
+
+
+@app.route("/metrics")
+def metrics():
+    from prometheus_client import CONTENT_TYPE_LATEST, Gauge, generate_latest
+    # A dedicated one-shot registry prevents duplicate metric registration in tests.
+    from prometheus_client import CollectorRegistry
+    registry = CollectorRegistry()
+    uptime = Gauge("nfl_hub_process_uptime_seconds", "Process uptime", registry=registry)
+    uptime.set(time.time() - _BOOT_TS)
+    return Response(generate_latest(registry), mimetype=CONTENT_TYPE_LATEST)
 
 
 @app.route("/api/status")
@@ -151,11 +230,25 @@ from routes.games import games_bp          # noqa: E402
 from routes.props import props_bp          # noqa: E402
 from routes.tracker_routes import tracker_bp  # noqa: E402
 from routes.players import players_bp      # noqa: E402
+from routes.dashboard_api import dashboard_bp  # noqa: E402
+from routes.directories import directories_bp  # noqa: E402
+from routes.intelligence import intelligence_bp  # noqa: E402
+from routes.auth import auth_bp  # noqa: E402
+from routes.database_api import database_bp  # noqa: E402
+from routes.admin_api import admin_bp  # noqa: E402
+from routes.v2_api import v2_bp  # noqa: E402
 
 app.register_blueprint(games_bp)
 app.register_blueprint(props_bp)
 app.register_blueprint(tracker_bp)
 app.register_blueprint(players_bp)
+app.register_blueprint(dashboard_bp)
+app.register_blueprint(directories_bp)
+app.register_blueprint(intelligence_bp)
+app.register_blueprint(auth_bp)
+app.register_blueprint(database_bp)
+app.register_blueprint(admin_bp)
+app.register_blueprint(v2_bp)
 
 
 # ------------------------------------------------------------------- preload

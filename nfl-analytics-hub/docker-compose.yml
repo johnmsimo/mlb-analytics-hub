@@ -1,0 +1,47 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: nfl_analytics
+      POSTGRES_USER: nfl
+      POSTGRES_PASSWORD: nfl-local
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nfl -d nfl_analytics"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+  web:
+    build: .
+    environment:
+      APP_ENV: development
+      AUTH_DISABLED: "1"
+      DATABASE_URL: postgresql+psycopg://nfl:nfl-local@postgres:5432/nfl_analytics
+      REDIS_URL: redis://redis:6379/0
+      ENABLE_SCHEDULER: "false"
+    ports: ["10000:10000"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_started}
+    command: sh -c "flask --app app db upgrade && gunicorn -c gunicorn_conf.py app:app"
+  scheduler:
+    build: .
+    environment:
+      APP_ENV: development
+      AUTH_DISABLED: "1"
+      DATABASE_URL: postgresql+psycopg://nfl:nfl-local@postgres:5432/nfl_analytics
+      REDIS_URL: redis://redis:6379/0
+      ENABLE_SCHEDULER: "1"
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_started}
+    command: python scheduler_service.py
+volumes:
+  postgres_data:
+  redis_data:

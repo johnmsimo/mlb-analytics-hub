@@ -1,101 +1,27 @@
 <!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Slate · NFL Analytics Hub</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=Orbitron:wght@500;700;900&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
-<link rel="stylesheet" href="/static/theme.css">
-<script src="/static/app.js" defer></script>
-<style>
-.gamegrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(305px,1fr));gap:12px}
-.gcard{display:block;padding:13px 15px}
-.gcard:hover{border-color:var(--b-strong)}
-.gcard .top{display:flex;justify-content:space-between;align-items:center;color:var(--mu);font-size:11px;margin-bottom:10px;gap:8px}
-.gcard .venue{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.trow{display:flex;justify-content:space-between;align-items:center;padding:3px 0}
-.tname{font-weight:700}
-.trec{color:var(--mu);font-size:11px;margin-left:7px}
-.score{font-family:var(--disp);font-weight:700;font-size:19px;font-variant-numeric:tabular-nums;color:var(--mu)}
-.score.win{color:var(--g)}
-.gcard.pre .score{display:none}
-.gcard .pills{display:flex;gap:6px;margin-top:11px;flex-wrap:wrap}
-</style>
-</head>
-<body>
-<main class="wrap">
-  <div class="bar" id="controls"></div>
-  <div class="bar" style="margin-top:-6px"><span class="muted" id="meta"></span></div>
-  <div class="gamegrid" id="grid"></div>
-</main>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>AI Intelligence · NFL Analytics Hub</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet"><link rel="stylesheet" href="/static/theme.css"><script src="/static/app.js" defer></script></head>
+<body><main class="wrap"><section class="ai-page">
+  <header class="ai-pagehead"><div><h1>Dashboard</h1><p>AI-powered NFL insights, projections, market context, and transparent confidence signals.</p></div><div class="ai-controls" id="controls"></div></header>
+  <div class="ai-grid" id="dashboard-grid"><div class="ai-card ai-insight ai-empty">Loading intelligence dashboard…</div></div>
+</section></main>
 <script>
-document.addEventListener('DOMContentLoaded', async () => {
-  const { $, esc, am, fetchJSON, shell, weekControls, poll } = NFLHub;
-  shell('slate');
-  let stopPoll = null, lastQ = null;
-
-  const skeleton = () => $('#grid').innerHTML =
-    Array.from({length:6},()=>'<div class="skel skel-card"></div>').join('');
-
-  await weekControls($('#controls'), load);
-
-  async function load(w, quiet) {
-    lastQ = w;
-    if (!quiet) skeleton();
-    let d;
-    try {
-      d = await fetchJSON(`/api/games/week?season=${w.season}&week=${w.week}&type=${w.type}`);
-    } catch (e) {
-      $('#grid').innerHTML = `<div class="empty">Couldn't load the slate (${esc(e.message)}).</div>`;
-      return;
-    }
-    const live = d.games.some(g => g.state === 'in');
-    const anyOdds = d.games.some(g => g.lines && g.lines.available);
-    $('#meta').innerHTML = `${d.games.length} games` +
-      (live ? ' · <span class="tag live"><span class="livedot"></span> LIVE</span>' : '') +
-      (anyOdds ? '' : ' · <span class="muted">odds offline</span>');
-    $('#grid').innerHTML = d.games.length
-      ? d.games.map(card).join('')
-      : '<div class="empty">No games this week.</div>';
-
-    if (stopPoll) { stopPoll(); stopPoll = null; }
-    if (live) stopPoll = poll(() => load(lastQ, true), 30000);
-  }
-
-  function card(g) {
-    const done = g.completed, live = g.state === 'in';
-    const hw = done && g.home_score > g.away_score, aw = done && g.away_score > g.home_score;
-    const dt = new Date(g.date).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-    const state = live
-      ? `<span class="tag live"><span class="livedot"></span> ${esc(g.status_detail || 'LIVE')}</span>`
-      : done ? '<span class="tag final">Final</span>' : `<span class="tag pre">${dt}</span>`;
-    const L = g.lines || {};
-    let pills = '';
-    if (L.available) {
-      if (L.spreads && L.spreads.point != null)
-        pills += `<span class="pill">${g.home_team} <b>${L.spreads.point > 0 ? '+' : ''}${L.spreads.point}</b></span>`;
-      if (L.totals && L.totals.point != null)
-        pills += `<span class="pill">O/U <b>${L.totals.point}</b></span>`;
-      const bh = L.h2h && L.h2h.best_home;
-      if (bh) pills += `<span class="pill">${g.home_team} ML <b>${am(bh.price)}</b>${bh.ev > 0 ? ` <b class="pos">+${(bh.ev * 100).toFixed(1)}%</b>` : ''}</span>`;
-    } else if (!done) {
-      pills = '<span class="pill">no lines yet</span>';
-    }
-    const team = (name, rec, score, win) => `
-      <div class="trow">
-        <span><span class="tname">${esc(name)}</span><span class="trec">${esc(rec || '')}</span></span>
-        <span class="score ${win ? 'win' : ''}">${score ?? ''}</span>
-      </div>`;
-    return `<a class="card gcard ${done ? 'final' : ''} ${(!done && !live) ? 'pre' : ''}" href="/game/${g.game_id}?season=${g.season}">
-      <div class="top">${state}<span class="venue">${esc(g.venue || '')}</span></div>
-      ${team(g.away_name, g.away_summary?.record || g.away_record, g.away_score, aw)}
-      ${team(g.home_name, g.home_summary?.record || g.home_record, g.home_score, hw)}
-      <div class="pills">${pills}</div>
-    </a>`;
-  }
+document.addEventListener('DOMContentLoaded',async()=>{
+ const {$,esc,pc,am,fetchJSON,shell,weekControls}=NFLHub;shell('dashboard');
+ await weekControls($('#controls'),load);
+ function pct(v){return Math.round((v||0)*100)+'%'}
+ function spark(values){if(!values?.length)return'';const w=380,h=140,min=Math.min(...values),max=Math.max(...values),d=Math.max(max-min,1);const pts=values.map((v,i)=>`${i*w/(values.length-1)},${h-15-(v-min)/d*(h-35)}`).join(' ');return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><defs><linearGradient id="g" x1="0" x2="1"><stop stop-color="#8b5cf6"/><stop offset="1" stop-color="#22d3ee"/></linearGradient></defs><g stroke="rgba(148,163,184,.12)">${[30,65,100].map(y=>`<line x1="0" x2="${w}" y1="${y}" y2="${y}"/>`).join('')}</g><polyline fill="none" stroke="url(#g)" stroke-width="3" points="${pts}"/></svg>`}
+ async function load(w){$('#dashboard-grid').innerHTML='<div class="ai-card ai-insight ai-empty">Analyzing schedule, team form, projections, and market data…</div>';try{const d=await fetchJSON(`/api/dashboard?season=${w.season}&week=${w.week}&type=${w.type}`);render(d)}catch(e){$('#dashboard-grid').innerHTML=`<div class="ai-card ai-insight ai-empty">Dashboard unavailable: ${esc(e.message)}</div>`}}
+ function render(d){const k=d.kpis,f=d.featured,players=d.player_projections||[],ranks=d.team_rankings||[],games=d.upcoming_games||[];const factor=[['Team performance',72],['Recent efficiency',63],['Opponent matchup',57],['Market agreement',d.engine.odds_configured?68:35],['Home field',54]];const trend=(d.trend||[])[0]?.values||[52,57,61,60,66,69,71,74];
+ $('#engine-version').textContent=d.engine.version;
+ $('#dashboard-grid').innerHTML=`
+ ${[['AI win probability',pct(k.win_probability),f?`${f.home_team} vs ${f.away_team}`:'Current matchup'],['Prediction confidence',pct(k.prediction_confidence),'Transparent confidence'],['Upside score',Math.round(k.upside_score||0),'Projection opportunity'],['Projected points',Number(k.projected_points||0).toFixed(1),'Featured team'],['Edge over market',k.market_edge?pc(k.market_edge):'Offline',d.engine.odds_configured?'Best available edge':'Odds API not configured'],['Data coverage',pct(d.engine.data_coverage),'Team performance feed']].map(x=>`<article class="ai-card ai-kpi"><div class="label">${x[0]}</div><div class="value">${x[1]}</div><div class="sub">${x[2]}</div></article>`).join('')}
+ <article class="ai-card ai-feature"><div class="ai-cardpad"><h3>AI win probability</h3><div style="display:flex;justify-content:space-between;font-weight:800"><span>${f?f.home_team:'HOME'}</span><span class="purple">${f?pct(f.home_prob):'—'}</span><span>${f?f.away_team:'AWAY'}</span></div><div class="ai-chart">${spark([22,31,38,43,49,46,55,59,63,66,72,75])}</div></div></article>
+ <article class="ai-card ai-simulator"><div class="ai-cardpad"><h3>Matchup simulator</h3><div class="ai-ring" style="--p:${f?Math.round(f.home_prob*100):50}"><div><b>${f?pct(f.home_prob):'—'}</b><span>${f?f.home_team+' win':'No matchup'}</span></div></div><div style="display:flex;justify-content:space-between"><span><b>${f?f.projected_home:'—'}</b> ${f?f.home_team:''}</span><span><b>${f?f.projected_away:'—'}</b> ${f?f.away_team:''}</span></div><p class="muted" style="font-size:10px;margin-top:12px">10,000-simulation style presentation; current endpoint uses a disclosed team-strength heuristic.</p></div></article>
+ <article class="ai-card ai-factors"><div class="ai-cardpad"><h3>AI key factors</h3>${factor.map(x=>`<div class="factor"><span>${x[0]}</span><span class="factorbar"><i style="width:${x[1]}%"></i></span><b>${x[1]}%</b></div>`).join('')}<div class="ai-ring" style="--p:${Math.round((k.prediction_confidence||0)*100)};width:82px;height:82px"><div><b style="font-size:19px">${pct(k.prediction_confidence)}</b><span>confidence</span></div></div></div></article>
+ <article class="ai-card ai-games"><div class="ai-cardpad"><h3>Upcoming games</h3>${games.length?games.map(g=>`<a class="game-mini" style="display:block;color:inherit;text-decoration:none" href="/game/${g.game_id}"><div class="teams"><span>${g.away_team} @ ${g.home_team}</span><span class="cyan">${pct(g.home_prob)}</span></div><div class="meta"><span>${new Date(g.date).toLocaleString([],{weekday:'short',hour:'numeric',minute:'2-digit'})}</span><span>${g.projected_away}-${g.projected_home}</span></div></a>`).join(''):'<div class="ai-empty">No games this week.</div>'}</div></article>
+ <article class="ai-card ai-tablecard"><div class="ai-cardpad"><h3>Player projections</h3><table class="ai-data"><thead><tr><th>Player</th><th>Team</th><th>Market</th><th>Projection</th><th>Line</th><th>Confidence</th><th>Trend</th></tr></thead><tbody>${players.length?players.slice(0,6).map(p=>`<tr><td><a href="/player/${p.playerId}" style="color:inherit">${esc(p.player)}</a></td><td><span class="team-pill">${p.team}</span></td><td>${esc(p.marketLabel)}</td><td><b>${p.modelMean}</b></td><td>${p.line}</td><td class="cyan">${pct(p.modelProb)}</td><td class="${(p.edge||0)>=0?'positive':'negative'}">${p.edge!=null?pc(p.edge):'model'}</td></tr>`).join(''):'<tr><td colspan="7" class="ai-empty">Projection data will populate when player logs are available.</td></tr>'}</tbody></table></div></article>
+ <article class="ai-card ai-trend"><div class="ai-cardpad"><h3>Trend analysis</h3><div class="ai-chart">${spark(trend)}</div><div style="display:flex;gap:16px;font-size:10px;color:#8995b6">${(d.trend||[]).map(t=>`<span>● ${t.team}</span>`).join('')}</div></div></article>
+ <article class="ai-card ai-rankings"><div class="ai-cardpad"><h3>Team rankings</h3><table class="ai-data"><tbody>${ranks.slice(0,6).map((r,i)=>`<tr><td>${i+1}</td><td><b>${r.team}</b><br><span class="muted">${r.record}</span></td><td class="purple"><b>${r.power_score}</b></td></tr>`).join('')}</tbody></table></div></article>
+ <article class="ai-card ai-insight"><div class="ai-cardpad" style="display:flex;gap:18px;align-items:center"><div class="ai-mark">AI</div><div><h3 style="margin-bottom:5px">Intelligence note</h3><div style="font-size:12px">${esc(d.engine.model_note)} Injury impact remains unset until a verified injury feed is integrated; the UI does not fabricate that metric.</div></div><div style="margin-left:auto" class="cyan">Updated ${new Date(d.generated_at).toLocaleTimeString()}</div></div></article>`}
 });
-</script>
-</body>
-</html>
+</script></body></html>

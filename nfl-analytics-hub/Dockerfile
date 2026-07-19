@@ -1,19 +1,21 @@
-FROM python:3.11-slim
+FROM python:3.11-slim AS runtime
 
-# Bundled redis so REDIS_URL=redis://localhost:6379 works out of the box;
-# point REDIS_URL at a managed Redis in production if preferred.
-RUN apt-get update && apt-get install -y --no-install-recommends redis-server \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY . .
-
-ENV PORT=8080 \
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PORT=8080 \
     DATA_DIR=/app/data
 
+RUN addgroup --system app && adduser --system --ingroup app app
+
+WORKDIR /app
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY --chown=app:app . .
+RUN mkdir -p /app/data && chown -R app:app /app
+
+USER app
 EXPOSE 8080
 
-CMD ["sh", "-c", "redis-server --daemonize yes --save '' --appendonly no && exec gunicorn app:app -c gunicorn_conf.py"]
+CMD ["gunicorn", "app:app", "-c", "gunicorn_conf.py"]

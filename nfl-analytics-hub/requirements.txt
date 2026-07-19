@@ -2,3 +2,13 @@ flask==3.0.3
 requests==2.32.3
 gunicorn==22.0.0
 redis==5.0.4
+Flask-SQLAlchemy==3.1.1
+SQLAlchemy==2.0.36
+psycopg[binary]==3.2.3
+Flask-Migrate==4.0.7
+alembic==1.14.0
+APScheduler==3.10.4
+prometheus-client==0.21.1
+pytest==8.3.4
+pytest-cov==6.0.0
+nflreadpy>=0.1.5

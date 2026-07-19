@@ -1,0 +1,8 @@
+Schema migrations are managed by Flask-Migrate/Alembic.
+
+Initial setup:
+  flask --app app db init        # only when migrations/ does not exist
+  flask --app app db migrate -m "describe change"
+  flask --app app db upgrade
+
+Production deploys must run `flask --app app db upgrade` before starting web workers.
