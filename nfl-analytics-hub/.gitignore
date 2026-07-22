@@ -1,0 +1,21 @@
+__pycache__/
+*.pyc
+.env
+data/*
+!data/.gitkeep
+
+# Deployment and local secrets
+.env
+.env.*
+!.env.example
+instance/
+*.db
+*.sqlite
+*.sqlite3
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+data/raw/
+artifacts/

@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Player · NFL Analytics Hub</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=Orbitron:wght@500;700;900&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<link rel="stylesheet" href="/static/theme.css">
+<script src="/static/app.js" defer></script>
+<style>
+.phead{padding:16px 18px;margin-bottom:14px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.phead .nm{font-family:var(--disp);font-weight:900;font-size:20px;letter-spacing:.5px}
+.phead .chips{display:flex;gap:6px;flex-wrap:wrap}
+.mktchips{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:12px}
+.mktchips button{background:var(--card);border:1px solid var(--line);color:var(--mu);border-radius:10px;padding:8px 13px;font-weight:700;font-size:12px}
+.mktchips button.on{background:var(--volt-dim);border-color:var(--b-strong);color:var(--volt)}
+.cols{display:grid;grid-template-columns:2fr 1fr;gap:14px}
+@media(max-width:920px){.cols{grid-template-columns:1fr}}
+.linebar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:12px 15px 2px}
+.linebar .stp{display:flex;align-items:center;gap:5px}
+.linebar input{width:84px;text-align:center;font-family:var(--disp);font-weight:700}
+.linebar .pm{width:34px;min-height:34px;padding:0;font-size:16px}
+.hits{display:flex;gap:7px;flex-wrap:wrap;padding:10px 15px 0}
+.hitchip{background:var(--card3);border:1px solid var(--line);border-radius:9px;padding:5px 11px;font-size:12px;color:var(--mu)}
+.hitchip b{font-family:var(--disp);font-size:13px;color:var(--t)}
+.hitchip b.good{color:var(--g)}.hitchip b.bad{color:var(--r)}
+.chartwrap{padding:8px 10px 14px}
+.legend{display:flex;gap:14px;align-items:center;padding:0 15px;font-size:11px;color:var(--mu)}
+.legend .sw{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+.projrow{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid rgba(22,35,60,.6);font-size:13px}
+.projrow:last-child{border-bottom:0}
+.projrow .v{font-variant-numeric:tabular-nums;font-weight:700}
+.bigp{font-family:var(--disp);font-weight:900;font-size:30px;text-align:center;padding:6px 0 2px}
+.subp{text-align:center;color:var(--mu);font-size:12px;margin-bottom:8px}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <div class="card phead" id="phead"><div class="skel" style="height:44px;flex:1"></div></div>
+  <div class="mktchips" id="mkts"></div>
+  <div class="cols">
+    <div class="panel">
+      <h2 id="charttitle">Game log</h2>
+      <div class="linebar">
+        <span class="muted">Line</span>
+        <span class="stp"><button class="btn pm" id="ln-minus">−</button><input id="ln" type="number" step="0.5"><button class="btn pm" id="ln-plus">+</button></span>
+        <span class="muted" id="lnsrc"></span>
+      </div>
+      <div class="hits" id="hits"></div>
+      <div class="chartwrap" id="chart"></div>
+      <div class="legend" id="legend">
+        <span><span class="sw" style="background:var(--bar-over)"></span>Over line</span>
+        <span><span class="sw" style="background:var(--bar-under)"></span>Under line</span>
+        <span><span class="sw" style="background:none;border-top:2px dashed var(--gold);height:0;border-radius:0"></span>Line</span>
+      </div>
+    </div>
+    <div>
+      <div class="panel"><h2>Projection</h2><div class="pad" id="proj"></div></div>
+      <div class="panel"><h2>Matchup</h2><div class="pad" id="matchup"></div></div>
+    </div>
+  </div>
+  <div class="panel"><h2>Full game log</h2><div class="scroll" id="logtbl"></div></div>
+</main>
+<div class="chart-tip" id="tip"></div>
+<script>
+document.addEventListener('DOMContentLoaded', async () => {
+  const { $, esc, am, fetchJSON, shell, addToSlip } = NFLHub;
+  shell('');
+  const pid = location.pathname.split('/').pop();
+  const season = new URLSearchParams(location.search).get('season') || '';
+
+  let D, mk = null, line = null;
+
+  try { D = await fetchJSON(`/api/player/${pid}?season=${season}`); }
+  catch (e) { $('#phead').innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+
+  const P = D.player;
+  document.title = `${P.name} · NFL Analytics Hub`;
+  const nxt = D.next_game
+    ? `Next: ${D.next_game.short_name} · Wk ${D.next_game.week}`
+    : 'No upcoming game scheduled';
+  $('#phead').innerHTML = `
+    <div class="nm">${esc(P.name)}</div>
+    <div class="chips">
+      <span class="pill"><b>${P.team}</b></span>
+      <span class="pill"><b>${P.position}</b></span>
+      <span class="pill">${P.games} games · ${D.stats_season}</span>
+      <span class="pill">${esc(nxt)}${D.opponent ? ` <b>vs ${D.opponent}</b>` : ''}</span>
+    </div>`;
+
+  if (!D.markets.length) { $('#mkts').innerHTML = '<div class="empty">No projectable markets for this player.</div>'; return; }
+  $('#mkts').innerHTML = D.markets.map(m =>
+    `<button data-k="${m.marketKey}">${esc(m.label)}</button>`).join('');
+  $('#mkts').querySelectorAll('button').forEach(b => b.onclick = () => select(b.dataset.k));
+
+  /* ---------- probability math mirroring projections.py ---------- */
+  const erf = x => { const s = x < 0 ? -1 : 1; x = Math.abs(x);
+    const t = 1 / (1 + 0.3275911 * x);
+    const y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
+    return s * y; };
+  const ncdf = x => 0.5 * (1 + erf(x / Math.SQRT2));
+  const poissonSF = (k, lam) => { if (lam <= 0) return 0;
+    let term = Math.exp(-lam), cdf = term;
+    for (let i = 1; i < k; i++) { term *= lam / i; cdf += term; }
+    return Math.max(0, Math.min(1, 1 - cdf)); };
+  const LOG_SHIFT = 8;
+  function probOver(proj, ln) {
+    if (proj.dist === 'poisson' || proj.dist === 'poisson_damped') return poissonSF(Math.floor(ln) + 1, Math.max(proj.mean, 1e-6));
+    if (proj.dist === 'lognormal') return 1 - ncdf((Math.log(Math.max(ln, -5) + LOG_SHIFT) - proj.mu) / Math.max(proj.sigma, 1e-6));
+    return 1 - ncdf((ln - proj.mean) / Math.max(proj.sd, 1e-6));
+  }
+
+  const M = () => D.markets.find(m => m.marketKey === mk);
+  const vals = m => D.history.map(h => m.statCol === '_scrimmage_tds' ? h.rushing_tds + h.receiving_tds : h[m.statCol]);
+
+  function select(k) {
+    mk = k;
+    $('#mkts').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.k === k));
+    const m = M();
+    line = m.line;
+    $('#ln').value = line;
+    $('#lnsrc').textContent = m.noOdds ? 'model line (no book line)' : 'book line';
+    $('#charttitle').textContent = `${m.label} — game by game`;
+    renderAll();
+  }
+  const step = () => (mk.endsWith('yds') ? 2.5 : 0.5);
+  $('#ln-minus').onclick = () => { line = +(+$('#ln').value - step()).toFixed(1); $('#ln').value = line; renderAll(); };
+  $('#ln-plus').onclick = () => { line = +(+$('#ln').value + step()).toFixed(1); $('#ln').value = line; renderAll(); };
+  $('#ln').onchange = () => { line = +$('#ln').value; renderAll(); };
+
+  function renderAll() { renderHits(); renderChart(); renderProj(); renderMatchup(); renderLog(); }
+
+  function rate(rows) {
+    if (!rows.length) return null;
+    const over = rows.filter(v => v > line).length;
+    return { pct: over / rows.length, over, n: rows.length };
+  }
+  function chip(label, r) {
+    if (!r) return '';
+    const cls = r.pct >= 0.55 ? 'good' : r.pct <= 0.45 ? 'bad' : '';
+    return `<span class="hitchip">${label} <b class="${cls}">${Math.round(r.pct * 100)}%</b> <span>(${r.over}/${r.n})</span></span>`;
+  }
+  function renderHits() {
+    const m = M(), v = vals(m);
+    const homes = D.history.map((h, i) => [h.home, v[i]]);
+    $('#hits').innerHTML =
+      chip('Season', rate(v)) +
+      chip('L4', rate(v.slice(-4))) +
+      chip('Home', rate(homes.filter(x => x[0] === 1).map(x => x[1]))) +
+      chip('Away', rate(homes.filter(x => x[0] === 0).map(x => x[1])));
+  }
+
+  function renderChart() {
+    const m = M(), v = vals(m), H = D.history;
+    const n = v.length, bw = Math.max(14, Math.min(34, Math.floor(680 / n) - 2));
+    const gap = 2, w = n * (bw + gap) + 46, h = 190, padT = 14, padB = 20, padL = 34;
+    const maxV = Math.max(...v, line, 1) * 1.12;
+    const y = val => padT + (h - padT - padB) * (1 - val / maxV);
+    const base = y(0);
+    let bars = '', hits = '', ticks = '';
+    const gridN = 3;
+    for (let i = 1; i <= gridN; i++) {
+      const gv = maxV * i / (gridN + 1), gy = y(gv);
+      ticks += `<line x1="${padL}" x2="${w}" y1="${gy}" y2="${gy}" stroke="rgba(111,135,171,.14)"/>` +
+        `<text x="${padL - 5}" y="${gy + 3}" text-anchor="end" font-size="9" fill="var(--mu2)">${Math.round(gv)}</text>`;
+    }
+    v.forEach((val, i) => {
+      const x = padL + 6 + i * (bw + gap);
+      const top = y(val), r = Math.min(4, bw / 2);
+      const col = val > line ? 'var(--bar-over)' : 'var(--bar-under)';
+      const bh = Math.max(base - top, 1.5);
+      bars += bh > r
+        ? `<path d="M${x},${base} V${top + r} a${r},${r} 0 0 1 ${r},-${r} h${bw - 2 * r} a${r},${r} 0 0 1 ${r},${r} V${base} Z" fill="${col}"/>`
+        : `<rect x="${x}" y="${base - bh}" width="${bw}" height="${bh}" fill="${col}"/>`;
+      const g = H[i];
+      hits += `<rect x="${x - gap / 2}" y="0" width="${bw + gap}" height="${h}" fill="transparent"
+        data-tip="${esc(`${g.season_type === 'POST' ? 'PO' : 'Wk'} ${g.week} ${g.home ? 'vs' : '@'} ${g.opponent} — ${val}`)}"/>`;
+      ticks += `<text x="${x + bw / 2}" y="${h - 6}" text-anchor="middle" font-size="8.5" fill="var(--mu2)">${g.season_type === 'POST' ? 'P' + g.week : g.week}</text>`;
+    });
+    const ly = y(line);
+    const svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-width:${w * 1.4}px;display:block">
+      ${ticks}
+      ${bars}
+      <line x1="${padL}" x2="${w}" y1="${ly}" y2="${ly}" stroke="var(--gold)" stroke-width="1.6" stroke-dasharray="6 4"/>
+      <text x="${w - 2}" y="${ly - 5}" text-anchor="end" font-size="10" font-weight="700" fill="var(--gold)">${line}</text>
+      <line x1="${padL}" x2="${w}" y1="${base}" y2="${base}" stroke="rgba(111,135,171,.35)"/>
+      ${hits}
+    </svg>`;
+    $('#chart').innerHTML = svg;
+    const tip = $('#tip');
+    $('#chart').querySelectorAll('[data-tip]').forEach(el => {
+      el.addEventListener('mousemove', e => {
+        tip.textContent = el.dataset.tip;
+        tip.style.left = e.clientX + 'px'; tip.style.top = e.clientY + 'px';
+        tip.classList.add('on');
+      });
+      el.addEventListener('mouseleave', () => tip.classList.remove('on'));
+    });
+  }
+
+  function renderProj() {
+    const m = M(), p = probOver(m.proj, line);
+    const side = p >= 0.5 ? 'over' : 'under';
+    const b = m.book, best = b ? (side === 'over' ? b.bestOver : b.bestUnder) : null;
+    $('#proj').innerHTML = `
+      <div class="bigp ${p >= 0.55 ? 'pos' : p <= 0.45 ? 'neg' : ''}">${Math.round(p * 100)}%</div>
+      <div class="subp">model P(over ${line})</div>
+      <div class="projrow"><span class="muted">Projection</span><span class="v">${m.proj.mean}</span></div>
+      <div class="projrow"><span class="muted">Season / L4 avg</span><span class="v">${m.proj.season_mean} / ${m.proj.l4_mean}</span></div>
+      <div class="projrow"><span class="muted">Opp factor</span><span class="v">${m.proj.opp_factor}×</span></div>
+      ${b && best ? `<div class="projrow"><span class="muted">Best ${side}</span><span class="v">${am(best.price)} <span class="muted">${esc(best.book)}</span></span></div>
+      <div class="projrow"><span class="muted">Edge / EV</span><span class="v ${b.edge > 0 ? 'pos' : 'neg'}">${(b.edge * 100).toFixed(1)}% / ${(b.evPct * 100).toFixed(1)}%</span></div>` : ''}
+      <button class="btn primary" style="width:100%;margin-top:11px" id="addpick">Add ${side.toUpperCase()} ${line} to slip</button>`;
+    $('#addpick').onclick = () => {
+      addToSlip({
+        gameId: D.next_game ? D.next_game.game_id : null,
+        season: D.next_game ? D.next_game.season : D.stats_season,
+        week: D.next_game ? D.next_game.week : null,
+        gameday: D.next_game ? (D.next_game.date || '').slice(0, 10) : null,
+        player: P.name, playerId: P.id, team: P.team, opponent: D.opponent,
+        position: P.position, marketKey: mk, marketLabel: m.label,
+        line, side, price: best ? best.price : null, book: best ? best.book : null,
+        modelProb: side === 'over' ? p : 1 - p, modelSource: 'analytic',
+      });
+    };
+  }
+
+  function renderMatchup() {
+    const c = D.opponent_dvp;
+    if (!D.opponent || !c) { $('#matchup').innerHTML = `<div class="muted">${D.opponent ? 'No defensive data.' : 'Offseason — projections use league-average opponent.'}</div>`; return; }
+    const row = (l, v, r) => v == null ? '' :
+      `<div class="projrow"><span class="muted">${l}</span><span class="v">${v} <span class="muted">(${r?.toFixed(2) ?? '—'}×)</span></span></div>`;
+    $('#matchup').innerHTML = `
+      <div class="muted" style="margin-bottom:6px"><b style="color:var(--t)">${D.opponent}</b> allows per game vs ${P.position}:</div>
+      ${row('Pass yards', c.passing_yards, c.passing_yards_ratio)}
+      ${row('Rush yards', c.rushing_yards, c.rushing_yards_ratio)}
+      ${row('Rec yards', c.receiving_yards, c.receiving_yards_ratio)}
+      ${row('Receptions', c.receptions, c.receptions_ratio)}
+      <div class="muted" style="margin-top:7px">&gt;1× = generous matchup</div>`;
+  }
+
+  function renderLog() {
+    const cols = P.position === 'QB'
+      ? [['completions','CMP'],['attempts','ATT'],['passing_yards','PaYD'],['passing_tds','PaTD'],['interceptions','INT'],['carries','CAR'],['rushing_yards','RuYD'],['rushing_tds','RuTD']]
+      : [['carries','CAR'],['rushing_yards','RuYD'],['rushing_tds','RuTD'],['targets','TGT'],['receptions','REC'],['receiving_yards','ReYD'],['receiving_tds','ReTD']];
+    let h = '<table><thead><tr><th>Wk</th><th>Opp</th>' + cols.map(c => `<th class="num">${c[1]}</th>`).join('') + '</tr></thead><tbody>';
+    for (const g of [...D.history].reverse()) {
+      h += `<tr><td>${g.season_type === 'POST' ? 'PO' + g.week : g.week}</td><td>${g.home ? 'vs' : '@'} ${g.opponent}</td>` +
+        cols.map(c => `<td class="num">${g[c[0]]}</td>`).join('') + '</tr>';
+    }
+    $('#logtbl').innerHTML = h + '</tbody></table>';
+  }
+
+  select(D.markets[0].marketKey);
+});
+</script>
+</body>
+</html>
