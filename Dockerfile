@@ -34,12 +34,11 @@ FROM python:3.11-slim
 # Set the working directory
 WORKDIR /usr/src/app
 
-# Install only runtime dependencies if needed
-# redis-server is installed here so the container can run its own local Redis
-# instance when no external REDIS_URL is supplied.
+# Install only runtime libraries required by Python dependencies.
+# Redis is an external optional service; redis_client.py falls back to an
+# in-process TTL cache when REDIS_URL is not configured.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpq5 \
-        redis-server \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the virtual environment from the build stage
@@ -64,19 +63,7 @@ USER appuser
 ENV PORT=8080
 EXPOSE $PORT
 
-# Point the app at the local Redis instance.
-# Override with a real REDIS_URL (e.g. Upstash, Redis Cloud) in production
-# and the embedded redis-server is simply unused — redis_client.py will
-# connect to the external URL instead.
-ENV REDIS_URL=redis://localhost:6379
-
-# Start Redis, wait until it is actually ready to accept connections (not just
-# daemonised), then start the app.  Without the readiness loop the app can
-# reach redis_client.py before Redis has bound its socket and permanently fall
-# back to in-memory mode for the container lifetime.
-CMD redis-server --daemonize yes \
-        --dir /tmp \
-        --save "" \
-        --loglevel warning \
-    && until redis-cli ping 2>/dev/null | grep -q PONG; do sleep 0.1; done \
-    && python app.py
+# Run the production WSGI server. The exec form preserves Fly.io shutdown
+# signals, and gunicorn_conf.py owns worker/thread/time-out configuration plus
+# the post-fork cache preload hook.
+CMD ["gunicorn", "--config", "gunicorn_conf.py", "app:app"]
