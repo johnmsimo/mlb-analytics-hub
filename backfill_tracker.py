@@ -38,14 +38,15 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import time
 import urllib.error
 import urllib.request
 from datetime import date, datetime, timedelta, timezone
 
-DEFAULT_BASE_URL = os.getenv("MLB_BASE_URL", "https://mlb-analytics-hub.fly.dev")
+from config import settings
+
+DEFAULT_BASE_URL = settings.mlb_base_url
 DEFAULT_START = "2026-05-01"
 # US/Eastern is UTC-4 during the MLB season (EDT); good enough for "yesterday".
 _ET = timezone(timedelta(hours=-4))
@@ -228,7 +229,7 @@ def parse_args(argv) -> argparse.Namespace:
     p.add_argument("--start", default=DEFAULT_START, help="YYYY-MM-DD (inclusive)")
     p.add_argument("--end", default=None,
                    help="YYYY-MM-DD (inclusive). Default: yesterday ET")
-    p.add_argument("--token", default=os.getenv("MLB_ADMIN_TOKEN") or os.getenv("ADMIN_TOKEN"),
+    p.add_argument("--token", default=settings.mlb_admin_token,
                    help="Admin token (or set MLB_ADMIN_TOKEN). Omit if app has no ADMIN_TOKEN.")
     p.add_argument("--sleep", type=float, default=3.0,
                    help="Seconds to pause between dates (be kind to the MLB API)")
