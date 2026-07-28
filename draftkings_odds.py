@@ -15,7 +15,6 @@ Public API:
   cache_status()                      -> dict
 """
 
-import os
 import re
 import time
 import logging
@@ -23,20 +22,22 @@ import threading
 
 import requests
 
+from config import settings
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-DK_ODDS_TTL = int(os.getenv("DK_ODDS_TTL_SEC", "300"))
+DK_ODDS_TTL = settings.draftkings_odds_ttl_seconds
 
 # DraftKings geo-routing prefix — NJ default; change via env if blocked.
 # Options: dkusnj, dkusco, dkusil, dkuspa, dkusva, dkusmi
-DK_GEO = os.getenv("DK_GEO", "dkusnj")
+DK_GEO = settings.draftkings_geo
 
 # MLB event group ID (stable)
-MLB_EVENT_GROUP = int(os.getenv("DK_MLB_EVENT_GROUP", "84240"))
+MLB_EVENT_GROUP = settings.draftkings_mlb_event_group
 
 # Known stable MLB offer category IDs — auto-validated at startup
 _DEFAULT_CATEGORIES: dict = {
