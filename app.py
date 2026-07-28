@@ -228,18 +228,13 @@ from brain_merge_patch import (
 )
 
 
-# ── Pooled HTTP session ───────────────────────────────────────────────────────
-# Every outbound call was `requests.get`, which opens a fresh TCP+TLS
-# connection per call — measured at 500-700ms each to statsapi.mlb.com before
-# any bytes move. The app makes thousands of these per hour (game fetches,
-# gamelogs, boxscores, the memory-store collector), so route module-level
-# requests.get through one Session with keep-alive pools. Session.get has the
-# identical signature and urllib3's pools are thread-safe; cookie state is
-# shared but the MLB/Odds/open-meteo APIs are cookie-indifferent.
-_HTTP_SESSION = requests.Session()
-_HTTP_SESSION.mount('https://', requests.adapters.HTTPAdapter(pool_connections=16, pool_maxsize=32))
-_HTTP_SESSION.mount('http://', requests.adapters.HTTPAdapter(pool_connections=8, pool_maxsize=16))
-requests.get = _HTTP_SESSION.get
+from config import settings
+from http_client import install_global_http_session
+from request_performance import performance_bp, request_performance
+
+# Install the same configured retrying pool in direct Flask starts and Gunicorn
+# workers. The installer is idempotent when Gunicorn already initialized it.
+_HTTP_SESSION = install_global_http_session()
 
 app = Flask(__name__)
 # Flask's default JSON provider sorts keys on every jsonify — pure overhead on
@@ -249,21 +244,23 @@ app.json.sort_keys = False
 
 # PROFILE_REQUESTS=1 wraps every request in cProfile and prints the top
 # cumulative functions to stdout — dev-only diagnostic, never set in prod.
-if os.getenv('PROFILE_REQUESTS') == '1':
+if settings.profile_requests:
     from werkzeug.middleware.profiler import ProfilerMiddleware
     app.wsgi_app = ProfilerMiddleware(app.wsgi_app, restrictions=[35], sort_by=('cumulative',))
 CORS(app)
+app.register_blueprint(performance_bp)
 
 
 @app.before_request
 def _attach_request_id():
     g.request_id = uuid4().hex[:8]
+    request_performance.begin_request()
 
 
 @app.after_request
 def _add_request_id_header(response):
     response.headers['X-Request-Id'] = getattr(g, 'request_id', '-')
-    return response
+    return request_performance.finish_request(response)
 
 
 @app.after_request

@@ -91,6 +91,30 @@ class Settings:
         return _boolean("CACHE_ALLOW_STALE", True)
 
     @property
+    def performance_monitor_enabled(self) -> bool:
+        return _boolean("PERFORMANCE_MONITOR_ENABLED", True)
+
+    @property
+    def profile_requests(self) -> bool:
+        return _boolean("PROFILE_REQUESTS", False)
+
+    @property
+    def performance_slow_ms(self) -> int:
+        return int(_number("PERFORMANCE_SLOW_MS", 1000, int, minimum=1))
+
+    @property
+    def performance_sample_size(self) -> int:
+        return int(
+            _number("PERFORMANCE_SAMPLE_SIZE", 2048, int, minimum=100, maximum=10000)
+        )
+
+    @property
+    def performance_route_limit(self) -> int:
+        return int(
+            _number("PERFORMANCE_ROUTE_LIMIT", 256, int, minimum=25, maximum=2000)
+        )
+
+    @property
     def admin_token(self) -> str:
         return _string("ADMIN_TOKEN")
 
@@ -192,6 +216,10 @@ class Settings:
             "cache_allow_stale": self.cache_allow_stale,
             "cache_stale_ttl": self.cache_stale_ttl,
             "cache_ttls": self.cache_ttls,
+            "performance_monitor_enabled": self.performance_monitor_enabled,
+            "performance_slow_ms": self.performance_slow_ms,
+            "performance_sample_size": self.performance_sample_size,
+            "performance_route_limit": self.performance_route_limit,
             "http_retry_total": self.http_retry_total,
             "http_retry_backoff": self.http_retry_backoff,
             "bq_project_configured": bool(self.google_cloud_project),

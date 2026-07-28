@@ -18,6 +18,11 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual(settings.redis_circuit_timeout, 60)
             self.assertEqual(settings.cache_stale_ttl, 300)
             self.assertTrue(settings.cache_allow_stale)
+            self.assertTrue(settings.performance_monitor_enabled)
+            self.assertFalse(settings.profile_requests)
+            self.assertEqual(settings.performance_slow_ms, 1000)
+            self.assertEqual(settings.performance_sample_size, 2048)
+            self.assertEqual(settings.performance_route_limit, 256)
 
     def test_environment_overrides_are_resolved_on_access(self):
         with patch.dict(
@@ -30,6 +35,8 @@ class ConfigurationTests(unittest.TestCase):
                 "BQ_ETL_HOUR_ET": "7",
                 "REDIS_FAILURE_THRESHOLD": "3",
                 "CACHE_ALLOW_STALE": "false",
+                "PERFORMANCE_MONITOR_ENABLED": "false",
+                "PERFORMANCE_SLOW_MS": "750",
             },
             clear=True,
         ):
@@ -40,6 +47,8 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual(settings.bq_etl_hour_et, 7)
             self.assertEqual(settings.redis_failure_threshold, 3)
             self.assertFalse(settings.cache_allow_stale)
+            self.assertFalse(settings.performance_monitor_enabled)
+            self.assertEqual(settings.performance_slow_ms, 750)
 
     def test_invalid_numbers_fall_back_and_ranges_are_bounded(self):
         with patch.dict(
@@ -51,6 +60,8 @@ class ConfigurationTests(unittest.TestCase):
                 "BQ_ETL_MINUTE_ET": "-1",
                 "REDIS_HEALTH_INTERVAL": "0",
                 "CACHE_STALE_TTL": "-4",
+                "PERFORMANCE_SAMPLE_SIZE": "999999",
+                "PERFORMANCE_ROUTE_LIMIT": "0",
             },
             clear=True,
         ):
@@ -60,6 +71,8 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual(settings.bq_etl_minute_et, 0)
             self.assertEqual(settings.redis_health_interval, 1)
             self.assertEqual(settings.cache_stale_ttl, 0)
+            self.assertEqual(settings.performance_sample_size, 10000)
+            self.assertEqual(settings.performance_route_limit, 25)
 
     def test_public_snapshot_never_exposes_secrets(self):
         with patch.dict(
