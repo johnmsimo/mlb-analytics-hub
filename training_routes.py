@@ -24,7 +24,6 @@ from __future__ import annotations
 import io
 import logging
 import math
-import os
 import sys
 import threading
 import time
@@ -36,12 +35,14 @@ from flask import Blueprint, jsonify, request
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
+from config import settings
+
 log = logging.getLogger(__name__)
 
 training_bp = Blueprint("training", __name__, url_prefix="/api/training")
 
-_REDIS_URL   = os.getenv("REDIS_URL", "")
-_ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "").strip()
+_REDIS_URL   = settings.redis_url
+_ADMIN_TOKEN = settings.admin_token
 
 limiter = Limiter(
     key_func=get_remote_address,

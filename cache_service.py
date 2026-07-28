@@ -7,24 +7,18 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import threading
 import time
 from collections import defaultdict
 from collections.abc import Callable
 from typing import Any, TypeVar
 
+from config import settings
 from redis_client import get_redis, is_redis_connected
 
 T = TypeVar("T")
 
-TTL_SECONDS = {
-    "live": int(os.getenv("CACHE_TTL_LIVE", "30")),
-    "schedule": int(os.getenv("CACHE_TTL_SCHEDULE", "300")),
-    "stats": int(os.getenv("CACHE_TTL_STATS", "3600")),
-    "analytics": int(os.getenv("CACHE_TTL_ANALYTICS", "900")),
-    "static": int(os.getenv("CACHE_TTL_STATIC", "21600")),
-}
+TTL_SECONDS = settings.cache_ttls
 
 _locks: dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()

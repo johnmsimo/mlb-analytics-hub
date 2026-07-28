@@ -22,10 +22,10 @@ Key goals:
   • auto_stop_machines=false in fly.toml keeps machine alive so caches
     are never lost to a suspend/resume cycle
 """
-import os
+from config import settings
 
 # Bind — Fly.io sets $PORT; fall back to 8080.
-bind = f"0.0.0.0:{os.environ.get('PORT', '8080')}"
+bind = f"0.0.0.0:{settings.port}"
 
 # One worker only. pybaseball + Savant caches are large (~150MB) and
 # 2 workers on a 2GB instance == unnecessary cache duplication.

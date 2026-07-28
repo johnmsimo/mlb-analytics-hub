@@ -22,7 +22,9 @@ import os
 from collections import defaultdict
 from datetime import datetime
 
-DATA_DIR = os.environ.get("DATA_DIR") or os.path.join(os.path.dirname(__file__), "data")
+from config import settings
+
+DATA_DIR = settings.data_dir
 TRACKER_PATH = os.path.join(DATA_DIR, "daily_tracker.json")
 OUT_PATH = os.path.join(DATA_DIR, "tier_thresholds.json")
 

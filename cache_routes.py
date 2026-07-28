@@ -2,17 +2,17 @@
 from __future__ import annotations
 
 import hmac
-import os
 
 from flask import Blueprint, jsonify, request
 
 from cache_service import cache_status, invalidate_namespace, reset_cache_metrics
+from config import settings
 
 cache_ops_bp = Blueprint("cache_ops", __name__, url_prefix="/api/cache")
 
 
 def _authorized() -> bool:
-    expected = os.getenv("CACHE_ADMIN_TOKEN", "")
+    expected = settings.cache_admin_token
     supplied = request.headers.get("X-Cache-Admin-Token", "")
     return bool(expected) and hmac.compare_digest(expected, supplied)
 

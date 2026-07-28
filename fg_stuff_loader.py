@@ -19,7 +19,9 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 
-DATA_DIR = os.environ.get("DATA_DIR") or os.path.join(os.path.dirname(__file__), "data")
+from config import settings
+
+DATA_DIR = settings.data_dir
 
 _lock = threading.Lock()
 _cache = {"df": None, "loaded_at": None, "year": None}

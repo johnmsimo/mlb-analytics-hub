@@ -100,8 +100,10 @@ import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+from config import settings
+
 _HERE        = os.path.dirname(os.path.abspath(__file__))
-_DATA_DIR    = os.environ.get("DATA_DIR") or os.path.join(_HERE, "data")
+_DATA_DIR    = settings.data_dir
 _TRACKER_PATH = os.path.join(_DATA_DIR, "daily_tracker.json")
 _lock        = threading.Lock()
 

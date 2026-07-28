@@ -9,13 +9,14 @@ exposed by pipeline_scheduler:
     run_pipeline()         →  POST /api/pipeline/run   (admin-token protected + rate limited)
 """
 
-import os
 import threading
 import logging
 
 from flask import Blueprint, jsonify, request
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+
+from config import settings
 
 from pipeline_scheduler import (
     get_matchup_df,
@@ -31,7 +32,7 @@ log = logging.getLogger(__name__)
 # Uses Redis when REDIS_URL is set; falls back to in-memory (dev/test).
 # Attach to the app via limiter.init_app(app) in app.py after blueprint
 # registration, or leave as a standalone limiter bound to this blueprint.
-_REDIS_URL = os.getenv("REDIS_URL", "")
+_REDIS_URL = settings.redis_url
 
 limiter = Limiter(
     key_func=get_remote_address,
@@ -41,7 +42,7 @@ limiter = Limiter(
 )
 
 # Read once at import time; same variable the rest of app.py uses.
-_ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "").strip()
+_ADMIN_TOKEN = settings.admin_token
 
 
 def _check_admin_auth():

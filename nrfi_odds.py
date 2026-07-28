@@ -2,15 +2,17 @@
 nrfi_odds.py — Live NRFI/YRFI odds ingestion + devig engine
 """
 
-import os, time, logging, threading
+import time, logging, threading
 import requests
+
+from config import settings
 
 logger = logging.getLogger(__name__)
 
-ODDS_API_KEY   = os.getenv("ODDS_API_KEY", "").strip()
+ODDS_API_KEY   = settings.odds_api_key
 ODDS_API_BASE  = "https://api.the-odds-api.com/v4"
 NRFI_MARKET    = "h2h_1st_1_innings"
-NRFI_CACHE_TTL = int(os.getenv("ODDS_NRFI_TTL_SEC", "300"))
+NRFI_CACHE_TTL = settings.odds_nrfi_ttl_seconds
 
 BOOK_PRIORITY = [
     "pinnacle", "draftkings", "fanduel", "betmgm",

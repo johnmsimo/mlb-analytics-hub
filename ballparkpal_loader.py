@@ -22,7 +22,9 @@ import threading
 from datetime import datetime, timedelta
 from urllib.request import Request, urlopen
 
-DATA_DIR = os.environ.get("DATA_DIR") or os.path.join(os.path.dirname(__file__), "data")
+from config import settings
+
+DATA_DIR = settings.data_dir
 
 _lock = threading.Lock()
 _cache = {}   # date_str → {parsed_at, by_team: {team_abbr: {hand: {stat: mult}}}}
