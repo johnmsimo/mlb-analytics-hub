@@ -27,14 +27,15 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import threading
 import time
 from typing import Any, Optional
 
+from config import settings
+
 log = logging.getLogger(__name__)
 
-_REDIS_URL: str = os.environ.get("REDIS_URL", "")
+_REDIS_URL: str = settings.redis_url
 
 
 # ── In-memory fallback ────────────────────────────────────────────────────────
