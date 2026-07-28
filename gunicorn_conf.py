@@ -91,22 +91,25 @@ def on_starting(server):
 
 
 def post_fork(server, worker):
-    """
-    Trigger cache preloads AFTER the worker has bound to port 8080.
-
-    This is the key fix for Fly.io health check failures:
-    Previously, _preload_caches() ran at module import time, meaning
-    heavy FG/Savant network I/O could block the worker before it was
-    ready to serve requests. By moving the trigger here, the port is
-    already open and health checks return 200 immediately while caches
-    load in the background.
-
-    _preload_caches() itself spawns daemon threads and returns instantly —
-    this hook does not block gunicorn startup.
-    """
+    """Install worker-local cache wrappers, then trigger background preloads."""
     import threading
+
+    try:
+        from pipeline_cache_integration import install_pipeline_cache
+
+        installed = install_pipeline_cache()
+        server.log.info(
+            "[post_fork] pipeline shared cache integration installed=%s",
+            installed,
+        )
+    except Exception as ex:
+        server.log.warning(
+            f"[post_fork] Could not install pipeline cache integration: {ex}"
+        )
+
     try:
         from app import _preload_caches
+
         threading.Thread(target=_preload_caches, daemon=True).start()
         server.log.info("[post_fork] _preload_caches() triggered in background thread")
     except Exception as ex:
