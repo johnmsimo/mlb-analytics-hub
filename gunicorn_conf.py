@@ -75,6 +75,21 @@ access_log_format = '%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s %(L)ss'
 capture_output = True
 
 
+def on_starting(server):
+    """Install the pooled retrying HTTP session before workers import app.py."""
+    try:
+        from http_client import install_global_http_session
+
+        session = install_global_http_session()
+        retries = session.get_adapter("https://").max_retries.total
+        server.log.info(
+            "[on_starting] shared HTTP session installed with %s retries",
+            retries,
+        )
+    except Exception as ex:
+        server.log.warning(f"[on_starting] Could not install HTTP session: {ex}")
+
+
 def post_fork(server, worker):
     """
     Trigger cache preloads AFTER the worker has bound to port 8080.
