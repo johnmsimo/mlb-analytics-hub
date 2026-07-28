@@ -2,6 +2,7 @@
 
 Installs cache-backed replacements for schedule, roster, BvP, and platoon
 lookups while preserving the scheduler's existing return types and fallbacks.
+Also registers cache operational routes once per worker.
 """
 from __future__ import annotations
 
@@ -15,6 +16,24 @@ from cache_service import get_or_compute, normalize_cache_key
 
 log = logging.getLogger(__name__)
 _INSTALLED_ATTR = "_shared_cache_integration_installed"
+_ROUTES_ATTR = "_cache_operations_routes_installed"
+
+
+def _install_cache_routes() -> bool:
+    """Register the cache operations blueprint on the main Flask app once."""
+    import app as app_module
+    from cache_routes import cache_ops_bp
+
+    flask_app = getattr(app_module, "app", None)
+    if flask_app is None:
+        log.warning("[pipeline.cache] app module has no Flask 'app' object")
+        return False
+    if getattr(flask_app, _ROUTES_ATTR, False):
+        return False
+    flask_app.register_blueprint(cache_ops_bp)
+    setattr(flask_app, _ROUTES_ATTR, True)
+    log.info("[pipeline.cache] cache operations routes registered")
+    return True
 
 
 def install_pipeline_cache(module: ModuleType | None = None) -> bool:
@@ -23,6 +42,10 @@ def install_pipeline_cache(module: ModuleType | None = None) -> bool:
         import pipeline_scheduler as module
 
     if getattr(module, _INSTALLED_ATTR, False):
+        try:
+            _install_cache_routes()
+        except Exception as exc:
+            log.warning("[pipeline.cache] route registration failed: %s", exc)
         return False
 
     original_position_ids = module._get_position_player_ids
@@ -72,5 +95,11 @@ def install_pipeline_cache(module: ModuleType | None = None) -> bool:
     module._get_bvp = cached_bvp
     module._get_platoon_splits = cached_splits
     setattr(module, _INSTALLED_ATTR, True)
+
+    try:
+        _install_cache_routes()
+    except Exception as exc:
+        log.warning("[pipeline.cache] route registration failed: %s", exc)
+
     log.info("[pipeline.cache] shared cache installed for schedule and MLB loaders")
     return True
