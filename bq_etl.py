@@ -53,7 +53,7 @@ DATASET = os.environ.get("BQ_DATASET", "mlb")
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
 def _bq():
-    from google.cloud import bigquery  # imported lazily so --help works without auth
+    from google.cloud import bigquery
     return bigquery
 
 
@@ -158,13 +158,7 @@ LIMIT 100000
 """
 
 
-# ── Source: MLB Stats API bulk endpoint ───────────────────────────────────────
 def _fetch_stats_bulk(group, season=None):
-    """Fetch league-wide season stats from the MLB Stats API.
-
-    group: 'hitting' or 'pitching'.
-    Returns: list of dicts with raw API fields.
-    """
     season = season or datetime.now().year
     url = (
         f"{MLB_API}/stats?stats=season&group={group}"
@@ -217,24 +211,25 @@ def build_batters_df():
         bb = _safe_i(stat.get("baseOnBalls"),      0)
         k  = _safe_i(stat.get("strikeOuts"),       0)
         rows.append({
-            "player_id":    pid,
-            "name":         player.get("fullName"),
-            "team":         team.get("abbreviation") or team.get("name"),
-            "bats":         (player.get("batSide") or {}).get("code"),
+            "player_id": pid,
+            "name": player.get("fullName"),
+            "team": team.get("abbreviation") or team.get("name"),
+            "bats": (player.get("batSide") or {}).get("code"),
             "pa": pa, "ab": ab, "h": h, "hr": hr, "bb": bb, "k": k,
-            "avg":          _safe_f(stat.get("avg")),
-            "obp":          _safe_f(stat.get("obp")),
-            "slg":          _safe_f(stat.get("slg")),
-            "woba":         None,   # MLB API doesn't expose wOBA; backfill from Savant CSV in a later pass
-            "xwoba":        None,
-            "iso":          (lambda s, a: (s - a) if (s is not None and a is not None) else None)(
-                                _safe_f(stat.get("slg")), _safe_f(stat.get("avg"))),
-            "k_pct":        (k / pa * 100.0) if pa else None,
-            "bb_pct":       (bb / pa * 100.0) if pa else None,
-            "barrel_pct":   None,   # Savant-only metric
+            "avg": _safe_f(stat.get("avg")),
+            "obp": _safe_f(stat.get("obp")),
+            "slg": _safe_f(stat.get("slg")),
+            "woba": None,
+            "xwoba": None,
+            "iso": (lambda s, a: (s - a) if (s is not None and a is not None) else None)(
+                _safe_f(stat.get("slg")), _safe_f(stat.get("avg"))
+            ),
+            "k_pct": (k / pa * 100.0) if pa else None,
+            "bb_pct": (bb / pa * 100.0) if pa else None,
+            "barrel_pct": None,
             "hard_hit_pct": None,
-            "avg_ev":       None,
-            "updated_at":   now,
+            "avg_ev": None,
+            "updated_at": now,
         })
     df = pd.DataFrame(rows)
     log.info("[build] batters rows=%d", len(df))
@@ -257,22 +252,22 @@ def build_pitchers_df():
         bb = _safe_i(stat.get("baseOnBalls"),    0)
         hr = _safe_i(stat.get("homeRuns"),       0)
         rows.append({
-            "player_id":  pid,
-            "name":       player.get("fullName"),
-            "team":       team.get("abbreviation") or team.get("name"),
-            "throws":     (player.get("pitchHand") or {}).get("code"),
-            "ip":         ip,
-            "era":        _safe_f(stat.get("era")),
-            "fip":        None,   # FG-only metric; backfill later
-            "xera":       None,   # Savant-only
-            "whip":       _safe_f(stat.get("whip")),
-            "k9":         (9.0 * k / ip) if ip else None,
-            "bb9":        (9.0 * bb / ip) if ip else None,
-            "hr9":        (9.0 * hr / ip) if ip else None,
-            "gb_pct":     _safe_f(stat.get("groundOutsToAirouts")),
-            "csw_pct":    None,
-            "avg_velo":   None,
-            "pitch_mix":  [],
+            "player_id": pid,
+            "name": player.get("fullName"),
+            "team": team.get("abbreviation") or team.get("name"),
+            "throws": (player.get("pitchHand") or {}).get("code"),
+            "ip": ip,
+            "era": _safe_f(stat.get("era")),
+            "fip": None,
+            "xera": None,
+            "whip": _safe_f(stat.get("whip")),
+            "k9": (9.0 * k / ip) if ip else None,
+            "bb9": (9.0 * bb / ip) if ip else None,
+            "hr9": (9.0 * hr / ip) if ip else None,
+            "gb_pct": _safe_f(stat.get("groundOutsToAirouts")),
+            "csw_pct": None,
+            "avg_velo": None,
+            "pitch_mix": [],
             "updated_at": now,
         })
     df = pd.DataFrame(rows)
@@ -281,7 +276,6 @@ def build_pitchers_df():
 
 
 def build_bvp_df():
-    """Read app.py's local data/mlb_matchups_*.csv files and normalize."""
     paths = sorted(_glob.glob(os.path.join(DATA_DIR, "mlb_matchups_*.csv")))
     if not paths:
         log.warning("[bvp] no mlb_matchups_*.csv files in %s", DATA_DIR)
@@ -303,21 +297,21 @@ def build_bvp_df():
                         continue
                     seen.add(key)
                     rows.append({
-                        "batter_id":     bid,
-                        "pitcher_id":    pid,
-                        "pa":            _safe_i(r.get("pa"),  0),
-                        "ab":            _safe_i(r.get("ab"),  0),
-                        "h":             _safe_i(r.get("h"),   0),
-                        "hr":            _safe_i(r.get("hr"),  0),
-                        "bb":            _safe_i(r.get("bb"),  0),
-                        "k":             _safe_i(r.get("k") or r.get("so"), 0),
-                        "avg":           _safe_f(r.get("avg")),
-                        "slg":           _safe_f(r.get("slg")),
-                        "woba":          _safe_f(r.get("woba")),
-                        "xwoba":         _safe_f(r.get("xwoba")),
-                        "last_faced":    None,
+                        "batter_id": bid,
+                        "pitcher_id": pid,
+                        "pa": _safe_i(r.get("pa"),  0),
+                        "ab": _safe_i(r.get("ab"),  0),
+                        "h": _safe_i(r.get("h"),   0),
+                        "hr": _safe_i(r.get("hr"),  0),
+                        "bb": _safe_i(r.get("bb"),  0),
+                        "k": _safe_i(r.get("k") or r.get("so"), 0),
+                        "avg": _safe_f(r.get("avg")),
+                        "slg": _safe_f(r.get("slg")),
+                        "woba": _safe_f(r.get("woba")),
+                        "xwoba": _safe_f(r.get("xwoba")),
+                        "last_faced": None,
                         "platoon_split": r.get("platoon") or r.get("split"),
-                        "updated_at":    now,
+                        "updated_at": now,
                     })
         except Exception as ex:
             log.warning("[bvp] read failed %s: %s", path, ex)
@@ -326,7 +320,6 @@ def build_bvp_df():
     return df
 
 
-# ── Loader ───────────────────────────────────────────────────────────────────
 def load_df(client, df, table_name, schema, write_disposition, partition_field=None):
     if df is None or df.empty:
         log.warning("[load] %s skipped (empty df)", table_name)
@@ -335,7 +328,7 @@ def load_df(client, df, table_name, schema, write_disposition, partition_field=N
     job_config = bq.LoadJobConfig(
         schema=schema,
         write_disposition=write_disposition,
-        source_format=bq.SourceFormat.PARQUET,  # round-trips pandas dtypes cleanly
+        source_format=bq.SourceFormat.PARQUET,
     )
     if partition_field:
         job_config.time_partitioning = bq.TimePartitioning(
@@ -367,14 +360,7 @@ def apply_slate_view(client):
     log.info("[view] OK")
 
 
-# ── Entry ─────────────────────────────────────────────────────────────────────
 def run_all(refresh="all"):
-    """Programmatic entry — same effect as `python bq_etl.py --refresh <refresh>`.
-
-    Returns a dict summary. Idempotent: WRITE_TRUNCATE for batters/pitchers,
-    WRITE_APPEND with daily partitions for bvp_situational. Safe to call from
-    background daemons; the BQ client + dataset are created on demand.
-    """
     project = os.environ.get("GOOGLE_CLOUD_PROJECT")
     if not project:
         return {"ok": False, "reason": "GOOGLE_CLOUD_PROJECT_unset"}
@@ -413,23 +399,32 @@ def run_all(refresh="all"):
     return summary
 
 
-# ── Daemon scheduler (called from app.py) ────────────────────────────────────
 import threading as _threading
+
+_bq_scheduler_start_lock = _threading.Lock()
+_bq_scheduler_started = False
 
 _SCHED_RUN_HOUR_ET   = int(os.environ.get("BQ_ETL_HOUR_ET",   "9"))
 _SCHED_RUN_MINUTE_ET = int(os.environ.get("BQ_ETL_MINUTE_ET", "30"))
 
 
 def start_bq_scheduler():
-    """Daemon: one boot refresh + daily refresh at BQ_ETL_HOUR/MINUTE_ET.
+    """Start the BigQuery ETL scheduler once per process.
 
-    Designed to be called once from app.py after Flask boot. Never blocks the
-    main thread. Silently no-ops when google-cloud-bigquery is unavailable or
-    GOOGLE_CLOUD_PROJECT is unset.
+    Runs one boot refresh and then refreshes daily at the configured ET time.
+    Repeated calls are safe and return without creating duplicate threads.
     """
+    global _bq_scheduler_started
+
     if not os.environ.get("GOOGLE_CLOUD_PROJECT"):
         log.info("[bq_etl] GOOGLE_CLOUD_PROJECT unset — scheduler not armed")
-        return
+        return False
+
+    with _bq_scheduler_start_lock:
+        if _bq_scheduler_started:
+            log.info("[bq_etl] scheduler already armed; skipping duplicate start")
+            return False
+        _bq_scheduler_started = True
 
     def _runner():
         from datetime import datetime as _dt
@@ -462,6 +457,7 @@ def start_bq_scheduler():
     t.start()
     log.info("[bq_etl] scheduler armed — daily refresh at %02d:%02d ET",
              _SCHED_RUN_HOUR_ET, _SCHED_RUN_MINUTE_ET)
+    return True
 
 
 def main():
