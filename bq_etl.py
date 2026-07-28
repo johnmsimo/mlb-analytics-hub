@@ -43,12 +43,14 @@ from datetime import datetime, timezone
 import pandas as pd
 import requests
 
+from config import settings
+
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s")
 log = logging.getLogger("bq_etl")
 
 MLB_API = "https://statsapi.mlb.com/api/v1"
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-DATASET = os.environ.get("BQ_DATASET", "mlb")
+DATA_DIR = settings.data_dir
+DATASET = settings.bq_dataset
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
@@ -349,7 +351,7 @@ def ensure_dataset(client):
     except Exception:
         log.info("[ensure] creating dataset %s", ds_id)
         ds = bq.Dataset(ds_id)
-        ds.location = os.environ.get("BQ_LOCATION", "US")
+        ds.location = settings.bq_location
         client.create_dataset(ds, exists_ok=True)
 
 
@@ -361,7 +363,7 @@ def apply_slate_view(client):
 
 
 def run_all(refresh="all"):
-    project = os.environ.get("GOOGLE_CLOUD_PROJECT")
+    project = settings.google_cloud_project
     if not project:
         return {"ok": False, "reason": "GOOGLE_CLOUD_PROJECT_unset"}
 
@@ -404,8 +406,8 @@ import threading as _threading
 _bq_scheduler_start_lock = _threading.Lock()
 _bq_scheduler_started = False
 
-_SCHED_RUN_HOUR_ET   = int(os.environ.get("BQ_ETL_HOUR_ET",   "9"))
-_SCHED_RUN_MINUTE_ET = int(os.environ.get("BQ_ETL_MINUTE_ET", "30"))
+_SCHED_RUN_HOUR_ET   = settings.bq_etl_hour_et
+_SCHED_RUN_MINUTE_ET = settings.bq_etl_minute_et
 
 
 def start_bq_scheduler():
@@ -416,7 +418,7 @@ def start_bq_scheduler():
     """
     global _bq_scheduler_started
 
-    if not os.environ.get("GOOGLE_CLOUD_PROJECT"):
+    if not settings.google_cloud_project:
         log.info("[bq_etl] GOOGLE_CLOUD_PROJECT unset — scheduler not armed")
         return False
 
