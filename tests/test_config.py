@@ -1,0 +1,69 @@
+import os
+import unittest
+from unittest.mock import patch
+
+from config import settings
+
+
+class ConfigurationTests(unittest.TestCase):
+    def test_defaults_are_typed(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(settings.port, 8080)
+            self.assertEqual(settings.http_retry_total, 3)
+            self.assertEqual(settings.http_retry_backoff, 0.5)
+            self.assertEqual(settings.cache_ttls["stats"], 3600)
+            self.assertEqual(settings.bq_dataset, "mlb")
+
+    def test_environment_overrides_are_resolved_on_access(self):
+        with patch.dict(
+            os.environ,
+            {
+                "PORT": "9090",
+                "REDIS_URL": "redis://example:6379/0",
+                "CACHE_TTL_LIVE": "45",
+                "HTTP_RETRY_TOTAL": "6",
+                "BQ_ETL_HOUR_ET": "7",
+            },
+            clear=True,
+        ):
+            self.assertEqual(settings.port, 9090)
+            self.assertEqual(settings.redis_url, "redis://example:6379/0")
+            self.assertEqual(settings.cache_ttls["live"], 45)
+            self.assertEqual(settings.http_retry_total, 6)
+            self.assertEqual(settings.bq_etl_hour_et, 7)
+
+    def test_invalid_numbers_fall_back_and_ranges_are_bounded(self):
+        with patch.dict(
+            os.environ,
+            {
+                "PORT": "invalid",
+                "HTTP_RETRY_TOTAL": "-4",
+                "BQ_ETL_HOUR_ET": "99",
+                "BQ_ETL_MINUTE_ET": "-1",
+            },
+            clear=True,
+        ):
+            self.assertEqual(settings.port, 8080)
+            self.assertEqual(settings.http_retry_total, 0)
+            self.assertEqual(settings.bq_etl_hour_et, 23)
+            self.assertEqual(settings.bq_etl_minute_et, 0)
+
+    def test_public_snapshot_never_exposes_secrets(self):
+        with patch.dict(
+            os.environ,
+            {
+                "ADMIN_TOKEN": "admin-secret",
+                "CACHE_ADMIN_TOKEN": "cache-secret",
+                "ODDS_API_KEY": "api-secret",
+            },
+            clear=True,
+        ):
+            snapshot = settings.as_public_dict()
+        serialized = repr(snapshot)
+        self.assertNotIn("admin-secret", serialized)
+        self.assertNotIn("cache-secret", serialized)
+        self.assertNotIn("api-secret", serialized)
+
+
+if __name__ == "__main__":
+    unittest.main()
