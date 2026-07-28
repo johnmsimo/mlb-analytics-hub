@@ -91,6 +91,10 @@ class Settings:
         return _boolean("CACHE_ALLOW_STALE", True)
 
     @property
+    def mlb_schedule_cache_ttl(self) -> int:
+        return int(_number("MLB_SCHEDULE_CACHE_TTL", 120, int, minimum=1))
+
+    @property
     def performance_monitor_enabled(self) -> bool:
         return _boolean("PERFORMANCE_MONITOR_ENABLED", True)
 
@@ -216,6 +220,7 @@ class Settings:
             "cache_allow_stale": self.cache_allow_stale,
             "cache_stale_ttl": self.cache_stale_ttl,
             "cache_ttls": self.cache_ttls,
+            "mlb_schedule_cache_ttl": self.mlb_schedule_cache_ttl,
             "performance_monitor_enabled": self.performance_monitor_enabled,
             "performance_slow_ms": self.performance_slow_ms,
             "performance_sample_size": self.performance_sample_size,

@@ -152,6 +152,7 @@ mlb-analytics-hub/
 | `REDIS_CIRCUIT_TIMEOUT` | Seconds before a half-open recovery probe | `60` |
 | `CACHE_STALE_TTL` | Extra seconds to retain stale-if-error cache shadows | `300` |
 | `CACHE_ALLOW_STALE` | Serve stale cached data when recomputation fails | `true` |
+| `MLB_SCHEDULE_CACHE_TTL` | Freshness window for shared hydrated date/game schedules | `120` |
 | `PERFORMANCE_MONITOR_ENABLED` | Collect bounded in-process request latency metrics | `true` |
 | `PERFORMANCE_SLOW_MS` | Slow-request structured-log threshold in milliseconds | `1000` |
 | `PERFORMANCE_SAMPLE_SIZE` | Recent request durations retained for aggregate percentiles | `2048` |

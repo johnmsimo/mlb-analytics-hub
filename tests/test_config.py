@@ -18,6 +18,7 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual(settings.redis_circuit_timeout, 60)
             self.assertEqual(settings.cache_stale_ttl, 300)
             self.assertTrue(settings.cache_allow_stale)
+            self.assertEqual(settings.mlb_schedule_cache_ttl, 120)
             self.assertTrue(settings.performance_monitor_enabled)
             self.assertFalse(settings.profile_requests)
             self.assertEqual(settings.performance_slow_ms, 1000)
@@ -35,6 +36,7 @@ class ConfigurationTests(unittest.TestCase):
                 "BQ_ETL_HOUR_ET": "7",
                 "REDIS_FAILURE_THRESHOLD": "3",
                 "CACHE_ALLOW_STALE": "false",
+                "MLB_SCHEDULE_CACHE_TTL": "90",
                 "PERFORMANCE_MONITOR_ENABLED": "false",
                 "PERFORMANCE_SLOW_MS": "750",
             },
@@ -47,6 +49,7 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual(settings.bq_etl_hour_et, 7)
             self.assertEqual(settings.redis_failure_threshold, 3)
             self.assertFalse(settings.cache_allow_stale)
+            self.assertEqual(settings.mlb_schedule_cache_ttl, 90)
             self.assertFalse(settings.performance_monitor_enabled)
             self.assertEqual(settings.performance_slow_ms, 750)
 
@@ -60,6 +63,7 @@ class ConfigurationTests(unittest.TestCase):
                 "BQ_ETL_MINUTE_ET": "-1",
                 "REDIS_HEALTH_INTERVAL": "0",
                 "CACHE_STALE_TTL": "-4",
+                "MLB_SCHEDULE_CACHE_TTL": "0",
                 "PERFORMANCE_SAMPLE_SIZE": "999999",
                 "PERFORMANCE_ROUTE_LIMIT": "0",
             },
@@ -71,6 +75,7 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual(settings.bq_etl_minute_et, 0)
             self.assertEqual(settings.redis_health_interval, 1)
             self.assertEqual(settings.cache_stale_ttl, 0)
+            self.assertEqual(settings.mlb_schedule_cache_ttl, 1)
             self.assertEqual(settings.performance_sample_size, 10000)
             self.assertEqual(settings.performance_route_limit, 25)
 
