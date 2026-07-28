@@ -36,6 +36,8 @@ _cache: dict = {
     "last_run":   None,
 }
 _cache_lock = threading.RLock()
+_scheduler_start_lock = threading.Lock()
+_scheduler_started = False
 
 
 def _import_app_modules():
@@ -320,8 +322,8 @@ def _rescore_with_confirmed_lineups(target_date=None):
         try:
             import lineup_loader
             import umpire_loader
-            lineups = lineup_loader.get_today_lineups()          # game_pk -> lineup stats dict
-            ump_map = umpire_loader.fetch_and_save(             # game_pk -> ump name
+            lineups = lineup_loader.get_today_lineups()
+            ump_map = umpire_loader.fetch_and_save(
                 resolved.strftime("%Y-%m-%d")
             )
 
@@ -332,13 +334,11 @@ def _rescore_with_confirmed_lineups(target_date=None):
                     for idx, row in df.iterrows():
                         gpk = int(row.get("game_pk", 0))
 
-                        # Umpire zone features
                         ump_name = ump_map.get(gpk, "")
                         uf = umpire_loader.get_umpire_features(ump_name)
                         df.at[idx, "ump_zone_size"] = uf["ump_zone_size"]
                         df.at[idx, "ump_k_boost"]   = uf["ump_k_boost"]
 
-                        # Confirmed-lineup k_pct / xwoba
                         lineup_data = lineups.get(gpk)
                         if lineup_data:
                             is_home_pitcher = bool(row.get("home_pitcher", False))
@@ -382,13 +382,11 @@ def _scheduler_loop():
         now   = datetime.now(ET)
         today = now.date()
 
-        # Morning pipeline (9 AM ET)
         if (now.hour == RUN_HOUR_ET and now.minute == RUN_MINUTE_ET
                 and today != last_run_date):
             last_run_date = today
             threading.Thread(target=run_pipeline, daemon=True).start()
 
-        # Lineup-lock rescore (11 AM ET)
         if (now.hour == _LINEUP_LOCK_HOUR_ET and now.minute == _LINEUP_LOCK_MINUTE_ET
                 and today != last_rescore_date):
             last_rescore_date = today
@@ -400,9 +398,19 @@ def _scheduler_loop():
 
 
 def start_scheduler():
-    """Call once from app.py after app is created.
+    """Start the pipeline scheduler once per process.
+
     Loads today's data from disk on cold-start, then arms the daily loops.
+    Repeated calls are safe and return without creating duplicate threads.
     """
+    global _scheduler_started
+
+    with _scheduler_start_lock:
+        if _scheduler_started:
+            log.info("[pipeline] Scheduler already armed; skipping duplicate start.")
+            return False
+        _scheduler_started = True
+
     out_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         "data", f"mlb_matchups_{datetime.now(ET).date().strftime('%Y%m%d')}.csv"
@@ -421,7 +429,10 @@ def start_scheduler():
     else:
         threading.Thread(target=run_pipeline, daemon=True).start()
 
-    threading.Thread(target=_scheduler_loop, daemon=True).start()
+    threading.Thread(
+        target=_scheduler_loop, daemon=True, name="pipeline_scheduler"
+    ).start()
+    return True
 
 
 # -- Public accessors (used by pipeline_routes.py) -----------------------------
