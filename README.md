@@ -142,12 +142,25 @@ mlb-analytics-hub/
 
 ## ⚙️ Environment Variables
 
-| Variable | Description |
-|----------|-------------|
-| `REDIS_URL` | Redis connection string |
-| `FANGRAPHS_TOKEN` | FanGraphs API token |
-| `SECRET_KEY` | Flask secret key |
-| `BQ_CREDENTIALS` | BigQuery service account JSON (optional) |
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `PORT` | Gunicorn/Fly.io HTTP port | `8080` |
+| `DATA_DIR` | Persistent application data directory | `./data` |
+| `REDIS_URL` | Redis connection string; in-memory fallback when unset | unset |
+| `ADMIN_TOKEN` | Protects pipeline and training mutations | unset |
+| `CACHE_ADMIN_TOKEN` | Protects cache invalidation and metric-reset endpoints | unset |
+| `CACHE_TTL_LIVE` / `SCHEDULE` / `STATS` / `ANALYTICS` / `STATIC` | Shared cache TTL policies in seconds | `30` / `300` / `3600` / `900` / `21600` |
+| `HTTP_RETRY_TOTAL` / `HTTP_RETRY_BACKOFF` | Outbound HTTP retry count and backoff factor | `3` / `0.5` |
+| `HTTP_POOL_CONNECTIONS` / `HTTP_POOL_MAXSIZE` | HTTPS connection pool sizing | `16` / `32` |
+| `GOOGLE_CLOUD_PROJECT` | Enables BigQuery ETL when configured | unset |
+| `BQ_DATASET` / `BQ_LOCATION` | BigQuery dataset and region | `mlb` / `US` |
+| `BQ_ETL_HOUR_ET` / `BQ_ETL_MINUTE_ET` | Daily ETL schedule in Eastern time | `9` / `30` |
+| `ODDS_API_KEY` | The Odds API credential | unset |
+| `ODDS_NRFI_TTL_SEC` / `DK_ODDS_TTL_SEC` | Sportsbook cache TTLs in seconds | `300` / `300` |
+| `DK_GEO` / `DK_MLB_EVENT_GROUP` | DraftKings routing and MLB event group | `dkusnj` / `84240` |
+| `MLB_BASE_URL` / `MLB_ADMIN_TOKEN` | Backfill script target and optional token override | production URL / `ADMIN_TOKEN` |
+
+Runtime modules read these values through `config.settings`, which applies type conversion, safe numeric fallbacks, and range validation.
 
 ---
 
