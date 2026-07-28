@@ -29,7 +29,23 @@ class CacheObservabilityTests(TestCase):
     def test_status_reports_hits_misses_and_compute_timing(self):
         key = cache_service.normalize_cache_key("stats", 42)
         with patch("cache_service.get_redis", return_value=self.cache), patch(
-            "cache_service.is_redis_connected", return_value=False
+            "cache_service.redis_health_status",
+            return_value={
+                "configured": True,
+                "connected": False,
+                "backend": "memory",
+                "fallback_active": True,
+                "circuit_state": "open",
+                "consecutive_failures": 5,
+                "total_failures": 5,
+                "last_success_at": None,
+                "last_failure_at": "2026-07-28T21:00:00+00:00",
+                "average_latency_ms": 0.0,
+                "health_interval_seconds": 30,
+                "failure_threshold": 5,
+                "circuit_timeout_seconds": 60,
+                "monitoring": True,
+            },
         ):
             self.assertEqual(cache_service.get_or_compute(key, lambda: {"x": 1}), {"x": 1})
             self.assertEqual(cache_service.get_or_compute(key, lambda: {"x": 2}), {"x": 1})
@@ -40,6 +56,7 @@ class CacheObservabilityTests(TestCase):
         self.assertEqual(status["metrics"]["hits_total"], 1)
         self.assertEqual(status["metrics"]["computes"], 1)
         self.assertEqual(status["metrics"]["hit_rate"], 0.5)
+        self.assertEqual(status["redis"]["circuit_state"], "open")
         self.assertGreaterEqual(status["metrics"]["average_compute_ms"], 0.0)
 
     def test_namespace_invalidation_only_deletes_registered_namespace(self):
