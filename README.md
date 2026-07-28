@@ -152,6 +152,10 @@ mlb-analytics-hub/
 | `REDIS_CIRCUIT_TIMEOUT` | Seconds before a half-open recovery probe | `60` |
 | `CACHE_STALE_TTL` | Extra seconds to retain stale-if-error cache shadows | `300` |
 | `CACHE_ALLOW_STALE` | Serve stale cached data when recomputation fails | `true` |
+| `PERFORMANCE_MONITOR_ENABLED` | Collect bounded in-process request latency metrics | `true` |
+| `PERFORMANCE_SLOW_MS` | Slow-request structured-log threshold in milliseconds | `1000` |
+| `PERFORMANCE_SAMPLE_SIZE` | Recent request durations retained for aggregate percentiles | `2048` |
+| `PERFORMANCE_ROUTE_LIMIT` | Maximum normalized route groups retained per process | `256` |
 | `ADMIN_TOKEN` | Protects pipeline and training mutations | unset |
 | `CACHE_ADMIN_TOKEN` | Protects cache invalidation and metric-reset endpoints | unset |
 | `CACHE_TTL_LIVE` / `SCHEDULE` / `STATS` / `ANALYTICS` / `STATIC` | Shared cache TTL policies in seconds | `30` / `300` / `3600` / `900` / `21600` |
@@ -166,6 +170,8 @@ mlb-analytics-hub/
 | `MLB_BASE_URL` / `MLB_ADMIN_TOKEN` | Backfill script target and optional token override | production URL / `ADMIN_TOKEN` |
 
 Runtime modules read these values through `config.settings`, which applies type conversion, safe numeric fallbacks, and range validation. Redis writes are mirrored to process memory, the circuit breaker automatically fails over during outages, and health probes restore Redis after recovery. `/api/cache/status` exposes the secret-safe backend, circuit, latency, failure, and stale-cache state.
+
+Request performance monitoring adds `X-Response-Time-Ms` and `Server-Timing` headers, emits structured logs for requests over `PERFORMANCE_SLOW_MS`, and exposes bounded, normalized route aggregates at `GET /api/performance/status`. Raw URLs, query strings, headers, and bodies are never retained. `POST /api/performance/metrics/reset` requires `X-Admin-Token` matching `ADMIN_TOKEN`.
 
 ---
 
