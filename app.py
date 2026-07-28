@@ -230,6 +230,7 @@ from brain_merge_patch import (
 
 from config import settings
 from http_client import install_global_http_session
+from mlb_schedule_cache import fetch_schedule, fetch_schedule_game
 from request_performance import performance_bp, request_performance
 
 # Install the same configured retrying pool in direct Flask starts and Gunicorn
@@ -3730,43 +3731,6 @@ def _top_team_injury(team_id):
         return None
     rows.sort(key=lambda x: sev.get(x.get("status"), 0), reverse=True)
     return rows[0]
-
-
-# ── MLB API Helpers ───────────────────────────────────────────────────────────
-_SCHEDULE_CACHE = {}
-_SCHEDULE_CACHE_LOCK = threading.Lock()
-_SCHEDULE_TTL = 120  # short — lineups/probables update, but 3+ calls/request was waste
-
-
-def fetch_schedule(date_str):
-    """Hydrated schedule for a date, TTL-cached. This was fetched 3+ times per
-    projections request (game fetch + travel walk-back) at ~600ms per call."""
-    now = time.time()
-    with _SCHEDULE_CACHE_LOCK:
-        hit = _SCHEDULE_CACHE.get(date_str)
-        if hit and now - hit[0] < _SCHEDULE_TTL:
-            return hit[1]
-    url = (f"{MLB_API}/schedule?sportId=1&date={date_str}"
-        "&hydrate=team,probablePitcher,lineups,linescore,venue(location),weather")
-    r = requests.get(url, timeout=10); r.raise_for_status()
-    dates = r.json().get("dates", [])
-    games = dates[0].get("games", []) if dates else []
-    with _SCHEDULE_CACHE_LOCK:
-        _evict_if_large(_SCHEDULE_CACHE, 20)
-        _SCHEDULE_CACHE[date_str] = (now, games)
-    return games
-
-
-def fetch_schedule_game(game_pk):
-    url = (f"{MLB_API}/schedule?sportId=1&gamePk={game_pk}"
-        "&hydrate=team,probablePitcher,lineups,linescore,venue(location),weather")
-    r = requests.get(url, timeout=10)
-    r.raise_for_status()
-    dates = r.json().get("dates", [])
-    if not dates:
-        return None
-    games = dates[0].get("games", [])
-    return games[0] if games else None
 
 
 _PREV_VENUE_CACHE = {}
