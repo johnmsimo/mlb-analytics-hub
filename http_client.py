@@ -49,12 +49,18 @@ def build_http_session() -> requests.Session:
     return session
 
 
-def install_global_http_session() -> requests.Session:
-    """Route module-level requests calls through one pooled retrying session."""
+def get_http_session() -> requests.Session:
+    """Return the process-wide pooled retrying session without monkey-patching."""
     global _GLOBAL_SESSION
     if _GLOBAL_SESSION is None:
         _GLOBAL_SESSION = build_http_session()
-        requests.get = _GLOBAL_SESSION.get
-        requests.head = _GLOBAL_SESSION.head
-        requests.options = _GLOBAL_SESSION.options
     return _GLOBAL_SESSION
+
+
+def install_global_http_session() -> requests.Session:
+    """Route module-level requests calls through one pooled retrying session."""
+    session = get_http_session()
+    requests.get = session.get
+    requests.head = session.head
+    requests.options = session.options
+    return session

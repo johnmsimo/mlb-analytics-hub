@@ -19,6 +19,13 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual(settings.cache_stale_ttl, 300)
             self.assertTrue(settings.cache_allow_stale)
             self.assertEqual(settings.mlb_schedule_cache_ttl, 120)
+            self.assertEqual(
+                settings.mlb_stats_api_base_url,
+                "https://statsapi.mlb.com/api",
+            )
+            self.assertEqual(settings.mlb_http_timeout, 10)
+            self.assertEqual(settings.mlb_bulk_http_timeout, 60)
+            self.assertEqual(settings.mlb_slow_request_ms, 1000)
             self.assertTrue(settings.performance_monitor_enabled)
             self.assertFalse(settings.profile_requests)
             self.assertEqual(settings.performance_slow_ms, 1000)
@@ -37,6 +44,10 @@ class ConfigurationTests(unittest.TestCase):
                 "REDIS_FAILURE_THRESHOLD": "3",
                 "CACHE_ALLOW_STALE": "false",
                 "MLB_SCHEDULE_CACHE_TTL": "90",
+                "MLB_STATS_API_BASE_URL": "https://mlb.example.test/api/",
+                "MLB_HTTP_TIMEOUT": "15",
+                "MLB_BULK_HTTP_TIMEOUT": "75",
+                "MLB_SLOW_REQUEST_MS": "650",
                 "PERFORMANCE_MONITOR_ENABLED": "false",
                 "PERFORMANCE_SLOW_MS": "750",
             },
@@ -50,6 +61,13 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual(settings.redis_failure_threshold, 3)
             self.assertFalse(settings.cache_allow_stale)
             self.assertEqual(settings.mlb_schedule_cache_ttl, 90)
+            self.assertEqual(
+                settings.mlb_stats_api_base_url,
+                "https://mlb.example.test/api",
+            )
+            self.assertEqual(settings.mlb_http_timeout, 15)
+            self.assertEqual(settings.mlb_bulk_http_timeout, 75)
+            self.assertEqual(settings.mlb_slow_request_ms, 650)
             self.assertFalse(settings.performance_monitor_enabled)
             self.assertEqual(settings.performance_slow_ms, 750)
 
@@ -64,6 +82,8 @@ class ConfigurationTests(unittest.TestCase):
                 "REDIS_HEALTH_INTERVAL": "0",
                 "CACHE_STALE_TTL": "-4",
                 "MLB_SCHEDULE_CACHE_TTL": "0",
+                "MLB_HTTP_TIMEOUT": "0",
+                "MLB_BULK_HTTP_TIMEOUT": "9999",
                 "PERFORMANCE_SAMPLE_SIZE": "999999",
                 "PERFORMANCE_ROUTE_LIMIT": "0",
             },
@@ -76,6 +96,8 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual(settings.redis_health_interval, 1)
             self.assertEqual(settings.cache_stale_ttl, 0)
             self.assertEqual(settings.mlb_schedule_cache_ttl, 1)
+            self.assertEqual(settings.mlb_http_timeout, 1)
+            self.assertEqual(settings.mlb_bulk_http_timeout, 300)
             self.assertEqual(settings.performance_sample_size, 10000)
             self.assertEqual(settings.performance_route_limit, 25)
 

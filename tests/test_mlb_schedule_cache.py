@@ -1,19 +1,11 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import cache_service
 import mlb_schedule_cache
 from redis_client import _MemoryClient
-
-
-def _response(games):
-    response = Mock()
-    response.json.return_value = {"dates": [{"games": games}]} if games is not None else {
-        "dates": []
-    }
-    return response
 
 
 class MlbScheduleCacheTests(unittest.TestCase):
@@ -28,33 +20,39 @@ class MlbScheduleCacheTests(unittest.TestCase):
         self.cache_patch.stop()
 
     def test_date_schedule_is_reused(self):
-        response = _response([{"gamePk": 13}])
-        with patch("mlb_schedule_cache.requests.get", return_value=response) as get:
+        games = [{"gamePk": 13}]
+        with patch(
+            "mlb_schedule_cache.mlb_client.schedule",
+            return_value=games,
+        ) as schedule:
             first = mlb_schedule_cache.fetch_schedule("2026-07-28")
             second = mlb_schedule_cache.fetch_schedule("2026-07-28")
 
         self.assertEqual(first, second)
-        self.assertEqual(get.call_count, 1)
-        self.assertIn("date=2026-07-28", get.call_args.args[0])
+        self.assertEqual(schedule.call_count, 1)
+        self.assertEqual(schedule.call_args.kwargs["date_str"], "2026-07-28")
 
     def test_game_schedule_is_reused(self):
-        response = _response([{"gamePk": 99113, "status": "Preview"}])
-        with patch("mlb_schedule_cache.requests.get", return_value=response) as get:
+        games = [{"gamePk": 99113, "status": "Preview"}]
+        with patch(
+            "mlb_schedule_cache.mlb_client.schedule",
+            return_value=games,
+        ) as schedule:
             first = mlb_schedule_cache.fetch_schedule_game(99113)
             second = mlb_schedule_cache.fetch_schedule_game(99113)
 
         self.assertEqual(first, second)
         self.assertEqual(first["gamePk"], 99113)
-        self.assertEqual(get.call_count, 1)
-        self.assertIn("gamePk=99113", get.call_args.args[0])
+        self.assertEqual(schedule.call_count, 1)
+        self.assertEqual(schedule.call_args.kwargs["game_pk"], 99113)
 
     def test_date_and_game_keys_do_not_collide(self):
-        date_response = _response([{"gamePk": 1}])
-        game_response = _response([{"gamePk": 2}])
+        date_response = [{"gamePk": 1}]
+        game_response = [{"gamePk": 2}]
         with patch(
-            "mlb_schedule_cache.requests.get",
+            "mlb_schedule_cache.mlb_client.schedule",
             side_effect=[date_response, game_response],
-        ) as get:
+        ) as schedule:
             self.assertEqual(
                 mlb_schedule_cache.fetch_schedule("99113"),
                 [{"gamePk": 1}],
@@ -64,15 +62,17 @@ class MlbScheduleCacheTests(unittest.TestCase):
                 {"gamePk": 2},
             )
 
-        self.assertEqual(get.call_count, 2)
+        self.assertEqual(schedule.call_count, 2)
 
     def test_not_found_game_is_cached(self):
-        response = _response(None)
-        with patch("mlb_schedule_cache.requests.get", return_value=response) as get:
+        with patch(
+            "mlb_schedule_cache.mlb_client.schedule",
+            return_value=[],
+        ) as schedule:
             self.assertIsNone(mlb_schedule_cache.fetch_schedule_game(99113))
             self.assertIsNone(mlb_schedule_cache.fetch_schedule_game(99113))
 
-        self.assertEqual(get.call_count, 1)
+        self.assertEqual(schedule.call_count, 1)
 
     def test_upstream_error_serves_stale_game(self):
         key = cache_service.normalize_cache_key("mlb_schedule_game", "99113")
@@ -81,10 +81,10 @@ class MlbScheduleCacheTests(unittest.TestCase):
             {"found": True, "game": {"gamePk": 99113, "status": "Preview"}},
             ttl=60,
         )
-        response = _response([])
-        response.raise_for_status.side_effect = ConnectionError("MLB unavailable")
-
-        with patch("mlb_schedule_cache.requests.get", return_value=response):
+        with patch(
+            "mlb_schedule_cache.mlb_client.schedule",
+            side_effect=ConnectionError("MLB unavailable"),
+        ):
             game = mlb_schedule_cache.fetch_schedule_game(99113)
 
         self.assertEqual(game["gamePk"], 99113)
