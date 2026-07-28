@@ -12,6 +12,7 @@ primary_region = 'EWR'
   PORT = '8080'
   PYBASEBALL_CACHE = '1'
   XGB_MODEL_DIR = './models'
+  DATA_DIR = '/app/data'
 
 [[mounts]]
   source = 'mlb_data'
@@ -27,8 +28,8 @@ primary_region = 'EWR'
 
   [[http_service.checks]]
     interval = '30s'
-    timeout = '30s'
-    grace_period = '10m0s'
+    timeout = '5s'
+    grace_period = '2m0s'
     method = 'GET'
     path = '/health'
 
