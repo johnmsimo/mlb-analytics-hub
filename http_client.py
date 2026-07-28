@@ -1,8 +1,6 @@
 """Shared outbound HTTP session configuration for MLB Analytics Hub."""
 from __future__ import annotations
 
-import os
-
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -10,23 +8,12 @@ from urllib3.util.retry import Retry
 _GLOBAL_SESSION: requests.Session | None = None
 
 
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.environ.get(name, str(default)))
-    except (TypeError, ValueError):
-        return default
 
-
-def _env_float(name: str, default: float) -> float:
-    try:
-        return float(os.environ.get(name, str(default)))
-    except (TypeError, ValueError):
-        return default
-
+from config import settings
 
 def build_retry_policy() -> Retry:
-    retries = max(0, _env_int("HTTP_RETRY_TOTAL", 3))
-    backoff = max(0.0, _env_float("HTTP_RETRY_BACKOFF", 0.5))
+    retries = settings.http_retry_total
+    backoff = settings.http_retry_backoff
     return Retry(
         total=retries,
         connect=retries,
@@ -47,16 +34,16 @@ def build_http_session() -> requests.Session:
         "https://",
         HTTPAdapter(
             max_retries=retry,
-            pool_connections=max(1, _env_int("HTTP_POOL_CONNECTIONS", 16)),
-            pool_maxsize=max(1, _env_int("HTTP_POOL_MAXSIZE", 32)),
+            pool_connections=settings.http_pool_connections,
+            pool_maxsize=settings.http_pool_maxsize,
         ),
     )
     session.mount(
         "http://",
         HTTPAdapter(
             max_retries=retry,
-            pool_connections=max(1, _env_int("HTTP_POOL_CONNECTIONS_HTTP", 8)),
-            pool_maxsize=max(1, _env_int("HTTP_POOL_MAXSIZE_HTTP", 16)),
+            pool_connections=settings.http_pool_connections_http,
+            pool_maxsize=settings.http_pool_maxsize_http,
         ),
     )
     return session
