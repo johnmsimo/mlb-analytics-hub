@@ -13,6 +13,11 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual(settings.http_retry_backoff, 0.5)
             self.assertEqual(settings.cache_ttls["stats"], 3600)
             self.assertEqual(settings.bq_dataset, "mlb")
+            self.assertEqual(settings.redis_health_interval, 30)
+            self.assertEqual(settings.redis_failure_threshold, 5)
+            self.assertEqual(settings.redis_circuit_timeout, 60)
+            self.assertEqual(settings.cache_stale_ttl, 300)
+            self.assertTrue(settings.cache_allow_stale)
 
     def test_environment_overrides_are_resolved_on_access(self):
         with patch.dict(
@@ -23,6 +28,8 @@ class ConfigurationTests(unittest.TestCase):
                 "CACHE_TTL_LIVE": "45",
                 "HTTP_RETRY_TOTAL": "6",
                 "BQ_ETL_HOUR_ET": "7",
+                "REDIS_FAILURE_THRESHOLD": "3",
+                "CACHE_ALLOW_STALE": "false",
             },
             clear=True,
         ):
@@ -31,6 +38,8 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual(settings.cache_ttls["live"], 45)
             self.assertEqual(settings.http_retry_total, 6)
             self.assertEqual(settings.bq_etl_hour_et, 7)
+            self.assertEqual(settings.redis_failure_threshold, 3)
+            self.assertFalse(settings.cache_allow_stale)
 
     def test_invalid_numbers_fall_back_and_ranges_are_bounded(self):
         with patch.dict(
@@ -40,6 +49,8 @@ class ConfigurationTests(unittest.TestCase):
                 "HTTP_RETRY_TOTAL": "-4",
                 "BQ_ETL_HOUR_ET": "99",
                 "BQ_ETL_MINUTE_ET": "-1",
+                "REDIS_HEALTH_INTERVAL": "0",
+                "CACHE_STALE_TTL": "-4",
             },
             clear=True,
         ):
@@ -47,6 +58,8 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual(settings.http_retry_total, 0)
             self.assertEqual(settings.bq_etl_hour_et, 23)
             self.assertEqual(settings.bq_etl_minute_et, 0)
+            self.assertEqual(settings.redis_health_interval, 1)
+            self.assertEqual(settings.cache_stale_ttl, 0)
 
     def test_public_snapshot_never_exposes_secrets(self):
         with patch.dict(
@@ -55,6 +68,7 @@ class ConfigurationTests(unittest.TestCase):
                 "ADMIN_TOKEN": "admin-secret",
                 "CACHE_ADMIN_TOKEN": "cache-secret",
                 "ODDS_API_KEY": "api-secret",
+                "REDIS_URL": "redis://user:redis-secret@example:6379/0",
             },
             clear=True,
         ):
@@ -63,6 +77,7 @@ class ConfigurationTests(unittest.TestCase):
         self.assertNotIn("admin-secret", serialized)
         self.assertNotIn("cache-secret", serialized)
         self.assertNotIn("api-secret", serialized)
+        self.assertNotIn("redis-secret", serialized)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 """Shared cache primitives for MLB Analytics Hub.
 
-Provides normalized keys, TTL policy, stampede protection, lightweight metrics,
-backend visibility, and safe invalidation on top of redis_client.
+Provides normalized keys, TTL policy, stampede protection, metrics, resilient
+backend visibility, safe invalidation, and stale-if-error data.
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from collections.abc import Callable
 from typing import Any, TypeVar
 
 from config import settings
-from redis_client import get_redis, is_redis_connected
+from redis_client import get_redis, is_redis_connected, redis_health_status
 
 T = TypeVar("T")
 
@@ -61,14 +61,19 @@ def _record(name: str, value: float = 1.0) -> None:
         _metrics[name] += value
 
 
+def _stale_key(key: str) -> str:
+    return f"{key}:stale"
+
+
 def get_or_compute(
     key: str,
     compute: Callable[[], T],
     *,
     ttl: int | None = None,
     policy: str = "analytics",
+    allow_stale: bool | None = None,
 ) -> T:
-    """Return cached data or compute it once per key under concurrent load."""
+    """Return cached data, compute it once, or serve stale data on compute error."""
     cache = get_redis()
     lookup_started = time.perf_counter()
     cached = cache.get(key)
@@ -85,32 +90,46 @@ def get_or_compute(
         if cached is not None:
             _record("hits_after_wait")
             return cached
+
+        effective_ttl = ttl if ttl is not None else ttl_for(policy)
+        stale_enabled = settings.cache_allow_stale if allow_stale is None else allow_stale
         compute_started = time.perf_counter()
         try:
             value = compute()
         except Exception:
             _record("compute_errors")
+            if stale_enabled:
+                stale = cache.get(_stale_key(key))
+                if stale is not None:
+                    _record("stale_hits")
+                    return stale
             raise
+
         _record("compute_seconds", time.perf_counter() - compute_started)
         _record("computes")
-        cache.set(key, value, ttl=ttl if ttl is not None else ttl_for(policy))
+        cache.set(key, value, ttl=effective_ttl)
+        if stale_enabled and settings.cache_stale_ttl > 0:
+            cache.set(
+                _stale_key(key),
+                value,
+                ttl=effective_ttl + settings.cache_stale_ttl,
+            )
+            _record("stale_writes")
         _record("writes")
         return value
 
 
 def invalidate(namespace: str, *parts: Any, **params: Any) -> None:
-    """Invalidate one normalized cache key."""
-    get_redis().delete(normalize_cache_key(namespace, *parts, **params))
+    """Invalidate one normalized cache key and its stale shadow."""
+    cache = get_redis()
+    key = normalize_cache_key(namespace, *parts, **params)
+    cache.delete(key)
+    cache.delete(_stale_key(key))
     _record("invalidations")
 
 
 def invalidate_namespace(namespace: str) -> int:
-    """Delete only keys created by this process for a known namespace.
-
-    This deliberately avoids a Redis-wide wildcard scan. With the production
-    single-worker configuration, the registry covers application-created keys
-    while preventing accidental deletion outside the requested namespace.
-    """
+    """Delete current-process keys for one namespace, including stale shadows."""
     safe_namespace = "".join(c if c.isalnum() or c in "_-" else "_" for c in namespace)
     with _metrics_lock:
         keys = tuple(_namespace_keys.get(safe_namespace, ()))
@@ -118,6 +137,7 @@ def invalidate_namespace(namespace: str) -> int:
     cache = get_redis()
     for key in keys:
         cache.delete(key)
+        cache.delete(_stale_key(key))
     _record("namespace_invalidations")
     _record("invalidated_keys", len(keys))
     return len(keys)
@@ -131,9 +151,15 @@ def cache_status() -> dict[str, Any]:
     lookups = int(metrics.get("lookups", 0))
     hits = int(metrics.get("hits", 0)) + int(metrics.get("hits_after_wait", 0))
     computes = int(metrics.get("computes", 0))
+    redis = redis_health_status()
     return {
-        "backend": "redis" if is_redis_connected() else "memory",
-        "connected": bool(is_redis_connected()),
+        "backend": redis["backend"],
+        "connected": redis["connected"],
+        "redis": redis,
+        "stale_if_error": {
+            "enabled": settings.cache_allow_stale,
+            "ttl_seconds": settings.cache_stale_ttl,
+        },
         "metrics": {
             **metrics,
             "lookups": lookups,

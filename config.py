@@ -42,6 +42,18 @@ def _number(
     return value
 
 
+def _boolean(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 @dataclass(frozen=True)
 class Settings:
     """Single typed interface for runtime and deployment configuration."""
@@ -57,6 +69,26 @@ class Settings:
     @property
     def redis_url(self) -> str:
         return _string("REDIS_URL")
+
+    @property
+    def redis_health_interval(self) -> int:
+        return int(_number("REDIS_HEALTH_INTERVAL", 30, int, minimum=1))
+
+    @property
+    def redis_failure_threshold(self) -> int:
+        return int(_number("REDIS_FAILURE_THRESHOLD", 5, int, minimum=1))
+
+    @property
+    def redis_circuit_timeout(self) -> int:
+        return int(_number("REDIS_CIRCUIT_TIMEOUT", 60, int, minimum=1))
+
+    @property
+    def cache_stale_ttl(self) -> int:
+        return int(_number("CACHE_STALE_TTL", 300, int, minimum=0))
+
+    @property
+    def cache_allow_stale(self) -> bool:
+        return _boolean("CACHE_ALLOW_STALE", True)
 
     @property
     def admin_token(self) -> str:
@@ -154,6 +186,11 @@ class Settings:
             "port": self.port,
             "data_dir": self.data_dir,
             "redis_configured": bool(self.redis_url),
+            "redis_health_interval": self.redis_health_interval,
+            "redis_failure_threshold": self.redis_failure_threshold,
+            "redis_circuit_timeout": self.redis_circuit_timeout,
+            "cache_allow_stale": self.cache_allow_stale,
+            "cache_stale_ttl": self.cache_stale_ttl,
             "cache_ttls": self.cache_ttls,
             "http_retry_total": self.http_retry_total,
             "http_retry_backoff": self.http_retry_backoff,

@@ -11,6 +11,7 @@ class CacheServiceTests(unittest.TestCase):
     def setUp(self):
         self.cache = _MemoryClient()
         cache_service._locks.clear()
+        cache_service.reset_cache_metrics()
 
     def test_normalized_key_is_stable_for_param_order(self):
         first = cache_service.normalize_cache_key("stats", player=13, season=2026)
@@ -44,6 +45,25 @@ class CacheServiceTests(unittest.TestCase):
             self.assertEqual(cache_service.get_or_compute("mlb:test:expiry", compute, ttl=1), 1)
             time.sleep(1.05)
             self.assertEqual(cache_service.get_or_compute("mlb:test:expiry", compute, ttl=1), 2)
+
+    def test_compute_error_serves_stale_value(self):
+        with patch("cache_service.get_redis", return_value=self.cache), patch.dict(
+            "os.environ",
+            {"CACHE_ALLOW_STALE": "true", "CACHE_STALE_TTL": "10"},
+        ):
+            self.assertEqual(
+                cache_service.get_or_compute("mlb:test:stale", lambda: {"value": 13}, ttl=1),
+                {"value": 13},
+            )
+            time.sleep(1.05)
+            result = cache_service.get_or_compute(
+                "mlb:test:stale",
+                lambda: (_ for _ in ()).throw(ConnectionError("upstream unavailable")),
+                ttl=1,
+            )
+
+        self.assertEqual(result, {"value": 13})
+        self.assertEqual(cache_service.cache_status()["metrics"]["stale_hits"], 1)
 
     def test_concurrent_misses_compute_once(self):
         calls = 0

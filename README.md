@@ -147,6 +147,11 @@ mlb-analytics-hub/
 | `PORT` | Gunicorn/Fly.io HTTP port | `8080` |
 | `DATA_DIR` | Persistent application data directory | `./data` |
 | `REDIS_URL` | Redis connection string; in-memory fallback when unset | unset |
+| `REDIS_HEALTH_INTERVAL` | Seconds between Redis health probes | `30` |
+| `REDIS_FAILURE_THRESHOLD` | Consecutive failures before opening the circuit | `5` |
+| `REDIS_CIRCUIT_TIMEOUT` | Seconds before a half-open recovery probe | `60` |
+| `CACHE_STALE_TTL` | Extra seconds to retain stale-if-error cache shadows | `300` |
+| `CACHE_ALLOW_STALE` | Serve stale cached data when recomputation fails | `true` |
 | `ADMIN_TOKEN` | Protects pipeline and training mutations | unset |
 | `CACHE_ADMIN_TOKEN` | Protects cache invalidation and metric-reset endpoints | unset |
 | `CACHE_TTL_LIVE` / `SCHEDULE` / `STATS` / `ANALYTICS` / `STATIC` | Shared cache TTL policies in seconds | `30` / `300` / `3600` / `900` / `21600` |
@@ -160,7 +165,7 @@ mlb-analytics-hub/
 | `DK_GEO` / `DK_MLB_EVENT_GROUP` | DraftKings routing and MLB event group | `dkusnj` / `84240` |
 | `MLB_BASE_URL` / `MLB_ADMIN_TOKEN` | Backfill script target and optional token override | production URL / `ADMIN_TOKEN` |
 
-Runtime modules read these values through `config.settings`, which applies type conversion, safe numeric fallbacks, and range validation.
+Runtime modules read these values through `config.settings`, which applies type conversion, safe numeric fallbacks, and range validation. Redis writes are mirrored to process memory, the circuit breaker automatically fails over during outages, and health probes restore Redis after recovery. `/api/cache/status` exposes the secret-safe backend, circuit, latency, failure, and stale-cache state.
 
 ---
 
