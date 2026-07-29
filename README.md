@@ -160,6 +160,8 @@ mlb-analytics-hub/
 | `PERFORMANCE_SLOW_MS` | Slow-request structured-log threshold in milliseconds | `1000` |
 | `PERFORMANCE_SAMPLE_SIZE` | Recent request durations retained for aggregate percentiles | `2048` |
 | `PERFORMANCE_ROUTE_LIMIT` | Maximum normalized route groups retained per process | `256` |
+| `XGB_SCORE_CACHE_TTL` | Process-local XGBoost scoring-result freshness window | `300` |
+| `XGB_SCORE_CACHE_MAX_ENTRIES` | Maximum memoized XGBoost scoring results per worker | `2048` |
 | `ADMIN_TOKEN` | Protects pipeline and training mutations | unset |
 | `CACHE_ADMIN_TOKEN` | Protects cache invalidation and metric-reset endpoints | unset |
 | `CACHE_TTL_LIVE` / `SCHEDULE` / `STATS` / `ANALYTICS` / `STATIC` | Shared cache TTL policies in seconds | `30` / `300` / `3600` / `900` / `21600` |
@@ -180,6 +182,11 @@ Request performance monitoring adds `X-Response-Time-Ms` and `Server-Timing` hea
 MLB schedule, team-venue, boxscore, v1.1 live-feed, player/stat, roster, standings, and transaction reads use the pooled shared MLB client and resilient cache. Repeated consumers share endpoint-aware freshness policies (`LIVE`, `SCHEDULE`, `STATS`, or `STATIC`), schedule reads retain the dedicated `MLB_SCHEDULE_CACHE_TTL`, concurrent misses are deduplicated, query parameters are isolated, and stale data remains available during short MLB or Redis outages.
 
 MLB Stats API traffic from shared schedule caching, game-day loaders, the pipeline scheduler, and BigQuery ETL uses one pooled retrying client. Slow/error logs contain normalized endpoint patterns without query parameters.
+
+XGBoost probability and full interval/Monte Carlo scoring results are memoized
+per worker using the exact model, market, line, and final feature vector.
+Concurrent identical scores collapse to one computation, returned objects are
+copy-isolated, and TTL/LRU bounds prevent stale or unbounded process memory.
 
 ---
 

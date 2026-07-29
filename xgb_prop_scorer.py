@@ -43,6 +43,7 @@ New public surface:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -51,6 +52,9 @@ import traceback
 from typing import Optional
 
 import numpy as np
+
+from config import settings
+from scoring_result_cache import ScoringResultCache
 
 try:
     from stacked_calibrator import apply_isotonic as _apply_isotonic
@@ -260,6 +264,42 @@ _loaded = False
 # Number of MC trials. 10 000 gives <0.005 SE on a 50% probability.
 _MC_N_SIMS = 10_000
 _MC_RNG = np.random.default_rng(seed=42)
+_SCORE_CACHE = ScoringResultCache()
+
+
+def _score_cache_key(
+    output_kind: str,
+    model_key: str,
+    market_key: str,
+    line: float | None,
+    X: np.ndarray,
+) -> tuple:
+    """Build a compact identity from the exact final model feature vector."""
+    features = np.ascontiguousarray(X, dtype=np.float32)
+    digest = hashlib.blake2b(features.tobytes(), digest_size=16).digest()
+    return (
+        output_kind,
+        model_key,
+        id(_models.get(model_key)),
+        market_key,
+        None if line is None else round(float(line), 4),
+        features.shape,
+        digest,
+    )
+
+
+def xgb_score_cache_status() -> dict:
+    """Return secret-free process-local scoring cache diagnostics."""
+    return {
+        **_SCORE_CACHE.status(),
+        "ttl_seconds": settings.xgb_score_cache_ttl,
+        "max_entries": settings.xgb_score_cache_max_entries,
+    }
+
+
+def xgb_score_cache_clear(*, reset_metrics: bool = False) -> None:
+    """Clear memoized scores, primarily for model reloads and diagnostics."""
+    _SCORE_CACHE.clear(reset_metrics=reset_metrics)
 
 
 # ─── Model loading ───────────────────────────────────────────────────────────
@@ -865,28 +905,38 @@ def _score_full(
     if not _xgb_calibrated(market_key):
         return {}
 
-    raw_p = float(model.predict_proba(X)[0, 1])
+    key = _score_cache_key("full", model_key, market_key, line, X)
 
-    # Step 2A: isotonic post-calibration
-    cal_p = float(_apply_isotonic(raw_p, market_key))
-    cal_p = round(min(0.97, max(0.03, cal_p)), 4)
+    def _compute() -> dict:
+        raw_p = float(model.predict_proba(X)[0, 1])
 
-    # Step 3: derive XGB prediction interval from tree ensemble
-    p_lo, p_hi = _xgb_interval(X, model, market_key)
+        # Step 2A: isotonic post-calibration
+        cal_p = float(_apply_isotonic(raw_p, market_key))
+        cal_p = round(min(0.97, max(0.03, cal_p)), 4)
 
-    # Step 3: run Monte Carlo anchored to (cal_p, p_lo, p_hi)
-    mc = mc_simulate(cal_p, p_lo, p_hi, line=line)
+        # Step 3: derive XGB prediction interval from tree ensemble
+        p_lo, p_hi = _xgb_interval(X, model, market_key)
 
-    return {
-        "prob":    cal_p,
-        "raw_p":   round(raw_p, 4),
-        "cal_p":   cal_p,
-        "p_lo":    p_lo,
-        "p_hi":    p_hi,
-        "mc":      mc,
-        "market":  market_key,
-        "line":    line,
-    }
+        # Step 3: run Monte Carlo anchored to (cal_p, p_lo, p_hi)
+        mc = mc_simulate(cal_p, p_lo, p_hi, line=line)
+
+        return {
+            "prob":    cal_p,
+            "raw_p":   round(raw_p, 4),
+            "cal_p":   cal_p,
+            "p_lo":    p_lo,
+            "p_hi":    p_hi,
+            "mc":      mc,
+            "market":  market_key,
+            "line":    line,
+        }
+
+    return _SCORE_CACHE.get_or_compute(
+        key,
+        _compute,
+        ttl_seconds=settings.xgb_score_cache_ttl,
+        max_entries=settings.xgb_score_cache_max_entries,
+    )
 
 
 # ─── Lean prob-only scorer ───────────────────────────────────────────────────────
@@ -903,9 +953,19 @@ def _score_prob(model_key: str, market_key: str, X: np.ndarray) -> Optional[floa
         return None
     if not _xgb_calibrated(market_key):
         return None
-    raw_p = float(model.predict_proba(X)[0, 1])
-    cal_p = float(_apply_isotonic(raw_p, market_key))
-    return round(min(0.97, max(0.03, cal_p)), 4)
+    key = _score_cache_key("prob", model_key, market_key, None, X)
+
+    def _compute() -> float:
+        raw_p = float(model.predict_proba(X)[0, 1])
+        cal_p = float(_apply_isotonic(raw_p, market_key))
+        return round(min(0.97, max(0.03, cal_p)), 4)
+
+    return _SCORE_CACHE.get_or_compute(
+        key,
+        _compute,
+        ttl_seconds=settings.xgb_score_cache_ttl,
+        max_entries=settings.xgb_score_cache_max_entries,
+    )
 
 
 # ─── Public scoring functions ───────────────────────────────────────────────────────
