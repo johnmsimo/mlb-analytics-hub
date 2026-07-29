@@ -25,13 +25,14 @@ from urllib.request import Request, urlopen
 import pandas as pd
 
 from config import settings
+from dataframe_lookup import DataFrameLookupIndex
 
 DATA_DIR = settings.data_dir
 
 _lock = threading.Lock()
 _cache = {
-    "bat": {"df": None, "loaded_at": None, "year": None},
-    "swt": {"df": None, "loaded_at": None, "year": None},
+    "bat": {"df": None, "loaded_at": None, "year": None, "index": None},
+    "swt": {"df": None, "loaded_at": None, "year": None, "index": None},
 }
 
 REFRESH_HOURS = 24
@@ -110,6 +111,12 @@ def _load(kind, year=None):
         slot["df"] = df
         slot["year"] = year
         slot["loaded_at"] = now
+        slot["index"] = DataFrameLookupIndex(
+            df,
+            id_columns=("player_id", "id", "batter", "mlbam_id"),
+            name_columns=("last_name, first_name", "player_name", "name", "Name"),
+            name_normalizer=_name_norm,
+        )
         return df
 
 
@@ -123,32 +130,33 @@ def _name_norm(s):
     return s
 
 
-def _find_row(df, name, player_id):
+def _lookup_index(kind, df):
+    slot = _cache[kind]
+    index = slot.get("index")
+    if index is not None and slot.get("df") is df:
+        return index
+    with _lock:
+        index = slot.get("index")
+        if index is None or slot.get("df") is not df:
+            slot["df"] = df
+            index = DataFrameLookupIndex(
+                df,
+                id_columns=("player_id", "id", "batter", "mlbam_id"),
+                name_columns=("last_name, first_name", "player_name", "name", "Name"),
+                name_normalizer=_name_norm,
+            )
+            slot["index"] = index
+    return index
+
+
+def _find_row(df, name, player_id, kind="bat"):
     if df is None or df.empty:
         return None
-    # Match by player_id first (Savant CSVs include `id` or `player_id`).
-    if player_id:
-        for col in ("player_id", "id", "batter", "mlbam_id"):
-            if col in df.columns:
-                row = df[df[col].astype(str) == str(player_id)]
-                if not row.empty:
-                    return row.iloc[0]
-    if name:
-        target = _name_norm(name)
-        for col in ("last_name, first_name", "player_name", "name", "Name"):
-            if col in df.columns:
-                series = df[col].astype(str).apply(_name_norm)
-                if series.str.strip().eq("").all():
-                    continue
-                # The bat-tracking CSV's `name` is just last name; allow contains.
-                row = df[series == target]
-                if row.empty:
-                    last = target.split()[-1] if target else ""
-                    if last:
-                        row = df[series.str.contains(last, na=False)]
-                if not row.empty:
-                    return row.iloc[0]
-    return None
+    return _lookup_index(kind, df).find(
+        player_id=player_id,
+        name=name,
+        last_name_fallback=True,
+    )
 
 
 def _f(row, *cols):
@@ -172,7 +180,7 @@ def bat_tracking(name=None, player_id=None, year=None):
     squared_up_per_swing, squared_up_per_bat_contact, batter_run_value.
     Returns dict with floats / None.
     """
-    row = _find_row(_load("bat", year), name, player_id)
+    row = _find_row(_load("bat", year), name, player_id, kind="bat")
     df = _cache["bat"]["df"]
     bs = _f(row, "avg_bat_speed", "bat_speed")
     pct = None
@@ -200,7 +208,7 @@ def swing_take(name=None, player_id=None, year=None):
     Savant CSV columns: runs_all, runs_heart, runs_shadow, runs_chase, runs_waste.
     Returns dict with floats / None.
     """
-    row = _find_row(_load("swt", year), name, player_id)
+    row = _find_row(_load("swt", year), name, player_id, kind="swt")
     return {
         "heart_rv":  _f(row, "runs_heart",  "heart_runs"),
         "shadow_rv": _f(row, "runs_shadow", "shadow_runs"),

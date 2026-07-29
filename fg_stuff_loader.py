@@ -20,11 +20,12 @@ from datetime import datetime, timedelta
 import pandas as pd
 
 from config import settings
+from dataframe_lookup import DataFrameLookupIndex
 
 DATA_DIR = settings.data_dir
 
 _lock = threading.Lock()
-_cache = {"df": None, "loaded_at": None, "year": None}
+_cache = {"df": None, "loaded_at": None, "year": None, "index": None}
 
 LEAGUE_AVG = 100.0
 REFRESH_HOURS = 24
@@ -102,6 +103,7 @@ def _load(year=None):
         _cache["df"] = df
         _cache["year"] = year
         _cache["loaded_at"] = now
+        _cache["index"] = _build_index(df)
         return df
 
 
@@ -109,6 +111,27 @@ def _name_lower(s):
     if s is None:
         return ""
     return str(s).lower().strip()
+
+
+def _build_index(df):
+    return DataFrameLookupIndex(
+        df,
+        id_columns=("playerid",),
+        name_columns=("PlayerName", "Name"),
+    )
+
+
+def _lookup_index(df):
+    index = _cache.get("index")
+    if index is not None and _cache.get("df") is df:
+        return index
+    with _lock:
+        index = _cache.get("index")
+        if index is None or _cache.get("df") is not df:
+            _cache["df"] = df
+            index = _build_index(df)
+            _cache["index"] = index
+    return index
 
 
 def fg_stuff(name=None, player_id=None, year=None):
@@ -122,20 +145,9 @@ def fg_stuff(name=None, player_id=None, year=None):
     if df is None or df.empty:
         return out
 
-    row = pd.DataFrame()
-    if player_id and "playerid" in df.columns:
-        row = df[df["playerid"] == str(player_id)]
-    if row.empty and name:
-        nc = "PlayerName" if "PlayerName" in df.columns else "Name"
-        if nc in df.columns:
-            nl = _name_lower(name)
-            row = df[df[nc].str.lower().str.strip() == nl]
-            if row.empty:
-                row = df[df[nc].str.lower().str.contains(nl, na=False)]
-    if row.empty:
+    r = _lookup_index(df).find(player_id=player_id, name=name)
+    if r is None:
         return out
-
-    r = row.iloc[0]
 
     def _f(col, default=LEAGUE_AVG):
         v = r.get(col) if col in r.index else None
