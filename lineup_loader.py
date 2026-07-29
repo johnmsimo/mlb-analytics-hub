@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 import traceback
 from datetime import date, datetime
@@ -50,6 +51,13 @@ _TIMEOUT  = 10
 # In-process LRU cache for player season stats (cleared each scheduler run)
 _player_stats_cache: dict[int, dict] = {}
 
+# Parsed lineup snapshots are shared by every scorer call in one worker.  The
+# backing JSON remains the source of truth; its mtime/size signature invalidates
+# this cache whenever the hourly scheduler refreshes the file.
+_LINEUP_SNAPSHOT_MAX_DATES = 3
+_lineup_snapshot_cache: dict[str, dict] = {}
+_lineup_snapshot_lock = threading.RLock()
+
 
 # ───────────────────────────────────────────────────────────────────────────────
 # Internal helpers
@@ -64,6 +72,105 @@ def _cache_fresh(date_str: str, max_age_sec: int = 3600) -> bool:
     if not os.path.exists(path):
         return False
     return (time.time() - os.path.getmtime(path)) < max_age_sec
+
+
+def _lineup_file_signature(path: str) -> tuple[int, int] | None:
+    try:
+        stat = os.stat(path)
+        return stat.st_mtime_ns, stat.st_size
+    except OSError:
+        return None
+
+
+def _empty_lineup_snapshot(signature=None) -> dict:
+    return {
+        "signature": signature,
+        "by_id": {},
+        "by_name": {},
+        "ordered_names": (),
+        "partial_name_memo": {},
+    }
+
+
+def _build_lineup_snapshot(lineups: dict, signature) -> dict:
+    """Build immutable ID/exact-name indexes while retaining ordered fallback."""
+    by_id: dict[int, dict] = {}
+    by_name: dict[str, dict] = {}
+    ordered_names: list[tuple[str, dict]] = []
+
+    for raw_id, entry in lineups.items():
+        if not isinstance(entry, dict):
+            continue
+        try:
+            by_id.setdefault(int(raw_id), entry)
+        except (TypeError, ValueError):
+            pass
+        name_key = str(entry.get("player_name") or "").lower()
+        if name_key:
+            by_name.setdefault(name_key, entry)
+            ordered_names.append((name_key, entry))
+
+    return {
+        "signature": signature,
+        "by_id": by_id,
+        "by_name": by_name,
+        "ordered_names": tuple(ordered_names),
+        # Rare partial-name requests preserve the previous substring behavior,
+        # but each unique query scans at most once per file version.
+        "partial_name_memo": {},
+    }
+
+
+def _load_lineup_snapshot(date_str: str) -> dict:
+    """Return one parsed, indexed snapshot for the current lineup file version."""
+    path = _cache_path(date_str)
+    signature = _lineup_file_signature(path)
+
+    with _lineup_snapshot_lock:
+        cached = _lineup_snapshot_cache.get(date_str)
+        if cached is not None and cached.get("signature") == signature:
+            return cached
+
+        snapshot = _empty_lineup_snapshot(signature)
+        if signature is not None:
+            try:
+                with open(path) as f:
+                    payload = json.load(f)
+                raw_lineups = payload.get("lineups", {}) if isinstance(payload, dict) else {}
+                if isinstance(raw_lineups, dict):
+                    snapshot = _build_lineup_snapshot(raw_lineups, signature)
+            except (OSError, TypeError, ValueError):
+                pass
+
+        if (
+            date_str not in _lineup_snapshot_cache
+            and len(_lineup_snapshot_cache) >= _LINEUP_SNAPSHOT_MAX_DATES
+        ):
+            _lineup_snapshot_cache.pop(next(iter(_lineup_snapshot_cache)))
+        _lineup_snapshot_cache[date_str] = snapshot
+        return snapshot
+
+
+def _clear_lineup_snapshot_cache() -> None:
+    """Clear parsed lineup snapshots (primarily for refreshes and tests)."""
+    with _lineup_snapshot_lock:
+        _lineup_snapshot_cache.clear()
+
+
+def _entry_features(entry: dict) -> dict:
+    return {
+        "expected_pa":      float(entry.get("expected_pa",   _DEFAULT_PA)),
+        "batting_order":    int(entry.get("batting_order",    0)),
+        "lineup_confirmed": int(entry.get("lineup_confirmed", 0)),
+    }
+
+
+def _default_lineup_features() -> dict:
+    return {
+        "expected_pa":      _DEFAULT_PA,
+        "batting_order":    0,
+        "lineup_confirmed": 0,
+    }
 
 
 def _fetch_games_for_date(date_str: str) -> list[dict]:
@@ -258,6 +365,8 @@ def fetch_and_save(date_str: Optional[str] = None) -> dict:
             {"fetched_at": datetime.utcnow().isoformat(), "lineups": lineups},
             f, indent=2,
         )
+    with _lineup_snapshot_lock:
+        _lineup_snapshot_cache.pop(date_str, None)
 
     n_confirmed = sum(1 for v in lineups.values() if v["lineup_confirmed"] == 1)
     print(
@@ -335,46 +444,47 @@ def get_lineup_features(
     if date_str is None:
         date_str = date.today().isoformat()
 
-    path = _cache_path(date_str)
     if not _cache_fresh(date_str):
-        try:
-            fetch_and_save(date_str)
-        except Exception:
-            pass
+        # Prevent concurrent first requests from stampeding the schedule API
+        # while still rechecking freshness after acquiring the lock.
+        with _lineup_snapshot_lock:
+            if not _cache_fresh(date_str):
+                try:
+                    fetch_and_save(date_str)
+                except Exception:
+                    pass
 
-    lineups: dict = {}
-    if os.path.exists(path):
-        try:
-            with open(path) as f:
-                lineups = json.load(f).get("lineups", {})
-            lineups = {int(k): v for k, v in lineups.items()}
-        except Exception:
-            pass
+    snapshot = _load_lineup_snapshot(date_str)
 
     if mlbam_id is not None:
-        entry = lineups.get(int(mlbam_id))
+        try:
+            entry = snapshot["by_id"].get(int(mlbam_id))
+        except (TypeError, ValueError):
+            entry = None
         if entry:
-            return {
-                "expected_pa":      float(entry.get("expected_pa",   _DEFAULT_PA)),
-                "batting_order":    int(entry.get("batting_order",    0)),
-                "lineup_confirmed": int(entry.get("lineup_confirmed", 0)),
-            }
+            return _entry_features(entry)
 
     if player_name:
         name_lower = player_name.lower()
-        for entry in lineups.values():
-            if name_lower in (entry.get("player_name") or "").lower():
-                return {
-                    "expected_pa":      float(entry.get("expected_pa",   _DEFAULT_PA)),
-                    "batting_order":    int(entry.get("batting_order",    0)),
-                    "lineup_confirmed": int(entry.get("lineup_confirmed", 0)),
-                }
+        entry = snapshot["by_name"].get(name_lower)
+        if entry is None:
+            with _lineup_snapshot_lock:
+                partial_memo = snapshot["partial_name_memo"]
+                if name_lower not in partial_memo:
+                    partial_memo[name_lower] = next(
+                        (
+                            candidate_entry
+                            for candidate_name, candidate_entry
+                            in snapshot["ordered_names"]
+                            if name_lower in candidate_name
+                        ),
+                        None,
+                    )
+                entry = partial_memo[name_lower]
+        if entry:
+            return _entry_features(entry)
 
-    return {
-        "expected_pa":      _DEFAULT_PA,
-        "batting_order":    0,
-        "lineup_confirmed": 0,
-    }
+    return _default_lineup_features()
 
 
 if __name__ == "__main__":
