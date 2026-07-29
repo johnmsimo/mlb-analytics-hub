@@ -31,8 +31,20 @@ DATA_DIR = settings.data_dir
 
 _lock = threading.Lock()
 _cache = {
-    "bat": {"df": None, "loaded_at": None, "year": None, "index": None},
-    "swt": {"df": None, "loaded_at": None, "year": None, "index": None},
+    "bat": {
+        "df": None,
+        "loaded_at": None,
+        "year": None,
+        "index": None,
+        "speed_percentiles": {},
+    },
+    "swt": {
+        "df": None,
+        "loaded_at": None,
+        "year": None,
+        "index": None,
+        "speed_percentiles": {},
+    },
 }
 
 REFRESH_HOURS = 24
@@ -111,12 +123,7 @@ def _load(kind, year=None):
         slot["df"] = df
         slot["year"] = year
         slot["loaded_at"] = now
-        slot["index"] = DataFrameLookupIndex(
-            df,
-            id_columns=("player_id", "id", "batter", "mlbam_id"),
-            name_columns=("last_name, first_name", "player_name", "name", "Name"),
-            name_normalizer=_name_norm,
-        )
+        slot["index"], slot["speed_percentiles"] = _build_lookup_snapshot(kind, df)
         return df
 
 
@@ -130,22 +137,56 @@ def _name_norm(s):
     return s
 
 
+def _build_bat_speed_percentiles(df):
+    """Precompute the legacy ``speed <= player speed`` percentile by value."""
+    if df is None or df.empty or "avg_bat_speed" not in df.columns:
+        return {}
+    try:
+        speeds = df["avg_bat_speed"].dropna().astype(float)
+    except Exception:
+        # Preserve the previous all-or-nothing conversion behavior: one invalid
+        # leaderboard value disables percentiles until the next refresh.
+        return {}
+    if speeds.empty:
+        return {}
+    ranked = speeds.rank(method="max", pct=True) * 100.0
+    return {
+        float(speed): round(float(percentile), 1)
+        for speed, percentile in zip(speeds, ranked)
+    }
+
+
+def _build_lookup_snapshot(kind, df):
+    index = DataFrameLookupIndex(
+        df,
+        id_columns=("player_id", "id", "batter", "mlbam_id"),
+        name_columns=("last_name, first_name", "player_name", "name", "Name"),
+        name_normalizer=_name_norm,
+    )
+    speed_percentiles = _build_bat_speed_percentiles(df) if kind == "bat" else {}
+    return index, speed_percentiles
+
+
 def _lookup_index(kind, df):
     slot = _cache[kind]
     index = slot.get("index")
-    if index is not None and slot.get("df") is df:
+    if (
+        index is not None
+        and slot.get("df") is df
+        and "speed_percentiles" in slot
+    ):
         return index
     with _lock:
         index = slot.get("index")
-        if index is None or slot.get("df") is not df:
+        if (
+            index is None
+            or slot.get("df") is not df
+            or "speed_percentiles" not in slot
+        ):
             slot["df"] = df
-            index = DataFrameLookupIndex(
-                df,
-                id_columns=("player_id", "id", "batter", "mlbam_id"),
-                name_columns=("last_name, first_name", "player_name", "name", "Name"),
-                name_normalizer=_name_norm,
-            )
+            index, speed_percentiles = _build_lookup_snapshot(kind, df)
             slot["index"] = index
+            slot["speed_percentiles"] = speed_percentiles
     return index
 
 
@@ -181,16 +222,12 @@ def bat_tracking(name=None, player_id=None, year=None):
     Returns dict with floats / None.
     """
     row = _find_row(_load("bat", year), name, player_id, kind="bat")
-    df = _cache["bat"]["df"]
     bs = _f(row, "avg_bat_speed", "bat_speed")
-    pct = None
-    if bs is not None and df is not None and "avg_bat_speed" in df.columns:
-        try:
-            speeds = df["avg_bat_speed"].dropna().astype(float)
-            if len(speeds) > 0:
-                pct = round(float((speeds <= bs).sum()) / len(speeds) * 100.0, 1)
-        except Exception:
-            pct = None
+    pct = (
+        _cache["bat"].get("speed_percentiles", {}).get(bs)
+        if bs is not None
+        else None
+    )
     return {
         "bat_speed":            bs,
         "swing_length":         _f(row, "swing_length", "avg_swing_length"),

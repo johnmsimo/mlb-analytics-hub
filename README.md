@@ -192,6 +192,8 @@ Savant bat-tracking, FanGraphs Stuff+, and catcher-framing feature lookups build
 immutable ID/name indexes when their process-local dataframe snapshots refresh.
 Hot scoring paths avoid repeated pandas column scans while preserving ID-first,
 normalized-name, partial-name, and previous-season fallback behavior.
+Bat-speed percentiles are also ranked once per Savant snapshot and reused by
+BATX/XGBoost enrichment instead of rescanning the leaderboard for every batter.
 
 Live-lineup feature lookups reuse an mtime-aware, per-worker parsed snapshot
 indexed by MLB ID and exact player name. Hourly lineup-file refreshes invalidate
