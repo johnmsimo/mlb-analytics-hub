@@ -41,11 +41,12 @@ try:
 except ImportError:
     _REQUESTS_OK = False
 
+from clients.mlb_client import mlb_client
+
 _HERE     = os.path.dirname(os.path.abspath(__file__))
 _DATA_DIR = os.path.join(_HERE, "data")
 os.makedirs(_DATA_DIR, exist_ok=True)
 
-_MLB_API       = "https://statsapi.mlb.com/api/v1"
 _METEO_API     = "https://api.open-meteo.com/v1/forecast"
 _TIMEOUT       = 12
 _CACHE_TTL_SEC = 10_800   # 3 hours
@@ -295,23 +296,18 @@ def _fetch_home_teams(date_str: str) -> dict[int, str]:
     """
     if not _REQUESTS_OK:
         return {}
-    url    = f"{_MLB_API}/schedule"
-    params = {"sportId": 1, "date": date_str}
     try:
-        resp = requests.get(url, params=params, timeout=_TIMEOUT)
-        resp.raise_for_status()
         result: dict[int, str] = {}
-        for date_block in resp.json().get("dates", []):
-            for game in date_block.get("games", []):
-                pk   = game.get("gamePk", 0)
-                code = (
-                    game.get("teams", {})
-                        .get("home", {})
-                        .get("team", {})
-                        .get("abbreviation", "")
-                )
-                if pk and code:
-                    result[pk] = code
+        for game in mlb_client.schedule(date_str=date_str, timeout=_TIMEOUT):
+            pk   = game.get("gamePk", 0)
+            code = (
+                game.get("teams", {})
+                    .get("home", {})
+                    .get("team", {})
+                    .get("abbreviation", "")
+            )
+            if pk and code:
+                result[pk] = code
         return result
     except Exception:
         print(f"[weather_loader] schedule fetch failed — {traceback.format_exc()}")

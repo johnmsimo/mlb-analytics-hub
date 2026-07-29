@@ -42,11 +42,12 @@ try:
 except ImportError:
     _REQUESTS_OK = False
 
+from clients.mlb_client import mlb_client
+
 _HERE     = os.path.dirname(os.path.abspath(__file__))
 _DATA_DIR = os.path.join(_HERE, "data")
 os.makedirs(_DATA_DIR, exist_ok=True)
 
-_MLB_API = "https://statsapi.mlb.com/api/v1"
 _TIMEOUT  = 12
 
 # Savant URL is built dynamically; see _savant_url()
@@ -324,23 +325,22 @@ def _fetch_game_officials(date_str: str) -> dict[int, str]:
     """
     if not _REQUESTS_OK:
         return {}
-    url    = f"{_MLB_API}/schedule"
-    params = {"sportId": 1, "date": date_str, "hydrate": "officials"}
     try:
-        resp = requests.get(url, params=params, timeout=_TIMEOUT)
-        resp.raise_for_status()
         result: dict[int, str] = {}
-        for date_block in resp.json().get("dates", []):
-            for game in date_block.get("games", []):
-                game_pk = game.get("gamePk", 0)
-                for official in (game.get("officials") or []):
-                    otype = (official.get("officialType") or "").lower()
-                    if "home plate" in otype or otype in ("hp", "home"):
-                        person = official.get("official") or {}
-                        name   = (person.get("fullName") or "").strip()
-                        if name:
-                            result[game_pk] = name
-                            break
+        for game in mlb_client.schedule(
+            date_str=date_str,
+            hydrate="officials",
+            timeout=_TIMEOUT,
+        ):
+            game_pk = game.get("gamePk", 0)
+            for official in (game.get("officials") or []):
+                otype = (official.get("officialType") or "").lower()
+                if "home plate" in otype or otype in ("hp", "home"):
+                    person = official.get("official") or {}
+                    name   = (person.get("fullName") or "").strip()
+                    if name:
+                        result[game_pk] = name
+                        break
         return result
     except Exception:
         print(f"[umpire_loader] officials fetch failed — {traceback.format_exc()}")

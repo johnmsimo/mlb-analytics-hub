@@ -41,14 +41,13 @@ import time
 from datetime import datetime, timezone
 
 import pandas as pd
-import requests
 
+from clients.mlb_client import mlb_client
 from config import settings
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s")
 log = logging.getLogger("bq_etl")
 
-MLB_API = "https://statsapi.mlb.com/api/v1"
 DATA_DIR = settings.data_dir
 DATASET = settings.bq_dataset
 
@@ -162,14 +161,16 @@ LIMIT 100000
 
 def _fetch_stats_bulk(group, season=None):
     season = season or datetime.now().year
-    url = (
-        f"{MLB_API}/stats?stats=season&group={group}"
-        f"&season={season}&sportIds=1&playerPool=all&limit=2000"
-    )
-    log.info("[fetch] %s", url)
-    r = requests.get(url, timeout=60)
-    r.raise_for_status()
-    body = r.json()
+    params = {
+        "stats": "season",
+        "group": group,
+        "season": season,
+        "sportIds": 1,
+        "playerPool": "all",
+        "limit": 2000,
+    }
+    log.info("[fetch] MLB stats group=%s season=%s", group, season)
+    body = mlb_client.stats(timeout=settings.mlb_bulk_http_timeout, **params)
     splits = []
     for s in body.get("stats") or []:
         splits.extend(s.get("splits") or [])

@@ -5,7 +5,7 @@ from unittest.mock import patch
 import requests
 
 import http_client
-from http_client import build_http_session, build_retry_policy
+from http_client import build_http_session, build_retry_policy, get_http_session
 
 
 class HttpClientTests(unittest.TestCase):
@@ -43,6 +43,12 @@ class HttpClientTests(unittest.TestCase):
             second = http_client.install_global_http_session()
         self.assertIs(first, second)
         self.assertEqual(requests.get.__self__, first)
+
+    def test_shared_session_does_not_require_global_install(self):
+        with patch.dict(os.environ, {}, clear=True):
+            first = get_http_session()
+            second = get_http_session()
+        self.assertIs(first, second)
 
 
 if __name__ == "__main__":

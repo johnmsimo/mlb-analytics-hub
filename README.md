@@ -153,6 +153,9 @@ mlb-analytics-hub/
 | `CACHE_STALE_TTL` | Extra seconds to retain stale-if-error cache shadows | `300` |
 | `CACHE_ALLOW_STALE` | Serve stale cached data when recomputation fails | `true` |
 | `MLB_SCHEDULE_CACHE_TTL` | Freshness window for shared hydrated date/game schedules | `120` |
+| `MLB_STATS_API_BASE_URL` | MLB Stats API root used by the shared client | `https://statsapi.mlb.com/api` |
+| `MLB_HTTP_TIMEOUT` / `MLB_BULK_HTTP_TIMEOUT` | Standard and bulk MLB request timeouts in seconds | `10` / `60` |
+| `MLB_SLOW_REQUEST_MS` | Slow MLB upstream structured-log threshold in milliseconds | `1000` |
 | `PERFORMANCE_MONITOR_ENABLED` | Collect bounded in-process request latency metrics | `true` |
 | `PERFORMANCE_SLOW_MS` | Slow-request structured-log threshold in milliseconds | `1000` |
 | `PERFORMANCE_SAMPLE_SIZE` | Recent request durations retained for aggregate percentiles | `2048` |
@@ -173,6 +176,8 @@ mlb-analytics-hub/
 Runtime modules read these values through `config.settings`, which applies type conversion, safe numeric fallbacks, and range validation. Redis writes are mirrored to process memory, the circuit breaker automatically fails over during outages, and health probes restore Redis after recovery. `/api/cache/status` exposes the secret-safe backend, circuit, latency, failure, and stale-cache state.
 
 Request performance monitoring adds `X-Response-Time-Ms` and `Server-Timing` headers, emits structured logs for requests over `PERFORMANCE_SLOW_MS`, and exposes bounded, normalized route aggregates at `GET /api/performance/status`. Raw URLs, query strings, headers, and bodies are never retained. `POST /api/performance/metrics/reset` requires `X-Admin-Token` matching `ADMIN_TOKEN`.
+
+MLB Stats API traffic from shared schedule caching, game-day loaders, the pipeline scheduler, and BigQuery ETL uses one pooled retrying client. Slow/error logs contain normalized endpoint patterns without query parameters.
 
 ---
 

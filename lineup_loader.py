@@ -28,11 +28,7 @@ import traceback
 from datetime import date, datetime
 from typing import Optional
 
-try:
-    import requests
-    _REQUESTS_OK = True
-except ImportError:
-    _REQUESTS_OK = False
+from clients.mlb_client import mlb_client
 
 _HERE     = os.path.dirname(os.path.abspath(__file__))
 _DATA_DIR = os.path.join(_HERE, "data")
@@ -49,7 +45,6 @@ _DEFAULT_PA = 4.20
 _LG_K_PCT  = 22.3
 _LG_XWOBA  = 0.318
 
-_MLB_API = "https://statsapi.mlb.com/api/v1"
 _TIMEOUT  = 10
 
 # In-process LRU cache for player season stats (cleared each scheduler run)
@@ -73,22 +68,12 @@ def _cache_fresh(date_str: str, max_age_sec: int = 3600) -> bool:
 
 def _fetch_games_for_date(date_str: str) -> list[dict]:
     """Return raw game dicts from MLB schedule API."""
-    if not _REQUESTS_OK:
-        return []
-    url    = f"{_MLB_API}/schedule"
-    params = {
-        "sportId": 1,
-        "date":    date_str,
-        "hydrate": "lineups,probablePitcher,team",
-    }
     try:
-        resp = requests.get(url, params=params, timeout=_TIMEOUT)
-        resp.raise_for_status()
-        return [
-            g
-            for db in resp.json().get("dates", [])
-            for g  in db.get("games", [])
-        ]
+        return mlb_client.schedule(
+            date_str=date_str,
+            hydrate="lineups,probablePitcher,team",
+            timeout=_TIMEOUT,
+        )
     except Exception:
         print(f"[lineup_loader] schedule fetch failed — {traceback.format_exc()}")
         return []
@@ -104,20 +89,17 @@ def _fetch_player_season_stats(mlbam_id: int, season: Optional[int] = None) -> d
         return _player_stats_cache[mlbam_id]
 
     fallback = {"k_pct": _LG_K_PCT, "xwoba": _LG_XWOBA}
-    if not _REQUESTS_OK:
-        return fallback
 
     yr  = season or datetime.utcnow().year
-    url = f"{_MLB_API}/people/{mlbam_id}/stats"
-    params = {
-        "stats":  "season",
-        "group":  "hitting",
-        "season": yr,
-    }
     try:
-        resp = requests.get(url, params=params, timeout=_TIMEOUT)
-        resp.raise_for_status()
-        stats_blocks = resp.json().get("stats", [])
+        payload = mlb_client.person_stats(
+            mlbam_id,
+            stats="season",
+            group="hitting",
+            season=yr,
+            timeout=_TIMEOUT,
+        )
+        stats_blocks = payload.get("stats", [])
         if not stats_blocks:
             _player_stats_cache[mlbam_id] = fallback
             return fallback

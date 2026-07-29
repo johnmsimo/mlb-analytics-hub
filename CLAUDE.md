@@ -43,6 +43,9 @@ Container build (used by Fly.io / `Dockerfile`): a multi-stage Python 3.11-slim 
 - `XGB_MODEL_DIR` — override the `models/` path for the XGBoost artifacts.
 - `DATA_DIR` — override the `data/` path (Fly.io mounts a persistent volume here at `/app/data`).
 - `PORT` — bind port (Fly.io sets 8080; local default 10000).
+- `MLB_STATS_API_BASE_URL` (default `https://statsapi.mlb.com/api`) — Stats API root for the shared MLB client.
+- `MLB_HTTP_TIMEOUT` / `MLB_BULK_HTTP_TIMEOUT` (defaults 10 / 60 seconds) — standard and bulk MLB request timeouts.
+- `MLB_SLOW_REQUEST_MS` (default 1000) — normalized slow-upstream log threshold.
 
 **Tracker / capture knobs:** `TRACKER_AUTO_SYNC_ENABLED`, `TRACKER_AUTO_SYNC_MINUTES`, `TRACKER_CAPTURE_BUDGET_SEC`, `TRACKER_CAPTURE_INCLUDE_ODDS`, `TRACKER_CAPTURE_BACKGROUND`, `TRACKER_SIMS`.
 

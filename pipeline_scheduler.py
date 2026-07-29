@@ -18,6 +18,8 @@ from datetime import datetime, date
 import pandas as pd
 from zoneinfo import ZoneInfo
 
+from clients.mlb_client import mlb_client
+
 ET = ZoneInfo("America/New_York")
 log = logging.getLogger(__name__)
 
@@ -68,12 +70,10 @@ def _build_games_df(fetch_schedule, target_date=None):
 
 def _get_position_player_ids(team_id):
     try:
-        import requests
-        url  = f"https://statsapi.mlb.com/api/v1/teams/{team_id}/roster?rosterType=active"
-        resp = requests.get(url, timeout=10)
+        payload = mlb_client.team_roster(team_id, timeout=10)
         return [
             p["person"]["id"]
-            for p in resp.json().get("roster", [])
+            for p in payload.get("roster", [])
             if p.get("position", {}).get("type") not in ("Pitcher",)
         ]
     except Exception:
@@ -82,13 +82,14 @@ def _get_position_player_ids(team_id):
 
 def _get_bvp(batter_id, pitcher_id):
     try:
-        import requests
-        url   = (
-            f"https://statsapi.mlb.com/api/v1/people/{batter_id}/stats"
-            f"?stats=vsPlayer&opposingPlayerId={pitcher_id}&group=hitting"
+        payload = mlb_client.person_stats(
+            batter_id,
+            stats="vsPlayer",
+            opposingPlayerId=pitcher_id,
+            group="hitting",
+            timeout=10,
         )
-        resp  = requests.get(url, timeout=10)
-        stats = resp.json().get("stats", [])
+        stats = payload.get("stats", [])
         if not stats:
             return {}
         splits = stats[0].get("splits", [])
@@ -108,14 +109,15 @@ def _get_bvp(batter_id, pitcher_id):
 
 def _get_platoon_splits(player_id, group="hitting"):
     try:
-        import requests
-        url    = (
-            f"https://statsapi.mlb.com/api/v1/people/{player_id}/stats"
-            f"?stats=statSplits&group={group}&sitCodes=vl,vr"
+        payload = mlb_client.person_stats(
+            player_id,
+            stats="statSplits",
+            group=group,
+            sitCodes="vl,vr",
+            timeout=10,
         )
-        resp   = requests.get(url, timeout=10)
         result = {}
-        for block in resp.json().get("stats", []):
+        for block in payload.get("stats", []):
             for split in block.get("splits", []):
                 hand   = split.get("split", {}).get("code", "")
                 s      = split.get("stat", {})
@@ -152,10 +154,8 @@ def _extract_pitcher_statcast(sv_pitcher_fn, pitcher_name):
 
 def _fetch_batter_row(batter_id, pitcher_id, pitcher_name, game_meta, sv_batter_fn):
     try:
-        import requests
-        url   = f"https://statsapi.mlb.com/api/v1/people/{batter_id}"
-        resp  = requests.get(url, timeout=8)
-        pdata = resp.json().get("people", [{}])[0]
+        payload = mlb_client.person(batter_id, timeout=8)
+        pdata = payload.get("people", [{}])[0]
         name  = pdata.get("fullName", str(batter_id))
         hand  = pdata.get("batSide", {}).get("code", "R")
     except Exception:

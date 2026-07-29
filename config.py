@@ -95,6 +95,27 @@ class Settings:
         return int(_number("MLB_SCHEDULE_CACHE_TTL", 120, int, minimum=1))
 
     @property
+    def mlb_stats_api_base_url(self) -> str:
+        return _string(
+            "MLB_STATS_API_BASE_URL",
+            "https://statsapi.mlb.com/api",
+        ).rstrip("/")
+
+    @property
+    def mlb_http_timeout(self) -> int:
+        return int(_number("MLB_HTTP_TIMEOUT", 10, int, minimum=1, maximum=120))
+
+    @property
+    def mlb_bulk_http_timeout(self) -> int:
+        return int(
+            _number("MLB_BULK_HTTP_TIMEOUT", 60, int, minimum=1, maximum=300)
+        )
+
+    @property
+    def mlb_slow_request_ms(self) -> int:
+        return int(_number("MLB_SLOW_REQUEST_MS", 1000, int, minimum=1))
+
+    @property
     def performance_monitor_enabled(self) -> bool:
         return _boolean("PERFORMANCE_MONITOR_ENABLED", True)
 
@@ -221,6 +242,10 @@ class Settings:
             "cache_stale_ttl": self.cache_stale_ttl,
             "cache_ttls": self.cache_ttls,
             "mlb_schedule_cache_ttl": self.mlb_schedule_cache_ttl,
+            "mlb_stats_api_base_url": self.mlb_stats_api_base_url,
+            "mlb_http_timeout": self.mlb_http_timeout,
+            "mlb_bulk_http_timeout": self.mlb_bulk_http_timeout,
+            "mlb_slow_request_ms": self.mlb_slow_request_ms,
             "performance_monitor_enabled": self.performance_monitor_enabled,
             "performance_slow_ms": self.performance_slow_ms,
             "performance_sample_size": self.performance_sample_size,

@@ -3,35 +3,21 @@ from __future__ import annotations
 
 from typing import Any
 
-import requests
-
 from cache_service import get_or_compute, normalize_cache_key
+from clients.mlb_client import mlb_client
 from config import settings
 
-MLB_API = "https://statsapi.mlb.com/api/v1"
 _SCHEDULE_HYDRATE = (
     "team,probablePitcher,lineups,linescore,venue(location),weather"
 )
 
 
 def _schedule_games(*, date_str: str | None = None, game_pk: Any = None) -> list[dict]:
-    if date_str is not None:
-        url = (
-            f"{MLB_API}/schedule?sportId=1&date={date_str}"
-            f"&hydrate={_SCHEDULE_HYDRATE}"
-        )
-    else:
-        url = (
-            f"{MLB_API}/schedule?sportId=1&gamePk={game_pk}"
-            f"&hydrate={_SCHEDULE_HYDRATE}"
-        )
-
-    response = requests.get(url, timeout=10)
-    response.raise_for_status()
-    payload = response.json()
-    dates = payload.get("dates", []) if isinstance(payload, dict) else []
-    games = dates[0].get("games", []) if dates else []
-    return games if isinstance(games, list) else []
+    return mlb_client.schedule(
+        date_str=date_str,
+        game_pk=game_pk,
+        hydrate=_SCHEDULE_HYDRATE,
+    )
 
 
 def fetch_schedule(date_str: str) -> list[dict]:
