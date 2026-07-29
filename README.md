@@ -188,6 +188,11 @@ per worker using the exact model, market, line, and final feature vector.
 Concurrent identical scores collapse to one computation, returned objects are
 copy-isolated, and TTL/LRU bounds prevent stale or unbounded process memory.
 
+Savant bat-tracking, FanGraphs Stuff+, and catcher-framing feature lookups build
+immutable ID/name indexes when their process-local dataframe snapshots refresh.
+Hot scoring paths avoid repeated pandas column scans while preserving ID-first,
+normalized-name, partial-name, and previous-season fallback behavior.
+
 ---
 
 ## 📄 License

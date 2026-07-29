@@ -28,11 +28,12 @@ from urllib.request import Request, urlopen
 import pandas as pd
 
 from config import settings
+from dataframe_lookup import DataFrameLookupIndex
 
 DATA_DIR = settings.data_dir
 
 _lock = threading.Lock()
-_cache = {"df": None, "loaded_at": None, "year": None}
+_cache = {"df": None, "loaded_at": None, "year": None, "index": None}
 
 REFRESH_HOURS = 24
 SAVANT_URL = (
@@ -90,6 +91,7 @@ def _load(year=None):
         _cache["df"] = df
         _cache["year"] = year
         _cache["loaded_at"] = now
+        _cache["index"] = _build_index(df)
         return df
 
 
@@ -106,6 +108,34 @@ def _first_first_last(name):
     return s
 
 
+def _build_index(df):
+    return DataFrameLookupIndex(
+        df,
+        id_columns=("id", "player_id", "catcher", "mlbam_id"),
+        name_columns=(
+            "catcher_name",
+            "player_name",
+            "Name",
+            "name",
+            "last_name, first_name",
+        ),
+        name_normalizer=_first_first_last,
+    )
+
+
+def _lookup_index(df):
+    index = _cache.get("index")
+    if index is not None and _cache.get("df") is df:
+        return index
+    with _lock:
+        index = _cache.get("index")
+        if index is None or _cache.get("df") is not df:
+            _cache["df"] = df
+            index = _build_index(df)
+            _cache["index"] = index
+    return index
+
+
 def framing_runs(name=None, player_id=None, year=None):
     """Return framing data dict for a catcher.
 
@@ -117,31 +147,9 @@ def framing_runs(name=None, player_id=None, year=None):
     if df is None or df.empty:
         return out
 
-    # Savant's CSV strips names — match by player_id (`id` column) first.
-    row = pd.DataFrame()
-    for id_col in ("id", "player_id", "catcher", "mlbam_id"):
-        if player_id and id_col in df.columns:
-            row = df[df[id_col].astype(str) == str(player_id)]
-            if not row.empty:
-                break
-
-    if row.empty and name:
-        target = _first_first_last(name)
-        for col in ("catcher_name", "player_name", "Name", "name", "last_name, first_name"):
-            if col in df.columns:
-                series = df[col].astype(str).apply(_first_first_last)
-                if series.str.strip().eq("").all():
-                    continue  # Savant CSV has empty name col
-                row = df[series == target]
-                if row.empty:
-                    row = df[series.str.contains(target, na=False)]
-                if not row.empty:
-                    break
-
-    if row.empty:
+    r = _lookup_index(df).find(player_id=player_id, name=name)
+    if r is None:
         return out
-
-    r = row.iloc[0]
 
     def _f(col):
         v = r.get(col) if col in r.index else None
