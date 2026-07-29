@@ -31,6 +31,8 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual(settings.performance_slow_ms, 1000)
             self.assertEqual(settings.performance_sample_size, 2048)
             self.assertEqual(settings.performance_route_limit, 256)
+            self.assertEqual(settings.xgb_score_cache_ttl, 300)
+            self.assertEqual(settings.xgb_score_cache_max_entries, 2048)
 
     def test_environment_overrides_are_resolved_on_access(self):
         with patch.dict(
@@ -50,6 +52,8 @@ class ConfigurationTests(unittest.TestCase):
                 "MLB_SLOW_REQUEST_MS": "650",
                 "PERFORMANCE_MONITOR_ENABLED": "false",
                 "PERFORMANCE_SLOW_MS": "750",
+                "XGB_SCORE_CACHE_TTL": "180",
+                "XGB_SCORE_CACHE_MAX_ENTRIES": "512",
             },
             clear=True,
         ):
@@ -70,6 +74,8 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual(settings.mlb_slow_request_ms, 650)
             self.assertFalse(settings.performance_monitor_enabled)
             self.assertEqual(settings.performance_slow_ms, 750)
+            self.assertEqual(settings.xgb_score_cache_ttl, 180)
+            self.assertEqual(settings.xgb_score_cache_max_entries, 512)
 
     def test_invalid_numbers_fall_back_and_ranges_are_bounded(self):
         with patch.dict(
@@ -86,6 +92,8 @@ class ConfigurationTests(unittest.TestCase):
                 "MLB_BULK_HTTP_TIMEOUT": "9999",
                 "PERFORMANCE_SAMPLE_SIZE": "999999",
                 "PERFORMANCE_ROUTE_LIMIT": "0",
+                "XGB_SCORE_CACHE_TTL": "-1",
+                "XGB_SCORE_CACHE_MAX_ENTRIES": "999999",
             },
             clear=True,
         ):
@@ -100,6 +108,8 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual(settings.mlb_bulk_http_timeout, 300)
             self.assertEqual(settings.performance_sample_size, 10000)
             self.assertEqual(settings.performance_route_limit, 25)
+            self.assertEqual(settings.xgb_score_cache_ttl, 0)
+            self.assertEqual(settings.xgb_score_cache_max_entries, 20000)
 
     def test_public_snapshot_never_exposes_secrets(self):
         with patch.dict(

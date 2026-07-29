@@ -140,6 +140,22 @@ class Settings:
         )
 
     @property
+    def xgb_score_cache_ttl(self) -> int:
+        return int(_number("XGB_SCORE_CACHE_TTL", 300, int, minimum=0, maximum=3600))
+
+    @property
+    def xgb_score_cache_max_entries(self) -> int:
+        return int(
+            _number(
+                "XGB_SCORE_CACHE_MAX_ENTRIES",
+                2048,
+                int,
+                minimum=0,
+                maximum=20000,
+            )
+        )
+
+    @property
     def admin_token(self) -> str:
         return _string("ADMIN_TOKEN")
 
@@ -250,6 +266,8 @@ class Settings:
             "performance_slow_ms": self.performance_slow_ms,
             "performance_sample_size": self.performance_sample_size,
             "performance_route_limit": self.performance_route_limit,
+            "xgb_score_cache_ttl": self.xgb_score_cache_ttl,
+            "xgb_score_cache_max_entries": self.xgb_score_cache_max_entries,
             "http_retry_total": self.http_retry_total,
             "http_retry_backoff": self.http_retry_backoff,
             "bq_project_configured": bool(self.google_cloud_project),
