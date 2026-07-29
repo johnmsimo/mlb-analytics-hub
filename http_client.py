@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import base64
 import re
+from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -17,13 +18,34 @@ from config import settings
 _GLOBAL_SESSION: requests.Session | None = None
 _MLB_BOXSCORE_PATH = re.compile(r"/v1/game/(\d+)/boxscore/?$")
 _MLB_LIVE_FEED_PATH = re.compile(r"/v1\.1/game/(\d+)/feed/live/?$")
+_MLB_REFERENCE_PATHS = (
+    ("mlb_person_stats", re.compile(r"/v1/people/(\d+)/stats/?$"), "stats"),
+    ("mlb_person", re.compile(r"/v1/people/(\d+)/?$"), "stats"),
+    ("mlb_people", re.compile(r"/v1/people/?$"), "stats"),
+    ("mlb_team_roster", re.compile(r"/v1/teams/(\d+)/roster/?$"), "schedule"),
+    ("mlb_team_stats", re.compile(r"/v1/teams/(\d+)/stats/?$"), "stats"),
+    ("mlb_team", re.compile(r"/v1/teams/(\d+)/?$"), "stats"),
+    ("mlb_teams", re.compile(r"/v1/teams/?$"), "static"),
+    ("mlb_sport_players", re.compile(r"/v1/sports/(\d+)/players/?$"), "stats"),
+    ("mlb_stats", re.compile(r"/v1/stats(?:/leaders)?/?$"), "stats"),
+    ("mlb_standings", re.compile(r"/v1/standings/?$"), "schedule"),
+    ("mlb_transactions", re.compile(r"/v1/transactions/?$"), "schedule"),
+)
 
 
-def _mlb_game_cache_target(url: str) -> tuple[str, int] | None:
+@dataclass(frozen=True)
+class _MLBCacheTarget:
+    namespace: str
+    identity: tuple[Any, ...]
+    policy: str
+
+
+def _mlb_cache_target(url: str) -> _MLBCacheTarget | None:
     parsed = urlsplit(str(url))
     configured_host = urlsplit(settings.mlb_stats_api_base_url).netloc
     if parsed.netloc not in {"statsapi.mlb.com", configured_host}:
         return None
+    normalized_query = tuple(sorted(parse_qsl(parsed.query, keep_blank_values=True)))
 
     for namespace, pattern in (
         ("mlb_boxscore", _MLB_BOXSCORE_PATH),
@@ -31,7 +53,20 @@ def _mlb_game_cache_target(url: str) -> tuple[str, int] | None:
     ):
         match = pattern.search(parsed.path)
         if match:
-            return namespace, int(match.group(1))
+            identity: tuple[Any, ...] = (int(match.group(1)),)
+            if normalized_query:
+                identity = (*identity, normalized_query)
+            return _MLBCacheTarget(namespace, identity, "live")
+
+    for namespace, pattern, policy in _MLB_REFERENCE_PATHS:
+        match = pattern.search(parsed.path)
+        if match:
+            identity = tuple(match.groups()) or (parsed.path.rstrip("/"),)
+            return _MLBCacheTarget(
+                namespace,
+                (*identity, normalized_query),
+                policy,
+            )
     return None
 
 
@@ -58,17 +93,16 @@ def _response_from_snapshot(snapshot: dict[str, Any]) -> requests.Response:
 
 
 class _SharedSession(requests.Session):
-    """Retrying session with resilient caching for repeated MLB game payloads."""
+    """Retrying session with resilient caching for repeated MLB read payloads."""
 
     def get(self, url, **kwargs):
-        target = _mlb_game_cache_target(str(url))
+        target = _mlb_cache_target(str(url))
         if target is None or kwargs.get("stream"):
             return super().get(url, **kwargs)
 
-        namespace, game_pk = target
         key = normalize_cache_key(
-            namespace,
-            game_pk,
+            target.namespace,
+            *target.identity,
             params=kwargs.get("params"),
         )
 
@@ -81,7 +115,7 @@ class _SharedSession(requests.Session):
             snapshot = get_or_compute(
                 key,
                 fetch,
-                policy="live",
+                policy=target.policy,
                 allow_stale=True,
             )
         except requests.HTTPError as exc:
