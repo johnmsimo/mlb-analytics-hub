@@ -1,4 +1,5 @@
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
 import pandas as pd
@@ -53,7 +54,15 @@ class DataFrameLookupIndexTests(unittest.TestCase):
 class IndexedLoaderContractTests(unittest.TestCase):
     def tearDown(self):
         for slot in savant_bat_tracking._cache.values():
-            slot.update({"df": None, "loaded_at": None, "year": None, "index": None})
+            slot.update(
+                {
+                    "df": None,
+                    "loaded_at": None,
+                    "year": None,
+                    "index": None,
+                    "speed_percentiles": {},
+                }
+            )
         fg_stuff_loader._cache.update(
             {"df": None, "loaded_at": None, "year": None, "index": None}
         )
@@ -85,6 +94,109 @@ class IndexedLoaderContractTests(unittest.TestCase):
 
         self.assertEqual(by_name["bat_speed"], 75.0)
         self.assertEqual(by_id["squared_up_pct"], 40.0)
+
+    def test_bat_speed_percentile_matches_legacy_less_than_or_equal_rank(self):
+        df = pd.DataFrame(
+            [
+                {"id": 1, "avg_bat_speed": 70.0},
+                {"id": 2, "avg_bat_speed": 75.0},
+                {"id": 3, "avg_bat_speed": 75.0},
+                {"id": 4, "avg_bat_speed": 80.0},
+            ]
+        )
+
+        with patch.object(savant_bat_tracking, "_load", return_value=df):
+            result = savant_bat_tracking.bat_tracking(player_id=2)
+
+        self.assertEqual(result["bat_speed_percentile"], 75.0)
+
+    def test_bat_speed_percentiles_build_once_for_repeated_lookups(self):
+        df = pd.DataFrame(
+            [
+                {"id": 13, "avg_bat_speed": 75.0},
+                {"id": 27, "avg_bat_speed": 70.0},
+            ]
+        )
+        real_builder = savant_bat_tracking._build_bat_speed_percentiles
+
+        with (
+            patch.object(savant_bat_tracking, "_load", return_value=df),
+            patch.object(
+                savant_bat_tracking,
+                "_build_bat_speed_percentiles",
+                wraps=real_builder,
+            ) as build,
+        ):
+            first = savant_bat_tracking.bat_tracking(player_id=13)
+            second = savant_bat_tracking.bat_tracking(player_id=27)
+            third = savant_bat_tracking.bat_tracking(player_id=13)
+
+        self.assertEqual(first["bat_speed_percentile"], 100.0)
+        self.assertEqual(second["bat_speed_percentile"], 50.0)
+        self.assertEqual(third, first)
+        self.assertEqual(build.call_count, 1)
+
+    def test_bat_speed_percentiles_rebuild_with_dataframe_refresh(self):
+        first_df = pd.DataFrame(
+            [
+                {"id": 13, "avg_bat_speed": 75.0},
+                {"id": 27, "avg_bat_speed": 80.0},
+            ]
+        )
+        second_df = pd.DataFrame(
+            [
+                {"id": 13, "avg_bat_speed": 75.0},
+                {"id": 27, "avg_bat_speed": 70.0},
+            ]
+        )
+
+        with patch.object(savant_bat_tracking, "_load", return_value=first_df):
+            first = savant_bat_tracking.bat_tracking(player_id=13)
+        with patch.object(savant_bat_tracking, "_load", return_value=second_df):
+            second = savant_bat_tracking.bat_tracking(player_id=13)
+
+        self.assertEqual(first["bat_speed_percentile"], 50.0)
+        self.assertEqual(second["bat_speed_percentile"], 100.0)
+
+    def test_invalid_speed_column_preserves_none_percentile_fallback(self):
+        df = pd.DataFrame(
+            [
+                {"id": 13, "avg_bat_speed": 75.0},
+                {"id": 27, "avg_bat_speed": "not-a-number"},
+            ]
+        )
+
+        with patch.object(savant_bat_tracking, "_load", return_value=df):
+            result = savant_bat_tracking.bat_tracking(player_id=13)
+
+        self.assertIsNone(result["bat_speed_percentile"])
+
+    def test_concurrent_bat_tracking_lookups_build_one_snapshot(self):
+        df = pd.DataFrame(
+            [{"id": player_id, "avg_bat_speed": 60.0 + player_id} for player_id in range(1, 21)]
+        )
+        real_builder = savant_bat_tracking._build_lookup_snapshot
+
+        with (
+            patch.object(savant_bat_tracking, "_load", return_value=df),
+            patch.object(
+                savant_bat_tracking,
+                "_build_lookup_snapshot",
+                wraps=real_builder,
+            ) as build,
+            ThreadPoolExecutor(max_workers=8) as pool,
+        ):
+            results = list(
+                pool.map(
+                    lambda player_id: savant_bat_tracking.bat_tracking(
+                        player_id=player_id
+                    ),
+                    range(1, 21),
+                )
+            )
+
+        self.assertEqual(build.call_count, 1)
+        self.assertTrue(all(row["bat_speed_percentile"] is not None for row in results))
 
     def test_stuff_lookup_rebuilds_when_dataframe_refreshes(self):
         first = pd.DataFrame(
