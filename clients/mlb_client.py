@@ -157,5 +157,28 @@ class MLBClient:
     ) -> dict[str, Any]:
         return self.get_json("stats", params=params, timeout=timeout)
 
+    def game_boxscore(
+        self,
+        game_pk: Any,
+        *,
+        timeout: int | float | None = None,
+    ) -> dict[str, Any]:
+        return self.get_json(
+            f"game/{game_pk}/boxscore",
+            timeout=timeout,
+        )
+
+    def game_live_feed(
+        self,
+        game_pk: Any,
+        *,
+        timeout: int | float | None = None,
+    ) -> dict[str, Any]:
+        return self.get_json(
+            f"game/{game_pk}/feed/live",
+            timeout=timeout,
+            api_version="v1.1",
+        )
+
 
 mlb_client = MLBClient()
