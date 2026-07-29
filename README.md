@@ -177,6 +177,8 @@ Runtime modules read these values through `config.settings`, which applies type 
 
 Request performance monitoring adds `X-Response-Time-Ms` and `Server-Timing` headers, emits structured logs for requests over `PERFORMANCE_SLOW_MS`, and exposes bounded, normalized route aggregates at `GET /api/performance/status`. Raw URLs, query strings, headers, and bodies are never retained. `POST /api/performance/metrics/reset` requires `X-Admin-Token` matching `ADMIN_TOKEN`.
 
+MLB schedule, boxscore, and v1.1 live-feed reads use the pooled shared MLB client and resilient cache. Repeated game-page consumers share one upstream payload per `CACHE_TTL_LIVE` window, concurrent misses are deduplicated, and stale game data remains available during short MLB or Redis outages.
+
 MLB Stats API traffic from shared schedule caching, game-day loaders, the pipeline scheduler, and BigQuery ETL uses one pooled retrying client. Slow/error logs contain normalized endpoint patterns without query parameters.
 
 ---

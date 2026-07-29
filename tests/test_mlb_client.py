@@ -86,6 +86,32 @@ class MLBClientTests(unittest.TestCase):
             },
         )
 
+    def test_game_boxscore_uses_v1_endpoint(self):
+        session, _ = _session_with({"teams": {}})
+        client = MLBClient(session=session, base_url="https://example.test/api")
+
+        payload = client.game_boxscore(99113, timeout=8)
+
+        self.assertEqual(payload, {"teams": {}})
+        session.get.assert_called_once_with(
+            "https://example.test/api/v1/game/99113/boxscore",
+            params=None,
+            timeout=8,
+        )
+
+    def test_game_live_feed_uses_v1_1_endpoint(self):
+        session, _ = _session_with({"liveData": {}})
+        client = MLBClient(session=session, base_url="https://example.test/api")
+
+        payload = client.game_live_feed(99113, timeout=9)
+
+        self.assertEqual(payload, {"liveData": {}})
+        session.get.assert_called_once_with(
+            "https://example.test/api/v1.1/game/99113/feed/live",
+            params=None,
+            timeout=9,
+        )
+
     def test_non_object_json_is_rejected(self):
         session, _ = _session_with([])
         client = MLBClient(session=session, base_url="https://example.test/api")
