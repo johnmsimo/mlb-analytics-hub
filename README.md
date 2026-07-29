@@ -193,6 +193,11 @@ immutable ID/name indexes when their process-local dataframe snapshots refresh.
 Hot scoring paths avoid repeated pandas column scans while preserving ID-first,
 normalized-name, partial-name, and previous-season fallback behavior.
 
+Live-lineup feature lookups reuse an mtime-aware, per-worker parsed snapshot
+indexed by MLB ID and exact player name. Hourly lineup-file refreshes invalidate
+the snapshot automatically, concurrent stale requests collapse to one refresh,
+and partial-name queries preserve their previous first-match behavior.
+
 ---
 
 ## 📄 License
