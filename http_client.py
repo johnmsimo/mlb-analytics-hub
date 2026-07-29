@@ -18,11 +18,13 @@ from config import settings
 _GLOBAL_SESSION: requests.Session | None = None
 _MLB_BOXSCORE_PATH = re.compile(r"/v1/game/(\d+)/boxscore/?$")
 _MLB_LIVE_FEED_PATH = re.compile(r"/v1\.1/game/(\d+)/feed/live/?$")
+_MLB_SCHEDULE_PATH = re.compile(r"/v1/schedule/?$")
 _MLB_REFERENCE_PATHS = (
     ("mlb_person_stats", re.compile(r"/v1/people/(\d+)/stats/?$"), "stats"),
     ("mlb_person", re.compile(r"/v1/people/(\d+)/?$"), "stats"),
     ("mlb_people", re.compile(r"/v1/people/?$"), "stats"),
     ("mlb_team_roster", re.compile(r"/v1/teams/(\d+)/roster/?$"), "schedule"),
+    ("mlb_team_venue", re.compile(r"/v1/teams/(\d+)/venue/?$"), "static"),
     ("mlb_team_stats", re.compile(r"/v1/teams/(\d+)/stats/?$"), "stats"),
     ("mlb_team", re.compile(r"/v1/teams/(\d+)/?$"), "stats"),
     ("mlb_teams", re.compile(r"/v1/teams/?$"), "static"),
@@ -38,6 +40,7 @@ class _MLBCacheTarget:
     namespace: str
     identity: tuple[Any, ...]
     policy: str
+    ttl_seconds: int | None = None
 
 
 def _mlb_cache_target(url: str) -> _MLBCacheTarget | None:
@@ -57,6 +60,14 @@ def _mlb_cache_target(url: str) -> _MLBCacheTarget | None:
             if normalized_query:
                 identity = (*identity, normalized_query)
             return _MLBCacheTarget(namespace, identity, "live")
+
+    if _MLB_SCHEDULE_PATH.search(parsed.path):
+        return _MLBCacheTarget(
+            "mlb_schedule",
+            (parsed.path.rstrip("/"), normalized_query),
+            "schedule",
+            settings.mlb_schedule_cache_ttl,
+        )
 
     for namespace, pattern, policy in _MLB_REFERENCE_PATHS:
         match = pattern.search(parsed.path)
@@ -115,6 +126,7 @@ class _SharedSession(requests.Session):
             snapshot = get_or_compute(
                 key,
                 fetch,
+                ttl=target.ttl_seconds,
                 policy=target.policy,
                 allow_stale=True,
             )

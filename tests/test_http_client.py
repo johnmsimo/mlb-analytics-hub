@@ -201,6 +201,7 @@ class HttpClientTests(unittest.TestCase):
         cases = (
             ("https://statsapi.mlb.com/api/v1/people/13", "stats"),
             ("https://statsapi.mlb.com/api/v1/teams/13/roster", "schedule"),
+            ("https://statsapi.mlb.com/api/v1/teams/13/venue", "static"),
             ("https://statsapi.mlb.com/api/v1/teams", "static"),
             ("https://statsapi.mlb.com/api/v1/transactions", "schedule"),
         )
@@ -210,6 +211,101 @@ class HttpClientTests(unittest.TestCase):
                 target = http_client._mlb_cache_target(url)
                 self.assertIsNotNone(target)
                 self.assertEqual(target.policy, expected_policy)
+
+    def test_schedule_requests_are_reused_with_phase_4_1_ttl(self):
+        url = "https://statsapi.mlb.com/api/v1/schedule"
+        session = build_http_session()
+
+        with (
+            patch.object(
+                requests.Session,
+                "get",
+                return_value=_response(url, b'{"dates": []}'),
+            ) as upstream,
+            patch(
+                "http_client.get_or_compute",
+                wraps=cache_service.get_or_compute,
+            ) as cached,
+            patch.dict(
+                os.environ,
+                {"MLB_SCHEDULE_CACHE_TTL": "91"},
+                clear=False,
+            ),
+        ):
+            first = session.get(
+                url,
+                params={"sportId": 1, "date": "2026-07-28"},
+            )
+            second = session.get(
+                url,
+                params={"date": "2026-07-28", "sportId": 1},
+            )
+
+        self.assertEqual(first.json(), second.json())
+        upstream.assert_called_once_with(
+            url,
+            params={"sportId": 1, "date": "2026-07-28"},
+        )
+        self.assertEqual(cached.call_args_list[0].kwargs["ttl"], 91)
+
+    def test_schedule_queries_isolate_dates_and_hydrations(self):
+        url = "https://statsapi.mlb.com/api/v1/schedule"
+        session = build_http_session()
+
+        with patch.object(
+            requests.Session,
+            "get",
+            side_effect=[
+                _response(url, b'{"dates": [{"date": "2026-07-28"}]}'),
+                _response(url, b'{"dates": [{"date": "2026-07-29"}]}'),
+                _response(url, b'{"dates": [{"hydrate": "officials"}]}'),
+            ],
+        ) as upstream:
+            day_one = session.get(url, params={"sportId": 1, "date": "2026-07-28"})
+            day_two = session.get(url, params={"sportId": 1, "date": "2026-07-29"})
+            hydrated = session.get(
+                url,
+                params={
+                    "sportId": 1,
+                    "date": "2026-07-28",
+                    "hydrate": "officials",
+                },
+            )
+
+        self.assertNotEqual(day_one.json(), day_two.json())
+        self.assertNotEqual(day_one.json(), hydrated.json())
+        self.assertEqual(upstream.call_count, 3)
+
+    def test_schedule_upstream_error_serves_stale_response(self):
+        url = (
+            "https://statsapi.mlb.com/api/v1/schedule?"
+            "date=2026-07-28&sportId=1"
+        )
+        target = http_client._mlb_cache_target(url)
+        self.assertIsNotNone(target)
+        key = cache_service.normalize_cache_key(
+            target.namespace,
+            *target.identity,
+            params=None,
+        )
+        self.cache.set(
+            f"{key}:stale",
+            http_client._response_snapshot(
+                _response(url, b'{"dates": [{"date": "2026-07-28"}]}')
+            ),
+            ttl=60,
+        )
+        session = build_http_session()
+
+        with patch.object(
+            requests.Session,
+            "get",
+            side_effect=requests.ConnectionError("MLB unavailable"),
+        ):
+            response = session.get(url)
+
+        self.assertEqual(response.json()["dates"][0]["date"], "2026-07-28")
+        self.assertEqual(cache_service.cache_status()["metrics"]["stale_hits"], 1)
 
     def test_upstream_error_serves_stale_reference_response(self):
         url = "https://statsapi.mlb.com/api/v1/people/13"
