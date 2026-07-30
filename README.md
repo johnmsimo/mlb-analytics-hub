@@ -187,6 +187,13 @@ Umpire historical features and daily home-plate assignments use thread-safe, mti
 
 Game-day weather features use thread-safe, mtime-aware parsed snapshots. Repeated per-player lookups reuse the same three-hour date snapshot, while concurrent cold reads collapse to one schedule and Open-Meteo refresh.
 
+Tracker analytics endpoints reuse one caller-private tracker snapshot and one
+calibration-history snapshot for an entire response. Market/day series no
+longer clone the full season store per market or per day, and bulk pick
+recalculation loads model adjustments once while preserving identical results.
+A representative 22,500-entry, 14-market dashboard build improved from about
+190 ms to 42 ms.
+
 XGBoost probability and full interval/Monte Carlo scoring results are memoized
 per worker using the exact model, market, line, and final feature vector.
 Concurrent identical scores collapse to one computation, returned objects are
