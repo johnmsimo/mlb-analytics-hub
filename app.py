@@ -1247,25 +1247,20 @@ def _save_json(path, payload):
 
 
 # ── Tracker store concurrency ─────────────────────────────────────────────────
-# The tracker is a single JSON file mutated via whole-file read-modify-write from
-# many paths (capture, grade, close, background continuation, auto-sync, manual
-# pick add/patch/delete). Without a shared lock these race and clobber each
-# other's updates — a bulk backfill in June 2026 wiped most of the store this
-# way. Every tracker-store mutation MUST hold this reentrant lock, and writers
-# that touch a single day MUST go through _tracker_commit_day(), which re-reads
-# the store under the lock so concurrent writes to *other* dates survive.
+# The tracker is a single JSON file mutated from many paths (capture, grade,
+# close, background continuation, auto-sync, manual pick add/patch/delete).
+# Without a shared lock these race and clobber each other's updates — a bulk
+# backfill in June 2026 wiped most of the store this way. Every tracker-store
+# mutation MUST hold this reentrant lock, and writers that touch a single day
+# MUST go through _tracker_commit_day(), which atomically replaces that day's
+# cached JSON while preserving every other day.
 _TRACKER_STORE_LOCK = threading.RLock()
 
 
 def _tracker_commit_day(date_str, day):
-    """Serialize + atomically persist a single day's record into the tracker
-    store. Re-reads the store under the lock and splices in only `date_str`, so
-    a stale in-memory snapshot can never overwrite concurrent updates to other
-    dates. Returns the _save_json() success bool."""
+    """Atomically persist one day without cloning/re-encoding the full store."""
     with _TRACKER_STORE_LOCK:
-        store = _tracker_store()
-        store[date_str] = day
-        return _save_json(TRACKER_STORE, store)
+        return _tracker_write_day_snapshot(date_str, day)
 
 
 def _evict_if_large(d, max_size=500):
@@ -16556,13 +16551,12 @@ def _tracker_capture_continue_bg(date_str, remaining_games, sched, adjustments, 
         if not bg_rows:
             return
         with _TRACKER_STORE_LOCK:
-            store = _tracker_store()
+            store = _tracker_store_for_dates([date_str])
             day = _normalize_tracker_day(store.get(date_str))
             merged = _merge_tracker_entries(day.get('entries', []), _recalc_tracker_entries(bg_rows))
             day['entries'] = merged
             day['capturedAt'] = datetime.now().isoformat()
-            store[date_str] = day
-            _save_json(TRACKER_STORE, store)
+            _tracker_commit_day(date_str, day)
     except Exception:
         print('[tracker_capture_bg]', traceback.format_exc())
     finally:
@@ -16571,13 +16565,14 @@ def _tracker_capture_continue_bg(date_str, remaining_games, sched, adjustments, 
 
 
 def _tracker_auto_sync_once():
-    store = _tracker_store()
-    if not store:
+    date_keys = _tracker_date_keys()
+    if not date_keys:
         return
     today = datetime.now(ET).strftime('%Y-%m-%d')
-    for ds in sorted(store.keys(), reverse=True):
+    for ds in sorted(date_keys, reverse=True):
         if ds > today:
             continue
+        store = _tracker_store_for_dates([ds])
         day = _normalize_tracker_day(store.get(ds))
         pending = [r for r in day.get('entries', []) if r.get('grade') == 'pending']
         if not pending:
@@ -16846,15 +16841,15 @@ def api_tracker_capture(date_str):
                 pass
 
         with _TRACKER_STORE_LOCK:
-            store = _tracker_store()
+            store = _tracker_store_for_dates([date_str])
             day = _normalize_tracker_day(store.get(date_str))
             entries = _merge_tracker_entries(day.get('entries', []), _recalc_tracker_entries(all_entries))
             if is_backfill:
                 for _e in entries:
                     _e['backfilled'] = True
             entries.sort(key=lambda x: x.get('score', 0), reverse=True)
-            store[date_str] = {'capturedAt': datetime.now().isoformat(), 'gradedAt': None, 'closingCapturedAt': None, 'entries': entries, 'backfilled': is_backfill or day.get('backfilled', False)}
-            saved_ok = _save_json(TRACKER_STORE, store)
+            updated_day = {'capturedAt': datetime.now().isoformat(), 'gradedAt': None, 'closingCapturedAt': None, 'entries': entries, 'backfilled': is_backfill or day.get('backfilled', False)}
+            saved_ok = _tracker_commit_day(date_str, updated_day)
         # Without this check, a failed disk write silently returns 210 picks to
         # the user — then "Capture Closing" 404s because the day isn't on disk.
         if not saved_ok:
@@ -16899,7 +16894,7 @@ def api_tracker_capture(date_str):
             'date': date_str,
             'entries': entries,
             'summary': _tracker_summary(entries),
-            'capturedAt': store[date_str]['capturedAt'],
+            'capturedAt': updated_day['capturedAt'],
             'capturedGames': captured_games,
             'totalGames': len(sched),
             'timedOut': timed_out,
@@ -17046,6 +17041,7 @@ _TRACKER_READ_CACHE = {
     'sig': None,
     'pickled': None,
     'day_pickles': {},
+    'day_json': {},
     'date_keys': (),
 }
 _TRACKER_READ_LOCK = threading.Lock()
@@ -17060,10 +17056,7 @@ def _tracker_cached_snapshot():
             with open(TRACKER_STORE, 'rb') as f:
                 st = os.fstat(f.fileno())
                 sig = (st.st_dev, st.st_ino, st.st_mtime_ns, st.st_size)
-                if (
-                    _TRACKER_READ_CACHE['sig'] == sig
-                    and _TRACKER_READ_CACHE['pickled'] is not None
-                ):
+                if _TRACKER_READ_CACHE['sig'] == sig:
                     return dict(_TRACKER_READ_CACHE)
 
                 data = json.load(f)
@@ -17082,7 +17075,14 @@ def _tracker_cached_snapshot():
                         )
                         for date_key, day in data.items()
                     },
-                    'date_keys': tuple(data.keys()),
+                    'day_json': {
+                        str(date_key): json.dumps(
+                            day,
+                            separators=(',', ':'),
+                        )
+                        for date_key, day in data.items()
+                    },
+                    'date_keys': tuple(str(key) for key in data.keys()),
                 })
                 return dict(_TRACKER_READ_CACHE)
     except FileNotFoundError:
@@ -17094,6 +17094,7 @@ def _tracker_cached_snapshot():
         'sig': None,
         'pickled': empty,
         'day_pickles': {},
+        'day_json': {},
         'date_keys': (),
     }
 
@@ -17107,7 +17108,24 @@ def _tracker_store():
     """
     import pickle
 
-    return pickle.loads(_tracker_cached_snapshot()['pickled'])
+    snapshot = _tracker_cached_snapshot()
+    blob = snapshot.get('pickled')
+    if blob is not None:
+        return pickle.loads(blob)
+
+    data = {
+        date_key: pickle.loads(snapshot['day_pickles'][date_key])
+        for date_key in snapshot['date_keys']
+        if date_key in snapshot['day_pickles']
+    }
+    blob = pickle.dumps(data, protocol=pickle.HIGHEST_PROTOCOL)
+    with _TRACKER_READ_LOCK:
+        if (
+            _TRACKER_READ_CACHE['sig'] == snapshot['sig']
+            and _TRACKER_READ_CACHE['pickled'] is None
+        ):
+            _TRACKER_READ_CACHE['pickled'] = blob
+    return data
 
 
 def _tracker_store_for_dates(date_keys):
@@ -17122,6 +17140,79 @@ def _tracker_store_for_dates(date_keys):
         if blob is not None:
             out[date_key] = pickle.loads(blob)
     return out
+
+
+def _tracker_date_keys():
+    """Return the tracker dates without deserializing the season store."""
+    return tuple(_tracker_cached_snapshot()['date_keys'])
+
+
+def _tracker_write_day_snapshot(date_str, day):
+    """Replace one tracker day by reusing serialized JSON for unchanged days.
+
+    The caller holds _TRACKER_STORE_LOCK, so two in-process mutations cannot
+    race. The on-disk replace remains atomic and the in-memory day snapshot is
+    advanced to the new inode immediately, avoiding a full-file parse on the
+    response path after a successful write.
+    """
+    import pickle
+
+    date_str = str(date_str)
+    tmp = f"{TRACKER_STORE}.{os.getpid()}.{threading.get_ident()}.tmp"
+    try:
+        snapshot = _tracker_cached_snapshot()
+        date_keys = list(snapshot['date_keys'])
+        day_json = dict(snapshot['day_json'])
+        day_pickles = dict(snapshot['day_pickles'])
+        encoded_day = json.dumps(day, separators=(',', ':'))
+
+        if date_str not in day_json:
+            date_keys.append(date_str)
+        day_json[date_str] = encoded_day
+        day_pickles[date_str] = pickle.dumps(
+            day,
+            protocol=pickle.HIGHEST_PROTOCOL,
+        )
+
+        parent = os.path.dirname(TRACKER_STORE)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(tmp, 'w', encoding='utf-8') as f:
+            f.write('{')
+            for idx, date_key in enumerate(date_keys):
+                if idx:
+                    f.write(',')
+                f.write(json.dumps(date_key))
+                f.write(':')
+                f.write(day_json[date_key])
+            f.write('}')
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+        os.replace(tmp, TRACKER_STORE)
+
+        st = os.stat(TRACKER_STORE)
+        sig = (st.st_dev, st.st_ino, st.st_mtime_ns, st.st_size)
+        with _TRACKER_READ_LOCK:
+            _TRACKER_READ_CACHE.update({
+                'sig': sig,
+                # Rebuild this lazily only if a true full-store reader asks.
+                'pickled': None,
+                'day_pickles': day_pickles,
+                'day_json': day_json,
+                'date_keys': tuple(date_keys),
+            })
+        return True
+    except Exception as ex:
+        try:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+        except OSError:
+            pass
+        print(f'[_tracker_write_day_snapshot] FAILED: {ex}')
+        return False
 
 
 def _coerce_tracker_entries(entries):
@@ -18929,7 +19020,7 @@ def api_tracker_pick():
         entry.setdefault(k, v)
 
     with _TRACKER_STORE_LOCK:
-        store = _tracker_store()
+        store = _tracker_store_for_dates([today])
         day   = store.setdefault(today, {'capturedAt': None, 'gradedAt': None,
                                           'closingCapturedAt': None, 'entries': []})
 
@@ -18943,7 +19034,7 @@ def api_tracker_pick():
         day['entries'].append(entry)
         if not day.get('capturedAt'):
             day['capturedAt'] = datetime.now().isoformat()
-        _save_json(TRACKER_STORE, store)
+        _tracker_commit_day(today, day)
     return jsonify({'success': True, 'id': entry['id'], 'duplicate': False, 'entry': _tracker_pick_payload(entry), 'today': _tracker_today_payload(today)})
 
 
@@ -18955,7 +19046,11 @@ def api_tracker_pick_patch(pick_id):
     payload = request.get_json(silent=True) or {}
     date_hint = payload.get('date') or request.args.get('date')
     with _TRACKER_STORE_LOCK:
-        store = _tracker_store()
+        store = (
+            _tracker_store_for_dates([date_hint])
+            if date_hint
+            else _tracker_store()
+        )
         date_str, day, entries, idx, row = _tracker_find_pick(store, pick_id, date_hint)
         if row is None:
             return jsonify({'success': False, 'error': 'Pick not found'}), 404
@@ -18976,8 +19071,7 @@ def api_tracker_pick_patch(pick_id):
 
         entries[idx] = row
         day['entries'] = entries
-        store[date_str] = day
-        _save_json(TRACKER_STORE, store)
+        _tracker_commit_day(date_str, day)
     return jsonify({'success': True, 'entry': _tracker_pick_payload(row), 'today': _tracker_today_payload(date_str)})
 
 
@@ -18988,12 +19082,11 @@ def api_tracker_pick_delete(pick_id):
         return denied
     today = request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
     with _TRACKER_STORE_LOCK:
-        store = _tracker_store()
+        store = _tracker_store_for_dates([today])
         date_str, day, entries, idx, row = _tracker_find_pick(store, pick_id, today)
         if row is not None:
             day['entries'] = [e for e in entries if e.get('id') != pick_id]
-            store[date_str] = day
-            _save_json(TRACKER_STORE, store)
+            _tracker_commit_day(date_str, day)
             return jsonify({'success': True, 'today': _tracker_today_payload(date_str)})
     return jsonify({'success': False, 'error': 'Pick not found'}), 404
 
@@ -19063,13 +19156,12 @@ def api_tracker_parlay():
         'parlayLeg': None,
     }
     with _TRACKER_STORE_LOCK:
-        store = _tracker_store()
+        store = _tracker_store_for_dates([today])
         day = store.setdefault(today, {'capturedAt': None, 'gradedAt': None, 'closingCapturedAt': None, 'entries': []})
         day['entries'].append(entry)
         if not day.get('capturedAt'):
             day['capturedAt'] = datetime.now(ET).isoformat()
-        store[today] = day
-        _save_json(TRACKER_STORE, store)
+        _tracker_commit_day(today, day)
     return jsonify({'success': True, 'id': parlay_id, 'entry': entry, 'today': _tracker_today_payload(today)})
 
 
@@ -21797,11 +21889,10 @@ def api_parlay_to_tracker():
         # Serialized + atomic + metadata-preserving (previously a raw, unlocked
         # open(...,'w') that clobbered the day's capturedAt/gradedAt/backfilled).
         with _TRACKER_STORE_LOCK:
-            store = _tracker_store()
+            store = _tracker_store_for_dates([date_str])
             day = _normalize_tracker_day(store.get(date_str))
             day['entries'] = (day.get('entries') or []) + [parlay_entry]
-            store[date_str] = day
-            _save_json(TRACKER_STORE, store)
+            _tracker_commit_day(date_str, day)
 
         return jsonify({
             'success': True,
