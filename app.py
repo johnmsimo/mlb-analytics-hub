@@ -1164,6 +1164,8 @@ _CACHE_WAIT_TIMEOUT_SEC = 5
 _active_roster_cache_lock = threading.Lock()
 _active_roster_cache = {}
 _ACTIVE_ROSTER_TTL = 30 * 60
+_JSON_SNAPSHOT_CACHE = {}
+_JSON_SNAPSHOT_LOCK = threading.Lock()
 
 
 def _load_json(path, default):
@@ -1174,6 +1176,45 @@ def _load_json(path, default):
             return json.load(f)
     except Exception:
         return default
+
+
+def _load_json_snapshot(path, default):
+    """Load a JSON control file once per file version and return a private copy.
+
+    Adjustment and calibration-history reads sit on many request paths but the
+    files change rarely. Cache a pickle of the parsed value against the open
+    file's device/inode/mtime/size signature so unchanged reads avoid both disk
+    I/O and JSON parsing while atomic replacements invalidate even if timestamp
+    and byte size happen to match. The lock covers the cold read, collapsing
+    concurrent first callers to one parse. Unpickling on return preserves the
+    existing caller-mutable contract without sharing nested dictionaries or
+    lists between requests.
+    """
+    import pickle
+
+    try:
+        with _JSON_SNAPSHOT_LOCK:
+            with open(path, 'rb') as f:
+                st = os.fstat(f.fileno())
+                sig = (st.st_dev, st.st_ino, st.st_mtime_ns, st.st_size)
+                cached = _JSON_SNAPSHOT_CACHE.get(path)
+                if cached is not None and cached['sig'] == sig:
+                    blob = cached['pickled']
+                else:
+                    data = json.load(f)
+                    blob = pickle.dumps(data, protocol=pickle.HIGHEST_PROTOCOL)
+                    _JSON_SNAPSHOT_CACHE[path] = {
+                        'sig': sig,
+                        'pickled': blob,
+                    }
+        return pickle.loads(blob)
+    except Exception:
+        try:
+            return pickle.loads(
+                pickle.dumps(default, protocol=pickle.HIGHEST_PROTOCOL)
+            )
+        except Exception:
+            return default
 
 
 def _save_json(path, payload):
@@ -15414,7 +15455,7 @@ def _append_calibration_history(event_type, adjustments, meta=None):
 
 def _history_in_window(end_date_str, window_days):
     dates = set(_dates_in_window(end_date_str, window_days))
-    hist = _load_json(CAL_HISTORY_STORE, [])
+    hist = _load_json_snapshot(CAL_HISTORY_STORE, [])
     out = []
     for row in hist:
         if not isinstance(row, dict):
@@ -15510,7 +15551,7 @@ def _default_adjustments():
 
 
 def _get_adjustments():
-    obj = _load_json(ADJUST_STORE, _default_adjustments())
+    obj = _load_json_snapshot(ADJUST_STORE, _default_adjustments())
     d = _default_adjustments()
     d.update({k: v for k, v in obj.items() if k not in ('market_multipliers', 'blend_weights')})
     d['market_multipliers'].update(obj.get('market_multipliers', {}))
