@@ -194,6 +194,11 @@ recalculation loads model adjustments once while preserving identical results.
 A representative 22,500-entry, 14-market dashboard build improved from about
 190 ms to 42 ms.
 
+Model adjustments and calibration history use thread-safe, file-version-aware
+parsed snapshots across requests. Concurrent cold reads collapse to one JSON
+parse, external and atomic file replacements invalidate automatically, and each
+caller receives a private mutable copy.
+
 XGBoost probability and full interval/Monte Carlo scoring results are memoized
 per worker using the exact model, market, line, and final feature vector.
 Concurrent identical scores collapse to one computation, returned objects are
