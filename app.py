@@ -1713,6 +1713,82 @@ def _normalize_mlb_memory_store(payload):
     return payload
 
 
+def _mlb_memory_file_signature(stat):
+    return (
+        stat.st_dev,
+        stat.st_ino,
+        stat.st_mtime_ns,
+        stat.st_size,
+    )
+
+
+def _build_mlb_memory_cached_views(payload, stat):
+    """Build immutable full/lightweight views for one persisted store version."""
+    import pickle
+
+    payload = _normalize_mlb_memory_store(payload)
+    latest = (
+        payload.get("latest")
+        if isinstance(payload.get("latest"), dict)
+        else None
+    )
+    latest_summary = None
+    if latest is not None:
+        latest_summary = {
+            "createdAt": latest.get("createdAt"),
+            "targetDateET": latest.get("targetDateET"),
+            "meta": latest.get("meta") or {},
+        }
+    latest_meta = (latest or {}).get("meta") or {}
+    status = {
+        "snapshotCount": len(payload.get("snapshots") or []),
+        "latest": {
+            "createdAt": (latest or {}).get("createdAt"),
+            "targetDateET": (latest or {}).get("targetDateET"),
+            "teamCount": latest_meta.get("teamCount"),
+            "gameCount": latest_meta.get("gameCount"),
+            "featuredPlayers": latest_meta.get("featuredPlayers"),
+            "mode": latest_meta.get("mode"),
+        },
+        "file": {
+            "exists": True,
+            "path": MLB_MEMORY_STORE,
+            "sizeBytes": stat.st_size,
+            "modifiedAt": datetime.fromtimestamp(
+                stat.st_mtime, tz=timezone.utc
+            ).isoformat(),
+        },
+        "updatedAt": payload.get("updatedAt"),
+    }
+    return {
+        "sig": _mlb_memory_file_signature(stat),
+        "payload": pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL),
+        "latest": (
+            pickle.dumps(latest, protocol=pickle.HIGHEST_PROTOCOL)
+            if latest is not None
+            else None
+        ),
+        "latest_summary": (
+            pickle.dumps(latest_summary, protocol=pickle.HIGHEST_PROTOCOL)
+            if latest_summary is not None
+            else None
+        ),
+        "status": pickle.dumps(status, protocol=pickle.HIGHEST_PROTOCOL),
+    }
+
+
+def _publish_mlb_memory_cached_views(payload, stat):
+    """Advance read views after an atomic write without reparsing the file."""
+    cached = _build_mlb_memory_cached_views(payload, stat)
+    with _MLB_MEMORY_READ_LOCK:
+        try:
+            current = os.stat(MLB_MEMORY_STORE)
+        except OSError:
+            return
+        if _mlb_memory_file_signature(current) == cached["sig"]:
+            _MLB_MEMORY_READ_CACHE.update(cached)
+
+
 def _mlb_memory_cached_views():
     """Parse the large seasonal memory store once per atomic file version.
 
@@ -1728,12 +1804,7 @@ def _mlb_memory_cached_views():
         with _MLB_MEMORY_READ_LOCK:
             with open(MLB_MEMORY_STORE, "rb") as handle:
                 stat = os.fstat(handle.fileno())
-                sig = (
-                    stat.st_dev,
-                    stat.st_ino,
-                    stat.st_mtime_ns,
-                    stat.st_size,
-                )
+                sig = _mlb_memory_file_signature(stat)
                 if (
                     _MLB_MEMORY_READ_CACHE["sig"] == sig
                     and _MLB_MEMORY_READ_CACHE["payload"] is not None
@@ -1741,61 +1812,8 @@ def _mlb_memory_cached_views():
                     return dict(_MLB_MEMORY_READ_CACHE)
 
                 payload = _normalize_mlb_memory_store(json.load(handle))
-                latest = (
-                    payload.get("latest")
-                    if isinstance(payload.get("latest"), dict)
-                    else None
-                )
-                latest_summary = None
-                if latest is not None:
-                    latest_summary = {
-                        "createdAt": latest.get("createdAt"),
-                        "targetDateET": latest.get("targetDateET"),
-                        "meta": latest.get("meta") or {},
-                    }
-                latest_meta = (latest or {}).get("meta") or {}
-                status = {
-                    "snapshotCount": len(payload.get("snapshots") or []),
-                    "latest": {
-                        "createdAt": (latest or {}).get("createdAt"),
-                        "targetDateET": (latest or {}).get("targetDateET"),
-                        "teamCount": latest_meta.get("teamCount"),
-                        "gameCount": latest_meta.get("gameCount"),
-                        "featuredPlayers": latest_meta.get("featuredPlayers"),
-                        "mode": latest_meta.get("mode"),
-                    },
-                    "file": {
-                        "exists": True,
-                        "path": MLB_MEMORY_STORE,
-                        "sizeBytes": stat.st_size,
-                        "modifiedAt": datetime.fromtimestamp(
-                            stat.st_mtime, tz=timezone.utc
-                        ).isoformat(),
-                    },
-                    "updatedAt": payload.get("updatedAt"),
-                }
                 _MLB_MEMORY_READ_CACHE.update(
-                    {
-                        "sig": sig,
-                        "payload": pickle.dumps(
-                            payload, protocol=pickle.HIGHEST_PROTOCOL
-                        ),
-                        "latest": (
-                            pickle.dumps(latest, protocol=pickle.HIGHEST_PROTOCOL)
-                            if latest is not None
-                            else None
-                        ),
-                        "latest_summary": (
-                            pickle.dumps(
-                                latest_summary, protocol=pickle.HIGHEST_PROTOCOL
-                            )
-                            if latest_summary is not None
-                            else None
-                        ),
-                        "status": pickle.dumps(
-                            status, protocol=pickle.HIGHEST_PROTOCOL
-                        ),
-                    }
+                    _build_mlb_memory_cached_views(payload, stat)
                 )
                 return dict(_MLB_MEMORY_READ_CACHE)
     except Exception:
@@ -1858,6 +1876,35 @@ def _mlb_memory_store_status_view():
     return pickle.loads(_mlb_memory_cached_views()["status"])
 
 
+def _write_mlb_memory_store(encoded):
+    """Atomically persist already-encoded JSON and return the new file stat."""
+    tmp = (
+        f"{MLB_MEMORY_STORE}.{os.getpid()}."
+        f"{threading.get_ident()}.tmp"
+    )
+    try:
+        parent = os.path.dirname(MLB_MEMORY_STORE)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as handle:
+            handle.write(encoded)
+            handle.flush()
+            try:
+                os.fsync(handle.fileno())
+            except OSError:
+                pass
+        os.replace(tmp, MLB_MEMORY_STORE)
+        return os.stat(MLB_MEMORY_STORE)
+    except Exception as ex:
+        try:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+        except OSError:
+            pass
+        print(f"[_write_mlb_memory_store] FAILED: {ex}")
+        return None
+
+
 def _append_mlb_memory_snapshot(snapshot, keep=30):
     payload = _mlb_memory_store_payload()
     snapshots = payload.get("snapshots") or []
@@ -1874,21 +1921,43 @@ def _append_mlb_memory_snapshot(snapshot, keep=30):
     snapshots = compacted
 
     # Prune oldest snapshots until file size target is respected.
+    encoded = None
+    updated_at = datetime.now(timezone.utc).isoformat()
     while snapshots:
-        test_payload = {
+        payload = {
             "latest": snapshots[-1],
             "snapshots": snapshots,
-            "updatedAt": datetime.now(timezone.utc).isoformat(),
+            "updatedAt": updated_at,
         }
-        est_size = len(json.dumps(test_payload, ensure_ascii=False))
-        if est_size <= _MLB_MEMORY_MAX_BYTES or len(snapshots) <= 6:
+        encoded = json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        encoded_size = len(encoded.encode("utf-8"))
+        if encoded_size <= _MLB_MEMORY_MAX_BYTES or len(snapshots) <= 6:
             break
         snapshots = snapshots[1:]
 
-    payload["snapshots"] = snapshots
-    payload["latest"] = snapshots[-1] if snapshots else _compact_mlb_memory_snapshot(snapshot, keep_detail=True)
-    payload["updatedAt"] = datetime.now(timezone.utc).isoformat()
-    _save_json(MLB_MEMORY_STORE, payload)
+    if encoded is None:
+        payload = {
+            "latest": _compact_mlb_memory_snapshot(
+                snapshot,
+                keep_detail=True,
+            ),
+            "snapshots": [],
+            "updatedAt": updated_at,
+        }
+        encoded = json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
+    stat = _write_mlb_memory_store(encoded)
+    if stat is None:
+        raise OSError("Unable to persist MLB memory store")
+    _publish_mlb_memory_cached_views(payload, stat)
     return payload
 
 
