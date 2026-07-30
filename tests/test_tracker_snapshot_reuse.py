@@ -69,7 +69,7 @@ class TrackerSnapshotReuseTests(unittest.TestCase):
         self.assertEqual([row["graded"] for row in hit_series], [1, 1])
         self.assertEqual([row["units"] for row in value_series], [-1.0, 0.91])
 
-    def test_performance_payload_clones_tracker_and_history_once(self):
+    def test_performance_payload_clones_tracker_window_and_history_once(self):
         history = [
             {
                 "timestamp": "2026-07-30T13:00:00",
@@ -82,9 +82,9 @@ class TrackerSnapshotReuseTests(unittest.TestCase):
         with (
             patch.object(
                 mlb_app,
-                "_tracker_store",
+                "_tracker_store_for_dates",
                 return_value=copy.deepcopy(self.store),
-            ) as tracker_store,
+            ) as tracker_window,
             patch.object(
                 mlb_app,
                 "_history_in_window",
@@ -99,7 +99,7 @@ class TrackerSnapshotReuseTests(unittest.TestCase):
             payload = mlb_app._tracker_performance_payload("2026-07-30", 2)
 
         self.assertTrue(payload["success"])
-        self.assertEqual(tracker_store.call_count, 1)
+        self.assertEqual(tracker_window.call_count, 1)
         self.assertEqual(history_loader.call_count, 1)
         self.assertEqual(
             payload["multiplierHistory"]["batter_hits"][0]["multiplier"],
@@ -134,21 +134,21 @@ class TrackerSnapshotReuseTests(unittest.TestCase):
         self.assertEqual(get_adjustments.call_count, 1)
         self.assertEqual(actual, expected)
 
-    def test_tracker_entries_route_uses_cached_store(self):
+    def test_tracker_entries_route_uses_cached_day(self):
         with (
             mlb_app.app.test_request_context(
                 "/api/tracker/entries?date=2026-07-30"
             ),
             patch.object(
                 mlb_app,
-                "_tracker_store",
+                "_tracker_store_for_dates",
                 return_value=copy.deepcopy(self.store),
-            ) as tracker_store,
+            ) as tracker_window,
         ):
             response = mlb_app.api_tracker_entries()
 
         payload = response.get_json()
-        self.assertEqual(tracker_store.call_count, 1)
+        self.assertEqual(tracker_window.call_count, 1)
         self.assertEqual(payload["total"], 1)
         self.assertEqual(payload["entries"][0]["player"], "Current Batter")
 
@@ -159,9 +159,9 @@ class TrackerSnapshotReuseTests(unittest.TestCase):
             ),
             patch.object(
                 mlb_app,
-                "_tracker_store",
+                "_tracker_store_for_dates",
                 return_value=copy.deepcopy(self.store),
-            ) as tracker_store,
+            ) as tracker_window,
             patch.object(
                 mlb_app,
                 "_history_in_window",
@@ -178,7 +178,7 @@ class TrackerSnapshotReuseTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(tracker_store.call_count, 1)
+        self.assertEqual(tracker_window.call_count, 1)
         self.assertEqual(history_loader.call_count, 1)
 
     def test_value_dashboard_reuses_one_tracker_snapshot(self):
@@ -188,9 +188,9 @@ class TrackerSnapshotReuseTests(unittest.TestCase):
             ),
             patch.object(
                 mlb_app,
-                "_tracker_store",
+                "_tracker_store_for_dates",
                 return_value=copy.deepcopy(self.store),
-            ) as tracker_store,
+            ) as tracker_window,
             patch.object(
                 mlb_app,
                 "_get_adjustments",
@@ -200,7 +200,7 @@ class TrackerSnapshotReuseTests(unittest.TestCase):
             response = mlb_app.api_tracker_value_dashboard("2026-07-30")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(tracker_store.call_count, 1)
+        self.assertEqual(tracker_window.call_count, 1)
 
 
 if __name__ == "__main__":
