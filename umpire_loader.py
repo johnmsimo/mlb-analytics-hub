@@ -31,8 +31,10 @@ import csv
 import io
 import json
 import os
+import threading
 import time
 import traceback
+from collections import OrderedDict
 from datetime import date, datetime
 from typing import Optional
 
@@ -49,6 +51,21 @@ _DATA_DIR = os.path.join(_HERE, "data")
 os.makedirs(_DATA_DIR, exist_ok=True)
 
 _TIMEOUT  = 12
+_HIST_REFRESH_SEC = 86_400
+_HIST_FAILURE_RETRY_SEC = 300
+_OFFICIALS_REFRESH_SEC = 7_200
+_OFFICIALS_CACHE_MAX_DATES = 8
+
+_historical_lock = threading.RLock()
+_historical_snapshot = {
+    "signature": None,
+    "refresh_after": 0.0,
+    "exact": None,
+    "by_last": {},
+    "by_first_prefix": {},
+}
+_officials_lock = threading.RLock()
+_officials_snapshots = OrderedDict()
 
 # Savant URL is built dynamically; see _savant_url()
 _SAVANT_BASE = (
@@ -198,6 +215,16 @@ def _cache_fresh(path: str, max_age_sec: int) -> bool:
         return False
     return (time.time() - os.path.getmtime(path)) < max_age_sec
 
+
+def _file_signature(path: str) -> Optional[tuple[int, int]]:
+    """Return a cheap version marker that changes on atomic file replacement."""
+    try:
+        stat = os.stat(path)
+        return stat.st_mtime_ns, stat.st_size
+    except OSError:
+        return None
+
+
 def _savant_url(year: int) -> str:
     return _SAVANT_BASE.format(year=year)
 
@@ -283,37 +310,189 @@ def _fetch_savant_career(year: Optional[int] = None) -> dict[str, tuple[float, f
     return result
 
 
-def _load_historical() -> dict[str, tuple[float, float]]:
+def _read_historical_file(path: str) -> Optional[dict[str, tuple[float, float]]]:
+    try:
+        with open(path) as f:
+            raw = json.load(f)
+        if not isinstance(raw, dict):
+            return None
+        return {
+            str(name): tuple(values)
+            for name, values in raw.items()
+            if isinstance(values, (list, tuple)) and len(values) >= 2
+        }
+    except Exception:
+        return None
+
+
+def _build_historical_snapshot(
+    savant: dict[str, tuple[float, float]],
+) -> dict:
+    """Build exact and ordered fallback indexes once per data snapshot."""
+    exact = dict(_UMP_FALLBACK)
+    exact.update(savant)
+
+    by_last: dict[str, tuple[float, float]] = {}
+    by_first_prefix: dict[str, tuple[float, float]] = {}
+    for stored, values in exact.items():
+        parts = stored.split()
+        if not parts:
+            continue
+        by_last.setdefault(parts[-1], values)
+        first = parts[0]
+        for end in range(4, len(first) + 1):
+            by_first_prefix.setdefault(first[:end], values)
+
+    return {
+        "exact": exact,
+        "by_last": by_last,
+        "by_first_prefix": by_first_prefix,
+    }
+
+
+def _install_historical_snapshot(
+    savant: dict[str, tuple[float, float]],
+    *,
+    signature: Optional[tuple[int, int]],
+    refresh_after: float,
+) -> dict:
+    _historical_snapshot.update(
+        {
+            "signature": signature,
+            "refresh_after": refresh_after,
+            **_build_historical_snapshot(savant),
+        }
+    )
+    return _historical_snapshot
+
+
+def _load_historical_snapshot() -> dict:
     """
-    Return career umpire stats merged from Savant + bundled fallback.
-    Priority: Savant (live) > _UMP_FALLBACK (bundled).
-    Refreshes from Savant once per day; uses disk cache otherwise.
+    Return indexed career umpire stats merged from Savant + bundled fallback.
+
+    Parsed data is reused until the source changes or its daily refresh expires.
+    Failed refreshes use the bundled table for five minutes before retrying.
     """
     hist_path = _hist_cache_path()
+    signature = _file_signature(hist_path)
+    now_mono = time.monotonic()
+    if (
+        _historical_snapshot["exact"] is not None
+        and _historical_snapshot["signature"] == signature
+        and now_mono < _historical_snapshot["refresh_after"]
+    ):
+        return _historical_snapshot
 
-    if _cache_fresh(hist_path, max_age_sec=86_400):
-        try:
-            with open(hist_path) as f:
-                raw = json.load(f)
-            merged = dict(_UMP_FALLBACK)
-            merged.update({k: tuple(v) for k, v in raw.items()})
-            return merged
-        except Exception:
-            pass
+    with _historical_lock:
+        signature = _file_signature(hist_path)
+        now_mono = time.monotonic()
+        if (
+            _historical_snapshot["exact"] is not None
+            and _historical_snapshot["signature"] == signature
+            and now_mono < _historical_snapshot["refresh_after"]
+        ):
+            return _historical_snapshot
 
-    # Fetch fresh from Savant
-    savant = _fetch_savant_career()
+        if signature is not None and _cache_fresh(
+            hist_path,
+            max_age_sec=_HIST_REFRESH_SEC,
+        ):
+            savant = _read_historical_file(hist_path)
+            if savant is not None:
+                age = max(0.0, time.time() - os.path.getmtime(hist_path))
+                return _install_historical_snapshot(
+                    savant,
+                    signature=signature,
+                    refresh_after=now_mono + max(
+                        0.0,
+                        _HIST_REFRESH_SEC - age,
+                    ),
+                )
 
-    # Merge: bundled fallback fills gaps Savant doesn't cover
-    merged = dict(_UMP_FALLBACK)
-    merged.update(savant)  # Savant wins on conflict
+        savant = _fetch_savant_career()
+        if savant:
+            try:
+                with open(hist_path, "w") as f:
+                    json.dump({k: list(v) for k, v in savant.items()}, f)
+            except Exception:
+                pass
+            return _install_historical_snapshot(
+                savant,
+                signature=_file_signature(hist_path),
+                refresh_after=now_mono + _HIST_REFRESH_SEC,
+            )
 
-    if savant:
-        # Persist only the Savant portion (fallback is always in memory)
-        with open(hist_path, "w") as f:
-            json.dump({k: list(v) for k, v in savant.items()}, f)
+        return _install_historical_snapshot(
+            {},
+            signature=signature,
+            refresh_after=now_mono + _HIST_FAILURE_RETRY_SEC,
+        )
 
-    return merged
+
+def _load_historical() -> dict[str, tuple[float, float]]:
+    """Compatibility accessor returning a caller-mutable mapping copy."""
+    return dict(_load_historical_snapshot()["exact"])
+
+
+def _read_officials_file(path: str) -> Optional[dict[int, str]]:
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return None
+        officials = data.get("officials", {})
+        if not isinstance(officials, dict):
+            return None
+        return {int(k): v for k, v in officials.items()}
+    except Exception:
+        return None
+
+
+def _cache_officials_snapshot(
+    date_str: str,
+    path: str,
+    officials: dict[int, str],
+) -> dict[int, str]:
+    _officials_snapshots[date_str] = {
+        "signature": _file_signature(path),
+        "officials": dict(officials),
+    }
+    _officials_snapshots.move_to_end(date_str)
+    while len(_officials_snapshots) > _OFFICIALS_CACHE_MAX_DATES:
+        _officials_snapshots.popitem(last=False)
+    return dict(officials)
+
+
+def _load_officials_snapshot(
+    date_str: str,
+    path: str,
+) -> Optional[dict[int, str]]:
+    signature = _file_signature(path)
+    cached = _officials_snapshots.get(date_str)
+    if cached is not None and cached["signature"] == signature:
+        _officials_snapshots.move_to_end(date_str)
+        return dict(cached["officials"])
+
+    officials = _read_officials_file(path)
+    if officials is None:
+        return None
+    return _cache_officials_snapshot(date_str, path, officials)
+
+
+def _clear_snapshot_caches() -> None:
+    """Reset process-local snapshots for tests and operational reloads."""
+    with _historical_lock:
+        _historical_snapshot.update(
+            {
+                "signature": None,
+                "refresh_after": 0.0,
+                "exact": None,
+                "by_last": {},
+                "by_first_prefix": {},
+            }
+        )
+    with _officials_lock:
+        _officials_snapshots.clear()
 
 
 # ── MLB StatsAPI: today's HP umpires ──────────────────────────────────────────
@@ -365,31 +544,25 @@ def fetch_and_save(date_str: Optional[str] = None) -> dict:
 
     path = _ump_cache_path(date_str)
 
-    # — TTL guard: skip fetch if cache is still fresh —
-    if _cache_fresh(path, max_age_sec=7_200):
-        try:
-            with open(path) as f:
-                data = json.load(f)
-            cached = {
-                int(k): v
-                for k, v in data.get("officials", {}).items()
-            }
+    with _officials_lock:
+        # — TTL guard: skip fetch if cache is still fresh —
+        if _cache_fresh(path, max_age_sec=_OFFICIALS_REFRESH_SEC):
+            cached = _load_officials_snapshot(date_str, path)
             if cached:
                 return cached
-        except Exception:
-            pass  # fall through to fresh fetch
 
-    officials = _fetch_game_officials(date_str)
+        officials = _fetch_game_officials(date_str)
 
-    with open(path, "w") as f:
-        json.dump(
-            {
-                "fetched_at": datetime.utcnow().isoformat(),
-                "officials":  {str(k): v for k, v in officials.items()},
-            },
-            f,
-            indent=2,
-        )
+        with open(path, "w") as f:
+            json.dump(
+                {
+                    "fetched_at": datetime.utcnow().isoformat(),
+                    "officials":  {str(k): v for k, v in officials.items()},
+                },
+                f,
+                indent=2,
+            )
+        officials = _cache_officials_snapshot(date_str, path, officials)
 
     print(f"[umpire_loader] {date_str} — {len(officials)} HP umpires assigned")
     return officials
@@ -443,29 +616,33 @@ def get_umpire_features(
     if not ump_name or not ump_name.strip():
         return {"ump_zone_size": 0.0, "ump_k_boost": 0.0}
 
-    historical = _load_historical()
+    historical = _load_historical_snapshot()
+    exact = historical["exact"]
     key   = ump_name.strip().lower()
     parts = key.split()
     last  = parts[-1]  if len(parts) >= 1 else ""
     first = parts[0]   if len(parts) >= 2 else ""
 
     # 1. Exact match
-    if key in historical:
-        z, k = historical[key]
+    if key in exact:
+        z, k = exact[key]
         return {"ump_zone_size": float(z), "ump_k_boost": float(k)}
 
     # 2. Last-name match
-    if last:
-        for stored, (z, k) in historical.items():
-            stored_parts = stored.split()
-            if stored_parts and stored_parts[-1] == last:
-                return {"ump_zone_size": float(z), "ump_k_boost": float(k)}
+    match = historical["by_last"].get(last) if last else None
+    if match is not None:
+        z, k = match
+        return {"ump_zone_size": float(z), "ump_k_boost": float(k)}
 
     # 3. First-name match (less reliable; used as last resort before neutral)
-    if first and len(first) > 3:  # avoid single-letter false positives
-        for stored, (z, k) in historical.items():
-            if stored.startswith(first):
-                return {"ump_zone_size": float(z), "ump_k_boost": float(k)}
+    match = (
+        historical["by_first_prefix"].get(first)
+        if first and len(first) > 3
+        else None
+    )
+    if match is not None:
+        z, k = match
+        return {"ump_zone_size": float(z), "ump_k_boost": float(k)}
 
     # 4. Unknown umpire — return neutral (league-average behaviour)
     print(f"[umpire_loader] unknown umpire '{ump_name}' — using league average")
