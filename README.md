@@ -200,6 +200,13 @@ season-long `daily_tracker.json`; writers and full exports keep private mutable
 full-store reads. Concurrent cold reads share one parse, and device/inode/mtime/
 size invalidation detects atomic file replacement. A representative 12.3 MB,
 180-day store made repeated 14-day reads about 17× faster with identical data.
+Single-day tracker mutations also use copy-on-write: unchanged days reuse their
+cached compact JSON, only the changed day is encoded again, and the atomic
+replace advances the in-memory day snapshot immediately. Concurrent updates to
+different dates remain serialized and full-history readers rebuild a private
+store lazily only when they actually request one. On a representative 12.3 MB,
+180-day tracker, 12 sequential single-day writes were about 5.1× faster with
+identical final data.
 
 Model adjustments and calibration history use thread-safe, file-version-aware
 parsed snapshots across requests. Concurrent cold reads collapse to one JSON
