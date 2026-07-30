@@ -1696,16 +1696,171 @@ def _mlb_memory_store_default():
     }
 
 
-def _mlb_memory_store_payload():
-    payload = _load_json(MLB_MEMORY_STORE, _mlb_memory_store_default())
+_MLB_MEMORY_READ_CACHE = {
+    "sig": None,
+    "payload": None,
+    "latest": None,
+    "latest_summary": None,
+    "status": None,
+}
+_MLB_MEMORY_READ_LOCK = threading.Lock()
+
+
+def _normalize_mlb_memory_store(payload):
     if not isinstance(payload, dict):
-        return _mlb_memory_store_default()
-    payload.setdefault("latest", None)
-    payload.setdefault("snapshots", [])
-    payload.setdefault("updatedAt", None)
+        payload = _mlb_memory_store_default()
+    else:
+        payload.setdefault("latest", None)
+        payload.setdefault("snapshots", [])
+        payload.setdefault("updatedAt", None)
     if not isinstance(payload.get("snapshots"), list):
         payload["snapshots"] = []
     return payload
+
+
+def _mlb_memory_cached_views():
+    """Parse the large seasonal memory store once per atomic file version.
+
+    The store is already roughly 12 MB and keeps growing through the season.
+    Status and summary-only requests need only a few metadata fields, while
+    writers need a private mutable full payload. Cache immutable pickle blobs
+    for those separate views so lightweight reads never clone the full store
+    and full/latest callers retain the previous mutation-safe contract.
+    """
+    import pickle
+
+    try:
+        with _MLB_MEMORY_READ_LOCK:
+            with open(MLB_MEMORY_STORE, "rb") as handle:
+                stat = os.fstat(handle.fileno())
+                sig = (
+                    stat.st_dev,
+                    stat.st_ino,
+                    stat.st_mtime_ns,
+                    stat.st_size,
+                )
+                if (
+                    _MLB_MEMORY_READ_CACHE["sig"] == sig
+                    and _MLB_MEMORY_READ_CACHE["payload"] is not None
+                ):
+                    return dict(_MLB_MEMORY_READ_CACHE)
+
+                payload = _normalize_mlb_memory_store(json.load(handle))
+                latest = (
+                    payload.get("latest")
+                    if isinstance(payload.get("latest"), dict)
+                    else None
+                )
+                latest_summary = None
+                if latest is not None:
+                    latest_summary = {
+                        "createdAt": latest.get("createdAt"),
+                        "targetDateET": latest.get("targetDateET"),
+                        "meta": latest.get("meta") or {},
+                    }
+                latest_meta = (latest or {}).get("meta") or {}
+                status = {
+                    "snapshotCount": len(payload.get("snapshots") or []),
+                    "latest": {
+                        "createdAt": (latest or {}).get("createdAt"),
+                        "targetDateET": (latest or {}).get("targetDateET"),
+                        "teamCount": latest_meta.get("teamCount"),
+                        "gameCount": latest_meta.get("gameCount"),
+                        "featuredPlayers": latest_meta.get("featuredPlayers"),
+                        "mode": latest_meta.get("mode"),
+                    },
+                    "file": {
+                        "exists": True,
+                        "path": MLB_MEMORY_STORE,
+                        "sizeBytes": stat.st_size,
+                        "modifiedAt": datetime.fromtimestamp(
+                            stat.st_mtime, tz=timezone.utc
+                        ).isoformat(),
+                    },
+                    "updatedAt": payload.get("updatedAt"),
+                }
+                _MLB_MEMORY_READ_CACHE.update(
+                    {
+                        "sig": sig,
+                        "payload": pickle.dumps(
+                            payload, protocol=pickle.HIGHEST_PROTOCOL
+                        ),
+                        "latest": (
+                            pickle.dumps(latest, protocol=pickle.HIGHEST_PROTOCOL)
+                            if latest is not None
+                            else None
+                        ),
+                        "latest_summary": (
+                            pickle.dumps(
+                                latest_summary, protocol=pickle.HIGHEST_PROTOCOL
+                            )
+                            if latest_summary is not None
+                            else None
+                        ),
+                        "status": pickle.dumps(
+                            status, protocol=pickle.HIGHEST_PROTOCOL
+                        ),
+                    }
+                )
+                return dict(_MLB_MEMORY_READ_CACHE)
+    except Exception:
+        empty = _normalize_mlb_memory_store(_mlb_memory_store_default())
+        try:
+            fallback_stat = os.stat(MLB_MEMORY_STORE)
+            file_exists = True
+            file_size = fallback_stat.st_size
+            modified_at = datetime.fromtimestamp(
+                fallback_stat.st_mtime, tz=timezone.utc
+            ).isoformat()
+        except OSError:
+            file_exists = False
+            file_size = 0
+            modified_at = None
+        status = {
+            "snapshotCount": 0,
+            "latest": {
+                "createdAt": None,
+                "targetDateET": None,
+                "teamCount": None,
+                "gameCount": None,
+                "featuredPlayers": None,
+                "mode": None,
+            },
+            "file": {
+                "exists": file_exists,
+                "path": MLB_MEMORY_STORE,
+                "sizeBytes": file_size,
+                "modifiedAt": modified_at,
+            },
+            "updatedAt": None,
+        }
+        return {
+            "sig": None,
+            "payload": pickle.dumps(empty, protocol=pickle.HIGHEST_PROTOCOL),
+            "latest": None,
+            "latest_summary": None,
+            "status": pickle.dumps(status, protocol=pickle.HIGHEST_PROTOCOL),
+        }
+
+
+def _mlb_memory_store_payload():
+    import pickle
+
+    return pickle.loads(_mlb_memory_cached_views()["payload"])
+
+
+def _mlb_memory_latest_snapshot(summary_only=False):
+    import pickle
+
+    key = "latest_summary" if summary_only else "latest"
+    blob = _mlb_memory_cached_views()[key]
+    return pickle.loads(blob) if blob is not None else None
+
+
+def _mlb_memory_store_status_view():
+    import pickle
+
+    return pickle.loads(_mlb_memory_cached_views()["status"])
 
 
 def _append_mlb_memory_snapshot(snapshot, keep=30):
@@ -5309,10 +5464,7 @@ def api_best_prop(game_pk):
 
 
 def _mlb_memory_status_payload():
-    payload = _mlb_memory_store_payload()
-    latest = payload.get("latest") if isinstance(payload.get("latest"), dict) else None
-    latest_meta = (latest or {}).get("meta") or {}
-    file_exists = os.path.exists(MLB_MEMORY_STORE)
+    status = _mlb_memory_store_status_view()
     with _mlb_memory_lock:
         collecting = bool(_mlb_memory_collecting)
         last_collect = _mlb_memory_last_collect
@@ -5322,22 +5474,10 @@ def _mlb_memory_status_payload():
         "lastCollectAt": last_collect,
         "lastError": last_error,
         "nextMode": _memory_mode_for_now('auto'),
-        "snapshotCount": len(payload.get("snapshots") or []),
-        "latest": {
-            "createdAt": (latest or {}).get("createdAt"),
-            "targetDateET": (latest or {}).get("targetDateET"),
-            "teamCount": latest_meta.get("teamCount"),
-            "gameCount": latest_meta.get("gameCount"),
-            "featuredPlayers": latest_meta.get("featuredPlayers"),
-            "mode": latest_meta.get("mode"),
-        },
-        "file": {
-            "exists": file_exists,
-            "path": MLB_MEMORY_STORE,
-            "sizeBytes": os.path.getsize(MLB_MEMORY_STORE) if file_exists else 0,
-            "modifiedAt": datetime.fromtimestamp(os.path.getmtime(MLB_MEMORY_STORE), tz=timezone.utc).isoformat() if file_exists else None,
-        },
-        "updatedAt": payload.get("updatedAt"),
+        "snapshotCount": status.get("snapshotCount", 0),
+        "latest": status.get("latest") or {},
+        "file": status.get("file") or {},
+        "updatedAt": status.get("updatedAt"),
     }
 
 
@@ -5876,20 +6016,10 @@ def api_brain_ingest_trigger():
 @app.route('/api/memory/latest')
 def api_memory_latest():
     try:
-        payload = _mlb_memory_store_payload()
-        latest = payload.get("latest") if isinstance(payload.get("latest"), dict) else None
+        summary_only = str(request.args.get('summaryOnly') or '').strip().lower() in ('1', 'true', 'yes')
+        latest = _mlb_memory_latest_snapshot(summary_only=summary_only)
         if not latest:
             return jsonify({"success": False, "error": "No MLB memory snapshot collected yet"}), 404
-        summary_only = str(request.args.get('summaryOnly') or '').strip().lower() in ('1', 'true', 'yes')
-        if summary_only:
-            return jsonify({
-                "success": True,
-                "snapshot": {
-                    "createdAt": latest.get("createdAt"),
-                    "targetDateET": latest.get("targetDateET"),
-                    "meta": latest.get("meta") or {},
-                },
-            })
         return jsonify({"success": True, "snapshot": latest})
     except Exception as ex:
         print(f'[api_memory_latest] {traceback.format_exc()}')

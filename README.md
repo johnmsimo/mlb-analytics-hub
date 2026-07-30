@@ -199,6 +199,12 @@ parsed snapshots across requests. Concurrent cold reads collapse to one JSON
 parse, external and atomic file replacements invalidate automatically, and each
 caller receives a private mutable copy.
 
+The growing MLB memory store also uses a thread-safe, file-version-aware
+snapshot. Status and summary-only routes read precomputed metadata without
+copying the full seasonal store, while full-store and latest-snapshot callers
+still receive private mutable values. Concurrent cold reads collapse to one
+parse and atomic file replacements invalidate by device/inode/mtime/size.
+
 XGBoost probability and full interval/Monte Carlo scoring results are memoized
 per worker using the exact model, market, line, and final feature vector.
 Concurrent identical scores collapse to one computation, returned objects are
