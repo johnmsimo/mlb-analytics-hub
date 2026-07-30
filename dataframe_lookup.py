@@ -58,10 +58,11 @@ class DataFrameLookupIndex:
         name_columns: Iterable[str] = (),
         name_normalizer: Callable[[object], str] = normalize_name,
     ):
-        self._by_id: dict[str, pd.Series] = {}
-        self._by_name: dict[str, pd.Series] = {}
-        self._by_last_name: dict[str, pd.Series] = {}
-        self._ordered_names: list[tuple[str, pd.Series]] = []
+        self._dataframe = dataframe
+        self._by_id: dict[str, int] = {}
+        self._by_name: dict[str, int] = {}
+        self._by_last_name: dict[str, int] = {}
+        self._ordered_names: list[tuple[str, int]] = []
         self._name_normalizer = name_normalizer
 
         if dataframe is None or dataframe.empty:
@@ -69,20 +70,25 @@ class DataFrameLookupIndex:
 
         ids = [column for column in id_columns if column in dataframe.columns]
         names = [column for column in name_columns if column in dataframe.columns]
-        for _, row in dataframe.iterrows():
+        for position, (_, row) in enumerate(dataframe.iterrows()):
             for column in ids:
                 key = normalize_id(row.get(column))
                 if key:
-                    self._by_id.setdefault(key, row)
+                    self._by_id.setdefault(key, position)
             seen_names: set[str] = set()
             for column in names:
                 key = name_normalizer(row.get(column))
                 if not key or key in seen_names:
                     continue
                 seen_names.add(key)
-                self._by_name.setdefault(key, row)
-                self._by_last_name.setdefault(key.split()[-1], row)
-                self._ordered_names.append((key, row))
+                self._by_name.setdefault(key, position)
+                self._by_last_name.setdefault(key.split()[-1], position)
+                self._ordered_names.append((key, position))
+
+    def _row(self, position: int | None) -> pd.Series | None:
+        if position is None:
+            return None
+        return self._dataframe.iloc[position]
 
     def find(
         self,
@@ -95,23 +101,23 @@ class DataFrameLookupIndex:
         """Return the first matching row without scanning dataframe columns."""
         player_key = normalize_id(player_id)
         if player_key:
-            row = self._by_id.get(player_key)
-            if row is not None:
-                return row
+            position = self._by_id.get(player_key)
+            if position is not None:
+                return self._row(position)
 
         name_key = self._name_normalizer(name)
         if not name_key:
             return None
-        row = self._by_name.get(name_key)
-        if row is not None:
-            return row
+        position = self._by_name.get(name_key)
+        if position is not None:
+            return self._row(position)
         if last_name_fallback:
-            row = self._by_last_name.get(name_key.split()[-1])
-            if row is not None:
-                return row
+            position = self._by_last_name.get(name_key.split()[-1])
+            if position is not None:
+                return self._row(position)
         if contains_fallback:
             needle = name_key.split()[-1] if last_name_fallback else name_key
-            for candidate, candidate_row in self._ordered_names:
+            for candidate, candidate_position in self._ordered_names:
                 if needle in candidate:
-                    return candidate_row
+                    return self._row(candidate_position)
         return None

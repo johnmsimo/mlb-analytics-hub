@@ -195,6 +195,11 @@ normalized-name, partial-name, and previous-season fallback behavior.
 Bat-speed percentiles are also ranked once per Savant snapshot and reused by
 BATX/XGBoost enrichment instead of rescanning the leaderboard for every batter.
 
+The primary FanGraphs batting, pitching, and projection loader also indexes each
+season dataframe once. Unique-player lookups no longer pay pandas boolean scans
+across the six-season fallback chain, while sample-size merging and caller-copy
+semantics remain unchanged.
+
 Live-lineup feature lookups reuse an mtime-aware, per-worker parsed snapshot
 indexed by MLB ID and exact player name. Hourly lineup-file refreshes invalidate
 the snapshot automatically, concurrent stale requests collapse to one refresh,

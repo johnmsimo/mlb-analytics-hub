@@ -6,6 +6,8 @@ import os, re
 import threading
 import pandas as pd
 
+from dataframe_lookup import DataFrameLookupIndex
+
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 
 BAT_PATH      = os.path.join(DATA_DIR, "fg_batting_2026.csv")
@@ -77,6 +79,7 @@ MIN_IP = 5.0
 MIN_PA = 20
 
 _cache: dict = {}
+_index_cache: dict = {}
 _load_lock = threading.Lock()
 
 
@@ -114,30 +117,93 @@ def _find_proj_path(primary, fallback):
 
 
 def _load_all():
-    # Fast path — no lock needed; dict bool check is atomic in CPython
-    if _cache:
+    # Fast path — dataframe and index snapshots are installed together while
+    # loading. The current-index check also supports tests or maintenance code
+    # that replace a cached dataframe in-process.
+    if _cache and _indexes_current():
         return
     with _load_lock:
-        # Double-checked: another thread may have loaded while we waited
-        if _cache:
-            return
-        for cache_key, path, label in BAT_SEASON_PATHS:
-            _cache[cache_key] = _try_load(path, label)
-        for cache_key, path, label in PIT_SEASON_PATHS:
-            _cache[cache_key] = _try_load(path, label)
-        for cache_key, primary, fallback, label in PROJ_BAT_PATHS:
-            path = _find_proj_path(primary, fallback)
-            _cache[cache_key] = _try_load(path, label)
-        for cache_key, primary, fallback, label in PROJ_PIT_PATHS:
-            path = _find_proj_path(primary, fallback)
-            _cache[cache_key] = _try_load(path, label)
+        # Double-checked: another thread may have loaded while we waited.
+        if not _cache:
+            for cache_key, path, label in BAT_SEASON_PATHS:
+                _cache[cache_key] = _try_load(path, label)
+            for cache_key, path, label in PIT_SEASON_PATHS:
+                _cache[cache_key] = _try_load(path, label)
+            for cache_key, primary, fallback, label in PROJ_BAT_PATHS:
+                path = _find_proj_path(primary, fallback)
+                _cache[cache_key] = _try_load(path, label)
+            for cache_key, primary, fallback, label in PROJ_PIT_PATHS:
+                path = _find_proj_path(primary, fallback)
+                _cache[cache_key] = _try_load(path, label)
+        _rebuild_stale_indexes_locked()
 
 
 def _name_col(df):
     return "PlayerName" if "PlayerName" in df.columns else "Name"
 
 
+def _normalize_name(value):
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    return str(value).lower().strip()
+
+
+def _build_index(df):
+    return DataFrameLookupIndex(
+        df,
+        id_columns=("playerid",),
+        name_columns=("PlayerName", "Name"),
+        name_normalizer=_normalize_name,
+    )
+
+
+def _indexes_current():
+    return all(
+        key in _index_cache and _index_cache[key][0] is df
+        for key, df in _cache.items()
+    )
+
+
+def _rebuild_stale_indexes_locked():
+    stale_keys = set(_index_cache) - set(_cache)
+    rebuilt = bool(stale_keys)
+    for key in stale_keys:
+        _index_cache.pop(key, None)
+    for key, df in _cache.items():
+        cached = _index_cache.get(key)
+        if cached is None or cached[0] is not df:
+            _index_cache[key] = (df, _build_index(df))
+            rebuilt = True
+    if rebuilt:
+        globals().get("_LOOKUP_MEMO", {}).clear()
+
+
+def _indexed_row(cache_key, name=None, player_id=None):
+    df = _cache.get(cache_key)
+    if df is None or df.empty:
+        return None
+    cached = _index_cache.get(cache_key)
+    if cached is None or cached[0] is not df:
+        with _load_lock:
+            cached = _index_cache.get(cache_key)
+            if cached is None or cached[0] is not df:
+                cached = (df, _build_index(df))
+                _index_cache[cache_key] = cached
+                globals().get("_LOOKUP_MEMO", {}).clear()
+    return cached[1].find(
+        player_id=player_id,
+        name=name,
+        contains_fallback=True,
+    )
+
+
 def _find_row(df, name=None, player_id=None):
+    """Legacy dataframe-returning lookup retained for compatibility."""
     if df.empty:
         return pd.DataFrame()
     if player_id:
@@ -204,10 +270,9 @@ def find_player_id(name, player_type="bat"):
         else [k for k, _, _ in PIT_SEASON_PATHS]
     )
     for key in season_keys:
-        df = _cache.get(key, pd.DataFrame())
-        row = _find_row(df, name=name)
-        if not row.empty and "playerid" in row.columns:
-            return str(row.iloc[0]["playerid"])
+        row = _indexed_row(key, name=name)
+        if row is not None and "playerid" in row.index:
+            return str(row["playerid"])
     return None
 
 
@@ -215,18 +280,16 @@ def _get_stats_with_fallback(cache_season_keys, ptype, player_id=None, name=None
     """Walk through season cache keys newest->oldest, return first row with enough sample."""
     first_row = None
     for key in cache_season_keys:
-        df = _cache.get(key, pd.DataFrame())
-        row = _find_row(df, player_id=player_id, name=name)
-        if row.empty:
+        row = _indexed_row(key, player_id=player_id, name=name)
+        if row is None:
             continue
-        r = row.iloc[0]
         if first_row is None:
-            first_row = r
-        if _has_enough_sample(r, ptype):
+            first_row = row
+        if _has_enough_sample(row, ptype):
             # Merge: older season as base, newer season on top (newer wins conflicts)
-            if first_row is not r:
-                return {**r.to_dict(), **first_row.to_dict()}
-            return r.to_dict()
+            if first_row is not row:
+                return {**row.to_dict(), **first_row.to_dict()}
+            return row.to_dict()
     if first_row is not None:
         return first_row.to_dict()
     return {}
@@ -235,19 +298,17 @@ def _get_stats_with_fallback(cache_season_keys, ptype, player_id=None, name=None
 def _get_proj_with_fallback(proj_cache_keys, player_id=None, name=None):
     """Walk projection cache keys newest->oldest, return first match found."""
     for key in proj_cache_keys:
-        df = _cache.get(key, pd.DataFrame())
-        row = _find_row(df, player_id=player_id, name=name)
-        if not row.empty:
-            return row.iloc[0].to_dict()
+        row = _indexed_row(key, player_id=player_id, name=name)
+        if row is not None:
+            return row.to_dict()
     return {}
 
 
-# Result memo for the public getters. Every lookup below runs pandas boolean
-# scans (str.lower == / str.contains) across up to six season CSVs — ~65ms per
-# call — and hot paths (the XGB scorer's per-batter pitcher enrichment) ask for
-# the SAME player dozens of times per request. The CSVs are loaded once per
-# process and never change, so memoized results can't go stale. Values are
-# copied on the way out so callers can mutate their dict freely.
+# Result memo for the public getters. Immutable dataframe indexes make every
+# first player lookup constant-time for ID/exact-name hits; this memo also
+# avoids repeating the season-fallback/merge work when hot paths ask for the
+# same player dozens of times. Values are copied out so callers can mutate
+# their dictionaries freely.
 _LOOKUP_MEMO = {}
 _LOOKUP_MEMO_MAX = 20000
 
