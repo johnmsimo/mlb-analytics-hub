@@ -30,8 +30,10 @@ from __future__ import annotations
 import json
 import math
 import os
+import threading
 import time
 import traceback
+from collections import OrderedDict
 from datetime import date, datetime
 from typing import Optional
 
@@ -50,6 +52,11 @@ os.makedirs(_DATA_DIR, exist_ok=True)
 _METEO_API     = "https://api.open-meteo.com/v1/forecast"
 _TIMEOUT       = 12
 _CACHE_TTL_SEC = 10_800   # 3 hours
+_SNAPSHOT_MAX_DATES = 8
+_SNAPSHOT_STAT_INTERVAL_SEC = 1.0
+
+_snapshot_lock = threading.RLock()
+_snapshots: OrderedDict[str, dict] = OrderedDict()
 
 
 # ── Stadium registry ─────────────────────────────────────────────────────────
@@ -147,10 +154,110 @@ _NEUTRAL_WEATHER = {"temperature": 72.0, "wind_speed": 8.0, "wind_direction_fact
 def _cache_path(date_str: str) -> str:
     return os.path.join(_DATA_DIR, f"weather_{date_str}.json")
 
-def _cache_fresh(path: str) -> bool:
-    if not os.path.exists(path):
-        return False
-    return (time.time() - os.path.getmtime(path)) < _CACHE_TTL_SEC
+def _file_signature(path: str) -> Optional[tuple[int, int]]:
+    """Return a cheap marker that changes when a cache file is replaced."""
+    try:
+        stat = os.stat(path)
+        return stat.st_mtime_ns, stat.st_size
+    except OSError:
+        return None
+
+
+def _copy_weather(games: dict[int, dict]) -> dict[int, dict]:
+    """Return caller-mutable weather rows without exposing cached state."""
+    return {
+        int(game_pk): dict(weather)
+        for game_pk, weather in games.items()
+        if isinstance(weather, dict)
+    }
+
+
+def _read_weather_file(path: str) -> Optional[dict[int, dict]]:
+    try:
+        with open(path) as f:
+            raw = json.load(f)
+        if not isinstance(raw, dict):
+            return None
+        games = raw.get("games", {})
+        if not isinstance(games, dict):
+            return None
+        return {
+            int(game_pk): dict(weather)
+            for game_pk, weather in games.items()
+            if isinstance(weather, dict)
+        }
+    except Exception:
+        return None
+
+
+def _cache_snapshot(
+    date_str: str,
+    path: str,
+    games: dict[int, dict],
+    *,
+    refresh_after: Optional[float] = None,
+) -> dict[int, dict]:
+    now_mono = time.monotonic()
+    _snapshots[date_str] = {
+        "signature": _file_signature(path),
+        "games": _copy_weather(games),
+        "refresh_after": (
+            now_mono + _CACHE_TTL_SEC
+            if refresh_after is None
+            else refresh_after
+        ),
+        "check_after": now_mono + _SNAPSHOT_STAT_INTERVAL_SEC,
+    }
+    _snapshots.move_to_end(date_str)
+    while len(_snapshots) > _SNAPSHOT_MAX_DATES:
+        _snapshots.popitem(last=False)
+    return _snapshots[date_str]["games"]
+
+
+def _load_fresh_snapshot(
+    date_str: str,
+    path: str,
+) -> Optional[dict[int, dict]]:
+    now_mono = time.monotonic()
+    cached = _snapshots.get(date_str)
+    if cached is not None and now_mono < cached["refresh_after"]:
+        if now_mono < cached["check_after"]:
+            _snapshots.move_to_end(date_str)
+            return cached["games"]
+        signature = _file_signature(path)
+        if cached["signature"] == signature:
+            cached["check_after"] = now_mono + min(
+                _SNAPSHOT_STAT_INTERVAL_SEC,
+                cached["refresh_after"] - now_mono,
+            )
+            _snapshots.move_to_end(date_str)
+            return cached["games"]
+
+    signature = _file_signature(path)
+    if signature is None:
+        return None
+    try:
+        age = max(0.0, time.time() - os.path.getmtime(path))
+    except OSError:
+        return None
+    if age >= _CACHE_TTL_SEC:
+        return None
+    games = _read_weather_file(path)
+    if games is None:
+        return None
+    return _cache_snapshot(
+        date_str,
+        path,
+        games,
+        refresh_after=now_mono + (_CACHE_TTL_SEC - age),
+    )
+
+
+def _clear_snapshot_cache() -> None:
+    """Reset process-local weather snapshots for tests and operational reloads."""
+    with _snapshot_lock:
+        _snapshots.clear()
+
 
 def _resolve_team(raw: str) -> Optional[str]:
     """Normalize a team code to our _STADIUMS key."""
@@ -328,43 +435,39 @@ def fetch_and_save(date_str: Optional[str] = None) -> dict:
 
     path = _cache_path(date_str)
 
-    # TTL guard
-    if _cache_fresh(path):
-        try:
-            with open(path) as f:
-                raw = json.load(f)
-            cached = {int(k): v for k, v in raw.get("games", {}).items()}
-            if cached:
-                return cached
-        except Exception:
-            pass
+    with _snapshot_lock:
+        # TTL guard. Parsed data is reused until the file changes or expires.
+        cached = _load_fresh_snapshot(date_str, path)
+        if cached:
+            return _copy_weather(cached)
 
-    home_teams = _fetch_home_teams(date_str)
-    # Deduplicate teams so we only hit Open-Meteo once per unique park
-    unique_teams: dict[str, dict] = {}
-    for gid, team in home_teams.items():
-        key = _resolve_team(team) or team
-        if key not in unique_teams:
-            unique_teams[key] = _weather_for_team(team, date_str)
+        home_teams = _fetch_home_teams(date_str)
+        # Deduplicate teams so we only hit Open-Meteo once per unique park
+        unique_teams: dict[str, dict] = {}
+        for gid, team in home_teams.items():
+            key = _resolve_team(team) or team
+            if key not in unique_teams:
+                unique_teams[key] = _weather_for_team(team, date_str)
 
-    result: dict[int, dict] = {}
-    for gid, team in home_teams.items():
-        key = _resolve_team(team) or team
-        result[gid] = unique_teams.get(key, dict(_NEUTRAL_WEATHER))
+        result: dict[int, dict] = {}
+        for gid, team in home_teams.items():
+            key = _resolve_team(team) or team
+            result[gid] = unique_teams.get(key, dict(_NEUTRAL_WEATHER))
 
-    with open(path, "w") as f:
-        json.dump(
-            {
-                "fetched_at": datetime.utcnow().isoformat(),
-                "date":       date_str,
-                "games":      {str(k): v for k, v in result.items()},
-            },
-            f,
-            indent=2,
-        )
+        with open(path, "w") as f:
+            json.dump(
+                {
+                    "fetched_at": datetime.utcnow().isoformat(),
+                    "date":       date_str,
+                    "games":      {str(k): v for k, v in result.items()},
+                },
+                f,
+                indent=2,
+            )
+        result = _cache_snapshot(date_str, path, result)
 
     print(f"[weather_loader] {date_str} — weather fetched for {len(result)} games")
-    return result
+    return _copy_weather(result)
 
 
 def get_all_weather(date_str: Optional[str] = None) -> dict:
@@ -390,8 +493,19 @@ def get_game_weather(
     """
     if date_str is None:
         date_str = date.today().isoformat()
-    all_wx = get_all_weather(date_str)
-    return all_wx.get(game_pk, dict(_NEUTRAL_WEATHER))
+    path = _cache_path(date_str)
+    with _snapshot_lock:
+        games = _load_fresh_snapshot(date_str, path)
+        if games:
+            weather = games.get(game_pk)
+            if isinstance(weather, dict):
+                return dict(weather)
+
+    # Cold/stale reads use the public loader, which rechecks freshness under
+    # the same lock so concurrent callers still share a single refresh.
+    all_wx = fetch_and_save(date_str)
+    weather = all_wx.get(game_pk)
+    return dict(weather) if isinstance(weather, dict) else dict(_NEUTRAL_WEATHER)
 
 
 if __name__ == "__main__":

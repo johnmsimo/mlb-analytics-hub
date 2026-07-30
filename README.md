@@ -185,6 +185,8 @@ MLB Stats API traffic from shared schedule caching, game-day loaders, the pipeli
 
 Umpire historical features and daily home-plate assignments use thread-safe, mtime-aware parsed snapshots. Exact, last-name, and first-name fallback indexes preserve the existing matching order without reparsing or rescanning the source files for every K-prop feature build.
 
+Game-day weather features use thread-safe, mtime-aware parsed snapshots. Repeated per-player lookups reuse the same three-hour date snapshot, while concurrent cold reads collapse to one schedule and Open-Meteo refresh.
+
 XGBoost probability and full interval/Monte Carlo scoring results are memoized
 per worker using the exact model, market, line, and final feature vector.
 Concurrent identical scores collapse to one computation, returned objects are
