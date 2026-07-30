@@ -194,6 +194,13 @@ recalculation loads model adjustments once while preserving identical results.
 A representative 22,500-entry, 14-market dashboard build improved from about
 190 ms to 42 ms.
 
+The tracker snapshot is also indexed by date. Read-only day and rolling-window
+routes deserialize only the requested dates instead of cloning the full
+season-long `daily_tracker.json`; writers and full exports keep private mutable
+full-store reads. Concurrent cold reads share one parse, and device/inode/mtime/
+size invalidation detects atomic file replacement. A representative 12.3 MB,
+180-day store made repeated 14-day reads about 17× faster with identical data.
+
 Model adjustments and calibration history use thread-safe, file-version-aware
 parsed snapshots across requests. Concurrent cold reads collapse to one JSON
 parse, external and atomic file replacements invalidate automatically, and each

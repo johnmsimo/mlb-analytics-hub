@@ -15597,8 +15597,12 @@ def _history_in_window(end_date_str, window_days):
 
 
 def _daily_series(end_date_str, window_days, market_key=None, store=None):
-    store = _tracker_store() if store is None else store
     dates = list(reversed(_dates_in_window(end_date_str, window_days)))
+    store = (
+        _tracker_store_for_dates(dates)
+        if store is None
+        else store
+    )
     series = []
     for ds in dates:
         day = _normalize_tracker_day(store.get(ds))
@@ -16650,7 +16654,7 @@ def _tracker_auto_capture_once():
     if datetime.now(ET).hour < capture_hour:
         return
 
-    store = _tracker_store()
+    store = _tracker_store_for_dates([today])
     day = _normalize_tracker_day(store.get(today))
     # Already have picks for today — nothing to do. (Re-capture merges, but we
     # avoid re-hammering the MLB API once a day is populated.)
@@ -16740,7 +16744,7 @@ def api_tracker_adjustments():
 
 @app.route('/api/tracker/date/<date_str>')
 def api_tracker_date(date_str):
-    store = _tracker_store()
+    store = _tracker_store_for_dates([date_str])
     day = _normalize_tracker_day(store.get(date_str))
     day['entries'] = _recalc_tracker_entries(day.get('entries', []))
     return jsonify({'success': True, 'date': date_str, 'adjustments': _get_adjustments(), 'capturedAt': day.get('capturedAt'), 'gradedAt': day.get('gradedAt'), 'closingCapturedAt': day.get('closingCapturedAt'), 'entries': day.get('entries', []), 'summary': _tracker_summary(day.get('entries', []))})
@@ -16917,7 +16921,7 @@ def api_tracker_grade(date_str):
     denied = _check_admin_auth()
     if denied:
         return denied
-    store = _tracker_store()
+    store = _tracker_store_for_dates([date_str])
     raw_day = store.get(date_str)
     if raw_day is None:
         return jsonify({
@@ -17038,44 +17042,86 @@ CALIBRATION_TARGETS = {
 }
 
 
-_TRACKER_READ_CACHE = {'sig': None, 'pickled': None}
+_TRACKER_READ_CACHE = {
+    'sig': None,
+    'pickled': None,
+    'day_pickles': {},
+    'date_keys': (),
+}
 _TRACKER_READ_LOCK = threading.Lock()
 
 
-def _tracker_store():
-    """Load the tracker store, parsing daily_tracker.json at most once per file
-    change. The file grows all season (multi-MB by late summer) and one tracker
-    page load fires several API calls that each used to re-parse it from disk.
-    The parsed store is cached against an (mtime_ns, size) signature — any
-    writer (this process via _save_json's atomic replace, or an external tool)
-    changes the signature and forces a re-parse. Every call returns a private
-    deep copy (pickle round-trip, ~3.5x faster than re-parsing JSON) because
-    callers mutate the returned days/entries in place and several run without
-    _TRACKER_STORE_LOCK; sharing one object across threads would race."""
+def _tracker_cached_snapshot():
+    """Build one immutable full-store and per-day snapshot per file version."""
     import pickle
+
     try:
-        with open(TRACKER_STORE, 'rb') as f:
-            st = os.fstat(f.fileno())
-            sig = (st.st_mtime_ns, st.st_size)
-            with _TRACKER_READ_LOCK:
-                cached = _TRACKER_READ_CACHE['pickled'] if _TRACKER_READ_CACHE['sig'] == sig else None
-            if cached is not None:
-                return pickle.loads(cached)
-            data = json.load(f)
-    except FileNotFoundError:
-        return {}
-    except Exception:
-        return _load_json(TRACKER_STORE, {})
-    if not isinstance(data, dict):
-        return {}
-    try:
-        blob = pickle.dumps(data, protocol=pickle.HIGHEST_PROTOCOL)
         with _TRACKER_READ_LOCK:
-            _TRACKER_READ_CACHE['sig'] = sig
-            _TRACKER_READ_CACHE['pickled'] = blob
+            with open(TRACKER_STORE, 'rb') as f:
+                st = os.fstat(f.fileno())
+                sig = (st.st_dev, st.st_ino, st.st_mtime_ns, st.st_size)
+                if (
+                    _TRACKER_READ_CACHE['sig'] == sig
+                    and _TRACKER_READ_CACHE['pickled'] is not None
+                ):
+                    return dict(_TRACKER_READ_CACHE)
+
+                data = json.load(f)
+                if not isinstance(data, dict):
+                    data = {}
+                _TRACKER_READ_CACHE.update({
+                    'sig': sig,
+                    'pickled': pickle.dumps(
+                        data,
+                        protocol=pickle.HIGHEST_PROTOCOL,
+                    ),
+                    'day_pickles': {
+                        str(date_key): pickle.dumps(
+                            day,
+                            protocol=pickle.HIGHEST_PROTOCOL,
+                        )
+                        for date_key, day in data.items()
+                    },
+                    'date_keys': tuple(data.keys()),
+                })
+                return dict(_TRACKER_READ_CACHE)
+    except FileNotFoundError:
+        pass
     except Exception:
         pass
-    return data
+    empty = pickle.dumps({}, protocol=pickle.HIGHEST_PROTOCOL)
+    return {
+        'sig': None,
+        'pickled': empty,
+        'day_pickles': {},
+        'date_keys': (),
+    }
+
+
+def _tracker_store():
+    """Return a private mutable copy of the complete tracker store.
+
+    Writers, full exports, and all-date scans retain the original contract.
+    Read-only day/window endpoints use _tracker_store_for_dates() so they do
+    not deserialize the multi-MB season payload on every request.
+    """
+    import pickle
+
+    return pickle.loads(_tracker_cached_snapshot()['pickled'])
+
+
+def _tracker_store_for_dates(date_keys):
+    """Return private mutable tracker values for only the requested dates."""
+    import pickle
+
+    snapshot = _tracker_cached_snapshot()
+    day_pickles = snapshot['day_pickles']
+    out = {}
+    for date_key in dict.fromkeys(str(value) for value in (date_keys or [])):
+        blob = day_pickles.get(date_key)
+        if blob is not None:
+            out[date_key] = pickle.loads(blob)
+    return out
 
 
 def _coerce_tracker_entries(entries):
@@ -17116,8 +17162,12 @@ def _dates_in_window(end_date_str, window_days):
 
 
 def _collect_window_entries(end_date_str, window_days, store=None):
-    store = _tracker_store() if store is None else store
     dates = set(_dates_in_window(end_date_str, window_days))
+    store = (
+        _tracker_store_for_dates(dates)
+        if store is None
+        else store
+    )
     rows = []
     for ds, payload in store.items():
         if ds in dates:
@@ -17669,7 +17719,7 @@ def _tracker_pick_payload(row):
 
 def _tracker_today_payload(date_str=None):
     date_str = date_str or datetime.now(ET).strftime('%Y-%m-%d')
-    store = _tracker_store()
+    store = _tracker_store_for_dates([date_str])
     day = _normalize_tracker_day(store.get(date_str))
     entries = [_tracker_pick_payload(x) for x in day.get('entries', [])]
     entries.sort(key=lambda x: ((x.get('grade') or 'pending') != 'pending', -(float(x.get('hubRating') or 0)), -(float(x.get('edge') or 0))))
@@ -17689,7 +17739,9 @@ def _tracker_today_payload(date_str=None):
 def _tracker_performance_payload(date_str=None, window_days=30):
     date_str = date_str or datetime.now(ET).strftime('%Y-%m-%d')
     window_days = max(1, int(window_days or 30))
-    store = _tracker_store()
+    store = _tracker_store_for_dates(
+        _dates_in_window(date_str, window_days)
+    )
     entries = _collect_window_entries(date_str, window_days, store=store)
     adjustments = _get_adjustments()
     calibration = _market_calibration(entries, adjustments)
@@ -17752,7 +17804,12 @@ def _tracker_backtest_payload(start_date, end_date, sims=2000):
         start_dt, end_dt = end_dt, start_dt
 
     sims = max(250, min(10000, int(sims or 2000)))
-    store = _tracker_store()
+    date_keys = []
+    current_date = start_dt
+    while current_date <= end_dt:
+        date_keys.append(current_date.isoformat())
+        current_date += timedelta(days=1)
+    store = _tracker_store_for_dates(date_keys)
     daily = []
     cur = start_dt
     total_bets = 0.0
@@ -17902,7 +17959,7 @@ def _tracker_backtest_payload(start_date, end_date, sims=2000):
 
 
 def _tracker_export_rows(date_str):
-    store = _tracker_store()
+    store = _tracker_store_for_dates([date_str])
     day = _normalize_tracker_day(store.get(date_str))
     rows = [dict(row) for row in day.get('entries', [])]
     rows.sort(key=lambda x: ((x.get('savedAt') or ''), (x.get('player') or ''), (x.get('marketKey') or '')))
@@ -18483,7 +18540,7 @@ def api_tracker_calibration_dashboard(date_str):
     window = int(request.args.get('window', 14) or 14)
     adjustments = _get_adjustments()
     markets = list((adjustments.get('market_multipliers') or {}).keys())
-    store = _tracker_store()
+    store = _tracker_store_for_dates(_dates_in_window(date_str, window))
     market_series = {
         mk: _daily_series(date_str, window, mk, store=store)
         for mk in markets
@@ -19520,7 +19577,7 @@ def _recalc_tracker_entries(entries, adjustments=None):
 
 @app.route('/api/tracker/close/<date_str>', methods=['POST'])
 def api_tracker_close(date_str):
-    store = _tracker_store()
+    store = _tracker_store_for_dates([date_str])
     raw_day = store.get(date_str)
     if raw_day is None:
         return jsonify({
@@ -19677,7 +19734,7 @@ def _tracker_closing_capture_once():
     if not ODDS_API_KEY:
         return
     today = datetime.now(ET).strftime('%Y-%m-%d')
-    store = _tracker_store()
+    store = _tracker_store_for_dates([today])
     raw_day = store.get(today)
     if not raw_day:
         return
@@ -19753,7 +19810,7 @@ def api_tracker_value_dashboard(date_str):
     window = int(request.args.get('window', 14) or 14)
     adjustments = _get_adjustments()
     markets = list((adjustments.get('market_multipliers') or {}).keys())
-    store = _tracker_store()
+    store = _tracker_store_for_dates(_dates_in_window(date_str, window))
     overall = _daily_value_series(date_str, window, None, store=store)
     market_series = {
         mk: _daily_value_series(date_str, window, mk, store=store)
@@ -19894,8 +19951,12 @@ def _value_summary(entries):
 
 
 def _daily_value_series(end_date_str, window_days, market_key=None, store=None):
-    store = _tracker_store() if store is None else store
     dates = list(reversed(_dates_in_window(end_date_str, window_days)))
+    store = (
+        _tracker_store_for_dates(dates)
+        if store is None
+        else store
+    )
     series = []
     for ds in dates:
         rows = list((store.get(ds) or {}).get('entries', []) or [])
@@ -20029,7 +20090,7 @@ def _portfolio_plan(entries, adjustments):
 
 @app.route('/api/tracker/portfolio/<date_str>')
 def api_tracker_portfolio(date_str):
-    store = _tracker_store()
+    store = _tracker_store_for_dates([date_str])
     day = _normalize_tracker_day(store.get(date_str))
     entries = _recalc_tracker_entries(day.get('entries', []))
     adjustments = _get_adjustments()
@@ -20204,7 +20265,7 @@ def _build_bet_slip(entries, adjustments):
 
 @app.route('/api/tracker/betslip/<date_str>')
 def api_tracker_betslip(date_str):
-    store = _tracker_store()
+    store = _tracker_store_for_dates([date_str])
     day = _normalize_tracker_day(store.get(date_str))
     entries = _recalc_tracker_entries(day.get('entries', []))
     adjustments = _get_adjustments()
@@ -20247,8 +20308,8 @@ def _audit_bucket_finalize(bucket):
 def _bankroll_curve_dashboard(end_date_str, window_days):
     adjustments = _get_adjustments()
     bankroll = float((adjustments or {}).get('bankroll', 1000.0) or 1000.0)
-    store = _tracker_store()
     dates = list(reversed(_dates_in_window(end_date_str, window_days)))
+    store = _tracker_store_for_dates(dates)
     roll = bankroll
     curve = []
     tier_audit = {k: _audit_bucket_init() for k in ['A', 'B', 'C', 'D']}
@@ -20351,8 +20412,8 @@ def _attr_bucket_finalize(name, bucket):
 
 def _attribution_dashboard(end_date_str, window_days):
     adjustments = _get_adjustments()
-    store = _tracker_store()
     dates = list(reversed(_dates_in_window(end_date_str, window_days)))
+    store = _tracker_store_for_dates(dates)
     market_buckets = {}
     tier_buckets = {k: _attr_bucket_init() for k in ['A', 'B', 'C', 'D']}
     overall = _attr_bucket_init()
@@ -21756,7 +21817,7 @@ def api_parlay_to_tracker():
 def api_model_upgrade_suggestions(date_str):
     """Get model upgrade suggestions based on daily performance grades."""
     try:
-        store = _tracker_store()
+        store = _tracker_store_for_dates([date_str])
         day = store.get(date_str, {})
         entries = day.get('entries', [])
         
@@ -24663,7 +24724,7 @@ def api_tracker_entries():
         date   = request.args.get("date", datetime.now(ET).strftime("%Y-%m-%d"))
         gamePk = request.args.get("gamePk")
 
-        store = _tracker_store()
+        store = _tracker_store_for_dates([date])
 
         day     = _normalize_tracker_day(store.get(date))
         entries = day.get("entries", [])
@@ -25179,7 +25240,7 @@ def _hit_history_recorded_rows(player_id, player_name, market_key, dates):
     if not dates:
         return out
     try:
-        store = _tracker_store()
+        store = _tracker_store_for_dates(dates)
     except Exception:
         return out
     name_l = (player_name or '').strip().lower()
