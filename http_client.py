@@ -19,6 +19,11 @@ _GLOBAL_SESSION: requests.Session | None = None
 _MLB_BOXSCORE_PATH = re.compile(r"/v1/game/(\d+)/boxscore/?$")
 _MLB_LIVE_FEED_PATH = re.compile(r"/v1\.1/game/(\d+)/feed/live/?$")
 _MLB_SCHEDULE_PATH = re.compile(r"/v1/schedule/?$")
+_DRAFTKINGS_MLB_PATH = re.compile(
+    r"^/api/sportscontent/[^/]+/v1/leagues/(\d+)"
+    r"(?:/categories/\d+)?/?$"
+)
+_ODDS_API_MLB_PATH = re.compile(r"^/v4/sports/baseball_mlb/odds/?$")
 _MLB_REFERENCE_PATHS = (
     ("mlb_person_stats", re.compile(r"/v1/people/(\d+)/stats/?$"), "stats"),
     ("mlb_person", re.compile(r"/v1/people/(\d+)/?$"), "stats"),
@@ -41,6 +46,37 @@ class _MLBCacheTarget:
     identity: tuple[Any, ...]
     policy: str
     ttl_seconds: int | None = None
+
+
+def _external_odds_cache_target(url: str) -> _MLBCacheTarget | None:
+    """Classify the two sportsbook GET surfaces used by the application."""
+    parsed = urlsplit(str(url))
+    normalized_query = tuple(sorted(parse_qsl(parsed.query, keep_blank_values=True)))
+
+    if parsed.netloc == "sportsbook-nash.draftkings.com":
+        match = _DRAFTKINGS_MLB_PATH.search(parsed.path)
+        if (
+            match
+            and int(match.group(1)) == settings.draftkings_mlb_event_group
+        ):
+            return _MLBCacheTarget(
+                "draftkings_mlb_odds",
+                (parsed.path.rstrip("/"), normalized_query),
+                "analytics",
+                settings.draftkings_odds_ttl_seconds,
+            )
+
+    if (
+        parsed.netloc == "api.the-odds-api.com"
+        and _ODDS_API_MLB_PATH.search(parsed.path)
+    ):
+        return _MLBCacheTarget(
+            "the_odds_api_mlb",
+            (parsed.path.rstrip("/"), normalized_query),
+            "analytics",
+            settings.odds_nrfi_ttl_seconds,
+        )
+    return None
 
 
 def _mlb_cache_target(url: str) -> _MLBCacheTarget | None:
@@ -81,6 +117,11 @@ def _mlb_cache_target(url: str) -> _MLBCacheTarget | None:
     return None
 
 
+def _shared_cache_target(url: str) -> _MLBCacheTarget | None:
+    """Return an endpoint-aware target for supported shared GET responses."""
+    return _mlb_cache_target(url) or _external_odds_cache_target(url)
+
+
 def _response_snapshot(response: requests.Response) -> dict[str, Any]:
     return {
         "status_code": response.status_code,
@@ -104,10 +145,10 @@ def _response_from_snapshot(snapshot: dict[str, Any]) -> requests.Response:
 
 
 class _SharedSession(requests.Session):
-    """Retrying session with resilient caching for repeated MLB read payloads."""
+    """Retrying session with resilient caching for repeated read payloads."""
 
     def get(self, url, **kwargs):
-        target = _mlb_cache_target(str(url))
+        target = _shared_cache_target(str(url))
         if target is None or kwargs.get("stream"):
             return super().get(url, **kwargs)
 
@@ -120,7 +161,12 @@ class _SharedSession(requests.Session):
         def fetch() -> dict[str, Any]:
             response = super(_SharedSession, self).get(url, **kwargs)
             response.raise_for_status()
-            return _response_snapshot(response)
+            snapshot = _response_snapshot(response)
+            if target.namespace == "the_odds_api_mlb":
+                # requests.Response.url includes prepared query parameters.
+                # Never persist the Odds API credential inside the cached value.
+                snapshot["url"] = str(url).split("?", 1)[0]
+            return snapshot
 
         try:
             snapshot = get_or_compute(

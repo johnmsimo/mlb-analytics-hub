@@ -1,5 +1,8 @@
 import os
+import threading
+import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
 import requests
@@ -306,6 +309,205 @@ class HttpClientTests(unittest.TestCase):
 
         self.assertEqual(response.json()["dates"][0]["date"], "2026-07-28")
         self.assertEqual(cache_service.cache_status()["metrics"]["stale_hits"], 1)
+
+    def test_external_odds_endpoints_use_existing_ttls(self):
+        with patch.dict(
+            os.environ,
+            {
+                "DK_ODDS_TTL_SEC": "211",
+                "ODDS_NRFI_TTL_SEC": "223",
+            },
+            clear=False,
+        ):
+            draftkings = http_client._shared_cache_target(
+                "https://sportsbook-nash.draftkings.com/api/"
+                "sportscontent/dkusnj/v1/leagues/84240/categories/1000"
+            )
+            odds_api = http_client._shared_cache_target(
+                "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds"
+            )
+
+        self.assertIsNotNone(draftkings)
+        self.assertEqual(draftkings.namespace, "draftkings_mlb_odds")
+        self.assertEqual(draftkings.ttl_seconds, 211)
+        self.assertIsNotNone(odds_api)
+        self.assertEqual(odds_api.namespace, "the_odds_api_mlb")
+        self.assertEqual(odds_api.ttl_seconds, 223)
+
+    def test_draftkings_requests_are_reused_and_query_safe(self):
+        url = (
+            "https://sportsbook-nash.draftkings.com/api/"
+            "sportscontent/dkusnj/v1/leagues/84240/categories/1000"
+        )
+        response = _response(url, b'{"eventGroup": {"events": []}}')
+        session = build_http_session()
+
+        with patch.object(
+            requests.Session,
+            "get",
+            return_value=response,
+        ) as upstream:
+            first = session.get(url, params={"format": "json"}, timeout=12)
+            second = session.get(url, params={"format": "json"}, timeout=8)
+
+        self.assertEqual(first.json(), second.json())
+        upstream.assert_called_once_with(
+            url,
+            params={"format": "json"},
+            timeout=12,
+        )
+
+    def test_draftkings_categories_do_not_collide(self):
+        batter_url = (
+            "https://sportsbook-nash.draftkings.com/api/"
+            "sportscontent/dkusnj/v1/leagues/84240/categories/1000"
+        )
+        pitcher_url = (
+            "https://sportsbook-nash.draftkings.com/api/"
+            "sportscontent/dkusnj/v1/leagues/84240/categories/1001"
+        )
+        session = build_http_session()
+
+        with patch.object(
+            requests.Session,
+            "get",
+            side_effect=[
+                _response(batter_url, b'{"kind": "batter"}'),
+                _response(pitcher_url, b'{"kind": "pitcher"}'),
+            ],
+        ) as upstream:
+            batter = session.get(batter_url, params={"format": "json"})
+            pitcher = session.get(pitcher_url, params={"format": "json"})
+
+        self.assertNotEqual(batter.json(), pitcher.json())
+        self.assertEqual(upstream.call_count, 2)
+
+    def test_concurrent_draftkings_misses_are_singleflight(self):
+        url = (
+            "https://sportsbook-nash.draftkings.com/api/"
+            "sportscontent/dkusnj/v1/leagues/84240/categories/1000"
+        )
+        session = build_http_session()
+        barrier = threading.Barrier(6)
+
+        def call():
+            barrier.wait()
+            return session.get(url, params={"format": "json"}).json()
+
+        def upstream_response(request_url, **kwargs):
+            time.sleep(0.03)
+            return _response(request_url, b'{"kind": "batter"}')
+
+        with patch.object(
+            requests.Session,
+            "get",
+            side_effect=upstream_response,
+        ) as upstream:
+            with ThreadPoolExecutor(max_workers=6) as pool:
+                results = list(pool.map(lambda _: call(), range(6)))
+
+        self.assertEqual(results, [{"kind": "batter"}] * 6)
+        upstream.assert_called_once_with(url, params={"format": "json"})
+
+    def test_the_odds_api_queries_are_reused_and_isolated(self):
+        url = "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds"
+        session = build_http_session()
+        nrfi_params = {
+            "apiKey": "secret-test-key",
+            "markets": "h2h_1st_1_innings",
+            "regions": "us",
+        }
+        h2h_params = {
+            "apiKey": "secret-test-key",
+            "markets": "h2h",
+            "regions": "us",
+        }
+
+        with patch.object(
+            requests.Session,
+            "get",
+            side_effect=[
+                _response(url, b'[{"kind": "nrfi"}]'),
+                _response(url, b'[{"kind": "h2h"}]'),
+            ],
+        ) as upstream:
+            nrfi = session.get(url, params=nrfi_params)
+            nrfi_again = session.get(
+                url,
+                params={
+                    "regions": "us",
+                    "markets": "h2h_1st_1_innings",
+                    "apiKey": "secret-test-key",
+                },
+            )
+            h2h = session.get(url, params=h2h_params)
+
+        self.assertEqual(nrfi.json(), nrfi_again.json())
+        self.assertNotEqual(nrfi.json(), h2h.json())
+        self.assertEqual(upstream.call_count, 2)
+        self.assertNotIn(
+            "secret-test-key",
+            str(cache_service.cache_status()),
+        )
+        key = cache_service.normalize_cache_key(
+            "the_odds_api_mlb",
+            "/v4/sports/baseball_mlb/odds",
+            (),
+            params=nrfi_params,
+        )
+        self.assertNotIn(
+            "secret-test-key",
+            str(self.cache.get(key)),
+        )
+
+    def test_external_odds_error_serves_stale_response(self):
+        url = (
+            "https://sportsbook-nash.draftkings.com/api/"
+            "sportscontent/dkusnj/v1/leagues/84240/categories/487"
+        )
+        params = {"format": "json"}
+        target = http_client._shared_cache_target(url)
+        key = cache_service.normalize_cache_key(
+            target.namespace,
+            *target.identity,
+            params=params,
+        )
+        self.cache.set(
+            f"{key}:stale",
+            http_client._response_snapshot(
+                _response(url, b'{"eventGroup": {"events": [{"id": 13}]}}')
+            ),
+            ttl=60,
+        )
+        session = build_http_session()
+
+        with patch.object(
+            requests.Session,
+            "get",
+            side_effect=requests.ConnectionError("sportsbook unavailable"),
+        ):
+            response = session.get(url, params=params)
+
+        self.assertEqual(response.json()["eventGroup"]["events"][0]["id"], 13)
+        self.assertEqual(cache_service.cache_status()["metrics"]["stale_hits"], 1)
+
+    def test_unrelated_external_requests_are_not_cached(self):
+        url = "https://api.open-meteo.com/v1/forecast"
+        session = build_http_session()
+
+        with patch.object(
+            requests.Session,
+            "get",
+            side_effect=[
+                _response(url, b'{"temperature": 72}'),
+                _response(url, b'{"temperature": 73}'),
+            ],
+        ) as upstream:
+            first = session.get(url)
+            second = session.get(url)
+
+        self.assertNotEqual(first.json(), second.json())
+        self.assertEqual(upstream.call_count, 2)
 
     def test_upstream_error_serves_stale_reference_response(self):
         url = "https://statsapi.mlb.com/api/v1/people/13"
