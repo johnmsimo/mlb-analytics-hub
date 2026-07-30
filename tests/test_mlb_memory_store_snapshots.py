@@ -24,6 +24,10 @@ class MlbMemoryStoreSnapshotTests(unittest.TestCase):
                 {
                     "sig": None,
                     "payload": None,
+                    "snapshot_pickles": None,
+                    "snapshot_jsons": None,
+                    "snapshot_modes": None,
+                    "updated_at": None,
                     "latest": None,
                     "latest_summary": None,
                     "status": None,
@@ -182,6 +186,61 @@ class MlbMemoryStoreSnapshotTests(unittest.TestCase):
                 15,
             )
 
+    def test_full_store_pickle_is_materialized_lazily_and_reused(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "mlb_memory_store.json")
+            self._write_json(path, self._payload())
+
+            with patch.object(mlb_app, "MLB_MEMORY_STORE", path):
+                status = mlb_app._mlb_memory_store_status_view()
+                self.assertIsNone(mlb_app._MLB_MEMORY_READ_CACHE["payload"])
+
+                first = mlb_app._mlb_memory_store_payload()
+                materialized = mlb_app._MLB_MEMORY_READ_CACHE["payload"]
+                first["snapshots"].clear()
+                second = mlb_app._mlb_memory_store_payload()
+
+            self.assertEqual(status["snapshotCount"], 2)
+            self.assertIsNotNone(materialized)
+            self.assertEqual(len(second["snapshots"]), 2)
+
+    def test_concurrent_full_reads_materialize_one_payload_pickle(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "mlb_memory_store.json")
+            self._write_json(path, self._payload())
+
+            with patch.object(mlb_app, "MLB_MEMORY_STORE", path):
+                mlb_app._mlb_memory_store_status_view()
+                import pickle
+
+                original_dumps = pickle.dumps
+                calls = 0
+                calls_lock = threading.Lock()
+
+                def counting_dumps(*args, **kwargs):
+                    nonlocal calls
+                    with calls_lock:
+                        calls += 1
+                    time.sleep(0.01)
+                    return original_dumps(*args, **kwargs)
+
+                with (
+                    patch.object(pickle, "dumps", side_effect=counting_dumps),
+                    ThreadPoolExecutor(max_workers=12) as pool,
+                ):
+                    values = list(
+                        pool.map(
+                            lambda _: mlb_app._mlb_memory_store_payload(),
+                            range(24),
+                        )
+                    )
+
+            self.assertEqual(calls, 1)
+            self.assertEqual(
+                {len(value["snapshots"]) for value in values},
+                {2},
+            )
+
     def test_invalid_file_does_not_poison_repaired_version(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = os.path.join(temp_dir, "mlb_memory_store.json")
@@ -198,17 +257,19 @@ class MlbMemoryStoreSnapshotTests(unittest.TestCase):
             self.assertEqual(fallback, mlb_app._mlb_memory_store_default())
             self.assertEqual(repaired["marker"], "repaired")
 
-    def test_append_serializes_once_and_advances_all_cached_views(self):
+    def test_append_avoids_full_store_dump_and_advances_cached_views(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = os.path.join(temp_dir, "mlb_memory_store.json")
             self._write_json(path, self._payload())
             new_snapshot = self._payload("appended")["latest"]
             original_dumps = json.dumps
             dumps_calls = 0
+            dumped_values = []
 
             def counting_dumps(*args, **kwargs):
                 nonlocal dumps_calls
                 dumps_calls += 1
+                dumped_values.append(args[0])
                 return original_dumps(*args, **kwargs)
 
             with patch.object(mlb_app, "MLB_MEMORY_STORE", path):
@@ -238,11 +299,67 @@ class MlbMemoryStoreSnapshotTests(unittest.TestCase):
                     latest = mlb_app._mlb_memory_latest_snapshot()
                     full = mlb_app._mlb_memory_store_payload()
 
-            self.assertEqual(dumps_calls, 1)
+            self.assertEqual(dumps_calls, 4)
+            self.assertFalse(
+                any(
+                    isinstance(value, dict) and "snapshots" in value
+                    for value in dumped_values
+                )
+            )
             self.assertEqual(status["snapshotCount"], 3)
             self.assertEqual(latest["marker"], "appended")
             self.assertEqual(summary["createdAt"], latest["createdAt"])
             self.assertEqual(full, written)
+
+    def test_warm_append_reuses_unchanged_snapshot_blobs(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "mlb_memory_store.json")
+            self._write_json(path, self._payload())
+            first_append = self._payload("appended-1")["latest"]
+            second_append = self._payload("appended-2")["latest"]
+
+            with patch.object(mlb_app, "MLB_MEMORY_STORE", path):
+                mlb_app._append_mlb_memory_snapshot(
+                    first_append,
+                    keep=30,
+                    return_payload=False,
+                )
+                original_compact = mlb_app._compact_mlb_memory_snapshot
+                compact_calls = 0
+
+                def counting_compact(*args, **kwargs):
+                    nonlocal compact_calls
+                    compact_calls += 1
+                    return original_compact(*args, **kwargs)
+
+                with (
+                    patch.object(
+                        mlb_app,
+                        "_compact_mlb_memory_snapshot",
+                        side_effect=counting_compact,
+                    ),
+                    patch.object(
+                        mlb_app,
+                        "_mlb_memory_store_payload",
+                        side_effect=AssertionError(
+                            "warm append should not clone the full store"
+                        ),
+                    ),
+                ):
+                    result = mlb_app._append_mlb_memory_snapshot(
+                        second_append,
+                        keep=30,
+                        return_payload=False,
+                    )
+
+                status = mlb_app._mlb_memory_store_status_view()
+                latest = mlb_app._mlb_memory_latest_snapshot()
+
+            self.assertIsNone(result)
+            self.assertEqual(compact_calls, 2)
+            self.assertEqual(status["snapshotCount"], 4)
+            self.assertEqual(latest["marker"], "appended-2")
+            self.assertIsNone(mlb_app._MLB_MEMORY_READ_CACHE["payload"])
 
     def test_append_preserves_retention_and_recent_detail_contract(self):
         with tempfile.TemporaryDirectory() as temp_dir:

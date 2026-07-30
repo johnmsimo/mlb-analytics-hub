@@ -1694,6 +1694,10 @@ def _mlb_memory_store_default():
 _MLB_MEMORY_READ_CACHE = {
     "sig": None,
     "payload": None,
+    "snapshot_pickles": None,
+    "snapshot_jsons": None,
+    "snapshot_modes": None,
+    "updated_at": None,
     "latest": None,
     "latest_summary": None,
     "status": None,
@@ -1722,16 +1726,62 @@ def _mlb_memory_file_signature(stat):
     )
 
 
-def _build_mlb_memory_cached_views(payload, stat):
+def _mlb_memory_snapshot_mode(snapshot):
+    """Return the canonical stored mode, or None when compaction is still needed."""
+    if not isinstance(snapshot, dict):
+        return None
+    games = snapshot.get("games")
+    players = snapshot.get("players")
+    if not isinstance(games, dict) or not isinstance(players, dict):
+        return None
+
+    compact = snapshot.get("compact")
+    if compact is False:
+        return "detail"
+    if compact is not True:
+        return None
+    if len(games.get("boxscores") or []) > 6:
+        return None
+    if len(players.get("featured") or []) > 40:
+        return None
+    return "compact"
+
+
+def _build_mlb_memory_cached_views(
+    payload,
+    stat,
+    *,
+    snapshot_pickles=None,
+    snapshot_jsons=None,
+    snapshot_modes=None,
+    payload_blob=None,
+):
     """Build immutable full/lightweight views for one persisted store version."""
     import pickle
 
     payload = _normalize_mlb_memory_store(payload)
+    snapshots = payload.get("snapshots") or []
     latest = (
         payload.get("latest")
         if isinstance(payload.get("latest"), dict)
         else None
     )
+    if snapshot_pickles is None:
+        snapshot_pickles = tuple(
+            pickle.dumps(item, protocol=pickle.HIGHEST_PROTOCOL)
+            for item in snapshots
+        )
+    else:
+        snapshot_pickles = tuple(snapshot_pickles)
+    if snapshot_jsons is not None:
+        snapshot_jsons = tuple(snapshot_jsons)
+    if snapshot_modes is None:
+        snapshot_modes = tuple(
+            _mlb_memory_snapshot_mode(item)
+            for item in snapshots
+        )
+    else:
+        snapshot_modes = tuple(snapshot_modes)
     latest_summary = None
     if latest is not None:
         latest_summary = {
@@ -1741,7 +1791,7 @@ def _build_mlb_memory_cached_views(payload, stat):
         }
     latest_meta = (latest or {}).get("meta") or {}
     status = {
-        "snapshotCount": len(payload.get("snapshots") or []),
+        "snapshotCount": len(snapshot_pickles),
         "latest": {
             "createdAt": (latest or {}).get("createdAt"),
             "targetDateET": (latest or {}).get("targetDateET"),
@@ -1762,7 +1812,11 @@ def _build_mlb_memory_cached_views(payload, stat):
     }
     return {
         "sig": _mlb_memory_file_signature(stat),
-        "payload": pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL),
+        "payload": payload_blob,
+        "snapshot_pickles": snapshot_pickles,
+        "snapshot_jsons": snapshot_jsons,
+        "snapshot_modes": snapshot_modes,
+        "updated_at": payload.get("updatedAt"),
         "latest": (
             pickle.dumps(latest, protocol=pickle.HIGHEST_PROTOCOL)
             if latest is not None
@@ -1777,9 +1831,22 @@ def _build_mlb_memory_cached_views(payload, stat):
     }
 
 
-def _publish_mlb_memory_cached_views(payload, stat):
+def _publish_mlb_memory_cached_views(
+    payload,
+    stat,
+    *,
+    snapshot_pickles=None,
+    snapshot_jsons=None,
+    snapshot_modes=None,
+):
     """Advance read views after an atomic write without reparsing the file."""
-    cached = _build_mlb_memory_cached_views(payload, stat)
+    cached = _build_mlb_memory_cached_views(
+        payload,
+        stat,
+        snapshot_pickles=snapshot_pickles,
+        snapshot_jsons=snapshot_jsons,
+        snapshot_modes=snapshot_modes,
+    )
     with _MLB_MEMORY_READ_LOCK:
         try:
             current = os.stat(MLB_MEMORY_STORE)
@@ -1794,9 +1861,9 @@ def _mlb_memory_cached_views():
 
     The store is already roughly 12 MB and keeps growing through the season.
     Status and summary-only requests need only a few metadata fields, while
-    writers need a private mutable full payload. Cache immutable pickle blobs
-    for those separate views so lightweight reads never clone the full store
-    and full/latest callers retain the previous mutation-safe contract.
+    writers need retained snapshots. Cache immutable per-snapshot blobs so
+    lightweight reads and warm appends never clone the full store. The full
+    mutable payload is materialized lazily only when a caller requests it.
     """
     import pickle
 
@@ -1807,7 +1874,7 @@ def _mlb_memory_cached_views():
                 sig = _mlb_memory_file_signature(stat)
                 if (
                     _MLB_MEMORY_READ_CACHE["sig"] == sig
-                    and _MLB_MEMORY_READ_CACHE["payload"] is not None
+                    and _MLB_MEMORY_READ_CACHE["snapshot_pickles"] is not None
                 ):
                     return dict(_MLB_MEMORY_READ_CACHE)
 
@@ -1849,7 +1916,11 @@ def _mlb_memory_cached_views():
         }
         return {
             "sig": None,
-            "payload": pickle.dumps(empty, protocol=pickle.HIGHEST_PROTOCOL),
+            "payload": None,
+            "snapshot_pickles": (),
+            "snapshot_jsons": (),
+            "snapshot_modes": (),
+            "updated_at": None,
             "latest": None,
             "latest_summary": None,
             "status": pickle.dumps(status, protocol=pickle.HIGHEST_PROTOCOL),
@@ -1859,7 +1930,69 @@ def _mlb_memory_cached_views():
 def _mlb_memory_store_payload():
     import pickle
 
-    return pickle.loads(_mlb_memory_cached_views()["payload"])
+    while True:
+        cached = _mlb_memory_cached_views()
+        if cached["sig"] is None:
+            latest_blob = cached["latest"]
+            snapshots = [
+                pickle.loads(item)
+                for item in (cached["snapshot_pickles"] or ())
+            ]
+            latest = (
+                pickle.loads(latest_blob)
+                if latest_blob is not None
+                else None
+            )
+            if snapshots and latest == snapshots[-1]:
+                latest = snapshots[-1]
+            return {
+                "latest": latest,
+                "snapshots": snapshots,
+                "updatedAt": cached["updated_at"],
+            }
+        blob = cached["payload"]
+        if blob is not None:
+            return pickle.loads(blob)
+
+        with _MLB_MEMORY_READ_LOCK:
+            if _MLB_MEMORY_READ_CACHE["sig"] != cached["sig"]:
+                continue
+            try:
+                current_sig = _mlb_memory_file_signature(
+                    os.stat(MLB_MEMORY_STORE)
+                )
+            except OSError:
+                current_sig = None
+            if current_sig != cached["sig"]:
+                continue
+
+            blob = _MLB_MEMORY_READ_CACHE["payload"]
+            if blob is None:
+                latest_blob = _MLB_MEMORY_READ_CACHE["latest"]
+                snapshots = [
+                    pickle.loads(item)
+                    for item in (
+                        _MLB_MEMORY_READ_CACHE["snapshot_pickles"] or ()
+                    )
+                ]
+                latest = (
+                    pickle.loads(latest_blob)
+                    if latest_blob is not None
+                    else None
+                )
+                if snapshots and latest == snapshots[-1]:
+                    latest = snapshots[-1]
+                payload = {
+                    "latest": latest,
+                    "snapshots": snapshots,
+                    "updatedAt": _MLB_MEMORY_READ_CACHE["updated_at"],
+                }
+                blob = pickle.dumps(
+                    payload,
+                    protocol=pickle.HIGHEST_PROTOCOL,
+                )
+                _MLB_MEMORY_READ_CACHE["payload"] = blob
+        return pickle.loads(blob)
 
 
 def _mlb_memory_latest_snapshot(summary_only=False):
@@ -1905,60 +2038,117 @@ def _write_mlb_memory_store(encoded):
         return None
 
 
-def _append_mlb_memory_snapshot(snapshot, keep=30):
-    payload = _mlb_memory_store_payload()
-    snapshots = payload.get("snapshots") or []
-    snapshots.append(snapshot)
-    keep = max(6, int(keep or _MLB_MEMORY_KEEP_SNAPSHOTS))
-    if len(snapshots) > keep:
-        snapshots = snapshots[-keep:]
+def _append_mlb_memory_snapshot(snapshot, keep=30, return_payload=True):
+    import pickle
 
-    # Keep newest snapshots rich, compact older ones to preserve long-term history.
-    compacted = []
-    for idx, snap in enumerate(snapshots):
-        is_recent = idx >= max(0, len(snapshots) - 3)
-        compacted.append(_compact_mlb_memory_snapshot(snap, keep_detail=is_recent))
-    snapshots = compacted
+    cached = _mlb_memory_cached_views()
+    snapshot_pickles = list(cached["snapshot_pickles"] or ())
+    snapshot_jsons = list(
+        cached["snapshot_jsons"]
+        if cached["snapshot_jsons"] is not None
+        else [None] * len(snapshot_pickles)
+    )
+    snapshot_modes = list(
+        cached["snapshot_modes"]
+        if cached["snapshot_modes"] is not None
+        else [None] * len(snapshot_pickles)
+    )
+
+    keep = max(6, int(keep or _MLB_MEMORY_KEEP_SNAPSHOTS))
+    retain = max(0, keep - 1)
+    if len(snapshot_pickles) > retain:
+        snapshot_pickles = snapshot_pickles[-retain:]
+        snapshot_jsons = snapshot_jsons[-retain:]
+        snapshot_modes = snapshot_modes[-retain:]
+
+    snapshot_pickles.append(
+        pickle.dumps(snapshot, protocol=pickle.HIGHEST_PROTOCOL)
+    )
+    snapshot_jsons.append(None)
+    snapshot_modes.append(None)
+
+    # Reuse canonical immutable blobs. Only a snapshot whose storage mode
+    # changes (plus the new snapshot) needs compaction and JSON serialization.
+    stored_pickles = []
+    stored_jsons = []
+    stored_modes = []
+    recent_start = max(0, len(snapshot_pickles) - 3)
+    for idx, (item_blob, encoded_item, stored_mode) in enumerate(
+        zip(snapshot_pickles, snapshot_jsons, snapshot_modes)
+    ):
+        desired_mode = "detail" if idx >= recent_start else "compact"
+        if encoded_item is not None and stored_mode == desired_mode:
+            stored_pickles.append(item_blob)
+            stored_jsons.append(encoded_item)
+            stored_modes.append(stored_mode)
+            continue
+
+        item = _compact_mlb_memory_snapshot(
+            pickle.loads(item_blob),
+            keep_detail=(desired_mode == "detail"),
+        )
+        stored_pickles.append(
+            pickle.dumps(item, protocol=pickle.HIGHEST_PROTOCOL)
+        )
+        stored_jsons.append(
+            json.dumps(
+                item,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        )
+        stored_modes.append(desired_mode)
 
     # Prune oldest snapshots until file size target is respected.
-    encoded = None
     updated_at = datetime.now(timezone.utc).isoformat()
-    while snapshots:
-        payload = {
-            "latest": snapshots[-1],
-            "snapshots": snapshots,
-            "updatedAt": updated_at,
-        }
-        encoded = json.dumps(
-            payload,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-        encoded_size = len(encoded.encode("utf-8"))
-        if encoded_size <= _MLB_MEMORY_MAX_BYTES or len(snapshots) <= 6:
-            break
-        snapshots = snapshots[1:]
+    updated_json = json.dumps(
+        updated_at,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
-    if encoded is None:
-        payload = {
-            "latest": _compact_mlb_memory_snapshot(
-                snapshot,
-                keep_detail=True,
-            ),
-            "snapshots": [],
-            "updatedAt": updated_at,
-        }
-        encoded = json.dumps(
-            payload,
-            ensure_ascii=False,
-            separators=(",", ":"),
+    def _encoded_store(items):
+        latest_json = items[-1]
+        return (
+            '{"latest":'
+            + latest_json
+            + ',"snapshots":['
+            + ",".join(items)
+            + '],"updatedAt":'
+            + updated_json
+            + "}"
         )
+
+    encoded = _encoded_store(stored_jsons)
+    while stored_jsons:
+        encoded_size = len(encoded.encode("utf-8"))
+        if encoded_size <= _MLB_MEMORY_MAX_BYTES or len(stored_jsons) <= 6:
+            break
+        stored_pickles = stored_pickles[1:]
+        stored_jsons = stored_jsons[1:]
+        stored_modes = stored_modes[1:]
+        encoded = _encoded_store(stored_jsons)
 
     stat = _write_mlb_memory_store(encoded)
     if stat is None:
         raise OSError("Unable to persist MLB memory store")
-    _publish_mlb_memory_cached_views(payload, stat)
-    return payload
+
+    latest = pickle.loads(stored_pickles[-1])
+    payload = {
+        "latest": latest,
+        "snapshots": [],
+        "updatedAt": updated_at,
+    }
+    _publish_mlb_memory_cached_views(
+        payload,
+        stat,
+        snapshot_pickles=stored_pickles,
+        snapshot_jsons=stored_jsons,
+        snapshot_modes=stored_modes,
+    )
+    if return_payload:
+        return _mlb_memory_store_payload()
+    return None
 
 
 def _compact_mlb_memory_snapshot(snapshot, keep_detail=False):
@@ -5566,7 +5756,11 @@ def _run_mlb_memory_collect(date_str=None, days_back=2, max_games_per_day=30, in
             transactions_days=int(defaults.get('transactions_days', 2) if mode else 2),
             pace_sec=pace_sec,
         )
-        _append_mlb_memory_snapshot(snapshot, keep=_MLB_MEMORY_KEEP_SNAPSHOTS)
+        _append_mlb_memory_snapshot(
+            snapshot,
+            keep=_MLB_MEMORY_KEEP_SNAPSHOTS,
+            return_payload=False,
+        )
         _mlb_memory_last_collect = datetime.now(timezone.utc).isoformat()
         return snapshot, None
     except Exception as ex:
