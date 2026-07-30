@@ -15425,8 +15425,8 @@ def _history_in_window(end_date_str, window_days):
     return out
 
 
-def _daily_series(end_date_str, window_days, market_key=None):
-    store = _tracker_store()
+def _daily_series(end_date_str, window_days, market_key=None, store=None):
+    store = _tracker_store() if store is None else store
     dates = list(reversed(_dates_in_window(end_date_str, window_days)))
     series = []
     for ds in dates:
@@ -15446,8 +15446,17 @@ def _daily_series(end_date_str, window_days, market_key=None):
     return series
 
 
-def _multiplier_history(end_date_str, window_days, market_key):
-    hist = _history_in_window(end_date_str, window_days)
+def _multiplier_history(
+    end_date_str,
+    window_days,
+    market_key,
+    history=None,
+):
+    hist = (
+        _history_in_window(end_date_str, window_days)
+        if history is None
+        else history
+    )
     points = []
     for row in hist:
         adj = row.get('adjustments', {}) or {}
@@ -16935,8 +16944,8 @@ def _dates_in_window(end_date_str, window_days):
     return [(end_dt - timedelta(days=i)).isoformat() for i in range(max(1, int(window_days)))]
 
 
-def _collect_window_entries(end_date_str, window_days):
-    store = _tracker_store()
+def _collect_window_entries(end_date_str, window_days, store=None):
+    store = _tracker_store() if store is None else store
     dates = set(_dates_in_window(end_date_str, window_days))
     rows = []
     for ds, payload in store.items():
@@ -17509,17 +17518,19 @@ def _tracker_today_payload(date_str=None):
 def _tracker_performance_payload(date_str=None, window_days=30):
     date_str = date_str or datetime.now(ET).strftime('%Y-%m-%d')
     window_days = max(1, int(window_days or 30))
-    entries = _collect_window_entries(date_str, window_days)
+    store = _tracker_store()
+    entries = _collect_window_entries(date_str, window_days, store=store)
     adjustments = _get_adjustments()
     calibration = _market_calibration(entries, adjustments)
-    overall_series = _daily_series(date_str, window_days, None)
+    overall_series = _daily_series(date_str, window_days, None, store=store)
+    history = _history_in_window(date_str, window_days)
     available_markets = sorted({row.get('marketKey') for row in entries if row.get('marketKey')})
     value_rows = [row for row in entries if row.get('grade') in ('win', 'loss', 'push')]
     clv_rows = [row for row in value_rows if row.get('clvEdge') is not None]
     top_clv = sorted(clv_rows, key=lambda x: float(x.get('clvEdge') or 0), reverse=True)[:10]
     daily = []
     for ds in reversed(_dates_in_window(date_str, window_days)):
-        rows = _normalize_tracker_day(_tracker_store().get(ds)).get('entries', [])
+        rows = _normalize_tracker_day(store.get(ds)).get('entries', [])
         graded = [r for r in rows if r.get('grade') in ('win', 'loss', 'push')]
         active = [r for r in graded if r.get('grade') in ('win', 'loss')]
         wins = sum(1 for r in active if r.get('grade') == 'win')
@@ -17548,7 +17559,15 @@ def _tracker_performance_payload(date_str=None, window_days=30):
         'summary': _tracker_live_summary(entries, adjustments),
         'overallSeries': overall_series,
         'availableMarkets': available_markets,
-        'multiplierHistory': {mk: _multiplier_history(date_str, window_days, mk) for mk in available_markets},
+        'multiplierHistory': {
+            mk: _multiplier_history(
+                date_str,
+                window_days,
+                mk,
+                history=history,
+            )
+            for mk in available_markets
+        },
         'calibration': calibration,
         'topCLV': top_clv,
         'daily': daily,
@@ -18293,14 +18312,26 @@ def api_tracker_calibration_dashboard(date_str):
     window = int(request.args.get('window', 14) or 14)
     adjustments = _get_adjustments()
     markets = list((adjustments.get('market_multipliers') or {}).keys())
-    market_series = {mk: _daily_series(date_str, window, mk) for mk in markets}
-    multiplier_history = {mk: _multiplier_history(date_str, window, mk) for mk in markets}
+    store = _tracker_store()
+    market_series = {
+        mk: _daily_series(date_str, window, mk, store=store)
+        for mk in markets
+    }
     events = _history_in_window(date_str, window)
+    multiplier_history = {
+        mk: _multiplier_history(
+            date_str,
+            window,
+            mk,
+            history=events,
+        )
+        for mk in markets
+    }
     return jsonify({
         'success': True,
         'date': date_str,
         'window': window,
-        'overallSeries': _daily_series(date_str, window, None),
+        'overallSeries': _daily_series(date_str, window, None, store=store),
         'marketSeries': market_series,
         'multiplierHistory': multiplier_history,
         'events': events[-120:],
@@ -19307,9 +19338,10 @@ def _profit_units_from_american(price):
     return None
 
 
-def _recalc_tracker_entries(entries):
+def _recalc_tracker_entries(entries, adjustments=None):
+    adjustments = _get_adjustments() if adjustments is None else adjustments
     for row in entries or []:
-        _recalc_tracker_entry(row)
+        _recalc_tracker_entry(row, adjustments=adjustments)
     return entries or []
 
 
@@ -19333,6 +19365,7 @@ def api_tracker_close(date_str):
         by_game.setdefault(row.get('gamePk'), []).append(row)
     sched = fetch_schedule(date_str)
     games = {g.get('gamePk'): g for g in sched}
+    adjustments = _get_adjustments()
     lock = __import__('threading').Lock()
     updated_count = [0]
 
@@ -19396,7 +19429,7 @@ def api_tracker_close(date_str):
                 row['status'] = 'graded'
                 row['gradedAt'] = datetime.now(ET).isoformat()
 
-            _recalc_tracker_entry(row)
+            _recalc_tracker_entry(row, adjustments=adjustments)
             local_updated += 1
         with lock:
             updated_count[0] += local_updated
@@ -19404,7 +19437,7 @@ def api_tracker_close(date_str):
     with ThreadPoolExecutor(max_workers=6) as ex:
         list(ex.map(_close_one, by_game.items()))
 
-    day['entries'] = _recalc_tracker_entries(entries)
+    day['entries'] = _recalc_tracker_entries(entries, adjustments=adjustments)
     day['closingCapturedAt'] = datetime.now().isoformat()
     _tracker_commit_day(date_str, day)
     return jsonify({'success': True, 'date': date_str, 'updated': updated_count[0], 'entries': day.get('entries', []), 'summary': _tracker_summary(day.get('entries', [])), 'closingCapturedAt': day.get('closingCapturedAt')})
@@ -19549,9 +19582,13 @@ def api_tracker_value_dashboard(date_str):
     window = int(request.args.get('window', 14) or 14)
     adjustments = _get_adjustments()
     markets = list((adjustments.get('market_multipliers') or {}).keys())
-    overall = _daily_value_series(date_str, window, None)
-    market_series = {mk: _daily_value_series(date_str, window, mk) for mk in markets}
-    entries = _collect_window_entries(date_str, window)
+    store = _tracker_store()
+    overall = _daily_value_series(date_str, window, None, store=store)
+    market_series = {
+        mk: _daily_value_series(date_str, window, mk, store=store)
+        for mk in markets
+    }
+    entries = _collect_window_entries(date_str, window, store=store)
     graded = [r for r in entries if r.get('grade') in ('win', 'loss', 'push')]
     top_clv = sorted([r for r in graded if r.get('clvEdge') is not None], key=lambda x: x.get('clvEdge', 0), reverse=True)[:12]
     worst_clv = sorted([r for r in graded if r.get('clvEdge') is not None], key=lambda x: x.get('clvEdge', 0))[:12]
@@ -19601,7 +19638,7 @@ def _stake_profile(row, adjustments):
     }
 
 
-def _recalc_tracker_entry(row):
+def _recalc_tracker_entry(row, adjustments=None):
     if row.get('openingPrice') is None and row.get('marketPrice') is not None:
         row['openingPrice'] = row.get('marketPrice')
     row['openingImplied'] = _american_to_implied(row.get('openingPrice'))
@@ -19629,7 +19666,7 @@ def _recalc_tracker_entry(row):
         except Exception:
             row['evPct'] = None
 
-    adj = _get_adjustments()
+    adj = _get_adjustments() if adjustments is None else adjustments
     stake = _stake_profile(row, adj)
     row['fullKellyPct'] = stake['full_kelly_pct']
     row['stakePct'] = stake['stake_pct']
@@ -19685,8 +19722,8 @@ def _value_summary(entries):
     return {'units': units, 'dollars': dollars, 'staked': total_staked, 'roi': roi, 'avg_clv': avg_clv, 'clv_positive_rate': clv_pos, 'graded_with_clv': len(clv)}
 
 
-def _daily_value_series(end_date_str, window_days, market_key=None):
-    store = _tracker_store()
+def _daily_value_series(end_date_str, window_days, market_key=None, store=None):
+    store = _tracker_store() if store is None else store
     dates = list(reversed(_dates_in_window(end_date_str, window_days)))
     series = []
     for ds in dates:
@@ -24455,10 +24492,7 @@ def api_tracker_entries():
         date   = request.args.get("date", datetime.now(ET).strftime("%Y-%m-%d"))
         gamePk = request.args.get("gamePk")
 
-        store = {}
-        if os.path.exists(TRACKER_STORE):
-            with open(TRACKER_STORE) as f:
-                store = json.load(f)
+        store = _tracker_store()
 
         day     = _normalize_tracker_day(store.get(date))
         entries = day.get("entries", [])
