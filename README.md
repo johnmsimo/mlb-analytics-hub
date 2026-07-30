@@ -214,15 +214,16 @@ parse, external and atomic file replacements invalidate automatically, and each
 caller receives a private mutable copy.
 
 The growing MLB memory store also uses a thread-safe, file-version-aware
-snapshot. Status and summary-only routes read precomputed metadata without
-copying the full seasonal store, while full-store and latest-snapshot callers
-still receive private mutable values. Concurrent cold reads collapse to one
-parse and atomic file replacements invalidate by device/inode/mtime/size.
-Three-hour collection appends reuse that parsed payload, compact and retain the
-same snapshots, encode the final store once, and publish the new lightweight
-views immediately after the atomic replacement. On the checked-in 11.9 MB
-store, representative appends improved from about 339 ms to 114 ms (3×) while
-preserving the JSON data and failure-recovery contract.
+snapshot with immutable per-snapshot blobs. Status and summary-only routes read
+precomputed metadata without materializing the full seasonal store; full-store
+callers build one immutable payload lazily under singleflight and still receive
+private mutable values. Concurrent cold reads collapse to one parse and atomic
+file replacements invalidate by device/inode/mtime/size. Three-hour collection
+appends reuse canonical JSON for every unchanged retained snapshot, transforming
+only the new snapshot and the one aging into compact history before the atomic
+replacement. On identical copies of the checked-in 11.9 MB store, repeated warm
+appends improved from about 173 ms to 90 ms (1.9×) with byte-equivalent retained
+data and the same retention, compaction, and failure-recovery contracts.
 
 XGBoost probability and full interval/Monte Carlo scoring results are memoized
 per worker using the exact model, market, line, and final feature vector.
