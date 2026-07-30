@@ -198,6 +198,159 @@ class MlbMemoryStoreSnapshotTests(unittest.TestCase):
             self.assertEqual(fallback, mlb_app._mlb_memory_store_default())
             self.assertEqual(repaired["marker"], "repaired")
 
+    def test_append_serializes_once_and_advances_all_cached_views(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "mlb_memory_store.json")
+            self._write_json(path, self._payload())
+            new_snapshot = self._payload("appended")["latest"]
+            original_dumps = json.dumps
+            dumps_calls = 0
+
+            def counting_dumps(*args, **kwargs):
+                nonlocal dumps_calls
+                dumps_calls += 1
+                return original_dumps(*args, **kwargs)
+
+            with patch.object(mlb_app, "MLB_MEMORY_STORE", path):
+                mlb_app._mlb_memory_store_status_view()
+                with (
+                    patch.object(
+                        mlb_app.json,
+                        "dumps",
+                        side_effect=counting_dumps,
+                    ),
+                    patch.object(
+                        mlb_app.json,
+                        "load",
+                        side_effect=AssertionError(
+                            "warm append should not reparse the store"
+                        ),
+                    ),
+                ):
+                    written = mlb_app._append_mlb_memory_snapshot(
+                        new_snapshot,
+                        keep=30,
+                    )
+                    status = mlb_app._mlb_memory_store_status_view()
+                    summary = mlb_app._mlb_memory_latest_snapshot(
+                        summary_only=True
+                    )
+                    latest = mlb_app._mlb_memory_latest_snapshot()
+                    full = mlb_app._mlb_memory_store_payload()
+
+            self.assertEqual(dumps_calls, 1)
+            self.assertEqual(status["snapshotCount"], 3)
+            self.assertEqual(latest["marker"], "appended")
+            self.assertEqual(summary["createdAt"], latest["createdAt"])
+            self.assertEqual(full, written)
+
+    def test_append_preserves_retention_and_recent_detail_contract(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "mlb_memory_store.json")
+            snapshots = []
+            for idx in range(8):
+                snap = self._payload(f"snapshot-{idx}")["latest"]
+                snap["games"]["boxscores"] = [
+                    {"gamePk": value}
+                    for value in range(12)
+                ]
+                snapshots.append(snap)
+            self._write_json(
+                path,
+                {
+                    "latest": snapshots[-1],
+                    "snapshots": snapshots,
+                    "updatedAt": "before",
+                },
+            )
+            appended = self._payload("snapshot-8")["latest"]
+            appended["games"]["boxscores"] = [
+                {"gamePk": value}
+                for value in range(12)
+            ]
+
+            with patch.object(mlb_app, "MLB_MEMORY_STORE", path):
+                written = mlb_app._append_mlb_memory_snapshot(
+                    appended,
+                    keep=6,
+                )
+
+            kept = written["snapshots"]
+            self.assertEqual(len(kept), 6)
+            self.assertEqual(
+                [snap["marker"] for snap in kept],
+                [f"snapshot-{idx}" for idx in range(3, 9)],
+            )
+            self.assertEqual(
+                [snap["compact"] for snap in kept],
+                [True, True, True, False, False, False],
+            )
+            self.assertNotIn("boxscores", kept[0]["games"])
+            self.assertEqual(len(kept[-1]["games"]["boxscores"]), 12)
+            self.assertIs(written["latest"], kept[-1])
+
+    def test_append_prunes_to_byte_limit_before_atomic_write(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "mlb_memory_store.json")
+            snapshots = []
+            for idx in range(9):
+                snap = self._payload(f"snapshot-{idx}")["latest"]
+                snap["padding"] = "x" * 800
+                snapshots.append(snap)
+            self._write_json(
+                path,
+                {
+                    "latest": snapshots[-1],
+                    "snapshots": snapshots,
+                    "updatedAt": "before",
+                },
+            )
+            appended = self._payload("snapshot-9")["latest"]
+            appended["padding"] = "x" * 800
+
+            with (
+                patch.object(mlb_app, "MLB_MEMORY_STORE", path),
+                patch.object(mlb_app, "_MLB_MEMORY_MAX_BYTES", 7_000),
+            ):
+                written = mlb_app._append_mlb_memory_snapshot(
+                    appended,
+                    keep=30,
+                )
+
+            self.assertEqual(len(written["snapshots"]), 6)
+            self.assertEqual(written["latest"]["marker"], "snapshot-9")
+            with open(path, "rb") as handle:
+                persisted = json.load(handle)
+            self.assertEqual(persisted, written)
+
+    def test_failed_append_preserves_previous_file_and_cached_views(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "mlb_memory_store.json")
+            self._write_json(path, self._payload())
+
+            with patch.object(mlb_app, "MLB_MEMORY_STORE", path):
+                before = mlb_app._mlb_memory_latest_snapshot()
+                with patch.object(
+                    mlb_app.os,
+                    "replace",
+                    side_effect=OSError("replace failed"),
+                ):
+                    with self.assertRaises(OSError):
+                        mlb_app._append_mlb_memory_snapshot(
+                            self._payload("rejected")["latest"],
+                            keep=30,
+                        )
+                after = mlb_app._mlb_memory_latest_snapshot()
+
+            self.assertEqual(before["marker"], "first")
+            self.assertEqual(after["marker"], "first")
+            self.assertFalse(
+                any(
+                    name.endswith(".tmp")
+                    for name in os.listdir(temp_dir)
+                )
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
