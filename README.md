@@ -212,6 +212,12 @@ are computed from the selected identity or gzip bytes, so only a validator for
 the same encoding can make a refresh bodyless. Day commits and atomic file
 replacements still invalidate cached bytes without changing decoded contracts.
 
+Performance, calibration, and value dashboard responses reuse immutable JSON
+and gzip bytes per date/window and the tracker, adjustment, and calibration
+history file versions they consume. Encoding-specific strong ETags make
+unchanged matching refreshes bodyless; tracker writes plus adjustment/history
+replacements invalidate automatically without changing decoded schemas.
+
 Model adjustments and calibration history use thread-safe, file-version-aware
 parsed snapshots across requests. Concurrent cold reads collapse to one JSON
 parse, external and atomic file replacements invalidate automatically, and each
