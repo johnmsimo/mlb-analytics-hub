@@ -224,6 +224,13 @@ only the new snapshot and the one aging into compact history before the atomic
 replacement. On identical copies of the checked-in 11.9 MB store, repeated warm
 appends improved from about 173 ms to 90 ms (1.9×) with byte-equivalent retained
 data and the same retention, compaction, and failure-recovery contracts.
+Full and summary `/api/memory/latest` responses also cache their immutable JSON
+and gzip representations per file version. Strong ETags support bodyless 304
+revalidation, successful appends and atomic replacements invalidate the cached
+bytes automatically, and the decoded response schema is unchanged. On the
+checked-in 594 KB latest snapshot, 100 repeated gzip-enabled route requests
+improved from about 1.54 seconds to 0.036 seconds (15.36 ms to 0.36 ms each,
+roughly 42.7×) with byte-identical decoded JSON.
 
 XGBoost probability and full interval/Monte Carlo scoring results are memoized
 per worker using the exact model, market, line, and final feature vector.

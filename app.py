@@ -1700,6 +1700,8 @@ _MLB_MEMORY_READ_CACHE = {
     "updated_at": None,
     "latest": None,
     "latest_summary": None,
+    "latest_response": None,
+    "latest_summary_response": None,
     "status": None,
 }
 _MLB_MEMORY_READ_LOCK = threading.Lock()
@@ -1827,6 +1829,8 @@ def _build_mlb_memory_cached_views(
             if latest_summary is not None
             else None
         ),
+        "latest_response": None,
+        "latest_summary_response": None,
         "status": pickle.dumps(status, protocol=pickle.HIGHEST_PROTOCOL),
     }
 
@@ -1923,6 +1927,8 @@ def _mlb_memory_cached_views():
             "updated_at": None,
             "latest": None,
             "latest_summary": None,
+            "latest_response": None,
+            "latest_summary_response": None,
             "status": pickle.dumps(status, protocol=pickle.HIGHEST_PROTOCOL),
         }
 
@@ -2001,6 +2007,92 @@ def _mlb_memory_latest_snapshot(summary_only=False):
     key = "latest_summary" if summary_only else "latest"
     blob = _mlb_memory_cached_views()[key]
     return pickle.loads(blob) if blob is not None else None
+
+
+def _mlb_memory_latest_representation(summary_only=False):
+    """Build one immutable JSON/gzip representation per store file version."""
+    import gzip
+    import hashlib
+    import pickle
+
+    view_key = "latest_summary" if summary_only else "latest"
+    response_key = (
+        "latest_summary_response" if summary_only else "latest_response"
+    )
+
+    while True:
+        cached = _mlb_memory_cached_views()
+        if cached[view_key] is None:
+            return None
+        representation = cached[response_key]
+        if representation is not None:
+            return representation
+
+        with _MLB_MEMORY_READ_LOCK:
+            if _MLB_MEMORY_READ_CACHE["sig"] != cached["sig"]:
+                continue
+            try:
+                current_sig = _mlb_memory_file_signature(
+                    os.stat(MLB_MEMORY_STORE)
+                )
+            except OSError:
+                current_sig = None
+            if current_sig != cached["sig"]:
+                continue
+
+            representation = _MLB_MEMORY_READ_CACHE[response_key]
+            if representation is None:
+                latest = pickle.loads(_MLB_MEMORY_READ_CACHE[view_key])
+                if not latest:
+                    return None
+                body = (
+                    app.json.dumps(
+                        {"success": True, "snapshot": latest},
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                ).encode("utf-8")
+                representation = {
+                    "body": body,
+                    "gzip": (
+                        gzip.compress(body, compresslevel=5)
+                        if len(body) >= 4096
+                        else None
+                    ),
+                    "etag": hashlib.sha256(body).hexdigest(),
+                }
+                _MLB_MEMORY_READ_CACHE[response_key] = representation
+        return representation
+
+
+def _mlb_memory_latest_response(summary_only=False):
+    """Serve cached latest-memory bytes with revalidation and gzip reuse."""
+    representation = _mlb_memory_latest_representation(
+        summary_only=summary_only
+    )
+    if representation is None:
+        return None
+
+    etag = representation["etag"]
+    headers = {
+        "Cache-Control": "no-cache",
+        "ETag": f'"{etag}"',
+        "Vary": "Accept-Encoding",
+    }
+    try:
+        if request.if_none_match.contains(etag):
+            return Response(status=304, headers=headers)
+    except Exception:
+        pass
+
+    body = representation["body"]
+    if (
+        representation["gzip"] is not None
+        and "gzip" in (request.headers.get("Accept-Encoding") or "")
+    ):
+        body = representation["gzip"]
+        headers["Content-Encoding"] = "gzip"
+    return Response(body, mimetype="application/json", headers=headers)
 
 
 def _mlb_memory_store_status_view():
@@ -6275,10 +6367,10 @@ def api_brain_ingest_trigger():
 def api_memory_latest():
     try:
         summary_only = str(request.args.get('summaryOnly') or '').strip().lower() in ('1', 'true', 'yes')
-        latest = _mlb_memory_latest_snapshot(summary_only=summary_only)
-        if not latest:
+        response = _mlb_memory_latest_response(summary_only=summary_only)
+        if response is None:
             return jsonify({"success": False, "error": "No MLB memory snapshot collected yet"}), 404
-        return jsonify({"success": True, "snapshot": latest})
+        return response
     except Exception as ex:
         print(f'[api_memory_latest] {traceback.format_exc()}')
         return jsonify({"success": False, "error": str(ex)}), 500
