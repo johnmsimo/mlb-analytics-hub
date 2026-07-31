@@ -232,6 +232,15 @@ checked-in 594 KB latest snapshot, 100 repeated gzip-enabled route requests
 improved from about 1.54 seconds to 0.036 seconds (15.36 ms to 0.36 ms each,
 roughly 42.7×) with byte-identical decoded JSON.
 
+The tracker day APIs (`/api/tracker/today`, `/api/tracker/date/<date>`, and
+`/api/tracker/entries`) also reuse bounded immutable JSON and gzip
+representations. Cache keys include both the tracker-store and model-adjustment
+device/inode/mtime/size versions, so pick writes and settings changes invalidate
+automatically. Strong ETags enable bodyless 304 responses, decoded schemas stay
+unchanged, and concurrent cold requests collapse to one encode. In a
+representative 250-row response, the JSON/gzip serialization portion fell from
+about 1.26 ms per request to an immutable byte lookup.
+
 XGBoost probability and full interval/Monte Carlo scoring results are memoized
 per worker using the exact model, market, line, and final feature vector.
 Concurrent identical scores collapse to one computation, returned objects are

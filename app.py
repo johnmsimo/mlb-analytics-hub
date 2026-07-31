@@ -17092,12 +17092,35 @@ def api_tracker_adjustments():
     return jsonify({'success': True, 'adjustments': _get_adjustments()})
 
 
-@app.route('/api/tracker/date/<date_str>')
-def api_tracker_date(date_str):
+def _tracker_date_payload(date_str):
     store = _tracker_store_for_dates([date_str])
     day = _normalize_tracker_day(store.get(date_str))
-    day['entries'] = _recalc_tracker_entries(day.get('entries', []))
-    return jsonify({'success': True, 'date': date_str, 'adjustments': _get_adjustments(), 'capturedAt': day.get('capturedAt'), 'gradedAt': day.get('gradedAt'), 'closingCapturedAt': day.get('closingCapturedAt'), 'entries': day.get('entries', []), 'summary': _tracker_summary(day.get('entries', []))})
+    adjustments = _get_adjustments()
+    day['entries'] = _recalc_tracker_entries(
+        day.get('entries', []),
+        adjustments=adjustments,
+    )
+    return {
+        'success': True,
+        'date': date_str,
+        'adjustments': adjustments,
+        'capturedAt': day.get('capturedAt'),
+        'gradedAt': day.get('gradedAt'),
+        'closingCapturedAt': day.get('closingCapturedAt'),
+        'entries': day.get('entries', []),
+        'summary': _tracker_summary(
+            day.get('entries', []),
+            adjustments=adjustments,
+        ),
+    }
+
+
+@app.route('/api/tracker/date/<date_str>')
+def api_tracker_date(date_str):
+    return _tracker_api_response(
+        ('date', str(date_str)),
+        lambda: _tracker_date_payload(date_str),
+    )
 
 
 @app.route('/api/tracker/capture/<date_str>', methods=['POST'])
@@ -17400,6 +17423,97 @@ _TRACKER_READ_CACHE = {
     'date_keys': (),
 }
 _TRACKER_READ_LOCK = threading.Lock()
+_TRACKER_RESPONSE_CACHE = {
+    'version': None,
+    'representations': {},
+}
+_TRACKER_RESPONSE_LOCK = threading.Lock()
+_TRACKER_RESPONSE_CACHE_MAX = 256
+
+
+def _tracker_file_signature(path):
+    try:
+        st = os.stat(path)
+        return (st.st_dev, st.st_ino, st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
+def _tracker_response_version():
+    """Return every file version that can change a tracker day response."""
+    return (
+        _tracker_cached_snapshot().get('sig'),
+        _tracker_file_signature(ADJUST_STORE),
+    )
+
+
+def _tracker_api_representation(cache_key, payload_factory):
+    """Build one immutable JSON/gzip representation per tracker file version."""
+    import gzip
+    import hashlib
+
+    with _TRACKER_RESPONSE_LOCK:
+        while True:
+            version = _tracker_response_version()
+            if _TRACKER_RESPONSE_CACHE['version'] != version:
+                _TRACKER_RESPONSE_CACHE.update({
+                    'version': version,
+                    'representations': {},
+                })
+
+            representations = _TRACKER_RESPONSE_CACHE['representations']
+            representation = representations.get(cache_key)
+            if representation is not None:
+                return representation
+
+            payload = payload_factory()
+            if _tracker_response_version() != version:
+                continue
+
+            body = (
+                app.json.dumps(payload, separators=(',', ':')) + '\n'
+            ).encode('utf-8')
+            representation = {
+                'body': body,
+                'gzip': (
+                    gzip.compress(body, compresslevel=5)
+                    if len(body) >= 4096
+                    else None
+                ),
+                'etag': hashlib.sha256(body).hexdigest(),
+            }
+            if len(representations) >= _TRACKER_RESPONSE_CACHE_MAX:
+                representations.pop(next(iter(representations)))
+            representations[cache_key] = representation
+            return representation
+
+
+def _tracker_api_response(cache_key, payload_factory):
+    """Serve a cached tracker representation with ETag revalidation."""
+    representation = _tracker_api_representation(
+        cache_key,
+        payload_factory,
+    )
+    etag = representation['etag']
+    headers = {
+        'Cache-Control': 'no-cache',
+        'ETag': f'"{etag}"',
+        'Vary': 'Accept-Encoding',
+    }
+    try:
+        if request.if_none_match.contains(etag):
+            return Response(status=304, headers=headers)
+    except Exception:
+        pass
+
+    body = representation['body']
+    if (
+        representation['gzip'] is not None
+        and 'gzip' in (request.headers.get('Accept-Encoding') or '')
+    ):
+        body = representation['gzip']
+        headers['Content-Encoding'] = 'gzip'
+    return Response(body, mimetype='application/json', headers=headers)
 
 
 def _tracker_cached_snapshot():
@@ -18086,7 +18200,7 @@ def _tracker_side_label(row):
 
 def _tracker_live_summary(entries, adjustments=None):
     adjustments = adjustments or _get_adjustments()
-    summary = _tracker_summary(entries)
+    summary = _tracker_summary(entries, adjustments=adjustments)
     graded = [x for x in entries if x.get('grade') in ('win', 'loss', 'push')]
     active = [x for x in graded if x.get('grade') in ('win', 'loss')]
     pending = [x for x in entries if (x.get('grade') or 'pending') == 'pending']
@@ -19245,7 +19359,10 @@ def api_defense_rankings():
 @app.route('/api/tracker/today')
 def api_tracker_today():
     date_str = request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
-    return jsonify(_tracker_today_payload(date_str))
+    return _tracker_api_response(
+        ('today', str(date_str)),
+        lambda: _tracker_today_payload(date_str),
+    )
 
 
 @app.route('/api/tracker/performance')
@@ -20421,7 +20538,7 @@ def _daily_value_series(end_date_str, window_days, market_key=None, store=None):
     return series
 
 
-def _tracker_summary(entries):
+def _tracker_summary(entries, adjustments=None):
     total = len(entries)
     graded = [x for x in entries if x.get('grade') in ('win', 'loss', 'push')]
     wins = sum(1 for x in graded if x.get('grade') == 'win')
@@ -20443,7 +20560,11 @@ def _tracker_summary(entries):
             by_market[mk]['units'] = round(by_market[mk]['units'] + float(x.get('profitUnits') or 0), 4)
         if x.get('profitDollars') is not None:
             by_market[mk]['dollars'] = round(by_market[mk]['dollars'] + float(x.get('profitDollars') or 0), 2)
-    adjustments = _get_adjustments()
+    adjustments = (
+        _get_adjustments()
+        if adjustments is None
+        else adjustments
+    )
     return {
         'picks': total, 'graded': len(graded), 'wins': wins, 'losses': losses, 'pushes': pushes,
         'hit_rate': hit_rate, 'by_market': by_market, 'value': _value_summary(entries), 'bankroll': _bankroll_summary(entries, adjustments)
@@ -25164,27 +25285,45 @@ def api_props_matchup_scores(game_pk):
 
 
 # ── Route: Tracker entries for the value bets panel ───────────────────────────
+def _tracker_entries_payload(date, game_pk=None):
+    store = _tracker_store_for_dates([date])
+    day = _normalize_tracker_day(store.get(date))
+    entries = day.get("entries", [])
+
+    if game_pk:
+        try:
+            pk_int = int(game_pk)
+            entries = [
+                entry
+                for entry in entries
+                if (
+                    entry.get("gamePk") == pk_int
+                    or str(entry.get("gamePk")) == str(pk_int)
+                )
+            ]
+        except (ValueError, TypeError):
+            pass
+
+    return {
+        "success": True,
+        "date": date,
+        "entries": entries,
+        "total": len(entries),
+    }
+
+
 @app.route('/api/tracker/entries')
 def api_tracker_entries():
     try:
-        date   = request.args.get("date", datetime.now(ET).strftime("%Y-%m-%d"))
-        gamePk = request.args.get("gamePk")
-
-        store = _tracker_store_for_dates([date])
-
-        day     = _normalize_tracker_day(store.get(date))
-        entries = day.get("entries", [])
-
-        if gamePk:
-            try:
-                pk_int  = int(gamePk)
-                entries = [e for e in entries
-                           if e.get("gamePk") == pk_int or str(e.get("gamePk")) == str(pk_int)]
-            except (ValueError, TypeError):
-                pass
-
-        return jsonify({"success": True, "date": date, "entries": entries, "total": len(entries)})
-
+        date = request.args.get(
+            "date",
+            datetime.now(ET).strftime("%Y-%m-%d"),
+        )
+        game_pk = request.args.get("gamePk")
+        return _tracker_api_response(
+            ("entries", str(date), str(game_pk or "")),
+            lambda: _tracker_entries_payload(date, game_pk),
+        )
     except Exception as ex:
         print(f"[api_tracker_entries] {traceback.format_exc()}")
         return jsonify({"success": False, "error": str(ex)}), 500
