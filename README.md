@@ -206,7 +206,11 @@ replace advances the in-memory day snapshot immediately. Concurrent updates to
 different dates remain serialized and full-history readers rebuild a private
 store lazily only when they actually request one. On a representative 12.3 MB,
 180-day tracker, 12 sequential single-day writes were about 5.1× faster with
-identical final data.
+identical final data. The date, today, and entries APIs also reuse immutable
+JSON and gzip representations per tracker/adjustment file version. Strong ETags
+make unchanged dashboard refreshes bodyless, while day commits and atomic file
+replacements invalidate cached bytes automatically without changing decoded
+response contracts.
 
 Model adjustments and calibration history use thread-safe, file-version-aware
 parsed snapshots across requests. Concurrent cold reads collapse to one JSON
