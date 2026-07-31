@@ -17094,10 +17094,7 @@ def api_tracker_adjustments():
 
 @app.route('/api/tracker/date/<date_str>')
 def api_tracker_date(date_str):
-    store = _tracker_store_for_dates([date_str])
-    day = _normalize_tracker_day(store.get(date_str))
-    day['entries'] = _recalc_tracker_entries(day.get('entries', []))
-    return jsonify({'success': True, 'date': date_str, 'adjustments': _get_adjustments(), 'capturedAt': day.get('capturedAt'), 'gradedAt': day.get('gradedAt'), 'closingCapturedAt': day.get('closingCapturedAt'), 'entries': day.get('entries', []), 'summary': _tracker_summary(day.get('entries', []))})
+    return _tracker_day_response('date', date_str)
 
 
 @app.route('/api/tracker/capture/<date_str>', methods=['POST'])
@@ -17400,6 +17397,9 @@ _TRACKER_READ_CACHE = {
     'date_keys': (),
 }
 _TRACKER_READ_LOCK = threading.Lock()
+_TRACKER_RESPONSE_CACHE = {}
+_TRACKER_RESPONSE_LOCK = threading.Lock()
+_TRACKER_RESPONSE_MAX_ENTRIES = 256
 
 
 def _tracker_cached_snapshot():
@@ -17502,6 +17502,18 @@ def _tracker_date_keys():
     return tuple(_tracker_cached_snapshot()['date_keys'])
 
 
+def _tracker_invalidate_day_responses(date_str=None):
+    """Discard cached tracker API representations after a successful write."""
+    with _TRACKER_RESPONSE_LOCK:
+        if date_str is None:
+            _TRACKER_RESPONSE_CACHE.clear()
+            return
+        date_str = str(date_str)
+        for key in list(_TRACKER_RESPONSE_CACHE):
+            if key[1] == date_str:
+                _TRACKER_RESPONSE_CACHE.pop(key, None)
+
+
 def _tracker_write_day_snapshot(date_str, day):
     """Replace one tracker day by reusing serialized JSON for unchanged days.
 
@@ -17559,6 +17571,7 @@ def _tracker_write_day_snapshot(date_str, day):
                 'day_json': day_json,
                 'date_keys': tuple(date_keys),
             })
+        _tracker_invalidate_day_responses(date_str)
         return True
     except Exception as ex:
         try:
@@ -18180,6 +18193,174 @@ def _tracker_today_payload(date_str=None):
         'summary': _tracker_live_summary(entries, adjustments),
         'settings': adjustments,
     }
+
+
+def _tracker_response_file_signature(path):
+    try:
+        st = os.stat(path)
+        return (st.st_dev, st.st_ino, st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
+def _tracker_entries_game_pk(value):
+    if value in (None, ''):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _tracker_day_response_payload(kind, date_str, game_pk=None):
+    """Build one decoded payload for the tracker day-response APIs."""
+    date_str = str(date_str)
+    if kind == 'today':
+        return _tracker_today_payload(date_str)
+
+    store = _tracker_store_for_dates([date_str])
+    day = _normalize_tracker_day(store.get(date_str))
+    if kind == 'date':
+        adjustments = _get_adjustments()
+        entries = _recalc_tracker_entries(
+            day.get('entries', []),
+            adjustments=adjustments,
+        )
+        return {
+            'success': True,
+            'date': date_str,
+            'adjustments': adjustments,
+            'capturedAt': day.get('capturedAt'),
+            'gradedAt': day.get('gradedAt'),
+            'closingCapturedAt': day.get('closingCapturedAt'),
+            'entries': entries,
+            'summary': _tracker_summary(entries),
+        }
+    if kind == 'entries':
+        entries = day.get('entries', [])
+        if game_pk is not None:
+            entries = [
+                entry for entry in entries
+                if (
+                    entry.get('gamePk') == game_pk
+                    or str(entry.get('gamePk')) == str(game_pk)
+                )
+            ]
+        return {
+            'success': True,
+            'date': date_str,
+            'entries': entries,
+            'total': len(entries),
+        }
+    raise ValueError(f'Unknown tracker day response kind: {kind}')
+
+
+def _tracker_encode_day_representation(payload, version):
+    import gzip
+    import hashlib
+
+    body = (
+        app.json.dumps(payload, separators=(',', ':')) + '\n'
+    ).encode('utf-8')
+    return {
+        'version': version,
+        'body': body,
+        'gzip': (
+            gzip.compress(body, compresslevel=5)
+            if len(body) >= 4096
+            else None
+        ),
+        'etag': hashlib.sha256(body).hexdigest(),
+    }
+
+
+def _tracker_day_representation(kind, date_str, game_pk=None):
+    """Reuse immutable JSON/gzip bytes until tracker inputs change."""
+    date_str = str(date_str)
+    game_pk = (
+        _tracker_entries_game_pk(game_pk)
+        if kind == 'entries'
+        else None
+    )
+    cache_key = (kind, date_str, game_pk)
+    uses_adjustments = kind in ('date', 'today')
+
+    for _attempt in range(3):
+        tracker_sig = _tracker_cached_snapshot()['sig']
+        adjustment_sig = (
+            _tracker_response_file_signature(ADJUST_STORE)
+            if uses_adjustments
+            else None
+        )
+        version = (tracker_sig, adjustment_sig)
+
+        with _TRACKER_RESPONSE_LOCK:
+            cached = _TRACKER_RESPONSE_CACHE.get(cache_key)
+            if cached is not None and cached['version'] == version:
+                return cached
+
+            payload = _tracker_day_response_payload(
+                kind,
+                date_str,
+                game_pk=game_pk,
+            )
+            current_version = (
+                _tracker_cached_snapshot()['sig'],
+                (
+                    _tracker_response_file_signature(ADJUST_STORE)
+                    if uses_adjustments
+                    else None
+                ),
+            )
+            if current_version != version:
+                continue
+
+            representation = _tracker_encode_day_representation(
+                payload,
+                version,
+            )
+            _evict_if_large(
+                _TRACKER_RESPONSE_CACHE,
+                _TRACKER_RESPONSE_MAX_ENTRIES,
+            )
+            _TRACKER_RESPONSE_CACHE[cache_key] = representation
+            return representation
+
+    payload = _tracker_day_response_payload(
+        kind,
+        date_str,
+        game_pk=game_pk,
+    )
+    return _tracker_encode_day_representation(payload, None)
+
+
+def _tracker_day_response(kind, date_str, game_pk=None):
+    """Serve one cached tracker day response with gzip and ETag support."""
+    representation = _tracker_day_representation(
+        kind,
+        date_str,
+        game_pk=game_pk,
+    )
+    etag = representation['etag']
+    headers = {
+        'Cache-Control': 'no-cache',
+        'ETag': f'"{etag}"',
+        'Vary': 'Accept-Encoding',
+    }
+    try:
+        if request.if_none_match.contains(etag):
+            return Response(status=304, headers=headers)
+    except Exception:
+        pass
+
+    body = representation['body']
+    if (
+        representation['gzip'] is not None
+        and 'gzip' in (request.headers.get('Accept-Encoding') or '')
+    ):
+        body = representation['gzip']
+        headers['Content-Encoding'] = 'gzip'
+    return Response(body, mimetype='application/json', headers=headers)
 
 
 def _tracker_performance_payload(date_str=None, window_days=30):
@@ -19245,7 +19426,7 @@ def api_defense_rankings():
 @app.route('/api/tracker/today')
 def api_tracker_today():
     date_str = request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
-    return jsonify(_tracker_today_payload(date_str))
+    return _tracker_day_response('today', date_str)
 
 
 @app.route('/api/tracker/performance')
@@ -25170,20 +25351,7 @@ def api_tracker_entries():
         date   = request.args.get("date", datetime.now(ET).strftime("%Y-%m-%d"))
         gamePk = request.args.get("gamePk")
 
-        store = _tracker_store_for_dates([date])
-
-        day     = _normalize_tracker_day(store.get(date))
-        entries = day.get("entries", [])
-
-        if gamePk:
-            try:
-                pk_int  = int(gamePk)
-                entries = [e for e in entries
-                           if e.get("gamePk") == pk_int or str(e.get("gamePk")) == str(pk_int)]
-            except (ValueError, TypeError):
-                pass
-
-        return jsonify({"success": True, "date": date, "entries": entries, "total": len(entries)})
+        return _tracker_day_response('entries', date, game_pk=gamePk)
 
     except Exception as ex:
         print(f"[api_tracker_entries] {traceback.format_exc()}")
