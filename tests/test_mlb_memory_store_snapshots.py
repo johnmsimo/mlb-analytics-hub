@@ -30,6 +30,8 @@ class MlbMemoryStoreSnapshotTests(unittest.TestCase):
                     "updated_at": None,
                     "latest": None,
                     "latest_summary": None,
+                    "latest_response": None,
+                    "latest_summary_response": None,
                     "status": None,
                 }
             )
@@ -185,6 +187,150 @@ class MlbMemoryStoreSnapshotTests(unittest.TestCase):
                 summary_response.get_json()["snapshot"]["meta"]["gameCount"],
                 15,
             )
+
+    def test_latest_route_reuses_json_and_gzip_representation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "mlb_memory_store.json")
+            payload = self._payload()
+            payload["latest"]["padding"] = "x" * 5000
+            payload["snapshots"][-1] = payload["latest"]
+            self._write_json(path, payload)
+            original_dumps = mlb_app.app.json.dumps
+            dumps_calls = 0
+
+            def counting_dumps(*args, **kwargs):
+                nonlocal dumps_calls
+                dumps_calls += 1
+                return original_dumps(*args, **kwargs)
+
+            with (
+                patch.object(mlb_app, "MLB_MEMORY_STORE", path),
+                patch.object(
+                    mlb_app.app.json,
+                    "dumps",
+                    side_effect=counting_dumps,
+                ),
+                mlb_app.app.test_client() as client,
+            ):
+                first = client.get(
+                    "/api/memory/latest",
+                    headers={"Accept-Encoding": "gzip"},
+                )
+                second = client.get(
+                    "/api/memory/latest",
+                    headers={"Accept-Encoding": "gzip"},
+                )
+
+            self.assertEqual(dumps_calls, 1)
+            self.assertEqual(first.status_code, 200)
+            self.assertEqual(second.status_code, 200)
+            self.assertEqual(first.headers.get("Content-Encoding"), "gzip")
+            self.assertEqual(first.data, second.data)
+            self.assertEqual(first.headers.get("ETag"), second.headers.get("ETag"))
+
+    def test_latest_route_etag_revalidates_without_a_body(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "mlb_memory_store.json")
+            self._write_json(path, self._payload())
+
+            with (
+                patch.object(mlb_app, "MLB_MEMORY_STORE", path),
+                mlb_app.app.test_client() as client,
+            ):
+                first = client.get("/api/memory/latest")
+                second = client.get(
+                    "/api/memory/latest",
+                    headers={"If-None-Match": first.headers["ETag"]},
+                )
+
+            self.assertEqual(first.status_code, 200)
+            self.assertEqual(second.status_code, 304)
+            self.assertEqual(second.data, b"")
+
+    def test_latest_representation_invalidates_after_atomic_replacement(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "mlb_memory_store.json")
+            self._write_json(path, self._payload("first"))
+            original_stat = os.stat(path)
+
+            with (
+                patch.object(mlb_app, "MLB_MEMORY_STORE", path),
+                mlb_app.app.test_client() as client,
+            ):
+                first = client.get("/api/memory/latest")
+                replacement = f"{path}.new"
+                self._write_json(replacement, self._payload("other"))
+                self.assertEqual(
+                    os.path.getsize(replacement),
+                    original_stat.st_size,
+                )
+                os.utime(
+                    replacement,
+                    ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
+                )
+                os.replace(replacement, path)
+                second = client.get("/api/memory/latest")
+
+            self.assertEqual(first.get_json()["snapshot"]["marker"], "first")
+            self.assertEqual(second.get_json()["snapshot"]["marker"], "other")
+            self.assertNotEqual(
+                first.headers.get("ETag"),
+                second.headers.get("ETag"),
+            )
+
+    def test_summary_and_full_latest_use_independent_representations(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "mlb_memory_store.json")
+            self._write_json(path, self._payload())
+
+            with (
+                patch.object(mlb_app, "MLB_MEMORY_STORE", path),
+                mlb_app.app.test_client() as client,
+            ):
+                summary = client.get(
+                    "/api/memory/latest?summaryOnly=true"
+                )
+                full = client.get("/api/memory/latest")
+
+            self.assertEqual(
+                summary.get_json()["snapshot"],
+                {
+                    "createdAt": "2026-07-30T12:00:00Z",
+                    "targetDateET": "2026-07-30",
+                    "meta": {
+                        "teamCount": 30,
+                        "gameCount": 15,
+                        "featuredPlayers": 160,
+                        "mode": "light",
+                    },
+                },
+            )
+            self.assertEqual(full.get_json()["snapshot"]["marker"], "first")
+            self.assertNotEqual(
+                summary.headers.get("ETag"),
+                full.headers.get("ETag"),
+            )
+
+    def test_empty_latest_keeps_existing_not_found_contract(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "mlb_memory_store.json")
+            self._write_json(
+                path,
+                {
+                    "latest": {},
+                    "snapshots": [],
+                    "updatedAt": None,
+                },
+            )
+
+            with (
+                patch.object(mlb_app, "MLB_MEMORY_STORE", path),
+                mlb_app.app.test_client() as client,
+            ):
+                response = client.get("/api/memory/latest")
+
+            self.assertEqual(response.status_code, 404)
+            self.assertFalse(response.get_json()["success"])
 
     def test_full_store_pickle_is_materialized_lazily_and_reused(self):
         with tempfile.TemporaryDirectory() as temp_dir:
