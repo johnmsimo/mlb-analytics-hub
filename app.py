@@ -1285,30 +1285,48 @@ _HTML_GZ_LOCK = threading.Lock()
 
 
 def _page_response(html):
+    """Serve one HTML encoding variant with a byte-accurate strong ETag."""
     import hashlib
-    body = html.encode('utf-8') if isinstance(html, str) else html
-    etag = hashlib.md5(body).hexdigest()
+
+    identity_body = html.encode('utf-8') if isinstance(html, str) else html
+    identity_etag = hashlib.md5(identity_body).hexdigest()
+    use_gzip = (
+        len(identity_body) >= 4096
+        and 'gzip' in (request.headers.get('Accept-Encoding') or '')
+    )
+
+    body = identity_body
+    etag = identity_etag
+    content_encoding = None
+    if use_gzip:
+        with _HTML_GZ_LOCK:
+            compressed = _HTML_GZ_CACHE.get(identity_etag)
+        if compressed is None:
+            import gzip as _gz
+            compressed_body = _gz.compress(identity_body, compresslevel=5)
+            compressed = {
+                'body': compressed_body,
+                'etag': hashlib.md5(compressed_body).hexdigest(),
+            }
+            with _HTML_GZ_LOCK:
+                _evict_if_large(_HTML_GZ_CACHE, 40)
+                _HTML_GZ_CACHE[identity_etag] = compressed
+        body = compressed['body']
+        etag = compressed['etag']
+        content_encoding = 'gzip'
+
     headers = {
         'Cache-Control': 'no-cache',
         'ETag': f'"{etag}"',
         'Vary': 'Accept-Encoding',
     }
+    if content_encoding is not None:
+        headers['Content-Encoding'] = content_encoding
     try:
         if request.if_none_match.contains(etag):
             return Response(status=304, headers=headers)
     except Exception:
         pass
-    if len(body) >= 4096 and 'gzip' in (request.headers.get('Accept-Encoding') or ''):
-        with _HTML_GZ_LOCK:
-            gz = _HTML_GZ_CACHE.get(etag)
-        if gz is None:
-            import gzip as _gz
-            gz = _gz.compress(body, compresslevel=5)
-            with _HTML_GZ_LOCK:
-                _evict_if_large(_HTML_GZ_CACHE, 40)
-                _HTML_GZ_CACHE[etag] = gz
-        headers['Content-Encoding'] = 'gzip'
-        return Response(gz, mimetype='text/html', headers=headers)
     return Response(body, mimetype='text/html', headers=headers)
 
 
@@ -2052,46 +2070,56 @@ def _mlb_memory_latest_representation(summary_only=False):
                     )
                     + "\n"
                 ).encode("utf-8")
+                compressed = (
+                    gzip.compress(body, compresslevel=5)
+                    if len(body) >= 4096
+                    else None
+                )
                 representation = {
                     "body": body,
-                    "gzip": (
-                        gzip.compress(body, compresslevel=5)
-                        if len(body) >= 4096
+                    "gzip": compressed,
+                    "etag": hashlib.sha256(body).hexdigest(),
+                    "gzip_etag": (
+                        hashlib.sha256(compressed).hexdigest()
+                        if compressed is not None
                         else None
                     ),
-                    "etag": hashlib.sha256(body).hexdigest(),
                 }
                 _MLB_MEMORY_READ_CACHE[response_key] = representation
         return representation
 
 
 def _mlb_memory_latest_response(summary_only=False):
-    """Serve cached latest-memory bytes with revalidation and gzip reuse."""
+    """Serve cached latest-memory bytes with variant-safe revalidation."""
     representation = _mlb_memory_latest_representation(
         summary_only=summary_only
     )
     if representation is None:
         return None
 
-    etag = representation["etag"]
+    use_gzip = (
+        representation["gzip"] is not None
+        and "gzip" in (request.headers.get("Accept-Encoding") or "")
+    )
+    if use_gzip:
+        body = representation["gzip"]
+        etag = representation["gzip_etag"]
+    else:
+        body = representation["body"]
+        etag = representation["etag"]
+
     headers = {
         "Cache-Control": "no-cache",
         "ETag": f'"{etag}"',
         "Vary": "Accept-Encoding",
     }
+    if use_gzip:
+        headers["Content-Encoding"] = "gzip"
     try:
         if request.if_none_match.contains(etag):
             return Response(status=304, headers=headers)
     except Exception:
         pass
-
-    body = representation["body"]
-    if (
-        representation["gzip"] is not None
-        and "gzip" in (request.headers.get("Accept-Encoding") or "")
-    ):
-        body = representation["gzip"]
-        headers["Content-Encoding"] = "gzip"
     return Response(body, mimetype="application/json", headers=headers)
 
 
@@ -18262,15 +18290,21 @@ def _tracker_encode_day_representation(payload, version):
     body = (
         app.json.dumps(payload, separators=(',', ':')) + '\n'
     ).encode('utf-8')
+    compressed = (
+        gzip.compress(body, compresslevel=5)
+        if len(body) >= 4096
+        else None
+    )
     return {
         'version': version,
         'body': body,
-        'gzip': (
-            gzip.compress(body, compresslevel=5)
-            if len(body) >= 4096
+        'gzip': compressed,
+        'etag': hashlib.sha256(body).hexdigest(),
+        'gzip_etag': (
+            hashlib.sha256(compressed).hexdigest()
+            if compressed is not None
             else None
         ),
-        'etag': hashlib.sha256(body).hexdigest(),
     }
 
 
@@ -18335,31 +18369,35 @@ def _tracker_day_representation(kind, date_str, game_pk=None):
 
 
 def _tracker_day_response(kind, date_str, game_pk=None):
-    """Serve one cached tracker day response with gzip and ETag support."""
+    """Serve one cached tracker day response with variant-safe ETags."""
     representation = _tracker_day_representation(
         kind,
         date_str,
         game_pk=game_pk,
     )
-    etag = representation['etag']
+    use_gzip = (
+        representation['gzip'] is not None
+        and 'gzip' in (request.headers.get('Accept-Encoding') or '')
+    )
+    if use_gzip:
+        body = representation['gzip']
+        etag = representation['gzip_etag']
+    else:
+        body = representation['body']
+        etag = representation['etag']
+
     headers = {
         'Cache-Control': 'no-cache',
         'ETag': f'"{etag}"',
         'Vary': 'Accept-Encoding',
     }
+    if use_gzip:
+        headers['Content-Encoding'] = 'gzip'
     try:
         if request.if_none_match.contains(etag):
             return Response(status=304, headers=headers)
     except Exception:
         pass
-
-    body = representation['body']
-    if (
-        representation['gzip'] is not None
-        and 'gzip' in (request.headers.get('Accept-Encoding') or '')
-    ):
-        body = representation['gzip']
-        headers['Content-Encoding'] = 'gzip'
     return Response(body, mimetype='application/json', headers=headers)
 
 
@@ -31496,3 +31534,4 @@ if __name__ == "__main__":
     _preload_caches()
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
+

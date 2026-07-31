@@ -208,9 +208,9 @@ store lazily only when they actually request one. On a representative 12.3 MB,
 180-day tracker, 12 sequential single-day writes were about 5.1× faster with
 identical final data. The date, today, and entries APIs also reuse immutable
 JSON and gzip representations per tracker/adjustment file version. Strong ETags
-make unchanged dashboard refreshes bodyless, while day commits and atomic file
-replacements invalidate cached bytes automatically without changing decoded
-response contracts.
+are computed from the selected identity or gzip bytes, so only a validator for
+the same encoding can make a refresh bodyless. Day commits and atomic file
+replacements still invalidate cached bytes without changing decoded contracts.
 
 Model adjustments and calibration history use thread-safe, file-version-aware
 parsed snapshots across requests. Concurrent cold reads collapse to one JSON
@@ -229,9 +229,10 @@ replacement. On identical copies of the checked-in 11.9 MB store, repeated warm
 appends improved from about 173 ms to 90 ms (1.9×) with byte-equivalent retained
 data and the same retention, compaction, and failure-recovery contracts.
 Full and summary `/api/memory/latest` responses also cache their immutable JSON
-and gzip representations per file version. Strong ETags support bodyless 304
-revalidation, successful appends and atomic replacements invalidate the cached
-bytes automatically, and the decoded response schema is unchanged. On the
+and gzip representations per file version. Strong ETags are computed from the
+selected identity or gzip bytes, so cross-encoding validators receive a full
+200 response. Successful appends and atomic replacements still invalidate the
+cached bytes automatically, and the decoded response schema is unchanged. On the
 checked-in 594 KB latest snapshot, 100 repeated gzip-enabled route requests
 improved from about 1.54 seconds to 0.036 seconds (15.36 ms to 0.36 ms each,
 roughly 42.7×) with byte-identical decoded JSON.
@@ -267,3 +268,4 @@ MIT License — feel free to fork and build on top of this.
 ---
 
 *Built by [@johnmsimo](https://github.com/johnmsimo)*
+
