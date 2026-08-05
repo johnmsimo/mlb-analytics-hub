@@ -65,5 +65,6 @@ EXPOSE $PORT
 
 # Run the production WSGI server. The exec form preserves Fly.io shutdown
 # signals, and gunicorn_conf.py owns worker/thread/time-out configuration plus
-# the post-fork cache preload hook.
-CMD ["gunicorn", "--config", "gunicorn_conf.py", "app:app"]
+# the post-fork cache preload hook. wsgi.py installs Phase 4.26 confidence
+# enrichment before exposing the Flask application.
+CMD ["gunicorn", "--config", "gunicorn_conf.py", "wsgi:app"]
