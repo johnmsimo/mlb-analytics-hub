@@ -17428,6 +17428,9 @@ _TRACKER_READ_LOCK = threading.Lock()
 _TRACKER_RESPONSE_CACHE = {}
 _TRACKER_RESPONSE_LOCK = threading.Lock()
 _TRACKER_RESPONSE_MAX_ENTRIES = 256
+_TRACKER_ANALYTICS_RESPONSE_CACHE = {}
+_TRACKER_ANALYTICS_RESPONSE_LOCK = threading.Lock()
+_TRACKER_ANALYTICS_RESPONSE_MAX_ENTRIES = 128
 
 
 def _tracker_cached_snapshot():
@@ -18368,13 +18371,8 @@ def _tracker_day_representation(kind, date_str, game_pk=None):
     return _tracker_encode_day_representation(payload, None)
 
 
-def _tracker_day_response(kind, date_str, game_pk=None):
-    """Serve one cached tracker day response with variant-safe ETags."""
-    representation = _tracker_day_representation(
-        kind,
-        date_str,
-        game_pk=game_pk,
-    )
+def _tracker_json_representation_response(representation):
+    """Serve selected immutable JSON bytes with variant-safe strong ETags."""
     use_gzip = (
         representation['gzip'] is not None
         and 'gzip' in (request.headers.get('Accept-Encoding') or '')
@@ -18399,6 +18397,87 @@ def _tracker_day_response(kind, date_str, game_pk=None):
     except Exception:
         pass
     return Response(body, mimetype='application/json', headers=headers)
+
+
+def _tracker_day_response(kind, date_str, game_pk=None):
+    """Serve one cached tracker day response with variant-safe ETags."""
+    representation = _tracker_day_representation(
+        kind,
+        date_str,
+        game_pk=game_pk,
+    )
+    return _tracker_json_representation_response(representation)
+
+
+def _tracker_analytics_input_version(kind):
+    """Return the file versions consumed by one tracker analytics response."""
+    return (
+        _tracker_cached_snapshot()['sig'],
+        _tracker_response_file_signature(ADJUST_STORE),
+        (
+            _tracker_response_file_signature(CAL_HISTORY_STORE)
+            if kind in ('performance', 'calibration')
+            else None
+        ),
+    )
+
+
+def _tracker_analytics_payload(kind, date_str, window_days):
+    """Build one decoded multi-day tracker analytics payload."""
+    if kind == 'performance':
+        return _tracker_performance_payload(date_str, window_days)
+    if kind == 'calibration':
+        return _tracker_calibration_dashboard_payload(date_str, window_days)
+    if kind == 'value':
+        return _tracker_value_dashboard_payload(date_str, window_days)
+    raise ValueError(f'Unknown tracker analytics response kind: {kind}')
+
+
+def _tracker_analytics_representation(kind, date_str, window_days):
+    """Reuse analytics JSON/gzip bytes until any consumed input changes."""
+    date_str = str(date_str)
+    window_days = int(window_days)
+    cache_key = (kind, date_str, window_days)
+
+    for _attempt in range(3):
+        version = _tracker_analytics_input_version(kind)
+        with _TRACKER_ANALYTICS_RESPONSE_LOCK:
+            cached = _TRACKER_ANALYTICS_RESPONSE_CACHE.get(cache_key)
+            if cached is not None and cached['version'] == version:
+                return cached
+
+            payload = _tracker_analytics_payload(
+                kind,
+                date_str,
+                window_days,
+            )
+            current_version = _tracker_analytics_input_version(kind)
+            if current_version != version:
+                continue
+
+            representation = _tracker_encode_day_representation(
+                payload,
+                version,
+            )
+            _evict_if_large(
+                _TRACKER_ANALYTICS_RESPONSE_CACHE,
+                _TRACKER_ANALYTICS_RESPONSE_MAX_ENTRIES,
+            )
+            _TRACKER_ANALYTICS_RESPONSE_CACHE[cache_key] = representation
+            return representation
+
+    payload = _tracker_analytics_payload(kind, date_str, window_days)
+    return _tracker_encode_day_representation(payload, None)
+
+
+def _tracker_analytics_response(kind, date_str, window_days):
+    """Serve one cached tracker analytics response."""
+    representation = _tracker_analytics_representation(
+        kind,
+        date_str,
+        window_days,
+    )
+    return _tracker_json_representation_response(representation)
 
 
 def _tracker_performance_payload(date_str=None, window_days=30):
@@ -19200,9 +19279,7 @@ def api_v1_edges():
         return jsonify({'success': False, 'error': str(ex)}), 500
 
 
-@app.route('/api/tracker/calibration/dashboard/<date_str>')
-def api_tracker_calibration_dashboard(date_str):
-    window = int(request.args.get('window', 14) or 14)
+def _tracker_calibration_dashboard_payload(date_str, window):
     adjustments = _get_adjustments()
     markets = list((adjustments.get('market_multipliers') or {}).keys())
     store = _tracker_store_for_dates(_dates_in_window(date_str, window))
@@ -19220,7 +19297,7 @@ def api_tracker_calibration_dashboard(date_str):
         )
         for mk in markets
     }
-    return jsonify({
+    return {
         'success': True,
         'date': date_str,
         'window': window,
@@ -19230,7 +19307,13 @@ def api_tracker_calibration_dashboard(date_str):
         'events': events[-120:],
         'availableMarkets': markets,
         'adjustments': adjustments,
-    })
+    }
+
+
+@app.route('/api/tracker/calibration/dashboard/<date_str>')
+def api_tracker_calibration_dashboard(date_str):
+    window = int(request.args.get('window', 14) or 14)
+    return _tracker_analytics_response('calibration', date_str, window)
 
 
 @app.route('/api/tracker/calibration/<date_str>')
@@ -19471,7 +19554,7 @@ def api_tracker_today():
 def api_tracker_performance():
     date_str = request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
     window = int(request.args.get('window', 30) or 30)
-    return jsonify(_tracker_performance_payload(date_str, window))
+    return _tracker_analytics_response('performance', date_str, window)
 
 
 @app.route('/api/tracker/backtest')
@@ -20471,9 +20554,7 @@ def _start_tracker_closing_capture_worker():
     threading.Thread(target=_runner, daemon=True).start()
 
 
-@app.route('/api/tracker/value/dashboard/<date_str>')
-def api_tracker_value_dashboard(date_str):
-    window = int(request.args.get('window', 14) or 14)
+def _tracker_value_dashboard_payload(date_str, window):
     adjustments = _get_adjustments()
     markets = list((adjustments.get('market_multipliers') or {}).keys())
     store = _tracker_store_for_dates(_dates_in_window(date_str, window))
@@ -20487,7 +20568,24 @@ def api_tracker_value_dashboard(date_str):
     top_clv = sorted([r for r in graded if r.get('clvEdge') is not None], key=lambda x: x.get('clvEdge', 0), reverse=True)[:12]
     worst_clv = sorted([r for r in graded if r.get('clvEdge') is not None], key=lambda x: x.get('clvEdge', 0))[:12]
     top_profit = sorted([r for r in graded if r.get('profitUnits') is not None], key=lambda x: x.get('profitUnits', 0), reverse=True)[:12]
-    return jsonify({'success': True, 'date': date_str, 'window': window, 'overallSeries': overall, 'marketSeries': market_series, 'availableMarkets': markets, 'windowSummary': _value_summary(entries), 'topCLV': top_clv, 'worstCLV': worst_clv, 'topProfit': top_profit})
+    return {
+        'success': True,
+        'date': date_str,
+        'window': window,
+        'overallSeries': overall,
+        'marketSeries': market_series,
+        'availableMarkets': markets,
+        'windowSummary': _value_summary(entries),
+        'topCLV': top_clv,
+        'worstCLV': worst_clv,
+        'topProfit': top_profit,
+    }
+
+
+@app.route('/api/tracker/value/dashboard/<date_str>')
+def api_tracker_value_dashboard(date_str):
+    window = int(request.args.get('window', 14) or 14)
+    return _tracker_analytics_response('value', date_str, window)
 
 
 
