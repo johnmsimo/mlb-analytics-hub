@@ -39,9 +39,10 @@ def decision_score(p: Mapping[str, Any]) -> float:
     probability = max(0.0, min(1.0, _prob(p)))
     confidence = max(0.0, min(100.0, _num(p.get('confidenceScore')))) / 100.0
     edge = max(0.0, min(0.15, _edge(p))) / 0.15
+    context = max(0.0, min(100.0, _num(p.get('contextScore'), 50.0))) / 100.0
     rating = max(0.0, min(100.0, _num(p.get('hubRating')))) / 100.0
     agreement = _num((p.get('confidenceComponents') or {}).get('modelAgreement'), 50.0) / 100.0
-    return round(min(1.0, probability*.34 + confidence*.32 + edge*.18 + rating*.08 + agreement*.08)*100, 1)
+    return round(min(1.0, probability*.31 + confidence*.28 + edge*.17 + context*.12 + rating*.06 + agreement*.06)*100, 1)
 
 def build_recommendations(picks: Iterable[Mapping[str, Any]], policy: DecisionPolicy | None = None) -> dict[str, Any]:
     policy = policy or DecisionPolicy()
@@ -60,8 +61,10 @@ def build_recommendations(picks: Iterable[Mapping[str, Any]], policy: DecisionPo
             continue
         p['intelligenceCategory'] = category
         p['decisionScore'] = decision_score(p)
-        p['whyThisPick'] = [f"Model win probability {_prob(p):.1%}", f"Estimated edge {_edge(p):.1%}", f"Confidence {_num(p.get('confidenceScore')):.1f}/100"]
+        p['whyThisPick'] = [f"Model win probability {_prob(p):.1%}", f"Estimated edge {_edge(p):.1%}", f"Confidence {_num(p.get('confidenceScore')):.1f}/100", f"Game context {_num(p.get('contextScore'), 50.0):.1f}/100"]
+        p['whyThisPick'].extend(p.get('contextEvidence') or [])
         if p.get('confidenceExplanation'): p['whyThisPick'].append(p['confidenceExplanation'])
+        if p.get('contextRisks'): p['riskFactors'] = list(p['contextRisks'])
         eligible.append(p)
     eligible.sort(key=lambda p: (-p['decisionScore'], -_prob(p), -_edge(p)))
     categories = ('hitter_hits','pitcher_strikeouts','game_winner')
