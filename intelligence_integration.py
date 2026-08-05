@@ -1,7 +1,8 @@
-"""Flask integration for context- and matchup-aware prediction intelligence."""
+"""Flask integration for context-, matchup-, and simulation-aware intelligence."""
 from context_engine import enrich_context
 from intelligence_core import build_recommendations
 from matchup_engine import enrich_matchups
+from simulation_engine import enrich_simulations
 
 
 def install_intelligence_api(app_module):
@@ -16,12 +17,14 @@ def install_intelligence_api(app_module):
         entries = tracker.get('entries') or tracker.get('picks') or []
         contextual_entries = enrich_context(entries)
         matchup_entries = enrich_matchups(contextual_entries)
-        decisions = build_recommendations(matchup_entries)
+        simulated_entries = enrich_simulations(matchup_entries)
+        decisions = build_recommendations(simulated_entries)
         return app_module.jsonify({
             'success': True,
             'date': tracker.get('date') or date_str,
             'sourceCount': len(entries),
             'contextVersion': '4.28',
             'matchupVersion': '4.29',
+            'simulationVersion': '4.30',
             **decisions,
         })
