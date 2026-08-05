@@ -41,9 +41,10 @@ def decision_score(p: Mapping[str, Any]) -> float:
     edge = max(0.0, min(0.15, _edge(p))) / 0.15
     context = max(0.0, min(100.0, _num(p.get('contextScore'), 50.0))) / 100.0
     matchup = max(0.0, min(100.0, _num(p.get('matchupScore'), 50.0))) / 100.0
+    simulation = max(0.0, min(100.0, _num(p.get('simulationScore'), 50.0))) / 100.0
     rating = max(0.0, min(100.0, _num(p.get('hubRating')))) / 100.0
     agreement = _num((p.get('confidenceComponents') or {}).get('modelAgreement'), 50.0) / 100.0
-    return round(min(1.0, probability*.28 + confidence*.25 + edge*.15 + context*.10 + matchup*.14 + rating*.04 + agreement*.04)*100, 1)
+    return round(min(1.0, probability*.25 + confidence*.22 + edge*.14 + context*.09 + matchup*.12 + simulation*.12 + rating*.03 + agreement*.03)*100, 1)
 
 def build_recommendations(picks: Iterable[Mapping[str, Any]], policy: DecisionPolicy | None = None) -> dict[str, Any]:
     policy = policy or DecisionPolicy()
@@ -68,11 +69,13 @@ def build_recommendations(picks: Iterable[Mapping[str, Any]], policy: DecisionPo
             f"Confidence {_num(p.get('confidenceScore')):.1f}/100",
             f"Game context {_num(p.get('contextScore'), 50.0):.1f}/100",
             f"Baseball matchup {_num(p.get('matchupScore'), 50.0):.1f}/100",
+            f"Simulation quality {_num(p.get('simulationScore'), 50.0):.1f}/100",
         ]
         p['whyThisPick'].extend(p.get('contextEvidence') or [])
         p['whyThisPick'].extend(p.get('matchupAdvantages') or [])
+        p['whyThisPick'].extend(p.get('simulationEvidence') or [])
         if p.get('confidenceExplanation'): p['whyThisPick'].append(p['confidenceExplanation'])
-        risks = list(p.get('contextRisks') or []) + list(p.get('matchupRisks') or [])
+        risks = list(p.get('contextRisks') or []) + list(p.get('matchupRisks') or []) + list(p.get('simulationRisks') or [])
         if risks: p['riskFactors'] = risks
         eligible.append(p)
     eligible.sort(key=lambda p: (-p['decisionScore'], -_prob(p), -_edge(p)))
