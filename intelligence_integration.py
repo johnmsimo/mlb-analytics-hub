@@ -1,6 +1,7 @@
-"""Flask integration for context-, matchup-, and simulation-aware intelligence."""
+"""Flask integration for prediction intelligence and learning analytics."""
 from context_engine import enrich_context
 from intelligence_core import build_recommendations
+from learning_engine import analyze_learning
 from matchup_engine import enrich_matchups
 from simulation_engine import enrich_simulations
 
@@ -26,5 +27,20 @@ def install_intelligence_api(app_module):
             'contextVersion': '4.28',
             'matchupVersion': '4.29',
             'simulationVersion': '4.30',
+            'learningVersion': '4.31',
             **decisions,
+        })
+
+    @flask_app.route('/api/intelligence/learning', methods=['GET'])
+    def api_intelligence_learning():
+        date_str = app_module.request.args.get('date') or None
+        tracker = app_module._tracker_today_payload(date_str)
+        entries = tracker.get('entries') or tracker.get('picks') or []
+        analytics = analyze_learning(entries)
+        return app_module.jsonify({
+            'success': True,
+            'date': tracker.get('date') or date_str,
+            'sourceCount': len(entries),
+            'learningVersion': '4.31',
+            **analytics,
         })
