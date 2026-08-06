@@ -234,8 +234,10 @@ from brain_merge_patch import (
 
 
 from config import settings
+from cache_service import normalize_cache_key
 from http_client import install_global_http_session
 from mlb_schedule_cache import fetch_schedule, fetch_schedule_game
+from redis_client import get_redis
 from request_performance import performance_bp, request_performance
 
 # Install the same configured retrying pool in direct Flask starts and Gunicorn
@@ -5281,6 +5283,37 @@ def parse_game(g, prefer_live_weather=True):
         # Final scores
         away_score = away.get("score")
         home_score = home.get("score")
+
+        # Carry the already-hydrated schedule lineup into the dashboard payload.
+        # This lets the card render immediately without waiting for a second
+        # network request; the dedicated lineup endpoint refreshes it in the
+        # background when an official boxscore becomes available.
+        schedule_lineups = g.get("lineups") or {}
+
+        def _card_schedule_lineup(players):
+            rows = []
+            for idx, player in enumerate(players or [], start=1):
+                name = (player.get("fullName") or player.get("name") or "").strip()
+                if not name:
+                    continue
+                pid = player.get("id") or player.get("playerId")
+                pos = (player.get("primaryPosition") or {}).get("abbreviation", "?")
+                bio = _bio_cache.get(pid) or {}
+                rows.append({
+                    "slot": idx,
+                    "id": pid,
+                    "name": name,
+                    "pos": pos,
+                    "bats": bio.get("bats", player.get("bats") or "S"),
+                })
+            return rows[:9]
+
+        away_card_lineup = _card_schedule_lineup(
+            schedule_lineups.get("awayBatters") or schedule_lineups.get("awayPlayers")
+        )
+        home_card_lineup = _card_schedule_lineup(
+            schedule_lineups.get("homeBatters") or schedule_lineups.get("homePlayers")
+        )
         return {
             "gamePk": pk, "status": st,
             "isPostponed": is_postponed,
@@ -5312,6 +5345,10 @@ def parse_game(g, prefer_live_weather=True):
             ),
             "weatherIcon": wi,
             "injuryAlert": injury_alert,
+            "awayLineup": away_card_lineup,
+            "homeLineup": home_card_lineup,
+            "awayLineupConfirmed": len(away_card_lineup) >= 9,
+            "homeLineupConfirmed": len(home_card_lineup) >= 9,
         }
     except Exception as ex:
         print("[parse_game]", ex); return None
@@ -22161,8 +22198,7 @@ def api_projections_monte_carlo():
                         'message': 'Computing… auto-refreshing in 20s'})
 
 
-@app.route('/api/lineup/<int:game_pk>')
-def api_lineup(game_pk):
+def _build_lineup_payload(game_pk):
     try:
         # ── Step 1: Try live boxscore (official confirmed batting order) ──────
         away, home = [], []
@@ -22296,18 +22332,143 @@ def api_lineup(game_pk):
         except Exception:
             pass
 
-        return jsonify({
+        return {
             'success': True, 'gamePk': game_pk,
             'away': away[:9], 'home': home[:9],
             'awayConfirmed': away_source == 'confirmed',
             'homeConfirmed': home_source == 'confirmed',
             'awaySource': away_source or 'none',
             'homeSource': home_source or 'none',
-        })
+        }
     except Exception as ex:
-        return jsonify({'success': False, 'gamePk': game_pk, 'away': [], 'home': [],
-                        'awayConfirmed': False, 'homeConfirmed': False,
-                        'awaySource': 'none', 'homeSource': 'none', 'error': str(ex)})
+        return {'success': False, 'gamePk': game_pk, 'away': [], 'home': [],
+                'awayConfirmed': False, 'homeConfirmed': False,
+                'awaySource': 'none', 'homeSource': 'none', 'error': str(ex)}
+
+
+_LINEUP_CARD_FRESH_TTL = 60
+_LINEUP_CARD_STALE_TTL = 1800
+_LINEUP_CARD_JOBS = set()
+_LINEUP_CARD_JOBS_LOCK = threading.Lock()
+_LINEUP_CARD_EXECUTOR = ThreadPoolExecutor(
+    max_workers=2,
+    thread_name_prefix='lineup-card-refresh',
+)
+
+
+def _lineup_card_cache_key(game_pk, date_str):
+    return normalize_cache_key('dashboard_lineup_v2', game_pk, date_str)
+
+
+def _schedule_lineup_payload(game_pk, date_str):
+    job_key = (int(game_pk), str(date_str))
+    with _LINEUP_CARD_JOBS_LOCK:
+        if job_key in _LINEUP_CARD_JOBS:
+            return False
+        _LINEUP_CARD_JOBS.add(job_key)
+
+    def _run():
+        try:
+            payload = _build_lineup_payload(game_pk)
+            if payload.get('success'):
+                get_redis().set(
+                    _lineup_card_cache_key(game_pk, date_str),
+                    {'timestamp': time.time(), 'payload': payload},
+                    ttl=_LINEUP_CARD_STALE_TTL,
+                )
+        except Exception:
+            logging.warning(
+                '[lineup_card] background refresh failed for %s',
+                game_pk,
+                exc_info=True,
+            )
+        finally:
+            with _LINEUP_CARD_JOBS_LOCK:
+                _LINEUP_CARD_JOBS.discard(job_key)
+
+    _LINEUP_CARD_EXECUTOR.submit(_run)
+    return True
+
+
+def _schedule_lineup_payload_from_game(game_pk, date_str):
+    """Build a lightweight lineup from the already-cached slate schedule."""
+    try:
+        games = fetch_schedule(date_str)
+        game = next(
+            (item for item in games if str(item.get('gamePk')) == str(game_pk)),
+            None,
+        )
+        lineups = (game or {}).get('lineups') or {}
+
+        def _parse(players):
+            out = []
+            for idx, player in enumerate(players or [], start=1):
+                name = (player.get('fullName') or player.get('name') or '').strip()
+                if not name:
+                    continue
+                pid = player.get('id') or player.get('playerId')
+                bio = _bio_cache.get(pid) or {}
+                out.append({
+                    'slot': idx,
+                    'id': pid,
+                    'name': name,
+                    'pos': (player.get('primaryPosition') or {}).get('abbreviation', '?'),
+                    'bats': bio.get('bats', player.get('bats') or 'S'),
+                })
+            return out[:9]
+
+        away = _parse(lineups.get('awayBatters') or lineups.get('awayPlayers'))
+        home = _parse(lineups.get('homeBatters') or lineups.get('homePlayers'))
+        return {
+            'success': True,
+            'gamePk': game_pk,
+            'away': away,
+            'home': home,
+            'awayConfirmed': len(away) >= 9,
+            'homeConfirmed': len(home) >= 9,
+            'awaySource': 'schedule' if away else 'none',
+            'homeSource': 'schedule' if home else 'none',
+        }
+    except Exception:
+        return {
+            'success': True,
+            'gamePk': game_pk,
+            'away': [],
+            'home': [],
+            'awayConfirmed': False,
+            'homeConfirmed': False,
+            'awaySource': 'none',
+            'homeSource': 'none',
+        }
+
+
+@app.route('/api/lineup/<int:game_pk>')
+def api_lineup(game_pk):
+    """Never block on MLB/player calls; serve a snapshot and refresh off-thread."""
+    date_str = request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
+    refresh = request.args.get('refresh') == '1'
+    now = time.time()
+    record = get_redis().get(_lineup_card_cache_key(game_pk, date_str))
+    if isinstance(record, dict) and isinstance(record.get('payload'), dict):
+        age = max(0, int(now - float(record.get('timestamp') or now)))
+        if not refresh and age < _LINEUP_CARD_FRESH_TTL:
+            return jsonify(dict(
+                record['payload'], cached=True, cacheAgeSec=age, computing=False,
+            ))
+        _schedule_lineup_payload(game_pk, date_str)
+        return jsonify(dict(
+            record['payload'], cached=True, stale=True, cacheAgeSec=age,
+            computing=True, retryAfterSeconds=3,
+        ))
+
+    payload = _schedule_lineup_payload_from_game(game_pk, date_str)
+    started = _schedule_lineup_payload(game_pk, date_str)
+    payload.update({
+        'computing': True,
+        'backgroundStarted': started,
+        'retryAfterSeconds': 3,
+    })
+    return jsonify(payload)
 
 
 # ── Slate Capture & Parlays ───────────────────────────────────────────────────
