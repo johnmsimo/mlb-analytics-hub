@@ -132,6 +132,29 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .qp-save:hover{background:rgba(0,229,255,.08);color:var(--c);border-color:rgba(0,229,255,.4)}
 .qp-save.saved{background:rgba(0,230,118,.1);color:#00e676;border-color:rgba(0,230,118,.3);cursor:default}
 .qp-loading{text-align:center;padding:8px 4px;font-family:Orbitron,monospace;font-size:.58rem;color:var(--mu);letter-spacing:2px}
+.qp-intel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:8px}
+.qp-intel-title{font-family:Orbitron,monospace;font-size:.62rem;font-weight:800;letter-spacing:1.2px;color:var(--c)}
+.qp-intel-sub{font-size:.55rem;color:var(--mu);line-height:1.4;margin-top:2px}
+.qp-policy{font-family:Orbitron,monospace;font-size:.48rem;color:var(--mu);white-space:nowrap}
+.qp-pick{border:1px solid rgba(0,229,255,.16);border-radius:9px;background:rgba(0,229,255,.035);padding:8px;margin-top:7px}
+.qp-pick.pass{border-color:rgba(106,141,176,.16);background:rgba(106,141,176,.035)}
+.qp-pick-top{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.qp-cat{font-family:Orbitron,monospace;font-size:.52rem;color:var(--mu);letter-spacing:.8px;flex:1;min-width:105px}
+.qp-grade{font-family:Orbitron,monospace;font-size:.5rem;font-weight:800;padding:2px 6px;border-radius:999px;white-space:nowrap}
+.qp-grade.strong{background:rgba(0,230,118,.16);border:1px solid rgba(0,230,118,.34);color:#00e676}
+.qp-grade.value{background:rgba(0,229,255,.13);border:1px solid rgba(0,229,255,.3);color:var(--c)}
+.qp-grade.lean{background:rgba(255,193,7,.11);border:1px solid rgba(255,193,7,.28);color:#ffd54f}
+.qp-grade.pass{background:rgba(106,141,176,.08);border:1px solid rgba(106,141,176,.2);color:var(--mu)}
+.qp-confidence{font-family:Orbitron,monospace;font-size:.58rem;font-weight:800;color:var(--c);white-space:nowrap}
+.qp-selection{display:flex;align-items:baseline;gap:6px;margin-top:6px;flex-wrap:wrap}
+.qp-player{font-size:.76rem;font-weight:800;color:var(--t);flex:1;min-width:110px}
+.qp-side{font-family:Orbitron,monospace;font-size:.63rem;font-weight:800;color:#00e676}
+.qp-price{font-family:Orbitron,monospace;font-size:.54rem;color:var(--t);background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);padding:1px 5px;border-radius:4px}
+.qp-summary{font-size:.6rem;line-height:1.4;color:#9fb3c8;margin-top:5px}
+.qp-proof{font-size:.55rem;line-height:1.4;color:var(--mu);margin-top:4px}
+.qp-proof.good{color:#9adfb0}.qp-proof.risk{color:#e5b5b5}
+.qp-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}
+.qp-actions .qp-save{margin:0}
 /* ── Confident Hits (money-maker block) ── */
 .ch-wrap{margin-bottom:10px;border:1px solid rgba(0,230,118,.28);border-radius:9px;background:linear-gradient(180deg,rgba(0,230,118,.06),rgba(0,230,118,.015));padding:7px 8px 4px}
 .ch-head{display:flex;align-items:center;justify-content:space-between;gap:6px;font-family:Orbitron,monospace;font-size:.6rem;font-weight:700;letter-spacing:1.4px;color:#00e676;margin-bottom:5px;text-transform:uppercase}
@@ -980,7 +1003,7 @@ function mkCard(g){
     +'<a href="/gameside-deepdive/'+g.gamePk+'" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" style="display:block;margin-top:6px;padding:7px;background:rgba(0,230,118,.07);border:1px solid rgba(0,230,118,.22);border-radius:8px;text-align:center;font-family:Orbitron,monospace;font-size:.58rem;letter-spacing:1.5px;color:#00e676;cursor:pointer;text-decoration:none">&#127919; GAMESIDE VIEW</a>'
     +(isFinal?'':('<button class="lineup-toggle" style="margin-top:6px;background:rgba(0,229,255,.03)" onclick="toggleQuickProps(event,'+g.gamePk+')">&#9889; QUICK PROPS</button>'
     +'<div class="qp-strip" id="qp-'+g.gamePk+'">'
-      +'<div class="qp-loading" id="qpl-'+g.gamePk+'">Loading top props…</div>'
+      +'<div class="qp-loading" id="qpl-'+g.gamePk+'">Ranking best bets…</div>'
     +'</div>'))
     // Admin odds refresh button (always visible for now)
     +'<button class="lineup-toggle" style="margin-top:10px;background:rgba(0,229,255,.04);color:#00e5ff;font-weight:700" onclick="refreshOddsForGame(event,'+g.gamePk+')">&#x21bb; REFRESH ODDS</button>'
@@ -1196,10 +1219,13 @@ function toggleQuickProps(e,pk){
   btn.textContent=open?'✕ HIDE PROPS':'⚡ QUICK PROPS';
   if(!open)return;
   if(QP_DATA[pk]){renderQuickProps(pk,QP_DATA[pk]);return;}
-  strip.innerHTML='<div class="qp-loading">Loading top props…</div>';
-  fetch('/api/props/quick/'+pk+'?date='+encodeURIComponent(selectedGamesDate))
+  strip.innerHTML='<div class="qp-loading">Ranking hit, strikeout and moneyline decisions…</div>';
+  fetch('/api/intelligence/game-card/'+pk+'?date='+encodeURIComponent(selectedGamesDate))
     .then(function(r){return r.json();})
-    .then(function(d){QP_DATA[pk]=d;renderQuickProps(pk,d);})
+    .then(function(d){
+      if(!d||!d.success)throw new Error((d&&d.error)||'Quick picks unavailable');
+      QP_DATA[pk]=d;renderQuickProps(pk,d);
+    })
     .catch(function(){
       var s=document.getElementById('qp-'+pk);
       if(s)s.innerHTML='<div class="qp-loading">Props unavailable</div>';
@@ -1341,65 +1367,92 @@ function chSave(e,h,btnId){
 function renderQuickProps(pk,d){
   var strip=document.getElementById('qp-'+pk);
   if(!strip)return;
-  var confHtml=renderConfidentHits(pk,(d&&d.confidentHits)||[]);
-  var picks=(d&&d.quickProps)||[];
-  if(!picks.length && d && d.picks) picks=d.picks;
-  if(!picks.length){strip.innerHTML=confHtml||'<div class="qp-loading">No standout props found</div>';return;}
-  var mktLabels={hits:'Hits',hr:'HR',tb:'Tot.Bases',rbi:'RBIs'};
+  var picks=(d&&d.quickPicks)||[];
+  if(!picks.length){strip.innerHTML='<div class="qp-loading">No game-card decisions available</div>';return;}
   var tracked=window.__trackedQPIds||[];
-  strip.innerHTML=confHtml+picks.map(function(p,i){
-    var hubRating=Math.round(p.hubRating||p.hub_score||0);
-    var cls=hubRating>=85?'elite':hubRating>=70?'strong':hubRating>=55?'mod':'low';
-    var mkt=((p.marketLabel||mktLabels[p.market]||p.market)||'Prop')+' O'+p.line;
-    // Model-first metrics: calibrated probability leads, live price/EV when the
-    // prop is priced, L10 over-rate as a confirmation signal (no longer the driver).
-    var modelPct=(p.adjProb!=null)?Math.round(p.adjProb*100):null;
-    var l10=(p.l10_pct!=null)?Math.round(p.l10_pct*100):null;
-    var parts=[];
-    if(modelPct!=null)parts.push('MODEL '+modelPct+'%');
-    if(p.bestPrice!=null)parts.push((p.bestPrice>0?'+':'')+p.bestPrice);
-    if(p.evPct!=null){var evp=p.evPct*100;parts.push((evp>0?'+':'')+evp.toFixed(1)+'% EV');}
-    if(l10!=null)parts.push('L10 '+l10+'%');
-    var evTxt=parts.join(' · ')||'—';
-    var evPos=(p.evPct!=null)?(p.evPct>0):((p.lift!=null)?(p.lift>0):((l10||0)>=70));
-    var key=p.playerId+':'+p.market+':'+p.line;
+  var policy=(d&&d.policy)||{};
+  var head='<div class="qp-intel-head">'
+    +'<div><div class="qp-intel-title">⚡ HIGHEST-CONFIDENCE PICKS</div>'
+    +'<div class="qp-intel-sub">One decision per market · weak edges become Pass</div></div>'
+    +'<div class="qp-policy">MIN '+Math.round(policy.minimumConfidence||0)+' CONF</div></div>';
+  strip.innerHTML=head+picks.map(function(p,i){
+    var grade=p.recommendationGrade||'Pass';
+    var isPass=grade==='Pass';
+    var gradeClass=grade==='Strong Play'?'strong':grade==='Value Play'?'value':grade==='Lean'?'lean':'pass';
+    var confidence=Math.round(Number(p.confidenceScore)||0);
+    var category=p.intelligenceCategory||'';
+    var player=p.player||p.team||'No candidate';
+    var side=p.recommendedSide||p.sideLabel||'';
+    var line=(p.line!=null)?p.line:null;
+    var selection;
+    if(isPass){
+      selection='<span class="qp-side" style="color:var(--mu)">PASS</span>';
+      if(player&&player!=='No candidate')selection+='<span class="qp-player" style="color:var(--mu)">'+player+'</span>';
+    }else if(category==='game_winner'){
+      selection='<span class="qp-player">'+(p.team||side||player)+'</span><span class="qp-side">MONEYLINE</span>';
+    }else{
+      var unit=category==='pitcher_strikeouts'?'Ks':'Hits';
+      selection='<span class="qp-player">'+player+'</span><span class="qp-side">'+side+' '+(line!=null?line+' ':'')+unit+'</span>';
+    }
+    var price=(p.bestAvailablePrice!=null)?p.bestAvailablePrice:p.marketPrice;
+    var priceHtml='';
+    if(price!=null&&!isPass){
+      priceHtml='<span class="qp-price">'+(Number(price)>0?'+':'')+price+(p.bestAvailableBook?' · '+p.bestAvailableBook:'')+'</span>';
+    }
+    var reasons=p.topReasons||[];
+    var evidence=p.supportingEvidence||[];
+    var proof=reasons[0]||(evidence[0]&&evidence[0].label)||'';
+    var risks=p.topRisks||[];
+    var summary=p.decisionSummary||p.confidenceNarrative||p.recommendedAction||'';
+    var key=quickPickKey(p);
     var saved=tracked.indexOf(key)>=0;
     var bid='qpsave-'+pk+'-'+i;
-    // --- Add Parlay Button ---
-    var parlayBtn = '<button class="qp-save" style="margin-left:6px;background:rgba(224,64,251,.08);border:1px solid #e040fb;color:#e040fb" onclick="addToParlayFromQP(event,'+encodeURIComponent(JSON.stringify(p))+')">+ Parlay</button>';
-    return '<div class="qp-row">'
-      +'<span class="qp-name">'+p.player+'</span>'
-      +'<span class="qp-mkt">'+mkt+'</span>'
-      +'<span class="qp-hub '+cls+'">HUB '+hubRating+'</span>'
-      +'<span class="qp-ev '+(evPos?'pos':'neg')+'">'+evTxt+'</span>'
-      +'<button class="qp-save'+(saved?' saved':'')
-      +'" id="'+bid+'" onclick="qpSave(event,'+JSON.stringify(p)+',\''+bid+'\')">'
-      +(saved?'✓ Saved':'💾')+'</button>'
-      +parlayBtn
+    var encoded=encodeURIComponent(JSON.stringify(p));
+    var actions=isPass?'':'<div class="qp-actions">'
+      +'<button class="qp-save'+(saved?' saved':'')+'" id="'+bid+'" onclick="qpSave(event,\''+encoded+'\',\''+bid+'\')">'+(saved?'✓ Saved':'💾 Save')+'</button>'
+      +'<button class="qp-save" style="background:rgba(224,64,251,.08);border-color:#e040fb;color:#e040fb" onclick="addToParlayFromQP(event,\''+encoded+'\')">+ Parlay</button>'
+      +'</div>';
+    return '<div class="qp-pick'+(isPass?' pass':'')+'">'
+      +'<div class="qp-pick-top"><span class="qp-cat">'+(p.categoryLabel||category)+'</span>'
+      +'<span class="qp-grade '+gradeClass+'">'+grade+'</span>'
+      +'<span class="qp-confidence">'+confidence+' CONF</span></div>'
+      +'<div class="qp-selection">'+selection+priceHtml+'</div>'
+      +(summary?'<div class="qp-summary">'+summary+'</div>':'')
+      +(proof?'<div class="qp-proof good">✓ '+proof+'</div>':'')
+      +(risks[0]?'<div class="qp-proof risk">⚠ '+risks[0]+'</div>':'')
+      +actions
       +'</div>';
   }).join('');
 }
-function qpSave(e,pick,btnId){
+function quickPickKey(pick){
+  return [pick.playerId||pick.team||pick.player||'pick',pick.marketKey||pick.intelligenceCategory||'market',pick.line||0,pick.recommendedSide||''].join(':');
+}
+function quickPickPayload(pick){
+  return {
+    player:pick.player,playerId:pick.playerId,team:pick.team,
+    marketKey:pick.marketKey||(pick.intelligenceCategory==='hitter_hits'?'batter_hits':pick.intelligenceCategory==='pitcher_strikeouts'?'pitcher_strikeouts':'h2h'),
+    line:pick.line,recommendedSide:pick.recommendedSide,source:'dashboard_intelligence',
+    adjProb:pick.adjProb,hubRating:pick.hubRating||pick.confidenceScore||0,
+    confidenceScore:pick.confidenceScore,recommendationGrade:pick.recommendationGrade,
+    decisionSummary:pick.decisionSummary,
+    price:(pick.bestAvailablePrice!=null?pick.bestAvailablePrice:pick.marketPrice),
+    book:pick.bestAvailableBook||pick.bookmaker||null,
+    edge:(pick.edge!=null?pick.edge:null),evPct:(pick.evPct!=null?pick.evPct:null),
+    impliedProb:(pick.marketImplied!=null?pick.marketImplied:null)
+  };
+}
+function qpSave(e,pickStr,btnId){
   e.stopPropagation();
   var btn=document.getElementById(btnId);
   if(btn&&btn.classList.contains('saved'))return;
-  var payload={
-    player:pick.player,playerId:pick.playerId,team:pick.team,
-    marketKey:pick.marketKey||('batter_'+pick.market),
-    line:pick.line,recommendedSide:'Over',source:'dashboard',
-    adjProb:(pick.adjProb!=null?pick.adjProb:(pick.l10_pct||0.5)),
-    hubRating:pick.hubRating||pick.hub_score||0,
-    price:(pick.bestPrice!=null?pick.bestPrice:null),book:(pick.bestBook||null),
-    edge:(pick.edge!=null?pick.edge:null),
-    evPct:(pick.evPct!=null?pick.evPct:null),
-    impliedProb:(pick.marketImplied!=null?pick.marketImplied:null)
-  };
+  var pick;try{pick=JSON.parse(decodeURIComponent(pickStr));}catch(err){if(btn)btn.textContent='Err';return;}
+  var payload=quickPickPayload(pick);
   fetch('/api/tracker/pick',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
     .then(function(r){return r.json();})
     .then(function(d){
       if(d.success&&btn){
         btn.classList.add('saved');btn.textContent='✓ Saved';
-        var key=pick.playerId+':'+pick.market+':'+pick.line;
+        var key=quickPickKey(pick);
         if(!window.__trackedQPIds)window.__trackedQPIds=[];
         if(window.__trackedQPIds.indexOf(key)<0)window.__trackedQPIds.push(key);
       }
@@ -1413,23 +1466,7 @@ function addToParlayFromQP(e, pickStr) {
   try {
     var pick = JSON.parse(decodeURIComponent(pickStr));
     var queue; try { queue = JSON.parse(localStorage.getItem('pendingParlayLegs') || '[]'); } catch(e) { queue = window.__parlayQueue || []; }
-    // Normalize prop for parlay
-    var leg = {
-      player: pick.player,
-      playerId: pick.playerId,
-      team: pick.team,
-      marketKey: pick.marketKey || ('batter_' + pick.market),
-      line: pick.line,
-      recommendedSide: 'Over',
-      source: 'dashboard',
-      adjProb: (pick.adjProb != null ? pick.adjProb : (pick.l10_pct || 0.5)),
-      hubRating: pick.hubRating || pick.hub_score || 0,
-      price: (pick.bestPrice != null ? pick.bestPrice : null),
-      book: (pick.bestBook || null),
-      edge: (pick.edge != null ? pick.edge : null),
-      evPct: (pick.evPct != null ? pick.evPct : null),
-      impliedProb: (pick.marketImplied != null ? pick.marketImplied : null)
-    };
+    var leg=quickPickPayload(pick);
     queue.push(leg);
     try { localStorage.setItem('pendingParlayLegs', JSON.stringify(queue)); } catch(e) {} window.__parlayQueue = queue;
     window.location.href = '/tracker';
