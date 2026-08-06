@@ -146,6 +146,10 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .qp-grade.lean{background:rgba(255,193,7,.11);border:1px solid rgba(255,193,7,.28);color:#ffd54f}
 .qp-grade.pass{background:rgba(106,141,176,.08);border:1px solid rgba(106,141,176,.2);color:var(--mu)}
 .qp-confidence{font-family:Orbitron,monospace;font-size:.58rem;font-weight:800;color:var(--c);white-space:nowrap}
+.qp-metrics{display:flex;gap:5px;flex-wrap:wrap;margin-top:6px}
+.qp-metric{font-family:Orbitron,monospace;font-size:.48rem;color:var(--mu);background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.08);padding:2px 5px;border-radius:4px}
+.qp-metric strong{color:var(--t)}
+.qp-unavailable{font-size:.53rem;line-height:1.45;color:var(--mu);margin-top:8px;padding:6px 8px;border:1px dashed rgba(106,141,176,.18);border-radius:7px}
 .qp-selection{display:flex;align-items:baseline;gap:6px;margin-top:6px;flex-wrap:wrap}
 .qp-player{font-size:.76rem;font-weight:800;color:var(--t);flex:1;min-width:110px}
 .qp-side{font-family:Orbitron,monospace;font-size:.63rem;font-weight:800;color:#00e676}
@@ -1368,27 +1372,26 @@ function renderQuickProps(pk,d){
   var strip=document.getElementById('qp-'+pk);
   if(!strip)return;
   var picks=(d&&d.quickPicks)||[];
-  if(!picks.length){strip.innerHTML='<div class="qp-loading">No game-card decisions available</div>';return;}
+  var unavailable=(d&&d.unavailableMarkets)||[];
   var tracked=window.__trackedQPIds||[];
-  var policy=(d&&d.policy)||{};
   var head='<div class="qp-intel-head">'
-    +'<div><div class="qp-intel-title">⚡ HIGHEST-CONFIDENCE PICKS</div>'
-    +'<div class="qp-intel-sub">Best positive-edge side per market · Pass only when no viable pick exists</div></div>'
-    +'<div class="qp-policy">PLAY '+Math.round(policy.minimumConfidence||0)+' · LEAN '+Math.round(policy.bestAvailableMinimumConfidence||0)+'</div></div>';
-  strip.innerHTML=head+picks.map(function(p,i){
-    var grade=p.recommendationGrade||'Pass';
-    var isPass=grade==='Pass';
+    +'<div><div class="qp-intel-title">⚡ TOP PICKS TO TAKE</div>'
+    +'<div class="qp-intel-sub">Priced positive-edge plays · Ranked by final Pick Score</div></div>'
+    +'<div class="qp-policy">'+picks.length+' PLAY'+(picks.length===1?'':'S')+'</div></div>';
+  var empty=picks.length?'':'<div class="qp-loading">No priced positive-edge pick is available for this game</div>';
+  var cards=picks.map(function(p,i){
+    var grade=p.recommendationGrade||'Lean';
     var gradeClass=grade==='Strong Play'?'strong':grade==='Value Play'?'value':grade==='Lean'?'lean':'pass';
-    var confidence=Math.round(Number(p.confidenceScore)||0);
+    var pickScore=Math.round(Number(p.pickScore)||0);
+    var probability=Number(p.modelProbabilityPct);
+    var edge=Number(p.estimatedEdgePct);
+    var reliability=Math.round(Number(p.modelReliabilityScore!=null?p.modelReliabilityScore:p.confidenceScore)||0);
     var category=p.intelligenceCategory||'';
     var player=p.player||p.team||'No candidate';
     var side=p.recommendedSide||p.sideLabel||'';
     var line=(p.line!=null)?p.line:null;
     var selection;
-    if(isPass){
-      selection='<span class="qp-side" style="color:var(--mu)">PASS</span>';
-      if(player&&player!=='No candidate')selection+='<span class="qp-player" style="color:var(--mu)">'+player+'</span>';
-    }else if(category==='game_winner'){
+    if(category==='game_winner'){
       selection='<span class="qp-player">'+(p.team||side||player)+'</span><span class="qp-side">MONEYLINE</span>';
     }else{
       var unit=category==='pitcher_strikeouts'?'Ks':'Hits';
@@ -1396,44 +1399,55 @@ function renderQuickProps(pk,d){
     }
     var price=(p.bestAvailablePrice!=null)?p.bestAvailablePrice:p.marketPrice;
     var priceHtml='';
-    if(price!=null&&!isPass){
+    if(price!=null){
       priceHtml='<span class="qp-price">'+(Number(price)>0?'+':'')+price+(p.bestAvailableBook?' · '+p.bestAvailableBook:'')+'</span>';
     }
-    var reasons=p.topReasons||[];
+    var reasons=p.pickScoreReasons||p.topReasons||[];
     var evidence=p.supportingEvidence||[];
     var proof=reasons[0]||(evidence[0]&&evidence[0].label)||'';
-    var risks=p.topRisks||[];
+    var risks=p.pickScoreRisks||p.topRisks||[];
     var summary=p.decisionSummary||p.confidenceNarrative||p.recommendedAction||'';
     var key=quickPickKey(p);
     var saved=tracked.indexOf(key)>=0;
     var bid='qpsave-'+pk+'-'+i;
     var encoded=encodeURIComponent(JSON.stringify(p));
-    var actions=isPass?'':'<div class="qp-actions">'
+    var actions='<div class="qp-actions">'
       +'<button class="qp-save'+(saved?' saved':'')+'" id="'+bid+'" onclick="qpSave(event,\''+encoded+'\',\''+bid+'\')">'+(saved?'✓ Saved':'💾 Save')+'</button>'
       +'<button class="qp-save" style="background:rgba(224,64,251,.08);border-color:#e040fb;color:#e040fb" onclick="addToParlayFromQP(event,\''+encoded+'\')">+ Parlay</button>'
       +'</div>';
-    return '<div class="qp-pick'+(isPass?' pass':'')+'">'
+    var metrics='<div class="qp-metrics">'
+      +'<span class="qp-metric">WIN <strong>'+probability.toFixed(1)+'%</strong></span>'
+      +'<span class="qp-metric">EDGE <strong>'+(edge>=0?'+':'')+edge.toFixed(1)+'%</strong></span>'
+      +'<span class="qp-metric">RELIABILITY <strong>'+reliability+'</strong></span></div>';
+    return '<div class="qp-pick">'
       +'<div class="qp-pick-top"><span class="qp-cat">'+(p.categoryLabel||category)+'</span>'
       +'<span class="qp-grade '+gradeClass+'">'+grade+'</span>'
-      +'<span class="qp-confidence">'+confidence+' CONF</span></div>'
+      +'<span class="qp-confidence">'+pickScore+' PICK</span></div>'
       +'<div class="qp-selection">'+selection+priceHtml+'</div>'
+      +metrics
       +(summary?'<div class="qp-summary">'+summary+'</div>':'')
       +(proof?'<div class="qp-proof good">✓ '+proof+'</div>':'')
       +(risks[0]?'<div class="qp-proof risk">⚠ '+risks[0]+'</div>':'')
       +actions
       +'</div>';
   }).join('');
+  var unavailableHtml=unavailable.length?'<div class="qp-unavailable">No qualifying play: '
+    +unavailable.map(function(item){return item.categoryLabel+' — '+item.reason;}).join(' · ')+'</div>':'';
+  strip.innerHTML=head+empty+cards+unavailableHtml;
 }
 function quickPickKey(pick){
   return [pick.playerId||pick.team||pick.player||'pick',pick.marketKey||pick.intelligenceCategory||'market',pick.line||0,pick.recommendedSide||''].join(':');
 }
 function quickPickPayload(pick){
   return {
-    player:pick.player,playerId:pick.playerId,team:pick.team,
+    player:pick.player||pick.team,playerId:pick.playerId,team:pick.team,
     marketKey:pick.marketKey||(pick.intelligenceCategory==='hitter_hits'?'batter_hits':pick.intelligenceCategory==='pitcher_strikeouts'?'pitcher_strikeouts':'h2h'),
     line:pick.line,recommendedSide:pick.recommendedSide,source:'dashboard_intelligence',
     adjProb:pick.adjProb,hubRating:pick.hubRating||pick.confidenceScore||0,
     confidenceScore:pick.confidenceScore,recommendationGrade:pick.recommendationGrade,
+    pickScore:pick.pickScore,pickConfidenceScore:pick.pickConfidenceScore,
+    modelReliabilityScore:pick.modelReliabilityScore,
+    modelProbabilityPct:pick.modelProbabilityPct,estimatedEdgePct:pick.estimatedEdgePct,
     decisionSummary:pick.decisionSummary,
     price:(pick.bestAvailablePrice!=null?pick.bestAvailablePrice:pick.marketPrice),
     book:pick.bestAvailableBook||pick.bookmaker||null,
