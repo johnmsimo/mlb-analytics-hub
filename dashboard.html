@@ -1374,7 +1374,7 @@ function renderQuickProps(pk,d){
   var head='<div class="qp-intel-head">'
     +'<div><div class="qp-intel-title">⚡ HIGHEST-CONFIDENCE PICKS</div>'
     +'<div class="qp-intel-sub">Best positive-edge side per market · Pass only when no viable pick exists</div></div>'
-    +'<div class="qp-policy">PLAY '+Math.round(policy.minimumConfidence||0)+' · LEAN '+Math.round(policy.bestAvailableMinimumConfidence||0)</div></div>';
+    +'<div class="qp-policy">PLAY '+Math.round(policy.minimumConfidence||0)+' · LEAN '+Math.round(policy.bestAvailableMinimumConfidence||0)+'</div></div>';
   strip.innerHTML=head+picks.map(function(p,i){
     var grade=p.recommendationGrade||'Pass';
     var isPass=grade==='Pass';
