@@ -6,12 +6,10 @@ from datetime import datetime
 from context_engine import enrich_context
 from explanation_engine import explain_decisions
 from game_card_intelligence import (
-    CATEGORY_ORDER,
     prepare_game_card_candidates,
     select_game_card_quick_picks,
 )
 from intelligence_core import build_recommendations
-from intelligence_core import classify_pick
 from learning_engine import analyze_learning
 from matchup_engine import enrich_matchups
 from simulation_engine import enrich_simulations
@@ -87,13 +85,11 @@ def install_intelligence_api(app_module):
             dict(row) for row in all_tracker_entries
             if str(row.get('gamePk')) == str(game_pk)
         ]
-        present = {classify_pick(row) for row in rows}
-
-        # Tracker capture is the most efficient source when it already contains
-        # all required markets. Otherwise generate the missing game candidates
-        # through the same full simulation/odds path used by tracker capture.
+        # Rebuild candidates on each cache miss so the game card ranks the
+        # current sportsbook lines instead of stale opening prices. Captured
+        # tracker rows remain a fallback if a live upstream source is unavailable.
         generated = []
-        if any(category not in present for category in CATEGORY_ORDER):
+        try:
             schedule = app_module.fetch_schedule(date_str)
             adjustments = dict(app_module._get_adjustments() or {})
             adjustments['captured_per_game'] = max(
@@ -107,6 +103,12 @@ def install_intelligence_api(app_module):
                 _sched=schedule,
                 include_odds=True,
             ) or []
+        except Exception:
+            app_module.logging.warning(
+                '[game_card_intelligence] live generation failed for %s',
+                game_pk,
+                exc_info=True,
+            )
 
         # Freshly generated rows replace duplicate tracker rows while preserving
         # any already-captured markets that generation could not rebuild.
