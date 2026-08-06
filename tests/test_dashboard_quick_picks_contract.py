@@ -3,6 +3,7 @@ from pathlib import Path
 
 DASHBOARD = Path(__file__).resolve().parents[1] / 'dashboard.html'
 APP = Path(__file__).resolve().parents[1] / 'app.py'
+DEEPDIVE = Path(__file__).resolve().parents[1] / 'deepdive.html'
 
 
 def test_dashboard_uses_game_card_intelligence_endpoint():
@@ -32,6 +33,8 @@ def test_dashboard_uses_game_card_intelligence_endpoint():
     assert 'page load must never start one build per game' in source
     assert 'Building the linked batter-vs-pitcher simulation in the background' in source
     assert 'retryAfterSeconds' in source
+    assert "refreshStatus.status==='error'" in source
+    assert "(!(d&&d.computing)&&unavailable.length)" in source
 
 
 def test_dashboard_lineups_render_cached_schedule_data_before_refresh():
@@ -84,3 +87,26 @@ def test_pass_decisions_are_not_rendered_as_pick_cards():
     assert "var picks=(d&&d.quickPicks)||[]" in source
     assert 'No qualifying play:' in source
     assert "selection='<span class=\"qp-side\" style=\"color:var(--mu)\">PASS" not in source
+
+
+def test_deep_dive_never_fabricates_an_unfinished_simulation():
+    source = DEEPDIVE.read_text(encoding='utf-8')
+    app_source = APP.read_text(encoding='utf-8')
+
+    assert "success: false" in source
+    assert "simulationReady: false" in source
+    assert 'No generic estimate is being substituted.' in source
+    assert 'away_mean_runs: 4.2' not in source
+    assert "opts.sims || 1500" in source
+    assert "loadSimulation({sims:5000" in source
+    assert "'requestedSims': int(sims or 0)" in app_source
+    assert "'away_mean_runs': 4.2" not in app_source
+    assert "'mean_total': 8.5" not in app_source
+
+
+def test_startup_does_not_compete_with_user_requested_simulations():
+    source = APP.read_text(encoding='utf-8')
+
+    assert "STARTUP_PROJECTIONS_PREWARM', '0'" in source
+    assert 'full-slate projections prewarm disabled' in source
+    assert '@serialized_simulation\ndef _do_simulate' in source

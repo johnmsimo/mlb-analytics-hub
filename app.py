@@ -15,6 +15,7 @@ from matchup_simulation_intelligence import (
     exact_over_probability,
     summarize_game_outcomes,
 )
+from simulation_capacity import serialized_simulation
 
 
 def _load_local_env_file(env_path):
@@ -13293,73 +13294,34 @@ def _simulation_fallback_payload(game_obj, game_pk, sims=0, warning=''):
     away_hand_counts = _hand_counts(away_roster)
     home_hand_counts = _hand_counts(home_roster)
 
-    away_batters = [{
-        'slot': i + 1, 'id': b.get('id'), 'name': b.get('name'), 'pos': b.get('pos'),
-        'bats': (_bio_cache.get(b.get('id')) or {}).get('bats', 'S'),
-        'ab': 4, 'h': 1, 'hr': 0, 'rbi': 0, 'r': 0, 'bb': 0, 'k': 1, 'tb': 1,
-    } for i, b in enumerate(away_roster[:9])]
-    home_batters = [{
-        'slot': i + 1, 'id': b.get('id'), 'name': b.get('name'), 'pos': b.get('pos'),
-        'bats': (_bio_cache.get(b.get('id')) or {}).get('bats', 'S'),
-        'ab': 4, 'h': 1, 'hr': 0, 'rbi': 0, 'r': 0, 'bb': 0, 'k': 1, 'tb': 1,
-    } for i, b in enumerate(home_roster[:9])]
-
     return {
-        'success': True,
+        # This object preserves diagnostic context for the UI, but it is not a
+        # simulation result. Never let generic league-average placeholders be
+        # displayed or cached as if thousands of matchup trials completed.
+        'success': False,
         'fallback': True,
+        'simulationReady': False,
+        'error': warning or 'Matchup simulation did not complete.',
         'warning': warning or 'Simulation fallback returned due to upstream data issue.',
         'meta': {
-            'sims': int(sims or 0),
+            'sims': 0,
+            'requestedSims': int(sims or 0),
             'awayAbbr': away_abbr,
             'homeAbbr': home_abbr,
             'parkFactor': PARK_FACTORS.get(home_t.get('id'), 1.0),
             'gamePk': game_pk,
         },
-        'team': {
-            'away_mean_runs': 4.2,
-            'home_mean_runs': 4.3,
-            'mean_total': 8.5,
-            'median_total': 8.0,
-            'p_8plus_total': 0.53,
-            'p_9plus_total': 0.46,
-            'p_10plus_total': 0.35,
-            'away_win_pct': 0.48,
-            'home_win_pct': 0.49,
-            'tie_pct': 0.03,
+        'diagnostics': {
+            'awayLineupCount': len(away_roster),
+            'homeLineupCount': len(home_roster),
+            'awayStarter': away_name,
+            'homeStarter': home_name,
         },
         'handedness': {
             'awayLineup': away_hand_counts,
             'homeLineup': home_hand_counts,
             'awayStarterHand': 'R',
             'homeStarterHand': 'R',
-        },
-        'playerProps': {'away': [], 'home': []},
-        'pitcherProps': {
-            'awayStarter': {'name': away_name, 'mean_k': 0, 'mean_outs': 0, 'mean_er': 0, 'mean_h': 0, 'mean_bb': 0},
-            'homeStarter': {'name': home_name, 'mean_k': 0, 'mean_outs': 0, 'mean_er': 0, 'mean_h': 0, 'mean_bb': 0},
-            'awayBullpen': {'name': away_abbr + ' Bullpen', 'mean_k': 0, 'mean_outs': 0, 'mean_er': 0, 'mean_h': 0, 'mean_bb': 0},
-            'homeBullpen': {'name': home_abbr + ' Bullpen', 'mean_k': 0, 'mean_outs': 0, 'mean_er': 0, 'mean_h': 0, 'mean_bb': 0},
-            'awayBullpenTiers': {'closer': {}, 'setup': {}, 'middle': {}},
-            'homeBullpenTiers': {'closer': {}, 'setup': {}, 'middle': {}},
-        },
-        'correlations': [],
-        'top_sgp_combos': [],
-        'sampleBoxscore': {
-            'away': {'batters': away_batters, 'runs': 4, 'hits': 8, 'bb': 3, 'k': 8},
-            'home': {'batters': home_batters, 'runs': 4, 'hits': 8, 'bb': 3, 'k': 8},
-            'away_abbr': away_abbr,
-            'home_abbr': home_abbr,
-            'away_pitcher': away_name,
-            'home_pitcher': home_name,
-        },
-        'projectedBoxscore': {
-            'away': {'batters': [], 'mean_runs': 4.2, 'mean_hits': 8.0, 'mean_bb': 3.0, 'mean_k': 8.0, 'mean_tb': 13.0},
-            'home': {'batters': [], 'mean_runs': 4.3, 'mean_hits': 8.0, 'mean_bb': 3.0, 'mean_k': 8.0, 'mean_tb': 13.0},
-            'away_abbr': away_abbr,
-            'home_abbr': home_abbr,
-            'away_pitcher': away_name,
-            'home_pitcher': home_name,
-            'sims': int(sims or 0),
         },
     }
 
@@ -13377,6 +13339,7 @@ def _pctl(arr, p):
     return float(s[lo] + (s[hi] - s[lo]) * (k - lo))
 
 
+@serialized_simulation
 def _do_simulate(game_pk, sims):
     """Core simulation logic, extracted so it can run in a background thread.
     Returns a plain dict (not a Flask Response)."""
@@ -13967,6 +13930,7 @@ def _do_simulate(game_pk, sims):
 # 'payload': dict|None}.
 _sim_bg_jobs: dict = {}
 _sim_bg_lock = threading.Lock()
+_SIM_JOB_MAX_SECONDS = int(os.getenv('SIM_JOB_MAX_SECONDS', '300') or 300)
 
 
 @app.route('/api/simulate/<int:game_pk>')
@@ -13987,10 +13951,43 @@ def api_simulate(game_pk):
     # 2. Background job already running or done
     with _sim_bg_lock:
         job = _sim_bg_jobs.get(job_key)
+    # A refresh request must not launch a second identical CPU-heavy run while
+    # the first one is still active.
+    if job and refresh and job.get('status') == 'running':
+        elapsed = int(time.time() - job['started'])
+        if elapsed <= _SIM_JOB_MAX_SECONDS:
+            return jsonify({
+                'computing': True,
+                'elapsed': elapsed,
+                'estimatedSeconds': max(15, _SIM_JOB_MAX_SECONDS - elapsed),
+            })
     if job and not refresh:
         if job['status'] == 'done':
             return jsonify(job['payload'])
+        if job['status'] == 'error':
+            return jsonify({
+                'success': False,
+                'simulationReady': False,
+                'error': job.get('error') or 'Matchup simulation failed.',
+                'retryable': True,
+            }), 503
         elapsed = int(time.time() - job['started'])
+        if elapsed > _SIM_JOB_MAX_SECONDS:
+            with _sim_bg_lock:
+                job.update({
+                    'status': 'error',
+                    'error': (
+                        f'Simulation exceeded {_SIM_JOB_MAX_SECONDS}s and was '
+                        'marked incomplete. Retry to start a fresh run.'
+                    ),
+                    'finished': time.time(),
+                })
+            return jsonify({
+                'success': False,
+                'simulationReady': False,
+                'error': job['error'],
+                'retryable': True,
+            }), 503
         # Warm path finishes in ~90s; cold start (post-redeploy) can run 3-5min
         # while FG/Savant/pipeline workers compete for CPU. Grow the estimate
         # past the warm budget so the UI doesn't sit at "5s remaining" forever.
@@ -14019,10 +14016,24 @@ def api_simulate(game_pk):
                 pass
             payload = _simulation_fallback_payload(g, game_pk, sims=0,
                                                    warning=str(exc)[:300])
+        completed = bool(
+            payload
+            and payload.get('success')
+            and not payload.get('fallback')
+            and payload.get('meta', {}).get('sims')
+        )
         with _sim_bg_lock:
-            _sim_bg_jobs[job_key]['status'] = 'done'
-            _sim_bg_jobs[job_key]['payload'] = payload
-        if payload and payload.get('success'):
+            _sim_bg_jobs[job_key].update({
+                'status': 'done' if completed else 'error',
+                'payload': payload,
+                'error': None if completed else (
+                    (payload or {}).get('error')
+                    or (payload or {}).get('warning')
+                    or 'Matchup simulation did not complete.'
+                ),
+                'finished': time.time(),
+            })
+        if completed:
             _correlation_cache[game_pk] = {
                 'date': today, 'signature': payload.get('_sig', ''),
                 'payload': payload,
@@ -16460,7 +16471,14 @@ def _build_team_market_rows(game_pk, capture_date, away_abbr, home_abbr,
     return rows
 
 
-def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched=None, include_odds=False):
+def _build_tracker_rows_for_game(
+    game_pk,
+    capture_date,
+    adjustments=None,
+    _sched=None,
+    include_odds=False,
+    decision_only=False,
+):
     adjustments = adjustments or _get_adjustments()
     raw = _sched if _sched is not None else fetch_schedule(capture_date)
     g = next((x for x in raw if x.get('gamePk') == game_pk), None)
@@ -16589,7 +16607,9 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                 }
             (away_batx_map if side == 'away' else home_batx_map)[index] = value
 
-    sims = int(os.getenv('TRACKER_SIMS', '1500') or 1500)
+    sims_env = 'GAME_CARD_SIMS' if decision_only else 'TRACKER_SIMS'
+    sims_default = '1000' if decision_only else '1500'
+    sims = int(os.getenv(sims_env, sims_default) or sims_default)
     sims = max(750, min(5000, sims))
     rng = AntitheticRandom(game_pk + int(capture_date.replace('-', '')) + 10)
     away_store = {i: [] for i in range(len(away_lineup))}
@@ -16665,7 +16685,11 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                 except Exception:
                     _bvp_data = None
             _bvp_pa = int((_bvp_data or {}).get('pa') or 0)
-            for mk, mean_field in _BATTER_MEAN_FIELD_FOR_MK.items():
+            hitter_markets = (
+                {'batter_hits': _BATTER_MEAN_FIELD_FOR_MK['batter_hits']}
+                if decision_only else _BATTER_MEAN_FIELD_FOR_MK
+            )
+            for mk, mean_field in hitter_markets.items():
                 # Use actual market lines from Odds API; fall back to single default
                 mkt_lines = _market_lines_for_player(market_props, player_name, mk)
                 lines_to_use = mkt_lines if mkt_lines else [_BATTER_FALLBACK_LINE[mk]]
@@ -29494,6 +29518,14 @@ def _preload_caches():
         response cache instead of paying the full cold build. Low priority:
         one game at a time, and each build populates the per-player day caches
         the other endpoints reuse."""
+        # A full-slate projection + props scan competes directly with an opened
+        # game card and deep-dive simulation after every deploy. Keep it opt-in;
+        # user-requested game intelligence has priority on the shared Fly CPU.
+        if str(os.getenv('STARTUP_PROJECTIONS_PREWARM', '0')).lower() not in (
+            '1', 'true', 'yes',
+        ):
+            print('[STARTUP] full-slate projections prewarm disabled; using on-demand SWR')
+            return
         deadline = time.time() + 240
         while time.time() < deadline:
             with _fg_lock:

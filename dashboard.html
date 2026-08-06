@@ -1481,9 +1481,12 @@ function renderQuickProps(pk,d){
       +actions
       +'</div>';
   }).join('');
-  var unavailableHtml=unavailable.length?'<div class="qp-unavailable">No qualifying play: '
+  var jobError=d&&d.refreshStatus&&d.refreshStatus.status==='error'
+    ?'<div class="qp-unavailable">Simulation refresh failed: '+(d.refreshStatus.error||d.message||'retry required')+'</div>'
+    :'';
+  var unavailableHtml=(!(d&&d.computing)&&unavailable.length)?'<div class="qp-unavailable">No qualifying play: '
     +unavailable.map(function(item){return item.categoryLabel+' — '+item.reason;}).join(' · ')+'</div>':'';
-  strip.innerHTML=head+empty+cards+unavailableHtml;
+  strip.innerHTML=head+empty+cards+jobError+unavailableHtml;
 }
 function quickPickKey(pick){
   return [pick.playerId||pick.team||pick.player||'pick',pick.marketKey||pick.intelligenceCategory||'market',pick.line||0,pick.recommendedSide||''].join(':');
