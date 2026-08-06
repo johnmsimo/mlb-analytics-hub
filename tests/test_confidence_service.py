@@ -78,6 +78,12 @@ class ConfidenceServiceTests(unittest.TestCase):
         self.assertIn("confidenceScore", enriched)
         self.assertIn("confidenceTier", enriched)
         self.assertIn("confidenceExplanation", enriched)
+        self.assertIn("modelReliabilityScore", enriched)
+        self.assertNotIn("marketEdge", enriched["modelReliabilityComponents"])
+        self.assertIn(
+            enriched["modelReliabilityTier"],
+            {"LOW", "MEDIUM", "HIGH", "VERY_HIGH"},
+        )
 
 
 if __name__ == "__main__":
