@@ -11,11 +11,30 @@ import threading
 # and startup behavior by process role.
 os.environ["PROCESS_ROLE"] = "worker"
 
-from task_queue import get_job_queue  # noqa: E402
+from task_queue import JobQueueUnavailable, get_job_queue, reset_job_queue  # noqa: E402
 
 
 log = logging.getLogger(__name__)
 _stop = threading.Event()
+
+
+def _wait_for_queue(
+    queue_factory,
+    *,
+    stop_event: threading.Event = _stop,
+    initial_backoff: float = 1.0,
+    maximum_backoff: float = 30.0,
+):
+    """Wait for Redis without exiting and without affecting Gunicorn liveness."""
+    backoff = max(0.01, float(initial_backoff))
+    while not stop_event.is_set():
+        try:
+            return queue_factory()
+        except JobQueueUnavailable as exc:
+            log.warning("Redis queue unavailable; retrying in %.1fs: %s", backoff, exc)
+            stop_event.wait(backoff)
+            backoff = min(backoff * 2, max(0.01, float(maximum_backoff)))
+    return None
 
 
 def _handlers():
@@ -82,19 +101,33 @@ def _handlers():
 
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s")
-    queue = get_job_queue()
-    handlers, app_module = _handlers()
-    app_module._preload_caches()
-
     def stop(_signum, _frame):
         _stop.set()
 
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
-    queue.heartbeat()
-    log.info("Phase 4.36 durable worker ready")
+
+    queue = _wait_for_queue(get_job_queue)
+    if queue is None:
+        return 0
+
+    handlers, app_module = _handlers()
+    try:
+        app_module._preload_caches()
+    except Exception:
+        log.exception("Worker reference preload failed; durable queue remains available")
+
+    log.info("Phase 4.36.1 durable worker ready")
     while not _stop.is_set():
-        queue.work_once(handlers, block_seconds=5)
+        try:
+            queue.heartbeat()
+            queue.work_once(handlers, block_seconds=5)
+        except Exception:
+            log.exception("Durable queue connection failed; reconnecting without stopping web")
+            reset_job_queue()
+            queue = _wait_for_queue(get_job_queue)
+            if queue is None:
+                break
     return 0
 
 

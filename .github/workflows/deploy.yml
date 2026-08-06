@@ -96,8 +96,8 @@ jobs:
                       raise
                   time.sleep(5)
           PY
-      - name: Roll back failed production smoke
-        if: failure() && steps.deploy.outcome == 'success' && steps.rollback.outputs.image != ''
+      - name: Roll back failed deployment or production smoke
+        if: failure() && steps.rollback.outputs.image != '' && steps.deploy.outcome != 'skipped'
         run: >-
           flyctl deploy
           --image ${{ steps.rollback.outputs.image }}
