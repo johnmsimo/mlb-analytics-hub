@@ -104,7 +104,9 @@ def test_returns_one_explained_decision_for_each_required_category():
     ]
     assert all('decisionSummary' in pick for pick in result['quickPicks'])
     assert result['best']['game_winner']['recommendedSide'] == 'NYY'
-    assert result['policy']['rankingPriority'] == 'confidenceScore'
+    assert result['policy']['rankingPriority'] == 'pickScore'
+    assert all('modelProbabilityPct' in pick for pick in result['quickPicks'])
+    assert all('modelReliabilityScore' in pick for pick in result['quickPicks'])
 
 
 def test_selects_highest_confidence_hit_instead_of_first_input():
@@ -163,6 +165,9 @@ def test_weak_or_missing_category_is_an_explicit_pass():
     assert result['best']['pitcher_strikeouts']['recommendationGrade'] == 'Pass'
     assert result['best']['game_winner']['recommendationGrade'] == 'Pass'
     assert result['passCategoryCount'] == 3
+    assert result['quickPicks'] == []
+    assert len(result['marketDecisions']) == 3
+    assert len(result['unavailableMarkets']) == 3
 
 
 def test_positive_edge_best_available_candidate_becomes_actionable_lean():
@@ -199,9 +204,12 @@ def test_positive_edge_best_available_candidate_becomes_actionable_lean():
     assert result['qualifiedCategoryCount'] == 0
     assert result['bestAvailableCategoryCount'] == 3
     assert result['passCategoryCount'] == 0
-    assert 'standard play threshold' in (
-        result['best']['hitter_hits']['decisionSummary']
+    assert [pick['overallRank'] for pick in result['quickPicks']] == [1, 2, 3]
+    assert [pick['pickScore'] for pick in result['quickPicks']] == sorted(
+        (pick['pickScore'] for pick in result['quickPicks']), reverse=True
     )
+    assert 'Pick Score' in result['best']['hitter_hits']['decisionSummary']
+    assert result['best']['hitter_hits']['standardThresholdMisses']
 
 
 def test_non_positive_edge_remains_a_pass_instead_of_forcing_a_pick():
@@ -213,6 +221,19 @@ def test_non_positive_edge_remains_a_pass_instead_of_forcing_a_pick():
     assert pick['recommendationGrade'] == 'Pass'
     assert pick['selectionMode'] == 'pass'
     assert pick['isActionable'] is False
+
+
+def test_thin_but_positive_edge_is_an_actionable_price_sensitive_lean():
+    result = build_game_card_quick_picks([
+        row('batter_hits', player='Thin Edge', probability=.58, implied=.579),
+    ])
+
+    pick = result['best']['hitter_hits']
+    assert pick['recommendationGrade'] == 'Lean'
+    assert pick['selectionMode'] == 'best_available'
+    assert pick['isActionable'] is True
+    assert pick['estimatedEdgePct'] == .1
+    assert 'price-sensitive' in pick['pickScoreRisks'][0]
 
 
 def test_game_card_api_returns_the_three_ranked_decisions(monkeypatch):
@@ -251,12 +272,11 @@ def test_game_card_api_returns_the_three_ranked_decisions(monkeypatch):
     payload = fake_app.view_functions['api_intelligence_game_card'](7)
 
     assert payload['success'] is True
-    assert payload['quickPicksVersion'] == '4.33.2'
-    assert [pick['intelligenceCategory'] for pick in payload['quickPicks']] == [
-        'hitter_hits',
-        'pitcher_strikeouts',
-        'game_winner',
-    ]
+    assert payload['quickPicksVersion'] == '4.34'
+    assert payload['pickConfidenceVersion'] == '4.34'
+    assert {pick['intelligenceCategory'] for pick in payload['marketDecisions']} == {
+        'hitter_hits', 'pitcher_strikeouts', 'game_winner',
+    }
     assert payload['best']['pitcher_strikeouts']['recommendedSide'] == 'Under'
 
 
