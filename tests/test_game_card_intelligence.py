@@ -308,6 +308,8 @@ def test_game_card_api_returns_the_three_ranked_decisions(monkeypatch):
 
     assert payload['success'] is True
     assert payload['quickPicksVersion'] == '4.35.2'
+    assert payload['performanceVersion'] == '4.36'
+    assert payload['deliveryArchitecture'] == 'redis_durable_worker'
     assert payload['pickConfidenceVersion'] == '4.34'
     assert payload['matchupSimulationVersion'] == '4.35'
     assert payload['recommendationSource'] == 'shared_game_matchup_simulation'

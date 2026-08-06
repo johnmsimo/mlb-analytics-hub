@@ -63,8 +63,7 @@ USER appuser
 ENV PORT=8080
 EXPOSE $PORT
 
-# Run the production WSGI server. The exec form preserves Fly.io shutdown
-# signals, and gunicorn_conf.py owns worker/thread/time-out configuration plus
-# the post-fork cache preload hook. wsgi.py installs Phase 4.26 confidence
-# enrichment before exposing the Flask application.
-CMD ["gunicorn", "--config", "gunicorn_conf.py", "wsgi:app"]
+# Run Gunicorn and the durable background worker as isolated OS processes.
+# process_manager.py forwards Fly shutdown signals and restarts the pair if
+# either child exits, while preserving the single volume-owning Machine.
+CMD ["python", "process_manager.py"]

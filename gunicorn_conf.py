@@ -91,9 +91,8 @@ def on_starting(server):
 
 
 def post_fork(server, worker):
-    """Install worker-local cache wrappers, then trigger background preloads."""
+    """Install cache wrappers and the limited compatibility reference preload."""
     import threading
-
     try:
         from pipeline_cache_integration import install_pipeline_cache
 
@@ -111,6 +110,8 @@ def post_fork(server, worker):
         from app import _preload_caches
 
         threading.Thread(target=_preload_caches, daemon=True).start()
-        server.log.info("[post_fork] _preload_caches() triggered in background thread")
+        server.log.info(
+            "[post_fork] limited reference preload started; heavy jobs remain worker-only"
+        )
     except Exception as ex:
-        server.log.warning(f"[post_fork] Could not trigger _preload_caches: {ex}")
+        server.log.warning(f"[post_fork] Could not start reference preload: {ex}")

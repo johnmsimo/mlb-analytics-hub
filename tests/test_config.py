@@ -33,6 +33,11 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual(settings.performance_route_limit, 256)
             self.assertEqual(settings.xgb_score_cache_ttl, 300)
             self.assertEqual(settings.xgb_score_cache_max_entries, 2048)
+            self.assertEqual(settings.process_role, "web")
+            self.assertFalse(settings.production)
+            self.assertFalse(settings.admin_auth_required)
+            self.assertEqual(settings.max_upload_bytes, 8 * 1024 * 1024)
+            self.assertEqual(settings.job_result_ttl, 3600)
 
     def test_environment_overrides_are_resolved_on_access(self):
         with patch.dict(
@@ -54,6 +59,12 @@ class ConfigurationTests(unittest.TestCase):
                 "PERFORMANCE_SLOW_MS": "750",
                 "XGB_SCORE_CACHE_TTL": "180",
                 "XGB_SCORE_CACHE_MAX_ENTRIES": "512",
+                "PROCESS_ROLE": "worker",
+                "APP_ENV": "production",
+                "ADMIN_AUTH_REQUIRED": "true",
+                "ALLOWED_ORIGINS": "https://one.example, https://two.example/",
+                "MAX_UPLOAD_BYTES": "4096",
+                "JOB_RESULT_TTL": "7200",
             },
             clear=True,
         ):
@@ -76,6 +87,15 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual(settings.performance_slow_ms, 750)
             self.assertEqual(settings.xgb_score_cache_ttl, 180)
             self.assertEqual(settings.xgb_score_cache_max_entries, 512)
+            self.assertEqual(settings.process_role, "worker")
+            self.assertTrue(settings.production)
+            self.assertTrue(settings.admin_auth_required)
+            self.assertEqual(
+                settings.allowed_origins,
+                ("https://one.example", "https://two.example"),
+            )
+            self.assertEqual(settings.max_upload_bytes, 4096)
+            self.assertEqual(settings.job_result_ttl, 7200)
 
     def test_invalid_numbers_fall_back_and_ranges_are_bounded(self):
         with patch.dict(

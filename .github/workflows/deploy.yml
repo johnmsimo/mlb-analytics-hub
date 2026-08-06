@@ -1,16 +1,106 @@
-name: Deploy to Fly.io
+name: Quality and Deploy
 on:
+  pull_request:
+    branches: [Main]
   push:
     branches: [Main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  deploy:
+  quality:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install runtime and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest
+      - name: Compile Python
+        run: python -m compileall -q .
+      - name: Run regression suite
+        env:
+          APP_ENV: test
+          PROCESS_ROLE: test
+          ADMIN_AUTH_REQUIRED: '0'
+        run: python -m pytest -q
+      - name: Validate inline JavaScript
+        run: python scripts/validate_inline_js.py
+
+  deploy:
+    if: github.event_name == 'push'
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: superfly/flyctl-actions/setup-flyctl@master
-      # setup-flyctl installs the binary as `flyctl` (no `fly` alias on the
-      # runner), so `fly deploy` failed with "fly: command not found" (exit
-      # 127) on every run since June 2026 — no deploy reached production.
-      - run: flyctl deploy --remote-only --build-arg GIT_SHA=${{ github.sha }}
+      - name: Capture current rollback image
+        id: rollback
+        run: |
+          image=$(flyctl releases --app mlb-analytics-hub --image | grep -Eo 'registry\.fly\.io/[^[:space:]]+' | head -1)
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      - name: Deploy tested commit
+        id: deploy
+        run: >-
+          flyctl deploy --remote-only
+          --build-arg GIT_SHA=${{ github.sha }}
+          --image-label ${{ github.sha }}
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      - name: Production smoke and readiness gate
+        id: smoke
+        run: |
+          python - <<'PY'
+          import json
+          import time
+          import urllib.request
+
+          base = "https://mlb-analytics-hub.fly.dev"
+          expected = "${{ github.sha }}"
+          last_error = None
+          for attempt in range(24):
+              try:
+                  started = time.perf_counter()
+                  with urllib.request.urlopen(base + "/health", timeout=3) as response:
+                      health = json.load(response)
+                  latency = time.perf_counter() - started
+                  if health.get("status") != "ok" or health.get("version") != expected:
+                      raise RuntimeError(f"unexpected health payload: {health}")
+                  if latency > 2:
+                      raise RuntimeError(f"health latency {latency:.2f}s")
+                  with urllib.request.urlopen(base + "/ready", timeout=5) as response:
+                      ready = json.load(response)
+                  if ready.get("status") != "ready":
+                      raise RuntimeError(f"not ready: {ready}")
+                  with urllib.request.urlopen(base + "/api/games/today", timeout=8) as response:
+                      if response.status != 200:
+                          raise RuntimeError(f"games status {response.status}")
+                  print("Production smoke passed", health, ready)
+                  break
+              except Exception as exc:
+                  last_error = exc
+                  if attempt == 23:
+                      raise
+                  time.sleep(5)
+          PY
+      - name: Roll back failed production smoke
+        if: failure() && steps.deploy.outcome == 'success' && steps.rollback.outputs.image != ''
+        run: >-
+          flyctl deploy
+          --image ${{ steps.rollback.outputs.image }}
+          --strategy immediate
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

@@ -9,14 +9,11 @@ exposed by pipeline_scheduler:
     run_pipeline()         →  POST /api/pipeline/run   (admin-token protected + rate limited)
 """
 
-import threading
 import logging
 
 from flask import Blueprint, jsonify, request
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
-
-from config import settings
+from security import check_admin_auth, limiter
+from task_queue import JobQueueUnavailable, enqueue_job
 
 from pipeline_scheduler import (
     get_matchup_df,
@@ -27,45 +24,6 @@ from pipeline_scheduler import (
 
 pipeline_bp = Blueprint("pipeline", __name__, url_prefix="/api/pipeline")
 log = logging.getLogger(__name__)
-
-# ── Rate limiter ──────────────────────────────────────────────────────────────
-# Uses Redis when REDIS_URL is set; falls back to in-memory (dev/test).
-# Attach to the app via limiter.init_app(app) in app.py after blueprint
-# registration, or leave as a standalone limiter bound to this blueprint.
-_REDIS_URL = settings.redis_url
-
-limiter = Limiter(
-    key_func=get_remote_address,
-    storage_uri=_REDIS_URL if _REDIS_URL else "memory://",
-    default_limits=[],          # no default limits on read-only routes
-    headers_enabled=True,       # exposes X-RateLimit-* headers for visibility
-)
-
-# Read once at import time; same variable the rest of app.py uses.
-_ADMIN_TOKEN = settings.admin_token
-
-
-def _check_admin_auth():
-    """Return None if auth passes (or ADMIN_TOKEN is unset), else a 401 Response.
-
-    Accepts the token via:
-      Authorization: Bearer <token>
-      X-Admin-Token: <token>
-    """
-    if not _ADMIN_TOKEN:
-        return None  # auth disabled — open access
-    auth_header  = request.headers.get("Authorization", "")
-    token_header = request.headers.get("X-Admin-Token", "")
-    bearer = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.startswith("Bearer ")
-        else ""
-    )
-    provided = bearer or token_header.strip()
-    if provided == _ADMIN_TOKEN:
-        return None
-    return jsonify({"success": False, "error": "Unauthorized"}), 401
-
 
 @pipeline_bp.route("/status")
 def pipeline_status():
@@ -123,7 +81,7 @@ def pipeline_run():
     Rate-limited to 3/min and 10/hr per IP (via Flask-Limiter).
     Safe to call while a run is already in progress (noop if already running).
     """
-    auth_err = _check_admin_auth()
+    auth_err = check_admin_auth()
     if auth_err is not None:
         return auth_err
 
@@ -131,6 +89,15 @@ def pipeline_run():
     if status.get("status") == "running":
         return jsonify({"success": False, "error": "Pipeline already running"}), 409
 
-    threading.Thread(target=run_pipeline, daemon=True).start()
-    log.info("[pipeline] Manual run triggered via POST /api/pipeline/run")
-    return jsonify({"success": True, "message": "Pipeline run started"})
+    try:
+        job = enqueue_job(
+            "pipeline",
+            {},
+            dedupe_key="pipeline:manual",
+            timeout_seconds=900,
+            max_attempts=1,
+        )
+    except JobQueueUnavailable:
+        return jsonify({"success": False, "error": "Worker unavailable"}), 503
+    log.info("[pipeline] Manual run queued via POST /api/pipeline/run")
+    return jsonify({"success": True, "message": "Pipeline run queued", "jobId": job["id"]}), 202
