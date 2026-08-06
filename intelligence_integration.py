@@ -155,7 +155,7 @@ def install_intelligence_api(app_module):
             'gamePk': game_pk,
             'sourceCount': len(merged),
             'generatedSourceCount': len(generated),
-            'quickPicksVersion': '4.33',
+            'quickPicksVersion': '4.33.2',
             'explanationVersion': '4.32',
             **decisions,
         }

@@ -5,7 +5,12 @@ from typing import Any, Iterable, Mapping
 
 from confidence_service import enrich_pick_confidence
 from explanation_engine import explain_recommendation
-from intelligence_core import DecisionPolicy, build_recommendations, classify_pick
+from intelligence_core import (
+    DecisionPolicy,
+    build_recommendations,
+    classify_pick,
+    decision_score,
+)
 
 
 CATEGORY_ORDER = ('hitter_hits', 'pitcher_strikeouts', 'game_winner')
@@ -14,6 +19,14 @@ CATEGORY_LABELS = {
     'pitcher_strikeouts': 'Pitcher Strikeouts',
     'game_winner': 'Moneyline',
 }
+
+# The global intelligence policy remains the standard for a qualified play. A
+# game card can also surface its best priced positive-edge side as a clearly
+# labeled Lean. This keeps Quick Props useful without presenting a weak or
+# negative-edge candidate as a normal wager.
+BEST_AVAILABLE_MINIMUM_PROBABILITY = 0.50
+BEST_AVAILABLE_MINIMUM_CONFIDENCE = 25.0
+BEST_AVAILABLE_MINIMUM_EDGE = 0.005
 
 
 def _num(value: Any, default: float | None = None) -> float | None:
@@ -161,6 +174,83 @@ def _rank_key(row: Mapping[str, Any]) -> tuple[float, float, float, float]:
     )
 
 
+def _edge(row: Mapping[str, Any]) -> float:
+    value = _num(row.get('edge'), -1.0)
+    if value is None:
+        return -1.0
+    return value / 100.0 if abs(value) > 1 else value
+
+
+def _has_price(row: Mapping[str, Any]) -> bool:
+    return _first(
+        row,
+        'bestAvailablePrice', 'marketPrice',
+        'bestOverPrice', 'best_over_price',
+        'bestUnderPrice', 'best_under_price',
+    ) is not None
+
+
+def _is_best_available_candidate(row: Mapping[str, Any]) -> bool:
+    """Return whether a rejected candidate is still an honest actionable Lean."""
+    grade = str(row.get('grade') or 'pending').strip().lower()
+    return (
+        _has_price(row)
+        and _probability(row) >= BEST_AVAILABLE_MINIMUM_PROBABILITY
+        and (_num(row.get('confidenceScore'), 0.0) or 0.0)
+        >= BEST_AVAILABLE_MINIMUM_CONFIDENCE
+        and _edge(row) >= BEST_AVAILABLE_MINIMUM_EDGE
+        and grade in {'pending', 'open', ''}
+        and classify_pick(row) in CATEGORY_ORDER
+    )
+
+
+def _standard_risk(reason: str) -> str:
+    return {
+        'probability below threshold': (
+            'model probability is below the standard play threshold'
+        ),
+        'confidence below threshold': (
+            'confidence is below the standard play threshold'
+        ),
+        'edge below threshold': 'edge is below the standard play threshold',
+    }.get(reason, reason)
+
+
+def _explain_best_available(
+    candidate: Mapping[str, Any],
+    reasons: list[str],
+    *,
+    learning: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Explain a positive-edge fallback as a Lean, never as a full-strength play."""
+    row = dict(candidate)
+    row['decisionScore'] = decision_score(row)
+    explained = explain_recommendation(row, learning=learning)
+    cautions = [_standard_risk(reason) for reason in reasons]
+    explained['topRisks'] = list(dict.fromkeys(
+        cautions + list(explained.get('topRisks') or [])
+    ))[:3]
+    lead = (explained.get('topReasons') or [
+        'the strongest available positive-edge side'
+    ])[0].lower()
+    caution = explained['topRisks'][0]
+    explained.update({
+        'recommendationGrade': 'Lean',
+        'decisionSummary': (
+            f'Best available Lean led by {lead}. Main caution: {caution}.'
+        ),
+        'recommendedAction': (
+            'Best available side; use a smaller stake and confirm the price '
+            'before betting.'
+        ),
+        'selectionMode': 'best_available',
+        'meetsStandardThresholds': False,
+        'isActionable': True,
+        'standardThresholdMisses': list(reasons),
+    })
+    return explained
+
+
 def select_game_card_quick_picks(
     candidates: Iterable[Mapping[str, Any]],
     *,
@@ -196,13 +286,45 @@ def select_game_card_quick_picks(
         if eligible:
             chosen = max(eligible, key=_rank_key)
             explained = explain_recommendation(chosen, learning=learning)
+            explained.update({
+                'selectionMode': 'qualified',
+                'meetsStandardThresholds': True,
+                'isActionable': True,
+                'standardThresholdMisses': [],
+            })
         elif rejected:
-            chosen, reasons = max(rejected, key=lambda pair: _rank_key(pair[0]))
-            explained = explain_recommendation(
-                chosen,
-                learning=learning,
-                rejection_reasons=reasons or ['the evidence is insufficient'],
-            )
+            best_available = [
+                pair for pair in rejected
+                if _is_best_available_candidate(pair[0])
+            ]
+            if best_available:
+                chosen, reasons = max(
+                    best_available,
+                    key=lambda pair: _rank_key(pair[0]),
+                )
+                explained = _explain_best_available(
+                    chosen,
+                    reasons,
+                    learning=learning,
+                )
+            else:
+                chosen, reasons = max(
+                    rejected,
+                    key=lambda pair: _rank_key(pair[0]),
+                )
+                explained = explain_recommendation(
+                    chosen,
+                    learning=learning,
+                    rejection_reasons=(
+                        reasons or ['the evidence is insufficient']
+                    ),
+                )
+                explained.update({
+                    'selectionMode': 'pass',
+                    'meetsStandardThresholds': False,
+                    'isActionable': False,
+                    'standardThresholdMisses': list(reasons),
+                })
         else:
             explained = explain_recommendation({
                 'id': f'no-candidate:{category}',
@@ -215,6 +337,14 @@ def select_game_card_quick_picks(
             }, learning=learning, rejection_reasons=[
                 'no market candidate is available',
             ])
+            explained.update({
+                'selectionMode': 'pass',
+                'meetsStandardThresholds': False,
+                'isActionable': False,
+                'standardThresholdMisses': [
+                    'no market candidate is available',
+                ],
+            })
 
         explained['intelligenceCategory'] = category
         explained['categoryLabel'] = CATEGORY_LABELS[category]
@@ -227,6 +357,13 @@ def select_game_card_quick_picks(
         'eligibleCategoryCount': sum(
             pick['recommendationGrade'] != 'Pass' for pick in selections
         ),
+        'qualifiedCategoryCount': sum(
+            pick.get('selectionMode') == 'qualified' for pick in selections
+        ),
+        'bestAvailableCategoryCount': sum(
+            pick.get('selectionMode') == 'best_available'
+            for pick in selections
+        ),
         'passCategoryCount': sum(
             pick['recommendationGrade'] == 'Pass' for pick in selections
         ),
@@ -234,6 +371,16 @@ def select_game_card_quick_picks(
             'minimumProbability': policy.minimum_probability,
             'minimumConfidence': policy.minimum_confidence,
             'minimumEdge': policy.minimum_edge,
+            'bestAvailableMinimumProbability': (
+                BEST_AVAILABLE_MINIMUM_PROBABILITY
+            ),
+            'bestAvailableMinimumConfidence': (
+                BEST_AVAILABLE_MINIMUM_CONFIDENCE
+            ),
+            'bestAvailableMinimumEdge': BEST_AVAILABLE_MINIMUM_EDGE,
+            'passRule': (
+                'no priced candidate clears the positive-edge viability floor'
+            ),
             'rankingPriority': 'confidenceScore',
         },
     }

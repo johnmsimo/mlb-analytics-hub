@@ -10,6 +10,8 @@ def test_dashboard_uses_game_card_intelligence_endpoint():
     assert "fetch('/api/intelligence/game-card/'" in source
     assert "var picks=(d&&d.quickPicks)||[]" in source
     assert 'HIGHEST-CONFIDENCE PICKS' in source
+    assert 'Best positive-edge side per market' in source
+    assert 'bestAvailableMinimumConfidence' in source
 
     prewarm_start = source.index('function prewarmQuickProps(games)')
     prewarm_end = source.index('function load(dateStr)', prewarm_start)
