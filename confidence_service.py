@@ -15,12 +15,52 @@ class ConfidenceResult:
     components: dict[str, float]
 
     def as_dict(self) -> dict[str, Any]:
+        reliability_components = {
+            key: value for key, value in self.components.items()
+            if key != "marketEdge"
+        }
+        reliability_weights = {
+            "probabilityStrength": 0.28,
+            "intervalStability": 0.18,
+            "modelAgreement": 0.14,
+            "simulationStability": 0.10,
+            "sampleSupport": 0.06,
+        }
+        weight_total = sum(reliability_weights.values())
+        reliability = round(sum(
+            reliability_components.get(key, 0.0) * weight
+            for key, weight in reliability_weights.items()
+        ) / weight_total, 1)
+        reliability_tier, reliability_label = _tier(reliability)
+        strongest = sorted(
+            reliability_components.items(),
+            key=lambda item: (-item[1], item[0]),
+        )[:2]
+        names = {
+            "probabilityStrength": "probability strength",
+            "intervalStability": "interval stability",
+            "modelAgreement": "model agreement",
+            "simulationStability": "simulation stability",
+            "sampleSupport": "sample support",
+        }
+        reliability_explanation = (
+            f"Driven by {names[strongest[0][0]]} and "
+            f"{names[strongest[1][0]]}."
+            if len(strongest) >= 2 else "Reliability evidence is unavailable."
+        )
         return {
             "confidenceScore": self.score,
             "confidenceTier": self.tier,
             "confidenceLabel": self.label,
             "confidenceExplanation": self.explanation,
             "confidenceComponents": dict(self.components),
+            # Explicit aliases stop consumers from mistaking projection
+            # reliability for either win probability or final bet quality.
+            "modelReliabilityScore": reliability,
+            "modelReliabilityTier": reliability_tier,
+            "modelReliabilityLabel": reliability_label,
+            "modelReliabilityExplanation": reliability_explanation,
+            "modelReliabilityComponents": reliability_components,
         }
 
 

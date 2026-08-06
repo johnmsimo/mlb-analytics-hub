@@ -11,6 +11,7 @@ from intelligence_core import (
     classify_pick,
     decision_score,
 )
+from pick_confidence import enrich_pick_score
 
 
 CATEGORY_ORDER = ('hitter_hits', 'pitcher_strikeouts', 'game_winner')
@@ -26,7 +27,7 @@ CATEGORY_LABELS = {
 # negative-edge candidate as a normal wager.
 BEST_AVAILABLE_MINIMUM_PROBABILITY = 0.50
 BEST_AVAILABLE_MINIMUM_CONFIDENCE = 25.0
-BEST_AVAILABLE_MINIMUM_EDGE = 0.005
+BEST_AVAILABLE_MINIMUM_EDGE = 0.0
 
 
 def _num(value: Any, default: float | None = None) -> float | None:
@@ -167,7 +168,7 @@ def prepare_game_card_candidates(
 
 def _rank_key(row: Mapping[str, Any]) -> tuple[float, float, float, float]:
     return (
-        _num(row.get('confidenceScore'), 0.0) or 0.0,
+        _num(row.get('pickScore'), 0.0) or 0.0,
         _num(row.get('decisionScore'), 0.0) or 0.0,
         _probability(row),
         _num(row.get('edge'), -1.0) or -1.0,
@@ -198,7 +199,7 @@ def _is_best_available_candidate(row: Mapping[str, Any]) -> bool:
         and _probability(row) >= BEST_AVAILABLE_MINIMUM_PROBABILITY
         and (_num(row.get('confidenceScore'), 0.0) or 0.0)
         >= BEST_AVAILABLE_MINIMUM_CONFIDENCE
-        and _edge(row) >= BEST_AVAILABLE_MINIMUM_EDGE
+        and _edge(row) > BEST_AVAILABLE_MINIMUM_EDGE
         and grade in {'pending', 'open', ''}
         and classify_pick(row) in CATEGORY_ORDER
     )
@@ -251,6 +252,34 @@ def _explain_best_available(
     return explained
 
 
+def _grade_actionable_pick(pick: Mapping[str, Any]) -> dict[str, Any]:
+    """Make the final Pick Score the game-card grade authority."""
+    row = dict(pick)
+    if not row.get('isActionable'):
+        row['recommendationGrade'] = 'Pass'
+        return row
+
+    score = _num(row.get('pickScore'), 0.0) or 0.0
+    probability = _probability(row)
+    edge = _edge(row)
+    reliability = _num(row.get('modelReliabilityScore'), 0.0) or 0.0
+    if score >= 78.0 and probability >= .62 and edge >= .05 and reliability >= 65.0:
+        grade = 'Strong Play'
+        action = 'Prioritize this play at a disciplined stake.'
+    elif score >= 65.0 and edge >= .02:
+        grade = 'Value Play'
+        action = 'Consider this value play at a standard or smaller stake.'
+    else:
+        grade = 'Lean'
+        action = 'Playable lean; use a smaller stake and confirm the price.'
+    row['recommendationGrade'] = grade
+    row['recommendedAction'] = action
+    row['decisionSummary'] = row.get('pickScoreNarrative') or row.get(
+        'decisionSummary'
+    )
+    return row
+
+
 def select_game_card_quick_picks(
     candidates: Iterable[Mapping[str, Any]],
     *,
@@ -263,7 +292,7 @@ def select_game_card_quick_picks(
         category: [] for category in CATEGORY_ORDER
     }
     for candidate in candidates:
-        row = dict(candidate)
+        row = enrich_pick_score(candidate, learning=learning)
         category = classify_pick(row)
         if category in grouped:
             row['intelligenceCategory'] = category
@@ -349,10 +378,33 @@ def select_game_card_quick_picks(
         explained['intelligenceCategory'] = category
         explained['categoryLabel'] = CATEGORY_LABELS[category]
         explained['rankWithinCategory'] = 1
-        selections.append(explained)
+        selections.append(_grade_actionable_pick(explained))
+
+    actionable = sorted(
+        (pick for pick in selections if pick.get('isActionable')),
+        key=_rank_key,
+        reverse=True,
+    )
+    for rank, pick in enumerate(actionable, 1):
+        pick['overallRank'] = rank
+    unavailable = [
+        {
+            'intelligenceCategory': pick['intelligenceCategory'],
+            'categoryLabel': pick['categoryLabel'],
+            'reason': (
+                (pick.get('pickScoreRisks') or pick.get('topRisks') or [
+                    'no priced positive-edge candidate is available'
+                ])[0]
+            ),
+        }
+        for pick in selections if not pick.get('isActionable')
+    ]
 
     return {
-        'quickPicks': selections,
+        # ``quickPicks`` is a picks surface: it contains bets, not Pass cards.
+        'quickPicks': actionable,
+        'marketDecisions': selections,
+        'unavailableMarkets': unavailable,
         'best': {pick['intelligenceCategory']: pick for pick in selections},
         'eligibleCategoryCount': sum(
             pick['recommendationGrade'] != 'Pass' for pick in selections
@@ -381,7 +433,11 @@ def select_game_card_quick_picks(
             'passRule': (
                 'no priced candidate clears the positive-edge viability floor'
             ),
-            'rankingPriority': 'confidenceScore',
+            'rankingPriority': 'pickScore',
+            'scoreMeaning': (
+                'Pick Score ranks bet quality; model probability is shown '
+                'separately and remains the win-probability estimate.'
+            ),
         },
     }
 
