@@ -154,7 +154,7 @@ def test_chooses_strikeout_under_when_it_has_the_stronger_qualified_case():
 
 def test_weak_or_missing_category_is_an_explicit_pass():
     result = build_game_card_quick_picks([
-        row('batter_hits', player='Weak', probability=.52, implied=.51),
+        row('batter_hits', player='Weak', probability=.52, implied=.53),
     ])
 
     hit = result['best']['hitter_hits']
@@ -163,6 +163,56 @@ def test_weak_or_missing_category_is_an_explicit_pass():
     assert result['best']['pitcher_strikeouts']['recommendationGrade'] == 'Pass'
     assert result['best']['game_winner']['recommendationGrade'] == 'Pass'
     assert result['passCategoryCount'] == 3
+
+
+def test_positive_edge_best_available_candidate_becomes_actionable_lean():
+    result = build_game_card_quick_picks([
+        row('batter_hits', player='Available Hitter', probability=.54, implied=.53),
+        row(
+            'pitcher_strikeouts',
+            player='Available Starter',
+            probability=.46,
+            implied=.47,
+            line=5.5,
+        ),
+        row(
+            'h2h',
+            player='NYY@BOS',
+            team='NYY',
+            probability=.53,
+            implied=.52,
+            recommendedSide='NYY',
+            line=0,
+        ),
+    ])
+
+    assert all(
+        pick['recommendationGrade'] == 'Lean'
+        for pick in result['quickPicks']
+    )
+    assert all(pick['isActionable'] for pick in result['quickPicks'])
+    assert all(
+        pick['selectionMode'] == 'best_available'
+        for pick in result['quickPicks']
+    )
+    assert result['eligibleCategoryCount'] == 3
+    assert result['qualifiedCategoryCount'] == 0
+    assert result['bestAvailableCategoryCount'] == 3
+    assert result['passCategoryCount'] == 0
+    assert 'standard play threshold' in (
+        result['best']['hitter_hits']['decisionSummary']
+    )
+
+
+def test_non_positive_edge_remains_a_pass_instead_of_forcing_a_pick():
+    result = build_game_card_quick_picks([
+        row('batter_hits', player='No Edge', probability=.54, implied=.55),
+    ])
+
+    pick = result['best']['hitter_hits']
+    assert pick['recommendationGrade'] == 'Pass'
+    assert pick['selectionMode'] == 'pass'
+    assert pick['isActionable'] is False
 
 
 def test_game_card_api_returns_the_three_ranked_decisions(monkeypatch):
@@ -201,7 +251,7 @@ def test_game_card_api_returns_the_three_ranked_decisions(monkeypatch):
     payload = fake_app.view_functions['api_intelligence_game_card'](7)
 
     assert payload['success'] is True
-    assert payload['quickPicksVersion'] == '4.33'
+    assert payload['quickPicksVersion'] == '4.33.2'
     assert [pick['intelligenceCategory'] for pick in payload['quickPicks']] == [
         'hitter_hits',
         'pitcher_strikeouts',
