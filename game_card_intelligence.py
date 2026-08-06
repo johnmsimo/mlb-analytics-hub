@@ -30,6 +30,7 @@ def _probability(row: Mapping[str, Any]) -> float:
         row.get('blendedProb', row.get('adjProb', row.get('probability'))),
         0.0,
     ) or 0.0
+    value = _num(row.get('blendedProb', row.get('adjProb', row.get('probability'))), 0.0) or 0.0
     return max(0.0, min(1.0, value / 100.0 if value > 1 else value))
 
 
@@ -106,6 +107,8 @@ def _as_side(row: Mapping[str, Any], side: str) -> dict[str, Any]:
             row, 'bestOverBook', 'best_over_book',
             'bestAvailableBook', 'bookmaker',
         )
+        price = _first(row, 'bestOverPrice', 'best_over_price', 'bestAvailablePrice', 'marketPrice')
+        book = _first(row, 'bestOverBook', 'best_over_book', 'bestAvailableBook', 'bookmaker')
         implied = _num(_first(row, 'marketImplied', 'openingImplied'))
         if implied is None:
             implied = _american_implied(price)
@@ -124,6 +127,7 @@ def _as_side(row: Mapping[str, Any], side: str) -> dict[str, Any]:
                 round(probability - implied, 4)
                 if implied is not None else pick.get('edge')
             ),
+            'edge': round(probability - implied, 4) if implied is not None else pick.get('edge'),
         })
 
     pick['id'] = _candidate_id(pick, pick['recommendedSide'])
@@ -135,6 +139,7 @@ def _as_side(row: Mapping[str, Any], side: str) -> dict[str, Any]:
 def prepare_game_card_candidates(
     rows: Iterable[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
+def prepare_game_card_candidates(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Keep supported markets and create a separately scored Under K candidate."""
     candidates: list[dict[str, Any]] = []
     for source in rows:
@@ -172,6 +177,7 @@ def select_game_card_quick_picks(
     grouped: dict[str, list[dict[str, Any]]] = {
         category: [] for category in CATEGORY_ORDER
     }
+    grouped: dict[str, list[dict[str, Any]]] = {category: [] for category in CATEGORY_ORDER}
     for candidate in candidates:
         row = dict(candidate)
         category = classify_pick(row)
@@ -191,6 +197,7 @@ def select_game_card_quick_picks(
                 reasons = list(
                     (decision.get('rejected') or [{}])[0].get('reasons') or []
                 )
+                reasons = list((decision.get('rejected') or [{}])[0].get('reasons') or [])
                 rejected.append((candidate, reasons))
 
         if eligible:
@@ -215,6 +222,7 @@ def select_game_card_quick_picks(
             }, learning=learning, rejection_reasons=[
                 'no market candidate is available',
             ])
+            }, learning=learning, rejection_reasons=['no market candidate is available'])
 
         explained['intelligenceCategory'] = category
         explained['categoryLabel'] = CATEGORY_LABELS[category]
@@ -230,6 +238,8 @@ def select_game_card_quick_picks(
         'passCategoryCount': sum(
             pick['recommendationGrade'] == 'Pass' for pick in selections
         ),
+        'eligibleCategoryCount': sum(pick['recommendationGrade'] != 'Pass' for pick in selections),
+        'passCategoryCount': sum(pick['recommendationGrade'] == 'Pass' for pick in selections),
         'policy': {
             'minimumProbability': policy.minimum_probability,
             'minimumConfidence': policy.minimum_confidence,

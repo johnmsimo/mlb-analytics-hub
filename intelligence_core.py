@@ -69,14 +69,7 @@ def build_recommendations(picks: Iterable[Mapping[str, Any]], policy: DecisionPo
             continue
         p['intelligenceCategory'] = category
         p['decisionScore'] = decision_score(p)
-        p['whyThisPick'] = [
-            f"Model win probability {_prob(p):.1%}",
-            f"Estimated edge {_edge(p):.1%}",
-            f"Confidence {_num(p.get('confidenceScore')):.1f}/100",
-            f"Game context {_num(p.get('contextScore'), 50.0):.1f}/100",
-            f"Baseball matchup {_num(p.get('matchupScore'), 50.0):.1f}/100",
-            f"Simulation quality {_num(p.get('simulationScore'), 50.0):.1f}/100",
-        ]
+        p['whyThisPick'] = [f"Model win probability {_prob(p):.1%}", f"Estimated edge {_edge(p):.1%}", f"Confidence {_num(p.get('confidenceScore')):.1f}/100", f"Game context {_num(p.get('contextScore'), 50.0):.1f}/100", f"Baseball matchup {_num(p.get('matchupScore'), 50.0):.1f}/100", f"Simulation quality {_num(p.get('simulationScore'), 50.0):.1f}/100"]
         p['whyThisPick'].extend(p.get('contextEvidence') or [])
         p['whyThisPick'].extend(p.get('matchupAdvantages') or [])
         p['whyThisPick'].extend(p.get('simulationEvidence') or [])

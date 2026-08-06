@@ -1220,6 +1220,7 @@ function toggleQuickProps(e,pk){
   if(!open)return;
   if(QP_DATA[pk]){renderQuickProps(pk,QP_DATA[pk]);return;}
   strip.innerHTML='<div class="qp-loading">Ranking hit, strikeout and moneyline decisions…</div>';
+  strip.innerHTML='<div class="qp-loading">Loading top props…</div>';
   fetch('/api/intelligence/game-card/'+pk+'?date='+encodeURIComponent(selectedGamesDate))
     .then(function(r){return r.json();})
     .then(function(d){
@@ -1369,6 +1370,51 @@ function renderQuickProps(pk,d){
   if(!strip)return;
   var picks=(d&&d.quickPicks)||[];
   if(!picks.length){strip.innerHTML='<div class="qp-loading">No game-card decisions available</div>';return;}
+  if(d&&Array.isArray(d.quickPicks)){
+    var tracked=window.__trackedQPIds||[];
+    strip.innerHTML=d.quickPicks.map(function(p,i){
+      var category=p.intelligenceCategory||'';
+      var isPass=p.recommendationGrade==='Pass';
+      var confidence=Math.round(p.confidenceScore||0);
+      var cls=isPass?'low':(confidence>=85?'elite':confidence>=72?'strong':confidence>=56?'mod':'low');
+      var side=p.recommendedSide||p.sideLabel||'';
+      var name=category==='game_winner'?(side||p.team||'Moneyline'):(p.player||p.categoryLabel||'No candidate');
+      var market=category==='hitter_hits'
+        ?'HITS '+side+' '+p.line
+        :category==='pitcher_strikeouts'
+          ?'Ks '+side+' '+p.line
+          :'MONEYLINE';
+      var price=(p.bestAvailablePrice!=null)?p.bestAvailablePrice:p.marketPrice;
+      var book=p.bestAvailableBook||p.bookmaker||'';
+      var modelPct=(p.adjProb!=null)?Math.round(p.adjProb*100):null;
+      var details=[];
+      details.push(p.recommendationGrade||'Pass');
+      if(modelPct!=null)details.push('MODEL '+modelPct+'%');
+      if(price!=null)details.push((price>0?'+':'')+price+(book?' '+String(book).slice(0,5).toUpperCase():''));
+      if(p.edge!=null)details.push((p.edge>=0?'+':'')+(p.edge*100).toFixed(1)+'% EDGE');
+      var bid='qpsave-'+pk+'-'+i;
+      var key=(p.playerId||p.gamePk||p.team||name)+':'+(p.marketKey||category)+':'+(p.line||0)+':'+side;
+      var saved=tracked.indexOf(key)>=0;
+      var encoded=encodeURIComponent(JSON.stringify(p));
+      var action=isPass
+        ?'<button class="qp-save" disabled style="opacity:.55;cursor:not-allowed">PASS</button>'
+        :'<button class="qp-save'+(saved?' saved':'')+'" id="'+bid+'" onclick="qpSaveEncoded(event,\''+encoded+'\',\''+bid+'\')">'+(saved?'✓ Saved':'💾')+'</button>'
+          +'<button class="qp-save" style="margin-left:6px;background:rgba(224,64,251,.08);border:1px solid #e040fb;color:#e040fb" onclick="addToParlayFromQP(event,\''+encoded+'\')">+ Parlay</button>';
+      return '<div class="qp-row">'
+        +'<span class="qp-name">'+esc(name)+'</span>'
+        +'<span class="qp-mkt">'+esc(market)+'</span>'
+        +'<span class="qp-hub '+cls+'">'+esc(p.recommendationGrade||'Pass')+' · CONF '+confidence+'</span>'
+        +'<span class="qp-ev '+(!isPass&&p.edge>=0?'pos':'neg')+'" title="'+esc(p.decisionSummary||'')+'">'+esc(details.join(' · '))+'</span>'
+        +action
+        +'</div>';
+    }).join('');
+    return;
+  }
+  var confHtml=renderConfidentHits(pk,(d&&d.confidentHits)||[]);
+  var picks=(d&&d.quickProps)||[];
+  if(!picks.length && d && d.picks) picks=d.picks;
+  if(!picks.length){strip.innerHTML=confHtml||'<div class="qp-loading">No standout props found</div>';return;}
+  var mktLabels={hits:'Hits',hr:'HR',tb:'Tot.Bases',rbi:'RBIs'};
   var tracked=window.__trackedQPIds||[];
   var policy=(d&&d.policy)||{};
   var head='<div class="qp-intel-head">'
@@ -1439,6 +1485,24 @@ function quickPickPayload(pick){
     book:pick.bestAvailableBook||pick.bookmaker||null,
     edge:(pick.edge!=null?pick.edge:null),evPct:(pick.evPct!=null?pick.evPct:null),
     impliedProb:(pick.marketImplied!=null?pick.marketImplied:null)
+function qpSaveEncoded(e,pickStr,btnId){
+  try{qpSave(e,JSON.parse(decodeURIComponent(pickStr)),btnId);}
+  catch(err){e.stopPropagation();showToast('Failed to save pick','err');}
+}
+function qpSave(e,pick,btnId){
+  e.stopPropagation();
+  var btn=document.getElementById(btnId);
+  if(btn&&btn.classList.contains('saved'))return;
+  var payload={
+    player:pick.player,playerId:pick.playerId,team:pick.team,
+    marketKey:pick.marketKey||('batter_'+pick.market),
+    gamePk:pick.gamePk||null,line:pick.line,recommendedSide:(pick.recommendedSide||pick.side||'Over'),source:'dashboard',
+    adjProb:(pick.adjProb!=null?pick.adjProb:(pick.l10_pct||0.5)),
+    hubRating:pick.hubRating||pick.hub_score||0,
+    price:(pick.bestAvailablePrice!=null?pick.bestAvailablePrice:(pick.bestPrice!=null?pick.bestPrice:(pick.marketPrice!=null?pick.marketPrice:null))),book:(pick.bestAvailableBook||pick.bestBook||pick.bookmaker||null),
+    edge:(pick.edge!=null?pick.edge:null),
+    evPct:(pick.evPct!=null?pick.evPct:null),
+    impliedProb:(pick.marketImplied!=null?pick.marketImplied:(pick.openingImplied!=null?pick.openingImplied:null)),reason:(pick.decisionSummary||pick.reason||null)
   };
 }
 function qpSave(e,pickStr,btnId){
@@ -1453,6 +1517,7 @@ function qpSave(e,pickStr,btnId){
       if(d.success&&btn){
         btn.classList.add('saved');btn.textContent='✓ Saved';
         var key=quickPickKey(pick);
+        var key=(pick.playerId||pick.gamePk||pick.team||pick.player)+':'+(pick.marketKey||pick.market)+':'+(pick.line||0)+':'+(pick.recommendedSide||pick.side||'Over');
         if(!window.__trackedQPIds)window.__trackedQPIds=[];
         if(window.__trackedQPIds.indexOf(key)<0)window.__trackedQPIds.push(key);
       }
@@ -1467,6 +1532,23 @@ function addToParlayFromQP(e, pickStr) {
     var pick = JSON.parse(decodeURIComponent(pickStr));
     var queue; try { queue = JSON.parse(localStorage.getItem('pendingParlayLegs') || '[]'); } catch(e) { queue = window.__parlayQueue || []; }
     var leg=quickPickPayload(pick);
+    // Normalize prop for parlay
+    var leg = {
+      player: pick.player,
+      playerId: pick.playerId,
+      team: pick.team,
+      marketKey: pick.marketKey || ('batter_' + pick.market),
+      line: pick.line,
+      recommendedSide: (pick.recommendedSide || pick.side || 'Over'),
+      source: 'dashboard',
+      adjProb: (pick.adjProb != null ? pick.adjProb : (pick.l10_pct || 0.5)),
+      hubRating: pick.hubRating || pick.hub_score || 0,
+      price: (pick.bestAvailablePrice != null ? pick.bestAvailablePrice : (pick.bestPrice != null ? pick.bestPrice : (pick.marketPrice != null ? pick.marketPrice : null))),
+      book: (pick.bestAvailableBook || pick.bestBook || pick.bookmaker || null),
+      edge: (pick.edge != null ? pick.edge : null),
+      evPct: (pick.evPct != null ? pick.evPct : null),
+      impliedProb: (pick.marketImplied != null ? pick.marketImplied : (pick.openingImplied != null ? pick.openingImplied : null))
+    };
     queue.push(leg);
     try { localStorage.setItem('pendingParlayLegs', JSON.stringify(queue)); } catch(e) {} window.__parlayQueue = queue;
     window.location.href = '/tracker';
@@ -2995,7 +3077,7 @@ function prewarmQuickProps(games){
     if(i>=list.length) return;
     var g=list[i++];
     if(QP_DATA[g.gamePk]){ setTimeout(next, 60); return; }
-    fetch('/api/props/quick/'+g.gamePk+'?date='+encodeURIComponent(selectedGamesDate))
+    fetch('/api/intelligence/game-card/'+g.gamePk+'?date='+encodeURIComponent(selectedGamesDate))
       .then(function(r){return r.json();})
       .then(function(d){
         if(token===QP_WARM_TOKEN && d && d.success){
