@@ -307,7 +307,7 @@ def test_game_card_api_returns_the_three_ranked_decisions(monkeypatch):
     payload = fake_app.view_functions['api_intelligence_game_card'](7)
 
     assert payload['success'] is True
-    assert payload['quickPicksVersion'] == '4.35.1'
+    assert payload['quickPicksVersion'] == '4.35.2'
     assert payload['pickConfidenceVersion'] == '4.34'
     assert payload['matchupSimulationVersion'] == '4.35'
     assert payload['recommendationSource'] == 'shared_game_matchup_simulation'
@@ -409,6 +409,7 @@ def test_game_card_api_rebuilds_an_incomplete_tracker_candidate_pool(monkeypatch
         row('h2h', player='NYY@BOS', team='BOS', probability=.39, implied=.47, recommendedSide='BOS', line=0),
     ]
     calls = []
+    build_kwargs = []
     fake_app = FakeApp()
     app_module = SimpleNamespace(
         app=fake_app,
@@ -422,7 +423,7 @@ def test_game_card_api_rebuilds_an_incomplete_tracker_candidate_pool(monkeypatch
         fetch_schedule=lambda _date: [{'gamePk': 7}],
         _get_adjustments=lambda: {},
         _build_tracker_rows_for_game=lambda *_args, **_kwargs: (
-            calls.append(True) or generated
+            calls.append(True) or build_kwargs.append(_kwargs) or generated
         ),
     )
     monkeypatch.setattr(intelligence_integration, 'enrich_context', lambda values: values)
@@ -453,6 +454,7 @@ def test_game_card_api_rebuilds_an_incomplete_tracker_candidate_pool(monkeypatch
         app_module, 7, '2026-08-06'
     )
     assert calls == [True]
+    assert build_kwargs[0]['decision_only'] is True
     assert rebuilt['generatedSourceCount'] == 4
     assert rebuilt['best']['hitter_hits']['player'] == 'Full Pool Hitter'
     assert rebuilt['simulationReady'] is True

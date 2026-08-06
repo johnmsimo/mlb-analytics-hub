@@ -19,11 +19,13 @@ from matchup_simulation_intelligence import simulation_audit
 from cache_service import normalize_cache_key
 from redis_client import get_redis
 from simulation_engine import enrich_simulations
+from simulation_capacity import serialized_simulation
 
 
 _GAME_CARD_CACHE_TTL = 300
 _GAME_CARD_STALE_TTL = 3600
 _GAME_CARD_JOB_RETRY_TTL = 30
+_GAME_CARD_JOB_MAX_SECONDS = 180
 _GAME_CARD_JOBS = {}
 _GAME_CARD_JOBS_LOCK = threading.RLock()
 # One serialized builder prevents a dashboard slate from launching several
@@ -46,7 +48,7 @@ def _has_price(row, category):
 
 
 def _cache_key(game_pk, date_str):
-    return normalize_cache_key('game_card_intelligence_v4351', game_pk, date_str)
+    return normalize_cache_key('game_card_intelligence_v4352', game_pk, date_str)
 
 
 def _read_cached_payload(game_pk, date_str):
@@ -144,10 +146,10 @@ def _decision_payload(game_pk, date_str, rows, all_tracker_entries, generated_co
         'gamePk': game_pk,
         'sourceCount': len(rows),
         'generatedSourceCount': generated_count,
-        'quickPicksVersion': '4.35.1',
+        'quickPicksVersion': '4.35.2',
         'pickConfidenceVersion': '4.34',
         'matchupSimulationVersion': '4.35',
-        'performanceVersion': '4.35.1',
+        'performanceVersion': '4.35.2',
         'recommendationSource': (
             'shared_game_matchup_simulation'
             if fully_backed else 'simulation_refresh_pending'
@@ -167,10 +169,10 @@ def _pending_payload(game_pk, date_str, source_count):
         'gamePk': game_pk,
         'sourceCount': source_count,
         'generatedSourceCount': 0,
-        'quickPicksVersion': '4.35.1',
+        'quickPicksVersion': '4.35.2',
         'pickConfidenceVersion': '4.34',
         'matchupSimulationVersion': '4.35',
-        'performanceVersion': '4.35.1',
+        'performanceVersion': '4.35.2',
         'recommendationSource': 'simulation_refresh_pending',
         'simulationReady': False,
         'simulationAudit': simulation_audit([]),
@@ -179,6 +181,7 @@ def _pending_payload(game_pk, date_str, source_count):
     }
 
 
+@serialized_simulation
 def _generate_game_card_payload(app_module, game_pk, date_str):
     tracker = app_module._tracker_today_payload(date_str)
     all_tracker_entries = tracker.get('entries') or tracker.get('picks') or []
@@ -198,6 +201,7 @@ def _generate_game_card_payload(app_module, game_pk, date_str):
         adjustments=adjustments,
         _sched=schedule,
         include_odds=True,
+        decision_only=True,
     ) or []
     merged = _merge_candidate_rows(captured, generated)
     return _decision_payload(
@@ -211,7 +215,21 @@ def _generate_game_card_payload(app_module, game_pk, date_str):
 
 def _job_snapshot(cache_key):
     with _GAME_CARD_JOBS_LOCK:
-        job = dict(_GAME_CARD_JOBS.get(cache_key) or {})
+        current = _GAME_CARD_JOBS.get(cache_key) or {}
+        started = float(current.get('started') or time.time())
+        if (
+            current.get('status') in {'queued', 'running'}
+            and time.time() - started > _GAME_CARD_JOB_MAX_SECONDS
+        ):
+            current.update({
+                'status': 'error',
+                'finished': time.time(),
+                'error': (
+                    'The linked matchup build exceeded its time budget. '
+                    'Retry after the current worker clears.'
+                ),
+            })
+        job = dict(current)
     if not job:
         return None
     started = float(job.get('started') or time.time())
@@ -228,7 +246,10 @@ def _schedule_game_card_refresh(app_module, game_pk, date_str):
     with _GAME_CARD_JOBS_LOCK:
         current = _GAME_CARD_JOBS.get(cache_key)
         if current and current.get('status') in {'queued', 'running'}:
-            return _job_snapshot(cache_key)
+            snapshot = _job_snapshot(cache_key)
+            if snapshot.get('status') in {'queued', 'running'}:
+                return snapshot
+            current = _GAME_CARD_JOBS.get(cache_key)
         if (
             current
             and current.get('status') == 'error'
@@ -335,12 +356,13 @@ def install_intelligence_api(app_module):
                     computing=False,
                 ))
             job = _schedule_game_card_refresh(app_module, game_pk, date_str)
+            computing = bool(job and job.get('status') in {'queued', 'running'})
             return app_module.jsonify(dict(
                 cached['payload'],
                 cached=True,
                 stale=True,
                 cacheAgeSec=age,
-                computing=True,
+                computing=computing,
                 refreshStatus=job,
                 retryAfterSeconds=4,
             ))
@@ -367,13 +389,16 @@ def install_intelligence_api(app_module):
             return app_module.jsonify(dict(payload, cached=False, computing=False))
 
         job = _schedule_game_card_refresh(app_module, game_pk, date_str)
+        computing = bool(job and job.get('status') in {'queued', 'running'})
         payload.update({
-            'computing': True,
+            'computing': computing,
             'refreshStatus': job,
             'retryAfterSeconds': 4,
             'message': (
                 'Refreshing the linked matchup simulation in the background. '
                 'This card will update automatically.'
+                if computing else
+                ((job or {}).get('error') or 'Matchup simulation unavailable.')
             ),
         })
         return app_module.jsonify(payload)
