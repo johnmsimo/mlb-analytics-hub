@@ -1,10 +1,23 @@
-"""Flask integration for prediction intelligence and learning analytics."""
+"""Flask integration for prediction, explanation, and game-card intelligence."""
+import threading
+import time
+from datetime import datetime
+
 from context_engine import enrich_context
 from explanation_engine import explain_decisions
+from game_card_intelligence import (
+    prepare_game_card_candidates,
+    select_game_card_quick_picks,
+)
 from intelligence_core import build_recommendations
 from learning_engine import analyze_learning
 from matchup_engine import enrich_matchups
 from simulation_engine import enrich_simulations
+
+
+_GAME_CARD_CACHE = {}
+_GAME_CARD_CACHE_LOCK = threading.Lock()
+_GAME_CARD_CACHE_TTL = 120
 
 
 def install_intelligence_api(app_module):
@@ -50,3 +63,90 @@ def install_intelligence_api(app_module):
             'learningVersion': '4.31',
             **analytics,
         })
+
+    @flask_app.route('/api/intelligence/game-card/<int:game_pk>', methods=['GET'])
+    def api_intelligence_game_card(game_pk):
+        """Return one confidence-first hit, K-side, and moneyline decision."""
+        date_str = app_module.request.args.get('date') or datetime.now(
+            app_module.ET
+        ).strftime('%Y-%m-%d')
+        cache_key = (int(game_pk), date_str)
+        refresh = app_module.request.args.get('refresh') == '1'
+        now = time.time()
+        if not refresh:
+            with _GAME_CARD_CACHE_LOCK:
+                cached = _GAME_CARD_CACHE.get(cache_key)
+            if cached and now - cached['timestamp'] < _GAME_CARD_CACHE_TTL:
+                return app_module.jsonify(dict(cached['payload'], cached=True))
+
+        tracker = app_module._tracker_today_payload(date_str)
+        all_tracker_entries = tracker.get('entries') or tracker.get('picks') or []
+        rows = [
+            dict(row) for row in all_tracker_entries
+            if str(row.get('gamePk')) == str(game_pk)
+        ]
+        # Rebuild candidates on each cache miss so the game card ranks the
+        # current sportsbook lines instead of stale opening prices. Captured
+        # tracker rows remain a fallback if a live upstream source is unavailable.
+        generated = []
+        try:
+            schedule = app_module.fetch_schedule(date_str)
+            adjustments = dict(app_module._get_adjustments() or {})
+            adjustments['captured_per_game'] = max(
+                100,
+                int(adjustments.get('captured_per_game') or 0),
+            )
+            generated = app_module._build_tracker_rows_for_game(
+                game_pk,
+                date_str,
+                adjustments=adjustments,
+                _sched=schedule,
+                include_odds=True,
+            ) or []
+        except Exception:
+            app_module.logging.warning(
+                '[game_card_intelligence] live generation failed for %s',
+                game_pk,
+                exc_info=True,
+            )
+
+        # Freshly generated rows replace duplicate tracker rows while preserving
+        # any already-captured markets that generation could not rebuild.
+        merged = {}
+        for row in rows + list(generated):
+            key = (
+                row.get('marketKey'), row.get('playerId'), row.get('player'),
+                row.get('team'), row.get('line'), row.get('recommendedSide'),
+            )
+            merged[key] = dict(row)
+        candidates = prepare_game_card_candidates(merged.values())
+        contextual = enrich_context(candidates)
+        matchups = enrich_matchups(contextual)
+        simulated = enrich_simulations(matchups)
+        learning = analyze_learning(all_tracker_entries)
+        decisions = select_game_card_quick_picks(
+            simulated,
+            learning=learning,
+        )
+        payload = {
+            'success': True,
+            'date': date_str,
+            'gamePk': game_pk,
+            'sourceCount': len(merged),
+            'generatedSourceCount': len(generated),
+            'quickPicksVersion': '4.33',
+            'explanationVersion': '4.32',
+            **decisions,
+        }
+        with _GAME_CARD_CACHE_LOCK:
+            if len(_GAME_CARD_CACHE) >= 80:
+                oldest = min(
+                    _GAME_CARD_CACHE,
+                    key=lambda key: _GAME_CARD_CACHE[key]['timestamp'],
+                )
+                _GAME_CARD_CACHE.pop(oldest, None)
+            _GAME_CARD_CACHE[cache_key] = {
+                'timestamp': time.time(),
+                'payload': payload,
+            }
+        return app_module.jsonify(payload)
