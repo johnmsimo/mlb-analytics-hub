@@ -11,6 +11,12 @@ def test_dashboard_uses_game_card_intelligence_endpoint():
     assert "var picks=(d&&d.quickPicks)||[]" in source
     assert 'HIGHEST-CONFIDENCE PICKS' in source
 
+    prewarm_start = source.index('function prewarmQuickProps(games)')
+    prewarm_end = source.index('function load(dateStr)', prewarm_start)
+    prewarm_source = source[prewarm_start:prewarm_end]
+    assert "fetch('/api/intelligence/game-card/'" in prewarm_source
+    assert "fetch('/api/props/quick/'" not in prewarm_source
+
 
 def test_save_and_parlay_preserve_recommended_side():
     source = DASHBOARD.read_text(encoding='utf-8')
@@ -27,4 +33,3 @@ def test_pass_decisions_do_not_render_bet_actions():
     source = DASHBOARD.read_text(encoding='utf-8')
 
     assert "var actions=isPass?'':'<div class=\"qp-actions\">'" in source
-
