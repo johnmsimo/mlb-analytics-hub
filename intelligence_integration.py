@@ -11,10 +11,6 @@ from game_card_intelligence import (
     select_game_card_quick_picks,
 )
 from intelligence_core import build_recommendations, classify_pick
-    prepare_game_card_candidates,
-    select_game_card_quick_picks,
-)
-from intelligence_core import build_recommendations
 from learning_engine import analyze_learning
 from matchup_engine import enrich_matchups
 from simulation_engine import enrich_simulations
@@ -114,34 +110,26 @@ def install_intelligence_api(app_module):
         # the same full simulation and live-odds path used by tracker capture.
         generated = []
         if not all(usable.values()):
-            schedule = app_module.fetch_schedule(date_str)
-            adjustments = dict(app_module._get_adjustments() or {})
-            adjustments['captured_per_game'] = max(
-                250,
-        # Rebuild candidates on each cache miss so the game card ranks the
-        # current sportsbook lines instead of stale opening prices. Captured
-        # tracker rows remain a fallback if a live upstream source is unavailable.
-        generated = []
-        try:
-            schedule = app_module.fetch_schedule(date_str)
-            adjustments = dict(app_module._get_adjustments() or {})
-            adjustments['captured_per_game'] = max(
-                100,
-                int(adjustments.get('captured_per_game') or 0),
-            )
-            generated = app_module._build_tracker_rows_for_game(
-                game_pk,
-                date_str,
-                adjustments=adjustments,
-                _sched=schedule,
-                include_odds=True,
-            ) or []
-        except Exception:
-            app_module.logging.warning(
-                '[game_card_intelligence] live generation failed for %s',
-                game_pk,
-                exc_info=True,
-            )
+            try:
+                schedule = app_module.fetch_schedule(date_str)
+                adjustments = dict(app_module._get_adjustments() or {})
+                adjustments['captured_per_game'] = max(
+                    250,
+                    int(adjustments.get('captured_per_game') or 0),
+                )
+                generated = app_module._build_tracker_rows_for_game(
+                    game_pk,
+                    date_str,
+                    adjustments=adjustments,
+                    _sched=schedule,
+                    include_odds=True,
+                ) or []
+            except Exception:
+                app_module.logging.warning(
+                    '[game_card_intelligence] live generation failed for %s',
+                    game_pk,
+                    exc_info=True,
+                )
 
         # Freshly generated rows replace duplicate tracker rows while preserving
         # any already-captured markets that generation could not rebuild.
