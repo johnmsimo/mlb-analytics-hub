@@ -41,6 +41,43 @@ class SimulationEngineTests(unittest.TestCase):
         self.assertAlmostEqual(enriched[0]['simulationProbability'], .66)
         self.assertNotIn('simulationScore', original)
 
+    def test_shared_game_simulation_overrides_disconnected_candidate_mc(self):
+        result = score_simulation({
+            'recommendedSide': 'Over',
+            'sharedSimulationBacked': True,
+            'gameSimProbability': .64,
+            'gameSimStd': .012,
+            'gameSimN': 1500,
+            'gameSimPlo': .616,
+            'gameSimPhi': .664,
+            'matchupSimulationSource': 'Hitter versus opposing starter',
+            'gameSimulationEvidence': ['linked plate-appearance trials'],
+            'mc_prob_over': .51,
+            'mc_n_sims': 100,
+        })
+
+        self.assertAlmostEqual(result['simulationProbability'], .64)
+        self.assertTrue(result['sharedSimulationBacked'])
+        self.assertEqual(
+            result['simulationSource'], 'Hitter versus opposing starter'
+        )
+        self.assertIn('linked plate-appearance trials', result['simulationEvidence'])
+
+    def test_shared_game_simulation_inverts_probability_and_interval_for_under(self):
+        result = score_simulation({
+            'recommendedSide': 'Under',
+            'sharedSimulationBacked': True,
+            'gameSimProbability': .42,
+            'gameSimStd': .013,
+            'gameSimN': 1500,
+            'gameSimPlo': .395,
+            'gameSimPhi': .445,
+        })
+
+        self.assertAlmostEqual(result['simulationProbability'], .58)
+        self.assertAlmostEqual(result['simulationInterval']['low'], .555)
+        self.assertAlmostEqual(result['simulationInterval']['high'], .605)
+
 
 if __name__ == '__main__':
     unittest.main()
