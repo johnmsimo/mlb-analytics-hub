@@ -26,6 +26,10 @@ def _num(value: Any, default: float | None = None) -> float | None:
 
 
 def _probability(row: Mapping[str, Any]) -> float:
+    value = _num(
+        row.get('blendedProb', row.get('adjProb', row.get('probability'))),
+        0.0,
+    ) or 0.0
     value = _num(row.get('blendedProb', row.get('adjProb', row.get('probability'))), 0.0) or 0.0
     return max(0.0, min(1.0, value / 100.0 if value > 1 else value))
 
@@ -54,6 +58,14 @@ def _candidate_id(row: Mapping[str, Any], side: str) -> str:
     ))
 
 
+def _under_interval(row: Mapping[str, Any]) -> tuple[float | None, float | None]:
+    over_low = _num(row.get('p_lo'))
+    over_high = _num(row.get('p_hi'))
+    if over_low is None or over_high is None:
+        return None, None
+    return max(0.0, 1.0 - over_high), min(1.0, 1.0 - over_low)
+
+
 def _as_side(row: Mapping[str, Any], side: str) -> dict[str, Any]:
     """Normalize a tracker row to the probability, price, and edge of one side."""
     pick = dict(row)
@@ -68,6 +80,7 @@ def _as_side(row: Mapping[str, Any], side: str) -> dict[str, Any]:
         if implied is None:
             over_implied = _num(_first(row, 'marketImplied', 'openingImplied'))
             implied = None if over_implied is None else max(0.0, 1.0 - over_implied)
+        p_lo, p_hi = _under_interval(row)
         pick.update({
             'recommendedSide': 'Under',
             'sideLabel': 'Under',
@@ -80,10 +93,20 @@ def _as_side(row: Mapping[str, Any], side: str) -> dict[str, Any]:
             'openingPrice': price,
             'openingImplied': round(implied, 4) if implied is not None else None,
             'edge': round(probability - implied, 4) if implied is not None else None,
+            'p_lo': round(p_lo, 4) if p_lo is not None else None,
+            'p_hi': round(p_hi, 4) if p_hi is not None else None,
         })
     else:
         probability = over_probability
         normalized_side = side if classify_pick(row) == 'game_winner' else 'Over'
+        price = _first(
+            row, 'bestOverPrice', 'best_over_price',
+            'bestAvailablePrice', 'marketPrice',
+        )
+        book = _first(
+            row, 'bestOverBook', 'best_over_book',
+            'bestAvailableBook', 'bookmaker',
+        )
         price = _first(row, 'bestOverPrice', 'best_over_price', 'bestAvailablePrice', 'marketPrice')
         book = _first(row, 'bestOverBook', 'best_over_book', 'bestAvailableBook', 'bookmaker')
         implied = _num(_first(row, 'marketImplied', 'openingImplied'))
@@ -100,6 +123,10 @@ def _as_side(row: Mapping[str, Any], side: str) -> dict[str, Any]:
             'marketImplied': round(implied, 4) if implied is not None else None,
             'openingPrice': price,
             'openingImplied': round(implied, 4) if implied is not None else None,
+            'edge': (
+                round(probability - implied, 4)
+                if implied is not None else pick.get('edge')
+            ),
             'edge': round(probability - implied, 4) if implied is not None else pick.get('edge'),
         })
 
@@ -109,6 +136,9 @@ def _as_side(row: Mapping[str, Any], side: str) -> dict[str, Any]:
     return enrich_pick_confidence(pick)
 
 
+def prepare_game_card_candidates(
+    rows: Iterable[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
 def prepare_game_card_candidates(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Keep supported markets and create a separately scored Under K candidate."""
     candidates: list[dict[str, Any]] = []
@@ -144,6 +174,9 @@ def select_game_card_quick_picks(
 ) -> dict[str, Any]:
     """Return the highest-confidence eligible pick—or an explicit Pass—per market."""
     policy = policy or DecisionPolicy(maximum_card_size=3)
+    grouped: dict[str, list[dict[str, Any]]] = {
+        category: [] for category in CATEGORY_ORDER
+    }
     grouped: dict[str, list[dict[str, Any]]] = {category: [] for category in CATEGORY_ORDER}
     for candidate in candidates:
         row = dict(candidate)
@@ -161,6 +194,9 @@ def select_game_card_quick_picks(
             if decision['card']:
                 eligible.append(decision['card'][0])
             else:
+                reasons = list(
+                    (decision.get('rejected') or [{}])[0].get('reasons') or []
+                )
                 reasons = list((decision.get('rejected') or [{}])[0].get('reasons') or [])
                 rejected.append((candidate, reasons))
 
@@ -183,6 +219,9 @@ def select_game_card_quick_picks(
                 'adjProb': 0.0,
                 'edge': 0.0,
                 'grade': 'pending',
+            }, learning=learning, rejection_reasons=[
+                'no market candidate is available',
+            ])
             }, learning=learning, rejection_reasons=['no market candidate is available'])
 
         explained['intelligenceCategory'] = category
@@ -193,6 +232,12 @@ def select_game_card_quick_picks(
     return {
         'quickPicks': selections,
         'best': {pick['intelligenceCategory']: pick for pick in selections},
+        'eligibleCategoryCount': sum(
+            pick['recommendationGrade'] != 'Pass' for pick in selections
+        ),
+        'passCategoryCount': sum(
+            pick['recommendationGrade'] == 'Pass' for pick in selections
+        ),
         'eligibleCategoryCount': sum(pick['recommendationGrade'] != 'Pass' for pick in selections),
         'passCategoryCount': sum(pick['recommendationGrade'] == 'Pass' for pick in selections),
         'policy': {

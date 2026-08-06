@@ -6,6 +6,11 @@ from datetime import datetime
 from context_engine import enrich_context
 from explanation_engine import explain_decisions
 from game_card_intelligence import (
+    CATEGORY_ORDER,
+    prepare_game_card_candidates,
+    select_game_card_quick_picks,
+)
+from intelligence_core import build_recommendations, classify_pick
     prepare_game_card_candidates,
     select_game_card_quick_picks,
 )
@@ -18,6 +23,17 @@ from simulation_engine import enrich_simulations
 _GAME_CARD_CACHE = {}
 _GAME_CARD_CACHE_LOCK = threading.Lock()
 _GAME_CARD_CACHE_TTL = 120
+
+
+def _has_price(row, category):
+    if category == 'pitcher_strikeouts':
+        keys = ('bestOverPrice', 'best_over_price', 'bestUnderPrice', 'best_under_price')
+    else:
+        keys = (
+            'bestOverPrice', 'best_over_price',
+            'bestAvailablePrice', 'marketPrice',
+        )
+    return any(row.get(key) is not None for key in keys)
 
 
 def install_intelligence_api(app_module):
@@ -85,6 +101,23 @@ def install_intelligence_api(app_module):
             dict(row) for row in all_tracker_entries
             if str(row.get('gamePk')) == str(game_pk)
         ]
+        usable = {
+            category: any(
+                classify_pick(row) == category and _has_price(row, category)
+                for row in rows
+            )
+            for category in CATEGORY_ORDER
+        }
+
+        # Tracker capture is the fastest source when it contains priced rows for
+        # every required market. Otherwise rebuild this game's candidates through
+        # the same full simulation and live-odds path used by tracker capture.
+        generated = []
+        if not all(usable.values()):
+            schedule = app_module.fetch_schedule(date_str)
+            adjustments = dict(app_module._get_adjustments() or {})
+            adjustments['captured_per_game'] = max(
+                250,
         # Rebuild candidates on each cache miss so the game card ranks the
         # current sportsbook lines instead of stale opening prices. Captured
         # tracker rows remain a fallback if a live upstream source is unavailable.
