@@ -2995,7 +2995,7 @@ function prewarmQuickProps(games){
     if(i>=list.length) return;
     var g=list[i++];
     if(QP_DATA[g.gamePk]){ setTimeout(next, 60); return; }
-    fetch('/api/props/quick/'+g.gamePk+'?date='+encodeURIComponent(selectedGamesDate))
+    fetch('/api/intelligence/game-card/'+g.gamePk+'?date='+encodeURIComponent(selectedGamesDate))
       .then(function(r){return r.json();})
       .then(function(d){
         if(token===QP_WARM_TOKEN && d && d.success){
