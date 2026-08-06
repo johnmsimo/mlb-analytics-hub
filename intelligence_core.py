@@ -26,12 +26,18 @@ def _edge(p: Mapping[str, Any]) -> float:
     return value / 100.0 if abs(value) > 1 else value
 
 def classify_pick(p: Mapping[str, Any]) -> str:
-    text = ' '.join(str(p.get(k) or '') for k in ('market','marketType','stat','propType','betType','category')).lower()
+    market_key = str(p.get('marketKey') or '').strip().lower()
+    text = ' '.join(str(p.get(k) or '') for k in (
+        'market', 'marketKey', 'marketType', 'stat', 'propType', 'betType',
+        'category', 'intelligenceCategory',
+    )).lower()
     if 'strikeout' in text or text.strip() in {'k','ks','pitcher k'}:
         return 'pitcher_strikeouts'
-    if 'moneyline' in text or 'game winner' in text or 'to win' in text:
+    if ('moneyline' in text or 'game winner' in text or 'to win' in text
+            or market_key in {'h2h', 'moneyline', 'game_winner'}):
         return 'game_winner'
-    if 'hit' in text and 'allowed' not in text and 'hard hit' not in text:
+    if (('hit' in text or 'batter_hits' in text)
+            and 'allowed' not in text and 'hard hit' not in text):
         return 'hitter_hits'
     return 'other'
 
@@ -63,14 +69,7 @@ def build_recommendations(picks: Iterable[Mapping[str, Any]], policy: DecisionPo
             continue
         p['intelligenceCategory'] = category
         p['decisionScore'] = decision_score(p)
-        p['whyThisPick'] = [
-            f"Model win probability {_prob(p):.1%}",
-            f"Estimated edge {_edge(p):.1%}",
-            f"Confidence {_num(p.get('confidenceScore')):.1f}/100",
-            f"Game context {_num(p.get('contextScore'), 50.0):.1f}/100",
-            f"Baseball matchup {_num(p.get('matchupScore'), 50.0):.1f}/100",
-            f"Simulation quality {_num(p.get('simulationScore'), 50.0):.1f}/100",
-        ]
+        p['whyThisPick'] = [f"Model win probability {_prob(p):.1%}", f"Estimated edge {_edge(p):.1%}", f"Confidence {_num(p.get('confidenceScore')):.1f}/100", f"Game context {_num(p.get('contextScore'), 50.0):.1f}/100", f"Baseball matchup {_num(p.get('matchupScore'), 50.0):.1f}/100", f"Simulation quality {_num(p.get('simulationScore'), 50.0):.1f}/100"]
         p['whyThisPick'].extend(p.get('contextEvidence') or [])
         p['whyThisPick'].extend(p.get('matchupAdvantages') or [])
         p['whyThisPick'].extend(p.get('simulationEvidence') or [])
