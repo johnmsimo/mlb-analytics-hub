@@ -7,6 +7,7 @@ class FakeRedis:
     def __init__(self):
         self.values = {}
         self.queues = {}
+        self.setex_calls = {}
 
     def ping(self):
         return True
@@ -23,6 +24,7 @@ class FakeRedis:
 
     def setex(self, key, ttl, value):
         del ttl
+        self.setex_calls[key] = self.setex_calls.get(key, 0) + 1
         self.values[key] = value
 
     def delete(self, key):
@@ -87,3 +89,18 @@ def test_queue_health_requires_recent_worker_heartbeat():
     health = queue.health()
     assert health['connected'] is True
     assert health['workerReady'] is True
+
+
+def test_long_job_refreshes_worker_heartbeat_until_completion():
+    redis = FakeRedis()
+    queue = RedisJobQueue(redis, heartbeat_interval_seconds=0.01)
+    job = queue.enqueue('simulation', {'gamePk': 11}, dedupe_key='sim:11')
+
+    def slow_job(_args):
+        time.sleep(0.05)
+
+    assert queue.work_once({'simulation': slow_job})
+    assert queue.get(job['id'])['status'] == 'done'
+    # One heartbeat is written before the handler, at least one while it is
+    # running, and another after completion.
+    assert redis.setex_calls.get(HEARTBEAT_KEY, 0) >= 3

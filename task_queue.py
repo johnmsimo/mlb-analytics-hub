@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -35,6 +36,7 @@ def _json(value: Any) -> str:
 class RedisJobQueue:
     client: Any
     job_ttl: int = 3600
+    heartbeat_interval_seconds: float = 20.0
 
     def _job_key(self, job_id: str) -> str:
         return f"{JOB_PREFIX}{job_id}"
@@ -174,6 +176,28 @@ class RedisJobQueue:
         })
         self._save(job)
         self.heartbeat()
+        heartbeat_stop = threading.Event()
+
+        def keep_worker_ready() -> None:
+            while not heartbeat_stop.wait(max(0.01, self.heartbeat_interval_seconds)):
+                try:
+                    self.heartbeat()
+                except Exception:
+                    # The main worker loop owns reconnection.  A heartbeat
+                    # failure must not interrupt an otherwise recoverable job.
+                    log.warning(
+                        "worker heartbeat failed during job kind=%s id=%s",
+                        job.get("kind"),
+                        job.get("id"),
+                        exc_info=True,
+                    )
+
+        heartbeat_thread = threading.Thread(
+            target=keep_worker_ready,
+            name=f"job-heartbeat-{job['id'][:8]}",
+            daemon=True,
+        )
+        heartbeat_thread.start()
         try:
             handler(dict(job.get("args") or {}))
         except Exception as exc:
@@ -193,6 +217,9 @@ class RedisJobQueue:
                 )
         else:
             self._finish(job)
+        finally:
+            heartbeat_stop.set()
+            heartbeat_thread.join(timeout=1)
         self.heartbeat()
         return True
 
@@ -211,6 +238,12 @@ class RedisJobQueue:
 
 
 _queue: RedisJobQueue | None = None
+
+
+def reset_job_queue() -> None:
+    """Drop a failed cached client so the worker can establish a new connection."""
+    global _queue
+    _queue = None
 
 
 def get_job_queue() -> RedisJobQueue:
