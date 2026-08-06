@@ -70,6 +70,27 @@ class ConfidenceServiceTests(unittest.TestCase):
         })
         self.assertGreater(result.components["modelAgreement"], 90.0)
 
+    def test_shared_matchup_simulation_is_confidence_source_for_under(self):
+        result = confidence_for_pick({
+            "recommendedSide": "Under",
+            "adjProb": 0.61,
+            "marketImplied": 0.52,
+            "sharedSimulationBacked": True,
+            "gameSimProbability": 0.40,
+            "gameSimPlo": 0.375,
+            "gameSimPhi": 0.425,
+            "gameSimStd": 0.013,
+            "gameSimN": 1500,
+            # Deliberately disagreeing legacy candidate simulation; Phase 4.35
+            # must ignore it in favor of the shared game trials above.
+            "mc_prob_under": 0.30,
+            "mc_std": 0.20,
+            "mc_n_sims": 100,
+        })
+        self.assertGreater(result.components["modelAgreement"], 90.0)
+        self.assertGreater(result.components["intervalStability"], 80.0)
+        self.assertEqual(result.components["sampleSupport"], 75.0)
+
     def test_enrichment_preserves_original_pick(self):
         pick = {"id": "pick-1", "adjProb": 0.62, "marketImplied": 0.52}
         enriched = enrich_pick_confidence(pick)

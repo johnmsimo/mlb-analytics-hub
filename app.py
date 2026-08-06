@@ -10,6 +10,11 @@ from zoneinfo import ZoneInfo
 ET = ZoneInfo("America/New_York")
 from flask import Flask, g, jsonify, request, Response
 from flask_cors import CORS
+from matchup_simulation_intelligence import (
+    build_simulation_signal,
+    exact_over_probability,
+    summarize_game_outcomes,
+)
 
 
 def _load_local_env_file(env_path):
@@ -11646,9 +11651,10 @@ def _batx_for_sim(batter, opp_pitcher, park, weather):
             'hr_mult':   hr_boost,
             'walk_mult': walk_boost,
             'k_mult':    k_boost,
+            'adjustments': dict(adj),
         }
     except Exception:
-        return {'composite': 1.0, 'hit_mult': 1.0, 'hr_mult': 1.0, 'walk_mult': 1.0, 'k_mult': 1.0}
+        return {'composite': 1.0, 'hit_mult': 1.0, 'hr_mult': 1.0, 'walk_mult': 1.0, 'k_mult': 1.0, 'adjustments': {}}
 
 
 def _derive_probs(b, p, park=1.0, batx=None):
@@ -13063,6 +13069,10 @@ def _summarize_player(lines):
     def arr(k): return [x[k] for x in lines]
     hits = arr('h'); hr = arr('hr'); rbi = arr('rbi'); runs = arr('r'); bb = arr('bb'); k = arr('k'); tb = arr('tb'); sb = arr('sb')
     hrr = [(x.get('h', 0) + x.get('r', 0) + x.get('rbi', 0)) for x in lines]
+    hit_over_probabilities = {
+        f'{line:.1f}': exact_over_probability(hits, line)
+        for line in (0.5, 1.5, 2.5, 3.5)
+    }
     return {
         'mean_hits': round(statistics.mean(hits), 3), 'median_hits': statistics.median(hits),
         'mean_hr': round(statistics.mean(hr), 3), 'mean_rbi': round(statistics.mean(rbi), 3),
@@ -13084,12 +13094,17 @@ def _summarize_player(lines):
         'p_2plus_hrr': round(sum(1 for x in hrr if x >= 2) / len(hrr), 3),
         'p_3plus_hrr': round(sum(1 for x in hrr if x >= 3) / len(hrr), 3),
         'p_4plus_hrr': round(sum(1 for x in hrr if x >= 4) / len(hrr), 3),
+        'hit_over_probabilities': hit_over_probabilities,
     }
 
 
 def _summarize_pitcher(lines):
     def arr(k): return [x[k] for x in lines]
     outs = arr('outs'); er = arr('er'); ks = arr('k'); hs = arr('h'); bbs = arr('bb')
+    k_over_probabilities = {
+        f'{line:.1f}': exact_over_probability(ks, line)
+        for line in (1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5, 10.5)
+    }
     return {
         'mean_outs': round(statistics.mean(outs), 2), 'median_outs': statistics.median(outs),
         'mean_er': round(statistics.mean(er), 2), 'mean_k': round(statistics.mean(ks), 2),
@@ -13105,6 +13120,7 @@ def _summarize_pitcher(lines):
         'p_6plus_k': round(sum(1 for x in ks if x >= 6)/len(ks), 3),
         'p_2plus_er': round(sum(1 for x in er if x >= 2)/len(er), 3),
         'p_3plus_er': round(sum(1 for x in er if x >= 3)/len(er), 3),
+        'k_over_probabilities': k_over_probabilities,
     }
 
 
@@ -16144,7 +16160,8 @@ def _projection_reason_short(player, market_key, adj_prob, edge, opp_name=''):
 
 
 def _build_team_market_rows(game_pk, capture_date, away_abbr, home_abbr,
-                            away_name, home_name, adjustments):
+                            away_name, home_name, adjustments,
+                            shared_simulation=None):
     """Generates tracker rows for team-level / game-level markets:
     h2h (moneyline), totals (game O/U), f5_h2h, f5_totals, nrfi, yrfi.
 
@@ -16201,7 +16218,8 @@ def _build_team_market_rows(game_pk, capture_date, away_abbr, home_abbr,
         return row
 
     def _emit(market_key, side, line, raw_prob, market_implied, market_price,
-              bookmaker, opp_book_price, opp_book_name, team, reason):
+              bookmaker, opp_book_price, opp_book_name, team, reason,
+              simulation_probability=None, simulation_mean=None):
         """Build a single row and append to rows."""
         raw_mult_prob = _clamp01(raw_prob * _market_mult(market_key, adjustments))
         # Team/game-level markets used to skip market blending entirely (unlike
@@ -16266,27 +16284,69 @@ def _build_team_market_rows(game_pk, capture_date, away_abbr, home_abbr,
             'openingPrice': market_price,
             'openingImplied': market_implied,
         }
+        if simulation_probability is not None:
+            row.update(build_simulation_signal(
+                simulation_probability,
+                (shared_simulation or {}).get('nSims', 0),
+                mode='linked_full_game_moneyline_simulation',
+                matchup=(
+                    f"{away_abbr} lineup and starter versus {home_abbr} "
+                    'lineup and starter, including bullpen transitions'
+                ),
+                outcome_mean=simulation_mean,
+                evidence=[
+                    f"{away_abbr} projected "
+                    f"{float((shared_simulation or {}).get('awayMeanRuns', 0)):.2f} runs",
+                    f"{home_abbr} projected "
+                    f"{float((shared_simulation or {}).get('homeMeanRuns', 0)):.2f} runs",
+                ],
+            ))
         rows.append(_finalize_row(row))
 
     # ── Moneyline (h2h) ─────────────────────────────────────────────────────
-    if proj.get('success'):
-        away_wp = float(proj.get('awayWinProb') or 0.5)
-        home_wp = float(proj.get('homeWinProb') or 0.5)
-        if away_wp >= home_wp:
-            side, side_wp, opp_wp = away_abbr, away_wp, home_wp
-            side_ml, opp_ml = (ml or {}).get('away'), (ml or {}).get('home')
-            team = away_abbr
+    if proj.get('success') or (shared_simulation or {}).get('nSims'):
+        if (shared_simulation or {}).get('nSims'):
+            away_wp = float(shared_simulation['awayWinProbability'])
+            home_wp = float(shared_simulation['homeWinProbability'])
+            away_runs = float(shared_simulation.get('awayMeanRuns') or 0.0)
+            home_runs = float(shared_simulation.get('homeMeanRuns') or 0.0)
+            source_label = (
+                f"{int(shared_simulation['nSims']):,} linked matchup simulations"
+            )
         else:
-            side, side_wp, opp_wp = home_abbr, home_wp, away_wp
-            side_ml, opp_ml = (ml or {}).get('home'), (ml or {}).get('away')
-            team = home_abbr
-        mi = side_ml.get('implied') if side_ml else None
-        mp = side_ml.get('price') if side_ml else None
-        bk = side_ml.get('bookmaker') if side_ml else None
-        opp_price = opp_ml.get('price') if opp_ml else None
-        opp_book = opp_ml.get('bookmaker') if opp_ml else None
-        _emit('h2h', side, 0, side_wp, mi, mp, bk, opp_price, opp_book, team,
-              f"Model favors {side} ({side_wp:.1%} win prob) — {away_abbr} {proj.get('awayRuns')} / {home_abbr} {proj.get('homeRuns')}.")
+            away_wp = float(proj.get('awayWinProb') or 0.5)
+            home_wp = float(proj.get('homeWinProb') or 0.5)
+            away_runs = float(proj.get('awayRuns') or 0.0)
+            home_runs = float(proj.get('homeRuns') or 0.0)
+            source_label = 'game projection fallback'
+
+        # Emit both sides.  The recommendation layer—not the raw favorite—must
+        # choose the better probability-versus-price edge.
+        for side, side_wp, side_ml, opp_ml, team, mean_runs in (
+            (
+                away_abbr, away_wp, (ml or {}).get('away'),
+                (ml or {}).get('home'), away_abbr, away_runs,
+            ),
+            (
+                home_abbr, home_wp, (ml or {}).get('home'),
+                (ml or {}).get('away'), home_abbr, home_runs,
+            ),
+        ):
+            mi = side_ml.get('implied') if side_ml else None
+            mp = side_ml.get('price') if side_ml else None
+            bk = side_ml.get('bookmaker') if side_ml else None
+            opp_price = opp_ml.get('price') if opp_ml else None
+            opp_book = opp_ml.get('bookmaker') if opp_ml else None
+            _emit(
+                'h2h', side, 0, side_wp, mi, mp, bk, opp_price, opp_book,
+                team,
+                f"{source_label}: {side} {side_wp:.1%} to win — "
+                f"{away_abbr} {away_runs:.2f} / {home_abbr} {home_runs:.2f}.",
+                simulation_probability=(
+                    side_wp if (shared_simulation or {}).get('nSims') else None
+                ),
+                simulation_mean=mean_runs,
+            )
 
     # ── Game Total Over/Under (totals) ──────────────────────────────────────
     if proj.get('success'):
@@ -16465,26 +16525,74 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
     away_pitcher = _pitcher_model(away_p.get('fullName', 'Away SP'), away_p.get('id'), away_team_id)
     home_pitcher = _pitcher_model(home_p.get('fullName', 'Home SP'), home_p.get('id'), home_team_id)
 
-    sims = int(os.getenv('TRACKER_SIMS', '700') or 700)
-    sims = max(300, min(5000, sims))
-    rng = random.Random(game_pk + int(capture_date.replace('-', '')) + 10)
+    # Quick Picks must be produced by a real shared matchup simulation, not by
+    # separately ranked projection fields.  BAT X applies platoon, opposing
+    # pitcher, pitch profile, BvP, recent-form, and defensive adjustments to
+    # every simulated plate appearance.  Pre-compute it once per batter so the
+    # trial loop remains fast enough for dashboard pre-warming.
+    _batx_jobs = (
+        [(i, batter, home_pitcher, 'away') for i, batter in enumerate(away_lineup)]
+        + [(i, batter, away_pitcher, 'home') for i, batter in enumerate(home_lineup)]
+    )
+    away_batx_map, home_batx_map = {}, {}
+    with ThreadPoolExecutor(max_workers=min(len(_batx_jobs) or 1, 18)) as _bx_ex:
+        _bx_futures = {
+            _bx_ex.submit(_batx_for_sim, batter, pitcher, park, {}):
+                (index, side)
+            for index, batter, pitcher, side in _batx_jobs
+        }
+        for _future in as_completed(_bx_futures):
+            index, side = _bx_futures[_future]
+            try:
+                value = _future.result()
+            except Exception:
+                value = {
+                    'composite': 1.0, 'hit_mult': 1.0, 'hr_mult': 1.0,
+                    'walk_mult': 1.0, 'k_mult': 1.0,
+                }
+            (away_batx_map if side == 'away' else home_batx_map)[index] = value
+
+    sims = int(os.getenv('TRACKER_SIMS', '1500') or 1500)
+    sims = max(750, min(5000, sims))
+    rng = AntitheticRandom(game_pk + int(capture_date.replace('-', '')) + 10)
     away_store = {i: [] for i in range(len(away_lineup))}
     home_store = {i: [] for i in range(len(home_lineup))}
     away_starter_lines, home_starter_lines = [], []
+    away_team_runs, home_team_runs = [], []
+    away_relief_fatigue = _relief_fatigue_penalty_cached(home_team_id)
+    home_relief_fatigue = _relief_fatigue_penalty_cached(away_team_id)
 
-    for _ in range(sims):
-        away_off = _simulate_offense(away_lineup, home_pitcher, home_team_id, park, rng)
-        home_off = _simulate_offense(home_lineup, away_pitcher, away_team_id, park, rng)
+    for sim_index in range(sims):
+        if sim_index % 2 == 1:
+            rng.start_antithetic()
+        away_off = _simulate_offense(
+            away_lineup, home_pitcher, home_team_id, park, rng,
+            batx_map=away_batx_map,
+            relief_fatigue_woba=away_relief_fatigue,
+        )
+        home_off = _simulate_offense(
+            home_lineup, away_pitcher, away_team_id, park, rng,
+            batx_map=home_batx_map,
+            relief_fatigue_woba=home_relief_fatigue,
+        )
+        if sim_index % 2 == 1:
+            rng.stop_antithetic()
         for i, line in enumerate(away_off['batters']): away_store[i].append(line)
         for i, line in enumerate(home_off['batters']): home_store[i].append(line)
         home_starter_lines.append(away_off['starter'])
         away_starter_lines.append(home_off['starter'])
+        away_team_runs.append(away_off['runs'])
+        home_team_runs.append(home_off['runs'])
+
+    shared_game_simulation = summarize_game_outcomes(
+        away_team_runs, home_team_runs
+    )
 
     away_props, home_props = [], []
     for i, b in enumerate(away_lineup):
-        s = _summarize_player(away_store[i]); s.update({'id': b.get('id'), 'name': b.get('name'), 'slot': b.get('slot'), 'pos': b.get('pos'), 'bats': b.get('bats', 'S')}); away_props.append(s)
+        s = _summarize_player(away_store[i]); s.update({'id': b.get('id'), 'name': b.get('name'), 'slot': b.get('slot'), 'pos': b.get('pos'), 'bats': b.get('bats', 'S'), 'batx': away_batx_map.get(i, {})}); away_props.append(s)
     for i, b in enumerate(home_lineup):
-        s = _summarize_player(home_store[i]); s.update({'id': b.get('id'), 'name': b.get('name'), 'slot': b.get('slot'), 'pos': b.get('pos'), 'bats': b.get('bats', 'S')}); home_props.append(s)
+        s = _summarize_player(home_store[i]); s.update({'id': b.get('id'), 'name': b.get('name'), 'slot': b.get('slot'), 'pos': b.get('pos'), 'bats': b.get('bats', 'S'), 'batx': home_batx_map.get(i, {})}); home_props.append(s)
 
     away_sp = _summarize_pitcher(away_starter_lines); away_sp.update({'name': away_pitcher['name'], 'id': away_pitcher.get('id'), 'pitchHand': away_pitcher['pitchHand']})
     home_sp = _summarize_pitcher(home_starter_lines); home_sp.update({'name': home_pitcher['name'], 'id': home_pitcher.get('id'), 'pitchHand': home_pitcher['pitchHand']})
@@ -16525,8 +16633,15 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                 mkt_lines = _market_lines_for_player(market_props, player_name, mk)
                 lines_to_use = mkt_lines if mkt_lines else [_BATTER_FALLBACK_LINE[mk]]
                 for line in lines_to_use:
+                    shared_sim_probability = None
+                    if mk == 'batter_hits':
+                        shared_sim_probability = (
+                            p.get('hit_over_probabilities') or {}
+                        ).get(f'{float(line):.1f}')
                     prob_field = _BATTER_PROB_FIELD_FOR.get((mk, line))
-                    if prob_field:
+                    if shared_sim_probability is not None:
+                        raw_prob = float(shared_sim_probability)
+                    elif prob_field:
                         raw_prob = float(p.get(prob_field, 0) or 0)
                     else:
                         raw_prob = _poisson_over_prob(float(p.get(mean_field, 0) or 0), line)
@@ -16618,6 +16733,45 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                         'score': round(score, 4), 'hubRating': hub, 'evPct': ev_pct, 'opp': opp_name, 'reason': _projection_reason_short(p.get('name'), mk, adj_prob, edge, opp_name), 'status': 'pending', 'actual': None, 'grade': 'pending', 'openingPrice': msum.get('best_over_price'), 'openingImplied': market_implied, 'closingPrice': None, 'closingImplied': None, 'closingBookmaker': None, 'closingCapturedAt': None, 'clvEdge': None, 'profitUnits': None, 'profitDollars': None,
                         'parlayId': None, 'parlayLeg': None
                     }
+                    if mk == 'batter_hits':
+                        _batx = p.get('batx') or {}
+                        _batx_adj = _batx.get('adjustments') or {}
+                        temp_row.update({
+                            'platoonScore': round(_clamp(
+                                50.0 + _safe_f(_batx_adj.get('platoon'), 0.0) * 1000.0,
+                                0.0, 100.0,
+                            ), 1),
+                            'pitchProfileFit': round(_clamp(
+                                50.0 + _safe_f(_batx_adj.get('pitch_mix'), 0.0) * 1000.0,
+                                0.0, 100.0,
+                            ), 1),
+                            'contactProfileFit': round(_clamp(
+                                50.0 + (
+                                    _safe_f(_batx_adj.get('contact'), 0.0)
+                                    + _safe_f(_batx_adj.get('discipline'), 0.0)
+                                ) * 700.0,
+                                0.0, 100.0,
+                            ), 1),
+                            'recentFormScore': round(_clamp(
+                                50.0 + _safe_f(_batx_adj.get('form'), 0.0) * 1000.0,
+                                0.0, 100.0,
+                            ), 1),
+                        })
+                        temp_row.update(build_simulation_signal(
+                            raw_prob,
+                            sims,
+                            mode='linked_plate_appearance_game_simulation',
+                            matchup=(
+                                f"{p.get('name')} versus {opp_name} and the "
+                                f"opposing bullpen"
+                            ),
+                            outcome_mean=p.get('mean_hits'),
+                            evidence=[
+                                f"BAT X matchup multiplier "
+                                f"{float(_batx.get('composite', 1.0)):.3f}",
+                                f"Exact empirical probability at {line} hits",
+                            ],
+                        ))
                     # ── MC distribution + stacked fields (all precomputed above) ─────────────
                     temp_row['mc_prob_over']  = _mc_batter.get('mc_prob_over')  if _mc_batter else None
                     temp_row['mc_prob_under'] = _mc_batter.get('mc_prob_under') if _mc_batter else None
@@ -16691,8 +16845,13 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
             _maybe_stuff_plus(sp, sp.get('id'))
         # ─────────────────────────────────────────────────────────────────────
         for line in k_lines:
+            shared_sim_probability = (
+                sp.get('k_over_probabilities') or {}
+            ).get(f'{float(line):.1f}')
             prob_field = _K_PROB_FIELD_FOR.get(line)
-            if prob_field:
+            if shared_sim_probability is not None:
+                raw_prob = float(shared_sim_probability)
+            elif prob_field:
                 raw_prob = float(sp.get(prob_field, 0) or 0)
             else:
                 raw_prob = _poisson_over_prob(mean_k, line)
@@ -16736,6 +16895,23 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
                 'score': round(score, 4), 'hubRating': hub, 'evPct': ev_pct, 'opp': '', 'reason': _projection_reason_short(sp.get('name'), 'pitcher_strikeouts', adj_prob, edge), 'status': 'pending', 'actual': None, 'grade': 'pending', 'openingPrice': msum.get('best_over_price'), 'openingImplied': market_implied, 'closingPrice': None, 'closingImplied': None, 'closingBookmaker': None, 'closingCapturedAt': None, 'clvEdge': None, 'profitUnits': None, 'profitDollars': None,
                 'parlayId': None, 'parlayLeg': None
             }
+            temp_row.update(build_simulation_signal(
+                _mc_k_prob,
+                sims,
+                mode='linked_pitcher_vs_lineup_game_simulation',
+                matchup=(
+                    f"{sp.get('name')} versus the complete opposing lineup"
+                ),
+                outcome_mean=sp.get('mean_k'),
+                evidence=[
+                    f"Exact empirical probability at {line} strikeouts",
+                    'Starter workload and bullpen transition simulated',
+                ],
+            ))
+            temp_row['strikeoutMatchupScore'] = round(_clamp(
+                50.0 + (_mc_k_prob - 0.5) * 120.0,
+                0.0, 100.0,
+            ), 1)
             # ── MC fields (Step 4) ──────────────────────────────────────────────────
             if k_xgb_ready:
                 try:
@@ -16780,13 +16956,32 @@ def _build_tracker_rows_for_game(game_pk, capture_date, adjustments=None, _sched
     try:
         rows.extend(_build_team_market_rows(
             game_pk, capture_date, away_abbr, home_abbr,
-            away_team.get('name', ''), home_team.get('name', ''), adjustments))
+            away_team.get('name', ''), home_team.get('name', ''), adjustments,
+            shared_simulation=shared_game_simulation))
     except Exception as ex:
         print(f"[_build_tracker_rows_for_game] team_market build failed for {game_pk}: {ex}")
 
     rows.sort(key=lambda x: x.get('score', 0), reverse=True)
     keep = int((adjustments or {}).get('captured_per_game', 25) or 25)
-    return rows[:keep]
+    # Never let HR/TB/RBI rows crowd the decision markets out of the generated
+    # candidate pool.  The game-card call asks for 250 rows, which is enough to
+    # retain every hitter-hit line, every starter-K line, and both moneyline
+    # teams.  A completeness marker prevents the API from mistaking a smaller
+    # daily tracker snapshot for the full set needed to identify the best play.
+    decision_markets = {'batter_hits', 'pitcher_strikeouts', 'h2h'}
+    decision_rows = [
+        row for row in rows if row.get('marketKey') in decision_markets
+    ]
+    other_rows = [
+        row for row in rows if row.get('marketKey') not in decision_markets
+    ]
+    decision_pool_complete = len(decision_rows) <= keep
+    selected = decision_rows[:keep]
+    selected.extend(other_rows[:max(0, keep - len(selected))])
+    for row in selected:
+        row['intelligenceCandidatePoolComplete'] = decision_pool_complete
+        row['intelligenceCandidatePoolSize'] = len(decision_rows)
+    return selected
 
 
 def _build_tracker_rows_quick(game_obj, capture_date, adjustments=None):
@@ -31632,4 +31827,3 @@ if __name__ == "__main__":
     _preload_caches()
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
-

@@ -7,6 +7,7 @@ from game_card_intelligence import (
     prepare_game_card_candidates,
 )
 from intelligence_core import classify_pick
+from matchup_simulation_intelligence import build_simulation_signal
 
 
 def row(
@@ -41,7 +42,14 @@ def row(
         'p_hi': probability + .04,
         'hubRating': 82,
         'grade': 'pending',
+        'intelligenceCandidatePoolComplete': True,
     }
+    data.update(build_simulation_signal(
+        probability,
+        1500,
+        mode='linked_test_game_simulation',
+        matchup=f'{player} versus opponent',
+    ))
     data.update(extra)
     return data
 
@@ -107,6 +115,24 @@ def test_returns_one_explained_decision_for_each_required_category():
     assert result['policy']['rankingPriority'] == 'pickScore'
     assert all('modelProbabilityPct' in pick for pick in result['quickPicks'])
     assert all('modelReliabilityScore' in pick for pick in result['quickPicks'])
+    assert all(pick['sharedSimulationBacked'] for pick in result['quickPicks'])
+
+
+def test_moneyline_selection_compares_both_simulated_sides_by_value():
+    result = build_game_card_quick_picks([
+        row(
+            'h2h', player='NYY@BOS', team='NYY', probability=.56,
+            implied=.58, recommendedSide='NYY', line=0,
+        ),
+        row(
+            'h2h', player='NYY@BOS', team='BOS', probability=.44,
+            implied=.38, recommendedSide='BOS', line=0,
+        ),
+    ])
+
+    assert result['best']['game_winner']['team'] == 'BOS'
+    assert result['best']['game_winner']['recommendedSide'] == 'BOS'
+    assert result['best']['game_winner']['estimatedEdgePct'] == 6.0
 
 
 def test_selects_highest_confidence_hit_instead_of_first_input():
@@ -254,6 +280,7 @@ def test_game_card_api_returns_the_three_ranked_decisions(monkeypatch):
         row('batter_hits', player='Hitter', probability=.69, implied=.56),
         row('pitcher_strikeouts', player='Starter', probability=.42, implied=.54, line=6.5),
         row('h2h', player='NYY@BOS', team='NYY', probability=.64, implied=.54, recommendedSide='NYY', line=0),
+        row('h2h', player='NYY@BOS', team='BOS', probability=.36, implied=.46, recommendedSide='BOS', line=0),
     ]
     fake_app = FakeApp()
     app_module = SimpleNamespace(
@@ -272,8 +299,12 @@ def test_game_card_api_returns_the_three_ranked_decisions(monkeypatch):
     payload = fake_app.view_functions['api_intelligence_game_card'](7)
 
     assert payload['success'] is True
-    assert payload['quickPicksVersion'] == '4.34'
+    assert payload['quickPicksVersion'] == '4.35'
     assert payload['pickConfidenceVersion'] == '4.34'
+    assert payload['matchupSimulationVersion'] == '4.35'
+    assert payload['recommendationSource'] == 'shared_game_matchup_simulation'
+    assert payload['simulationReady'] is True
+    assert payload['simulationAudit']['simulationCoveragePct'] == 100.0
     assert {pick['intelligenceCategory'] for pick in payload['marketDecisions']} == {
         'hitter_hits', 'pitcher_strikeouts', 'game_winner',
     }
@@ -297,7 +328,12 @@ def test_game_card_api_falls_back_when_live_generation_fails(monkeypatch):
     def fail_generation(*_args, **_kwargs):
         raise RuntimeError('upstream unavailable')
 
-    rows = [row('batter_hits', player='Captured Hitter', probability=.69, implied=.56)]
+    captured = row(
+        'batter_hits', player='Captured Hitter', probability=.69, implied=.56
+    )
+    captured['sharedSimulationBacked'] = False
+    captured['intelligenceCandidatePoolComplete'] = False
+    rows = [captured]
     fake_app = FakeApp()
     app_module = SimpleNamespace(
         app=fake_app,
@@ -321,4 +357,61 @@ def test_game_card_api_falls_back_when_live_generation_fails(monkeypatch):
     assert payload['success'] is True
     assert payload['sourceCount'] == 1
     assert payload['generatedSourceCount'] == 0
-    assert payload['best']['hitter_hits']['player'] == 'Captured Hitter'
+    assert payload['simulationReady'] is False
+    assert payload['recommendationSource'] == 'simulation_unavailable_or_partial'
+    assert payload['quickPicks'] == []
+    assert payload['best']['hitter_hits']['recommendationGrade'] == 'Pass'
+
+
+def test_game_card_api_rebuilds_an_incomplete_tracker_candidate_pool(monkeypatch):
+    class FakeApp:
+        def __init__(self):
+            self.view_functions = {}
+
+        def route(self, _path, methods=None):
+            del methods
+
+            def register(function):
+                self.view_functions[function.__name__] = function
+                return function
+
+            return register
+
+    captured = row('batter_hits', player='Partial Hitter')
+    captured['intelligenceCandidatePoolComplete'] = False
+    generated = [
+        row('batter_hits', player='Full Pool Hitter', probability=.70),
+        row('pitcher_strikeouts', player='Full Pool Starter', probability=.62, line=5.5),
+        row('h2h', player='NYY@BOS', team='NYY', probability=.61, implied=.53, recommendedSide='NYY', line=0),
+        row('h2h', player='NYY@BOS', team='BOS', probability=.39, implied=.47, recommendedSide='BOS', line=0),
+    ]
+    calls = []
+    fake_app = FakeApp()
+    app_module = SimpleNamespace(
+        app=fake_app,
+        request=SimpleNamespace(args={'date': '2026-08-06', 'refresh': '1'}),
+        jsonify=lambda payload: payload,
+        ET=timezone.utc,
+        logging=SimpleNamespace(warning=lambda *_args, **_kwargs: None),
+        _tracker_today_payload=lambda _date: {
+            'date': '2026-08-06', 'entries': [captured]
+        },
+        fetch_schedule=lambda _date: [{'gamePk': 7}],
+        _get_adjustments=lambda: {},
+        _build_tracker_rows_for_game=lambda *_args, **_kwargs: (
+            calls.append(True) or generated
+        ),
+    )
+    monkeypatch.setattr(intelligence_integration, 'enrich_context', lambda values: values)
+    monkeypatch.setattr(intelligence_integration, 'enrich_matchups', lambda values: values)
+    monkeypatch.setattr(intelligence_integration, 'enrich_simulations', lambda values: values)
+    monkeypatch.setattr(intelligence_integration, 'analyze_learning', lambda _values: {})
+
+    intelligence_integration.install_intelligence_api(app_module)
+    payload = fake_app.view_functions['api_intelligence_game_card'](7)
+
+    assert calls == [True]
+    assert payload['generatedSourceCount'] == 4
+    assert payload['best']['hitter_hits']['player'] == 'Full Pool Hitter'
+    assert payload['simulationReady'] is True
+    assert payload['simulationAudit']['simulationCoveragePct'] == 100.0

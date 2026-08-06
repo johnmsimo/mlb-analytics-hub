@@ -18,7 +18,11 @@ def _clamp(value: float, low: float = 0.0, high: float = 100.0) -> float:
 
 def _probability(pick: Mapping[str, Any]) -> float | None:
     side = str(pick.get('recommendedSide') or 'Over').lower()
-    value = _num(pick.get('mc_prob_under') if side == 'under' else pick.get('mc_prob_over'))
+    shared = _num(pick.get('gameSimProbability'))
+    if shared is not None:
+        value = 1.0 - shared if side == 'under' else shared
+    else:
+        value = _num(pick.get('mc_prob_under') if side == 'under' else pick.get('mc_prob_over'))
     if value is None and side == 'under':
         over = _num(pick.get('mc_prob_over'))
         value = None if over is None else 1.0 - over
@@ -27,12 +31,31 @@ def _probability(pick: Mapping[str, Any]) -> float | None:
     return value
 
 
+def _interval(pick: Mapping[str, Any]) -> tuple[float | None, float | None]:
+    low = _num(pick.get('gameSimPlo'))
+    high = _num(pick.get('gameSimPhi'))
+    shared = low is not None and high is not None
+    if not shared:
+        low = _num(pick.get('p_lo'))
+        high = _num(pick.get('p_hi'))
+    if (
+        shared
+        and str(pick.get('recommendedSide') or 'Over').lower() == 'under'
+    ):
+        low, high = 1.0 - high, 1.0 - low
+    return low, high
+
+
 def score_simulation(pick: Mapping[str, Any]) -> dict[str, Any]:
     probability = _probability(pick)
-    std = _num(pick.get('mc_std'))
-    sample_size = _num(pick.get('mc_n_sims'))
-    low = _num(pick.get('p_lo'))
-    high = _num(pick.get('p_hi'))
+    shared_backed = bool(pick.get('sharedSimulationBacked'))
+    std = _num(
+        pick.get('gameSimStd') if shared_backed else pick.get('mc_std')
+    )
+    sample_size = _num(
+        pick.get('gameSimN') if shared_backed else pick.get('mc_n_sims')
+    )
+    low, high = _interval(pick)
 
     probability_score = 50.0 if probability is None else _clamp(50.0 + (probability - .50) * 200.0)
     stability_score = 50.0 if std is None else _clamp(100.0 - max(0.0, std) / .22 * 100.0)
@@ -53,7 +76,11 @@ def score_simulation(pick: Mapping[str, Any]) -> dict[str, Any]:
         risk_value = volatility
         tail_risk = 'high' if risk_value >= 65 else 'moderate' if risk_value >= 40 else 'low'
 
-    evidence = [f"Simulation reliability {reliability:.0f}/100", f"Consistency {consistency:.0f}/100"]
+    evidence = list(pick.get('gameSimulationEvidence') or [])
+    evidence.extend([
+        f"Simulation reliability {reliability:.0f}/100",
+        f"Consistency {consistency:.0f}/100",
+    ])
     if probability is not None:
         evidence.insert(0, f"Monte Carlo win probability {probability:.1%}")
     if sample_size is not None:
@@ -67,12 +94,17 @@ def score_simulation(pick: Mapping[str, Any]) -> dict[str, Any]:
     return {
         'simulationScore': score,
         'simulationProbability': probability,
+        'sharedSimulationBacked': shared_backed,
+        'simulationSource': (
+            pick.get('matchupSimulationSource')
+            if shared_backed else 'candidate-level Monte Carlo'
+        ),
         'simulationReliability': reliability,
         'consistencyScore': consistency,
         'volatilityScore': volatility,
         'tailRisk': tail_risk,
         'simulationInterval': {'low': low, 'high': high, 'width': interval_width},
-        'simulationEvidence': evidence,
+        'simulationEvidence': list(dict.fromkeys(evidence)),
         'simulationRisks': risks,
     }
 

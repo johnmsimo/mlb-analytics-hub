@@ -194,11 +194,34 @@ def score_projection(
 
 def confidence_for_pick(pick: Mapping[str, Any]) -> ConfidenceResult:
     side = str(pick.get("recommendedSide") or "Over").strip().lower()
-    mc_probability = pick.get("mc_prob_over")
-    if side == "under":
-        mc_probability = pick.get("mc_prob_under")
-        if mc_probability is None and pick.get("mc_prob_over") is not None:
-            mc_probability = 1.0 - float(pick["mc_prob_over"])
+    shared_probability = pick.get("gameSimProbability")
+    shared_backed = (
+        pick.get("sharedSimulationBacked") is True
+        and shared_probability is not None
+    )
+    if shared_backed:
+        mc_probability = float(shared_probability)
+        interval_low = pick.get("gameSimPlo")
+        interval_high = pick.get("gameSimPhi")
+        if side == "under":
+            mc_probability = 1.0 - mc_probability
+            if interval_low is not None and interval_high is not None:
+                interval_low, interval_high = (
+                    1.0 - float(interval_high),
+                    1.0 - float(interval_low),
+                )
+        mc_std = pick.get("gameSimStd")
+        sample_size = pick.get("gameSimN")
+    else:
+        mc_probability = pick.get("mc_prob_over")
+        if side == "under":
+            mc_probability = pick.get("mc_prob_under")
+            if mc_probability is None and pick.get("mc_prob_over") is not None:
+                mc_probability = 1.0 - float(pick["mc_prob_over"])
+        interval_low = pick.get("p_lo")
+        interval_high = pick.get("p_hi")
+        mc_std = pick.get("mc_std")
+        sample_size = pick.get("mc_n_sims")
 
     return score_projection(
         probability=(
@@ -211,11 +234,11 @@ def confidence_for_pick(pick: Mapping[str, Any]) -> ConfidenceResult:
             if pick.get("marketImplied") is not None
             else pick.get("openingImplied")
         ),
-        interval_low=pick.get("p_lo"),
-        interval_high=pick.get("p_hi"),
+        interval_low=interval_low,
+        interval_high=interval_high,
         monte_carlo_probability=mc_probability,
-        monte_carlo_std=pick.get("mc_std"),
-        sample_size=pick.get("mc_n_sims"),
+        monte_carlo_std=mc_std,
+        sample_size=sample_size,
     )
 
 

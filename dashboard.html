@@ -1373,12 +1373,18 @@ function renderQuickProps(pk,d){
   if(!strip)return;
   var picks=(d&&d.quickPicks)||[];
   var unavailable=(d&&d.unavailableMarkets)||[];
+  var simAudit=(d&&d.simulationAudit)||{};
   var tracked=window.__trackedQPIds||[];
+  var simTrials=Number(simAudit.minimumLinkedTrials)||0;
   var head='<div class="qp-intel-head">'
     +'<div><div class="qp-intel-title">⚡ TOP PICKS TO TAKE</div>'
-    +'<div class="qp-intel-sub">Priced positive-edge plays · Ranked by final Pick Score</div></div>'
-    +'<div class="qp-policy">'+picks.length+' PLAY'+(picks.length===1?'':'S')+'</div></div>';
-  var empty=picks.length?'':'<div class="qp-loading">No priced positive-edge pick is available for this game</div>';
+    +'<div class="qp-intel-sub">Shared batter-vs-pitcher game simulation · Ranked by final Pick Score</div></div>'
+    +'<div class="qp-policy">'+(simTrials?simTrials.toLocaleString()+' SIMS · ':'')+picks.length+' PLAY'+(picks.length===1?'':'S')+'</div></div>';
+  var empty=picks.length?'':(
+    d&&d.simulationReady===false
+      ?'<div class="qp-loading">Matchup simulation is unavailable or incomplete — refresh before taking a pick</div>'
+      :'<div class="qp-loading">No priced positive-edge pick is available for this game</div>'
+  );
   var cards=picks.map(function(p,i){
     var grade=p.recommendationGrade||'Lean';
     var gradeClass=grade==='Strong Play'?'strong':grade==='Value Play'?'value':grade==='Lean'?'lean':'pass';
@@ -1407,6 +1413,8 @@ function renderQuickProps(pk,d){
     var proof=reasons[0]||(evidence[0]&&evidence[0].label)||'';
     var risks=p.pickScoreRisks||p.topRisks||[];
     var summary=p.decisionSummary||p.confidenceNarrative||p.recommendedAction||'';
+    var simSource=p.matchupSimulationSource||p.simulationSource||'';
+    var simN=Number(p.gameSimN)||0;
     var key=quickPickKey(p);
     var saved=tracked.indexOf(key)>=0;
     var bid='qpsave-'+pk+'-'+i;
@@ -1418,7 +1426,8 @@ function renderQuickProps(pk,d){
     var metrics='<div class="qp-metrics">'
       +'<span class="qp-metric">WIN <strong>'+probability.toFixed(1)+'%</strong></span>'
       +'<span class="qp-metric">EDGE <strong>'+(edge>=0?'+':'')+edge.toFixed(1)+'%</strong></span>'
-      +'<span class="qp-metric">RELIABILITY <strong>'+reliability+'</strong></span></div>';
+      +'<span class="qp-metric">RELIABILITY <strong>'+reliability+'</strong></span>'
+      +(simN?'<span class="qp-metric">SIM <strong>'+simN.toLocaleString()+'</strong></span>':'')+'</div>';
     return '<div class="qp-pick">'
       +'<div class="qp-pick-top"><span class="qp-cat">'+(p.categoryLabel||category)+'</span>'
       +'<span class="qp-grade '+gradeClass+'">'+grade+'</span>'
@@ -1426,6 +1435,7 @@ function renderQuickProps(pk,d){
       +'<div class="qp-selection">'+selection+priceHtml+'</div>'
       +metrics
       +(summary?'<div class="qp-summary">'+summary+'</div>':'')
+      +(simSource?'<div class="qp-proof good">⚾ '+simSource+'</div>':'')
       +(proof?'<div class="qp-proof good">✓ '+proof+'</div>':'')
       +(risks[0]?'<div class="qp-proof risk">⚠ '+risks[0]+'</div>':'')
       +actions
@@ -1448,6 +1458,11 @@ function quickPickPayload(pick){
     pickScore:pick.pickScore,pickConfidenceScore:pick.pickConfidenceScore,
     modelReliabilityScore:pick.modelReliabilityScore,
     modelProbabilityPct:pick.modelProbabilityPct,estimatedEdgePct:pick.estimatedEdgePct,
+    sharedSimulationBacked:pick.sharedSimulationBacked,
+    matchupSimulationVersion:pick.matchupSimulationVersion,
+    matchupSimulationSource:pick.matchupSimulationSource,
+    gameSimProbability:pick.gameSimProbability,gameSimN:pick.gameSimN,
+    gameSimPlo:pick.gameSimPlo,gameSimPhi:pick.gameSimPhi,
     decisionSummary:pick.decisionSummary,
     price:(pick.bestAvailablePrice!=null?pick.bestAvailablePrice:pick.marketPrice),
     book:pick.bestAvailableBook||pick.bookmaker||null,
