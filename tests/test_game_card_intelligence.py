@@ -208,3 +208,47 @@ def test_game_card_api_returns_the_three_ranked_decisions(monkeypatch):
         'game_winner',
     ]
     assert payload['best']['pitcher_strikeouts']['recommendedSide'] == 'Under'
+
+
+def test_game_card_api_falls_back_when_live_generation_fails(monkeypatch):
+    class FakeApp:
+        def __init__(self):
+            self.view_functions = {}
+
+        def route(self, _path, methods=None):
+            del methods
+
+            def register(function):
+                self.view_functions[function.__name__] = function
+                return function
+
+            return register
+
+    def fail_generation(*_args, **_kwargs):
+        raise RuntimeError('upstream unavailable')
+
+    rows = [row('batter_hits', player='Captured Hitter', probability=.69, implied=.56)]
+    fake_app = FakeApp()
+    app_module = SimpleNamespace(
+        app=fake_app,
+        request=SimpleNamespace(args={'date': '2026-08-06', 'refresh': '1'}),
+        jsonify=lambda payload: payload,
+        ET=timezone.utc,
+        logging=SimpleNamespace(warning=lambda *_args, **_kwargs: None),
+        _tracker_today_payload=lambda _date: {'date': '2026-08-06', 'entries': rows},
+        fetch_schedule=lambda _date: [],
+        _get_adjustments=lambda: {},
+        _build_tracker_rows_for_game=fail_generation,
+    )
+    monkeypatch.setattr(intelligence_integration, 'enrich_context', lambda values: values)
+    monkeypatch.setattr(intelligence_integration, 'enrich_matchups', lambda values: values)
+    monkeypatch.setattr(intelligence_integration, 'enrich_simulations', lambda values: values)
+    monkeypatch.setattr(intelligence_integration, 'analyze_learning', lambda _values: {})
+
+    intelligence_integration.install_intelligence_api(app_module)
+    payload = fake_app.view_functions['api_intelligence_game_card'](7)
+
+    assert payload['success'] is True
+    assert payload['sourceCount'] == 1
+    assert payload['generatedSourceCount'] == 0
+    assert payload['best']['hitter_hits']['player'] == 'Captured Hitter'
