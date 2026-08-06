@@ -10,6 +10,8 @@ primary_region = 'EWR'
 
 [env]
   PORT = '8080'
+  APP_ENV = 'production'
+  ADMIN_AUTH_REQUIRED = '1'
   PYBASEBALL_CACHE = '1'
   XGB_MODEL_DIR = './models'
   DATA_DIR = '/app/data'

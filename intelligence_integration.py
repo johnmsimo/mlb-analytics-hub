@@ -1,8 +1,5 @@
 """Flask integration for prediction, explanation, and game-card intelligence."""
-import logging
-import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 from context_engine import enrich_context
@@ -19,21 +16,16 @@ from matchup_simulation_intelligence import simulation_audit
 from cache_service import normalize_cache_key
 from redis_client import get_redis
 from simulation_engine import enrich_simulations
-from simulation_capacity import serialized_simulation
+from task_queue import (
+    JobQueueUnavailable,
+    enqueue_job,
+    get_job_queue,
+    write_durable_json,
+)
 
 
 _GAME_CARD_CACHE_TTL = 300
 _GAME_CARD_STALE_TTL = 3600
-_GAME_CARD_JOB_RETRY_TTL = 30
-_GAME_CARD_JOB_MAX_SECONDS = 180
-_GAME_CARD_JOBS = {}
-_GAME_CARD_JOBS_LOCK = threading.RLock()
-# One serialized builder prevents a dashboard slate from launching several
-# CPU-heavy simulations at once. Request threads only read snapshots or enqueue.
-_GAME_CARD_EXECUTOR = ThreadPoolExecutor(
-    max_workers=1,
-    thread_name_prefix='game-card-intelligence',
-)
 
 
 def _has_price(row, category):
@@ -63,11 +55,11 @@ def _read_cached_payload(game_pk, date_str):
 
 def _write_cached_payload(game_pk, date_str, payload):
     record = {'timestamp': time.time(), 'payload': dict(payload)}
-    get_redis().set(
-        _cache_key(game_pk, date_str),
-        record,
-        ttl=_GAME_CARD_STALE_TTL,
-    )
+    key = _cache_key(game_pk, date_str)
+    try:
+        write_durable_json(key, record, ttl=_GAME_CARD_STALE_TTL)
+    except JobQueueUnavailable:
+        get_redis().set(key, record, ttl=_GAME_CARD_STALE_TTL)
 
 
 def _candidate_pool_ready(rows):
@@ -149,7 +141,8 @@ def _decision_payload(game_pk, date_str, rows, all_tracker_entries, generated_co
         'quickPicksVersion': '4.35.2',
         'pickConfidenceVersion': '4.34',
         'matchupSimulationVersion': '4.35',
-        'performanceVersion': '4.35.2',
+        'performanceVersion': '4.36',
+        'deliveryArchitecture': 'redis_durable_worker',
         'recommendationSource': (
             'shared_game_matchup_simulation'
             if fully_backed else 'simulation_refresh_pending'
@@ -172,7 +165,8 @@ def _pending_payload(game_pk, date_str, source_count):
         'quickPicksVersion': '4.35.2',
         'pickConfidenceVersion': '4.34',
         'matchupSimulationVersion': '4.35',
-        'performanceVersion': '4.35.2',
+        'performanceVersion': '4.36',
+        'deliveryArchitecture': 'redis_durable_worker',
         'recommendationSource': 'simulation_refresh_pending',
         'simulationReady': False,
         'simulationAudit': simulation_audit([]),
@@ -181,7 +175,6 @@ def _pending_payload(game_pk, date_str, source_count):
     }
 
 
-@serialized_simulation
 def _generate_game_card_payload(app_module, game_pk, date_str):
     tracker = app_module._tracker_today_payload(date_str)
     all_tracker_entries = tracker.get('entries') or tracker.get('picks') or []
@@ -213,84 +206,34 @@ def _generate_game_card_payload(app_module, game_pk, date_str):
     )
 
 
-def _job_snapshot(cache_key):
-    with _GAME_CARD_JOBS_LOCK:
-        current = _GAME_CARD_JOBS.get(cache_key) or {}
-        started = float(current.get('started') or time.time())
-        if (
-            current.get('status') in {'queued', 'running'}
-            and time.time() - started > _GAME_CARD_JOB_MAX_SECONDS
-        ):
-            current.update({
-                'status': 'error',
-                'finished': time.time(),
-                'error': (
-                    'The linked matchup build exceeded its time budget. '
-                    'Retry after the current worker clears.'
-                ),
-            })
-        job = dict(current)
-    if not job:
-        return None
-    started = float(job.get('started') or time.time())
-    return {
-        'status': job.get('status') or 'queued',
-        'elapsedSeconds': max(0, int(time.time() - started)),
-        'error': job.get('error'),
-    }
-
-
-def _schedule_game_card_refresh(app_module, game_pk, date_str):
+def _schedule_game_card_refresh(_app_module, game_pk, date_str):
     cache_key = _cache_key(game_pk, date_str)
-    now = time.time()
-    with _GAME_CARD_JOBS_LOCK:
-        current = _GAME_CARD_JOBS.get(cache_key)
-        if current and current.get('status') in {'queued', 'running'}:
-            snapshot = _job_snapshot(cache_key)
-            if snapshot.get('status') in {'queued', 'running'}:
-                return snapshot
-            current = _GAME_CARD_JOBS.get(cache_key)
-        if (
-            current
-            and current.get('status') == 'error'
-            and now - float(current.get('finished') or now) < _GAME_CARD_JOB_RETRY_TTL
-        ):
-            return _job_snapshot(cache_key)
-        _GAME_CARD_JOBS[cache_key] = {
-            'status': 'queued',
-            'started': now,
-            'error': None,
+    try:
+        job = enqueue_job(
+            'game_card',
+            {'gamePk': int(game_pk), 'date': date_str},
+            dedupe_key=cache_key,
+            timeout_seconds=300,
+            max_attempts=2,
+        )
+        return get_job_queue().snapshot(job)
+    except JobQueueUnavailable:
+        return {
+            'status': 'unavailable',
+            'elapsedSeconds': 0,
+            'error': 'Durable simulation worker is unavailable.',
         }
 
-    def _run():
-        with _GAME_CARD_JOBS_LOCK:
-            _GAME_CARD_JOBS[cache_key]['status'] = 'running'
-        try:
-            payload = _generate_game_card_payload(app_module, game_pk, date_str)
-            if not payload.get('simulationReady'):
-                raise RuntimeError('shared simulation candidate pool is incomplete')
-            _write_cached_payload(game_pk, date_str, payload)
-            with _GAME_CARD_JOBS_LOCK:
-                _GAME_CARD_JOBS[cache_key].update({
-                    'status': 'done',
-                    'finished': time.time(),
-                })
-        except Exception as exc:
-            logger = getattr(app_module, 'logging', logging)
-            logger.warning(
-                '[game_card_intelligence] background refresh failed for %s',
-                game_pk,
-                exc_info=True,
-            )
-            with _GAME_CARD_JOBS_LOCK:
-                _GAME_CARD_JOBS[cache_key].update({
-                    'status': 'error',
-                    'finished': time.time(),
-                    'error': str(exc)[:180],
-                })
 
-    _GAME_CARD_EXECUTOR.submit(_run)
-    return _job_snapshot(cache_key)
+def run_game_card_job(app_module, args):
+    """Worker entry point; never called by a Flask request thread."""
+    game_pk = int(args['gamePk'])
+    date_str = str(args['date'])
+    payload = _generate_game_card_payload(app_module, game_pk, date_str)
+    if not payload.get('simulationReady'):
+        raise RuntimeError('shared simulation candidate pool is incomplete')
+    _write_cached_payload(game_pk, date_str, payload)
+    return payload
 
 
 def install_intelligence_api(app_module):
@@ -339,7 +282,7 @@ def install_intelligence_api(app_module):
 
     @flask_app.route('/api/intelligence/game-card/<int:game_pk>', methods=['GET'])
     def api_intelligence_game_card(game_pk):
-        """Serve cached decisions instantly and rebuild heavy simulations off-thread."""
+        """Serve cached decisions instantly and enqueue rebuilds for the worker."""
         date_str = app_module.request.args.get('date') or datetime.now(
             app_module.ET
         ).strftime('%Y-%m-%d')

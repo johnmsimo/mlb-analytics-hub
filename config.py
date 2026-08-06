@@ -63,6 +63,18 @@ class Settings:
         return int(_number("PORT", 8080, int, minimum=1, maximum=65535))
 
     @property
+    def process_role(self) -> str:
+        value = _string("PROCESS_ROLE", "web").lower()
+        return value if value in {"web", "worker", "test"} else "web"
+
+    @property
+    def production(self) -> bool:
+        explicit = _string("APP_ENV").lower()
+        if explicit:
+            return explicit in {"production", "prod"}
+        return bool(_string("FLY_APP_NAME"))
+
+    @property
     def data_dir(self) -> str:
         return _string("DATA_DIR", str(_BASE_DIR / "data"), strip=False)
 
@@ -160,6 +172,39 @@ class Settings:
         return _string("ADMIN_TOKEN")
 
     @property
+    def admin_auth_required(self) -> bool:
+        return _boolean("ADMIN_AUTH_REQUIRED", self.production)
+
+    @property
+    def allowed_origins(self) -> tuple[str, ...]:
+        raw = _string(
+            "ALLOWED_ORIGINS",
+            "https://mlb-analytics-hub.fly.dev",
+        )
+        values = tuple(value.strip().rstrip("/") for value in raw.split(",") if value.strip())
+        return values or ("https://mlb-analytics-hub.fly.dev",)
+
+    @property
+    def api_rate_limit(self) -> str:
+        return _string("API_RATE_LIMIT", "180 per minute")
+
+    @property
+    def max_upload_bytes(self) -> int:
+        return int(
+            _number(
+                "MAX_UPLOAD_BYTES",
+                8 * 1024 * 1024,
+                int,
+                minimum=1024,
+                maximum=32 * 1024 * 1024,
+            )
+        )
+
+    @property
+    def job_result_ttl(self) -> int:
+        return int(_number("JOB_RESULT_TTL", 3600, int, minimum=300, maximum=86400))
+
+    @property
     def cache_admin_token(self) -> str:
         return _string("CACHE_ADMIN_TOKEN")
 
@@ -249,6 +294,8 @@ class Settings:
         """Return non-secret operational settings for diagnostics."""
         return {
             "port": self.port,
+            "process_role": self.process_role,
+            "production": self.production,
             "data_dir": self.data_dir,
             "redis_configured": bool(self.redis_url),
             "redis_health_interval": self.redis_health_interval,
@@ -268,6 +315,11 @@ class Settings:
             "performance_route_limit": self.performance_route_limit,
             "xgb_score_cache_ttl": self.xgb_score_cache_ttl,
             "xgb_score_cache_max_entries": self.xgb_score_cache_max_entries,
+            "admin_auth_required": self.admin_auth_required,
+            "allowed_origins": self.allowed_origins,
+            "api_rate_limit": self.api_rate_limit,
+            "max_upload_bytes": self.max_upload_bytes,
+            "job_result_ttl": self.job_result_ttl,
             "http_retry_total": self.http_retry_total,
             "http_retry_backoff": self.http_retry_backoff,
             "bq_project_configured": bool(self.google_cloud_project),

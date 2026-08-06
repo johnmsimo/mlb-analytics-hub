@@ -22,6 +22,7 @@ Protection:
 from __future__ import annotations
 
 import io
+import json
 import logging
 import math
 import sys
@@ -32,24 +33,17 @@ from contextlib import redirect_stdout
 from typing import Optional
 
 from flask import Blueprint, jsonify, request
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
-
-from config import settings
+from security import check_admin_auth, limiter
+from task_queue import (
+    JobQueueUnavailable,
+    enqueue_job,
+    get_job_queue,
+    write_durable_json,
+)
 
 log = logging.getLogger(__name__)
 
 training_bp = Blueprint("training", __name__, url_prefix="/api/training")
-
-_REDIS_URL   = settings.redis_url
-_ADMIN_TOKEN = settings.admin_token
-
-limiter = Limiter(
-    key_func=get_remote_address,
-    storage_uri=_REDIS_URL if _REDIS_URL else "memory://",
-    default_limits=[],
-    headers_enabled=True,
-)
 
 # ── Shared training state (in-memory; one run at a time) ──────────────────────
 _VALID_MARKETS = ["hits", "hr", "tb", "rbi", "k_3.5", "k_4.5", "k_5.5"]
@@ -69,6 +63,8 @@ _state: dict = {
 }
 _state_lock = threading.Lock()
 _MAX_LOG_LINES = 200
+_TRAINING_POINTER_KEY = "mlb:training:active-job:v436"
+_TRAINING_RESULT_KEY = "mlb:training:last-result:v436"
 
 
 def _set(key: str, value) -> None:
@@ -233,18 +229,66 @@ def _run_training(markets: list[str], seasons: list[int]) -> None:
         _set("finished_at", time.time())
 
 
+def run_training_job(args) -> None:
+    """Durable worker entry point for model training."""
+    markets = list(args.get('markets') or _VALID_MARKETS)
+    seasons = [int(value) for value in (args.get('seasons') or [2021, 2022, 2023, 2024, 2025])]
+    with _state_lock:
+        _state['requested_markets'] = markets
+        _state['requested_seasons'] = seasons
+    _run_training(markets, seasons)
+    with _state_lock:
+        result = _json_safe(dict(_state))
+    result['success'] = result.get('status') == 'done'
+    write_durable_json(_TRAINING_RESULT_KEY, result, ttl=86400)
+
+
+def _durable_training_status():
+    try:
+        queue = get_job_queue()
+        pointer_raw = queue.client.get(_TRAINING_POINTER_KEY)
+        if not pointer_raw:
+            return None
+        pointer = json.loads(pointer_raw)
+        job = queue.get(pointer.get('jobId'))
+        snapshot = queue.snapshot(job)
+        if not snapshot:
+            return None
+        if snapshot['status'] in {'queued', 'running'}:
+            return {
+                'success': True,
+                'status': snapshot['status'],
+                'phase': 'Queued on durable worker' if snapshot['status'] == 'queued' else 'Training on durable worker',
+                'progress_pct': 0,
+                'markets_done': 0,
+                'markets_total': len(pointer.get('markets') or []),
+                'market_results': {},
+                'log_tail': [],
+                'elapsed_s': snapshot['elapsedSeconds'],
+                'error': None,
+                'job': snapshot,
+            }
+        if snapshot['status'] == 'error':
+            return {
+                'success': False,
+                'status': 'error',
+                'phase': 'Worker job failed',
+                'progress_pct': 0,
+                'markets_done': 0,
+                'markets_total': len(pointer.get('markets') or []),
+                'market_results': {},
+                'log_tail': [],
+                'elapsed_s': snapshot['elapsedSeconds'],
+                'error': snapshot['error'],
+                'job': snapshot,
+            }
+        result_raw = queue.client.get(_TRAINING_RESULT_KEY)
+        return json.loads(result_raw) if result_raw else None
+    except (JobQueueUnavailable, TypeError, ValueError):
+        return None
+
+
 # ── Auth helper ───────────────────────────────────────────────────────────────
-
-def _check_admin_auth():
-    if not _ADMIN_TOKEN:
-        return None
-    auth  = request.headers.get("Authorization", "")
-    token = request.headers.get("X-Admin-Token", "")
-    bearer = auth.removeprefix("Bearer ").strip() if auth.startswith("Bearer ") else ""
-    if (bearer or token.strip()) == _ADMIN_TOKEN:
-        return None
-    return jsonify({"success": False, "error": "Unauthorized"}), 401
-
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
@@ -263,6 +307,10 @@ def training_status():
       elapsed_s     — seconds since run started (null if idle)
       error         — error message string (null if none)
     """
+    durable = _durable_training_status()
+    if durable is not None:
+        return jsonify(durable)
+
     with _state_lock:
         snap = dict(_state)
 
@@ -299,7 +347,7 @@ def training_run():
       { "markets": ["hits","k_4.5"], "seasons": [2023,2024,2025] }
     Omit to train all 7 markets on default seasons (2021-2025).
     """
-    auth_err = _check_admin_auth()
+    auth_err = check_admin_auth()
     if auth_err is not None:
         return auth_err
 
@@ -320,12 +368,26 @@ def training_run():
         _state["requested_markets"] = markets
         _state["requested_seasons"] = seasons
 
-    t = threading.Thread(target=_run_training, args=(markets, seasons), daemon=True)
-    t.start()
-    log.info("[training] run triggered — markets=%s seasons=%s", markets, seasons)
+    try:
+        job = enqueue_job(
+            'training',
+            {'markets': markets, 'seasons': seasons},
+            dedupe_key='model-training',
+            timeout_seconds=7200,
+            max_attempts=1,
+        )
+        write_durable_json(
+            _TRAINING_POINTER_KEY,
+            {'jobId': job['id'], 'markets': markets, 'seasons': seasons},
+            ttl=86400,
+        )
+    except JobQueueUnavailable:
+        return jsonify({'success': False, 'error': 'Worker unavailable'}), 503
+    log.info("[training] run queued — markets=%s seasons=%s", markets, seasons)
     return jsonify({
         "success": True,
-        "message": f"Training started for {len(markets)} markets",
+        "message": f"Training queued for {len(markets)} markets",
         "markets": markets,
         "seasons": seasons,
-    })
+        "jobId": job['id'],
+    }), 202

@@ -9,7 +9,6 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 ET = ZoneInfo("America/New_York")
 from flask import Flask, g, jsonify, request, Response
-from flask_cors import CORS
 from matchup_simulation_intelligence import (
     build_simulation_signal,
     exact_over_probability,
@@ -240,6 +239,14 @@ from http_client import install_global_http_session
 from mlb_schedule_cache import fetch_schedule, fetch_schedule_game
 from redis_client import get_redis
 from request_performance import performance_bp, request_performance
+from security import check_admin_auth, install_security
+from task_queue import (
+    JobQueueUnavailable,
+    enqueue_job,
+    get_job_queue,
+    queue_health,
+    write_durable_json,
+)
 
 # Install the same configured retrying pool in direct Flask starts and Gunicorn
 # workers. The installer is idempotent when Gunicorn already initialized it.
@@ -256,7 +263,6 @@ app.json.sort_keys = False
 if settings.profile_requests:
     from werkzeug.middleware.profiler import ProfilerMiddleware
     app.wsgi_app = ProfilerMiddleware(app.wsgi_app, restrictions=[35], sort_by=('cumulative',))
-CORS(app)
 app.register_blueprint(performance_bp)
 
 
@@ -294,6 +300,11 @@ def _gzip_json(response):
     except Exception:
         pass
     return response
+
+
+# Register mutation auth after request IDs so rejected requests remain
+# traceable; response hardening still applies to every route and error.
+install_security(app)
 
 
 # ── LLM clients (Gemini via API key — Anthropic removed) ─────────────────────
@@ -605,9 +616,8 @@ if _PIPELINE_AVAILABLE:
     app.register_blueprint(pipeline_bp)
     logging.info("[pipeline] Blueprint registered at /api/pipeline/*")
 
-from training_routes import training_bp, limiter as training_limiter
+from training_routes import training_bp
 app.register_blueprint(training_bp)
-training_limiter.init_app(app)
 
 # --- MLB API PLAYERS INGEST ROUTE (must be after app = Flask(__name__)) ---
 @app.route('/api/brain/fetch-mlb-players', methods=['POST'])
@@ -1055,11 +1065,9 @@ def api_pitcher_performance_badges(pitcher_id):
 def handle_exception(e):
     """Return JSON for uncaught exceptions and log the error."""
     logging.error("[Flask] Unhandled exception", exc_info=e)
-    resp = {
-        "success": False,
-        "error": str(e),
-        "type": type(e).__name__,
-    }
+    resp = {"success": False, "error": "Internal server error"}
+    if not settings.production:
+        resp["type"] = type(e).__name__
     return jsonify(resp), 500
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -1068,19 +1076,11 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 # Set ADMIN_TOKEN env var to enable write-route protection.
 # When set, POST/PATCH/DELETE requests to admin/tracker routes require:
 #   Authorization: Bearer <token>   OR   X-Admin-Token: <token>
-_ADMIN_TOKEN = os.getenv('ADMIN_TOKEN', '').strip()
+_ADMIN_TOKEN = settings.admin_token
 
 def _check_admin_auth():
-    """Return None if auth passes (or is disabled), else a 401 Response."""
-    if not _ADMIN_TOKEN:
-        return None
-    auth_header = request.headers.get('Authorization', '')
-    token_header = request.headers.get('X-Admin-Token', '')
-    bearer = auth_header.removeprefix('Bearer ').strip() if auth_header.startswith('Bearer ') else ''
-    provided = bearer or token_header.strip()
-    if provided == _ADMIN_TOKEN:
-        return None
-    return jsonify({'success': False, 'error': 'Unauthorized'}), 401
+    """Compatibility wrapper around the central fail-closed auth policy."""
+    return check_admin_auth()
 
 def _read_html_or_fallback(filename):
     path = os.path.join(_HERE, filename)
@@ -1119,7 +1119,7 @@ os.makedirs(DATA_DIR, exist_ok=True)
 print(f"[startup] DATA_DIR={DATA_DIR}")
 # Cap multipart uploads at 16MB — image screenshots are typically <2MB; this
 # rejects accidental large file selections before they hit disk.
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
+app.config['MAX_CONTENT_LENGTH'] = settings.max_upload_bytes
 BRAIN_DATA_DIR = os.path.join(DATA_DIR, 'brain_uploads')
 os.makedirs(BRAIN_DATA_DIR, exist_ok=True)
 # Image uploads for the player-signals feature live in a top-level data subdir
@@ -1393,6 +1393,9 @@ def _save_brain_upload_state(payload):
 def _safe_brain_upload_name(filename):
     safe_name = "".join(c for c in (filename or '') if c.isalnum() or c in ('._-'))
     return safe_name or f"upload_{uuid4().hex[:8]}.dat"
+
+
+_BRAIN_UPLOAD_EXTENSIONS = {'.csv', '.tsv', '.json', '.txt'}
 
 
 def _unique_brain_upload_name(filename):
@@ -5535,6 +5538,18 @@ def api_cache_warm():
     global _pipeline_run_started_at
     force = str(request.args.get("force", "")).strip().lower() in ("1", "true", "yes")
     target_date = (request.args.get("date") or "").strip() or None
+    if settings.process_role != 'worker':
+        try:
+            job = enqueue_job(
+                'cache_warm',
+                {'force': force, 'date': target_date},
+                dedupe_key=f'cache-warm:{target_date or "today"}',
+                timeout_seconds=600,
+                max_attempts=1,
+            )
+            return jsonify({'success': True, 'queued': True, 'jobId': job['id']}), 202
+        except JobQueueUnavailable:
+            return jsonify({'success': False, 'error': 'Worker unavailable'}), 503
     triggered = []
     skipped = []
 
@@ -5613,20 +5628,42 @@ _APP_BOOT_ISO = datetime.now().isoformat()
 
 @app.route('/health')
 def health_check():
-    t0 = time.time()
-    with _fg_lock:
-        fg_ready = _fg_loaded
-    with _sv_lock:
-        sv_ready = _sv_loaded
-    resp = {
+    """Constant-time liveness probe; never touches Redis, files, or loaders."""
+    return {
         'status': 'ok',
         'version': _APP_VERSION,
         'bootedAt': _APP_BOOT_ISO,
-        'fg_loaded': fg_ready,
-        'sv_loaded': sv_ready,
-    }
-    logging.info(f"[API] /health took {time.time()-t0:.3f}s fg={fg_ready} sv={sv_ready}")
-    return resp, 200
+        'process': settings.process_role,
+    }, 200
+
+
+@app.route('/ready')
+def readiness_check():
+    """Dependency readiness for deployment smoke tests and traffic gating."""
+    started = time.perf_counter()
+    jobs = queue_health()
+    ready = bool(jobs.get('connected') and jobs.get('workerReady'))
+    return {
+        'status': 'ready' if ready else 'not_ready',
+        'version': _APP_VERSION,
+        'jobs': jobs,
+        'latencyMs': round((time.perf_counter() - started) * 1000, 2),
+    }, 200 if ready else 503
+
+
+@app.route('/api/jobs/<job_id>')
+def api_job_status(job_id):
+    """Return a secret-safe durable job status for UI polling."""
+    if not re.fullmatch(r'[0-9a-f]{32}', job_id or ''):
+        return jsonify({'success': False, 'error': 'Invalid job id'}), 400
+    try:
+        queue = get_job_queue()
+        job = queue.get(job_id)
+    except JobQueueUnavailable:
+        return jsonify({'success': False, 'error': 'Worker unavailable'}), 503
+    if not job:
+        return jsonify({'success': False, 'error': 'Job not found'}), 404
+    return jsonify({'success': True, 'job': queue.snapshot(job)})
 
 
 @app.route('/api/mc-upgrades/status')
@@ -6019,6 +6056,11 @@ def api_brain_data_upload():
             if f and f.filename:
                 try:
                     filename = f.filename
+                    if os.path.splitext(filename)[1].lower() not in _BRAIN_UPLOAD_EXTENSIONS:
+                        return jsonify({
+                            'success': False,
+                            'error': 'Unsupported file type. Use CSV, TSV, JSON, or TXT.',
+                        }), 400
                     safe_name = _unique_brain_upload_name(filename)
                     file_path = os.path.join(BRAIN_DATA_DIR, safe_name)
                     f.save(file_path)
@@ -6414,6 +6456,15 @@ def api_brain_ingest_trigger():
     try:
         force_refresh = request.get_json(silent=True) or {}
         force = force_refresh.get('force', False)
+        if settings.process_role != 'worker':
+            job = enqueue_job(
+                'brain_ingest',
+                {'force': bool(force)},
+                dedupe_key='brain-ingest',
+                timeout_seconds=900,
+                max_attempts=1,
+            )
+            return jsonify({'success': True, 'queued': True, 'jobId': job['id']}), 202
 
         _maybe_refresh_fg()
         _maybe_refresh_savant()
@@ -6429,6 +6480,8 @@ def api_brain_ingest_trigger():
             'data': comprehensive,
             'manualUploads': manual_uploads,
         })
+    except JobQueueUnavailable:
+        return jsonify({'success': False, 'error': 'Worker unavailable'}), 503
     except Exception as ex:
         print(f'[api_brain_ingest_trigger] {traceback.format_exc()}')
         return jsonify({'success': False, 'error': str(ex)}), 500
@@ -13924,123 +13977,81 @@ def _do_simulate(game_pk, sims):
             return emergency
 
 
-# ── Background simulation dispatcher ─────────────────────────────────────────
-# Jobs keyed by (game_pk, sims) so that a 5k-sim request and a 2.5k-sim request
-# don't race each other.  Entries: {'status': 'running'|'done', 'started': float,
-# 'payload': dict|None}.
-_sim_bg_jobs: dict = {}
-_sim_bg_lock = threading.Lock()
-_SIM_JOB_MAX_SECONDS = int(os.getenv('SIM_JOB_MAX_SECONDS', '300') or 300)
+# ── Durable simulation dispatcher ────────────────────────────────────────────
+_SIMULATION_CACHE_TTL = int(os.getenv('SIMULATION_CACHE_TTL', '3600') or 3600)
+
+
+def _simulation_snapshot_key(game_pk, sims, date_str=None):
+    return normalize_cache_key(
+        'linked_game_simulation_v436',
+        int(game_pk),
+        int(sims),
+        date_str or datetime.now(ET).strftime('%Y-%m-%d'),
+    )
+
+
+def _read_simulation_snapshot(game_pk, sims, date_str=None):
+    value = get_redis().get(_simulation_snapshot_key(game_pk, sims, date_str))
+    if not isinstance(value, dict) or not isinstance(value.get('payload'), dict):
+        return None
+    return value
+
+
+def _write_simulation_snapshot(game_pk, sims, payload, date_str=None):
+    record = {'timestamp': time.time(), 'payload': dict(payload)}
+    key = _simulation_snapshot_key(game_pk, sims, date_str)
+    try:
+        write_durable_json(key, record, ttl=_SIMULATION_CACHE_TTL)
+    except JobQueueUnavailable:
+        if settings.production:
+            raise
+        get_redis().set(key, record, ttl=_SIMULATION_CACHE_TTL)
 
 
 @app.route('/api/simulate/<int:game_pk>')
 def api_simulate(game_pk):
     try:
-        sims = max(1500, min(5000, int(request.args.get('sims', 5000) or 5000)))
+        sims = max(1500, min(5000, int(request.args.get('sims', 1500) or 1500)))
     except Exception:
-        sims = 5000
+        sims = 1500
     refresh = request.args.get('refresh') == '1'
     today = datetime.now(ET).strftime('%Y-%m-%d')
-    job_key = (game_pk, sims)
+    cached = _read_simulation_snapshot(game_pk, sims, today)
+    if cached and not refresh:
+        return jsonify(dict(cached['payload'], cached=True))
 
-    # 1. Fast cache hit
-    cached = _correlation_cache.get(game_pk)
-    if cached and not refresh and cached.get('date') == today:
-        return jsonify(cached['payload'])
-
-    # 2. Background job already running or done
-    with _sim_bg_lock:
-        job = _sim_bg_jobs.get(job_key)
-    # A refresh request must not launch a second identical CPU-heavy run while
-    # the first one is still active.
-    if job and refresh and job.get('status') == 'running':
-        elapsed = int(time.time() - job['started'])
-        if elapsed <= _SIM_JOB_MAX_SECONDS:
-            return jsonify({
-                'computing': True,
-                'elapsed': elapsed,
-                'estimatedSeconds': max(15, _SIM_JOB_MAX_SECONDS - elapsed),
-            })
-    if job and not refresh:
-        if job['status'] == 'done':
-            return jsonify(job['payload'])
-        if job['status'] == 'error':
-            return jsonify({
-                'success': False,
-                'simulationReady': False,
-                'error': job.get('error') or 'Matchup simulation failed.',
-                'retryable': True,
-            }), 503
-        elapsed = int(time.time() - job['started'])
-        if elapsed > _SIM_JOB_MAX_SECONDS:
-            with _sim_bg_lock:
-                job.update({
-                    'status': 'error',
-                    'error': (
-                        f'Simulation exceeded {_SIM_JOB_MAX_SECONDS}s and was '
-                        'marked incomplete. Retry to start a fresh run.'
-                    ),
-                    'finished': time.time(),
-                })
-            return jsonify({
-                'success': False,
-                'simulationReady': False,
-                'error': job['error'],
-                'retryable': True,
-            }), 503
-        # Warm path finishes in ~90s; cold start (post-redeploy) can run 3-5min
-        # while FG/Savant/pipeline workers compete for CPU. Grow the estimate
-        # past the warm budget so the UI doesn't sit at "5s remaining" forever.
-        if elapsed < 90:
-            est = 90 - elapsed
-        elif elapsed < 240:
-            est = max(20, 240 - elapsed)
-        else:
-            est = max(15, 360 - elapsed)
-        return jsonify({'computing': True, 'elapsed': elapsed,
-                        'estimatedSeconds': est})
-
-    # 3. Kick off background simulation
-    started = time.time()
-    with _sim_bg_lock:
-        _sim_bg_jobs[job_key] = {'status': 'running', 'started': started, 'payload': None}
-
-    def _run():
-        try:
-            payload = _do_simulate(game_pk, sims)
-        except Exception as exc:
-            g = {}
-            try:
-                g = fetch_schedule_game(game_pk) or {}
-            except Exception:
-                pass
-            payload = _simulation_fallback_payload(g, game_pk, sims=0,
-                                                   warning=str(exc)[:300])
-        completed = bool(
-            payload
-            and payload.get('success')
-            and not payload.get('fallback')
-            and payload.get('meta', {}).get('sims')
+    try:
+        job = enqueue_job(
+            'simulation',
+            {'gamePk': game_pk, 'sims': sims, 'date': today},
+            dedupe_key=f'simulation:{today}:{game_pk}:{sims}',
+            timeout_seconds=360,
+            max_attempts=2,
         )
-        with _sim_bg_lock:
-            _sim_bg_jobs[job_key].update({
-                'status': 'done' if completed else 'error',
-                'payload': payload,
-                'error': None if completed else (
-                    (payload or {}).get('error')
-                    or (payload or {}).get('warning')
-                    or 'Matchup simulation did not complete.'
-                ),
-                'finished': time.time(),
-            })
-        if completed:
-            _correlation_cache[game_pk] = {
-                'date': today, 'signature': payload.get('_sig', ''),
-                'payload': payload,
-            }
+        status = get_job_queue().snapshot(job) or {}
+    except JobQueueUnavailable:
+        return jsonify({
+            'success': False,
+            'simulationReady': False,
+            'computing': False,
+            'error': 'Simulation worker is unavailable. No estimate was substituted.',
+            'retryable': True,
+        }), 503
 
-    threading.Thread(target=_run, daemon=True).start()
-    return jsonify({'computing': True, 'elapsed': 0, 'estimatedSeconds': 90})
+    if status.get('status') == 'error':
+        return jsonify({
+            'success': False,
+            'simulationReady': False,
+            'computing': False,
+            'error': status.get('error') or 'Matchup simulation failed.',
+            'retryable': True,
+        }), 503
+    return jsonify({
+        'computing': True,
+        'elapsed': status.get('elapsedSeconds', 0),
+        'estimatedSeconds': max(15, 120 - int(status.get('elapsedSeconds') or 0)),
+        'job': status,
+    })
 
 
 # ── Phase 7 Odds / Lineup / Edge Infrastructure ──────────────────────────────
@@ -14578,6 +14589,25 @@ def api_odds_cache_refresh():
     event_id = payload.get('eventId') or request.args.get('eventId')
     game_pk = payload.get('gamePk') or request.args.get('gamePk')
     clear_first = str(payload.get('clearFirst', request.args.get('clearFirst', '1'))).strip().lower() in ('1', 'true', 'yes')
+
+    if settings.process_role != 'worker':
+        try:
+            job = enqueue_job(
+                'odds_refresh',
+                {
+                    'mode': mode,
+                    'date': date_str,
+                    'eventId': event_id,
+                    'gamePk': game_pk,
+                    'clearFirst': clear_first,
+                },
+                dedupe_key=f'odds-refresh:{date_str}:{mode}:{event_id or game_pk or "all"}',
+                timeout_seconds=600,
+                max_attempts=2,
+            )
+            return jsonify({'success': True, 'queued': True, 'jobId': job['id']}), 202
+        except JobQueueUnavailable:
+            return jsonify({'success': False, 'error': 'Worker unavailable'}), 503
 
     if not ODDS_API_KEY:
         return jsonify({'success': False, 'error': 'ODDS_API_KEY is not configured'}), 400
@@ -29481,6 +29511,15 @@ def _preload_caches():
     threading.Thread(target=load_rosters, daemon=True).start()
     threading.Thread(target=load_arsenal, daemon=True).start()
 
+    # Legacy research endpoints still read these reference dictionaries from
+    # process memory.  Keep only that compatibility preload in Gunicorn while
+    # the durable worker owns simulations, refresh jobs, schedulers, odds, and
+    # downstream prewarming.  Later phases can serialize these dictionaries
+    # and remove the final web-side preload without blanking research pages.
+    if settings.process_role == 'web':
+        logging.info('[STARTUP] web reference preload started; heavy prewarm is worker-only')
+        return
+
     def _prewarm_when_ready():
         # Wait for FG data to be available before prewarming dependent caches.
         deadline = time.time() + 90
@@ -31988,30 +32027,28 @@ def api_prizepicks_refresh():
     _pp_cache["ts"] = 0
     return jsonify({"status": "ok", "message": "Cache cleared"})
 
-# Start hourly injury refresh worker once routes/helpers are loaded.
-# Launch historical/prewarm loaders now that every function they reference
-# (e.g. _sv_key, fetch_schedule) is defined.
-_launch_startup_loaders()
+# Periodic ingestion, synchronization, and simulations belong to the worker.
+# Gunicorn keeps only the compatibility reference dictionaries needed by
+# legacy read routes and otherwise serves snapshots or enqueues durable work.
+if settings.process_role == 'worker':
+    _launch_startup_loaders()
+    _start_injury_worker()
+    _start_tracker_auto_sync_worker()
+    _start_tracker_auto_capture_worker()
+    _start_tracker_closing_capture_worker()
+    _start_mlb_memory_worker()
 
-_start_injury_worker()
-_start_tracker_auto_sync_worker()
-_start_tracker_auto_capture_worker()
-_start_tracker_closing_capture_worker()
-_start_mlb_memory_worker()
+    if _PIPELINE_AVAILABLE:
+        start_scheduler()
+        logging.info("[pipeline] Scheduler armed — fires at 09:00 ET daily.")
 
-# Start daily pipeline scheduler (runs at 8 AM ET + on boot)
-if _PIPELINE_AVAILABLE:
-    start_scheduler()
-    logging.info("[pipeline] Scheduler armed — fires at 09:00 ET daily.")
-
-# Start BigQuery ETL scheduler: one boot refresh + daily at 09:30 ET (30 min
-# after the matchup pipeline so today's BvP CSV exists before we upload it).
-# No-ops if GOOGLE_CLOUD_PROJECT is unset or google-cloud-bigquery is missing.
-try:
-    from bq_etl import start_bq_scheduler
-    start_bq_scheduler()
-except Exception as _bq_sched_err:
-    logging.warning(f"[bq_etl] scheduler not started: {_bq_sched_err}")
+    try:
+        from bq_etl import start_bq_scheduler
+        start_bq_scheduler()
+    except Exception as _bq_sched_err:
+        logging.warning(f"[bq_etl] scheduler not started: {_bq_sched_err}")
+else:
+    logging.info('[startup] in-process loaders disabled for web role')
 
 
 if __name__ == "__main__":
