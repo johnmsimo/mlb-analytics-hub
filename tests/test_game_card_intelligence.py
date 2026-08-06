@@ -294,17 +294,27 @@ def test_game_card_api_returns_the_three_ranked_decisions(monkeypatch):
     monkeypatch.setattr(intelligence_integration, 'enrich_matchups', lambda values: values)
     monkeypatch.setattr(intelligence_integration, 'enrich_simulations', lambda values: values)
     monkeypatch.setattr(intelligence_integration, 'analyze_learning', lambda _values: {})
+    monkeypatch.setattr(intelligence_integration, '_read_cached_payload', lambda *_args: None)
+    monkeypatch.setattr(intelligence_integration, '_write_cached_payload', lambda *_args: None)
+    scheduled = []
+    monkeypatch.setattr(
+        intelligence_integration,
+        '_schedule_game_card_refresh',
+        lambda *_args: scheduled.append(True) or {'status': 'queued'},
+    )
 
     intelligence_integration.install_intelligence_api(app_module)
     payload = fake_app.view_functions['api_intelligence_game_card'](7)
 
     assert payload['success'] is True
-    assert payload['quickPicksVersion'] == '4.35'
+    assert payload['quickPicksVersion'] == '4.35.1'
     assert payload['pickConfidenceVersion'] == '4.34'
     assert payload['matchupSimulationVersion'] == '4.35'
     assert payload['recommendationSource'] == 'shared_game_matchup_simulation'
     assert payload['simulationReady'] is True
     assert payload['simulationAudit']['simulationCoveragePct'] == 100.0
+    assert payload['computing'] is True
+    assert scheduled == [True]
     assert {pick['intelligenceCategory'] for pick in payload['marketDecisions']} == {
         'hitter_hits', 'pitcher_strikeouts', 'game_winner',
     }
@@ -325,7 +335,10 @@ def test_game_card_api_falls_back_when_live_generation_fails(monkeypatch):
 
             return register
 
+    generation_calls = []
+
     def fail_generation(*_args, **_kwargs):
+        generation_calls.append(True)
         raise RuntimeError('upstream unavailable')
 
     captured = row(
@@ -350,6 +363,13 @@ def test_game_card_api_falls_back_when_live_generation_fails(monkeypatch):
     monkeypatch.setattr(intelligence_integration, 'enrich_matchups', lambda values: values)
     monkeypatch.setattr(intelligence_integration, 'enrich_simulations', lambda values: values)
     monkeypatch.setattr(intelligence_integration, 'analyze_learning', lambda _values: {})
+    monkeypatch.setattr(intelligence_integration, '_read_cached_payload', lambda *_args: None)
+    scheduled = []
+    monkeypatch.setattr(
+        intelligence_integration,
+        '_schedule_game_card_refresh',
+        lambda *_args: scheduled.append(True) or {'status': 'queued'},
+    )
 
     intelligence_integration.install_intelligence_api(app_module)
     payload = fake_app.view_functions['api_intelligence_game_card'](7)
@@ -358,9 +378,12 @@ def test_game_card_api_falls_back_when_live_generation_fails(monkeypatch):
     assert payload['sourceCount'] == 1
     assert payload['generatedSourceCount'] == 0
     assert payload['simulationReady'] is False
-    assert payload['recommendationSource'] == 'simulation_unavailable_or_partial'
+    assert payload['recommendationSource'] == 'simulation_refresh_pending'
     assert payload['quickPicks'] == []
     assert payload['best']['hitter_hits']['recommendationGrade'] == 'Pass'
+    assert payload['computing'] is True
+    assert generation_calls == []
+    assert scheduled == [True]
 
 
 def test_game_card_api_rebuilds_an_incomplete_tracker_candidate_pool(monkeypatch):
@@ -406,12 +429,80 @@ def test_game_card_api_rebuilds_an_incomplete_tracker_candidate_pool(monkeypatch
     monkeypatch.setattr(intelligence_integration, 'enrich_matchups', lambda values: values)
     monkeypatch.setattr(intelligence_integration, 'enrich_simulations', lambda values: values)
     monkeypatch.setattr(intelligence_integration, 'analyze_learning', lambda _values: {})
+    monkeypatch.setattr(intelligence_integration, '_read_cached_payload', lambda *_args: None)
+    scheduled = []
+    monkeypatch.setattr(
+        intelligence_integration,
+        '_schedule_game_card_refresh',
+        lambda *_args: scheduled.append(True) or {'status': 'queued'},
+    )
 
     intelligence_integration.install_intelligence_api(app_module)
     payload = fake_app.view_functions['api_intelligence_game_card'](7)
 
+    # The HTTP request only enqueues the full build and returns immediately.
+    assert calls == []
+    assert scheduled == [True]
+    assert payload['generatedSourceCount'] == 0
+    assert payload['simulationReady'] is False
+    assert payload['computing'] is True
+
+    # The same heavy builder still produces the complete simulation snapshot
+    # when executed by the serialized background worker.
+    rebuilt = intelligence_integration._generate_game_card_payload(
+        app_module, 7, '2026-08-06'
+    )
     assert calls == [True]
-    assert payload['generatedSourceCount'] == 4
-    assert payload['best']['hitter_hits']['player'] == 'Full Pool Hitter'
-    assert payload['simulationReady'] is True
-    assert payload['simulationAudit']['simulationCoveragePct'] == 100.0
+    assert rebuilt['generatedSourceCount'] == 4
+    assert rebuilt['best']['hitter_hits']['player'] == 'Full Pool Hitter'
+    assert rebuilt['simulationReady'] is True
+    assert rebuilt['simulationAudit']['simulationCoveragePct'] == 100.0
+
+
+def test_game_card_api_serves_stale_snapshot_while_refreshing(monkeypatch):
+    class FakeApp:
+        def __init__(self):
+            self.view_functions = {}
+
+        def route(self, _path, methods=None):
+            del methods
+
+            def register(function):
+                self.view_functions[function.__name__] = function
+                return function
+
+            return register
+
+    cached_payload = {
+        'success': True,
+        'gamePk': 7,
+        'quickPicks': [{'player': 'Cached Hitter'}],
+        'simulationReady': True,
+    }
+    fake_app = FakeApp()
+    app_module = SimpleNamespace(
+        app=fake_app,
+        request=SimpleNamespace(args={'date': '2026-08-06', 'refresh': '1'}),
+        jsonify=lambda payload: payload,
+        ET=timezone.utc,
+    )
+    monkeypatch.setattr(
+        intelligence_integration,
+        '_read_cached_payload',
+        lambda *_args: {'timestamp': 1, 'payload': cached_payload},
+    )
+    scheduled = []
+    monkeypatch.setattr(
+        intelligence_integration,
+        '_schedule_game_card_refresh',
+        lambda *_args: scheduled.append(True) or {'status': 'queued'},
+    )
+
+    intelligence_integration.install_intelligence_api(app_module)
+    payload = fake_app.view_functions['api_intelligence_game_card'](7)
+
+    assert payload['quickPicks'][0]['player'] == 'Cached Hitter'
+    assert payload['stale'] is True
+    assert payload['computing'] is True
+    assert payload['retryAfterSeconds'] == 4
+    assert scheduled == [True]

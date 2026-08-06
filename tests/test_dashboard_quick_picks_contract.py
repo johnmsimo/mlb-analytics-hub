@@ -2,12 +2,13 @@ from pathlib import Path
 
 
 DASHBOARD = Path(__file__).resolve().parents[1] / 'dashboard.html'
+APP = Path(__file__).resolve().parents[1] / 'app.py'
 
 
 def test_dashboard_uses_game_card_intelligence_endpoint():
     source = DASHBOARD.read_text(encoding='utf-8')
 
-    assert "fetch('/api/intelligence/game-card/'" in source
+    assert "apiFetchJsonTimeout('/api/intelligence/game-card/'" in source
     assert "var picks=(d&&d.quickPicks)||[]" in source
     assert 'TOP PICKS TO TAKE' in source
     assert 'Ranked by final Pick Score' in source
@@ -24,10 +25,37 @@ def test_dashboard_uses_game_card_intelligence_endpoint():
     assert 'd.unavailableMarkets' in source
 
     prewarm_start = source.index('function prewarmQuickProps(games)')
-    prewarm_end = source.index('function load(dateStr)', prewarm_start)
+    prewarm_end = source.index('function seedDashboardLineups(games)', prewarm_start)
     prewarm_source = source[prewarm_start:prewarm_end]
-    assert "fetch('/api/intelligence/game-card/'" in prewarm_source
+    assert '/api/intelligence/game-card/' not in prewarm_source
     assert "fetch('/api/props/quick/'" not in prewarm_source
+    assert 'page load must never start one build per game' in source
+    assert 'Building the linked batter-vs-pitcher simulation in the background' in source
+    assert 'retryAfterSeconds' in source
+
+
+def test_dashboard_lineups_render_cached_schedule_data_before_refresh():
+    source = DASHBOARD.read_text(encoding='utf-8')
+
+    assert 'function seedDashboardLineups(games)' in source
+    assert 'g.awayLineup||[]' in source
+    assert 'g.homeLineup||[]' in source
+    assert "apiFetchJsonTimeout('/api/lineup/'" in source
+    assert 'Lineup refresh is taking longer than expected' in source
+
+
+def test_lineup_api_never_runs_live_enrichment_in_the_request():
+    source = APP.read_text(encoding='utf-8')
+    route_start = source.index("@app.route('/api/lineup/<int:game_pk>')")
+    route_end = source.index('# ── Slate Capture & Parlays', route_start)
+    route_source = source[route_start:route_end]
+
+    assert '_schedule_lineup_payload(game_pk, date_str)' in route_source
+    assert '_schedule_lineup_payload_from_game(game_pk, date_str)' in route_source
+    assert '_build_lineup_payload(game_pk)' not in route_source
+    assert "'computing': True" in route_source
+    assert 'awayLineup' in source
+    assert 'homeLineup' in source
 
 
 def test_save_and_parlay_preserve_recommended_side():

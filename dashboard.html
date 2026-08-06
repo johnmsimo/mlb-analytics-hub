@@ -1043,6 +1043,29 @@ function refreshOddsForGame(e, gamePk) {
 }
 
 var LINEUPS={};
+var LINEUP_POLLS={};
+function refreshCardLineup(pk,attempt){
+  attempt=attempt||0;
+  apiFetchJsonTimeout('/api/lineup/'+pk+'?date='+encodeURIComponent(selectedGamesDate),7000)
+    .then(function(d){
+      if(!d||!d.success)throw new Error((d&&d.error)||'Lineup unavailable');
+      LINEUPS[pk]=d;
+      renderCardLineup(pk,d);
+      if(d.computing && attempt<20){
+        clearTimeout(LINEUP_POLLS[pk]);
+        LINEUP_POLLS[pk]=setTimeout(function(){refreshCardLineup(pk,attempt+1);},Math.max(2500,Number(d.retryAfterSeconds||3)*1000));
+      }
+    })
+    .catch(function(){
+      var card=document.getElementById('cl-'+pk);
+      if(card && !(LINEUPS[pk]&&((LINEUPS[pk].away||[]).length||(LINEUPS[pk].home||[]).length)))
+        card.innerHTML='<div class="cl-pending">Lineup refresh is taking longer than expected — retrying…</div>';
+      if(attempt<3){
+        clearTimeout(LINEUP_POLLS[pk]);
+        LINEUP_POLLS[pk]=setTimeout(function(){refreshCardLineup(pk,attempt+1);},3000);
+      }
+    });
+}
 function toggleLineup(e, pk){
   e.stopPropagation();
   var el=document.getElementById('lu-'+pk);
@@ -1051,17 +1074,11 @@ function toggleLineup(e, pk){
   var open=el.classList.toggle('open');
   btn.textContent=open?'\u2715 HIDE LINEUP':'\u2261 SHOW LINEUP';
   if(open){
-    if(LINEUPS[pk] && LINEUPS[pk].awayConfirmed && LINEUPS[pk].homeConfirmed){
+    if(LINEUPS[pk]){
       renderCardLineup(pk, LINEUPS[pk]);
-      return;
+      if(LINEUPS[pk].awayConfirmed && LINEUPS[pk].homeConfirmed && !LINEUPS[pk].computing)return;
     }
-    fetch('/api/lineup/'+pk).then(function(r){return r.json();}).then(function(d){
-      LINEUPS[pk]=d;
-      renderCardLineup(pk, d);
-    }).catch(function(){
-      var card=document.getElementById('cl-'+pk);
-      if(card) card.innerHTML='<div class="cl-pending">Lineup unavailable</div>';
-    });
+    refreshCardLineup(pk,0);
   }
 }
 function renderLineup(pk, d){
@@ -1214,6 +1231,32 @@ function renderCardLineup(pk, d){
 }
 
 var QP_DATA={};
+var QP_POLLS={};
+function loadQuickProps(pk,attempt){
+  attempt=attempt||0;
+  apiFetchJsonTimeout('/api/intelligence/game-card/'+pk+'?date='+encodeURIComponent(selectedGamesDate),8000)
+    .then(function(d){
+      if(!d||!d.success)throw new Error((d&&d.error)||'Quick picks unavailable');
+      QP_DATA[pk]=d;
+      renderQuickProps(pk,d);
+      if(d.computing && attempt<45){
+        clearTimeout(QP_POLLS[pk]);
+        QP_POLLS[pk]=setTimeout(function(){
+          var strip=document.getElementById('qp-'+pk);
+          if(strip&&strip.classList.contains('open'))loadQuickProps(pk,attempt+1);
+        },Math.max(3000,Number(d.retryAfterSeconds||4)*1000));
+      }
+    })
+    .catch(function(){
+      var s=document.getElementById('qp-'+pk);
+      if(s && !(QP_DATA[pk]&&((QP_DATA[pk].quickPicks||[]).length)))
+        s.innerHTML='<div class="qp-loading">Simulation refresh is taking longer than expected — retrying automatically…</div>';
+      if(attempt<3){
+        clearTimeout(QP_POLLS[pk]);
+        QP_POLLS[pk]=setTimeout(function(){loadQuickProps(pk,attempt+1);},4000);
+      }
+    });
+}
 function toggleQuickProps(e,pk){
   e.stopPropagation();
   var strip=document.getElementById('qp-'+pk);
@@ -1222,18 +1265,13 @@ function toggleQuickProps(e,pk){
   var open=strip.classList.toggle('open');
   btn.textContent=open?'✕ HIDE PROPS':'⚡ QUICK PROPS';
   if(!open)return;
-  if(QP_DATA[pk]){renderQuickProps(pk,QP_DATA[pk]);return;}
-  strip.innerHTML='<div class="qp-loading">Ranking hit, strikeout and moneyline decisions…</div>';
-  fetch('/api/intelligence/game-card/'+pk+'?date='+encodeURIComponent(selectedGamesDate))
-    .then(function(r){return r.json();})
-    .then(function(d){
-      if(!d||!d.success)throw new Error((d&&d.error)||'Quick picks unavailable');
-      QP_DATA[pk]=d;renderQuickProps(pk,d);
-    })
-    .catch(function(){
-      var s=document.getElementById('qp-'+pk);
-      if(s)s.innerHTML='<div class="qp-loading">Props unavailable</div>';
-    });
+  if(QP_DATA[pk]){
+    renderQuickProps(pk,QP_DATA[pk]);
+    if(!QP_DATA[pk].computing)return;
+  }else{
+    strip.innerHTML='<div class="qp-loading">Loading cached matchup intelligence…</div>';
+  }
+  loadQuickProps(pk,0);
 }
 function chConfClass(p){ return p>=70?'elite':p>=65?'strong':'solid'; }
 var CH_SORT='prob';   // 'prob' = highest hit probability · 'tilt' = biggest matchup exploit
@@ -1379,10 +1417,12 @@ function renderQuickProps(pk,d){
   var head='<div class="qp-intel-head">'
     +'<div><div class="qp-intel-title">⚡ TOP PICKS TO TAKE</div>'
     +'<div class="qp-intel-sub">Shared batter-vs-pitcher game simulation · Ranked by final Pick Score</div></div>'
-    +'<div class="qp-policy">'+(simTrials?simTrials.toLocaleString()+' SIMS · ':'')+picks.length+' PLAY'+(picks.length===1?'':'S')+'</div></div>';
+    +'<div class="qp-policy">'+(d&&d.computing?'↻ UPDATING · ':'')+(simTrials?simTrials.toLocaleString()+' SIMS · ':'')+picks.length+' PLAY'+(picks.length===1?'':'S')+'</div></div>';
   var empty=picks.length?'':(
-    d&&d.simulationReady===false
-      ?'<div class="qp-loading">Matchup simulation is unavailable or incomplete — refresh before taking a pick</div>'
+    d&&d.computing
+      ?'<div class="qp-loading">Building the linked batter-vs-pitcher simulation in the background — this updates automatically</div>'
+      :d&&d.simulationReady===false
+      ?'<div class="qp-loading">Matchup simulation is unavailable or incomplete</div>'
       :'<div class="qp-loading">No priced positive-edge pick is available for this game</div>'
   );
   var cards=picks.map(function(p,i){
@@ -2316,6 +2356,13 @@ function apiFetchJson(path, opts){
     return r.json();
   });
 }
+function apiFetchJsonTimeout(path, timeoutMs, opts){
+  var controller=(typeof AbortController!=='undefined')?new AbortController():null;
+  var requestOpts=Object.assign({},opts||{});
+  if(controller)requestOpts.signal=controller.signal;
+  var timer=controller?setTimeout(function(){controller.abort();},timeoutMs||8000):null;
+  return apiFetchJson(path,requestOpts).finally(function(){if(timer)clearTimeout(timer);});
+}
 function loadMemoryStatus(){
   var v=document.getElementById('sm'),l=document.getElementById('sml');
   if(!v||!l)return;
@@ -3001,43 +3048,26 @@ function loadSharpChips(games){
   })();
 }
 // Gently pre-warm Quick Props (incl. Confident Hits) for the slate in the
-// background so the first expand is instant instead of a multi-second compute.
-// One game at a time, cancellable when the date changes, skips already-cached.
+// browser only when already cached. Heavy simulation is request-triggered and
+// serialized server-side; page load must never start one build per game.
 var QP_WARM_TOKEN=0;
 function prewarmQuickProps(games){
-  var token=++QP_WARM_TOKEN;
-  var list=(games||[]).filter(function(g){
-    return !g.isPostponed&&!g.isCancelled&&!g.isSuspended
-      && g.status!=='Final'&&g.status!=='Game Over'&&g.status!=='Completed Early';
-  });
-  // Warm the games starting SOONEST first — those are the ones closest to first
-  // pitch where you're about to bet. Live games sort ahead (gameDate already
-  // passed), then upcoming by start time; missing dates sink to the end.
-  list.sort(function(a,b){
-    var ta=Date.parse(a.gameStartIso||'')||Infinity;
-    var tb=Date.parse(b.gameStartIso||'')||Infinity;
-    return ta-tb;
-  });
-  var i=0;
-  (function next(){
-    if(token!==QP_WARM_TOKEN) return;           // a newer slate load supersedes us
-    if(i>=list.length) return;
-    var g=list[i++];
-    if(QP_DATA[g.gamePk]){ setTimeout(next, 60); return; }
-    fetch('/api/intelligence/game-card/'+g.gamePk+'?date='+encodeURIComponent(selectedGamesDate))
-      .then(function(r){return r.json();})
-      .then(function(d){
-        if(token===QP_WARM_TOKEN && d && d.success){
-          QP_DATA[g.gamePk]=d;
-          var s=document.getElementById('qp-'+g.gamePk);
-          if(s&&s.classList.contains('open')) renderQuickProps(g.gamePk,d);
-        }
-      })
-      .catch(function(){})
-      .finally(function(){ setTimeout(next, 1100); });
-  })();
+  ++QP_WARM_TOKEN;
+  // The API snapshot is requested only when the user opens Quick Props.
 }
-function load(dateStr){if(dateStr) selectedGamesDate=dateStr;syncDateUI();apiFetchJson('/api/games/today?date='+encodeURIComponent(selectedGamesDate)).then(function(d){if(!d.success)throw new Error(d.error||'API error');var gs=d.games||[];window.__lastGames=gs;var activeGs=gs.filter(function(g){return !g.isPostponed&&!g.isCancelled&&!g.isSuspended&&g.status!=='Postponed'&&g.status!=='Cancelled'&&g.status!=='Suspended';});document.getElementById('sg').textContent=activeGs.length||0;document.getElementById('sl').textContent=activeGs.filter(function(g){return g.status==='Live'}).length;var edges=activeGs.map(function(g){return g.edge});document.getElementById('se').textContent=edges.length?(edges.reduce(function(a,b){return a+b},0)/edges.length).toFixed(1):'--';document.getElementById('sh').textContent=activeGs.filter(function(g){return g.edge>=8}).length;if(!gs.length){document.getElementById('gc').innerHTML='<div class="ng"><h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px">NO GAMES FOR '+fmtDateLabel(selectedGamesDate).toUpperCase()+'</h3></div>';}else{document.getElementById('gc').innerHTML='<div class="grid">'+gs.map(mkCard).join('')+'</div>';setTimeout(function(){document.querySelectorAll('.fill').forEach(function(e){e.style.width=e.getAttribute('data-w')+'%'})},150);if(window.initLiveCards)initLiveCards(gs);loadSharpChips(gs);prewarmQuickProps(gs);}if(window.setNavAsOf)setNavAsOf(new Date());if(document.getElementById('nrfiView').classList.contains('active')) loadNRFIBoard(activeGs);}).catch(function(e){document.getElementById('gc').innerHTML='<div class="sw"><div style="background:rgba(224,64,251,.08);border:1px solid rgba(224,64,251,.3);border-radius:12px;padding:24px 32px;text-align:center"><h3 style="color:var(--m);font-family:Orbitron;margin-bottom:8px">CONNECTION ERROR</h3><p style="color:var(--mu);font-size:.82rem">'+e.message+'</p></div></div>'})}
+function seedDashboardLineups(games){
+  (games||[]).forEach(function(g){
+    var away=g.awayLineup||[],home=g.homeLineup||[];
+    if(!away.length&&!home.length)return;
+    LINEUPS[g.gamePk]={
+      success:true,gamePk:g.gamePk,away:away,home:home,
+      awayConfirmed:!!g.awayLineupConfirmed,
+      homeConfirmed:!!g.homeLineupConfirmed,
+      awaySource:'schedule',homeSource:'schedule',computing:true
+    };
+  });
+}
+function load(dateStr){if(dateStr) selectedGamesDate=dateStr;syncDateUI();apiFetchJson('/api/games/today?date='+encodeURIComponent(selectedGamesDate)).then(function(d){if(!d.success)throw new Error(d.error||'API error');var gs=d.games||[];seedDashboardLineups(gs);window.__lastGames=gs;var activeGs=gs.filter(function(g){return !g.isPostponed&&!g.isCancelled&&!g.isSuspended&&g.status!=='Postponed'&&g.status!=='Cancelled'&&g.status!=='Suspended';});document.getElementById('sg').textContent=activeGs.length||0;document.getElementById('sl').textContent=activeGs.filter(function(g){return g.status==='Live'}).length;var edges=activeGs.map(function(g){return g.edge});document.getElementById('se').textContent=edges.length?(edges.reduce(function(a,b){return a+b},0)/edges.length).toFixed(1):'--';document.getElementById('sh').textContent=activeGs.filter(function(g){return g.edge>=8}).length;if(!gs.length){document.getElementById('gc').innerHTML='<div class="ng"><h3 style="font-family:Orbitron;color:var(--mu);letter-spacing:2px">NO GAMES FOR '+fmtDateLabel(selectedGamesDate).toUpperCase()+'</h3></div>';}else{document.getElementById('gc').innerHTML='<div class="grid">'+gs.map(mkCard).join('')+'</div>';setTimeout(function(){document.querySelectorAll('.fill').forEach(function(e){e.style.width=e.getAttribute('data-w')+'%'})},150);if(window.initLiveCards)initLiveCards(gs);loadSharpChips(gs);prewarmQuickProps(gs);}if(window.setNavAsOf)setNavAsOf(new Date());if(document.getElementById('nrfiView').classList.contains('active')) loadNRFIBoard(activeGs);}).catch(function(e){document.getElementById('gc').innerHTML='<div class="sw"><div style="background:rgba(224,64,251,.08);border:1px solid rgba(224,64,251,.3);border-radius:12px;padding:24px 32px;text-align:center"><h3 style="color:var(--m);font-family:Orbitron;margin-bottom:8px">CONNECTION ERROR</h3><p style="color:var(--mu);font-size:.82rem">'+e.message+'</p></div></div>'})}
 function initNRFI(){ if(NRFI_LAST_DATE===selectedGamesDate && NRFI_ROWS.length) return; loadNRFIBoard(window.__lastGames||[]); }
 function loadNRFIBoard(games){
   var meta=document.getElementById('nrfiMeta'), body=document.getElementById('nrfiBody');
