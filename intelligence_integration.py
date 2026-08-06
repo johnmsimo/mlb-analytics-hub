@@ -1,5 +1,6 @@
 """Flask integration for prediction intelligence and learning analytics."""
 from context_engine import enrich_context
+from explanation_engine import explain_decisions
 from intelligence_core import build_recommendations
 from learning_engine import analyze_learning
 from matchup_engine import enrich_matchups
@@ -19,7 +20,11 @@ def install_intelligence_api(app_module):
         contextual_entries = enrich_context(entries)
         matchup_entries = enrich_matchups(contextual_entries)
         simulated_entries = enrich_simulations(matchup_entries)
-        decisions = build_recommendations(simulated_entries)
+        learning = analyze_learning(simulated_entries)
+        decisions = explain_decisions(
+            build_recommendations(simulated_entries),
+            learning=learning,
+        )
         return app_module.jsonify({
             'success': True,
             'date': tracker.get('date') or date_str,
@@ -28,6 +33,7 @@ def install_intelligence_api(app_module):
             'matchupVersion': '4.29',
             'simulationVersion': '4.30',
             'learningVersion': '4.31',
+            'explanationVersion': '4.32',
             **decisions,
         })
 
