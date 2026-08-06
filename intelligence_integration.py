@@ -13,6 +13,7 @@ from game_card_intelligence import (
 from intelligence_core import build_recommendations, classify_pick
 from learning_engine import analyze_learning
 from matchup_engine import enrich_matchups
+from matchup_simulation_intelligence import simulation_audit
 from simulation_engine import enrich_simulations
 
 
@@ -97,19 +98,29 @@ def install_intelligence_api(app_module):
             dict(row) for row in all_tracker_entries
             if str(row.get('gamePk')) == str(game_pk)
         ]
-        usable = {
-            category: any(
-                classify_pick(row) == category and _has_price(row, category)
+        usable_counts = {
+            category: sum(
+                classify_pick(row) == category
+                and _has_price(row, category)
+                and row.get('sharedSimulationBacked') is True
                 for row in rows
             )
             for category in CATEGORY_ORDER
         }
+        usable = {
+            category: count >= (2 if category == 'game_winner' else 1)
+            for category, count in usable_counts.items()
+        }
+        candidate_pool_complete = any(
+            row.get('intelligenceCandidatePoolComplete') is True
+            for row in rows
+        )
 
         # Tracker capture is the fastest source when it contains priced rows for
         # every required market. Otherwise rebuild this game's candidates through
         # the same full simulation and live-odds path used by tracker capture.
         generated = []
-        if not all(usable.values()):
+        if not all(usable.values()) or not candidate_pool_complete:
             try:
                 schedule = app_module.fetch_schedule(date_str)
                 adjustments = dict(app_module._get_adjustments() or {})
@@ -145,9 +156,32 @@ def install_intelligence_api(app_module):
         matchups = enrich_matchups(contextual)
         simulated = enrich_simulations(matchups)
         learning = analyze_learning(all_tracker_entries)
+        audit = simulation_audit(simulated)
+        simulation_backed = [
+            row for row in simulated if row.get('sharedSimulationBacked') is True
+        ]
         decisions = select_game_card_quick_picks(
-            simulated,
+            simulation_backed,
             learning=learning,
+        )
+        backed_category_counts = {
+            category: sum(
+                classify_pick(row) == category for row in simulation_backed
+            )
+            for category in CATEGORY_ORDER
+        }
+        required_markets_ready = all(
+            count >= (2 if category == 'game_winner' else 1)
+            for category, count in backed_category_counts.items()
+        )
+        fully_backed = (
+            audit['candidateCount'] > 0
+            and audit['simulationBackedCount'] == audit['candidateCount']
+            and required_markets_ready
+            and any(
+                row.get('intelligenceCandidatePoolComplete') is True
+                for row in simulation_backed
+            )
         )
         payload = {
             'success': True,
@@ -155,8 +189,15 @@ def install_intelligence_api(app_module):
             'gamePk': game_pk,
             'sourceCount': len(merged),
             'generatedSourceCount': len(generated),
-            'quickPicksVersion': '4.34',
+            'quickPicksVersion': '4.35',
             'pickConfidenceVersion': '4.34',
+            'matchupSimulationVersion': '4.35',
+            'recommendationSource': (
+                'shared_game_matchup_simulation'
+                if fully_backed else 'simulation_unavailable_or_partial'
+            ),
+            'simulationReady': fully_backed,
+            'simulationAudit': audit,
             'explanationVersion': '4.32',
             **decisions,
         }
