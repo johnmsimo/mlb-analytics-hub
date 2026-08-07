@@ -2,6 +2,11 @@
 import time
 from datetime import datetime
 
+from candidate_integrity import (
+    INTEGRITY_VERSION,
+    CandidateIntegrityPolicy,
+    evaluate_candidates,
+)
 from context_engine import enrich_context
 from explanation_engine import explain_decisions
 from game_card_intelligence import (
@@ -26,6 +31,7 @@ from task_queue import (
 
 _GAME_CARD_CACHE_TTL = 300
 _GAME_CARD_STALE_TTL = 3600
+_MAX_ACTIONABLE_CACHE_AGE = CandidateIntegrityPolicy().maximum_odds_age_seconds
 
 
 def _has_price(row, category):
@@ -40,7 +46,7 @@ def _has_price(row, category):
 
 
 def _cache_key(game_pk, date_str):
-    return normalize_cache_key('game_card_intelligence_v4352', game_pk, date_str)
+    return normalize_cache_key('game_card_intelligence_v437', game_pk, date_str)
 
 
 def _read_cached_payload(game_pk, date_str):
@@ -63,23 +69,27 @@ def _write_cached_payload(game_pk, date_str, payload):
 
 
 def _candidate_pool_ready(rows):
+    prepared = prepare_game_card_candidates(rows)
+    integrity = evaluate_candidates(prepared)
+    eligible = integrity['eligible']
     usable_counts = {
         category: sum(
             classify_pick(row) == category
-            and _has_price(row, category)
             and row.get('sharedSimulationBacked') is True
-            for row in rows
+            for row in eligible
         )
         for category in CATEGORY_ORDER
     }
-    markets_ready = all(
-        count >= (2 if category == 'game_winner' else 1)
-        for category, count in usable_counts.items()
+    markets_ready = all(count >= 1 for count in usable_counts.values())
+    simulated_moneyline_sides = sum(
+        classify_pick(row) == 'game_winner'
+        and row.get('sharedSimulationBacked') is True
+        for row in prepared
     )
     pool_complete = any(
-        row.get('intelligenceCandidatePoolComplete') is True for row in rows
+        row.get('intelligenceCandidatePoolComplete') is True for row in eligible
     )
-    return markets_ready and pool_complete
+    return markets_ready and simulated_moneyline_sides >= 2 and pool_complete
 
 
 def _merge_candidate_rows(captured, generated):
@@ -99,9 +109,12 @@ def _decision_payload(game_pk, date_str, rows, all_tracker_entries, generated_co
     matchups = enrich_matchups(contextual)
     simulated = enrich_simulations(matchups)
     learning = analyze_learning(all_tracker_entries)
-    audit = simulation_audit(simulated)
+    integrity = evaluate_candidates(simulated)
+    integrity_eligible = integrity['eligible']
+    audit = simulation_audit(integrity_eligible)
     simulation_backed = [
-        row for row in simulated if row.get('sharedSimulationBacked') is True
+        row for row in integrity_eligible
+        if row.get('sharedSimulationBacked') is True
     ]
     decisions = select_game_card_quick_picks(
         simulation_backed,
@@ -114,13 +127,18 @@ def _decision_payload(game_pk, date_str, rows, all_tracker_entries, generated_co
         for category in CATEGORY_ORDER
     }
     required_markets_ready = all(
-        count >= (2 if category == 'game_winner' else 1)
-        for category, count in backed_category_counts.items()
+        count >= 1 for count in backed_category_counts.values()
+    )
+    simulated_moneyline_sides = sum(
+        classify_pick(row) == 'game_winner'
+        and row.get('sharedSimulationBacked') is True
+        for row in simulated
     )
     fully_backed = (
         audit['candidateCount'] > 0
         and audit['simulationBackedCount'] == audit['candidateCount']
         and required_markets_ready
+        and simulated_moneyline_sides >= 2
         and any(
             row.get('intelligenceCandidatePoolComplete') is True
             for row in simulation_backed
@@ -138,7 +156,9 @@ def _decision_payload(game_pk, date_str, rows, all_tracker_entries, generated_co
         'gamePk': game_pk,
         'sourceCount': len(rows),
         'generatedSourceCount': generated_count,
-        'quickPicksVersion': '4.35.2',
+        'quickPicksVersion': '4.37',
+        'candidateIntegrityVersion': INTEGRITY_VERSION,
+        'candidateIntegrityAudit': integrity['audit'],
         'pickConfidenceVersion': '4.34',
         'matchupSimulationVersion': '4.35',
         'performanceVersion': '4.36',
@@ -162,7 +182,9 @@ def _pending_payload(game_pk, date_str, source_count):
         'gamePk': game_pk,
         'sourceCount': source_count,
         'generatedSourceCount': 0,
-        'quickPicksVersion': '4.35.2',
+        'quickPicksVersion': '4.37',
+        'candidateIntegrityVersion': INTEGRITY_VERSION,
+        'candidateIntegrityAudit': evaluate_candidates([])['audit'],
         'pickConfidenceVersion': '4.34',
         'matchupSimulationVersion': '4.35',
         'performanceVersion': '4.36',
@@ -300,14 +322,31 @@ def install_intelligence_api(app_module):
                 ))
             job = _schedule_game_card_refresh(app_module, game_pk, date_str)
             computing = bool(job and job.get('status') in {'queued', 'running'})
+            cached_payload = cached['payload']
+            integrity_expired = age > _MAX_ACTIONABLE_CACHE_AGE
+            if integrity_expired:
+                # Keep stale-while-refresh responsive without presenting an
+                # expired sportsbook snapshot as a current recommendation.
+                cached_payload = _pending_payload(
+                    game_pk,
+                    date_str,
+                    int(cached['payload'].get('sourceCount') or 0),
+                )
             return app_module.jsonify(dict(
-                cached['payload'],
+                cached_payload,
                 cached=True,
                 stale=True,
+                integrityExpired=integrity_expired,
                 cacheAgeSec=age,
                 computing=computing,
                 refreshStatus=job,
                 retryAfterSeconds=4,
+                message=(
+                    'Sportsbook prices expired; refreshing verified picks in '
+                    'the background.'
+                    if integrity_expired else
+                    'Refreshing verified picks in the background.'
+                ),
             ))
 
         tracker = app_module._tracker_today_payload(date_str)

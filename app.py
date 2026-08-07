@@ -14,7 +14,24 @@ from matchup_simulation_intelligence import (
     exact_over_probability,
     summarize_game_outcomes,
 )
+from candidate_integrity import (
+    INTEGRITY_VERSION as CANDIDATE_INTEGRITY_VERSION,
+    canonical_market_key,
+    evaluate_candidate,
+    evaluate_candidates,
+    market_role,
+)
 from simulation_capacity import serialized_simulation
+
+
+def _parse_candidate_start(value):
+    try:
+        parsed = datetime.fromisoformat(str(value or '').replace('Z', '+00:00'))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except (TypeError, ValueError):
+        return None
 
 
 def _load_local_env_file(env_path):
@@ -16524,10 +16541,15 @@ def _build_tracker_rows_for_game(
 
     # ── Try boxscore lineups first (works once game has started) ─────────────
     away_lineup, home_lineup = [], []
+    away_lineup_source, home_lineup_source = None, None
     try:
         box = requests.get(f"{MLB_API}/game/{game_pk}/boxscore", timeout=10).json().get('teams', {})
         away_lineup = get_batters_from_boxscore(box.get('away', {}), 'away')
         home_lineup = get_batters_from_boxscore(box.get('home', {}), 'home')
+        if len(away_lineup) >= 9:
+            away_lineup_source = 'confirmed'
+        if len(home_lineup) >= 9:
+            home_lineup_source = 'confirmed'
     except Exception as ex:
         print(f'[tracker_rows] boxscore fetch failed for {game_pk}: {ex}')
 
@@ -16560,8 +16582,12 @@ def _build_tracker_rows_for_game(
 
             if not away_lineup:
                 away_lineup = _parse_scheduled_lineup(lineups.get('awayBatters', []))
+                if away_lineup:
+                    away_lineup_source = 'projected'
             if not home_lineup:
                 home_lineup = _parse_scheduled_lineup(lineups.get('homeBatters', []))
+                if home_lineup:
+                    home_lineup_source = 'projected'
         except Exception as ex:
             print(f'[tracker_rows] scheduled lineup parse failed for {game_pk}: {ex}')
 
@@ -16597,8 +16623,12 @@ def _build_tracker_rows_for_game(
 
     if not away_lineup:
         away_lineup = _roster_lineup(away_team_id)
+        if away_lineup:
+            away_lineup_source = 'roster'
     if not home_lineup:
         home_lineup = _roster_lineup(home_team_id)
+        if home_lineup:
+            home_lineup_source = 'roster'
 
     if not away_lineup or not home_lineup:
         return []
@@ -17069,10 +17099,63 @@ def _build_tracker_rows_for_game(
     decision_pool_complete = len(decision_rows) <= keep
     selected = decision_rows[:keep]
     selected.extend(other_rows[:max(0, keep - len(selected))])
+    generated_at = datetime.now(timezone.utc).isoformat()
+    game_status = str((g.get('status') or {}).get('detailedState') or '')
+    abstract_state = str((g.get('status') or {}).get('abstractGameState') or '')
+    game_start = g.get('gameDate')
+    hitter_positions = {
+        (player.get('id'), player.get('name')): player.get('pos')
+        for player in away_lineup + home_lineup
+    }
+    combined_lineup_source = (
+        'roster'
+        if 'roster' in {away_lineup_source, home_lineup_source}
+        else 'projected'
+        if 'projected' in {away_lineup_source, home_lineup_source}
+        else 'confirmed'
+        if away_lineup_source == home_lineup_source == 'confirmed'
+        else 'missing'
+    )
+    annotated = []
     for row in selected:
         row['intelligenceCandidatePoolComplete'] = decision_pool_complete
         row['intelligenceCandidatePoolSize'] = len(decision_rows)
-    return selected
+        role = market_role(str(row.get('marketKey') or ''))
+        if role == 'batter':
+            lineup_status = (
+                away_lineup_source
+                if row.get('team') == away_abbr
+                else home_lineup_source
+                if row.get('team') == home_abbr
+                else 'missing'
+            )
+            position = hitter_positions.get(
+                (row.get('playerId'), row.get('player'))
+            )
+        elif role == 'pitcher':
+            lineup_status = combined_lineup_source
+            position = 'SP'
+        else:
+            lineup_status = 'not_applicable'
+            position = 'TEAM'
+        row.update({
+            'gameStatus': game_status,
+            'gameAbstractState': abstract_state,
+            'gameStartIso': game_start,
+            'lineupStatus': lineup_status,
+            'playerRole': role,
+            'playerPosition': position,
+            'candidateModelVersion': 'prediction-stack-4.37',
+            'modelVersion': row.get('modelVersion') or 'prediction-stack-4.37',
+            'generatedAt': generated_at,
+            'oddsUpdatedAt': (
+                generated_at
+                if row.get('marketPrice') is not None and row.get('bookmaker')
+                else None
+            ),
+        })
+        annotated.append(evaluate_candidate(row))
+    return annotated
 
 
 def _build_tracker_rows_quick(game_obj, capture_date, adjustments=None):
@@ -17158,6 +17241,14 @@ def _build_tracker_rows_quick(game_obj, capture_date, adjustments=None):
                     'profitDollars': None,
                     'parlayId': None,
                     'parlayLeg': None,
+                    'gameStatus': str((g.get('status') or {}).get('detailedState') or ''),
+                    'gameAbstractState': str((g.get('status') or {}).get('abstractGameState') or ''),
+                    'gameStartIso': g.get('gameDate'),
+                    'lineupStatus': 'projected',
+                    'playerRole': 'batter',
+                    'playerPosition': (p.get('primaryPosition') or {}).get('abbreviation'),
+                    'candidateModelVersion': 'fallback-heuristic-4.37',
+                    'modelVersion': 'fallback-heuristic-4.37',
                 }
                 # Phase 1: Add schema fields
                 row_data['id'] = str(uuid4())
@@ -17168,7 +17259,7 @@ def _build_tracker_rows_quick(game_obj, capture_date, adjustments=None):
                 # Phase 2: Add tier and BvP grade (fallback capture)
                 row_data['confidenceTier'] = _confidence_tier(row_data)
                 row_data['bvpGrade'] = None  # No pitcher data in quick capture
-                rows.append(row_data)
+                rows.append(evaluate_candidate(row_data))
 
     _emit(away_hitters, away_abbr)
     _emit(home_hitters, home_abbr)
@@ -19006,7 +19097,12 @@ def _tracker_export_csv_text(date_str):
         'openingImplied', 'parlayId', 'parlayLeg', 'stakeDollars', 'kellyFraction',
         'confidenceTier', 'status', 'actual', 'grade', 'gradedAt', 'closingPrice',
         'closingImplied', 'closingBookmaker', 'closingCapturedAt', 'clvEdge', 'profitDollars',
-        'profitUnits', 'reason'
+        'profitUnits', 'reason', 'canonicalCandidateId', 'integrityVersion',
+        'integrityStatus',
+        'integrityReasons', 'actionable', 'playerRole', 'playerPosition',
+        'gameStatus', 'gameStartIso', 'lineupStatus', 'modelVersion',
+        'simulationVersion', 'simulationTrials', 'oddsUpdatedAt',
+        'oddsAgeSeconds', 'marketFairProbability', 'canonicalEdge'
     ]
     output = io.StringIO()
     writer = csvmod.DictWriter(output, fieldnames=fields, extrasaction='ignore')
@@ -19017,6 +19113,10 @@ def _tracker_export_csv_text(date_str):
             cleaned['matchupStorylines'] = ' | '.join(str(x) for x in cleaned.get('matchupStorylines') or [])
         if isinstance(cleaned.get('legs'), list):
             cleaned['legs'] = json.dumps(cleaned.get('legs'))
+        if isinstance(cleaned.get('integrityReasons'), list):
+            cleaned['integrityReasons'] = ' | '.join(
+                str(x) for x in cleaned.get('integrityReasons') or []
+            )
         writer.writerow(cleaned)
     return day, output.getvalue()
 
@@ -19147,6 +19247,9 @@ def _empty_props_scan_payload(date_str):
         'games': [],
         'gameCount': 0,
         'props': [],
+        'actionableProps': [],
+        'candidateIntegrityVersion': CANDIDATE_INTEGRITY_VERSION,
+        'candidateIntegrityAudit': evaluate_candidates([])['audit'],
         'batters': [],
         'pitchers': [],
         'injury_summary': {'count': 0, 'players': []},
@@ -19247,7 +19350,14 @@ def _compute_props_scan_today_payload(date_str):
             flat_props.extend(props)
             injury_rows.extend(injuries)
 
-    flat_props.sort(key=lambda x: (-(float(x.get('hubRating') or 0)), -(float(x.get('edge') or 0)), -(float(x.get('adjProb') or 0))))
+    integrity = evaluate_candidates(flat_props)
+    flat_props = integrity['eligible'] + integrity['rejected']
+    flat_props.sort(key=lambda x: (
+        x.get('actionable') is not True,
+        -(float(x.get('hubRating') or 0)),
+        -(float(x.get('canonicalEdge') or -1)),
+        -(float(x.get('adjProb') or 0)),
+    ))
     batters.sort(key=lambda x: (-(float(x.get('scanHubRating') or 0)), -(float(((x.get('proj') or {}).get('hits') or 0)))))
     pitchers.sort(key=lambda x: (-(float((((x.get('proj') or {}).get('k')) or 0))), x.get('name') or ''))
 
@@ -19257,6 +19367,9 @@ def _compute_props_scan_today_payload(date_str):
         'games': parsed_games,
         'gameCount': len(parsed_games),
         'props': flat_props,
+        'actionableProps': integrity['eligible'],
+        'candidateIntegrityVersion': CANDIDATE_INTEGRITY_VERSION,
+        'candidateIntegrityAudit': integrity['audit'],
         'batters': batters,
         'pitchers': pitchers,
         'injury_summary': {
@@ -19371,12 +19484,11 @@ def _edge_finder_payload(date_str, min_edge=0.02, market=None, limit=150):
         min_edge = 0.02
     market = (market or '').strip().lower() or None
 
+    integrity = evaluate_candidates(base.get('props', []) or [])
     edges = []
-    for p in base.get('props', []) or []:
-        edge = p.get('edge')
-        mi = p.get('marketImplied')
-        if edge is None or mi is None:          # need a real market line to have an edge
-            continue
+    for p in integrity['eligible']:
+        edge = p.get('canonicalEdge')
+        mi = p.get('marketFairProbability')
         try:
             edge_f = float(edge)
         except (TypeError, ValueError):
@@ -19401,14 +19513,18 @@ def _edge_finder_payload(date_str, min_edge=0.02, market=None, limit=150):
             'edgePct': round(edge_f * 100, 1),
             'evPct': p.get('evPct'),
             'modelProb': p.get('adjProb'),
-            'marketImplied': mi,
+            'marketImplied': p.get('quotedMarketImplied'),
+            'marketFairProbability': mi,
             'hubRating': p.get('hubRating'),
             'grade': _edge_letter_grade(edge_f),
-            'bestPrice': p.get('bestOverPrice') or p.get('bestAvailablePrice') or p.get('marketPrice'),
-            'bestBook': p.get('bestOverBook') or p.get('bestAvailableBook') or p.get('bookmaker'),
+            'bestPrice': p.get('canonicalPrice'),
+            'bestBook': p.get('canonicalBook'),
             'bestUnderPrice': p.get('bestUnderPrice'),
             'bookmaker': p.get('bookmaker'),
             'reason': p.get('reason'),
+            'canonicalCandidateId': p.get('canonicalCandidateId'),
+            'candidateIntegrityVersion': p.get('integrityVersion'),
+            'actionable': True,
         })
 
     edges.sort(key=lambda x: (
@@ -19434,6 +19550,8 @@ def _edge_finder_payload(date_str, min_edge=0.02, market=None, limit=150):
         'computing': base.get('computing', False),
         'message': base.get('message'),
         'generatedAt': datetime.now(timezone.utc).isoformat(),
+        'candidateIntegrityVersion': CANDIDATE_INTEGRITY_VERSION,
+        'candidateIntegrityAudit': integrity['audit'],
         'edges': edges,
     }
 
@@ -19934,6 +20052,32 @@ def api_tracker_pick():
         return jsonify({'success': False, 'error': 'Missing player or marketKey'}), 400
 
     today = entry.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
+    candidate_id = entry.get('canonicalCandidateId')
+    trusted = None
+    if candidate_id:
+        scan = _props_scan_today_payload(today)
+        integrity = evaluate_candidates(scan.get('props', []) or [])
+        trusted = next(
+            (
+                row for row in integrity['eligible']
+                if row.get('canonicalCandidateId') == candidate_id
+            ),
+            None,
+        )
+    if trusted is None:
+        checked = evaluate_candidate(entry)
+        if checked.get('actionable') is not True:
+            return jsonify({
+                'success': False,
+                'error': 'Candidate does not pass the canonical betting contract.',
+                'candidateIntegrityVersion': CANDIDATE_INTEGRITY_VERSION,
+                'reasons': checked.get('integrityReasons') or [],
+            }), 422
+        trusted = checked
+    entry = {
+        **trusted,
+        'source': entry.get('source') or trusted.get('source') or 'props_board',
+    }
     entry['date']   = today
     entry['source'] = entry.get('source') or 'props_board'
     entry.setdefault('savedAt', datetime.now(ET).isoformat())
@@ -21918,6 +22062,11 @@ def _compute_cheatsheets_today(date_str):
                     'evPct': round(edge * 100.0, 1),
                     'matchupScore': score.get('score'),
                     'composite': comp_pct,
+                    'actionable': False,
+                    'candidateIntegrityVersion': CANDIDATE_INTEGRITY_VERSION,
+                    'integrityReasons': [
+                        'research projection has no verified two-sided sportsbook price'
+                    ],
                 })
             return rows
 
@@ -22144,8 +22293,9 @@ def _mc_board_payload(date_str, force_refresh=False):
         _trigger_props_scan_refresh_async(date_str, reason='mc_force_refresh')
     base = _props_scan_today_payload(date_str)
 
+    integrity = evaluate_candidates(base.get('props') or [])
     rows = []
-    for p in base.get('props') or []:
+    for p in integrity['eligible']:
         mk = p.get('marketKey')
         if mk not in _MC_BOARD_MARKETS:
             continue
@@ -22154,29 +22304,16 @@ def _mc_board_payload(date_str, force_refresh=False):
             continue
         adj = float(adj)
         line = p.get('line')
-        mi = p.get('marketImplied')
+        mi = p.get('marketFairProbability')
 
         side = 'Over'
         prob = round(adj, 4)
-        price = p.get('bestOverPrice') or p.get('marketPrice')
-        book = p.get('bestOverBook') or p.get('bookmaker')
+        price = p.get('canonicalPrice')
+        book = p.get('canonicalBook')
         ev_pct = p.get('evPct')
         if mi and mi > 0:
             source = 'model+odds'
-            edge = _capped_edge(adj, mi)
-            # The model prob is two-sided: when the over is negative-value and
-            # a real under price exists, the profitable play is the UNDER —
-            # recommend that side instead of listing only overs.
-            u_imp = _american_to_implied(p.get('bestUnderPrice'))
-            if u_imp and u_imp > 0:
-                u_edge = _capped_edge(1.0 - adj, u_imp)
-                if u_edge is not None and u_edge > (edge or 0) and u_edge >= 0.015:
-                    side = 'Under'
-                    prob = round(1.0 - adj, 4)
-                    price = p.get('bestUnderPrice')
-                    book = p.get('bestUnderBook') or book
-                    edge = u_edge
-                    ev_pct = round(prob / u_imp - 1, 4)
+            edge = p.get('canonicalEdge')
         else:
             source = 'simulation'
             try:
@@ -22203,6 +22340,9 @@ def _mc_board_payload(date_str, force_refresh=False):
             'source': source,
             'grade': _mc_grade(edge), 'recommendation': _mc_rec(edge, side),
             'reasoning': p.get('reason') or '',
+            'canonicalCandidateId': p.get('canonicalCandidateId'),
+            'candidateIntegrityVersion': p.get('integrityVersion'),
+            'actionable': True,
         })
 
     rows.sort(key=lambda x: x['edge'], reverse=True)
@@ -22228,6 +22368,8 @@ def _mc_board_payload(date_str, force_refresh=False):
         'cached': base.get('cached', False),
         'cacheAgeSec': base.get('cacheAgeSec', 0),
         'generatedAt': base.get('generatedAt'),
+        'candidateIntegrityVersion': CANDIDATE_INTEGRITY_VERSION,
+        'candidateIntegrityAudit': integrity['audit'],
     }
     if computing and not rows:
         payload['message'] = 'Computing… auto-refreshing in 20s'
@@ -22590,53 +22732,42 @@ def api_capture_daily_slate(date_str):
 _PARLAY_CORR_MARKET_ALIAS = {'batter_runs_scored': 'batter_runs'}
 
 
-def _parlay_leg_prob_from_scan(scan_props, game_pk, player, market, line, side):
-    """Look up a leg's model win probability in the cached props-scan rows.
+def _canonical_parlay_leg(candidates, selection):
+    """Resolve one requested leg to an exact fresh canonical candidate."""
+    candidate_id = selection.get('canonicalCandidateId')
+    if candidate_id:
+        return next((
+            row for row in candidates
+            if row.get('canonicalCandidateId') == candidate_id
+        ), None)
 
-    Returns (prob, matched_row) — prob is side-aware (Under = 1 − over prob).
-    Prefers an exact line match, then a row carrying a real book price, then
-    the first row for the (game, player, market). Returns (None, None) when
-    the scan has no row for the leg — callers must NOT substitute a guess.
-    """
-    want_pk = str(game_pk or '')
-    want_player = _ascii_fold(str(player or '')).lower().strip()
-    want_line = None
+    want_pk = str(selection.get('game_pk') or selection.get('gamePk') or '')
+    want_player = _ascii_fold(str(selection.get('player') or '')).lower().strip()
+    want_market = canonical_market_key({
+        'marketKey': selection.get('market') or selection.get('marketKey'),
+    })
+    want_side = str(
+        selection.get('side') or selection.get('recommendedSide') or 'Over'
+    ).strip().lower()
     try:
-        want_line = float(line) if line is not None else None
+        want_line = float(selection.get('line'))
     except (TypeError, ValueError):
-        pass
-    exact, priced, first = None, None, None
-    for p in scan_props or []:
-        if p.get('marketKey') != market:
-            continue
-        if str(p.get('gamePk') or '') != want_pk:
-            continue
-        if _ascii_fold(str(p.get('player') or '')).lower().strip() != want_player:
-            continue
+        return None
+
+    for row in candidates:
         try:
-            prob = float(p.get('adjProb'))
+            same_line = abs(float(row.get('line')) - want_line) < 1e-9
         except (TypeError, ValueError):
             continue
-        if not (0.0 < prob < 1.0):
-            continue
-        if first is None:
-            first = p
-        if priced is None and p.get('marketImplied') is not None:
-            priced = p
-        if want_line is not None:
-            try:
-                if abs(float(p.get('line')) - want_line) < 1e-9:
-                    exact = p
-                    break
-            except (TypeError, ValueError):
-                pass
-    row = exact or priced or first
-    if row is None:
-        return None, None
-    prob = float(row.get('adjProb'))
-    if str(side or 'Over').strip().lower().startswith('under'):
-        prob = 1.0 - prob
-    return round(prob, 4), row
+        if (
+            str(row.get('gamePk') or '') == want_pk
+            and _ascii_fold(str(row.get('player') or '')).lower().strip() == want_player
+            and canonical_market_key(row) == want_market
+            and str(row.get('canonicalSide') or '').strip().lower() == want_side
+            and same_line
+        ):
+            return row
+    return None
 
 
 def _parlay_same_game_corr_factor(game_pk, legs):
@@ -22693,15 +22824,7 @@ def _parlay_same_game_corr_factor(game_pk, legs):
 
 @app.route('/api/parlay/build', methods=['POST'])
 def api_build_parlay():
-    """Build a parlay from selected game props, priced from the model.
-
-    Each leg's win probability comes from the cached props-scan — the same
-    calibrated adjProb pipeline behind /api/edges/today — never a hardcoded
-    heuristic. Same-game leg pairs are correlation-adjusted from the game's
-    cached Monte Carlo correlation matrix when it's available (built by
-    /api/simulate). Legs the scan can't match get win_probability: null, and
-    the combined probability is omitted rather than fabricated from them.
-    """
+    """Build a parlay exclusively from fresh canonical sportsbook candidates."""
     try:
         req = request.get_json() or {}
         selections = req.get('selections', [])  # [{game_pk, player, market, line?, side?, projection?}]
@@ -22709,43 +22832,68 @@ def api_build_parlay():
         if not selections:
             return jsonify({'success': False, 'error': 'No selections provided', 'parlay': None})
 
-        scan_props = (_props_scan_today_payload(datetime.now(ET).strftime('%Y-%m-%d'))
-                      or {}).get('props') or []
+        scan = _props_scan_today_payload(datetime.now(ET).strftime('%Y-%m-%d')) or {}
+        integrity = evaluate_candidates(scan.get('props') or [])
+        eligible = integrity['eligible']
 
         parlay = {
             'id': datetime.now().isoformat().replace(':', '').replace('.', ''),
             'created_at': datetime.now(timezone.utc).isoformat(),
             'selections': [],
             'implied_odds': None,
+            'decimal_odds': None,
             'american_odds': None,
-            'summary': {'leg_count': 0, 'break_even_prob': None,
-                        'unmatched_legs': 0, 'correlation_applied': False},
+            'summary': {
+                'leg_count': 0,
+                'break_even_prob': None,
+                'combined_model_probability': None,
+                'invalid_legs': 0,
+                'correlation_applied': False,
+            },
+            'candidateIntegrityVersion': CANDIDATE_INTEGRITY_VERSION,
         }
 
         matched_by_game = {}
-        unmatched = 0
+        invalid = []
+        market_decimal = 1.0
         for sel in selections:
-            game_pk = sel.get('game_pk')
-            player = sel.get('player')
-            market = sel.get('market')
-            side = sel.get('side', 'Over')
-            prob, row = _parlay_leg_prob_from_scan(
-                scan_props, game_pk, player, market, sel.get('line'), side)
+            row = _canonical_parlay_leg(eligible, sel)
+            if row is None:
+                invalid.append({
+                    'canonicalCandidateId': sel.get('canonicalCandidateId'),
+                    'player': sel.get('player'),
+                    'market': sel.get('market') or sel.get('marketKey'),
+                    'reason': 'no exact fresh canonical candidate',
+                })
+                continue
+            prob = float(row.get('canonicalProbability'))
+            price = row.get('canonicalPrice')
             leg = {
-                'game_pk': game_pk,
-                'player': player,
-                'market': market,
-                'line': (row or {}).get('line', sel.get('line')),
-                'side': side,
-                'win_probability': prob,
-                'american_odds': _prob_to_american(prob) if prob else None,
-                'prob_source': 'model' if prob is not None else None,
+                'game_pk': row.get('gamePk'),
+                'player': row.get('player'),
+                'market': row.get('canonicalMarketKey'),
+                'line': row.get('line'),
+                'side': row.get('canonicalSide'),
+                'win_probability': round(prob, 4),
+                'american_odds': price,
+                'bookmaker': row.get('canonicalBook'),
+                'prob_source': 'canonical_model',
+                'canonicalCandidateId': row.get('canonicalCandidateId'),
+                'candidateIntegrityVersion': row.get('integrityVersion'),
+                'actionable': True,
             }
             parlay['selections'].append(leg)
-            if prob is None:
-                unmatched += 1
-            else:
-                matched_by_game.setdefault(str(game_pk or ''), []).append(leg)
+            matched_by_game.setdefault(str(row.get('gamePk') or ''), []).append(leg)
+            market_decimal *= _american_to_decimal(price)
+
+        if invalid:
+            return jsonify({
+                'success': False,
+                'error': 'Parlay contains unavailable, stale, or unpriced legs.',
+                'candidateIntegrityVersion': CANDIDATE_INTEGRITY_VERSION,
+                'invalidSelections': invalid,
+                'parlay': None,
+            }), 422
 
         # Combined probability: independent product across games, then a
         # pairwise correlation factor within each game where the MC matrix
@@ -22765,18 +22913,19 @@ def api_build_parlay():
         prob_product = max(0.0001, min(0.9999, prob_product))
 
         parlay['summary']['leg_count'] = len(parlay['selections'])
-        parlay['summary']['unmatched_legs'] = unmatched
+        parlay['summary']['invalid_legs'] = 0
         parlay['summary']['correlation_applied'] = bool(corr_pairs)
         if corr_pairs:
             parlay['summary']['correlation_pairs'] = corr_pairs
-        if unmatched == 0 and matched_by_game:
-            parlay['summary']['break_even_prob'] = round(prob_product, 4)
-            parlay['implied_odds'] = round(prob_product, 4)
-            parlay['american_odds'] = _prob_to_american(prob_product)
-        else:
-            parlay['summary']['note'] = (
-                f"{unmatched} leg(s) not found in today's props scan — "
-                "combined odds omitted rather than estimated.")
+        if matched_by_game:
+            break_even = 1.0 / market_decimal
+            parlay['summary']['break_even_prob'] = round(break_even, 4)
+            parlay['summary']['combined_model_probability'] = round(
+                prob_product, 4,
+            )
+            parlay['implied_odds'] = round(break_even, 4)
+            parlay['decimal_odds'] = round(market_decimal, 3)
+            parlay['american_odds'] = _decimal_to_american(market_decimal)
 
         return jsonify({
             'success': True,
@@ -22823,10 +22972,10 @@ _PARLAY_PROP_MARKETS = {
 def _parlay_leg_candidates(props):
     """Distinct candidate legs from the scan props: the best (highest model
     probability) leg per (player, market, line), restricted to player-prop
-    markets that carry a model probability. Each leg uses a real book price when
-    odds are available, else a model-implied price so payout/EV still compute."""
+    markets that carry a fresh, real sportsbook price."""
+    integrity = evaluate_candidates(props or [])
     best = {}
-    for p in props or []:
+    for p in integrity['eligible']:
         mk = p.get('marketKey')
         if mk not in _PARLAY_PROP_MARKETS:
             continue
@@ -22840,11 +22989,8 @@ def _parlay_leg_candidates(props):
         cur = best.get(key)
         if cur is not None and prob <= cur['winProb']:
             continue
-        price = p.get('bestOverPrice') or p.get('bestAvailablePrice') or p.get('marketPrice')
+        price = p.get('canonicalPrice')
         price_source = 'market'
-        if price is None:
-            price = _prob_to_american(prob)
-            price_source = 'model'
         best[key] = {
             'player': p.get('player'), 'playerId': p.get('playerId'),
             'team': p.get('team'), 'opp': p.get('opp'),
@@ -22853,8 +22999,11 @@ def _parlay_leg_candidates(props):
             'line': p.get('line'), 'side': p.get('recommendedSide') or 'Over',
             'winProb': round(prob, 4),
             'price': price, 'priceSource': price_source,
-            'edge': p.get('edge'), 'evPct': p.get('evPct'),
+            'edge': p.get('canonicalEdge'), 'evPct': p.get('evPct'),
             'hubRating': p.get('hubRating'), 'grade': _edge_letter_grade(p.get('edge')),
+            'canonicalCandidateId': p.get('canonicalCandidateId'),
+            'candidateIntegrityVersion': p.get('integrityVersion'),
+            'actionable': True,
         }
     return list(best.values())
 
@@ -22953,6 +23102,39 @@ def api_parlay_to_tracker():
         
         if not parlay:
             return jsonify({'success': False, 'error': 'No parlay provided'})
+
+        selections = parlay.get('selections') or parlay.get('legs') or []
+        if not selections:
+            return jsonify({
+                'success': False,
+                'error': 'Parlay has no canonical selections.',
+            }), 400
+        scan = _props_scan_today_payload(date_str)
+        integrity = evaluate_candidates(scan.get('props', []) or [])
+        trusted_by_id = {
+            row.get('canonicalCandidateId'): row
+            for row in integrity['eligible']
+        }
+        trusted_selections = []
+        invalid = []
+        for selection in selections:
+            candidate_id = selection.get('canonicalCandidateId')
+            trusted = trusted_by_id.get(candidate_id)
+            if trusted is None:
+                invalid.append({
+                    'candidateId': candidate_id,
+                    'player': selection.get('player'),
+                    'reason': 'selection is not an eligible fresh canonical candidate',
+                })
+            else:
+                trusted_selections.append(trusted)
+        if invalid:
+            return jsonify({
+                'success': False,
+                'error': 'Parlay contains ineligible or stale selections.',
+                'candidateIntegrityVersion': CANDIDATE_INTEGRITY_VERSION,
+                'invalidSelections': invalid,
+            }), 422
         
         # Create tracker entries for this parlay
         parlay_entry = {
@@ -22960,7 +23142,7 @@ def api_parlay_to_tracker():
             'date': date_str,
             'type': 'parlay',
             'timestamp': datetime.now(timezone.utc).isoformat(),
-            'selections': parlay.get('selections', []),
+            'selections': trusted_selections,
             'american_odds': parlay.get('american_odds'),
             'break_even_prob': parlay.get('summary', {}).get('break_even_prob'),
             'notes': notes,
@@ -26687,6 +26869,10 @@ def _compute_consistency_payload(date_str):
             'l20': _consistency_window_summary(values, row.get('line'), 20),
             'season': _consistency_window_summary(values, row.get('line'), None),
             'sampleSize': len(values),
+            'actionable': row.get('actionable') is True,
+            'canonicalCandidateId': row.get('canonicalCandidateId'),
+            'candidateIntegrityVersion': row.get('integrityVersion'),
+            'integrityReasons': row.get('integrityReasons') or [],
         }
         # Season-over-season context: the same over-rate computed on the player's
         # full PRIOR season (real 2025 game logs), plus the year-over-year delta —
@@ -26797,7 +26983,8 @@ def _consistency_payload(date_str, refresh=False):
 _HOT_HAND_FIELDS = (
     'player', 'playerId', 'team', 'opp', 'slot', 'gamePk', 'gameLabel',
     'line', 'hubRating', 'evPct', 'l5', 'l10', 'l20', 'season',
-    'sparkline', 'streakOver', 'sampleSize',
+    'sparkline', 'streakOver', 'sampleSize', 'actionable',
+    'canonicalCandidateId', 'candidateIntegrityVersion', 'integrityReasons',
 )
 
 
@@ -29223,10 +29410,19 @@ def api_hr_daily_scores():
         with _hr_daily_lock:
             cached = _hr_daily_cache.get("date")
             if cached == date_str and _hr_daily_cache.get("scores"):
+                now_utc = datetime.now(timezone.utc)
+                cached_scores = [
+                    row for row in _hr_daily_cache["scores"]
+                    if (
+                        (lambda start: start is not None and start > now_utc)(
+                            _parse_candidate_start(row.get("game_date_iso"))
+                        )
+                    )
+                ]
                 return jsonify({
                     "success": True,
                     "date": date_str,
-                    "scores":      _hr_daily_cache["scores"],
+                    "scores":      cached_scores,
                     "ai_blurbs":   _hr_daily_cache.get("ai_blurbs") or {},
                     "ai_enriched": bool(_hr_daily_cache.get("ai_blurbs")),
                     "ai_model":    _hr_daily_cache.get("ai_model"),
@@ -29242,6 +29438,19 @@ def api_hr_daily_scores():
         for game in games_raw:
             game_pk = game.get("gamePk")
             if not game_pk:
+                continue
+            game_state = str((game.get("status") or {}).get("abstractGameState") or "").lower()
+            game_detail = str((game.get("status") or {}).get("detailedState") or "").lower()
+            game_start_utc = _parse_candidate_start(game.get("gameDate"))
+            if (
+                game_state != "preview"
+                or any(token in game_detail for token in (
+                    "final", "completed", "live", "in progress", "postponed",
+                    "cancelled", "canceled", "suspended", "delayed",
+                ))
+                or game_start_utc is None
+                or game_start_utc <= datetime.now(timezone.utc)
+            ):
                 continue
             teams     = game.get("teams") or {}
             home_info = (teams.get("home") or {}).get("team") or {}
@@ -29421,6 +29630,11 @@ def api_hr_daily_scores():
                             "pitch_table":      pitch_table,
                             "lethal_pitches":   lethal_pitches,
                             "lineup_confirmed": lineup_confirmed,
+                            "actionable": False,
+                            "candidateIntegrityVersion": CANDIDATE_INTEGRITY_VERSION,
+                            "integrityReasons": [
+                                "HR research score has no verified two-sided sportsbook price"
+                            ],
                             "is_dome":          is_dome,
                             "weather_temp":     wx.get("temp"),
                             "weather_condition": wx.get("condition"),

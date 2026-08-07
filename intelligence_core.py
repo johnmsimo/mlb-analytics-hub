@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
+from candidate_integrity import evaluate_candidates
+
 @dataclass(frozen=True)
 class DecisionPolicy:
     minimum_probability: float = 0.55
@@ -54,8 +56,18 @@ def decision_score(p: Mapping[str, Any]) -> float:
 
 def build_recommendations(picks: Iterable[Mapping[str, Any]], policy: DecisionPolicy | None = None) -> dict[str, Any]:
     policy = policy or DecisionPolicy()
-    eligible, rejected = [], []
-    for source in picks:
+    integrity = evaluate_candidates(picks)
+    eligible = []
+    rejected = [
+        {
+            'id': row.get('id') or row.get('canonicalCandidateId'),
+            'category': classify_pick(row),
+            'reasons': list(row.get('integrityReasons') or []),
+            'integrityStatus': 'rejected',
+        }
+        for row in integrity['rejected']
+    ]
+    for source in integrity['eligible']:
         p = dict(source)
         category = classify_pick(p)
         reasons = []
@@ -94,4 +106,22 @@ def build_recommendations(picks: Iterable[Mapping[str, Any]], policy: DecisionPo
     for p in eligible:
         if len(card) >= policy.maximum_card_size: break
         if p.get('id') not in seen: card.append(p); seen.add(p.get('id'))
-    return {'policy': {'minimumProbability': policy.minimum_probability, 'minimumConfidence': policy.minimum_confidence, 'minimumEdge': policy.minimum_edge, 'maximumCardSize': policy.maximum_card_size}, 'best': best, 'card': card, 'abstentions': {c:'No play met all intelligence thresholds.' for c in categories if best[c] is None}, 'eligibleCount': len(eligible), 'rejectedCount': len(rejected), 'rejected': rejected}
+    return {
+        'policy': {
+            'minimumProbability': policy.minimum_probability,
+            'minimumConfidence': policy.minimum_confidence,
+            'minimumEdge': policy.minimum_edge,
+            'maximumCardSize': policy.maximum_card_size,
+        },
+        'candidateIntegrityVersion': integrity['version'],
+        'candidateIntegrityAudit': integrity['audit'],
+        'best': best,
+        'card': card,
+        'abstentions': {
+            c: 'No play met the integrity and intelligence thresholds.'
+            for c in categories if best[c] is None
+        },
+        'eligibleCount': len(eligible),
+        'rejectedCount': len(rejected),
+        'rejected': rejected,
+    }
