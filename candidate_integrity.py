@@ -53,6 +53,9 @@ _MARKET_ALIASES = {
     "pitcher strikeouts": "pitcher_strikeouts",
     "strikeouts": "pitcher_strikeouts",
     "pitcher ks": "pitcher_strikeouts",
+    "pitcher_strikeouts": "pitcher_strikeouts",
+    "hitter_hits": "batter_hits",
+    "game_winner": "h2h",
     "game_moneyline": "h2h",
     "moneyline": "h2h",
     "game winner": "h2h",
@@ -139,7 +142,7 @@ def american_implied_probability(price: Any) -> float | None:
 def canonical_market_key(row: Mapping[str, Any]) -> str:
     raw = _first(
         row, "canonicalMarketKey", "marketKey", "market_key", "market",
-        "marketType", "propType", "stat",
+        "marketType", "propType", "stat", "intelligenceCategory", "category",
     )
     key = re.sub(r"\s+", " ", str(raw or "").strip().lower())
     if key in _MARKET_ALIASES:

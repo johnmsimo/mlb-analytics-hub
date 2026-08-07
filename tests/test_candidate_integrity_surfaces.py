@@ -1,7 +1,38 @@
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 import app as mlb_app
+
+
+@pytest.fixture(autouse=True)
+def promoted_hits_market(monkeypatch):
+    monkeypatch.setattr(
+        mlb_app,
+        "_current_market_validation_report",
+        lambda *_a, **_k: {
+            "version": "4.38",
+            "promotedMarkets": ["batter_hits"],
+            "marketGates": {
+                "batter_hits": {
+                    "marketKey": "batter_hits",
+                    "status": "promoted",
+                    "promoted": True,
+                    "reasons": [],
+                    "metrics": {},
+                },
+            },
+            "marketSideGates": {
+                "batter_hits|over": {
+                    "status": "promoted",
+                    "promoted": True,
+                    "reasons": [],
+                    "metrics": {},
+                },
+            },
+        },
+    )
 
 
 def surface_candidate(player="Valid Hitter", **changes):

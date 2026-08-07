@@ -1421,6 +1421,8 @@ function renderQuickProps(pk,d){
   var empty=picks.length?'':(
     d&&d.computing
       ?'<div class="qp-loading">Building the linked batter-vs-pitcher simulation in the background — this updates automatically</div>'
+      :d&&d.decisionReady&&d.recommendationSource==='market_validation_abstention'
+      ?'<div class="qp-loading">No market has passed the walk-forward validation gate yet — projections remain research-only</div>'
       :d&&d.simulationReady===false
       ?'<div class="qp-loading">Matchup simulation is unavailable or incomplete</div>'
       :'<div class="qp-loading">No priced positive-edge pick is available for this game</div>'

@@ -16,6 +16,7 @@ from game_card_intelligence import (
 )
 from intelligence_core import build_recommendations, classify_pick
 from learning_engine import analyze_learning
+from market_validation import VALIDATION_VERSION, apply_market_gates
 from matchup_engine import enrich_matchups
 from matchup_simulation_intelligence import simulation_audit
 from cache_service import normalize_cache_key
@@ -34,6 +35,13 @@ _GAME_CARD_STALE_TTL = 3600
 _MAX_ACTIONABLE_CACHE_AGE = CandidateIntegrityPolicy().maximum_odds_age_seconds
 
 
+def _validation_history(app_module, date_str, fallback=()):
+    collector = getattr(app_module, '_collect_window_entries', None)
+    if callable(collector):
+        return collector(date_str, 180)
+    return list(fallback or [])
+
+
 def _has_price(row, category):
     if category == 'pitcher_strikeouts':
         keys = ('bestOverPrice', 'best_over_price', 'bestUnderPrice', 'best_under_price')
@@ -46,7 +54,7 @@ def _has_price(row, category):
 
 
 def _cache_key(game_pk, date_str):
-    return normalize_cache_key('game_card_intelligence_v437', game_pk, date_str)
+    return normalize_cache_key('game_card_intelligence_v438', game_pk, date_str)
 
 
 def _read_cached_payload(game_pk, date_str):
@@ -110,7 +118,8 @@ def _decision_payload(game_pk, date_str, rows, all_tracker_entries, generated_co
     simulated = enrich_simulations(matchups)
     learning = analyze_learning(all_tracker_entries)
     integrity = evaluate_candidates(simulated)
-    integrity_eligible = integrity['eligible']
+    market_gates = apply_market_gates(integrity['eligible'], learning)
+    integrity_eligible = market_gates['promoted']
     audit = simulation_audit(integrity_eligible)
     simulation_backed = [
         row for row in integrity_eligible
@@ -119,6 +128,7 @@ def _decision_payload(game_pk, date_str, rows, all_tracker_entries, generated_co
     decisions = select_game_card_quick_picks(
         simulation_backed,
         learning=learning,
+        market_gate_rejections=market_gates['rejected'],
     )
     backed_category_counts = {
         category: sum(
@@ -126,8 +136,13 @@ def _decision_payload(game_pk, date_str, rows, all_tracker_entries, generated_co
         )
         for category in CATEGORY_ORDER
     }
-    required_markets_ready = all(
-        count >= 1 for count in backed_category_counts.values()
+    promoted_categories = {
+        classify_pick(row) for row in integrity_eligible
+        if classify_pick(row) in CATEGORY_ORDER
+    }
+    required_markets_ready = bool(promoted_categories) and all(
+        backed_category_counts[category] >= 1
+        for category in promoted_categories
     )
     simulated_moneyline_sides = sum(
         classify_pick(row) == 'game_winner'
@@ -138,16 +153,24 @@ def _decision_payload(game_pk, date_str, rows, all_tracker_entries, generated_co
         audit['candidateCount'] > 0
         and audit['simulationBackedCount'] == audit['candidateCount']
         and required_markets_ready
-        and simulated_moneyline_sides >= 2
+        and (
+            'game_winner' not in promoted_categories
+            or simulated_moneyline_sides >= 2
+        )
         and any(
             row.get('intelligenceCandidatePoolComplete') is True
             for row in simulation_backed
         )
     )
+    validation_abstention = (
+        not promoted_categories
+        and market_gates['audit']['candidateCount'] > 0
+    )
+    decision_ready = fully_backed or validation_abstention
     # Never promote a partial market pool as a finished set of simulated picks.
     # A previously cached complete snapshot may still be served while this one
     # rebuilds, but a cold partial response is only a progress state.
-    if not fully_backed:
+    if not decision_ready:
         decisions = dict(decisions)
         decisions['quickPicks'] = []
     return {
@@ -156,9 +179,12 @@ def _decision_payload(game_pk, date_str, rows, all_tracker_entries, generated_co
         'gamePk': game_pk,
         'sourceCount': len(rows),
         'generatedSourceCount': generated_count,
-        'quickPicksVersion': '4.37',
+        'quickPicksVersion': VALIDATION_VERSION,
         'candidateIntegrityVersion': INTEGRITY_VERSION,
         'candidateIntegrityAudit': integrity['audit'],
+        'marketValidationVersion': VALIDATION_VERSION,
+        'marketGateAudit': market_gates['audit'],
+        'marketValidation': learning.get('marketValidation'),
         'pickConfidenceVersion': '4.34',
         'matchupSimulationVersion': '4.35',
         'performanceVersion': '4.36',
@@ -166,8 +192,10 @@ def _decision_payload(game_pk, date_str, rows, all_tracker_entries, generated_co
         'recommendationSource': (
             'shared_game_matchup_simulation'
             if fully_backed else 'simulation_refresh_pending'
+            if not validation_abstention else 'market_validation_abstention'
         ),
         'simulationReady': fully_backed,
+        'decisionReady': decision_ready,
         'simulationAudit': audit,
         'explanationVersion': '4.32',
         **decisions,
@@ -182,15 +210,17 @@ def _pending_payload(game_pk, date_str, source_count):
         'gamePk': game_pk,
         'sourceCount': source_count,
         'generatedSourceCount': 0,
-        'quickPicksVersion': '4.37',
+        'quickPicksVersion': VALIDATION_VERSION,
         'candidateIntegrityVersion': INTEGRITY_VERSION,
         'candidateIntegrityAudit': evaluate_candidates([])['audit'],
         'pickConfidenceVersion': '4.34',
         'matchupSimulationVersion': '4.35',
         'performanceVersion': '4.36',
+        'marketValidationVersion': VALIDATION_VERSION,
         'deliveryArchitecture': 'redis_durable_worker',
         'recommendationSource': 'simulation_refresh_pending',
         'simulationReady': False,
+        'decisionReady': False,
         'simulationAudit': simulation_audit([]),
         'explanationVersion': '4.32',
         **decisions,
@@ -199,9 +229,12 @@ def _pending_payload(game_pk, date_str, source_count):
 
 def _generate_game_card_payload(app_module, game_pk, date_str):
     tracker = app_module._tracker_today_payload(date_str)
-    all_tracker_entries = tracker.get('entries') or tracker.get('picks') or []
+    current_entries = tracker.get('entries') or tracker.get('picks') or []
+    all_tracker_entries = _validation_history(
+        app_module, date_str, current_entries,
+    )
     captured = [
-        dict(row) for row in all_tracker_entries
+        dict(row) for row in current_entries
         if str(row.get('gamePk')) == str(game_pk)
     ]
     schedule = app_module.fetch_schedule(date_str)
@@ -252,7 +285,7 @@ def run_game_card_job(app_module, args):
     game_pk = int(args['gamePk'])
     date_str = str(args['date'])
     payload = _generate_game_card_payload(app_module, game_pk, date_str)
-    if not payload.get('simulationReady'):
+    if not payload.get('decisionReady'):
         raise RuntimeError('shared simulation candidate pool is incomplete')
     _write_cached_payload(game_pk, date_str, payload)
     return payload
@@ -271,9 +304,14 @@ def install_intelligence_api(app_module):
         contextual_entries = enrich_context(entries)
         matchup_entries = enrich_matchups(contextual_entries)
         simulated_entries = enrich_simulations(matchup_entries)
-        learning = analyze_learning(simulated_entries)
+        effective_date = tracker.get('date') or date_str or datetime.now(
+            app_module.ET
+        ).strftime('%Y-%m-%d')
+        history = _validation_history(app_module, effective_date, entries)
+        learning = analyze_learning(history)
+        market_gates = apply_market_gates(simulated_entries, learning)
         decisions = explain_decisions(
-            build_recommendations(simulated_entries),
+            build_recommendations(market_gates['promoted']),
             learning=learning,
         )
         return app_module.jsonify({
@@ -283,7 +321,10 @@ def install_intelligence_api(app_module):
             'contextVersion': '4.28',
             'matchupVersion': '4.29',
             'simulationVersion': '4.30',
-            'learningVersion': '4.31',
+            'learningVersion': VALIDATION_VERSION,
+            'marketValidationVersion': VALIDATION_VERSION,
+            'marketGateAudit': market_gates['audit'],
+            'marketValidation': learning.get('marketValidation'),
             'explanationVersion': '4.32',
             **decisions,
         })
@@ -292,14 +333,42 @@ def install_intelligence_api(app_module):
     def api_intelligence_learning():
         date_str = app_module.request.args.get('date') or None
         tracker = app_module._tracker_today_payload(date_str)
-        entries = tracker.get('entries') or tracker.get('picks') or []
+        effective_date = tracker.get('date') or date_str or datetime.now(
+            app_module.ET
+        ).strftime('%Y-%m-%d')
+        try:
+            window = max(30, min(365, int(
+                app_module.request.args.get('window', 180) or 180
+            )))
+        except (TypeError, ValueError):
+            window = 180
+        collector = getattr(app_module, '_collect_window_entries', None)
+        entries = (
+            collector(effective_date, window)
+            if callable(collector)
+            else tracker.get('entries') or tracker.get('picks') or []
+        )
         analytics = analyze_learning(entries)
         return app_module.jsonify({
             'success': True,
-            'date': tracker.get('date') or date_str,
+            'date': effective_date,
+            'window': window,
             'sourceCount': len(entries),
-            'learningVersion': '4.31',
+            'learningVersion': VALIDATION_VERSION,
             **analytics,
+        })
+
+    @flask_app.route('/api/intelligence/validation', methods=['GET'])
+    def api_intelligence_validation():
+        date_str = app_module.request.args.get('date') or datetime.now(
+            app_module.ET
+        ).strftime('%Y-%m-%d')
+        report = app_module._current_market_validation_report(date_str)
+        return app_module.jsonify({
+            'success': True,
+            'date': date_str,
+            'marketValidationVersion': VALIDATION_VERSION,
+            **report,
         })
 
     @flask_app.route('/api/intelligence/game-card/<int:game_pk>', methods=['GET'])
@@ -350,9 +419,12 @@ def install_intelligence_api(app_module):
             ))
 
         tracker = app_module._tracker_today_payload(date_str)
-        all_tracker_entries = tracker.get('entries') or tracker.get('picks') or []
+        current_entries = tracker.get('entries') or tracker.get('picks') or []
+        all_tracker_entries = _validation_history(
+            app_module, date_str, current_entries,
+        )
         rows = [
-            dict(row) for row in all_tracker_entries
+            dict(row) for row in current_entries
             if str(row.get('gamePk')) == str(game_pk)
         ]
         payload = (
@@ -366,7 +438,7 @@ def install_intelligence_api(app_module):
             if _candidate_pool_ready(rows)
             else _pending_payload(game_pk, date_str, len(rows))
         )
-        if payload.get('simulationReady') and not refresh:
+        if payload.get('decisionReady') and not refresh:
             _write_cached_payload(game_pk, date_str, payload)
             return app_module.jsonify(dict(payload, cached=False, computing=False))
 

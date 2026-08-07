@@ -21,6 +21,12 @@ from candidate_integrity import (
     evaluate_candidates,
     market_role,
 )
+from market_validation import (
+    VALIDATION_VERSION as MARKET_VALIDATION_VERSION,
+    apply_market_gates,
+    build_validation_report,
+    gate_for_market,
+)
 from simulation_capacity import serialized_simulation
 
 
@@ -17912,6 +17918,7 @@ def _tracker_date_keys():
 
 def _tracker_invalidate_day_responses(date_str=None):
     """Discard cached tracker API representations after a successful write."""
+    _invalidate_market_validation()
     with _TRACKER_RESPONSE_LOCK:
         if date_str is None:
             _TRACKER_RESPONSE_CACHE.clear()
@@ -18038,8 +18045,98 @@ def _collect_window_entries(end_date_str, window_days, store=None):
     rows = []
     for ds, payload in store.items():
         if ds in dates:
-            rows.extend(_normalize_tracker_day(payload).get('entries', []))
+            for source in _normalize_tracker_day(payload).get('entries', []):
+                row = dict(source)
+                row.setdefault('date', ds)
+                rows.append(row)
     return rows
+
+
+# Phase 4.38 keeps structural candidate integrity and market validation as two
+# separate, auditable decisions.  The report is cached because every betting
+# surface consumes the same tracker history; a tracker write invalidates it.
+_MARKET_VALIDATION_WINDOW_DAYS = 180
+_MARKET_VALIDATION_TTL_SECONDS = 300
+_market_validation_state = {
+    'date': None, 'builtAt': 0.0, 'report': None,
+}
+_market_validation_lock = threading.Lock()
+
+
+def _invalidate_market_validation():
+    with _market_validation_lock:
+        _market_validation_state.update({
+            'date': None, 'builtAt': 0.0, 'report': None,
+        })
+
+
+def _current_market_validation_report(date_str=None, *, force=False):
+    date_str = date_str or datetime.now(ET).strftime('%Y-%m-%d')
+    now = time.time()
+    with _market_validation_lock:
+        fresh = (
+            not force
+            and _market_validation_state['report'] is not None
+            and _market_validation_state['date'] == date_str
+            and now - _market_validation_state['builtAt']
+            < _MARKET_VALIDATION_TTL_SECONDS
+        )
+        if fresh:
+            return _market_validation_state['report']
+        entries = _collect_window_entries(
+            date_str, _MARKET_VALIDATION_WINDOW_DAYS,
+        )
+        report = build_validation_report(entries)
+        _market_validation_state.update({
+            'date': date_str,
+            'builtAt': now,
+            'report': report,
+        })
+        return report
+
+
+def _evaluate_promotable_candidates(sources, date_str=None):
+    """Apply Phase 4.37 integrity, then Phase 4.38 market promotion gates."""
+    integrity = evaluate_candidates(sources or [])
+    validation = _current_market_validation_report(date_str)
+    gated = apply_market_gates(integrity['eligible'], validation)
+    gate_rejected = []
+    for source in gated['rejected']:
+        row = dict(source)
+        row['integrityReasons'] = list(dict.fromkeys(
+            list(row.get('integrityReasons') or [])
+            + [
+                f"market validation: {reason}"
+                for reason in row.get('marketGateReasons') or []
+            ]
+        ))
+        gate_rejected.append(row)
+    audit = dict(integrity['audit'])
+    rejection_reasons = dict(audit.get('rejectionReasons') or {})
+    for reason, count in (
+        gated['audit'].get('rejectionReasons') or {}
+    ).items():
+        rejection_reasons[f'market validation: {reason}'] = (
+            rejection_reasons.get(f'market validation: {reason}', 0)
+            + int(count)
+        )
+    audit.update({
+        'structurallyEligibleCount': integrity['audit']['eligibleCount'],
+        'eligibleCount': len(gated['promoted']),
+        'rejectedCount': len(integrity['rejected']) + len(gate_rejected),
+        'marketValidationVersion': MARKET_VALIDATION_VERSION,
+        'marketGateRejectedCount': len(gate_rejected),
+        'marketGateAudit': gated['audit'],
+        'promotedMarkets': validation.get('promotedMarkets') or [],
+        'rejectionReasons': rejection_reasons,
+    })
+    return {
+        'version': integrity['version'],
+        'eligible': gated['promoted'],
+        'rejected': list(integrity['rejected']) + gate_rejected,
+        'audit': audit,
+        'marketValidation': validation,
+    }
 
 
 # ── Per-market probability recalibration ──────────────────────────────────────
@@ -18244,6 +18341,12 @@ def _blend_weight_for(market_key):
     """The model weight logit_blend_prob should use — learned when the market
     has enough graded history, the hand-tuned prior otherwise."""
     prior = MARKET_MODEL_WEIGHTS.get(market_key, MARKET_MODEL_WEIGHTS["default"])
+    # Adaptive blend weights remain disabled unless the market has passed the
+    # strict walk-forward gate.  This is a reversible runtime boundary: a
+    # failed or warming market always falls back to its committed prior.
+    gate = gate_for_market(_current_market_validation_report(), market_key)
+    if gate.get('promoted') is not True:
+        return prior
     bw = _get_blend_weights()
     if bw is None:
         return prior
@@ -19250,6 +19353,7 @@ def _empty_props_scan_payload(date_str):
         'actionableProps': [],
         'candidateIntegrityVersion': CANDIDATE_INTEGRITY_VERSION,
         'candidateIntegrityAudit': evaluate_candidates([])['audit'],
+        'marketValidationVersion': MARKET_VALIDATION_VERSION,
         'batters': [],
         'pitchers': [],
         'injury_summary': {'count': 0, 'players': []},
@@ -19350,7 +19454,7 @@ def _compute_props_scan_today_payload(date_str):
             flat_props.extend(props)
             injury_rows.extend(injuries)
 
-    integrity = evaluate_candidates(flat_props)
+    integrity = _evaluate_promotable_candidates(flat_props, date_str)
     flat_props = integrity['eligible'] + integrity['rejected']
     flat_props.sort(key=lambda x: (
         x.get('actionable') is not True,
@@ -19370,6 +19474,8 @@ def _compute_props_scan_today_payload(date_str):
         'actionableProps': integrity['eligible'],
         'candidateIntegrityVersion': CANDIDATE_INTEGRITY_VERSION,
         'candidateIntegrityAudit': integrity['audit'],
+        'marketValidationVersion': MARKET_VALIDATION_VERSION,
+        'marketValidation': integrity['marketValidation'],
         'batters': batters,
         'pitchers': pitchers,
         'injury_summary': {
@@ -19484,7 +19590,9 @@ def _edge_finder_payload(date_str, min_edge=0.02, market=None, limit=150):
         min_edge = 0.02
     market = (market or '').strip().lower() or None
 
-    integrity = evaluate_candidates(base.get('props', []) or [])
+    integrity = _evaluate_promotable_candidates(
+        base.get('props', []) or [], date_str,
+    )
     edges = []
     for p in integrity['eligible']:
         edge = p.get('canonicalEdge')
@@ -19552,6 +19660,8 @@ def _edge_finder_payload(date_str, min_edge=0.02, market=None, limit=150):
         'generatedAt': datetime.now(timezone.utc).isoformat(),
         'candidateIntegrityVersion': CANDIDATE_INTEGRITY_VERSION,
         'candidateIntegrityAudit': integrity['audit'],
+        'marketValidationVersion': MARKET_VALIDATION_VERSION,
+        'marketGateAudit': integrity['audit'].get('marketGateAudit'),
         'edges': edges,
     }
 
@@ -20056,7 +20166,9 @@ def api_tracker_pick():
     trusted = None
     if candidate_id:
         scan = _props_scan_today_payload(today)
-        integrity = evaluate_candidates(scan.get('props', []) or [])
+        integrity = _evaluate_promotable_candidates(
+            scan.get('props', []) or [], today,
+        )
         trusted = next(
             (
                 row for row in integrity['eligible']
@@ -20065,13 +20177,22 @@ def api_tracker_pick():
             None,
         )
     if trusted is None:
-        checked = evaluate_candidate(entry)
-        if checked.get('actionable') is not True:
+        checked_result = _evaluate_promotable_candidates([entry], today)
+        checked = next(iter(checked_result['eligible']), None)
+        if checked is None:
+            rejected = (checked_result.get('rejected') or [{}])[0]
             return jsonify({
                 'success': False,
-                'error': 'Candidate does not pass the canonical betting contract.',
+                'error': (
+                    'Candidate does not pass the canonical betting and '
+                    'market-validation contract.'
+                ),
                 'candidateIntegrityVersion': CANDIDATE_INTEGRITY_VERSION,
-                'reasons': checked.get('integrityReasons') or [],
+                'marketValidationVersion': MARKET_VALIDATION_VERSION,
+                'reasons': (
+                    rejected.get('integrityReasons')
+                    or rejected.get('marketGateReasons') or []
+                ),
             }), 422
         trusted = checked
     entry = {
@@ -22293,7 +22414,9 @@ def _mc_board_payload(date_str, force_refresh=False):
         _trigger_props_scan_refresh_async(date_str, reason='mc_force_refresh')
     base = _props_scan_today_payload(date_str)
 
-    integrity = evaluate_candidates(base.get('props') or [])
+    integrity = _evaluate_promotable_candidates(
+        base.get('props') or [], date_str,
+    )
     rows = []
     for p in integrity['eligible']:
         mk = p.get('marketKey')
@@ -22833,7 +22956,10 @@ def api_build_parlay():
             return jsonify({'success': False, 'error': 'No selections provided', 'parlay': None})
 
         scan = _props_scan_today_payload(datetime.now(ET).strftime('%Y-%m-%d')) or {}
-        integrity = evaluate_candidates(scan.get('props') or [])
+        integrity = _evaluate_promotable_candidates(
+            scan.get('props') or [],
+            datetime.now(ET).strftime('%Y-%m-%d'),
+        )
         eligible = integrity['eligible']
 
         parlay = {
@@ -22969,11 +23095,11 @@ _PARLAY_PROP_MARKETS = {
 }
 
 
-def _parlay_leg_candidates(props):
+def _parlay_leg_candidates(props, date_str=None):
     """Distinct candidate legs from the scan props: the best (highest model
     probability) leg per (player, market, line), restricted to player-prop
     markets that carry a fresh, real sportsbook price."""
-    integrity = evaluate_candidates(props or [])
+    integrity = _evaluate_promotable_candidates(props or [], date_str)
     best = {}
     for p in integrity['eligible']:
         mk = p.get('marketKey')
@@ -23050,7 +23176,7 @@ def _build_parlay_from_legs(legs, name, risk):
 
 def _auto_parlays_payload(date_str):
     base = _props_scan_today_payload(date_str)
-    cands = _parlay_leg_candidates(base.get('props', []))
+    cands = _parlay_leg_candidates(base.get('props', []), date_str)
 
     def _value(c):
         if c.get('edge') is not None:
@@ -23110,7 +23236,9 @@ def api_parlay_to_tracker():
                 'error': 'Parlay has no canonical selections.',
             }), 400
         scan = _props_scan_today_payload(date_str)
-        integrity = evaluate_candidates(scan.get('props', []) or [])
+        integrity = _evaluate_promotable_candidates(
+            scan.get('props', []) or [], date_str,
+        )
         trusted_by_id = {
             row.get('canonicalCandidateId'): row
             for row in integrity['eligible']

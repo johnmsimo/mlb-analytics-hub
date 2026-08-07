@@ -29,6 +29,7 @@ A full-stack MLB analytics and sports betting prediction platform built with Fla
 | `stacked_calibrator.py` | Stacked ensemble calibration for probability outputs |
 | `tier_calibrator.py` | Tiered confidence scoring system |
 | `eval_models.py` | Model evaluation metrics, Brier scores, and calibration curves |
+| `market_validation.py` | Strict walk-forward market validation and fail-closed promotion gates |
 | `train_hr_tb_rbi.py` | Specialized training for HR, Total Bases, and RBI props |
 | `nrfi_odds.py` | NRFI/YRFI probability model |
 
@@ -218,6 +219,15 @@ history file versions they consume. Encoding-specific strong ETags make
 unchanged matching refreshes bodyless; tracker writes plus adjustment/history
 replacements invalidate automatically without changing decoded schemas.
 
+Market promotion is fail-closed. `GET /api/intelligence/validation` evaluates
+only time-ordered, non-backfilled holdout predictions and reports Brier skill
+versus the sportsbook market, calibration error, ROI, closing-line value, and
+maximum drawdown by market, side, recommendation grade, odds range, and
+sportsbook. A structurally valid Phase 4.37 candidate remains research-only
+until its market passes every Phase 4.38 sample, calibration, pricing, CLV,
+profitability, and risk gate. Adaptive blend weights also stay on their
+committed priors until that market is promoted.
+
 Model adjustments and calibration history use thread-safe, file-version-aware
 parsed snapshots across requests. Concurrent cold reads collapse to one JSON
 parse, external and atomic file replacements invalidate automatically, and each
@@ -274,4 +284,3 @@ MIT License — feel free to fork and build on top of this.
 ---
 
 *Built by [@johnmsimo](https://github.com/johnmsimo)*
-
