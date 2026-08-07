@@ -5,6 +5,9 @@ import math
 from collections import defaultdict
 from typing import Any, Iterable, Mapping
 
+from candidate_integrity import canonical_market_key
+from market_validation import VALIDATION_VERSION, build_validation_report
+
 
 def _num(value: Any, default: float | None = None) -> float | None:
     try:
@@ -35,7 +38,7 @@ def _outcome(row: Mapping[str, Any]) -> int | None:
 
 
 def _market(row: Mapping[str, Any]) -> str:
-    return str(row.get('intelligenceCategory') or row.get('market') or row.get('marketType') or 'unknown').strip() or 'unknown'
+    return canonical_market_key(row) or 'unknown'
 
 
 def _summary(rows: list[tuple[float, int]]) -> dict[str, Any]:
@@ -59,6 +62,7 @@ def _summary(rows: list[tuple[float, int]]) -> dict[str, Any]:
 
 
 def analyze_learning(entries: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    entries = list(entries)
     graded: list[tuple[Mapping[str, Any], float, int]] = []
     skipped = 0
     for source in entries:
@@ -86,9 +90,11 @@ def analyze_learning(entries: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
             band = 'high' if value >= 70 else 'medium' if value >= 50 else 'low'
             factor_groups[factor][band].append((prob, outcome))
 
+    market_validation = build_validation_report(entries)
     return {
         'mode': 'measurement_only',
         'adaptiveWeightsEnabled': False,
+        'learningVersion': VALIDATION_VERSION,
         'gradedCount': len(graded),
         'skippedCount': skipped,
         'overall': _summary(pairs),
@@ -98,5 +104,8 @@ def analyze_learning(entries: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
             factor: {band: _summary(values) for band, values in sorted(groups.items())}
             for factor, groups in factor_groups.items() if groups
         },
+        'marketValidation': market_validation,
+        'marketGates': market_validation['marketGates'],
+        'promotedMarkets': market_validation['promotedMarkets'],
         'minimumSampleNotice': 'Do not adapt model weights until each evaluated segment has a meaningful sample size.',
     }

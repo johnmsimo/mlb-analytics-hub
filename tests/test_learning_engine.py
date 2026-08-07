@@ -23,12 +23,23 @@ class LearningEngineTests(unittest.TestCase):
         self.assertEqual(result['gradedCount'], 0)
         self.assertEqual(result['skippedCount'], 2)
 
+    def test_tracker_market_key_is_never_misattributed_as_unknown(self):
+        result = analyze_learning([
+            {
+                'marketKey': 'batter_hits', 'adjProb': .62,
+                'grade': 'win', 'date': '2026-08-01',
+            },
+        ])
+        self.assertIn('batter_hits', result['byMarket'])
+        self.assertNotIn('unknown', result['byMarket'])
+
     def test_groups_by_market_calibration_and_factors(self):
         result = analyze_learning([
             {'market': 'Moneyline', 'blendedProb': .74, 'grade': 'WIN', 'contextScore': 82},
             {'market': 'Pitcher Strikeouts', 'blendedProb': .64, 'grade': 'LOSS', 'contextScore': 45},
         ])
-        self.assertIn('Moneyline', result['byMarket'])
+        self.assertIn('h2h', result['byMarket'])
+        self.assertIn('pitcher_strikeouts', result['byMarket'])
         self.assertIn('70-79%', result['calibrationBuckets'])
         self.assertIn('contextScore', result['factorPerformance'])
         self.assertIn('high', result['factorPerformance']['contextScore'])
@@ -37,6 +48,8 @@ class LearningEngineTests(unittest.TestCase):
         result = analyze_learning([])
         self.assertEqual(result['mode'], 'measurement_only')
         self.assertFalse(result['adaptiveWeightsEnabled'])
+        self.assertIn('marketValidation', result)
+        self.assertEqual(result['marketValidation']['mode'], 'strict_walk_forward_holdout')
 
 
 if __name__ == '__main__':

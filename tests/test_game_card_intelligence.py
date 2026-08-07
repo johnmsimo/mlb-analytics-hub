@@ -10,6 +10,69 @@ from intelligence_core import classify_pick
 from matchup_simulation_intelligence import build_simulation_signal
 
 
+def promoted_learning():
+    gates = {
+        market: {
+            'marketKey': market,
+            'status': 'promoted',
+            'promoted': True,
+            'reasons': [],
+            'metrics': {},
+        }
+        for market in ('batter_hits', 'pitcher_strikeouts', 'h2h')
+    }
+    side_gates = {
+        key: {
+            'status': 'promoted', 'promoted': True,
+            'reasons': [], 'metrics': {},
+        }
+        for key in (
+            'batter_hits|over', 'pitcher_strikeouts|over',
+            'pitcher_strikeouts|under', 'h2h|selection',
+        )
+    }
+    return {
+        'marketValidation': {
+            'version': '4.38',
+            'marketGates': gates,
+            'marketSideGates': side_gates,
+            'promotedMarkets': list(gates),
+        },
+    }
+
+
+def disabled_learning():
+    gates = {
+        market: {
+            'marketKey': market,
+            'status': 'disabled',
+            'promoted': False,
+            'reasons': ['holdout ROI is not positive'],
+            'metrics': {'count': 100, 'roi': -0.10},
+        }
+        for market in ('batter_hits', 'pitcher_strikeouts', 'h2h')
+    }
+    side_gates = {
+        key: {
+            'status': 'disabled', 'promoted': False,
+            'reasons': ['holdout ROI is not positive'],
+            'metrics': {'count': 100, 'roi': -0.10},
+        }
+        for key in (
+            'batter_hits|over', 'pitcher_strikeouts|over',
+            'pitcher_strikeouts|under', 'h2h|selection',
+        )
+    }
+    return {
+        'marketValidation': {
+            'version': '4.38',
+            'marketGates': gates,
+            'marketSideGates': side_gates,
+            'promotedMarkets': [],
+        },
+    }
+
+
 def row(
     market,
     *,
@@ -313,7 +376,10 @@ def test_game_card_api_returns_the_three_ranked_decisions(monkeypatch):
     monkeypatch.setattr(intelligence_integration, 'enrich_context', lambda values: values)
     monkeypatch.setattr(intelligence_integration, 'enrich_matchups', lambda values: values)
     monkeypatch.setattr(intelligence_integration, 'enrich_simulations', lambda values: values)
-    monkeypatch.setattr(intelligence_integration, 'analyze_learning', lambda _values: {})
+    monkeypatch.setattr(
+        intelligence_integration, 'analyze_learning',
+        lambda _values: promoted_learning(),
+    )
     monkeypatch.setattr(intelligence_integration, '_read_cached_payload', lambda *_args: None)
     monkeypatch.setattr(intelligence_integration, '_write_cached_payload', lambda *_args: None)
     scheduled = []
@@ -327,7 +393,7 @@ def test_game_card_api_returns_the_three_ranked_decisions(monkeypatch):
     payload = fake_app.view_functions['api_intelligence_game_card'](7)
 
     assert payload['success'] is True
-    assert payload['quickPicksVersion'] == '4.37'
+    assert payload['quickPicksVersion'] == '4.38'
     assert payload['candidateIntegrityVersion'] == '4.37'
     assert payload['performanceVersion'] == '4.36'
     assert payload['deliveryArchitecture'] == 'redis_durable_worker'
@@ -342,6 +408,86 @@ def test_game_card_api_returns_the_three_ranked_decisions(monkeypatch):
         'hitter_hits', 'pitcher_strikeouts', 'game_winner',
     }
     assert payload['best']['pitcher_strikeouts']['recommendedSide'] == 'Under'
+
+
+def test_completed_market_gate_abstention_is_cacheable_not_a_failed_job(monkeypatch):
+    rows = [
+        row('batter_hits', player='Hitter'),
+        row('pitcher_strikeouts', player='Starter', line=6.5),
+        row('h2h', player='NYY@BOS', team='NYY', recommendedSide='NYY', line=0),
+        row('h2h', player='NYY@BOS', team='BOS', recommendedSide='BOS', line=0),
+    ]
+    monkeypatch.setattr(
+        intelligence_integration, 'analyze_learning',
+        lambda _values: disabled_learning(),
+    )
+    monkeypatch.setattr(
+        intelligence_integration, 'enrich_context', lambda values: values,
+    )
+    monkeypatch.setattr(
+        intelligence_integration, 'enrich_matchups', lambda values: values,
+    )
+    monkeypatch.setattr(
+        intelligence_integration, 'enrich_simulations', lambda values: values,
+    )
+
+    payload = intelligence_integration._decision_payload(
+        7, '2026-08-06', rows, [], generated_count=4,
+    )
+
+    assert payload['decisionReady'] is True
+    assert payload['simulationReady'] is False
+    assert payload['recommendationSource'] == 'market_validation_abstention'
+    assert payload['quickPicks'] == []
+    assert all(
+        decision['recommendationGrade'] == 'Pass'
+        for decision in payload['marketDecisions']
+    )
+
+
+def test_learning_api_uses_historical_window_instead_of_empty_today():
+    class FakeApp:
+        def __init__(self):
+            self.view_functions = {}
+
+        def route(self, _path, methods=None):
+            del methods
+
+            def register(function):
+                self.view_functions[function.__name__] = function
+                return function
+
+            return register
+
+    history = [{
+        'marketKey': 'batter_hits', 'adjProb': .62, 'grade': 'win',
+        'date': '2026-08-01',
+    }]
+    report = {
+        'version': '4.38', 'marketGates': {}, 'promotedMarkets': [],
+    }
+    fake_app = FakeApp()
+    app_module = SimpleNamespace(
+        app=fake_app,
+        request=SimpleNamespace(args={'date': '2026-08-06', 'window': '180'}),
+        jsonify=lambda payload: payload,
+        ET=timezone.utc,
+        _tracker_today_payload=lambda _date: {
+            'date': '2026-08-06', 'entries': [],
+        },
+        _collect_window_entries=lambda _date, _window: history,
+        _current_market_validation_report=lambda _date: report,
+    )
+
+    intelligence_integration.install_intelligence_api(app_module)
+    learning = fake_app.view_functions['api_intelligence_learning']()
+    validation = fake_app.view_functions['api_intelligence_validation']()
+
+    assert learning['sourceCount'] == 1
+    assert learning['gradedCount'] == 1
+    assert 'batter_hits' in learning['byMarket']
+    assert 'unknown' not in learning['byMarket']
+    assert validation['marketValidationVersion'] == '4.38'
 
 
 def test_game_card_api_falls_back_when_live_generation_fails(monkeypatch):
@@ -385,7 +531,10 @@ def test_game_card_api_falls_back_when_live_generation_fails(monkeypatch):
     monkeypatch.setattr(intelligence_integration, 'enrich_context', lambda values: values)
     monkeypatch.setattr(intelligence_integration, 'enrich_matchups', lambda values: values)
     monkeypatch.setattr(intelligence_integration, 'enrich_simulations', lambda values: values)
-    monkeypatch.setattr(intelligence_integration, 'analyze_learning', lambda _values: {})
+    monkeypatch.setattr(
+        intelligence_integration, 'analyze_learning',
+        lambda _values: promoted_learning(),
+    )
     monkeypatch.setattr(intelligence_integration, '_read_cached_payload', lambda *_args: None)
     scheduled = []
     monkeypatch.setattr(
@@ -452,7 +601,10 @@ def test_game_card_api_rebuilds_an_incomplete_tracker_candidate_pool(monkeypatch
     monkeypatch.setattr(intelligence_integration, 'enrich_context', lambda values: values)
     monkeypatch.setattr(intelligence_integration, 'enrich_matchups', lambda values: values)
     monkeypatch.setattr(intelligence_integration, 'enrich_simulations', lambda values: values)
-    monkeypatch.setattr(intelligence_integration, 'analyze_learning', lambda _values: {})
+    monkeypatch.setattr(
+        intelligence_integration, 'analyze_learning',
+        lambda _values: promoted_learning(),
+    )
     monkeypatch.setattr(intelligence_integration, '_read_cached_payload', lambda *_args: None)
     scheduled = []
     monkeypatch.setattr(

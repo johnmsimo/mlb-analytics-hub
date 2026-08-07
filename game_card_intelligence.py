@@ -288,6 +288,7 @@ def select_game_card_quick_picks(
     *,
     learning: Mapping[str, Any] | None = None,
     policy: DecisionPolicy | None = None,
+    market_gate_rejections: Iterable[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """Return the highest-confidence eligible pick—or an explicit Pass—per market."""
     policy = policy or DecisionPolicy(maximum_card_size=3)
@@ -299,6 +300,14 @@ def select_game_card_quick_picks(
         category = classify_pick(row)
         if category in integrity_rejected:
             integrity_rejected[category].append(row)
+    market_rejected: dict[str, list[dict[str, Any]]] = {
+        category: [] for category in CATEGORY_ORDER
+    }
+    for source in market_gate_rejections:
+        row = dict(source)
+        category = classify_pick(row)
+        if category in market_rejected:
+            market_rejected[category].append(row)
     grouped: dict[str, list[dict[str, Any]]] = {
         category: [] for category in CATEGORY_ORDER
     }
@@ -366,11 +375,17 @@ def select_game_card_quick_picks(
                     'standardThresholdMisses': list(reasons),
                 })
         else:
-            rejected_for_integrity = integrity_rejected[category]
+            rejected_for_integrity = (
+                integrity_rejected[category] + market_rejected[category]
+            )
             integrity_reasons = list(dict.fromkeys(
                 reason
                 for row in rejected_for_integrity
-                for reason in (row.get('integrityReasons') or [])
+                for reason in (
+                    row.get('integrityReasons')
+                    or row.get('marketGateReasons')
+                    or row.get('promotionReasons') or []
+                )
             ))
             rejected_source = (
                 max(rejected_for_integrity, key=_rank_key)
