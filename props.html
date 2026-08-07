@@ -1286,7 +1286,10 @@ async function trackEdgeW(i, btn){
       body: JSON.stringify({player:e.player, playerId:e.playerId, team:e.team, gamePk:e.gamePk,
         marketKey:e.marketKey, line:e.line, recommendedSide:e.side||'Over', adjProb:e.modelProb,
         edge:e.edge, marketImplied:e.marketImplied, hubRating:e.hubRating, evPct:e.evPct,
-        bestOverPrice:e.bestPrice, bookmaker:e.bestBook, source:'edge_finder', date:CUR_DATE})});
+        bestOverPrice:e.bestPrice, bookmaker:e.bestBook,
+        canonicalCandidateId:e.canonicalCandidateId,
+        candidateIntegrityVersion:e.candidateIntegrityVersion,
+        source:'edge_finder', date:CUR_DATE})});
     const d = await r.json();
     if(d.success){ btn.textContent='✓'; btn.style.color='var(--g)'; }
     else { btn.disabled=false; btn.textContent='+ TRACK'; alert('Save failed: '+(d.error||'error')); }
@@ -1319,7 +1322,7 @@ async function loadHotHandWidget(){
         <div style="display:flex;align-items:center;gap:6px">
           <span style="font-size:.7rem;color:var(--g);font-weight:700">${l5.over||0}/${l5.total||0}</span>
           <span style="font-size:.66rem;color:var(--o)">${p.streakOver||0}🔥</span>
-          <button onclick="trackHotHand(${i},this)" style="margin-left:auto;border:1px solid rgba(0,229,255,.3);background:rgba(0,229,255,.08);color:var(--c);border-radius:7px;padding:3px 8px;font-size:.62rem;cursor:pointer">+ TRACK</button>
+          ${p.actionable ? `<button onclick="trackHotHand(${i},this)" style="margin-left:auto;border:1px solid rgba(0,229,255,.3);background:rgba(0,229,255,.08);color:var(--c);border-radius:7px;padding:3px 8px;font-size:.62rem;cursor:pointer">+ TRACK</button>` : `<span style="margin-left:auto;color:var(--mu);font-size:.58rem">RESEARCH ONLY</span>`}
         </div>
       </div>`;
     }).join('');
@@ -1336,7 +1339,10 @@ async function trackHotHand(i, btn){
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({player:p.player, playerId:p.playerId, team:p.team, gamePk:p.gamePk,
         marketKey:p.marketKey, line:p.line, recommendedSide:'Over',
-        hubRating:p.hubRating, evPct:p.evPct, source:'hot_hand_widget', date:CUR_DATE})
+        hubRating:p.hubRating, evPct:p.evPct,
+        canonicalCandidateId:p.canonicalCandidateId,
+        candidateIntegrityVersion:p.candidateIntegrityVersion,
+        source:'hot_hand_widget', date:CUR_DATE})
     });
     const d = await r.json();
     if(d.success){ btn.textContent='✓'; btn.style.color='var(--g)'; }
@@ -1699,47 +1705,6 @@ async function checkLineupStatus(pk) {
   } catch(e) { console.warn('[lineup-poll]', e.message); }
 }
 
-// ── Parlay Handler ──
-function addToParlay(leg) {
-  try {
-    if (!leg || !leg.player || !leg.marketKey) throw new Error('Missing player or market');
-    let queue = [];
-    try { queue = JSON.parse(localStorage.getItem('pendingParlayLegs')) || []; } catch {}
-    if (!Array.isArray(queue)) queue = [];
-    // Prevent duplicate (same player, market, line, game)
-    if (!queue.some(l => l.player === leg.player && l.marketKey === leg.marketKey && String(l.line) === String(leg.line) && String(l.gamePk) === String(leg.gamePk))) {
-      queue.push({
-        player: leg.player,
-        marketKey: leg.marketKey,
-        line: leg.line,
-        team: leg.team || '',
-        opp: leg.opp || '',
-        recommendedSide: leg.recommendedSide || 'Over',
-        sideLabel: leg.sideLabel || leg.recommendedSide || 'Over',
-        source: 'props_board',
-        reason: 'Imported from Props Board',
-        gamePk: leg.gamePk || '',
-      });
-      localStorage.setItem('pendingParlayLegs', JSON.stringify(queue));
-    }
-    window.location.href = '/tracker';
-  } catch(e) {
-    alert('Failed to add to parlay: ' + e.message);
-  }
-}
-
-// ── Parlay button click delegation (data-* attributes, no inline scope variables) ──
-document.addEventListener('click', function(e) {
-  const btn = e.target.closest('.parlay-btn');
-  if (!btn) return;
-  addToParlay({
-    player:    btn.dataset.player    ?? '',
-    team:      btn.dataset.team      ?? '',
-    marketKey: btn.dataset.marketKey ?? '',
-    line:      btn.dataset.line      ?? '',
-    gamePk:    btn.dataset.gamePk    ?? '',
-  });
-});
 function startLineupPolling(pk) {
   // Immediate first check
   checkLineupStatus(pk);
@@ -3861,10 +3826,7 @@ function batterCard(b) {
     ${batxHtml}
     ${trnd}
     <div class="parlay-row" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px">
-      ${p.hits != null ? `<button class="save-btn parlay-btn" data-player="${esc(b.name)}" data-team="${esc(b.team||'')}" data-market-key="player_hits" data-line="${p.hits.toFixed(2)}" data-game-pk="${b.gamePk||''}">＋ H PARLAY</button>` : ''}
-      ${p.hr != null   ? `<button class="save-btn parlay-btn" data-player="${esc(b.name)}" data-team="${esc(b.team||'')}" data-market-key="player_home_runs" data-line="${p.hr.toFixed(2)}" data-game-pk="${b.gamePk||''}">＋ HR PARLAY</button>` : ''}
-      ${p.tb != null   ? `<button class="save-btn parlay-btn" data-player="${esc(b.name)}" data-team="${esc(b.team||'')}" data-market-key="player_total_bases" data-line="${p.tb.toFixed(2)}" data-game-pk="${b.gamePk||''}">＋ TB PARLAY</button>` : ''}
-      ${p.rbi != null  ? `<button class="save-btn parlay-btn" data-player="${esc(b.name)}" data-team="${esc(b.team||'')}" data-market-key="player_rbi" data-line="${p.rbi.toFixed(2)}" data-game-pk="${b.gamePk||''}">＋ RBI PARLAY</button>` : ''}
+      <span style="color:var(--mu);font-size:.6rem">RESEARCH PROJECTION · NO VERIFIED PRICE</span>
     </div>
   </div>`;
 }
@@ -3987,17 +3949,9 @@ function pitcherPanel(p) {
     </div>
     ${modelIntelPanel(PLAYER_BEST_PROP[(p.name||'').toLowerCase()])}
     ${pitchXPanel(p, pr)}
-    ${pr.k != null ? (() => {
-      // Parlay quick-adds at the pitcher's REAL book K lines; generic ladder only
-      // when no odds coverage exists.
-      const realKLines = [...new Set((Array.isArray(p.oddsMarkets) ? p.oddsMarkets : [])
-        .filter(m => m.marketKey === 'pitcher_strikeouts' && Number.isFinite(Number(m.line)))
-        .map(m => Number(m.line)))].sort((a, b) => a - b);
-      const lines = realKLines.length ? realKLines : [3.5, 4.5, 5.5, 6.5];
-      return `<div class="parlay-row" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px">
-      ${lines.map(line => `<button class="save-btn parlay-btn" data-player="${esc(p.name||'')}" data-team="${esc(p.team||'')}" data-market-key="pitcher_strikeouts" data-line="${line}" data-game-pk="${p.gamePk||''}">＋ K ${line}</button>`).join('')}
-    </div>`;
-    })() : ''}
+    ${pr.k != null ? `<div class="parlay-row" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px">
+      <span style="color:var(--mu);font-size:.6rem">RESEARCH PROJECTION · NO VERIFIED PRICE</span>
+    </div>` : ''}
     <div class="bcard-tools" style="grid-template-columns:repeat(2,1fr)">
       <button class="tool-btn" onclick="openLineShop('${(p.name||'').replace(/'/g,"\\'")}', ${p.gamePk || 'null'}, ${pid || 'null'}, 'pitcher')" title="Line shopping — book-by-book K prices">📚 LINE SHOPPING</button>
       <button class="tool-btn" onclick="openHitHistory(${pid||'null'}, '${(p.name||'').replace(/'/g,"\\'")}', 'pitcher')" title="Game-by-game K prop history">📊 K HISTORY</button>

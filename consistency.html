@@ -304,7 +304,7 @@
           `<td>${row.sampleSize || 0}</td>` +
           `<td><span class="hub">${row.hubRating == null ? '-' : num(row.hubRating, 0)}</span></td>` +
           `<td class="ev ${evClass}">${num(ev, 1)}%</td>` +
-          `<td><button class="btn parlay-btn" onclick="addConsistencyRowToParlay(${origIdx})">+ Parlay</button></td>` +
+          `<td>${row.actionable ? `<button class="btn parlay-btn" onclick="addConsistencyRowToParlay(${origIdx})">+ Parlay</button>` : `<span style="color:var(--mu);font-size:.65rem">Research only</span>`}</td>` +
         '</tr>';
       }).join('');
     }
@@ -320,6 +320,8 @@
         gamePk: r.gamePk,
         team: r.team,
         recommendedSide: 'Over',
+        canonicalCandidateId: r.canonicalCandidateId,
+        candidateIntegrityVersion: r.candidateIntegrityVersion,
         savedAt: Date.now(),
         source: 'consistency_sheet',
       };

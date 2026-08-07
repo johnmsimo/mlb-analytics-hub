@@ -1,4 +1,4 @@
-from datetime import timezone
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import intelligence_integration
@@ -18,6 +18,18 @@ def row(
     implied=.55,
     **extra,
 ):
+    def price_for_probability(value):
+        return (
+            -100.0 * value / (1.0 - value)
+            if value >= 0.5
+            else 100.0 * (1.0 - value) / value
+        )
+
+    role = (
+        'pitcher' if market == 'pitcher_strikeouts'
+        else 'team' if market == 'h2h'
+        else 'batter'
+    )
     data = {
         'id': f'{market}:{player}',
         'gamePk': 7,
@@ -30,9 +42,9 @@ def row(
         'adjProb': probability,
         'marketImplied': implied,
         'edge': probability - implied,
-        'bestOverPrice': -120,
+        'bestOverPrice': price_for_probability(implied),
         'bestOverBook': 'Book A',
-        'bestUnderPrice': 110,
+        'bestUnderPrice': price_for_probability(1.0 - implied),
         'bestUnderBook': 'Book B',
         'mc_prob_over': probability,
         'mc_prob_under': 1 - probability,
@@ -43,6 +55,14 @@ def row(
         'hubRating': 82,
         'grade': 'pending',
         'intelligenceCandidatePoolComplete': True,
+        'gameStatus': 'Scheduled',
+        'gameAbstractState': 'Preview',
+        'gameStartIso': '2099-08-06T23:10:00+00:00',
+        'lineupStatus': 'not_applicable' if role == 'team' else 'confirmed',
+        'playerRole': role,
+        'playerPosition': 'TEAM' if role == 'team' else 'SP' if role == 'pitcher' else 'CF',
+        'modelVersion': 'test-model-4.37',
+        'oddsUpdatedAt': datetime.now(timezone.utc).isoformat(),
     }
     data.update(build_simulation_signal(
         probability,
@@ -76,7 +96,7 @@ def test_creates_independently_scored_over_and_under_strikeout_candidates():
 
     assert over['adjProb'] == .43
     assert under['adjProb'] == .57
-    assert under['bestAvailablePrice'] == 110
+    assert round(under['bestAvailablePrice'], 3) == round(100.0 * .52 / .48, 3)
     assert under['bestAvailableBook'] == 'Book B'
     assert under['p_lo'] == .53
     assert under['p_hi'] == .61
@@ -187,7 +207,7 @@ def test_weak_or_missing_category_is_an_explicit_pass():
 
     hit = result['best']['hitter_hits']
     assert hit['recommendationGrade'] == 'Pass'
-    assert 'probability below threshold' in hit['topRisks']
+    assert 'no positive edge after de-vigging' in hit['topRisks']
     assert result['best']['pitcher_strikeouts']['recommendationGrade'] == 'Pass'
     assert result['best']['game_winner']['recommendationGrade'] == 'Pass'
     assert result['passCategoryCount'] == 3
@@ -307,7 +327,8 @@ def test_game_card_api_returns_the_three_ranked_decisions(monkeypatch):
     payload = fake_app.view_functions['api_intelligence_game_card'](7)
 
     assert payload['success'] is True
-    assert payload['quickPicksVersion'] == '4.35.2'
+    assert payload['quickPicksVersion'] == '4.37'
+    assert payload['candidateIntegrityVersion'] == '4.37'
     assert payload['performanceVersion'] == '4.36'
     assert payload['deliveryArchitecture'] == 'redis_durable_worker'
     assert payload['pickConfidenceVersion'] == '4.34'
@@ -463,7 +484,7 @@ def test_game_card_api_rebuilds_an_incomplete_tracker_candidate_pool(monkeypatch
     assert rebuilt['simulationAudit']['simulationCoveragePct'] == 100.0
 
 
-def test_game_card_api_serves_stale_snapshot_while_refreshing(monkeypatch):
+def test_game_card_api_hides_integrity_expired_snapshot_while_refreshing(monkeypatch):
     class FakeApp:
         def __init__(self):
             self.view_functions = {}
@@ -505,8 +526,58 @@ def test_game_card_api_serves_stale_snapshot_while_refreshing(monkeypatch):
     intelligence_integration.install_intelligence_api(app_module)
     payload = fake_app.view_functions['api_intelligence_game_card'](7)
 
-    assert payload['quickPicks'][0]['player'] == 'Cached Hitter'
+    assert payload['quickPicks'] == []
     assert payload['stale'] is True
+    assert payload['integrityExpired'] is True
+    assert payload['simulationReady'] is False
     assert payload['computing'] is True
     assert payload['retryAfterSeconds'] == 4
     assert scheduled == [True]
+
+
+def test_game_card_api_can_serve_stale_snapshot_with_fresh_odds(monkeypatch):
+    class FakeApp:
+        def __init__(self):
+            self.view_functions = {}
+
+        def route(self, _path, methods=None):
+            del methods
+
+            def register(function):
+                self.view_functions[function.__name__] = function
+                return function
+
+            return register
+
+    cached_payload = {
+        'success': True,
+        'gamePk': 7,
+        'quickPicks': [{'player': 'Cached Hitter'}],
+        'simulationReady': True,
+    }
+    fake_app = FakeApp()
+    app_module = SimpleNamespace(
+        app=fake_app,
+        request=SimpleNamespace(args={'date': '2026-08-06', 'refresh': '1'}),
+        jsonify=lambda payload: payload,
+        ET=timezone.utc,
+    )
+    monkeypatch.setattr(intelligence_integration.time, 'time', lambda: 10_000)
+    monkeypatch.setattr(
+        intelligence_integration,
+        '_read_cached_payload',
+        lambda *_args: {'timestamp': 9_400, 'payload': cached_payload},
+    )
+    monkeypatch.setattr(
+        intelligence_integration,
+        '_schedule_game_card_refresh',
+        lambda *_args: {'status': 'queued'},
+    )
+
+    intelligence_integration.install_intelligence_api(app_module)
+    payload = fake_app.view_functions['api_intelligence_game_card'](7)
+
+    assert payload['quickPicks'][0]['player'] == 'Cached Hitter'
+    assert payload['stale'] is True
+    assert payload['integrityExpired'] is False
+    assert payload['cacheAgeSec'] == 600

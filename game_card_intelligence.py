@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Mapping
 
+from candidate_integrity import evaluate_candidates
 from confidence_service import enrich_pick_confidence
 from explanation_engine import explain_recommendation
 from intelligence_core import (
@@ -195,6 +196,8 @@ def _is_best_available_candidate(row: Mapping[str, Any]) -> bool:
     """Return whether a rejected candidate is still an honest actionable Lean."""
     grade = str(row.get('grade') or 'pending').strip().lower()
     return (
+        row.get('actionable') is True
+        and
         _has_price(row)
         and _probability(row) >= BEST_AVAILABLE_MINIMUM_PROBABILITY
         and (_num(row.get('confidenceScore'), 0.0) or 0.0)
@@ -288,10 +291,18 @@ def select_game_card_quick_picks(
 ) -> dict[str, Any]:
     """Return the highest-confidence eligible pick—or an explicit Pass—per market."""
     policy = policy or DecisionPolicy(maximum_card_size=3)
+    integrity = evaluate_candidates(candidates)
+    integrity_rejected: dict[str, list[dict[str, Any]]] = {
+        category: [] for category in CATEGORY_ORDER
+    }
+    for row in integrity['rejected']:
+        category = classify_pick(row)
+        if category in integrity_rejected:
+            integrity_rejected[category].append(row)
     grouped: dict[str, list[dict[str, Any]]] = {
         category: [] for category in CATEGORY_ORDER
     }
-    for candidate in candidates:
+    for candidate in integrity['eligible']:
         row = enrich_pick_score(candidate, learning=learning)
         category = classify_pick(row)
         if category in grouped:
@@ -355,7 +366,18 @@ def select_game_card_quick_picks(
                     'standardThresholdMisses': list(reasons),
                 })
         else:
+            rejected_for_integrity = integrity_rejected[category]
+            integrity_reasons = list(dict.fromkeys(
+                reason
+                for row in rejected_for_integrity
+                for reason in (row.get('integrityReasons') or [])
+            ))
+            rejected_source = (
+                max(rejected_for_integrity, key=_rank_key)
+                if rejected_for_integrity else {}
+            )
             explained = explain_recommendation({
+                **rejected_source,
                 'id': f'no-candidate:{category}',
                 'market': CATEGORY_LABELS[category],
                 'intelligenceCategory': category,
@@ -363,16 +385,16 @@ def select_game_card_quick_picks(
                 'adjProb': 0.0,
                 'edge': 0.0,
                 'grade': 'pending',
-            }, learning=learning, rejection_reasons=[
-                'no market candidate is available',
-            ])
+            }, learning=learning, rejection_reasons=(
+                integrity_reasons or ['no market candidate is available']
+            ))
             explained.update({
                 'selectionMode': 'pass',
                 'meetsStandardThresholds': False,
                 'isActionable': False,
-                'standardThresholdMisses': [
-                    'no market candidate is available',
-                ],
+                'standardThresholdMisses': (
+                    integrity_reasons or ['no market candidate is available']
+                ),
             })
 
         explained['intelligenceCategory'] = category
@@ -439,6 +461,8 @@ def select_game_card_quick_picks(
                 'separately and remains the win-probability estimate.'
             ),
         },
+        'candidateIntegrityVersion': integrity['version'],
+        'candidateIntegrityAudit': integrity['audit'],
     }
 
 

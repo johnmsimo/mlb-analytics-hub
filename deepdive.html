@@ -700,7 +700,7 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:14px 3
   <!-- GAME PROJECTION PANEL -->
   <div class="pnl fw pnl-src"><div class="pt">&#127919; GAME PROJECTION &amp; O/U MODEL <span class="tag-sv">PROJ</span></div><div id="gpContent"><div class="spinner"></div></div></div>
   <div class="pnl fw pnl-src"><div class="pt">&#128203; KEY STORYLINES <span class="tag-sv">GEMINI</span></div><div id="storylineContent"><div class="spinner"></div></div></div>
-  <div class="pnl fw pnl-src" id="parlayRecWrap"><div class="pt">&#11088; TOP PICKS &amp; PARLAY RECOMMENDATION <span class="tag-sv">BAT X</span></div><div id="parlayRecPanel"><div class="spinner"></div></div></div>
+  <div class="pnl fw pnl-src" id="parlayRecWrap"><div class="pt">&#11088; RESEARCH SIGNALS &amp; CORRELATION IDEAS <span class="tag-sv">BAT X</span></div><div id="parlayRecPanel"><div class="spinner"></div></div></div>
   <div class="pnl"><div class="pt">&#127919; MODEL EDGE</div><div id="edgeP"><div class="spinner"></div></div></div>
   <div class="pnl"><div class="pt">&#127780; WEATHER</div><div id="wxP"><div class="spinner"></div></div></div>
   <div class="pnl fw pnl-src">
@@ -911,39 +911,6 @@ function aiTrackerEntry(prop){
     reason:(prop && prop.reasoning) || 'Saved from deep dive AI notable props',
     source:'props_board'
   };
-}
-
-function addAIPickToParlay(idx){
-  var prop=AI_PROP_CACHE[idx];
-  if(!prop) return;
-  var entry=aiTrackerEntry(prop);
-  addPropToParlay(prop.player || '', entry.marketKey || 'batter_hits', entry.line || 0.5, GPK, entry.recommendedSide || 'Over', entry.team || '');
-}
-
-function saveAIPick(idx, ev){
-  if(ev){ev.stopPropagation();}
-  var prop=AI_PROP_CACHE[idx];
-  if(!prop) return;
-  var entry=aiTrackerEntry(prop);
-  var key=trackerKey(entry.player, entry.marketKey, entry.line);
-  if(TRACKED_KEYS.has(key) || TRACK_SAVING[key]) return;
-  TRACK_SAVING[key]=1;
-  renderAIPanel(AI_DATA);
-  fetch('/api/tracker/pick',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify(entry)
-  }).then(function(res){return res.json();})
-    .then(function(d){
-      if(d && d.success){
-        TRACKED_KEYS.add(key);
-        persistTrackedKeys();
-      }else{
-        alert('Save failed: '+((d&&d.error)||'unknown error'));
-      }
-    })
-    .catch(function(e){alert('Save failed: '+e.message);})
-    .finally(function(){delete TRACK_SAVING[key];renderAIPanel(AI_DATA);});
 }
 
 function loadGame(){
@@ -1842,8 +1809,7 @@ function showTab(side){
     if(hasSvSc)sc+='<td class="sv-c '+evc(p.sv_ev)+'">'+pv(p.sv_ev,'---')+'</td>'
       +'<td class="sv-c '+hhc(p.sv_hh_pct)+'">'+pv(p.sv_hh_pct,'---')+'</td>'
       +'<td class="sv-c '+brlc(p.sv_brl_pct)+'">'+pv(p.sv_brl_pct,'---')+'</td>';
-    // Add to Parlay button
-    var addBtn = '<button class="parlay-btn" style="margin-left:8px;padding:2px 8px;font-size:.7rem;border-radius:6px;border:1px solid var(--c);background:rgba(0,229,255,.08);color:var(--c);cursor:pointer" onclick="addToParlay(\''+esc(p.name)+'\', \'player\', '+i+')">+ Parlay</button>';
+    var addBtn = '<span style="margin-left:8px;color:var(--mu);font-size:.58rem">RESEARCH ONLY</span>';
     // Prop-spotlight emoji badges for the lineup's best Hit / HR / SB threats.
     var emo='';
     if(i===LEAD.hit) emo+=' <span title="Top hit probability in this lineup">🎯</span>';
@@ -1866,24 +1832,6 @@ function showTab(side){
       +(hasFg?'<span style="color:var(--fg)">&#9889; Orange = FanGraphs (wOBA/wRC+/WAR)</span>':'')
       +(hasSvX||hasSvSc?'<span style="color:var(--sv)">&#127987;&#65039; Cyan = Baseball Savant (xStats/EV/HH%/Brl%)</span>':'')
       +'</div>':'');
-}
-
-// Add to Parlay handler — saves a pending leg to localStorage and navigates to tracker
-function addToParlay(playerName, type, idx) {
-  var leg = {
-    type: type,
-    name: playerName,
-    idx: idx,
-    source: 'deepdive',
-    ts: Date.now()
-  };
-  var pending = [];
-  try {
-    pending = JSON.parse(localStorage.getItem('pendingParlayLegs')||'[]');
-  } catch(e) {}
-  pending.push(leg);
-  localStorage.setItem('pendingParlayLegs', JSON.stringify(pending));
-  window.location.href = '/tracker';
 }
 
 loadTrackedKeys();
@@ -2463,19 +2411,11 @@ function renderAIPanel(d) {
     AI_PROP_CACHE = proj.notable_props.slice();
     propsHtml = '<div class="ai-props"><div style="font-family:Orbitron;font-size:.64rem;color:var(--c);letter-spacing:2px;margin-bottom:10px">🎯 NOTABLE PLAYER PROPS</div>';
     proj.notable_props.forEach(function(prop, idx) {
-      var entry = aiTrackerEntry(prop);
-      var key = trackerKey(entry.player, entry.marketKey, entry.line);
-      var saving = !!TRACK_SAVING[key];
-      var saved = TRACKED_KEYS.has(key);
-      var saveTxt = saving ? '...' : (saved ? '✓ Saved' : '💾 Save Pick');
       propsHtml += '<div class="ai-prop-item" style="transition:background .2s" onmouseover="this.style.background=\'rgba(0,229,255,.08)\'" onmouseout="this.style.background=\'rgba(0,0,0,.2)\'">' +
         '<div class="ai-prop-player">' + (prop.player || 'Player') + '</div>' +
         '<div class="ai-prop-detail">' + (prop.prop || 'prop') + ' O/U ' + (prop.projection || '') + '</div>' +
         '<div class="ai-prop-reasoning">' + (prop.reasoning || '') + '</div>' +
-        '<div style="display:flex;gap:8px;margin-top:8px">' +
-          '<button class="trk-save'+(saved?' saved':'')+(saving?' saving':'')+'" onclick="saveAIPick('+idx+',event)">'+saveTxt+'</button>' +
-          '<button class="trk-save" onclick="addAIPickToParlay('+idx+')">＋ Add To Parlay</button>' +
-        '</div>' +
+        '<div style="color:var(--mu);font-size:.58rem;margin-top:8px">RESEARCH ONLY · NO VERIFIED SPORTSBOOK PRICE</div>' +
         '</div>';
     });
     propsHtml += '</div>';
@@ -2540,7 +2480,6 @@ setTimeout(function() {
 
 
 // ── Parlay Builder + Correlation Matrix ───────────────────────────────────────
-var PARLAY_STATE = { selections: [], odds: 0, americanOdds: 100 };
 var SIM_CORR_LOOKUP = {};
 var SIM_TOP_SGP = [];
 
@@ -2588,7 +2527,7 @@ function renderSgpBuilderSection(){
       + '<div class="sgp-stat">P: ' + pct(c.combined_prob || 0) + '</div>'
       + '<div class="sgp-stat"><span class="corr-badge ' + style.cls + '">' + style.label + '</span></div>'
       + '<div class="sgp-stat">EV: ' + ev + '</div>'
-      + '<button class="sgp-btn" onclick="addSgpCombo(' + idx + ')">Add to Parlay</button>'
+      + '<span class="sgp-btn" style="cursor:default;opacity:.65">RESEARCH ONLY</span>'
       + '</div>';
   }).join('');
   var negCount = (SIM_DATA.correlations || []).filter(function(c){ return c && c.r <= -0.3; }).length;
@@ -2598,22 +2537,6 @@ function renderSgpBuilderSection(){
     + '<div class="sgp-warning">Negative-correlation flags detected: ' + negCount + '. Avoid forcing conflicting legs into one SGP.</div>'
     + '</div>';
 }
-function addSgpCombo(idx){
-  var combo = SIM_TOP_SGP[idx];
-  if(!combo || !combo.legs_meta || !combo.legs_meta.length){ return; }
-  combo.legs_meta.forEach(function(leg){
-    PARLAY_STATE.selections.push({
-      game_pk: GPK,
-      player: leg.player || '',
-      market: leg.market || 'batter_hits',
-      projection: leg.line != null ? leg.line : 0.5,
-      side: leg.side || 'Over',
-      team: leg.team || '',
-    });
-  });
-  renderParlayPanel();
-}
-
 // ── Correlation engine ────────────────────────────────────────────────────────
 // Returns a coefficient from -1.0 to +1.0 between two parlay legs.
 // Positive = outcomes tend to happen together (dilutes true edge).
@@ -2750,158 +2673,6 @@ function parlayDiversification(selections) {
   return Math.round(Math.max(0, Math.min(100, (1 - avgCorr) * 100)));
 }
 
-function ensureParlayPanel() {
-  if (!document.getElementById('parlayPanelWrap')) {
-    var wrap = document.createElement('div');
-    wrap.id = 'parlayPanelWrap';
-    wrap.className = 'pnl fw pnl-src';
-    wrap.innerHTML = '<div class="pt">🎰 PARLAY BUILDER + CORRELATION MATRIX</div><div id="parlayPanel"><div class="parlay-empty">👁️ Add props to build a correlated parlay</div></div>';
-    var dg = document.querySelector('.dg');
-    if (dg) dg.appendChild(wrap);
-  }
-  return document.getElementById('parlayPanel');
-}
-
-function addPropToParlay(playerName, market, projection, gamePk, side, team) {
-  PARLAY_STATE.selections.push({
-    game_pk: gamePk,
-    player:  playerName,
-    market:  market,
-    projection: projection,
-    side:    side  || 'Over',
-    team:    team  || '',
-  });
-  renderParlayPanel();
-}
-
-function removeParlayLeg(idx) {
-  PARLAY_STATE.selections.splice(idx, 1);
-  renderParlayPanel();
-}
-
-function clearParlay() {
-  PARLAY_STATE.selections = [];
-  PARLAY_STATE.odds = 0;
-  PARLAY_STATE.americanOdds = 100;
-  renderParlayPanel();
-}
-
-function calculateParlayOdds() {
-  if (!PARLAY_STATE.selections.length) { PARLAY_STATE.odds = 0; PARLAY_STATE.americanOdds = 100; return; }
-  var prob = 1.0;
-  PARLAY_STATE.selections.forEach(function(sel) {
-    var p = 0.55;
-    var m = (sel.market || '').toLowerCase();
-    if      (m.includes('home_run'))    p = 0.48;
-    else if (m.includes('total_base'))  p = 0.54;
-    else if (m.includes('hit'))         p = sel.projection >= 1.5 ? 0.48 : 0.57;
-    else if (m.includes('strikeout') && m.includes('pitcher')) p = sel.projection >= 6.5 ? 0.52 : 0.56;
-    else if (m.includes('rbi'))         p = 0.52;
-    PARLAY_STATE.selections.forEach(function(other) {
-      if (other === sel) return;
-      var c = getCorrelation(sel, other);
-      p = Math.min(0.92, p * (1 + c.r * 0.12)); // correlation adjustment
-    });
-    prob *= Math.max(0.08, Math.min(0.92, p));
-  });
-  PARLAY_STATE.odds = prob;
-  PARLAY_STATE.americanOdds = prob >= 0.5
-    ? Math.round(-100 * prob / (1 - prob))
-    : Math.round(100 * (1 - prob) / prob);
-}
-
-function renderParlayPanel() {
-  var el = ensureParlayPanel();
-  calculateParlayOdds();
-
-  if (!PARLAY_STATE.selections.length) {
-    el.innerHTML = '<div class="parlay-empty">👁️ Add props from the AI panel or projections to build a parlay</div>';
-    return;
-  }
-
-  var sels = PARLAY_STATE.selections;
-  var divScore = parlayDiversification(sels);
-  var divColor = divScore >= 70 ? '#00e676' : divScore >= 45 ? '#ff9800' : '#f44336';
-  var divLabel = divScore >= 70 ? 'WELL DIVERSIFIED' : divScore >= 45 ? 'MODERATE OVERLAP' : 'HIGHLY CORRELATED';
-
-  // Build leg HTML with per-leg correlation badges vs all other legs
-  var legsHtml = sels.map(function(sel, idx) {
-    var corrBadges = '';
-    sels.forEach(function(other, jdx) {
-      if (jdx === idx) return;
-      var c = getCorrelation(sel, other);
-      var otherName = (other.player || '').split(' ').pop(); // last name only
-      corrBadges += '<span class="corr-badge ' + c.cls + '" title="' + c.r + '">'
-        + c.label + ' vs ' + otherName + '</span>';
-    });
-    var mktLabel = (sel.market || '').replace(/_/g, ' ').toUpperCase();
-    return '<div class="parlay-leg">'
-      + '<div class="parlay-leg-row">'
-      +   '<div class="parlay-leg-info">'
-      +     '<div class="parlay-leg-title">' + (sel.player || '—') + '</div>'
-      +     '<div class="parlay-leg-sub">' + mktLabel + ' · ' + sel.side + ' ' + (sel.projection || '') + (sel.team ? ' · ' + sel.team : '') + '</div>'
-      +   '</div>'
-      +   '<button class="parlay-leg-remove" onclick="removeParlayLeg(' + idx + ')">✕</button>'
-      + '</div>'
-      + (corrBadges ? '<div class="parlay-corr-row">' + corrBadges + '</div>' : '')
-      + '</div>';
-  }).join('');
-
-  // Diversification bar
-  var divBarHtml = '<div class="parlay-div-bar">'
-    + '<div class="parlay-div-label"><span>DIVERSIFICATION</span><span style="color:' + divColor + '">' + divScore + '/100 · ' + divLabel + '</span></div>'
-    + '<div class="parlay-div-track"><div class="parlay-div-fill" style="width:' + divScore + '%;background:' + divColor + '"></div></div>'
-    + '</div>';
-
-  var oddsHtml = '<div class="parlay-odds">'
-    + '<div class="parlay-odd-card"><div class="parlay-odd-label">BREAK-EVEN</div><div class="parlay-odd-value">' + (PARLAY_STATE.odds * 100).toFixed(1) + '%</div></div>'
-    + '<div class="parlay-odd-card"><div class="parlay-odd-label">AMERICAN ODDS</div><div class="parlay-odd-value">' + (PARLAY_STATE.americanOdds > 0 ? '+' : '') + PARLAY_STATE.americanOdds + '</div></div>'
-    + '<div class="parlay-odd-card"><div class="parlay-odd-label">LEGS</div><div class="parlay-odd-value">' + sels.length + '</div></div>'
-    + '</div>';
-
-  el.innerHTML = '<div class="parlay-header">🎰 PARLAY BUILDER <span class="parlay-badge">' + sels.length + ' LEGS</span></div>'
-    + legsHtml
-    + divBarHtml
-    + oddsHtml
-    + '<textarea id="parlayNotes" placeholder="Notes (optional)…" style="width:100%;background:#060e1d;border:1px solid rgba(0,229,255,.16);color:var(--t);padding:8px 10px;border-radius:8px;font-size:.7rem;font-family:Inter,sans-serif;resize:vertical;height:52px;margin-top:8px"></textarea>'
-    + '<div class="parlay-actions">'
-    +   '<button class="parlay-btn" onclick="clearParlay()">Clear All</button>'
-    +   '<button class="parlay-btn send" onclick="sendParlayToTracker()">Send to Tracker ✓</button>'
-    + '</div>';
-}
-
-function sendParlayToTracker() {
-  if (!PARLAY_STATE.selections.length) { alert('Add selections first'); return; }
-  var notes = (document.getElementById('parlayNotes') || {}).value || '';
-  var today = new Date().toISOString().split('T')[0];
-  fetch('/api/parlay/send-to-tracker', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({
-      parlay: {
-        id: 'parlay_' + Date.now(),
-        selections: PARLAY_STATE.selections,
-        american_odds: PARLAY_STATE.americanOdds,
-        diversification_score: parlayDiversification(PARLAY_STATE.selections),
-        summary: { leg_count: PARLAY_STATE.selections.length, break_even_prob: PARLAY_STATE.odds }
-      },
-      date: today, notes: notes
-    })
-  })
-  .then(function(r){ return r.json(); })
-  .then(function(d){
-    if (d.success) { alert('✓ Parlay sent to tracker for ' + today); clearParlay(); }
-    else alert('Error: ' + (d.error || 'Failed'));
-  })
-  .catch(function(e){ alert('Network error: ' + e.message); });
-}
-
-setTimeout(function() { ensureParlayPanel(); }, 500);
-
-
-
-
-
 // ── Phase 4 Monte Carlo Simulation UI ────────────────────────────────────────
 var SIM_DATA = null;
 var PROPS_DATA = null;
@@ -3027,7 +2798,7 @@ function buildParlayRec(){
   // Sort by score desc
   candidates.sort(function(a,b){return b.score-a.score;});
 
-  // ── Top 3 five-star bets (elite/strong only, deduplicated by player) ──────
+  // ── Top three research signals, deduplicated by player ────────────────────
   var starPicks = [];
   var seenNames = {};
   candidates.forEach(function(c){
@@ -3049,7 +2820,7 @@ function buildParlayRec(){
     });
   }
 
-  // ── Parlay legs: best HITS + best BASES + best K + best HR ─────────────────
+  // ── Correlation examples: best HITS + BASES + K + HR research signals ─────
   var parlayLegs = [];
   var cats = ['HITS','BASES','K','HR'];
   cats.forEach(function(cat){
@@ -3071,7 +2842,7 @@ function buildParlayRec(){
       +'</div>'
       +'<div class="pr-conf '+c.conf+'">'+confStars[c.conf]+'</div>'
     +'</div>';
-  }).join('') : '<div class="pr-empty">No high-confidence picks found</div>';
+  }).join('') : '<div class="pr-empty">No strong research signals found</div>';
 
   var parlayHtml = parlayLegs.length ? parlayLegs.map(function(leg){
     var isOver = leg.pick.indexOf('OVER')>=0;
@@ -3085,13 +2856,13 @@ function buildParlayRec(){
 
   el.innerHTML = '<div class="pr-grid">'
     +'<div class="pr-card stars">'
-      +'<div class="pr-section-hd">⭐ TOP 3 FIVE-STAR BETS</div>'
+      +'<div class="pr-section-hd">⭐ TOP 3 RESEARCH SIGNALS</div>'
       +starsHtml
     +'</div>'
     +'<div class="pr-card parlay">'
-      +'<div class="pr-section-hd">🎰 PARLAY RECOMMENDATION <span style="font-size:.52rem;font-family:sans-serif;opacity:.6;letter-spacing:0">'+(parlayLegs.length)+'-LEG</span></div>'
+      +'<div class="pr-section-hd">🔬 CORRELATION RESEARCH <span style="font-size:.52rem;font-family:sans-serif;opacity:.6;letter-spacing:0">'+(parlayLegs.length)+' SIGNALS</span></div>'
       +parlayHtml
-      +(parlayLegs.length>=2?'<div style="margin-top:12px;padding:10px;background:rgba(0,0,0,.2);border-radius:8px;font-size:.6rem;color:var(--mu);line-height:1.6">💡 <strong style="color:var(--t)">Parlay tip:</strong> Correlated legs (same team\'s hitters + opposing K under) increase risk. Consider splitting into singles for value.</div>':'')
+      +(parlayLegs.length>=2?'<div style="margin-top:12px;padding:10px;background:rgba(0,0,0,.2);border-radius:8px;font-size:.6rem;color:var(--mu);line-height:1.6">Research only. These projections are not priced or eligible betting candidates.</div>':'')
     +'</div>'
   +'</div>';
 }

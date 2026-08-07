@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timezone
 
 from explanation_engine import explain_decisions, explain_recommendation
 from intelligence_core import build_recommendations
@@ -106,6 +107,25 @@ class ExplanationEngineTests(unittest.TestCase):
             'confidenceScore': 40,
             'edge': .01,
             'grade': 'pending',
+            'gamePk': 7,
+            'player': 'Weak Hitter',
+            'playerId': 77,
+            'line': 0.5,
+            'recommendedSide': 'Over',
+            'bestAvailablePrice': -110,
+            'bestAvailableBook': 'Book A',
+            'bestOverPrice': -110,
+            'bestUnderPrice': -105,
+            'gameStatus': 'Scheduled',
+            'gameAbstractState': 'Preview',
+            'gameStartIso': '2099-08-06T23:10:00+00:00',
+            'lineupStatus': 'confirmed',
+            'playerRole': 'batter',
+            'playerPosition': 'CF',
+            'modelVersion': 'test-model-4.37',
+            'matchupSimulationVersion': '4.35',
+            'gameSimN': 1500,
+            'oddsUpdatedAt': datetime.now(timezone.utc).isoformat(),
         }])
         result = explain_decisions(decisions)
         self.assertEqual(result['rejected'][0]['recommendationGrade'], 'Pass')

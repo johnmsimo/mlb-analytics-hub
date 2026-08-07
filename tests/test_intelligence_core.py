@@ -1,9 +1,27 @@
 import unittest
+from datetime import datetime, timezone
 from intelligence_core import build_recommendations, classify_pick
 
 
 def pick(pid, market, probability=.64, confidence=76, edge=.08, rating=80):
-    return {'id': pid, 'market': market, 'blendedProb': probability, 'confidenceScore': confidence, 'edge': edge, 'hubRating': rating, 'grade': 'pending'}
+    market_l = market.lower()
+    role = 'pitcher' if 'strikeout' in market_l else 'team' if 'moneyline' in market_l else 'batter'
+    return {
+        'id': pid, 'market': market, 'blendedProb': probability,
+        'confidenceScore': confidence, 'edge': edge, 'hubRating': rating,
+        'grade': 'pending', 'gamePk': 7, 'player': pid, 'playerId': pid,
+        'line': 0 if role == 'team' else 0.5, 'recommendedSide': 'NYY' if role == 'team' else 'Over',
+        'bestAvailablePrice': 110, 'bestAvailableBook': 'Book A',
+        'bestOverPrice': 110, 'bestUnderPrice': -110,
+        'gameStatus': 'Scheduled', 'gameAbstractState': 'Preview',
+        'gameStartIso': '2099-08-06T23:10:00+00:00',
+        'lineupStatus': 'not_applicable' if role == 'team' else 'confirmed',
+        'playerRole': role,
+        'playerPosition': 'TEAM' if role == 'team' else 'SP' if role == 'pitcher' else 'CF',
+        'modelVersion': 'test-model-4.37',
+        'matchupSimulationVersion': '4.35', 'gameSimN': 1500,
+        'oddsUpdatedAt': datetime.now(timezone.utc).isoformat(),
+    }
 
 
 class IntelligenceCoreTests(unittest.TestCase):

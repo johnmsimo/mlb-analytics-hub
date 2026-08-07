@@ -190,7 +190,7 @@
         '<td>'+ esc(r.matchupGrade||r.bvpGrade||'-') +'</td>'+
         '<td>'+ (r.hubRating==null?'-':r.hubRating) +'</td>'+
         '<td class="'+((r.evPct||0)>=0?'good':'bad')+'">'+num(r.evPct,1)+'%</td>'+
-        '<td><button class="btn parlay-btn" onclick="addHitsRowToParlay('+idx+')">+ Parlay</button></td>'+
+        '<td>'+(r.actionable?'<button class="btn parlay-btn" onclick="addHitsRowToParlay('+idx+')">+ Parlay</button>':'<span style="color:var(--mu);font-size:.65rem">Research only</span>')+'</td>'+
       '</tr>').join('');
     }
 
@@ -214,7 +214,7 @@
         '<td>'+ esc(r.matchupGrade||r.bvpGrade||'-') +'</td>'+
         '<td class="'+l10Class(r.l10Pct)+'">'+pct(r.l10Pct)+'</td>'+
         '<td>'+ (r.hubRating==null?'-':r.hubRating) +'</td>'+
-        '<td><button class="btn parlay-btn" onclick="addMatchupRowToParlay('+idx+')">+ Parlay</button></td>'+
+        '<td><span style="color:var(--mu);font-size:.65rem">Research only</span></td>'+
       '</tr>').join('');
     }
 
@@ -296,7 +296,7 @@
         '<div class="ws-divider"></div>'+
         '<div class="ws-rec">'+esc(c.recommendation||'-')+'</div>'+
         reasonHtml+
-        '<button class="ws-parlay-btn" onclick="addWeakspotToParlay('+idx+')">+ Parlay</button>'+
+        '<div style="margin-top:8px;color:var(--mu);font-size:.68rem">Research only · no verified price</div>'+
       '</div>';
     }
 
