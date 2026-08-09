@@ -115,7 +115,7 @@ def post_fork(server, worker):
             max_workers=1,
         )
         server.log.info(
-            "[post_fork] bounded reference warmup started=%s; status is available at /api/cache/warmup/status",
+            "[post_fork] shared reference snapshot hydration started; upstream refresh remains worker-only; bounded warmup started=%s; status is available at /api/cache/warmup/status",
             started,
         )
     except Exception as ex:
