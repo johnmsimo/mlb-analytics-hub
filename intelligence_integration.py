@@ -1,4 +1,5 @@
 """Flask integration for prediction, explanation, and game-card intelligence."""
+import math
 import time
 from datetime import datetime
 
@@ -341,6 +342,58 @@ def _pick_evidence(row, clv):
         'clvCapturedAt': clv.get('capturedAt'),
     }
 
+
+def _evidence_integrity(evidence):
+    """Fail closed when an actionable pick lacks decision-ready evidence."""
+    required = (
+        'market', 'side', 'price', 'book', 'probabilityPct',
+        'edgePct', 'freshnessSeconds', 'lineupStatus',
+    )
+    reasons = []
+    for field in required:
+        value = evidence.get(field)
+        if value is None or (
+            isinstance(value, str) and not value.strip()
+        ):
+            reasons.append(f'missing {field}')
+
+    for field in ('price', 'probabilityPct', 'edgePct'):
+        value = evidence.get(field)
+        if value is None:
+            continue
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            reasons.append(f'invalid {field}')
+            continue
+        if not math.isfinite(number):
+            reasons.append(f'invalid {field}')
+
+    freshness = evidence.get('freshnessSeconds')
+    if freshness is not None:
+        try:
+            freshness_value = float(freshness)
+        except (TypeError, ValueError):
+            reasons.append('invalid freshnessSeconds')
+        else:
+            if (
+                not math.isfinite(freshness_value)
+                or freshness_value < 0
+                or freshness_value > _MAX_ACTIONABLE_CACHE_AGE
+            ):
+                reasons.append('freshnessSeconds exceeds actionable window')
+
+    lineup_status = str(evidence.get('lineupStatus') or '').strip().lower()
+    if lineup_status in {'out', 'inactive', 'unknown', 'unconfirmed'}:
+        reasons.append('lineup is not confirmed or projected')
+
+    return {
+        'version': '4.45',
+        'status': 'verified' if not reasons else 'rejected',
+        'verified': not reasons,
+        'reasons': reasons,
+    }
+
 def install_intelligence_api(app_module):
     flask_app = app_module.app
     if 'api_intelligence_recommendations' in flask_app.view_functions:
@@ -394,6 +447,8 @@ def install_intelligence_api(app_module):
         """
         payload = _recommendation_payload()
         candidates = []
+        evidence_rejections = []
+        evidence_rejection_reasons = {}
         for pick in payload.get('card') or []:
             row = dict(pick)
             if str(row.get('recommendationGrade') or '').lower() == 'pass':
@@ -406,7 +461,17 @@ def install_intelligence_api(app_module):
             row.setdefault('freshnessSeconds', row.get('oddsAgeSeconds'))
             clv = _clv_provenance(row)
             row['clvProvenance'] = clv
-            row['evidence'] = _pick_evidence(row, clv)
+            evidence = _pick_evidence(row, clv)
+            evidence_integrity = _evidence_integrity(evidence)
+            row['evidence'] = evidence
+            row['evidenceIntegrity'] = evidence_integrity
+            if not evidence_integrity['verified']:
+                evidence_rejections.append(row)
+                for reason in evidence_integrity['reasons']:
+                    evidence_rejection_reasons[reason] = (
+                        evidence_rejection_reasons.get(reason, 0) + 1
+                    )
+                continue
             candidates.append(row)
         candidates.sort(key=lambda row: (
             -float(row.get('pickScore') or row.get('decisionScore') or 0),
@@ -415,12 +480,20 @@ def install_intelligence_api(app_module):
         picks = candidates[:5]
         return app_module.jsonify({
             'success': True,
-            'contractVersion': '4.44',
-            'evidenceVersion': '4.44',
+            'contractVersion': '4.45',
+            'evidenceVersion': '4.45',
+            'evidenceIntegrityVersion': '4.45',
             'date': payload.get('date'),
             'picks': picks,
             'count': len(picks),
             'researchOnly': not bool(picks),
+            'evidenceAudit': {
+                'version': '4.45',
+                'candidateCount': len(candidates) + len(evidence_rejections),
+                'acceptedCount': len(candidates),
+                'rejectedCount': len(evidence_rejections),
+                'rejectionReasons': dict(sorted(evidence_rejection_reasons.items())),
+            },
             'passes': len(payload.get('passes') or payload.get('rejected') or []),
             'marketValidation': payload.get('marketValidation'),
             'marketGateAudit': payload.get('marketGateAudit'),
