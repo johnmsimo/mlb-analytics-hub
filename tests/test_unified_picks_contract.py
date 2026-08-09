@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_unified_picks_route_is_the_primary_actionable_contract():
     source = (ROOT / 'intelligence_integration.py').read_text(encoding='utf-8')
     assert "@flask_app.route('/api/picks/today'" in source
-    assert "'contractVersion': '4.44'" in source
+    assert "'contractVersion': '4.45'" in source
     assert "'picks': picks" in source
     assert "candidates[:5]" in source
     assert "recommendationGrade" in source
@@ -36,7 +36,13 @@ def test_unified_route_does_not_promote_pass_rows():
 
 def test_primary_picks_contract_exposes_normalized_evidence_snapshot():
     source = (ROOT / 'intelligence_integration.py').read_text(encoding='utf-8')
-    assert "'evidenceVersion': '4.44'" in source
+    assert "'evidenceVersion': '4.45'" in source
     assert "def _pick_evidence(row, clv):" in source
-    assert "row['evidence'] = _pick_evidence(row, clv)" in source
+    assert "evidence = _pick_evidence(row, clv)" in source
     assert "'verifiedClvEdge': clv.get('edge')" in source
+
+    assert "'evidenceIntegrityVersion': '4.45'" in source
+    assert "def _evidence_integrity(evidence):" in source
+    assert "row['evidenceIntegrity'] = evidence_integrity" in source
+    assert "if not evidence_integrity['verified']:" in source
+    assert "'evidenceAudit': {" in source
