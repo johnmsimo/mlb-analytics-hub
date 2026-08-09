@@ -39,6 +39,10 @@ def _test_app():
     def public_picks():
         return jsonify({"success": True})
 
+    @app.get("/<path:ignored>")
+    def admin_surface_stub(ignored):
+        return jsonify({"success": True})
+
     install_security(app)
     return app
 
