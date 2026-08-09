@@ -473,12 +473,35 @@ def install_intelligence_api(app_module):
                     )
                 continue
             candidates.append(row)
+        ranking_method = 'pickScore_desc_then_edgePct_desc'
         candidates.sort(key=lambda row: (
             -float(row.get('pickScore') or row.get('decisionScore') or 0),
             -float(row.get('estimatedEdgePct') or row.get('edge') or 0),
         ))
         actionable_limit = 5
-        picks = candidates[:actionable_limit]
+        ranked_candidates = []
+        for rank, candidate in enumerate(candidates, start=1):
+            ranked = dict(candidate)
+            ranked['selectionAudit'] = {
+                'version': '4.48',
+                'rank': rank,
+                'rankedBy': ranking_method,
+                'rankingScore': (
+                    ranked.get('pickScore')
+                    or ranked.get('decisionScore')
+                ),
+                'tieBreakEdgePct': (
+                    ranked.get('estimatedEdgePct')
+                    or ranked.get('edge')
+                ),
+                'disposition': (
+                    'displayed'
+                    if rank <= actionable_limit
+                    else 'withheld_by_actionable_cap'
+                ),
+            }
+            ranked_candidates.append(ranked)
+        picks = ranked_candidates[:actionable_limit]
         displayed_count = len(picks)
         rejected_count = len(evidence_rejections)
         withheld_count = max(0, len(candidates) - displayed_count)
@@ -493,20 +516,26 @@ def install_intelligence_api(app_module):
             audit_status = 'verified'
         return app_module.jsonify({
             'success': True,
-            'contractVersion': '4.47',
+            'contractVersion': '4.48',
             'evidenceVersion': '4.45',
             'evidenceIntegrityVersion': '4.45',
-            'evidenceAuditVersion': '4.47',
+            'evidenceAuditVersion': '4.48',
             'date': payload.get('date'),
             'picks': picks,
             'count': len(picks),
             'researchOnly': not bool(picks),
             'evidenceAudit': {
-                'version': '4.47',
+                'version': '4.48',
                 'status': audit_status,
                 'actionableLimit': actionable_limit,
                 'capApplied': cap_applied,
                 'withheldCount': withheld_count,
+                'rankingVersion': '4.48',
+                'rankingMethod': ranking_method,
+                'selectionRule': (
+                    'highest-ranked validated candidates up to actionableLimit'
+                ),
+                'rankedCandidateCount': len(ranked_candidates),
                 'candidateCount': len(candidates) + len(evidence_rejections),
                 'acceptedCount': len(candidates),
                 'rejectedCount': rejected_count,
