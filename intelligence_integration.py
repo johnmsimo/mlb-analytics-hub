@@ -296,8 +296,7 @@ def install_intelligence_api(app_module):
     if 'api_intelligence_recommendations' in flask_app.view_functions:
         return
 
-    @flask_app.route('/api/intelligence/recommendations', methods=['GET'])
-    def api_intelligence_recommendations():
+    def _recommendation_payload():
         date_str = app_module.request.args.get('date') or None
         tracker = app_module._tracker_today_payload(date_str)
         entries = tracker.get('entries') or tracker.get('picks') or []
@@ -314,7 +313,7 @@ def install_intelligence_api(app_module):
             build_recommendations(market_gates['promoted']),
             learning=learning,
         )
-        return app_module.jsonify({
+        return {
             'success': True,
             'date': tracker.get('date') or date_str,
             'sourceCount': len(entries),
@@ -327,6 +326,53 @@ def install_intelligence_api(app_module):
             'marketValidation': learning.get('marketValidation'),
             'explanationVersion': '4.32',
             **decisions,
+        }
+
+    @flask_app.route('/api/intelligence/recommendations', methods=['GET'])
+    def api_intelligence_recommendations():
+        return app_module.jsonify(_recommendation_payload())
+
+    @flask_app.route('/api/picks/today', methods=['GET'])
+    def api_picks_today():
+        """Single authoritative, actionable Picks contract.
+
+        The older recommendation endpoints remain available for research and
+        compatibility, but this route is the only surface intended to drive
+        the primary betting experience. It deliberately caps the actionable
+        set and carries the evidence needed to make a decision without
+        opening another page.
+        """
+        payload = _recommendation_payload()
+        candidates = []
+        for pick in payload.get('card') or []:
+            row = dict(pick)
+            if str(row.get('recommendationGrade') or '').lower() == 'pass':
+                continue
+            row.setdefault('book', row.get('bestAvailableBook') or row.get('bestBook'))
+            row.setdefault('price', row.get('bestAvailablePrice') or row.get('marketPrice'))
+            row.setdefault('probabilityPct', row.get('modelProbabilityPct'))
+            row.setdefault('edgePct', row.get('estimatedEdgePct'))
+            row.setdefault('lineupStatus', row.get('lineupSource') or row.get('lineup_status'))
+            row.setdefault('freshnessSeconds', row.get('oddsAgeSeconds'))
+            candidates.append(row)
+        candidates.sort(key=lambda row: (
+            -float(row.get('pickScore') or row.get('decisionScore') or 0),
+            -float(row.get('estimatedEdgePct') or row.get('edge') or 0),
+        ))
+        picks = candidates[:5]
+        return app_module.jsonify({
+            'success': True,
+            'contractVersion': '4.39',
+            'date': payload.get('date'),
+            'picks': picks,
+            'count': len(picks),
+            'researchOnly': not bool(picks),
+            'passes': len(payload.get('passes') or payload.get('rejected') or []),
+            'marketValidation': payload.get('marketValidation'),
+            'marketGateAudit': payload.get('marketGateAudit'),
+            'sourceCount': payload.get('sourceCount', 0),
+            'message': ('No market currently passes the validation gate; projections remain research-only.'
+                        if not picks else 'Only the highest-ranked validated plays are shown.'),
         })
 
     @flask_app.route('/api/intelligence/learning', methods=['GET'])
