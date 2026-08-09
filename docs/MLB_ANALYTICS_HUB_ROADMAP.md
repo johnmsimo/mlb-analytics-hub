@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 4.57 merged and deployed on 2026-08-09. Phase 4.58 is the active phase.
+Status: Phase 4.58 merged and deployed on 2026-08-09. Phase 4.59 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -103,6 +103,8 @@ Exit gate: no horizontal overflow, clipped tables, inaccessible controls, or
 hidden primary actions at 390px width.
 
 ### Phase 4.59 — Performance and cache readiness
+
+Implementation status: bounded cache warmup, explicit route budgets, parallel independent best-bets refreshers, pooled deep-dive loaders, and visible timeout/partial fallback states are wired into the runtime.
 
 Reduce slow schedule/API calls, improve cold-start warmup, parallelize
 independent loaders, and add route-level performance budgets.
