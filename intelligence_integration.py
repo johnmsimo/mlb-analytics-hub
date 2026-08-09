@@ -3,6 +3,7 @@ import math
 import time
 from datetime import datetime
 
+from actionability import ACTIONABILITY_VERSION, evaluate_actionability
 from candidate_integrity import (
     INTEGRITY_VERSION,
     CandidateIntegrityPolicy,
@@ -183,6 +184,8 @@ def _decision_payload(game_pk, date_str, rows, all_tracker_entries, generated_co
         'quickPicksVersion': VALIDATION_VERSION,
         'candidateIntegrityVersion': INTEGRITY_VERSION,
         'candidateIntegrityAudit': integrity['audit'],
+        'actionabilityVersion': ACTIONABILITY_VERSION,
+        'actionabilityAudit': (market_gates['audit'].get('actionabilityAudit') or {}),
         'marketValidationVersion': VALIDATION_VERSION,
         'marketGateAudit': market_gates['audit'],
         'marketValidation': learning.get('marketValidation'),
@@ -214,6 +217,15 @@ def _pending_payload(game_pk, date_str, source_count):
         'quickPicksVersion': VALIDATION_VERSION,
         'candidateIntegrityVersion': INTEGRITY_VERSION,
         'candidateIntegrityAudit': evaluate_candidates([])['audit'],
+        'actionabilityVersion': ACTIONABILITY_VERSION,
+        'actionabilityAudit': {
+            'version': ACTIONABILITY_VERSION,
+            'sourceCount': 0,
+            'actionableCount': 0,
+            'rejectedCount': 0,
+            'stageCounts': {},
+            'rejectionReasons': {},
+        },
         'pickConfidenceVersion': '4.34',
         'matchupSimulationVersion': '4.35',
         'performanceVersion': '4.36',
@@ -472,11 +484,25 @@ def install_intelligence_api(app_module):
         """
         payload = _recommendation_payload()
         candidates = []
+        actionability_rejections = []
+        actionability_rejection_reasons = {}
         evidence_rejections = []
         evidence_rejection_reasons = {}
         for pick in payload.get('card') or []:
             row = dict(pick)
             if str(row.get('recommendationGrade') or '').lower() == 'pass':
+                continue
+            actionability = evaluate_actionability(
+                row,
+                require_market_validation=True,
+            )
+            row.update(actionability)
+            if not actionability['actionable']:
+                actionability_rejections.append(row)
+                for reason in actionability['actionabilityReasons']:
+                    actionability_rejection_reasons[reason] = (
+                        actionability_rejection_reasons.get(reason, 0) + 1
+                    )
                 continue
             row.setdefault('book', row.get('bestAvailableBook') or row.get('bestBook'))
             row.setdefault('price', row.get('bestAvailablePrice') or row.get('marketPrice'))
@@ -562,9 +588,17 @@ def install_intelligence_api(app_module):
             audit_status = 'capped'
         else:
             audit_status = 'verified'
+        actionability_stage_counts = {}
+        for row in actionability_rejections:
+            stage = str(row.get('actionabilityStage') or 'Validated')
+            actionability_stage_counts[stage] = (
+                actionability_stage_counts.get(stage, 0) + 1
+            )
+        actionability_stage_counts['Actionable'] = len(candidates)
         return app_module.jsonify({
             'success': True,
-            'contractVersion': '4.50',
+            'contractVersion': '4.52',
+            'actionabilityVersion': ACTIONABILITY_VERSION,
             'evidenceVersion': '4.45',
             'evidenceIntegrityVersion': '4.45',
             'evidenceAuditVersion': '4.50',
@@ -573,6 +607,25 @@ def install_intelligence_api(app_module):
             'count': len(picks),
             'researchOnly': not bool(picks),
             'selectionAuditVersion': '4.50',
+            'actionabilityAudit': {
+                'version': ACTIONABILITY_VERSION,
+                'candidateCount': (
+                    len(actionability_rejections)
+                    + len(candidates)
+                    + len(evidence_rejections)
+                ),
+                'actionableCount': len(candidates),
+                'rejectedCount': (
+                    len(actionability_rejections)
+                    + len(evidence_rejections)
+                ),
+                'stageCounts': dict(sorted(actionability_stage_counts.items())),
+                'rejectionReasons': dict(sorted(actionability_rejection_reasons.items())),
+                'evidenceRejectedCount': len(evidence_rejections),
+                'evidenceRejectionReasons': dict(
+                    sorted(evidence_rejection_reasons.items())
+                ),
+            },
             'evidenceAudit': {
                 'version': '4.49',
                 'status': audit_status,

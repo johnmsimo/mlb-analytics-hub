@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 4.50 merged and deployed on 2026-08-09.
+Status: Phase 4.51 merged and deployed on 2026-08-09. Phase 4.52 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and

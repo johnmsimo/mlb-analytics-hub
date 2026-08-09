@@ -16,6 +16,7 @@ from datetime import date, datetime, timezone
 import math
 from typing import Any, Iterable, Mapping
 
+from actionability import ACTIONABILITY_VERSION, evaluate_actionability
 from candidate_integrity import SUPPORTED_MARKETS, canonical_market_key
 
 
@@ -587,6 +588,8 @@ def apply_market_gates(
     rejected: list[dict[str, Any]] = []
     counts: dict[str, int] = defaultdict(int)
     rejection_reasons: Counter[str] = Counter()
+    stage_counts: Counter[str] = Counter()
+    actionability_reasons: Counter[str] = Counter()
     for source in candidates:
         row = dict(source)
         market = canonical_market_key(row)
@@ -627,16 +630,26 @@ def apply_market_gates(
             "marketSideGateStatus": side_status,
             "marketSideGateMetrics": dict(side_gate.get("metrics") or {}),
         })
+        decision = evaluate_actionability(
+            row,
+            require_market_validation=True,
+        )
+        row.update(decision)
+        stage_counts[decision["actionabilityStage"]] += 1
         counts[status] += 1
-        if is_promoted:
+        if decision["actionable"] and is_promoted:
+            row["promotionStatus"] = "promoted"
             promoted.append(row)
         else:
             row["actionable"] = False
             row["promotionStatus"] = "research_only"
-            row["promotionReasons"] = reasons or [
-                "market has not passed walk-forward validation"
-            ]
+            row["promotionReasons"] = list(dict.fromkeys(
+                reasons
+                + (decision["actionabilityReasons"] if not is_promoted else [])
+                or ["market has not passed walk-forward validation"]
+            ))
             rejection_reasons.update(row["promotionReasons"])
+            actionability_reasons.update(decision["actionabilityReasons"])
             rejected.append(row)
     return {
         "version": VALIDATION_VERSION,
@@ -649,5 +662,11 @@ def apply_market_gates(
             "rejectedCount": len(rejected),
             "statusCounts": dict(sorted(counts.items())),
             "rejectionReasons": dict(sorted(rejection_reasons.items())),
+            "actionabilityVersion": ACTIONABILITY_VERSION,
+            "actionabilityAudit": {
+                "version": ACTIONABILITY_VERSION,
+                "stageCounts": dict(sorted(stage_counts.items())),
+                "rejectionReasons": dict(sorted(actionability_reasons.items())),
+            },
         },
     }

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
+from actionability import ACTIONABILITY_VERSION, evaluate_actionability
 from candidate_integrity import evaluate_candidates
 
 @dataclass(frozen=True)
@@ -67,8 +68,25 @@ def build_recommendations(picks: Iterable[Mapping[str, Any]], policy: DecisionPo
         }
         for row in integrity['rejected']
     ]
+    actionability_rejections = []
     for source in integrity['eligible']:
         p = dict(source)
+        actionability = evaluate_actionability(
+            p,
+            require_market_validation=(
+                "marketGatePromoted" in p or "promotionStatus" in p
+            ),
+        )
+        p.update(actionability)
+        if not actionability["actionable"]:
+            actionability_rejections.append({
+                "id": p.get("id") or p.get("canonicalCandidateId"),
+                "category": classify_pick(p),
+                "reasons": list(actionability["actionabilityReasons"]),
+                "actionabilityStage": actionability["actionabilityStage"],
+                "integrityStatus": "rejected",
+            })
+            continue
         category = classify_pick(p)
         reasons = []
         if _prob(p) < policy.minimum_probability: reasons.append('probability below threshold')
@@ -122,6 +140,24 @@ def build_recommendations(picks: Iterable[Mapping[str, Any]], policy: DecisionPo
             for c in categories if best[c] is None
         },
         'eligibleCount': len(eligible),
-        'rejectedCount': len(rejected),
-        'rejected': rejected,
+        'rejectedCount': len(rejected) + len(actionability_rejections),
+        'rejected': rejected + actionability_rejections,
+        'actionabilityVersion': ACTIONABILITY_VERSION,
+        'actionabilityAudit': {
+            'version': ACTIONABILITY_VERSION,
+            'sourceCount': len(integrity['eligible']),
+            'actionableCount': len(eligible),
+            'rejectedCount': len(actionability_rejections),
+            'rejectionReasons': {
+                reason: sum(
+                    reason in item['reasons']
+                    for item in actionability_rejections
+                )
+                for reason in sorted({
+                    reason
+                    for item in actionability_rejections
+                    for reason in item['reasons']
+                })
+            },
+        },
     }
