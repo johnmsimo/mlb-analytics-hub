@@ -27,7 +27,7 @@ def _lineage(**overrides):
         },
     }
     values.update(overrides)
-    receipt = accept_closing_capture(
+    receipt = values.pop("closing_integrity", None) or accept_closing_capture(
         opening={"capturedAt": values["opening"]["capturedAt"]},
         closing={
             "capturedAt": values["closing"]["capturedAt"],
