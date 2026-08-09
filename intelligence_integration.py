@@ -464,6 +464,8 @@ def install_intelligence_api(app_module):
             'marketValidationVersion': VALIDATION_VERSION,
             'marketGateAudit': market_gates['audit'],
             'marketValidation': learning.get('marketValidation'),
+            'calibrationVersion': '4.54',
+            'calibrationAudit': (learning.get('marketValidation') or {}).get('calibrationAudit') or {},
             'explanationVersion': '4.32',
             **decisions,
         }
@@ -661,6 +663,8 @@ def install_intelligence_api(app_module):
             },
             'passes': len(payload.get('passes') or payload.get('rejected') or []),
             'marketValidation': payload.get('marketValidation'),
+            'calibrationVersion': '4.54',
+            'calibrationAudit': (payload.get('marketValidation') or {}).get('calibrationAudit') or {},
             'marketGateAudit': payload.get('marketGateAudit'),
             'sourceCount': payload.get('sourceCount', 0),
             'message': ('No market currently passes the validation gate; projections remain research-only.'
