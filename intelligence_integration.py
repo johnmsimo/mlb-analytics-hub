@@ -478,20 +478,32 @@ def install_intelligence_api(app_module):
             -float(row.get('estimatedEdgePct') or row.get('edge') or 0),
         ))
         picks = candidates[:5]
+        displayed_count = len(picks)
+        rejected_count = len(evidence_rejections)
+        audit_status = (
+            'verified' if displayed_count and not rejected_count
+            else 'partial' if displayed_count and rejected_count
+            else 'rejected' if rejected_count
+            else 'unavailable'
+        )
         return app_module.jsonify({
             'success': True,
-            'contractVersion': '4.45',
+            'contractVersion': '4.46',
             'evidenceVersion': '4.45',
             'evidenceIntegrityVersion': '4.45',
+            'evidenceAuditVersion': '4.46',
             'date': payload.get('date'),
             'picks': picks,
             'count': len(picks),
             'researchOnly': not bool(picks),
             'evidenceAudit': {
-                'version': '4.45',
+                'version': '4.46',
+                'status': audit_status,
+                'actionableLimit': 5,
                 'candidateCount': len(candidates) + len(evidence_rejections),
                 'acceptedCount': len(candidates),
-                'rejectedCount': len(evidence_rejections),
+                'rejectedCount': rejected_count,
+                'displayedCount': displayed_count,
                 'rejectionReasons': dict(sorted(evidence_rejection_reasons.items())),
             },
             'passes': len(payload.get('passes') or payload.get('rejected') or []),
