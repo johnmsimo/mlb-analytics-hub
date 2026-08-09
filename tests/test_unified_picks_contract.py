@@ -34,6 +34,8 @@ def test_primary_picks_contract_requires_actionability_gate():
     assert "require_market_validation=True" in source
     assert "'actionabilityVersion': ACTIONABILITY_VERSION" in source
     assert "'actionabilityAudit': {" in source
+    assert "'actionableCount': len(candidates)" in source
+    assert "'evidenceRejectedCount': len(evidence_rejections)" in source
 
 
 def test_unified_route_does_not_promote_pass_rows():
