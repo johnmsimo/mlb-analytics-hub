@@ -531,6 +531,24 @@ def install_intelligence_api(app_module):
                 ),
             }
             ranked_candidates.append(ranked)
+        displayed_ranks = [
+            item['selectionAudit']['rank']
+            for item in ranked_candidates[:actionable_limit]
+        ]
+        withheld_ranks = [
+            item['selectionAudit']['rank']
+            for item in ranked_candidates[actionable_limit:]
+        ]
+        cap_boundary = None
+        if len(ranked_candidates) >= actionable_limit:
+            boundary = ranked_candidates[actionable_limit - 1]
+            boundary_audit = boundary['selectionAudit']
+            cap_boundary = {
+                'rank': boundary_audit['rank'],
+                'rankingScore': boundary_audit['rankingScore'],
+                'tieBreakEdgePct': boundary_audit['tieBreakEdgePct'],
+                'stableOrderKey': boundary_audit['stableOrderKey'],
+            }
         picks = ranked_candidates[:actionable_limit]
         displayed_count = len(picks)
         rejected_count = len(evidence_rejections)
@@ -546,15 +564,15 @@ def install_intelligence_api(app_module):
             audit_status = 'verified'
         return app_module.jsonify({
             'success': True,
-            'contractVersion': '4.49',
+            'contractVersion': '4.50',
             'evidenceVersion': '4.45',
             'evidenceIntegrityVersion': '4.45',
-            'evidenceAuditVersion': '4.49',
+            'evidenceAuditVersion': '4.50',
             'date': payload.get('date'),
             'picks': picks,
             'count': len(picks),
             'researchOnly': not bool(picks),
-            'selectionAuditVersion': '4.49',
+            'selectionAuditVersion': '4.50',
             'evidenceAudit': {
                 'version': '4.49',
                 'status': audit_status,
@@ -574,6 +592,19 @@ def install_intelligence_api(app_module):
                 'rejectedCount': rejected_count,
                 'displayedCount': displayed_count,
                 'rejectionReasons': dict(sorted(evidence_rejection_reasons.items())),
+            },
+            'selectionAudit': {
+                'version': '4.50',
+                'displayedRanks': displayed_ranks,
+                'withheldRanks': withheld_ranks,
+                'capBoundary': cap_boundary,
+                'capBoundaryRank': (
+                    cap_boundary['rank'] if cap_boundary else None
+                ),
+                'selectionRule': (
+                    'displayedRanks are the highest-ranked validated candidates; '
+                    'withheldRanks begin immediately after actionableLimit'
+                ),
             },
             'passes': len(payload.get('passes') or payload.get('rejected') or []),
             'marketValidation': payload.get('marketValidation'),
