@@ -14,6 +14,11 @@ import hashlib
 import re
 from typing import Any, Iterable, Mapping
 
+from entity_validation import (
+    ENTITY_VALIDATION_VERSION,
+    validate_entity_data,
+)
+
 
 INTEGRITY_VERSION = "4.37"
 
@@ -246,6 +251,13 @@ def evaluate_candidate(
     row["canonicalSide"] = side
     row["canonicalCandidateId"] = _candidate_identity(row, market_key, side)
 
+    entity_validation = validate_entity_data(
+        row, market_key=market_key, role=role, now=checked_at,
+    )
+    row["entityValidation"] = entity_validation
+    row["entityValidationVersion"] = ENTITY_VALIDATION_VERSION
+    reasons.extend(entity_validation["reasons"])
+
     if market_key not in SUPPORTED_MARKETS:
         reasons.append("unsupported market")
     if row["playerRole"] != role:
@@ -424,5 +436,15 @@ def evaluate_candidates(
             "rejectedCount": len(rejected),
             "duplicateCount": duplicate_count,
             "rejectionReasons": dict(sorted(reason_counts.items())),
+            "entityValidationVersion": ENTITY_VALIDATION_VERSION,
+            "entityRejectedCount": sum(
+                row.get("entityValidation", {}).get("valid") is False
+                for row in rows
+            ),
+            "entityRejectionReasons": dict(sorted(Counter(
+                reason
+                for row in rows
+                for reason in row.get("entityValidation", {}).get("reasons", [])
+            ).items())),
         },
     }
