@@ -103,7 +103,13 @@ def test_actionability_contract_has_explicit_fail_closed_stages():
 def test_filter_actionable_reports_rows_that_must_not_reach_betting_surfaces():
     result = filter_actionable([
         base_row(),
-        base_row(canonicalPrice=None),
+        base_row(
+            canonicalPrice=None,
+            bestAvailablePrice=None,
+            marketPrice=None,
+            bestOverPrice=None,
+            bestUnderPrice=None,
+        ),
         base_row(marketGatePromoted=False, marketGateStatus="warming_up"),
     ])
     assert [row["actionabilityStage"] for row in result["actionable"]] == ["Actionable"]
