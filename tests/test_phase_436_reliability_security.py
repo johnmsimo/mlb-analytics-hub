@@ -32,10 +32,10 @@ def test_process_roles_keep_startup_compute_out_of_gunicorn():
     app = (ROOT / 'app.py').read_text(encoding='utf-8')
     docker = (ROOT / 'Dockerfile').read_text(encoding='utf-8')
 
-    assert 'limited reference preload started; heavy jobs remain worker-only' in gunicorn
+    assert 'shared reference snapshot hydration started; upstream refresh remains worker-only' in gunicorn
     assert "if settings.process_role == 'worker':" in app
     assert "if settings.process_role == 'web':" in app
-    assert 'heavy prewarm is worker-only' in app
+    assert 'web shared reference snapshot watcher started' in app
     assert 'CMD ["python", "process_manager.py"]' in docker
 
 

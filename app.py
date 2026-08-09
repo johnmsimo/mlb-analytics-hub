@@ -260,6 +260,7 @@ from config import settings
 from cache_service import normalize_cache_key
 from http_client import install_global_http_session
 from mlb_schedule_cache import fetch_schedule, fetch_schedule_game
+from reference_snapshots import ReferenceSnapshotStore
 from redis_client import get_redis
 from request_performance import performance_bp, request_performance
 from security import check_admin_auth, install_security, limiter
@@ -2819,6 +2820,18 @@ _fg_loaded = False
 _fg_load_date = None
 _fg_loading = False
 
+# Phase 4.40 shared reference-data boundary.  The durable worker publishes a
+# single atomic FG/Savant snapshot to the mounted volume; production web
+# processes hydrate these legacy dictionaries from that version instead of
+# independently repeating every upstream request.
+_reference_snapshot_store = ReferenceSnapshotStore(settings.reference_snapshot_path)
+_reference_snapshot_publish_lock = threading.Lock()
+_reference_snapshot_apply_lock = threading.Lock()
+_reference_snapshot_watch_lock = threading.Lock()
+_reference_snapshot_watch_started = False
+_reference_snapshot_refreshing = False
+_reference_snapshot_meta: dict = {}
+
 # ── Historical FG + daily matchup caches ─────────────────────────────────────
 # Keyed by MLBAM int ID → {year → {stat_key → value}}
 _fg_hist_lock = threading.Lock()
@@ -2853,6 +2866,7 @@ def _load_fg_data():
             _fg_loaded = has_data
             _fg_load_date = datetime.now().date() if has_data else None
         logging.info(f"[FG] _load_fg_data done: loaded={_fg_loaded} pit={len(_fg_pit)} bat={len(_fg_bat)}")
+        _publish_reference_snapshot_if_ready()
     finally:
         with _fg_cond:
             _fg_loading = False
@@ -3104,6 +3118,9 @@ def _load_fg_data_from_mlb_api():
 
 def _maybe_refresh_fg():
     global _fg_loading
+    if _production_web_uses_reference_snapshot():
+        _refresh_shared_reference_snapshot_async()
+        return
     with _fg_lock:
         # Atomically check and set _fg_loading so only one thread spawns a loader.
         if _fg_loading:
@@ -4045,9 +4062,221 @@ def _load_savant_data():
             f"(stats may be incomplete): {'; '.join(_failed_subcaches)}"
         )
     logging.info(f"[Savant] All caches ready: pitxstats={len(_sv_pit_xstats)} batxstats={len(_sv_bat_xstats)} statcast={len(_sv_bat_statcast)} arsenal={len(_sv_arsenal_pct)} velo={len(_sv_arsenal_velo)} pit_arsenal={len(_sv_pit_arsenal_stats)} bat_arsenal={len(_sv_bat_arsenal_stats)} loaded={_sv_loaded}")
+    _publish_reference_snapshot_if_ready()
+
+
+def _production_web_uses_reference_snapshot():
+    return settings.process_role == 'web' and settings.production
+
+
+def _reference_snapshot_status_payload():
+    status = _reference_snapshot_store.status()
+    effective = str(status.get('effectiveDate') or '')
+    return {
+        'available': bool(status.get('available')),
+        'version': status.get('version'),
+        'generatedAt': status.get('generatedAt'),
+        'effectiveDate': effective or None,
+        'stale': bool(effective and effective != str(datetime.now().date())),
+        'counts': dict(status.get('counts') or {}),
+        'lastError': status.get('lastError'),
+        'source': 'worker_volume_snapshot',
+    }
+
+
+def _publish_reference_snapshot_if_ready():
+    """Publish only when the worker has a complete same-day FG/Savant pair."""
+    global _reference_snapshot_meta
+    if settings.process_role != 'worker':
+        return None
+    today = datetime.now().date()
+    with _reference_snapshot_publish_lock:
+        # Acquire in the same FG -> Savant order used by status routes.  Both
+        # loaders replace whole dictionaries, so the copy is one coherent
+        # cross-dataset point in time.
+        with _fg_lock:
+            with _sv_lock:
+                datasets_ready = (
+                    _fg_bat, _fg_pit, _sv_pit_xstats, _sv_bat_xstats,
+                    _sv_bat_statcast, _sv_arsenal_pct, _sv_arsenal_velo,
+                    _sv_pit_arsenal_stats, _sv_bat_arsenal_stats,
+                )
+                complete = bool(
+                    _fg_loaded
+                    and _sv_loaded
+                    and _fg_load_date == today
+                    and _sv_load_date == today
+                    and all(datasets_ready)
+                )
+                if not complete:
+                    if (
+                        _fg_loaded and _sv_loaded
+                        and _fg_load_date == today and _sv_load_date == today
+                    ):
+                        logging.warning(
+                            '[reference-snapshot] refusing incomplete publish counts=%s',
+                            [len(value) for value in datasets_ready],
+                        )
+                    return None
+                datasets = {
+                    'fg_bat': dict(_fg_bat),
+                    'fg_pit': dict(_fg_pit),
+                    'sv_pit_xstats': dict(_sv_pit_xstats),
+                    'sv_bat_xstats': dict(_sv_bat_xstats),
+                    'sv_bat_statcast': dict(_sv_bat_statcast),
+                    'sv_arsenal_pct': dict(_sv_arsenal_pct),
+                    'sv_arsenal_velo': dict(_sv_arsenal_velo),
+                    'sv_pit_arsenal_stats': dict(_sv_pit_arsenal_stats),
+                    'sv_bat_arsenal_stats': dict(_sv_bat_arsenal_stats),
+                }
+        try:
+            metadata = _reference_snapshot_store.publish(
+                datasets,
+                effective_date=str(today),
+            )
+        except Exception as ex:
+            logging.error('[reference-snapshot] publish failed: %s', ex)
+            return None
+        _reference_snapshot_meta = dict(metadata)
+        logging.info(
+            '[reference-snapshot] worker published version=%s changed=%s bytes=%s',
+            metadata.get('version'), metadata.get('changed'),
+            metadata.get('compressedBytes'),
+        )
+        return metadata
+
+
+def _apply_shared_reference_snapshot(snapshot):
+    """Replace every legacy reference dictionary from one verified version."""
+    global _fg_bat, _fg_pit, _fg_loaded, _fg_load_date
+    global _sv_pit_xstats, _sv_bat_xstats, _sv_bat_statcast
+    global _sv_arsenal_pct, _sv_arsenal_velo, _sv_loaded, _sv_load_date
+    global _sv_pit_arsenal_stats, _sv_bat_arsenal_stats
+    global _reference_snapshot_meta
+
+    datasets = dict((snapshot or {}).get('datasets') or {})
+    metadata = dict((snapshot or {}).get('metadata') or {})
+    if not metadata.get('version'):
+        return False
+    try:
+        effective_date = datetime.strptime(
+            str(metadata.get('effectiveDate') or ''), '%Y-%m-%d'
+        ).date()
+    except (TypeError, ValueError):
+        return False
+
+    with _reference_snapshot_apply_lock:
+        if (
+            _reference_snapshot_meta.get('version') == metadata.get('version')
+            and _fg_loaded
+            and _sv_loaded
+        ):
+            return False
+        with _fg_cond:
+            with _sv_cond:
+                _fg_bat = dict(datasets['fg_bat'])
+                _fg_pit = dict(datasets['fg_pit'])
+                _fg_loaded = bool(_fg_bat or _fg_pit)
+                _fg_load_date = effective_date if _fg_loaded else None
+                _sv_pit_xstats = dict(datasets['sv_pit_xstats'])
+                _sv_bat_xstats = dict(datasets['sv_bat_xstats'])
+                _sv_bat_statcast = dict(datasets['sv_bat_statcast'])
+                _sv_arsenal_pct = dict(datasets['sv_arsenal_pct'])
+                _sv_arsenal_velo = dict(datasets['sv_arsenal_velo'])
+                _sv_pit_arsenal_stats = dict(datasets['sv_pit_arsenal_stats'])
+                _sv_bat_arsenal_stats = dict(datasets['sv_bat_arsenal_stats'])
+                _sv_loaded = bool(
+                    _sv_pit_xstats or _sv_bat_xstats or _sv_bat_statcast
+                    or _sv_arsenal_pct or _sv_arsenal_velo
+                )
+                _sv_load_date = effective_date if _sv_loaded else None
+                _reference_snapshot_meta = metadata
+                _fg_cond.notify_all()
+                _sv_cond.notify_all()
+        try:
+            with _fuzzy_name_lock:
+                _fuzzy_name_cache.clear()
+        except NameError:
+            pass
+    logging.info(
+        '[reference-snapshot] web hydrated version=%s effective_date=%s fg=%s/%s savant=%s/%s',
+        metadata.get('version'), effective_date, len(_fg_bat), len(_fg_pit),
+        len(_sv_bat_xstats), len(_sv_pit_xstats),
+    )
+    return True
+
+
+def _load_shared_reference_snapshot():
+    snapshot = _reference_snapshot_store.load()
+    if not snapshot:
+        return False
+    return _apply_shared_reference_snapshot(snapshot)
+
+
+def _refresh_shared_reference_snapshot_async():
+    global _reference_snapshot_refreshing
+    with _reference_snapshot_watch_lock:
+        if _reference_snapshot_refreshing:
+            return
+        _reference_snapshot_refreshing = True
+
+    def _runner():
+        global _reference_snapshot_refreshing
+        try:
+            _load_shared_reference_snapshot()
+        except Exception as ex:
+            logging.warning('[reference-snapshot] refresh failed: %s', ex)
+        finally:
+            with _reference_snapshot_watch_lock:
+                _reference_snapshot_refreshing = False
+
+    threading.Thread(
+        target=_runner,
+        name='reference-snapshot-refresh',
+        daemon=True,
+    ).start()
+
+
+def _start_reference_snapshot_watcher():
+    global _reference_snapshot_watch_started
+    with _reference_snapshot_watch_lock:
+        if _reference_snapshot_watch_started:
+            return
+        _reference_snapshot_watch_started = True
+
+    # Hydrate synchronously from the last persisted version so most deploys
+    # have reference data before the first user request.  The watcher then
+    # notices the worker's next atomic version without Redis command traffic.
+    try:
+        _load_shared_reference_snapshot()
+    except Exception as ex:
+        logging.warning('[reference-snapshot] initial hydrate failed: %s', ex)
+
+    def _watch():
+        delay = 1
+        while True:
+            time.sleep(delay)
+            try:
+                _load_shared_reference_snapshot()
+            except Exception as ex:
+                logging.warning('[reference-snapshot] watch refresh failed: %s', ex)
+            delay = (
+                settings.reference_snapshot_poll_seconds
+                if _reference_snapshot_meta.get('version')
+                else 1
+            )
+
+    threading.Thread(
+        target=_watch,
+        name='reference-snapshot-watch',
+        daemon=True,
+    ).start()
 
 def _maybe_refresh_savant():
     global _sv_loading
+    if _production_web_uses_reference_snapshot():
+        _refresh_shared_reference_snapshot_async()
+        return
     with _sv_lock:
         # Atomically check and set _sv_loading so only one thread spawns a loader.
         if _sv_loading:
@@ -5469,6 +5698,7 @@ def api_status():
     resp = jsonify({
         "fangraphs": {"loaded":fgl,"date":str(fgd),"batters":fgb,"pitchers":fgp},
         "savant":    {"loaded":svl,"date":str(svd),"pit_xstats":svpi,"bat_xstats":svbi,"statcast":svsc,"arsenals":svar},
+        "referenceSnapshot": _reference_snapshot_status_payload(),
         "mlbMemory": _mlb_memory_status_payload(),
         "ai": {
             "gemini": {
@@ -5516,9 +5746,12 @@ def api_cache_status():
         }
     with _local_arsenal_lock:
         ars = _local_arsenal_cache
+    with _sv_lock:
+        shared_arsenal_count = len(_sv_arsenal_pct)
     arsenal_state = {
-        "loaded":   ars is not None,
-        "pitchers": (len(ars[0]) if ars else 0),
+        "loaded":   bool(shared_arsenal_count or ars is not None),
+        "pitchers": shared_arsenal_count or (len(ars[0]) if ars else 0),
+        "source":   "shared_snapshot" if shared_arsenal_count else "local_fallback",
     }
     pipeline_state = None
     if _PIPELINE_AVAILABLE:
@@ -5542,6 +5775,7 @@ def api_cache_status():
         "ready":    ready,
         "fg":       fg_state,
         "savant":   sv_state,
+        "referenceSnapshot": _reference_snapshot_status_payload(),
         "arsenal":  arsenal_state,
         "pipeline": pipeline_state,
     })
@@ -29853,19 +30087,22 @@ def _preload_caches():
         except Exception as ex:
             print(f"[STARTUP] Local pitcher arsenal cache preload failed: {ex}")
 
-    # Start cache loads in parallel background threads
-    threading.Thread(target=load_fg, daemon=True).start()
-    threading.Thread(target=load_sv, daemon=True).start()
-    threading.Thread(target=load_rosters, daemon=True).start()
-    threading.Thread(target=load_arsenal, daemon=True).start()
+    # Production web processes never call the upstream FG/Savant endpoints.
+    # The worker owns refresh and publishes one volume-backed version; web
+    # hydrates the same verified bytes and watches for atomic replacement.
+    if _production_web_uses_reference_snapshot():
+        _start_reference_snapshot_watcher()
+    else:
+        threading.Thread(target=load_fg, daemon=True).start()
+        threading.Thread(target=load_sv, daemon=True).start()
+        threading.Thread(target=load_rosters, daemon=True).start()
+        threading.Thread(target=load_arsenal, daemon=True).start()
 
-    # Legacy research endpoints still read these reference dictionaries from
-    # process memory.  Keep only that compatibility preload in Gunicorn while
-    # the durable worker owns simulations, refresh jobs, schedulers, odds, and
-    # downstream prewarming.  Later phases can serialize these dictionaries
-    # and remove the final web-side preload without blanking research pages.
+    # Legacy research endpoints still read process-local dictionaries, but in
+    # production those dictionaries now come exclusively from the worker's
+    # shared, versioned volume snapshot.
     if settings.process_role == 'web':
-        logging.info('[STARTUP] web reference preload started; heavy prewarm is worker-only')
+        logging.info('[STARTUP] web shared reference snapshot watcher started')
         return
 
     def _prewarm_when_ready():
