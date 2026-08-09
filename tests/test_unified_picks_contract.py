@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_unified_picks_route_is_the_primary_actionable_contract():
     source = (ROOT / 'intelligence_integration.py').read_text(encoding='utf-8')
     assert "@flask_app.route('/api/picks/today'" in source
-    assert "'contractVersion': '4.49'" in source
+    assert "'contractVersion': '4.50'" in source
     assert "'picks': picks" in source
     assert "actionable_limit = 5" in source
     assert "picks = ranked_candidates[:actionable_limit]" in source
@@ -51,7 +51,7 @@ def test_primary_picks_contract_exposes_normalized_evidence_snapshot():
 
 def test_primary_picks_contract_exposes_auditable_summary():
     source = (ROOT / 'intelligence_integration.py').read_text(encoding='utf-8')
-    assert "'evidenceAuditVersion': '4.49'" in source
+    assert "'evidenceAuditVersion': '4.50'" in source
     assert "'status': audit_status" in source
     assert "'actionableLimit': actionable_limit" in source
     assert "'capApplied': cap_applied" in source
@@ -79,7 +79,7 @@ def test_primary_picks_contract_uses_safe_deterministic_ranking():
     assert "def _stable_candidate_key(row):" in source
     assert "_ranking_number(row, 'pickScore', 'decisionScore')" in source
     assert "_stable_candidate_key(row)" in source
-    assert "'selectionAuditVersion': '4.49'" in source
+    assert "'selectionAuditVersion': '4.50'" in source
 
 
 def test_picks_page_surfaces_evidence_audit_details():
@@ -92,3 +92,21 @@ def test_picks_page_surfaces_evidence_audit_details():
     assert 'rankingMethod' in source
     assert 'RANK' in source
     assert 'selection.rank' in source
+
+
+def test_primary_picks_contract_exposes_selection_boundary_audit():
+    source = (ROOT / 'intelligence_integration.py').read_text(encoding='utf-8')
+    assert "'selectionAudit': {" in source
+    assert "'version': '4.50'" in source
+    assert "'displayedRanks': displayed_ranks" in source
+    assert "'withheldRanks': withheld_ranks" in source
+    assert "'capBoundary': cap_boundary" in source
+    assert "'capBoundaryRank': (" in source
+
+
+def test_picks_page_surfaces_selection_boundary_summary():
+    source = (ROOT / 'picks.html').read_text(encoding='utf-8')
+    assert "const selection=audit.selectionAudit||{}" in source
+    assert "selected "+"" in source
+    assert "withheld "+"" in source
+    assert "cap boundary #" in source
