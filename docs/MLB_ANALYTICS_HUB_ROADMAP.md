@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 4.53 merged and deployed on 2026-08-09. Phase 4.54 is the active phase.
+Status: Phase 4.54 merged and deployed on 2026-08-09. Phase 4.55 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -54,6 +54,10 @@ Exit gate: no `HIGH CONF` or `STRONG BET` label can appear for a market failing
 its calibration gate.
 
 ### Phase 4.55 — Odds and closing-line reliability
+
+Implementation status: canonical opening/current/closing odds lineage, freshness,
+verified closing receipts, and separate graded-versus-CLV-graded denominators are
+being enforced in tracker, validation, and Picks contracts.
 
 Capture opening price, current price, closing price, book, timestamp, line, and
 freshness for every market. Separate graded from CLV-graded everywhere.

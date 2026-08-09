@@ -19,6 +19,7 @@ from game_card_intelligence import (
 from intelligence_core import build_recommendations, classify_pick
 from learning_engine import analyze_learning
 from market_validation import VALIDATION_VERSION, apply_market_gates
+from odds_lineage import ODDS_LINEAGE_VERSION, clv_summary
 from matchup_engine import enrich_matchups
 from matchup_simulation_intelligence import simulation_audit
 from cache_service import normalize_cache_key
@@ -305,11 +306,16 @@ def run_game_card_job(app_module, args):
 
 
 def _clv_provenance(row):
-    """Expose only auditable CLV evidence on the primary Picks contract."""
+    """Expose only canonical, auditable CLV evidence on the Picks contract."""
     receipt = row.get('closingIntegrity')
+    lineage = row.get('oddsLineage')
     has_receipt = isinstance(receipt, dict)
+    has_lineage = isinstance(lineage, dict)
     accepted = (
         has_receipt
+        and has_lineage
+        and lineage.get('version') == ODDS_LINEAGE_VERSION
+        and lineage.get('clvEligible') is True
         and receipt.get('accepted') is True
         and receipt.get('fresh') is True
     )
@@ -320,6 +326,8 @@ def _clv_provenance(row):
         if has_receipt and receipt.get('accepted') is False
         else 'unverified'
     )
+    snapshots = lineage.get('snapshots') if has_lineage else {}
+    current = snapshots.get('current') if isinstance(snapshots, dict) else {}
     return {
         'status': status,
         'verified': accepted,
@@ -331,7 +339,21 @@ def _clv_provenance(row):
             or receipt.get('capturedAt')
             if has_receipt else row.get('closingCapturedAt')
         ),
-        'reason': receipt.get('reason') if has_receipt else 'missing_integrity_receipt',
+        'reason': (
+            lineage.get('clvReason')
+            if has_lineage and not accepted
+            else receipt.get('reason')
+            if has_receipt and not accepted
+            else 'missing_integrity_receipt'
+            if not has_lineage
+            else None
+        ),
+        'lineageVersion': lineage.get('version') if has_lineage else None,
+        'clvEligible': accepted,
+        'currentFreshness': current.get('freshness') if isinstance(current, dict) else None,
+        'opening': snapshots.get('opening') if isinstance(snapshots, dict) else None,
+        'current': current,
+        'closing': snapshots.get('closing') if isinstance(snapshots, dict) else None,
     }
 
 
@@ -342,6 +364,9 @@ def _pick_evidence(row, clv):
         'market': row.get('marketKey') or row.get('categoryLabel') or row.get('intelligenceCategory'),
         'side': row.get('recommendedSide') or row.get('side'),
         'line': row.get('line'),
+        'openingPrice': row.get('openingPrice'),
+        'currentPrice': row.get('currentPrice'),
+        'closingPrice': row.get('closingPrice'),
         'price': row.get('price'),
         'book': row.get('book'),
         'probabilityPct': row.get('probabilityPct'),
@@ -352,6 +377,9 @@ def _pick_evidence(row, clv):
         'verifiedClvEdge': clv.get('edge'),
         'clvSource': clv.get('source'),
         'clvCapturedAt': clv.get('capturedAt'),
+        'clvDenominator': 'clvGradedCount',
+        'oddsLineageVersion': clv.get('lineageVersion'),
+        'currentOddsFreshness': clv.get('currentFreshness'),
     }
 
 
@@ -465,6 +493,8 @@ def install_intelligence_api(app_module):
             'marketGateAudit': market_gates['audit'],
             'marketValidation': learning.get('marketValidation'),
             'calibrationVersion': '4.54',
+            'oddsLineageVersion': ODDS_LINEAGE_VERSION,
+            'clvAudit': (learning.get('marketValidation') or {}).get('clvAudit') or {},
             'calibrationAudit': (learning.get('marketValidation') or {}).get('calibrationAudit') or {},
             'explanationVersion': '4.32',
             **decisions,
@@ -664,6 +694,8 @@ def install_intelligence_api(app_module):
             'passes': len(payload.get('passes') or payload.get('rejected') or []),
             'marketValidation': payload.get('marketValidation'),
             'calibrationVersion': '4.54',
+            'oddsLineageVersion': ODDS_LINEAGE_VERSION,
+            'clvAudit': (payload.get('marketValidation') or {}).get('clvAudit') or {},
             'calibrationAudit': (payload.get('marketValidation') or {}).get('calibrationAudit') or {},
             'marketGateAudit': payload.get('marketGateAudit'),
             'sourceCount': payload.get('sourceCount', 0),

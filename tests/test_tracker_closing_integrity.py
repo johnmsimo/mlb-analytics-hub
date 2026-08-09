@@ -15,6 +15,9 @@ def _base(**overrides):
         "first_pitch": "2026-08-09T19:00:00Z",
         "opening_captured_at": "2026-08-09T15:00:00Z",
         "closing_captured_at": "2026-08-09T18:55:00Z",
+        "current_price": -125,
+        "current_implied": 0.5556,
+        "current_captured_at": "2026-08-09T18:30:00Z",
     }
     values.update(overrides)
     return build_pick_payload(**values)
@@ -26,6 +29,9 @@ def test_valid_close_is_attached_to_tracker_payload():
     assert payload["closingIntegrity"]["source"] == "odds_api_live"
     assert payload["closingIntegrity"]["fresh"] is True
     assert payload["clvEdge"] == 0.0545
+    assert payload["oddsLineageVersion"] == "4.55"
+    assert payload["oddsLineage"]["clvEligible"] is True
+    assert payload["oddsLineage"]["snapshots"]["current"]["price"] == -125.0
 
 
 def test_invalid_close_cannot_publish_clv_edge():
