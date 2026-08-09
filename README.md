@@ -228,6 +228,15 @@ until its market passes every Phase 4.38 sample, calibration, pricing, CLV,
 profitability, and risk gate. Adaptive blend weights also stay on their
 committed priors until that market is promoted.
 
+Production FanGraphs-compatible and Baseball Savant reference data is refreshed
+only by the durable worker. Once both same-day datasets are complete, the worker
+publishes one compressed, SHA-256-verified snapshot through an atomic replacement
+on the mounted volume. Gunicorn hydrates all nine legacy reference dictionaries
+from that exact version and watches for replacements; it never repeats the
+upstream reference calls. A missing or corrupt refresh leaves the previous valid
+version available, and `/api/status` plus `/api/cache/status` expose the active
+version, effective date, counts, staleness, and safe load error state.
+
 Model adjustments and calibration history use thread-safe, file-version-aware
 parsed snapshots across requests. Concurrent cold reads collapse to one JSON
 parse, external and atomic file replacements invalidate automatically, and each

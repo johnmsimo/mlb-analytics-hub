@@ -79,6 +79,26 @@ class Settings:
         return _string("DATA_DIR", str(_BASE_DIR / "data"), strip=False)
 
     @property
+    def reference_snapshot_path(self) -> str:
+        return _string(
+            "REFERENCE_SNAPSHOT_PATH",
+            str(Path(self.data_dir) / "reference_data.snapshot"),
+            strip=False,
+        )
+
+    @property
+    def reference_snapshot_poll_seconds(self) -> int:
+        return int(
+            _number(
+                "REFERENCE_SNAPSHOT_POLL_SECONDS",
+                15,
+                int,
+                minimum=1,
+                maximum=300,
+            )
+        )
+
+    @property
     def redis_url(self) -> str:
         return _string("REDIS_URL")
 

@@ -42,6 +42,8 @@ Container build (used by Fly.io / `Dockerfile`): a multi-stage Python 3.11-slim 
 - `PYBASEBALL_CACHE=1` — set in `fly.toml`; prevents pybaseball from hammering FanGraphs on import.
 - `XGB_MODEL_DIR` — override the `models/` path for the XGBoost artifacts.
 - `DATA_DIR` — override the `data/` path (Fly.io mounts a persistent volume here at `/app/data`).
+- `REFERENCE_SNAPSHOT_PATH` — override the Phase 4.40 worker-published FG/Savant snapshot (default: `$DATA_DIR/reference_data.snapshot`).
+- `REFERENCE_SNAPSHOT_POLL_SECONDS` — how often production web workers check the volume for an atomically published reference-data version (default: 15 seconds).
 - `PORT` — bind port (Fly.io sets 8080; local default 10000).
 - `MLB_STATS_API_BASE_URL` (default `https://statsapi.mlb.com/api`) — Stats API root for the shared MLB client.
 - `MLB_HTTP_TIMEOUT` / `MLB_BULK_HTTP_TIMEOUT` (defaults 10 / 60 seconds) — standard and bulk MLB request timeouts.
@@ -84,6 +86,7 @@ app.py                          ~22.7k LOC Flask app — routes, caches, project
 ├── http_client.py               Shared HTTP pool + resilient live game-response cache
 ├── bq_etl.py                   Standalone ETL — populates BigQuery mlb.{batters,pitchers,bvp_situational,daily_slate_view}
 ├── redis_client.py             Thin Redis wrapper with in-memory fallback (JSON values + TTLs)
+├── reference_snapshots.py      Checksummed, compressed, atomic worker→web FG/Savant snapshots on the mounted volume
 └── gunicorn_conf.py            1 worker, 12 gthreads, preload_app=False, post_fork cache preload
 ```
 
@@ -109,7 +112,7 @@ app.py                          ~22.7k LOC Flask app — routes, caches, project
 16. **Daily / cross-game** — `/api/teams/overview`, `/api/teams/pitching-rankings`, `/api/cheatsheets/today`, `/api/projections/monte-carlo`, `/api/lineup/<pk>`, `/api/capture-daily-slate/<date>`, `/api/parlay/build`.
 17. **Prop projection model** (~17740–19090) — `/api/ai-boxscore/<pk>`, `/api/props/projections/<pk>`, `_project_batter`, `_project_batter_batx`, `_project_pitcher`, `_matchup_score`, `_platoon_blend`.
 18. **Specialized sub-views** — `/api/umpire/<pk>`, `/api/props/trends/*`, `/api/props/quick/*`, `/api/bullpen/fatigue/<pk>`, `/api/f5/<pk>`, `/api/lineup-status/<pk>`, gameside deepdive, breakout detector, HR analytics, matchup card, cheatsheet (BigQuery-backed), insights, projected boxscore.
-19. **Cache preload** (~21336–21415) — `_preload_caches()` kicks off FG/Savant/roster/arsenal loads in daemon threads. Called from `gunicorn_conf.py:post_fork()`, **not** at module import (see Gunicorn section).
+19. **Cache preload** — `_preload_caches()` makes the durable worker own FG/Savant upstream refreshes and publish one versioned reference snapshot. Production web workers hydrate/watch that mounted-volume snapshot; local development may still load upstream directly. Called from `gunicorn_conf.py:post_fork()`, **not** at module import (see Gunicorn section).
 
 ### Pages and their routes
 
@@ -308,4 +311,3 @@ Known remaining cost: a from-scratch projections build is ~2-4s of real wall tim
 - **Adding a new env var**: add it to this file's "Environment variables" section *and* the relevant defaults block (`_admin_settings_default`, `_app_settings_default`, or the constant area near `app.py:137`).
 - **Touching the model/calibration**: regenerate XGB artifacts via the Colab notebook (`docs/xgb_model_regeneration.md`), keep `xgboost==3.2.0` pinned, and commit refreshed `.pkl`s.
 - **Tracker changes**: preserve the dedup key tuple and the `id` / `savedAt` / `gradedAt` invariants — downstream calibration/performance views depend on them.
-

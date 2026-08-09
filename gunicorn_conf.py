@@ -91,7 +91,7 @@ def on_starting(server):
 
 
 def post_fork(server, worker):
-    """Install cache wrappers and the limited compatibility reference preload."""
+    """Install cache wrappers and hydrate shared reference snapshots."""
     import threading
     try:
         from pipeline_cache_integration import install_pipeline_cache
@@ -111,7 +111,7 @@ def post_fork(server, worker):
 
         threading.Thread(target=_preload_caches, daemon=True).start()
         server.log.info(
-            "[post_fork] limited reference preload started; heavy jobs remain worker-only"
+            "[post_fork] shared reference snapshot hydration started; upstream refresh remains worker-only"
         )
     except Exception as ex:
         server.log.warning(f"[post_fork] Could not start reference preload: {ex}")
