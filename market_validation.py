@@ -18,6 +18,7 @@ from typing import Any, Iterable, Mapping
 
 from actionability import ACTIONABILITY_VERSION, evaluate_actionability
 from candidate_integrity import SUPPORTED_MARKETS, canonical_market_key
+from odds_lineage import clv_eligibility, clv_summary
 
 
 VALIDATION_VERSION = "4.38"
@@ -193,6 +194,8 @@ def _profit_units(row: Mapping[str, Any], outcome: int) -> float | None:
 
 
 def _clv(row: Mapping[str, Any]) -> float | None:
+    if not clv_eligibility(row):
+        return None
     for key in ("clvEdge", "closingLineValue", "clv"):
         value = _number(row.get(key))
         if value is not None:
@@ -244,6 +247,8 @@ def _normalized_rows(
         })
         row["validationProfitUnits"] = _profit_units(source, outcome)
         row["validationClv"] = _clv(source)
+        row["validationGraded"] = True
+        row["validationClvEligible"] = clv_eligibility(source)
         rows.append(row)
     rows.sort(key=lambda row: (
         row["validationTimestamp"],
@@ -410,6 +415,10 @@ def summarize_rows(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
             "logLoss": None, "calibrationError": None, "pricedCount": 0,
             "profitUnits": None, "roi": None, "clvCount": 0,
             "averageClv": None, "maximumDrawdownUnits": None,
+            "gradedCount": 0, "clvEligibleCount": 0, "clvGradedCount": 0,
+            "clvDenominator": "clvGradedCount", "beatCloseCount": 0,
+            "beatCloseRate": None, "clvClaimStatus": "insufficient_sample",
+            "clvClaimEligible": False,
             "days": 0,
         }
     count = len(values)
@@ -457,6 +466,7 @@ def summarize_rows(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         float(row["validationClv"])
         for row in values if row.get("validationClv") is not None
     ]
+    clv_audit = clv_summary(values)
     return {
         "count": count,
         "wins": wins,
@@ -477,6 +487,15 @@ def summarize_rows(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         "profitUnits": round(sum(profits), 3) if profits else None,
         "roi": round(sum(profits) / len(profits), 4) if profits else None,
         "clvCount": len(clv_values),
+        "gradedCount": clv_audit["gradedCount"],
+        "clvEligibleCount": clv_audit["clvEligibleCount"],
+        "clvGradedCount": clv_audit["clvGradedCount"],
+        "clvDenominator": clv_audit["clvDenominator"],
+        "beatCloseCount": clv_audit["beatCloseCount"],
+        "beatCloseRate": clv_audit["beatCloseRate"],
+        "clvClaimStatus": clv_audit["claimStatus"],
+        "clvClaimEligible": clv_audit["claimEligible"],
+        "clvAudit": clv_audit,
         "averageClv": (
             round(sum(clv_values) / len(clv_values), 4)
             if clv_values else None
@@ -675,6 +694,7 @@ def build_validation_report(
             market for market, gate in gates.items()
             if gate["status"] == "warming_up"
         ],
+        "clvAudit": clv_summary(validation_rows),
         "calibrationAudit": {
             "version": CALIBRATION_VERSION,
             "marketStatuses": {
