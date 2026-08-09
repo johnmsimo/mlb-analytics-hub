@@ -33,6 +33,8 @@ def base_row(**changes):
         "canonicalPrice": -110,
         "canonicalBook": "Book A",
         "canonicalEdge": 0.08,
+        "edge": 0.08,
+        "confidenceScore": 80.0,
         "actionable": True,
         "marketGatePromoted": True,
         "marketGateStatus": "promoted",
@@ -46,11 +48,27 @@ def base_row(**changes):
 def test_actionability_contract_has_explicit_fail_closed_stages():
     assert ACTIONABILITY_VERSION == "4.52"
     research = evaluate_actionability(
-        base_row(canonicalProbability=None, canonicalPrice=None),
+        base_row(
+            canonicalProbability=None,
+            adjProb=None,
+            probability=None,
+            winProb=None,
+            canonicalPrice=None,
+            bestAvailablePrice=None,
+            marketPrice=None,
+            bestOverPrice=None,
+            bestUnderPrice=None,
+        ),
         require_market_validation=True,
     )
     projected = evaluate_actionability(
-        base_row(canonicalPrice=None),
+        base_row(
+            canonicalPrice=None,
+            bestAvailablePrice=None,
+            marketPrice=None,
+            bestOverPrice=None,
+            bestUnderPrice=None,
+        ),
         require_market_validation=True,
     )
     priced = evaluate_actionability(
