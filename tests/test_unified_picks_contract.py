@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_unified_picks_route_is_the_primary_actionable_contract():
     source = (ROOT / 'intelligence_integration.py').read_text(encoding='utf-8')
     assert "@flask_app.route('/api/picks/today'" in source
-    assert "'contractVersion': '4.47'" in source
+    assert "'contractVersion': '4.48'" in source
     assert "'picks': picks" in source
     assert "actionable_limit = 5" in source
     assert "picks = candidates[:actionable_limit]" in source
@@ -51,13 +51,24 @@ def test_primary_picks_contract_exposes_normalized_evidence_snapshot():
 
 def test_primary_picks_contract_exposes_auditable_summary():
     source = (ROOT / 'intelligence_integration.py').read_text(encoding='utf-8')
-    assert "'evidenceAuditVersion': '4.47'" in source
+    assert "'evidenceAuditVersion': '4.48'" in source
     assert "'status': audit_status" in source
     assert "'actionableLimit': actionable_limit" in source
     assert "'capApplied': cap_applied" in source
     assert "'withheldCount': withheld_count" in source
     assert "'displayedCount': displayed_count" in source
     assert "'rejectionReasons': dict(sorted(evidence_rejection_reasons.items()))" in source
+
+
+def test_primary_picks_contract_exposes_selection_ranking_audit():
+    source = (ROOT / 'intelligence_integration.py').read_text(encoding='utf-8')
+    assert "ranking_method = 'pickScore_desc_then_edgePct_desc'" in source
+    assert "'selectionAudit'] = {" in source
+    assert "'rankingVersion': '4.48'" in source
+    assert "'rankingMethod': ranking_method" in source
+    assert "'selectionRule': (" in source
+    assert "'rankedCandidateCount': len(ranked_candidates)" in source
+    assert "'disposition': (" in source
 
 
 def test_picks_page_surfaces_evidence_audit_details():
@@ -67,3 +78,6 @@ def test_picks_page_surfaces_evidence_audit_details():
     assert "Object.entries(audit.rejectionReasons||{})" in source
     assert 'Evidence audit:' in source
     assert 'validated' in source and 'rejected' in source
+    assert 'rankingMethod' in source
+    assert 'RANK' in source
+    assert 'selection.rank' in source
