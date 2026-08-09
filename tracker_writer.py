@@ -101,6 +101,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from config import settings
+from closing_line_integrity import accept_closing_capture
 
 _HERE        = os.path.dirname(os.path.abspath(__file__))
 _DATA_DIR    = settings.data_dir
@@ -132,6 +133,12 @@ def build_pick_payload(
     opening_implied:  Optional[float] = None,
     closing_implied:  Optional[float] = None,
     book:             Optional[str]   = None,
+    # Auditable closing-line capture metadata (Phase 4.42)
+    first_pitch:            Any           = None,
+    opening_captured_at:    Any           = None,
+    closing_captured_at:    Any           = None,
+    closing_source:         Optional[str] = None,
+    closing_book:            Optional[str] = None,
     # Staking
     stake_units:      Optional[float] = None,
     stake_dollars:    Optional[float] = None,
@@ -168,6 +175,28 @@ def build_pick_payload(
     _clv_edge = None
     if closing_implied is not None and opening_implied is not None:
         _clv_edge = round(float(closing_implied) - float(opening_implied), 4)
+
+    closing_integrity = None
+    if any(value is not None for value in (
+        first_pitch,
+        opening_captured_at,
+        closing_captured_at,
+        closing_price,
+        closing_implied,
+        closing_book,
+    )):
+        closing_integrity = accept_closing_capture(
+            opening={"capturedAt": opening_captured_at},
+            closing={
+                "capturedAt": closing_captured_at,
+                "price": closing_price,
+                "book": closing_book or book,
+                "source": closing_source,
+            },
+            first_pitch=first_pitch,
+        )
+        if not closing_integrity["accepted"]:
+            _clv_edge = None
 
     _hub_rating = _compute_hub_rating(_adj_prob, _edge)
     _hub_tier   = _compute_hub_tier(_hub_rating)
@@ -222,6 +251,14 @@ def build_pick_payload(
         "closingImplied": round(closing_implied, 4) if closing_implied is not None else None,
         "marketImplied":  round(opening_implied, 4) if opening_implied is not None else None,
         "clvEdge":        _clv_edge,
+        "openingCapturedAt": opening_captured_at,
+        "closingCapturedAt": closing_captured_at,
+        "closingSource":  closing_integrity.get("source") if closing_integrity else None,
+        "closingBook":    closing_book or book if closing_integrity else None,
+        "closingIntegrity": closing_integrity,
+        "closingIntegrityAccepted": (
+            closing_integrity["accepted"] if closing_integrity else None
+        ),
         "book":           book,
         "edge":           _edge,
         "evPct":          _ev_pct,
