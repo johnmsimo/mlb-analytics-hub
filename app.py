@@ -262,7 +262,7 @@ from http_client import install_global_http_session
 from mlb_schedule_cache import fetch_schedule, fetch_schedule_game
 from redis_client import get_redis
 from request_performance import performance_bp, request_performance
-from security import check_admin_auth, install_security
+from security import check_admin_auth, install_security, limiter
 from task_queue import (
     JobQueueUnavailable,
     enqueue_job,
@@ -5654,6 +5654,7 @@ _APP_BOOT_ISO = datetime.now().isoformat()
 
 
 @app.route('/health')
+@limiter.exempt
 def health_check():
     """Constant-time liveness probe; never touches Redis, files, or loaders."""
     return {
@@ -5665,6 +5666,7 @@ def health_check():
 
 
 @app.route('/ready')
+@limiter.exempt
 def readiness_check():
     """Dependency readiness for deployment smoke tests and traffic gating."""
     started = time.perf_counter()
