@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
 
@@ -65,50 +65,58 @@ class WarmupCoordinator:
     ) -> None:
         started = time.monotonic()
         worker_count = max_workers or max(1, min(4, len(tasks) or 1))
-        futures = {}
-        with ThreadPoolExecutor(
+        pool = ThreadPoolExecutor(
             max_workers=worker_count,
             thread_name_prefix="cache-warmup-task",
-        ) as pool:
-            for name, task in tasks.items():
-                futures[pool.submit(task)] = name
+        )
+        futures = {
+            pool.submit(task): name for name, task in tasks.items()
+        }
+        pending = set(futures)
+        deadline = started + timeout_seconds
+        try:
+            while pending:
+                remaining = max(0.0, deadline - time.monotonic())
+                done, pending = wait(
+                    pending,
+                    timeout=remaining,
+                    return_when=FIRST_COMPLETED,
+                )
+                if not done:
+                    elapsed_ms = round((time.monotonic() - started) * 1000, 2)
+                    with self._lock:
+                        for future in pending:
+                            name = futures[future]
+                            self._state["tasks"][name] = {
+                                "status": "timed_out",
+                                "durationMs": elapsed_ms,
+                                "error": "warmup wall-clock budget exceeded",
+                            }
+                            future.cancel()
+                    break
 
-            for future in as_completed(futures):
-                name = futures[future]
-                elapsed_ms = round((time.monotonic() - started) * 1000, 2)
-                if time.monotonic() - started > timeout_seconds:
-                    with self._lock:
-                        self._state["tasks"][name] = {
-                            "status": "timed_out",
-                            "durationMs": elapsed_ms,
-                            "error": "warmup wall-clock budget exceeded",
-                        }
-                    continue
-                try:
-                    future.result()
-                except Exception as exc:
-                    with self._lock:
-                        self._state["tasks"][name] = {
-                            "status": "failed",
-                            "durationMs": elapsed_ms,
-                            "error": type(exc).__name__,
-                        }
-                else:
-                    with self._lock:
-                        self._state["tasks"][name] = {
-                            "status": "ready",
-                            "durationMs": elapsed_ms,
-                            "error": None,
-                        }
-
-            with self._lock:
-                for task_state in self._state["tasks"].values():
-                    if task_state["status"] == "queued":
-                        task_state.update({
-                            "status": "timed_out",
-                            "durationMs": round((time.monotonic() - started) * 1000, 2),
-                            "error": "warmup wall-clock budget exceeded",
-                        })
+                for future in done:
+                    name = futures[future]
+                    elapsed_ms = round((time.monotonic() - started) * 1000, 2)
+                    try:
+                        future.result()
+                    except Exception as exc:
+                        with self._lock:
+                            self._state["tasks"][name] = {
+                                "status": "failed",
+                                "durationMs": elapsed_ms,
+                                "error": type(exc).__name__,
+                            }
+                    else:
+                        with self._lock:
+                            self._state["tasks"][name] = {
+                                "status": "ready",
+                                "durationMs": elapsed_ms,
+                                "error": None,
+                            }
+        finally:
+            # Do not wait for a stuck upstream call after publishing readiness.
+            pool.shutdown(wait=False, cancel_futures=True)
 
         with self._lock:
             statuses = [item["status"] for item in self._state["tasks"].values()]
