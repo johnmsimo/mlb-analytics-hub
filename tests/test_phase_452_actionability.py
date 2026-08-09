@@ -8,8 +8,28 @@ from intelligence_core import build_recommendations
 
 def base_row(**changes):
     row = {
+        "gamePk": 7,
+        "gameStatus": "Scheduled",
+        "gameAbstractState": "Preview",
+        "gameStartIso": "2099-08-06T23:10:00+00:00",
+        "player": "Valid Hitter",
+        "playerId": 101,
+        "playerRole": "batter",
+        "playerPosition": "CF",
+        "lineupStatus": "confirmed",
         "marketKey": "batter_hits",
+        "line": 0.5,
+        "recommendedSide": "Over",
+        "adjProb": 0.64,
         "canonicalProbability": 0.64,
+        "bestAvailablePrice": -110,
+        "bestAvailableBook": "Book A",
+        "bestOverPrice": -110,
+        "bestUnderPrice": -105,
+        "oddsUpdatedAt": "2099-08-06T15:58:00+00:00",
+        "modelVersion": "hits-xgb-2026.08",
+        "matchupSimulationVersion": "4.35",
+        "gameSimN": 1500,
         "canonicalPrice": -110,
         "canonicalBook": "Book A",
         "canonicalEdge": 0.08,
@@ -83,7 +103,12 @@ def test_filter_actionable_reports_rows_that_must_not_reach_betting_surfaces():
 def test_recommendation_builder_drops_non_actionable_market_rows():
     result = build_recommendations([
         base_row(),
-        base_row(canonicalPrice=None, id="projected"),
+        base_row(
+            marketGatePromoted=False,
+            marketGateStatus="warming_up",
+            marketSideGateStatus="warming_up",
+            id="priced",
+        ),
     ])
     assert len(result["card"]) == 1
     assert result["card"][0]["actionabilityStage"] == "Actionable"
