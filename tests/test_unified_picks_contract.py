@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_unified_picks_route_is_the_primary_actionable_contract():
     source = (ROOT / 'intelligence_integration.py').read_text(encoding='utf-8')
     assert "@flask_app.route('/api/picks/today'" in source
-    assert "'contractVersion': '4.43'" in source
+    assert "'contractVersion': '4.44'" in source
     assert "'picks': picks" in source
     assert "candidates[:5]" in source
     assert "recommendationGrade" in source
