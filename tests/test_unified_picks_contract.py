@@ -7,9 +7,10 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_unified_picks_route_is_the_primary_actionable_contract():
     source = (ROOT / 'intelligence_integration.py').read_text(encoding='utf-8')
     assert "@flask_app.route('/api/picks/today'" in source
-    assert "'contractVersion': '4.46'" in source
+    assert "'contractVersion': '4.47'" in source
     assert "'picks': picks" in source
-    assert "candidates[:5]" in source
+    assert "actionable_limit = 5" in source
+    assert "picks = candidates[:actionable_limit]" in source
     assert "recommendationGrade" in source
     assert "marketValidation" in source
 
@@ -50,9 +51,11 @@ def test_primary_picks_contract_exposes_normalized_evidence_snapshot():
 
 def test_primary_picks_contract_exposes_auditable_summary():
     source = (ROOT / 'intelligence_integration.py').read_text(encoding='utf-8')
-    assert "'evidenceAuditVersion': '4.46'" in source
+    assert "'evidenceAuditVersion': '4.47'" in source
     assert "'status': audit_status" in source
-    assert "'actionableLimit': 5" in source
+    assert "'actionableLimit': actionable_limit" in source
+    assert "'capApplied': cap_applied" in source
+    assert "'withheldCount': withheld_count" in source
     assert "'displayedCount': displayed_count" in source
     assert "'rejectionReasons': dict(sorted(evidence_rejection_reasons.items()))" in source
 
@@ -60,6 +63,7 @@ def test_primary_picks_contract_exposes_auditable_summary():
 def test_picks_page_surfaces_evidence_audit_details():
     source = (ROOT / 'picks.html').read_text(encoding='utf-8')
     assert "const audit=d.evidenceAudit||{}" in source
+    assert "const withheld=audit.withheldCount||0" in source
     assert "Object.entries(audit.rejectionReasons||{})" in source
     assert 'Evidence audit:' in source
     assert 'validated' in source and 'rejected' in source
