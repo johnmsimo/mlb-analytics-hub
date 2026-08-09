@@ -21,6 +21,7 @@ from candidate_integrity import SUPPORTED_MARKETS, canonical_market_key
 
 
 VALIDATION_VERSION = "4.38"
+CALIBRATION_VERSION = "4.54"
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,9 @@ class ValidationPolicy:
     minimum_roi: float = 0.0
     minimum_average_clv: float = 0.0
     maximum_drawdown_units: float = 10.0
+    calibration_confidence_level: float = 0.95
+    drift_warning_delta: float = 0.05
+    drift_failure_delta: float = 0.10
 
 
 def _number(value: Any) -> float | None:
@@ -269,6 +273,120 @@ def _calibration_error(rows: list[Mapping[str, Any]]) -> float | None:
     )
 
 
+def _wilson_interval(successes: int, total: int, confidence: float = 0.95) -> dict[str, Any] | None:
+    if total <= 0:
+        return None
+    # 95% Wilson interval; the explicit level is part of the public audit.
+    z = 1.959964 if confidence >= 0.95 else 1.644854
+    proportion = successes / total
+    denominator = 1.0 + z * z / total
+    centre = (proportion + z * z / (2.0 * total)) / denominator
+    margin = (
+        z * math.sqrt(
+            proportion * (1.0 - proportion) / total
+            + z * z / (4.0 * total * total)
+        ) / denominator
+    )
+    return {
+        "level": round(confidence, 3),
+        "lower": round(max(0.0, centre - margin), 4),
+        "upper": round(min(1.0, centre + margin), 4),
+    }
+
+
+def _drift_summary(rows: list[Mapping[str, Any]], policy: ValidationPolicy) -> dict[str, Any]:
+    values = sorted(rows, key=lambda row: row["validationTimestamp"])
+    if len(values) < 2:
+        return {
+            "status": "unknown",
+            "baselineCount": 0,
+            "recentCount": len(values),
+            "eceDelta": None,
+            "brierDelta": None,
+        }
+    recent_count = max(1, len(values) // 3)
+    baseline = values[:-recent_count]
+    recent = values[-recent_count:]
+    baseline_metrics = summarize_rows(baseline)
+    recent_metrics = summarize_rows(recent)
+    ece_delta = (
+        float(recent_metrics["calibrationError"])
+        - float(baseline_metrics["calibrationError"])
+    )
+    brier_delta = (
+        float(recent_metrics["brierScore"])
+        - float(baseline_metrics["brierScore"])
+    )
+    if (
+        len(recent) < max(5, policy.minimum_validation_rows // 4)
+        or len(baseline) < max(5, policy.minimum_validation_rows // 2)
+    ):
+        status = "unknown"
+    elif (
+        ece_delta >= policy.drift_failure_delta
+        or brier_delta >= policy.drift_failure_delta
+    ):
+        status = "drifted"
+    elif (
+        ece_delta >= policy.drift_warning_delta
+        or brier_delta >= policy.drift_warning_delta / 2.0
+    ):
+        status = "watch"
+    else:
+        status = "stable"
+    return {
+        "status": status,
+        "baselineCount": len(baseline),
+        "recentCount": len(recent),
+        "eceDelta": round(ece_delta, 4),
+        "brierDelta": round(brier_delta, 5),
+        "baselineEnd": baseline[-1]["validationDate"],
+        "recentStart": recent[0]["validationDate"],
+    }
+
+
+def _calibration_metadata(rows: list[Mapping[str, Any]], policy: ValidationPolicy) -> dict[str, Any]:
+    values = list(rows)
+    count = len(values)
+    wins = sum(int(row["validationOutcome"]) for row in values)
+    summary = summarize_rows(values)
+    return {
+        "version": CALIBRATION_VERSION,
+        "sampleSize": count,
+        "brierScore": summary["brierScore"],
+        "ece": summary["calibrationError"],
+        "confidenceInterval": {
+            "winRate": _wilson_interval(
+                wins, count, policy.calibration_confidence_level,
+            ),
+            "level": round(policy.calibration_confidence_level, 3),
+        },
+        "driftStatus": _drift_summary(values, policy),
+    }
+
+
+def _annotated_group_summary(
+    rows: Iterable[Mapping[str, Any]], key: str, policy: ValidationPolicy,
+) -> dict[str, dict[str, Any]]:
+    groups: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for row in rows:
+        groups[str(row.get(key) or "unknown")].append(row)
+    result = {}
+    for name, values in sorted(groups.items()):
+        summary = summarize_rows(values)
+        calibration = _calibration_metadata(values, policy)
+        summary.update({
+            "sampleSize": calibration["sampleSize"],
+            "expectedCalibrationError": calibration["ece"],
+            "confidenceInterval": calibration["confidenceInterval"],
+            "driftStatus": calibration["driftStatus"]["status"],
+            "drift": calibration["driftStatus"],
+            "calibration": calibration,
+        })
+        result[name] = summary
+    return result
+
+
 def _maximum_drawdown(values: list[float]) -> float | None:
     if not values:
         return None
@@ -463,6 +581,8 @@ def _gate(market: str, metrics: Mapping[str, Any], folds: int,
     drawdown = _number(metrics.get("maximumDrawdownUnits"))
     if drawdown is not None and drawdown > policy.maximum_drawdown_units:
         failed.append("maximum drawdown exceeds policy")
+    if str(metrics.get("driftStatus") or "unknown") == "drifted":
+        failed.append("calibration drift exceeds policy")
 
     if insufficient:
         status = "warming_up"
@@ -488,11 +608,11 @@ def build_validation_report(
     policy = policy or ValidationPolicy()
     history, skipped, excluded_backfill = _normalized_rows(entries)
     validation_rows, folds = _walk_forward_rows(history, policy)
-    validation_by_market = _group_summary(
-        validation_rows, "canonicalMarketKey"
+    validation_by_market = _annotated_group_summary(
+        validation_rows, "canonicalMarketKey", policy,
     )
-    validation_by_market_side = _group_summary(
-        validation_rows, "validationMarketSide"
+    validation_by_market_side = _annotated_group_summary(
+        validation_rows, "validationMarketSide", policy,
     )
     observed_markets = set(validation_by_market) | {
         row["canonicalMarketKey"] for row in history
@@ -520,6 +640,7 @@ def build_validation_report(
     }
     return {
         "version": VALIDATION_VERSION,
+        "calibrationVersion": CALIBRATION_VERSION,
         "mode": "strict_walk_forward_holdout",
         "adaptiveWeightsEnabled": False,
         "historyCount": len(history),
@@ -554,6 +675,20 @@ def build_validation_report(
             market for market, gate in gates.items()
             if gate["status"] == "warming_up"
         ],
+        "calibrationAudit": {
+            "version": CALIBRATION_VERSION,
+            "marketStatuses": {
+                market: gate["status"] for market, gate in gates.items()
+            },
+            "failingMarkets": [
+                market for market, gate in gates.items()
+                if gate["status"] == "disabled"
+            ],
+            "driftedMarkets": [
+                market for market, gate in gates.items()
+                if str((gate.get("metrics") or {}).get("driftStatus") or "") == "drifted"
+            ],
+        },
     }
 
 
@@ -621,8 +756,24 @@ def apply_market_gates(
             gate.get("promoted") is True
             and side_gate.get("promoted") is True
         )
+        market_metrics = dict(gate.get("metrics") or {})
+        calibration_drift = str(market_metrics.get("driftStatus") or "unknown")
+        is_promoted = (
+            gate.get("promoted") is True
+            and side_gate.get("promoted") is True
+        )
         row.update({
             "marketValidationVersion": VALIDATION_VERSION,
+            "calibrationVersion": CALIBRATION_VERSION,
+            "calibrationStatus": "passed" if is_promoted else status,
+            "calibrationDriftStatus": calibration_drift,
+            "calibrationEvidence": {
+                "sampleSize": market_metrics.get("sampleSize", market_metrics.get("count", 0)),
+                "brierScore": market_metrics.get("brierScore"),
+                "ece": market_metrics.get("expectedCalibrationError", market_metrics.get("calibrationError")),
+                "confidenceInterval": market_metrics.get("confidenceInterval"),
+                "driftStatus": calibration_drift,
+            },
             "marketGateStatus": status,
             "marketGatePromoted": is_promoted,
             "marketGateReasons": reasons,
@@ -630,6 +781,22 @@ def apply_market_gates(
             "marketSideGateStatus": side_status,
             "marketSideGateMetrics": dict(side_gate.get("metrics") or {}),
         })
+        if status == "disabled" or calibration_drift == "drifted":
+            strong_fields = (
+                "recommendationGrade", "confidenceTier",
+                "stackVerdict", "pickScoreTier",
+            )
+            strong_labels = {
+                "high", "high_conf", "high_confidence",
+                "high conf", "strong", "strong_bet", "strong bet",
+            }
+            for field in strong_fields:
+                original = row.get(field)
+                if str(original or "").strip().lower() in strong_labels:
+                    row[f"calibrationDowngradedFrom_{field}"] = original
+                    row[field] = "CAUTION"
+            row["calibrationDowngraded"] = True
+
         decision = evaluate_actionability(
             row,
             require_market_validation=True,
