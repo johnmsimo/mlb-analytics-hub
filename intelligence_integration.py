@@ -291,6 +291,37 @@ def run_game_card_job(app_module, args):
     return payload
 
 
+def _clv_provenance(row):
+    """Expose only auditable CLV evidence on the primary Picks contract."""
+    receipt = row.get('closingIntegrity')
+    has_receipt = isinstance(receipt, dict)
+    accepted = (
+        has_receipt
+        and receipt.get('accepted') is True
+        and receipt.get('fresh') is True
+    )
+    status = (
+        'verified'
+        if accepted
+        else 'rejected'
+        if has_receipt and receipt.get('accepted') is False
+        else 'unverified'
+    )
+    return {
+        'status': status,
+        'verified': accepted,
+        'edge': row.get('clvEdge') if accepted else None,
+        'source': receipt.get('source') if has_receipt else None,
+        'book': row.get('closingBook') if has_receipt else None,
+        'capturedAt': (
+            row.get('closingCapturedAt')
+            or receipt.get('capturedAt')
+            if has_receipt else row.get('closingCapturedAt')
+        ),
+        'reason': receipt.get('reason') if has_receipt else 'missing_integrity_receipt',
+    }
+
+
 def install_intelligence_api(app_module):
     flask_app = app_module.app
     if 'api_intelligence_recommendations' in flask_app.view_functions:
@@ -354,6 +385,7 @@ def install_intelligence_api(app_module):
             row.setdefault('edgePct', row.get('estimatedEdgePct'))
             row.setdefault('lineupStatus', row.get('lineupSource') or row.get('lineup_status'))
             row.setdefault('freshnessSeconds', row.get('oddsAgeSeconds'))
+            row['clvProvenance'] = _clv_provenance(row)
             candidates.append(row)
         candidates.sort(key=lambda row: (
             -float(row.get('pickScore') or row.get('decisionScore') or 0),
@@ -362,7 +394,7 @@ def install_intelligence_api(app_module):
         picks = candidates[:5]
         return app_module.jsonify({
             'success': True,
-            'contractVersion': '4.39',
+            'contractVersion': '4.43',
             'date': payload.get('date'),
             'picks': picks,
             'count': len(picks),
