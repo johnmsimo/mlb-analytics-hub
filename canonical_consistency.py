@@ -423,6 +423,88 @@ def install_canonical_consistency(app_module: Any) -> None:
     app_module._canonical_consistency_installed = True
 
 
+_RESPONSE_CONTRACTS = (
+    (
+        "/api/props/projections",
+        "props",
+        ("projections", "props", "batters", "pitchers", "rows", "candidates"),
+    ),
+    (
+        "/api/props/scan/today",
+        "props",
+        ("props", "rows", "candidates"),
+    ),
+    (
+        "/api/edges/today",
+        "edge_lab",
+        ("edges", "props", "rows", "candidates"),
+    ),
+    (
+        "/api/projections/monte-carlo",
+        "monte_carlo",
+        ("topProps", "props", "rows", "candidates"),
+    ),
+    (
+        "/api/cheatsheets/today",
+        "cheatsheets",
+        ("rows", "props", "candidates", "batters"),
+    ),
+    (
+        "/api/cheatsheet",
+        "cheatsheets",
+        ("rows", "props", "candidates", "batters"),
+    ),
+    (
+        "/api/tracker",
+        "tracker",
+        ("entries", "picks", "rows", "candidates"),
+    ),
+    (
+        "/api/deepdive",
+        "deep_dive",
+        ("props", "projections", "rows", "candidates"),
+    ),
+    (
+        "/api/gameside",
+        "gameside",
+        ("props", "projections", "rows", "candidates"),
+    ),
+)
+
+
+def install_canonical_response_hook(app_module: Any) -> None:
+    """Normalize JSON responses used by recommendation-capable pages."""
+    flask_app = app_module.app
+    if getattr(app_module, "_canonical_response_hook_installed", False):
+        return
+
+    @flask_app.after_request
+    def _canonical_response_hook(response: Any) -> Any:
+        path = str(getattr(app_module.request, "path", "") or "")
+        contract = next(
+            (
+                item
+                for item in _RESPONSE_CONTRACTS
+                if path.startswith(item[0])
+            ),
+            None,
+        )
+        if contract is None or "json" not in str(
+            response.headers.get("Content-Type") or ""
+        ).lower():
+            return response
+        payload = response.get_json(silent=True)
+        if not isinstance(payload, Mapping):
+            return response
+        _, surface, row_keys = contract
+        normalized = normalize_payload(payload, surface=surface, row_keys=row_keys)
+        response.set_data(app_module.json.dumps(normalized, default=str))
+        response.headers["Content-Length"] = str(len(response.get_data()))
+        return response
+
+    app_module._canonical_response_hook_installed = True
+
+
 def install_canonical_consistency_api(app_module: Any) -> None:
     """Expose an inspectable cross-page contract endpoint for UI and QA."""
     flask_app = app_module.app
@@ -430,6 +512,7 @@ def install_canonical_consistency_api(app_module: Any) -> None:
         return
 
     install_canonical_consistency(app_module)
+    install_canonical_response_hook(app_module)
 
     @flask_app.route("/api/candidates/canonical", methods=["GET"])
     def api_canonical_candidates():
