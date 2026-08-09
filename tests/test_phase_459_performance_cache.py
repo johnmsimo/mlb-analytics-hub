@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -69,15 +70,20 @@ class Phase459PerformanceTests(unittest.TestCase):
 
     def test_warmup_is_idempotent_while_running(self):
         coordinator = WarmupCoordinator()
+        release = threading.Event()
 
-        with patch("cache_warmup.time.sleep"):
-            self.assertTrue(
-                coordinator.start(
-                    {"slow": lambda: time.sleep(0.05)},
-                    timeout_seconds=1,
-                    max_workers=1,
-                )
+        def slow():
+            release.wait(1)
+
+        self.assertTrue(
+            coordinator.start(
+                {"slow": slow},
+                timeout_seconds=2,
+                max_workers=1,
             )
-            self.assertFalse(
-                coordinator.start({"other": lambda: None}, timeout_seconds=1)
-            )
+        )
+        time.sleep(0.02)
+        self.assertFalse(
+            coordinator.start({"other": lambda: None}, timeout_seconds=1)
+        )
+        release.set()
