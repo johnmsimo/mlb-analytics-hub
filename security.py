@@ -11,6 +11,35 @@ from flask_limiter.util import get_remote_address
 from config import settings
 
 
+# Administrative reads are protected by the same fail-closed boundary as
+# administrative mutations. Keep this allowlist explicit so a new public API
+# cannot become private accidentally through a broad substring match.
+_ADMIN_HTML_PATHS = frozenset({"/settings"})
+_ADMIN_API_PATHS = frozenset({
+    "/api/admin",
+    "/api/app-settings",
+    "/api/tracker/settings",
+})
+_ADMIN_API_PREFIXES = (
+    "/api/admin/",
+    "/api/brain/",
+    "/api/brain-data/",
+    "/api/cache/",
+    "/api/memory/",
+    "/api/model-actual/daily-summary/",
+    "/api/pipeline/",
+    "/api/training/",
+)
+
+
+def is_admin_surface(path: str) -> bool:
+    """Return whether *path* exposes administrative or operational data."""
+    normalized = (path or "").rstrip("/") or "/"
+    return normalized in _ADMIN_HTML_PATHS or normalized in _ADMIN_API_PATHS or any(
+        normalized.startswith(prefix) for prefix in _ADMIN_API_PREFIXES
+    )
+
+
 def _default_rate_limit_exempt() -> bool:
     """Keep operational probes and non-API delivery out of shared Redis.
 
@@ -64,7 +93,12 @@ def install_security(app) -> None:
     limiter.init_app(app)
 
     @app.before_request
-    def _protect_api_mutations():
+    def _protect_admin_boundary():
+        # Protect administrative GETs and the settings shell as well as the
+        # existing mutation boundary. Public read-only product APIs remain
+        # untouched.
+        if is_admin_surface(request.path):
+            return check_admin_auth()
         if (
             request.path.startswith("/api/")
             and request.method in {"POST", "PUT", "PATCH", "DELETE"}
