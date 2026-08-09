@@ -28,6 +28,11 @@ class JobQueueUnavailable(RuntimeError):
     """Raised when durable jobs cannot be accepted safely."""
 
 
+def _redis_socket_timeout(block_seconds: int) -> float:
+    """Keep Redis reads alive longer than the worker's blocking BLPOP."""
+    return max(2.0, float(block_seconds) + 2.0)
+
+
 def _json(value: Any) -> str:
     return json.dumps(value, separators=(",", ":"), sort_keys=True, default=str)
 
@@ -259,7 +264,10 @@ def get_job_queue() -> RedisJobQueue:
             settings.redis_url,
             decode_responses=True,
             socket_connect_timeout=0.5,
-            socket_timeout=1.0,
+            # BLPOP may legitimately wait for the configured idle period.
+            # A shorter socket timeout turns an empty queue into a false
+            # connection failure and causes needless worker reconnect churn.
+            socket_timeout=_redis_socket_timeout(settings.redis_queue_block_seconds),
             health_check_interval=30,
         )
         client.ping()
