@@ -12,6 +12,7 @@ import threading
 os.environ["PROCESS_ROLE"] = "worker"
 
 from task_queue import JobQueueUnavailable, get_job_queue, reset_job_queue  # noqa: E402
+from config import settings  # noqa: E402
 
 
 log = logging.getLogger(__name__)
@@ -121,7 +122,7 @@ def main() -> int:
     while not _stop.is_set():
         try:
             queue.heartbeat()
-            queue.work_once(handlers, block_seconds=5)
+            queue.work_once(handlers, block_seconds=settings.redis_queue_block_seconds)
         except Exception:
             log.exception("Durable queue connection failed; reconnecting without stopping web")
             reset_job_queue()

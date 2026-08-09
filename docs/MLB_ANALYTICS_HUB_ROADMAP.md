@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 4.58 merged and deployed on 2026-08-09. Phase 4.59 is the active phase.
+Status: Phase 4.59 merged and deployed on 2026-08-09. Phase 4.60 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -113,6 +113,8 @@ Exit gate: health/readiness is fast, first meaningful content is under two
 seconds for cached views, and deep dives have explicit timeout/fallback states.
 
 ### Phase 4.60 — Production quality gates
+
+Implementation status: Redis worker readiness is being hardened so an idle durable queue cannot manufacture socket timeouts; the worker block timeout is now explicitly longer than its Redis socket timeout, with regression coverage and deployment validation in progress.
 
 Expand deployment validation beyond compilation and pytest with browser smoke
 tests for every route, API contract tests, mobile layout tests, stale-data
