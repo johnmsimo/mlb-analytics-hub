@@ -15,6 +15,7 @@ from typing import Any
 from flask import Blueprint, g, has_request_context, jsonify, request
 
 from config import settings
+from performance_budget import route_budget_ms, route_budget_snapshot
 
 log = logging.getLogger(__name__)
 
@@ -30,6 +31,8 @@ class _RouteStats:
     slow_requests: int = 0
     total_ms: float = 0.0
     max_ms: float = 0.0
+    budget_ms: int | None = None
+    budget_breaches: int = 0
 
 
 class RequestPerformanceMonitor:
@@ -95,13 +98,21 @@ class RequestPerformanceMonitor:
     ) -> None:
         """Record one normalized request measurement."""
         route_key = f"{method.upper()} {route_rule}"
+        budget_ms = route_budget_ms(route_key)
+        budget_breached = budget_ms is not None and duration_ms > budget_ms
         with self._lock:
             if route_key not in self._routes and len(self._routes) >= self.route_limit - 1:
                 route_key = "<other>"
-            stats = self._routes.setdefault(route_key, _RouteStats())
+                budget_ms = None
+                budget_breached = False
+            stats = self._routes.setdefault(
+                route_key,
+                _RouteStats(budget_ms=budget_ms),
+            )
             stats.requests += 1
             stats.errors += int(status_code >= 500)
             stats.slow_requests += int(duration_ms >= self.slow_ms)
+            stats.budget_breaches += int(budget_breached)
             stats.total_ms += duration_ms
             stats.max_ms = max(stats.max_ms, duration_ms)
             self._samples.append(duration_ms)
@@ -139,6 +150,8 @@ class RequestPerformanceMonitor:
                     "slow_requests": stats.slow_requests,
                     "average_ms": round(stats.total_ms / stats.requests, 2),
                     "max_ms": round(stats.max_ms, 2),
+                    "budget_ms": stats.budget_ms,
+                    "budget_breaches": stats.budget_breaches,
                 }
                 for route, stats in self._routes.items()
             ]
@@ -151,6 +164,7 @@ class RequestPerformanceMonitor:
         total_requests = sum(item["requests"] for item in route_items)
         error_count = sum(item["errors"] for item in route_items)
         slow_requests = sum(item["slow_requests"] for item in route_items)
+        budget_breaches = sum(item["budget_breaches"] for item in route_items)
         sorted_samples = sorted(samples)
 
         return {
@@ -164,6 +178,7 @@ class RequestPerformanceMonitor:
                 "requests": total_requests,
                 "errors": error_count,
                 "slow_requests": slow_requests,
+                "budget_breaches": budget_breaches,
                 "sampled_requests": len(samples),
                 "average_ms": round(sum(samples) / len(samples), 2) if samples else 0.0,
                 "p95_ms": self._percentile(sorted_samples, 0.95),
@@ -194,7 +209,9 @@ performance_bp = Blueprint("performance", __name__)
 @performance_bp.get("/api/performance/status")
 def performance_status():
     """Return a secret-safe in-process request performance snapshot."""
-    return jsonify(request_performance.snapshot())
+    payload = request_performance.snapshot()
+    payload["route_budgets_ms"] = route_budget_snapshot()
+    return jsonify(payload)
 
 
 @performance_bp.post("/api/performance/metrics/reset")
