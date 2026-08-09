@@ -91,8 +91,7 @@ def on_starting(server):
 
 
 def post_fork(server, worker):
-    """Install cache wrappers and hydrate shared reference snapshots."""
-    import threading
+    """Install cache wrappers and start bounded, observable warmup."""
     try:
         from pipeline_cache_integration import install_pipeline_cache
 
@@ -108,10 +107,16 @@ def post_fork(server, worker):
 
     try:
         from app import _preload_caches
+        from cache_warmup import warmup
 
-        threading.Thread(target=_preload_caches, daemon=True).start()
+        started = warmup.start(
+            {"reference_snapshot": _preload_caches},
+            timeout_seconds=30,
+            max_workers=1,
+        )
         server.log.info(
-            "[post_fork] shared reference snapshot hydration started; upstream refresh remains worker-only"
+            "[post_fork] bounded reference warmup started=%s; status is available at /api/cache/warmup/status",
+            started,
         )
     except Exception as ex:
         server.log.warning(f"[post_fork] Could not start reference preload: {ex}")
