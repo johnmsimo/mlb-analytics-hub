@@ -44,6 +44,7 @@ def calibration_history(*, drifted=False):
                 "recommendationGrade": "STRONG BET",
                 "grade": "win" if outcome else "loss",
                 "clvEdge": 0.02,
+                "oddsLineage": {"version": "4.55", "clvEligible": True},
             })
     return rows
 
