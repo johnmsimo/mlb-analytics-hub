@@ -115,8 +115,13 @@ def test_phase_457_contract_is_installed_and_documented():
     roadmap = (ROOT / "docs" / "MLB_ANALYTICS_HUB_ROADMAP.md").read_text(
         encoding="utf-8"
     )
+    contract = (ROOT / "canonical_consistency.py").read_text(encoding="utf-8")
     assert "install_canonical_consistency_api" in wsgi
+    assert "install_canonical_response_hook" in contract
+    assert "/api/props/projections" in contract
+    assert "/api/cheatsheets/today" in contract
+    assert "/api/tracker" in contract
+    assert "/api/deepdive" in contract
+    assert "/api/gameside" in contract
     assert 'Status: Phase 4.57' in roadmap
-    assert 'CANONICAL_CONTRACT_VERSION = "4.57"' in (
-        ROOT / "canonical_consistency.py"
-    ).read_text(encoding="utf-8")
+    assert 'CANONICAL_CONTRACT_VERSION = "4.57"' in contract
