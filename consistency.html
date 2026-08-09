@@ -153,7 +153,8 @@
     </section>
   </div>
 
-  <script>
+  <script src="/static/freshness-state.js"></script>
+<script>
     let DATA = null;
     let ACTIVE_MARKET = null;
 
@@ -355,11 +356,13 @@
         setOptions('slotFilter', (data.slots || []).map(s => ({ value: String(s), label: `Slot ${s}` })), 'All Slots');
         buildTabs(data.markets || []);
         renderActiveMarket();
-        if(data.computing){
+        const freshness = FreshnessState.normalize(data);
+        FreshnessState.apply('statusText', freshness, data.date || etToday());
+        if(FreshnessState.isComputing(data) && FreshnessState.shouldRetry('consistency')){
           status.textContent = `${data.message || 'Computing... auto-refresh in 20s'} | retrying in 5s`;
           setTimeout(function(){ loadData(false); }, 5000);
         }else{
-          status.textContent = `Updated ${data.generatedAt || 'now'} | ${data.cached ? 'cached' : 'fresh'} payload for ${data.date || etToday()}`;
+          status.textContent = `${FreshnessState.label(freshness)} · ${data.generatedAt || 'now'} | ${data.cached ? 'cached' : 'fresh'} payload for ${data.date || etToday()}`;
         }
       }catch(err){
         document.getElementById('sheetBody').innerHTML = `<tr><td colspan="16" class="empty">${err.message}</td></tr>`;

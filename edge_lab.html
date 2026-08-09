@@ -205,7 +205,8 @@
     </section>
   </div>
 
-  <script>
+  <script src="/static/freshness-state.js"></script>
+<script>
     const LOADED = {hot:false, edges:false, defense:false, parlays:false};
     let VIEW = 'hot';
     let EDGES = [], PARLAYS = [], CUR_DATE = null;
@@ -304,7 +305,7 @@
           `<span class="pill">${d.count} players</span>`,
           `<span class="pill">Window: ${win.toUpperCase()}</span>`,
           `<span class="pill">≥ ${Math.round(mp*100)}%</span>`,
-          d.computing?`<span class="pill">Computing… retry 6s</span>`:`<span class="pill">${d.cached?'cached':'fresh'}</span>`
+          `<span class="pill">${FreshnessState.label(FreshnessState.normalize(d))}${d.cached?' · cached':''}</span>`
         ].join('');
         const rows=d.players||[];
         document.getElementById('hotBody').innerHTML = rows.length? rows.map((p,i)=>{
@@ -324,7 +325,7 @@
             `<td><span class="hub">${p.hubRating==null?'-':Math.round(p.hubRating)}</span></td>`+
           '</tr>';
         }).join('') : '<tr><td colspan="11" class="empty">No players meet this streak threshold.</td></tr>';
-        if(d.computing) setTimeout(()=>loadHot(false),6000);
+        if(FreshnessState.isComputing(d) && FreshnessState.shouldRetry('hot')) setTimeout(()=>loadHot(false),6000);
         setStatus(`100% Club · ${d.count} players · ${d.date}`);
       }catch(e){
         document.getElementById('hotBody').innerHTML=`<tr><td colspan="11" class="empty">${esc(e.message)}</td></tr>`;
@@ -349,7 +350,7 @@
           `<span class="pill">≥ ${(d.minEdge*100).toFixed(0)}% edge</span>`,
           gc['A+']?`<span class="pill">A+: ${gc['A+']}</span>`:'',
           gc['A']?`<span class="pill">A: ${gc['A']}</span>`:'',
-          d.computing?`<span class="pill">Computing… retry 6s</span>`:`<span class="pill">${d.cached?'cached':'fresh'}</span>`
+          `<span class="pill">${FreshnessState.label(FreshnessState.normalize(d))}${d.cached?' · cached':''}</span>`
         ].filter(Boolean).join('');
         const rows=EDGES;
         document.getElementById('edgeBody').innerHTML = rows.length? rows.map((e,i)=>(
@@ -370,7 +371,7 @@
           `<td><button class="trackbtn" onclick="trackEdge(${i}, this)">+ Track</button></td>`+
           '</tr>'
         )).join('') : `<tr><td colspan="14" class="empty">No positive-edge plays${d.computing?' yet (computing)':''}. Edges require live book lines (ODDS_API_KEY).</td></tr>`;
-        if(d.computing) setTimeout(()=>loadEdges(false),6000);
+        if(FreshnessState.isComputing(d) && FreshnessState.shouldRetry('edges')) setTimeout(()=>loadEdges(false),6000);
         setStatus(`Edge Finder · ${d.count} plays · ${d.date}`);
       }catch(e){
         document.getElementById('edgeBody').innerHTML=`<tr><td colspan="14" class="empty">${esc(e.message)}</td></tr>`;
@@ -426,7 +427,7 @@
         PARLAYS = d.parlays||[]; CUR_DATE = d.date;
         document.getElementById('parMeta').innerHTML=[
           `<span class="pill">${d.candidateCount} candidate legs</span>`,
-          d.computing?`<span class="pill">Computing… retry 6s</span>`:`<span class="pill">${d.cached?'cached':'fresh'}</span>`,
+          `<span class="pill">${FreshnessState.label(FreshnessState.normalize(d))}${d.cached?' · cached':''}</span>`,
           `<span class="pill">${d.date}</span>`
         ].join('');
         const grid=document.getElementById('parGrid');
@@ -447,7 +448,7 @@
             `<button class="trackbtn full" onclick="trackParlay(${i}, this)"${(p.legs||[]).length?'':' disabled'}>Send to tracker</button>`+
           `</div>`;
         }).join('') || '<div class="empty">No parlays available.</div>';
-        if(d.computing) setTimeout(()=>loadParlays(false),6000);
+        if(FreshnessState.isComputing(d) && FreshnessState.shouldRetry('parlays')) setTimeout(()=>loadParlays(false),6000);
         setStatus(`Parlays · ${d.candidateCount} candidate legs · ${d.date}`);
       }catch(e){
         document.getElementById('parGrid').innerHTML=`<div class="empty">${esc(e.message)}</div>`;
