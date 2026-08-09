@@ -113,6 +113,9 @@ def _price(row: Mapping[str, Any]) -> float | None:
 
 
 def _book(row: Mapping[str, Any]) -> str | None:
+    # A book name without a quoted price is not usable betting evidence.
+    if _price(row) is None:
+        return None
     for key in (
         "canonicalBook",
         "book",
