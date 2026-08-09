@@ -393,6 +393,31 @@ def _evidence_integrity(evidence):
         'verified': not reasons,
         'reasons': reasons,
     }
+ 
+ 
+def _ranking_number(row, *keys):
+    """Return a finite numeric ranking value without letting bad input abort Picks."""
+    for key in keys:
+        value = row.get(key)
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(number):
+            return number
+    return 0.0
+
+
+def _stable_candidate_key(row):
+    """Build a deterministic tie-break key from the candidate identity fields."""
+    return "|".join(
+        str(row.get(key) or "").strip().lower()
+        for key in (
+            "canonicalCandidateId", "id", "gamePk", "marketKey", "playerId",
+            "player", "team", "line", "recommendedSide", "side", "book", "price",
+        )
+    )
+
 
 def install_intelligence_api(app_module):
     flask_app = app_module.app
@@ -473,27 +498,32 @@ def install_intelligence_api(app_module):
                     )
                 continue
             candidates.append(row)
-        ranking_method = 'pickScore_desc_then_edgePct_desc'
+        ranking_method = (
+            'pickScore_desc_then_edgePct_desc_then_candidateKey_asc'
+        )
         candidates.sort(key=lambda row: (
-            -float(row.get('pickScore') or row.get('decisionScore') or 0),
-            -float(row.get('estimatedEdgePct') or row.get('edge') or 0),
+            -_ranking_number(row, 'pickScore', 'decisionScore'),
+            -_ranking_number(row, 'estimatedEdgePct', 'edgePct', 'edge'),
+            _stable_candidate_key(row),
         ))
         actionable_limit = 5
         ranked_candidates = []
         for rank, candidate in enumerate(candidates, start=1):
             ranked = dict(candidate)
+            primary_score = _ranking_number(
+                candidate, 'pickScore', 'decisionScore'
+            )
+            edge_score = _ranking_number(
+                candidate, 'estimatedEdgePct', 'edgePct', 'edge'
+            )
+            stable_key = _stable_candidate_key(candidate)
             ranked['selectionAudit'] = {
-                'version': '4.48',
+                'version': '4.49',
                 'rank': rank,
                 'rankedBy': ranking_method,
-                'rankingScore': (
-                    ranked.get('pickScore')
-                    or ranked.get('decisionScore')
-                ),
-                'tieBreakEdgePct': (
-                    ranked.get('estimatedEdgePct')
-                    or ranked.get('edge')
-                ),
+                'rankingScore': primary_score,
+                'tieBreakEdgePct': edge_score,
+                'stableOrderKey': stable_key,
                 'disposition': (
                     'displayed'
                     if rank <= actionable_limit
@@ -516,24 +546,27 @@ def install_intelligence_api(app_module):
             audit_status = 'verified'
         return app_module.jsonify({
             'success': True,
-            'contractVersion': '4.48',
+            'contractVersion': '4.49',
             'evidenceVersion': '4.45',
             'evidenceIntegrityVersion': '4.45',
-            'evidenceAuditVersion': '4.48',
+            'evidenceAuditVersion': '4.49',
             'date': payload.get('date'),
             'picks': picks,
             'count': len(picks),
             'researchOnly': not bool(picks),
+            'selectionAuditVersion': '4.49',
             'evidenceAudit': {
-                'version': '4.48',
+                'version': '4.49',
                 'status': audit_status,
                 'actionableLimit': actionable_limit,
                 'capApplied': cap_applied,
                 'withheldCount': withheld_count,
-                'rankingVersion': '4.48',
+                'rankingVersion': '4.49',
                 'rankingMethod': ranking_method,
+                'deterministic': True,
                 'selectionRule': (
-                    'highest-ranked validated candidates up to actionableLimit'
+                    'stable deterministic ranking, then highest-ranked validated '
+                    'candidates up to actionableLimit'
                 ),
                 'rankedCandidateCount': len(ranked_candidates),
                 'candidateCount': len(candidates) + len(evidence_rejections),
