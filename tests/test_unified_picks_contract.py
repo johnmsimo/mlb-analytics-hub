@@ -32,3 +32,11 @@ def test_unified_route_does_not_promote_pass_rows():
     assert "if str(row.get('recommendationGrade') or '').lower() == 'pass':" in source
     assert "'researchOnly': not bool(picks)" in source
     assert "projections remain research-only" in source
+
+
+def test_primary_picks_contract_exposes_normalized_evidence_snapshot():
+    source = (ROOT / 'intelligence_integration.py').read_text(encoding='utf-8')
+    assert "'evidenceVersion': '4.44'" in source
+    assert "def _pick_evidence(row, clv):" in source
+    assert "row['evidence'] = _pick_evidence(row, clv)" in source
+    assert "'verifiedClvEdge': clv.get('edge')" in source
