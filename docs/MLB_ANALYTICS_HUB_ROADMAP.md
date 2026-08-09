@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 4.54 merged and deployed on 2026-08-09. Phase 4.55 is the active phase.
+Status: Phase 4.55 merged and deployed on 2026-08-09. Phase 4.56 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -11,7 +11,7 @@ previous phase and ship only after its exit gate passes.
 
 ### Phase 4.51 — Secure the administrative boundary
 
-Protect `/settings`, administrative GET endpoints, uploaded-file listings,
+Protect \`/settings\`, administrative GET endpoints, uploaded-file listings,
 brain ingestion, training, summaries, and operational metadata.
 
 Exit gate: no private settings or admin identity is visible without
@@ -21,9 +21,9 @@ authentication; all admin reads and writes have security tests.
 
 Every row must clearly be one of:
 
-`Research → Projected → Priced → Validated → Actionable → Graded`
+\`Research → Projected → Priced → Validated → Actionable → Graded\`
 
-Only `Actionable` rows may appear in Value Bets, Best Bets, primary Picks, or
+Only \`Actionable\` rows may appear in Value Bets, Best Bets, primary Picks, or
 betting recommendations.
 
 Exit gate: zero unpriced edge rows and zero research-only rows presented as
@@ -33,14 +33,14 @@ bets.
 
 Implementation status: shared freshness/computation contract wired into affected surfaces; bounded retries and visible stale/failed/unavailable labels are being enforced.
 
-Create shared states: `ready`, `computing`, `partial`, `stale`, `failed`, and
-`unavailable`.
+Create shared states: \`ready\`, \`computing\`, \`partial\`, \`stale\`, \`failed\`, and
+\`unavailable\`.
 
 Fix the stuck 100% Club, partial Value Bets behavior, stale Consistency cache,
 and missing cache-readiness messaging.
 
-Exit gate: no page remains indefinitely in a loading state; every stale value
-is visibly labeled.
+Exit gate: no page remains indefinitely in a loading state; every stale value is
+visibly labeled.
 
 ### Phase 4.54 — Calibration and drift enforcement
 
@@ -50,7 +50,7 @@ Use market-specific Brier score, ECE, sample size, confidence intervals, and
 drift status. When a market fails calibration, automatically downgrade or
 suppress strong recommendations.
 
-Exit gate: no `HIGH CONF` or `STRONG BET` label can appear for a market failing
+Exit gate: no \`HIGH CONF\` or \`STRONG BET\` label can appear for a market failing
 its calibration gate.
 
 ### Phase 4.55 — Odds and closing-line reliability
@@ -66,6 +66,11 @@ Exit gate: rolling CLV metrics have consistent denominators and at least 500
 valid CLV observations before industry-level claims are made.
 
 ### Phase 4.56 — Data correctness and entity validation
+
+Implementation status: the Phase 4.56 entity-validation boundary is being added
+to the shared candidate contract. Explicit identity, lineup, stat, handedness,
+probable-pitcher, asset, market-name, and line contradictions fail closed before
+recommendation surfaces.
 
 Reject player/team identity mismatches, invalid lineup status, impossible or
 suspicious stats, incorrect handedness, stale probable pitchers, missing logos
@@ -130,8 +135,8 @@ explanations.
 
 ## Audit findings carried into the roadmap
 
-- `/settings` exposes an administrative surface before authentication.
-- Value Bets can contain `SKIP` or model-only rows without verified prices.
+- \`/settings\` exposes an administrative surface before authentication.
+- Value Bets can contain \`SKIP\` or model-only rows without verified prices.
 - Several pages can remain in computing or partial states without a shared
   state contract; 100% Club was the clearest stuck workflow.
 - Calibration drift was visible in RBI metrics and must affect recommendation
