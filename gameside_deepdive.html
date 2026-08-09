@@ -132,6 +132,7 @@ body::before{content:"";position:fixed;inset:0;background:radial-gradient(ellips
 <div id="root"><div class="loading"><span class="spin"></span>LOADING GAME DATA...</div></div>
 </div>
 
+<script src="/static/async-loader.js"></script>
 <script>
 const GPK = (location.pathname.split('/').filter(Boolean)).pop();
 document.getElementById('ddLink').href = '/deep-dive/' + GPK;
@@ -503,12 +504,20 @@ async function load(silent) {
     return;
   }
   try {
-    const [gd, pp, bd, lp] = await Promise.all([
-      fetch('/api/game-projection/' + GPK).then(r=>r.json()).catch(()=>({})),
-      fetch('/api/pitchers/' + GPK).then(r=>r.json()).catch(()=>({})),
-      fetch('/api/game/' + GPK).then(r=>r.json()).catch(()=>({})),
-      fetch('/api/lineup-props/' + GPK).then(r=>r.json()).catch(()=>({})),
+    const settled = await Promise.allSettled([
+      fetchJsonWithTimeout('/api/game-projection/' + GPK,{timeoutMs:7000}),
+      fetchJsonWithTimeout('/api/pitchers/' + GPK,{timeoutMs:7000}),
+      fetchJsonWithTimeout('/api/game/' + GPK,{timeoutMs:7000}),
+      fetchJsonWithTimeout('/api/lineup-props/' + GPK,{timeoutMs:7000}),
     ]);
+    const valueOrEmpty = item => item.status === 'fulfilled' ? item.value : {};
+    const [gd, pp, bd, lp] = settled.map(valueOrEmpty);
+    const degraded = settled.some(item => item.status !== 'fulfilled');
+    if (!gd || !Object.keys(gd).length) {
+      const error = new Error('Game projection exceeded its response budget.');
+      error.code = 'timeout';
+      throw error;
+    }
 
     const awayP = pp.awayPitcher || {};
     const homeP = pp.homePitcher || {};
@@ -538,7 +547,7 @@ async function load(silent) {
       document.getElementById('liveBarText').textContent = `LIVE · ${awayAbbr} @ ${homeAbbr} — auto-refreshing every 90s`;
     }
 
-    let html = '';
+    let html = degraded ? '<div class="err" role="status">Some enrichment timed out; showing available cached game data.</div>' : '';
     html += `<div class="gh">
       <div class="gh-title">
         ${awayLogo?`<img class="gh-logo" src="${awayLogo}" alt="${awayAbbr}" loading="lazy" width="26" height="26">`:''}
@@ -610,7 +619,7 @@ async function load(silent) {
     document.getElementById('root').innerHTML = html;
   } catch(e) {
     if (!silent) {
-      document.getElementById('root').innerHTML = `<div class="err">Error loading game data: ${esc(e.message||e)}</div>`;
+      renderDeepDiveFallback('root','GAME DEEP DIVE UNAVAILABLE',e.code==='timeout'?'The game data request exceeded its response budget. Try again shortly.':'The upstream data service did not return a complete game response.');
     }
   }
 }
