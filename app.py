@@ -5423,6 +5423,10 @@ def bvp_page():
 def value_bets_page():
     return _page_response(VALUE_BETS_HTML)
 
+@app.route('/picks')
+def picks_page():
+    return _page_response(_read_html_or_fallback('picks.html'))
+
 @app.route('/nrfi')
 def nrfi_page():
     return _page_response(NRFI_HTML)
