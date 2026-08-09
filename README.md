@@ -151,6 +151,7 @@ mlb-analytics-hub/
 | `REDIS_HEALTH_INTERVAL` | Seconds between Redis health probes | `30` |
 | `REDIS_FAILURE_THRESHOLD` | Consecutive failures before opening the circuit | `5` |
 | `REDIS_CIRCUIT_TIMEOUT` | Seconds before a half-open recovery probe | `60` |
+| `REDIS_QUEUE_BLOCK_SECONDS` | Idle worker wait used by Redis `BLPOP`; socket timeout is kept above it | `5` |
 | `CACHE_STALE_TTL` | Extra seconds to retain stale-if-error cache shadows | `300` |
 | `CACHE_ALLOW_STALE` | Serve stale cached data when recomputation fails | `true` |
 | `MLB_SCHEDULE_CACHE_TTL` | Freshness window for shared hydrated date/game schedules | `120` |
