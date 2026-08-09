@@ -344,7 +344,7 @@ def _clv_provenance(row):
             if has_lineage and not accepted
             else receipt.get('reason')
             if has_receipt and not accepted
-            else 'missing_odds_lineage'
+            else 'missing_integrity_receipt'
             if not has_lineage
             else None
         ),
