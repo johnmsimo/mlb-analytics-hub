@@ -155,6 +155,7 @@
   </div>
 </div>
 
+<script src="/static/freshness-state.js"></script>
 <script>
 let allProps = [];
 let sortCol = 'edge';
@@ -223,9 +224,11 @@ async function loadData(force) {
     const r = await fetch(url);
     const d = await r.json();
     allProps = (d.props || []);
-    const isComputing = d.computing || false;
+    const freshness = FreshnessState.normalize(d);
+    FreshnessState.apply('statusText', freshness, d.date || 'today');
+    const isComputing = FreshnessState.isComputing(d);
     document.getElementById('computingNote').style.display = isComputing ? 'block' : 'none';
-    if (isComputing) refreshTimer = setTimeout(() => loadData(false), 20000);
+    if (isComputing && FreshnessState.shouldRetry('value-bets')) refreshTimer = setTimeout(() => loadData(false), 20000);
     const hasOdds = allProps.some(p => p.edge != null);
     const noOddsNotice = document.getElementById('noOddsNotice');
     if (noOddsNotice) noOddsNotice.style.display = (!hasOdds && allProps.length > 0) ? 'block' : 'none';
