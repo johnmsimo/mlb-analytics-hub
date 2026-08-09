@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_unified_picks_route_is_the_primary_actionable_contract():
     source = (ROOT / 'intelligence_integration.py').read_text(encoding='utf-8')
     assert "@flask_app.route('/api/picks/today'" in source
-    assert "'contractVersion': '4.48'" in source
+    assert "'contractVersion': '4.49'" in source
     assert "'picks': picks" in source
     assert "actionable_limit = 5" in source
     assert "picks = ranked_candidates[:actionable_limit]" in source
@@ -51,7 +51,7 @@ def test_primary_picks_contract_exposes_normalized_evidence_snapshot():
 
 def test_primary_picks_contract_exposes_auditable_summary():
     source = (ROOT / 'intelligence_integration.py').read_text(encoding='utf-8')
-    assert "'evidenceAuditVersion': '4.48'" in source
+    assert "'evidenceAuditVersion': '4.49'" in source
     assert "'status': audit_status" in source
     assert "'actionableLimit': actionable_limit" in source
     assert "'capApplied': cap_applied" in source
@@ -62,13 +62,24 @@ def test_primary_picks_contract_exposes_auditable_summary():
 
 def test_primary_picks_contract_exposes_selection_ranking_audit():
     source = (ROOT / 'intelligence_integration.py').read_text(encoding='utf-8')
-    assert "ranking_method = 'pickScore_desc_then_edgePct_desc'" in source
+    assert "'pickScore_desc_then_edgePct_desc_then_candidateKey_asc'" in source
     assert "'selectionAudit'] = {" in source
-    assert "'rankingVersion': '4.48'" in source
+    assert "'rankingVersion': '4.49'" in source
     assert "'rankingMethod': ranking_method" in source
     assert "'selectionRule': (" in source
     assert "'rankedCandidateCount': len(ranked_candidates)" in source
     assert "'disposition': (" in source
+    assert "'stableOrderKey': stable_key" in source
+    assert "'deterministic': True" in source
+
+
+def test_primary_picks_contract_uses_safe_deterministic_ranking():
+    source = (ROOT / 'intelligence_integration.py').read_text(encoding='utf-8')
+    assert "def _ranking_number(row, *keys):" in source
+    assert "def _stable_candidate_key(row):" in source
+    assert "_ranking_number(row, 'pickScore', 'decisionScore')" in source
+    assert "_stable_candidate_key(row)" in source
+    assert "'selectionAuditVersion': '4.49'" in source
 
 
 def test_picks_page_surfaces_evidence_audit_details():
