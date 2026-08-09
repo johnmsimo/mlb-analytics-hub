@@ -588,6 +588,13 @@ def install_intelligence_api(app_module):
             audit_status = 'capped'
         else:
             audit_status = 'verified'
+        actionability_stage_counts = {}
+        for row in actionability_rejections:
+            stage = str(row.get('actionabilityStage') or 'Validated')
+            actionability_stage_counts[stage] = (
+                actionability_stage_counts.get(stage, 0) + 1
+            )
+        actionability_stage_counts['Actionable'] = len(candidates)
         return app_module.jsonify({
             'success': True,
             'contractVersion': '4.52',
@@ -602,14 +609,22 @@ def install_intelligence_api(app_module):
             'selectionAuditVersion': '4.50',
             'actionabilityAudit': {
                 'version': ACTIONABILITY_VERSION,
-                'candidateCount': len(actionability_rejections) + len(candidates) + len(evidence_rejections),
-                'actionableCount': len(candidates) + len(evidence_rejections),
-                'rejectedCount': len(actionability_rejections) + len(evidence_rejections),
-                'stageCounts': {
-                    'Actionable': len(candidates) + len(evidence_rejections),
-                    'Rejected': len(actionability_rejections) + len(evidence_rejections),
-                },
+                'candidateCount': (
+                    len(actionability_rejections)
+                    + len(candidates)
+                    + len(evidence_rejections)
+                ),
+                'actionableCount': len(candidates),
+                'rejectedCount': (
+                    len(actionability_rejections)
+                    + len(evidence_rejections)
+                ),
+                'stageCounts': dict(sorted(actionability_stage_counts.items())),
                 'rejectionReasons': dict(sorted(actionability_rejection_reasons.items())),
+                'evidenceRejectedCount': len(evidence_rejections),
+                'evidenceRejectionReasons': dict(
+                    sorted(evidence_rejection_reasons.items())
+                ),
             },
             'evidenceAudit': {
                 'version': '4.49',
