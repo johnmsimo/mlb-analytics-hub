@@ -45,6 +45,7 @@ def history(market="Pitcher Strikeouts", *, strong=True):
                 "confidenceTier": "HIGH",
                 "grade": "win" if outcome else "loss",
                 "clvEdge": 0.02 if strong else -0.02,
+                "oddsLineage": {"version": "4.55", "clvEligible": True},
             })
     return rows
 
@@ -68,6 +69,8 @@ def test_walk_forward_gates_use_only_strict_future_holdouts():
     assert gate["metrics"]["brierSkillVsMarket"] > 0
     assert gate["metrics"]["roi"] > 0
     assert gate["metrics"]["averageClv"] > 0
+    assert gate["metrics"]["gradedCount"] == gate["metrics"]["clvGradedCount"]
+    assert gate["metrics"]["clvDenominator"] == "clvGradedCount"
 
 
 def test_failing_market_is_disabled_and_cannot_promote_candidates():
