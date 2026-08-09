@@ -11,10 +11,23 @@ from flask_limiter.util import get_remote_address
 from config import settings
 
 
+def _default_rate_limit_exempt() -> bool:
+    """Keep operational probes and non-API delivery out of shared Redis.
+
+    Health probes must never depend on the limiter's storage. The application
+    default is an API limit, so applying it to HTML pages and static delivery
+    only spends Redis commands without protecting an API resource.
+    """
+    path = request.path.rstrip("/") or "/"
+    return path in {"/health", "/ready"} or not path.startswith("/api/")
+
+
 limiter = Limiter(
     key_func=get_remote_address,
     storage_uri=settings.redis_url or "memory://",
     default_limits=[settings.api_rate_limit],
+    default_limits_exempt_when=_default_rate_limit_exempt,
+    in_memory_fallback_enabled=True,
     headers_enabled=True,
 )
 
