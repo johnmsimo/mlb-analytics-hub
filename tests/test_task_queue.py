@@ -104,3 +104,10 @@ def test_long_job_refreshes_worker_heartbeat_until_completion():
     # One heartbeat is written before the handler, at least one while it is
     # running, and another after completion.
     assert redis.setex_calls.get(HEARTBEAT_KEY, 0) >= 3
+
+
+def test_redis_socket_timeout_exceeds_block_timeout():
+    from task_queue import _redis_socket_timeout
+
+    assert _redis_socket_timeout(5) > 5
+    assert _redis_socket_timeout(30) > 30
