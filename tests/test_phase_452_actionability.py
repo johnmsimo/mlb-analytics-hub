@@ -73,6 +73,11 @@ def test_filter_actionable_reports_rows_that_must_not_reach_betting_surfaces():
     assert result["audit"]["stageCounts"]["Projected"] == 1
     assert result["audit"]["stageCounts"]["Priced"] == 1
     assert result["audit"]["rejectedCount"] == 2
+    assert result["audit"]["stageCounts"] == {
+        "Actionable": 1,
+        "Priced": 1,
+        "Projected": 1,
+    }
 
 
 def test_recommendation_builder_drops_non_actionable_market_rows():
