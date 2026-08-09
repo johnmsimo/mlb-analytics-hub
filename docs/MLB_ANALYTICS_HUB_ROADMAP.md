@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 4.52 merged and deployed on 2026-08-09. Phase 4.53 is the active phase.
+Status: Phase 4.53 merged and deployed on 2026-08-09. Phase 4.54 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -43,6 +43,8 @@ Exit gate: no page remains indefinitely in a loading state; every stale value
 is visibly labeled.
 
 ### Phase 4.54 — Calibration and drift enforcement
+
+Implementation status: calibration evidence and drift gates are wired into market validation and recommendation contracts.
 
 Use market-specific Brier score, ECE, sample size, confidence intervals, and
 drift status. When a market fails calibration, automatically downgrade or
