@@ -322,6 +322,25 @@ def _clv_provenance(row):
     }
 
 
+
+def _pick_evidence(row, clv):
+    """Return the normalized decision inputs carried by an actionable pick."""
+    return {
+        'market': row.get('marketKey') or row.get('categoryLabel') or row.get('intelligenceCategory'),
+        'side': row.get('recommendedSide') or row.get('side'),
+        'line': row.get('line'),
+        'price': row.get('price'),
+        'book': row.get('book'),
+        'probabilityPct': row.get('probabilityPct'),
+        'edgePct': row.get('edgePct'),
+        'freshnessSeconds': row.get('freshnessSeconds'),
+        'lineupStatus': row.get('lineupStatus'),
+        'clvStatus': clv.get('status'),
+        'verifiedClvEdge': clv.get('edge'),
+        'clvSource': clv.get('source'),
+        'clvCapturedAt': clv.get('capturedAt'),
+    }
+
 def install_intelligence_api(app_module):
     flask_app = app_module.app
     if 'api_intelligence_recommendations' in flask_app.view_functions:
@@ -385,7 +404,9 @@ def install_intelligence_api(app_module):
             row.setdefault('edgePct', row.get('estimatedEdgePct'))
             row.setdefault('lineupStatus', row.get('lineupSource') or row.get('lineup_status'))
             row.setdefault('freshnessSeconds', row.get('oddsAgeSeconds'))
-            row['clvProvenance'] = _clv_provenance(row)
+            clv = _clv_provenance(row)
+            row['clvProvenance'] = clv
+            row['evidence'] = _pick_evidence(row, clv)
             candidates.append(row)
         candidates.sort(key=lambda row: (
             -float(row.get('pickScore') or row.get('decisionScore') or 0),
@@ -394,7 +415,8 @@ def install_intelligence_api(app_module):
         picks = candidates[:5]
         return app_module.jsonify({
             'success': True,
-            'contractVersion': '4.43',
+            'contractVersion': '4.44',
+            'evidenceVersion': '4.44',
             'date': payload.get('date'),
             'picks': picks,
             'count': len(picks),
