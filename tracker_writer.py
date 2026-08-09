@@ -102,6 +102,7 @@ from typing import Any, Dict, Optional
 
 from config import settings
 from closing_line_integrity import accept_closing_capture
+from odds_lineage import build_odds_lineage
 
 _HERE        = os.path.dirname(os.path.abspath(__file__))
 _DATA_DIR    = settings.data_dir
@@ -139,6 +140,12 @@ def build_pick_payload(
     closing_captured_at:    Any           = None,
     closing_source:         Optional[str] = None,
     closing_book:            Optional[str] = None,
+    # Current sportsbook snapshot (Phase 4.55)
+    current_price:           Optional[int]   = None,
+    current_implied:         Optional[float] = None,
+    current_captured_at:     Any           = None,
+    current_source:          Optional[str] = None,
+    current_book:            Optional[str] = None,
     # Staking
     stake_units:      Optional[float] = None,
     stake_dollars:    Optional[float] = None,
@@ -198,6 +205,32 @@ def build_pick_payload(
         if not closing_integrity["accepted"]:
             _clv_edge = None
 
+    odds_lineage = build_odds_lineage(
+        line=line,
+        opening={
+            "price": opening_price,
+            "impliedProbability": opening_implied,
+            "book": book,
+            "capturedAt": opening_captured_at,
+            "source": source,
+        },
+        current={
+            "price": current_price,
+            "impliedProbability": current_implied,
+            "book": current_book or book,
+            "capturedAt": current_captured_at,
+            "source": current_source or source,
+        },
+        closing={
+            "price": closing_price,
+            "impliedProbability": closing_implied,
+            "book": closing_book or book,
+            "capturedAt": closing_captured_at,
+            "source": closing_source or source,
+        },
+        closing_integrity=closing_integrity,
+    )
+
     _hub_rating = _compute_hub_rating(_adj_prob, _edge)
     _hub_tier   = _compute_hub_tier(_hub_rating)
     _ev_pct     = _compute_ev_pct(_adj_prob, opening_price)
@@ -247,18 +280,25 @@ def build_pick_payload(
         # Book / market
         "openingPrice":   opening_price,
         "closingPrice":   closing_price,
+        "currentPrice":    current_price,
         "openingImplied": round(opening_implied, 4) if opening_implied is not None else None,
         "closingImplied": round(closing_implied, 4) if closing_implied is not None else None,
+        "currentImplied":  round(current_implied, 4) if current_implied is not None else None,
         "marketImplied":  round(opening_implied, 4) if opening_implied is not None else None,
         "clvEdge":        _clv_edge,
         "openingCapturedAt": opening_captured_at,
         "closingCapturedAt": closing_captured_at,
+        "currentCapturedAt": current_captured_at,
         "closingSource":  closing_integrity.get("source") if closing_integrity else None,
         "closingBook":    closing_book or book if closing_integrity else None,
         "closingIntegrity": closing_integrity,
         "closingIntegrityAccepted": (
             closing_integrity["accepted"] if closing_integrity else None
         ),
+        "oddsLineageVersion": odds_lineage["version"],
+        "oddsLineage": odds_lineage,
+        "clvEligible": odds_lineage["clvEligible"],
+        "clvEligibilityReason": odds_lineage["clvReason"],
         "book":           book,
         "edge":           _edge,
         "evPct":          _ev_pct,
