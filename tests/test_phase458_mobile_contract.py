@@ -31,7 +31,7 @@ def test_requested_surfaces_have_mobile_css_and_page_specific_contracts():
     }
     for filename, markers in pages.items():
         html = (ROOT / filename).read_text(encoding="utf-8")
-        assert re.search(r'<link[^>]+href="/static/mobile\\.css"', html)
+        assert re.search(r'<link[^>]+href="/static/mobile\.css"', html)
         for marker in markers:
             assert marker in MOBILE_CSS
 
