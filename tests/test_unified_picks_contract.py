@@ -38,7 +38,7 @@ def test_primary_picks_contract_exposes_normalized_evidence_snapshot():
     source = (ROOT / 'intelligence_integration.py').read_text(encoding='utf-8')
     assert "'evidenceVersion': '4.45'" in source
     assert "def _pick_evidence(row, clv):" in source
-    assert "row['evidence'] = _pick_evidence(row, clv)" in source
+    assert "evidence = _pick_evidence(row, clv)" in source
     assert "'verifiedClvEdge': clv.get('edge')" in source
 
     assert "'evidenceIntegrityVersion': '4.45'" in source
