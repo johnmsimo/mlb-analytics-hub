@@ -13,6 +13,7 @@ import threading
 import time
 import logging
 import importlib
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, date
 
 import pandas as pd
@@ -285,26 +286,50 @@ def run_pipeline(target_date=None):
             _cache["status"] = "error"
 
 
-def _refresh_best_bets_signals(target_date):
-    """Refresh FG Stuff+, catcher framing, bat tracking, Ballpark Pal, umpire,
-    and the tier calibrator.  Each step is independently try/except'd.
-    """
-    year     = target_date.year if hasattr(target_date, "year") else datetime.now(ET).year
-    date_str = target_date.strftime("%Y-%m-%d") if hasattr(target_date, "strftime") else None
+def _run_refresh_tasks(tasks, *, max_workers: int = 6):
+    """Run independent enrichment refreshers concurrently and isolate failures."""
+    if not tasks:
+        return {}
+    results = {}
+    worker_count = max(1, min(int(max_workers), len(tasks)))
+    with ThreadPoolExecutor(
+        max_workers=worker_count,
+        thread_name_prefix="best-bets-refresh",
+    ) as pool:
+        futures = {pool.submit(work): label for label, work in tasks}
+        for future in as_completed(futures):
+            label = futures[future]
+            try:
+                results[label] = future.result()
+                log.info(
+                    "[pipeline.best_bets] %s: refreshed (rows/result=%r)",
+                    label,
+                    results[label],
+                )
+            except Exception as exc:
+                results[label] = None
+                log.warning("[pipeline.best_bets] %s failed: %s", label, exc)
+    return results
 
-    for label, work in (
-        ("fg_stuff",        lambda: __import__("fg_stuff_loader").fetch_and_save(year)),
-        ("framing",         lambda: __import__("framing_loader").fetch_and_save(year)),
-        ("bat_tracking",    lambda: __import__("savant_bat_tracking").fetch_and_save(year)),
-        ("ballparkpal",     lambda: __import__("ballparkpal_loader").fetch_and_save(date_str)),
-        ("umpire",          lambda: __import__("umpire_loader").fetch_and_save(date_str)),
-        ("tier_calibrator", lambda: __import__("tier_calibrator").calibrate()),
-    ):
-        try:
-            n = work()
-            log.info(f"[pipeline.best_bets] {label}: refreshed (rows/result={n!r})")
-        except Exception as e:
-            log.warning(f"[pipeline.best_bets] {label} failed: {e}")
+
+def _refresh_best_bets_signals(target_date):
+    """Refresh independent best-bets sources in parallel with isolated failures."""
+    year = target_date.year if hasattr(target_date, "year") else datetime.now(ET).year
+    date_str = (
+        target_date.strftime("%Y-%m-%d")
+        if hasattr(target_date, "strftime")
+        else None
+    )
+    return _run_refresh_tasks(
+        [
+            ("fg_stuff", lambda: __import__("fg_stuff_loader").fetch_and_save(year)),
+            ("framing", lambda: __import__("framing_loader").fetch_and_save(year)),
+            ("bat_tracking", lambda: __import__("savant_bat_tracking").fetch_and_save(year)),
+            ("ballparkpal", lambda: __import__("ballparkpal_loader").fetch_and_save(date_str)),
+            ("umpire", lambda: __import__("umpire_loader").fetch_and_save(date_str)),
+            ("tier_calibrator", lambda: __import__("tier_calibrator").calibrate()),
+        ]
+    )
 
 
 # -- Lineup-lock rescore -------------------------------------------------------

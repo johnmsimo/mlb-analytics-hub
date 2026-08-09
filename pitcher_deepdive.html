@@ -275,6 +275,7 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 
 <footer>MLB ANALYTICS HUB · PITCHER DEEP DIVE · FG + STATCAST + MLB STATS API · FOR ENTERTAINMENT PURPOSES ONLY</footer>
 
+<script src="/static/async-loader.js"></script>
 <script>
 function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 const PITCH_NAMES = {ff:'4-Seam FB',si:'Sinker',fc:'Cutter',st:'Sweeper',sl:'Slider',cu:'Curveball',ch:'Changeup',fs:'Splitter',kn:'Knuckleball',sv:'Slurve',kc:'KC Curve',fp:'Forkball'};
@@ -295,7 +296,7 @@ const hasStat=v=>v!==undefined&&v!==null&&v!=='NA'&&v!=='N/A'&&v!==''&&parseFloa
 // ── CACHE STATUS ────────────────────────────────────────────────────────
 async function checkCache(){
   try{
-    const d=await fetch('/api/status').then(r=>r.json());
+    const d=await fetchJsonWithTimeout('/api/status',{timeoutMs:3000});
     const fgPit=d.fangraphs?.pitchers||0;
     const fgLoaded=d.fangraphs?.loaded||false;
     const svArsenals=d.savant?.arsenals||0;
@@ -342,7 +343,7 @@ document.addEventListener('DOMContentLoaded',async()=>{
 // ── GAMES ───────────────────────────────────────────────────────────────
 async function loadGames(){
   try{
-    const d=await fetch('/api/games/today').then(r=>r.json());
+    const d=await fetchJsonWithTimeout('/api/games/today',{timeoutMs:3000});
     GAMES=d.games||[];
     const sel=$('gameSelect');
     if(!GAMES.length){sel.innerHTML='<option value="">No games today</option>';return;}
@@ -390,27 +391,39 @@ async function analyze(silent=false){
   }
 
   try{
-    const pd=await fetch(`/api/pitchers/${g.gamePk}`).then(r=>r.json());
+    const pd=await fetchJsonWithTimeout('/api/pitchers/' + g.gamePk,{timeoutMs:6000});
     PD=pd;
 
-    // Fetch the pitcher-vs-batters matchup data in parallel with logs
-    let matchup=null;
-    try{
-      matchup=await fetch(`/api/pitcher-matchup/${g.gamePk}`).then(r=>r.json());
-      if(matchup?.success){
-        MATCHUPS[pd.awayPitcher?.id] = matchup.awaySide;
-        MATCHUPS[pd.homePitcher?.id] = matchup.homeSide;
-      }
-    }catch(e){/* non-fatal */}
+    // Matchup, logs, and BAT X are independent after the pitcher payload arrives.
+    const [matchupResult, awayLogResult, homeLogResult, propsResult] =
+      await Promise.allSettled([
+        fetchJsonWithTimeout('/api/pitcher-matchup/' + g.gamePk,{timeoutMs:5000}),
+        pd.awayPitcher?.id
+          ? fetchJsonWithTimeout('/api/player-splits/' + pd.awayPitcher.id + '/pitching',{timeoutMs:5000})
+          : Promise.resolve({}),
+        pd.homePitcher?.id
+          ? fetchJsonWithTimeout('/api/player-splits/' + pd.homePitcher.id + '/pitching',{timeoutMs:5000})
+          : Promise.resolve({}),
+        fetchJsonWithTimeout('/api/props/projections/' + g.gamePk,{timeoutMs:7000}),
+      ]);
 
-    // Fetch game logs
-    for(const pit of [pd.awayPitcher,pd.homePitcher]){
-      if(pit?.id){
-        try{
-          const ld=await fetch(`/api/player-splits/${pit.id}/pitching`).then(r=>r.json());
-          LOGS[pit.id]=ld.recentGames||[];
-        }catch(e){LOGS[pit.id]=[];}
-      }
+    const matchup = matchupResult.status === 'fulfilled'
+      ? matchupResult.value
+      : null;
+    if(matchup?.success){
+      MATCHUPS[pd.awayPitcher?.id] = matchup.awaySide;
+      MATCHUPS[pd.homePitcher?.id] = matchup.homeSide;
+    }
+
+    if(pd.awayPitcher?.id){
+      LOGS[pd.awayPitcher.id] = awayLogResult.status === 'fulfilled'
+        ? (awayLogResult.value.recentGames || [])
+        : [];
+    }
+    if(pd.homePitcher?.id){
+      LOGS[pd.homePitcher.id] = homeLogResult.status === 'fulfilled'
+        ? (homeLogResult.value.recentGames || [])
+        : [];
     }
 
     const away=buildCard(pd.awayPitcher,g.awayAbbr,g.homeAbbr);
@@ -419,19 +432,17 @@ async function analyze(silent=false){
     $('cardsGrid').innerHTML=away+home;
     $('placeholder').style.display='none';
 
-    // Animate arsenal bars
     setTimeout(()=>{
       document.querySelectorAll('.ars-b').forEach(b=>{b.style.width=b.dataset.w+'%';});
     },120);
 
-    // Load BAT X projections for threat pane integration
-    fetch(`/api/props/projections/${g.gamePk}`)
-      .then(r=>r.json())
-      .then(d=>{ if(d&&d.success){ PROPS_DATA=d; rebuildThreats(); buildPdPicksPanel(); } })
-      .catch(()=>{});
-
-  }catch(e){
-    if(!silent) $('cardsGrid').innerHTML=`<div class="pc" style="grid-column:1/-1"><div class="empty">Error: ${e.message}</div></div>`;
+    if(propsResult.status === 'fulfilled' && propsResult.value?.success){
+      PROPS_DATA=propsResult.value;
+      rebuildThreats();
+      buildPdPicksPanel();
+    }
+    }catch(e){
+    if(!silent) renderDeepDiveFallback('cardsGrid','PITCHER DEEP DIVE UNAVAILABLE',e.code==='timeout'?'The pitcher data request exceeded its response budget. Try again shortly.':'The upstream data service did not return a complete pitcher response.');
   }
 }
 
