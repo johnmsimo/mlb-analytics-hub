@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 4.55 merged and deployed on 2026-08-09. Phase 4.56 is the active phase.
+Status: Phase 4.56 merged and deployed on 2026-08-09. Phase 4.57 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -80,6 +80,8 @@ surfaces.
 Exit gate: invalid rows are rejected before reaching any recommendation surface.
 
 ### Phase 4.57 — Canonical cross-page consistency
+
+Implementation status: the canonical 4.57 candidate projection, identity, decision snapshot, producer adapters, cross-page audit endpoint, and regression coverage are wired into the shared WSGI startup path.
 
 Make Props, Value Bets, Cheatsheets, Edge Lab, Tracker, Deep Dive, and Gameside
 consume the same validated candidate contract.
