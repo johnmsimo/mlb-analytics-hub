@@ -312,6 +312,220 @@
   }
 }
 
+/* ── Phase 4.58: 390px iPhone contract ───────────────────────────────
+   Keep dense data discoverable with contained horizontal scrolling, while
+   stacking controls/cards so primary actions remain visible and tappable. */
+@media (max-width: 480px) {
+  html, body {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  .wrap, .main, main, .content, .page {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+  }
+
+  /* Page headers keep the title readable and the primary action reachable. */
+  .top, .topbar {
+    align-items: stretch !important;
+    gap: 10px !important;
+  }
+  .top > *, .topbar > * {
+    min-width: 0;
+  }
+  .brand, .brand-title, .brand-sub, .sub {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .top .actions, .topbar .top-actions {
+    width: 100%;
+    min-width: 0;
+  }
+  .top .actions > *, .topbar .top-actions > * {
+    max-width: 100%;
+  }
+
+  /* Every wide table is a deliberate touch-scrolling region, never a page-wide
+     overflow source. The scroll shadow communicates that more columns exist. */
+  .tw, .tbl-wrap, .table-wrap, .tbl-panel, .scroll-x,
+  .main .table-wrap, .panel .table-wrap {
+    max-width: 100%;
+    min-width: 0;
+  }
+  .tw, .tbl-wrap, .table-wrap, .scroll-x {
+    overflow-x: auto !important;
+    overflow-y: hidden;
+    overscroll-behavior-inline: contain;
+    touch-action: pan-x pan-y;
+    -webkit-overflow-scrolling: touch;
+  }
+  .tw table, .tbl-wrap table, .table-wrap table, .scroll-x table {
+    max-width: none;
+  }
+
+  /* Value Bets and Consistency filters remain full-width and usable. */
+  .filters, .toolbar, .selbar, .srcbar {
+    width: 100%;
+    min-width: 0;
+  }
+  .filters > *, .filter-group, .toolbar > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .filters select, .filter-group select {
+    width: 100%;
+    min-width: 0 !important;
+  }
+  .toolbar .tabs, .tabs {
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
+    max-width: 100%;
+    padding-bottom: 3px;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .toolbar .tabs::-webkit-scrollbar, .tabs::-webkit-scrollbar {
+    display: none;
+  }
+  .toolbar .tab, .tabs .tab {
+    flex: 0 0 auto;
+  }
+
+  /* Tracker: preserve the KPI grid, but prevent cards and controls from
+     forcing the viewport wider than the phone. */
+  .hero {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+  }
+  .hstat {
+    min-width: 0;
+    padding: 10px 8px !important;
+  }
+  .hstat-v {
+    font-size: 1.08rem !important;
+  }
+  .panel {
+    min-width: 0;
+    padding: 12px !important;
+  }
+  .pcard-top {
+    flex-wrap: wrap;
+  }
+  .pcard-name, .pcard-meta, .pcard-reason {
+    overflow-wrap: anywhere;
+  }
+  .builder-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+  .ctrl, .perf-tabs {
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  /* Pitcher Deep Dive: stack the main cards and selector; compress only the
+     dense arsenal columns so their labels remain readable. */
+  .main {
+    padding-top: 14px !important;
+  }
+  .selbar {
+    align-items: stretch !important;
+    gap: 8px !important;
+  }
+  .sel-input {
+    width: 100%;
+    min-width: 0 !important;
+    flex: 1 1 100%;
+  }
+  .analyze-btn {
+    width: 100%;
+  }
+  .cards-grid {
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+  }
+  .pc-head {
+    flex-wrap: wrap;
+    gap: 10px !important;
+  }
+  .pc-hand {
+    margin-left: 0 !important;
+  }
+  .kprop-table, .gl-table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .ars-cols, .ars-row {
+    grid-template-columns: 78px minmax(0, 1fr) 46px 50px !important;
+    gap: 5px !important;
+  }
+  .ars-name, .ars-pct, .ars-vel {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  /* Settings: one readable column, including the generated admin sections. */
+  #app-root > div {
+    width: 100%;
+    max-width: 100%;
+    padding: 16px 12px !important;
+  }
+  .top-grid, .field-grid-2 {
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+  }
+  .field-grid, .market-grid {
+    grid-template-columns: 1fr !important;
+  }
+  .section-card {
+    min-width: 0;
+    padding: 14px !important;
+    margin-bottom: 14px !important;
+  }
+  .status-row {
+    align-items: flex-start !important;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .log-box {
+    max-width: 100%;
+  }
+
+  /* Tools: swipeable calculator tabs, single-column forms, and visible
+     two-column result summaries at 390px. */
+  .calc-card {
+    width: 100%;
+    max-width: none !important;
+    padding: 16px !important;
+  }
+  .form-grid {
+    grid-template-columns: 1fr !important;
+  }
+  .result-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+  .parlay-leg {
+    min-width: 0;
+    align-items: stretch;
+  }
+  .parlay-leg input {
+    min-width: 0;
+  }
+  .calc-btn {
+    min-height: 44px;
+  }
+
+  /* Inputs never create an accidental horizontal scrollbar. */
+  input, select, textarea, button {
+    max-width: 100%;
+  }
+}
+
 /* Hide bottom tab bar above tablet width — desktop keeps its existing nav */
 @media (min-width: 769px) {
   .mobile-tabbar, .mobile-more { display: none !important; }
