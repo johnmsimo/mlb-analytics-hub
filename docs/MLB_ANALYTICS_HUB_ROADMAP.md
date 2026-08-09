@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 4.56 merged and deployed on 2026-08-09. Phase 4.57 is the active phase.
+Status: Phase 4.57 merged and deployed on 2026-08-09. Phase 4.58 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -90,6 +90,11 @@ Exit gate: the same player/market/line has the same probability, edge, price,
 status, and recommendation everywhere.
 
 ### Phase 4.58 — Mobile-first product pass
+
+Implementation status: the shared mobile contract now adds a 390px phone-width
+layer for Tracker, Value Bets, Consistency, Pitcher Deep Dive, Settings, and
+Tools. Dense tables use contained touch scrolling, controls and forms stack
+within the viewport, and primary actions retain 44px touch targets.
 
 Perform actual iPhone-width testing for every page, especially Tracker, Value
 Bets, Consistency, Deep Dive, Settings, and Tools.
