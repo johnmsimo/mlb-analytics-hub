@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_unified_picks_route_is_the_primary_actionable_contract():
     source = (ROOT / 'intelligence_integration.py').read_text(encoding='utf-8')
     assert "@flask_app.route('/api/picks/today'" in source
-    assert "'contractVersion': '4.50'" in source
+    assert "'contractVersion': '4.52'" in source
     assert "'picks': picks" in source
     assert "actionable_limit = 5" in source
     assert "picks = ranked_candidates[:actionable_limit]" in source
@@ -26,6 +26,14 @@ def test_picks_page_is_mobile_first_and_explains_decisions():
     assert 'topReasons' in source
     assert 'topRisks' in source
     assert 'clvProvenance' in source
+
+
+def test_primary_picks_contract_requires_actionability_gate():
+    source = (ROOT / 'intelligence_integration.py').read_text(encoding='utf-8')
+    assert "evaluate_actionability(" in source
+    assert "require_market_validation=True" in source
+    assert "'actionabilityVersion': ACTIONABILITY_VERSION" in source
+    assert "'actionabilityAudit': {" in source
 
 
 def test_unified_route_does_not_promote_pass_rows():
