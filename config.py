@@ -115,6 +115,19 @@ class Settings:
         return int(_number("REDIS_CIRCUIT_TIMEOUT", 60, int, minimum=1))
 
     @property
+    def redis_queue_block_seconds(self) -> int:
+        """Maximum idle wait for the durable worker's Redis BLPOP."""
+        return int(
+            _number(
+                "REDIS_QUEUE_BLOCK_SECONDS",
+                5,
+                int,
+                minimum=1,
+                maximum=30,
+            )
+        )
+
+    @property
     def cache_stale_ttl(self) -> int:
         return int(_number("CACHE_STALE_TTL", 300, int, minimum=0))
 
@@ -321,6 +334,7 @@ class Settings:
             "redis_health_interval": self.redis_health_interval,
             "redis_failure_threshold": self.redis_failure_threshold,
             "redis_circuit_timeout": self.redis_circuit_timeout,
+            "redis_queue_block_seconds": self.redis_queue_block_seconds,
             "cache_allow_stale": self.cache_allow_stale,
             "cache_stale_ttl": self.cache_stale_ttl,
             "cache_ttls": self.cache_ttls,
