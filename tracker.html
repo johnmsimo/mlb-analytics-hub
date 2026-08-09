@@ -290,13 +290,14 @@ details[open] summary::before{transform:rotate(90deg)}
 
 <!-- ── HERO STATS ─────────────────────────────────────────────────────── -->
 <div class="hero">
-  <div class="hstat green"><div class="hstat-v" id="hCLVRate">—</div><div class="hstat-l">Beat Close % <span title="Closing Line Value: the share of graded bets whose price beat the closing line. The sharpest, lowest-variance measure of edge — the primary KPI.">ⓘ</span></div></div>
-  <div class="hstat gold"><div class="hstat-v" id="hAvgCLV">—</div><div class="hstat-l">Avg CLV</div></div>
+  <div class="hstat green"><div class="hstat-v" id="hCLVRate">—</div><div class="hstat-l">Beat Close % <small>(CLV-graded only)</small> <span title="CLV uses only graded picks with verified opening and closing odds.">ⓘ</span></div></div>
+  <div class="hstat gold"><div class="hstat-v" id="hAvgCLV">—</div><div class="hstat-l">Avg CLV <small>(CLV-graded only)</small></div></div>
   <div class="hstat"><div class="hstat-v" id="hHitRate">—</div><div class="hstat-l">Hit Rate</div></div>
   <div class="hstat"><div class="hstat-v" id="hProfit">$0</div><div class="hstat-l">P/L $</div></div>
-  <div class="hstat"><div class="hstat-v" id="hGraded">0</div><div class="hstat-l">Graded</div></div>
+  <div class="hstat"><div class="hstat-v" id="hGraded">0</div><div class="hstat-l">Graded (all outcomes)</div></div>
   <div class="hstat"><div class="hstat-v" id="hBankroll">—</div><div class="hstat-l">Bankroll</div></div>
 </div>
+<div class="panel-sub" id="clvAuditNote" style="margin:6px 0 12px">CLV denominator: verified CLV-graded picks only; general performance uses all graded outcomes.</div>
 
 <!-- ── MODEL TRACK RECORD BANNER ─────────────────────────────────────── -->
 <div class="trec" id="trecBanner">
@@ -377,8 +378,8 @@ details[open] summary::before{transform:rotate(90deg)}
       </div>
       <div class="tw">
         <table id="mktTbl">
-          <thead><tr><th>Market</th><th>Picks</th><th>Graded</th><th>Wins</th><th>Losses</th><th>Push</th><th>Hit Rate</th><th>Units</th><th>P/L $</th></tr></thead>
-          <tbody id="mktBody"><tr><td colspan="9" class="empty">No data.</td></tr></tbody>
+          <thead><tr><th>Market</th><th>Picks</th><th>Graded</th><th>CLV Graded</th><th>Wins</th><th>Losses</th><th>Push</th><th>Hit Rate</th><th>Units</th><th>P/L $</th></tr></thead>
+          <tbody id="mktBody"><tr><td colspan="10" class="empty">No data.</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -1138,7 +1139,12 @@ function renderSummary(d) {
     const clvLabel = document.querySelector('#hCLVRate').closest('.hstat').querySelector('.hstat-l');
     if (clvLabel) clvLabel.firstChild.textContent = nClv ? `Beat Close % (n=${nClv}) ` : 'Beat Close % ';
     // ── Supporting metrics ───────────────────────────────────────────────────
-    $('hGraded').textContent   = s.graded || 0;
+    const gradedCount = Number(s.graded || 0);
+     $('hGraded').textContent   = gradedCount;
+     const gradedLabel = document.querySelector('#hGraded').closest('.hstat')?.querySelector('.hstat-l');
+     if (gradedLabel) gradedLabel.textContent = 'Graded (all outcomes)';
+     const auditNote = $('clvAuditNote');
+     if (auditNote) auditNote.textContent = `CLV denominator: ${nClv} verified CLV-graded of ${gradedCount} graded outcomes; claims require 500 valid observations.`;
     $('hHitRate').textContent  = s.hit_rate!=null ? pct(s.hit_rate) : '—';
     const profit = parseFloat(vs.dollars||0);
     $('hProfit').textContent   = money(profit);
@@ -1157,11 +1163,13 @@ function renderMarketTable(d) {
     console.log('[renderMarketTable] by_market:', bm);
     const rows = Object.entries(bm).map(([mk, v]) => {
       const graded = (v.wins||0)+(v.losses||0)+(v.pushes||0);
+      const clvGraded = v.clvGradedCount ?? v.graded_with_clv ?? 0;
       const hr = graded ? (v.wins||0)/graded : null;
       return `<tr>
         <td>${mkTag(mk)}</td>
         <td>${v.picks||0}</td>
         <td>${graded}</td>
+        <td>${clvGraded}</td>
         <td style="color:var(--g)">${v.wins||0}</td>
         <td style="color:var(--r)">${v.losses||0}</td>
         <td style="color:var(--y)">${v.pushes||0}</td>
@@ -1170,7 +1178,7 @@ function renderMarketTable(d) {
         <td style="color:${(v.dollars||0)>=0?'var(--g)':'var(--r)'}">${money(v.dollars||0)}</td>
       </tr>`;
     });
-    $('mktBody').innerHTML = rows.length ? rows.join('') : '<tr><td colspan="9" class="empty">No market data.</td></tr>';
+    $('mktBody').innerHTML = rows.length ? rows.join('') : '<tr><td colspan="10" class="empty">No market data.</td></tr>';
     $('mktSub').textContent = rows.length ? `${rows.length} markets` : '';
   } catch(e) {
     console.error('[renderMarketTable] Error:', e);
