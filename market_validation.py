@@ -636,6 +636,7 @@ def apply_market_gates(
         )
         row.update(decision)
         stage_counts[decision["actionabilityStage"]] += 1
+        counts[status] += 1
         if decision["actionable"] and is_promoted:
             row["promotionStatus"] = "promoted"
             promoted.append(row)
