@@ -10,7 +10,7 @@ def test_unified_picks_route_is_the_primary_actionable_contract():
     assert "'contractVersion': '4.48'" in source
     assert "'picks': picks" in source
     assert "actionable_limit = 5" in source
-    assert "picks = candidates[:actionable_limit]" in source
+    assert "picks = ranked_candidates[:actionable_limit]" in source
     assert "recommendationGrade" in source
     assert "marketValidation" in source
 
