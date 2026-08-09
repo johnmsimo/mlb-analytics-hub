@@ -477,29 +477,36 @@ def install_intelligence_api(app_module):
             -float(row.get('pickScore') or row.get('decisionScore') or 0),
             -float(row.get('estimatedEdgePct') or row.get('edge') or 0),
         ))
-        picks = candidates[:5]
+        actionable_limit = 5
+        picks = candidates[:actionable_limit]
         displayed_count = len(picks)
         rejected_count = len(evidence_rejections)
-        audit_status = (
-            'verified' if displayed_count and not rejected_count
-            else 'partial' if displayed_count and rejected_count
-            else 'rejected' if rejected_count
-            else 'unavailable'
-        )
+        withheld_count = max(0, len(candidates) - displayed_count)
+        cap_applied = withheld_count > 0
+        if not displayed_count:
+            audit_status = 'rejected' if rejected_count else 'unavailable'
+        elif rejected_count:
+            audit_status = 'partial'
+        elif cap_applied:
+            audit_status = 'capped'
+        else:
+            audit_status = 'verified'
         return app_module.jsonify({
             'success': True,
-            'contractVersion': '4.46',
+            'contractVersion': '4.47',
             'evidenceVersion': '4.45',
             'evidenceIntegrityVersion': '4.45',
-            'evidenceAuditVersion': '4.46',
+            'evidenceAuditVersion': '4.47',
             'date': payload.get('date'),
             'picks': picks,
             'count': len(picks),
             'researchOnly': not bool(picks),
             'evidenceAudit': {
-                'version': '4.46',
+                'version': '4.47',
                 'status': audit_status,
-                'actionableLimit': 5,
+                'actionableLimit': actionable_limit,
+                'capApplied': cap_applied,
+                'withheldCount': withheld_count,
                 'candidateCount': len(candidates) + len(evidence_rejections),
                 'acceptedCount': len(candidates),
                 'rejectedCount': rejected_count,
