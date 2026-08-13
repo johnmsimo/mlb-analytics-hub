@@ -23,6 +23,16 @@
     catch (error) { /* device storage is optional */ }
   }
 
+  function readString(key, fallback) {
+    try { return window.localStorage.getItem(key) || fallback; }
+    catch (error) { return fallback; }
+  }
+
+  function writeString(key, value) {
+    try { window.localStorage.setItem(key, String(value)); }
+    catch (error) { /* device storage is optional */ }
+  }
+
   function esc(value) {
     return String(value == null ? '' : value).replace(/[&<>'"]/g, function (char) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char];
@@ -68,10 +78,13 @@
   }
 
   function loadPreferences() {
-    state.watchlist = new Set(readJson(WATCHLIST_KEY, []).map(function (name) { return String(name).toLowerCase(); }));
+    var savedWatchlist = readJson(WATCHLIST_KEY, []);
+    if (!Array.isArray(savedWatchlist)) savedWatchlist = [];
+    state.watchlist = new Set(savedWatchlist.map(function (name) { return String(name).toLowerCase(); }));
     var savedMarkets = readJson(MARKET_KEY, MARKET_OPTIONS.map(function (item) { return item.key; }));
+    if (!Array.isArray(savedMarkets)) savedMarkets = MARKET_OPTIONS.map(function (item) { return item.key; });
     state.preferred = new Set(savedMarkets);
-    var savedThreshold = number(window.localStorage.getItem(THRESHOLD_KEY));
+    var savedThreshold = number(readString(THRESHOLD_KEY, ''));
     state.threshold = savedThreshold != null ? savedThreshold : 5;
   }
 
@@ -97,7 +110,7 @@
     select.value = String(state.threshold);
     select.addEventListener('change', function () {
       state.threshold = number(select.value) || 5;
-      window.localStorage.setItem(THRESHOLD_KEY, String(state.threshold));
+      writeString(THRESHOLD_KEY, state.threshold);
       renderSignals();
     });
   }
@@ -282,4 +295,3 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();
 })();
-
