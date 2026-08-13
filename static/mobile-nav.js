@@ -14,6 +14,7 @@
   ];
 
   var MORE_LINKS = [
+    { href: '/cheatsheets',          label: 'Cheatsheets',       sub: 'Daily validated targets' },
     { href: '/edge-lab',             label: 'Edge Lab',          sub: '100% Club · edges · parlays' },
     { href: '__DEEPDIVE__',          label: 'Deep Dive',         sub: "Today's first game" },
     { href: '/batter-vs-pitcher',    label: 'BvP',               sub: 'Batter vs pitcher' },
@@ -29,9 +30,9 @@
 
   function pickActiveTab(path) {
     if (path === '/' || path === '/index' || path === '') return 'home';
+    if (path.indexOf('/workspace') === 0) return 'hub';
     if (path.indexOf('/props') === 0) return 'props';
     if (path.indexOf('/tracker') === 0) return 'tracker';
-    if (path.indexOf('/cheatsheet') === 0) return 'cheat';
     return null;
   }
 
