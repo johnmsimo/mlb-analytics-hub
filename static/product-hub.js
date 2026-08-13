@@ -63,7 +63,8 @@
   }
 
   function bookOf(row) {
-    return row.canonicalBook || row.bestBook || row.bestAvailableBook || row.bookmaker || null;
+    var value = row.canonicalBook || row.bestBook || row.bestAvailableBook || row.bookmaker || null;
+    return value && String(value).trim() ? String(value).trim() : null;
   }
 
   function marketKeyOf(row) {
@@ -74,7 +75,7 @@
     var stage = String(row.actionabilityStage || '').toLowerCase();
     return row.actionable === true && (!stage || stage === 'actionable') &&
       Boolean(row.player && (row.playerId || row.canonicalCandidateId)) &&
-      Boolean(marketKeyOf(row)) && priceOf(row) != null && Boolean(bookOf(row));
+      Boolean(marketKeyOf(row)) && priceOf(row) != null && priceOf(row) !== 0 && Boolean(bookOf(row));
   }
 
   function loadPreferences() {
@@ -215,14 +216,17 @@
       host.innerHTML = '<div class="empty-state">Calibration evidence is unavailable. My Hub will continue to suppress unverified signals.</div>';
       return;
     }
-    var healthy = 0;
+    var healthy = entries.filter(function (entry) {
+      var gate = entry[1] || {};
+      var status = String(gate.status || gate.driftStatus || 'unknown').toLowerCase();
+      return ['promoted', 'passed', 'stable', 'ready'].indexOf(status) >= 0;
+    }).length;
     host.innerHTML = entries.slice(0, 8).map(function (entry) {
       var key = entry[0];
       var gate = entry[1] || {};
       var status = String(gate.status || gate.driftStatus || 'unknown').toLowerCase();
       var ok = ['promoted', 'passed', 'stable', 'ready'].indexOf(status) >= 0;
       var blocked = ['disabled', 'failed', 'drifted', 'blocked'].indexOf(status) >= 0;
-      if (ok) healthy += 1;
       return '<div class="gate-row"><span>' + esc(key.replace(/_/g, ' ')) + '</span><b class="' + (ok ? 'ok' : (blocked ? 'blocked' : 'watch')) + '">' + esc(status.toUpperCase()) + '</b></div>';
     }).join('');
     document.getElementById('healthyMarketCount').textContent = healthy + '/' + entries.length;
