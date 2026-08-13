@@ -5,7 +5,11 @@
   var MARKET_KEY = 'mlb_market_preferences';
   var THRESHOLD_KEY = 'mlb_alert_edge_threshold';
   var ALERT_LEDGER_KEY = 'mlb_alert_ledger';
+  var ALERT_CANDIDATE_STATE_KEY = 'mlb_alert_candidate_state';
   var ALERT_LEDGER_LIMIT = 200;
+  var MAX_ALERT_ODDS_AGE_SECONDS = 900;
+  var MATERIAL_EDGE_DELTA_PCT = 1;
+  var MATERIAL_PRICE_DELTA = 10;
   var MARKET_OPTIONS = [
     { key: 'batter_hits', label: 'Hits' },
     { key: 'batter_total_bases', label: 'Total Bases' },
@@ -20,7 +24,8 @@
     watchlist: new Set(),
     preferred: new Set(),
     threshold: 5,
-    alertLedger: {}
+    alertLedger: {},
+    alertCandidates: {}
   };
 
   function readJson(key, fallback) {
@@ -99,14 +104,23 @@
     return String(row.canonicalCandidateId) + ':' + String(row.canonicalFingerprint);
   }
 
+  function isAlertFresh(row) {
+    var age = number(row.oddsAgeSeconds);
+    var timestamp = Date.parse(String(row.oddsUpdatedAt || ''));
+    return age != null && age >= 0 && age <= MAX_ALERT_ODDS_AGE_SECONDS &&
+      Number.isFinite(timestamp);
+  }
+
   function cleanAlertLedger(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
     var valid = {};
     Object.keys(value).slice(-ALERT_LEDGER_LIMIT).forEach(function (key) {
       var item = value[key];
-      if (!item || ['new', 'seen', 'dismissed'].indexOf(item.status) === -1) return;
+      if (!item || ['new', 'seen', 'dismissed', 'superseded'].indexOf(item.status) === -1) return;
       valid[key] = {
         status: item.status,
+        kind: String(item.kind || 'new_opportunity'),
+        movement: String(item.movement || ''),
         createdAt: String(item.createdAt || ''),
         updatedAt: String(item.updatedAt || item.createdAt || '')
       };
@@ -114,12 +128,45 @@
     return valid;
   }
 
-  function persistAlertLedger() {
-    var keys = Object.keys(state.alertLedger).sort(function (left, right) {
+  function cleanAlertCandidates(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    var valid = {};
+    Object.keys(value).slice(-ALERT_LEDGER_LIMIT).forEach(function (key) {
+      var item = value[key];
+      if (!item || !item.activeAlertId || !item.fingerprint) return;
+      valid[key] = {
+        activeAlertId: String(item.activeAlertId),
+        fingerprint: String(item.fingerprint),
+        edge: number(item.edge),
+        price: number(item.price),
+        oddsUpdatedAt: String(item.oddsUpdatedAt || ''),
+        updatedAt: String(item.updatedAt || '')
+      };
+    });
+    return valid;
+  }
+
+  function persistAlertState() {
+    var candidateKeys = Object.keys(state.alertCandidates).sort(function (left, right) {
+      return String(state.alertCandidates[left].updatedAt).localeCompare(String(state.alertCandidates[right].updatedAt));
+    });
+    while (candidateKeys.length > ALERT_LEDGER_LIMIT) delete state.alertCandidates[candidateKeys.shift()];
+
+    var protectedIds = {};
+    Object.keys(state.alertCandidates).forEach(function (key) {
+      protectedIds[state.alertCandidates[key].activeAlertId] = true;
+    });
+    var ledgerKeys = Object.keys(state.alertLedger).sort(function (left, right) {
       return String(state.alertLedger[left].updatedAt).localeCompare(String(state.alertLedger[right].updatedAt));
     });
-    while (keys.length > ALERT_LEDGER_LIMIT) delete state.alertLedger[keys.shift()];
+    var removable = ledgerKeys.filter(function (key) { return !protectedIds[key]; });
+    while (ledgerKeys.length > ALERT_LEDGER_LIMIT && removable.length) {
+      var removeId = removable.shift();
+      delete state.alertLedger[removeId];
+      ledgerKeys = ledgerKeys.filter(function (key) { return key !== removeId; });
+    }
     writeJson(ALERT_LEDGER_KEY, state.alertLedger);
+    writeJson(ALERT_CANDIDATE_STATE_KEY, state.alertCandidates);
   }
 
   function loadPreferences() {
@@ -132,6 +179,7 @@
     var savedThreshold = number(readString(THRESHOLD_KEY, ''));
     state.threshold = savedThreshold != null ? savedThreshold : 5;
     state.alertLedger = cleanAlertLedger(readJson(ALERT_LEDGER_KEY, {}));
+    state.alertCandidates = cleanAlertCandidates(readJson(ALERT_CANDIDATE_STATE_KEY, {}));
   }
 
   function renderMarketOptions() {
@@ -244,65 +292,180 @@
     host.innerHTML = list.slice(0, 8).map(signalHtml).join('');
   }
 
-  function eligibleAlerts() {
+  function thresholdMatches() {
     return personalizedEdges().filter(function (row) {
       return (edgeValue(row) || 0) >= state.threshold;
     });
   }
 
-  function alertExplanation(row) {
+  function eligibleAlerts() {
+    return thresholdMatches().filter(isAlertFresh);
+  }
+
+  function freshnessLabel(row) {
+    var age = number(row.oddsAgeSeconds);
+    if (age == null) return 'freshness unavailable';
+    if (age < 60) return 'fresh now';
+    return 'fresh ' + Math.floor(age / 60) + 'm ago';
+  }
+
+  function materialMovement(previous, row) {
+    var edgeDelta = (edgeValue(row) || 0) - (number(previous.edge) || 0);
+    var priceDelta = (priceOf(row) || 0) - (number(previous.price) || 0);
+    if (Math.abs(edgeDelta) >= MATERIAL_EDGE_DELTA_PCT) {
+      return {
+        kind: edgeDelta > 0 ? 'edge_up' : 'edge_down',
+        text: 'edge ' + (edgeDelta > 0 ? '+' : '') + edgeDelta.toFixed(1) + ' pts'
+      };
+    }
+    if (Math.abs(priceDelta) >= MATERIAL_PRICE_DELTA) {
+      return {
+        kind: 'price_move',
+        text: 'price ' + (priceDelta > 0 ? '+' : '') + priceDelta.toFixed(0)
+      };
+    }
+    return null;
+  }
+
+  function snapshotState(row, activeAlertId, now) {
+    return {
+      activeAlertId: activeAlertId,
+      fingerprint: String(row.canonicalFingerprint),
+      edge: edgeValue(row),
+      price: priceOf(row),
+      oddsUpdatedAt: String(row.oddsUpdatedAt),
+      updatedAt: now
+    };
+  }
+
+  function reconcileAlert(row, now) {
+    var candidateId = String(row.canonicalCandidateId);
+    var snapshotId = alertIdentity(row);
+    var previous = state.alertCandidates[candidateId];
+    var changed = false;
+    var suppressed = false;
+
+    if (!previous || !state.alertLedger[previous.activeAlertId]) {
+      if (!state.alertLedger[snapshotId]) {
+        state.alertLedger[snapshotId] = {
+          status: 'new',
+          kind: 'new_opportunity',
+          movement: '',
+          createdAt: now,
+          updatedAt: now
+        };
+      }
+      state.alertCandidates[candidateId] = snapshotState(row, snapshotId, now);
+      return { id: snapshotId, changed: true, suppressed: false };
+    }
+
+    if (previous.fingerprint === String(row.canonicalFingerprint)) {
+      return { id: previous.activeAlertId, changed: false, suppressed: false };
+    }
+
+    var movement = materialMovement(previous, row);
+    if (movement) {
+      var priorAlert = state.alertLedger[previous.activeAlertId];
+      if (priorAlert && priorAlert.status !== 'dismissed') {
+        priorAlert.status = 'superseded';
+        priorAlert.updatedAt = now;
+      }
+      state.alertLedger[snapshotId] = {
+        status: 'new',
+        kind: movement.kind,
+        movement: movement.text,
+        createdAt: now,
+        updatedAt: now
+      };
+      state.alertCandidates[candidateId] = snapshotState(row, snapshotId, now);
+      changed = true;
+    } else {
+      state.alertCandidates[candidateId] = snapshotState(row, previous.activeAlertId, now);
+      changed = true;
+      suppressed = true;
+    }
+    return {
+      id: state.alertCandidates[candidateId].activeAlertId,
+      changed: changed,
+      suppressed: suppressed
+    };
+  }
+
+  function reconcileAlerts(rows) {
+    var now = new Date().toISOString();
+    var changed = false;
+    var suppressed = 0;
+    var records = rows.map(function (row) {
+      var result = reconcileAlert(row, now);
+      changed = changed || result.changed;
+      if (result.suppressed) suppressed += 1;
+      return { row: row, id: result.id, ledger: state.alertLedger[result.id] };
+    });
+    if (changed) persistAlertState();
+    return { records: records, suppressed: suppressed };
+  }
+
+  function alertExplanation(row, ledger) {
     var parts = [];
     if (state.watchlist.has(String(row.player || '').toLowerCase())) parts.push('saved player');
     parts.push('preferred market');
     parts.push((edgeValue(row) || 0).toFixed(1) + '% edge');
     parts.push(bookOf(row) + ' ' + (priceOf(row) > 0 ? '+' : '') + priceOf(row));
+    parts.push(freshnessLabel(row));
+    if (ledger.movement) parts.push(ledger.movement);
     return parts.join(' · ');
   }
 
-  function alertHtml(row, ledger) {
-    var id = alertIdentity(row);
+  function alertKindLabel(ledger) {
+    return {
+      new_opportunity: 'NEW',
+      edge_up: 'EDGE UP',
+      edge_down: 'EDGE DOWN',
+      price_move: 'PRICE MOVE'
+    }[ledger.kind] || (ledger.status === 'new' ? 'NEW' : 'SEEN');
+  }
+
+  function alertHtml(record) {
+    var row = record.row;
+    var ledger = record.ledger;
     var market = MARKET_OPTIONS.find(function (item) { return item.key === marketKeyOf(row); });
-    return '<article class="alert-card" data-alert-id="' + esc(id) + '">' +
-      '<div><span class="alert-state">' + (ledger.status === 'new' ? 'NEW' : 'SEEN') + '</span>' +
+    return '<article class="alert-card" data-alert-id="' + esc(record.id) + '" data-alert-kind="' + esc(ledger.kind) + '">' +
+      '<div><span class="alert-state">' + esc(alertKindLabel(ledger)) + '</span>' +
       '<strong>' + esc(row.player) + ' · ' + esc(market ? market.label : marketKeyOf(row)) + '</strong>' +
-      '<small>' + esc(alertExplanation(row)) + '</small></div>' +
+      '<small>' + esc(alertExplanation(row, ledger)) + '</small></div>' +
       '<div class="alert-actions">' +
       (ledger.status === 'new' ? '<button type="button" data-alert-action="seen">Seen</button>' : '') +
       '<button type="button" data-alert-action="dismiss">Dismiss</button></div></article>';
   }
 
   function renderAlerts() {
-    var now = new Date().toISOString();
-    var eligible = eligibleAlerts();
-    var changed = false;
-    eligible.forEach(function (row) {
-      var id = alertIdentity(row);
-      if (!state.alertLedger[id]) {
-        state.alertLedger[id] = { status: 'new', createdAt: now, updatedAt: now };
-        changed = true;
-      }
+    var matches = thresholdMatches();
+    var eligible = matches.filter(isAlertFresh);
+    var reconciled = reconcileAlerts(eligible);
+    var visible = reconciled.records.filter(function (record) {
+      return ['dismissed', 'superseded'].indexOf(record.ledger.status) === -1;
     });
-    if (changed) persistAlertLedger();
-
-    var visible = eligible.filter(function (row) {
-      return state.alertLedger[alertIdentity(row)].status !== 'dismissed';
-    });
-    var unread = visible.filter(function (row) {
-      return state.alertLedger[alertIdentity(row)].status === 'new';
+    var unread = visible.filter(function (record) {
+      return record.ledger.status === 'new';
     }).length;
+    var staleSuppressed = matches.length - eligible.length;
     document.getElementById('alertMetric').textContent = String(unread);
-    document.getElementById('alertMetricDetail').textContent = state.threshold + '%+ preferred markets';
+    document.getElementById('alertMetricDetail').textContent = 'fresh ≤15m · material changes';
     document.getElementById('alertSummary').textContent =
-      unread + ' new · ' + visible.length + ' active · ' + eligible.length + ' threshold matches';
+      unread + ' new · ' + visible.length + ' active · ' + staleSuppressed +
+      ' stale suppressed · ' + reconciled.suppressed + ' quiet refreshes';
 
     var host = document.getElementById('alertList');
     if (!visible.length) {
-      host.innerHTML = '<div class="empty-state">No new fully validated alerts match your preferences right now.</div>';
+      host.innerHTML = '<div class="empty-state">No fresh, materially distinct alerts match your preferences right now.</div>';
       return;
     }
-    host.innerHTML = visible.slice(0, 12).map(function (row) {
-      return alertHtml(row, state.alertLedger[alertIdentity(row)]);
-    }).join('');
+    host.innerHTML = visible.slice(0, 12).map(alertHtml).join('');
+  }
+
+  function activeAlertFor(row) {
+    var candidate = state.alertCandidates[String(row.canonicalCandidateId)];
+    return candidate && state.alertLedger[candidate.activeAlertId];
   }
 
   function wireAlertInbox() {
@@ -315,19 +478,19 @@
       if (!item) return;
       item.status = button.getAttribute('data-alert-action') === 'dismiss' ? 'dismissed' : 'seen';
       item.updatedAt = new Date().toISOString();
-      persistAlertLedger();
+      persistAlertState();
       renderAlerts();
     });
     document.getElementById('markAllAlertsSeen').addEventListener('click', function () {
       var now = new Date().toISOString();
       eligibleAlerts().forEach(function (row) {
-        var item = state.alertLedger[alertIdentity(row)];
+        var item = activeAlertFor(row);
         if (item && item.status === 'new') {
           item.status = 'seen';
           item.updatedAt = now;
         }
       });
-      persistAlertLedger();
+      persistAlertState();
       renderAlerts();
     });
   }
