@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 4.62 merged and deployed on 2026-08-13. Phase 4.63 is the active phase.
+Status: Phase 4.63 merged and deployed on 2026-08-13. Phase 4.64 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -155,6 +155,14 @@ Implementation status: My Hub is adding a device-private alert inbox with stable
 Only canonical actionable candidates with stable identity, fingerprint, positive edge, a real sportsbook price, and a real book can create alerts. Alert history remains on the device until an end-user authentication boundary exists; the administrative token is never treated as a user account.
 
 Exit gate: duplicate refreshes cannot create duplicate alerts, dismissed alerts stay dismissed for the same canonical snapshot, and no unpriced, unidentified, non-positive, or non-actionable row can enter the inbox.
+
+### Phase 4.64 — Alert freshness and market movement
+
+Implementation status: My Hub is adding a second fail-closed alert boundary that requires an explicit odds timestamp and a server-computed age of no more than 15 minutes. Canonical snapshots are grouped by candidate identity so routine refreshes stay quiet while material edge or price movement creates one new alert and supersedes the prior snapshot.
+
+Material movement is defined as at least a 1.0 percentage-point edge change or a 10-point American-price change. Immaterial fingerprint changes update the candidate snapshot without reopening seen or dismissed alerts. Candidate and alert histories remain bounded and private to the device.
+
+Exit gate: stale or timestamp-less rows cannot alert, identical refreshes cannot duplicate, immaterial changes cannot create noise, and only a materially changed fresh snapshot can reopen a previously dismissed candidate.
 
 ## Audit findings carried into the roadmap
 
