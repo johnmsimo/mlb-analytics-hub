@@ -417,12 +417,13 @@
   }
 
   function alertKindLabel(ledger) {
+    if (ledger.status === 'seen') return 'SEEN';
     return {
       new_opportunity: 'NEW',
       edge_up: 'EDGE UP',
       edge_down: 'EDGE DOWN',
       price_move: 'PRICE MOVE'
-    }[ledger.kind] || (ledger.status === 'new' ? 'NEW' : 'SEEN');
+    }[ledger.kind] || 'NEW';
   }
 
   function alertHtml(record) {
