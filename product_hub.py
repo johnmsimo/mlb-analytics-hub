@@ -1,4 +1,4 @@
-"""Phase 4.63 product journey, personalization, and local alert contracts."""
+"""Phase 4.64 product journey, freshness, and material alert contracts."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 from flask import Blueprint, jsonify, make_response
 
 
-PRODUCT_HUB_VERSION = "4.63"
+PRODUCT_HUB_VERSION = "4.64"
 _ROOT = Path(__file__).resolve().parent
 _HUB_PATH = _ROOT / "product_hub.html"
 
@@ -69,8 +69,19 @@ def product_journey():
                 "persistence": "device_private",
             },
             "alerts": {
-                "lifecycle": ["new", "seen", "dismissed"],
+                "lifecycle": ["new", "seen", "dismissed", "superseded"],
                 "dedupeIdentity": ["canonicalCandidateId", "canonicalFingerprint"],
+                "groupIdentity": "canonicalCandidateId",
+                "freshness": {
+                    "timestampField": "oddsUpdatedAt",
+                    "ageField": "oddsAgeSeconds",
+                    "maximumOddsAgeSeconds": 900,
+                },
+                "materialChange": {
+                    "minimumEdgeDeltaPct": 1.0,
+                    "minimumAmericanPriceDelta": 10,
+                    "supersedePreviousSnapshot": True,
+                },
                 "requiresPreferredMarket": True,
                 "requiresThresholdMatch": True,
                 "serverPersistence": False,
