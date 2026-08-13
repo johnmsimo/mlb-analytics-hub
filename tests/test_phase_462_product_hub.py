@@ -45,7 +45,7 @@ def test_workspace_uses_canonical_fail_closed_sources_and_storage_keys():
     assert "/api/calibration/markets" in source
     assert "/api/tracker/performance?window=30" in source
     assert "row.actionable === true" in source
-    assert "priceOf(row) != null" in source
+    assert "price != null" in source
     assert "price !== 0" in source
     assert "Math.abs(price) >= 100" in source
     assert "Boolean(book)" in source
