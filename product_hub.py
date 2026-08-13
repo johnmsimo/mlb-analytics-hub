@@ -65,6 +65,7 @@ def product_journey():
                 "marketStorageKey": "mlb_market_preferences",
                 "alertThresholdStorageKey": "mlb_alert_edge_threshold",
                 "alertLedgerStorageKey": "mlb_alert_ledger",
+                "alertCandidateStateStorageKey": "mlb_alert_candidate_state",
                 "alertDelivery": "in_app",
                 "persistence": "device_private",
             },
