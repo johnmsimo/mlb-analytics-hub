@@ -7,13 +7,14 @@
   var mq = window.matchMedia('(max-width: 768px)');
 
   var TABS = [
-    { tab: 'home',   href: '/',            icon: '\u{1F3E0}', label: 'Home' },
-    { tab: 'props',  href: '/props',       icon: '\u{1F4CA}', label: 'Props' },
-    { tab: 'tracker',href: '/tracker',     icon: '\u{1F4CB}', label: 'Tracker' },
-    { tab: 'cheat',  href: '/cheatsheets', icon: '\u{1F525}', label: 'Cheats' }
+    { tab: 'home',    href: '/',          icon: '\u{1F3E0}', label: 'Home' },
+    { tab: 'hub',     href: '/workspace', icon: '\u{2728}', label: 'My Hub' },
+    { tab: 'props',   href: '/props',     icon: '\u{1F4CA}', label: 'Props' },
+    { tab: 'tracker', href: '/tracker',   icon: '\u{1F4CB}', label: 'Tracker' }
   ];
 
   var MORE_LINKS = [
+    { href: '/cheatsheets',          label: 'Cheatsheets',       sub: 'Daily validated targets' },
     { href: '/edge-lab',             label: 'Edge Lab',          sub: '100% Club · edges · parlays' },
     { href: '__DEEPDIVE__',          label: 'Deep Dive',         sub: "Today's first game" },
     { href: '/batter-vs-pitcher',    label: 'BvP',               sub: 'Batter vs pitcher' },
@@ -29,9 +30,9 @@
 
   function pickActiveTab(path) {
     if (path === '/' || path === '/index' || path === '') return 'home';
+    if (path.indexOf('/workspace') === 0) return 'hub';
     if (path.indexOf('/props') === 0) return 'props';
     if (path.indexOf('/tracker') === 0) return 'tracker';
-    if (path.indexOf('/cheatsheet') === 0) return 'cheat';
     return null;
   }
 

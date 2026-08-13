@@ -14,6 +14,11 @@ HTML_FILES = (
     "props.html",
     "tracker.html",
 )
+STATIC_JS_FILES = (
+    "static/global-nav.js",
+    "static/mobile-nav.js",
+    "static/product-hub.js",
+)
 
 
 def main() -> int:
@@ -35,6 +40,16 @@ def main() -> int:
             )
             if result.returncode:
                 failures.append(f"{name} script {index}: {result.stderr.strip()}")
+    for name in STATIC_JS_FILES:
+        count += 1
+        result = subprocess.run(
+            ["node", "--check", str(ROOT / name)],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode:
+            failures.append(f"{name}: {result.stderr.strip()}")
     if failures:
         raise SystemExit("\n\n".join(failures))
     print(f"Validated {count} inline JavaScript blocks.")
