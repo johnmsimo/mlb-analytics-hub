@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#050a18">
+  <title>My Hub · MLB Analytics Hub</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&family=Orbitron:wght@600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/tokens.css">
+  <link rel="stylesheet" href="/static/product-hub.css">
+  <link rel="stylesheet" href="/static/mobile.css">
+  <script src="/static/global-nav.js" defer></script>
+  <script src="/static/mobile-nav.js" defer></script>
+  <script src="/static/product-hub.js" defer></script>
+</head>
+<body>
+  <nav class="hub-topnav">
+    <a class="hub-brand" href="/" aria-label="MLB Analytics Hub dashboard">
+      <img src="/static/logo.png" alt="">
+      <span><strong>MLB ANALYTICS HUB</strong><small>Personal decision workspace</small></span>
+    </a>
+    <div class="hub-nav-actions">
+      <span class="live"><i></i> LIVE</span>
+      <a href="/props">Props</a>
+      <a href="/tracker">Tracker</a>
+    </div>
+  </nav>
+
+  <main class="hub-shell">
+    <section class="hub-hero" aria-labelledby="hubTitle">
+      <div>
+        <p class="eyebrow">PHASE 4.62 · MY HUB</p>
+        <h1 id="hubTitle">One clear path from signal to insight.</h1>
+        <p class="hero-copy">Discover opportunities, validate the evidence, track decisions, and learn from outcomes—without losing the context that makes a pick trustworthy.</p>
+      </div>
+      <div class="hero-status" id="heroStatus" data-state="computing">
+        <span class="status-dot"></span>
+        <span><strong id="heroStatusLabel">Loading workspace</strong><small id="heroStatusDetail">Checking actionable signals and market health</small></span>
+      </div>
+    </section>
+
+    <ol class="journey" aria-label="Decision journey">
+      <li><span>1</span><strong>Discover</strong><small>Find signals</small></li>
+      <li><span>2</span><strong>Validate</strong><small>Check evidence</small></li>
+      <li><span>3</span><strong>Track</strong><small>Record decisions</small></li>
+      <li><span>4</span><strong>Learn</strong><small>Measure outcomes</small></li>
+    </ol>
+
+    <section class="metric-grid" aria-label="Workspace summary">
+      <article class="metric-card"><span>ACTIONABLE NOW</span><strong id="actionableCount">—</strong><small>priced + validated</small></article>
+      <article class="metric-card"><span>MARKETS HEALTHY</span><strong id="healthyMarketCount">—</strong><small id="healthyMarketDetail">calibration gates</small></article>
+      <article class="metric-card"><span>SAVED PLAYERS</span><strong id="watchlistMetric">0</strong><small>from Props watchlist</small></article>
+      <article class="metric-card"><span>ALERT MATCHES</span><strong id="alertMetric">—</strong><small id="alertMetricDetail">personal threshold</small></article>
+    </section>
+
+    <section class="hub-grid">
+      <article class="panel signals-panel">
+        <header class="panel-head">
+          <div><p class="step-label">1 · DISCOVER</p><h2>Personalized signals</h2></div>
+          <a href="/props">Open Props →</a>
+        </header>
+        <div class="signal-list" id="signalList" aria-live="polite">
+          <div class="empty-state">Loading fully validated opportunities…</div>
+        </div>
+        <footer class="panel-foot"><span id="signalFoot">Only actionable rows with verified price and book evidence appear here.</span><a href="/value-bets">Value Bets →</a></footer>
+      </article>
+
+      <aside class="panel preferences-panel">
+        <header class="panel-head"><div><p class="step-label">PERSONALIZE</p><h2>Your markets</h2></div></header>
+        <p class="panel-copy">Choose the markets that should rise to the top of My Hub.</p>
+        <div class="market-options" id="marketOptions" role="group" aria-label="Preferred markets"></div>
+        <label class="threshold-label" for="alertThreshold">In-app alert threshold</label>
+        <select id="alertThreshold">
+          <option value="3">3% edge or higher</option>
+          <option value="5">5% edge or higher</option>
+          <option value="8">8% edge or higher</option>
+          <option value="10">10% edge or higher</option>
+        </select>
+        <p class="privacy-note">Preferences stay on this device. Alerts are shown inside My Hub and never bypass validation gates.</p>
+      </aside>
+
+      <article class="panel validation-panel">
+        <header class="panel-head">
+          <div><p class="step-label">2 · VALIDATE</p><h2>Trust check</h2></div>
+          <a href="/edge-lab">Open Edge Lab →</a>
+        </header>
+        <div class="validation-body" id="validationBody">
+          <div class="empty-state">Loading calibration and drift evidence…</div>
+        </div>
+      </article>
+
+      <article class="panel track-panel">
+        <header class="panel-head">
+          <div><p class="step-label">3 · TRACK</p><h2>Decision record</h2></div>
+          <a href="/tracker">Open Tracker →</a>
+        </header>
+        <div class="track-metrics" id="trackMetrics">
+          <div><span>GRADED</span><strong id="gradedCount">—</strong></div>
+          <div><span>WIN RATE</span><strong id="winRate">—</strong></div>
+          <div><span>ROI</span><strong id="roi">—</strong></div>
+          <div><span>BRIER</span><strong id="brier">—</strong></div>
+        </div>
+        <p class="panel-copy" id="trackNote">Loading the last 30 days of graded decision evidence…</p>
+      </article>
+
+      <article class="panel watchlist-panel">
+        <header class="panel-head">
+          <div><p class="step-label">SAVED PLAYERS</p><h2>Watchlist</h2></div>
+          <a href="/props">Browse Props →</a>
+        </header>
+        <form id="watchlistForm" class="watchlist-form">
+          <label class="sr-only" for="watchlistName">Player name</label>
+          <input id="watchlistName" type="text" maxlength="80" autocomplete="off" placeholder="Add a player name">
+          <button type="submit">Save player</button>
+        </form>
+        <div class="watchlist-chips" id="watchlistChips"></div>
+      </article>
+
+      <article class="panel learn-panel">
+        <header class="panel-head"><div><p class="step-label">4 · LEARN</p><h2>Close the loop</h2></div></header>
+        <div class="learn-links">
+          <a href="/consistency"><span>Consistency</span><small>Compare hit-rate windows and stability.</small><b>→</b></a>
+          <a href="/tracker"><span>Performance</span><small>Review graded outcomes, ROI, CLV, and calibration.</small><b>→</b></a>
+          <a href="/edge-lab"><span>Evidence</span><small>Revisit edge context before the next decision.</small><b>→</b></a>
+        </div>
+      </article>
+    </section>
+  </main>
+</body>
+</html>
+
