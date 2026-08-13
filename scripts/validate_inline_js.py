@@ -14,7 +14,7 @@ HTML_FILES = (
     "props.html",
     "tracker.html",
 )
-STATIC_JS_FILES = ("static/product-hub.js",)
+STATIC_JS_FILES = (\n    "static/global-nav.js",\n    "static/mobile-nav.js",\n    "static/product-hub.js",\n)
 
 
 def main() -> int:
