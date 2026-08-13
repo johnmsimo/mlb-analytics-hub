@@ -48,6 +48,10 @@ jobs:
       - name: Refresh calibration backfill (season-to-date out-of-sample pairs)
         run: python calibration_backfill.py
 
+      - name: Enforce Phase 4.61 model operations gates
+        run: |
+          python scripts/model_gate.py
+          git diff --check
       - name: Open PR with refreshed artifacts
         uses: peter-evans/create-pull-request@v6
         with:
@@ -73,4 +77,5 @@ jobs:
             data/regen_summary.json
             data/park_factors_learned.json
             data/calibration_backfill.json
+            data/model_gate_report.json
             data/savant_bat_tracking_*.csv
