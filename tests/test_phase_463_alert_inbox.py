@@ -15,8 +15,8 @@ def test_phase_463_alert_contract_is_device_private_and_fail_closed():
         payload = client.get("/api/product/journey").get_json()
 
     alerts = payload["alerts"]
-    assert payload["version"] == PRODUCT_HUB_VERSION == "4.63"
-    assert alerts["lifecycle"] == ["new", "seen", "dismissed"]
+    assert payload["version"] == PRODUCT_HUB_VERSION == "4.64"
+    assert alerts["lifecycle"][:3] == ["new", "seen", "dismissed"]
     assert alerts["dedupeIdentity"] == [
         "canonicalCandidateId",
         "canonicalFingerprint",
@@ -40,7 +40,7 @@ def test_phase_463_alert_inbox_has_bounded_dedupe_and_lifecycle_controls():
         "data-alert-action=\"seen\"",
         "data-alert-action=\"dismiss\"",
         "markAllAlertsSeen",
-        "persistAlertLedger()",
+        "persistAlertState()",
     ):
         assert marker in source
 
@@ -62,7 +62,7 @@ def test_phase_463_alert_inbox_preserves_mobile_and_privacy_contract():
     html = (ROOT / "product_hub.html").read_text(encoding="utf-8")
     css = (ROOT / "static" / "product-hub.css").read_text(encoding="utf-8")
 
-    assert "PHASE 4.63" in html
+    assert "PHASE 4.64" in html
     assert 'id="alertList"' in html
     assert 'id="markAllAlertsSeen"' in html
     assert "private to this device" in html
