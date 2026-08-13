@@ -44,6 +44,7 @@ def test_workspace_uses_canonical_fail_closed_sources_and_storage_keys():
     assert "/api/tracker/performance?window=30" in source
     assert "row.actionable === true" in source
     assert "priceOf(row) != null" in source
+    assert "priceOf(row) !== 0" in source
     assert "Boolean(bookOf(row))" in source
     assert "mlb_watchlist" in source
     assert "mlb_market_preferences" in source
@@ -67,4 +68,3 @@ def test_workspace_preserves_390px_touch_contract():
     assert "min-height:44px" in css
     assert 'href="/static/mobile.css"' in html
     assert 'name="viewport"' in html
-
