@@ -14,12 +14,14 @@ def test_product_journey_contract_is_complete_and_ordered():
     with app.test_client() as client:
         payload = client.get("/api/product/journey").get_json()
 
-    assert payload["version"] == PRODUCT_HUB_VERSION == "4.62"
+    assert payload["version"] == PRODUCT_HUB_VERSION == "4.63"
     assert [stage["key"] for stage in payload["stages"]] == [
         "discover", "validate", "track", "learn"
     ]
     assert payload["actionability"]["failClosed"] is True
     assert payload["personalization"]["alertDelivery"] == "in_app"
+    assert payload["personalization"]["persistence"] == "device_private"
+    assert payload["alerts"]["serverPersistence"] is False
 
 
 def test_workspace_is_no_store_and_contains_growth_features():
@@ -44,11 +46,14 @@ def test_workspace_uses_canonical_fail_closed_sources_and_storage_keys():
     assert "/api/tracker/performance?window=30" in source
     assert "row.actionable === true" in source
     assert "priceOf(row) != null" in source
-    assert "priceOf(row) !== 0" in source
-    assert "Boolean(bookOf(row))" in source
+    assert "price !== 0" in source
+    assert "Math.abs(price) >= 100" in source
+    assert "Boolean(book)" in source
+    assert "Boolean(row.canonicalFingerprint)" in source
     assert "mlb_watchlist" in source
     assert "mlb_market_preferences" in source
     assert "mlb_alert_edge_threshold" in source
+    assert "mlb_alert_ledger" in source
 
 
 def test_workspace_is_registered_once_and_available_in_shared_navigation():
