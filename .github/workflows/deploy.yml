@@ -89,10 +89,16 @@ jobs:
                       journey = json.load(response)
                   stages = [stage.get("key") for stage in journey.get("stages", [])]
                   alerts = journey.get("alerts", {})
-                  if journey.get("version") != "4.63" or stages != ["discover", "validate", "track", "learn"]:
+                  if journey.get("version") != "4.64" or stages != ["discover", "validate", "track", "learn"]:
                       raise RuntimeError(f"unexpected product journey: {journey}")
+                  freshness = alerts.get("freshness", {})
+                  movement = alerts.get("materialChange", {})
                   if alerts.get("serverPersistence") is not False or alerts.get("failClosed") is not True:
                       raise RuntimeError(f"unexpected alert contract: {alerts}")
+                  if freshness.get("maximumOddsAgeSeconds") != 900:
+                      raise RuntimeError(f"unexpected alert freshness: {freshness}")
+                  if movement.get("minimumEdgeDeltaPct") != 1.0 or movement.get("minimumAmericanPriceDelta") != 10:
+                      raise RuntimeError(f"unexpected material movement: {movement}")
                   with urllib.request.urlopen(base + "/workspace", timeout=5) as response:
                       workspace = response.read(8192).decode("utf-8", errors="replace")
                   if "MY HUB" not in workspace or "Discover" not in workspace or "ALERT INBOX" not in workspace:
