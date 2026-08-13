@@ -66,6 +66,6 @@ def test_phase_463_alert_inbox_preserves_mobile_and_privacy_contract():
     assert 'id="alertList"' in html
     assert 'id="markAllAlertsSeen"' in html
     assert "private to this device" in html
-    assert ".alert-card{grid-template-columns:1fr}" in css
+    assert ".signal-card,.alert-card{grid-template-columns:1fr}" in css
     assert ".alert-actions{justify-content:flex-start}" in css
     assert "min-height:44px" in css
