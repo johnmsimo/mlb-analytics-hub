@@ -31,7 +31,7 @@
   <main class="hub-shell">
     <section class="hub-hero" aria-labelledby="hubTitle">
       <div>
-        <p class="eyebrow">PHASE 4.62 · MY HUB</p>
+        <p class="eyebrow">PHASE 4.63 · MY HUB</p>
         <h1 id="hubTitle">One clear path from signal to insight.</h1>
         <p class="hero-copy">Discover opportunities, validate the evidence, track decisions, and learn from outcomes—without losing the context that makes a pick trustworthy.</p>
       </div>
@@ -52,7 +52,7 @@
       <article class="metric-card"><span>ACTIONABLE NOW</span><strong id="actionableCount">—</strong><small>priced + validated</small></article>
       <article class="metric-card"><span>MARKETS HEALTHY</span><strong id="healthyMarketCount">—</strong><small id="healthyMarketDetail">calibration gates</small></article>
       <article class="metric-card"><span>SAVED PLAYERS</span><strong id="watchlistMetric">0</strong><small>from Props watchlist</small></article>
-      <article class="metric-card"><span>ALERT MATCHES</span><strong id="alertMetric">—</strong><small id="alertMetricDetail">personal threshold</small></article>
+      <article class="metric-card"><span>UNREAD ALERTS</span><strong id="alertMetric">—</strong><small id="alertMetricDetail">actionable matches</small></article>
     </section>
 
     <section class="hub-grid">
@@ -80,6 +80,18 @@
         </select>
         <p class="privacy-note">Preferences stay on this device. Alerts are shown inside My Hub and never bypass validation gates.</p>
       </aside>
+
+      <article class="panel alerts-panel">
+        <header class="panel-head">
+          <div><p class="step-label">ALERT INBOX</p><h2>Actionable alerts</h2></div>
+          <button id="markAllAlertsSeen" type="button">Mark all seen</button>
+        </header>
+        <p class="panel-copy" id="alertSummary">Loading alert matches from this device…</p>
+        <div class="alert-list" id="alertList" aria-live="polite">
+          <div class="empty-state">Checking canonical signals against your saved preferences…</div>
+        </div>
+        <footer class="panel-foot"><span>Alerts remain private to this device and never bypass validation.</span></footer>
+      </article>
 
       <article class="panel validation-panel">
         <header class="panel-head">

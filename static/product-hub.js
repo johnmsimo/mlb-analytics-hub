@@ -4,6 +4,8 @@
   var WATCHLIST_KEY = 'mlb_watchlist';
   var MARKET_KEY = 'mlb_market_preferences';
   var THRESHOLD_KEY = 'mlb_alert_edge_threshold';
+  var ALERT_LEDGER_KEY = 'mlb_alert_ledger';
+  var ALERT_LEDGER_LIMIT = 200;
   var MARKET_OPTIONS = [
     { key: 'batter_hits', label: 'Hits' },
     { key: 'batter_total_bases', label: 'Total Bases' },
@@ -11,7 +13,15 @@
     { key: 'batter_rbis', label: 'RBIs' },
     { key: 'pitcher_strikeouts', label: 'Strikeouts' }
   ];
-  var state = { edges: [], markets: null, tracker: null, watchlist: new Set(), preferred: new Set(), threshold: 5 };
+  var state = {
+    edges: [],
+    markets: null,
+    tracker: null,
+    watchlist: new Set(),
+    preferred: new Set(),
+    threshold: 5,
+    alertLedger: {}
+  };
 
   function readJson(key, fallback) {
     try { return JSON.parse(window.localStorage.getItem(key) || '') || fallback; }
@@ -73,9 +83,43 @@
 
   function isActionable(row) {
     var stage = String(row.actionabilityStage || '').toLowerCase();
+    var price = priceOf(row);
+    var edge = edgeValue(row);
+    var book = String(bookOf(row) || '').toLowerCase();
+    var invalidBooks = ['model', 'n/a', 'na', 'none', 'projection', 'research', 'sim', 'simulation', 'unknown', 'unpriced'];
     return row.actionable === true && (!stage || stage === 'actionable') &&
-      Boolean(row.player && (row.playerId || row.canonicalCandidateId)) &&
-      Boolean(marketKeyOf(row)) && priceOf(row) != null && priceOf(row) !== 0 && Boolean(bookOf(row));
+      Boolean(row.player && row.playerId && row.canonicalCandidateId) &&
+      Boolean(row.canonicalFingerprint) && Boolean(marketKeyOf(row)) &&
+      price != null && price !== 0 && Math.abs(price) >= 100 &&
+      Boolean(book) && invalidBooks.indexOf(book) === -1 &&
+      edge != null && edge > 0;
+  }
+
+  function alertIdentity(row) {
+    return String(row.canonicalCandidateId) + ':' + String(row.canonicalFingerprint);
+  }
+
+  function cleanAlertLedger(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    var valid = {};
+    Object.keys(value).slice(-ALERT_LEDGER_LIMIT).forEach(function (key) {
+      var item = value[key];
+      if (!item || ['new', 'seen', 'dismissed'].indexOf(item.status) === -1) return;
+      valid[key] = {
+        status: item.status,
+        createdAt: String(item.createdAt || ''),
+        updatedAt: String(item.updatedAt || item.createdAt || '')
+      };
+    });
+    return valid;
+  }
+
+  function persistAlertLedger() {
+    var keys = Object.keys(state.alertLedger).sort(function (left, right) {
+      return String(state.alertLedger[left].updatedAt).localeCompare(String(state.alertLedger[right].updatedAt));
+    });
+    while (keys.length > ALERT_LEDGER_LIMIT) delete state.alertLedger[keys.shift()];
+    writeJson(ALERT_LEDGER_KEY, state.alertLedger);
   }
 
   function loadPreferences() {
@@ -87,6 +131,7 @@
     state.preferred = new Set(savedMarkets);
     var savedThreshold = number(readString(THRESHOLD_KEY, ''));
     state.threshold = savedThreshold != null ? savedThreshold : 5;
+    state.alertLedger = cleanAlertLedger(readJson(ALERT_LEDGER_KEY, {}));
   }
 
   function renderMarketOptions() {
@@ -186,10 +231,8 @@
     var list = personalizedEdges();
     var host = document.getElementById('signalList');
     document.getElementById('actionableCount').textContent = String(state.edges.length);
-    var alertCount = list.filter(function (row) { return (edgeValue(row) || 0) >= state.threshold; }).length;
-    document.getElementById('alertMetric').textContent = String(alertCount);
-    document.getElementById('alertMetricDetail').textContent = state.threshold + '%+ preferred markets';
     document.getElementById('signalFoot').textContent = list.length + ' preferred-market signal' + (list.length === 1 ? '' : 's') + '; saved players rank first.';
+    renderAlerts();
     if (!state.preferred.size) {
       host.innerHTML = '<div class="empty-state">Select at least one preferred market to personalize signals.</div>';
       return;
@@ -199,6 +242,94 @@
       return;
     }
     host.innerHTML = list.slice(0, 8).map(signalHtml).join('');
+  }
+
+  function eligibleAlerts() {
+    return personalizedEdges().filter(function (row) {
+      return (edgeValue(row) || 0) >= state.threshold;
+    });
+  }
+
+  function alertExplanation(row) {
+    var parts = [];
+    if (state.watchlist.has(String(row.player || '').toLowerCase())) parts.push('saved player');
+    parts.push('preferred market');
+    parts.push((edgeValue(row) || 0).toFixed(1) + '% edge');
+    parts.push(bookOf(row) + ' ' + (priceOf(row) > 0 ? '+' : '') + priceOf(row));
+    return parts.join(' · ');
+  }
+
+  function alertHtml(row, ledger) {
+    var id = alertIdentity(row);
+    var market = MARKET_OPTIONS.find(function (item) { return item.key === marketKeyOf(row); });
+    return '<article class="alert-card" data-alert-id="' + esc(id) + '">' +
+      '<div><span class="alert-state">' + (ledger.status === 'new' ? 'NEW' : 'SEEN') + '</span>' +
+      '<strong>' + esc(row.player) + ' · ' + esc(market ? market.label : marketKeyOf(row)) + '</strong>' +
+      '<small>' + esc(alertExplanation(row)) + '</small></div>' +
+      '<div class="alert-actions">' +
+      (ledger.status === 'new' ? '<button type="button" data-alert-action="seen">Seen</button>' : '') +
+      '<button type="button" data-alert-action="dismiss">Dismiss</button></div></article>';
+  }
+
+  function renderAlerts() {
+    var now = new Date().toISOString();
+    var eligible = eligibleAlerts();
+    var changed = false;
+    eligible.forEach(function (row) {
+      var id = alertIdentity(row);
+      if (!state.alertLedger[id]) {
+        state.alertLedger[id] = { status: 'new', createdAt: now, updatedAt: now };
+        changed = true;
+      }
+    });
+    if (changed) persistAlertLedger();
+
+    var visible = eligible.filter(function (row) {
+      return state.alertLedger[alertIdentity(row)].status !== 'dismissed';
+    });
+    var unread = visible.filter(function (row) {
+      return state.alertLedger[alertIdentity(row)].status === 'new';
+    }).length;
+    document.getElementById('alertMetric').textContent = String(unread);
+    document.getElementById('alertMetricDetail').textContent = state.threshold + '%+ preferred markets';
+    document.getElementById('alertSummary').textContent =
+      unread + ' new · ' + visible.length + ' active · ' + eligible.length + ' threshold matches';
+
+    var host = document.getElementById('alertList');
+    if (!visible.length) {
+      host.innerHTML = '<div class="empty-state">No new fully validated alerts match your preferences right now.</div>';
+      return;
+    }
+    host.innerHTML = visible.slice(0, 12).map(function (row) {
+      return alertHtml(row, state.alertLedger[alertIdentity(row)]);
+    }).join('');
+  }
+
+  function wireAlertInbox() {
+    document.getElementById('alertList').addEventListener('click', function (event) {
+      var button = event.target.closest('[data-alert-action]');
+      var card = event.target.closest('[data-alert-id]');
+      if (!button || !card) return;
+      var id = card.getAttribute('data-alert-id');
+      var item = state.alertLedger[id];
+      if (!item) return;
+      item.status = button.getAttribute('data-alert-action') === 'dismiss' ? 'dismissed' : 'seen';
+      item.updatedAt = new Date().toISOString();
+      persistAlertLedger();
+      renderAlerts();
+    });
+    document.getElementById('markAllAlertsSeen').addEventListener('click', function () {
+      var now = new Date().toISOString();
+      eligibleAlerts().forEach(function (row) {
+        var item = state.alertLedger[alertIdentity(row)];
+        if (item && item.status === 'new') {
+          item.status = 'seen';
+          item.updatedAt = now;
+        }
+      });
+      persistAlertLedger();
+      renderAlerts();
+    });
   }
 
   function marketEntries(payload) {
@@ -281,6 +412,8 @@
     renderMarketOptions();
     renderWatchlist();
     wireWatchlistForm();
+    wireAlertInbox();
+    renderAlerts();
 
     var failures = 0;
     Promise.all([

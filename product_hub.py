@@ -1,4 +1,4 @@
-"""Phase 4.62 product journey and personalized workspace routes."""
+"""Phase 4.63 product journey, personalization, and local alert contracts."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 from flask import Blueprint, jsonify, make_response
 
 
-PRODUCT_HUB_VERSION = "4.62"
+PRODUCT_HUB_VERSION = "4.63"
 _ROOT = Path(__file__).resolve().parent
 _HUB_PATH = _ROOT / "product_hub.html"
 
@@ -64,7 +64,17 @@ def product_journey():
                 "watchlistStorageKey": "mlb_watchlist",
                 "marketStorageKey": "mlb_market_preferences",
                 "alertThresholdStorageKey": "mlb_alert_edge_threshold",
+                "alertLedgerStorageKey": "mlb_alert_ledger",
                 "alertDelivery": "in_app",
+                "persistence": "device_private",
+            },
+            "alerts": {
+                "lifecycle": ["new", "seen", "dismissed"],
+                "dedupeIdentity": ["canonicalCandidateId", "canonicalFingerprint"],
+                "requiresPreferredMarket": True,
+                "requiresThresholdMatch": True,
+                "serverPersistence": False,
+                "failClosed": True,
             },
             "actionability": {
                 "source": "/api/edges/today",
@@ -74,6 +84,9 @@ def product_journey():
                     "market price",
                     "book",
                     "canonical market",
+                    "canonical candidate identity",
+                    "canonical fingerprint",
+                    "positive edge",
                 ],
                 "failClosed": True,
             },

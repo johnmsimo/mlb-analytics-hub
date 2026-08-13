@@ -88,11 +88,14 @@ jobs:
                   with urllib.request.urlopen(base + "/api/product/journey", timeout=5) as response:
                       journey = json.load(response)
                   stages = [stage.get("key") for stage in journey.get("stages", [])]
-                  if journey.get("version") != "4.62" or stages != ["discover", "validate", "track", "learn"]:
+                  alerts = journey.get("alerts", {})
+                  if journey.get("version") != "4.63" or stages != ["discover", "validate", "track", "learn"]:
                       raise RuntimeError(f"unexpected product journey: {journey}")
+                  if alerts.get("serverPersistence") is not False or alerts.get("failClosed") is not True:
+                      raise RuntimeError(f"unexpected alert contract: {alerts}")
                   with urllib.request.urlopen(base + "/workspace", timeout=5) as response:
-                      workspace = response.read(4096).decode("utf-8", errors="replace")
-                  if "MY HUB" not in workspace or "Discover" not in workspace:
+                      workspace = response.read(8192).decode("utf-8", errors="replace")
+                  if "MY HUB" not in workspace or "Discover" not in workspace or "ALERT INBOX" not in workspace:
                       raise RuntimeError("product workspace contract missing")
                   with urllib.request.urlopen(base + "/api/games/today", timeout=8) as response:
                       if response.status != 200:
