@@ -7,10 +7,10 @@
   var mq = window.matchMedia('(max-width: 768px)');
 
   var TABS = [
-    { tab: 'home',   href: '/',            icon: '\u{1F3E0}', label: 'Home' },
-    { tab: 'props',  href: '/props',       icon: '\u{1F4CA}', label: 'Props' },
-    { tab: 'tracker',href: '/tracker',     icon: '\u{1F4CB}', label: 'Tracker' },
-    { tab: 'cheat',  href: '/cheatsheets', icon: '\u{1F525}', label: 'Cheats' }
+    { tab: 'home',    href: '/',          icon: '\u{1F3E0}', label: 'Home' },
+    { tab: 'hub',     href: '/workspace', icon: '\u{2728}', label: 'My Hub' },
+    { tab: 'props',   href: '/props',     icon: '\u{1F4CA}', label: 'Props' },
+    { tab: 'tracker', href: '/tracker',   icon: '\u{1F4CB}', label: 'Tracker' }
   ];
 
   var MORE_LINKS = [
