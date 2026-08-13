@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 4.61 merged and deployed on 2026-08-13. Phase 4.62 is the active phase.
+Status: Phase 4.62 merged and deployed on 2026-08-13. Phase 4.63 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -147,6 +147,14 @@ After trust and reliability are complete, consolidate the experience around:
 
 Then add watchlists, saved players, alerts, personalized markets, and clearer
 explanations.
+
+### Phase 4.63 — Actionable alert lifecycle
+
+Implementation status: My Hub is adding a device-private alert inbox with stable canonical deduplication, bounded local history, new/seen/dismissed states, saved-player priority, preferred-market filtering, and explicit edge-threshold matching.
+
+Only canonical actionable candidates with stable identity, fingerprint, positive edge, a real sportsbook price, and a real book can create alerts. Alert history remains on the device until an end-user authentication boundary exists; the administrative token is never treated as a user account.
+
+Exit gate: duplicate refreshes cannot create duplicate alerts, dismissed alerts stay dismissed for the same canonical snapshot, and no unpriced, unidentified, non-positive, or non-actionable row can enter the inbox.
 
 ## Audit findings carried into the roadmap
 
