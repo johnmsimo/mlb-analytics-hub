@@ -36,7 +36,7 @@ def test_phase_463_alert_inbox_has_bounded_dedupe_and_lifecycle_controls():
         "alertIdentity(row)",
         "canonicalCandidateId",
         "canonicalFingerprint",
-        "['new', 'seen', 'dismissed']",
+        "['new', 'seen', 'dismissed', 'superseded']",
         "data-alert-action=\"seen\"",
         "data-alert-action=\"dismiss\"",
         "markAllAlertsSeen",
