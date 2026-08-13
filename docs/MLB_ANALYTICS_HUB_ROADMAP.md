@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 4.59 merged and deployed on 2026-08-09. Phase 4.60 is the active phase.
+Status: Phase 4.60 merged and deployed on 2026-08-09. Phase 4.61 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -125,6 +125,8 @@ Exit gate: a deployment cannot pass if any critical page is stuck, stale,
 unauthorized, or showing invalid betting data.
 
 ### Phase 4.61 — Champion/challenger model operations
+
+Implementation status: metadata-only model operations gates, serve-feature alias parity, challenger comparison, and explicit rollback records are wired into the weekly regeneration workflow. New candidates remain blocked from production until the four gates pass and the PR is reviewed and merged.
 
 Formalize model lineage, weekly retraining, challenger comparison, rollback,
 feature parity, and live-versus-held-out evaluation.
