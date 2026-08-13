@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 4.60 merged and deployed on 2026-08-09. Phase 4.61 is the active phase.
+Status: Phase 4.61 merged and deployed on 2026-08-13. Phase 4.62 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -135,6 +135,8 @@ Exit gate: no model reaches production without passing held-out, calibration,
 serve-parity, and market-validation gates.
 
 ### Phase 4.62 — Product consolidation and growth
+
+Implementation status: a mobile-first My Hub consolidates canonical actionable signals, calibration health, tracker evidence, the existing Props watchlist, saved players, preferred markets, in-app edge thresholds, and clearer price/probability explanations into one Discover → Validate → Track → Learn workspace.
 
 After trust and reliability are complete, consolidate the experience around:
 
