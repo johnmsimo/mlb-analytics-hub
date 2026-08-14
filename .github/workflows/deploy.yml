@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: production-${{ github.ref }}
+  group: ${{ github.event_name == 'push' && 'mlb-analytics-hub-production' || format('quality-{0}', github.ref) }}
   cancel-in-progress: false
 
 jobs:
@@ -55,6 +55,10 @@ jobs:
       - name: Deploy tested commit
         id: deploy
         run: >-
+          python3 scripts/deploy_with_lease_retry.py
+          --attempts 4
+          --base-delay 15
+          --
           flyctl deploy --remote-only
           --build-arg GIT_SHA=${{ github.sha }}
           --image-label ${{ github.sha }}
@@ -115,10 +119,38 @@ jobs:
                   time.sleep(5)
           PY
       - name: Roll back failed deployment or production smoke
+        id: rollback_deploy
         if: failure() && steps.rollback.outputs.image != '' && steps.deploy.outcome != 'skipped'
         run: >-
+          python3 scripts/deploy_with_lease_retry.py
+          --attempts 4
+          --base-delay 15
+          --
           flyctl deploy
           --image ${{ steps.rollback.outputs.image }}
           --strategy immediate
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      - name: Record deployment provenance
+        if: always()
+        env:
+          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
+          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+          ROLLBACK_OUTCOME: ${{ steps.rollback_deploy.outcome }}
+          ROLLBACK_IMAGE: ${{ steps.rollback.outputs.image }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "## Production deployment provenance"
+            echo
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Source | GitHub Actions |"
+            echo "| Commit | $GITHUB_SHA |"
+            echo "| Run | [$GITHUB_RUN_ID]($RUN_URL) |"
+            echo "| Deploy | $DEPLOY_OUTCOME |"
+            echo "| Production smoke | $SMOKE_OUTCOME |"
+            echo "| Rollback | $ROLLBACK_OUTCOME |"
+            echo "| Captured rollback image | $ROLLBACK_IMAGE |"
+            echo "| Application | https://mlb-analytics-hub.fly.dev |"
+          } >> "$GITHUB_STEP_SUMMARY"

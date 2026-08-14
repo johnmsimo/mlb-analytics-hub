@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 4.63 merged and deployed on 2026-08-13. Phase 4.64 is the active phase.
+Status: Phase 4.64 merged and deployed on 2026-08-14. Phase 4.65 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -163,6 +163,21 @@ Implementation status: My Hub is adding a second fail-closed alert boundary that
 Material movement is defined as at least a 1.0 percentage-point edge change or a 10-point American-price change. Immaterial fingerprint changes update the candidate snapshot without reopening seen or dismissed alerts. Candidate and alert histories remain bounded and private to the device.
 
 Exit gate: stale or timestamp-less rows cannot alert, identical refreshes cannot duplicate, immaterial changes cannot create noise, and only a materially changed fresh snapshot can reopen a previously dismissed candidate.
+
+### Phase 4.65 — Deployment single-flight and lease recovery
+
+Implementation status: production-triggered GitHub Actions runs use one explicit
+non-cancelling concurrency group, both deploy and rollback retry only the known
+transient Fly.io machine-lease collision with bounded backoff, and every run
+writes commit, workflow, smoke, and rollback provenance to the Actions summary.
+
+Merge to `Main` remains the authoritative production deployment path. Operators
+must not start a competing manual `flyctl deploy` while that workflow is queued
+or active; all other deployment errors continue to fail immediately.
+
+Exit gate: production workflows cannot overlap one another, transient lease
+collisions recover within the bounded retry policy, non-lease failures fail
+closed, and every attempted production deployment leaves reviewable provenance.
 
 ## Audit findings carried into the roadmap
 
