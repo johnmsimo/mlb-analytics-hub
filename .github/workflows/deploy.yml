@@ -48,7 +48,7 @@ jobs:
       - name: Capture current rollback image
         id: rollback
         run: |
-          image=$(flyctl releases --app mlb-analytics-hub --image | grep -Eo 'registry\\.fly\\.io/[^[:space:]]+' | head -1)
+          image=$(flyctl releases --app mlb-analytics-hub --image | grep -Eo 'registry\.fly\.io/[^[:space:]]+' | head -1)
           echo "image=$image" >> "$GITHUB_OUTPUT"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
