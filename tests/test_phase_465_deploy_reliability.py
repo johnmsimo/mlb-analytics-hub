@@ -125,7 +125,7 @@ def test_phase_465_workflow_is_single_flight_and_records_provenance():
 
     assert "'mlb-analytics-hub-production'" in workflow
     assert "format('quality-{0}', github.ref)" in workflow
-    assert "cancel-in-progress: false" in workflow
+    assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in workflow
     assert workflow.count("scripts/deploy_with_lease_retry.py") == 2
     assert "Record deployment provenance" in workflow
     assert "$GITHUB_STEP_SUMMARY" in workflow
