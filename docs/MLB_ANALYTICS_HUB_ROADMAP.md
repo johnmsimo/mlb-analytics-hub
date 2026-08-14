@@ -187,9 +187,11 @@ all locally referenced static assets, confirms administrative reads remain
 unauthorized, and validates the health, readiness, journey, games, actionable
 edge, calibration, and tracker API contracts within explicit response budgets.
 
-Pull requests run the contract against the currently deployed baseline. A merge
-to `Main` runs the same contract against the exact deployed commit before the
-release can pass; failures continue to trigger the existing rollback path.
+Pull requests run the page, asset, authorization, readiness, journey, and games
+subset that can be proven against the currently deployed baseline. A merge to
+`Main` adds the Edge Finder, calibration, and tracker contracts against the
+exact newly deployed commit before the release can pass; failures continue to
+trigger the existing rollback path.
 
 Exit gate: all 19 public product shells, every referenced local asset, all eight
 administrative read boundaries, and seven critical API/readiness contracts pass
