@@ -104,6 +104,43 @@ def test_edge_and_monte_carlo_surfaces_share_the_same_integrity_gate(monkeypatch
     assert monte_carlo["candidateIntegrityAudit"]["rejectedCount"] == 1
 
 
+def test_edge_finder_reuses_props_scan_prevalidated_partition(monkeypatch):
+    evaluated = mlb_app._evaluate_promotable_candidates(
+        [surface_candidate()],
+        "2026-08-06",
+    )
+    payload = {
+        "success": True,
+        "date": "2026-08-06",
+        "props": evaluated["eligible"] + evaluated["rejected"],
+        "actionableProps": evaluated["eligible"],
+        "candidateIntegrityAudit": evaluated["audit"],
+        "cached": True,
+        "computing": False,
+    }
+    monkeypatch.setattr(
+        mlb_app,
+        "_props_scan_today_payload",
+        lambda *_a, **_k: payload,
+    )
+
+    def repeated_integrity_pass(*_args, **_kwargs):
+        raise AssertionError("cached actionable props must not be re-evaluated")
+
+    monkeypatch.setattr(
+        mlb_app,
+        "_evaluate_promotable_candidates",
+        repeated_integrity_pass,
+    )
+
+    edges = mlb_app._edge_finder_payload("2026-08-06", min_edge=0.01)
+
+    assert edges["count"] == 1
+    assert edges["edges"][0]["player"] == "Valid Hitter"
+    assert edges["edges"][0]["canonicalCandidateId"]
+    assert edges["candidateIntegrityAudit"] == evaluated["audit"]
+
+
 def test_parlays_never_fabricate_model_prices_or_accept_invalid_rows():
     valid = surface_candidate()
     unpriced = surface_candidate(
