@@ -36,6 +36,14 @@ jobs:
         run: python -m pytest -q
       - name: Validate inline JavaScript
         run: python scripts/validate_inline_js.py
+      - name: Validate current production contract
+        if: github.event_name == 'pull_request'
+        run: >-
+          python scripts/production_contract_gate.py
+          --base-url https://mlb-analytics-hub.fly.dev
+          --release-attempts 3
+          --contract-attempts 2
+          --retry-delay 3
 
   deploy:
     if: github.event_name == 'push'
@@ -66,58 +74,10 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       - name: Production smoke and readiness gate
         id: smoke
-        run: |
-          python - <<'PY'
-          import json
-          import time
-          import urllib.request
-
-          base = "https://mlb-analytics-hub.fly.dev"
-          expected = "${{ github.sha }}"
-          last_error = None
-          for attempt in range(24):
-              try:
-                  started = time.perf_counter()
-                  with urllib.request.urlopen(base + "/health", timeout=3) as response:
-                      health = json.load(response)
-                  latency = time.perf_counter() - started
-                  if health.get("status") != "ok" or health.get("version") != expected:
-                      raise RuntimeError(f"unexpected health payload: {health}")
-                  if latency > 2:
-                      raise RuntimeError(f"health latency {latency:.2f}s")
-                  with urllib.request.urlopen(base + "/ready", timeout=5) as response:
-                      ready = json.load(response)
-                  if ready.get("status") != "ready":
-                      raise RuntimeError(f"not ready: {ready}")
-                  with urllib.request.urlopen(base + "/api/product/journey", timeout=5) as response:
-                      journey = json.load(response)
-                  stages = [stage.get("key") for stage in journey.get("stages", [])]
-                  alerts = journey.get("alerts", {})
-                  if journey.get("version") != "4.64" or stages != ["discover", "validate", "track", "learn"]:
-                      raise RuntimeError(f"unexpected product journey: {journey}")
-                  freshness = alerts.get("freshness", {})
-                  movement = alerts.get("materialChange", {})
-                  if alerts.get("serverPersistence") is not False or alerts.get("failClosed") is not True:
-                      raise RuntimeError(f"unexpected alert contract: {alerts}")
-                  if freshness.get("maximumOddsAgeSeconds") != 900:
-                      raise RuntimeError(f"unexpected alert freshness: {freshness}")
-                  if movement.get("minimumEdgeDeltaPct") != 1.0 or movement.get("minimumAmericanPriceDelta") != 10:
-                      raise RuntimeError(f"unexpected material movement: {movement}")
-                  with urllib.request.urlopen(base + "/workspace", timeout=5) as response:
-                      workspace = response.read(8192).decode("utf-8", errors="replace")
-                  if "MY HUB" not in workspace or "Discover" not in workspace or "ALERT INBOX" not in workspace:
-                      raise RuntimeError("product workspace contract missing")
-                  with urllib.request.urlopen(base + "/api/games/today", timeout=8) as response:
-                      if response.status != 200:
-                          raise RuntimeError(f"games status {response.status}")
-                  print("Production smoke passed", health, ready)
-                  break
-              except Exception as exc:
-                  last_error = exc
-                  if attempt == 23:
-                      raise
-                  time.sleep(5)
-          PY
+        run: >-
+          python3 scripts/production_contract_gate.py
+          --base-url https://mlb-analytics-hub.fly.dev
+          --expected-sha ${{ github.sha }}
       - name: Roll back failed deployment or production smoke
         id: rollback_deploy
         if: failure() && steps.rollback.outputs.image != '' && steps.deploy.outcome != 'skipped'
