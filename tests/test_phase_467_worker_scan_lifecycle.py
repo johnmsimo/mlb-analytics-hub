@@ -74,7 +74,7 @@ def test_phase_467_contract_is_installed_and_documented():
     assert "def get_deduped_job" in queue_source
     assert "Background job exceeded its bounded completion window." in queue_source
     assert "def _props_scan_job_state" in app_source
-    assert "'computationState': 'failed'" in app_source
+    assert "payload['computationState'] = 'failed'" in app_source
     assert "'canonicalFingerprint': p.get('canonicalFingerprint')" in app_source
     assert "PASS post-scan web isolation" in gate_source
     assert "Phase 4.67 is the active phase." in roadmap
