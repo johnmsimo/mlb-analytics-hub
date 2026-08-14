@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 4.65 merged and deployed on 2026-08-14. Phase 4.66 is the active phase.
+Status: Phase 4.66 merged and deployed on 2026-08-14. Phase 4.67 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -197,6 +197,25 @@ Exit gate: all 19 public product shells, every referenced local asset, all eight
 administrative read boundaries, and seven critical API/readiness contracts pass
 the live gate without mutating production data, and the post-deploy health
 version matches the merge commit.
+
+### Phase 4.67 — Durable recommendation scan lifecycle
+
+Implementation status: cold and stale props scans now expose one bounded durable
+job lifecycle across web and worker processes. Edge Finder reports
+`ready`, `computing`, `failed`, or `unavailable` with safe job identity,
+elapsed time, attempt, and timeout metadata; queued or running jobs that exceed
+their 600-second completion window transition to an explicit failure instead of
+remaining indefinitely in a loading state.
+
+Recommendation rows are withheld unless the producer snapshot is fresh and
+ready. The post-deploy live gate validates the durable job contract and
+immediately rechecks commit identity, health latency, readiness, and worker
+availability after Edge Finder can enqueue cold work.
+
+Exit gate: no cold or stale Edge Finder request can run CPU-heavy work inside
+Gunicorn, duplicate an active scan, remain computing beyond its bounded window,
+or surface a recommendation before a fresh terminal worker snapshot exists; web
+health and readiness remain within contract after scan submission.
 
 ## Audit findings carried into the roadmap
 
