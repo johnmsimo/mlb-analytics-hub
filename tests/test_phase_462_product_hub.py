@@ -14,7 +14,7 @@ def test_product_journey_contract_is_complete_and_ordered():
     with app.test_client() as client:
         payload = client.get("/api/product/journey").get_json()
 
-    assert payload["version"] == PRODUCT_HUB_VERSION == "4.63"
+    assert payload["version"] == PRODUCT_HUB_VERSION == "4.64"
     assert [stage["key"] for stage in payload["stages"]] == [
         "discover", "validate", "track", "learn"
     ]
