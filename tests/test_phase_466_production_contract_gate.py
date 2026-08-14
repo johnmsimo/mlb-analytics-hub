@@ -107,6 +107,8 @@ class FakeProduction:
                 {
                     "success": True,
                     "computing": False,
+                    "computationState": "ready",
+                    "scanJob": None,
                     "edges": edges,
                     "count": len(edges),
                 }
@@ -144,19 +146,38 @@ def test_page_contract_requires_complete_mobile_html():
 def test_actionable_edges_contract_fails_closed():
     edge = valid_edge()
     validate_actionable_edges(
-        {"success": True, "computing": False, "edges": [edge], "count": 1}
+        {
+            "success": True,
+            "computing": False,
+            "computationState": "ready",
+            "edges": [edge],
+            "count": 1,
+        }
     )
 
     invalid = dict(edge, canonicalBook="model")
     with pytest.raises(ContractError, match="sportsbook identity"):
         validate_actionable_edges(
-            {"success": True, "computing": False, "edges": [invalid], "count": 1}
+            {
+                "success": True,
+                "computing": False,
+                "computationState": "ready",
+                "edges": [invalid],
+                "count": 1,
+            }
         )
 
     validate_actionable_edges(
         {
             "success": True,
             "computing": True,
+            "computationState": "computing",
+            "scanJob": {
+                "id": "job-466",
+                "status": "running",
+                "elapsedSeconds": 3,
+                "timeoutSeconds": 600,
+            },
             "message": "Computing with recommendations withheld",
             "edges": [],
             "count": 0,
@@ -167,6 +188,13 @@ def test_actionable_edges_contract_fails_closed():
             {
                 "success": True,
                 "computing": True,
+                "computationState": "computing",
+                "scanJob": {
+                    "id": "job-466",
+                    "status": "queued",
+                    "elapsedSeconds": 0,
+                    "timeoutSeconds": 600,
+                },
                 "message": "Computing",
                 "edges": [edge],
                 "count": 1,
@@ -193,6 +221,9 @@ def test_full_gate_uses_only_get_contracts_and_reports_coverage():
         "api_contracts": 7,
     }
     assert all(call[1] for call in fake.calls)
+    paths = [urlsplit(call[1]).path for call in fake.calls]
+    assert paths.count("/health") == 2
+    assert paths.count("/ready") == 2
 
 
 def test_baseline_gate_defers_new_deployed_api_contracts():
@@ -246,5 +277,5 @@ def test_phase_466_workflow_and_roadmap_install_live_gate():
     assert "--baseline" in workflow
     assert "Production smoke and readiness gate" in workflow
     assert "--expected-sha ${{ github.sha }}" in workflow
-    assert "Phase 4.66 is the active phase." in roadmap
+    assert "### Phase 4.66 — Declarative live production contract gate" in roadmap
     assert "Declarative live production contract gate" in roadmap
