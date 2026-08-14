@@ -19830,9 +19830,23 @@ def _edge_finder_payload(date_str, min_edge=0.02, market=None, limit=150):
         min_edge = 0.02
     market = (market or '').strip().lower() or None
 
-    integrity = _evaluate_promotable_candidates(
-        base.get('props', []) or [], date_str,
-    )
+    # The props-scan producer already evaluated and partitioned every candidate.
+    # Reuse that fail-closed result on the hot read path instead of repeating the
+    # full slate integrity pass for every Edge Finder request.
+    prevalidated = base.get('actionableProps')
+    prevalidated_audit = base.get('candidateIntegrityAudit')
+    if isinstance(prevalidated, list) and isinstance(prevalidated_audit, dict):
+        integrity = {
+            'eligible': [row for row in prevalidated if isinstance(row, dict)],
+            'rejected': [],
+            'audit': dict(prevalidated_audit),
+        }
+    else:
+        # Compatibility fallback for old/injected payloads without the producer
+        # contract. This remains fail closed and is covered by existing tests.
+        integrity = _evaluate_promotable_candidates(
+            base.get('props', []) or [], date_str,
+        )
     edges = []
     for p in integrity['eligible']:
         edge = p.get('canonicalEdge')
