@@ -153,9 +153,24 @@ def test_actionable_edges_contract_fails_closed():
             {"success": True, "computing": False, "edges": [invalid], "count": 1}
         )
 
-    with pytest.raises(ContractError, match="still computing"):
+    validate_actionable_edges(
+        {
+            "success": True,
+            "computing": True,
+            "message": "Computing with recommendations withheld",
+            "edges": [],
+            "count": 0,
+        }
+    )
+    with pytest.raises(ContractError, match="zero rows"):
         validate_actionable_edges(
-            {"success": True, "computing": True, "edges": [], "count": 0}
+            {
+                "success": True,
+                "computing": True,
+                "message": "Computing",
+                "edges": [edge],
+                "count": 1,
+            }
         )
 
 
@@ -178,6 +193,26 @@ def test_full_gate_uses_only_get_contracts_and_reports_coverage():
         "api_contracts": 7,
     }
     assert all(call[1] for call in fake.calls)
+
+
+def test_baseline_gate_defers_new_deployed_api_contracts():
+    fake = FakeProduction()
+    summary = run_gate(
+        base_url="https://production.example",
+        expected_sha="tested-sha",
+        fetcher=fake,
+        release_attempts=1,
+        contract_attempts=1,
+        retry_delay=0,
+        sleeper=lambda delay: None,
+        baseline_only=True,
+    )
+
+    paths = [urlsplit(call[1]).path for call in fake.calls]
+    assert summary["api_contracts"] == 4
+    assert "/api/edges/today" not in paths
+    assert "/api/calibration/markets" not in paths
+    assert "/api/tracker/performance" not in paths
 
 
 def test_full_gate_rejects_an_exposed_admin_read():
@@ -204,6 +239,7 @@ def test_phase_466_workflow_and_roadmap_install_live_gate():
 
     assert workflow.count("scripts/production_contract_gate.py") == 2
     assert "Validate current production contract" in workflow
+    assert "--baseline" in workflow
     assert "Production smoke and readiness gate" in workflow
     assert "--expected-sha ${{ github.sha }}" in workflow
     assert "Phase 4.66 is the active phase." in roadmap
