@@ -236,7 +236,11 @@ def test_phase_466_workflow_and_roadmap_install_live_gate():
     roadmap = (ROOT / "docs" / "MLB_ANALYTICS_HUB_ROADMAP.md").read_text(
         encoding="utf-8"
     )
+    worker = (ROOT / "worker.py").read_text(encoding="utf-8")
 
+    assert '"props_scan": props_scan' in worker
+    assert "_compute_props_scan_today_payload" in worker
+    assert "_write_props_scan_durable_snapshot" in worker
     assert workflow.count("scripts/production_contract_gate.py") == 2
     assert "Validate current production contract" in workflow
     assert "--baseline" in workflow
