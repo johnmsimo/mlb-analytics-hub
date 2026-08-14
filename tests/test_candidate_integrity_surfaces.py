@@ -1,5 +1,8 @@
+import json
+import time
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -102,6 +105,105 @@ def test_edge_and_monte_carlo_surfaces_share_the_same_integrity_gate(monkeypatch
     assert len(monte_carlo["topProps"]) == 1
     assert monte_carlo["topProps"][0]["player"] == "Valid Hitter"
     assert monte_carlo["candidateIntegrityAudit"]["rejectedCount"] == 1
+
+
+def test_edge_finder_reuses_props_scan_prevalidated_partition(monkeypatch):
+    evaluated = mlb_app._evaluate_promotable_candidates(
+        [surface_candidate()],
+        "2026-08-06",
+    )
+    payload = {
+        "success": True,
+        "date": "2026-08-06",
+        "props": evaluated["eligible"] + evaluated["rejected"],
+        "actionableProps": evaluated["eligible"],
+        "candidateIntegrityAudit": evaluated["audit"],
+        "cached": True,
+        "computing": False,
+    }
+    monkeypatch.setattr(
+        mlb_app,
+        "_props_scan_today_payload",
+        lambda *_a, **_k: payload,
+    )
+
+    def repeated_integrity_pass(*_args, **_kwargs):
+        raise AssertionError("cached actionable props must not be re-evaluated")
+
+    monkeypatch.setattr(
+        mlb_app,
+        "_evaluate_promotable_candidates",
+        repeated_integrity_pass,
+    )
+
+    edges = mlb_app._edge_finder_payload("2026-08-06", min_edge=0.01)
+
+    assert edges["count"] == 1
+    assert edges["edges"][0]["player"] == "Valid Hitter"
+    assert edges["edges"][0]["canonicalCandidateId"]
+    assert edges["candidateIntegrityAudit"] == evaluated["audit"]
+
+
+def test_web_props_scan_refresh_queues_worker_job(monkeypatch):
+    calls = []
+
+    def fake_enqueue(kind, args, **options):
+        calls.append((kind, args, options))
+        return {"status": "queued"}
+
+    monkeypatch.setenv("PROCESS_ROLE", "web")
+    monkeypatch.setattr(mlb_app, "enqueue_job", fake_enqueue)
+
+    assert mlb_app._trigger_props_scan_refresh_async(
+        "2026-08-06",
+        reason="edge-finder",
+    ) is True
+    assert calls == [
+        (
+            "props_scan",
+            {"date": "2026-08-06", "reason": "edge-finder"},
+            {
+                "dedupe_key": "props-scan:2026-08-06",
+                "timeout_seconds": 600,
+                "max_attempts": 2,
+            },
+        )
+    ]
+
+
+def test_props_scan_reads_fresh_durable_worker_snapshot(monkeypatch):
+    date_str = "2099-08-07"
+    payload = mlb_app._empty_props_scan_payload(date_str)
+    snapshot = {"ts": time.time(), "payload": payload}
+    client = SimpleNamespace(
+        get=lambda key: json.dumps(snapshot).encode("utf-8")
+    )
+    previous = mlb_app._PROPS_SCAN_CACHE.pop(date_str, None)
+
+    monkeypatch.setattr(
+        mlb_app,
+        "get_job_queue",
+        lambda: SimpleNamespace(client=client),
+    )
+
+    def unexpected_refresh(*_args, **_kwargs):
+        raise AssertionError("fresh durable snapshot must not queue another scan")
+
+    monkeypatch.setattr(
+        mlb_app,
+        "_trigger_props_scan_refresh_async",
+        unexpected_refresh,
+    )
+
+    try:
+        result = mlb_app._props_scan_today_payload(date_str)
+        assert result["success"] is True
+        assert result["date"] == date_str
+        assert mlb_app._PROPS_SCAN_CACHE[date_str]["payload"] == payload
+    finally:
+        mlb_app._PROPS_SCAN_CACHE.pop(date_str, None)
+        if previous is not None:
+            mlb_app._PROPS_SCAN_CACHE[date_str] = previous
 
 
 def test_parlays_never_fabricate_model_prices_or_accept_invalid_rows():

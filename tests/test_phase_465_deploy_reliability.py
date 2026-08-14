@@ -125,7 +125,7 @@ def test_phase_465_workflow_is_single_flight_and_records_provenance():
 
     assert "'mlb-analytics-hub-production'" in workflow
     assert "format('quality-{0}', github.ref)" in workflow
-    assert "cancel-in-progress: false" in workflow
+    assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in workflow
     assert workflow.count("scripts/deploy_with_lease_retry.py") == 2
     assert "Record deployment provenance" in workflow
     assert "$GITHUB_STEP_SUMMARY" in workflow
@@ -141,5 +141,5 @@ def test_phase_465_runbook_and_roadmap_capture_operating_contract():
     assert "Merge to `Main` is the production deployment trigger." in runbook
     assert "Do not start a manual `flyctl deploy`" in runbook
     assert "only retries the known transient machine-lease collision" in runbook
-    assert "Phase 4.65 is the active phase." in roadmap
+    assert "### Phase 4.65 — Deployment single-flight and lease recovery" in roadmap
     assert "Deployment single-flight and lease recovery" in roadmap

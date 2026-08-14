@@ -89,6 +89,15 @@ def _handlers():
     def odds_refresh(args):
         call_route('/api/odds/cache/refresh', app_module.api_odds_cache_refresh, body=args)
 
+    def props_scan(args):
+        date_str = str(args.get("date") or "").strip()
+        if not date_str:
+            raise RuntimeError("props_scan requires date")
+        payload = app_module._compute_props_scan_today_payload(date_str)
+        if not payload or payload.get("success") is not True:
+            raise RuntimeError("Props scan did not complete.")
+        app_module._write_props_scan_durable_snapshot(date_str, payload)
+
     return {
         "game_card": lambda args: run_game_card_job(app_module, args),
         "simulation": simulation,
@@ -96,6 +105,7 @@ def _handlers():
         "cache_warm": cache_warm,
         "brain_ingest": brain_ingest,
         "odds_refresh": odds_refresh,
+        "props_scan": props_scan,
         "training": run_training_job,
     }, app_module
 
