@@ -8,6 +8,7 @@ class FakeRedis:
         self.values = {}
         self.queues = {}
         self.setex_calls = {}
+        self.expired = {}
 
     def ping(self):
         return True
@@ -31,7 +32,7 @@ class FakeRedis:
         self.values.pop(key, None)
 
     def expire(self, key, ttl):
-        del key, ttl
+        self.expired[key] = ttl
         return True
 
     def rpush(self, key, value):
@@ -79,6 +80,30 @@ def test_queue_retries_once_then_reports_error():
     failed = queue.get(job['id'])
     assert failed['status'] == 'error'
     assert failed['error'] == 'Background job failed. Retry or check server logs.'
+
+
+def test_deduped_job_fails_closed_after_completion_window():
+    redis = FakeRedis()
+    queue = RedisJobQueue(redis)
+    job = queue.enqueue(
+        'props_scan',
+        {'date': '2026-08-14'},
+        dedupe_key='props-scan:2026-08-14',
+        timeout_seconds=30,
+    )
+    job['queuedAt'] = time.time() - 31
+    queue._save(job)
+
+    stale = queue.get_deduped('props-scan:2026-08-14')
+    snapshot = queue.snapshot(stale)
+
+    assert stale['status'] == 'error'
+    assert stale['finishedAt'] is not None
+    assert 'bounded completion window' in stale['error']
+    assert snapshot['status'] == 'error'
+    assert snapshot['timeoutSeconds'] == 30
+    assert snapshot['maxAttempts'] == 2
+    assert redis.expired[queue._dedupe_key('props-scan:2026-08-14')] == 30
 
 
 def test_queue_health_requires_recent_worker_heartbeat():
