@@ -41,6 +41,7 @@ jobs:
         run: >-
           python scripts/production_contract_gate.py
           --base-url https://mlb-analytics-hub.fly.dev
+          --baseline
           --release-attempts 3
           --contract-attempts 2
           --retry-delay 3
