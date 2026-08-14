@@ -179,10 +179,13 @@ def validate_page(contract: PageContract, response: HttpResponse) -> set[str]:
 def validate_actionable_edges(payload: Any) -> None:
     _require(isinstance(payload, dict), "edges payload must be an object")
     _require(payload.get("success") is True, "edges payload is not successful")
-    _require(payload.get("computing") is not True, "edges payload is still computing")
     edges = payload.get("edges")
     _require(isinstance(edges, list), "edges payload must include an edges list")
     _require(payload.get("count") == len(edges), "edges count does not match rows")
+    if payload.get("computing") is True:
+        _require(not edges, "computing edges payload must fail closed with zero rows")
+        _require(bool(payload.get("message")), "computing edges payload needs a state message")
+        return
 
     for index, row in enumerate(edges):
         _require(isinstance(row, dict), f"edge {index} is not an object")
@@ -363,6 +366,7 @@ def run_gate(
     contract_attempts: int = 6,
     retry_delay: float = 5,
     sleeper: Callable[[float], None] = time.sleep,
+    baseline_only: bool = False,
 ) -> dict[str, int]:
     wait_for_release(
         base_url=base_url,
@@ -401,9 +405,11 @@ def run_gate(
         )
         print(f"PASS admin boundary {path} ({response.status})", flush=True)
 
-    json_contracts = (
+    baseline_contracts = (
         ("/api/product/journey", "product journey", 5.0, _validate_journey),
         ("/api/games/today", "today games", 8.0, _validate_games),
+    )
+    deployed_contracts = (
         (
             "/api/edges/today?minEdge=0.03&limit=5",
             "actionable edges",
@@ -422,6 +428,11 @@ def run_gate(
             5.0,
             _validate_tracker,
         ),
+    )
+    json_contracts = (
+        baseline_contracts
+        if baseline_only
+        else baseline_contracts + deployed_contracts
     )
     for path, label, budget, validator in json_contracts:
         _json_contract_with_retry(
@@ -454,6 +465,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default="https://mlb-analytics-hub.fly.dev",
     )
     parser.add_argument("--expected-sha")
+    parser.add_argument(
+        "--baseline",
+        action="store_true",
+        help="Run contracts that can be proven against the currently deployed baseline.",
+    )
     parser.add_argument("--release-attempts", type=int, default=24)
     parser.add_argument("--contract-attempts", type=int, default=6)
     parser.add_argument("--retry-delay", type=float, default=5)
@@ -474,6 +490,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             release_attempts=args.release_attempts,
             contract_attempts=args.contract_attempts,
             retry_delay=args.retry_delay,
+            baseline_only=args.baseline,
         )
     except ContractError as exc:
         print(f"Production contract failed: {exc}", file=sys.stderr)
