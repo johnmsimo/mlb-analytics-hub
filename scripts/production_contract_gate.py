@@ -127,7 +127,7 @@ def fetch_url(base_url: str, path: str, timeout: float) -> HttpResponse:
         headers={
             "Accept": "*/*",
             "Accept-Encoding": "identity",
-            "User-Agent": "mlb-analytics-hub-production-contract/4.66",
+            "User-Agent": "mlb-analytics-hub-production-contract/4.67",
         },
         method="GET",
     )
@@ -182,11 +182,38 @@ def validate_actionable_edges(payload: Any) -> None:
     edges = payload.get("edges")
     _require(isinstance(edges, list), "edges payload must include an edges list")
     _require(payload.get("count") == len(edges), "edges count does not match rows")
-    if payload.get("computing") is True:
+    state = str(payload.get("computationState") or "").lower()
+    _require(
+        state in {"ready", "computing", "failed", "unavailable"},
+        f"edges payload has invalid computation state {state!r}",
+    )
+    if state in {"failed", "unavailable"}:
+        _require(not edges, f"{state} edges payload must fail closed with zero rows")
+        _require(bool(payload.get("message")), f"{state} edges payload needs a state message")
+        raise ContractError(f"edges computation is {state}: {payload.get('message')}")
+    if state == "computing":
+        _require(payload.get("computing") is True, "computing state flag is inconsistent")
         _require(not edges, "computing edges payload must fail closed with zero rows")
         _require(bool(payload.get("message")), "computing edges payload needs a state message")
+        job = payload.get("scanJob")
+        _require(isinstance(job, dict), "computing edges payload needs durable job state")
+        _require(bool(job.get("id")), "computing edge job is missing identity")
+        _require(
+            job.get("status") in {"queued", "running"},
+            f"computing edge job has terminal status {job.get('status')!r}",
+        )
+        _require(
+            isinstance(job.get("elapsedSeconds"), int)
+            and job.get("elapsedSeconds") >= 0,
+            "computing edge job needs bounded elapsed time",
+        )
+        _require(
+            job.get("timeoutSeconds") == 600,
+            "computing edge job completion window changed unexpectedly",
+        )
         return
 
+    _require(payload.get("computing") is not True, "ready edges cannot be computing")
     for index, row in enumerate(edges):
         _require(isinstance(row, dict), f"edge {index} is not an object")
         stage = str(row.get("actionabilityStage") or "").lower()
@@ -447,6 +474,20 @@ def run_gate(
             retry_delay=retry_delay,
             sleeper=sleeper,
         )
+
+    if not baseline_only:
+        # Edge Finder may enqueue a CPU-heavy cold scan. Prove immediately that
+        # the work stayed behind the durable worker boundary and did not starve
+        # Gunicorn health or readiness.
+        wait_for_release(
+            base_url=base_url,
+            expected_sha=expected_sha,
+            fetcher=fetcher,
+            attempts=min(3, release_attempts),
+            retry_delay=retry_delay,
+            sleeper=sleeper,
+        )
+        print("PASS post-scan web isolation", flush=True)
 
     summary = {
         "pages": len(PUBLIC_PAGE_CONTRACTS),

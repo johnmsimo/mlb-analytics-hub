@@ -267,6 +267,7 @@ from security import check_admin_auth, install_security, limiter
 from task_queue import (
     JobQueueUnavailable,
     enqueue_job,
+    get_deduped_job,
     get_job_queue,
     queue_health,
     write_durable_json,
@@ -19617,6 +19618,21 @@ def _read_props_scan_durable_snapshot(date_str):
     return {"ts": timestamp, "payload": payload}
 
 
+def _props_scan_job_state(date_str):
+    try:
+        return get_deduped_job(f'props-scan:{date_str}')
+    except JobQueueUnavailable:
+        return {
+            'id': None,
+            'status': 'unavailable',
+            'elapsedSeconds': 0,
+            'attempt': 0,
+            'maxAttempts': 2,
+            'timeoutSeconds': 600,
+            'error': 'Durable props-scan queue is unavailable.',
+        }
+
+
 def _empty_props_scan_payload(date_str):
     return {
         'success': True,
@@ -19780,13 +19796,30 @@ def _trigger_props_scan_refresh_async(date_str, reason='auto'):
                 max_attempts=2,
             )
             print(f"[props_scan] durable refresh {job.get('status')} ({reason})")
-            return True
+            started = float(job.get('startedAt') or job.get('queuedAt') or time.time())
+            return {
+                'id': job.get('id'),
+                'status': job.get('status') or 'queued',
+                'elapsedSeconds': max(0, int(time.time() - started)),
+                'attempt': int(job.get('attempt') or 0),
+                'maxAttempts': int(job.get('maxAttempts') or 2),
+                'timeoutSeconds': int(job.get('timeoutSeconds') or 600),
+                'error': job.get('error'),
+            }
         except JobQueueUnavailable:
             # Never fall back to CPU-heavy work inside Gunicorn. The response
-            # remains an explicit fail-closed computing state until the durable
-            # worker is available.
+            # remains an explicit fail-closed unavailable state until the
+            # durable worker can safely accept the scan.
             print('[props_scan] durable queue unavailable; web remains responsive')
-            return False
+            return {
+                'id': None,
+                'status': 'unavailable',
+                'elapsedSeconds': 0,
+                'attempt': 0,
+                'maxAttempts': 2,
+                'timeoutSeconds': 600,
+                'error': 'Durable props-scan queue is unavailable.',
+            }
 
     with _props_scan_cache_lock:
         if _props_scan_refreshing:
@@ -19827,26 +19860,61 @@ def _props_scan_today_payload(date_str, refresh=False):
         payload['cacheAgeSec'] = age
         payload['cached'] = True
         payload['computing'] = False
+        payload['computationState'] = 'ready'
+        payload['scanJob'] = None
         return payload
 
     if refresh:
-        return _compute_props_scan_today_payload(date_str)
-
-    if cached:
-        if not refreshing:
-            _trigger_props_scan_refresh_async(date_str, reason='stale_cache')
-        payload = dict(cached.get('payload') or {})
-        payload['cacheAgeSec'] = age
-        payload['cached'] = True
-        payload['computing'] = True
-        payload['message'] = 'Refreshing in background'
+        payload = _compute_props_scan_today_payload(date_str)
+        payload['computing'] = False
+        payload['computationState'] = 'ready'
+        payload['scanJob'] = None
         return payload
 
-    if not refreshing:
-        _trigger_props_scan_refresh_async(date_str, reason='cold_start')
-    payload = _empty_props_scan_payload(date_str)
-    payload['computing'] = True
-    payload['message'] = 'Computing... auto-refresh in 20s'
+    web_role = str(os.getenv('PROCESS_ROLE') or '').strip().lower() == 'web'
+    job_state = _props_scan_job_state(date_str) if web_role else None
+    if job_state is None and not refreshing:
+        job_state = _trigger_props_scan_refresh_async(
+            date_str,
+            reason='stale_cache' if cached else 'cold_start',
+        )
+
+    payload = (
+        dict(cached.get('payload') or {})
+        if cached
+        else _empty_props_scan_payload(date_str)
+    )
+    payload['cacheAgeSec'] = age
+    payload['cached'] = bool(cached)
+    payload['scanJob'] = job_state if isinstance(job_state, dict) else None
+
+    job_status = (
+        str(job_state.get('status') or '').lower()
+        if isinstance(job_state, dict)
+        else ''
+    )
+    if job_status == 'error':
+        payload['computing'] = False
+        payload['computationState'] = 'failed'
+        payload['message'] = (
+            job_state.get('error')
+            or 'Props scan failed within its bounded completion window.'
+        )
+    elif job_status == 'unavailable':
+        payload['computing'] = False
+        payload['computationState'] = 'unavailable'
+        payload['message'] = (
+            job_state.get('error')
+            or 'Props scan worker is unavailable.'
+        )
+    else:
+        payload['computing'] = True
+        payload['computationState'] = 'computing'
+        payload['message'] = (
+            'Refreshing stale data in the durable worker'
+            if cached
+            else 'Computing recommendations in the durable worker'
+        )
     return payload
 
 
@@ -19905,6 +19973,15 @@ def _edge_finder_payload(date_str, min_edge=0.02, market=None, limit=150):
         integrity = _evaluate_promotable_candidates(
             base.get('props', []) or [], date_str,
         )
+    # Recommendation surfaces fail closed until the durable producer has
+    # supplied a fresh terminal snapshot. Stale rows may remain visible on
+    # research surfaces, but never as current betting recommendations.
+    computation_state = str(base.get('computationState') or '').lower()
+    if base.get('computing') is True or computation_state in {
+        'computing', 'failed', 'unavailable',
+    }:
+        integrity['eligible'] = []
+
     edges = []
     for p in integrity['eligible']:
         edge = p.get('canonicalEdge')
@@ -19943,7 +20020,13 @@ def _edge_finder_payload(date_str, min_edge=0.02, market=None, limit=150):
             'bookmaker': p.get('bookmaker'),
             'reason': p.get('reason'),
             'canonicalCandidateId': p.get('canonicalCandidateId'),
+            'canonicalFingerprint': p.get('canonicalFingerprint'),
+            'canonicalMarketKey': p.get('marketKey'),
+            'canonicalPrice': p.get('canonicalPrice'),
+            'canonicalBook': p.get('canonicalBook'),
+            'canonicalEdge': edge_f,
             'candidateIntegrityVersion': p.get('integrityVersion'),
+            'actionabilityStage': 'Actionable',
             'actionable': True,
         })
 
@@ -19968,6 +20051,10 @@ def _edge_finder_payload(date_str, min_edge=0.02, market=None, limit=150):
         'gradeCounts': grade_counts,
         'cached': base.get('cached', False),
         'computing': base.get('computing', False),
+        'computationState': base.get('computationState') or (
+            'computing' if base.get('computing') else 'ready'
+        ),
+        'scanJob': base.get('scanJob'),
         'message': base.get('message'),
         'generatedAt': datetime.now(timezone.utc).isoformat(),
         'candidateIntegrityVersion': CANDIDATE_INTEGRITY_VERSION,

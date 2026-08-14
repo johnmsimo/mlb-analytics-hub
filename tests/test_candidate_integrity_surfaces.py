@@ -154,10 +154,12 @@ def test_web_props_scan_refresh_queues_worker_job(monkeypatch):
     monkeypatch.setenv("PROCESS_ROLE", "web")
     monkeypatch.setattr(mlb_app, "enqueue_job", fake_enqueue)
 
-    assert mlb_app._trigger_props_scan_refresh_async(
+    result = mlb_app._trigger_props_scan_refresh_async(
         "2026-08-06",
         reason="edge-finder",
-    ) is True
+    )
+    assert result["status"] == "queued"
+    assert result["timeoutSeconds"] == 600
     assert calls == [
         (
             "props_scan",
@@ -169,6 +171,84 @@ def test_web_props_scan_refresh_queues_worker_job(monkeypatch):
             },
         )
     ]
+
+
+def test_props_scan_surfaces_durable_job_state_without_requeue(monkeypatch):
+    date_str = "2099-08-08"
+    active_job = {
+        "id": "job-467",
+        "status": "running",
+        "elapsedSeconds": 12,
+        "attempt": 1,
+        "maxAttempts": 2,
+        "timeoutSeconds": 600,
+        "error": None,
+    }
+    previous = mlb_app._PROPS_SCAN_CACHE.pop(date_str, None)
+    monkeypatch.setenv("PROCESS_ROLE", "web")
+    monkeypatch.setattr(
+        mlb_app,
+        "_props_scan_job_state",
+        lambda _date: active_job,
+    )
+
+    def unexpected_enqueue(*_args, **_kwargs):
+        raise AssertionError("active durable job must not be enqueued twice")
+
+    monkeypatch.setattr(
+        mlb_app,
+        "_trigger_props_scan_refresh_async",
+        unexpected_enqueue,
+    )
+
+    try:
+        result = mlb_app._props_scan_today_payload(date_str)
+        assert result["computing"] is True
+        assert result["computationState"] == "computing"
+        assert result["scanJob"] == active_job
+        assert result["actionableProps"] == []
+    finally:
+        mlb_app._PROPS_SCAN_CACHE.pop(date_str, None)
+        if previous is not None:
+            mlb_app._PROPS_SCAN_CACHE[date_str] = previous
+
+
+def test_failed_props_scan_is_explicit_and_edges_fail_closed(monkeypatch):
+    evaluated = mlb_app._evaluate_promotable_candidates(
+        [surface_candidate()],
+        "2026-08-09",
+    )
+    failed = {
+        "success": True,
+        "date": "2026-08-09",
+        "actionableProps": evaluated["eligible"],
+        "candidateIntegrityAudit": evaluated["audit"],
+        "computing": False,
+        "computationState": "failed",
+        "scanJob": {
+            "id": "job-failed",
+            "status": "error",
+            "elapsedSeconds": 600,
+            "attempt": 2,
+            "maxAttempts": 2,
+            "timeoutSeconds": 600,
+            "error": "Background job failed.",
+        },
+        "message": "Background job failed.",
+    }
+    monkeypatch.setattr(
+        mlb_app,
+        "_props_scan_today_payload",
+        lambda *_a, **_k: failed,
+    )
+
+    edges = mlb_app._edge_finder_payload("2026-08-09", min_edge=0.01)
+
+    assert edges["computing"] is False
+    assert edges["computationState"] == "failed"
+    assert edges["scanJob"]["status"] == "error"
+    assert edges["count"] == 0
+    assert edges["edges"] == []
 
 
 def test_props_scan_reads_fresh_durable_worker_snapshot(monkeypatch):

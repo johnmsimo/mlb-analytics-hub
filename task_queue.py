@@ -66,6 +66,36 @@ class RedisJobQueue:
             return None
         return value if isinstance(value, dict) else None
 
+    def get_deduped(
+        self,
+        dedupe_key: str,
+        *,
+        fail_stale: bool = True,
+    ) -> dict[str, Any] | None:
+        """Return the current deduplicated job and fail closed when it is stale."""
+        dedupe = self._dedupe_key(dedupe_key)
+        existing_id = self.client.get(dedupe)
+        existing = self.get(str(existing_id)) if existing_id else None
+        if not existing:
+            return None
+        status = str(existing.get("status") or "")
+        started = float(existing.get("startedAt") or existing.get("queuedAt") or 0)
+        timeout = max(30, int(existing.get("timeoutSeconds") or 300))
+        if (
+            fail_stale
+            and status in {"queued", "running"}
+            and started
+            and time.time() - started > timeout
+        ):
+            existing.update({
+                "status": "error",
+                "finishedAt": time.time(),
+                "error": "Background job exceeded its bounded completion window.",
+            })
+            self._save(existing)
+            self.client.expire(dedupe, 30)
+        return existing
+
     def enqueue(
         self,
         kind: str,
@@ -76,24 +106,10 @@ class RedisJobQueue:
         max_attempts: int = 2,
     ) -> dict[str, Any]:
         dedupe = self._dedupe_key(dedupe_key)
-        existing_id = self.client.get(dedupe)
-        existing = self.get(existing_id)
+        existing = self.get_deduped(dedupe_key)
         if existing:
-            started = float(existing.get("startedAt") or existing.get("queuedAt") or 0)
-            stale = (
-                existing.get("status") == "running"
-                and started
-                and time.time() - started > int(existing.get("timeoutSeconds") or timeout_seconds)
-            )
-            if not stale and existing.get("status") in {"queued", "running"}:
+            if existing.get("status") in {"queued", "running"}:
                 return existing
-            if stale:
-                existing.update({
-                    "status": "error",
-                    "finishedAt": time.time(),
-                    "error": "Worker heartbeat expired while this job was running.",
-                })
-                self._save(existing)
             self.client.delete(dedupe)
 
         job_id = uuid.uuid4().hex
@@ -131,6 +147,8 @@ class RedisJobQueue:
             "status": job.get("status") or "queued",
             "elapsedSeconds": max(0, int(time.time() - started)),
             "attempt": int(job.get("attempt") or 0),
+            "maxAttempts": int(job.get("maxAttempts") or 1),
+            "timeoutSeconds": int(job.get("timeoutSeconds") or 0),
             "error": job.get("error"),
         }
 
@@ -279,6 +297,11 @@ def get_job_queue() -> RedisJobQueue:
 
 def enqueue_job(*args: Any, **kwargs: Any) -> dict[str, Any]:
     return get_job_queue().enqueue(*args, **kwargs)
+
+
+def get_deduped_job(dedupe_key: str) -> dict[str, Any] | None:
+    queue = get_job_queue()
+    return queue.snapshot(queue.get_deduped(dedupe_key))
 
 
 def write_durable_json(key: str, value: Any, *, ttl: int) -> None:
