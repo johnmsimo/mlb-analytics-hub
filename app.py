@@ -1185,6 +1185,8 @@ _mlb_memory_collecting = False
 _mlb_memory_last_collect = None
 _mlb_memory_last_error = None
 _PROPS_SCAN_TTL = 20 * 60
+_PROPS_SCAN_DURABLE_TTL = 40 * 60
+_PROPS_SCAN_DURABLE_PREFIX = "mlb:props-scan:v1:"
 _CONSISTENCY_TTL = 20 * 60
 _weather_cache_lock = threading.Lock()
 _weather_cache = {}
@@ -19583,6 +19585,38 @@ def _tracker_export_pdf_bytes(date_str):
     return _simple_pdf_bytes(lines, title='MLB Analytics Hub - Tracker Summary Card', subtitle=subtitle)
 
 
+def _props_scan_snapshot_key(date_str):
+    return f"{_PROPS_SCAN_DURABLE_PREFIX}{date_str}"
+
+
+def _write_props_scan_durable_snapshot(date_str, payload):
+    write_durable_json(
+        _props_scan_snapshot_key(date_str),
+        {"ts": time.time(), "payload": payload},
+        ttl=_PROPS_SCAN_DURABLE_TTL,
+    )
+
+
+def _read_props_scan_durable_snapshot(date_str):
+    try:
+        raw = get_job_queue().client.get(_props_scan_snapshot_key(date_str))
+        value = json.loads(raw) if raw else None
+    except (JobQueueUnavailable, TypeError, ValueError):
+        return None
+    if not isinstance(value, dict):
+        return None
+    payload = value.get("payload")
+    if not isinstance(payload, dict) or payload.get("success") is not True:
+        return None
+    if str(payload.get("date") or "") != str(date_str):
+        return None
+    try:
+        timestamp = float(value.get("ts") or 0)
+    except (TypeError, ValueError):
+        return None
+    return {"ts": timestamp, "payload": payload}
+
+
 def _empty_props_scan_payload(date_str):
     return {
         'success': True,
@@ -19736,6 +19770,24 @@ def _compute_props_scan_today_payload(date_str):
 
 def _trigger_props_scan_refresh_async(date_str, reason='auto'):
     global _props_scan_refreshing
+    if str(os.getenv('PROCESS_ROLE') or '').strip().lower() == 'web':
+        try:
+            job = enqueue_job(
+                'props_scan',
+                {'date': date_str, 'reason': reason},
+                dedupe_key=f'props-scan:{date_str}',
+                timeout_seconds=600,
+                max_attempts=2,
+            )
+            print(f"[props_scan] durable refresh {job.get('status')} ({reason})")
+            return True
+        except JobQueueUnavailable:
+            # Never fall back to CPU-heavy work inside Gunicorn. The response
+            # remains an explicit fail-closed computing state until the durable
+            # worker is available.
+            print('[props_scan] durable queue unavailable; web remains responsive')
+            return False
+
     with _props_scan_cache_lock:
         if _props_scan_refreshing:
             return False
@@ -19761,6 +19813,12 @@ def _props_scan_today_payload(date_str, refresh=False):
     with _props_scan_cache_lock:
         cached = _PROPS_SCAN_CACHE.get(date_str)
         refreshing = _props_scan_refreshing
+    if not cached:
+        durable = _read_props_scan_durable_snapshot(date_str)
+        if durable:
+            cached = durable
+            with _props_scan_cache_lock:
+                _PROPS_SCAN_CACHE[date_str] = durable
     ts = float((cached or {}).get('ts') or 0)
     age = int(now - ts) if ts else 0
 
