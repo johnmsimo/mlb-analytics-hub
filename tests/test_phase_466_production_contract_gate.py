@@ -1,0 +1,210 @@
+import json
+from pathlib import Path
+from urllib.parse import urlsplit
+
+import pytest
+
+from scripts.production_contract_gate import (
+    ADMIN_READ_PATHS,
+    PUBLIC_PAGE_CONTRACTS,
+    ContractError,
+    HttpResponse,
+    PageContract,
+    run_gate,
+    validate_actionable_edges,
+    validate_page,
+)
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def response(status=200, body=b"", content_type="application/json", elapsed=0.05):
+    return HttpResponse(
+        status=status,
+        headers={"content-type": content_type},
+        body=body,
+        elapsed_seconds=elapsed,
+    )
+
+
+def json_response(payload, status=200, elapsed=0.05):
+    return response(
+        status=status,
+        body=json.dumps(payload).encode("utf-8"),
+        elapsed=elapsed,
+    )
+
+
+def valid_edge():
+    return {
+        "actionable": True,
+        "actionabilityStage": "Actionable",
+        "player": "Contract Hitter",
+        "playerId": 101,
+        "canonicalCandidateId": "candidate-101-hits",
+        "canonicalFingerprint": "snapshot-1",
+        "canonicalMarketKey": "batter_hits",
+        "canonicalPrice": -110,
+        "canonicalBook": "Book A",
+        "canonicalEdge": 0.05,
+    }
+
+
+class FakeProduction:
+    def __init__(self, *, exposed_admin_path=None):
+        self.calls = []
+        self.exposed_admin_path = exposed_admin_path
+        self.page_markers = {
+            contract.path: contract.marker for contract in PUBLIC_PAGE_CONTRACTS
+        }
+
+    def __call__(self, base_url, path, timeout):
+        self.calls.append((base_url, path, timeout))
+        clean_path = urlsplit(path).path
+        if clean_path == "/health":
+            return json_response({"status": "ok", "version": "tested-sha"})
+        if clean_path == "/ready":
+            return json_response({"status": "ready"})
+        if path in self.page_markers:
+            marker = self.page_markers[path]
+            html = (
+                '<!doctype html><html><head><meta name="viewport" '
+                'content="width=device-width"><script src="/static/app.js"></script>'
+                f"<title>{marker}</title></head><body>{marker}"
+                + ("x" * 600)
+                + "</body></html>"
+            )
+            return response(body=html.encode("utf-8"), content_type="text/html")
+        if clean_path == "/static/app.js":
+            return response(body=b"window.contractGate = true;", content_type="text/javascript")
+        if clean_path in ADMIN_READ_PATHS:
+            status = 200 if clean_path == self.exposed_admin_path else 401
+            return json_response({"success": status == 200}, status=status)
+        if clean_path == "/api/product/journey":
+            return json_response(
+                {
+                    "success": True,
+                    "version": "4.64",
+                    "stages": [
+                        {"key": "discover"},
+                        {"key": "validate"},
+                        {"key": "track"},
+                        {"key": "learn"},
+                    ],
+                    "alerts": {
+                        "failClosed": True,
+                        "serverPersistence": False,
+                        "freshness": {"maximumOddsAgeSeconds": 900},
+                    },
+                }
+            )
+        if clean_path == "/api/games/today":
+            return json_response({"success": True, "games": [], "count": 0})
+        if clean_path == "/api/edges/today":
+            edges = [valid_edge()]
+            return json_response(
+                {
+                    "success": True,
+                    "computing": False,
+                    "edges": edges,
+                    "count": len(edges),
+                }
+            )
+        if clean_path == "/api/calibration/markets":
+            return json_response({"success": True, "markets": []})
+        if clean_path == "/api/tracker/performance":
+            return json_response({"success": True})
+        raise AssertionError(f"unexpected path {path}")
+
+
+def test_page_contract_requires_complete_mobile_html():
+    contract = PageContract("/example", "Expected Product")
+    html = (
+        '<!doctype html><meta name="viewport" content="width=device-width">'
+        "<title>Expected Product</title>"
+        + ("x" * 600)
+    )
+    assets = validate_page(
+        contract,
+        response(body=html.encode("utf-8"), content_type="text/html"),
+    )
+    assert assets == set()
+
+    with pytest.raises(ContractError, match="mobile viewport"):
+        validate_page(
+            contract,
+            response(
+                body=("<title>Expected Product</title>" + ("x" * 600)).encode(),
+                content_type="text/html",
+            ),
+        )
+
+
+def test_actionable_edges_contract_fails_closed():
+    edge = valid_edge()
+    validate_actionable_edges(
+        {"success": True, "computing": False, "edges": [edge], "count": 1}
+    )
+
+    invalid = dict(edge, canonicalBook="model")
+    with pytest.raises(ContractError, match="sportsbook identity"):
+        validate_actionable_edges(
+            {"success": True, "computing": False, "edges": [invalid], "count": 1}
+        )
+
+    with pytest.raises(ContractError, match="still computing"):
+        validate_actionable_edges(
+            {"success": True, "computing": True, "edges": [], "count": 0}
+        )
+
+
+def test_full_gate_uses_only_get_contracts_and_reports_coverage():
+    fake = FakeProduction()
+    summary = run_gate(
+        base_url="https://production.example",
+        expected_sha="tested-sha",
+        fetcher=fake,
+        release_attempts=1,
+        contract_attempts=1,
+        retry_delay=0,
+        sleeper=lambda delay: None,
+    )
+
+    assert summary == {
+        "pages": 19,
+        "assets": 1,
+        "admin_boundaries": 8,
+        "api_contracts": 7,
+    }
+    assert all(call[1] for call in fake.calls)
+
+
+def test_full_gate_rejects_an_exposed_admin_read():
+    fake = FakeProduction(exposed_admin_path="/settings")
+    with pytest.raises(ContractError, match="failed closed boundary"):
+        run_gate(
+            base_url="https://production.example",
+            expected_sha="tested-sha",
+            fetcher=fake,
+            release_attempts=1,
+            contract_attempts=1,
+            retry_delay=0,
+            sleeper=lambda delay: None,
+        )
+
+
+def test_phase_466_workflow_and_roadmap_install_live_gate():
+    workflow = (ROOT / ".github" / "workflows" / "deploy.yml").read_text(
+        encoding="utf-8"
+    )
+    roadmap = (ROOT / "docs" / "MLB_ANALYTICS_HUB_ROADMAP.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert workflow.count("scripts/production_contract_gate.py") == 2
+    assert "Validate current production contract" in workflow
+    assert "Production smoke and readiness gate" in workflow
+    assert "--expected-sha ${{ github.sha }}" in workflow
+    assert "Phase 4.66 is the active phase." in roadmap
+    assert "Declarative live production contract gate" in roadmap
