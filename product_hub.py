@@ -15,6 +15,7 @@ VERIFIED_DECISION_MARKET_LEARNING_VERSION = "4.73"
 VERIFIED_DECISION_MARKET_PREFERENCE_REVIEW_VERSION = "4.74"
 MARKET_PREFERENCE_CHANGE_RECEIPT_VERSION = "4.75"
 PERSONALIZED_SIGNAL_PROVENANCE_VERSION = "4.76"
+ALERT_ELIGIBILITY_PROVENANCE_VERSION = "4.77"
 _ROOT = Path(__file__).resolve().parent
 _HUB_PATH = _ROOT / "product_hub.html"
 
@@ -185,6 +186,31 @@ def product_journey():
                 "provenanceOnly": True,
                 "eligibilityChanged": False,
                 "rankingChanged": False,
+                "learningPerformanceUsed": False,
+                "recommendation": False,
+                "serverPersistence": False,
+                "failClosed": True,
+            },
+            "alertEligibilityProvenance": {
+                "version": ALERT_ELIGIBILITY_PROVENANCE_VERSION,
+                "sourceContractVersion": PERSONALIZED_SIGNAL_PROVENANCE_VERSION,
+                "reasonOrder": [
+                    "preferred_market",
+                    "threshold_match",
+                    "fresh_quote",
+                    "eligible_event",
+                ],
+                "eligibleEventKinds": [
+                    "new_opportunity",
+                    "edge_up",
+                    "edge_down",
+                    "price_move",
+                ],
+                "requiresActionable": True,
+                "requiresActiveLedgerState": True,
+                "provenanceOnly": True,
+                "eligibilityChanged": False,
+                "ledgerMutation": False,
                 "learningPerformanceUsed": False,
                 "recommendation": False,
                 "serverPersistence": False,
