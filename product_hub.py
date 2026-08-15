@@ -13,6 +13,7 @@ VERIFIED_DECISION_HANDOFF_VERSION = "4.71"
 VERIFIED_DECISION_LEARNING_VERSION = "4.72"
 VERIFIED_DECISION_MARKET_LEARNING_VERSION = "4.73"
 VERIFIED_DECISION_MARKET_PREFERENCE_REVIEW_VERSION = "4.74"
+MARKET_PREFERENCE_CHANGE_RECEIPT_VERSION = "4.75"
 _ROOT = Path(__file__).resolve().parent
 _HUB_PATH = _ROOT / "product_hub.html"
 
@@ -153,6 +154,23 @@ def product_journey():
                 "recommendation": False,
                 "requiresRepresentedCanonicalMarket": True,
                 "syncsDiscoverPreferences": True,
+                "failClosed": True,
+            },
+            "marketPreferenceChangeReceipt": {
+                "version": MARKET_PREFERENCE_CHANGE_RECEIPT_VERSION,
+                "sourceContractVersion": VERIFIED_DECISION_MARKET_PREFERENCE_REVIEW_VERSION,
+                "preferenceStorageKey": "mlb_market_preferences",
+                "states": ["idle", "applied", "undone", "unavailable"],
+                "receiptPersistence": "session_only",
+                "deviceLocal": True,
+                "serverPersistence": False,
+                "explicitUserActionRequired": True,
+                "undoRequiresExplicitAction": True,
+                "automaticPreferenceMutation": False,
+                "performanceDriven": False,
+                "recommendation": False,
+                "signalImpactSource": "current_actionable_edges",
+                "signalImpactRequiresReadyState": True,
                 "failClosed": True,
             },
             "alerts": {

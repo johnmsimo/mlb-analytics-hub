@@ -28,6 +28,7 @@
     tracker: null,
     watchlist: new Set(),
     preferred: new Set(),
+    preferenceReceipt: null,
     threshold: 5,
     alertLedger: {},
     alertCandidates: {}
@@ -244,7 +245,9 @@
     state.watchlist = new Set(savedWatchlist.map(function (name) { return String(name).toLowerCase(); }));
     var savedMarkets = readJson(MARKET_KEY, MARKET_OPTIONS.map(function (item) { return item.key; }));
     if (!Array.isArray(savedMarkets)) savedMarkets = MARKET_OPTIONS.map(function (item) { return item.key; });
-    state.preferred = new Set(savedMarkets);
+    state.preferred = new Set(savedMarkets.map(function (key) {
+      return String(key || '');
+    }).filter(isSupportedMarketKey));
     var savedThreshold = number(readString(THRESHOLD_KEY, ''));
     state.threshold = savedThreshold != null ? savedThreshold : 5;
     state.alertLedger = cleanAlertLedger(readJson(ALERT_LEDGER_KEY, {}));
@@ -266,13 +269,87 @@
     });
   }
 
-  function setPreferredMarket(key, preferred) {
-    if (!isSupportedMarketKey(key)) return;
+  function renderMarketPreferenceReceipt() {
+    var host = document.getElementById('marketPreferenceReceipt');
+    var text = document.getElementById('marketPreferenceReceiptText');
+    var undo = document.getElementById('undoMarketPreference');
+    if (!host || !text || !undo) return;
+    var receipt = state.preferenceReceipt;
+    if (!receipt) {
+      host.setAttribute('data-receipt-state', 'idle');
+      text.textContent = 'Your next explicit market change will appear here.';
+      undo.hidden = true;
+      return;
+    }
+    if (!isSupportedMarketKey(receipt.marketKey)) {
+      host.setAttribute('data-receipt-state', 'unavailable');
+      text.textContent = 'Preference receipt unavailable; no additional change was made.';
+      undo.hidden = true;
+      return;
+    }
+
+    var label = marketLabelOf({ canonicalMarketKey: receipt.marketKey });
+    var action = receipt.current ? 'added to' : 'removed from';
+    var source = receipt.source === 'market_learning' ? 'Learn' : 'Your markets';
+    var impact = state.edgeState === 'ready'
+      ? personalizedEdges().length + ' current actionable signal' +
+        (personalizedEdges().length === 1 ? '' : 's') + ' match your preferences.'
+      : 'Matching signal count is unavailable until current edges are ready.';
+    if (receipt.state === 'undone') {
+      action = receipt.current ? 'restored to' : 'removed again from';
+      text.textContent = label + ' was ' + action + ' your preferences. ' + impact;
+      host.setAttribute('data-receipt-state', 'undone');
+      undo.hidden = true;
+      return;
+    }
+    text.textContent = label + ' was ' + action + ' your preferences from ' +
+      source + '. ' + impact;
+    host.setAttribute('data-receipt-state', 'applied');
+    undo.hidden = false;
+  }
+
+  function applyPreferredMarket(key, preferred) {
+    if (!isSupportedMarketKey(key)) return false;
     if (preferred) state.preferred.add(key);
     else state.preferred.delete(key);
     writeJson(MARKET_KEY, Array.from(state.preferred));
     syncMarketPreferenceControls();
     renderSignals();
+    return true;
+  }
+
+  function setPreferredMarket(key, preferred, source) {
+    if (!isSupportedMarketKey(key) || state.preferred.has(key) === preferred) return;
+    state.preferenceReceipt = {
+      state: 'applied',
+      marketKey: key,
+      previous: state.preferred.has(key),
+      current: preferred,
+      source: source === 'market_learning' ? 'market_learning' : 'preferences'
+    };
+    applyPreferredMarket(key, preferred);
+  }
+
+  function undoMarketPreferenceChange() {
+    var receipt = state.preferenceReceipt;
+    if (!receipt || receipt.state !== 'applied' ||
+        !isSupportedMarketKey(receipt.marketKey)) return;
+    var restored = receipt.previous;
+    if (!applyPreferredMarket(receipt.marketKey, restored)) return;
+    state.preferenceReceipt = {
+      state: 'undone',
+      marketKey: receipt.marketKey,
+      previous: receipt.current,
+      current: restored,
+      source: 'undo'
+    };
+    renderMarketPreferenceReceipt();
+  }
+
+  function wireMarketPreferenceReceipt() {
+    var undo = document.getElementById('undoMarketPreference');
+    if (!undo) return;
+    undo.addEventListener('click', undoMarketPreferenceChange);
   }
 
   function renderMarketOptions() {
@@ -286,7 +363,7 @@
       button.setAttribute('data-market-preference-key', item.key);
       button.setAttribute('aria-pressed', state.preferred.has(item.key) ? 'true' : 'false');
       button.addEventListener('click', function () {
-        setPreferredMarket(item.key, !state.preferred.has(item.key));
+        setPreferredMarket(item.key, !state.preferred.has(item.key), 'preferences');
       });
       host.appendChild(button);
     });
@@ -522,6 +599,7 @@
     document.getElementById('signalFoot').textContent = list.length + ' preferred-market signal' + (list.length === 1 ? '' : 's') + '; saved players rank first.';
     renderSavedOpportunityDigest();
     renderAlerts();
+    renderMarketPreferenceReceipt();
     if (!state.preferred.size) {
       host.innerHTML = '<div class="empty-state">Select at least one preferred market to personalize signals.</div>';
       return;
@@ -884,7 +962,7 @@
       var button = event.target.closest('[data-market-learning-preference]');
       if (!button || !list.contains(button)) return;
       var key = String(button.getAttribute('data-market-learning-preference') || '');
-      setPreferredMarket(key, !state.preferred.has(key));
+      setPreferredMarket(key, !state.preferred.has(key), 'market_learning');
     });
   }
 
@@ -983,11 +1061,13 @@
   function boot() {
     loadPreferences();
     renderMarketOptions();
+    renderMarketPreferenceReceipt();
     renderWatchlist();
     wireWatchlistForm();
     wireSignalActions();
     wireSavedOpportunityActions();
     wireMarketLearningActions();
+    wireMarketPreferenceReceipt();
     wireAlertInbox();
     renderAlerts();
 

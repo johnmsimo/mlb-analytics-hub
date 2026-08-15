@@ -123,5 +123,5 @@ def test_phase_457_contract_is_installed_and_documented():
     assert "/api/tracker" in contract
     assert "/api/deepdive" in contract
     assert "/api/gameside" in contract
-    assert 'Phase 4.74 is the active phase.' in roadmap
+    assert 'Phase 4.75 is the active phase.' in roadmap
     assert 'CANONICAL_CONTRACT_VERSION = "4.57"' in contract

@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 4.73 merged and deployed on 2026-08-15. Phase 4.74 is the active phase.
+Status: Phase 4.74 merged and deployed on 2026-08-15. Phase 4.75 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -347,6 +347,24 @@ Exit gate: every preference change requires an explicit user action on a
 represented canonical market, both control surfaces reflect the same device
 state, phone controls retain a 44px touch target, and descriptive learning alone
 cannot add or remove a preference.
+
+### Phase 4.75 — Market preference change receipt
+
+Implementation status: every explicit market preference change now produces a
+session-only receipt in My Hub showing the affected canonical market, the
+control surface that initiated the change, and the count of currently matching
+actionable signals when the edges response is ready. A single explicit undo
+restores the prior device-local preference state.
+
+The receipt never uses ROI, CLV, win rate, or market-learning performance to
+suggest or apply a preference. Unknown stored keys are discarded, unavailable
+edge states suppress the impact count, and neither apply nor undo writes to the
+server.
+
+Exit gate: each valid change and undo requires a user tap, receipts are
+announced accessibly, impact counts come only from current actionable edges in a
+ready state, the undo target is exactly the preceding preference value, and
+phone controls retain a 44px touch target.
 
 ## Audit findings carried into the roadmap
 
