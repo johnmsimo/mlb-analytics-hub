@@ -453,16 +453,20 @@
     }
   }
 
-  function prepareDecisionDraft(candidateId) {
+  function prepareDecisionDraft(candidateId, origin) {
+    var draftOrigin = origin === 'eligible_alert' ? 'eligible_alert' : 'saved_player_digest';
     var row = state.edges.find(function (item) {
       return String(item.canonicalCandidateId || '') === String(candidateId || '');
     });
     var draft = decisionDraftFrom(row);
-    var summary = document.getElementById('savedOpportunitySummary');
+    var summary = document.getElementById(
+      draftOrigin === 'eligible_alert' ? 'alertSummary' : 'savedOpportunitySummary'
+    );
     if (!draft) {
       if (summary) summary.textContent = 'That opportunity is no longer fresh and no tracking draft was created.';
       return;
     }
+    draft.preparedFrom = draftOrigin;
     if (!writeVerifiedDecisionDraft(draft)) {
       if (summary) summary.textContent = 'This device could not store the draft; no tracking action was taken.';
       return;
@@ -639,7 +643,7 @@
     document.getElementById('savedOpportunityList').addEventListener('click', function (event) {
       var button = event.target.closest('[data-prepare-track]');
       if (!button) return;
-      prepareDecisionDraft(button.getAttribute('data-prepare-track'));
+      prepareDecisionDraft(button.getAttribute('data-prepare-track'), 'saved_player_digest');
     });
   }
 
@@ -766,6 +770,7 @@
   }
 
   function alertEligibilityReasons(row, ledger) {
+    if (!row || !ledger) return [];
     var marketKey = marketKeyOf(row);
     var edge = edgeValue(row);
     var validKinds = ['new_opportunity', 'edge_up', 'edge_down', 'price_move'];
@@ -829,6 +834,8 @@
             esc(reason.label) + '</span>';
         }).join('') + '</p></div>' +
       '<div class="alert-actions">' +
+      '<button type="button" class="alert-review" data-prepare-alert-track="' +
+        esc(row.canonicalCandidateId) + '">Review in Tracker</button>' +
       (ledger.status === 'new' ? '<button type="button" data-alert-action="seen">Seen</button>' : '') +
       '<button type="button" data-alert-action="dismiss">Dismiss</button></div></article>';
   }
@@ -859,6 +866,19 @@
     host.innerHTML = cards.join('');
   }
 
+  function prepareAlertDecisionDraft(candidateId, alertId) {
+    var row = state.edges.find(function (item) {
+      return String(item.canonicalCandidateId || '') === String(candidateId || '');
+    });
+    var ledger = state.alertLedger[String(alertId || '')];
+    if (!alertEligibilityReasons(row, ledger).length) {
+      document.getElementById('alertSummary').textContent =
+        'That alert is no longer eligible and no tracking draft was created.';
+      return;
+    }
+    prepareDecisionDraft(candidateId, 'eligible_alert');
+  }
+
   function activeAlertFor(row) {
     var candidate = state.alertCandidates[String(row.canonicalCandidateId)];
     return candidate && state.alertLedger[candidate.activeAlertId];
@@ -866,8 +886,17 @@
 
   function wireAlertInbox() {
     document.getElementById('alertList').addEventListener('click', function (event) {
-      var button = event.target.closest('[data-alert-action]');
+      var review = event.target.closest('[data-prepare-alert-track]');
       var card = event.target.closest('[data-alert-id]');
+      if (review) {
+        if (!card) return;
+        prepareAlertDecisionDraft(
+          review.getAttribute('data-prepare-alert-track'),
+          card.getAttribute('data-alert-id')
+        );
+        return;
+      }
+      var button = event.target.closest('[data-alert-action]');
       if (!button || !card) return;
       var id = card.getAttribute('data-alert-id');
       var item = state.alertLedger[id];
