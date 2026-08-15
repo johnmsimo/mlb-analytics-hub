@@ -18,6 +18,7 @@ PERSONALIZED_SIGNAL_PROVENANCE_VERSION = "4.76"
 ALERT_ELIGIBILITY_PROVENANCE_VERSION = "4.77"
 VERIFIED_ALERT_REVIEW_HANDOFF_VERSION = "4.78"
 VERIFIED_DECISION_ORIGIN_PROVENANCE_VERSION = "4.79"
+VERIFIED_DECISION_REVIEW_FRESHNESS_VERSION = "4.80"
 _ROOT = Path(__file__).resolve().parent
 _HUB_PATH = _ROOT / "product_hub.html"
 
@@ -216,6 +217,21 @@ def product_journey():
                 "learningPerformanceUsed": False,
                 "recommendation": False,
                 "serverPersistence": False,
+                "failClosed": True,
+            },
+            "verifiedDecisionReviewFreshness": {
+                "version": VERIFIED_DECISION_REVIEW_FRESHNESS_VERSION,
+                "sourceContractVersion": VERIFIED_DECISION_ORIGIN_PROVENANCE_VERSION,
+                "draftContractVersion": VERIFIED_DECISION_HANDOFF_VERSION,
+                "freshnessField": "expiresAt",
+                "displayedBeforeSave": True,
+                "revalidatedOnSaveAttempt": True,
+                "clientPostSuppressedWhenExpired": True,
+                "serverMutationOnExpiry": False,
+                "recommendationChanged": False,
+                "requiresExplicitSave": True,
+                "saveRequiresAdminAuth": True,
+                "canonicalRevalidationOnSave": True,
                 "failClosed": True,
             },
             "verifiedDecisionOriginProvenance": {
