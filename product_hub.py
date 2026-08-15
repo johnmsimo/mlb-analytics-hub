@@ -14,6 +14,7 @@ VERIFIED_DECISION_LEARNING_VERSION = "4.72"
 VERIFIED_DECISION_MARKET_LEARNING_VERSION = "4.73"
 VERIFIED_DECISION_MARKET_PREFERENCE_REVIEW_VERSION = "4.74"
 MARKET_PREFERENCE_CHANGE_RECEIPT_VERSION = "4.75"
+PERSONALIZED_SIGNAL_PROVENANCE_VERSION = "4.76"
 _ROOT = Path(__file__).resolve().parent
 _HUB_PATH = _ROOT / "product_hub.html"
 
@@ -171,6 +172,22 @@ def product_journey():
                 "recommendation": False,
                 "signalImpactSource": "current_actionable_edges",
                 "signalImpactRequiresReadyState": True,
+                "failClosed": True,
+            },
+            "personalizedSignalProvenance": {
+                "version": PERSONALIZED_SIGNAL_PROVENANCE_VERSION,
+                "sourceContractVersion": MARKET_PREFERENCE_CHANGE_RECEIPT_VERSION,
+                "sourceEndpoint": "/api/edges/today",
+                "reasonOrder": ["preferred_market", "saved_player"],
+                "requiresActionable": True,
+                "requiresCanonicalPreferredMarket": True,
+                "savedPlayerReasonUsesExplicitWatchlist": True,
+                "provenanceOnly": True,
+                "eligibilityChanged": False,
+                "rankingChanged": False,
+                "learningPerformanceUsed": False,
+                "recommendation": False,
+                "serverPersistence": False,
                 "failClosed": True,
             },
             "alerts": {
