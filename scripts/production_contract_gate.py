@@ -407,6 +407,8 @@ def wait_for_edge_convergence(
         f"/api/edges/today?date={urllib.parse.quote(probe_date)}"
         "&minEdge=0.03&limit=5"
     )
+    if expected_sha:
+        path += f"&requiredRelease={urllib.parse.quote(expected_sha)}"
     last_error: Exception | None = None
     for attempt in range(1, attempts + 1):
         try:
