@@ -12,6 +12,7 @@ SAVED_PLAYER_DIGEST_VERSION = "4.70"
 VERIFIED_DECISION_HANDOFF_VERSION = "4.71"
 VERIFIED_DECISION_LEARNING_VERSION = "4.72"
 VERIFIED_DECISION_MARKET_LEARNING_VERSION = "4.73"
+VERIFIED_DECISION_MARKET_PREFERENCE_REVIEW_VERSION = "4.74"
 _ROOT = Path(__file__).resolve().parent
 _HUB_PATH = _ROOT / "product_hub.html"
 
@@ -138,6 +139,20 @@ def product_journey():
                 "preferenceMutation": False,
                 "recommendation": False,
                 "metricsAreDescriptive": True,
+                "failClosed": True,
+            },
+            "verifiedDecisionMarketPreferenceReview": {
+                "version": VERIFIED_DECISION_MARKET_PREFERENCE_REVIEW_VERSION,
+                "sourceContractVersion": VERIFIED_DECISION_MARKET_LEARNING_VERSION,
+                "storageKey": "mlb_market_preferences",
+                "explicitUserActionRequired": True,
+                "deviceLocal": True,
+                "serverPersistence": False,
+                "automaticPreferenceMutation": False,
+                "rankingEnabled": False,
+                "recommendation": False,
+                "requiresRepresentedCanonicalMarket": True,
+                "syncsDiscoverPreferences": True,
                 "failClosed": True,
             },
             "alerts": {

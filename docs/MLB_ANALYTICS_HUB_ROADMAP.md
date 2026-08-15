@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 4.72 merged and deployed on 2026-08-15. Phase 4.73 is the active phase.
+Status: Phase 4.73 merged and deployed on 2026-08-15. Phase 4.74 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -331,6 +331,22 @@ Exit gate: only exact 4.71 handoff rows in supported canonical markets are
 included, unknown markets are omitted, malformed or duplicate market aggregates
 fail closed, missing ROI or CLV stays blank, and neither backend nor frontend
 reorders markets by performance.
+
+### Phase 4.74 — Explicit market preference review
+
+Implementation status: represented 4.73 market-learning rows now expose an
+explicit preference control that reuses the device-local Discover market
+preference store. The Learn view and existing preference chips stay synchronized
+after a user tap.
+
+Performance never ranks markets, suggests a preference, or mutates the store.
+Unknown, duplicate, malformed, or unavailable market learning remains
+non-interactive, and no preference is persisted to the server.
+
+Exit gate: every preference change requires an explicit user action on a
+represented canonical market, both control surfaces reflect the same device
+state, phone controls retain a 44px touch target, and descriptive learning alone
+cannot add or remove a preference.
 
 ## Audit findings carried into the roadmap
 
