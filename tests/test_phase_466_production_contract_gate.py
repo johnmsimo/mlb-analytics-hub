@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -65,7 +65,12 @@ class FakeProduction:
         if clean_path == "/health":
             return json_response({"status": "ok", "version": "tested-sha"})
         if clean_path == "/ready":
-            return json_response({"status": "ready"})
+            return json_response(
+                {
+                    "status": "ready",
+                    "jobs": {"connected": True, "workerReady": True},
+                }
+            )
         if path in self.page_markers:
             marker = self.page_markers[path]
             html = (
@@ -103,12 +108,20 @@ class FakeProduction:
             return json_response({"success": True, "games": [], "count": 0})
         if clean_path == "/api/edges/today":
             edges = [valid_edge()]
+            probe_date = parse_qs(urlsplit(path).query).get("date", ["today"])[0]
             return json_response(
                 {
                     "success": True,
                     "computing": False,
                     "computationState": "ready",
                     "scanJob": None,
+                    "completionReceipt": {
+                        "contractVersion": "4.68",
+                        "source": "durable-worker",
+                        "date": probe_date,
+                        "completedAt": "2026-08-15T12:00:00+00:00",
+                        "release": "tested-sha",
+                    },
                     "edges": edges,
                     "count": len(edges),
                 }
@@ -219,6 +232,7 @@ def test_full_gate_uses_only_get_contracts_and_reports_coverage():
         "assets": 1,
         "admin_boundaries": 8,
         "api_contracts": 7,
+        "worker_convergence": 1,
     }
     assert all(call[1] for call in fake.calls)
     paths = [urlsplit(call[1]).path for call in fake.calls]
@@ -241,6 +255,7 @@ def test_baseline_gate_defers_new_deployed_api_contracts():
 
     paths = [urlsplit(call[1]).path for call in fake.calls]
     assert summary["api_contracts"] == 4
+    assert summary["worker_convergence"] == 0
     assert "/api/edges/today" not in paths
     assert "/api/calibration/markets" not in paths
     assert "/api/tracker/performance" not in paths
