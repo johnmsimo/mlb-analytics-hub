@@ -19618,9 +19618,16 @@ def _read_props_scan_durable_snapshot(date_str):
     return {"ts": timestamp, "payload": payload}
 
 
-def _props_scan_job_state(date_str):
+def _props_scan_dedupe_key(date_str, required_release=None):
+    suffix = f':{required_release}' if required_release else ''
+    return f'props-scan:{date_str}{suffix}'
+
+
+def _props_scan_job_state(date_str, required_release=None):
     try:
-        return get_deduped_job(f'props-scan:{date_str}')
+        return get_deduped_job(
+            _props_scan_dedupe_key(date_str, required_release)
+        )
     except JobQueueUnavailable:
         return {
             'id': None,
@@ -19784,14 +19791,24 @@ def _compute_props_scan_today_payload(date_str):
     return payload
 
 
-def _trigger_props_scan_refresh_async(date_str, reason='auto'):
+def _trigger_props_scan_refresh_async(
+    date_str,
+    reason='auto',
+    required_release=None,
+):
     global _props_scan_refreshing
     if str(os.getenv('PROCESS_ROLE') or '').strip().lower() == 'web':
         try:
+            args = {'date': date_str, 'reason': reason}
+            if required_release:
+                args['requiredRelease'] = required_release
             job = enqueue_job(
                 'props_scan',
-                {'date': date_str, 'reason': reason},
-                dedupe_key=f'props-scan:{date_str}',
+                args,
+                dedupe_key=_props_scan_dedupe_key(
+                    date_str,
+                    required_release,
+                ),
                 timeout_seconds=600,
                 max_attempts=2,
             )
@@ -19841,7 +19858,11 @@ def _trigger_props_scan_refresh_async(date_str, reason='auto'):
     return True
 
 
-def _props_scan_today_payload(date_str, refresh=False):
+def _props_scan_today_payload(
+    date_str,
+    refresh=False,
+    required_release=None,
+):
     now = time.time()
     with _props_scan_cache_lock:
         cached = _PROPS_SCAN_CACHE.get(date_str)
@@ -19857,12 +19878,20 @@ def _props_scan_today_payload(date_str, refresh=False):
 
     if cached and not refresh and (now - ts) < _PROPS_SCAN_TTL:
         payload = dict(cached.get('payload') or {})
-        payload['cacheAgeSec'] = age
-        payload['cached'] = True
-        payload['computing'] = False
-        payload['computationState'] = 'ready'
-        payload['scanJob'] = None
-        return payload
+        receipt_release = str(
+            (payload.get('completionReceipt') or {}).get('release') or ''
+        )
+        release_satisfied = (
+            not required_release
+            or receipt_release == str(required_release)
+        )
+        if release_satisfied:
+            payload['cacheAgeSec'] = age
+            payload['cached'] = True
+            payload['computing'] = False
+            payload['computationState'] = 'ready'
+            payload['scanJob'] = None
+            return payload
 
     if refresh:
         payload = _compute_props_scan_today_payload(date_str)
@@ -19872,11 +19901,20 @@ def _props_scan_today_payload(date_str, refresh=False):
         return payload
 
     web_role = str(os.getenv('PROCESS_ROLE') or '').strip().lower() == 'web'
-    job_state = _props_scan_job_state(date_str) if web_role else None
+    job_state = (
+        _props_scan_job_state(date_str, required_release)
+        if web_role
+        else None
+    )
     if job_state is None and not refreshing:
         job_state = _trigger_props_scan_refresh_async(
             date_str,
-            reason='stale_cache' if cached else 'cold_start',
+            reason=(
+                'release_probe'
+                if required_release
+                else 'stale_cache' if cached else 'cold_start'
+            ),
+            required_release=required_release,
         )
 
     payload = (
@@ -19948,8 +19986,17 @@ def _edge_letter_grade(edge):
     return 'D'
 
 
-def _edge_finder_payload(date_str, min_edge=0.02, market=None, limit=150):
-    base = _props_scan_today_payload(date_str)
+def _edge_finder_payload(
+    date_str,
+    min_edge=0.02,
+    market=None,
+    limit=150,
+    required_release=None,
+):
+    base = _props_scan_today_payload(
+        date_str,
+        required_release=required_release,
+    )
     try:
         min_edge = float(min_edge)
     except (TypeError, ValueError):
@@ -20055,6 +20102,7 @@ def _edge_finder_payload(date_str, min_edge=0.02, market=None, limit=150):
             'computing' if base.get('computing') else 'ready'
         ),
         'scanJob': base.get('scanJob'),
+        'completionReceipt': base.get('completionReceipt'),
         'message': base.get('message'),
         'generatedAt': datetime.now(timezone.utc).isoformat(),
         'candidateIntegrityVersion': CANDIDATE_INTEGRITY_VERSION,
@@ -20072,6 +20120,12 @@ def api_edges_today():
     market (e.g. batter_hits), limit (default 150)."""
     date_str = request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
     market = request.args.get('market')
+    required_release = str(request.args.get('requiredRelease') or '').strip()
+    if required_release and not re.fullmatch(r'[0-9a-f]{40}', required_release):
+        return jsonify({
+            'success': False,
+            'error': 'requiredRelease must be a 40-character commit SHA',
+        }), 400
     try:
         min_edge = float(request.args.get('minEdge', 0.02))
     except (TypeError, ValueError):
@@ -20081,7 +20135,13 @@ def api_edges_today():
     except (TypeError, ValueError):
         limit = 150
     try:
-        return jsonify(_edge_finder_payload(date_str, min_edge=min_edge, market=market, limit=limit))
+        return jsonify(_edge_finder_payload(
+            date_str,
+            min_edge=min_edge,
+            market=market,
+            limit=limit,
+            required_release=required_release or None,
+        ))
     except Exception as ex:
         print(f'[api_edges_today] {traceback.format_exc()}')
         return jsonify({'success': False, 'error': str(ex)}), 500

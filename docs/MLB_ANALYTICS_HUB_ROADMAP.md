@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 4.66 merged and deployed on 2026-08-14. Phase 4.67 is the active phase.
+Status: Phase 4.67 merged and deployed on 2026-08-14. Phase 4.68 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -216,6 +216,26 @@ Exit gate: no cold or stale Edge Finder request can run CPU-heavy work inside
 Gunicorn, duplicate an active scan, remain computing beyond its bounded window,
 or surface a recommendation before a fresh terminal worker snapshot exists; web
 health and readiness remain within contract after scan submission.
+
+### Phase 4.68 — Durable worker convergence receipt
+
+Implementation status: the durable props-scan worker now stamps completed
+snapshots with a 4.68 receipt containing the scan date, completion time, durable
+worker source, and exact deployed release SHA. Edge Finder carries that receipt
+without exposing queue internals or administrative data.
+
+The post-deploy gate derives a future-date probe scoped by the required release
+SHA, so a fresh receipt from an earlier deployment cannot satisfy the check. It
+accepts only bounded fail-closed computing states while polling and proves Redis
+and worker readiness, and cannot pass until the worker returns a fresh
+`ready` snapshot whose receipt matches both the probe date and deployed commit.
+The convergence wait is bounded to 61 attempts at 10-second intervals and
+remains inside the existing deployment timeout and rollback path.
+
+Exit gate: a release cannot pass merely because cold work was queued; the exact
+deployed worker must finish a new scan, persist its receipt through Redis, return
+it through Gunicorn, and preserve health/readiness throughout the bounded
+convergence window.
 
 ## Audit findings carried into the roadmap
 
