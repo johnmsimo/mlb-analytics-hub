@@ -224,8 +224,9 @@ snapshots with a 4.68 receipt containing the scan date, completion time, durable
 worker source, and exact deployed release SHA. Edge Finder carries that receipt
 without exposing queue internals or administrative data.
 
-The post-deploy gate derives a deployment-scoped future-date probe, accepts only
-bounded fail-closed computing states while polling, continuously proves Redis
+The post-deploy gate derives a future-date probe scoped by the required release
+SHA, so a fresh receipt from an earlier deployment cannot satisfy the check. It
+accepts only bounded fail-closed computing states while polling and proves Redis
 and worker readiness, and cannot pass until the worker returns a fresh
 `ready` snapshot whose receipt matches both the probe date and deployed commit.
 The convergence wait is bounded to 61 attempts at 10-second intervals and
