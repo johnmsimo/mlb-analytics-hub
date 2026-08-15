@@ -9,6 +9,7 @@ from flask import Blueprint, jsonify, make_response
 
 PRODUCT_HUB_VERSION = "4.64"
 SAVED_PLAYER_DIGEST_VERSION = "4.70"
+VERIFIED_DECISION_HANDOFF_VERSION = "4.71"
 _ROOT = Path(__file__).resolve().parent
 _HUB_PATH = _ROOT / "product_hub.html"
 
@@ -84,6 +85,21 @@ def product_journey():
                 "requiresEvidenceReceiptVersion": "4.69",
                 "oneTapSignalControls": True,
                 "serverPersistence": False,
+                "failClosed": True,
+            },
+            "verifiedDecisionHandoff": {
+                "version": VERIFIED_DECISION_HANDOFF_VERSION,
+                "source": "saved_player_verified_opportunity",
+                "requiresEvidenceReceiptVersion": "4.69",
+                "storageKey": "mlb_verified_decision_draft_v471",
+                "destination": "/tracker",
+                "states": ["prepared", "reviewing", "discarded", "expired"],
+                "expiresWithQuote": True,
+                "serverMutationOnPrepare": False,
+                "requiresExplicitSave": True,
+                "saveEndpoint": "/api/tracker/pick",
+                "saveRequiresAdminAuth": True,
+                "canonicalRevalidationOnSave": True,
                 "failClosed": True,
             },
             "alerts": {

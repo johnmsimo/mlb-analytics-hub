@@ -9,6 +9,9 @@
   var ALERT_LEDGER_LIMIT = 200;
   var MAX_ALERT_ODDS_AGE_SECONDS = 900;
   var RECOMMENDATION_EVIDENCE_VERSION = '4.69';
+  var VERIFIED_DECISION_DRAFT_VERSION = '4.71';
+  var VERIFIED_DECISION_DRAFT_KEY = 'mlb_verified_decision_draft_v471';
+  var PAGE_LOADED_AT = Date.now();
   var MATERIAL_EDGE_DELTA_PCT = 1;
   var MATERIAL_PRICE_DELTA = 10;
   var MARKET_OPTIONS = [
@@ -298,6 +301,77 @@
     });
   }
 
+  function decisionDraftFrom(row) {
+    if (!isActionable(row)) return null;
+    var receipt = row.evidenceReceipt;
+    var receiptAge = number(receipt.price.ageSeconds);
+    var elapsedSeconds = Math.max(0, (Date.now() - PAGE_LOADED_AT) / 1000);
+    var currentAge = receiptAge == null ? null : receiptAge + elapsedSeconds;
+    if (currentAge == null || currentAge > MAX_ALERT_ODDS_AGE_SECONDS) return null;
+
+    var probabilityValue = probability(receipt.model.probability);
+    var edge = number(receipt.market.edge);
+    var price = number(receipt.price.american);
+    var line = number(receipt.selection.line);
+    if (probabilityValue == null || edge == null || price == null || line == null) return null;
+
+    var preparedAt = Date.now();
+    var remainingSeconds = Math.max(0, MAX_ALERT_ODDS_AGE_SECONDS - currentAge);
+    return {
+      version: VERIFIED_DECISION_DRAFT_VERSION,
+      state: 'prepared',
+      preparedAt: new Date(preparedAt).toISOString(),
+      expiresAt: new Date(preparedAt + remainingSeconds * 1000).toISOString(),
+      receiptVersion: receipt.contractVersion,
+      canonicalCandidateId: row.canonicalCandidateId,
+      canonicalFingerprint: row.canonicalFingerprint,
+      player: String(row.player || ''),
+      team: String(row.team || ''),
+      opp: String(row.opp || row.opponent || ''),
+      marketKey: marketKeyOf(row),
+      line: line,
+      recommendedSide: String(receipt.selection.side || ''),
+      adjProb: probabilityValue,
+      edge: edge,
+      modelMean: number(row.modelMean != null ? row.modelMean : row.projection),
+      bookmaker: String(receipt.price.book || ''),
+      marketPrice: price,
+      bestAvailablePrice: price,
+      bestAvailableBook: String(receipt.price.book || ''),
+      oddsObservedAt: String(receipt.price.observedAt || ''),
+      reason: String(receipt.explanation || ''),
+      serverMutation: false
+    };
+  }
+
+  function writeVerifiedDecisionDraft(draft) {
+    try {
+      window.localStorage.setItem(VERIFIED_DECISION_DRAFT_KEY, JSON.stringify(draft));
+      var stored = JSON.parse(window.localStorage.getItem(VERIFIED_DECISION_DRAFT_KEY) || 'null');
+      return Boolean(stored && stored.version === VERIFIED_DECISION_DRAFT_VERSION &&
+        stored.canonicalCandidateId === draft.canonicalCandidateId);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function prepareDecisionDraft(candidateId) {
+    var row = state.edges.find(function (item) {
+      return String(item.canonicalCandidateId || '') === String(candidateId || '');
+    });
+    var draft = decisionDraftFrom(row);
+    var summary = document.getElementById('savedOpportunitySummary');
+    if (!draft) {
+      if (summary) summary.textContent = 'That opportunity is no longer fresh and no tracking draft was created.';
+      return;
+    }
+    if (!writeVerifiedDecisionDraft(draft)) {
+      if (summary) summary.textContent = 'This device could not store the draft; no tracking action was taken.';
+      return;
+    }
+    window.location.assign('/tracker?decisionDraft=4.71');
+  }
+
   function savedOpportunityHtml(name) {
     var rows = savedPlayerRows(name);
     var label = displayPlayerName(name);
@@ -318,7 +392,9 @@
       '<div class="saved-opportunity-proof"><b>+' + edge.toFixed(1) + '%</b><small>' +
         esc(receipt.price.book) + ' ' + (price > 0 ? '+' : '') + esc(price) +
         ' · ' + esc(freshnessLabel(row)) + '</small></div>' +
-      '<span>VERIFIED RECEIPT ' + esc(receipt.contractVersion) + '</span></article>';
+      '<span>VERIFIED RECEIPT ' + esc(receipt.contractVersion) + '</span>' +
+      '<button type="button" class="saved-opportunity-track" data-prepare-track="' +
+        esc(row.canonicalCandidateId) + '">Review in Tracker</button></article>';
   }
 
   function renderSavedOpportunityDigest() {
@@ -434,6 +510,14 @@
       return;
     }
     host.innerHTML = list.slice(0, 8).map(signalHtml).join('');
+  }
+
+  function wireSavedOpportunityActions() {
+    document.getElementById('savedOpportunityList').addEventListener('click', function (event) {
+      var button = event.target.closest('[data-prepare-track]');
+      if (!button) return;
+      prepareDecisionDraft(button.getAttribute('data-prepare-track'));
+    });
   }
 
   function wireSignalActions() {
@@ -730,6 +814,7 @@
     renderWatchlist();
     wireWatchlistForm();
     wireSignalActions();
+    wireSavedOpportunityActions();
     wireAlertInbox();
     renderAlerts();
 
