@@ -13,6 +13,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 from html.parser import HTMLParser
 from typing import Any
 
@@ -127,7 +128,7 @@ def fetch_url(base_url: str, path: str, timeout: float) -> HttpResponse:
         headers={
             "Accept": "*/*",
             "Accept-Encoding": "identity",
-            "User-Agent": "mlb-analytics-hub-production-contract/4.67",
+            "User-Agent": "mlb-analytics-hub-production-contract/4.68",
         },
         method="GET",
     )
@@ -270,6 +271,10 @@ def _validate_health(payload: Any, expected_sha: str | None) -> None:
 def _validate_ready(payload: Any) -> None:
     _require(isinstance(payload, dict), "ready payload must be an object")
     _require(payload.get("status") == "ready", f"unexpected ready payload: {payload}")
+    jobs = payload.get("jobs")
+    _require(isinstance(jobs, dict), "ready payload must include durable worker health")
+    _require(jobs.get("connected") is True, "ready payload reports Redis disconnected")
+    _require(jobs.get("workerReady") is True, "ready payload reports worker unavailable")
 
 
 def _validate_journey(payload: Any) -> None:
@@ -296,6 +301,46 @@ def _validate_games(payload: Any) -> None:
     games = payload.get("games")
     _require(isinstance(games, list), "games payload must include a games list")
     _require(payload.get("count") == len(games), "games count does not match rows")
+
+
+def validate_completion_receipt(
+    payload: Any,
+    *,
+    expected_sha: str | None,
+    probe_date: str,
+) -> None:
+    _require(
+        payload.get("computationState") == "ready",
+        "durable scan has not converged to ready",
+    )
+    receipt = payload.get("completionReceipt")
+    _require(isinstance(receipt, dict), "ready scan is missing completion receipt")
+    _require(
+        receipt.get("contractVersion") == "4.68",
+        "completion receipt contract version changed",
+    )
+    _require(
+        receipt.get("source") == "durable-worker",
+        "scan completion was not attested by the durable worker",
+    )
+    _require(receipt.get("date") == probe_date, "completion receipt date mismatch")
+    _require(bool(receipt.get("completedAt")), "completion receipt lacks timestamp")
+    if expected_sha:
+        _require(
+            receipt.get("release") == expected_sha,
+            f"completion receipt release mismatch: {receipt.get('release')}",
+        )
+
+
+def convergence_probe_date(
+    expected_sha: str | None,
+    *,
+    today: date | None = None,
+) -> str:
+    base = today or datetime.now(timezone.utc).date()
+    token = str(expected_sha or "deployment")
+    offset = 1 + (sum(ord(char) for char in token) % 7)
+    return (base + timedelta(days=offset)).isoformat()
 
 
 def _validate_calibration(payload: Any) -> None:
@@ -348,6 +393,69 @@ def _json_contract_with_retry(
     raise ContractError(f"{label} failed after {attempts} attempts: {last_error}")
 
 
+def wait_for_edge_convergence(
+    *,
+    base_url: str,
+    expected_sha: str | None,
+    probe_date: str,
+    fetcher: Callable[[str, str, float], HttpResponse],
+    attempts: int,
+    retry_delay: float,
+    sleeper: Callable[[float], None],
+) -> Any:
+    path = (
+        f"/api/edges/today?date={urllib.parse.quote(probe_date)}"
+        "&minEdge=0.03&limit=5"
+    )
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            response = fetcher(base_url, path, 10)
+            _require(response.status == 200, f"convergence probe returned {response.status}")
+            _require(
+                response.elapsed_seconds <= 8,
+                f"convergence probe exceeded 8s budget ({response.elapsed_seconds:.2f}s)",
+            )
+            payload = response.json()
+            validate_actionable_edges(payload)
+            if payload.get("computationState") == "ready":
+                validate_completion_receipt(
+                    payload,
+                    expected_sha=expected_sha,
+                    probe_date=probe_date,
+                )
+                print(
+                    f"PASS durable worker convergence {probe_date} "
+                    f"({response.elapsed_seconds:.2f}s)",
+                    flush=True,
+                )
+                return payload
+            wait_for_release(
+                base_url=base_url,
+                expected_sha=expected_sha,
+                fetcher=fetcher,
+                attempts=1,
+                retry_delay=0,
+                sleeper=sleeper,
+            )
+            last_error = ContractError(
+                f"scan remains computing with job {payload.get('scanJob')}"
+            )
+        except ContractError as exc:
+            last_error = exc
+        if attempt == attempts:
+            break
+        print(
+            f"WAIT durable worker convergence: {last_error}; "
+            f"retrying ({attempt + 1}/{attempts})",
+            flush=True,
+        )
+        sleeper(retry_delay)
+    raise ContractError(
+        f"durable worker failed to converge after {attempts} attempts: {last_error}"
+    )
+
+
 def wait_for_release(
     *,
     base_url: str,
@@ -394,6 +502,8 @@ def run_gate(
     retry_delay: float = 5,
     sleeper: Callable[[float], None] = time.sleep,
     baseline_only: bool = False,
+    settle_attempts: int = 61,
+    settle_delay: float = 10,
 ) -> dict[str, int]:
     wait_for_release(
         base_url=base_url,
@@ -475,10 +585,22 @@ def run_gate(
             sleeper=sleeper,
         )
 
+    convergence_checks = 0
     if not baseline_only:
-        # Edge Finder may enqueue a CPU-heavy cold scan. Prove immediately that
-        # the work stayed behind the durable worker boundary and did not starve
-        # Gunicorn health or readiness.
+        probe_date = convergence_probe_date(expected_sha)
+        wait_for_edge_convergence(
+            base_url=base_url,
+            expected_sha=expected_sha,
+            probe_date=probe_date,
+            fetcher=fetcher,
+            attempts=settle_attempts,
+            retry_delay=settle_delay,
+            sleeper=sleeper,
+        )
+        convergence_checks = 1
+
+        # Prove the web tier is still healthy after the durable worker has
+        # completed the deployment-scoped cold scan.
         wait_for_release(
             base_url=base_url,
             expected_sha=expected_sha,
@@ -487,13 +609,14 @@ def run_gate(
             retry_delay=retry_delay,
             sleeper=sleeper,
         )
-        print("PASS post-scan web isolation", flush=True)
+        print("PASS post-convergence web isolation", flush=True)
 
     summary = {
         "pages": len(PUBLIC_PAGE_CONTRACTS),
         "assets": len(assets),
         "admin_boundaries": len(ADMIN_READ_PATHS),
         "api_contracts": len(json_contracts) + 2,
+        "worker_convergence": convergence_checks,
     }
     print(f"Production contract passed: {json.dumps(summary, sort_keys=True)}")
     return summary
@@ -514,11 +637,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--release-attempts", type=int, default=24)
     parser.add_argument("--contract-attempts", type=int, default=6)
     parser.add_argument("--retry-delay", type=float, default=5)
+    parser.add_argument("--settle-attempts", type=int, default=61)
+    parser.add_argument("--settle-delay", type=float, default=10)
     args = parser.parse_args(argv)
-    if args.release_attempts < 1 or args.contract_attempts < 1:
+    if (
+        args.release_attempts < 1
+        or args.contract_attempts < 1
+        or args.settle_attempts < 1
+    ):
         parser.error("attempt counts must be at least 1")
-    if args.retry_delay < 0:
-        parser.error("--retry-delay must be non-negative")
+    if args.retry_delay < 0 or args.settle_delay < 0:
+        parser.error("retry delays must be non-negative")
     return args
 
 
@@ -532,6 +661,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             contract_attempts=args.contract_attempts,
             retry_delay=args.retry_delay,
             baseline_only=args.baseline,
+            settle_attempts=args.settle_attempts,
+            settle_delay=args.settle_delay,
         )
     except ContractError as exc:
         print(f"Production contract failed: {exc}", file=sys.stderr)
