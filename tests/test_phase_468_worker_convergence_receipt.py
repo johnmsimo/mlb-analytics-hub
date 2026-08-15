@@ -42,7 +42,9 @@ class ConvergingProduction:
                 }
             )
         if clean_path == "/api/edges/today":
-            assert parse_qs(urlsplit(path).query)["date"] == [self.probe_date]
+            query = parse_qs(urlsplit(path).query)
+            assert query["date"] == [self.probe_date]
+            assert query["requiredRelease"] == [self.expected_sha]
             self.edge_calls += 1
             if self.edge_calls == 1:
                 return json_response(
@@ -162,8 +164,12 @@ def test_phase_468_contract_is_installed_and_documented():
     assert '"contractVersion": "4.68"' in worker
     assert '"source": "durable-worker"' in worker
     assert '"release": app_module._APP_VERSION' in worker
+    assert 'required_release != app_module._APP_VERSION' in worker
     assert "'completionReceipt': base.get('completionReceipt')" in app_source
+    assert "def _props_scan_dedupe_key" in app_source
+    assert "required_release=required_release" in app_source
     assert "def wait_for_edge_convergence" in gate
+    assert "requiredRelease=" in gate
     assert "--settle-attempts" in gate
     assert "--settle-attempts 61" in workflow
     assert "--settle-delay 10" in workflow
