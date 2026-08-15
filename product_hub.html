@@ -31,7 +31,7 @@
   <main class="hub-shell">
     <section class="hub-hero" aria-labelledby="hubTitle">
       <div>
-        <p class="eyebrow">PHASE 4.64 · MY HUB <span class="feature-version">FEATURE 4.71</span></p>
+        <p class="eyebrow">PHASE 4.64 · MY HUB <span class="feature-version">FEATURE 4.72</span></p>
         <h1 id="hubTitle">One clear path from signal to insight.</h1>
         <p class="hero-copy">Discover opportunities, validate the evidence, track decisions, and learn from outcomes—without losing the context that makes a pick trustworthy.</p>
       </div>
@@ -137,6 +137,16 @@
 
       <article class="panel learn-panel">
         <header class="panel-head"><div><p class="step-label">4 · LEARN</p><h2>Close the loop</h2></div></header>
+        <div class="decision-learning" id="verifiedDecisionLearning" data-learning-state="loading" aria-live="polite">
+          <div class="learning-head"><span>MY HUB DECISIONS</span><b id="learningState">LOADING</b></div>
+          <div class="learning-metrics">
+            <div><span>DECISIONS</span><strong id="learningDecisions">—</strong></div>
+            <div><span>PENDING</span><strong id="learningPending">—</strong></div>
+            <div><span>GRADED</span><strong id="learningGraded">—</strong></div>
+            <div><span>BEAT CLOSE</span><strong id="learningBeatClose">—</strong></div>
+          </div>
+          <p id="learningNote">Loading source-attributed decision outcomes…</p>
+        </div>
         <div class="learn-links">
           <a href="/consistency"><span>Consistency</span><small>Compare hit-rate windows and stability.</small><b>→</b></a>
           <a href="/tracker"><span>Performance</span><small>Review graded outcomes, ROI, CLV, and calibration.</small><b>→</b></a>

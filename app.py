@@ -263,6 +263,7 @@ from mlb_schedule_cache import fetch_schedule, fetch_schedule_game
 from reference_snapshots import ReferenceSnapshotStore
 from redis_client import get_redis
 from request_performance import performance_bp, request_performance
+from tracker_learning import build_verified_decision_learning
 from security import check_admin_auth, install_security, limiter
 from task_queue import (
     JobQueueUnavailable,
@@ -19259,6 +19260,7 @@ def _tracker_performance_payload(date_str=None, window_days=30):
             for mk in available_markets
         },
         'calibration': calibration,
+        'verifiedDecisionLearning': build_verified_decision_learning(entries),
         'topCLV': top_clv,
         'daily': daily,
     }
