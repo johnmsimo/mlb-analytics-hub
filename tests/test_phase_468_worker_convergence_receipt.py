@@ -152,6 +152,9 @@ def test_phase_468_contract_is_installed_and_documented():
     gate = (root / "scripts" / "production_contract_gate.py").read_text(
         encoding="utf-8"
     )
+    workflow = (root / ".github" / "workflows" / "deploy.yml").read_text(
+        encoding="utf-8"
+    )
     roadmap = (root / "docs" / "MLB_ANALYTICS_HUB_ROADMAP.md").read_text(
         encoding="utf-8"
     )
@@ -162,5 +165,7 @@ def test_phase_468_contract_is_installed_and_documented():
     assert "'completionReceipt': base.get('completionReceipt')" in app_source
     assert "def wait_for_edge_convergence" in gate
     assert "--settle-attempts" in gate
+    assert "--settle-attempts 61" in workflow
+    assert "--settle-delay 10" in workflow
     assert "Phase 4.68 is the active phase." in roadmap
     assert "Durable worker convergence receipt" in roadmap
