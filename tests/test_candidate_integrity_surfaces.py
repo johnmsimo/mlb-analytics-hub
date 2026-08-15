@@ -189,7 +189,7 @@ def test_props_scan_surfaces_durable_job_state_without_requeue(monkeypatch):
     monkeypatch.setattr(
         mlb_app,
         "_props_scan_job_state",
-        lambda _date: active_job,
+        lambda *_args: active_job,
     )
 
     def unexpected_enqueue(*_args, **_kwargs):
@@ -249,6 +249,70 @@ def test_failed_props_scan_is_explicit_and_edges_fail_closed(monkeypatch):
     assert edges["scanJob"]["status"] == "error"
     assert edges["count"] == 0
     assert edges["edges"] == []
+
+
+def test_release_probe_bypasses_fresh_snapshot_from_old_worker(monkeypatch):
+    date_str = "2099-08-10"
+    required_release = "b" * 40
+    payload = mlb_app._empty_props_scan_payload(date_str)
+    payload["completionReceipt"] = {
+        "contractVersion": "4.68",
+        "source": "durable-worker",
+        "date": date_str,
+        "completedAt": "2099-08-09T12:00:00+00:00",
+        "release": "a" * 40,
+    }
+    previous = mlb_app._PROPS_SCAN_CACHE.pop(date_str, None)
+    mlb_app._PROPS_SCAN_CACHE[date_str] = {
+        "ts": time.time(),
+        "payload": payload,
+    }
+    calls = []
+
+    monkeypatch.setenv("PROCESS_ROLE", "web")
+    monkeypatch.setattr(mlb_app, "_props_scan_refreshing", False)
+    monkeypatch.setattr(
+        mlb_app,
+        "_props_scan_job_state",
+        lambda date, release: (
+            calls.append(("state", date, release)) or None
+        ),
+    )
+
+    def fake_trigger(date, reason="auto", required_release=None):
+        calls.append(("trigger", date, reason, required_release))
+        return {
+            "id": "job-release",
+            "status": "queued",
+            "elapsedSeconds": 0,
+            "attempt": 0,
+            "maxAttempts": 2,
+            "timeoutSeconds": 600,
+            "error": None,
+        }
+
+    monkeypatch.setattr(
+        mlb_app,
+        "_trigger_props_scan_refresh_async",
+        fake_trigger,
+    )
+
+    try:
+        result = mlb_app._props_scan_today_payload(
+            date_str,
+            required_release=required_release,
+        )
+        assert result["computing"] is True
+        assert result["computationState"] == "computing"
+        assert result["scanJob"]["id"] == "job-release"
+        assert calls == [
+            ("state", date_str, required_release),
+            ("trigger", date_str, "release_probe", required_release),
+        ]
+    finally:
+        mlb_app._PROPS_SCAN_CACHE.pop(date_str, None)
+        if previous is not None:
+            mlb_app._PROPS_SCAN_CACHE[date_str] = previous
 
 
 def test_props_scan_reads_fresh_durable_worker_snapshot(monkeypatch):
