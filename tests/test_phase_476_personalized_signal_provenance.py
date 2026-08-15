@@ -44,7 +44,7 @@ def test_provenance_requires_actionability_and_explicit_preferred_market():
 
     assert "isActionable(row)" in reasons
     assert "isSupportedMarketKey(marketKey)" in reasons
-    assert "state.preferred.has(marketKey)" in reasons
+    assert "state.preferred.has(marketKeyOf(row))" in reasons
     assert "return [];" in reasons
     assert "preferred_market" in reasons
 
