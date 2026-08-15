@@ -20,6 +20,7 @@
   ];
   var state = {
     edges: [],
+    edgeState: 'loading',
     markets: null,
     tracker: null,
     watchlist: new Set(),
@@ -85,6 +86,23 @@
 
   function marketKeyOf(row) {
     return String(row.canonicalMarketKey || row.marketKey || '').trim();
+  }
+
+  function playerKey(value) {
+    return String(value || '').trim().toLowerCase();
+  }
+
+  function displayPlayerName(value) {
+    return playerKey(value).replace(/\b\w/g, function (letter) {
+      return letter.toUpperCase();
+    });
+  }
+
+  function marketLabelOf(row) {
+    var option = MARKET_OPTIONS.find(function (item) {
+      return item.key === marketKeyOf(row);
+    });
+    return option ? option.label : marketKeyOf(row).replace(/_/g, ' ');
   }
 
   function hasEvidenceReceipt(row) {
@@ -257,39 +275,109 @@
     });
   }
 
+  function persistWatchlist() {
+    writeJson(WATCHLIST_KEY, Array.from(state.watchlist));
+  }
+
+  function setPlayerSaved(name, saved) {
+    var key = playerKey(name);
+    if (!key) return;
+    if (saved) state.watchlist.add(key);
+    else state.watchlist.delete(key);
+    persistWatchlist();
+    renderWatchlist();
+    renderSignals();
+  }
+
+  function savedPlayerRows(name) {
+    var key = playerKey(name);
+    return state.edges.filter(function (row) {
+      return playerKey(row.player) === key && isActionable(row);
+    }).sort(function (left, right) {
+      return (edgeValue(right) || 0) - (edgeValue(left) || 0);
+    });
+  }
+
+  function savedOpportunityHtml(name) {
+    var rows = savedPlayerRows(name);
+    var label = displayPlayerName(name);
+    if (!rows.length) {
+      return '<article class="saved-opportunity quiet" data-opportunity-state="none">' +
+        '<div><strong>' + esc(label) + '</strong><small>No verified opportunity right now.</small></div>' +
+        '<span>UNVERIFIED ROWS HIDDEN</span></article>';
+    }
+    var row = rows[0];
+    var receipt = row.evidenceReceipt;
+    var edge = edgeValue(row);
+    var price = number(receipt.price.american);
+    var more = rows.length > 1 ? ' · +' + (rows.length - 1) + ' more' : '';
+    return '<article class="saved-opportunity ready" data-opportunity-state="verified">' +
+      '<div><strong>' + esc(label) + '</strong><small>' +
+        esc(marketLabelOf(row)) + ' · ' + esc(receipt.selection.side) + ' ' +
+        esc(receipt.selection.line) + more + '</small></div>' +
+      '<div class="saved-opportunity-proof"><b>+' + edge.toFixed(1) + '%</b><small>' +
+        esc(receipt.price.book) + ' ' + (price > 0 ? '+' : '') + esc(price) +
+        ' · ' + esc(freshnessLabel(row)) + '</small></div>' +
+      '<span>VERIFIED RECEIPT ' + esc(receipt.contractVersion) + '</span></article>';
+  }
+
+  function renderSavedOpportunityDigest() {
+    var host = document.getElementById('savedOpportunityList');
+    var summary = document.getElementById('savedOpportunitySummary');
+    var names = Array.from(state.watchlist).sort();
+    if (!host || !summary) return;
+    if (!names.length) {
+      summary.textContent = 'Save a player to create a private opportunity digest.';
+      host.innerHTML = '<div class="empty-state">No saved players yet.</div>';
+      return;
+    }
+    if (['loading', 'computing'].indexOf(state.edgeState) >= 0) {
+      summary.textContent = 'Checking receipted opportunities for ' + names.length + ' saved player' + (names.length === 1 ? '' : 's') + '…';
+      host.innerHTML = '<div class="empty-state">Waiting for fresh canonical evidence…</div>';
+      return;
+    }
+    if (['failed', 'unavailable'].indexOf(state.edgeState) >= 0) {
+      summary.textContent = 'Opportunity evidence is unavailable; saved players remain private on this device.';
+      host.innerHTML = '<div class="empty-state">No recommendation is shown without verified evidence.</div>';
+      return;
+    }
+    var active = names.filter(function (name) {
+      return savedPlayerRows(name).length > 0;
+    }).length;
+    summary.textContent = active + ' of ' + names.length + ' saved player' +
+      (names.length === 1 ? '' : 's') + ' have a verified opportunity now.';
+    host.innerHTML = names.map(savedOpportunityHtml).join('');
+  }
+
   function renderWatchlist() {
     var host = document.getElementById('watchlistChips');
     var names = Array.from(state.watchlist).sort();
     document.getElementById('watchlistMetric').textContent = String(names.length);
     if (!names.length) {
-      host.innerHTML = '<span class="empty-state">Star players in Props or add one here.</span>';
+      host.innerHTML = '<span class="empty-state">Save a receipted signal or add a player here.</span>';
+      renderSavedOpportunityDigest();
       return;
     }
     host.innerHTML = names.map(function (name) {
-      return '<span class="watch-chip">⭐ ' + esc(name.replace(/\b\w/g, function (letter) { return letter.toUpperCase(); })) +
-        '<button type="button" data-remove-player="' + esc(name) + '" aria-label="Remove ' + esc(name) + '">×</button></span>';
+      return '<span class="watch-chip">⭐ ' + esc(displayPlayerName(name)) +
+        '<button type="button" data-remove-player="' + esc(name) + '" aria-label="Remove ' + esc(displayPlayerName(name)) + '">×</button></span>';
     }).join('');
     host.querySelectorAll('[data-remove-player]').forEach(function (button) {
       button.addEventListener('click', function () {
-        state.watchlist.delete(button.getAttribute('data-remove-player'));
-        writeJson(WATCHLIST_KEY, Array.from(state.watchlist));
-        renderWatchlist();
-        renderSignals();
+        setPlayerSaved(button.getAttribute('data-remove-player'), false);
       });
     });
+    renderSavedOpportunityDigest();
   }
 
   function wireWatchlistForm() {
     document.getElementById('watchlistForm').addEventListener('submit', function (event) {
       event.preventDefault();
       var input = document.getElementById('watchlistName');
-      var name = input.value.trim().toLowerCase();
+      var name = playerKey(input.value);
       if (!name) return;
-      state.watchlist.add(name);
-      writeJson(WATCHLIST_KEY, Array.from(state.watchlist));
       input.value = '';
-      renderWatchlist();
-      renderSignals();
+      setPlayerSaved(name, true);
     });
   }
 
@@ -304,16 +392,20 @@
   }
 
   function signalHtml(row) {
-    var marketOption = MARKET_OPTIONS.find(function (item) { return item.key === marketKeyOf(row); });
     var receipt = row.evidenceReceipt;
     var edge = edgeValue(row);
     var modelProb = probability(receipt.model.probability);
     var fairProb = probability(receipt.market.fairProbability);
     var price = number(receipt.price.american);
-    var saved = state.watchlist.has(String(row.player || '').toLowerCase());
+    var player = playerKey(row.player);
+    var saved = state.watchlist.has(player);
     return '<article class="signal-card' + (saved ? ' watchlisted' : '') + '">' +
-      '<div><div class="signal-title">' + (saved ? '<span class="star">★</span>' : '') + '<strong>' + esc(row.player) + '</strong></div>' +
-      '<p class="signal-market">' + esc(marketOption ? marketOption.label : marketKeyOf(row)) + ' · ' + esc(receipt.selection.side) + ' ' + esc(receipt.selection.line) + '</p>' +
+      '<div><div class="signal-title"><strong>' + esc(row.player) + '</strong>' +
+      '<button type="button" class="signal-save" data-toggle-player="' + esc(player) +
+        '" aria-pressed="' + (saved ? 'true' : 'false') + '" aria-label="' +
+        (saved ? 'Remove ' : 'Save ') + esc(row.player) + '">' +
+        (saved ? '★ Saved' : '☆ Save') + '</button></div>' +
+      '<p class="signal-market">' + esc(marketLabelOf(row)) + ' · ' + esc(receipt.selection.side) + ' ' + esc(receipt.selection.line) + '</p>' +
       '<div class="evidence">' +
         '<span>MODEL ' + (modelProb * 100).toFixed(1) + '%</span>' +
         '<span>FAIR MARKET ' + (fairProb * 100).toFixed(1) + '%</span>' +
@@ -331,6 +423,7 @@
     var host = document.getElementById('signalList');
     document.getElementById('actionableCount').textContent = String(state.edges.length);
     document.getElementById('signalFoot').textContent = list.length + ' preferred-market signal' + (list.length === 1 ? '' : 's') + '; saved players rank first.';
+    renderSavedOpportunityDigest();
     renderAlerts();
     if (!state.preferred.size) {
       host.innerHTML = '<div class="empty-state">Select at least one preferred market to personalize signals.</div>';
@@ -341,6 +434,15 @@
       return;
     }
     host.innerHTML = list.slice(0, 8).map(signalHtml).join('');
+  }
+
+  function wireSignalActions() {
+    document.getElementById('signalList').addEventListener('click', function (event) {
+      var button = event.target.closest('[data-toggle-player]');
+      if (!button) return;
+      var name = button.getAttribute('data-toggle-player');
+      setPlayerSaved(name, !state.watchlist.has(playerKey(name)));
+    });
   }
 
   function thresholdMatches() {
@@ -627,6 +729,7 @@
     renderMarketOptions();
     renderWatchlist();
     wireWatchlistForm();
+    wireSignalActions();
     wireAlertInbox();
     renderAlerts();
 
@@ -634,9 +737,15 @@
     Promise.all([
       requestJson('/api/edges/today?minEdge=0.03').then(function (payload) {
         var rows = payload && Array.isArray(payload.edges) ? payload.edges : [];
+        state.edgeState = String(payload.computationState || 'ready').toLowerCase();
         state.edges = rows.filter(isActionable);
         renderSignals();
-      }).catch(function () { failures += 1; state.edges = []; renderSignals(); }),
+      }).catch(function () {
+        failures += 1;
+        state.edgeState = 'unavailable';
+        state.edges = [];
+        renderSignals();
+      }),
       requestJson('/api/calibration/markets').then(function (payload) { state.markets = payload; renderValidation(); })
         .catch(function () { failures += 1; state.markets = null; renderValidation(); }),
       requestJson('/api/tracker/performance?window=30').then(function (payload) { state.tracker = payload; renderTracker(); })

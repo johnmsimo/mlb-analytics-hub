@@ -31,7 +31,7 @@
   <main class="hub-shell">
     <section class="hub-hero" aria-labelledby="hubTitle">
       <div>
-        <p class="eyebrow">PHASE 4.64 · MY HUB</p>
+        <p class="eyebrow">PHASE 4.70 · MY HUB</p>
         <h1 id="hubTitle">One clear path from signal to insight.</h1>
         <p class="hero-copy">Discover opportunities, validate the evidence, track decisions, and learn from outcomes—without losing the context that makes a pick trustworthy.</p>
       </div>
@@ -119,7 +119,7 @@
 
       <article class="panel watchlist-panel">
         <header class="panel-head">
-          <div><p class="step-label">SAVED PLAYERS</p><h2>Watchlist</h2></div>
+          <div><p class="step-label">SAVED PLAYERS</p><h2>Verified opportunity digest</h2></div>
           <a href="/props">Browse Props →</a>
         </header>
         <form id="watchlistForm" class="watchlist-form">
@@ -128,6 +128,11 @@
           <button type="submit">Save player</button>
         </form>
         <div class="watchlist-chips" id="watchlistChips"></div>
+        <p class="saved-opportunity-summary" id="savedOpportunitySummary">Checking saved-player opportunities…</p>
+        <div class="saved-opportunity-list" id="savedOpportunityList" aria-live="polite">
+          <div class="empty-state">Waiting for fresh canonical evidence…</div>
+        </div>
+        <footer class="panel-foot"><span>Only 4.69-receipted opportunities appear. Missing, stale, or unvalidated rows stay hidden.</span></footer>
       </article>
 
       <article class="panel learn-panel">
