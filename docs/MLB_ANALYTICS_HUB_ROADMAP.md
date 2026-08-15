@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 4.78 merged and deployed on 2026-08-15. Phase 4.79 is the active phase.
+Status: Phase 4.79 merged and deployed on 2026-08-15. Phase 4.80 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -435,6 +435,22 @@ Exit gate: every accepted prepared draft carries one allowed origin, the same
 origin is visibly and accessibly identified in Tracker before save, malformed
 origins fail closed, and existing admin authorization, canonical
 revalidation, and explicit-save boundaries remain unchanged.
+
+### Phase 4.80 — Verified draft expiry guard
+
+Implementation status: Tracker now displays the prepared draft's quote-valid-
+until time and revalidates the complete 4.71 draft immediately before building
+or posting the explicit-save payload.
+
+If the quote expires while the review modal is open, Tracker clears the
+device-local draft, closes the review, reports that no pick was created, and
+suppresses the POST. Manual picks remain unaffected. The client guard does not
+replace admin authorization or the server's canonical revalidation.
+
+Exit gate: every verified review shows its quote expiry before save, every save
+attempt rechecks the full draft contract, expired drafts produce no server
+request or pick, and recommendation strength, authorization, and canonical
+revalidation remain unchanged.
 
 ## Audit findings carried into the roadmap
 
