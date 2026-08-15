@@ -39,7 +39,7 @@ def test_workspace_contains_saved_player_digest_accessibility_contract():
     html = (ROOT / "product_hub.html").read_text(encoding="utf-8")
 
     assert "PHASE 4.64 · MY HUB" in html
-    assert "FEATURE 4.70" in html
+    assert "FEATURE 4.71" in html
     assert 'id="savedOpportunitySummary"' in html
     assert 'id="savedOpportunityList"' in html
     assert 'aria-live="polite"' in html
@@ -82,7 +82,7 @@ def test_saved_player_digest_preserves_phone_touch_contract():
     assert ".saved-opportunity.quiet" in css
     assert ".signal-save" in css
     assert "@media(max-width:480px)" in css
-    assert ".watchlist-form button,.signal-save,.market-chip" in css
+    assert ".watchlist-form button,.signal-save,.saved-opportunity-track,.market-chip" in css
     assert "min-height:44px" in css
 
 
@@ -91,5 +91,5 @@ def test_phase_470_is_documented_as_active():
         encoding="utf-8"
     )
 
-    assert "Phase 4.70 is the active phase." in roadmap
+    assert "Phase 4.71 is the active phase." in roadmap
     assert "### Phase 4.70 — Saved-player verified opportunity digest" in roadmap

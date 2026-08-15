@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 4.69 merged and deployed on 2026-08-15. Phase 4.70 is the active phase.
+Status: Phase 4.70 merged and deployed on 2026-08-15. Phase 4.71 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -276,6 +276,26 @@ underlying row passes the complete actionability and 4.69 evidence contracts;
 missing, stale, unpriced, mismatched, or unavailable evidence produces an
 explicit non-recommendation state, and all save/remove controls preserve the
 390px touch contract.
+
+### Phase 4.71 — Verified decision handoff
+
+Implementation status: a saved player's strongest current 4.69-receipted
+opportunity can be prepared as an expiring, device-private decision draft and
+opened in Tracker review mode. The draft carries the canonical candidate and
+fingerprint, selection, model probability, edge, sportsbook price, receipt
+version, explanation, and quote expiry needed to preserve decision context.
+
+Preparing a draft never creates a tracked pick. Tracker labels the handoff,
+locks the canonical evidence fields for review, and waits for an explicit save
+through the existing admin-authenticated endpoint. That endpoint re-resolves
+the canonical candidate before persistence. Invalid, altered, unsupported, or
+expired drafts are discarded locally and create no server mutation.
+
+Exit gate: only a currently actionable row with a complete 4.69 evidence
+receipt can produce a 4.71 draft; the draft expires with its quote, storage
+failure and validation failure remain visible non-actions, Tracker never
+auto-saves the handoff, and the review control preserves the 390px touch
+contract.
 
 ## Audit findings carried into the roadmap
 
