@@ -777,6 +777,76 @@
     return null;
   }
 
+  function renderVerifiedDecisionMarketLearning(learning) {
+    var host = document.getElementById('verifiedDecisionMarketLearning');
+    var list = document.getElementById('marketLearningList');
+    var marketLearning = learning && learning.marketLearning;
+    var supported = MARKET_OPTIONS.map(function (item) { return item.key; });
+    var validStates = ['no_market_history', 'awaiting_outcomes', 'learning', 'sample_ready'];
+    var valid = marketLearning &&
+      marketLearning.version === '4.73' &&
+      marketLearning.aggregateOnly === true &&
+      marketLearning.trackerRowsIncluded === false &&
+      marketLearning.rankingEnabled === false &&
+      marketLearning.preferenceMutation === false &&
+      marketLearning.recommendation === false &&
+      marketLearning.failClosed === true &&
+      validStates.indexOf(String(marketLearning.state || '')) >= 0 &&
+      Array.isArray(marketLearning.markets) &&
+      marketLearning.markets.length <= supported.length;
+    var seen = {};
+    if (valid) {
+      valid = marketLearning.markets.every(function (item) {
+        var key = String(item && item.marketKey || '');
+        var decisions = number(item && item.decisionCount);
+        var graded = number(item && item.gradedCount);
+        var stateName = String(item && item.state || '');
+        var ok = supported.indexOf(key) >= 0 && !seen[key] &&
+          decisions != null && decisions >= 0 &&
+          graded != null && graded >= 0 && graded <= decisions &&
+          ['awaiting_outcomes', 'learning', 'sample_ready'].indexOf(stateName) >= 0;
+        seen[key] = true;
+        return ok;
+      });
+    }
+    if (!host || !list || !valid) {
+      if (host) host.setAttribute('data-market-learning-state', 'unavailable');
+      document.getElementById('marketLearningState').textContent = 'UNAVAILABLE';
+      if (list) list.innerHTML = '<div class="empty-state">No market conclusion is shown.</div>';
+      document.getElementById('marketLearningNote').textContent =
+        'Market attribution is unavailable or malformed; preferences remain unchanged.';
+      return;
+    }
+
+    var stateName = String(marketLearning.state);
+    host.setAttribute('data-market-learning-state', stateName);
+    document.getElementById('marketLearningState').textContent =
+      stateName === 'no_market_history' ? 'NO HISTORY' :
+      stateName === 'awaiting_outcomes' ? 'AWAITING OUTCOMES' :
+      stateName === 'sample_ready' ? 'SAMPLE READY' : 'LEARNING';
+
+    if (!marketLearning.markets.length) {
+      list.innerHTML = '<div class="empty-state">No verified market history in this window.</div>';
+      document.getElementById('marketLearningNote').textContent =
+        'Market samples appear after verified decisions are tracked; no preference is changed automatically.';
+      return;
+    }
+
+    list.innerHTML = marketLearning.markets.map(function (item) {
+      var label = marketLabelOf({ canonicalMarketKey: item.marketKey });
+      var beatClose = number(item.beatCloseRate);
+      var closeText = beatClose == null ? 'CLV —' :
+        'Beat close ' + ((beatClose <= 1 ? beatClose * 100 : beatClose).toFixed(1)) + '%';
+      return '<div class="market-learning-row" data-sample-ready="' +
+        (item.sampleReady === true ? 'true' : 'false') + '">' +
+        '<strong>' + esc(label) + '</strong><span>' +
+        esc(item.gradedCount) + ' graded / ' + esc(item.decisionCount) +
+        ' decisions</span><b>' + esc(closeText) + '</b></div>';
+    }).join('');
+    document.getElementById('marketLearningNote').textContent =
+      'Markets stay in canonical order. These descriptive samples do not rank markets or change preferences.';
+  }
+
   function renderVerifiedDecisionLearning() {
     var host = document.getElementById('verifiedDecisionLearning');
     var learning = state.tracker && state.tracker.verifiedDecisionLearning;
@@ -802,10 +872,12 @@
       document.getElementById('learningBeatClose').textContent = '—';
       document.getElementById('learningNote').textContent =
         'Source-attributed learning is unavailable; no conclusion is shown.';
+      renderVerifiedDecisionMarketLearning(null);
       return;
     }
 
     host.setAttribute('data-learning-state', stateName);
+    renderVerifiedDecisionMarketLearning(learning);
     document.getElementById('learningDecisions').textContent = String(Math.round(decisions));
     document.getElementById('learningPending').textContent = String(Math.round(pending));
     document.getElementById('learningGraded').textContent = String(Math.round(graded));

@@ -11,6 +11,7 @@ PRODUCT_HUB_VERSION = "4.64"
 SAVED_PLAYER_DIGEST_VERSION = "4.70"
 VERIFIED_DECISION_HANDOFF_VERSION = "4.71"
 VERIFIED_DECISION_LEARNING_VERSION = "4.72"
+VERIFIED_DECISION_MARKET_LEARNING_VERSION = "4.73"
 _ROOT = Path(__file__).resolve().parent
 _HUB_PATH = _ROOT / "product_hub.html"
 
@@ -117,6 +118,25 @@ def product_journey():
                 "minimumGradedSample": 10,
                 "aggregateOnly": True,
                 "rowsIncluded": False,
+                "metricsAreDescriptive": True,
+                "failClosed": True,
+            },
+            "verifiedDecisionMarketLearning": {
+                "version": VERIFIED_DECISION_MARKET_LEARNING_VERSION,
+                "parentContractVersion": VERIFIED_DECISION_LEARNING_VERSION,
+                "supportedMarkets": [
+                    "batter_hits",
+                    "batter_total_bases",
+                    "batter_home_runs",
+                    "batter_rbis",
+                    "pitcher_strikeouts",
+                ],
+                "minimumGradedSamplePerMarket": 10,
+                "aggregateOnly": True,
+                "trackerRowsIncluded": False,
+                "rankingEnabled": False,
+                "preferenceMutation": False,
+                "recommendation": False,
                 "metricsAreDescriptive": True,
                 "failClosed": True,
             },

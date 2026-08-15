@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 4.71 merged and deployed on 2026-08-15. Phase 4.72 is the active phase.
+Status: Phase 4.72 merged and deployed on 2026-08-15. Phase 4.73 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -314,6 +314,23 @@ Exit gate: only rows carrying the exact server-persisted 4.71 handoff source are
 included, the response is aggregate-only with no row payload, zero-risk and
 missing-CLV samples do not fabricate ROI or beat-close values, and My Hub never
 turns a small or unavailable sample into a recommendation.
+
+### Phase 4.73 — Verified decision market learning lens
+
+Implementation status: the aggregate-only 4.72 learning payload now carries a
+nested 4.73 market lens for the five canonical My Hub markets. Each market keeps
+decision, pending, graded, outcome, ROI, unit, and closing-line aggregates in
+canonical order without returning tracker rows or player identities.
+
+My Hub renders market sample progress beneath the overall learning state.
+Markets remain awaiting outcomes, learning, or sample ready using the same
+ten-graded-decision threshold. The lens is explicitly descriptive: it does not
+rank markets, change device preferences, or create recommendations.
+
+Exit gate: only exact 4.71 handoff rows in supported canonical markets are
+included, unknown markets are omitted, malformed or duplicate market aggregates
+fail closed, missing ROI or CLV stays blank, and neither backend nor frontend
+reorders markets by performance.
 
 ## Audit findings carried into the roadmap
 
