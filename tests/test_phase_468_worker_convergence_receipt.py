@@ -173,5 +173,5 @@ def test_phase_468_contract_is_installed_and_documented():
     assert "--settle-attempts" in gate
     assert "--settle-attempts 61" in workflow
     assert "--settle-delay 10" in workflow
-    assert "Phase 4.68 is the active phase." in roadmap
+    assert "### Phase 4.68 — Durable worker convergence receipt" in roadmap\n    assert "Phase 4.69 is the active phase." in roadmap
     assert "Durable worker convergence receipt" in roadmap

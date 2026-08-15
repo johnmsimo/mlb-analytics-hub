@@ -37,6 +37,7 @@ def json_response(payload, status=200, elapsed=0.05):
 
 
 def valid_edge():
+    observed_at = "2026-08-15T12:00:00+00:00"
     return {
         "actionable": True,
         "actionabilityStage": "Actionable",
@@ -45,9 +46,48 @@ def valid_edge():
         "canonicalCandidateId": "candidate-101-hits",
         "canonicalFingerprint": "snapshot-1",
         "canonicalMarketKey": "batter_hits",
+        "canonicalSide": "Over",
+        "line": 0.5,
         "canonicalPrice": -110,
         "canonicalBook": "Book A",
         "canonicalEdge": 0.05,
+        "oddsUpdatedAt": observed_at,
+        "evidenceReceipt": {
+            "contractVersion": "4.69",
+            "candidateId": "candidate-101-hits",
+            "fingerprint": "snapshot-1",
+            "selection": {
+                "marketKey": "batter_hits",
+                "side": "Over",
+                "line": 0.5,
+            },
+            "price": {
+                "american": -110,
+                "book": "Book A",
+                "observedAt": observed_at,
+                "ageSeconds": 10,
+                "maximumAgeSeconds": 900,
+                "fresh": True,
+            },
+            "model": {
+                "probability": 0.60,
+                "version": "contract-model-1",
+            },
+            "market": {
+                "impliedProbability": 0.52381,
+                "fairProbability": 0.55,
+                "edge": 0.05,
+            },
+            "validation": {
+                "actionable": True,
+                "actionabilityStage": "Actionable",
+                "candidateIntegrityVersion": "4.37",
+                "marketValidationVersion": "4.38",
+                "calibrationStatus": "passed",
+                "marketGateStatus": "promoted",
+            },
+            "explanation": "Model probability exceeds the de-vigged fair market.",
+        },
     }
 
 

@@ -97,7 +97,8 @@ def test_edge_lab_fails_closed_without_fresh_complete_evidence():
     assert row["actionable"] is False
     assert row["actionabilityStage"] == "Validated"
     assert row["evidenceReceipt"] is None
-    assert "missing complete recommendation evidence receipt" in row[
+    assert "sportsbook price is stale" in row["actionabilityReasons"]
+    assert "candidate integrity or downstream evidence gate rejected row" in row[
         "actionabilityReasons"
     ]
 
