@@ -79,6 +79,8 @@ jobs:
           python3 scripts/production_contract_gate.py
           --base-url https://mlb-analytics-hub.fly.dev
           --expected-sha ${{ github.sha }}
+          --settle-attempts 61
+          --settle-delay 10
       - name: Roll back failed deployment or production smoke
         id: rollback_deploy
         if: failure() && steps.rollback.outputs.image != '' && steps.deploy.outcome != 'skipped'
