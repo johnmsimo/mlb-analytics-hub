@@ -40,7 +40,7 @@ def test_market_learning_preferences_are_user_initiated_and_share_one_store():
     assert "var MARKET_KEY = 'mlb_market_preferences';" in source
     assert "function wireMarketLearningActions()" in source
     assert "data-market-learning-preference" in source
-    assert "setPreferredMarket(key, !state.preferred.has(key));" in source
+    assert "setPreferredMarket(key, !state.preferred.has(key), 'market_learning');" in source
     assert "writeJson(MARKET_KEY, Array.from(state.preferred));" in source
     assert "data-market-preference-key" in source
     assert "syncMarketPreferenceControls();" in source
@@ -75,7 +75,7 @@ def test_workspace_exposes_accessible_synchronized_review_controls():
     source = (ROOT / "static" / "product-hub.js").read_text(encoding="utf-8")
     css = (ROOT / "static" / "product-hub.css").read_text(encoding="utf-8")
 
-    assert "FEATURE 4.74" in html
+    assert "FEATURE 4.75" in html
     assert 'id="verifiedDecisionMarketLearning"' in html
     assert 'class="market-learning-preference"' in source
     assert "aria-pressed" in source
@@ -93,6 +93,6 @@ def test_phase_474_is_documented_as_active():
         encoding="utf-8"
     )
 
-    assert "Phase 4.74 is the active phase." in roadmap
+    assert "Phase 4.75 is the active phase." in roadmap
     assert "### Phase 4.74 — Explicit market preference review" in roadmap
     assert "every preference change requires an explicit user action" in roadmap

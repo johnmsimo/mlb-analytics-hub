@@ -31,7 +31,7 @@
   <main class="hub-shell">
     <section class="hub-hero" aria-labelledby="hubTitle">
       <div>
-        <p class="eyebrow">PHASE 4.64 · MY HUB <span class="feature-version">FEATURE 4.74</span></p>
+        <p class="eyebrow">PHASE 4.64 · MY HUB <span class="feature-version">FEATURE 4.75</span></p>
         <h1 id="hubTitle">One clear path from signal to insight.</h1>
         <p class="hero-copy">Discover opportunities, validate the evidence, track decisions, and learn from outcomes—without losing the context that makes a pick trustworthy.</p>
       </div>
@@ -69,8 +69,12 @@
 
       <aside class="panel preferences-panel">
         <header class="panel-head"><div><p class="step-label">PERSONALIZE</p><h2>Your markets</h2></div></header>
-        <p class="panel-copy">Choose the markets that should rise to the top of My Hub.</p>
+        <p class="panel-copy">Choose the markets included in your personalized My Hub signals.</p>
         <div class="market-options" id="marketOptions" role="group" aria-label="Preferred markets"></div>
+        <div class="market-preference-receipt" id="marketPreferenceReceipt" data-receipt-state="idle" aria-live="polite">
+          <p id="marketPreferenceReceiptText">Your next explicit market change will appear here.</p>
+          <button class="market-preference-undo" id="undoMarketPreference" type="button" hidden>Undo last change</button>
+        </div>
         <label class="threshold-label" for="alertThreshold">In-app alert threshold</label>
         <select id="alertThreshold">
           <option value="3">3% edge or higher</option>
