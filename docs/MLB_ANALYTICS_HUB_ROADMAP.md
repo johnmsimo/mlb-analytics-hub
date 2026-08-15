@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 4.70 merged and deployed on 2026-08-15. Phase 4.71 is the active phase.
+Status: Phase 4.71 merged and deployed on 2026-08-15. Phase 4.72 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -296,6 +296,24 @@ receipt can produce a 4.71 draft; the draft expires with its quote, storage
 failure and validation failure remain visible non-actions, Tracker never
 auto-saves the handoff, and the review control preserves the 390px touch
 contract.
+
+### Phase 4.72 — Verified decision learning loop
+
+Implementation status: Tracker's existing 30-day performance response now includes
+an aggregate-only learning slice for decisions saved through the 4.71 verified
+handoff. It reports decision, pending, and graded counts plus descriptive
+outcome, ROI, unit, and closing-line aggregates without returning tracker rows
+or player identities to My Hub.
+
+My Hub exposes explicit no-decision, awaiting-outcome, learning, sample-ready,
+and unavailable states. Fewer than ten graded decisions remain visibly labeled
+as an early descriptive sample; missing or malformed source attribution shows
+no conclusion. Full audit detail remains in Tracker.
+
+Exit gate: only rows carrying the exact server-persisted 4.71 handoff source are
+included, the response is aggregate-only with no row payload, zero-risk and
+missing-CLV samples do not fabricate ROI or beat-close values, and My Hub never
+turns a small or unavailable sample into a recommendation.
 
 ## Audit findings carried into the roadmap
 

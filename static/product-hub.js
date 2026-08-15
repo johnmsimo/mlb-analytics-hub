@@ -777,10 +777,68 @@
     return null;
   }
 
+  function renderVerifiedDecisionLearning() {
+    var host = document.getElementById('verifiedDecisionLearning');
+    var learning = state.tracker && state.tracker.verifiedDecisionLearning;
+    var validStates = ['no_verified_decisions', 'awaiting_outcomes', 'learning', 'sample_ready'];
+    var valid = learning &&
+      learning.version === '4.72' &&
+      learning.source === 'my_hub_verified_decision_draft' &&
+      learning.aggregateOnly === true &&
+      learning.rowsIncluded === false &&
+      learning.failClosed === true &&
+      validStates.indexOf(String(learning.state || '')) >= 0;
+    var stateName = valid ? String(learning.state) : 'unavailable';
+    var decisions = valid ? number(learning.decisionCount) : null;
+    var pending = valid ? number(learning.pendingCount) : null;
+    var graded = valid ? number(learning.gradedCount) : null;
+    var beatClose = valid ? number(learning.beatCloseRate) : null;
+    if (!host || decisions == null || pending == null || graded == null) {
+      if (host) host.setAttribute('data-learning-state', 'unavailable');
+      document.getElementById('learningState').textContent = 'UNAVAILABLE';
+      document.getElementById('learningDecisions').textContent = '—';
+      document.getElementById('learningPending').textContent = '—';
+      document.getElementById('learningGraded').textContent = '—';
+      document.getElementById('learningBeatClose').textContent = '—';
+      document.getElementById('learningNote').textContent =
+        'Source-attributed learning is unavailable; no conclusion is shown.';
+      return;
+    }
+
+    host.setAttribute('data-learning-state', stateName);
+    document.getElementById('learningDecisions').textContent = String(Math.round(decisions));
+    document.getElementById('learningPending').textContent = String(Math.round(pending));
+    document.getElementById('learningGraded').textContent = String(Math.round(graded));
+    document.getElementById('learningBeatClose').textContent =
+      beatClose == null ? '—' : ((beatClose <= 1 ? beatClose * 100 : beatClose).toFixed(1) + '%');
+
+    if (stateName === 'no_verified_decisions') {
+      document.getElementById('learningState').textContent = 'NO DECISIONS';
+      document.getElementById('learningNote').textContent =
+        'No decisions saved through the verified My Hub handoff are in this 30-day window.';
+    } else if (stateName === 'awaiting_outcomes') {
+      document.getElementById('learningState').textContent = 'AWAITING OUTCOMES';
+      document.getElementById('learningNote').textContent =
+        'Verified decisions are tracked, but none are graded; no performance conclusion is available.';
+    } else if (stateName === 'learning') {
+      var minimum = number(learning.minimumGradedSample) || 10;
+      var remaining = Math.max(0, minimum - graded);
+      document.getElementById('learningState').textContent = 'LEARNING';
+      document.getElementById('learningNote').textContent =
+        Math.round(graded) + ' graded decision' + (graded === 1 ? '' : 's') + '; ' +
+        Math.round(remaining) + ' more before the source sample is ready. Early metrics are descriptive only.';
+    } else {
+      document.getElementById('learningState').textContent = 'SAMPLE READY';
+      document.getElementById('learningNote').textContent =
+        Math.round(graded) + ' graded verified decisions are ready for source-level review in Tracker.';
+    }
+  }
+
   function renderTracker() {
     var payload = state.tracker;
     if (!payload) {
       document.getElementById('trackNote').textContent = 'Tracker evidence is unavailable. Open Tracker to review saved decisions.';
+      renderVerifiedDecisionLearning();
       return;
     }
     var graded = findMetric(payload, ['gradedCount', 'graded', 'totalGraded', 'count']);
@@ -792,6 +850,7 @@
     document.getElementById('roi').textContent = roi == null ? '—' : ((roi <= 1 && roi >= -1 ? roi * 100 : roi).toFixed(1) + '%');
     document.getElementById('brier').textContent = brier == null ? '—' : brier.toFixed(3);
     document.getElementById('trackNote').textContent = graded ? 'Last 30 days of graded decisions. Use Tracker for CLV, market splits, and full audit details.' : 'No graded decisions are available for the selected window yet.';
+    renderVerifiedDecisionLearning();
   }
 
   function updateHero(failures) {

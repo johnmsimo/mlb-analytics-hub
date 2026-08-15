@@ -10,6 +10,7 @@ from flask import Blueprint, jsonify, make_response
 PRODUCT_HUB_VERSION = "4.64"
 SAVED_PLAYER_DIGEST_VERSION = "4.70"
 VERIFIED_DECISION_HANDOFF_VERSION = "4.71"
+VERIFIED_DECISION_LEARNING_VERSION = "4.72"
 _ROOT = Path(__file__).resolve().parent
 _HUB_PATH = _ROOT / "product_hub.html"
 
@@ -100,6 +101,23 @@ def product_journey():
                 "saveEndpoint": "/api/tracker/pick",
                 "saveRequiresAdminAuth": True,
                 "canonicalRevalidationOnSave": True,
+                "failClosed": True,
+            },
+            "verifiedDecisionLearning": {
+                "version": VERIFIED_DECISION_LEARNING_VERSION,
+                "sourceEndpoint": "/api/tracker/performance?window=30",
+                "trackedSource": "my_hub_verified_decision_draft",
+                "states": [
+                    "no_verified_decisions",
+                    "awaiting_outcomes",
+                    "learning",
+                    "sample_ready",
+                    "unavailable",
+                ],
+                "minimumGradedSample": 10,
+                "aggregateOnly": True,
+                "rowsIncluded": False,
+                "metricsAreDescriptive": True,
                 "failClosed": True,
             },
             "alerts": {

@@ -39,7 +39,7 @@ def test_workspace_contains_saved_player_digest_accessibility_contract():
     html = (ROOT / "product_hub.html").read_text(encoding="utf-8")
 
     assert "PHASE 4.64 · MY HUB" in html
-    assert "FEATURE 4.71" in html
+    assert "FEATURE 4.72" in html
     assert 'id="savedOpportunitySummary"' in html
     assert 'id="savedOpportunityList"' in html
     assert 'aria-live="polite"' in html
@@ -91,5 +91,5 @@ def test_phase_470_is_documented_as_active():
         encoding="utf-8"
     )
 
-    assert "Phase 4.71 is the active phase." in roadmap
+    assert "Phase 4.72 is the active phase." in roadmap
     assert "### Phase 4.70 — Saved-player verified opportunity digest" in roadmap
