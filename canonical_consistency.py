@@ -19,6 +19,8 @@ from candidate_integrity import evaluate_candidate
 
 
 CANONICAL_CONTRACT_VERSION = "4.57"
+RECOMMENDATION_EVIDENCE_VERSION = "4.69"
+MAX_EVIDENCE_ODDS_AGE_SECONDS = 900
 CANONICAL_FIELDS = (
     "canonicalCandidateId",
     "playerId",
@@ -171,6 +173,119 @@ def _fingerprint(snapshot: Mapping[str, Any]) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24]
 
 
+def _evidence_timestamp(value: Any) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _recommendation_evidence(
+    row: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Build a complete, internally consistent receipt or fail closed."""
+    candidate_id = str(row.get("canonicalCandidateId") or "").strip()
+    fingerprint = str(row.get("canonicalFingerprint") or "").strip()
+    market_key = str(row.get("canonicalMarketKey") or "").strip()
+    side = str(row.get("canonicalSide") or "").strip()
+    book = str(row.get("canonicalBook") or "").strip()
+    model_version = str(row.get("modelVersion") or "").strip()
+    integrity_version = str(row.get("integrityVersion") or "").strip()
+    validation_version = str(row.get("marketValidationVersion") or "").strip()
+    calibration_status = str(row.get("calibrationStatus") or "").strip().lower()
+    market_gate_status = str(row.get("marketGateStatus") or "").strip().lower()
+    observed_at = str(row.get("oddsUpdatedAt") or "").strip()
+    observed = _evidence_timestamp(observed_at)
+
+    line = _number(row.get("line"))
+    price = _number(row.get("canonicalPrice"))
+    age_seconds = _number(row.get("oddsAgeSeconds"))
+    model_probability = _number(row.get("canonicalProbability"))
+    implied_probability = _number(row.get("quotedMarketImplied"))
+    fair_probability = _number(row.get("marketFairProbability"))
+    edge = _number(row.get("canonicalEdge"))
+
+    complete = (
+        row.get("actionable") is True
+        and str(row.get("actionabilityStage") or "").lower() == "actionable"
+        and row.get("marketGatePromoted") is True
+        and candidate_id
+        and fingerprint
+        and market_key
+        and side
+        and line is not None
+        and price is not None
+        and price != 0
+        and abs(price) >= 100
+        and book
+        and observed is not None
+        and age_seconds is not None
+        and 0 <= age_seconds <= MAX_EVIDENCE_ODDS_AGE_SECONDS
+        and model_version
+        and integrity_version
+        and validation_version
+        and calibration_status == "passed"
+        and market_gate_status == "promoted"
+        and model_probability is not None
+        and 0 < model_probability < 1
+        and implied_probability is not None
+        and 0 < implied_probability < 1
+        and fair_probability is not None
+        and 0 < fair_probability < 1
+        and edge is not None
+        and edge > 0
+    )
+    if not complete:
+        return None
+
+    reason = str(row.get("reason") or "").strip()
+    if not reason:
+        reason = (
+            f"Model {model_probability * 100:.1f}% versus "
+            f"{fair_probability * 100:.1f}% fair market probability at "
+            f"{book} {price:+g}; {edge * 100:.1f}-point edge."
+        )
+    return {
+        "contractVersion": RECOMMENDATION_EVIDENCE_VERSION,
+        "candidateId": candidate_id,
+        "fingerprint": fingerprint,
+        "selection": {
+            "marketKey": market_key,
+            "side": side,
+            "line": line,
+        },
+        "price": {
+            "american": price,
+            "book": book,
+            "observedAt": observed_at,
+            "ageSeconds": age_seconds,
+            "maximumAgeSeconds": MAX_EVIDENCE_ODDS_AGE_SECONDS,
+            "fresh": True,
+        },
+        "model": {
+            "probability": model_probability,
+            "version": model_version,
+        },
+        "market": {
+            "impliedProbability": implied_probability,
+            "fairProbability": fair_probability,
+            "edge": edge,
+        },
+        "validation": {
+            "actionable": True,
+            "actionabilityStage": "Actionable",
+            "candidateIntegrityVersion": integrity_version,
+            "marketValidationVersion": validation_version,
+            "calibrationStatus": calibration_status,
+            "marketGateStatus": market_gate_status,
+        },
+        "explanation": reason,
+    }
+
+
 def normalize_candidate(
     source: Mapping[str, Any],
     *,
@@ -223,6 +338,24 @@ def normalize_candidate(
     evaluated["canonicalFingerprint"] = _fingerprint(
         evaluated["canonicalSnapshot"]
     )
+    evaluated["recommendationEvidenceVersion"] = RECOMMENDATION_EVIDENCE_VERSION
+    receipt = _recommendation_evidence(evaluated)
+    if (
+        surface == "edge_lab"
+        and evaluated.get("actionable") is True
+        and receipt is None
+    ):
+        evaluated["actionable"] = False
+        evaluated["actionabilityStage"] = "Validated"
+        evaluated["actionabilityReasons"] = list(dict.fromkeys(
+            list(evaluated.get("actionabilityReasons") or [])
+            + ["missing complete recommendation evidence receipt"]
+        ))
+        evaluated["canonicalSnapshot"] = _snapshot(evaluated)
+        evaluated["canonicalFingerprint"] = _fingerprint(
+            evaluated["canonicalSnapshot"]
+        )
+    evaluated["evidenceReceipt"] = receipt
     return evaluated
 
 

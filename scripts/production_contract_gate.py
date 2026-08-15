@@ -20,6 +20,8 @@ from typing import Any
 
 PAGE_BUDGET_SECONDS = 2.0
 ASSET_BUDGET_SECONDS = 2.0
+RECOMMENDATION_EVIDENCE_VERSION = "4.69"
+MAX_EVIDENCE_ODDS_AGE_SECONDS = 900
 INVALID_BOOKS = {
     "model",
     "n/a",
@@ -128,7 +130,7 @@ def fetch_url(base_url: str, path: str, timeout: float) -> HttpResponse:
         headers={
             "Accept": "*/*",
             "Accept-Encoding": "identity",
-            "User-Agent": "mlb-analytics-hub-production-contract/4.68",
+            "User-Agent": "mlb-analytics-hub-production-contract/4.69",
         },
         method="GET",
     )
@@ -175,6 +177,132 @@ def validate_page(contract: PageContract, response: HttpResponse) -> set[str]:
     parser = _StaticAssetParser()
     parser.feed(html)
     return parser.paths
+
+
+def validate_recommendation_evidence(row: dict[str, Any], index: int) -> None:
+    receipt = row.get("evidenceReceipt")
+    _require(isinstance(receipt, dict), f"edge {index} lacks evidence receipt")
+    _require(
+        receipt.get("contractVersion") == RECOMMENDATION_EVIDENCE_VERSION,
+        f"edge {index} has an unexpected evidence contract version",
+    )
+    _require(
+        receipt.get("candidateId") == row.get("canonicalCandidateId"),
+        f"edge {index} evidence candidate identity mismatch",
+    )
+    _require(
+        receipt.get("fingerprint") == row.get("canonicalFingerprint"),
+        f"edge {index} evidence fingerprint mismatch",
+    )
+
+    selection = receipt.get("selection")
+    quoted = receipt.get("price")
+    model = receipt.get("model")
+    market_evidence = receipt.get("market")
+    validation = receipt.get("validation")
+    for name, value in (
+        ("selection", selection),
+        ("price", quoted),
+        ("model", model),
+        ("market", market_evidence),
+        ("validation", validation),
+    ):
+        _require(isinstance(value, dict), f"edge {index} evidence lacks {name}")
+
+    market_key = row.get("canonicalMarketKey") or row.get("marketKey")
+    _require(
+        selection.get("marketKey") == market_key,
+        f"edge {index} evidence market identity mismatch",
+    )
+    _require(
+        str(selection.get("side") or "").lower()
+        == str(row.get("canonicalSide") or row.get("side") or "").lower(),
+        f"edge {index} evidence side mismatch",
+    )
+    _require(
+        selection.get("line") == row.get("line"),
+        f"edge {index} evidence line mismatch",
+    )
+
+    price = row.get("canonicalPrice")
+    book = row.get("canonicalBook")
+    age = quoted.get("ageSeconds")
+    _require(quoted.get("american") == price, f"edge {index} evidence price mismatch")
+    _require(
+        str(quoted.get("book") or "").lower() == str(book or "").lower(),
+        f"edge {index} evidence book mismatch",
+    )
+    _require(
+        isinstance(age, (int, float))
+        and not isinstance(age, bool)
+        and 0 <= age <= MAX_EVIDENCE_ODDS_AGE_SECONDS,
+        f"edge {index} evidence odds age is invalid",
+    )
+    _require(
+        quoted.get("maximumAgeSeconds") == MAX_EVIDENCE_ODDS_AGE_SECONDS
+        and quoted.get("fresh") is True,
+        f"edge {index} evidence freshness policy mismatch",
+    )
+    observed_at = str(quoted.get("observedAt") or "")
+    _require(
+        observed_at == str(row.get("oddsUpdatedAt") or ""),
+        f"edge {index} evidence timestamp mismatch",
+    )
+    try:
+        datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ContractError(
+            f"edge {index} evidence timestamp is invalid"
+        ) from exc
+
+    model_probability = model.get("probability")
+    implied_probability = market_evidence.get("impliedProbability")
+    fair_probability = market_evidence.get("fairProbability")
+    evidence_edge = market_evidence.get("edge")
+    for name, value in (
+        ("model probability", model_probability),
+        ("implied probability", implied_probability),
+        ("fair probability", fair_probability),
+    ):
+        _require(
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and 0 < value < 1,
+            f"edge {index} evidence {name} is invalid",
+        )
+    _require(bool(model.get("version")), f"edge {index} evidence lacks model version")
+    _require(
+        isinstance(evidence_edge, (int, float))
+        and not isinstance(evidence_edge, bool)
+        and evidence_edge > 0,
+        f"edge {index} evidence edge is invalid",
+    )
+    canonical_edge = row.get("canonicalEdge")
+    _require(
+        isinstance(canonical_edge, (int, float))
+        and abs(evidence_edge - canonical_edge) < 0.000001,
+        f"edge {index} evidence edge mismatch",
+    )
+
+    _require(
+        validation.get("actionable") is True
+        and str(validation.get("actionabilityStage") or "").lower() == "actionable",
+        f"edge {index} evidence is not actionable",
+    )
+    _require(
+        str(validation.get("calibrationStatus") or "").lower() == "passed"
+        and str(validation.get("marketGateStatus") or "").lower() == "promoted",
+        f"edge {index} evidence lacks promoted calibration",
+    )
+    _require(
+        bool(validation.get("candidateIntegrityVersion"))
+        and bool(validation.get("marketValidationVersion")),
+        f"edge {index} evidence lacks validation versions",
+    )
+    _require(
+        bool(str(receipt.get("explanation") or "").strip()),
+        f"edge {index} evidence lacks explanation",
+    )
 
 
 def validate_actionable_edges(payload: Any) -> None:
@@ -256,6 +384,7 @@ def validate_actionable_edges(payload: Any) -> None:
             isinstance(edge, (int, float)) and edge > 0,
             f"edge {index} has non-positive edge",
         )
+        validate_recommendation_evidence(row, index)
 
 
 def _validate_health(payload: Any, expected_sha: str | None) -> None:
