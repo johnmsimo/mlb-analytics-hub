@@ -765,6 +765,28 @@
     return { records: records, suppressed: suppressed };
   }
 
+  function alertEligibilityReasons(row, ledger) {
+    var marketKey = marketKeyOf(row);
+    var edge = edgeValue(row);
+    var validKinds = ['new_opportunity', 'edge_up', 'edge_down', 'price_move'];
+    var activeStates = ['new', 'seen'];
+    if (!isActionable(row) || !isSupportedMarketKey(marketKey) ||
+        !state.preferred.has(marketKeyOf(row)) ||
+        edge == null || edge < state.threshold ||
+        !isAlertFresh(row) || !ledger ||
+        activeStates.indexOf(ledger.status) === -1 ||
+        validKinds.indexOf(ledger.kind) === -1) return [];
+    return [
+      { key: 'preferred_market', label: 'Preferred market' },
+      { key: 'threshold_match', label: 'Threshold ' + state.threshold + '%+' },
+      { key: 'fresh_quote', label: 'Fresh quote ≤15m' },
+      {
+        key: 'eligible_event',
+        label: ledger.kind === 'new_opportunity' ? 'New opportunity' : 'Material change'
+      }
+    ];
+  }
+
   function alertExplanation(row, ledger) {
     var parts = [];
     if (state.watchlist.has(String(row.player || '').toLowerCase())) parts.push('saved player');
@@ -789,11 +811,23 @@
   function alertHtml(record) {
     var row = record.row;
     var ledger = record.ledger;
+    var reasons = alertEligibilityReasons(row, ledger);
+    if (!reasons.length) return '';
+    var reasonKeys = reasons.map(function (reason) { return reason.key; });
+    var reasonLabels = reasons.map(function (reason) { return reason.label; });
     var market = MARKET_OPTIONS.find(function (item) { return item.key === marketKeyOf(row); });
-    return '<article class="alert-card" data-alert-id="' + esc(record.id) + '" data-alert-kind="' + esc(ledger.kind) + '">' +
+    return '<article class="alert-card" data-alert-id="' + esc(record.id) +
+      '" data-alert-kind="' + esc(ledger.kind) +
+      '" data-alert-provenance="' + esc(reasonKeys.join(',')) + '">' +
       '<div><span class="alert-state">' + esc(alertKindLabel(ledger)) + '</span>' +
       '<strong>' + esc(row.player) + ' · ' + esc(market ? market.label : marketKeyOf(row)) + '</strong>' +
-      '<small>' + esc(alertExplanation(row, ledger)) + '</small></div>' +
+      '<small>' + esc(alertExplanation(row, ledger)) + '</small>' +
+      '<p class="alert-provenance" aria-label="Alert eligibility reasons: ' +
+        esc(reasonLabels.join(', ')) + '"><strong>Alert because</strong>' +
+        reasons.map(function (reason) {
+          return '<span data-alert-provenance-reason="' + esc(reason.key) + '">' +
+            esc(reason.label) + '</span>';
+        }).join('') + '</p></div>' +
       '<div class="alert-actions">' +
       (ledger.status === 'new' ? '<button type="button" data-alert-action="seen">Seen</button>' : '') +
       '<button type="button" data-alert-action="dismiss">Dismiss</button></div></article>';
@@ -817,11 +851,12 @@
       ' stale suppressed · ' + reconciled.suppressed + ' quiet refreshes';
 
     var host = document.getElementById('alertList');
-    if (!visible.length) {
+    var cards = visible.slice(0, 12).map(alertHtml).filter(Boolean);
+    if (!cards.length) {
       host.innerHTML = '<div class="empty-state">No fresh, materially distinct alerts match your preferences right now.</div>';
       return;
     }
-    host.innerHTML = visible.slice(0, 12).map(alertHtml).join('');
+    host.innerHTML = cards.join('');
   }
 
   function activeAlertFor(row) {

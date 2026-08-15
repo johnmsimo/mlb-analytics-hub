@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 4.75 merged and deployed on 2026-08-15. Phase 4.76 is the active phase.
+Status: Phase 4.76 merged and deployed on 2026-08-15. Phase 4.77 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -382,6 +382,25 @@ Exit gate: every displayed provenance reason is derived only from current
 actionability plus explicit device state, unknown markets fail closed, saved
 player priority is labeled without implying stronger model evidence, and
 assistive technology receives the same reason labels shown visually.
+
+### Phase 4.77 — Alert eligibility provenance
+
+Implementation status: every visible My Hub alert now carries fixed-order,
+accessible provenance for its explicitly preferred market, configured edge
+threshold, fresh quote, and eligible event. The event reason distinguishes a new
+actionable opportunity from a material edge or price change without changing
+the existing alert ledger.
+
+Provenance is explanatory only. It does not create alerts, alter thresholds,
+change lifecycle state, inspect ROI, CLV, win rate, or learning performance, or
+write to the server. Non-actionable rows, unsupported markets, stale quotes,
+below-threshold edges, malformed ledger records, and inactive states render no
+alert card.
+
+Exit gate: every displayed alert reason is derived from the same canonical
+eligibility checks that create the inbox, reason keys remain in stable order,
+assistive technology receives the visible labels, quiet refreshes stay
+suppressed, and provenance performs no ledger mutation.
 
 ## Audit findings carried into the roadmap
 
