@@ -172,7 +172,7 @@ tr:hover td{background:rgba(0,229,255,.03)}
 .modal-card{width:min(720px,94vw);max-height:86vh;overflow:auto;background:var(--bg2);border:1px solid var(--line2);border-radius:16px;padding:16px}
 .modal-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px}
 .modal-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.verified-draft-notice{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 12px;padding:10px 12px;border:1px solid rgba(0,230,118,.35);border-radius:10px;background:rgba(0,230,118,.06)}.verified-draft-notice[hidden]{display:none}.verified-draft-notice div{display:grid;gap:3px}.verified-draft-notice strong{color:var(--g);font-size:.7rem}.verified-draft-notice span{color:var(--mu);font-size:.62rem;line-height:1.4}
+.verified-draft-notice{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 12px;padding:10px 12px;border:1px solid rgba(0,230,118,.35);border-radius:10px;background:rgba(0,230,118,.06)}.verified-draft-notice[hidden]{display:none}.verified-draft-notice div{display:grid;gap:3px}.verified-draft-notice strong{color:var(--g);font-size:.7rem}.verified-draft-notice span{color:var(--mu);font-size:.62rem;line-height:1.4}.verified-draft-notice .verified-draft-origin{width:max-content;padding:2px 7px;border:1px solid rgba(0,229,255,.28);border-radius:999px;background:rgba(0,229,255,.07);color:var(--c);font-weight:700;letter-spacing:.04em;text-transform:uppercase}
 .modal-grid .field textarea{min-height:82px;resize:vertical;background:var(--bg3);border:1px solid var(--line2);color:var(--txt);border-radius:8px;padding:8px 10px}
 .modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
 .export-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
@@ -776,7 +776,7 @@ details[open] summary::before{transform:rotate(90deg)}
       <button class="btn sm" onclick="closeManualPick()">Close</button>
     </div>
     <div class="verified-draft-notice" id="verifiedDraftNotice" hidden>
-      <div><strong id="verifiedDraftLabel">Verified My Hub draft</strong><span>Prepared from a 4.69 receipt. Saving explicitly revalidates the canonical candidate on the server.</span></div>
+      <div><strong id="verifiedDraftLabel">Verified My Hub draft</strong><span class="verified-draft-origin" id="verifiedDraftOrigin">Draft source unavailable</span><span>Prepared from a 4.69 receipt. Saving explicitly revalidates the canonical candidate on the server.</span></div>
       <button class="btn sm" type="button" onclick="discardVerifiedDecisionDraft()">Discard draft</button>
     </div>
     <div class="modal-grid">
@@ -819,6 +819,10 @@ const MARKET_LABELS = {
 
 const VERIFIED_DECISION_DRAFT_VERSION = '4.71';
 const VERIFIED_DECISION_DRAFT_KEY = 'mlb_verified_decision_draft_v471';
+const VERIFIED_DECISION_DRAFT_ORIGINS = Object.freeze({
+  saved_player_digest: 'Saved player digest',
+  eligible_alert: 'Eligible alert',
+});
 let pendingVerifiedDecisionDraft = null;
 
 const st = {
@@ -1634,6 +1638,12 @@ async function saveAdj() {
   } catch(e){ status(e.message,true); }
 }
 
+function verifiedDecisionOriginLabel(origin) {
+  return Object.prototype.hasOwnProperty.call(VERIFIED_DECISION_DRAFT_ORIGINS, origin)
+    ? VERIFIED_DECISION_DRAFT_ORIGINS[origin]
+    : '';
+}
+
 function isVerifiedDecisionDraft(draft) {
   if (!draft || typeof draft !== 'object') return false;
   const expiresAt = Date.parse(String(draft.expiresAt || ''));
@@ -1645,6 +1655,7 @@ function isVerifiedDecisionDraft(draft) {
   return draft.version === VERIFIED_DECISION_DRAFT_VERSION &&
     draft.state === 'prepared' &&
     draft.receiptVersion === '4.69' &&
+    Boolean(verifiedDecisionOriginLabel(draft.preparedFrom)) &&
     draft.serverMutation === false &&
     requiredText.every(value => Boolean(String(value || '').trim())) &&
     [draft.line, draft.adjProb, draft.edge, draft.marketPrice].every(value =>
@@ -1685,6 +1696,7 @@ function clearVerifiedDecisionDraft(clearFields=false) {
   if ($('manualPickTitle')) $('manualPickTitle').textContent = 'Add Manual Pick';
   if ($('manualPickSubtitle')) $('manualPickSubtitle').textContent = 'Use this for books or markets you found outside the research board.';
   if ($('verifiedDraftNotice')) $('verifiedDraftNotice').hidden = true;
+  if ($('verifiedDraftOrigin')) $('verifiedDraftOrigin').textContent = 'Draft source unavailable';
   if (clearFields) {
     ['mpPlayer','mpTeam','mpOpp','mpLine','mpProb','mpEdge','mpMean','mpBook',
      'mpPrice','mpBestPrice','mpBestBook','mpStake','mpReason'].forEach(id => {
@@ -1737,6 +1749,7 @@ function applyVerifiedDecisionDraft() {
   $('manualPickTitle').textContent = 'Review Verified Decision';
   $('manualPickSubtitle').textContent = 'Review the canonical evidence, choose a stake, then explicitly save.';
   $('verifiedDraftLabel').textContent = draft.player + ' · ' + (MARKET_LABELS[draft.marketKey] || draft.marketKey);
+  $('verifiedDraftOrigin').textContent = 'Draft source: ' + verifiedDecisionOriginLabel(draft.preparedFrom);
   $('verifiedDraftNotice').hidden = false;
   openManualPick();
   status('Verified My Hub draft ready for review; no pick has been created.');

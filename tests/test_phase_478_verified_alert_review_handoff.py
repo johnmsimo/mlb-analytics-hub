@@ -45,7 +45,7 @@ def test_eligible_alert_cards_expose_explicit_tracker_review_control():
     source = (ROOT / "static" / "product-hub.js").read_text(encoding="utf-8")
     css = (ROOT / "static" / "product-hub.css").read_text(encoding="utf-8")
 
-    assert "FEATURE 4.78" in html
+    assert "FEATURE 4.79" in html
     assert 'class="alert-review"' in source
     assert "data-prepare-alert-track" in source
     assert ">Review in Tracker</button>" in source
@@ -110,6 +110,6 @@ def test_phase_478_is_documented_as_active():
         encoding="utf-8"
     )
 
-    assert "Phase 4.78 is the active phase." in roadmap
+    assert "Phase 4.79 is the active phase." in roadmap
     assert "### Phase 4.78 — Verified alert review handoff" in roadmap
     assert "Tracker remains the only explicit server-save boundary." in roadmap
