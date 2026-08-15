@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 4.76 merged and deployed on 2026-08-15. Phase 4.77 is the active phase.
+Status: Phase 4.77 merged and deployed on 2026-08-15. Phase 4.78 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -401,6 +401,23 @@ Exit gate: every displayed alert reason is derived from the same canonical
 eligibility checks that create the inbox, reason keys remain in stable order,
 assistive technology receives the visible labels, quiet refreshes stay
 suppressed, and provenance performs no ledger mutation.
+
+### Phase 4.78 — Verified alert review handoff
+
+Implementation status: every fully eligible alert now exposes an explicit
+Review in Tracker control. A user tap rechecks the current alert provenance,
+active ledger state, canonical actionability, and quote expiry before preparing
+the existing 4.71 device-local decision draft and navigating to Tracker.
+
+Preparing from an alert records its device-local origin but does not save a
+pick, mutate alert lifecycle state, post to the server, or bypass Tracker's
+explicit save, admin authorization, or canonical revalidation. Ineligible or
+expired alerts remain on My Hub with a clear failure message and no draft.
+
+Exit gate: the review control appears only on rendered eligible alerts, every
+handoff requires a tap, the alert and evidence receipt are revalidated at tap
+time, the draft expires with its quote, no ledger state changes on prepare, and
+Tracker remains the only explicit server-save boundary.
 
 ## Audit findings carried into the roadmap
 
