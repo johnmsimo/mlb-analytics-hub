@@ -251,6 +251,30 @@
     state.alertCandidates = cleanAlertCandidates(readJson(ALERT_CANDIDATE_STATE_KEY, {}));
   }
 
+  function isSupportedMarketKey(key) {
+    return MARKET_OPTIONS.some(function (item) { return item.key === key; });
+  }
+
+  function syncMarketPreferenceControls() {
+    document.querySelectorAll('[data-market-preference-key]').forEach(function (button) {
+      var key = String(button.getAttribute('data-market-preference-key') || '');
+      var preferred = isSupportedMarketKey(key) && state.preferred.has(key);
+      button.setAttribute('aria-pressed', preferred ? 'true' : 'false');
+      if (button.classList.contains('market-learning-preference')) {
+        button.textContent = preferred ? 'Preferred' : 'Add preference';
+      }
+    });
+  }
+
+  function setPreferredMarket(key, preferred) {
+    if (!isSupportedMarketKey(key)) return;
+    if (preferred) state.preferred.add(key);
+    else state.preferred.delete(key);
+    writeJson(MARKET_KEY, Array.from(state.preferred));
+    syncMarketPreferenceControls();
+    renderSignals();
+  }
+
   function renderMarketOptions() {
     var host = document.getElementById('marketOptions');
     host.innerHTML = '';
@@ -259,13 +283,10 @@
       button.type = 'button';
       button.className = 'market-chip';
       button.textContent = item.label;
+      button.setAttribute('data-market-preference-key', item.key);
       button.setAttribute('aria-pressed', state.preferred.has(item.key) ? 'true' : 'false');
       button.addEventListener('click', function () {
-        if (state.preferred.has(item.key)) state.preferred.delete(item.key);
-        else state.preferred.add(item.key);
-        button.setAttribute('aria-pressed', state.preferred.has(item.key) ? 'true' : 'false');
-        writeJson(MARKET_KEY, Array.from(state.preferred));
-        renderSignals();
+        setPreferredMarket(item.key, !state.preferred.has(item.key));
       });
       host.appendChild(button);
     });
@@ -833,18 +854,38 @@
     }
 
     list.innerHTML = marketLearning.markets.map(function (item) {
-      var label = marketLabelOf({ canonicalMarketKey: item.marketKey });
+      var key = String(item.marketKey);
+      var label = marketLabelOf({ canonicalMarketKey: key });
       var beatClose = number(item.beatCloseRate);
       var closeText = beatClose == null ? 'CLV —' :
         'Beat close ' + ((beatClose <= 1 ? beatClose * 100 : beatClose).toFixed(1)) + '%';
+      var preferred = state.preferred.has(key);
       return '<div class="market-learning-row" data-sample-ready="' +
         (item.sampleReady === true ? 'true' : 'false') + '">' +
         '<strong>' + esc(label) + '</strong><span>' +
         esc(item.gradedCount) + ' graded / ' + esc(item.decisionCount) +
-        ' decisions</span><b>' + esc(closeText) + '</b></div>';
+        ' decisions</span><b>' + esc(closeText) + '</b>' +
+        '<button type="button" class="market-learning-preference" ' +
+        'data-market-learning-preference="' + esc(key) + '" ' +
+        'data-market-preference-key="' + esc(key) + '" aria-pressed="' +
+        (preferred ? 'true' : 'false') + '" aria-label="' +
+        (preferred ? 'Remove ' : 'Add ') + esc(label) + ' market preference">' +
+        (preferred ? 'Preferred' : 'Add preference') + '</button></div>';
     }).join('');
+    syncMarketPreferenceControls();
     document.getElementById('marketLearningNote').textContent =
-      'Markets stay in canonical order. These descriptive samples do not rank markets or change preferences.';
+      'Markets stay in canonical order. Tap to review a device preference; performance never changes it automatically.';
+  }
+
+  function wireMarketLearningActions() {
+    var list = document.getElementById('marketLearningList');
+    if (!list) return;
+    list.addEventListener('click', function (event) {
+      var button = event.target.closest('[data-market-learning-preference]');
+      if (!button || !list.contains(button)) return;
+      var key = String(button.getAttribute('data-market-learning-preference') || '');
+      setPreferredMarket(key, !state.preferred.has(key));
+    });
   }
 
   function renderVerifiedDecisionLearning() {
@@ -946,6 +987,7 @@
     wireWatchlistForm();
     wireSignalActions();
     wireSavedOpportunityActions();
+    wireMarketLearningActions();
     wireAlertInbox();
     renderAlerts();
 
