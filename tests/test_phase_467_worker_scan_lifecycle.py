@@ -76,6 +76,6 @@ def test_phase_467_contract_is_installed_and_documented():
     assert "def _props_scan_job_state" in app_source
     assert "payload['computationState'] = 'failed'" in app_source
     assert "'canonicalFingerprint': p.get('canonicalFingerprint')" in app_source
-    assert "PASS post-scan web isolation" in gate_source
-    assert "Phase 4.67 is the active phase." in roadmap
+    assert "PASS post-convergence web isolation" in gate_source
+    assert "### Phase 4.67 — Durable recommendation scan lifecycle" in roadmap
     assert "Durable recommendation scan lifecycle" in roadmap
