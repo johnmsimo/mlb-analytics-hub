@@ -8,6 +8,7 @@
   var ALERT_CANDIDATE_STATE_KEY = 'mlb_alert_candidate_state';
   var ALERT_LEDGER_LIMIT = 200;
   var MAX_ALERT_ODDS_AGE_SECONDS = 900;
+  var RECOMMENDATION_EVIDENCE_VERSION = '4.69';
   var MATERIAL_EDGE_DELTA_PCT = 1;
   var MATERIAL_PRICE_DELTA = 10;
   var MARKET_OPTIONS = [
@@ -86,6 +87,53 @@
     return String(row.canonicalMarketKey || row.marketKey || '').trim();
   }
 
+  function hasEvidenceReceipt(row) {
+    var receipt = row && row.evidenceReceipt;
+    var selection = receipt && receipt.selection;
+    var quoted = receipt && receipt.price;
+    var model = receipt && receipt.model;
+    var market = receipt && receipt.market;
+    var validation = receipt && receipt.validation;
+    if (!receipt || !selection || !quoted || !model || !market || !validation) return false;
+
+    var receiptPrice = number(quoted.american);
+    var receiptAge = number(quoted.ageSeconds);
+    var receiptLine = number(selection.line);
+    var receiptModel = probability(model.probability);
+    var receiptImplied = probability(market.impliedProbability);
+    var receiptFair = probability(market.fairProbability);
+    var receiptEdge = number(market.edge);
+    var rowEdge = edgeValue(row);
+    var timestamp = Date.parse(String(quoted.observedAt || ''));
+    return receipt.contractVersion === RECOMMENDATION_EVIDENCE_VERSION &&
+      receipt.candidateId === row.canonicalCandidateId &&
+      receipt.fingerprint === row.canonicalFingerprint &&
+      selection.marketKey === marketKeyOf(row) &&
+      String(selection.side || '').toLowerCase() ===
+        String(row.canonicalSide || row.side || '').toLowerCase() &&
+      receiptLine != null && receiptLine === number(row.line) &&
+      receiptPrice != null && receiptPrice === priceOf(row) &&
+      String(quoted.book || '').toLowerCase() === String(bookOf(row) || '').toLowerCase() &&
+      receiptAge != null && receiptAge >= 0 &&
+      receiptAge <= MAX_ALERT_ODDS_AGE_SECONDS &&
+      quoted.maximumAgeSeconds === MAX_ALERT_ODDS_AGE_SECONDS &&
+      quoted.fresh === true && Number.isFinite(timestamp) &&
+      String(quoted.observedAt) === String(row.oddsUpdatedAt || '') &&
+      receiptModel != null && receiptModel > 0 && receiptModel < 1 &&
+      Boolean(model.version) &&
+      receiptImplied != null && receiptImplied > 0 && receiptImplied < 1 &&
+      receiptFair != null && receiptFair > 0 && receiptFair < 1 &&
+      receiptEdge != null && receiptEdge > 0 &&
+      rowEdge != null && Math.abs(receiptEdge * 100 - rowEdge) < 0.11 &&
+      validation.actionable === true &&
+      String(validation.actionabilityStage || '').toLowerCase() === 'actionable' &&
+      String(validation.calibrationStatus || '').toLowerCase() === 'passed' &&
+      String(validation.marketGateStatus || '').toLowerCase() === 'promoted' &&
+      Boolean(validation.candidateIntegrityVersion) &&
+      Boolean(validation.marketValidationVersion) &&
+      Boolean(String(receipt.explanation || '').trim());
+  }
+
   function isActionable(row) {
     var stage = String(row.actionabilityStage || '').toLowerCase();
     var price = priceOf(row);
@@ -97,7 +145,7 @@
       Boolean(row.canonicalFingerprint) && Boolean(marketKeyOf(row)) &&
       price != null && price !== 0 && Math.abs(price) >= 100 &&
       Boolean(book) && invalidBooks.indexOf(book) === -1 &&
-      edge != null && edge > 0;
+      edge != null && edge > 0 && hasEvidenceReceipt(row);
   }
 
   function alertIdentity(row) {
@@ -256,21 +304,24 @@
   }
 
   function signalHtml(row) {
-    var market = MARKET_OPTIONS.find(function (item) { return item.key === marketKeyOf(row); });
+    var marketOption = MARKET_OPTIONS.find(function (item) { return item.key === marketKeyOf(row); });
+    var receipt = row.evidenceReceipt;
     var edge = edgeValue(row);
-    var modelProb = probability(row.canonicalProbability != null ? row.canonicalProbability : row.modelProb);
-    var implied = probability(row.marketImplied != null ? row.marketImplied : row.impliedProb);
-    var price = priceOf(row);
+    var modelProb = probability(receipt.model.probability);
+    var fairProb = probability(receipt.market.fairProbability);
+    var price = number(receipt.price.american);
     var saved = state.watchlist.has(String(row.player || '').toLowerCase());
     return '<article class="signal-card' + (saved ? ' watchlisted' : '') + '">' +
       '<div><div class="signal-title">' + (saved ? '<span class="star">★</span>' : '') + '<strong>' + esc(row.player) + '</strong></div>' +
-      '<p class="signal-market">' + esc(market ? market.label : marketKeyOf(row)) + ' · ' + esc(row.side || row.canonicalSide || 'Over') + ' ' + esc(row.line) + '</p>' +
+      '<p class="signal-market">' + esc(marketOption ? marketOption.label : marketKeyOf(row)) + ' · ' + esc(receipt.selection.side) + ' ' + esc(receipt.selection.line) + '</p>' +
       '<div class="evidence">' +
-        (modelProb != null ? '<span>MODEL ' + (modelProb * 100).toFixed(1) + '%</span>' : '') +
-        (implied != null ? '<span>MARKET ' + (implied * 100).toFixed(1) + '%</span>' : '') +
-        '<span>' + esc(bookOf(row)) + ' ' + (price > 0 ? '+' : '') + esc(price) + '</span>' +
-        '<span>VALIDATED</span>' +
-      '</div></div>' +
+        '<span>MODEL ' + (modelProb * 100).toFixed(1) + '%</span>' +
+        '<span>FAIR MARKET ' + (fairProb * 100).toFixed(1) + '%</span>' +
+        '<span>' + esc(receipt.price.book) + ' ' + (price > 0 ? '+' : '') + esc(price) + '</span>' +
+        '<span>' + esc(freshnessLabel(row).toUpperCase()) + '</span>' +
+        '<span>RECEIPT 4.69</span>' +
+      '</div>' +
+      '<p class="signal-why"><strong>Why this qualifies:</strong> ' + esc(receipt.explanation) + '</p></div>' +
       '<div class="signal-edge"><strong>+' + (edge == null ? '—' : edge.toFixed(1)) + '%</strong><small>MODEL EDGE</small></div>' +
       '</article>';
   }

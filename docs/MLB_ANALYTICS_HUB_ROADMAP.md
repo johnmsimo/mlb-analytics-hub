@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 4.67 merged and deployed on 2026-08-14. Phase 4.68 is the active phase.
+Status: Phase 4.68 merged and deployed on 2026-08-15. Phase 4.69 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -236,6 +236,26 @@ Exit gate: a release cannot pass merely because cold work was queued; the exact
 deployed worker must finish a new scan, persist its receipt through Redis, return
 it through Gunicorn, and preserve health/readiness throughout the bounded
 convergence window.
+
+### Phase 4.69 — Actionable recommendation evidence receipts
+
+Implementation status: every Edge Finder row intended for My Hub now preserves
+the canonical selection, current sportsbook quote, server-computed freshness,
+model version and probability, de-vigged market probability, calibrated edge,
+and market-promotion decision through the canonical response layer. That layer
+issues one 4.69 evidence receipt bound to the candidate identity and decision
+fingerprint only when the evidence is complete and internally consistent.
+
+My Hub requires the receipt before a signal or alert is actionable and shows a
+concise `Why this qualifies` explanation with model probability, fair market
+probability, sportsbook price, and quote freshness. Missing, stale, mismatched,
+uncalibrated, or unexplained evidence fails closed. The post-deploy contract gate
+independently revalidates every receipt against its enclosing live edge row.
+
+Exit gate: no recommendation can appear in My Hub or its in-app alert inbox
+without a fresh, priced, calibrated, identity-bound 4.69 receipt whose
+probability, edge, sportsbook, selection, validation versions, and explanation
+match the canonical row.
 
 ## Audit findings carried into the roadmap
 
