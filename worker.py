@@ -94,6 +94,9 @@ def _handlers():
         date_str = str(args.get("date") or "").strip()
         if not date_str:
             raise RuntimeError("props_scan requires date")
+        required_release = str(args.get("requiredRelease") or "").strip()
+        if required_release and required_release != app_module._APP_VERSION:
+            raise RuntimeError("props_scan release does not match this worker")
         payload = app_module._compute_props_scan_today_payload(date_str)
         if not payload or payload.get("success") is not True:
             raise RuntimeError("Props scan did not complete.")
