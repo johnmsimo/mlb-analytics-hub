@@ -64,7 +64,7 @@ def test_preference_actions_fail_closed_to_represented_canonical_markets():
     source = (ROOT / "static" / "product-hub.js").read_text(encoding="utf-8")
 
     assert "function isSupportedMarketKey(key)" in source
-    assert "if (!isSupportedMarketKey(key)) return;" in source
+    assert "if (!isSupportedMarketKey(key)) return false;" in source
     assert "supported.indexOf(key) >= 0 && !seen[key]" in source
     assert "No market conclusion is shown." in source
     assert "preferences remain unchanged." in source

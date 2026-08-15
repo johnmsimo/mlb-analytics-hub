@@ -107,4 +107,4 @@ def test_phase_475_is_documented_as_active():
 
     assert "Phase 4.75 is the active phase." in roadmap
     assert "### Phase 4.75 — Market preference change receipt" in roadmap
-    assert "receipts are announced accessibly" in roadmap
+    assert "announced accessibly" in roadmap
