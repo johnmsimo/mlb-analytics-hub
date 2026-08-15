@@ -8,6 +8,7 @@ from flask import Blueprint, jsonify, make_response
 
 
 PRODUCT_HUB_VERSION = "4.64"
+SAVED_PLAYER_DIGEST_VERSION = "4.70"
 _ROOT = Path(__file__).resolve().parent
 _HUB_PATH = _ROOT / "product_hub.html"
 
@@ -68,6 +69,22 @@ def product_journey():
                 "alertCandidateStateStorageKey": "mlb_alert_candidate_state",
                 "alertDelivery": "in_app",
                 "persistence": "device_private",
+                "savedPlayerDigestVersion": SAVED_PLAYER_DIGEST_VERSION,
+            },
+            "savedPlayerDigest": {
+                "version": SAVED_PLAYER_DIGEST_VERSION,
+                "source": "/api/edges/today",
+                "watchlistStorageKey": "mlb_watchlist",
+                "states": [
+                    "loading",
+                    "verified_opportunity",
+                    "no_verified_opportunity",
+                    "unavailable",
+                ],
+                "requiresEvidenceReceiptVersion": "4.69",
+                "oneTapSignalControls": True,
+                "serverPersistence": False,
+                "failClosed": True,
             },
             "alerts": {
                 "lifecycle": ["new", "seen", "dismissed", "superseded"],

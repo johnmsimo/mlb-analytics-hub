@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 4.68 merged and deployed on 2026-08-15. Phase 4.69 is the active phase.
+Status: Phase 4.69 merged and deployed on 2026-08-15. Phase 4.70 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -256,6 +256,26 @@ Exit gate: no recommendation can appear in My Hub or its in-app alert inbox
 without a fresh, priced, calibrated, identity-bound 4.69 receipt whose
 probability, edge, sportsbook, selection, validation versions, and explanation
 match the canonical row.
+
+### Phase 4.70 — Saved-player verified opportunity digest
+
+Implementation status: My Hub turns the device-private watchlist into an
+explicit opportunity digest. Every saved player receives one visible state:
+loading while canonical evidence is computing, verified when at least one
+actionable 4.69 receipt exists, no verified opportunity when current rows do not
+qualify, or unavailable when the evidence source fails.
+
+Receipted signal cards add one-tap save and remove controls while retaining the
+manual watchlist form. The digest ranks each player's strongest current edge,
+shows selection, sportsbook price, quote freshness, and receipt version, and
+states when additional verified markets exist. Saved names remain local to the
+device and never create a server-side profile.
+
+Exit gate: a saved player can never appear to have an opportunity unless the
+underlying row passes the complete actionability and 4.69 evidence contracts;
+missing, stale, unpriced, mismatched, or unavailable evidence produces an
+explicit non-recommendation state, and all save/remove controls preserve the
+390px touch contract.
 
 ## Audit findings carried into the roadmap
 
