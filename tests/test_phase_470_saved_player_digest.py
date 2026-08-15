@@ -38,7 +38,7 @@ def test_saved_player_digest_contract_is_device_private_and_fail_closed():
 def test_workspace_contains_saved_player_digest_accessibility_contract():
     html = (ROOT / "product_hub.html").read_text(encoding="utf-8")
 
-    assert "PHASE 4.70 · MY HUB" in html
+    assert "PHASE 4.64 · MY HUB" in html\n    assert "FEATURE 4.70" in html
     assert 'id="savedOpportunitySummary"' in html
     assert 'id="savedOpportunityList"' in html
     assert 'aria-live="polite"' in html
