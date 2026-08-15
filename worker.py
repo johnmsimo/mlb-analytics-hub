@@ -5,6 +5,7 @@ import logging
 import os
 import signal
 import threading
+from datetime import datetime, timezone
 
 
 # Must be set before importing app.py; that module gates its periodic workers
@@ -96,6 +97,14 @@ def _handlers():
         payload = app_module._compute_props_scan_today_payload(date_str)
         if not payload or payload.get("success") is not True:
             raise RuntimeError("Props scan did not complete.")
+        payload = dict(payload)
+        payload["completionReceipt"] = {
+            "contractVersion": "4.68",
+            "source": "durable-worker",
+            "date": date_str,
+            "completedAt": datetime.now(timezone.utc).isoformat(),
+            "release": app_module._APP_VERSION,
+        }
         app_module._write_props_scan_durable_snapshot(date_str, payload)
 
     return {
