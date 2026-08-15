@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 4.74 merged and deployed on 2026-08-15. Phase 4.75 is the active phase.
+Status: Phase 4.75 merged and deployed on 2026-08-15. Phase 4.76 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -365,6 +365,23 @@ Exit gate: each valid change and undo requires a user tap, receipts are
 announced accessibly, impact counts come only from current actionable edges in a
 ready state, the undo target is exactly the preceding preference value, and
 phone controls retain a 44px touch target.
+
+### Phase 4.76 — Personalized signal provenance
+
+Implementation status: every rendered My Hub signal now carries stable,
+accessible provenance showing that its canonical market is explicitly preferred
+and, when applicable, that its player is on the device-local watchlist. Reason
+keys remain in fixed preferred-market then saved-player order.
+
+Provenance is explanatory only. It does not change signal eligibility, reorder
+model edges, inspect ROI, CLV, win rate, or market-learning performance, or
+create a new recommendation. Rows that are not actionable or no longer match a
+supported preferred market render no provenance and no signal card.
+
+Exit gate: every displayed provenance reason is derived only from current
+actionability plus explicit device state, unknown markets fail closed, saved
+player priority is labeled without implying stronger model evidence, and
+assistive technology receives the same reason labels shown visually.
 
 ## Audit findings carried into the roadmap
 

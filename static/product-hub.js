@@ -555,17 +555,34 @@
     });
   }
 
+  function personalizedSignalReasons(row) {
+    var marketKey = marketKeyOf(row);
+    if (!isActionable(row) || !isSupportedMarketKey(marketKey) ||
+        !state.preferred.has(marketKeyOf(row))) return [];
+    var reasons = [{ key: 'preferred_market', label: 'Preferred market' }];
+    if (state.watchlist.has(playerKey(row.player))) {
+      reasons.push({ key: 'saved_player', label: 'Saved player' });
+    }
+    return reasons;
+  }
+
   function personalizedEdges() {
-    var preferred = state.edges.filter(function (row) { return state.preferred.has(marketKeyOf(row)); });
+    var preferred = state.edges.filter(function (row) {
+      return personalizedSignalReasons(row).length > 0;
+    });
     return preferred.sort(function (left, right) {
-      var leftSaved = state.watchlist.has(String(left.player || '').toLowerCase()) ? 1 : 0;
-      var rightSaved = state.watchlist.has(String(right.player || '').toLowerCase()) ? 1 : 0;
+      var leftSaved = state.watchlist.has(playerKey(left.player)) ? 1 : 0;
+      var rightSaved = state.watchlist.has(playerKey(right.player)) ? 1 : 0;
       if (leftSaved !== rightSaved) return rightSaved - leftSaved;
       return (edgeValue(right) || 0) - (edgeValue(left) || 0);
     });
   }
 
   function signalHtml(row) {
+    var reasons = personalizedSignalReasons(row);
+    if (!reasons.length) return '';
+    var reasonKeys = reasons.map(function (reason) { return reason.key; });
+    var reasonLabels = reasons.map(function (reason) { return reason.label; });
     var receipt = row.evidenceReceipt;
     var edge = edgeValue(row);
     var modelProb = probability(receipt.model.probability);
@@ -573,13 +590,20 @@
     var price = number(receipt.price.american);
     var player = playerKey(row.player);
     var saved = state.watchlist.has(player);
-    return '<article class="signal-card' + (saved ? ' watchlisted' : '') + '">' +
+    return '<article class="signal-card' + (saved ? ' watchlisted' : '') +
+      '" data-personalization-reasons="' + esc(reasonKeys.join(',')) + '">' +
       '<div><div class="signal-title"><strong>' + esc(row.player) + '</strong>' +
       '<button type="button" class="signal-save" data-toggle-player="' + esc(player) +
         '" aria-pressed="' + (saved ? 'true' : 'false') + '" aria-label="' +
         (saved ? 'Remove ' : 'Save ') + esc(row.player) + '">' +
         (saved ? '★ Saved' : '☆ Save') + '</button></div>' +
       '<p class="signal-market">' + esc(marketLabelOf(row)) + ' · ' + esc(receipt.selection.side) + ' ' + esc(receipt.selection.line) + '</p>' +
+      '<p class="signal-provenance" aria-label="Personalization reasons: ' +
+        esc(reasonLabels.join(', ')) + '"><strong>Shown because</strong>' +
+        reasons.map(function (reason) {
+          return '<span data-personalization-reason="' + esc(reason.key) + '">' +
+            esc(reason.label) + '</span>';
+        }).join('') + '</p>' +
       '<div class="evidence">' +
         '<span>MODEL ' + (modelProb * 100).toFixed(1) + '%</span>' +
         '<span>FAIR MARKET ' + (fairProb * 100).toFixed(1) + '%</span>' +

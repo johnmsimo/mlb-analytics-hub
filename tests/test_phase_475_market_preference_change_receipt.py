@@ -42,7 +42,7 @@ def test_workspace_exposes_accessible_change_receipt_and_explicit_undo():
     source = (ROOT / "static" / "product-hub.js").read_text(encoding="utf-8")
     css = (ROOT / "static" / "product-hub.css").read_text(encoding="utf-8")
 
-    assert "FEATURE 4.75" in html
+    assert "FEATURE 4.76" in html
     assert 'id="marketPreferenceReceipt"' in html
     assert 'data-receipt-state="idle"' in html
     assert 'aria-live="polite"' in html
@@ -105,6 +105,6 @@ def test_phase_475_is_documented_as_active():
         encoding="utf-8"
     )
 
-    assert "Phase 4.75 is the active phase." in roadmap
+    assert "Phase 4.76 is the active phase." in roadmap
     assert "### Phase 4.75 — Market preference change receipt" in roadmap
     assert "announced accessibly" in roadmap
