@@ -17,6 +17,7 @@ MARKET_PREFERENCE_CHANGE_RECEIPT_VERSION = "4.75"
 PERSONALIZED_SIGNAL_PROVENANCE_VERSION = "4.76"
 ALERT_ELIGIBILITY_PROVENANCE_VERSION = "4.77"
 VERIFIED_ALERT_REVIEW_HANDOFF_VERSION = "4.78"
+VERIFIED_DECISION_ORIGIN_PROVENANCE_VERSION = "4.79"
 _ROOT = Path(__file__).resolve().parent
 _HUB_PATH = _ROOT / "product_hub.html"
 
@@ -215,6 +216,20 @@ def product_journey():
                 "learningPerformanceUsed": False,
                 "recommendation": False,
                 "serverPersistence": False,
+                "failClosed": True,
+            },
+            "verifiedDecisionOriginProvenance": {
+                "version": VERIFIED_DECISION_ORIGIN_PROVENANCE_VERSION,
+                "sourceContractVersion": VERIFIED_ALERT_REVIEW_HANDOFF_VERSION,
+                "draftContractVersion": VERIFIED_DECISION_HANDOFF_VERSION,
+                "allowedOrigins": ["saved_player_digest", "eligible_alert"],
+                "requiresOrigin": True,
+                "displayedBeforeSave": True,
+                "originAffectsRecommendation": False,
+                "originAffectsAuthorization": False,
+                "originAffectsCanonicalRevalidation": False,
+                "serverMutationOnReview": False,
+                "requiresExplicitSave": True,
                 "failClosed": True,
             },
             "verifiedAlertReviewHandoff": {

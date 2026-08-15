@@ -113,7 +113,7 @@ def test_workspace_renders_explicit_learning_and_unavailable_states():
     source = (ROOT / "static" / "product-hub.js").read_text(encoding="utf-8")
     css = (ROOT / "static" / "product-hub.css").read_text(encoding="utf-8")
 
-    assert "FEATURE 4.78" in html
+    assert "FEATURE 4.79" in html
     assert 'id="verifiedDecisionLearning"' in html
     assert 'aria-live="polite"' in html
     for marker in (
@@ -136,5 +136,5 @@ def test_phase_472_is_documented_as_active():
         encoding="utf-8"
     )
 
-    assert "Phase 4.78 is the active phase." in roadmap
+    assert "Phase 4.79 is the active phase." in roadmap
     assert "### Phase 4.72 — Verified decision learning loop" in roadmap

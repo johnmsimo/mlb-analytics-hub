@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 4.77 merged and deployed on 2026-08-15. Phase 4.78 is the active phase.
+Status: Phase 4.78 merged and deployed on 2026-08-15. Phase 4.79 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -418,6 +418,23 @@ Exit gate: the review control appears only on rendered eligible alerts, every
 handoff requires a tap, the alert and evidence receipt are revalidated at tap
 time, the draft expires with its quote, no ledger state changes on prepare, and
 Tracker remains the only explicit server-save boundary.
+
+### Phase 4.79 — Decision draft origin provenance
+
+Implementation status: Tracker now accepts a prepared 4.71 decision draft only
+when its device-local origin is exactly `saved_player_digest` or
+`eligible_alert`. The review notice displays that source before the user can
+explicitly save.
+
+Origin provenance is explanatory only. It does not alter recommendation
+strength, authorize a save, change canonical revalidation, mutate server state
+during review, or persist as a new server-side pick field. Missing and unknown
+origins invalidate and remove the device-local draft without creating a pick.
+
+Exit gate: every accepted prepared draft carries one allowed origin, the same
+origin is visibly and accessibly identified in Tracker before save, malformed
+origins fail closed, and existing admin authorization, canonical
+revalidation, and explicit-save boundaries remain unchanged.
 
 ## Audit findings carried into the roadmap
 
