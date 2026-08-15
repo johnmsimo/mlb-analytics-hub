@@ -20055,6 +20055,7 @@ def _edge_finder_payload(date_str, min_edge=0.02, market=None, limit=150):
             'computing' if base.get('computing') else 'ready'
         ),
         'scanJob': base.get('scanJob'),
+        'completionReceipt': base.get('completionReceipt'),
         'message': base.get('message'),
         'generatedAt': datetime.now(timezone.utc).isoformat(),
         'candidateIntegrityVersion': CANDIDATE_INTEGRITY_VERSION,
