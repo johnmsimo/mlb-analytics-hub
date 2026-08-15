@@ -558,7 +558,7 @@
   function personalizedSignalReasons(row) {
     var marketKey = marketKeyOf(row);
     if (!isActionable(row) || !isSupportedMarketKey(marketKey) ||
-        !state.preferred.has(marketKey)) return [];
+        !state.preferred.has(marketKeyOf(row))) return [];
     var reasons = [{ key: 'preferred_market', label: 'Preferred market' }];
     if (state.watchlist.has(playerKey(row.player))) {
       reasons.push({ key: 'saved_player', label: 'Saved player' });
