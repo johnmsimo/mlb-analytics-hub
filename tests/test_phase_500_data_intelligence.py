@@ -120,7 +120,7 @@ def test_quality_and_weekly_regeneration_enforce_data_intelligence():
 def test_roadmap_opens_phase_five_without_changing_live_predictions():
     roadmap = (ROOT / "docs/MLB_ANALYTICS_HUB_ROADMAP.md").read_text(encoding="utf-8")
     docs = (ROOT / "docs/data_intelligence.md").read_text(encoding="utf-8")
-    assert "Phase 4.86 merged and deployed on 2026-08-16. Phase 5.0 is the active phase." in roadmap
+    assert "Phase 4.86 is the final 4.x bridge." in roadmap
     assert "### Phase 5.0 — Data intelligence foundation" in roadmap
     assert "does not change production probabilities" in docs
     assert "automatic promotion remains disabled" in docs

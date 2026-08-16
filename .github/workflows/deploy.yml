@@ -32,6 +32,8 @@ jobs:
         run: python scripts/accuracy_baseline.py --check
       - name: Verify Phase 5.0 data intelligence
         run: python scripts/data_intelligence.py --check
+      - name: Verify Phase 5.1 RBI challenger contract
+        run: python scripts/rbi_opportunity_experiment.py --check-contract
       - name: Run regression suite
         env:
           APP_ENV: test

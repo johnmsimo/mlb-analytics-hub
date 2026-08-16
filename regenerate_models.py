@@ -59,6 +59,7 @@ from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
 import xgboost as xgb
 
 import stuff_model
+from rbi_opportunity import add_historical_rbi_opportunity
 
 warnings.filterwarnings("ignore")
 
@@ -166,6 +167,10 @@ RBI_FEATURES = [
     # Opposing starter's physics-based Stuff+ (see HR_FEATURES note).
     "opp_stuff_plus",
 ]
+
+# Phase 5.1 shadow challenger only. The production RBI feature order remains
+# unchanged until the frozen metric gates and shadow calibration both pass.
+RBI_CHALLENGER_FEATURES = [*RBI_FEATURES, "rbi_traffic_obp"]
 
 # ── Park factors — VERBATIM copies of app.py's PARK_FACTORS /
 #    HR_PARK_FACTORS / HR_PARK_FACTORS_HAND, keyed by MLBAM home-team id.
@@ -399,6 +404,11 @@ def _agg_chunk(sc: pd.DataFrame, season: int) -> tuple[pd.DataFrame, pd.DataFram
         "grounded_into_double_play", "double_play", "force_out",
         "fielders_choice", "fielders_choice_out", "strikeout_double_play",
     ]).astype(int)
+    sc["is_walk"] = sc["events"].isin(["walk", "intent_walk"]).astype(int)
+    sc["is_hbp"] = (sc["events"] == "hit_by_pitch").astype(int)
+    sc["is_sf"] = (sc["events"] == "sac_fly").astype(int)
+    sc["on_base"] = sc["is_hit"] + sc["is_walk"] + sc["is_hbp"]
+    sc["obp_denom"] = sc["is_ab"] + sc["is_walk"] + sc["is_hbp"] + sc["is_sf"]
     # Total bases: single 1, double 2, triple 3, HR 4.
     sc["tb"] = sc["is_hit"] + sc["is_double"] + 2 * sc["is_triple"] + 3 * sc["is_hr"]
 
@@ -426,6 +436,7 @@ def _agg_chunk(sc: pd.DataFrame, season: int) -> tuple[pd.DataFrame, pd.DataFram
     bat = (pa.groupby(["game_pk", "game_date", "batter"])
              .agg(hits=("is_hit", "sum"), ab=("is_ab", "sum"), pa=("is_pa", "sum"),
                   tb=("tb", "sum"), hr=("is_hr", "sum"), rbi=("rbi", "sum"),
+                  on_base=("on_base", "sum"), obp_denom=("obp_denom", "sum"),
                   inning_topbot=("inning_topbot", "first"),
                   stand=("stand", "first") if "stand" in pa.columns else ("is_pa", "size"),
                   p_throws=("p_throws", "first") if "p_throws" in pa.columns else ("is_pa", "size"),
@@ -644,6 +655,9 @@ def build_batter_matrix(bg: pd.DataFrame,
     # serve-time slot→PA table; unknown slot (0) → league-default PA.
     bg["batting_order"] = pd.to_numeric(bg.get("batting_order"), errors="coerce").fillna(0).astype(int)
     bg["expected_pa"] = bg["batting_order"].map(_PA_BY_SLOT).fillna(_DEFAULT_PA)
+    # Phase 5.1: strictly pregame season-to-date OBP for the three lineup
+    # slots preceding each batter. The helper never reads RBI targets.
+    bg = add_historical_rbi_opportunity(bg)
     bg["ab_safe"] = bg["ab"].clip(lower=1)
     bg["l7_hits"] = bg.groupby("batter")["hits"].transform(
         lambda x: x.shift(1).rolling(7, min_periods=1).mean())

@@ -148,6 +148,7 @@ class LineupSnapshotCacheTests(unittest.TestCase):
                 "expected_pa": 4.20,
                 "batting_order": 0,
                 "lineup_confirmed": 0,
+                "rbi_traffic_obp": 0.320,
             },
         )
 

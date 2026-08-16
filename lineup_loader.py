@@ -30,6 +30,7 @@ from datetime import date, datetime
 from typing import Optional
 
 from clients.mlb_client import mlb_client
+from rbi_opportunity import LEAGUE_OBP, RBI_TRAFFIC_FEATURE, attach_live_rbi_opportunity
 
 _HERE     = os.path.dirname(os.path.abspath(__file__))
 _DATA_DIR = os.path.join(_HERE, "data")
@@ -162,6 +163,7 @@ def _entry_features(entry: dict) -> dict:
         "expected_pa":      float(entry.get("expected_pa",   _DEFAULT_PA)),
         "batting_order":    int(entry.get("batting_order",    0)),
         "lineup_confirmed": int(entry.get("lineup_confirmed", 0)),
+        RBI_TRAFFIC_FEATURE: float(entry.get(RBI_TRAFFIC_FEATURE, LEAGUE_OBP)),
     }
 
 
@@ -170,6 +172,7 @@ def _default_lineup_features() -> dict:
         "expected_pa":      _DEFAULT_PA,
         "batting_order":    0,
         "lineup_confirmed": 0,
+        RBI_TRAFFIC_FEATURE: LEAGUE_OBP,
     }
 
 
@@ -195,7 +198,7 @@ def _fetch_player_season_stats(mlbam_id: int, season: Optional[int] = None) -> d
     if mlbam_id in _player_stats_cache:
         return _player_stats_cache[mlbam_id]
 
-    fallback = {"k_pct": _LG_K_PCT, "xwoba": _LG_XWOBA}
+    fallback = {"k_pct": _LG_K_PCT, "xwoba": _LG_XWOBA, "obp": LEAGUE_OBP}
 
     yr  = season or datetime.utcnow().year
     try:
@@ -225,8 +228,13 @@ def _fetch_player_season_stats(mlbam_id: int, season: Optional[int] = None) -> d
 
         # xwoba is not in the standard MLB stats API; fall back to woba as proxy.
         woba_val  = float(s.get("wOba") or s.get("woba") or _LG_XWOBA)
+        obp_val = float(s.get("obp") or s.get("onBasePercentage") or LEAGUE_OBP)
 
-        result = {"k_pct": round(k_pct_val, 2), "xwoba": round(woba_val, 4)}
+        result = {
+            "k_pct": round(k_pct_val, 2),
+            "xwoba": round(woba_val, 4),
+            "obp": round(obp_val, 4),
+        }
         _player_stats_cache[mlbam_id] = result
         return result
 
@@ -356,8 +364,11 @@ def fetch_and_save(date_str: Optional[str] = None) -> dict:
     if date_str is None:
         date_str = date.today().isoformat()
 
-    games   = _fetch_games_for_date(date_str)
+    global _player_stats_cache
+    _player_stats_cache = {}
+    games = _fetch_games_for_date(date_str)
     lineups = _parse_lineups(games)
+    lineups = attach_live_rbi_opportunity(lineups, _fetch_player_season_stats)
 
     path = _cache_path(date_str)
     with open(path, "w") as f:

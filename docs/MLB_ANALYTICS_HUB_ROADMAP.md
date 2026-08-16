@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 4.86 merged and deployed on 2026-08-16. Phase 5.0 is the active phase.
+Status: Phase 5.0 merged and deployed on 2026-08-16. Phase 5.1 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -578,6 +578,25 @@ candidate registry explains every admitted or blocked signal; at least one
 weak-market experiment is eligible for Phase 5.1; no source admission changes
 production probabilities or bypasses the frozen champion comparison and
 review-gated promotion contract.
+
+### Phase 5.1 — RBI opportunity challenger lane
+
+Implementation status: the first admitted market-specific experiment adds
+strictly pregame lineup-traffic context for `rbi_1.5` and `rbi`. Historical
+training uses season-to-date OBP from plate appearances before each target game;
+live scoring uses the confirmed lineup and current season OBP with the same
+league-average fallback.
+
+The feature exists only in a shadow challenger list. A manual, read-only
+workflow compares held-out Brier, AUC, log loss, season, cohort, and serve parity
+against the frozen champions, uploads evidence, and writes no model artifact.
+Even a metric-gate winner remains ineligible for promotion until shadow
+calibration proves that market ECE does not regress.
+
+Exit gate: historical and live feature values share one definition and fallback;
+target mutation cannot change a pregame feature; both RBI lines are compared to
+their frozen 2025 champions; no merge changes production probabilities; model
+promotion remains manual, review-gated, calibration-gated, and reversible.
 
 ## Audit findings carried into the roadmap
 
