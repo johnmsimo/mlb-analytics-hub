@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 4.80 merged and deployed on 2026-08-16. Phase 4.81 is the active phase.
+Status: Phase 4.81 merged and deployed on 2026-08-16. Phase 4.82 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -468,6 +468,22 @@ Exit gate: every verified review exposes a live freshness state, expiration
 disables Save before a user tap can post, cleanup stops the timer and restores
 manual controls, and admin authorization plus server canonical revalidation
 remain unchanged.
+
+### Phase 4.82 — Mobile resume freshness reconciliation
+
+Implementation status: Tracker now pauses the verified-draft countdown while the
+page is hidden, then rechecks the absolute quote expiry and restarts the timer
+when the page becomes visible or returns through the browser page cache.
+
+This closes the iPhone and background-tab throttling gap without trusting missed
+interval ticks. Resume handling performs no fetch or server mutation, manual
+picks remain unaffected, and the Phase 4.80 save-time guard remains the final
+client-side backstop before canonical server revalidation.
+
+Exit gate: hidden reviews stop their timer, every visible or pageshow transition
+reconciles against absolute expiresAt, expired resumes disable Save before any
+POST, and explicit save, admin authorization, and canonical revalidation remain
+unchanged.
 
 ## Audit findings carried into the roadmap
 

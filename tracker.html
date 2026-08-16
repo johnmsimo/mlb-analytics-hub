@@ -1698,6 +1698,22 @@ function startVerifiedDraftExpiryTimer() {
   }
 }
 
+function reconcileVerifiedDraftExpiryAfterResume() {
+  if (!pendingVerifiedDecisionDraft) return;
+  startVerifiedDraftExpiryTimer();
+}
+
+function handleVerifiedDraftVisibilityChange() {
+  if (!pendingVerifiedDecisionDraft) return;
+  if (document.visibilityState === 'hidden') {
+    stopVerifiedDraftExpiryTimer();
+    return;
+  }
+  if (document.visibilityState === 'visible') {
+    reconcileVerifiedDraftExpiryAfterResume();
+  }
+}
+
 function isVerifiedDecisionDraft(draft) {
   if (!draft || typeof draft !== 'object') return false;
   const expiresAt = Date.parse(String(draft.expiresAt || ''));
@@ -2339,6 +2355,8 @@ function wire() {
   });
   ['fMkt','fRes','fTier','fSort','fGame'].forEach(id=>$(id)?.addEventListener('change',renderBoard));
   $('fPlayer')?.addEventListener('input', renderBoard);
+  document.addEventListener('visibilitychange', handleVerifiedDraftVisibilityChange);
+  window.addEventListener('pageshow', reconcileVerifiedDraftExpiryAfterResume);
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────────────

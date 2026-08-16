@@ -128,7 +128,7 @@ def test_workspace_renders_market_lens_without_ranking():
     source = (ROOT / "static" / "product-hub.js").read_text(encoding="utf-8")
     css = (ROOT / "static" / "product-hub.css").read_text(encoding="utf-8")
 
-    assert "FEATURE 4.81" in html
+    assert "FEATURE 4.82" in html
     assert 'id="verifiedDecisionMarketLearning"' in html
     assert 'id="marketLearningList"' in html
     for marker in (
@@ -149,5 +149,5 @@ def test_phase_473_is_documented_as_active():
         encoding="utf-8"
     )
 
-    assert "Phase 4.81 is the active phase." in roadmap
+    assert "Phase 4.82 is the active phase." in roadmap
     assert "### Phase 4.73 — Verified decision market learning lens" in roadmap
