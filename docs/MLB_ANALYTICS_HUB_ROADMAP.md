@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 4.82 merged and deployed on 2026-08-16. Phase 4.83 is the active phase.
+Status: Phase 4.83 merged and deployed on 2026-08-16. Phase 4.84 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -501,6 +501,22 @@ place.
 Exit gate: every external draft-key change invalidates an active review, newer
 replacement data remains device-local for explicit review, no invalidation can
 post a pick, and manual Tracker entry remains unaffected.
+
+### Phase 4.84 — Explicit newest-draft recovery
+
+Implementation status: when cross-tab invalidation includes a replacement that
+passes the complete 4.71 draft contract, Tracker now exposes a 44px Review
+newest draft control. Removal, clear, malformed, and expired events offer no
+recovery action.
+
+The control never auto-opens a draft. A tap re-reads device storage and runs the
+normal Tracker validation and review path before explicit Save. Review performs
+no API call or server mutation, and manual entry remains available.
+
+Exit gate: recovery is offered only for a valid replacement, every recovery
+requires a user tap and fresh storage read, unavailable drafts fail closed
+without a pick, and admin authorization plus canonical revalidation remain
+unchanged.
 
 ## Audit findings carried into the roadmap
 

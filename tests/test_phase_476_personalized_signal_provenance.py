@@ -67,7 +67,7 @@ def test_signal_cards_render_machine_readable_and_accessible_reasons():
     source = (ROOT / "static" / "product-hub.js").read_text(encoding="utf-8")
     css = (ROOT / "static" / "product-hub.css").read_text(encoding="utf-8")
 
-    assert "FEATURE 4.83" in html
+    assert "FEATURE 4.84" in html
     assert "data-personalization-reasons" in source
     assert "data-personalization-reason" in source
     assert "Personalization reasons:" in source
@@ -106,6 +106,6 @@ def test_phase_476_is_documented_as_active():
         encoding="utf-8"
     )
 
-    assert "Phase 4.83 is the active phase." in roadmap
+    assert "Phase 4.84 is the active phase." in roadmap
     assert "### Phase 4.76 — Personalized signal provenance" in roadmap
     assert "Provenance is explanatory only." in roadmap

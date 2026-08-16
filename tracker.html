@@ -172,7 +172,7 @@ tr:hover td{background:rgba(0,229,255,.03)}
 .modal-card{width:min(720px,94vw);max-height:86vh;overflow:auto;background:var(--bg2);border:1px solid var(--line2);border-radius:16px;padding:16px}
 .modal-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px}
 .modal-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.verified-draft-notice{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 12px;padding:10px 12px;border:1px solid rgba(0,230,118,.35);border-radius:10px;background:rgba(0,230,118,.06)}.verified-draft-notice[hidden]{display:none}.verified-draft-notice div{display:grid;gap:3px}.verified-draft-notice strong{color:var(--g);font-size:.7rem}.verified-draft-notice span{color:var(--mu);font-size:.62rem;line-height:1.4}.verified-draft-notice .verified-draft-origin{width:max-content;padding:2px 7px;border:1px solid rgba(0,229,255,.28);border-radius:999px;background:rgba(0,229,255,.07);color:var(--c);font-weight:700;letter-spacing:.04em;text-transform:uppercase}.verified-draft-notice .verified-draft-expiry{color:var(--y);font-weight:700}.verified-draft-notice[data-freshness-state="expired"]{border-color:rgba(255,82,82,.42);background:rgba(255,82,82,.07)}.verified-draft-notice[data-freshness-state="expired"] .verified-draft-expiry{color:var(--r)}.modal-actions .btn:disabled{opacity:.45;cursor:not-allowed}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.verified-draft-notice{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 12px;padding:10px 12px;border:1px solid rgba(0,230,118,.35);border-radius:10px;background:rgba(0,230,118,.06)}.verified-draft-notice[hidden]{display:none}.verified-draft-notice div{display:grid;gap:3px}.verified-draft-notice strong{color:var(--g);font-size:.7rem}.verified-draft-notice span{color:var(--mu);font-size:.62rem;line-height:1.4}.verified-draft-notice .verified-draft-origin{width:max-content;padding:2px 7px;border:1px solid rgba(0,229,255,.28);border-radius:999px;background:rgba(0,229,255,.07);color:var(--c);font-weight:700;letter-spacing:.04em;text-transform:uppercase}.verified-draft-notice .verified-draft-expiry{color:var(--y);font-weight:700}.verified-draft-notice[data-freshness-state="expired"]{border-color:rgba(255,82,82,.42);background:rgba(255,82,82,.07)}.verified-draft-notice[data-freshness-state="expired"] .verified-draft-expiry{color:var(--r)}.modal-actions .btn:disabled{opacity:.45;cursor:not-allowed}.review-latest-draft{min-height:44px;border-color:rgba(0,229,255,.35);color:var(--c)}.review-latest-draft[hidden]{display:none}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 .modal-grid .field textarea{min-height:82px;resize:vertical;background:var(--bg3);border:1px solid var(--line2);color:var(--txt);border-radius:8px;padding:8px 10px}
 .modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
 .export-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
@@ -264,6 +264,7 @@ details[open] summary::before{transform:rotate(90deg)}
   </div>
   <div class="top-actions">
     <span class="pill"><span class="dot"></span><span id="statusTxt">Ready</span></span>
+    <button class="btn sm review-latest-draft" id="reviewLatestDraftBtn" type="button" hidden>Review newest draft</button>
     <a class="btn" href="/" target="_blank" rel="noopener">Dashboard</a>
     <a class="btn" href="/props" target="_blank" rel="noopener">Props</a>
     <a class="btn" href="/value-bets" target="_blank" rel="noopener">Value Bets</a>
@@ -825,6 +826,7 @@ const VERIFIED_DECISION_DRAFT_ORIGINS = Object.freeze({
 });
 let pendingVerifiedDecisionDraft = null;
 let verifiedDraftExpiryTimer = null;
+let latestCrossTabDraftAvailable = false;
 
 const st = {
   day: null,
@@ -1738,8 +1740,14 @@ function invalidateVerifiedDecisionReviewFromStorage() {
   if ($('mpMarket')) $('mpMarket').selectedIndex = 0;
   if ($('mpSide')) $('mpSide').selectedIndex = 0;
   closeManualPick();
+  if ($('reviewLatestDraftBtn')) {
+    $('reviewLatestDraftBtn').hidden = !latestCrossTabDraftAvailable;
+    $('reviewLatestDraftBtn').disabled = false;
+  }
   status(
-    'Prepared My Hub draft changed in another tab; review closed and no pick was created. Reload Tracker to review the newest draft.',
+    latestCrossTabDraftAvailable
+      ? 'Prepared My Hub draft changed in another tab; review closed and no pick was created. A newer verified draft is ready for explicit review.'
+      : 'Prepared My Hub draft changed in another tab; review closed and no pick was created. No replacement draft is available.',
     true
   );
 }
@@ -1747,7 +1755,24 @@ function invalidateVerifiedDecisionReviewFromStorage() {
 function handleVerifiedDecisionDraftStorage(event) {
   if (!pendingVerifiedDecisionDraft || !event) return;
   if (event.key !== VERIFIED_DECISION_DRAFT_KEY && event.key !== null) return;
+  latestCrossTabDraftAvailable = false;
+  if (typeof event.newValue === 'string') {
+    try {
+      latestCrossTabDraftAvailable = isVerifiedDecisionDraft(JSON.parse(event.newValue));
+    } catch {}
+  }
   invalidateVerifiedDecisionReviewFromStorage();
+}
+
+function reviewLatestVerifiedDecisionDraft() {
+  if ($('reviewLatestDraftBtn')) $('reviewLatestDraftBtn').hidden = true;
+  latestCrossTabDraftAvailable = false;
+  const result = readVerifiedDecisionDraft();
+  if (!result.present || !result.draft) {
+    status('The newest verified draft is no longer available; no pick was created.', true);
+    return;
+  }
+  applyVerifiedDecisionDraft();
 }
 
 function isVerifiedDecisionDraft(draft) {
@@ -1808,6 +1833,8 @@ function clearVerifiedDecisionDraft(clearFields=false) {
   if ($('verifiedDraftFreshnessStatus')) $('verifiedDraftFreshnessStatus').textContent = 'Quote freshness unavailable';
   if ($('verifiedDraftNotice')) $('verifiedDraftNotice').dataset.freshnessState = 'idle';
   if ($('saveManualPickBtn')) $('saveManualPickBtn').disabled = false;
+  latestCrossTabDraftAvailable = false;
+  if ($('reviewLatestDraftBtn')) $('reviewLatestDraftBtn').hidden = true;
   if (clearFields) {
     ['mpPlayer','mpTeam','mpOpp','mpLine','mpProb','mpEdge','mpMean','mpBook',
      'mpPrice','mpBestPrice','mpBestBook','mpStake','mpReason'].forEach(id => {
@@ -2376,7 +2403,7 @@ function wire() {
     ['exportCsvBtn', ()=>exportTracker('csv')], ['exportPdfBtn', ()=>exportTracker('pdf')],
     ['exportAllCsvBtn', ()=>{ status('Downloading all history…'); window.location.href='/api/tracker/export/all'; }],
     ['btExportCsvBtn', ()=>exportTracker('csv')], ['btExportPdfBtn', ()=>exportTracker('pdf')],
-    ['saveManualPickBtn', saveManualPick], ['clearParlayBtn', ()=>{st.parlay=[]; renderBoard(); renderParlayBuilder();}], ['saveParlayBtn', saveParlay], ['saveAdjBtn', saveAdj],
+    ['saveManualPickBtn', saveManualPick], ['reviewLatestDraftBtn', reviewLatestVerifiedDecisionDraft], ['clearParlayBtn', ()=>{st.parlay=[]; renderBoard(); renderParlayBuilder();}], ['saveParlayBtn', saveParlay], ['saveAdjBtn', saveAdj],
     ['loadCalBtn', loadCal], ['applyCalBtn', applyCal],
     ['loadValBtn', loadVal], ['loadBRBtn', loadBR],
     ['loadAttrBtn', loadAttr], ['runBtBtn', runBacktest],
