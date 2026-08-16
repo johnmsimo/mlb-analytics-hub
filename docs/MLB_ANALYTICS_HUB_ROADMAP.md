@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 4.83 merged and deployed on 2026-08-16. Phase 4.84 is the active phase.
+Status: Phase 4.84 merged and deployed on 2026-08-16. Phase 4.85 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -517,6 +517,24 @@ Exit gate: recovery is offered only for a valid replacement, every recovery
 requires a user tap and fresh storage read, unavailable drafts fail closed
 without a pick, and admin authorization plus canonical revalidation remain
 unchanged.
+
+### Phase 4.85 — Pre-save verified draft identity guard
+
+Implementation status: immediately before a verified Tracker save, the client
+now re-reads device storage and requires the complete reviewed draft identity to
+match the current valid 4.71 draft. This closes the event-delivery race where a
+different tab can replace or remove the draft just before its storage event is
+handled.
+
+A mismatch closes and clears the stale review before any Tracker POST. A valid
+newer replacement remains device-local and is offered only through the existing
+explicit Review newest draft control. Manual entry is unchanged, and the server
+continues to enforce admin authorization and canonical revalidation.
+
+Exit gate: every verified save re-reads storage before constructing or posting
+its payload, only an exact current draft identity can cross the client POST
+boundary, mismatches create no pick or server mutation, replacements remain
+available for explicit review, and manual Tracker entry remains unaffected.
 
 ## Audit findings carried into the roadmap
 
