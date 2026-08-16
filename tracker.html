@@ -172,7 +172,7 @@ tr:hover td{background:rgba(0,229,255,.03)}
 .modal-card{width:min(720px,94vw);max-height:86vh;overflow:auto;background:var(--bg2);border:1px solid var(--line2);border-radius:16px;padding:16px}
 .modal-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px}
 .modal-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.verified-draft-notice{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 12px;padding:10px 12px;border:1px solid rgba(0,230,118,.35);border-radius:10px;background:rgba(0,230,118,.06)}.verified-draft-notice[hidden]{display:none}.verified-draft-notice div{display:grid;gap:3px}.verified-draft-notice strong{color:var(--g);font-size:.7rem}.verified-draft-notice span{color:var(--mu);font-size:.62rem;line-height:1.4}.verified-draft-notice .verified-draft-origin{width:max-content;padding:2px 7px;border:1px solid rgba(0,229,255,.28);border-radius:999px;background:rgba(0,229,255,.07);color:var(--c);font-weight:700;letter-spacing:.04em;text-transform:uppercase}.verified-draft-notice .verified-draft-expiry{color:var(--y);font-weight:700}
+.verified-draft-notice{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 12px;padding:10px 12px;border:1px solid rgba(0,230,118,.35);border-radius:10px;background:rgba(0,230,118,.06)}.verified-draft-notice[hidden]{display:none}.verified-draft-notice div{display:grid;gap:3px}.verified-draft-notice strong{color:var(--g);font-size:.7rem}.verified-draft-notice span{color:var(--mu);font-size:.62rem;line-height:1.4}.verified-draft-notice .verified-draft-origin{width:max-content;padding:2px 7px;border:1px solid rgba(0,229,255,.28);border-radius:999px;background:rgba(0,229,255,.07);color:var(--c);font-weight:700;letter-spacing:.04em;text-transform:uppercase}.verified-draft-notice .verified-draft-expiry{color:var(--y);font-weight:700}.verified-draft-notice[data-freshness-state="expired"]{border-color:rgba(255,82,82,.42);background:rgba(255,82,82,.07)}.verified-draft-notice[data-freshness-state="expired"] .verified-draft-expiry{color:var(--r)}.modal-actions .btn:disabled{opacity:.45;cursor:not-allowed}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 .modal-grid .field textarea{min-height:82px;resize:vertical;background:var(--bg3);border:1px solid var(--line2);color:var(--txt);border-radius:8px;padding:8px 10px}
 .modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
 .export-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
@@ -775,8 +775,8 @@ details[open] summary::before{transform:rotate(90deg)}
       </div>
       <button class="btn sm" onclick="closeManualPick()">Close</button>
     </div>
-    <div class="verified-draft-notice" id="verifiedDraftNotice" hidden>
-      <div><strong id="verifiedDraftLabel">Verified My Hub draft</strong><span class="verified-draft-origin" id="verifiedDraftOrigin">Draft source unavailable</span><span class="verified-draft-expiry" id="verifiedDraftExpiry">Quote expiry unavailable</span><span>Prepared from a 4.69 receipt. Saving explicitly revalidates the canonical candidate on the server.</span></div>
+    <div class="verified-draft-notice" id="verifiedDraftNotice" data-freshness-state="idle" hidden>
+      <div><strong id="verifiedDraftLabel">Verified My Hub draft</strong><span class="verified-draft-origin" id="verifiedDraftOrigin">Draft source unavailable</span><span class="verified-draft-expiry" id="verifiedDraftExpiry" aria-hidden="true">Quote expiry unavailable</span><span class="sr-only" id="verifiedDraftFreshnessStatus" role="status" aria-live="polite">Quote freshness unavailable</span><span>Prepared from a 4.69 receipt. Saving explicitly revalidates the canonical candidate on the server.</span></div>
       <button class="btn sm" type="button" onclick="discardVerifiedDecisionDraft()">Discard draft</button>
     </div>
     <div class="modal-grid">
@@ -824,6 +824,7 @@ const VERIFIED_DECISION_DRAFT_ORIGINS = Object.freeze({
   eligible_alert: 'Eligible alert',
 });
 let pendingVerifiedDecisionDraft = null;
+let verifiedDraftExpiryTimer = null;
 
 const st = {
   day: null,
@@ -1647,10 +1648,54 @@ function verifiedDecisionOriginLabel(origin) {
 function verifiedDecisionExpiryLabel(expiresAt) {
   const expiry = new Date(String(expiresAt || ''));
   if (Number.isNaN(expiry.getTime())) return '';
+  const remainingSeconds = Math.max(0, Math.ceil((expiry.getTime() - Date.now()) / 1000));
+  const minutes = Math.floor(remainingSeconds / 60);
+  const seconds = String(remainingSeconds % 60).padStart(2, '0');
+  const remaining = remainingSeconds > 0
+    ? minutes + 'm ' + seconds + 's remaining'
+    : 'expired';
   return 'Quote valid until ' + expiry.toLocaleTimeString('en-US', {
     hour: 'numeric',
     minute: '2-digit',
-  });
+  }) + ' · ' + remaining;
+}
+
+function stopVerifiedDraftExpiryTimer() {
+  if (verifiedDraftExpiryTimer !== null) {
+    window.clearInterval(verifiedDraftExpiryTimer);
+    verifiedDraftExpiryTimer = null;
+  }
+}
+
+function updateVerifiedDraftExpiryState() {
+  if (!pendingVerifiedDecisionDraft) return;
+  const expiresAt = Date.parse(String(pendingVerifiedDecisionDraft.expiresAt || ''));
+  const expired = !Number.isFinite(expiresAt) || Date.now() > expiresAt;
+  if ($('verifiedDraftExpiry')) {
+    $('verifiedDraftExpiry').textContent = verifiedDecisionExpiryLabel(
+      pendingVerifiedDecisionDraft.expiresAt
+    );
+  }
+  if ($('verifiedDraftNotice')) {
+    $('verifiedDraftNotice').dataset.freshnessState = expired ? 'expired' : 'fresh';
+  }
+  if ($('saveManualPickBtn')) $('saveManualPickBtn').disabled = expired;
+  if (expired) {
+    stopVerifiedDraftExpiryTimer();
+    if ($('verifiedDraftFreshnessStatus')) {
+      $('verifiedDraftFreshnessStatus').textContent =
+        'Quote expired. Save is disabled and no pick was created.';
+    }
+    status('Prepared My Hub draft expired during review; Save is disabled and no pick was created.', true);
+  }
+}
+
+function startVerifiedDraftExpiryTimer() {
+  stopVerifiedDraftExpiryTimer();
+  updateVerifiedDraftExpiryState();
+  if (pendingVerifiedDecisionDraft && isVerifiedDecisionDraft(pendingVerifiedDecisionDraft)) {
+    verifiedDraftExpiryTimer = window.setInterval(updateVerifiedDraftExpiryState, 1000);
+  }
 }
 
 function isVerifiedDecisionDraft(draft) {
@@ -1699,6 +1744,7 @@ function setVerifiedDraftFieldsLocked(locked) {
 }
 
 function clearVerifiedDecisionDraft(clearFields=false) {
+  stopVerifiedDraftExpiryTimer();
   try { localStorage.removeItem(VERIFIED_DECISION_DRAFT_KEY); } catch {}
   pendingVerifiedDecisionDraft = null;
   setVerifiedDraftFieldsLocked(false);
@@ -1707,6 +1753,9 @@ function clearVerifiedDecisionDraft(clearFields=false) {
   if ($('verifiedDraftNotice')) $('verifiedDraftNotice').hidden = true;
   if ($('verifiedDraftOrigin')) $('verifiedDraftOrigin').textContent = 'Draft source unavailable';
   if ($('verifiedDraftExpiry')) $('verifiedDraftExpiry').textContent = 'Quote expiry unavailable';
+  if ($('verifiedDraftFreshnessStatus')) $('verifiedDraftFreshnessStatus').textContent = 'Quote freshness unavailable';
+  if ($('verifiedDraftNotice')) $('verifiedDraftNotice').dataset.freshnessState = 'idle';
+  if ($('saveManualPickBtn')) $('saveManualPickBtn').disabled = false;
   if (clearFields) {
     ['mpPlayer','mpTeam','mpOpp','mpLine','mpProb','mpEdge','mpMean','mpBook',
      'mpPrice','mpBestPrice','mpBestBook','mpStake','mpReason'].forEach(id => {
@@ -1761,7 +1810,12 @@ function applyVerifiedDecisionDraft() {
   $('verifiedDraftLabel').textContent = draft.player + ' · ' + (MARKET_LABELS[draft.marketKey] || draft.marketKey);
   $('verifiedDraftOrigin').textContent = 'Draft source: ' + verifiedDecisionOriginLabel(draft.preparedFrom);
   $('verifiedDraftExpiry').textContent = verifiedDecisionExpiryLabel(draft.expiresAt);
+  $('verifiedDraftFreshnessStatus').textContent =
+    'Quote is fresh. Save remains available until the displayed expiry time.';
+  $('verifiedDraftNotice').dataset.freshnessState = 'fresh';
   $('verifiedDraftNotice').hidden = false;
+  $('saveManualPickBtn').disabled = false;
+  startVerifiedDraftExpiryTimer();
   openManualPick();
   status('Verified My Hub draft ready for review; no pick has been created.');
 }

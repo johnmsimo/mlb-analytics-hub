@@ -19,6 +19,7 @@ ALERT_ELIGIBILITY_PROVENANCE_VERSION = "4.77"
 VERIFIED_ALERT_REVIEW_HANDOFF_VERSION = "4.78"
 VERIFIED_DECISION_ORIGIN_PROVENANCE_VERSION = "4.79"
 VERIFIED_DECISION_REVIEW_FRESHNESS_VERSION = "4.80"
+VERIFIED_DECISION_LIVE_EXPIRY_VERSION = "4.81"
 _ROOT = Path(__file__).resolve().parent
 _HUB_PATH = _ROOT / "product_hub.html"
 
@@ -217,6 +218,23 @@ def product_journey():
                 "learningPerformanceUsed": False,
                 "recommendation": False,
                 "serverPersistence": False,
+                "failClosed": True,
+            },
+            "verifiedDecisionLiveExpiry": {
+                "version": VERIFIED_DECISION_LIVE_EXPIRY_VERSION,
+                "sourceContractVersion": VERIFIED_DECISION_REVIEW_FRESHNESS_VERSION,
+                "draftContractVersion": VERIFIED_DECISION_HANDOFF_VERSION,
+                "freshnessStates": ["fresh", "expired"],
+                "countdownIntervalMilliseconds": 1000,
+                "visibleCountdown": True,
+                "accessibleStateAnnouncement": True,
+                "saveDisabledWhenExpired": True,
+                "clientPostSuppressedWhenExpired": True,
+                "manualPicksUnaffected": True,
+                "serverMutationOnExpiry": False,
+                "requiresExplicitSave": True,
+                "saveRequiresAdminAuth": True,
+                "canonicalRevalidationOnSave": True,
                 "failClosed": True,
             },
             "verifiedDecisionReviewFreshness": {
