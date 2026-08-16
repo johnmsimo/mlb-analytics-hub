@@ -23,6 +23,7 @@ VERIFIED_DECISION_LIVE_EXPIRY_VERSION = "4.81"
 VERIFIED_DECISION_RESUME_REVALIDATION_VERSION = "4.82"
 VERIFIED_DECISION_CROSS_TAB_INVALIDATION_VERSION = "4.83"
 VERIFIED_DECISION_EXPLICIT_RECOVERY_VERSION = "4.84"
+VERIFIED_DECISION_PRE_SAVE_IDENTITY_VERSION = "4.85"
 _ROOT = Path(__file__).resolve().parent
 _HUB_PATH = _ROOT / "product_hub.html"
 
@@ -221,6 +222,23 @@ def product_journey():
                 "learningPerformanceUsed": False,
                 "recommendation": False,
                 "serverPersistence": False,
+                "failClosed": True,
+            },
+            "verifiedDecisionPreSaveIdentity": {
+                "version": VERIFIED_DECISION_PRE_SAVE_IDENTITY_VERSION,
+                "sourceContractVersion": VERIFIED_DECISION_EXPLICIT_RECOVERY_VERSION,
+                "draftContractVersion": VERIFIED_DECISION_HANDOFF_VERSION,
+                "storageReReadBeforePost": True,
+                "fullDraftIdentityMatchRequired": True,
+                "mismatchInvalidatesActiveReview": True,
+                "replacementPreservedOnMismatch": True,
+                "replacementRequiresExplicitReview": True,
+                "clientPostOnMismatch": False,
+                "serverMutationOnMismatch": False,
+                "manualPicksUnaffected": True,
+                "requiresExplicitSave": True,
+                "saveRequiresAdminAuth": True,
+                "canonicalRevalidationOnSave": True,
                 "failClosed": True,
             },
             "verifiedDecisionExplicitRecovery": {

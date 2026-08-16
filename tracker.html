@@ -1810,6 +1810,13 @@ function readVerifiedDecisionDraft() {
   return {present:true, draft:null};
 }
 
+function verifiedDecisionDraftIdentity(draft) {
+  if (!draft || typeof draft !== 'object' || Array.isArray(draft)) return '';
+  return JSON.stringify(
+    Object.keys(draft).sort().map(key => [key, draft[key]])
+  );
+}
+
 function setVerifiedDraftFieldsLocked(locked) {
   [
     'mpPlayer','mpTeam','mpOpp','mpMarket','mpLine','mpSide','mpProb','mpEdge',
@@ -1914,6 +1921,20 @@ async function saveManualPick() {
     closeManualPick();
     status('Prepared My Hub draft expired during review; no pick was created.', true);
     return;
+  }
+
+  if (pendingVerifiedDecisionDraft) {
+    const current = readVerifiedDecisionDraft();
+    const draftStillCurrent = Boolean(
+      current.draft &&
+      verifiedDecisionDraftIdentity(current.draft) ===
+        verifiedDecisionDraftIdentity(pendingVerifiedDecisionDraft)
+    );
+    if (!draftStillCurrent) {
+      latestCrossTabDraftAvailable = Boolean(current.draft);
+      invalidateVerifiedDecisionReviewFromStorage();
+      return;
+    }
   }
 
   const payload = {
