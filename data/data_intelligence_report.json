@@ -1,0 +1,571 @@
+{
+  "candidateQueue": [
+    {
+      "admitted": true,
+      "blockers": [],
+      "id": "rbi_opportunity_context",
+      "phase": "5.1",
+      "researchPriority": 1,
+      "targetMarkets": [
+        "batter_rbis"
+      ],
+      "targetModels": [
+        "rbi_1.5",
+        "rbi"
+      ]
+    },
+    {
+      "admitted": true,
+      "blockers": [],
+      "id": "pitch_mix_contact_matchup",
+      "phase": "5.1",
+      "researchPriority": 2,
+      "targetMarkets": [
+        "batter_hits",
+        "batter_home_runs",
+        "batter_total_bases"
+      ],
+      "targetModels": [
+        "hits_1.5",
+        "tb_2.5",
+        "tb_3.5",
+        "hits",
+        "tb",
+        "hr"
+      ]
+    },
+    {
+      "admitted": false,
+      "blockers": [
+        "historical_reconstruction"
+      ],
+      "id": "weather_game_environment",
+      "phase": "5.1",
+      "researchPriority": 3,
+      "targetMarkets": [
+        "batter_home_runs",
+        "batter_total_bases"
+      ],
+      "targetModels": [
+        "tb_2.5",
+        "tb_3.5",
+        "hr",
+        "tb"
+      ]
+    },
+    {
+      "admitted": false,
+      "blockers": [
+        "historical_reconstruction"
+      ],
+      "id": "confirmed_lineup_publication_state",
+      "phase": "5.1",
+      "researchPriority": 4,
+      "targetMarkets": [
+        "batter_hits",
+        "batter_rbis",
+        "batter_total_bases"
+      ],
+      "targetModels": [
+        "rbi_1.5",
+        "rbi",
+        "hits_1.5",
+        "tb_2.5",
+        "tb_3.5"
+      ]
+    },
+    {
+      "admitted": false,
+      "blockers": [
+        "historical_reconstruction",
+        "live_serve_path",
+        "freshness_policy"
+      ],
+      "id": "umpire_zone_context",
+      "phase": "5.1",
+      "researchPriority": 5,
+      "targetMarkets": [
+        "batter_hits",
+        "pitcher_strikeouts"
+      ],
+      "targetModels": [
+        "hits_1.5",
+        "k_2.5",
+        "k_3.5",
+        "k_4.5",
+        "k_5.5",
+        "k_6.5",
+        "k_7.5"
+      ]
+    },
+    {
+      "admitted": false,
+      "blockers": [
+        "historical_reconstruction",
+        "live_serve_path",
+        "freshness_policy",
+        "leakage_review"
+      ],
+      "id": "injury_availability",
+      "phase": "5.1",
+      "researchPriority": 6,
+      "targetMarkets": [
+        "batter_hits",
+        "batter_rbis",
+        "batter_total_bases"
+      ],
+      "targetModels": [
+        "rbi_1.5",
+        "rbi",
+        "hits_1.5",
+        "tb_2.5",
+        "tb_3.5"
+      ]
+    },
+    {
+      "admitted": false,
+      "blockers": [
+        "historical_reconstruction",
+        "live_serve_path",
+        "freshness_policy",
+        "leakage_review"
+      ],
+      "id": "bullpen_availability",
+      "phase": "5.1",
+      "researchPriority": 7,
+      "targetMarkets": [
+        "batter_hits",
+        "batter_home_runs",
+        "batter_rbis",
+        "batter_total_bases"
+      ],
+      "targetModels": [
+        "rbi_1.5",
+        "rbi",
+        "hits_1.5",
+        "tb_2.5",
+        "tb_3.5",
+        "hr"
+      ]
+    },
+    {
+      "admitted": false,
+      "blockers": [
+        "phase_routing",
+        "historical_reconstruction"
+      ],
+      "id": "sportsbook_consensus",
+      "phase": "5.3",
+      "researchPriority": 8,
+      "targetMarkets": [
+        "batter_hits",
+        "batter_rbis",
+        "batter_total_bases"
+      ],
+      "targetModels": [
+        "rbi_1.5",
+        "rbi",
+        "hits_1.5",
+        "tb_2.5",
+        "tb_3.5"
+      ]
+    }
+  ],
+  "coverage": {
+    "admittedPhase51Signals": 2,
+    "candidateSignals": 8,
+    "championModels": 14,
+    "governedServeFeatures": 50,
+    "sourceContracts": 7,
+    "trackerMarkets": 5,
+    "uniqueServeFeatures": 50
+  },
+  "errors": [],
+  "modelCoverage": {
+    "hits": {
+      "featureCount": 22,
+      "governedFeatureCount": 22,
+      "sourceIds": [
+        "handedness_platoon",
+        "lineup_role",
+        "opponent_starter_profile",
+        "recent_form",
+        "statcast_season_skill"
+      ],
+      "trackerMarket": "batter_hits"
+    },
+    "hits_1.5": {
+      "featureCount": 22,
+      "governedFeatureCount": 22,
+      "sourceIds": [
+        "handedness_platoon",
+        "lineup_role",
+        "opponent_starter_profile",
+        "recent_form",
+        "statcast_season_skill"
+      ],
+      "trackerMarket": "batter_hits"
+    },
+    "hr": {
+      "featureCount": 29,
+      "governedFeatureCount": 29,
+      "sourceIds": [
+        "handedness_platoon",
+        "lineup_role",
+        "opponent_starter_profile",
+        "park_factors",
+        "recent_form",
+        "statcast_bat_tracking",
+        "statcast_season_skill"
+      ],
+      "trackerMarket": "batter_home_runs"
+    },
+    "k_2.5": {
+      "featureCount": 12,
+      "governedFeatureCount": 12,
+      "sourceIds": [
+        "recent_form",
+        "statcast_season_skill"
+      ],
+      "trackerMarket": "pitcher_strikeouts"
+    },
+    "k_3.5": {
+      "featureCount": 12,
+      "governedFeatureCount": 12,
+      "sourceIds": [
+        "recent_form",
+        "statcast_season_skill"
+      ],
+      "trackerMarket": "pitcher_strikeouts"
+    },
+    "k_4.5": {
+      "featureCount": 12,
+      "governedFeatureCount": 12,
+      "sourceIds": [
+        "recent_form",
+        "statcast_season_skill"
+      ],
+      "trackerMarket": "pitcher_strikeouts"
+    },
+    "k_5.5": {
+      "featureCount": 12,
+      "governedFeatureCount": 12,
+      "sourceIds": [
+        "recent_form",
+        "statcast_season_skill"
+      ],
+      "trackerMarket": "pitcher_strikeouts"
+    },
+    "k_6.5": {
+      "featureCount": 12,
+      "governedFeatureCount": 12,
+      "sourceIds": [
+        "recent_form",
+        "statcast_season_skill"
+      ],
+      "trackerMarket": "pitcher_strikeouts"
+    },
+    "k_7.5": {
+      "featureCount": 12,
+      "governedFeatureCount": 12,
+      "sourceIds": [
+        "recent_form",
+        "statcast_season_skill"
+      ],
+      "trackerMarket": "pitcher_strikeouts"
+    },
+    "rbi": {
+      "featureCount": 26,
+      "governedFeatureCount": 26,
+      "sourceIds": [
+        "handedness_platoon",
+        "lineup_role",
+        "opponent_starter_profile",
+        "recent_form",
+        "statcast_bat_tracking",
+        "statcast_season_skill"
+      ],
+      "trackerMarket": "batter_rbis"
+    },
+    "rbi_1.5": {
+      "featureCount": 26,
+      "governedFeatureCount": 26,
+      "sourceIds": [
+        "handedness_platoon",
+        "lineup_role",
+        "opponent_starter_profile",
+        "recent_form",
+        "statcast_bat_tracking",
+        "statcast_season_skill"
+      ],
+      "trackerMarket": "batter_rbis"
+    },
+    "tb": {
+      "featureCount": 30,
+      "governedFeatureCount": 30,
+      "sourceIds": [
+        "handedness_platoon",
+        "lineup_role",
+        "opponent_starter_profile",
+        "park_factors",
+        "recent_form",
+        "statcast_bat_tracking",
+        "statcast_season_skill"
+      ],
+      "trackerMarket": "batter_total_bases"
+    },
+    "tb_2.5": {
+      "featureCount": 30,
+      "governedFeatureCount": 30,
+      "sourceIds": [
+        "handedness_platoon",
+        "lineup_role",
+        "opponent_starter_profile",
+        "park_factors",
+        "recent_form",
+        "statcast_bat_tracking",
+        "statcast_season_skill"
+      ],
+      "trackerMarket": "batter_total_bases"
+    },
+    "tb_3.5": {
+      "featureCount": 30,
+      "governedFeatureCount": 30,
+      "sourceIds": [
+        "handedness_platoon",
+        "lineup_role",
+        "opponent_starter_profile",
+        "park_factors",
+        "recent_form",
+        "statcast_bat_tracking",
+        "statcast_season_skill"
+      ],
+      "trackerMarket": "batter_total_bases"
+    }
+  },
+  "phase51Admission": {
+    "admittedSignals": [
+      "rbi_opportunity_context",
+      "pitch_mix_contact_matchup"
+    ],
+    "changesProductionProbabilities": false,
+    "queue": [
+      {
+        "admitted": true,
+        "blockers": [],
+        "id": "rbi_opportunity_context",
+        "phase": "5.1",
+        "researchPriority": 1,
+        "targetMarkets": [
+          "batter_rbis"
+        ],
+        "targetModels": [
+          "rbi_1.5",
+          "rbi"
+        ]
+      },
+      {
+        "admitted": true,
+        "blockers": [],
+        "id": "pitch_mix_contact_matchup",
+        "phase": "5.1",
+        "researchPriority": 2,
+        "targetMarkets": [
+          "batter_hits",
+          "batter_home_runs",
+          "batter_total_bases"
+        ],
+        "targetModels": [
+          "hits_1.5",
+          "tb_2.5",
+          "tb_3.5",
+          "hits",
+          "tb",
+          "hr"
+        ]
+      },
+      {
+        "admitted": false,
+        "blockers": [
+          "historical_reconstruction"
+        ],
+        "id": "weather_game_environment",
+        "phase": "5.1",
+        "researchPriority": 3,
+        "targetMarkets": [
+          "batter_home_runs",
+          "batter_total_bases"
+        ],
+        "targetModels": [
+          "tb_2.5",
+          "tb_3.5",
+          "hr",
+          "tb"
+        ]
+      },
+      {
+        "admitted": false,
+        "blockers": [
+          "historical_reconstruction"
+        ],
+        "id": "confirmed_lineup_publication_state",
+        "phase": "5.1",
+        "researchPriority": 4,
+        "targetMarkets": [
+          "batter_hits",
+          "batter_rbis",
+          "batter_total_bases"
+        ],
+        "targetModels": [
+          "rbi_1.5",
+          "rbi",
+          "hits_1.5",
+          "tb_2.5",
+          "tb_3.5"
+        ]
+      },
+      {
+        "admitted": false,
+        "blockers": [
+          "historical_reconstruction",
+          "live_serve_path",
+          "freshness_policy"
+        ],
+        "id": "umpire_zone_context",
+        "phase": "5.1",
+        "researchPriority": 5,
+        "targetMarkets": [
+          "batter_hits",
+          "pitcher_strikeouts"
+        ],
+        "targetModels": [
+          "hits_1.5",
+          "k_2.5",
+          "k_3.5",
+          "k_4.5",
+          "k_5.5",
+          "k_6.5",
+          "k_7.5"
+        ]
+      },
+      {
+        "admitted": false,
+        "blockers": [
+          "historical_reconstruction",
+          "live_serve_path",
+          "freshness_policy",
+          "leakage_review"
+        ],
+        "id": "injury_availability",
+        "phase": "5.1",
+        "researchPriority": 6,
+        "targetMarkets": [
+          "batter_hits",
+          "batter_rbis",
+          "batter_total_bases"
+        ],
+        "targetModels": [
+          "rbi_1.5",
+          "rbi",
+          "hits_1.5",
+          "tb_2.5",
+          "tb_3.5"
+        ]
+      },
+      {
+        "admitted": false,
+        "blockers": [
+          "historical_reconstruction",
+          "live_serve_path",
+          "freshness_policy",
+          "leakage_review"
+        ],
+        "id": "bullpen_availability",
+        "phase": "5.1",
+        "researchPriority": 7,
+        "targetMarkets": [
+          "batter_hits",
+          "batter_home_runs",
+          "batter_rbis",
+          "batter_total_bases"
+        ],
+        "targetModels": [
+          "rbi_1.5",
+          "rbi",
+          "hits_1.5",
+          "tb_2.5",
+          "tb_3.5",
+          "hr"
+        ]
+      }
+    ],
+    "ready": true
+  },
+  "promotionSafety": {
+    "automaticPromotion": false,
+    "championComparisonStillRequired": true,
+    "heldOutAucMustNotRegress": true,
+    "heldOutBrierMustImprove": true,
+    "heldOutLoglossMustNotRegress": true,
+    "marketEceMustNotRegress": true
+  },
+  "sourceBaselineVersion": "4.86.0",
+  "sourceBlobs": {
+    "accuracyBaseline": "6e941891dac893e5a900cfa2bedd44ba19ee650e",
+    "serveFeatures": "82246c727cdd37a97803303d07ff89eed1b15768",
+    "sourceManifest": "ab9cfcfc11037fcc54fd80d8683fc93fa328d0c4"
+  },
+  "sourceCoverage": [
+    {
+      "admissible": true,
+      "featureCount": 3,
+      "freshnessMinutes": 30,
+      "id": "handedness_platoon",
+      "modelCount": 8
+    },
+    {
+      "admissible": true,
+      "featureCount": 2,
+      "freshnessMinutes": 15,
+      "id": "lineup_role",
+      "modelCount": 8
+    },
+    {
+      "admissible": true,
+      "featureCount": 8,
+      "freshnessMinutes": 30,
+      "id": "opponent_starter_profile",
+      "modelCount": 8
+    },
+    {
+      "admissible": true,
+      "featureCount": 2,
+      "freshnessMinutes": 10080,
+      "id": "park_factors",
+      "modelCount": 4
+    },
+    {
+      "admissible": true,
+      "featureCount": 14,
+      "freshnessMinutes": 1440,
+      "id": "recent_form",
+      "modelCount": 14
+    },
+    {
+      "admissible": true,
+      "featureCount": 4,
+      "freshnessMinutes": 1440,
+      "id": "statcast_bat_tracking",
+      "modelCount": 6
+    },
+    {
+      "admissible": true,
+      "featureCount": 17,
+      "freshnessMinutes": 1440,
+      "id": "statcast_season_skill",
+      "modelCount": 14
+    }
+  ],
+  "status": "passed",
+  "version": "5.0.0"
+}

@@ -91,5 +91,5 @@ def test_phase_470_is_documented_as_active():
         encoding="utf-8"
     )
 
-    assert "Phase 4.86 is the active phase." in roadmap
+    assert "Phase 5.0 is the active phase." in roadmap
     assert "### Phase 4.70 — Saved-player verified opportunity digest" in roadmap

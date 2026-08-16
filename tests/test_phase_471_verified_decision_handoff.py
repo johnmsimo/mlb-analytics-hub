@@ -116,5 +116,5 @@ def test_phase_471_is_documented_as_active():
         encoding="utf-8"
     )
 
-    assert "Phase 4.86 is the active phase." in roadmap
+    assert "Phase 5.0 is the active phase." in roadmap
     assert "### Phase 4.71 — Verified decision handoff" in roadmap

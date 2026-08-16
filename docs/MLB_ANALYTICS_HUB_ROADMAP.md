@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 4.85 merged and deployed on 2026-08-16. Phase 4.86 is the active phase.
+Status: Phase 4.86 merged and deployed on 2026-08-16. Phase 5.0 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -557,6 +557,27 @@ weakness ranking and comparison contract; automatic promotion remains disabled.
 
 Phase 4.86 is the final 4.x bridge. After it is merged and deployed, new planned
 work begins under Phase 5 — Accuracy and Intelligence.
+
+### Phase 5.0 — Data intelligence foundation
+
+Implementation status: all fifty distinct production serve features are mapped
+to one of seven source contracts with historical reconstruction, live serving,
+freshness, and leakage evidence. Pull-request quality rejects ungoverned
+features, duplicate assignments, feature-count drift, unsafe source contracts,
+and stale intelligence reports.
+
+The first admitted Phase 5.1 experiments are RBI opportunity context for
+`rbi_1.5` and `rbi`, followed by pitch-mix/contact matchup evidence for the
+weak hits and total-bases lines. Weather, lineup-publication history, umpire,
+injury, and bullpen signals remain blocked until their missing point-in-time
+contracts exist. Sportsbook consensus is reserved for Phase 5.3 decision
+intelligence.
+
+Exit gate: every champion feature has one admissible provenance contract; the
+candidate registry explains every admitted or blocked signal; at least one
+weak-market experiment is eligible for Phase 5.1; no source admission changes
+production probabilities or bypasses the frozen champion comparison and
+review-gated promotion contract.
 
 ## Audit findings carried into the roadmap
 

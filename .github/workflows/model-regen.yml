@@ -52,9 +52,10 @@ jobs:
         run: |
           python scripts/model_gate.py
           git diff --check
-      - name: Freeze candidate champions and refresh Phase 5 baseline
+      - name: Freeze candidate champions and refresh Phase 5 intelligence
         run: |
           python scripts/accuracy_baseline.py --refresh-champions --source-sha "$GITHUB_SHA"
+          python scripts/data_intelligence.py
           git diff --check
       - name: Open PR with refreshed artifacts
         uses: peter-evans/create-pull-request@v6
@@ -84,4 +85,5 @@ jobs:
             data/model_gate_report.json
             data/champion_manifest.json
             data/accuracy_baseline.json
+            data/data_intelligence_report.json
             data/savant_bat_tracking_*.csv
