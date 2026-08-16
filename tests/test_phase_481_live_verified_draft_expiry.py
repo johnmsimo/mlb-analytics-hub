@@ -100,6 +100,6 @@ def test_phase_481_is_documented_as_active():
     )
 
     assert "FEATURE 4.86" in html
-    assert "Phase 4.86 is the active phase." in roadmap
+    assert "Phase 5.0 is the active phase." in roadmap
     assert "### Phase 4.81 — Live verified draft expiry state" in roadmap
     assert "assistive technology receives state-change announcements" in roadmap

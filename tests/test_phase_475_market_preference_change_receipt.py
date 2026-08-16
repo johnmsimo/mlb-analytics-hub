@@ -105,6 +105,6 @@ def test_phase_475_is_documented_as_active():
         encoding="utf-8"
     )
 
-    assert "Phase 4.86 is the active phase." in roadmap
+    assert "Phase 5.0 is the active phase." in roadmap
     assert "### Phase 4.75 — Market preference change receipt" in roadmap
     assert "announced accessibly" in roadmap

@@ -149,5 +149,5 @@ def test_phase_473_is_documented_as_active():
         encoding="utf-8"
     )
 
-    assert "Phase 4.86 is the active phase." in roadmap
+    assert "Phase 5.0 is the active phase." in roadmap
     assert "### Phase 4.73 — Verified decision market learning lens" in roadmap

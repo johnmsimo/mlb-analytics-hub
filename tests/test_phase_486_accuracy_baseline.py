@@ -180,7 +180,7 @@ def test_phase_486_closes_four_x_and_hands_off_to_phase_five():
     roadmap = (ROOT / "docs" / "MLB_ANALYTICS_HUB_ROADMAP.md").read_text(encoding="utf-8")
     handoff = (ROOT / "docs" / "accuracy_intelligence_handoff.md").read_text(encoding="utf-8")
     html = (ROOT / "product_hub.html").read_text(encoding="utf-8")
-    assert "Phase 4.86 is the active phase." in roadmap
+    assert "Phase 5.0 is the active phase." in roadmap
     assert "### Phase 4.86 — Accuracy baseline and reliability closeout" in roadmap
     assert "Phase 5 — Accuracy and Intelligence" in handoff
     assert "FEATURE 4.86" in html

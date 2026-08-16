@@ -86,6 +86,6 @@ def test_phase_480_is_documented_as_active():
     )
 
     assert "FEATURE 4.86" in html
-    assert "Phase 4.86 is the active phase." in roadmap
+    assert "Phase 5.0 is the active phase." in roadmap
     assert "### Phase 4.80 — Verified draft expiry guard" in roadmap
     assert "suppresses the POST" in roadmap

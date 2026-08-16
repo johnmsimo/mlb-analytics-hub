@@ -48,6 +48,5 @@ and cannot enter champion training.
 Any Phase 5.1 challenger must still improve held-out Brier, avoid held-out log
 loss and AUC regression, avoid market ECE regression, preserve a strictly later
 disjoint holdout, pass serve parity and market gates, and retain an explicit
-rollback target. Review and merge remain mandatory; automatic promotion remains
-disabled. CLV stays observational until 500 valid observations and ROI remains
+rollback target. Review and merge remain mandatory; automatic promotion remains disabled. CLV stays observational until 500 valid observations and ROI remains
 descriptive.
