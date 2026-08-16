@@ -36,6 +36,8 @@ jobs:
         run: python scripts/rbi_opportunity_experiment.py --check-contract
       - name: Verify Phase 5.2 pitch-mix challenger contract
         run: python scripts/pitch_mix_matchup_experiment.py --check-contract
+      - name: Verify Phase 5.3 decision intelligence contract
+        run: python scripts/decision_intelligence.py --check-contract
       - name: Run regression suite
         env:
           APP_ENV: test
@@ -125,3 +127,4 @@ jobs:
             echo "| Captured rollback image | $ROLLBACK_IMAGE |"
             echo "| Application | https://mlb-analytics-hub.fly.dev |"
           } >> "$GITHUB_STEP_SUMMARY"
+

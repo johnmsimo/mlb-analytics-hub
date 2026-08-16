@@ -3,7 +3,9 @@
     {
       "admitted": true,
       "blockers": [],
+      "decisionEligible": false,
       "id": "rbi_opportunity_context",
+      "modelEligible": true,
       "phase": "5.1",
       "researchPriority": 1,
       "targetMarkets": [
@@ -17,7 +19,9 @@
     {
       "admitted": true,
       "blockers": [],
+      "decisionEligible": false,
       "id": "pitch_mix_contact_matchup",
+      "modelEligible": true,
       "phase": "5.1",
       "researchPriority": 2,
       "targetMarkets": [
@@ -39,7 +43,9 @@
       "blockers": [
         "historical_reconstruction"
       ],
+      "decisionEligible": false,
       "id": "weather_game_environment",
+      "modelEligible": true,
       "phase": "5.1",
       "researchPriority": 3,
       "targetMarkets": [
@@ -58,7 +64,9 @@
       "blockers": [
         "historical_reconstruction"
       ],
+      "decisionEligible": false,
       "id": "confirmed_lineup_publication_state",
+      "modelEligible": true,
       "phase": "5.1",
       "researchPriority": 4,
       "targetMarkets": [
@@ -81,7 +89,9 @@
         "live_serve_path",
         "freshness_policy"
       ],
+      "decisionEligible": false,
       "id": "umpire_zone_context",
+      "modelEligible": true,
       "phase": "5.1",
       "researchPriority": 5,
       "targetMarkets": [
@@ -106,7 +116,9 @@
         "freshness_policy",
         "leakage_review"
       ],
+      "decisionEligible": false,
       "id": "injury_availability",
+      "modelEligible": true,
       "phase": "5.1",
       "researchPriority": 6,
       "targetMarkets": [
@@ -130,7 +142,9 @@
         "freshness_policy",
         "leakage_review"
       ],
+      "decisionEligible": false,
       "id": "bullpen_availability",
+      "modelEligible": true,
       "phase": "5.1",
       "researchPriority": 7,
       "targetMarkets": [
@@ -149,12 +163,11 @@
       ]
     },
     {
-      "admitted": false,
-      "blockers": [
-        "phase_routing",
-        "historical_reconstruction"
-      ],
+      "admitted": true,
+      "blockers": [],
+      "decisionEligible": true,
       "id": "sportsbook_consensus",
+      "modelEligible": false,
       "phase": "5.3",
       "researchPriority": 8,
       "targetMarkets": [
@@ -173,6 +186,7 @@
   ],
   "coverage": {
     "admittedPhase51Signals": 2,
+    "admittedPhase53Signals": 1,
     "candidateSignals": 8,
     "championModels": 14,
     "governedServeFeatures": 50,
@@ -353,7 +367,9 @@
       {
         "admitted": true,
         "blockers": [],
+        "decisionEligible": false,
         "id": "rbi_opportunity_context",
+        "modelEligible": true,
         "phase": "5.1",
         "researchPriority": 1,
         "targetMarkets": [
@@ -367,7 +383,9 @@
       {
         "admitted": true,
         "blockers": [],
+        "decisionEligible": false,
         "id": "pitch_mix_contact_matchup",
+        "modelEligible": true,
         "phase": "5.1",
         "researchPriority": 2,
         "targetMarkets": [
@@ -389,7 +407,9 @@
         "blockers": [
           "historical_reconstruction"
         ],
+        "decisionEligible": false,
         "id": "weather_game_environment",
+        "modelEligible": true,
         "phase": "5.1",
         "researchPriority": 3,
         "targetMarkets": [
@@ -408,7 +428,9 @@
         "blockers": [
           "historical_reconstruction"
         ],
+        "decisionEligible": false,
         "id": "confirmed_lineup_publication_state",
+        "modelEligible": true,
         "phase": "5.1",
         "researchPriority": 4,
         "targetMarkets": [
@@ -431,7 +453,9 @@
           "live_serve_path",
           "freshness_policy"
         ],
+        "decisionEligible": false,
         "id": "umpire_zone_context",
+        "modelEligible": true,
         "phase": "5.1",
         "researchPriority": 5,
         "targetMarkets": [
@@ -456,7 +480,9 @@
           "freshness_policy",
           "leakage_review"
         ],
+        "decisionEligible": false,
         "id": "injury_availability",
+        "modelEligible": true,
         "phase": "5.1",
         "researchPriority": 6,
         "targetMarkets": [
@@ -480,7 +506,9 @@
           "freshness_policy",
           "leakage_review"
         ],
+        "decisionEligible": false,
         "id": "bullpen_availability",
+        "modelEligible": true,
         "phase": "5.1",
         "researchPriority": 7,
         "targetMarkets": [
@@ -501,6 +529,38 @@
     ],
     "ready": true
   },
+  "phase53Admission": {
+    "admittedSignals": [
+      "sportsbook_consensus"
+    ],
+    "automaticAction": false,
+    "modelTrainingEligible": false,
+    "queue": [
+      {
+        "admitted": true,
+        "blockers": [],
+        "decisionEligible": true,
+        "id": "sportsbook_consensus",
+        "modelEligible": false,
+        "phase": "5.3",
+        "researchPriority": 8,
+        "targetMarkets": [
+          "batter_hits",
+          "batter_rbis",
+          "batter_total_bases"
+        ],
+        "targetModels": [
+          "rbi_1.5",
+          "rbi",
+          "hits_1.5",
+          "tb_2.5",
+          "tb_3.5"
+        ]
+      }
+    ],
+    "ready": true,
+    "reviewRequired": true
+  },
   "promotionSafety": {
     "automaticPromotion": false,
     "championComparisonStillRequired": true,
@@ -513,7 +573,7 @@
   "sourceBlobs": {
     "accuracyBaseline": "6e941891dac893e5a900cfa2bedd44ba19ee650e",
     "serveFeatures": "82246c727cdd37a97803303d07ff89eed1b15768",
-    "sourceManifest": "ab9cfcfc11037fcc54fd80d8683fc93fa328d0c4"
+    "sourceManifest": "e7c9675fea00a9a4465745fb04bda50aaeb8a31d"
   },
   "sourceCoverage": [
     {

@@ -1,9 +1,9 @@
-"""Phase 5.0 data-source governance and experiment admission.
+"""Phase 5 data-source governance and experiment/decision admission.
 
 This module is metadata-only. It never loads model artifacts, changes live
-features, or promotes a challenger. It proves that every champion serve feature
-has historical reconstruction, live serving, freshness, and leakage evidence,
-then produces a deterministic queue of candidate signals for Phase 5.1.
+features, promotes a challenger, or approves a decision. Model experiments must
+prove historical reconstruction; Phase 5.3 decision evidence must remain
+explicitly decision-only and pass its live serving contract.
 """
 
 from __future__ import annotations
@@ -45,10 +45,21 @@ def _source_is_admissible(source: Mapping[str, Any]) -> bool:
 
 def _candidate_blockers(candidate: Mapping[str, Any], model_keys: set[str]) -> list[str]:
     blockers: list[str] = []
-    if candidate.get("modelEligible") is not True:
+    model_eligible = candidate.get("modelEligible") is True
+    decision_eligible = candidate.get("decisionEligible") is True
+    if not model_eligible and not decision_eligible:
         blockers.append("phase_routing")
-    if candidate.get("historicallyReconstructable") is not True or not _nonempty(candidate.get("historicalPath")):
+    if model_eligible and (
+        candidate.get("historicallyReconstructable") is not True
+        or not _nonempty(candidate.get("historicalPath"))
+    ):
         blockers.append("historical_reconstruction")
+    if decision_eligible and (
+        candidate.get("phase") != "5.3"
+        or not _nonempty(candidate.get("decisionPath"))
+        or model_eligible
+    ):
+        blockers.append("decision_only_contract")
     if candidate.get("liveServeAvailable") is not True or not _nonempty(candidate.get("livePath")):
         blockers.append("live_serve_path")
     if not _positive_minutes(candidate.get("freshnessMinutes")):
@@ -184,11 +195,18 @@ def build_data_intelligence_report(
             "targetModels": target_models,
             "targetMarkets": target_markets,
             "phase": candidate.get("phase"),
+            "modelEligible": candidate.get("modelEligible") is True,
+            "decisionEligible": candidate.get("decisionEligible") is True,
         })
     candidate_queue.sort(key=lambda item: (item["researchPriority"] if isinstance(item["researchPriority"], int) else 10**9, item["id"]))
 
     phase51_queue = [item for item in candidate_queue if item["phase"] == "5.1"]
-    admitted = [item["id"] for item in phase51_queue if item["admitted"]]
+    admitted51 = [item["id"] for item in phase51_queue if item["admitted"]]
+    phase53_queue = [item for item in candidate_queue if item["phase"] == "5.3"]
+    admitted53 = [
+        item["id"] for item in phase53_queue
+        if item["admitted"] and item["decisionEligible"] and not item["modelEligible"]
+    ]
     promotion = accuracy_baseline.get("phase5Handoff", {}).get("promotionContract", {})
     return {
         "version": DATA_INTELLIGENCE_VERSION,
@@ -203,16 +221,25 @@ def build_data_intelligence_report(
             "governedServeFeatures": len(governed_features),
             "sourceContracts": len(source_records),
             "candidateSignals": len(candidate_queue),
-            "admittedPhase51Signals": len(admitted),
+            "admittedPhase51Signals": len(admitted51),
+            "admittedPhase53Signals": len(admitted53),
         },
         "modelCoverage": model_coverage,
         "sourceCoverage": source_coverage,
         "candidateQueue": candidate_queue,
         "phase51Admission": {
-            "ready": bool(admitted) and not errors,
-            "admittedSignals": admitted,
+            "ready": bool(admitted51) and not errors,
+            "admittedSignals": admitted51,
             "queue": phase51_queue,
             "changesProductionProbabilities": False,
+        },
+        "phase53Admission": {
+            "ready": bool(admitted53) and not errors,
+            "admittedSignals": admitted53,
+            "queue": phase53_queue,
+            "modelTrainingEligible": False,
+            "automaticAction": False,
+            "reviewRequired": True,
         },
         "promotionSafety": {
             "automaticPromotion": False,

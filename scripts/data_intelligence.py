@@ -57,10 +57,13 @@ def main() -> int:
         "features": report["coverage"]["governedServeFeatures"],
         "sources": report["coverage"]["sourceContracts"],
         "phase51_ready": report["phase51Admission"]["ready"],
-        "admitted_signals": report["phase51Admission"]["admittedSignals"],
+        "phase51_admitted_signals": report["phase51Admission"]["admittedSignals"],
+        "phase53_ready": report["phase53Admission"]["ready"],
+        "phase53_admitted_signals": report["phase53Admission"]["admittedSignals"],
     }, indent=2))
     return 0 if report["status"] == "passed" else 1
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

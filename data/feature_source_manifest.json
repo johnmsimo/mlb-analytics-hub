@@ -187,6 +187,8 @@
       "livePath": "live sportsbook odds integration",
       "targetModels": ["rbi_1.5", "rbi", "hits_1.5", "tb_2.5", "tb_3.5"],
       "modelEligible": false,
+      "decisionEligible": true,
+      "decisionPath": "decision_intelligence.evaluate_decision",
       "historicallyReconstructable": false,
       "liveServeAvailable": true,
       "freshnessMinutes": 5,
@@ -194,3 +196,4 @@
     }
   ]
 }
+
