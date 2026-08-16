@@ -59,6 +59,11 @@ from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
 import xgboost as xgb
 
 import stuff_model
+from pitch_mix_matchup import (
+    PITCH_MIX_CONTACT_FEATURE,
+    add_historical_pitch_mix_contact,
+    aggregate_game_pitch_inputs,
+)
 from rbi_opportunity import add_historical_rbi_opportunity
 
 warnings.filterwarnings("ignore")
@@ -358,6 +363,14 @@ MARKETS = {
                     params=XGB_PARAMS_K),
 }
 
+# Phase 5.2 shadow challengers only. Production MARKETS and the committed
+# feature map remain unchanged until frozen metric and shadow-ECE gates pass.
+_PITCH_MIX_TARGETS = ("hits_1.5", "tb_2.5", "tb_3.5", "hits", "tb", "hr")
+PITCH_MIX_CHALLENGER_FEATURES = {
+    key: [*MARKETS[key]["features"], PITCH_MIX_CONTACT_FEATURE]
+    for key in _PITCH_MIX_TARGETS
+}
+
 
 # ════════════════════════════════════════════════════════════════════════
 # 1. Statcast game logs (per game outcomes + opposing starter)
@@ -484,6 +497,10 @@ def _agg_chunk(sc: pd.DataFrame, season: int) -> tuple[pd.DataFrame, pd.DataFram
                             .rank(method="first").clip(upper=9))
     bat = bat.merge(fab[["game_pk", "inning_topbot", "batter", "batting_order"]],
                     on=["game_pk", "inning_topbot", "batter"], how="left")
+
+    # Phase 5.2 sufficient statistics. Current-game values are retained only so
+    # build_batter_matrix can shift them behind each target game.
+    bat = aggregate_game_pitch_inputs(sc, pa, bat)
 
     bat["hit_over_0.5"] = (bat["hits"] >= 1).astype(int)
     bat["hit_over_1.5"] = (bat["hits"] >= 2).astype(int)
@@ -658,6 +675,9 @@ def build_batter_matrix(bg: pd.DataFrame,
     # Phase 5.1: strictly pregame season-to-date OBP for the three lineup
     # slots preceding each batter. The helper never reads RBI targets.
     bg = add_historical_rbi_opportunity(bg)
+    # Phase 5.2: strictly pregame batter contact by pitch family aligned with
+    # the opposing starter's pregame arsenal. Neutral until both samples pass.
+    bg = add_historical_pitch_mix_contact(bg)
     bg["ab_safe"] = bg["ab"].clip(lower=1)
     bg["l7_hits"] = bg.groupby("batter")["hits"].transform(
         lambda x: x.shift(1).rolling(7, min_periods=1).mean())

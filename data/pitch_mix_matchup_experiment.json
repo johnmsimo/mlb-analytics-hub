@@ -1,0 +1,65 @@
+{
+  "version": "5.2.0",
+  "experimentId": "pitch_mix_contact_matchup",
+  "status": "ready_to_run",
+  "targetMarkets": [
+    "batter_hits",
+    "batter_total_bases",
+    "batter_home_runs"
+  ],
+  "targetModels": [
+    "hits_1.5",
+    "tb_2.5",
+    "tb_3.5",
+    "hits",
+    "tb",
+    "hr"
+  ],
+  "rolloutOrder": [
+    "hits_1.5",
+    "tb_2.5",
+    "tb_3.5",
+    "hits",
+    "tb",
+    "hr"
+  ],
+  "feature": {
+    "name": "pitch_mix_contact_edge",
+    "scale": "wOBA difference",
+    "minimum": -0.2,
+    "maximum": 0.2,
+    "neutralFallback": 0.0,
+    "pitchFamilies": [
+      "fastball",
+      "breaking",
+      "offspeed"
+    ],
+    "batterPriorPlateAppearances": 25,
+    "minimumObservedBatterPlateAppearances": 15,
+    "minimumObservedPitcherPitches": 50
+  },
+  "historicalContract": {
+    "source": "pitch-level Statcast",
+    "timing": "strictly before target game",
+    "targetColumnsRead": false
+  },
+  "liveContract": {
+    "source": "Baseball Savant current-season pitcher arsenal and batter pitch-type results",
+    "cacheMinutes": 60,
+    "fallback": 0.0
+  },
+  "gates": {
+    "sameTestSeason": 2025,
+    "sameHeldOutCohort": true,
+    "heldOutBrierMustImprove": true,
+    "heldOutAucMustNotRegress": true,
+    "heldOutLoglossMustNotRegress": true,
+    "marketEceShadowCalibrationRequired": true
+  },
+  "safety": {
+    "writesChampionArtifacts": false,
+    "changesProductionProbabilities": false,
+    "automaticPromotion": false,
+    "reviewRequired": true
+  }
+}

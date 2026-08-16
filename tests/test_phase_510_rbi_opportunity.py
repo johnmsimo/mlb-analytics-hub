@@ -172,7 +172,6 @@ def test_ci_and_manual_workflow_enforce_frozen_experiment_boundary():
 def test_phase_51_is_documented_without_claiming_model_lift():
     roadmap = (ROOT / "docs/MLB_ANALYTICS_HUB_ROADMAP.md").read_text(encoding="utf-8")
     docs = (ROOT / "docs/rbi_opportunity_experiment.md").read_text(encoding="utf-8")
-    assert "Phase 5.0 merged and deployed on 2026-08-16. Phase 5.1 is the active phase." in roadmap
     assert "### Phase 5.1 — RBI opportunity challenger lane" in roadmap
     assert "does not change production probabilities" in docs
     assert "Automatic promotion remains disabled" in docs

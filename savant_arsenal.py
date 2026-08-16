@@ -31,6 +31,8 @@ Returns [] on any failure (network error, bad ID, no data).
 ═══════════════════════════════════════════════════════════════════════
 """
 
+import csv
+import io
 import time
 import logging
 import requests
@@ -39,10 +41,12 @@ logger = logging.getLogger(__name__)
 
 # ── In-memory cache  { mlbam_id -> (timestamp, data) } ─────────────────────
 _CACHE: dict = {}
+_BATTER_CACHE: dict = {}
 CACHE_TTL = 3600  # seconds — refresh arsenal data every hour
 
 # Savant arsenal endpoint
 _ARSENAL_URL = "https://baseballsavant.mlb.com/player-services/arsenal-stats"
+_BATTER_ARSENAL_URL = "https://baseballsavant.mlb.com/leaderboard/pitch-arsenal-stats"
 
 # Friendly pitch-type name map
 _PITCH_NAMES = {
@@ -170,6 +174,115 @@ def get_arsenal_stats(mlbam_id: int, year: int = 2026, force_refresh: bool = Fal
     return data
 
 
+
+def _fetch_batter_pitch_types(mlbam_id: int, year: int) -> list:
+    """Fetch one batter's Baseball Savant results split by pitch type."""
+    params = {
+        "type": "batter",
+        "pitchType": "",
+        "year": year,
+        "team": "",
+        "min": 1,
+        "csv": "true",
+    }
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; MLBAnalyticsHub/1.0)",
+        "Accept": "text/csv",
+    }
+    try:
+        resp = requests.get(
+            _BATTER_ARSENAL_URL,
+            params=params,
+            headers=headers,
+            timeout=12,
+        )
+        if resp.status_code != 200:
+            logger.warning(
+                "Savant batter arsenal HTTP %s for player %s",
+                resp.status_code,
+                mlbam_id,
+            )
+            return []
+        rows = csv.DictReader(io.StringIO(resp.text))
+        result = []
+        for row in rows:
+            raw_id = (
+                row.get("player_id")
+                or row.get("playerId")
+                or row.get("id")
+                or row.get("mlbamid")
+            )
+            try:
+                if int(float(raw_id)) != int(mlbam_id):
+                    continue
+            except (TypeError, ValueError):
+                continue
+
+            def _first(*keys):
+                for key in keys:
+                    value = row.get(key)
+                    if value not in (None, ""):
+                        return value
+                return None
+
+            def _number(*keys):
+                value = _first(*keys)
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    return None
+
+            pitch_type = str(
+                _first("pitch_type", "pitchType", "pitch_name", "pitch") or ""
+            ).strip()
+            woba = _number("woba", "wOBA", "estimated_woba", "est_woba")
+            pa = _number(
+                "pa",
+                "plate_appearances",
+                "pitches",
+                "total_pitches",
+                "pitch_count",
+            )
+            if not pitch_type or woba is None or pa is None or pa <= 0:
+                continue
+            result.append({
+                "pitch_type": pitch_type,
+                "woba": round(woba, 4),
+                "pa": int(pa),
+            })
+        return result
+    except requests.Timeout:
+        logger.warning("[Savant Batter Arsenal] timeout for player %s", mlbam_id)
+        return []
+    except Exception as exc:
+        logger.exception(
+            "[Savant Batter Arsenal] error for player %s: %s",
+            mlbam_id,
+            exc,
+        )
+        return []
+
+
+def get_batter_pitch_type_stats(
+    mlbam_id: int,
+    year: int = 2026,
+    force_refresh: bool = False,
+) -> list:
+    """Return cached current-season batter results split by pitch type."""
+    cache_key = (int(mlbam_id), int(year))
+    now = time.time()
+    if not force_refresh and cache_key in _BATTER_CACHE:
+        timestamp, data = _BATTER_CACHE[cache_key]
+        if now - timestamp < CACHE_TTL:
+            return data
+    data = _fetch_batter_pitch_types(int(mlbam_id), int(year))
+    if not data and int(year) == 2026:
+        data = _fetch_batter_pitch_types(int(mlbam_id), 2025)
+    _BATTER_CACHE[cache_key] = (now, data)
+    return data
+
+
 def clear_cache():
-    """Clear the in-memory arsenal cache (useful for testing)."""
+    """Clear pitcher and batter pitch-type caches (useful for testing)."""
     _CACHE.clear()
+    _BATTER_CACHE.clear()

@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 5.0 merged and deployed on 2026-08-16. Phase 5.1 is the active phase.
+Status: Phase 5.1 merged and deployed on 2026-08-16. Phase 5.2 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -597,6 +597,30 @@ Exit gate: historical and live feature values share one definition and fallback;
 target mutation cannot change a pregame feature; both RBI lines are compared to
 their frozen 2025 champions; no merge changes production probabilities; model
 promotion remains manual, review-gated, calibration-gated, and reversible.
+
+
+### Phase 5.2 — Pitch-mix/contact challenger lane
+
+Implementation status: the second admitted experiment adds one strictly pregame
+arsenal-alignment feature to shadow challengers for `hits_1.5`, `tb_2.5`,
+`tb_3.5`, `hits`, `tb`, and `hr`, preserving the frozen weakness order.
+Pitch-level Statcast reconstructs batter contact by fastball, breaking-ball, and
+offspeed families together with each opposing starter's prior pitch mix.
+
+Live scoring uses the current Baseball Savant pitcher arsenal and batter
+pitch-type result contract with the same family mapping, shrinkage, limits, and
+neutral fallback. Production artifacts do not contain the feature, so merging
+this phase creates no production probability change or new production fetch.
+
+A manual read-only workflow compares every challenger with its frozen 2025
+champion. Held-out Brier must improve while AUC and log loss do not regress on
+the identical cohort. Passing models remain shadow-only until market ECE also
+passes and a human approves promotion.
+
+Exit gate: train/live definitions and fallbacks match; target mutation cannot
+change pregame values; all six admitted models receive frozen comparisons; no
+pickle or production feature map is written; automatic promotion remains
+disabled.
 
 ## Audit findings carried into the roadmap
 

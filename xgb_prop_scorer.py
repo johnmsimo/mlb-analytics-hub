@@ -54,6 +54,11 @@ from typing import Optional
 import numpy as np
 
 from config import settings
+from pitch_mix_matchup import (
+    NEUTRAL_PITCH_MIX_EDGE,
+    PITCH_MIX_CONTACT_FEATURE,
+    resolve_live_pitch_mix_contact,
+)
 from rbi_opportunity import LEAGUE_OBP, RBI_TRAFFIC_FEATURE
 from scoring_result_cache import ScoringResultCache
 
@@ -704,6 +709,13 @@ def _build_hit_features(batter: dict, pitcher: dict, feat_order: list) -> Option
     expected_pa      = lineup_feats["expected_pa"]
     batting_order    = lineup_feats["batting_order"]
     lineup_confirmed = lineup_feats["lineup_confirmed"]
+    # Production artifacts do not contain this key, so Phase 5.2 adds no live
+    # fetch until a reviewed challenger is explicitly loaded.
+    pitch_mix_contact_edge = (
+        resolve_live_pitch_mix_contact(batter, pitcher)
+        if PITCH_MIX_CONTACT_FEATURE in feat_order
+        else NEUTRAL_PITCH_MIX_EDGE
+    )
     raw = {
         "sv_xba":               _sf(batter,  "svxba",  "xAVG",   default=0.250),
         "sv_xwoba":             _sf(batter,  "svxwoba","xwOBA","fgwoba",  default=0.320),
@@ -732,6 +744,7 @@ def _build_hit_features(batter: dict, pitcher: dict, feat_order: list) -> Option
         "wx_temp_mult":         _sf(batter,  "wxTempMult","wx_temp_mult",      default=1.00),
         "wx_wind_mult":         _sf(batter,  "wxWindMult","wx_wind_mult",      default=1.00),
         "pitch_mix_slg_edge":   _sf(batter,  "pitchMixSlgEdge","pitch_mix_slg_edge",  default=0.00),
+        "pitch_mix_contact_edge": pitch_mix_contact_edge,
         "bvp_woba_edge_shrunk": _sf(batter,  "bvpWobaEdge","bvp_woba_edge_shrunk",   default=0.00),
         "split_ops_edge":       _sf(batter,  "splitOpsEdge","split_ops_edge",         default=0.00),
     }
@@ -826,6 +839,11 @@ def _build_batter_market_features(batter: dict, pitcher: dict, feat_order: list)
     )
     expected_pa   = lineup_feats["expected_pa"]
     batting_order = lineup_feats["batting_order"]
+    pitch_mix_contact_edge = (
+        resolve_live_pitch_mix_contact(batter, pitcher)
+        if PITCH_MIX_CONTACT_FEATURE in feat_order
+        else NEUTRAL_PITCH_MIX_EDGE
+    )
     # Bat-tracking (2024+): looked up here so EVERY caller gets serve parity.
     # No row (below-min-swings batter) → NaN, matching training where bt_* is
     # never imputed and XGB's missing-branch handles it.
@@ -863,6 +881,7 @@ def _build_batter_market_features(batter: dict, pitcher: dict, feat_order: list)
         "batting_order": float(batting_order),
         "expected_pa":   expected_pa,
         "rbi_traffic_obp": float(lineup_feats[RBI_TRAFFIC_FEATURE]),
+        "pitch_mix_contact_edge": pitch_mix_contact_edge,
         "l7_hits":        _sf(batter, "l7Hits", "l7hits",                       default=0.8571),
         "l7_ev":          _sf(batter, "l7Ev",          "l7_ev",          default=83.12),
         "l7_barrel":      _sf(batter, "l7Barrel",      "l7_barrel",      default=0.0347),
