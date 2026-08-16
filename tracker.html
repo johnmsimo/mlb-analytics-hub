@@ -1714,6 +1714,42 @@ function handleVerifiedDraftVisibilityChange() {
   }
 }
 
+function invalidateVerifiedDecisionReviewFromStorage() {
+  stopVerifiedDraftExpiryTimer();
+  pendingVerifiedDecisionDraft = null;
+  setVerifiedDraftFieldsLocked(false);
+  if ($('manualPickTitle')) $('manualPickTitle').textContent = 'Add Manual Pick';
+  if ($('manualPickSubtitle')) $('manualPickSubtitle').textContent =
+    'Use this for books or markets you found outside the research board.';
+  if ($('verifiedDraftNotice')) {
+    $('verifiedDraftNotice').hidden = true;
+    $('verifiedDraftNotice').dataset.freshnessState = 'idle';
+  }
+  if ($('verifiedDraftOrigin')) $('verifiedDraftOrigin').textContent = 'Draft source unavailable';
+  if ($('verifiedDraftExpiry')) $('verifiedDraftExpiry').textContent = 'Quote expiry unavailable';
+  if ($('verifiedDraftFreshnessStatus')) {
+    $('verifiedDraftFreshnessStatus').textContent = 'Quote freshness unavailable';
+  }
+  if ($('saveManualPickBtn')) $('saveManualPickBtn').disabled = false;
+  [
+    'mpPlayer','mpTeam','mpOpp','mpLine','mpProb','mpEdge','mpMean','mpBook',
+    'mpPrice','mpBestPrice','mpBestBook','mpStake','mpReason'
+  ].forEach(id => { if ($(id)) $(id).value = ''; });
+  if ($('mpMarket')) $('mpMarket').selectedIndex = 0;
+  if ($('mpSide')) $('mpSide').selectedIndex = 0;
+  closeManualPick();
+  status(
+    'Prepared My Hub draft changed in another tab; review closed and no pick was created. Reload Tracker to review the newest draft.',
+    true
+  );
+}
+
+function handleVerifiedDecisionDraftStorage(event) {
+  if (!pendingVerifiedDecisionDraft || !event) return;
+  if (event.key !== VERIFIED_DECISION_DRAFT_KEY && event.key !== null) return;
+  invalidateVerifiedDecisionReviewFromStorage();
+}
+
 function isVerifiedDecisionDraft(draft) {
   if (!draft || typeof draft !== 'object') return false;
   const expiresAt = Date.parse(String(draft.expiresAt || ''));
@@ -2357,6 +2393,7 @@ function wire() {
   $('fPlayer')?.addEventListener('input', renderBoard);
   document.addEventListener('visibilitychange', handleVerifiedDraftVisibilityChange);
   window.addEventListener('pageshow', reconcileVerifiedDraftExpiryAfterResume);
+  window.addEventListener('storage', handleVerifiedDecisionDraftStorage);
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────────────

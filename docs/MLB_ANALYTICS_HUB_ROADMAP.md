@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 4.81 merged and deployed on 2026-08-16. Phase 4.82 is the active phase.
+Status: Phase 4.82 merged and deployed on 2026-08-16. Phase 4.83 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -484,6 +484,23 @@ Exit gate: hidden reviews stop their timer, every visible or pageshow transition
 reconciles against absolute expiresAt, expired resumes disable Save before any
 POST, and explicit save, admin authorization, and canonical revalidation remain
 unchanged.
+
+### Phase 4.83 — Cross-tab verified draft invalidation
+
+Implementation status: Tracker now listens for same-device storage changes to
+the active 4.71 draft. Replacement, removal, or a full storage clear closes and
+resets the current review immediately so stale in-memory evidence cannot remain
+saveable.
+
+The invalidating tab does not delete a replacement written by another tab or
+auto-open it. The user must explicitly reload and review the newest draft.
+Cross-tab invalidation performs no API call or server mutation, while the
+existing expiry, authorization, and canonical revalidation guards remain in
+place.
+
+Exit gate: every external draft-key change invalidates an active review, newer
+replacement data remains device-local for explicit review, no invalidation can
+post a pick, and manual Tracker entry remains unaffected.
 
 ## Audit findings carried into the roadmap
 

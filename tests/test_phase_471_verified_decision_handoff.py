@@ -102,7 +102,7 @@ def test_handoff_preserves_accessible_phone_review_controls():
     css = (ROOT / "static" / "product-hub.css").read_text(encoding="utf-8")
     tracker = (ROOT / "tracker.html").read_text(encoding="utf-8")
 
-    assert "FEATURE 4.82" in html
+    assert "FEATURE 4.83" in html
     assert "Review in Tracker prepares an expiring draft" in html
     assert ".saved-opportunity-track" in css
     assert ".watchlist-form button,.signal-save,.saved-opportunity-track,.market-chip" in css
@@ -116,5 +116,5 @@ def test_phase_471_is_documented_as_active():
         encoding="utf-8"
     )
 
-    assert "Phase 4.82 is the active phase." in roadmap
+    assert "Phase 4.83 is the active phase." in roadmap
     assert "### Phase 4.71 — Verified decision handoff" in roadmap
