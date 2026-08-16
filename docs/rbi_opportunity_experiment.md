@@ -14,8 +14,7 @@ MLB lineup and current season StatsAPI OBP. Missing lineup slots or unavailable
 stats fall back to the declared league OBP of 0.320 on both paths.
 
 The feature is appended only to `RBI_CHALLENGER_FEATURES`. It is deliberately
-absent from the committed champion feature map, so merging this phase does not
-change production probabilities.
+absent from the committed champion feature map, so merging this phase does not change production probabilities.
 
 ## Experiment gate
 
