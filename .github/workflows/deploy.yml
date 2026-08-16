@@ -28,6 +28,8 @@ jobs:
           python -m pip install -r requirements.txt pytest
       - name: Compile Python
         run: python -m compileall -q .
+      - name: Verify Phase 4.86 accuracy baseline
+        run: python scripts/accuracy_baseline.py --check
       - name: Run regression suite
         env:
           APP_ENV: test

@@ -93,7 +93,7 @@ def test_phase_479_is_documented_as_active():
         encoding="utf-8"
     )
 
-    assert "FEATURE 4.85" in html
-    assert "Phase 4.85 is the active phase." in roadmap
+    assert "FEATURE 4.86" in html
+    assert "Phase 4.86 is the active phase." in roadmap
     assert "### Phase 4.79 — Decision draft origin provenance" in roadmap
     assert "existing admin authorization, canonical" in roadmap

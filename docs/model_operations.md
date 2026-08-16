@@ -22,3 +22,17 @@ remain required before deployment.
 
 The CI report is written to `data/model_gate_report.json`. A failed gate exits
 the weekly regeneration job before its pull request is opened.
+
+## Phase 4.86 baseline closeout
+
+`data/champion_manifest.json` freezes every production model artifact by Git
+blob identity. `scripts/accuracy_baseline.py` verifies those artifacts against
+the complete market contract, the 2021–2024 versus 2025 temporal holdout,
+ordered serve aliases, held-out AUC/Brier/log loss, and five current-season
+calibration snapshots.
+
+The deterministic result is committed at `data/accuracy_baseline.json`.
+Pull-request quality runs it in check mode, while weekly regeneration refreshes
+the proposed manifest and report before opening its review-gated PR. Phase 5
+challengers must improve held-out Brier, avoid AUC/log-loss/ECE regression, and
+retain every Phase 4.61 promotion gate. No model is automatically promoted.
