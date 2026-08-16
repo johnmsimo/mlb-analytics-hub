@@ -88,7 +88,7 @@ def test_alert_cards_expose_accessible_machine_readable_provenance():
     source = (ROOT / "static" / "product-hub.js").read_text(encoding="utf-8")
     css = (ROOT / "static" / "product-hub.css").read_text(encoding="utf-8")
 
-    assert "FEATURE 4.81" in html
+    assert "FEATURE 4.82" in html
     assert "data-alert-provenance" in source
     assert "data-alert-provenance-reason" in source
     assert "Alert eligibility reasons:" in source
@@ -139,6 +139,6 @@ def test_phase_477_is_documented_as_active():
         encoding="utf-8"
     )
 
-    assert "Phase 4.81 is the active phase." in roadmap
+    assert "Phase 4.82 is the active phase." in roadmap
     assert "### Phase 4.77 — Alert eligibility provenance" in roadmap
     assert "Provenance is explanatory only." in roadmap
