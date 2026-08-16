@@ -97,7 +97,7 @@ def test_phase_485_is_documented_as_active():
         encoding="utf-8"
     )
 
-    assert "FEATURE 4.85" in html
-    assert "Phase 4.85 is the active phase." in roadmap
+    assert "FEATURE 4.86" in html
+    assert "Phase 4.86 is the active phase." in roadmap
     assert "### Phase 4.85 — Pre-save verified draft identity guard" in roadmap
     assert "only an exact current draft identity" in roadmap

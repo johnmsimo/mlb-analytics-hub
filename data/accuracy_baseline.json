@@ -1,0 +1,688 @@
+{
+  "coverage": {
+    "baselineModels": 14,
+    "calibrationMarkets": 5,
+    "expectedModels": 14,
+    "expectedTrackerMarkets": 5
+  },
+  "errors": [],
+  "marketBaselines": {
+    "batter_hits": {
+      "currentSeasonCalibration": {
+        "brier": 0.189882,
+        "ece": 0.014116,
+        "logloss": 0.561969,
+        "meanProbability": 0.388457,
+        "minimumSample": 500,
+        "observedRate": 0.39325,
+        "populatedBins": 8,
+        "sampleReady": true,
+        "sampleSize": 4000
+      },
+      "heldOutCohortSize": 43839,
+      "maximumGeneralizationGap": 0.0277,
+      "medianTestAuc": 0.6281,
+      "modelCount": 2,
+      "modelKeys": [
+        "hits",
+        "hits_1.5"
+      ],
+      "weakestBrierSkillScore": 0.03482
+    },
+    "batter_home_runs": {
+      "currentSeasonCalibration": {
+        "brier": 0.090252,
+        "ece": 0.008884,
+        "logloss": 0.31412,
+        "meanProbability": 0.104122,
+        "minimumSample": 500,
+        "observedRate": 0.10725,
+        "populatedBins": 4,
+        "sampleReady": true,
+        "sampleSize": 4000
+      },
+      "heldOutCohortSize": 43839,
+      "maximumGeneralizationGap": 0.0121,
+      "medianTestAuc": 0.6833,
+      "modelCount": 1,
+      "modelKeys": [
+        "hr"
+      ],
+      "weakestBrierSkillScore": 0.042339
+    },
+    "batter_rbis": {
+      "currentSeasonCalibration": {
+        "brier": 0.147384,
+        "ece": 0.010521,
+        "logloss": 0.461042,
+        "meanProbability": 0.191531,
+        "minimumSample": 500,
+        "observedRate": 0.2005,
+        "populatedBins": 5,
+        "sampleReady": true,
+        "sampleSize": 4000
+      },
+      "heldOutCohortSize": 43839,
+      "maximumGeneralizationGap": 0.0304,
+      "medianTestAuc": 0.61625,
+      "modelCount": 2,
+      "modelKeys": [
+        "rbi",
+        "rbi_1.5"
+      ],
+      "weakestBrierSkillScore": 0.01826
+    },
+    "batter_total_bases": {
+      "currentSeasonCalibration": {
+        "brier": 0.15352,
+        "ece": 0.002713,
+        "logloss": 0.474794,
+        "meanProbability": 0.212393,
+        "minimumSample": 500,
+        "observedRate": 0.212,
+        "populatedBins": 6,
+        "sampleReady": true,
+        "sampleSize": 4000
+      },
+      "heldOutCohortSize": 43839,
+      "maximumGeneralizationGap": 0.0209,
+      "medianTestAuc": 0.6405,
+      "modelCount": 3,
+      "modelKeys": [
+        "tb",
+        "tb_2.5",
+        "tb_3.5"
+      ],
+      "weakestBrierSkillScore": 0.037951
+    },
+    "pitcher_strikeouts": {
+      "currentSeasonCalibration": {
+        "brier": 0.156129,
+        "ece": 0.018666,
+        "logloss": 0.47537,
+        "meanProbability": 0.48527,
+        "minimumSample": 500,
+        "observedRate": 0.49325,
+        "populatedBins": 10,
+        "sampleReady": true,
+        "sampleSize": 4000
+      },
+      "heldOutCohortSize": 4227,
+      "maximumGeneralizationGap": 0.084,
+      "medianTestAuc": 0.72485,
+      "modelCount": 6,
+      "modelKeys": [
+        "k_2.5",
+        "k_3.5",
+        "k_4.5",
+        "k_5.5",
+        "k_6.5",
+        "k_7.5"
+      ],
+      "weakestBrierSkillScore": 0.08
+    }
+  },
+  "modelBaselines": {
+    "hits": {
+      "artifactGitBlobSha": "502f9607fae750e731fdfcc8ebf72125ab699ddd",
+      "artifactRef": "models/xgb_hits_over_0.5.pkl",
+      "calibrationMethod": "isotonic_cv4",
+      "errors": [],
+      "exportedAtUtc": "2026-07-06T13:01:21.999304",
+      "featureCount": 22,
+      "featureSignature": "7771e2f92ac1fa495a3ec81c0835fb30d2486097ca6ad5a7d1a409a44012e883",
+      "heldOut": {
+        "auc": 0.6241,
+        "aucLiftOverRandom": 0.1241,
+        "baseRateBrier": 0.2426,
+        "brier": 0.2302,
+        "brierSkillScore": 0.051113,
+        "generalizationGap": 0.0226,
+        "logloss": 0.6528,
+        "trainAuc": 0.6467
+      },
+      "line": 0.5,
+      "modelType": "CalibratedClassifierCV(XGBClassifier)",
+      "split": {
+        "nTest": 43839,
+        "nTrain": 190463,
+        "strictlyTemporal": true,
+        "testSeason": 2025,
+        "trainSeasons": [
+          2021,
+          2022,
+          2023,
+          2024
+        ]
+      },
+      "status": "passed",
+      "target": "hit_over_0.5",
+      "trackerMarket": "batter_hits"
+    },
+    "hits_1.5": {
+      "artifactGitBlobSha": "92dbe040e257dbacb792c6ca24a815a06a0869e1",
+      "artifactRef": "models/xgb_hits_over_1.5.pkl",
+      "calibrationMethod": "isotonic_cv4",
+      "errors": [],
+      "exportedAtUtc": "2026-07-06T13:01:58.644465",
+      "featureCount": 22,
+      "featureSignature": "7771e2f92ac1fa495a3ec81c0835fb30d2486097ca6ad5a7d1a409a44012e883",
+      "heldOut": {
+        "auc": 0.6321,
+        "aucLiftOverRandom": 0.1321,
+        "baseRateBrier": 0.1637,
+        "brier": 0.158,
+        "brierSkillScore": 0.03482,
+        "generalizationGap": 0.0277,
+        "logloss": 0.4903,
+        "trainAuc": 0.6598
+      },
+      "line": 1.5,
+      "modelType": "CalibratedClassifierCV(XGBClassifier)",
+      "split": {
+        "nTest": 43839,
+        "nTrain": 190463,
+        "strictlyTemporal": true,
+        "testSeason": 2025,
+        "trainSeasons": [
+          2021,
+          2022,
+          2023,
+          2024
+        ]
+      },
+      "status": "passed",
+      "target": "hit_over_1.5",
+      "trackerMarket": "batter_hits"
+    },
+    "hr": {
+      "artifactGitBlobSha": "d7ffc990460c10e8018fd9350265e9644153563a",
+      "artifactRef": "models/xgb_hr_over_0.5.pkl",
+      "calibrationMethod": "isotonic_cv4",
+      "errors": [],
+      "exportedAtUtc": "2026-07-06T13:01:33.867120",
+      "featureCount": 29,
+      "featureSignature": "b48914c6cd3cb586cedebe6c62a7506d0072676cc4340631d499461b114837a9",
+      "heldOut": {
+        "auc": 0.6833,
+        "aucLiftOverRandom": 0.1833,
+        "baseRateBrier": 0.0992,
+        "brier": 0.095,
+        "brierSkillScore": 0.042339,
+        "generalizationGap": 0.0121,
+        "logloss": 0.3279,
+        "trainAuc": 0.6954
+      },
+      "line": 0.5,
+      "modelType": "CalibratedClassifierCV(XGBClassifier)",
+      "split": {
+        "nTest": 43839,
+        "nTrain": 190463,
+        "strictlyTemporal": true,
+        "testSeason": 2025,
+        "trainSeasons": [
+          2021,
+          2022,
+          2023,
+          2024
+        ]
+      },
+      "status": "passed",
+      "target": "hr_over_0.5",
+      "trackerMarket": "batter_home_runs"
+    },
+    "k_2.5": {
+      "artifactGitBlobSha": "86be49be34bb826f7ed933df8d2914d47985e609",
+      "artifactRef": "models/xgb_k_over_2.5.pkl",
+      "calibrationMethod": "isotonic_cv4",
+      "errors": [],
+      "exportedAtUtc": "2026-07-06T13:02:25.943726",
+      "featureCount": 12,
+      "featureSignature": "75e509fb922f34039a8e9aafe912492990c89876b40f0bc203d4b440763018f0",
+      "heldOut": {
+        "auc": 0.7225,
+        "aucLiftOverRandom": 0.2225,
+        "baseRateBrier": 0.1225,
+        "brier": 0.1127,
+        "brierSkillScore": 0.08,
+        "generalizationGap": 0.084,
+        "logloss": 0.3702,
+        "trainAuc": 0.8065
+      },
+      "line": 2.5,
+      "modelType": "CalibratedClassifierCV(XGBClassifier)",
+      "split": {
+        "nTest": 4227,
+        "nTrain": 17278,
+        "strictlyTemporal": true,
+        "testSeason": 2025,
+        "trainSeasons": [
+          2021,
+          2022,
+          2023,
+          2024
+        ]
+      },
+      "status": "passed",
+      "target": "k_over_2.5",
+      "trackerMarket": "pitcher_strikeouts"
+    },
+    "k_3.5": {
+      "artifactGitBlobSha": "e24e9ecdda9f5f7985351b5c87a5eed00d8eef33",
+      "artifactRef": "models/xgb_k_over_3.5.pkl",
+      "calibrationMethod": "isotonic_cv4",
+      "errors": [],
+      "exportedAtUtc": "2026-07-06T13:01:23.085657",
+      "featureCount": 12,
+      "featureSignature": "75e509fb922f34039a8e9aafe912492990c89876b40f0bc203d4b440763018f0",
+      "heldOut": {
+        "auc": 0.6996,
+        "aucLiftOverRandom": 0.1996,
+        "baseRateBrier": 0.2013,
+        "brier": 0.1807,
+        "brierSkillScore": 0.102335,
+        "generalizationGap": 0.0688,
+        "logloss": 0.5393,
+        "trainAuc": 0.7684
+      },
+      "line": 3.5,
+      "modelType": "CalibratedClassifierCV(XGBClassifier)",
+      "split": {
+        "nTest": 4227,
+        "nTrain": 17278,
+        "strictlyTemporal": true,
+        "testSeason": 2025,
+        "trainSeasons": [
+          2021,
+          2022,
+          2023,
+          2024
+        ]
+      },
+      "status": "passed",
+      "target": "k_over_3.5",
+      "trackerMarket": "pitcher_strikeouts"
+    },
+    "k_4.5": {
+      "artifactGitBlobSha": "4265d4848ba597ed8eec69d0b7364d8d0d164564",
+      "artifactRef": "models/xgb_k_over_4.5.pkl",
+      "calibrationMethod": "isotonic_cv4",
+      "errors": [],
+      "exportedAtUtc": "2026-07-06T13:01:24.177445",
+      "featureCount": 12,
+      "featureSignature": "75e509fb922f34039a8e9aafe912492990c89876b40f0bc203d4b440763018f0",
+      "heldOut": {
+        "auc": 0.7099,
+        "aucLiftOverRandom": 0.2099,
+        "baseRateBrier": 0.2468,
+        "brier": 0.2142,
+        "brierSkillScore": 0.132091,
+        "generalizationGap": 0.051,
+        "logloss": 0.6168,
+        "trainAuc": 0.7609
+      },
+      "line": 4.5,
+      "modelType": "CalibratedClassifierCV(XGBClassifier)",
+      "split": {
+        "nTest": 4227,
+        "nTrain": 17278,
+        "strictlyTemporal": true,
+        "testSeason": 2025,
+        "trainSeasons": [
+          2021,
+          2022,
+          2023,
+          2024
+        ]
+      },
+      "status": "passed",
+      "target": "k_over_4.5",
+      "trackerMarket": "pitcher_strikeouts"
+    },
+    "k_5.5": {
+      "artifactGitBlobSha": "cc27425651c43fa5410a6fd57555fcce358787df",
+      "artifactRef": "models/xgb_k_over_5.5.pkl",
+      "calibrationMethod": "isotonic_cv4",
+      "errors": [],
+      "exportedAtUtc": "2026-07-06T13:01:25.275292",
+      "featureCount": 12,
+      "featureSignature": "75e509fb922f34039a8e9aafe912492990c89876b40f0bc203d4b440763018f0",
+      "heldOut": {
+        "auc": 0.7272,
+        "aucLiftOverRandom": 0.2272,
+        "baseRateBrier": 0.2381,
+        "brier": 0.2021,
+        "brierSkillScore": 0.151197,
+        "generalizationGap": 0.0365,
+        "logloss": 0.5906,
+        "trainAuc": 0.7637
+      },
+      "line": 5.5,
+      "modelType": "CalibratedClassifierCV(XGBClassifier)",
+      "split": {
+        "nTest": 4227,
+        "nTrain": 17278,
+        "strictlyTemporal": true,
+        "testSeason": 2025,
+        "trainSeasons": [
+          2021,
+          2022,
+          2023,
+          2024
+        ]
+      },
+      "status": "passed",
+      "target": "k_over_5.5",
+      "trackerMarket": "pitcher_strikeouts"
+    },
+    "k_6.5": {
+      "artifactGitBlobSha": "fcb53a8a78cd4e97fd653ca74417755fbf5fe440",
+      "artifactRef": "models/xgb_k_over_6.5.pkl",
+      "calibrationMethod": "isotonic_cv4",
+      "errors": [],
+      "exportedAtUtc": "2026-07-06T13:02:27.036378",
+      "featureCount": 12,
+      "featureSignature": "75e509fb922f34039a8e9aafe912492990c89876b40f0bc203d4b440763018f0",
+      "heldOut": {
+        "auc": 0.7373,
+        "aucLiftOverRandom": 0.2373,
+        "baseRateBrier": 0.1874,
+        "brier": 0.1614,
+        "brierSkillScore": 0.138741,
+        "generalizationGap": 0.0481,
+        "logloss": 0.4938,
+        "trainAuc": 0.7854
+      },
+      "line": 6.5,
+      "modelType": "CalibratedClassifierCV(XGBClassifier)",
+      "split": {
+        "nTest": 4227,
+        "nTrain": 17278,
+        "strictlyTemporal": true,
+        "testSeason": 2025,
+        "trainSeasons": [
+          2021,
+          2022,
+          2023,
+          2024
+        ]
+      },
+      "status": "passed",
+      "target": "k_over_6.5",
+      "trackerMarket": "pitcher_strikeouts"
+    },
+    "k_7.5": {
+      "artifactGitBlobSha": "2bcc8e3267c226d7d8046ca87695ac8564a5d4f5",
+      "artifactRef": "models/xgb_k_over_7.5.pkl",
+      "calibrationMethod": "isotonic_cv4",
+      "errors": [],
+      "exportedAtUtc": "2026-07-06T13:02:28.113321",
+      "featureCount": 12,
+      "featureSignature": "75e509fb922f34039a8e9aafe912492990c89876b40f0bc203d4b440763018f0",
+      "heldOut": {
+        "auc": 0.7611,
+        "aucLiftOverRandom": 0.2611,
+        "baseRateBrier": 0.1308,
+        "brier": 0.1138,
+        "brierSkillScore": 0.129969,
+        "generalizationGap": 0.0541,
+        "logloss": 0.3719,
+        "trainAuc": 0.8152
+      },
+      "line": 7.5,
+      "modelType": "CalibratedClassifierCV(XGBClassifier)",
+      "split": {
+        "nTest": 4227,
+        "nTrain": 17278,
+        "strictlyTemporal": true,
+        "testSeason": 2025,
+        "trainSeasons": [
+          2021,
+          2022,
+          2023,
+          2024
+        ]
+      },
+      "status": "passed",
+      "target": "k_over_7.5",
+      "trackerMarket": "pitcher_strikeouts"
+    },
+    "rbi": {
+      "artifactGitBlobSha": "9f1c85cc746de49a62b9aeb8def2c2bd356dd108",
+      "artifactRef": "models/xgb_rbi_over_0.5.pkl",
+      "calibrationMethod": "isotonic_cv4",
+      "errors": [],
+      "exportedAtUtc": "2026-07-06T13:01:51.781664",
+      "featureCount": 26,
+      "featureSignature": "17a58bd2d6c1ebaa1022e0fb1a70c1aef733f14fe4b50c3bd5e9d71cb1e4dba4",
+      "heldOut": {
+        "auc": 0.6075,
+        "aucLiftOverRandom": 0.1075,
+        "baseRateBrier": 0.2072,
+        "brier": 0.2012,
+        "brierSkillScore": 0.028958,
+        "generalizationGap": 0.0211,
+        "logloss": 0.59,
+        "trainAuc": 0.6286
+      },
+      "line": 0.5,
+      "modelType": "CalibratedClassifierCV(XGBClassifier)",
+      "split": {
+        "nTest": 43839,
+        "nTrain": 190463,
+        "strictlyTemporal": true,
+        "testSeason": 2025,
+        "trainSeasons": [
+          2021,
+          2022,
+          2023,
+          2024
+        ]
+      },
+      "status": "passed",
+      "target": "rbi_over_0.5",
+      "trackerMarket": "batter_rbis"
+    },
+    "rbi_1.5": {
+      "artifactGitBlobSha": "10aa7a0fd3b0d393dc1d8ee8b31d1401ffef8732",
+      "artifactRef": "models/xgb_rbi_over_1.5.pkl",
+      "calibrationMethod": "isotonic_cv4",
+      "errors": [],
+      "exportedAtUtc": "2026-07-06T13:02:24.866775",
+      "featureCount": 26,
+      "featureSignature": "17a58bd2d6c1ebaa1022e0fb1a70c1aef733f14fe4b50c3bd5e9d71cb1e4dba4",
+      "heldOut": {
+        "auc": 0.625,
+        "aucLiftOverRandom": 0.125,
+        "baseRateBrier": 0.0931,
+        "brier": 0.0914,
+        "brierSkillScore": 0.01826,
+        "generalizationGap": 0.0304,
+        "logloss": 0.3245,
+        "trainAuc": 0.6554
+      },
+      "line": 1.5,
+      "modelType": "CalibratedClassifierCV(XGBClassifier)",
+      "split": {
+        "nTest": 43839,
+        "nTrain": 190463,
+        "strictlyTemporal": true,
+        "testSeason": 2025,
+        "trainSeasons": [
+          2021,
+          2022,
+          2023,
+          2024
+        ]
+      },
+      "status": "passed",
+      "target": "rbi_over_1.5",
+      "trackerMarket": "batter_rbis"
+    },
+    "tb": {
+      "artifactGitBlobSha": "360a72d04f4a10a17a57fd6ccc0d0a1c96a65fb2",
+      "artifactRef": "models/xgb_tb_over_1.5.pkl",
+      "calibrationMethod": "isotonic_cv4",
+      "errors": [],
+      "exportedAtUtc": "2026-07-06T13:01:43.145102",
+      "featureCount": 30,
+      "featureSignature": "e26abf55c3809afe9e61060819aa8b529df86c5bc331f22eb3f30dccc407f63b",
+      "heldOut": {
+        "auc": 0.6247,
+        "aucLiftOverRandom": 0.1247,
+        "baseRateBrier": 0.2236,
+        "brier": 0.214,
+        "brierSkillScore": 0.042934,
+        "generalizationGap": 0.0201,
+        "logloss": 0.6167,
+        "trainAuc": 0.6448
+      },
+      "line": 1.5,
+      "modelType": "CalibratedClassifierCV(XGBClassifier)",
+      "split": {
+        "nTest": 43839,
+        "nTrain": 190463,
+        "strictlyTemporal": true,
+        "testSeason": 2025,
+        "trainSeasons": [
+          2021,
+          2022,
+          2023,
+          2024
+        ]
+      },
+      "status": "passed",
+      "target": "tb_over_1.5",
+      "trackerMarket": "batter_total_bases"
+    },
+    "tb_2.5": {
+      "artifactGitBlobSha": "5d6dd25956e642062b41d53f2e8d06b4a41c3843",
+      "artifactRef": "models/xgb_tb_over_2.5.pkl",
+      "calibrationMethod": "isotonic_cv4",
+      "errors": [],
+      "exportedAtUtc": "2026-07-06T13:02:07.841181",
+      "featureCount": 30,
+      "featureSignature": "e26abf55c3809afe9e61060819aa8b529df86c5bc331f22eb3f30dccc407f63b",
+      "heldOut": {
+        "auc": 0.6405,
+        "aucLiftOverRandom": 0.1405,
+        "baseRateBrier": 0.1581,
+        "brier": 0.1521,
+        "brierSkillScore": 0.037951,
+        "generalizationGap": 0.0209,
+        "logloss": 0.4762,
+        "trainAuc": 0.6614
+      },
+      "line": 2.5,
+      "modelType": "CalibratedClassifierCV(XGBClassifier)",
+      "split": {
+        "nTest": 43839,
+        "nTrain": 190463,
+        "strictlyTemporal": true,
+        "testSeason": 2025,
+        "trainSeasons": [
+          2021,
+          2022,
+          2023,
+          2024
+        ]
+      },
+      "status": "passed",
+      "target": "tb_over_2.5",
+      "trackerMarket": "batter_total_bases"
+    },
+    "tb_3.5": {
+      "artifactGitBlobSha": "09c4dc6fed965890939e9201bcfbdfa05c2ffef7",
+      "artifactRef": "models/xgb_tb_over_3.5.pkl",
+      "calibrationMethod": "isotonic_cv4",
+      "errors": [],
+      "exportedAtUtc": "2026-07-06T13:02:16.612157",
+      "featureCount": 30,
+      "featureSignature": "e26abf55c3809afe9e61060819aa8b529df86c5bc331f22eb3f30dccc407f63b",
+      "heldOut": {
+        "auc": 0.6631,
+        "aucLiftOverRandom": 0.1631,
+        "baseRateBrier": 0.1199,
+        "brier": 0.1152,
+        "brierSkillScore": 0.039199,
+        "generalizationGap": 0.0129,
+        "logloss": 0.3833,
+        "trainAuc": 0.676
+      },
+      "line": 3.5,
+      "modelType": "CalibratedClassifierCV(XGBClassifier)",
+      "split": {
+        "nTest": 43839,
+        "nTrain": 190463,
+        "strictlyTemporal": true,
+        "testSeason": 2025,
+        "trainSeasons": [
+          2021,
+          2022,
+          2023,
+          2024
+        ]
+      },
+      "status": "passed",
+      "target": "tb_over_3.5",
+      "trackerMarket": "batter_total_bases"
+    }
+  },
+  "observationalMetrics": {
+    "clv": {
+      "industryClaimAllowed": false,
+      "minimumValidObservations": 500,
+      "promotionMetric": false,
+      "status": "collecting"
+    },
+    "roi": {
+      "promotionMetric": false,
+      "status": "descriptive_only"
+    }
+  },
+  "phase5Handoff": {
+    "priorityModels": [
+      "rbi_1.5",
+      "rbi",
+      "hits_1.5",
+      "tb_2.5",
+      "tb_3.5"
+    ],
+    "promotionContract": {
+      "automaticPromotion": false,
+      "heldOutAucMustNotRegress": true,
+      "heldOutBrierMustImprove": true,
+      "heldOutLoglossMustNotRegress": true,
+      "marketEceMustNotRegress": true,
+      "marketValidationRequired": true,
+      "serveParityRequired": true,
+      "strictTemporalSplitRequired": true
+    },
+    "ready": true
+  },
+  "sourceBlobs": {
+    "calibrationBackfill": "45c82a39f3a883791f4cbe67d07bf4edf8f9014d",
+    "modelMetrics": "b7b4ad8d5a78d4d5e207c4b228d031dca365886a",
+    "regenerationSummary": "d7769030cb965cd060bca995f934d30b1f5ad17c",
+    "serveFeatures": "82246c727cdd37a97803303d07ff89eed1b15768"
+  },
+  "sourceMainSha": "f43e007c5e09893d01f17e896753ca532de8f9ae",
+  "status": "passed",
+  "version": "4.86.0",
+  "weaknessRanking": [
+    "rbi_1.5",
+    "rbi",
+    "hits_1.5",
+    "tb_2.5",
+    "tb_3.5",
+    "hr",
+    "tb",
+    "hits",
+    "k_2.5",
+    "k_3.5",
+    "k_7.5",
+    "k_4.5",
+    "k_6.5",
+    "k_5.5"
+  ]
+}

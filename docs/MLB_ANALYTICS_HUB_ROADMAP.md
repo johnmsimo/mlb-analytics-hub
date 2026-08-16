@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 4.84 merged and deployed on 2026-08-16. Phase 4.85 is the active phase.
+Status: Phase 4.85 merged and deployed on 2026-08-16. Phase 4.86 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -535,6 +535,28 @@ Exit gate: every verified save re-reads storage before constructing or posting
 its payload, only an exact current draft identity can cross the client POST
 boundary, mismatches create no pick or server mutation, replacements remain
 available for explicit review, and manual Tracker entry remains unaffected.
+
+### Phase 4.86 — Accuracy baseline and reliability closeout
+
+Implementation status: the fourteen production champion artifacts are frozen by
+Git blob identity and tied to their exact held-out metrics, temporal split,
+ordered serve features, canonical market contract, and current-season
+calibration evidence. One deterministic report covers all five supported
+Tracker markets and ranks the weakest model lines without loading or promoting
+a binary artifact.
+
+Pull-request quality now rejects stale baseline evidence. Weekly regeneration
+refreshes the proposed champion manifest and baseline before opening its
+review-gated PR. CLV continues accumulating toward 500 valid observations and
+ROI remains descriptive; neither can silently promote a model.
+
+Exit gate: all fourteen models and five Tracker markets have reproducible
+champion, holdout, feature-parity, leakage, calibration, and input signatures;
+the baseline is fail-closed and current in CI; Phase 5 receives an explicit
+weakness ranking and comparison contract; automatic promotion remains disabled.
+
+Phase 4.86 is the final 4.x bridge. After it is merged and deployed, new planned
+work begins under Phase 5 — Accuracy and Intelligence.
 
 ## Audit findings carried into the roadmap
 

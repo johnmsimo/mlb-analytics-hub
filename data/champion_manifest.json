@@ -1,0 +1,62 @@
+{
+  "version": "4.86.0",
+  "frozen_from_main_sha": "f43e007c5e09893d01f17e896753ca532de8f9ae",
+  "models": {
+    "hits": {
+      "artifact_ref": "models/xgb_hits_over_0.5.pkl",
+      "git_blob_sha": "502f9607fae750e731fdfcc8ebf72125ab699ddd"
+    },
+    "hits_1.5": {
+      "artifact_ref": "models/xgb_hits_over_1.5.pkl",
+      "git_blob_sha": "92dbe040e257dbacb792c6ca24a815a06a0869e1"
+    },
+    "tb": {
+      "artifact_ref": "models/xgb_tb_over_1.5.pkl",
+      "git_blob_sha": "360a72d04f4a10a17a57fd6ccc0d0a1c96a65fb2"
+    },
+    "tb_2.5": {
+      "artifact_ref": "models/xgb_tb_over_2.5.pkl",
+      "git_blob_sha": "5d6dd25956e642062b41d53f2e8d06b4a41c3843"
+    },
+    "tb_3.5": {
+      "artifact_ref": "models/xgb_tb_over_3.5.pkl",
+      "git_blob_sha": "09c4dc6fed965890939e9201bcfbdfa05c2ffef7"
+    },
+    "hr": {
+      "artifact_ref": "models/xgb_hr_over_0.5.pkl",
+      "git_blob_sha": "d7ffc990460c10e8018fd9350265e9644153563a"
+    },
+    "rbi": {
+      "artifact_ref": "models/xgb_rbi_over_0.5.pkl",
+      "git_blob_sha": "9f1c85cc746de49a62b9aeb8def2c2bd356dd108"
+    },
+    "rbi_1.5": {
+      "artifact_ref": "models/xgb_rbi_over_1.5.pkl",
+      "git_blob_sha": "10aa7a0fd3b0d393dc1d8ee8b31d1401ffef8732"
+    },
+    "k_2.5": {
+      "artifact_ref": "models/xgb_k_over_2.5.pkl",
+      "git_blob_sha": "86be49be34bb826f7ed933df8d2914d47985e609"
+    },
+    "k_3.5": {
+      "artifact_ref": "models/xgb_k_over_3.5.pkl",
+      "git_blob_sha": "e24e9ecdda9f5f7985351b5c87a5eed00d8eef33"
+    },
+    "k_4.5": {
+      "artifact_ref": "models/xgb_k_over_4.5.pkl",
+      "git_blob_sha": "4265d4848ba597ed8eec69d0b7364d8d0d164564"
+    },
+    "k_5.5": {
+      "artifact_ref": "models/xgb_k_over_5.5.pkl",
+      "git_blob_sha": "cc27425651c43fa5410a6fd57555fcce358787df"
+    },
+    "k_6.5": {
+      "artifact_ref": "models/xgb_k_over_6.5.pkl",
+      "git_blob_sha": "fcb53a8a78cd4e97fd653ca74417755fbf5fe440"
+    },
+    "k_7.5": {
+      "artifact_ref": "models/xgb_k_over_7.5.pkl",
+      "git_blob_sha": "2bcc8e3267c226d7d8046ca87695ac8564a5d4f5"
+    }
+  }
+}
