@@ -22,6 +22,7 @@ VERIFIED_DECISION_REVIEW_FRESHNESS_VERSION = "4.80"
 VERIFIED_DECISION_LIVE_EXPIRY_VERSION = "4.81"
 VERIFIED_DECISION_RESUME_REVALIDATION_VERSION = "4.82"
 VERIFIED_DECISION_CROSS_TAB_INVALIDATION_VERSION = "4.83"
+VERIFIED_DECISION_EXPLICIT_RECOVERY_VERSION = "4.84"
 _ROOT = Path(__file__).resolve().parent
 _HUB_PATH = _ROOT / "product_hub.html"
 
@@ -220,6 +221,24 @@ def product_journey():
                 "learningPerformanceUsed": False,
                 "recommendation": False,
                 "serverPersistence": False,
+                "failClosed": True,
+            },
+            "verifiedDecisionExplicitRecovery": {
+                "version": VERIFIED_DECISION_EXPLICIT_RECOVERY_VERSION,
+                "sourceContractVersion": VERIFIED_DECISION_CROSS_TAB_INVALIDATION_VERSION,
+                "draftContractVersion": VERIFIED_DECISION_HANDOFF_VERSION,
+                "controlLabel": "Review newest draft",
+                "minimumTouchTargetPixels": 44,
+                "replacementValidatedBeforeOffer": True,
+                "storageReReadOnTap": True,
+                "explicitUserActionRequired": True,
+                "newDraftAutoOpened": False,
+                "clientPostOnReview": False,
+                "serverMutationOnReview": False,
+                "manualPicksUnaffected": True,
+                "requiresExplicitSave": True,
+                "saveRequiresAdminAuth": True,
+                "canonicalRevalidationOnSave": True,
                 "failClosed": True,
             },
             "verifiedDecisionCrossTabInvalidation": {

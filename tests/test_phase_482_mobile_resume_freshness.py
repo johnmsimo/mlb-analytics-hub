@@ -91,7 +91,7 @@ def test_phase_482_is_documented_as_active():
         encoding="utf-8"
     )
 
-    assert "FEATURE 4.83" in html
-    assert "Phase 4.83 is the active phase." in roadmap
+    assert "FEATURE 4.84" in html
+    assert "Phase 4.84 is the active phase." in roadmap
     assert "### Phase 4.82 — Mobile resume freshness reconciliation" in roadmap
     assert "iPhone and background-tab throttling gap" in roadmap

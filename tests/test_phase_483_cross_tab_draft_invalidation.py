@@ -99,7 +99,7 @@ def test_phase_483_is_documented_as_active():
         encoding="utf-8"
     )
 
-    assert "FEATURE 4.83" in html
-    assert "Phase 4.83 is the active phase." in roadmap
+    assert "FEATURE 4.84" in html
+    assert "Phase 4.84 is the active phase." in roadmap
     assert "### Phase 4.83 — Cross-tab verified draft invalidation" in roadmap
     assert "does not delete a replacement written by another tab" in roadmap
