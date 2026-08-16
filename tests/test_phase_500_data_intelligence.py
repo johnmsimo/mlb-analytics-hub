@@ -64,6 +64,32 @@ def test_complete_source_governance_admits_phase_51_experiment():
     assert report["phase51Admission"]["changesProductionProbabilities"] is False
 
 
+def test_decision_only_signal_does_not_require_training_history():
+    baseline, features, manifest = fixture()
+    manifest["candidateSignals"].append({
+        "id": "sportsbook_consensus",
+        "phase": "5.3",
+        "researchPriority": 2,
+        "targetModels": ["rbi"],
+        "historicalPath": None,
+        "livePath": "live odds",
+        "decisionPath": "decision_intelligence.evaluate_decision",
+        "modelEligible": False,
+        "decisionEligible": True,
+        "historicallyReconstructable": False,
+        "liveServeAvailable": True,
+        "freshnessMinutes": 5,
+        "leakageMode": "pregame_only",
+    })
+    report = build_data_intelligence_report(baseline, features, manifest)
+    assert report["status"] == "passed"
+    assert report["phase53Admission"]["ready"] is True
+    assert report["phase53Admission"]["admittedSignals"] == ["sportsbook_consensus"]
+    assert report["phase53Admission"]["modelTrainingEligible"] is False
+    assert report["phase53Admission"]["automaticAction"] is False
+    assert report["phase53Admission"]["reviewRequired"] is True
+
+
 def test_ungoverned_champion_feature_fails_closed():
     baseline, features, manifest = fixture()
     features["rbi"].append("unknown")
@@ -107,6 +133,10 @@ def test_committed_report_governs_all_production_features():
         "rbi_opportunity_context",
         "pitch_mix_contact_matchup",
     ]
+    assert report["phase53Admission"]["admittedSignals"] == [
+        "sportsbook_consensus",
+    ]
+    assert report["phase53Admission"]["modelTrainingEligible"] is False
 
 
 def test_quality_and_weekly_regeneration_enforce_data_intelligence():
@@ -124,3 +154,4 @@ def test_roadmap_opens_phase_five_without_changing_live_predictions():
     assert "### Phase 5.0 — Data intelligence foundation" in roadmap
     assert "does not change production probabilities" in docs
     assert "automatic promotion remains disabled" in docs
+

@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 5.1 merged and deployed on 2026-08-16. Phase 5.2 is the active phase.
+Status: Phase 5.2 merged and deployed on 2026-08-16. Phase 5.3 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -622,6 +622,27 @@ change pregame values; all six admitted models receive frozen comparisons; no
 pickle or production feature map is written; automatic promotion remains
 disabled.
 
+### Phase 5.3 — Decision intelligence foundation
+
+Implementation status: fresh multi-book sportsbook consensus is admitted as
+live decision evidence only and remains excluded from model training. Every
+quote must identify a real book and source, carry a timestamp no more than five
+minutes old, provide complete two-way prices at the exact candidate line, and
+contribute to at least two independent books with bounded fair-probability
+dispersion.
+
+Only candidates whose market and side validation gates are promoted can enter
+the decision engine. Price shopping selects the best accepted price, while
+market-specific edge and expected-value thresholds create explicit no-bet
+zones. Qualified output remains review-only and non-actionable. The stake
+preview uses quarter Kelly, is capped at 1% of bankroll, and cannot approve or
+place a wager.
+
+Exit gate: sportsbook consensus cannot enter a champion feature list; one-book,
+stale, incomplete, mismatched, dispersed, unvalidated, below-edge, or below-EV
+evidence fails closed; every qualified decision remains `actionable: false`,
+requires human review, and preserves the authenticated Tracker save boundary.
+
 ## Audit findings carried into the roadmap
 
 - \`/settings\` exposes an administrative surface before authentication.
@@ -642,3 +663,4 @@ Do not declare the product production-grade based only on a passing unit suite.
 Every phase must include contract tests plus the relevant live/browser or
 deployment gate, and recommendations must fail closed whenever price,
 freshness, identity, calibration, or authorization evidence is missing.
+

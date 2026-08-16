@@ -1,0 +1,30 @@
+{
+  "automaticAction": false,
+  "decisionReviewRequired": true,
+  "freshnessSeconds": 300,
+  "marketThresholds": {
+    "batter_hits": {
+      "minimumEdge": 0.025,
+      "minimumExpectedValue": 0.03
+    },
+    "batter_rbis": {
+      "minimumEdge": 0.035,
+      "minimumExpectedValue": 0.04
+    },
+    "batter_total_bases": {
+      "minimumEdge": 0.03,
+      "minimumExpectedValue": 0.035
+    }
+  },
+  "maximumConsensusSpread": 0.08,
+  "minimumBooks": 2,
+  "modelEligible": false,
+  "role": "decision_only",
+  "signalId": "sportsbook_consensus",
+  "staking": {
+    "kellyFraction": 0.25,
+    "maximumStakePct": 0.01,
+    "unitPct": 0.01
+  },
+  "version": "5.3.0"
+}
