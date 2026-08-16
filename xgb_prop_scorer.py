@@ -54,6 +54,7 @@ from typing import Optional
 import numpy as np
 
 from config import settings
+from rbi_opportunity import LEAGUE_OBP, RBI_TRAFFIC_FEATURE
 from scoring_result_cache import ScoringResultCache
 
 try:
@@ -160,7 +161,12 @@ try:
 except ImportError:
     _LINEUP_AVAILABLE = False
     def _get_lineup_features(**kw) -> dict:
-        return {"expected_pa": 4.20, "batting_order": 0, "lineup_confirmed": 0}
+        return {
+            "expected_pa": 4.20,
+            "batting_order": 0,
+            "lineup_confirmed": 0,
+            RBI_TRAFFIC_FEATURE: LEAGUE_OBP,
+        }
 
 # Mirror of lineup_loader._PA_BY_SLOT / regenerate_models._PA_BY_SLOT so an
 # explicitly-supplied batting-order slot maps to the SAME expected_pa the models
@@ -170,17 +176,21 @@ _PA_BY_SLOT = {1: 4.60, 2: 4.52, 3: 4.44, 4: 4.36, 5: 4.28,
 _DEFAULT_PA = 4.20
 
 
-def _resolve_lineup_role(d: dict, mlbam_id, player_name: str) -> dict:
-    """Lineup role (batting_order / expected_pa / lineup_confirmed) for the hits
-    and power models.
+def _resolve_lineup_role(
+    d: dict,
+    mlbam_id,
+    player_name: str,
+    *,
+    include_rbi_context: bool = False,
+) -> dict:
+    """Resolve train/serve-consistent lineup role and optional RBI traffic."""
+    lookup = {}
+    if include_rbi_context:
+        try:
+            lookup = _get_lineup_features(mlbam_id=mlbam_id, player_name=player_name) or {}
+        except Exception:
+            lookup = {}
 
-    Prefers an explicit lineup slot supplied by the live caller — the
-    tracker-capture and projection paths already know each hitter's slot, so this
-    avoids depending on the lineups_{date}.json cache resolving. When that cache
-    is stale or a batter isn't matched, get_lineup_features() collapses EVERY
-    batter to its league-default (batting_order 0 / expected_pa 4.20), which is
-    exactly the serve gap /api/diag/serve-parity flags. Falls back to the lineup
-    loader only when no explicit slot is passed."""
     bo_explicit = d.get("batting_order")
     if bo_explicit is None:
         bo_explicit = d.get("slot")
@@ -196,15 +206,31 @@ def _resolve_lineup_role(d: dict, mlbam_id, player_name: str) -> dict:
             epa = _PA_BY_SLOT.get(bo, _DEFAULT_PA)
         lc = d.get("lineup_confirmed")
         if lc is None:
-            # A known 1-9 slot means we have this batter's lineup position —
-            # treat as confirmed (matches training, where order was always known).
             lc = 1 if 1 <= bo <= 9 else 0
-        return {"expected_pa": float(epa), "batting_order": float(bo),
-                "lineup_confirmed": float(lc)}
-    lf = _get_lineup_features(mlbam_id=mlbam_id, player_name=player_name)
-    return {"expected_pa": float(lf.get("expected_pa", _DEFAULT_PA)),
-            "batting_order": float(lf.get("batting_order", 0) or 0),
-            "lineup_confirmed": float(lf.get("lineup_confirmed", 0) or 0)}
+    else:
+        if not lookup:
+            lookup = _get_lineup_features(mlbam_id=mlbam_id, player_name=player_name)
+        bo = float(lookup.get("batting_order", 0) or 0)
+        epa = float(lookup.get("expected_pa", _DEFAULT_PA))
+        lc = float(lookup.get("lineup_confirmed", 0) or 0)
+
+    raw_context = d.get("rbiTrafficObp")
+    if raw_context is None:
+        raw_context = d.get(RBI_TRAFFIC_FEATURE)
+    if raw_context is None:
+        raw_context = lookup.get(RBI_TRAFFIC_FEATURE, LEAGUE_OBP)
+    try:
+        context = float(raw_context)
+        if not 0.0 <= context <= 1.0:
+            context = LEAGUE_OBP
+    except (TypeError, ValueError):
+        context = LEAGUE_OBP
+    return {
+        "expected_pa": float(epa),
+        "batting_order": float(bo),
+        "lineup_confirmed": float(lc),
+        RBI_TRAFFIC_FEATURE: context,
+    }
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _MODEL_DIR = os.path.join(_HERE, "models")
@@ -792,7 +818,12 @@ def _build_batter_market_features(batter: dict, pitcher: dict, feat_order: list)
     platoon  = 1 if (bat_side == "L" and pit_hand == "R") or (bat_side == "R" and pit_hand == "L") else 0
     mlbam_id    = batter.get("mlbamid") or batter.get("xMLBAMID")
     player_name = batter.get("name") or batter.get("Name") or batter.get("PlayerName")
-    lineup_feats  = _resolve_lineup_role(batter, mlbam_id, player_name)
+    lineup_feats = _resolve_lineup_role(
+        batter,
+        mlbam_id,
+        player_name,
+        include_rbi_context=RBI_TRAFFIC_FEATURE in feat_order,
+    )
     expected_pa   = lineup_feats["expected_pa"]
     batting_order = lineup_feats["batting_order"]
     # Bat-tracking (2024+): looked up here so EVERY caller gets serve parity.
@@ -831,6 +862,7 @@ def _build_batter_market_features(batter: dict, pitcher: dict, feat_order: list)
         "platoon_adv":platoon,
         "batting_order": float(batting_order),
         "expected_pa":   expected_pa,
+        "rbi_traffic_obp": float(lineup_feats[RBI_TRAFFIC_FEATURE]),
         "l7_hits":        _sf(batter, "l7Hits", "l7hits",                       default=0.8571),
         "l7_ev":          _sf(batter, "l7Ev",          "l7_ev",          default=83.12),
         "l7_barrel":      _sf(batter, "l7Barrel",      "l7_barrel",      default=0.0347),

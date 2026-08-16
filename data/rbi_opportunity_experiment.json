@@ -1,0 +1,44 @@
+{
+  "version": "5.1.0",
+  "experimentId": "rbi_opportunity_context",
+  "status": "ready_to_run",
+  "priority": 1,
+  "targetModels": [
+    "rbi_1.5",
+    "rbi"
+  ],
+  "feature": {
+    "name": "rbi_traffic_obp",
+    "definition": "Mean pregame season-to-date OBP of the three lineup slots immediately preceding the target batter.",
+    "historicalSource": "Statcast plate-appearance events and reconstructed batting order",
+    "liveSource": "Confirmed MLB lineup plus current season StatsAPI OBP",
+    "fallback": 0.32,
+    "freshnessMinutes": 15,
+    "leakageMode": "pregame_only"
+  },
+  "split": {
+    "trainSeasons": [
+      2021,
+      2022,
+      2023,
+      2024
+    ],
+    "testSeason": 2025,
+    "strictlyTemporal": true
+  },
+  "gates": {
+    "heldOutBrierMustImprove": true,
+    "heldOutAucMustNotRegress": true,
+    "heldOutLoglossMustNotRegress": true,
+    "sameHeldOutCohortRequired": true,
+    "serveParityRequired": true,
+    "marketEceMustNotRegress": true
+  },
+  "safety": {
+    "writesChampionArtifacts": false,
+    "changesProductionProbabilities": false,
+    "automaticPromotion": false,
+    "shadowCalibrationRequiredBeforePromotion": true,
+    "reviewAndMergeRequired": true
+  }
+}

@@ -1,0 +1,36 @@
+name: RBI opportunity challenger
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  experiment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install experiment dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install xgboost==3.2.0 scikit-learn==1.6.1 pandas numpy joblib pybaseball
+      - name: Verify frozen Phase 5.1 contract
+        run: |
+          python scripts/accuracy_baseline.py --check
+          python scripts/data_intelligence.py --check
+          python scripts/rbi_opportunity_experiment.py --check-contract
+      - name: Run RBI opportunity challenger
+        run: python scripts/rbi_opportunity_experiment.py --run
+      - name: Upload evidence without promoting a model
+        uses: actions/upload-artifact@v4
+        with:
+          name: rbi-opportunity-experiment
+          path: artifacts/rbi_opportunity_experiment_report.json
+          if-no-files-found: error
+          retention-days: 30

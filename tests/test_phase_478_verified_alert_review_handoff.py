@@ -110,6 +110,6 @@ def test_phase_478_is_documented_as_active():
         encoding="utf-8"
     )
 
-    assert "Phase 5.0 is the active phase." in roadmap
+    assert "Phase 4.86 is the final 4.x bridge." in roadmap
     assert "### Phase 4.78 — Verified alert review handoff" in roadmap
     assert "Tracker remains the only explicit server-save boundary." in roadmap
