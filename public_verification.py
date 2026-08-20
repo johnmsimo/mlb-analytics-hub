@@ -9,6 +9,7 @@ admin identity, and rejected row contents never cross this boundary.
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import os
 from collections import Counter
@@ -136,6 +137,61 @@ def _priced(row: Mapping[str, Any]) -> bool:
     )
 
 
+def build_publication_receipt(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Freeze every public release field, including the exact American price."""
+    prediction = row.get("learningReceipt") if isinstance(row.get("learningReceipt"), Mapping) else {}
+    prediction_snapshot = prediction.get("snapshot") if isinstance(prediction.get("snapshot"), Mapping) else {}
+    price = _number(row.get("openingPrice"))
+    snapshot = {
+        "predictionFingerprint": prediction.get("predictionFingerprint"),
+        "player": str(row.get("player") or "").strip() or None,
+        "gamePk": prediction_snapshot.get("gamePk"),
+        "marketKey": prediction_snapshot.get("marketKey"),
+        "side": prediction_snapshot.get("side"),
+        "line": prediction_snapshot.get("line"),
+        "probability": prediction_snapshot.get("servedProbability"),
+        "openingPrice": int(price) if price is not None else None,
+        "sportsbook": str(row.get("book") or "").strip() or None,
+        "releasedAt": prediction_snapshot.get("savedAt"),
+        "source": prediction_snapshot.get("source"),
+        "modelVersion": prediction_snapshot.get("modelVersion"),
+    }
+    blockers = []
+    if not _public_source(row):
+        blockers.append("private or unpublished source")
+    if not _receipt_is_intact(row):
+        blockers.append("invalid prediction receipt")
+    if not _priced(row):
+        blockers.append("missing verified price")
+    if not snapshot["player"]:
+        blockers.append("missing public identity")
+    if _time(snapshot["releasedAt"]) is None:
+        blockers.append("missing release timestamp")
+    encoded = json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return {
+        "version": PUBLIC_VERIFICATION_VERSION,
+        "releaseFingerprint": hashlib.sha256(encoded).hexdigest(),
+        "snapshot": snapshot,
+        "publicReleaseEligible": not blockers,
+        "blockers": blockers,
+        "outcomeFieldsIncluded": False,
+    }
+
+
+def _publication_receipt_is_intact(row: Mapping[str, Any]) -> bool:
+    receipt = row.get("publicationReceipt")
+    if not isinstance(receipt, Mapping):
+        return False
+    expected = build_publication_receipt(row)
+    return bool(
+        receipt.get("version") == PUBLIC_VERIFICATION_VERSION
+        and receipt.get("releaseFingerprint") == expected["releaseFingerprint"]
+        and receipt.get("snapshot") == expected["snapshot"]
+        and receipt.get("publicReleaseEligible") is True
+        and receipt.get("outcomeFieldsIncluded") is False
+    )
+
+
 def _release_reason(row: Mapping[str, Any]) -> str | None:
     if not _public_source(row):
         return "private_or_unpublished"
@@ -143,6 +199,8 @@ def _release_reason(row: Mapping[str, Any]) -> str | None:
         return "invalid_prediction_receipt"
     if not _priced(row):
         return "missing_verified_price"
+    if not _publication_receipt_is_intact(row):
+        return "invalid_publication_receipt"
     receipt = row.get("learningReceipt") or {}
     snapshot = receipt.get("snapshot") or {}
     if not str(row.get("player") or "").strip():
@@ -163,17 +221,19 @@ def _clv_fields(row: Mapping[str, Any]) -> tuple[int | None, float | None]:
 
 
 def _public_row(row: Mapping[str, Any]) -> dict[str, Any]:
-    receipt = row["learningReceipt"]
+    prediction_receipt = row["learningReceipt"]
+    receipt = row["publicationReceipt"]
     snapshot = receipt["snapshot"]
     closing_price, clv_edge = _clv_fields(row)
-    probability = _number(snapshot.get("servedProbability"))
-    price = _number(row.get("openingPrice"))
+    probability = _number(snapshot.get("probability"))
     return {
-        "publicId": str(receipt["predictionFingerprint"])[:16],
-        "receiptFingerprint": receipt["predictionFingerprint"],
+        "publicId": str(receipt["releaseFingerprint"])[:16],
+        "receiptFingerprint": receipt["releaseFingerprint"],
         "receiptVersion": receipt["version"],
         "receiptVerified": True,
-        "releasedAt": snapshot["savedAt"],
+        "predictionFingerprint": prediction_receipt["predictionFingerprint"],
+        "predictionReceiptVersion": prediction_receipt["version"],
+        "releasedAt": snapshot["releasedAt"],
         "gradedAt": str(row.get("gradedAt") or "") or None,
         "gamePk": snapshot.get("gamePk"),
         "player": str(row.get("player") or "").strip(),
@@ -181,8 +241,8 @@ def _public_row(row: Mapping[str, Any]) -> dict[str, Any]:
         "side": str(snapshot.get("side") or "").title(),
         "line": snapshot.get("line"),
         "probability": round(probability, 6) if probability is not None else None,
-        "sportsbook": str(row.get("book") or "").strip(),
-        "openingPrice": int(price) if price is not None else None,
+        "sportsbook": snapshot["sportsbook"],
+        "openingPrice": snapshot["openingPrice"],
         "closingPrice": closing_price,
         "clvEdge": clv_edge,
         "result": _grade(row),
@@ -379,4 +439,3 @@ def install_public_verification(app_module: Any) -> None:
 
     flask_app.register_blueprint(blueprint)
     setattr(flask_app, "_phase_56_public_verification_installed", True)
-
