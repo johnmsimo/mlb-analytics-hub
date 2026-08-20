@@ -236,6 +236,32 @@ class FakeProduction:
                         "serverMutation": False,
                         "failClosed": True,
                     },
+                    "guidedParlays": {
+                        "version": "5.10",
+                        "sourceEndpoint": "/api/parlay/auto",
+                        "surface": "/edge-lab#parlays",
+                        "states": [
+                            "ready",
+                            "no_verified_combinations",
+                            "computing",
+                            "failed",
+                            "unavailable",
+                        ],
+                        "minimumVerifiedLegs": 2,
+                        "maximumGuidedLegs": 4,
+                        "requiresEvidenceReceiptVersion": "4.69",
+                        "requiresMultiBookShoppingVersion": "5.9",
+                        "requiresReadyMultiBookConsensus": True,
+                        "correlationWarningsRequired": True,
+                        "unresolvedSameGameCorrelationTrackable": False,
+                        "combinedRiskExplanationRequired": True,
+                        "referencePriceIsBookOffer": False,
+                        "reviewRequired": True,
+                        "approved": False,
+                        "readOnly": True,
+                        "serverMutation": False,
+                        "failClosed": True,
+                    },
                     "alerts": {
                         "failClosed": True,
                         "serverPersistence": False,
@@ -245,6 +271,32 @@ class FakeProduction:
             )
         if clean_path == "/api/games/today":
             return json_response({"success": True, "games": [], "count": 0})
+        if clean_path == "/api/parlay/auto":
+            return json_response(
+                {
+                    "success": True,
+                    "version": "5.10",
+                    "date": "2026-08-20",
+                    "state": "no_verified_combinations",
+                    "candidateCount": 0,
+                    "verifiedCandidateCount": 0,
+                    "withheldCandidateCount": 0,
+                    "withheldReasonCounts": {},
+                    "cached": True,
+                    "computing": False,
+                    "message": None,
+                    "generatedAt": "2026-08-20T18:00:00+00:00",
+                    "minimumVerifiedLegs": 2,
+                    "maximumGuidedLegs": 4,
+                    "requiresEvidenceReceiptVersion": "4.69",
+                    "requiresMultiBookShoppingVersion": "5.9",
+                    "reviewRequired": True,
+                    "approved": False,
+                    "readOnly": True,
+                    "failClosed": True,
+                    "parlays": [],
+                }
+            )
         if clean_path == "/api/edges/today":
             edges = [valid_edge()]
             probe_date = parse_qs(urlsplit(path).query).get("date", ["today"])[0]
@@ -424,7 +476,7 @@ def test_full_gate_uses_only_get_contracts_and_reports_coverage():
         "pages": 20,
         "assets": 1,
         "admin_boundaries": 8,
-        "api_contracts": 8,
+        "api_contracts": 9,
         "worker_convergence": 1,
     }
     assert all(call[1] for call in fake.calls)

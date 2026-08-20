@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 5.6 merged and deployed on 2026-08-20. Phases 5.7 and 5.8 are deferred; Phase 5.9 is active.
+Status: Phases 5.6 and 5.9 are merged and deployed. Phases 5.7 and 5.8 are deferred; Phase 5.10 is active.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -729,7 +729,7 @@ external notification or account dependencies.
 
 ### Phase 5.9 — Production Multi-Book Shopping
 
-Implementation status: same-line two-way sportsbook quotes are being preserved
+Implementation status: merged and deployed. Same-line two-way sportsbook quotes are preserved
 at the durable producer boundary instead of being collapsed to one price. Every
 My Hub recommendation card receives a privacy-safe Phase 5.9 shopping receipt
 derived from the existing Phase 5.3 decision engine. It shows the best accepted
@@ -760,8 +760,28 @@ deployment.
 
 ### Phase 5.10 — Guided Parlays
 
-Expose the existing parlay intelligence only with correlation warnings, verified
-legs, and explicit combined-risk explanations.
+Implementation status: active. The existing auto-parlay surface is being moved
+from the broad props pool to the hot Phase 5.5/5.9 recommendation snapshot. A
+leg is admitted only when it is actionable, carries a matching Phase 4.69
+recommendation-evidence receipt, and has a ready Phase 5.9 consensus with at
+least two fresh same-line sportsbooks.
+
+Every guided combination is read-only, unapproved, and limited to two through
+four verified legs. Automatic combinations use distinct players and games.
+Every card names the independence assumption, displays correlation warnings,
+shows the probability that at least one leg misses, and explains that multiplied
+single-leg prices are reference odds—not a verified sportsbook parlay offer.
+Unresolved same-game correlation is not trackable. Tracking is an explicit,
+authenticated action that revalidates every leg and fingerprint against the
+current recommendation snapshot before writing a private Tracker record.
+
+Exit gate: `/api/parlay/auto` and the mobile Edge Lab Guided Parlays view fail
+closed unless enough currently verified legs exist; every returned leg proves
+4.69 and 5.9 lineage; no stale, degraded, unpriced, duplicated, or mismatched
+leg is exposed; correlation warnings and three combined-risk explanations are
+present; reference odds cannot be labeled as a sportsbook offer; no bankroll,
+dollar stake, or payout suggestion is returned; the production contract gate
+validates the Phase 5.10 journey and live payload after deployment.
 
 ### Phase 5.11 — Monetization and Growth
 
@@ -789,5 +809,4 @@ Do not declare the product production-grade based only on a passing unit suite.
 Every phase must include contract tests plus the relevant live/browser or
 deployment gate, and recommendations must fail closed whenever price,
 freshness, identity, calibration, or authorization evidence is missing.
-
 

@@ -10,6 +10,7 @@ from flask import Blueprint, jsonify, make_response
 PRODUCT_HUB_VERSION = "4.64"
 DAILY_DECISION_BOARD_VERSION = "5.5"
 PRODUCTION_MULTI_BOOK_SHOPPING_VERSION = "5.9"
+GUIDED_PARLAY_VERSION = "5.10"
 SAVED_PLAYER_DIGEST_VERSION = "4.70"
 VERIFIED_DECISION_HANDOFF_VERSION = "4.71"
 VERIFIED_DECISION_LEARNING_VERSION = "4.72"
@@ -143,6 +144,32 @@ def product_journey():
                 "bankrollIncluded": False,
                 "stakeDollarsIncluded": False,
                 "changesRecommendation": False,
+                "serverMutation": False,
+                "failClosed": True,
+            },
+            "guidedParlays": {
+                "version": GUIDED_PARLAY_VERSION,
+                "sourceEndpoint": "/api/parlay/auto",
+                "surface": "/edge-lab#parlays",
+                "states": [
+                    "ready",
+                    "no_verified_combinations",
+                    "computing",
+                    "failed",
+                    "unavailable",
+                ],
+                "minimumVerifiedLegs": 2,
+                "maximumGuidedLegs": 4,
+                "requiresEvidenceReceiptVersion": "4.69",
+                "requiresMultiBookShoppingVersion": PRODUCTION_MULTI_BOOK_SHOPPING_VERSION,
+                "requiresReadyMultiBookConsensus": True,
+                "correlationWarningsRequired": True,
+                "unresolvedSameGameCorrelationTrackable": False,
+                "combinedRiskExplanationRequired": True,
+                "referencePriceIsBookOffer": False,
+                "reviewRequired": True,
+                "approved": False,
+                "readOnly": True,
                 "serverMutation": False,
                 "failClosed": True,
             },
@@ -456,4 +483,3 @@ def product_journey():
             },
         }
     )
-

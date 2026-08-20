@@ -545,17 +545,59 @@ def _validate_multi_book_contract(contract: Any) -> None:
     _require(contract.get("failClosed") is True, "shopping must fail closed")
 
 
+def _validate_guided_parlay_contract(contract: Any) -> None:
+    _require(isinstance(contract, dict), "guided parlays must be an object")
+    _require(contract.get("version") == "5.10", "guided parlay version changed")
+    _require(contract.get("minimumVerifiedLegs") == 2, "guided minimum changed")
+    _require(contract.get("maximumGuidedLegs") == 4, "guided maximum changed")
+    _require(
+        contract.get("requiresEvidenceReceiptVersion") == "4.69",
+        "guided parlays lost recommendation evidence",
+    )
+    _require(
+        contract.get("requiresMultiBookShoppingVersion") == "5.9",
+        "guided parlays lost multi-book evidence",
+    )
+    _require(
+        contract.get("requiresReadyMultiBookConsensus") is True,
+        "guided parlays admitted degraded consensus",
+    )
+    _require(
+        contract.get("correlationWarningsRequired") is True,
+        "guided parlays lost correlation warnings",
+    )
+    _require(
+        contract.get("unresolvedSameGameCorrelationTrackable") is False,
+        "unresolved same-game correlation became trackable",
+    )
+    _require(
+        contract.get("combinedRiskExplanationRequired") is True,
+        "guided parlays lost combined-risk explanations",
+    )
+    _require(
+        contract.get("referencePriceIsBookOffer") is False,
+        "reference odds were misrepresented as a book offer",
+    )
+    _require(contract.get("reviewRequired") is True, "guided review gate changed")
+    _require(contract.get("approved") is False, "guided parlays cannot auto-approve")
+    _require(contract.get("readOnly") is True, "guided suggestions must be read only")
+    _require(contract.get("serverMutation") is False, "guided read must not mutate")
+    _require(contract.get("failClosed") is True, "guided parlays must fail closed")
+
+
 def _validate_journey(
     payload: Any,
     *,
     require_daily_board: bool = True,
     require_multi_book: bool = True,
+    require_guided_parlays: bool = True,
 ) -> None:
     _require(isinstance(payload, dict), "journey payload must be an object")
     stages = [stage.get("key") for stage in payload.get("stages", [])]
     alerts = payload.get("alerts", {})
     board = payload.get("dailyDecisionBoard", {})
     multi_book = payload.get("productionMultiBookShopping", {})
+    guided = payload.get("guidedParlays", {})
     _require(payload.get("success") is True, "journey payload is not successful")
     _require(payload.get("version") == "4.64", "journey version changed unexpectedly")
     _require(
@@ -572,6 +614,8 @@ def _validate_journey(
         _validate_daily_decision_board(board)
     if require_multi_book or multi_book:
         _validate_multi_book_contract(multi_book)
+    if require_guided_parlays or guided:
+        _validate_guided_parlay_contract(guided)
 
 
 def _validate_journey_baseline(payload: Any) -> None:
@@ -581,6 +625,7 @@ def _validate_journey_baseline(payload: Any) -> None:
         payload,
         require_daily_board=False,
         require_multi_book=False,
+        require_guided_parlays=False,
     )
 
 
@@ -590,6 +635,147 @@ def _validate_games(payload: Any) -> None:
     games = payload.get("games")
     _require(isinstance(games, list), "games payload must include a games list")
     _require(payload.get("count") == len(games), "games count does not match rows")
+
+
+def _validate_guided_parlays(payload: Any) -> None:
+    _require(isinstance(payload, dict), "guided parlay payload must be an object")
+    _require(payload.get("success") is True, "guided parlay payload is not successful")
+    _require(payload.get("version") == "5.10", "guided parlay payload version changed")
+    state = payload.get("state")
+    _require(
+        state in {
+            "ready", "no_verified_combinations", "computing", "failed", "unavailable",
+        },
+        f"guided parlay payload has invalid state {state!r}",
+    )
+    _require(payload.get("minimumVerifiedLegs") == 2, "guided minimum changed")
+    _require(payload.get("maximumGuidedLegs") == 4, "guided maximum changed")
+    _require(
+        payload.get("requiresEvidenceReceiptVersion") == "4.69",
+        "guided payload lost evidence lineage",
+    )
+    _require(
+        payload.get("requiresMultiBookShoppingVersion") == "5.9",
+        "guided payload lost shopping lineage",
+    )
+    _require(payload.get("reviewRequired") is True, "guided payload bypassed review")
+    _require(payload.get("approved") is False, "guided payload auto-approved")
+    _require(payload.get("readOnly") is True, "guided payload is not read only")
+    _require(payload.get("failClosed") is True, "guided payload is not fail closed")
+    for field in ("candidateCount", "verifiedCandidateCount", "withheldCandidateCount"):
+        value = payload.get(field)
+        _require(isinstance(value, int) and value >= 0, f"guided {field} is invalid")
+    _require(
+        payload.get("candidateCount")
+        == payload.get("verifiedCandidateCount") + payload.get("withheldCandidateCount"),
+        "guided candidate denominators do not reconcile",
+    )
+    parlays = payload.get("parlays")
+    _require(isinstance(parlays, list), "guided parlays must be a list")
+    if state == "ready":
+        _require(bool(parlays), "ready guided payload has no combinations")
+    if state in {"no_verified_combinations", "computing", "failed", "unavailable"}:
+        _require(not parlays, f"guided {state} payload exposed combinations")
+
+    leg_fields = {
+        "canonicalCandidateId", "canonicalFingerprint", "gamePk", "player",
+        "playerId", "team", "opp", "marketKey", "marketLabel", "side", "line",
+        "modelProbability", "bestPrice", "bestBook", "quoteCapturedAt",
+        "quoteExpiresAt", "acceptedBookCount", "evidenceReceiptVersion",
+        "multiBookShoppingVersion", "verified",
+    }
+    for index, parlay in enumerate(parlays):
+        _require(isinstance(parlay, dict), f"guided parlay {index} is not an object")
+        _require(parlay.get("version") == "5.10", f"guided parlay {index} version changed")
+        _require(parlay.get("state") == "ready", f"guided parlay {index} is not ready")
+        _require(parlay.get("readOnly") is True, f"guided parlay {index} is not read only")
+        _require(parlay.get("serverMutation") is False, f"guided parlay {index} mutates")
+        legs = parlay.get("legs")
+        _require(isinstance(legs, list), f"guided parlay {index} legs changed")
+        _require(2 <= len(legs) <= 4, f"guided parlay {index} leg count changed")
+        _require(
+            parlay.get("verifiedLegCount") == len(legs),
+            f"guided parlay {index} verification denominator changed",
+        )
+        candidate_ids = set()
+        for leg_index, leg in enumerate(legs):
+            _require(
+                isinstance(leg, dict) and set(leg) == leg_fields,
+                f"guided parlay {index} leg {leg_index} changed its allowlist",
+            )
+            _require(leg.get("verified") is True, f"guided leg {leg_index} is unverified")
+            _require(
+                leg.get("evidenceReceiptVersion") == "4.69",
+                f"guided leg {leg_index} lost evidence lineage",
+            )
+            _require(
+                leg.get("multiBookShoppingVersion") == "5.9",
+                f"guided leg {leg_index} lost shopping lineage",
+            )
+            _require(
+                isinstance(leg.get("acceptedBookCount"), int)
+                and leg.get("acceptedBookCount") >= 2,
+                f"guided leg {leg_index} lacks two books",
+            )
+            _require(bool(leg.get("bestBook")), f"guided leg {leg_index} lacks book")
+            _require(
+                isinstance(leg.get("bestPrice"), (int, float))
+                and leg.get("bestPrice") != 0
+                and abs(leg.get("bestPrice")) >= 100,
+                f"guided leg {leg_index} has invalid price",
+            )
+            probability = leg.get("modelProbability")
+            _require(
+                isinstance(probability, (int, float)) and 0 < probability < 1,
+                f"guided leg {leg_index} has invalid probability",
+            )
+            candidate_id = leg.get("canonicalCandidateId")
+            _require(bool(candidate_id), f"guided leg {leg_index} lacks identity")
+            _require(candidate_id not in candidate_ids, "guided parlay duplicated a leg")
+            candidate_ids.add(candidate_id)
+
+        correlation = parlay.get("correlation")
+        _require(isinstance(correlation, dict), f"guided parlay {index} lacks correlation")
+        _require(
+            correlation.get("state") == "clear",
+            f"guided parlay {index} exposed unresolved correlation",
+        )
+        _require(
+            isinstance(correlation.get("warnings"), list)
+            and correlation.get("warnings"),
+            f"guided parlay {index} lacks correlation warning",
+        )
+        risk = parlay.get("combinedRisk")
+        _require(isinstance(risk, dict), f"guided parlay {index} lacks combined risk")
+        combined = risk.get("combinedProbability")
+        miss = risk.get("atLeastOneLegMissProbability")
+        _require(
+            isinstance(combined, (int, float)) and 0 < combined < 1,
+            f"guided parlay {index} has invalid combined probability",
+        )
+        _require(
+            isinstance(miss, (int, float)) and abs(combined + miss - 1.0) < 1e-5,
+            f"guided parlay {index} risk probabilities do not reconcile",
+        )
+        _require(
+            isinstance(risk.get("explanations"), list)
+            and len(risk.get("explanations")) >= 3,
+            f"guided parlay {index} lacks risk explanations",
+        )
+        reference = parlay.get("referencePrice")
+        _require(isinstance(reference, dict), f"guided parlay {index} lacks reference price")
+        _require(
+            reference.get("bookOfferVerified") is False,
+            f"guided parlay {index} misrepresented a book offer",
+        )
+        decision = parlay.get("decision")
+        _require(isinstance(decision, dict), f"guided parlay {index} lacks decision")
+        _require(decision.get("reviewRequired") is True, "guided decision bypassed review")
+        _require(decision.get("approved") is False, "guided decision auto-approved")
+        _require(decision.get("trackable") is True, "ready guided decision is not trackable")
+    encoded = json.dumps(payload, sort_keys=True).lower()
+    for forbidden in ('"bankroll"', '"stakedollars"', '"payoutper100"'):
+        _require(forbidden not in encoded, f"guided payload exposed {forbidden}")
 
 
 def validate_completion_receipt(
@@ -916,6 +1102,12 @@ def run_gate(
             "actionable edges",
             8.0,
             validate_actionable_edges,
+        ),
+        (
+            "/api/parlay/auto",
+            "guided parlays",
+            8.0,
+            _validate_guided_parlays,
         ),
         (
             "/api/calibration/markets?window=60",
