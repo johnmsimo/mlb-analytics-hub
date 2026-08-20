@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from product_hub import (
     DAILY_DECISION_BOARD_VERSION,
     product_hub_bp,
@@ -97,3 +99,31 @@ def test_production_gate_requires_phase_55_board_contract():
     assert 'board.get("failClosed") is True' in gate
     assert 'board.get("rawRejectedRowsIncluded") is False' in gate
     assert 'board.get("maximumCards") == 8' in gate
+
+
+def test_pr_baseline_accepts_previous_journey_but_post_deploy_requires_phase_55():
+    from scripts.production_contract_gate import (
+        ContractError,
+        _validate_journey,
+        _validate_journey_baseline,
+    )
+
+    previous_release = {
+        "success": True,
+        "version": "4.64",
+        "stages": [
+            {"key": "discover"},
+            {"key": "validate"},
+            {"key": "track"},
+            {"key": "learn"},
+        ],
+        "alerts": {
+            "failClosed": True,
+            "serverPersistence": False,
+            "freshness": {"maximumOddsAgeSeconds": 900},
+        },
+    }
+
+    _validate_journey_baseline(previous_release)
+    with pytest.raises(ContractError, match="daily decision board"):
+        _validate_journey(previous_release)
