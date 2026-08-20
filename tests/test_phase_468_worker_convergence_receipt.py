@@ -71,6 +71,17 @@ class ConvergingProduction:
                     "success": True,
                     "computing": False,
                     "computationState": "ready",
+                    "multiBookShoppingVersion": "5.9",
+                    "oddsProviderHealth": {
+                        "provider": "The Odds API",
+                        "state": "ready",
+                        "configured": True,
+                        "capturedAt": "2026-08-15T12:00:00+00:00",
+                        "eventCount": 15,
+                        "fetchedEventCount": 15,
+                        "degradedEventCount": 0,
+                        "message": "Fresh multi-book prices are available.",
+                    },
                     "completionReceipt": {
                         "contractVersion": "4.68",
                         "source": "durable-worker",
