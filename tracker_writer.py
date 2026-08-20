@@ -104,6 +104,7 @@ from config import settings
 from continuous_learning import build_prediction_receipt
 from closing_line_integrity import accept_closing_capture
 from odds_lineage import build_odds_lineage
+from public_verification import build_publication_receipt
 
 _HERE        = os.path.dirname(os.path.abspath(__file__))
 _DATA_DIR    = settings.data_dir
@@ -333,6 +334,12 @@ def build_pick_payload(
     # receipt excludes grade/profit fields and is preserved on later upserts.
     payload["learningReceipt"] = build_prediction_receipt(payload)
 
+    # Phase 5.6 separately freezes the exact public release price. Only
+    # integrity-eligible system recommendations receive a publication receipt.
+    publication_receipt = build_publication_receipt(payload)
+    if publication_receipt["publicReleaseEligible"]:
+        payload["publicationReceipt"] = publication_receipt
+
     return payload
 
 
@@ -389,7 +396,7 @@ def write_pick(
             merged = {**payload}
             for preserve_key in (
                 "grade", "gradedAt", "profitUnits", "profitDollars",
-                "learningReceipt",
+                "learningReceipt", "publicationReceipt",
             ):
                 if existing.get(preserve_key) not in (None, "pending"):
                     merged[preserve_key] = existing[preserve_key]

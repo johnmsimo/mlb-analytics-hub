@@ -6,6 +6,7 @@ import pytest
 
 from scripts.production_contract_gate import (
     ADMIN_READ_PATHS,
+    PHASE_56_PAGE_CONTRACTS,
     PUBLIC_PAGE_CONTRACTS,
     ContractError,
     HttpResponse,
@@ -13,6 +14,7 @@ from scripts.production_contract_gate import (
     run_gate,
     validate_actionable_edges,
     validate_page,
+    _validate_public_verification,
 )
 
 
@@ -96,7 +98,8 @@ class FakeProduction:
         self.calls = []
         self.exposed_admin_path = exposed_admin_path
         self.page_markers = {
-            contract.path: contract.marker for contract in PUBLIC_PAGE_CONTRACTS
+            contract.path: contract.marker
+            for contract in PUBLIC_PAGE_CONTRACTS + PHASE_56_PAGE_CONTRACTS
         }
 
     def __call__(self, base_url, path, timeout):
@@ -177,6 +180,54 @@ class FakeProduction:
             return json_response({"success": True, "markets": []})
         if clean_path == "/api/tracker/performance":
             return json_response({"success": True})
+        if clean_path == "/api/verification/ledger":
+            return json_response(
+                {
+                    "success": True,
+                    "version": "5.6",
+                    "readOnly": True,
+                    "failClosed": True,
+                    "lossesOmitted": False,
+                    "privateTrackerFieldsIncluded": False,
+                    "metrics": {
+                        "releasedCount": 1,
+                        "gradedCount": 1,
+                        "wins": 0,
+                        "losses": 1,
+                        "pending": 0,
+                        "clvGradedCount": 0,
+                        "roiEligibleCount": 1,
+                    },
+                    "ledger": [
+                        {
+                            "publicId": "receipt-1",
+                            "receiptFingerprint": "receipt-1-full",
+                            "receiptVersion": "5.6",
+                            "receiptVerified": True,
+                            "predictionFingerprint": "prediction-1-full",
+                            "predictionReceiptVersion": "5.4.0",
+                            "releasedAt": "2026-08-19T16:00:00+00:00",
+                            "gradedAt": "2026-08-20T02:00:00+00:00",
+                            "gamePk": 777,
+                            "player": "Contract Hitter",
+                            "marketKey": "batter_hits",
+                            "side": "Over",
+                            "line": 0.5,
+                            "probability": 0.6,
+                            "sportsbook": "Book A",
+                            "openingPrice": -110,
+                            "closingPrice": None,
+                            "clvEdge": None,
+                            "result": "loss",
+                        }
+                    ],
+                    "withheld": {
+                        "count": 0,
+                        "reasonCounts": {},
+                        "rawRowsIncluded": False,
+                    },
+                }
+            )
         raise AssertionError(f"unexpected path {path}")
 
 
@@ -275,16 +326,26 @@ def test_full_gate_uses_only_get_contracts_and_reports_coverage():
     )
 
     assert summary == {
-        "pages": 19,
+        "pages": 20,
         "assets": 1,
         "admin_boundaries": 8,
-        "api_contracts": 7,
+        "api_contracts": 8,
         "worker_convergence": 1,
     }
     assert all(call[1] for call in fake.calls)
     paths = [urlsplit(call[1]).path for call in fake.calls]
     assert paths.count("/health") == 2
     assert paths.count("/ready") == 2
+
+
+def test_public_verification_contract_keeps_losses_and_public_allowlist():
+    fake = FakeProduction()
+    payload = fake("https://production.example", "/api/verification/ledger", 5).json()
+    _validate_public_verification(payload)
+
+    payload["lossesOmitted"] = True
+    with pytest.raises(ContractError, match="omit losses"):
+        _validate_public_verification(payload)
 
 
 def test_baseline_gate_defers_new_deployed_api_contracts():
@@ -306,6 +367,9 @@ def test_baseline_gate_defers_new_deployed_api_contracts():
     assert "/api/edges/today" not in paths
     assert "/api/calibration/markets" not in paths
     assert "/api/tracker/performance" not in paths
+    assert "/api/verification/ledger" not in paths
+    assert "/verification" not in paths
+    assert summary["pages"] == 19
 
 
 def test_full_gate_rejects_an_exposed_admin_read():

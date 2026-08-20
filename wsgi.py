@@ -9,10 +9,12 @@ from intelligence_integration import install_intelligence_api
 from tracker_confidence_integration import install_tracker_confidence
 from cache_warmup import cache_warmup_bp
 from product_hub import product_hub_bp
+from public_verification import install_public_verification
 
 install_tracker_confidence(app_module)
 install_intelligence_api(app_module)
 install_canonical_consistency_api(app_module)
+install_public_verification(app_module)
 
 # Phase 4.59: expose bounded warmup state once per worker.
 if not getattr(app_module.app, "_phase_459_warmup_installed", False):

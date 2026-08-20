@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#07111f">
+  <title>Public Verification Ledger · MLB Analytics Hub</title>
+  <meta name="description" content="A read-only, receipt-verified record of MLB Analytics Hub recommendations, outcomes, ROI, calibration, and closing-line performance.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;family=JetBrains+Mono:wght@500;600&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/public-verification.css?v=5.6">
+  <link rel="stylesheet" href="/static/mobile-nav.css">
+</head>
+<body>
+  <a class="skip-link" href="#ledger">Skip to verification ledger</a>
+  <header class="hero">
+    <nav class="topbar" aria-label="Page">
+      <a class="brand" href="/">MLB <span>Analytics Hub</span></a>
+      <a class="private-link" href="/tracker">Private Tracker</a>
+    </nav>
+    <div class="hero__content">
+      <p class="eyebrow">PHASE 5.6 · INDEPENDENTLY CHECKABLE</p>
+      <h1>Public Verification Ledger</h1>
+      <p class="hero__lede">Every eligible system recommendation remains on the record—pending, win, loss, or push—with its original line, sportsbook price, release time, and immutable prediction fingerprint.</p>
+      <div class="trust-row" aria-label="Verification guarantees">
+        <span>Read only</span><span>Losses included</span><span>Receipt verified</span><span>No dollar stakes</span>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="controls" aria-label="Ledger window">
+      <div>
+        <p class="section-label">PUBLIC PERFORMANCE</p>
+        <p id="windowLabel" class="window-label">Loading verification window…</p>
+      </div>
+      <div class="segmented" role="group" aria-label="Date range">
+        <button type="button" data-window="30">30D</button>
+        <button type="button" data-window="90" class="active" aria-pressed="true">90D</button>
+        <button type="button" data-window="366">1Y</button>
+      </div>
+    </section>
+
+    <div id="status" class="status" role="status" aria-live="polite">Verifying released recommendations…</div>
+
+    <section id="metrics" class="metric-grid" aria-label="Verified performance metrics" hidden>
+      <article class="metric metric--primary"><span>Record</span><strong id="recordMetric">—</strong><small id="recordSample">0 graded</small></article>
+      <article class="metric"><span>ROI</span><strong id="roiMetric">—</strong><small id="roiSample">0 ROI-graded</small></article>
+      <article class="metric"><span>Brier</span><strong id="brierMetric">—</strong><small id="brierSample">0 graded</small></article>
+      <article class="metric"><span>ECE</span><strong id="eceMetric">—</strong><small>Lower is better</small></article>
+      <article class="metric"><span>Average CLV</span><strong id="clvMetric">—</strong><small id="clvSample">0 CLV-graded</small></article>
+      <article class="metric"><span>Beat close</span><strong id="beatCloseMetric">—</strong><small>Verified lineage only</small></article>
+    </section>
+
+    <section class="method" aria-labelledby="methodTitle">
+      <div>
+        <p class="section-label">DENOMINATORS, NOT CLAIMS</p>
+        <h2 id="methodTitle">The sample tells you what is actually measured.</h2>
+      </div>
+      <div class="method__definitions">
+        <p><strong>Graded</strong> counts verified wins and losses. Pending recommendations and pushes stay visible but do not enter Brier or ECE.</p>
+        <p><strong>CLV-graded</strong> is smaller by design: closing price appears only when accepted closing-line lineage exists.</p>
+        <p><strong>ROI-graded</strong> uses unit risk and unit profit internally. Dollar stake, bankroll, notes, settings, and admin activity are never public.</p>
+      </div>
+    </section>
+
+    <section id="ledger" class="ledger" aria-labelledby="ledgerTitle">
+      <div class="ledger__header">
+        <div>
+          <p class="section-label">IMMUTABLE RELEASE RECORD</p>
+          <h2 id="ledgerTitle">Recommendations</h2>
+        </div>
+        <div class="segmented segmented--filter" role="group" aria-label="Result filter">
+          <button type="button" data-filter="all" class="active" aria-pressed="true">All</button>
+          <button type="button" data-filter="settled">Settled</button>
+          <button type="button" data-filter="pending">Pending</button>
+        </div>
+      </div>
+      <div id="ledgerRows" class="ledger__rows"></div>
+      <div id="emptyState" class="empty" hidden>
+        <strong>No verified releases in this view.</strong>
+        <span>A blank ledger is not converted into a recommendation.</span>
+      </div>
+    </section>
+
+    <section class="boundary" aria-label="Public privacy boundary">
+      <span class="boundary__icon" aria-hidden="true">✓</span>
+      <div><strong>Public proof, private workspace.</strong><p>This surface cannot save, grade, edit, delete, or reveal Tracker-only fields. Invalid or tampered records are withheld without exposing their raw contents.</p></div>
+    </section>
+  </main>
+
+  <footer><span>MLB Analytics Hub · Verification contract 5.6</span><a href="/workspace">Open My Hub</a></footer>
+
+  <script src="/static/public-verification.js?v=5.6" defer></script>
+  <script src="/static/global-nav.js" defer></script>
+  <script src="/static/mobile-nav.js" defer></script>
+</body>
+</html>
