@@ -93,7 +93,7 @@
     var receipt = document.createElement('div');
     receipt.className = 'release__receipt';
     var verified = document.createElement('span');
-    verified.textContent = '✓ RECEIPT ' + row.receiptVersion + ' VERIFIED';
+    verified.textContent = '✓ PUBLICATION ' + row.receiptVersion + ' · PREDICTION ' + row.predictionReceiptVersion;
     var fingerprint = document.createElement('code');
     fingerprint.textContent = row.receiptFingerprint;
     receipt.appendChild(verified);
