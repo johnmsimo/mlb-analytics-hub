@@ -14,6 +14,7 @@
   ];
 
   var MORE_LINKS = [
+    { href: '/verification',         label: 'Verification',      sub: 'Public results · ROI · calibration' },
     { href: '/cheatsheets',          label: 'Cheatsheets',       sub: 'Daily validated targets' },
     { href: '/edge-lab',             label: 'Edge Lab',          sub: '100% Club · edges · parlays' },
     { href: '__DEEPDIVE__',          label: 'Deep Dive',         sub: "Today's first game" },
