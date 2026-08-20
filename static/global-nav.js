@@ -7,6 +7,7 @@
   var NAV_PAGES = [
     { href: '/',                     label: '🏠 Dashboard' },
     { href: '/workspace',            label: '✨ My Hub' },
+    { href: '/verification',         label: '✓ Verification' },
     { href: '/props',                label: '📊 Props' },
     { href: '/tracker',              label: '📋 Tracker' },
     { href: '/cheatsheets',          label: '🔥 Cheatsheets' },
