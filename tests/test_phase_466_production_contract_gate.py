@@ -202,8 +202,10 @@ class FakeProduction:
                         {
                             "publicId": "receipt-1",
                             "receiptFingerprint": "receipt-1-full",
-                            "receiptVersion": "5.4.0",
+                            "receiptVersion": "5.6",
                             "receiptVerified": True,
+                            "predictionFingerprint": "prediction-1-full",
+                            "predictionReceiptVersion": "5.4.0",
                             "releasedAt": "2026-08-19T16:00:00+00:00",
                             "gradedAt": "2026-08-20T02:00:00+00:00",
                             "gamePk": 777,
