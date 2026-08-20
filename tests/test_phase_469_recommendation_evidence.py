@@ -8,6 +8,7 @@ from canonical_consistency import (
     RECOMMENDATION_EVIDENCE_VERSION,
     normalize_candidate,
 )
+from multi_book_shopping import build_multi_book_shopping
 from scripts.production_contract_gate import (
     ContractError,
     validate_actionable_edges,
@@ -58,11 +59,47 @@ def actionable_candidate(**changes):
 
 
 def normalized_edge(**changes):
-    return normalize_candidate(
+    row = normalize_candidate(
         actionable_candidate(**changes),
         surface="edge_lab",
         now=NOW,
     )
+    provider = {
+        "provider": "The Odds API",
+        "state": "ready",
+        "configured": True,
+        "capturedAt": NOW.isoformat(),
+        "eventCount": 15,
+        "fetchedEventCount": 15,
+        "degradedEventCount": 0,
+        "message": "Fresh multi-book prices are available.",
+    }
+    quotes = [
+        {
+            "book": "Book A",
+            "source": "the-odds-api",
+            "capturedAt": NOW.isoformat(),
+            "line": 0.5,
+            "overPrice": -110,
+            "underPrice": -110,
+        },
+        {
+            "book": "Book B",
+            "source": "the-odds-api",
+            "capturedAt": NOW.isoformat(),
+            "line": 0.5,
+            "overPrice": -105,
+            "underPrice": -115,
+        },
+    ]
+    row["multiBookShoppingVersion"] = "5.9"
+    row["multiBookShopping"] = build_multi_book_shopping(
+        row,
+        quotes,
+        provider_health=provider,
+        now=NOW,
+    )
+    return row
 
 
 def test_actionable_edge_receipt_is_complete_and_bound_to_fingerprint():
@@ -110,6 +147,8 @@ def test_live_gate_revalidates_receipt_against_enclosing_edge():
         "count": 1,
         "computing": False,
         "computationState": "ready",
+        "multiBookShoppingVersion": "5.9",
+        "oddsProviderHealth": row["multiBookShopping"]["providerHealth"],
         "edges": [row],
     }
     validate_actionable_edges(payload)
