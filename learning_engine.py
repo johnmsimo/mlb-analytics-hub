@@ -6,6 +6,7 @@ from collections import defaultdict
 from typing import Any, Iterable, Mapping
 
 from candidate_integrity import canonical_market_key
+from continuous_learning import CONTINUOUS_LEARNING_VERSION, build_continuous_learning_report
 from market_validation import VALIDATION_VERSION, build_validation_report
 
 
@@ -91,10 +92,12 @@ def analyze_learning(entries: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
             factor_groups[factor][band].append((prob, outcome))
 
     market_validation = build_validation_report(entries)
+    continuous_learning = build_continuous_learning_report(entries)
     return {
         'mode': 'measurement_only',
         'adaptiveWeightsEnabled': False,
         'learningVersion': VALIDATION_VERSION,
+        'continuousLearningVersion': CONTINUOUS_LEARNING_VERSION,
         'gradedCount': len(graded),
         'skippedCount': skipped,
         'overall': _summary(pairs),
@@ -107,5 +110,7 @@ def analyze_learning(entries: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         'marketValidation': market_validation,
         'marketGates': market_validation['marketGates'],
         'promotedMarkets': market_validation['promotedMarkets'],
+        'continuousLearning': continuous_learning,
         'minimumSampleNotice': 'Do not adapt model weights until each evaluated segment has a meaningful sample size.',
     }
+

@@ -101,6 +101,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from config import settings
+from continuous_learning import build_prediction_receipt
 from closing_line_integrity import accept_closing_capture
 from odds_lineage import build_odds_lineage
 
@@ -173,6 +174,12 @@ def build_pick_payload(
     _blended_prob = blended_prob if blended_prob is not None else sf.get("blendedProb")
     _p_lo         = p_lo         if p_lo         is not None else sf.get("p_lo")
     _p_hi         = p_hi         if p_hi         is not None else sf.get("p_hi")
+    _pre_cal_prob = sf.get("preCalProb", sf.get("rawMultProb"))
+    _model_version = sf.get("modelVersion", sf.get("modelArtifactVersion"))
+    _component_probabilities = (
+        sf.get("componentProbabilities") or sf.get("modelProbabilities")
+        or sf.get("modelProbs") or {}
+    )
 
     # ── Derived market fields ───────────────────────────────────────────────
     _edge     = None
@@ -261,6 +268,9 @@ def build_pick_payload(
         "rawProb":        round(_raw_prob, 4)     if _raw_prob     is not None else None,
         "adjProb":        round(_adj_prob, 4)     if _adj_prob     is not None else None,
         "blendedProb":    round(_blended_prob, 4) if _blended_prob is not None else None,
+        "preCalProb":     round(_pre_cal_prob, 4) if _pre_cal_prob is not None else None,
+        "modelVersion":   _model_version,
+        "componentProbabilities": _component_probabilities,
         "p_lo":           _p_lo,
         "p_hi":           _p_hi,
 
@@ -319,6 +329,10 @@ def build_pick_payload(
     if extra:
         payload.update(extra)
 
+    # Phase 5.4 freezes every pre-outcome learning input before grading. The
+    # receipt excludes grade/profit fields and is preserved on later upserts.
+    payload["learningReceipt"] = build_prediction_receipt(payload)
+
     return payload
 
 
@@ -373,7 +387,10 @@ def write_pick(
             existing = entries[existing_idx]
             # Preserve grading data if already set; update everything else
             merged = {**payload}
-            for preserve_key in ("grade", "gradedAt", "profitUnits", "profitDollars"):
+            for preserve_key in (
+                "grade", "gradedAt", "profitUnits", "profitDollars",
+                "learningReceipt",
+            ):
                 if existing.get(preserve_key) not in (None, "pending"):
                     merged[preserve_key] = existing[preserve_key]
             entries[existing_idx] = merged

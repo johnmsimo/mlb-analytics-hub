@@ -1,0 +1,29 @@
+{
+  "automaticModelPromotion": false,
+  "automaticProbabilityAdaptation": false,
+  "automaticStakingChange": false,
+  "automaticThresholdChange": false,
+  "automaticWeightChange": false,
+  "humanReviewRequired": true,
+  "mode": "measurement_and_review_only",
+  "receipt": {
+    "immutablePregameSnapshot": true,
+    "outcomeFieldsIncluded": false,
+    "requiresFingerprintMatch": true,
+    "requiresOutcomeAfterPrediction": true
+  },
+  "sampleGates": {
+    "blendLearning": 60,
+    "calibrationLearning": 80,
+    "industryClvClaim": 500,
+    "modelRetrainingReview": 200,
+    "smartConsensus": 40
+  },
+  "version": "5.4.0",
+  "windows": {
+    "baselineDays": 90,
+    "brierDriftDelta": 0.04,
+    "minimumDriftRows": 25,
+    "recentDays": 30
+  }
+}

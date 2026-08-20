@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 5.2 merged and deployed on 2026-08-16. Phase 5.3 is the active phase.
+Status: Phase 5.3 merged and deployed on 2026-08-20. Phase 5.4 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -643,6 +643,31 @@ stale, incomplete, mismatched, dispersed, unvalidated, below-edge, or below-EV
 evidence fails closed; every qualified decision remains `actionable: false`,
 requires human review, and preserves the authenticated Tracker save boundary.
 
+### Phase 5.4 — Continuous learning foundation
+
+Implementation status: every new Tracker prediction receives an immutable
+pregame learning receipt before any outcome exists. The receipt fingerprints
+the canonical identity, market, side, exact line, served and pre-calibration
+probabilities, opening market evidence, prediction source, model version, and
+prediction timestamp while explicitly excluding outcome and profit fields.
+
+Only a win or loss graded after the prediction can enter Phase 5.4 metrics.
+Missing, changed, duplicate, backfilled, pushed, timestamp-less, or future
+outcomes fail closed. Trusted observations produce market-level Brier, log
+loss, ECE, 30/90-day drift, CLV sample readiness, and explicit review queues.
+
+Sample gates preserve the existing learning thresholds: 40 observations for
+smart-consensus review, 60 for market-blend review, 80 for calibration review,
+200 for shadow model-retraining review, and 500 verified CLV observations for
+industry-level claims. Crossing a gate creates evidence for human review only;
+it never changes probabilities, weights, thresholds, stakes, or champions.
+
+Exit gate: every accepted learning observation is bound to an untampered
+pregame receipt and post-prediction outcome; drift and sample readiness are
+visible by market; all adaptations remain shadow proposals behind held-out,
+calibration, serve-parity, market-validation, review, merge, and rollback
+gates; automatic model promotion remains disabled.
+
 ## Audit findings carried into the roadmap
 
 - \`/settings\` exposes an administrative surface before authentication.
@@ -663,4 +688,5 @@ Do not declare the product production-grade based only on a passing unit suite.
 Every phase must include contract tests plus the relevant live/browser or
 deployment gate, and recommendations must fail closed whenever price,
 freshness, identity, calibration, or authorization evidence is missing.
+
 
