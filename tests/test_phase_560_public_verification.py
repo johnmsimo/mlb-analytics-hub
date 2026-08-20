@@ -7,6 +7,7 @@ from flask import Flask
 from continuous_learning import build_prediction_receipt
 from public_verification import (
     PUBLIC_VERIFICATION_VERSION,
+    build_publication_receipt,
     build_public_verification_ledger,
     install_public_verification,
 )
@@ -36,6 +37,9 @@ def recommendation(*, identity, grade="pending", source="xgb", **changes):
     }
     row.update(changes)
     row["learningReceipt"] = build_prediction_receipt(row)
+    publication = build_publication_receipt(row)
+    if publication["publicReleaseEligible"]:
+        row["publicationReceipt"] = publication
     return row
 
 
@@ -87,15 +91,17 @@ def test_ledger_fails_closed_without_exposing_rejected_or_private_data():
     unpriced = recommendation(identity="unpriced", openingPrice=None)
     tampered = recommendation(identity="tampered")
     tampered["line"] = 1.5
+    price_tampered = recommendation(identity="price-tampered")
+    price_tampered["openingPrice"] = -125
 
     payload = build_public_verification_ledger(
-        [valid, manual, draft, unpriced, tampered],
+        [valid, manual, draft, unpriced, tampered, price_tampered],
         as_of=date(2026, 8, 20),
         window_days=30,
     )
 
     assert [row["publicId"] for row in payload["ledger"]] == [
-        valid["learningReceipt"]["predictionFingerprint"][:16]
+        valid["publicationReceipt"]["releaseFingerprint"][:16]
     ]
     encoded = json.dumps(payload)
     assert "private note" not in encoded
@@ -104,6 +110,7 @@ def test_ledger_fails_closed_without_exposing_rejected_or_private_data():
     assert payload["withheld"]["rawRowsIncluded"] is False
     assert payload["withheld"]["reasonCounts"] == {
         "invalid_prediction_receipt": 1,
+        "invalid_publication_receipt": 1,
         "missing_verified_price": 1,
         "private_or_unpublished": 2,
     }
@@ -146,4 +153,3 @@ def test_flask_installer_serves_mobile_page_and_read_only_api(tmp_path):
     assert response.get_json()["metrics"]["releasedCount"] == 1
     assert invalid.status_code == 400
     assert mutation.status_code == 405
-
