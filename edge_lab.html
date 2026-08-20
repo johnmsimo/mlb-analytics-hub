@@ -71,11 +71,20 @@
     .pcard.moderate{border-top:3px solid var(--yellow)}
     .pcard.aggressive{border-top:3px solid var(--red)}
     .pcard .odds{font-size:1.6rem;font-weight:800;color:var(--cyan)}
+    .pcard .odds-label{font-size:.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
     .pcard .kv{display:flex;justify-content:space-between;font-size:.82rem;color:var(--muted)}
     .pcard .kv b{color:var(--text)}
     .leg{border:1px solid var(--line);border-radius:10px;padding:9px 11px;background:rgba(255,255,255,.02)}
     .leg .lp{font-weight:700;font-size:.9rem}
     .leg .lm{font-size:.78rem;color:var(--muted);margin-top:2px}
+    .guided-note{margin-bottom:14px;border:1px solid rgba(255,204,77,.35);background:rgba(255,204,77,.08);border-radius:12px;padding:11px 13px;color:var(--yellow);font-size:.82rem;line-height:1.45}
+    .risk-box,.corr-box{border:1px solid var(--line);border-radius:11px;padding:10px 12px;background:rgba(0,0,0,.12)}
+    .risk-title,.corr-title{font-size:.7rem;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin-bottom:6px}
+    .risk-copy,.corr-warning{font-size:.76rem;line-height:1.42;color:var(--muted)}
+    .corr-warning+.corr-warning,.risk-copy+.risk-copy{margin-top:5px}
+    .corr-warning.high,.corr-warning.critical{color:var(--red)}
+    .corr-warning.medium{color:var(--yellow)}
+    .verified-chip{display:inline-flex;align-items:center;gap:4px;color:var(--green);font-size:.68rem;font-weight:800}
     .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:.68rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase}
     .badge.conservative{background:rgba(0,212,122,.14);color:var(--green)}
     .badge.moderate{background:rgba(255,204,77,.14);color:var(--yellow)}
@@ -84,7 +93,7 @@
     .trackbtn:hover{background:rgba(77,220,255,.16)}
     .trackbtn:disabled{cursor:default;opacity:.85}
     .trackbtn.tracked{background:rgba(0,212,122,.16);border-color:rgba(0,212,122,.45);color:var(--green)}
-    .trackbtn.full{width:100%;margin-top:4px;padding:9px}
+    .trackbtn.full{width:100%;min-height:44px;margin-top:4px;padding:9px}
     @media (max-width:980px){.parlay-grid{grid-template-columns:1fr}}
     @media (max-width:640px){.wrap{padding:14px}.filters{width:100%}.filters select{flex:1;min-width:0}.actions{width:100%}}
   </style>
@@ -96,7 +105,7 @@
     <div class="top">
       <div>
         <div class="brand">MLB ANALYTICS HUB - EDGE LAB</div>
-        <div class="sub" id="statusText">Hot-hand streaks, model edges, opponent defense, and auto-built parlays across today's slate.</div>
+        <div class="sub" id="statusText">Hot-hand streaks, model edges, opponent defense, and review-only guided parlays across today's slate.</div>
       </div>
       <div class="actions">
         <a class="toplink" href="/">Dashboard</a>
@@ -114,7 +123,7 @@
       <button class="navtab on" data-view="hot" onclick="setView('hot')">🔥 100% Club</button>
       <button class="navtab" data-view="edges" onclick="setView('edges')">📈 Edge Finder</button>
       <button class="navtab" data-view="defense" onclick="setView('defense')">🧤 Defense</button>
-      <button class="navtab" data-view="parlays" onclick="setView('parlays')">🎰 Parlays</button>
+      <button class="navtab" data-view="parlays" onclick="setView('parlays')">Guided Parlays</button>
     </div>
 
     <!-- 100% CLUB -->
@@ -200,6 +209,7 @@
 
     <!-- PARLAYS -->
     <section class="panel" id="view-parlays" style="display:none">
+      <div class="guided-note">Phase 5.10 only combines legs with verified recommendation evidence and ready multi-book prices. Every combination remains unapproved, assumes compounding risk, and requires human review.</div>
       <div class="meta" id="parMeta"></div>
       <div class="parlay-grid" id="parGrid"></div>
     </section>
@@ -245,18 +255,13 @@
 
     async function trackParlay(i, btn){
       const p = PARLAYS[i]; if(!p || !(p.legs||[]).length) return;
-      const parlay = {
-        id: 'auto-'+p.risk+'-'+Date.now(),
-        selections: p.legs.map(l=>({game_pk:l.gamePk, player:l.player, market:l.marketKey, projection:l.line, side:l.side, win_probability:l.winProb, american_odds:l.price})),
-        american_odds: p.americanOdds,
-        summary: {break_even_prob:p.combinedWinProb, leg_count:p.legCount},
-      };
+      const parlay = Object.assign({}, p, {id:'guided-'+p.riskTier+'-'+Date.now()});
       if(btn){btn.disabled=true;btn.textContent='…';}
       try{
         const d = await postJSON('/api/parlay/send-to-tracker', {parlay, date:CUR_DATE});
-        if(d.success){ if(btn){btn.textContent='✓ Sent to tracker';btn.classList.add('tracked');} toast(`${p.name} parlay sent to tracker`, true); }
-        else { if(btn){btn.disabled=false;btn.textContent='Send to tracker';} toast('Failed: '+(d.error||'error'), false); }
-      }catch(err){ if(btn){btn.disabled=false;btn.textContent='Send to tracker';} toast('Failed: '+err.message, false); }
+        if(d.success){ if(btn){btn.textContent='✓ Tracked after review';btn.classList.add('tracked');} toast(`${p.name} guided parlay tracked`, true); }
+        else { if(btn){btn.disabled=false;btn.textContent='Review & track';} toast('Failed: '+(d.error||'error'), false); }
+      }catch(err){ if(btn){btn.disabled=false;btn.textContent='Review & track';} toast('Failed: '+err.message, false); }
     }
 
     function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
@@ -419,14 +424,15 @@
     async function loadParlays(force){
       const btn=document.getElementById('refreshBtn'); btn.disabled=true;
       try{
-        setStatus('Building parlays…');
+        setStatus('Checking verified guided parlays…');
         const r=await fetch('/api/parlay/auto');
         const d=await r.json();
         if(!d.success) throw new Error(d.error||'failed');
         LOADED.parlays=true;
         PARLAYS = d.parlays||[]; CUR_DATE = d.date;
         document.getElementById('parMeta').innerHTML=[
-          `<span class="pill">${d.candidateCount} candidate legs</span>`,
+          `<span class="pill">Phase ${esc(d.version||'5.10')}</span>`,
+          `<span class="pill">${d.verifiedCandidateCount||0}/${d.candidateCount||0} verified legs</span>`,
           `<span class="pill">${FreshnessState.label(FreshnessState.normalize(d))}${d.cached?' · cached':''}</span>`,
           `<span class="pill">${d.date}</span>`
         ].join('');
@@ -434,22 +440,29 @@
         const parlays=PARLAYS;
         grid.innerHTML = parlays.map((p,i)=>{
           const legs=(p.legs||[]).map(l=>(
-            `<div class="leg"><div class="lp">${esc(l.player)} · ${esc(l.marketLabel)} ${l.side} ${l.line}</div>`+
-            `<div class="lm">Model ${pct(l.winProb)} · ${odds(l.price)}${l.priceSource==='model'?' (model)':''}${l.grade?' · '+l.grade:''}</div></div>`
+            `<div class="leg"><div class="lp">${esc(l.player)} · ${esc(l.marketLabel)} ${esc(l.side)} ${esc(l.line)}</div>`+
+            `<div class="lm">Model ${pct(l.modelProbability)} · Best ${odds(l.bestPrice)} @ ${esc(l.bestBook)} · ${l.acceptedBookCount} books</div>`+
+            `<div class="verified-chip">Verified 4.69 + 5.9</div></div>`
           )).join('') || '<div class="small">Not enough qualifying legs.</div>';
-          const evCls=(p.evPct||0)>=0?'ev pos':'ev neg';
-          return `<div class="pcard ${p.risk}">`+
-            `<div style="display:flex;justify-content:space-between;align-items:center"><h3>${esc(p.name)}</h3><span class="badge ${p.risk}">${p.legCount} legs</span></div>`+
-            `<div class="odds">${odds(p.americanOdds)}</div>`+
-            `<div class="kv"><span>Combined win prob</span><b>${pct1(p.combinedWinProb)}</b></div>`+
-            `<div class="kv"><span>Payout / $100</span><b>${p.payoutPer100==null?'-':'$'+p.payoutPer100}</b></div>`+
-            `<div class="kv"><span>Model EV</span><b class="${evCls}">${p.evPct==null?'-':pct1(p.evPct)}</b></div>`+
+          const risk=p.combinedRisk||{}, price=p.referencePrice||{}, corr=p.correlation||{};
+          const evCls=(risk.expectedValue||0)>=0?'ev pos':'ev neg';
+          const warnings=(corr.warnings||[]).map(w=>`<div class="corr-warning ${esc(w.severity)}">${esc(w.message)}</div>`).join('');
+          const explanations=(risk.explanations||[]).map(x=>`<div class="risk-copy">${esc(x)}</div>`).join('');
+          const trackable=!!(p.decision&&p.decision.trackable);
+          return `<div class="pcard ${esc(p.riskTier)}">`+
+            `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><h3>${esc(p.name)}</h3><span class="badge ${esc(p.riskTier)}">${p.verifiedLegCount} verified</span></div>`+
+            `<div><div class="odds-label">Reference odds · not a book offer</div><div class="odds">${odds(price.americanOdds)}</div></div>`+
+            `<div class="kv"><span>Combined estimate</span><b>${pct1(risk.combinedProbability)}</b></div>`+
+            `<div class="kv"><span>At least one leg misses</span><b>${pct1(risk.atLeastOneLegMissProbability)}</b></div>`+
+            `<div class="kv"><span>Reference EV</span><b class="${evCls}">${risk.expectedValue==null?'-':pct1(risk.expectedValue)}</b></div>`+
             `<div style="display:flex;flex-direction:column;gap:7px;margin-top:4px">${legs}</div>`+
-            `<button class="trackbtn full" onclick="trackParlay(${i}, this)"${(p.legs||[]).length?'':' disabled'}>Send to tracker</button>`+
+            `<div class="corr-box"><div class="corr-title">Correlation warning · ${esc(corr.state||'unknown')}</div>${warnings}</div>`+
+            `<div class="risk-box"><div class="risk-title">Combined risk · ${esc(risk.level||'unknown')}</div>${explanations}</div>`+
+            `<button class="trackbtn full" onclick="trackParlay(${i}, this)"${trackable?'':' disabled'}>${trackable?'Review & track':'Correlation review required'}</button>`+
           `</div>`;
-        }).join('') || '<div class="empty">No parlays available.</div>';
+        }).join('') || `<div class="empty">${d.state==='computing'?'Verified legs are still computing.':'No combination currently has enough verified, fresh legs.'}</div>`;
         if(FreshnessState.isComputing(d) && FreshnessState.shouldRetry('parlays')) setTimeout(()=>loadParlays(false),6000);
-        setStatus(`Parlays · ${d.candidateCount} candidate legs · ${d.date}`);
+        setStatus(`Guided Parlays · ${d.verifiedCandidateCount||0} verified legs · ${d.date}`);
       }catch(e){
         document.getElementById('parGrid').innerHTML=`<div class="empty">${esc(e.message)}</div>`;
         setStatus('Error: '+e.message);
