@@ -31,14 +31,57 @@
   <main class="hub-shell">
     <section class="hub-hero" aria-labelledby="hubTitle">
       <div>
-        <p class="eyebrow">PHASE 4.64 · MY HUB <span class="feature-version">FEATURE 4.86</span></p>
-        <h1 id="hubTitle">One clear path from signal to insight.</h1>
-        <p class="hero-copy">Discover opportunities, validate the evidence, track decisions, and learn from outcomes—without losing the context that makes a pick trustworthy.</p>
+        <p class="eyebrow">MY HUB · DAILY DECISIONS <span class="feature-version">PHASE 5.5</span></p>
+        <h1 id="hubTitle">Today’s verified opportunities, in one place.</h1>
+        <p class="hero-copy">See what cleared every identity, pricing, freshness, calibration, edge, and evidence gate—or get a definitive no-bet answer.</p>
       </div>
       <div class="hero-status" id="heroStatus" data-state="computing">
         <span class="status-dot"></span>
         <span><strong id="heroStatusLabel">Loading workspace</strong><small id="heroStatusDetail">Checking actionable signals and market health</small></span>
       </div>
+    </section>
+
+    <section class="decision-board" id="dailyDecisionBoard" data-board-state="loading" aria-labelledby="decisionBoardTitle">
+      <header class="decision-board-head">
+        <div>
+          <p class="eyebrow">PHASE 5.5 · DAILY DECISION BOARD</p>
+          <h2 id="decisionBoardTitle">What matters today</h2>
+          <p>Only canonical, priced, calibrated, fresh, 4.69-receipted opportunities can appear.</p>
+        </div>
+        <div class="decision-board-state" aria-live="polite">
+          <span id="decisionBoardStatus">CHECKING</span>
+          <strong id="decisionBoardHeadline">Scanning today’s market</strong>
+          <small id="decisionBoardDetail">No recommendation is shown until every gate passes.</small>
+        </div>
+      </header>
+
+      <div class="decision-board-metrics" aria-label="Daily decision summary">
+        <div><span>VERIFIED PLAYS</span><strong id="boardQualifiedCount">—</strong></div>
+        <div><span>FILTERED</span><strong id="boardRejectedCount">—</strong></div>
+        <div><span>SOURCE STATE</span><strong id="boardSourceState">LOADING</strong></div>
+      </div>
+
+      <div class="decision-board-layout">
+        <div class="decision-board-list" id="decisionBoardList" aria-live="polite">
+          <div class="decision-board-empty">Loading the fail-closed daily board…</div>
+        </div>
+        <aside class="admission-summary" aria-labelledby="admissionSummaryTitle">
+          <div>
+            <p class="step-label">ADMISSION SUMMARY</p>
+            <h3 id="admissionSummaryTitle">Why plays were filtered</h3>
+          </div>
+          <p id="admissionSummaryText">Waiting for integrity and actionability audits…</p>
+          <div class="admission-reasons" id="admissionReasonList"></div>
+        </aside>
+      </div>
+
+      <footer class="decision-board-foot">
+        <span>“No bet” is a valid answer. Missing evidence never becomes a pick.</span>
+        <div>
+          <button id="decisionBoardRefresh" type="button">Refresh board</button>
+          <a href="/value-bets">Open all Value Bets →</a>
+        </div>
+      </footer>
     </section>
 
     <ol class="journey" aria-label="Decision journey">
