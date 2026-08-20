@@ -6,6 +6,14 @@ from pathlib import Path
 
 from flask import Blueprint, jsonify, make_response
 
+from monetization_growth import (
+    CONVERSION_LEDGER_STORAGE_KEY,
+    MONETIZATION_GROWTH_VERSION,
+    MONETIZATION_STATUS_ENDPOINT,
+    ONBOARDING_STORAGE_KEY,
+    REFERRAL_STORAGE_KEY,
+)
+
 
 PRODUCT_HUB_VERSION = "4.64"
 DAILY_DECISION_BOARD_VERSION = "5.5"
@@ -170,6 +178,27 @@ def product_journey():
                 "reviewRequired": True,
                 "approved": False,
                 "readOnly": True,
+                "serverMutation": False,
+                "failClosed": True,
+            },
+            "monetizationGrowth": {
+                "version": MONETIZATION_GROWTH_VERSION,
+                "sourceEndpoint": MONETIZATION_STATUS_ENDPOINT,
+                "surface": "/pricing",
+                "rolloutState": "identity_required",
+                "freeUsageEnforcementMode": "shadow",
+                "premiumEntitlementSource": "server_verified_subscription",
+                "clientStorageCanGrantPremium": False,
+                "anonymousSessionCanGrantPremium": False,
+                "checkoutAvailable": False,
+                "requiresVerifiedCustomerIdentity": True,
+                "requiresWebhookReconciliation": True,
+                "onboardingStorageKey": ONBOARDING_STORAGE_KEY,
+                "referralStorageKey": REFERRAL_STORAGE_KEY,
+                "conversionLedgerStorageKey": CONVERSION_LEDGER_STORAGE_KEY,
+                "growthPersistence": "device_private",
+                "serverAnalyticsCollection": False,
+                "rawPersonalDataIncluded": False,
                 "serverMutation": False,
                 "failClosed": True,
             },

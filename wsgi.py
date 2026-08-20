@@ -8,6 +8,7 @@ from canonical_consistency import (
 from intelligence_integration import install_intelligence_api
 from tracker_confidence_integration import install_tracker_confidence
 from cache_warmup import cache_warmup_bp
+from monetization_growth import monetization_growth_bp
 from product_hub import product_hub_bp
 from public_verification import install_public_verification
 
@@ -25,5 +26,10 @@ if not getattr(app_module.app, "_phase_459_warmup_installed", False):
 if not getattr(app_module.app, "_phase_462_product_hub_installed", False):
     app_module.app.register_blueprint(product_hub_bp)
     setattr(app_module.app, "_phase_462_product_hub_installed", True)
+
+# Phase 5.11: expose read-only plan readiness and a fail-closed paid boundary.
+if not getattr(app_module.app, "_phase_511_monetization_growth_installed", False):
+    app_module.app.register_blueprint(monetization_growth_bp)
+    setattr(app_module.app, "_phase_511_monetization_growth_installed", True)
 
 app = app_module.app
