@@ -8,6 +8,7 @@
   var ALERT_CANDIDATE_STATE_KEY = 'mlb_alert_candidate_state';
   var ALERT_LEDGER_LIMIT = 200;
   var MAX_ALERT_ODDS_AGE_SECONDS = 900;
+  var DAILY_DECISION_BOARD_VERSION = '5.5';
   var RECOMMENDATION_EVIDENCE_VERSION = '4.69';
   var VERIFIED_DECISION_DRAFT_VERSION = '4.71';
   var VERIFIED_DECISION_DRAFT_KEY = 'mlb_verified_decision_draft_v471';
@@ -23,6 +24,7 @@
   ];
   var state = {
     edges: [],
+    edgePayload: null,
     edgeState: 'loading',
     markets: null,
     tracker: null,
@@ -582,6 +584,190 @@
     });
   }
 
+  function friendlyAdmissionReason(reason) {
+    var value = String(reason || '').toLowerCase();
+    if (/price|book|odds|quote/.test(value)) return 'Missing or stale sportsbook quote';
+    if (/calibrat|market gate|promot/.test(value)) return 'Calibration or market gate blocked';
+    if (/identity|entity|player|team|lineup|pitcher|handed/.test(value)) return 'Identity or lineup evidence failed';
+    if (/edge|expected value|\bev\b|threshold/.test(value)) return 'Edge or EV below threshold';
+    if (/receipt|fingerprint|evidence/.test(value)) return 'Decision evidence receipt incomplete';
+    if (/simulation|matchup/.test(value)) return 'Simulation or matchup evidence incomplete';
+    if (/probability|projection|model/.test(value)) return 'Projection evidence incomplete';
+    var label = String(reason || 'Other validation gate').replace(/[_-]+/g, ' ').trim();
+    return label.charAt(0).toUpperCase() + label.slice(1);
+  }
+
+  function auditObjects(payload) {
+    var result = [];
+    ['candidateIntegrityAudit', 'actionabilityAudit'].forEach(function (key) {
+      var audit = payload && payload[key];
+      if (audit && typeof audit === 'object' && !Array.isArray(audit)) result.push(audit);
+    });
+    var collections = payload && payload.canonicalCandidateAudit &&
+      payload.canonicalCandidateAudit.collections;
+    if (collections && typeof collections === 'object') {
+      Object.keys(collections).forEach(function (key) {
+        var audit = collections[key];
+        if (audit && typeof audit === 'object' && !Array.isArray(audit)) result.push(audit);
+      });
+    }
+    return result;
+  }
+
+  function admissionReasons(payload) {
+    var totals = {};
+    auditObjects(payload).forEach(function (audit) {
+      var reasons = audit.rejectionReasons;
+      if (!reasons || typeof reasons !== 'object' || Array.isArray(reasons)) return;
+      Object.keys(reasons).forEach(function (reason) {
+        var count = number(reasons[reason]);
+        if (count == null || count <= 0) return;
+        var label = friendlyAdmissionReason(reason);
+        totals[label] = (totals[label] || 0) + count;
+      });
+    });
+    return Object.keys(totals).map(function (label) {
+      return { label: label, count: totals[label] };
+    }).sort(function (left, right) {
+      return right.count - left.count || left.label.localeCompare(right.label);
+    });
+  }
+
+  function auditRejectedCount(payload) {
+    return auditObjects(payload).reduce(function (largest, audit) {
+      var count = number(audit.rejectedCount);
+      return count == null ? largest : Math.max(largest, count);
+    }, 0);
+  }
+
+  function dailyDecisionRows() {
+    return state.edges.slice().sort(function (left, right) {
+      return (edgeValue(right) || 0) - (edgeValue(left) || 0);
+    }).slice(0, 8);
+  }
+
+  function decisionBoardCardHtml(row) {
+    var receipt = row.evidenceReceipt;
+    var modelProb = probability(receipt.model.probability);
+    var fairProb = probability(receipt.market.fairProbability);
+    var edge = edgeValue(row);
+    var price = number(receipt.price.american);
+    var player = playerKey(row.player);
+    var saved = state.watchlist.has(player);
+    var context = [row.team, row.matchup].filter(Boolean).join(' · ');
+    return '<article class="decision-card" data-board-version="' +
+      DAILY_DECISION_BOARD_VERSION + '">' +
+      '<div class="decision-card-top"><span>VERIFIED PLAY</span><small>' +
+      esc(freshnessLabel(row)) + '</small></div>' +
+      '<div class="decision-card-title"><div><strong>' + esc(row.player) +
+      '</strong><small>' + esc(context) + '</small></div>' +
+      '<b>+' + (edge == null ? '—' : edge.toFixed(1)) + '% EDGE</b></div>' +
+      '<p class="decision-selection">' + esc(marketLabelOf(row)) + ' · ' +
+      esc(receipt.selection.side) + ' ' + esc(receipt.selection.line) + '</p>' +
+      '<div class="decision-proof">' +
+      '<span><small>MODEL</small><b>' + (modelProb * 100).toFixed(1) + '%</b></span>' +
+      '<span><small>FAIR MARKET</small><b>' + (fairProb * 100).toFixed(1) + '%</b></span>' +
+      '<span><small>BEST PRICE</small><b>' + esc(receipt.price.book) + ' ' +
+      (price > 0 ? '+' : '') + esc(price) + '</b></span>' +
+      '</div>' +
+      '<p class="decision-explanation"><strong>Why it qualifies:</strong> ' +
+      esc(receipt.explanation) + '</p>' +
+      '<div class="decision-card-actions"><button type="button" data-board-save-player="' +
+      esc(player) + '" aria-pressed="' + (saved ? 'true' : 'false') + '">' +
+      (saved ? '★ Saved player' : '☆ Save player') +
+      '</button><a href="/value-bets">Review full evidence →</a></div>' +
+      '</article>';
+  }
+
+  function renderAdmissionSummary(boardState) {
+    var host = document.getElementById('admissionReasonList');
+    var text = document.getElementById('admissionSummaryText');
+    var reasons = admissionReasons(state.edgePayload);
+    if (reasons.length) {
+      text.textContent = 'Aggregate gate results from today’s candidate audits. Rejected rows remain hidden.';
+      host.innerHTML = reasons.slice(0, 6).map(function (reason) {
+        return '<div class="admission-reason"><span>' + esc(reason.label) +
+          '</span><strong>' + esc(reason.count) + '</strong></div>';
+      }).join('');
+      return;
+    }
+    var messages = {
+      computing: 'The durable scan is still running. No interim candidates are promoted.',
+      unavailable: 'Required evidence is unavailable. The board is failing closed.',
+      no_bet: 'The scan is ready, but no candidate cleared every required gate.',
+      verified_plays: 'Displayed plays cleared every gate; nonqualifying candidates remain hidden.'
+    };
+    text.textContent = messages[boardState] || 'Waiting for candidate audits…';
+    host.innerHTML = '<div class="admission-reason neutral"><span>No aggregate rejection counts reported</span><strong>—</strong></div>';
+  }
+
+  function renderDailyDecisionBoard() {
+    var board = document.getElementById('dailyDecisionBoard');
+    if (!board) return;
+    var rows = dailyDecisionRows();
+    var sourceState = String(state.edgeState || 'loading').toLowerCase();
+    var boardState = ['loading', 'computing'].indexOf(sourceState) >= 0 ? 'computing' :
+      ['failed', 'unavailable'].indexOf(sourceState) >= 0 ? 'unavailable' :
+      rows.length ? 'verified_plays' : 'no_bet';
+    var payloadMessage = state.edgePayload && String(state.edgePayload.message || '').trim();
+    var copy = {
+      computing: {
+        status: 'COMPUTING',
+        headline: 'Scanning today’s market',
+        detail: payloadMessage || 'No recommendation is shown while the durable scan is incomplete.'
+      },
+      unavailable: {
+        status: 'UNAVAILABLE',
+        headline: 'Decision evidence is unavailable',
+        detail: payloadMessage || 'The board is failing closed. Refresh after the evidence source recovers.'
+      },
+      no_bet: {
+        status: 'NO BET',
+        headline: 'No verified play qualifies right now',
+        detail: 'The scan is ready; no candidate cleared identity, price, freshness, calibration, edge, and receipt gates.'
+      },
+      verified_plays: {
+        status: 'VERIFIED',
+        headline: rows.length + ' verified opportunit' + (rows.length === 1 ? 'y' : 'ies') + ' cleared every gate',
+        detail: 'Ranked by canonical model edge. Always review the current sportsbook quote before tracking.'
+      }
+    }[boardState];
+
+    board.setAttribute('data-board-state', boardState);
+    document.getElementById('decisionBoardStatus').textContent = copy.status;
+    document.getElementById('decisionBoardHeadline').textContent = copy.headline;
+    document.getElementById('decisionBoardDetail').textContent = copy.detail;
+    document.getElementById('boardQualifiedCount').textContent =
+      boardState === 'computing' ? '—' : String(rows.length);
+    document.getElementById('boardRejectedCount').textContent =
+      boardState === 'computing' ? '—' : String(auditRejectedCount(state.edgePayload));
+    document.getElementById('boardSourceState').textContent = sourceState.toUpperCase();
+
+    var host = document.getElementById('decisionBoardList');
+    if (boardState === 'verified_plays') {
+      host.innerHTML = rows.map(decisionBoardCardHtml).join('');
+    } else {
+      host.innerHTML = '<div class="decision-board-empty" data-empty-state="' +
+        esc(boardState) + '"><strong>' + esc(copy.headline) + '</strong><span>' +
+        esc(copy.detail) + '</span></div>';
+    }
+    renderAdmissionSummary(boardState);
+  }
+
+  function wireDailyDecisionBoard() {
+    var host = document.getElementById('decisionBoardList');
+    var refresh = document.getElementById('decisionBoardRefresh');
+    if (host) {
+      host.addEventListener('click', function (event) {
+        var button = event.target.closest('[data-board-save-player]');
+        if (!button) return;
+        var name = button.getAttribute('data-board-save-player');
+        setPlayerSaved(name, !state.watchlist.has(playerKey(name)));
+      });
+    }
+    if (refresh) refresh.addEventListener('click', function () { window.location.reload(); });
+  }
+
   function signalHtml(row) {
     var reasons = personalizedSignalReasons(row);
     if (!reasons.length) return '';
@@ -621,6 +807,7 @@
   }
 
   function renderSignals() {
+    renderDailyDecisionBoard();
     var list = personalizedEdges();
     var host = document.getElementById('signalList');
     document.getElementById('actionableCount').textContent = String(state.edges.length);
@@ -1151,6 +1338,8 @@
     renderMarketOptions();
     renderMarketPreferenceReceipt();
     renderWatchlist();
+    renderDailyDecisionBoard();
+    wireDailyDecisionBoard();
     wireWatchlistForm();
     wireSignalActions();
     wireSavedOpportunityActions();
@@ -1163,11 +1352,13 @@
     Promise.all([
       requestJson('/api/edges/today?minEdge=0.03').then(function (payload) {
         var rows = payload && Array.isArray(payload.edges) ? payload.edges : [];
+        state.edgePayload = payload;
         state.edgeState = String(payload.computationState || 'ready').toLowerCase();
         state.edges = rows.filter(isActionable);
         renderSignals();
       }).catch(function () {
         failures += 1;
+        state.edgePayload = null;
         state.edgeState = 'unavailable';
         state.edges = [];
         renderSignals();
