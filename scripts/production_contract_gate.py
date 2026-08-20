@@ -410,6 +410,7 @@ def _validate_journey(payload: Any) -> None:
     _require(isinstance(payload, dict), "journey payload must be an object")
     stages = [stage.get("key") for stage in payload.get("stages", [])]
     alerts = payload.get("alerts", {})
+    board = payload.get("dailyDecisionBoard", {})
     _require(payload.get("success") is True, "journey payload is not successful")
     _require(payload.get("version") == "4.64", "journey version changed unexpectedly")
     _require(
@@ -422,6 +423,11 @@ def _validate_journey(payload: Any) -> None:
         alerts.get("freshness", {}).get("maximumOddsAgeSeconds") == 900,
         "alert freshness contract changed unexpectedly",
     )
+    _require(board.get("version") == "5.5", "daily decision board version changed")
+    _require(board.get("failClosed") is True, "daily decision board must fail closed")
+    _require(board.get("rawRejectedRowsIncluded") is False, "daily board exposed rejected rows")
+    _require(board.get("noBetIsValidDecision") is True, "daily board must preserve no-bet")
+    _require(board.get("maximumCards") == 8, "daily board card limit changed")
 
 
 def _validate_games(payload: Any) -> None:
