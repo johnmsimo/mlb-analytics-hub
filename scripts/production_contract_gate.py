@@ -85,6 +85,10 @@ PUBLIC_PAGE_CONTRACTS = (
     PageContract("/player/1", "Player Profile"),
 )
 
+PHASE_56_PAGE_CONTRACTS = (
+    PageContract("/verification", "Public Verification Ledger · MLB Analytics Hub"),
+)
+
 ADMIN_READ_PATHS = (
     "/settings",
     "/api/app-settings",
@@ -505,6 +509,70 @@ def _validate_tracker(payload: Any) -> None:
     _require(payload.get("success") is True, "tracker payload is not successful")
 
 
+def _validate_public_verification(payload: Any) -> None:
+    _require(isinstance(payload, dict), "verification ledger must be an object")
+    _require(payload.get("success") is True, "verification ledger is not successful")
+    _require(payload.get("version") == "5.6", "verification version changed")
+    _require(payload.get("readOnly") is True, "verification ledger must be read only")
+    _require(payload.get("failClosed") is True, "verification ledger must fail closed")
+    _require(payload.get("lossesOmitted") is False, "verification ledger may not omit losses")
+    _require(
+        payload.get("privateTrackerFieldsIncluded") is False,
+        "verification ledger exposed private Tracker fields",
+    )
+    ledger = payload.get("ledger")
+    metrics = payload.get("metrics")
+    withheld = payload.get("withheld")
+    _require(isinstance(ledger, list), "verification ledger rows must be a list")
+    _require(isinstance(metrics, dict), "verification metrics must be an object")
+    _require(
+        metrics.get("releasedCount") == len(ledger),
+        "verification released count does not match rows",
+    )
+    for field in (
+        "gradedCount", "wins", "losses", "pending", "clvGradedCount",
+        "roiEligibleCount",
+    ):
+        _require(
+            isinstance(metrics.get(field), int) and metrics.get(field) >= 0,
+            f"verification metric {field} is invalid",
+        )
+    _require(
+        metrics.get("gradedCount") == metrics.get("wins") + metrics.get("losses"),
+        "verification graded denominator is inconsistent",
+    )
+    _require(
+        metrics.get("clvGradedCount") <= metrics.get("gradedCount"),
+        "verification CLV denominator exceeds graded sample",
+    )
+    _require(
+        isinstance(withheld, dict) and withheld.get("rawRowsIncluded") is False,
+        "verification withheld rows crossed the public boundary",
+    )
+    allowed = {
+        "publicId", "receiptFingerprint", "receiptVersion", "receiptVerified",
+        "releasedAt", "gradedAt", "gamePk", "player", "marketKey", "side",
+        "line", "probability", "sportsbook", "openingPrice", "closingPrice",
+        "clvEdge", "result",
+    }
+    for index, row in enumerate(ledger):
+        _require(isinstance(row, dict), f"verification row {index} is invalid")
+        _require(set(row) == allowed, f"verification row {index} changed its allowlist")
+        _require(row.get("receiptVerified") is True, f"verification row {index} is unverified")
+        _require(row.get("receiptVersion") == "5.4.0", f"verification row {index} has an invalid receipt version")
+        _require(
+            row.get("result") in {"pending", "win", "loss", "push"},
+            f"verification row {index} has an invalid result",
+        )
+        _require(bool(row.get("receiptFingerprint")), f"verification row {index} lacks receipt")
+        _require(bool(row.get("sportsbook")), f"verification row {index} lacks sportsbook")
+        _require(
+            isinstance(row.get("openingPrice"), int)
+            and abs(row.get("openingPrice")) >= 100,
+            f"verification row {index} lacks release price",
+        )
+
+
 def _json_contract_with_retry(
     *,
     base_url: str,
@@ -668,7 +736,12 @@ def run_gate(
     )
 
     assets: set[str] = set()
-    for contract in PUBLIC_PAGE_CONTRACTS:
+    page_contracts = (
+        PUBLIC_PAGE_CONTRACTS
+        if baseline_only
+        else PUBLIC_PAGE_CONTRACTS + PHASE_56_PAGE_CONTRACTS
+    )
+    for contract in page_contracts:
         response = fetcher(base_url, contract.path, 5)
         assets.update(validate_page(contract, response))
         print(
@@ -721,6 +794,12 @@ def run_gate(
             5.0,
             _validate_tracker,
         ),
+        (
+            "/api/verification/ledger?window=90",
+            "public verification ledger",
+            5.0,
+            _validate_public_verification,
+        ),
     )
     json_contracts = (
         baseline_contracts
@@ -768,7 +847,7 @@ def run_gate(
         print("PASS post-convergence web isolation", flush=True)
 
     summary = {
-        "pages": len(PUBLIC_PAGE_CONTRACTS),
+        "pages": len(page_contracts),
         "assets": len(assets),
         "admin_boundaries": len(ADMIN_READ_PATHS),
         "api_contracts": len(json_contracts) + 2,
