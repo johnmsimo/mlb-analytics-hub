@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phases 5.6 and 5.9 are merged and deployed. Phases 5.7 and 5.8 are deferred; Phase 5.10 is active.
+Status: Phases 5.6, 5.9, and 5.10 are merged and deployed. Phases 5.7 and 5.8 are deferred; Phase 5.11 is active.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -760,7 +760,7 @@ deployment.
 
 ### Phase 5.10 — Guided Parlays
 
-Implementation status: active. The existing auto-parlay surface is being moved
+Implementation status: merged and deployed. The existing auto-parlay surface was moved
 from the broad props pool to the hot Phase 5.5/5.9 recommendation snapshot. A
 leg is admitted only when it is actionable, carries a matching Phase 4.69
 recommendation-evidence receipt, and has a ready Phase 5.9 consensus with at
@@ -785,9 +785,27 @@ validates the Phase 5.10 journey and live payload after deployment.
 
 ### Phase 5.11 — Monetization and Growth
 
-After the daily decision product and multi-book evidence are dependable, add
-free usage limits, Premium entitlements, subscription billing, onboarding,
-referral measurement, and conversion analytics.
+Implementation status: active, staged behind a fail-closed paid boundary.
+
+The first production-safe slice adds a public Free/Premium comparison, a
+server-owned monetization readiness receipt, device-private onboarding,
+strict referral-code attribution, and a bounded device-private conversion
+ledger. A configurable Free daily-board limit is reported in shadow mode so
+the product decision can be evaluated without treating browser storage as a
+secure paywall.
+
+Customer accounts remain deferred, so checkout and Premium entitlement are
+intentionally unavailable. Neither local storage nor an anonymous browser
+session can grant paid access. Billing can open only after a verified
+server-side customer principal exists, a subscription adapter is implemented,
+prices are approved, and webhook reconciliation can prove the current
+entitlement.
+
+Exit gate: `/pricing`, `/api/monetization/status`, and the My Hub onboarding
+surface are mobile-first and definitive; Free remains available; Premium
+fails closed; checkout is absent; client storage cannot grant entitlement;
+referral and conversion receipts contain no raw personal data and remain on
+device; the production contract gate proves these boundaries after deployment.
 
 ## Audit findings carried into the roadmap
 
@@ -809,4 +827,3 @@ Do not declare the product production-grade based only on a passing unit suite.
 Every phase must include contract tests plus the relevant live/browser or
 deployment gate, and recommendations must fail closed whenever price,
 freshness, identity, calibration, or authorization evidence is missing.
-

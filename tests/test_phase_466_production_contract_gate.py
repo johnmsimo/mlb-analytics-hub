@@ -6,6 +6,7 @@ import pytest
 
 from scripts.production_contract_gate import (
     ADMIN_READ_PATHS,
+    PHASE_511_PAGE_CONTRACTS,
     PHASE_56_PAGE_CONTRACTS,
     PUBLIC_PAGE_CONTRACTS,
     ContractError,
@@ -170,7 +171,11 @@ class FakeProduction:
         self.exposed_admin_path = exposed_admin_path
         self.page_markers = {
             contract.path: contract.marker
-            for contract in PUBLIC_PAGE_CONTRACTS + PHASE_56_PAGE_CONTRACTS
+            for contract in (
+                PUBLIC_PAGE_CONTRACTS
+                + PHASE_56_PAGE_CONTRACTS
+                + PHASE_511_PAGE_CONTRACTS
+            )
         }
 
     def __call__(self, base_url, path, timeout):
@@ -259,6 +264,27 @@ class FakeProduction:
                         "reviewRequired": True,
                         "approved": False,
                         "readOnly": True,
+                        "serverMutation": False,
+                        "failClosed": True,
+                    },
+                    "monetizationGrowth": {
+                        "version": "5.11",
+                        "sourceEndpoint": "/api/monetization/status",
+                        "surface": "/pricing",
+                        "rolloutState": "identity_required",
+                        "freeUsageEnforcementMode": "shadow",
+                        "premiumEntitlementSource": "server_verified_subscription",
+                        "clientStorageCanGrantPremium": False,
+                        "anonymousSessionCanGrantPremium": False,
+                        "checkoutAvailable": False,
+                        "requiresVerifiedCustomerIdentity": True,
+                        "requiresWebhookReconciliation": True,
+                        "onboardingStorageKey": "mlb_growth_onboarding_v511",
+                        "referralStorageKey": "mlb_growth_referral_v511",
+                        "conversionLedgerStorageKey": "mlb_growth_events_v511",
+                        "growthPersistence": "device_private",
+                        "serverAnalyticsCollection": False,
+                        "rawPersonalDataIncluded": False,
                         "serverMutation": False,
                         "failClosed": True,
                     },
@@ -371,6 +397,90 @@ class FakeProduction:
                     },
                 }
             )
+        if clean_path == "/api/monetization/status":
+            return json_response(
+                {
+                    "success": True,
+                    "version": "5.11",
+                    "rolloutState": "identity_required",
+                    "plans": [
+                        {
+                            "key": "free",
+                            "label": "Free",
+                            "availability": "available",
+                            "price": None,
+                            "features": ["Daily Decision Board"],
+                        },
+                        {
+                            "key": "premium",
+                            "label": "Premium",
+                            "availability": "preview",
+                            "price": None,
+                            "features": ["Server entitlement"],
+                        },
+                    ],
+                    "freeUsage": {
+                        "measurement": "daily_decision_board_view",
+                        "configuredLimit": None,
+                        "enforcementMode": "shadow",
+                        "hardLimitEnabled": False,
+                        "counterPersistence": "device_private",
+                        "reason": "Verified identity required.",
+                    },
+                    "premiumEntitlement": {
+                        "state": "unavailable",
+                        "source": "server_verified_subscription",
+                        "clientStorageCanGrant": False,
+                        "anonymousSessionCanGrant": False,
+                        "failClosed": True,
+                    },
+                    "billing": {
+                        "state": "identity_required",
+                        "checkoutAvailable": False,
+                        "provider": None,
+                        "priceDecisionRecorded": False,
+                        "webhookReconciliationRequired": True,
+                        "blockers": ["Identity", "Adapter", "Webhooks"],
+                    },
+                    "onboarding": {
+                        "state": "available",
+                        "persistence": "device_private",
+                        "storageKey": "mlb_growth_onboarding_v511",
+                        "steps": [
+                            "review_daily_board",
+                            "save_player",
+                            "inspect_evidence",
+                            "open_tracker",
+                        ],
+                    },
+                    "referrals": {
+                        "state": "device_attribution",
+                        "queryParameter": "ref",
+                        "acceptedPattern": "^[A-Za-z0-9_-]{3,32}$",
+                        "persistence": "device_private",
+                        "storageKey": "mlb_growth_referral_v511",
+                        "rawPersonalDataIncluded": False,
+                    },
+                    "conversionAnalytics": {
+                        "state": "device_receipts",
+                        "persistence": "device_private",
+                        "storageKey": "mlb_growth_events_v511",
+                        "maximumReceipts": 100,
+                        "serverCollection": False,
+                        "rawPersonalDataIncluded": False,
+                        "events": [
+                            "pricing_viewed",
+                            "premium_interest",
+                            "onboarding_step_completed",
+                            "referral_landed",
+                        ],
+                    },
+                    "readOnly": True,
+                    "serverMutation": False,
+                    "rawPersonalDataIncluded": False,
+                    "failClosed": True,
+                }
+            )
         raise AssertionError(f"unexpected path {path}")
 
 
@@ -473,10 +583,10 @@ def test_full_gate_uses_only_get_contracts_and_reports_coverage():
     )
 
     assert summary == {
-        "pages": 20,
+        "pages": 21,
         "assets": 1,
         "admin_boundaries": 8,
-        "api_contracts": 9,
+        "api_contracts": 10,
         "worker_convergence": 1,
     }
     assert all(call[1] for call in fake.calls)
@@ -516,6 +626,8 @@ def test_baseline_gate_defers_new_deployed_api_contracts():
     assert "/api/tracker/performance" not in paths
     assert "/api/verification/ledger" not in paths
     assert "/verification" not in paths
+    assert "/pricing" not in paths
+    assert "/api/monetization/status" not in paths
     assert summary["pages"] == 19
 
 

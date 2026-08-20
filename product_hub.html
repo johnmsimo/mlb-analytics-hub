@@ -14,6 +14,7 @@
   <script src="/static/global-nav.js" defer></script>
   <script src="/static/mobile-nav.js" defer></script>
   <script src="/static/product-hub.js" defer></script>
+  <script src="/static/monetization-growth.js" defer></script>
 </head>
 <body>
   <nav class="hub-topnav">
@@ -25,13 +26,14 @@
       <span class="live"><i></i> LIVE</span>
       <a href="/props">Props</a>
       <a href="/tracker">Tracker</a>
+      <a href="/pricing">Plans</a>
     </div>
   </nav>
 
   <main class="hub-shell">
     <section class="hub-hero" aria-labelledby="hubTitle">
       <div>
-        <p class="eyebrow">PHASE 4.64 · MY HUB <span class="feature-version">FEATURE 4.86</span> <span class="feature-version">PHASE 5.5</span> <span class="feature-version">PHASE 5.9</span></p>
+        <p class="eyebrow">PHASE 4.64 · MY HUB <span class="feature-version">FEATURE 4.86</span> <span class="feature-version">PHASE 5.5</span> <span class="feature-version">PHASE 5.9</span> <span class="feature-version">PHASE 5.11</span></p>
         <h1 id="hubTitle">Today’s verified opportunities, in one place.</h1>
         <p class="hero-copy">See what cleared every identity, pricing, freshness, calibration, edge, and evidence gate—or get a definitive no-bet answer.</p>
       </div>
@@ -205,8 +207,37 @@
           <a href="/edge-lab"><span>Evidence</span><small>Revisit edge context before the next decision.</small><b>→</b></a>
         </div>
       </article>
+
+      <article class="panel growth-panel" id="growthOnboarding">
+        <header class="panel-head">
+          <div><p class="step-label">PHASE 5.11 · GET STARTED</p><h2>Your decision-product checklist</h2></div>
+          <span class="growth-entitlement-state" id="growthEntitlementState">LOADING</span>
+        </header>
+        <div class="growth-panel-body">
+          <div class="growth-onboarding-head">
+            <div>
+              <strong>Learn the evidence loop</strong>
+              <p>Progress and conversion receipts stay on this device. They never grant Premium access.</p>
+            </div>
+            <b id="growthOnboardingMeter">0 / 4</b>
+          </div>
+          <div class="growth-onboarding-list">
+            <button type="button" data-onboarding-step="review_daily_board" aria-pressed="false"><span>Review today’s definitive board state</span><b>MARK DONE</b></button>
+            <button type="button" data-onboarding-step="save_player" aria-pressed="false"><span>Save a player for verified opportunities</span><b>MARK DONE</b></button>
+            <button type="button" data-onboarding-step="inspect_evidence" aria-pressed="false"><span>Inspect price, model, risk, and receipt evidence</span><b>MARK DONE</b></button>
+            <button type="button" data-onboarding-step="open_tracker" aria-pressed="false"><span>Open Tracker and review a decision record</span><b>MARK DONE</b></button>
+          </div>
+          <div class="growth-access-receipt">
+            <div><span>FREE LIMIT</span><strong id="growthFreeLimit">Loading…</strong></div>
+            <div><span>CONVERSION RECEIPTS</span><strong id="growthReceiptSummary">Loading…</strong></div>
+          </div>
+        </div>
+        <footer class="panel-foot growth-panel-actions">
+          <span>Premium checkout remains unavailable until customer identity and billing are server verified.</span>
+          <div><button id="growthPremiumInterest" type="button">Save Premium interest</button><a href="/pricing">Compare plans →</a></div>
+        </footer>
+      </article>
     </section>
   </main>
 </body>
 </html>
-

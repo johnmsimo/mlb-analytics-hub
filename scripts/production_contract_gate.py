@@ -89,6 +89,10 @@ PHASE_56_PAGE_CONTRACTS = (
     PageContract("/verification", "Public Verification Ledger · MLB Analytics Hub"),
 )
 
+PHASE_511_PAGE_CONTRACTS = (
+    PageContract("/pricing", "Plans · MLB Analytics Hub"),
+)
+
 ADMIN_READ_PATHS = (
     "/settings",
     "/api/app-settings",
@@ -585,12 +589,66 @@ def _validate_guided_parlay_contract(contract: Any) -> None:
     _require(contract.get("failClosed") is True, "guided parlays must fail closed")
 
 
+def _validate_monetization_growth_contract(contract: Any) -> None:
+    _require(isinstance(contract, dict), "monetization growth must be an object")
+    _require(contract.get("version") == "5.11", "monetization version changed")
+    _require(
+        contract.get("sourceEndpoint") == "/api/monetization/status",
+        "monetization status endpoint changed",
+    )
+    _require(
+        contract.get("rolloutState") == "identity_required",
+        "paid rollout bypassed verified identity",
+    )
+    _require(
+        contract.get("freeUsageEnforcementMode") == "shadow",
+        "anonymous usage unexpectedly became a paid boundary",
+    )
+    _require(
+        contract.get("premiumEntitlementSource")
+        == "server_verified_subscription",
+        "Premium entitlement source changed",
+    )
+    _require(
+        contract.get("clientStorageCanGrantPremium") is False,
+        "client storage can grant Premium",
+    )
+    _require(
+        contract.get("anonymousSessionCanGrantPremium") is False,
+        "anonymous session can grant Premium",
+    )
+    _require(contract.get("checkoutAvailable") is False, "checkout opened early")
+    _require(
+        contract.get("requiresVerifiedCustomerIdentity") is True,
+        "customer identity gate was removed",
+    )
+    _require(
+        contract.get("requiresWebhookReconciliation") is True,
+        "billing reconciliation gate was removed",
+    )
+    _require(
+        contract.get("growthPersistence") == "device_private",
+        "growth persistence boundary changed",
+    )
+    _require(
+        contract.get("serverAnalyticsCollection") is False,
+        "growth analytics unexpectedly reached the server",
+    )
+    _require(
+        contract.get("rawPersonalDataIncluded") is False,
+        "monetization contract exposed personal data",
+    )
+    _require(contract.get("serverMutation") is False, "monetization read mutates")
+    _require(contract.get("failClosed") is True, "monetization must fail closed")
+
+
 def _validate_journey(
     payload: Any,
     *,
     require_daily_board: bool = True,
     require_multi_book: bool = True,
     require_guided_parlays: bool = True,
+    require_monetization_growth: bool = True,
 ) -> None:
     _require(isinstance(payload, dict), "journey payload must be an object")
     stages = [stage.get("key") for stage in payload.get("stages", [])]
@@ -598,6 +656,7 @@ def _validate_journey(
     board = payload.get("dailyDecisionBoard", {})
     multi_book = payload.get("productionMultiBookShopping", {})
     guided = payload.get("guidedParlays", {})
+    monetization = payload.get("monetizationGrowth", {})
     _require(payload.get("success") is True, "journey payload is not successful")
     _require(payload.get("version") == "4.64", "journey version changed unexpectedly")
     _require(
@@ -616,6 +675,8 @@ def _validate_journey(
         _validate_multi_book_contract(multi_book)
     if require_guided_parlays or guided:
         _validate_guided_parlay_contract(guided)
+    if require_monetization_growth or monetization:
+        _validate_monetization_growth_contract(monetization)
 
 
 def _validate_journey_baseline(payload: Any) -> None:
@@ -626,7 +687,62 @@ def _validate_journey_baseline(payload: Any) -> None:
         require_daily_board=False,
         require_multi_book=False,
         require_guided_parlays=False,
+        require_monetization_growth=False,
     )
+
+
+def _validate_monetization_status(payload: Any) -> None:
+    _require(isinstance(payload, dict), "monetization status must be an object")
+    _require(payload.get("success") is True, "monetization status is not successful")
+    _require(payload.get("version") == "5.11", "monetization status version changed")
+    _require(
+        payload.get("rolloutState") == "identity_required",
+        "monetization status bypassed identity",
+    )
+    plans = payload.get("plans")
+    _require(isinstance(plans, list) and len(plans) == 2, "plan catalog changed")
+    _require(
+        [plan.get("key") for plan in plans] == ["free", "premium"],
+        "plan order or identity changed",
+    )
+    _require(plans[0].get("availability") == "available", "Free became unavailable")
+    _require(plans[1].get("availability") == "preview", "Premium opened early")
+    usage = payload.get("freeUsage")
+    _require(isinstance(usage, dict), "free usage contract is missing")
+    _require(usage.get("enforcementMode") == "shadow", "usage enforcement opened early")
+    _require(usage.get("hardLimitEnabled") is False, "anonymous hard limit opened early")
+    entitlement = payload.get("premiumEntitlement")
+    _require(isinstance(entitlement, dict), "Premium entitlement contract is missing")
+    _require(entitlement.get("state") == "unavailable", "Premium entitlement opened")
+    _require(entitlement.get("clientStorageCanGrant") is False, "client can grant Premium")
+    _require(entitlement.get("failClosed") is True, "Premium does not fail closed")
+    billing = payload.get("billing")
+    _require(isinstance(billing, dict), "billing receipt is missing")
+    _require(billing.get("state") == "identity_required", "billing state changed")
+    _require(billing.get("checkoutAvailable") is False, "checkout opened early")
+    _require(
+        isinstance(billing.get("blockers"), list) and len(billing.get("blockers")) == 3,
+        "billing blockers changed",
+    )
+    referrals = payload.get("referrals")
+    analytics = payload.get("conversionAnalytics")
+    _require(
+        isinstance(referrals, dict)
+        and referrals.get("persistence") == "device_private"
+        and referrals.get("rawPersonalDataIncluded") is False,
+        "referral privacy boundary changed",
+    )
+    _require(
+        isinstance(analytics, dict)
+        and analytics.get("persistence") == "device_private"
+        and analytics.get("serverCollection") is False
+        and analytics.get("rawPersonalDataIncluded") is False,
+        "conversion analytics privacy boundary changed",
+    )
+    _require(payload.get("readOnly") is True, "monetization status is not read only")
+    _require(payload.get("serverMutation") is False, "monetization status mutates")
+    _require(payload.get("rawPersonalDataIncluded") is False, "status exposed PII")
+    _require(payload.get("failClosed") is True, "monetization status is not fail closed")
 
 
 def _validate_games(payload: Any) -> None:
@@ -1060,7 +1176,7 @@ def run_gate(
     page_contracts = (
         PUBLIC_PAGE_CONTRACTS
         if baseline_only
-        else PUBLIC_PAGE_CONTRACTS + PHASE_56_PAGE_CONTRACTS
+        else PUBLIC_PAGE_CONTRACTS + PHASE_56_PAGE_CONTRACTS + PHASE_511_PAGE_CONTRACTS
     )
     for contract in page_contracts:
         response = fetcher(base_url, contract.path, 5)
@@ -1126,6 +1242,12 @@ def run_gate(
             "public verification ledger",
             5.0,
             _validate_public_verification,
+        ),
+        (
+            "/api/monetization/status",
+            "monetization readiness",
+            5.0,
+            _validate_monetization_status,
         ),
     )
     json_contracts = (
