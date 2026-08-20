@@ -551,7 +551,7 @@ def _validate_public_verification(payload: Any) -> None:
     )
     allowed = {
         "publicId", "receiptFingerprint", "receiptVersion", "receiptVerified",
-        "releasedAt", "gradedAt", "gamePk", "player", "marketKey", "side",
+        "predictionFingerprint", "predictionReceiptVersion", "releasedAt", "gradedAt", "gamePk", "player", "marketKey", "side",
         "line", "probability", "sportsbook", "openingPrice", "closingPrice",
         "clvEdge", "result",
     }
@@ -559,7 +559,8 @@ def _validate_public_verification(payload: Any) -> None:
         _require(isinstance(row, dict), f"verification row {index} is invalid")
         _require(set(row) == allowed, f"verification row {index} changed its allowlist")
         _require(row.get("receiptVerified") is True, f"verification row {index} is unverified")
-        _require(row.get("receiptVersion") == "5.4.0", f"verification row {index} has an invalid receipt version")
+        _require(row.get("receiptVersion") == "5.6", f"verification row {index} has an invalid publication receipt version")
+        _require(row.get("predictionReceiptVersion") == "5.4.0", f"verification row {index} has an invalid prediction receipt version")
         _require(
             row.get("result") in {"pending", "win", "loss", "push"},
             f"verification row {index} has an invalid result",
