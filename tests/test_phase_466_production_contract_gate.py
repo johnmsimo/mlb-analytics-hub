@@ -137,6 +137,13 @@ class FakeProduction:
                         {"key": "track"},
                         {"key": "learn"},
                     ],
+                    "dailyDecisionBoard": {
+                        "version": "5.5",
+                        "maximumCards": 8,
+                        "rawRejectedRowsIncluded": False,
+                        "noBetIsValidDecision": True,
+                        "failClosed": True,
+                    },
                     "alerts": {
                         "failClosed": True,
                         "serverPersistence": False,
