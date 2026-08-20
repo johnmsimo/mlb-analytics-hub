@@ -38,6 +38,75 @@ def json_response(payload, status=200, elapsed=0.05):
     )
 
 
+
+def valid_shopping():
+    return {
+        "version": "5.9",
+        "sourceDecisionVersion": "5.3.0",
+        "state": "ready",
+        "reviewRequired": True,
+        "changesRecommendation": False,
+        "providerHealth": {
+            "provider": "The Odds API",
+            "state": "ready",
+            "configured": True,
+            "capturedAt": "2026-08-15T12:00:00+00:00",
+            "eventCount": 15,
+            "fetchedEventCount": 15,
+            "degradedEventCount": 0,
+            "message": "Fresh multi-book prices are available.",
+        },
+        "consensus": {
+            "requiredBooks": 2,
+            "acceptedBookCount": 2,
+            "rejectedQuoteCount": 0,
+            "fairProbability": 0.55,
+            "spread": 0.01,
+            "maximumSpread": 0.08,
+        },
+        "priceShopping": {
+            "bestAvailableBook": "Book B",
+            "bestAvailablePrice": -105,
+            "capturedAt": "2026-08-15T12:00:00+00:00",
+            "quotes": [
+                {
+                    "book": "Book B",
+                    "source": "the-odds-api",
+                    "capturedAt": "2026-08-15T12:00:00+00:00",
+                    "ageSeconds": 10,
+                    "line": 0.5,
+                    "overPrice": -105,
+                    "underPrice": -115,
+                    "selectedPrice": -105,
+                    "fairProbability": 0.53,
+                },
+                {
+                    "book": "Book A",
+                    "source": "the-odds-api",
+                    "capturedAt": "2026-08-15T12:00:00+00:00",
+                    "ageSeconds": 10,
+                    "line": 0.5,
+                    "overPrice": -110,
+                    "underPrice": -110,
+                    "selectedPrice": -110,
+                    "fairProbability": 0.50,
+                },
+            ],
+        },
+        "decision": {
+            "status": "qualified",
+            "qualifiedForReview": True,
+            "approved": False,
+            "reasons": [],
+            "modelEdge": 0.11,
+            "expectedValue": 0.20,
+            "thresholds": {"minimumEdge": 0.025, "minimumExpectedValue": 0.03},
+            "checkedAt": "2026-08-15T12:00:00+00:00",
+            "fingerprint": "decision-1",
+        },
+    }
+
+
 def valid_edge():
     observed_at = "2026-08-15T12:00:00+00:00"
     return {
@@ -54,6 +123,8 @@ def valid_edge():
         "canonicalBook": "Book A",
         "canonicalEdge": 0.05,
         "oddsUpdatedAt": observed_at,
+        "multiBookShoppingVersion": "5.9",
+        "multiBookShopping": valid_shopping(),
         "evidenceReceipt": {
             "contractVersion": "4.69",
             "candidateId": "candidate-101-hits",
@@ -147,6 +218,24 @@ class FakeProduction:
                         "noBetIsValidDecision": True,
                         "failClosed": True,
                     },
+                    "productionMultiBookShopping": {
+                        "version": "5.9",
+                        "sourceDecisionEngineVersion": "5.3.0",
+                        "minimumFreshBooks": 2,
+                        "maximumQuoteAgeSeconds": 300,
+                        "visibleOnCards": [
+                            "daily_decision_board",
+                            "personalized_signal",
+                            "saved_player_opportunity",
+                            "eligible_alert",
+                        ],
+                        "rawRejectedQuotesIncluded": False,
+                        "bankrollIncluded": False,
+                        "stakeDollarsIncluded": False,
+                        "changesRecommendation": False,
+                        "serverMutation": False,
+                        "failClosed": True,
+                    },
                     "alerts": {
                         "failClosed": True,
                         "serverPersistence": False,
@@ -165,6 +254,8 @@ class FakeProduction:
                     "computing": False,
                     "computationState": "ready",
                     "scanJob": None,
+                    "multiBookShoppingVersion": "5.9",
+                    "oddsProviderHealth": valid_shopping()["providerHealth"],
                     "completionReceipt": {
                         "contractVersion": "4.68",
                         "source": "durable-worker",
@@ -261,6 +352,8 @@ def test_actionable_edges_contract_fails_closed():
             "success": True,
             "computing": False,
             "computationState": "ready",
+            "multiBookShoppingVersion": "5.9",
+            "oddsProviderHealth": valid_shopping()["providerHealth"],
             "edges": [edge],
             "count": 1,
         }
@@ -273,6 +366,8 @@ def test_actionable_edges_contract_fails_closed():
                 "success": True,
                 "computing": False,
                 "computationState": "ready",
+                "multiBookShoppingVersion": "5.9",
+                "oddsProviderHealth": valid_shopping()["providerHealth"],
                 "edges": [invalid],
                 "count": 1,
             }

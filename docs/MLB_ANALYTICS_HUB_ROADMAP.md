@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 5.5 merged and deployed on 2026-08-20. Phase 5.6 is the active phase.
+Status: Phase 5.6 merged and deployed on 2026-08-20. Phases 5.7 and 5.8 are deferred; Phase 5.9 is active.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -713,6 +713,61 @@ losses cannot be filtered out of the source ledger; tampered, unpriced, private,
 duplicate, and malformed rows are withheld without exposing their contents; the
 production gate defers the new surface against the pre-merge baseline and
 verifies it strictly after deployment.
+
+
+### Phase 5.7 — Customer Accounts (deferred)
+
+Add separate end-user authentication, cloud preferences, watchlists, tracked
+decisions, and account/privacy management. This phase is intentionally deferred
+and is not a dependency of Phase 5.9.
+
+### Phase 5.8 — Delivered Alerts (deferred)
+
+Add push and email delivery to the existing freshness and material-movement
+intelligence. This phase is intentionally deferred; Phase 5.9 does not create
+external notification or account dependencies.
+
+### Phase 5.9 — Production Multi-Book Shopping
+
+Implementation status: same-line two-way sportsbook quotes are being preserved
+at the durable producer boundary instead of being collapsed to one price. Every
+My Hub recommendation card receives a privacy-safe Phase 5.9 shopping receipt
+derived from the existing Phase 5.3 decision engine. It shows the best accepted
+price, accepted book count, fair-market consensus, expected value, individual
+accepted prices, and the human-review decision status.
+
+Quote admission uses actual provider timestamps, exact candidate line, complete
+over/under prices, real book and source identity, a five-minute freshness
+maximum, at least two independent books, and the existing dispersion limit.
+Provider and shopping states are explicit: `ready`, `computing`, `partial`,
+`stale`, `failed`, or `unavailable`. Malformed and rejected upstream rows
+are represented only by aggregate counts. Raw rejected quotes, bankroll, dollar
+stakes, settings, and provider error contents are not returned.
+
+The shopping receipt is read-only. It never changes a model probability,
+candidate rank, existing actionability receipt, alert ledger, Tracker record, or
+champion. Heavy simulation and odds collection remain in the durable worker;
+the Flask edge read path only evaluates preserved quotes.
+
+Exit gate: every Daily Decision Board, personalized signal, saved-player
+opportunity, and eligible-alert recommendation card renders a Phase 5.9
+multi-book state at 390px width; ready consensus requires at least two fresh
+same-line books; degraded providers are visibly partial, stale, failed, or
+unavailable; no single, stale, incomplete, mismatched, or anonymous quote can be
+presented as fresh consensus; the production contract gate verifies the version,
+provider state, quote allowlist, privacy boundary, and card markers after
+deployment.
+
+### Phase 5.10 — Guided Parlays
+
+Expose the existing parlay intelligence only with correlation warnings, verified
+legs, and explicit combined-risk explanations.
+
+### Phase 5.11 — Monetization and Growth
+
+After the daily decision product and multi-book evidence are dependable, add
+free usage limits, Premium entitlements, subscription billing, onboarding,
+referral measurement, and conversion analytics.
 
 ## Audit findings carried into the roadmap
 

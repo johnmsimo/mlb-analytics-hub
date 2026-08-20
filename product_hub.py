@@ -9,6 +9,7 @@ from flask import Blueprint, jsonify, make_response
 
 PRODUCT_HUB_VERSION = "4.64"
 DAILY_DECISION_BOARD_VERSION = "5.5"
+PRODUCTION_MULTI_BOOK_SHOPPING_VERSION = "5.9"
 SAVED_PLAYER_DIGEST_VERSION = "4.70"
 VERIFIED_DECISION_HANDOFF_VERSION = "4.71"
 VERIFIED_DECISION_LEARNING_VERSION = "4.72"
@@ -104,9 +105,44 @@ def product_journey():
                 "requiresCanonicalIdentity": True,
                 "requiresFreshSportsbookQuote": True,
                 "requiresPriceAndBook": True,
+                "requiresMultiBookShoppingVersion": PRODUCTION_MULTI_BOOK_SHOPPING_VERSION,
                 "exposesAggregateRejectionReasons": True,
                 "rawRejectedRowsIncluded": False,
                 "noBetIsValidDecision": True,
+                "serverMutation": False,
+                "failClosed": True,
+            },
+            "productionMultiBookShopping": {
+                "version": PRODUCTION_MULTI_BOOK_SHOPPING_VERSION,
+                "sourceDecisionEngineVersion": "5.3.0",
+                "sourceEndpoint": "/api/edges/today?minEdge=0.03",
+                "responseField": "multiBookShopping",
+                "states": [
+                    "ready",
+                    "computing",
+                    "partial",
+                    "stale",
+                    "failed",
+                    "unavailable",
+                ],
+                "visibleOnCards": [
+                    "daily_decision_board",
+                    "personalized_signal",
+                    "saved_player_opportunity",
+                    "eligible_alert",
+                ],
+                "minimumFreshBooks": 2,
+                "maximumQuoteAgeSeconds": 300,
+                "requiresTwoWaySameLineQuotes": True,
+                "actualProviderTimestampRequired": True,
+                "bestPriceVisible": True,
+                "consensusProbabilityVisible": True,
+                "expectedValueVisible": True,
+                "degradedProviderStateVisible": True,
+                "rawRejectedQuotesIncluded": False,
+                "bankrollIncluded": False,
+                "stakeDollarsIncluded": False,
+                "changesRecommendation": False,
                 "serverMutation": False,
                 "failClosed": True,
             },

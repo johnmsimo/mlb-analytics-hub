@@ -9,6 +9,7 @@
   var ALERT_LEDGER_LIMIT = 200;
   var MAX_ALERT_ODDS_AGE_SECONDS = 900;
   var DAILY_DECISION_BOARD_VERSION = '5.5';
+  var MULTI_BOOK_SHOPPING_VERSION = '5.9';
   var RECOMMENDATION_EVIDENCE_VERSION = '4.69';
   var VERIFIED_DECISION_DRAFT_VERSION = '4.71';
   var VERIFIED_DECISION_DRAFT_KEY = 'mlb_verified_decision_draft_v471';
@@ -170,6 +171,70 @@
       price != null && price !== 0 && Math.abs(price) >= 100 &&
       Boolean(book) && invalidBooks.indexOf(book) === -1 &&
       edge != null && edge > 0 && hasEvidenceReceipt(row);
+  }
+
+
+  function americanPrice(value) {
+    var price = number(value);
+    if (price == null) return '—';
+    return (price > 0 ? '+' : '') + price.toFixed(0);
+  }
+
+  function multiBookShoppingHtml(row, compact) {
+    var shopping = row && row.multiBookShopping;
+    var stateName = shopping && String(shopping.state || '').toLowerCase();
+    var validStates = ['ready', 'computing', 'partial', 'stale', 'failed', 'unavailable'];
+    if (!shopping || shopping.version !== MULTI_BOOK_SHOPPING_VERSION ||
+        validStates.indexOf(stateName) === -1) {
+      return '<section class="multi-book-shopping unavailable" data-shopping-state="unavailable">' +
+        '<div class="multi-book-head"><strong>MULTI-BOOK SHOPPING</strong><span>UNAVAILABLE</span></div>' +
+        '<p>Consensus evidence was not returned for this recommendation.</p></section>';
+    }
+    var consensus = shopping.consensus || {};
+    var price = shopping.priceShopping || {};
+    var provider = shopping.providerHealth || {};
+    var decision = shopping.decision || {};
+    var quotes = Array.isArray(price.quotes) ? price.quotes : [];
+    var accepted = number(consensus.acceptedBookCount) || 0;
+    var required = number(consensus.requiredBooks) || 2;
+    var fair = probability(consensus.fairProbability);
+    var ev = number(decision.expectedValue);
+    var stateLabel = {
+      ready: 'LIVE',
+      computing: 'REFRESHING',
+      partial: 'PARTIAL',
+      stale: 'STALE',
+      failed: 'FAILED',
+      unavailable: 'UNAVAILABLE'
+    }[stateName];
+    var lead = stateName === 'ready'
+      ? accepted + ' fresh books · consensus ' + (fair == null ? '—' : (fair * 100).toFixed(1) + '%')
+      : stateName === 'partial'
+        ? accepted + ' of ' + required + ' required fresh books'
+        : String(provider.message || 'Fresh multi-book consensus is unavailable.');
+    var quoteHtml = quotes.slice(0, compact ? 3 : 5).map(function (quote, index) {
+      return '<span class="multi-book-quote' + (index === 0 ? ' best' : '') + '">' +
+        '<small>' + esc(quote.book) + '</small><b>' + americanPrice(quote.selectedPrice) + '</b></span>';
+    }).join('');
+    var bestHtml = price.bestAvailableBook
+      ? '<span class="multi-book-best"><small>BEST PRICE</small><b>' +
+        esc(price.bestAvailableBook) + ' ' + americanPrice(price.bestAvailablePrice) + '</b></span>'
+      : '<span class="multi-book-best"><small>BEST PRICE</small><b>—</b></span>';
+    var decisionHtml = stateName === 'ready' || stateName === 'partial'
+      ? '<span class="multi-book-best"><small>CONSENSUS EV</small><b>' +
+        (ev == null ? '—' : (ev * 100).toFixed(1) + '%') + '</b></span>'
+      : '';
+    var reason = Array.isArray(decision.reasons) && decision.reasons.length
+      ? '<p class="multi-book-note">Review gate: ' + esc(decision.reasons[0]) + '</p>'
+      : '<p class="multi-book-note">Multi-book evidence is read-only and requires review.</p>';
+    return '<section class="multi-book-shopping ' + esc(stateName) +
+      '" data-shopping-state="' + esc(stateName) + '" data-shopping-version="' +
+      MULTI_BOOK_SHOPPING_VERSION + '">' +
+      '<div class="multi-book-head"><strong>MULTI-BOOK SHOPPING</strong><span>' +
+      esc(stateLabel) + '</span></div><p>' + esc(lead) + '</p>' +
+      '<div class="multi-book-summary">' + bestHtml + decisionHtml + '</div>' +
+      (quoteHtml ? '<div class="multi-book-quotes" aria-label="Accepted sportsbook prices">' +
+        quoteHtml + '</div>' : '') + reason + '</section>';
   }
 
   function alertIdentity(row) {
@@ -497,6 +562,7 @@
         esc(receipt.price.book) + ' ' + (price > 0 ? '+' : '') + esc(price) +
         ' · ' + esc(freshnessLabel(row)) + '</small></div>' +
       '<span>VERIFIED RECEIPT ' + esc(receipt.contractVersion) + '</span>' +
+      multiBookShoppingHtml(row, true) +
       '<button type="button" class="saved-opportunity-track" data-prepare-track="' +
         esc(row.canonicalCandidateId) + '">Review in Tracker</button></article>';
   }
@@ -672,6 +738,7 @@
       '</div>' +
       '<p class="decision-explanation"><strong>Why it qualifies:</strong> ' +
       esc(receipt.explanation) + '</p>' +
+      multiBookShoppingHtml(row, false) +
       '<div class="decision-card-actions"><button type="button" data-board-save-player="' +
       esc(player) + '" aria-pressed="' + (saved ? 'true' : 'false') + '">' +
       (saved ? '★ Saved player' : '☆ Save player') +
@@ -801,7 +868,8 @@
         '<span>' + esc(freshnessLabel(row).toUpperCase()) + '</span>' +
         '<span>RECEIPT 4.69</span>' +
       '</div>' +
-      '<p class="signal-why"><strong>Why this qualifies:</strong> ' + esc(receipt.explanation) + '</p></div>' +
+      '<p class="signal-why"><strong>Why this qualifies:</strong> ' + esc(receipt.explanation) + '</p>' +
+      multiBookShoppingHtml(row, true) + '</div>' +
       '<div class="signal-edge"><strong>+' + (edge == null ? '—' : edge.toFixed(1)) + '%</strong><small>MODEL EDGE</small></div>' +
       '</article>';
   }
@@ -1019,7 +1087,7 @@
         reasons.map(function (reason) {
           return '<span data-alert-provenance-reason="' + esc(reason.key) + '">' +
             esc(reason.label) + '</span>';
-        }).join('') + '</p></div>' +
+        }).join('') + '</p>' + multiBookShoppingHtml(row, true) + '</div>' +
       '<div class="alert-actions">' +
       '<button type="button" class="alert-review" data-prepare-alert-track="' +
         esc(row.canonicalCandidateId) + '">Review in Tracker</button>' +

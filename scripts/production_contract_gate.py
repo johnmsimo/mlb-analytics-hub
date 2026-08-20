@@ -309,6 +309,99 @@ def validate_recommendation_evidence(row: dict[str, Any], index: int) -> None:
     )
 
 
+def _validate_multi_book_shopping(row: dict[str, Any], index: int) -> None:
+    shopping = row.get("multiBookShopping")
+    _require(isinstance(shopping, dict), f"edge {index} lacks multi-book shopping")
+    _require(shopping.get("version") == "5.9", f"edge {index} shopping version changed")
+    _require(
+        shopping.get("sourceDecisionVersion") == "5.3.0",
+        f"edge {index} is not backed by Phase 5.3",
+    )
+    state = str(shopping.get("state") or "").lower()
+    _require(
+        state in {"ready", "computing", "partial", "stale", "failed", "unavailable"},
+        f"edge {index} has invalid shopping state {state!r}",
+    )
+    _require(
+        shopping.get("reviewRequired") is True
+        and shopping.get("changesRecommendation") is False,
+        f"edge {index} shopping changed the recommendation boundary",
+    )
+    provider = shopping.get("providerHealth")
+    provider_fields = {
+        "provider", "state", "configured", "capturedAt", "eventCount",
+        "fetchedEventCount", "degradedEventCount", "message",
+    }
+    _require(
+        isinstance(provider, dict) and set(provider) == provider_fields,
+        f"edge {index} provider health changed its privacy allowlist",
+    )
+    _require(
+        provider.get("state") in {
+            "ready", "computing", "partial", "stale", "failed", "unavailable",
+        },
+        f"edge {index} has invalid provider state",
+    )
+    consensus = shopping.get("consensus")
+    price = shopping.get("priceShopping")
+    decision = shopping.get("decision")
+    _require(isinstance(consensus, dict), f"edge {index} lacks shopping consensus")
+    _require(isinstance(price, dict), f"edge {index} lacks price shopping")
+    _require(isinstance(decision, dict), f"edge {index} lacks shopping decision")
+    _require(decision.get("approved") is False, f"edge {index} was auto-approved")
+    required = consensus.get("requiredBooks")
+    accepted = consensus.get("acceptedBookCount")
+    rejected = consensus.get("rejectedQuoteCount")
+    _require(
+        isinstance(required, int) and required >= 2,
+        f"edge {index} has invalid required book count",
+    )
+    _require(
+        isinstance(accepted, int) and accepted >= 0
+        and isinstance(rejected, int) and rejected >= 0,
+        f"edge {index} has invalid quote denominators",
+    )
+    quotes = price.get("quotes")
+    _require(isinstance(quotes, list), f"edge {index} quotes must be a list")
+    _require(len(quotes) == accepted, f"edge {index} accepted quote count changed")
+    quote_fields = {
+        "book", "source", "capturedAt", "ageSeconds", "line", "overPrice",
+        "underPrice", "selectedPrice", "fairProbability",
+    }
+    for quote_index, quote in enumerate(quotes):
+        _require(
+            isinstance(quote, dict) and set(quote) == quote_fields,
+            f"edge {index} quote {quote_index} changed its allowlist",
+        )
+        _require(bool(quote.get("book")), f"edge {index} quote {quote_index} lacks book")
+        _require(bool(quote.get("source")), f"edge {index} quote {quote_index} lacks source")
+        _require(bool(quote.get("capturedAt")), f"edge {index} quote {quote_index} lacks timestamp")
+        _require(
+            isinstance(quote.get("ageSeconds"), int)
+            and 0 <= quote.get("ageSeconds") <= 300,
+            f"edge {index} quote {quote_index} is stale",
+        )
+        for field in ("overPrice", "underPrice", "selectedPrice"):
+            value = quote.get(field)
+            _require(
+                isinstance(value, (int, float)) and value != 0 and abs(value) >= 100,
+                f"edge {index} quote {quote_index} has invalid {field}",
+            )
+    if state == "ready":
+        _require(accepted >= required, f"edge {index} ready consensus lacks books")
+        _require(
+            provider.get("state") == "ready",
+            f"edge {index} ready consensus has degraded provider",
+        )
+    if state in {"stale", "failed", "unavailable"}:
+        _require(not quotes, f"edge {index} exposed quotes in {state} state")
+    encoded = json.dumps(shopping, sort_keys=True).lower()
+    for forbidden in (
+        '"bankroll"', '"stakedollars"', '"stakepreview"', '"rejectedquotes"',
+    ):
+        _require(forbidden not in encoded, f"edge {index} shopping exposed {forbidden}")
+
+
 def validate_actionable_edges(payload: Any) -> None:
     _require(isinstance(payload, dict), "edges payload must be an object")
     _require(payload.get("success") is True, "edges payload is not successful")
@@ -347,6 +440,12 @@ def validate_actionable_edges(payload: Any) -> None:
         return
 
     _require(payload.get("computing") is not True, "ready edges cannot be computing")
+    _require(
+        payload.get("multiBookShoppingVersion") == "5.9",
+        "edges multi-book shopping version changed",
+    )
+    provider = payload.get("oddsProviderHealth")
+    _require(isinstance(provider, dict), "edges lack odds provider health")
     for index, row in enumerate(edges):
         _require(isinstance(row, dict), f"edge {index} is not an object")
         stage = str(row.get("actionabilityStage") or "").lower()
@@ -389,6 +488,7 @@ def validate_actionable_edges(payload: Any) -> None:
             f"edge {index} has non-positive edge",
         )
         validate_recommendation_evidence(row, index)
+        _validate_multi_book_shopping(row, index)
 
 
 def _validate_health(payload: Any, expected_sha: str | None) -> None:
@@ -419,15 +519,43 @@ def _validate_daily_decision_board(board: Any) -> None:
     _require(board.get("maximumCards") == 8, "daily board card limit changed")
 
 
+def _validate_multi_book_contract(contract: Any) -> None:
+    _require(isinstance(contract, dict), "multi-book shopping must be an object")
+    _require(contract.get("version") == "5.9", "multi-book shopping version changed")
+    _require(
+        contract.get("sourceDecisionEngineVersion") == "5.3.0",
+        "multi-book shopping lost Phase 5.3 provenance",
+    )
+    _require(contract.get("minimumFreshBooks") == 2, "multi-book minimum changed")
+    _require(contract.get("maximumQuoteAgeSeconds") == 300, "shopping freshness changed")
+    _require(
+        contract.get("visibleOnCards") == [
+            "daily_decision_board",
+            "personalized_signal",
+            "saved_player_opportunity",
+            "eligible_alert",
+        ],
+        "multi-book card coverage changed",
+    )
+    _require(contract.get("rawRejectedQuotesIncluded") is False, "raw quotes leaked")
+    _require(contract.get("bankrollIncluded") is False, "bankroll leaked")
+    _require(contract.get("stakeDollarsIncluded") is False, "stake dollars leaked")
+    _require(contract.get("changesRecommendation") is False, "shopping changed picks")
+    _require(contract.get("serverMutation") is False, "shopping must be read only")
+    _require(contract.get("failClosed") is True, "shopping must fail closed")
+
+
 def _validate_journey(
     payload: Any,
     *,
     require_daily_board: bool = True,
+    require_multi_book: bool = True,
 ) -> None:
     _require(isinstance(payload, dict), "journey payload must be an object")
     stages = [stage.get("key") for stage in payload.get("stages", [])]
     alerts = payload.get("alerts", {})
     board = payload.get("dailyDecisionBoard", {})
+    multi_book = payload.get("productionMultiBookShopping", {})
     _require(payload.get("success") is True, "journey payload is not successful")
     _require(payload.get("version") == "4.64", "journey version changed unexpectedly")
     _require(
@@ -442,12 +570,18 @@ def _validate_journey(
     )
     if require_daily_board or board:
         _validate_daily_decision_board(board)
+    if require_multi_book or multi_book:
+        _validate_multi_book_contract(multi_book)
 
 
 def _validate_journey_baseline(payload: Any) -> None:
     # Pull requests validate the currently deployed Main release, which cannot
     # expose a new contract before merge. Post-deploy validation remains strict.
-    _validate_journey(payload, require_daily_board=False)
+    _validate_journey(
+        payload,
+        require_daily_board=False,
+        require_multi_book=False,
+    )
 
 
 def _validate_games(payload: Any) -> None:
