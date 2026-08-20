@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 5.4 merged and deployed on 2026-08-20. Phase 5.5 is the active phase.
+Status: Phase 5.5 merged and deployed on 2026-08-20. Phase 5.6 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -689,6 +689,30 @@ market probability, edge, book, price, freshness, explanation, and evidence
 receipt; no interim or rejected row can appear; no-bet and unavailable states
 state why recommendations are withheld; the production journey gate verifies
 the Phase 5.5 contract after deployment.
+
+### Phase 5.6 — Public Verification Ledger
+
+Implementation status: a read-only public verification surface is being added
+without weakening the private Tracker and administrative boundary. The ledger
+admits only priced system recommendations whose immutable Phase 5.4 prediction
+receipt still matches the released identity, market, side, line, probability,
+sportsbook, source, model version, and release timestamp. Explicit private,
+manual, user, Tracker, and My Hub draft sources fail closed.
+
+Every admitted recommendation remains visible as pending, win, loss, or push.
+Public rows use a strict allowlist and never include notes, dollar stakes,
+bankroll, settings, admin identity, or raw rejected records. Performance reports
+the released, settled, graded, ROI-graded, and CLV-graded denominators separately;
+Brier score and ECE use verified win/loss rows, while CLV appears only with
+accepted closing-line lineage.
+
+Exit gate: the mobile-first `/verification` page and read-only
+`/api/verification/ledger` contract publish exact release line, American
+price, sportsbook, probability, timestamp, outcome, and receipt fingerprint;
+losses cannot be filtered out of the source ledger; tampered, unpriced, private,
+duplicate, and malformed rows are withheld without exposing their contents; the
+production gate defers the new surface against the pre-merge baseline and
+verifies it strictly after deployment.
 
 ## Audit findings carried into the roadmap
 
