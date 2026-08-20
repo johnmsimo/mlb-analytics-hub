@@ -724,7 +724,7 @@
       no_bet: {
         status: 'NO BET',
         headline: 'No verified play qualifies right now',
-        detail: 'The scan is ready; no candidate cleared identity, price, freshness, calibration, edge, and receipt gates.'
+        detail: 'The scan is ready. No candidate cleared identity, price, freshness, calibration, edge, and receipt gates.'
       },
       verified_plays: {
         status: 'VERIFIED',
