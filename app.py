@@ -32,6 +32,12 @@ from multi_book_shopping import (
     MULTI_BOOK_SHOPPING_VERSION,
     build_multi_book_shopping,
 )
+from guided_parlays import (
+    GUIDED_PARLAY_VERSION,
+    build_guided_parlay,
+    verify_guided_leg,
+)
+from canonical_consistency import normalize_candidate
 
 
 def _parse_candidate_start(value):
@@ -23774,41 +23780,129 @@ def _build_parlay_from_legs(legs, name, risk):
     }
 
 
+def _select_guided_parlay_rows(rows, n, min_prob, max_prob, rank_key):
+    """Choose distinct verified legs while avoiding automatic same-game stacks."""
+    pool = []
+    for row in rows or []:
+        leg, _reasons = verify_guided_leg(row)
+        if leg is None:
+            continue
+        probability = float(leg['modelProbability'])
+        if min_prob <= probability <= max_prob:
+            pool.append((row, leg))
+    pool.sort(key=lambda item: rank_key(item[0], item[1]))
+    chosen, used_games, used_players = [], set(), set()
+    for row, leg in pool:
+        game_key = str(leg.get('gamePk') or '')
+        player_key = str(leg.get('playerId') or leg.get('player') or '')
+        if game_key in used_games or player_key in used_players:
+            continue
+        chosen.append(row)
+        used_games.add(game_key)
+        used_players.add(player_key)
+        if len(chosen) >= n:
+            break
+    return chosen if len(chosen) == n else []
+
+
+def _guided_edge_with_evidence(row):
+    """Keep direct Flask starts aligned with the canonical WSGI wrapper."""
+    candidate = dict(row or {})
+    if not isinstance(candidate.get('evidenceReceipt'), dict):
+        candidate = normalize_candidate(candidate, surface='edge_lab')
+    leg, reasons = verify_guided_leg(candidate)
+    return candidate, leg, reasons
+
+
 def _auto_parlays_payload(date_str):
-    base = _props_scan_today_payload(date_str)
-    cands = _parlay_leg_candidates(base.get('props', []), date_str)
+    # Reuse the hot, bounded Phase 5.5/5.9 edge snapshot. The canonical wrapper
+    # adds each 4.69 evidence receipt before this function runs in production;
+    # no matchup simulation or provider request occurs on the Flask read path.
+    base = _edge_finder_payload(date_str, min_edge=0.025, limit=100)
+    state = str(base.get('computationState') or '').lower()
+    edge_rows = base.get('edges') or []
+    verified_rows = []
+    rejection_counts = {}
+    if state == 'ready' and base.get('computing') is not True:
+        for row in edge_rows:
+            row, leg, reasons = _guided_edge_with_evidence(row)
+            if leg is not None:
+                verified_rows.append(row)
+            else:
+                for reason in reasons:
+                    rejection_counts[reason] = rejection_counts.get(reason, 0) + 1
 
-    def _value(c):
-        if c.get('edge') is not None:
-            return float(c['edge'])
-        if c.get('evPct') is not None:
-            return float(c['evPct'])
-        return (float(c.get('hubRating') or 0)) / 100.0
+    def _edge(row):
+        try:
+            return float(row.get('canonicalEdge', row.get('edge')) or 0)
+        except (TypeError, ValueError):
+            return 0.0
 
-    conservative = _select_parlay_legs(cands, 3, 0.68, 0.999, lambda c: -c['winProb'])
-    moderate     = _select_parlay_legs(cands, 3, 0.55, 0.85,  lambda c: (-_value(c), -c['winProb']))
-    aggressive   = _select_parlay_legs(cands, 4, 0.42, 0.72,  lambda c: (-_value(c), -(float(c.get('hubRating') or 0))))
-
+    conservative = _select_guided_parlay_rows(
+        verified_rows, 2, 0.60, 0.999,
+        lambda row, leg: (-leg['modelProbability'], -_edge(row)),
+    )
+    moderate = _select_guided_parlay_rows(
+        verified_rows, 3, 0.54, 0.90,
+        lambda row, leg: (-_edge(row), -leg['modelProbability']),
+    )
+    aggressive = _select_guided_parlay_rows(
+        verified_rows, 4, 0.48, 0.82,
+        lambda row, leg: (-_edge(row), -leg['modelProbability']),
+    )
+    generated_at = datetime.now(timezone.utc)
+    plans = [
+        (conservative, 'Two-Leg Foundation', 'conservative'),
+        (moderate, 'Three-Leg Guided', 'moderate'),
+        (aggressive, 'Four-Leg High Variance', 'aggressive'),
+    ]
+    parlays = [
+        build_guided_parlay(
+            rows,
+            name=name,
+            risk_tier=risk,
+            generated_at=generated_at,
+        )
+        for rows, name, risk in plans
+        if rows
+    ]
+    if state in {'computing', 'failed', 'unavailable'}:
+        guided_state = state
+    elif parlays:
+        guided_state = 'ready'
+    else:
+        guided_state = 'no_verified_combinations'
     return {
         'success': True,
+        'version': GUIDED_PARLAY_VERSION,
         'date': date_str,
-        'candidateCount': len(cands),
+        'state': guided_state,
+        'candidateCount': len(edge_rows),
+        'verifiedCandidateCount': len(verified_rows),
+        'withheldCandidateCount': max(0, len(edge_rows) - len(verified_rows)),
+        'withheldReasonCounts': dict(sorted(rejection_counts.items())),
         'cached': base.get('cached', False),
         'computing': base.get('computing', False),
+        'computationState': base.get('computationState') or (
+            'computing' if base.get('computing') else 'ready'
+        ),
         'message': base.get('message'),
-        'generatedAt': datetime.now(timezone.utc).isoformat(),
-        'parlays': [
-            _build_parlay_from_legs(conservative, 'Conservative', 'conservative'),
-            _build_parlay_from_legs(moderate, 'Moderate', 'moderate'),
-            _build_parlay_from_legs(aggressive, 'Aggressive', 'aggressive'),
-        ],
+        'generatedAt': generated_at.isoformat(),
+        'minimumVerifiedLegs': 2,
+        'maximumGuidedLegs': 4,
+        'requiresEvidenceReceiptVersion': '4.69',
+        'requiresMultiBookShoppingVersion': MULTI_BOOK_SHOPPING_VERSION,
+        'reviewRequired': True,
+        'approved': False,
+        'readOnly': True,
+        'failClosed': True,
+        'parlays': parlays,
     }
 
 
 @app.route('/api/parlay/auto')
 def api_parlay_auto():
-    """Auto-generated Conservative/Moderate/Aggressive parlays from today's
-    model prop pool. Param: date."""
+    """Review-only guided parlays from verified recommendation legs. Param: date."""
     date_str = request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')
     try:
         return jsonify(_auto_parlays_payload(date_str))
@@ -23819,8 +23913,11 @@ def api_parlay_auto():
 
 @app.route('/api/parlay/send-to-tracker', methods=['POST'])
 def api_parlay_to_tracker():
-    """Send a parlay to the daily tracker."""
+    """Explicitly track a currently reverified Phase 5.10 guided parlay."""
     try:
+        denied = _check_admin_auth()
+        if denied:
+            return denied
         req = request.get_json() or {}
         parlay = req.get('parlay')
         date_str = req.get('date', datetime.now().strftime('%Y-%m-%d'))
@@ -23829,50 +23926,102 @@ def api_parlay_to_tracker():
         if not parlay:
             return jsonify({'success': False, 'error': 'No parlay provided'})
 
-        selections = parlay.get('selections') or parlay.get('legs') or []
-        if not selections:
+        if parlay.get('version') != GUIDED_PARLAY_VERSION:
             return jsonify({
                 'success': False,
-                'error': 'Parlay has no canonical selections.',
+                'error': 'A Phase 5.10 guided-parlay receipt is required.',
+            }), 422
+        decision = parlay.get('decision') or {}
+        if decision.get('trackable') is not True or decision.get('approved') is not False:
+            return jsonify({
+                'success': False,
+                'error': 'Parlay correlation or review state is not trackable.',
+            }), 422
+
+        selections = parlay.get('selections') or parlay.get('legs') or []
+        if not isinstance(selections, list) or not 2 <= len(selections) <= 4:
+            return jsonify({
+                'success': False,
+                'error': 'Guided parlays require two to four verified legs.',
             }), 400
-        scan = _props_scan_today_payload(date_str)
-        integrity = _evaluate_promotable_candidates(
-            scan.get('props', []) or [], date_str,
-        )
-        trusted_by_id = {
-            row.get('canonicalCandidateId'): row
-            for row in integrity['eligible']
-        }
-        trusted_selections = []
+
+        current = _edge_finder_payload(date_str, min_edge=0.0, limit=10000)
+        if (
+            current.get('computing') is True
+            or str(current.get('computationState') or '').lower() != 'ready'
+        ):
+            return jsonify({
+                'success': False,
+                'error': 'Current verified recommendation snapshot is unavailable.',
+            }), 409
+        trusted_by_id = {}
+        for row in current.get('edges') or []:
+            candidate, _leg, _reasons = _guided_edge_with_evidence(row)
+            candidate_id = candidate.get('canonicalCandidateId')
+            if candidate_id:
+                trusted_by_id[candidate_id] = candidate
+        trusted_rows = []
         invalid = []
         for selection in selections:
             candidate_id = selection.get('canonicalCandidateId')
             trusted = trusted_by_id.get(candidate_id)
-            if trusted is None:
+            trusted, verified, reasons = _guided_edge_with_evidence(trusted or {})
+            if (
+                trusted is None
+                or verified is None
+                or verified.get('canonicalFingerprint')
+                != selection.get('canonicalFingerprint')
+            ):
                 invalid.append({
                     'candidateId': candidate_id,
                     'player': selection.get('player'),
-                    'reason': 'selection is not an eligible fresh canonical candidate',
+                    'reason': (
+                        reasons[0] if reasons
+                        else 'selection no longer matches current canonical evidence'
+                    ),
                 })
             else:
-                trusted_selections.append(trusted)
+                trusted_rows.append(trusted)
         if invalid:
             return jsonify({
                 'success': False,
-                'error': 'Parlay contains ineligible or stale selections.',
-                'candidateIntegrityVersion': CANDIDATE_INTEGRITY_VERSION,
+                'error': 'Parlay contains expired, changed, or unverified legs.',
+                'guidedParlayVersion': GUIDED_PARLAY_VERSION,
                 'invalidSelections': invalid,
+            }), 422
+
+        rebuilt = build_guided_parlay(
+            trusted_rows,
+            name=parlay.get('name') or f'{len(trusted_rows)}-Leg Guided Parlay',
+            risk_tier=parlay.get('riskTier') or 'guided',
+        )
+        if rebuilt.get('state') != 'ready' or (
+            rebuilt.get('decision') or {}
+        ).get('trackable') is not True:
+            return jsonify({
+                'success': False,
+                'error': 'Parlay no longer clears the guided correlation boundary.',
+                'guidedParlay': rebuilt,
             }), 422
         
         # Create tracker entries for this parlay
         parlay_entry = {
-            'id': parlay.get('id'),
+            'id': parlay.get('id') or str(uuid.uuid4()),
             'date': date_str,
             'type': 'parlay',
             'timestamp': datetime.now(timezone.utc).isoformat(),
-            'selections': trusted_selections,
-            'american_odds': parlay.get('american_odds'),
-            'break_even_prob': parlay.get('summary', {}).get('break_even_prob'),
+            'guidedParlayVersion': GUIDED_PARLAY_VERSION,
+            'selections': rebuilt.get('legs') or [],
+            'american_odds': (rebuilt.get('referencePrice') or {}).get('americanOdds'),
+            'break_even_prob': (
+                1.0 / (rebuilt.get('referencePrice') or {}).get('decimalOdds')
+                if (rebuilt.get('referencePrice') or {}).get('decimalOdds') else None
+            ),
+            'correlation': rebuilt.get('correlation'),
+            'combinedRisk': rebuilt.get('combinedRisk'),
+            'referencePrice': rebuilt.get('referencePrice'),
+            'reviewRequired': True,
+            'approved': False,
             'notes': notes,
             'status': 'pending',
             'grade': 'pending'
@@ -23888,8 +24037,8 @@ def api_parlay_to_tracker():
 
         return jsonify({
             'success': True,
-            'message': f'Parlay {parlay.get("id")} added to tracker for {date_str}',
-            'entry_id': parlay.get('id')
+            'message': f'Guided parlay {parlay_entry["id"]} added to tracker for {date_str}',
+            'entry_id': parlay_entry['id']
         })
     except Exception as ex:
         print(f"[parlay_to_tracker] {traceback.format_exc()}")
