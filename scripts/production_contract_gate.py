@@ -406,10 +406,24 @@ def _validate_ready(payload: Any) -> None:
     _require(jobs.get("workerReady") is True, "ready payload reports worker unavailable")
 
 
-def _validate_journey(payload: Any) -> None:
+def _validate_daily_decision_board(board: Any) -> None:
+    _require(isinstance(board, dict), "daily decision board must be an object")
+    _require(board.get("version") == "5.5", "daily decision board version changed")
+    _require(board.get("failClosed") is True, "daily decision board must fail closed")
+    _require(board.get("rawRejectedRowsIncluded") is False, "daily board exposed rejected rows")
+    _require(board.get("noBetIsValidDecision") is True, "daily board must preserve no-bet")
+    _require(board.get("maximumCards") == 8, "daily board card limit changed")
+
+
+def _validate_journey(
+    payload: Any,
+    *,
+    require_daily_board: bool = True,
+) -> None:
     _require(isinstance(payload, dict), "journey payload must be an object")
     stages = [stage.get("key") for stage in payload.get("stages", [])]
     alerts = payload.get("alerts", {})
+    board = payload.get("dailyDecisionBoard", {})
     _require(payload.get("success") is True, "journey payload is not successful")
     _require(payload.get("version") == "4.64", "journey version changed unexpectedly")
     _require(
@@ -422,6 +436,14 @@ def _validate_journey(payload: Any) -> None:
         alerts.get("freshness", {}).get("maximumOddsAgeSeconds") == 900,
         "alert freshness contract changed unexpectedly",
     )
+    if require_daily_board or board:
+        _validate_daily_decision_board(board)
+
+
+def _validate_journey_baseline(payload: Any) -> None:
+    # Pull requests validate the currently deployed Main release, which cannot
+    # expose a new contract before merge. Post-deploy validation remains strict.
+    _validate_journey(payload, require_daily_board=False)
 
 
 def _validate_games(payload: Any) -> None:
@@ -673,8 +695,11 @@ def run_gate(
         )
         print(f"PASS admin boundary {path} ({response.status})", flush=True)
 
+    journey_validator = (
+        _validate_journey_baseline if baseline_only else _validate_journey
+    )
     baseline_contracts = (
-        ("/api/product/journey", "product journey", 5.0, _validate_journey),
+        ("/api/product/journey", "product journey", 5.0, journey_validator),
         ("/api/games/today", "today games", 8.0, _validate_games),
     )
     deployed_contracts = (

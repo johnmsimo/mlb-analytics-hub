@@ -8,6 +8,7 @@ from flask import Blueprint, jsonify, make_response
 
 
 PRODUCT_HUB_VERSION = "4.64"
+DAILY_DECISION_BOARD_VERSION = "5.5"
 SAVED_PLAYER_DIGEST_VERSION = "4.70"
 VERIFIED_DECISION_HANDOFF_VERSION = "4.71"
 VERIFIED_DECISION_LEARNING_VERSION = "4.72"
@@ -85,6 +86,29 @@ def product_journey():
                 "alertDelivery": "in_app",
                 "persistence": "device_private",
                 "savedPlayerDigestVersion": SAVED_PLAYER_DIGEST_VERSION,
+            },
+            "dailyDecisionBoard": {
+                "version": DAILY_DECISION_BOARD_VERSION,
+                "sourceEndpoint": "/api/edges/today?minEdge=0.03",
+                "states": [
+                    "loading",
+                    "computing",
+                    "verified_plays",
+                    "no_bet",
+                    "unavailable",
+                ],
+                "requiredEvidenceReceiptVersion": "4.69",
+                "maximumCards": 8,
+                "rankBy": "canonical_edge_desc",
+                "requiresActionable": True,
+                "requiresCanonicalIdentity": True,
+                "requiresFreshSportsbookQuote": True,
+                "requiresPriceAndBook": True,
+                "exposesAggregateRejectionReasons": True,
+                "rawRejectedRowsIncluded": False,
+                "noBetIsValidDecision": True,
+                "serverMutation": False,
+                "failClosed": True,
             },
             "savedPlayerDigest": {
                 "version": SAVED_PLAYER_DIGEST_VERSION,

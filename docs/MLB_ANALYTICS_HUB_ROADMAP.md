@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 5.3 merged and deployed on 2026-08-20. Phase 5.4 is the active phase.
+Status: Phase 5.4 merged and deployed on 2026-08-20. Phase 5.5 is the active phase.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -667,6 +667,28 @@ pregame receipt and post-prediction outcome; drift and sample readiness are
 visible by market; all adaptations remain shadow proposals behind held-out,
 calibration, serve-parity, market-validation, review, merge, and rollback
 gates; automatic model promotion remains disabled.
+
+
+### Phase 5.5 — Daily Decision Board
+
+Implementation status: My Hub is being promoted into the primary mobile-first
+daily decision surface. It consumes the existing canonical Edge Finder payload
+and displays only complete 4.69-receipted actionable rows, ranked by canonical
+edge. It has four explicit terminal views: verified plays, no bet, computing,
+and unavailable.
+
+The board summarizes aggregate candidate-integrity and actionability rejection
+reasons without returning rejected candidate rows. A ready scan with zero
+qualified rows is a valid no-bet decision; computing, failed, stale, unpriced,
+uncalibrated, unidentified, or incomplete evidence never becomes a pick.
+Existing saved-player, alert, Tracker, and review boundaries remain unchanged.
+
+Exit gate: My Hub gives one definitive daily answer at 390px width; every
+displayed card preserves player, market, side, line, model probability, fair
+market probability, edge, book, price, freshness, explanation, and evidence
+receipt; no interim or rejected row can appear; no-bet and unavailable states
+state why recommendations are withheld; the production journey gate verifies
+the Phase 5.5 contract after deployment.
 
 ## Audit findings carried into the roadmap
 
