@@ -28,6 +28,10 @@ from market_validation import (
     gate_for_market,
 )
 from simulation_capacity import serialized_simulation
+from multi_book_shopping import (
+    MULTI_BOOK_SHOPPING_VERSION,
+    build_multi_book_shopping,
+)
 
 
 def _parse_candidate_start(value):
@@ -14823,6 +14827,55 @@ def _odds_cache_status_payload():
     }
 
 
+
+
+def _odds_recommendation_provider_health(now=None):
+    """Expose a privacy-safe provider state for recommendation cards."""
+    checked_at = now or datetime.now(timezone.utc)
+    with _ODDS_CACHE_LOCK:
+        meta = dict(_ODDS_SNAPSHOT_META)
+    captured_at = _parse_candidate_start(meta.get('completedAt'))
+    age_seconds = (
+        max(0, int((checked_at - captured_at).total_seconds()))
+        if captured_at is not None else None
+    )
+    event_count = int(meta.get('eventsCount') or 0)
+    fetched_count = int(meta.get('eventsFetched') or 0)
+    degraded_count = max(0, event_count - fetched_count)
+    configured = bool(ODDS_API_KEY)
+    if not configured:
+        state = 'unavailable'
+        message = 'Multi-book odds provider is not configured.'
+    elif meta.get('running'):
+        state = 'computing'
+        message = 'Multi-book prices are refreshing in the worker.'
+    elif meta.get('date') != _odds_today_key() or age_seconds is None:
+        state = 'unavailable'
+        message = 'No current multi-book snapshot is available.'
+    elif age_seconds > 300:
+        state = 'stale'
+        message = 'Multi-book consensus is withheld because the snapshot is older than five minutes.'
+    elif not meta.get('complete'):
+        state = 'failed'
+        message = 'The multi-book snapshot did not complete.'
+    elif degraded_count or meta.get('errors'):
+        state = 'partial'
+        message = 'Some events or books are unavailable; accepted quotes remain visible.'
+    else:
+        state = 'ready'
+        message = 'Fresh multi-book prices are available.'
+    return {
+        'provider': 'The Odds API',
+        'state': state,
+        'configured': configured,
+        'capturedAt': meta.get('completedAt'),
+        'eventCount': event_count,
+        'fetchedEventCount': fetched_count,
+        'degradedEventCount': degraded_count,
+        'message': message,
+    }
+
+
 def _clear_odds_caches_locked():
     _ODDS_EVENTS_CACHE.clear()
     _ODDS_GAME_CACHE.clear()
@@ -15113,6 +15166,8 @@ def _parse_prop_markets(bookmakers, valid_names):
     grouped = {}
     for bk in bookmakers or []:
         bkt = bk.get('title')
+        source_name = 'the-odds-api'
+        bookmaker_updated_at = bk.get('last_update')
         for m in bk.get('markets', []) or []:
             mk = m.get('key')
             outs = m.get('outcomes', []) or []
@@ -15133,7 +15188,14 @@ def _parse_prop_markets(bookmakers, valid_names):
                         'player': player, 'market_key': mk,
                         'base_key': mk[:-len('_alternate')] if is_alt else mk,
                         'is_alt': is_alt,
-                        'line': point, 'bookmaker': bkt, 'over_price': None, 'under_price': None,
+                        'line': point, 'bookmaker': bkt,
+                        'source': source_name,
+                        'captured_at': (
+                            bookmaker_updated_at
+                            or m.get('last_update')
+                            or _ODDS_SNAPSHOT_META.get('completedAt')
+                        ),
+                        'over_price': None, 'under_price': None,
                     }
                 grouped[key][f'{side}_price'] = o.get('price')
     out = []
@@ -15185,6 +15247,9 @@ def _market_price_summary(market_props, player, mk, line):
             'market_implied': None,
             'market_bookmaker': None,
             'line_varies': False,
+            'quotes': [],
+            'best_over_captured_at': None,
+            'best_under_captured_at': None,
         }
 
     def _best_side(items, side_key):
@@ -15193,14 +15258,42 @@ def _market_price_summary(market_props, player, mk, line):
             px = it.get(side_key)
             if px is None:
                 continue
-            candidates.append((px, it.get('bookmaker')))
+            candidates.append((
+                px,
+                it.get('bookmaker'),
+                it.get('captured_at'),
+            ))
         if not candidates:
-            return None, None
-        best_px, best_book = max(candidates, key=lambda x: _american_price_score(x[0]))
-        return best_px, best_book
+            return None, None, None
+        best_px, best_book, captured_at = max(
+            candidates,
+            key=lambda x: _american_price_score(x[0]),
+        )
+        return best_px, best_book, captured_at
 
-    best_over_price, best_over_book = _best_side(same_line, 'over_price')
-    best_under_price, best_under_book = _best_side(same_line, 'under_price')
+    best_over_price, best_over_book, best_over_captured_at = _best_side(
+        same_line, 'over_price',
+    )
+    best_under_price, best_under_book, best_under_captured_at = _best_side(
+        same_line, 'under_price',
+    )
+
+    same_line_quotes = []
+    seen_books = set()
+    for item in same_line:
+        book = str(item.get('bookmaker') or '').strip()
+        book_key = book.lower()
+        if not book or book_key in seen_books:
+            continue
+        seen_books.add(book_key)
+        same_line_quotes.append({
+            'book': book,
+            'source': item.get('source') or 'the-odds-api',
+            'capturedAt': item.get('captured_at'),
+            'line': item.get('line'),
+            'overPrice': item.get('over_price'),
+            'underPrice': item.get('under_price'),
+        })
 
     line_vals = []
     for it in all_items:
@@ -15260,6 +15353,9 @@ def _market_price_summary(market_props, player, mk, line):
         'opening_over_price': opening_over_price,
         'line_move': line_move,
         'price_history': price_history,
+        'quotes': same_line_quotes,
+        'best_over_captured_at': best_over_captured_at,
+        'best_under_captured_at': best_under_captured_at,
     }
 
 
@@ -17101,6 +17197,8 @@ def _build_tracker_rows_for_game(
                         'best_over_price': msum.get('best_over_price'), 'best_over_book': msum.get('best_over_book'),
                         'best_under_price': msum.get('best_under_price'), 'best_under_book': msum.get('best_under_book'),
                         'line_range': msum.get('line_range'), 'book_count': msum.get('book_count'), 'line_varies': msum.get('line_varies'),
+                        'sportsbookQuotes': msum.get('quotes') or [],
+                        'oddsObservedAt': msum.get('best_over_captured_at'),
                         'score': round(score, 4), 'hubRating': hub, 'evPct': ev_pct, 'opp': opp_name, 'reason': _projection_reason_short(p.get('name'), mk, adj_prob, edge, opp_name), 'status': 'pending', 'actual': None, 'grade': 'pending', 'openingPrice': msum.get('best_over_price'), 'openingImplied': market_implied, 'closingPrice': None, 'closingImplied': None, 'closingBookmaker': None, 'closingCapturedAt': None, 'clvEdge': None, 'profitUnits': None, 'profitDollars': None,
                         'parlayId': None, 'parlayLeg': None
                     }
@@ -17263,6 +17361,8 @@ def _build_tracker_rows_for_game(
                 'best_over_price': msum.get('best_over_price'), 'best_over_book': msum.get('best_over_book'),
                 'best_under_price': msum.get('best_under_price'), 'best_under_book': msum.get('best_under_book'),
                 'line_range': msum.get('line_range'), 'book_count': msum.get('book_count'), 'line_varies': msum.get('line_varies'),
+                'sportsbookQuotes': msum.get('quotes') or [],
+                'oddsObservedAt': msum.get('best_over_captured_at'),
                 'score': round(score, 4), 'hubRating': hub, 'evPct': ev_pct, 'opp': '', 'reason': _projection_reason_short(sp.get('name'), 'pitcher_strikeouts', adj_prob, edge), 'status': 'pending', 'actual': None, 'grade': 'pending', 'openingPrice': msum.get('best_over_price'), 'openingImplied': market_implied, 'closingPrice': None, 'closingImplied': None, 'closingBookmaker': None, 'closingCapturedAt': None, 'clvEdge': None, 'profitUnits': None, 'profitDollars': None,
                 'parlayId': None, 'parlayLeg': None
             }
@@ -20032,6 +20132,8 @@ def _edge_finder_payload(
         integrity['eligible'] = []
 
     edges = []
+    provider_health = _odds_recommendation_provider_health()
+    shopping_checked_at = datetime.now(timezone.utc)
     for p in integrity['eligible']:
         edge = p.get('canonicalEdge')
         mi = p.get('marketFairProbability')
@@ -20044,6 +20146,12 @@ def _edge_finder_payload(
         mk = p.get('marketKey')
         if market and mk != market:
             continue
+        multi_book_shopping = build_multi_book_shopping(
+            p,
+            p.get('sportsbookQuotes') or [],
+            provider_health=provider_health,
+            now=shopping_checked_at,
+        )
         edges.append({
             'player': p.get('player'),
             'playerId': p.get('playerId'),
@@ -20090,6 +20198,8 @@ def _edge_finder_payload(
             'canonicalPrice': p.get('canonicalPrice'),
             'canonicalBook': p.get('canonicalBook'),
             'canonicalEdge': edge_f,
+            'multiBookShoppingVersion': MULTI_BOOK_SHOPPING_VERSION,
+            'multiBookShopping': multi_book_shopping,
             'integrityVersion': p.get('integrityVersion'),
             'integrityStatus': p.get('integrityStatus'),
             'candidateIntegrityVersion': p.get('integrityVersion'),
@@ -20134,6 +20244,8 @@ def _edge_finder_payload(
         'message': base.get('message'),
         'generatedAt': datetime.now(timezone.utc).isoformat(),
         'recommendationEvidenceVersion': '4.69',
+        'multiBookShoppingVersion': MULTI_BOOK_SHOPPING_VERSION,
+        'oddsProviderHealth': provider_health,
         'candidateIntegrityVersion': CANDIDATE_INTEGRITY_VERSION,
         'candidateIntegrityAudit': integrity['audit'],
         'marketValidationVersion': MARKET_VALIDATION_VERSION,
