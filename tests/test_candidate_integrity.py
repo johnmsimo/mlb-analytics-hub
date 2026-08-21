@@ -105,6 +105,24 @@ def test_real_two_sided_fresh_sportsbook_price_is_required():
     assert "sportsbook price is stale" in stale["integrityReasons"]
 
 
+def test_missing_quote_does_not_invent_a_negative_edge_rejection():
+    result = evaluate_candidate(
+        candidate(
+            bestAvailablePrice=None,
+            bestAvailableBook=None,
+            bestOverPrice=None,
+            bestUnderPrice=None,
+            oddsUpdatedAt=None,
+        ),
+        now=NOW,
+    )
+
+    assert "missing sportsbook price" in result["integrityReasons"]
+    assert "no positive edge after de-vigging" not in result["integrityReasons"]
+    assert result["canonicalEdge"] is None
+    assert result["oddsUpdatedAt"] is None
+
+
 def test_projection_labels_and_non_american_prices_are_not_sportsbooks():
     projection = evaluate_candidate(
         candidate(bestAvailableBook="Research"), now=NOW
@@ -160,3 +178,4 @@ def test_bulk_evaluation_deduplicates_market_identity_and_reports_reasons():
     assert result["audit"]["eligibleCount"] == 1
     assert result["eligible"][0]["canonicalPrice"] == -105
     assert result["audit"]["rejectionReasons"]["invalid batter position"] == 1
+    assert sum(result["audit"]["primaryRejectionReasons"].values()) == 1

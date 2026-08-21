@@ -335,13 +335,16 @@ def evaluate_candidate(
     )
     row["quotedEdge"] = row.get("edge")
     row["canonicalEdge"] = round(edge, 6) if edge is not None else None
-    if edge is None or edge <= policy.minimum_edge:
+    # Missing price evidence already has a precise rejection reason above.
+    # Do not also describe the same row as a negative-edge candidate: without
+    # a real two-sided quote there is no de-vigged edge to evaluate.
+    if edge is not None and edge <= policy.minimum_edge:
         reasons.append("no positive edge after de-vigging")
     elif edge is not None:
         row["edge"] = round(edge, 6)
 
     odds_at = _parse_datetime(_first(
-        row, "oddsUpdatedAt", "marketUpdatedAt", "generatedAt", "savedAt",
+        row, "oddsUpdatedAt", "oddsObservedAt", "marketUpdatedAt", "savedAt",
         "timestamp",
     ))
     row["oddsUpdatedAt"] = odds_at.isoformat() if odds_at else None
@@ -424,6 +427,13 @@ def evaluate_candidates(
     reason_counts = Counter(
         reason for row in rejected for reason in row.get("integrityReasons", [])
     )
+    # Reasons remain fully auditable and may overlap, while this primary
+    # distribution gives product surfaces a mutually exclusive candidate
+    # count. It therefore always sums to rejectedCount.
+    primary_reason_counts = Counter(
+        (row.get("integrityReasons") or ["other validation gate"])[0]
+        for row in rejected
+    )
     return {
         "version": INTEGRITY_VERSION,
         "eligible": eligible,
@@ -436,6 +446,9 @@ def evaluate_candidates(
             "rejectedCount": len(rejected),
             "duplicateCount": duplicate_count,
             "rejectionReasons": dict(sorted(reason_counts.items())),
+            "primaryRejectionReasons": dict(
+                sorted(primary_reason_counts.items())
+            ),
             "entityValidationVersion": ENTITY_VALIDATION_VERSION,
             "entityRejectedCount": sum(
                 row.get("entityValidation", {}).get("valid") is False

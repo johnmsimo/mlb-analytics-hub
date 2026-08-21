@@ -138,6 +138,7 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .qp-policy{font-family:Orbitron,monospace;font-size:.48rem;color:var(--mu);white-space:nowrap}
 .qp-pick{border:1px solid rgba(0,229,255,.16);border-radius:9px;background:rgba(0,229,255,.035);padding:8px;margin-top:7px}
 .qp-pick.pass{border-color:rgba(106,141,176,.16);background:rgba(106,141,176,.035)}
+.qp-pick.watchlist{border-color:rgba(255,193,7,.26);background:rgba(255,193,7,.035)}
 .qp-pick-top{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
 .qp-cat{font-family:Orbitron,monospace;font-size:.52rem;color:var(--mu);letter-spacing:.8px;flex:1;min-width:105px}
 .qp-grade{font-family:Orbitron,monospace;font-size:.5rem;font-weight:800;padding:2px 6px;border-radius:999px;white-space:nowrap}
@@ -145,6 +146,7 @@ footer{text-align:center;padding:20px;border-top:1px solid var(--b);font-size:.6
 .qp-grade.value{background:rgba(0,229,255,.13);border:1px solid rgba(0,229,255,.3);color:var(--c)}
 .qp-grade.lean{background:rgba(255,193,7,.11);border:1px solid rgba(255,193,7,.28);color:#ffd54f}
 .qp-grade.pass{background:rgba(106,141,176,.08);border:1px solid rgba(106,141,176,.2);color:var(--mu)}
+.qp-grade.watchlist{background:rgba(255,193,7,.11);border:1px solid rgba(255,193,7,.3);color:#ffd54f}
 .qp-confidence{font-family:Orbitron,monospace;font-size:.58rem;font-weight:800;color:var(--c);white-space:nowrap}
 .qp-metrics{display:flex;gap:5px;flex-wrap:wrap;margin-top:6px}
 .qp-metric{font-family:Orbitron,monospace;font-size:.48rem;color:var(--mu);background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.08);padding:2px 5px;border-radius:4px}
@@ -1239,7 +1241,7 @@ function loadQuickProps(pk,attempt){
       if(!d||!d.success)throw new Error((d&&d.error)||'Quick picks unavailable');
       QP_DATA[pk]=d;
       renderQuickProps(pk,d);
-      if(d.computing && attempt<45){
+      if(d.computing && attempt<150){
         clearTimeout(QP_POLLS[pk]);
         QP_POLLS[pk]=setTimeout(function(){
           var strip=document.getElementById('qp-'+pk);
@@ -1249,7 +1251,10 @@ function loadQuickProps(pk,attempt){
     })
     .catch(function(){
       var s=document.getElementById('qp-'+pk);
-      if(s && !(QP_DATA[pk]&&((QP_DATA[pk].quickPicks||[]).length)))
+      if(s && !(QP_DATA[pk]&&(
+        (QP_DATA[pk].quickPicks||[]).length ||
+        (QP_DATA[pk].watchlistPicks||[]).length
+      )))
         s.innerHTML='<div class="qp-loading">Simulation refresh is taking longer than expected — retrying automatically…</div>';
       if(attempt<3){
         clearTimeout(QP_POLLS[pk]);
@@ -1410,15 +1415,16 @@ function renderQuickProps(pk,d){
   var strip=document.getElementById('qp-'+pk);
   if(!strip)return;
   var picks=(d&&d.quickPicks)||[];
+  var watchlist=(d&&d.watchlistPicks)||[];
   var unavailable=(d&&d.unavailableMarkets)||[];
   var simAudit=(d&&d.simulationAudit)||{};
   var tracked=window.__trackedQPIds||[];
   var simTrials=Number(simAudit.minimumLinkedTrials)||0;
   var head='<div class="qp-intel-head">'
-    +'<div><div class="qp-intel-title">⚡ TOP PICKS TO TAKE</div>'
-    +'<div class="qp-intel-sub">Shared batter-vs-pitcher game simulation · Ranked by final Pick Score</div></div>'
-    +'<div class="qp-policy">'+(d&&d.computing?'↻ UPDATING · ':'')+(simTrials?simTrials.toLocaleString()+' SIMS · ':'')+picks.length+' PLAY'+(picks.length===1?'':'S')+'</div></div>';
-  var empty=picks.length?'':(
+    +'<div><div class="qp-intel-title">⚡ '+(picks.length?'TOP PICKS TO TAKE':'QUICK PROP ANALYSIS')+'</div>'
+    +'<div class="qp-intel-sub">Shared batter-vs-pitcher game simulation · Ranked by final Pick Score · Verified plays stay separate from analysis-only signals</div></div>'
+    +'<div class="qp-policy">'+(d&&d.computing?'↻ UPDATING · ':'')+(simTrials?simTrials.toLocaleString()+' SIMS · ':'')+picks.length+' PLAY'+(picks.length===1?'':'S')+' · '+watchlist.length+' WATCH</div></div>';
+  var empty=(picks.length||watchlist.length)?'':(
     d&&d.computing
       ?'<div class="qp-loading">Building the linked batter-vs-pitcher simulation in the background — this updates automatically</div>'
       :d&&d.decisionReady&&d.recommendationSource==='market_validation_abstention'
@@ -1483,12 +1489,36 @@ function renderQuickProps(pk,d){
       +actions
       +'</div>';
   }).join('');
+  var watchlistCards=watchlist.map(function(p){
+    var category=p.intelligenceCategory||'';
+    var player=p.player||p.team||'Analysis candidate';
+    var side=p.recommendedSide||p.sideLabel||'';
+    var line=(p.line!=null)?p.line:null;
+    var unit=category==='pitcher_strikeouts'?'Ks':category==='game_winner'?'MONEYLINE':'Hits';
+    var selection=category==='game_winner'
+      ?'<span class="qp-player">'+(p.team||side||player)+'</span><span class="qp-side">MONEYLINE</span>'
+      :'<span class="qp-player">'+player+'</span><span class="qp-side">'+side+' '+(line!=null?line+' ':'')+unit+'</span>';
+    var price=(p.bestAvailablePrice!=null)?p.bestAvailablePrice:p.marketPrice;
+    var probability=Number(p.modelProbabilityPct);
+    var edge=Number(p.estimatedEdgePct);
+    var simN=Number(p.gameSimN)||0;
+    var risk=p.watchlistReason||(p.watchlistReasons||[])[0]||'Historical market validation has not promoted this signal.';
+    return '<div class="qp-pick watchlist">'
+      +'<div class="qp-pick-top"><span class="qp-cat">'+(p.categoryLabel||category)+'</span>'
+      +'<span class="qp-grade watchlist">WATCHLIST · ANALYSIS ONLY</span></div>'
+      +'<div class="qp-selection">'+selection+(price!=null?'<span class="qp-price">'+(Number(price)>0?'+':'')+price+(p.bestAvailableBook?' · '+p.bestAvailableBook:'')+'</span>':'')+'</div>'
+      +'<div class="qp-metrics"><span class="qp-metric">MODEL <strong>'+probability.toFixed(1)+'%</strong></span>'
+      +'<span class="qp-metric">EDGE <strong>'+(edge>=0?'+':'')+edge.toFixed(1)+'%</strong></span>'
+      +(simN?'<span class="qp-metric">SIM <strong>'+simN.toLocaleString()+'</strong></span>':'')+'</div>'
+      +'<div class="qp-proof risk">⚠ '+risk+'</div>'
+      +'<div class="qp-summary">Tracking and parlay actions are disabled until validation promotes this market.</div></div>';
+  }).join('');
   var jobError=d&&d.refreshStatus&&d.refreshStatus.status==='error'
     ?'<div class="qp-unavailable">Simulation refresh failed: '+(d.refreshStatus.error||d.message||'retry required')+'</div>'
     :'';
   var unavailableHtml=(!(d&&d.computing)&&unavailable.length)?'<div class="qp-unavailable">No qualifying play: '
     +unavailable.map(function(item){return item.categoryLabel+' — '+item.reason;}).join(' · ')+'</div>':'';
-  strip.innerHTML=head+empty+cards+jobError+unavailableHtml;
+  strip.innerHTML=head+empty+cards+watchlistCards+jobError+unavailableHtml;
 }
 function quickPickKey(pick){
   return [pick.playerId||pick.team||pick.player||'pick',pick.marketKey||pick.intelligenceCategory||'market',pick.line||0,pick.recommendedSide||''].join(':');

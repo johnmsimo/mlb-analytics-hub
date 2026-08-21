@@ -14383,6 +14383,18 @@ _ODDS_SNAPSHOT_STRICT = _odds_bool_env('ODDS_SNAPSHOT_STRICT', '1')
 _ODDS_SNAPSHOT_AUTOWARM = _odds_bool_env('ODDS_SNAPSHOT_AUTOWARM', '1')
 _ODDS_SNAPSHOT_HEARTBEAT_SEC = _odds_ttl_seconds('ODDS_SNAPSHOT_HEARTBEAT_SEC', 5 * 60, min_seconds=60, max_seconds=60 * 60)
 _ODDS_SNAPSHOT_RETRY_SEC = _odds_ttl_seconds('ODDS_SNAPSHOT_RETRY_SEC', 15 * 60, min_seconds=60, max_seconds=6 * 60 * 60)
+# The complete market catalog is intentionally loaded once per day to control
+# provider cost. Recommendation markets are a much smaller live subset and
+# must be refreshed inside the same 15-minute window enforced by candidate
+# integrity. Keeping these clocks separate prevents a completed morning
+# snapshot from being treated as live all afternoon.
+_ODDS_RECOMMENDATION_TTL_SEC = _odds_ttl_seconds(
+    'ODDS_RECOMMENDATION_TTL_SEC', 5 * 60,
+    min_seconds=60, max_seconds=15 * 60,
+)
+_ODDS_RECOMMENDATION_MARKETS = (
+    'h2h,batter_hits,pitcher_strikeouts'
+)
 _ODDS_CACHE_LOCK = threading.Lock()
 _ODDS_SNAPSHOT_WORKER_LOCK = threading.Lock()
 # Single-thread executor for non-blocking odds-cache file persistence.
@@ -14398,6 +14410,9 @@ _ODDS_SNAPSHOT_META: dict = {
     'eventsCount': 0,
     'eventsFetched': 0,
     'errors': [],
+    'recommendationCompletedAt': None,
+    'recommendationEventsFetched': 0,
+    'recommendationErrors': [],
     # The Odds API credit usage (from x-requests-* response headers), so we can
     # confirm caching is actually saving fetch usage.
     'creditsRemaining': None,
@@ -14564,7 +14579,11 @@ def _ensure_daily_odds_snapshot():
         with _ODDS_CACHE_LOCK:
             _ODDS_SNAPSHOT_META['eventsFetched'] = fetched
             _ODDS_SNAPSHOT_META['errors'] = errors[:50]
-            _ODDS_SNAPSHOT_META['completedAt'] = datetime.now(timezone.utc).isoformat()
+            completed_at = datetime.now(timezone.utc).isoformat()
+            _ODDS_SNAPSHOT_META['completedAt'] = completed_at
+            _ODDS_SNAPSHOT_META['recommendationCompletedAt'] = completed_at
+            _ODDS_SNAPSHOT_META['recommendationEventsFetched'] = fetched
+            _ODDS_SNAPSHOT_META['recommendationErrors'] = errors[:50]
             _ODDS_SNAPSHOT_META['complete'] = True
             _ODDS_SNAPSHOT_META['running'] = False
         # Persist to disk off the critical path so this thread isn't blocked by disk I/O.
@@ -14591,6 +14610,121 @@ def _odds_snapshot_ready_today():
         )
 
 
+def _recommendation_odds_snapshot_fresh(now=None):
+    checked_at = now or datetime.now(timezone.utc)
+    with _ODDS_CACHE_LOCK:
+        meta = dict(_ODDS_SNAPSHOT_META)
+    if meta.get('date') != _odds_today_key() or not meta.get('complete'):
+        return False
+    captured_at = _parse_candidate_start(
+        meta.get('recommendationCompletedAt') or meta.get('completedAt')
+    )
+    return bool(
+        captured_at is not None
+        and max(0.0, (checked_at - captured_at).total_seconds())
+        <= _ODDS_RECOMMENDATION_TTL_SEC
+    )
+
+
+def _merge_recommendation_bookmakers(current, refreshed):
+    """Replace only live decision markets while preserving the daily catalog."""
+    live_keys = {
+        value.strip() for value in _ODDS_RECOMMENDATION_MARKETS.split(',')
+        if value.strip()
+    }
+    merged = {}
+    for book in current or []:
+        key = str(book.get('key') or book.get('title') or '').strip().lower()
+        if not key:
+            continue
+        item = dict(book)
+        item['markets'] = [
+            dict(market) for market in (book.get('markets') or [])
+            if str(market.get('key') or '') not in live_keys
+        ]
+        merged[key] = item
+    for book in refreshed or []:
+        key = str(book.get('key') or book.get('title') or '').strip().lower()
+        if not key:
+            continue
+        existing = merged.get(key, {})
+        item = dict(existing)
+        item.update({
+            field: value for field, value in dict(book).items()
+            if field != 'markets'
+        })
+        item['markets'] = list(existing.get('markets') or []) + [
+            dict(market) for market in (book.get('markets') or [])
+            if str(market.get('key') or '') in live_keys
+        ]
+        merged[key] = item
+    return list(merged.values())
+
+
+def _refresh_recommendation_odds_snapshot():
+    """Refresh hits, strikeouts, and moneyline without rebilling every market."""
+    if not ODDS_API_KEY:
+        return False
+    if not _odds_snapshot_ready_today() and not _ensure_daily_odds_snapshot():
+        return False
+    with _ODDS_CACHE_LOCK:
+        if _ODDS_SNAPSHOT_META.get('running'):
+            return False
+        _ODDS_SNAPSHOT_META['running'] = True
+        events = list(_ODDS_EVENTS_CACHE.get('data') or [])
+    fetched = 0
+    errors = []
+    try:
+        for event in events:
+            event_id = event.get('id')
+            if not event_id:
+                continue
+            try:
+                response = requests.get(
+                    f'https://api.the-odds-api.com/v4/sports/baseball_mlb/events/{event_id}/odds',
+                    params={
+                        'apiKey': ODDS_API_KEY,
+                        'regions': ODDS_REGION,
+                        'markets': _ODDS_RECOMMENDATION_MARKETS,
+                        'oddsFormat': 'american',
+                        'dateFormat': 'iso',
+                    },
+                    timeout=15,
+                )
+                response.raise_for_status()
+                _record_odds_credits(response)
+                refreshed = (response.json() or {}).get('bookmakers', []) or []
+                with _ODDS_CACHE_LOCK:
+                    current = (_ODDS_GAME_CACHE.get(event_id) or {}).get('all') or []
+                    _ODDS_GAME_CACHE[event_id] = {
+                        'all': _merge_recommendation_bookmakers(current, refreshed),
+                        'ts': time.time(),
+                        'cache_date': _odds_today_key(),
+                    }
+                fetched += 1
+            except Exception as ex:
+                errors.append(f'{event_id}: {ex}')
+        completed_at = datetime.now(timezone.utc).isoformat()
+        with _ODDS_CACHE_LOCK:
+            if fetched > 0:
+                _ODDS_SNAPSHOT_META['recommendationCompletedAt'] = completed_at
+            _ODDS_SNAPSHOT_META['recommendationEventsFetched'] = fetched
+            _ODDS_SNAPSHOT_META['recommendationErrors'] = errors[:50]
+            _ODDS_SNAPSHOT_META['running'] = False
+        _odds_io_executor.submit(_persist_odds_caches)
+        print(
+            f'[Odds] Recommendation refresh complete: '
+            f'events={len(events)} fetched={fetched} errors={len(errors)}'
+        )
+        return fetched > 0
+    except Exception as ex:
+        with _ODDS_CACHE_LOCK:
+            _ODDS_SNAPSHOT_META['recommendationErrors'] = [str(ex)]
+            _ODDS_SNAPSHOT_META['running'] = False
+        print(f'[Odds] Recommendation refresh failed: {ex}')
+        return False
+
+
 def _start_odds_snapshot_worker():
     """Continuously ensure today's odds snapshot is built without manual priming."""
     global _ODDS_SNAPSHOT_WORKER_STARTED, _ODDS_SNAPSHOT_WORKER_LAST_ATTEMPT
@@ -14609,7 +14743,10 @@ def _start_odds_snapshot_worker():
                     time.sleep(5 * 60)
                     continue
 
-                if _odds_snapshot_ready_today():
+                if (
+                    _odds_snapshot_ready_today()
+                    and _recommendation_odds_snapshot_fresh()
+                ):
                     time.sleep(_ODDS_SNAPSHOT_HEARTBEAT_SEC)
                     continue
 
@@ -14619,8 +14756,16 @@ def _start_odds_snapshot_worker():
                     continue
 
                 _ODDS_SNAPSHOT_WORKER_LAST_ATTEMPT = now
-                built = _ensure_daily_odds_snapshot()
+                built = (
+                    _refresh_recommendation_odds_snapshot()
+                    if _odds_snapshot_ready_today()
+                    else _ensure_daily_odds_snapshot()
+                )
                 if built:
+                    # The retry interval is for failures. A successful live
+                    # refresh should become eligible again as soon as its
+                    # recommendation TTL expires.
+                    _ODDS_SNAPSHOT_WORKER_LAST_ATTEMPT = 0.0
                     print('[ODDS_WORKER] Daily snapshot ready')
                 else:
                     print('[ODDS_WORKER] Snapshot attempt incomplete; will retry')
@@ -14850,13 +14995,20 @@ def _odds_recommendation_provider_health(now=None):
     checked_at = now or datetime.now(timezone.utc)
     with _ODDS_CACHE_LOCK:
         meta = dict(_ODDS_SNAPSHOT_META)
-    captured_at = _parse_candidate_start(meta.get('completedAt'))
+    recommendation_completed_at = (
+        meta.get('recommendationCompletedAt') or meta.get('completedAt')
+    )
+    captured_at = _parse_candidate_start(recommendation_completed_at)
     age_seconds = (
         max(0, int((checked_at - captured_at).total_seconds()))
         if captured_at is not None else None
     )
     event_count = int(meta.get('eventsCount') or 0)
-    fetched_count = int(meta.get('eventsFetched') or 0)
+    fetched_count = int(
+        meta.get('recommendationEventsFetched')
+        if meta.get('recommendationEventsFetched') is not None
+        else meta.get('eventsFetched') or 0
+    )
     degraded_count = max(0, event_count - fetched_count)
     configured = bool(ODDS_API_KEY)
     if not configured:
@@ -14868,13 +15020,16 @@ def _odds_recommendation_provider_health(now=None):
     elif meta.get('date') != _odds_today_key() or age_seconds is None:
         state = 'unavailable'
         message = 'No current multi-book snapshot is available.'
-    elif age_seconds > 300:
+    elif age_seconds > _ODDS_RECOMMENDATION_TTL_SEC:
         state = 'stale'
-        message = 'Multi-book consensus is withheld because the snapshot is older than five minutes.'
+        message = (
+            'Multi-book consensus is withheld because the live decision-market '
+            'snapshot is older than five minutes.'
+        )
     elif not meta.get('complete'):
         state = 'failed'
         message = 'The multi-book snapshot did not complete.'
-    elif degraded_count or meta.get('errors'):
+    elif degraded_count or meta.get('recommendationErrors'):
         state = 'partial'
         message = 'Some events or books are unavailable; accepted quotes remain visible.'
     else:
@@ -14884,7 +15039,7 @@ def _odds_recommendation_provider_health(now=None):
         'provider': 'The Odds API',
         'state': state,
         'configured': configured,
-        'capturedAt': meta.get('completedAt'),
+        'capturedAt': recommendation_completed_at,
         'eventCount': event_count,
         'fetchedEventCount': fetched_count,
         'degradedEventCount': degraded_count,
@@ -14904,6 +15059,9 @@ def _clear_odds_caches_locked():
         'eventsCount': 0,
         'eventsFetched': 0,
         'errors': [],
+        'recommendationCompletedAt': None,
+        'recommendationEventsFetched': 0,
+        'recommendationErrors': [],
     })
     _persist_odds_caches()
 
@@ -14924,7 +15082,10 @@ def api_odds_cache_refresh():
     date_str = str(payload.get('date') or request.args.get('date') or datetime.now(ET).strftime('%Y-%m-%d')).strip()
     event_id = payload.get('eventId') or request.args.get('eventId')
     game_pk = payload.get('gamePk') or request.args.get('gamePk')
-    clear_first = str(payload.get('clearFirst', request.args.get('clearFirst', '1'))).strip().lower() in ('1', 'true', 'yes')
+    clear_default = '0' if mode in ('recommendation', 'live', 'core') else '1'
+    clear_first = str(payload.get(
+        'clearFirst', request.args.get('clearFirst', clear_default),
+    )).strip().lower() in ('1', 'true', 'yes')
 
     if settings.process_role != 'worker':
         try:
@@ -14967,6 +15128,11 @@ def api_odds_cache_refresh():
         if mode in ('snapshot', 'build'):
             snapshot_ok = _odds_snapshot_ready_today()
             result['snapshotBuilt'] = snapshot_ok
+            result['prefetchedEventIds'] = list((_ODDS_GAME_CACHE or {}).keys())[:50]
+            result['prefetchedCount'] = len(_ODDS_GAME_CACHE or {})
+        elif mode in ('recommendation', 'live', 'core'):
+            refreshed = _refresh_recommendation_odds_snapshot()
+            result['recommendationRefreshed'] = refreshed
             result['prefetchedEventIds'] = list((_ODDS_GAME_CACHE or {}).keys())[:50]
             result['prefetchedCount'] = len(_ODDS_GAME_CACHE or {})
         elif mode in ('today', 'all'):
@@ -15209,6 +15375,9 @@ def _parse_prop_markets(bookmakers, valid_names):
                         'captured_at': (
                             bookmaker_updated_at
                             or m.get('last_update')
+                            or _ODDS_SNAPSHOT_META.get(
+                                'recommendationCompletedAt'
+                            )
                             or _ODDS_SNAPSHOT_META.get('completedAt')
                         ),
                         'over_price': None, 'under_price': None,
@@ -16953,7 +17122,11 @@ def _build_tracker_rows_for_game(
         except Exception as ex:
             print(f'[tracker_rows] scheduled lineup parse failed for {game_pk}: {ex}')
 
-    # ── Last resort: active roster (top 9 position players) ─────────────────
+    # ── Last resort: evidence-backed active-roster projection ──────────────
+    # Official batting orders are commonly unavailable in the morning. Rank
+    # active position players by current-season PA so this is a real projected
+    # lineup, not the arbitrary roster API order. Candidate integrity still
+    # distinguishes this from a confirmed lineup.
     def _roster_lineup(team_id):
         try:
             out = []
@@ -16966,7 +17139,7 @@ def _build_tracker_rows_for_game(
                 if not name:
                     continue
                 fgb = fg_batter(name); svb = sv_batter(name)
-                out.append({'slot': len(out)+1, 'id': pid, 'name': name, 'pos': pos, 'bats': 'S',
+                out.append({'slot': 0, 'id': pid, 'name': name, 'pos': pos, 'bats': 'S',
                             'fg_pa': fgb.get('fg_pa','N/A'), 'fg_r': fgb.get('fg_r','N/A'),
                             'fg_sb': fgb.get('fg_sb','N/A'), 'fg_woba': fgb.get('fg_woba','N/A'),
                             'fg_wrc': fgb.get('fg_wrc','N/A'), 'fg_war': fgb.get('fg_war','N/A'),
@@ -16976,21 +17149,27 @@ def _build_tracker_rows_for_game(
                             'sv_la': svb.get('sv_la','N/A'),
                             'avg': fgb.get('fg_avg','.---'), 'obp': fgb.get('fg_obp','.---'),
                             'slg': fgb.get('fg_slg','.---'), 'ops': fgb.get('fg_ops','.---'),
-                            'ab': 0, 'hits': 0, 'hr': 0, 'rbi': 0})
-                if len(out) >= 9:
-                    break
-            return out
+                            'ab': 0, 'hits': 0, 'hr': 0, 'rbi': 0,
+                            'lineupProjectionMethod': 'active_roster_season_pa'})
+            out.sort(key=lambda row: (
+                -_safe_f(row.get('fg_pa'), 0.0),
+                str(row.get('name') or ''),
+            ))
+            projected = out[:9]
+            for index, row in enumerate(projected, start=1):
+                row['slot'] = index
+            return projected
         except Exception:
             return []
 
     if not away_lineup:
         away_lineup = _roster_lineup(away_team_id)
         if away_lineup:
-            away_lineup_source = 'roster'
+            away_lineup_source = 'projected'
     if not home_lineup:
         home_lineup = _roster_lineup(home_team_id)
         if home_lineup:
-            home_lineup_source = 'roster'
+            home_lineup_source = 'projected'
 
     if not away_lineup or not home_lineup:
         return []
@@ -17474,9 +17653,7 @@ def _build_tracker_rows_for_game(
         for player in away_lineup + home_lineup
     }
     combined_lineup_source = (
-        'roster'
-        if 'roster' in {away_lineup_source, home_lineup_source}
-        else 'projected'
+        'projected'
         if 'projected' in {away_lineup_source, home_lineup_source}
         else 'confirmed'
         if away_lineup_source == home_lineup_source == 'confirmed'
@@ -17509,13 +17686,29 @@ def _build_tracker_rows_for_game(
             'gameAbstractState': abstract_state,
             'gameStartIso': game_start,
             'lineupStatus': lineup_status,
+            'lineupProjectionMethod': (
+                'active_roster_season_pa'
+                if lineup_status == 'projected'
+                and any(
+                    player.get('lineupProjectionMethod')
+                    == 'active_roster_season_pa'
+                    for player in away_lineup + home_lineup
+                )
+                else 'mlb_schedule'
+                if lineup_status == 'projected'
+                else None
+            ),
             'playerRole': role,
             'playerPosition': position,
             'candidateModelVersion': 'prediction-stack-4.37',
             'modelVersion': row.get('modelVersion') or 'prediction-stack-4.37',
             'generatedAt': generated_at,
             'oddsUpdatedAt': (
-                generated_at
+                row.get('oddsObservedAt')
+                or (
+                    _ODDS_SNAPSHOT_META.get('recommendationCompletedAt')
+                    or _ODDS_SNAPSHOT_META.get('completedAt')
+                )
                 if row.get('marketPrice') is not None and row.get('bookmaker')
                 else None
             ),
@@ -18560,6 +18753,9 @@ def _evaluate_promotable_candidates(sources, date_str=None):
         gate_rejected.append(row)
     audit = dict(integrity['audit'])
     rejection_reasons = dict(audit.get('rejectionReasons') or {})
+    primary_rejection_reasons = dict(
+        audit.get('primaryRejectionReasons') or {}
+    )
     for reason, count in (
         gated['audit'].get('rejectionReasons') or {}
     ).items():
@@ -18574,6 +18770,19 @@ def _evaluate_promotable_candidates(sources, date_str=None):
             continue
         reason = f'Phase 6.3 drift control: {state}'
         rejection_reasons[reason] = rejection_reasons.get(reason, 0) + int(count)
+    for row in gate_rejected:
+        reasons = (
+            row.get('promotionReasons')
+            or row.get('marketGateReasons')
+            or row.get('integrityReasons')
+            or ['market validation has not promoted this candidate']
+        )
+        reason = str(reasons[0])
+        if not reason.lower().startswith(('market validation', 'phase 6.3')):
+            reason = f'market validation: {reason}'
+        primary_rejection_reasons[reason] = (
+            primary_rejection_reasons.get(reason, 0) + 1
+        )
     audit.update({
         'structurallyEligibleCount': integrity['audit']['eligibleCount'],
         'eligibleCount': len(interventions['promoted']),
@@ -18585,11 +18794,16 @@ def _evaluate_promotable_candidates(sources, date_str=None):
         'phase6DriftAudit': interventions['audit'],
         'promotedMarkets': validation.get('promotedMarkets') or [],
         'rejectionReasons': rejection_reasons,
+        'primaryRejectionReasons': primary_rejection_reasons,
     })
     return {
         'version': integrity['version'],
         'eligible': interventions['promoted'],
         'rejected': list(integrity['rejected']) + gate_rejected,
+        # Structurally valid, priced candidates that were held back by market
+        # validation remain useful as clearly labeled analysis/watchlist rows.
+        # Raw integrity failures are never exposed through this collection.
+        'watchlist': gate_rejected,
         'audit': audit,
         'marketValidation': validation,
         'phase6Intelligence': phase6,
@@ -19863,6 +20077,7 @@ def _empty_props_scan_payload(date_str):
         'gameCount': 0,
         'props': [],
         'actionableProps': [],
+        'watchlistProps': [],
         'candidateIntegrityVersion': CANDIDATE_INTEGRITY_VERSION,
         'candidateIntegrityAudit': evaluate_candidates([])['audit'],
         'marketValidationVersion': MARKET_VALIDATION_VERSION,
@@ -19984,6 +20199,7 @@ def _compute_props_scan_today_payload(date_str):
         'gameCount': len(parsed_games),
         'props': flat_props,
         'actionableProps': integrity['eligible'],
+        'watchlistProps': integrity['watchlist'],
         'candidateIntegrityVersion': CANDIDATE_INTEGRITY_VERSION,
         'candidateIntegrityAudit': integrity['audit'],
         'marketValidationVersion': MARKET_VALIDATION_VERSION,
@@ -20222,11 +20438,16 @@ def _edge_finder_payload(
     # Reuse that fail-closed result on the hot read path instead of repeating the
     # full slate integrity pass for every Edge Finder request.
     prevalidated = base.get('actionableProps')
+    prevalidated_watchlist = base.get('watchlistProps')
     prevalidated_audit = base.get('candidateIntegrityAudit')
     if isinstance(prevalidated, list) and isinstance(prevalidated_audit, dict):
         integrity = {
             'eligible': [row for row in prevalidated if isinstance(row, dict)],
             'rejected': [],
+            'watchlist': [
+                row for row in (prevalidated_watchlist or [])
+                if isinstance(row, dict)
+            ],
             'audit': dict(prevalidated_audit),
         }
     else:
@@ -20336,6 +20557,65 @@ def _edge_finder_payload(
     ))
     edges = edges[:int(limit)]
 
+    watchlist_edges = []
+    for candidate in integrity.get('watchlist') or []:
+        edge = candidate.get('canonicalEdge')
+        try:
+            edge_f = float(edge)
+        except (TypeError, ValueError):
+            continue
+        market_key = candidate.get('marketKey')
+        if edge_f < min_edge or (market and market_key != market):
+            continue
+        reasons = (
+            candidate.get('promotionReasons')
+            or candidate.get('marketGateReasons')
+            or candidate.get('integrityReasons')
+            or ['Market validation has not promoted this candidate.']
+        )
+        watchlist_edges.append({
+            'player': candidate.get('player'),
+            'playerId': candidate.get('playerId'),
+            'team': candidate.get('team'),
+            'opp': candidate.get('opp'),
+            'gamePk': candidate.get('gamePk'),
+            'matchup': candidate.get('matchup'),
+            'gameStartIso': candidate.get('gameStartIso'),
+            'lineupStatus': candidate.get('lineupStatus'),
+            'lineupProjectionMethod': candidate.get('lineupProjectionMethod'),
+            'marketKey': market_key,
+            'canonicalMarketKey': market_key,
+            'marketLabel': _EDGE_MARKET_LABELS.get(market_key, market_key),
+            'line': candidate.get('line'),
+            'side': candidate.get('canonicalSide')
+                    or candidate.get('recommendedSide') or 'Over',
+            'modelProb': candidate.get('canonicalProbability'),
+            'marketFairProbability': candidate.get('marketFairProbability'),
+            'edge': round(edge_f, 4),
+            'edgePct': round(edge_f * 100, 1),
+            'evPct': candidate.get('evPct'),
+            'bestPrice': candidate.get('canonicalPrice'),
+            'bestBook': candidate.get('canonicalBook'),
+            'oddsUpdatedAt': candidate.get('oddsUpdatedAt'),
+            'oddsAgeSeconds': candidate.get('oddsAgeSeconds'),
+            'simulationVersion': candidate.get('simulationVersion'),
+            'simulationTrials': candidate.get('simulationTrials'),
+            'marketGateStatus': candidate.get('marketGateStatus'),
+            'calibrationStatus': candidate.get('calibrationStatus'),
+            'calibrationEvidence': candidate.get('calibrationEvidence'),
+            'promotionStatus': 'research_only',
+            'watchlistReason': str(reasons[0]),
+            'watchlistReasons': list(reasons)[:3],
+            'actionabilityStage': candidate.get('actionabilityStage') or 'Priced',
+            'actionable': False,
+        })
+    watchlist_edges.sort(key=lambda row: (
+        -(row.get('edge') or 0),
+        -(float(row.get('modelProb') or 0)),
+        str(row.get('player') or ''),
+    ))
+    watchlist_edges = watchlist_edges[:int(limit)]
+
     grade_counts = {}
     for e in edges:
         grade_counts[e['grade']] = grade_counts.get(e['grade'], 0) + 1
@@ -20346,6 +20626,7 @@ def _edge_finder_payload(
         'minEdge': min_edge,
         'market': market,
         'count': len(edges),
+        'watchlistCount': len(watchlist_edges),
         'gradeCounts': grade_counts,
         'cached': base.get('cached', False),
         'computing': base.get('computing', False),
@@ -20364,6 +20645,7 @@ def _edge_finder_payload(
         'marketValidationVersion': MARKET_VALIDATION_VERSION,
         'marketGateAudit': integrity['audit'].get('marketGateAudit'),
         'edges': edges,
+        'watchlistEdges': watchlist_edges,
     }
 
 
@@ -24812,7 +25094,8 @@ def _props_fetch_game_uncached(game_pk, date_hint=None, gdata_override=None):
                 out.append({
                     "slot": i, "id": pid, "name": name, "pos": pos,
                     "bats": bio.get("bats", p.get("batSide", {}).get("code", "S")),
-                    "lineup_status": "pending",
+                    "lineup_status": "projected",
+                    "lineup_projection_method": "mlb_schedule",
                     "avg": fgb.get("fg_avg", ".---"), "obp": fgb.get("fg_obp", ".---"),
                     "slg": fgb.get("fg_slg", ".---"), "ops": fgb.get("fg_ops", ".---"),
                     "ab": 0, "hits": 0, "hr": 0, "rbi": 0,
@@ -24852,12 +25135,13 @@ def _props_fetch_game_uncached(game_pk, date_hint=None, gdata_override=None):
                     svb = sv_batter(name)
                     bio = _bio_cache.get(pid) or {}
                     out.append({
-                        "slot": len(out) + 1,
+                        "slot": 0,
                         "id": pid,
                         "name": name,
                         "pos": pos,
                         "bats": bio.get("bats", "S"),
-                        "lineup_status": "pending",
+                        "lineup_status": "projected",
+                        "lineup_projection_method": "active_roster_season_pa",
                         "avg": fgb.get("fg_avg", ".---"),
                         "obp": fgb.get("fg_obp", ".---"),
                         "slg": fgb.get("fg_slg", ".---"),
@@ -24880,11 +25164,16 @@ def _props_fetch_game_uncached(game_pk, date_hint=None, gdata_override=None):
                         "sv_brl_pct": svb.get("sv_brl_pct", "N/A"),
                         "sv_la": svb.get("sv_la", "N/A"),
                     })
-                    if len(out) >= 9:
-                        break
             except Exception as ex:
                 print(f"[props] roster fallback error team={team_id}: {ex}")
-            return out
+            out.sort(key=lambda row: (
+                -_safe_f(row.get("fg_pa"), 0.0),
+                str(row.get("name") or ""),
+            ))
+            projected = out[:9]
+            for index, row in enumerate(projected, start=1):
+                row["slot"] = index
+            return projected
 
         away_team_id = (away_t.get("team") or {}).get("id")
         home_team_id = (home_t.get("team") or {}).get("id")
@@ -26351,7 +26640,16 @@ def api_props_projections(game_pk):
                     "sv_brl_pct_rank": _pct_rank(brl_values, brl),
                     "pull_pct_air_rank": _pct_rank(pull_values, pull),
                     "lineupConfirmed": bool(lineup_confirmed),
-                    "lineupStatus": "confirmed" if lineup_confirmed else "pending",
+                    "lineupStatus": (
+                        "confirmed" if lineup_confirmed
+                        else "projected"
+                        if str(b.get("lineup_status") or "").lower()
+                        == "projected"
+                        else "pending"
+                    ),
+                    "lineupProjectionMethod": b.get(
+                        "lineup_projection_method"
+                    ),
                     "injuryStatus": (injury or {}).get("status"),
                     "injuryType": (injury or {}).get("type"),
                     "injuryDescription": (injury or {}).get("description"),
@@ -26361,7 +26659,13 @@ def api_props_projections(game_pk):
                         "windBucket": wind_bucket,
                         "parkBucket": park_bucket,
                         "slotBucket": slot_bucket,
-                        "lineup": "confirmed" if lineup_confirmed else "pending",
+                        "lineup": (
+                            "confirmed" if lineup_confirmed
+                            else "projected"
+                            if str(b.get("lineup_status") or "").lower()
+                            == "projected"
+                            else "pending"
+                        ),
                     },
                     # Expose platoon splits for UI
                     "vs_l_avg":     b.get("vs_l_avg"),

@@ -111,6 +111,24 @@ def test_insufficient_history_fails_closed_as_warming_up():
     assert "no completed walk-forward holdout fold" in gate["reasons"]
 
 
+def test_measured_failure_is_disabled_even_when_clv_is_still_missing():
+    policy = ValidationPolicy(
+        **{
+            **POLICY.__dict__,
+            "minimum_clv_rows": 100,
+        }
+    )
+    report = build_validation_report(
+        history("Player Hits", strong=False), policy=policy,
+    )
+    gate = report["marketGates"]["batter_hits"]
+
+    assert gate["status"] == "disabled"
+    assert gate["reasons"][0] != "CLV sample below 100"
+    assert "model Brier score does not beat the market baseline" in gate["reasons"]
+    assert "CLV sample below 100" in gate["reasons"]
+
+
 def test_lookahead_backfills_are_excluded_from_every_promotion_gate():
     rows = history()
     rows[0]["backfilled"] = True
