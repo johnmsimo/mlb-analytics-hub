@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;family=JetBrains+Mono:wght@500;600&amp;display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/public-verification.css?v=5.6">
+  <link rel="stylesheet" href="/static/public-verification.css?v=6.0">
   <link rel="stylesheet" href="/static/mobile-nav.css">
 </head>
 <body>
@@ -20,7 +20,7 @@
       <a class="private-link" href="/tracker">Private Tracker</a>
     </nav>
     <div class="hero__content">
-      <p class="eyebrow">PHASE 5.6 · INDEPENDENTLY CHECKABLE</p>
+      <p class="eyebrow">PHASE 5.6 LEDGER · PHASE 6.0 ACCURACY CONTROL PLANE</p>
       <h1>Public Verification Ledger</h1>
       <p class="hero__lede">Every eligible system recommendation remains on the record—pending, win, loss, or push—with its original line, sportsbook price, release time, and immutable prediction fingerprint.</p>
       <div class="trust-row" aria-label="Verification guarantees">
@@ -51,6 +51,26 @@
       <article class="metric"><span>ECE</span><strong id="eceMetric">—</strong><small>Lower is better</small></article>
       <article class="metric"><span>Average CLV</span><strong id="clvMetric">—</strong><small id="clvSample">0 CLV-graded</small></article>
       <article class="metric"><span>Beat close</span><strong id="beatCloseMetric">—</strong><small>Verified lineage only</small></article>
+    </section>
+
+    <section id="accuracyControlPlane" class="accuracy-plane" aria-labelledby="accuracyTitle">
+      <div class="accuracy-plane__heading">
+        <div>
+          <p class="section-label">MODEL VS VERIFIED CLOSE</p>
+          <h2 id="accuracyTitle">Accuracy control plane</h2>
+        </div>
+        <span id="accuracyGateState" class="accuracy-state accuracy-state--unavailable">Withheld</span>
+      </div>
+      <p id="accuracyGateCopy" class="accuracy-plane__copy">No model-vs-market claim is shown until the paired accuracy contract verifies.</p>
+      <div class="accuracy-grid" aria-label="Paired model and closing-market accuracy">
+        <article><span>Paired sample</span><strong id="accuracyPairedSample">—</strong><small>500 required for a claim</small></article>
+        <article><span>Model Brier</span><strong id="accuracyModelBrier">—</strong><small>Lower is better</small></article>
+        <article><span>Closing Brier</span><strong id="accuracyClosingBrier">—</strong><small>Two-way de-vigged</small></article>
+        <article><span>Paired delta</span><strong id="accuracyBrierDelta">—</strong><small>Model minus close</small></article>
+        <article><span>Beat close</span><strong id="accuracyBeatClose">—</strong><small id="accuracyClvSample">0 CLV-graded</small></article>
+        <article><span>Industry claim</span><strong id="accuracyClaim">Withheld</strong><small>Confidence-gated</small></article>
+      </div>
+      <p id="accuracyCoverage" class="accuracy-plane__coverage">No row-level Tracker data is published.</p>
     </section>
 
     <section class="method" aria-labelledby="methodTitle">
@@ -90,9 +110,9 @@
     </section>
   </main>
 
-  <footer><span>MLB Analytics Hub · Verification contract 5.6</span><a href="/workspace">Open My Hub</a></footer>
+  <footer><span>MLB Analytics Hub · Verification contracts 5.6 / 6.0</span><a href="/workspace">Open My Hub</a></footer>
 
-  <script src="/static/public-verification.js?v=5.6" defer></script>
+  <script src="/static/public-verification.js?v=6.0" defer></script>
   <script src="/static/global-nav.js" defer></script>
   <script src="/static/mobile-nav.js" defer></script>
 </body>

@@ -15,6 +15,7 @@ from scripts.production_contract_gate import (
     run_gate,
     validate_actionable_edges,
     validate_page,
+    _validate_accuracy_control_plane,
     _validate_public_verification,
 )
 
@@ -288,6 +289,27 @@ class FakeProduction:
                         "serverMutation": False,
                         "failClosed": True,
                     },
+                    "accuracyControlPlane": {
+                        "version": "6.0",
+                        "sourceEndpoint": "/api/accuracy/control-plane?window=90",
+                        "surface": "/verification#accuracyControlPlane",
+                        "benchmarkType": "side_correct_two_way_power_devig_close",
+                        "minimumPairedSample": 500,
+                        "minimumClvSample": 500,
+                        "beatCloseTarget": 0.524,
+                        "requiresImmutablePredictionReceipt": True,
+                        "requiresClosingBenchmarkReceipt": True,
+                        "requiresExactLine": True,
+                        "requiresAcceptedClosingIntegrity": True,
+                        "requiresBrierConfidence": True,
+                        "requiresBeatCloseConfidence": True,
+                        "industryClaimDefaultsToFalse": True,
+                        "privateTrackerFieldsIncluded": False,
+                        "automaticModelChange": False,
+                        "automaticThresholdChange": False,
+                        "serverMutation": False,
+                        "failClosed": True,
+                    },
                     "alerts": {
                         "failClosed": True,
                         "serverPersistence": False,
@@ -395,6 +417,63 @@ class FakeProduction:
                         "reasonCounts": {},
                         "rawRowsIncluded": False,
                     },
+                }
+            )
+        if clean_path == "/api/accuracy/control-plane":
+            return json_response(
+                {
+                    "success": True,
+                    "version": "6.0",
+                    "state": "insufficient_sample",
+                    "readOnly": True,
+                    "failClosed": True,
+                    "industryClaimMade": False,
+                    "window": {"days": 90, "from": "2026-05-24", "through": "2026-08-21"},
+                    "generatedAt": "2026-08-21T12:00:00+00:00",
+                    "overall": {
+                        "state": "insufficient_sample",
+                        "claimEligible": False,
+                        "pairedSampleSize": 0,
+                        "modelBrier": None,
+                        "closingMarketBrier": None,
+                        "pairedBrierDelta": None,
+                        "pairedBrierDeltaInterval": {"lower": None, "upper": None, "confidenceLevel": 0.95},
+                        "relativeBrierSkillVsClose": None,
+                        "brierEvidence": "insufficient_sample",
+                        "modelEce": None,
+                        "closingMarketEce": None,
+                        "clvGradedCount": 0,
+                        "beatCloseCount": 0,
+                        "beatCloseRate": None,
+                        "beatCloseInterval": {"lower": None, "upper": None, "confidenceLevel": 0.95},
+                        "minimumClaimSample": 500,
+                        "beatCloseTarget": 0.524,
+                    },
+                    "byMarket": {},
+                    "coverage": {
+                        "pairedEligibleCount": 0,
+                        "rejectedCount": 0,
+                        "rejectedReasonCounts": {},
+                        "rawRowsIncluded": False,
+                    },
+                    "benchmark": {
+                        "version": "6.0",
+                        "type": "side_correct_two_way_power_devig_close",
+                        "requiresExactLine": True,
+                        "requiresAcceptedClosingIntegrity": True,
+                        "outcomesFrozenAfterPrediction": True,
+                    },
+                    "claimPolicy": {
+                        "minimumPairedSample": 500,
+                        "minimumClvSample": 500,
+                        "beatCloseTarget": 0.524,
+                        "requiresModelBrierConfidenceUpperBelowZero": True,
+                        "requiresBeatCloseWilsonLowerAboveHalf": True,
+                    },
+                    "privateTrackerFieldsIncluded": False,
+                    "automaticModelChange": False,
+                    "automaticThresholdChange": False,
+                    "serverMutation": False,
                 }
             )
         if clean_path == "/api/monetization/status":
@@ -586,7 +665,7 @@ def test_full_gate_uses_only_get_contracts_and_reports_coverage():
         "pages": 21,
         "assets": 1,
         "admin_boundaries": 8,
-        "api_contracts": 10,
+        "api_contracts": 11,
         "worker_convergence": 1,
     }
     assert all(call[1] for call in fake.calls)
@@ -603,6 +682,16 @@ def test_public_verification_contract_keeps_losses_and_public_allowlist():
     payload["lossesOmitted"] = True
     with pytest.raises(ContractError, match="omit losses"):
         _validate_public_verification(payload)
+
+
+def test_accuracy_control_plane_contract_withholds_unqualified_claims():
+    fake = FakeProduction()
+    payload = fake("https://production.example", "/api/accuracy/control-plane", 5).json()
+    _validate_accuracy_control_plane(payload)
+
+    payload["industryClaimMade"] = True
+    with pytest.raises(ContractError, match="escaped its gate"):
+        _validate_accuracy_control_plane(payload)
 
 
 def test_baseline_gate_defers_new_deployed_api_contracts():
@@ -625,6 +714,7 @@ def test_baseline_gate_defers_new_deployed_api_contracts():
     assert "/api/calibration/markets" not in paths
     assert "/api/tracker/performance" not in paths
     assert "/api/verification/ledger" not in paths
+    assert "/api/accuracy/control-plane" not in paths
     assert "/verification" not in paths
     assert "/pricing" not in paths
     assert "/api/monetization/status" not in paths

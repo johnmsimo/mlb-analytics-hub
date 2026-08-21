@@ -2,6 +2,7 @@
 
 import app as app_module
 
+from accuracy_control_plane import install_accuracy_control_plane
 from canonical_consistency import (
     install_canonical_consistency_api,
 )
@@ -16,6 +17,7 @@ install_tracker_confidence(app_module)
 install_intelligence_api(app_module)
 install_canonical_consistency_api(app_module)
 install_public_verification(app_module)
+install_accuracy_control_plane(app_module)
 
 # Phase 4.59: expose bounded warmup state once per worker.
 if not getattr(app_module.app, "_phase_459_warmup_installed", False):

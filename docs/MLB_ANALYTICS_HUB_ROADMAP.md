@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phases 5.6, 5.9, and 5.10 are merged and deployed. Phases 5.7 and 5.8 are deferred; Phase 5.11 is active.
+Status: Phase 5.11 is merged and deployed. Phases 5.7 and 5.8 remain deferred; Phase 6.0 is active.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -785,7 +785,7 @@ validates the Phase 5.10 journey and live payload after deployment.
 
 ### Phase 5.11 — Monetization and Growth
 
-Implementation status: active, staged behind a fail-closed paid boundary.
+Implementation status: merged and deployed, staged behind a fail-closed paid boundary.
 
 The first production-safe slice adds a public Free/Premium comparison, a
 server-owned monetization readiness receipt, device-private onboarding,
@@ -806,6 +806,67 @@ surface are mobile-first and definitive; Free remains available; Premium
 fails closed; checkout is absent; client storage cannot grant entitlement;
 referral and conversion receipts contain no raw personal data and remain on
 device; the production contract gate proves these boundaries after deployment.
+
+## Phase 6 — Market-beating Accuracy and Intelligence
+
+Phase 6 turns the existing modeling, calibration, simulation, market, and
+public-verification systems into one statistically defensible accuracy program.
+The governing rule is simple: the product may not call itself market-leading
+until the same verified predictions are scored against a side-correct,
+de-vigged closing benchmark with enough paired observations.
+
+### Phase 6.0 — Verified Closing Benchmark and Accuracy Control Plane
+
+Implementation status: active.
+
+Capture both over and under prices from the same sportsbook at the exact
+closing line, select the recommendation side explicitly, remove vig with the
+power method, and freeze the result in an outcome-free SHA-256 receipt. A
+one-sided, stale, mismatched, anonymous, tampered, or out-of-window close cannot
+enter accuracy measurement.
+
+Expose a read-only 90-day control plane that compares model Brier and ECE with
+the paired closing-market Brier and ECE. Report the paired Brier difference
+with a 95% interval, Beat-Close rate with a Wilson interval, exact samples,
+coverage exclusions, and market splits. It never changes a model, threshold,
+probability, stake, or recommendation.
+
+Exit gate: the closing path is side-correct; every accuracy-eligible row has an
+intact Phase 5.4 prediction receipt and Phase 6.0 two-way closing receipt; no
+private Tracker row is returned; an industry claim remains false until at
+least 500 paired graded rows and 500 verified-CLV rows exist, the model's paired
+Brier confidence interval is entirely better than the close, Beat-Close is
+above 52.4%, and its 95% Wilson lower bound is above 50%.
+
+### Phase 6.1 — Contextual Error Atlas
+
+Measure calibration, Brier skill, and misses by market, side, line, sportsbook,
+lineup status, pitcher hand, park, weather, umpire, model version, confidence
+tier, and freshness cohort. Require minimum samples and suppress raw rows.
+
+### Phase 6.2 — Champion/Challenger Intelligence
+
+Generate shadow challenger reports that identify exactly which cohorts improve,
+which regress, and whether gains survive temporal holdout, serve parity,
+calibration, and market baselines. Promotion remains review and merge gated.
+
+### Phase 6.3 — Live Drift Intervention
+
+Unify feature drift, probability drift, calibration drift, provider health, and
+CLV decay into bounded market states. Drift can downgrade or suppress a market,
+but cannot silently retrain or promote a model.
+
+### Phase 6.4 — Simulation and Correlation Calibration
+
+Grade Monte Carlo distributions, interval coverage, game simulations, and
+parlay correlation assumptions against realized outcomes. Block correlation
+claims that lack verified joint samples.
+
+### Phase 6.5 — Decision Policy Optimization
+
+Use strictly out-of-sample shadow experiments to test no-bet zones and
+market-specific edge/EV thresholds. Optimize decision quality rather than pick
+volume; changes require explicit review and rollback evidence.
 
 ## Audit findings carried into the roadmap
 

@@ -37,6 +37,10 @@ from guided_parlays import (
     build_guided_parlay,
     verify_guided_leg,
 )
+from accuracy_control_plane import build_closing_benchmark_receipt
+from closing_line_integrity import accept_closing_capture
+from continuous_learning import build_prediction_receipt
+from odds_lineage import build_odds_lineage
 from canonical_consistency import normalize_candidate
 
 
@@ -17642,6 +17646,18 @@ def _tracker_row_key(row):
     )
 
 
+_IMMUTABLE_TRACKER_PREDICTION_FIELDS = (
+    'id', 'canonicalCandidateId', 'gamePk', 'canonicalMarketKey', 'marketKey',
+    'canonicalSide', 'recommendedSide', 'side', 'line', 'blendedProb',
+    'adjProb', 'canonicalProbability', 'probability', 'preCalProb',
+    'rawMultProb', 'openingPrice', 'openingImplied', 'marketImplied',
+    'book', 'bestAvailableBook', 'openingBookmaker', 'oddsObservedAt',
+    'source', 'modelSource', 'modelVersion', 'modelArtifactVersion',
+    'componentProbabilities', 'modelProbabilities', 'modelProbs', 'savedAt',
+    'predictionTimestamp', 'generatedAt',
+)
+
+
 def _merge_tracker_entries(existing_rows, new_rows):
     out = {}
     for r in (existing_rows or []):
@@ -17649,7 +17665,19 @@ def _merge_tracker_entries(existing_rows, new_rows):
             out[_tracker_row_key(r)] = r
     for r in (new_rows or []):
         if isinstance(r, dict):
-            out[_tracker_row_key(r)] = r
+            key = _tracker_row_key(r)
+            previous = out.get(key) if isinstance(out.get(key), dict) else {}
+            prepared = dict(r)
+            # A recapture may refresh projections or prices, but it must never
+            # rewrite the original recommendation or its prediction receipt.
+            if isinstance(previous.get('learningReceipt'), dict):
+                for field in _IMMUTABLE_TRACKER_PREDICTION_FIELDS:
+                    if field in previous:
+                        prepared[field] = previous[field]
+                prepared['learningReceipt'] = previous['learningReceipt']
+            elif str(prepared.get('grade') or 'pending').lower() == 'pending':
+                prepared['learningReceipt'] = build_prediction_receipt(prepared)
+            out[key] = prepared
     rows = list(out.values())
     rows.sort(key=lambda x: x.get('score', 0), reverse=True)
     return rows
@@ -20832,6 +20860,7 @@ def api_tracker_pick():
                  ('gradedAt',None),('closingPrice',None),('closingBookmaker', None), ('closingCapturedAt', None),
                  ('clvEdge',None),('profitUnits',None), ('profitDollars', None), ('parlayId', None), ('parlayLeg', None)]:
         entry.setdefault(k, v)
+    entry.setdefault('learningReceipt', build_prediction_receipt(entry))
 
     with _TRACKER_STORE_LOCK:
         store = _tracker_store_for_dates([today])
@@ -21521,7 +21550,6 @@ def api_tracker_close(date_str):
             return
         valid_names = set(r.get('player') for r in rows if r.get('player'))
         props = _parse_prop_markets(books, valid_names)
-        now_ts = datetime.now().isoformat()
         local_updated = 0
         players = {}
         if is_final:
@@ -21535,17 +21563,66 @@ def api_tracker_close(date_str):
             m = next((x for x in props if x.get('player') == row.get('player') and x.get('market_key') == row.get('marketKey') and float(x.get('line', 0)) == float(row.get('line', 0))), None)
             if not m:
                 continue
-            row['closingPrice'] = m.get('over_price')
+            close_side = str(
+                row.get('canonicalSide')
+                or row.get('recommendedSide')
+                or row.get('side')
+                or 'Over'
+            ).strip().lower()
+            closing_over = m.get('over_price')
+            closing_under = m.get('under_price')
+            selected_close = closing_under if close_side.startswith('under') else closing_over
+            captured_at = m.get('captured_at') or datetime.now(timezone.utc).isoformat()
+            closing_book = m.get('bookmaker')
+            closing_source = m.get('source') or 'the-odds-api-live'
+
+            row['closingOverPrice'] = closing_over
+            row['closingUnderPrice'] = closing_under
+            row['closingLine'] = m.get('line')
+            row['closingPrice'] = selected_close
             row['closingBookmaker'] = m.get('bookmaker')
-            row['closingCapturedAt'] = now_ts
+            row['closingBook'] = closing_book
+            row['closingSource'] = closing_source
+            row['closingCapturedAt'] = captured_at
+            closing_integrity = accept_closing_capture(
+                opening={
+                    'capturedAt': (
+                        row.get('openingCapturedAt') or row.get('oddsObservedAt')
+                        or row.get('savedAt')
+                    ),
+                },
+                closing={
+                    'capturedAt': captured_at,
+                    'price': selected_close,
+                    'book': closing_book,
+                    'source': closing_source,
+                },
+                first_pitch=g.get('gameDate'),
+            )
+            row['closingIntegrity'] = closing_integrity
+            row['closingIntegrityAccepted'] = closing_integrity['accepted']
+            benchmark = build_closing_benchmark_receipt(
+                row,
+                closing_integrity=closing_integrity,
+            )
+            row['closingBenchmarkReceipt'] = benchmark
+            row['closingFairProbability'] = (
+                benchmark['snapshot']['selectedFairProbability']
+                if benchmark['accepted']
+                else None
+            )
             # If capture ran in fast mode without odds, backfill opening/market now.
-            row['marketPrice'] = m.get('over_price')
+            row['marketPrice'] = selected_close
             row['bookmaker'] = m.get('bookmaker')
-            row['marketImplied'] = m.get('over_implied')
+            row['marketImplied'] = (
+                m.get('under_implied')
+                if close_side.startswith('under')
+                else m.get('over_implied')
+            )
             if row.get('openingPrice') is None:
-                row['openingPrice'] = m.get('over_price')
+                row['openingPrice'] = selected_close
             if row.get('openingImplied') is None:
-                row['openingImplied'] = m.get('over_implied')
+                row['openingImplied'] = row.get('marketImplied')
 
             if is_final and row.get('grade') == 'pending':
                 pobj = None
@@ -21794,7 +21871,45 @@ def _recalc_tracker_entry(row, adjustments=None):
     if row.get('marketImplied') is None and row.get('marketPrice') is not None:
         row['marketImplied'] = _american_to_implied(row.get('marketPrice'))
     implied_for_edge = row.get('marketImplied') or row.get('openingImplied')
-    if row.get('closingPrice') is not None:
+    benchmark = row.get('closingBenchmarkReceipt')
+    if isinstance(benchmark, dict):
+        snapshot = benchmark.get('snapshot') if isinstance(benchmark.get('snapshot'), dict) else {}
+        if benchmark.get('accepted') is True:
+            row['closingImplied'] = _american_to_implied(snapshot.get('selectedPrice'))
+            row['closingFairProbability'] = snapshot.get('selectedFairProbability')
+            lineage = build_odds_lineage(
+                line=row.get('line'),
+                opening={
+                    'price': row.get('openingPrice'),
+                    'impliedProbability': row.get('openingImplied'),
+                    'book': (
+                        row.get('openingBook') or row.get('bestAvailableBook')
+                        or row.get('book') or row.get('bookmaker')
+                    ),
+                    'capturedAt': (
+                        row.get('openingCapturedAt') or row.get('oddsObservedAt')
+                        or row.get('savedAt')
+                    ),
+                    'source': row.get('openingSource') or row.get('oddsSource') or row.get('source'),
+                },
+                closing={
+                    'price': snapshot.get('selectedPrice'),
+                    'impliedProbability': row.get('closingImplied'),
+                    'book': snapshot.get('book'),
+                    'capturedAt': snapshot.get('capturedAt'),
+                    'source': snapshot.get('source'),
+                },
+                closing_integrity=row.get('closingIntegrity'),
+            )
+            row['oddsLineageVersion'] = lineage['version']
+            row['oddsLineage'] = lineage
+            row['clvEligible'] = lineage['clvEligible']
+            row['clvEligibilityReason'] = lineage['clvReason']
+        else:
+            row['closingImplied'] = None
+            row['closingFairProbability'] = None
+            row['clvEdge'] = None
+    elif row.get('closingPrice') is not None:
         row['closingImplied'] = _american_to_implied(row.get('closingPrice'))
         if implied_for_edge is None:
             implied_for_edge = row.get('closingImplied')

@@ -642,6 +642,40 @@ def _validate_monetization_growth_contract(contract: Any) -> None:
     _require(contract.get("failClosed") is True, "monetization must fail closed")
 
 
+def _validate_accuracy_control_plane_journey(contract: Any) -> None:
+    _require(isinstance(contract, dict), "accuracy control plane must be an object")
+    _require(contract.get("version") == "6.0", "accuracy control plane version changed")
+    _require(
+        contract.get("sourceEndpoint") == "/api/accuracy/control-plane?window=90",
+        "accuracy control-plane endpoint changed",
+    )
+    _require(
+        contract.get("benchmarkType") == "side_correct_two_way_power_devig_close",
+        "accuracy closing benchmark changed",
+    )
+    _require(contract.get("minimumPairedSample") == 500, "accuracy sample gate changed")
+    _require(contract.get("minimumClvSample") == 500, "accuracy CLV gate changed")
+    _require(contract.get("beatCloseTarget") == 0.524, "Beat Close target changed")
+    for field in (
+        "requiresImmutablePredictionReceipt",
+        "requiresClosingBenchmarkReceipt",
+        "requiresExactLine",
+        "requiresAcceptedClosingIntegrity",
+        "requiresBrierConfidence",
+        "requiresBeatCloseConfidence",
+        "industryClaimDefaultsToFalse",
+        "failClosed",
+    ):
+        _require(contract.get(field) is True, f"accuracy contract lost {field}")
+    for field in (
+        "privateTrackerFieldsIncluded",
+        "automaticModelChange",
+        "automaticThresholdChange",
+        "serverMutation",
+    ):
+        _require(contract.get(field) is False, f"accuracy contract opened {field}")
+
+
 def _validate_journey(
     payload: Any,
     *,
@@ -649,6 +683,7 @@ def _validate_journey(
     require_multi_book: bool = True,
     require_guided_parlays: bool = True,
     require_monetization_growth: bool = True,
+    require_accuracy_control_plane: bool = True,
 ) -> None:
     _require(isinstance(payload, dict), "journey payload must be an object")
     stages = [stage.get("key") for stage in payload.get("stages", [])]
@@ -657,6 +692,7 @@ def _validate_journey(
     multi_book = payload.get("productionMultiBookShopping", {})
     guided = payload.get("guidedParlays", {})
     monetization = payload.get("monetizationGrowth", {})
+    accuracy = payload.get("accuracyControlPlane", {})
     _require(payload.get("success") is True, "journey payload is not successful")
     _require(payload.get("version") == "4.64", "journey version changed unexpectedly")
     _require(
@@ -677,6 +713,8 @@ def _validate_journey(
         _validate_guided_parlay_contract(guided)
     if require_monetization_growth or monetization:
         _validate_monetization_growth_contract(monetization)
+    if require_accuracy_control_plane or accuracy:
+        _validate_accuracy_control_plane_journey(accuracy)
 
 
 def _validate_journey_baseline(payload: Any) -> None:
@@ -688,6 +726,7 @@ def _validate_journey_baseline(payload: Any) -> None:
         require_multi_book=False,
         require_guided_parlays=False,
         require_monetization_growth=False,
+        require_accuracy_control_plane=False,
     )
 
 
@@ -1010,6 +1049,56 @@ def _validate_public_verification(payload: Any) -> None:
         )
 
 
+def _validate_accuracy_control_plane(payload: Any) -> None:
+    _require(isinstance(payload, dict), "accuracy control plane must be an object")
+    _require(payload.get("success") is True, "accuracy control plane is not successful")
+    _require(payload.get("version") == "6.0", "accuracy control-plane version changed")
+    _require(payload.get("readOnly") is True, "accuracy control plane must be read only")
+    _require(payload.get("failClosed") is True, "accuracy control plane must fail closed")
+    _require(payload.get("privateTrackerFieldsIncluded") is False, "accuracy control plane exposed Tracker fields")
+    _require(payload.get("automaticModelChange") is False, "accuracy read changed the model")
+    _require(payload.get("automaticThresholdChange") is False, "accuracy read changed thresholds")
+    _require(payload.get("serverMutation") is False, "accuracy read mutated server state")
+    _require(
+        payload.get("state") in {
+            "insufficient_sample",
+            "insufficient_clv_sample",
+            "not_market_leading",
+            "market_leading",
+        },
+        "accuracy control plane has an invalid state",
+    )
+    overall = payload.get("overall")
+    coverage = payload.get("coverage")
+    benchmark = payload.get("benchmark")
+    policy = payload.get("claimPolicy")
+    _require(isinstance(overall, dict), "accuracy overall scorecard is missing")
+    _require(isinstance(coverage, dict), "accuracy coverage is missing")
+    _require(isinstance(benchmark, dict), "accuracy benchmark is missing")
+    _require(isinstance(policy, dict), "accuracy claim policy is missing")
+    _require(overall.get("state") == payload.get("state"), "accuracy states disagree")
+    paired = overall.get("pairedSampleSize")
+    clv_count = overall.get("clvGradedCount")
+    _require(isinstance(paired, int) and paired >= 0, "accuracy paired sample is invalid")
+    _require(isinstance(clv_count, int) and 0 <= clv_count <= paired, "accuracy CLV sample is invalid")
+    _require(coverage.get("pairedEligibleCount") == paired, "accuracy coverage denominator changed")
+    _require(coverage.get("rawRowsIncluded") is False, "accuracy coverage exposed raw rows")
+    _require(benchmark.get("version") == "6.0", "closing benchmark version changed")
+    _require(
+        benchmark.get("type") == "side_correct_two_way_power_devig_close",
+        "closing benchmark type changed",
+    )
+    _require(benchmark.get("requiresExactLine") is True, "closing benchmark lost exact-line matching")
+    _require(benchmark.get("requiresAcceptedClosingIntegrity") is True, "closing integrity gate changed")
+    _require(policy.get("minimumPairedSample") == 500, "paired claim sample changed")
+    _require(policy.get("minimumClvSample") == 500, "CLV claim sample changed")
+    _require(policy.get("beatCloseTarget") == 0.524, "Beat Close claim target changed")
+    claim = payload.get("industryClaimMade")
+    _require(isinstance(claim, bool), "accuracy claim flag is invalid")
+    _require(claim == (payload.get("state") == "market_leading"), "accuracy claim escaped its gate")
+    _require(overall.get("claimEligible") is claim, "accuracy overall claim disagrees")
+
+
 def _json_contract_with_retry(
     *,
     base_url: str,
@@ -1242,6 +1331,12 @@ def run_gate(
             "public verification ledger",
             5.0,
             _validate_public_verification,
+        ),
+        (
+            "/api/accuracy/control-plane?window=90",
+            "accuracy control plane",
+            5.0,
+            _validate_accuracy_control_plane,
         ),
         (
             "/api/monetization/status",

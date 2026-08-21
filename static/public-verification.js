@@ -47,6 +47,45 @@
     byId('metrics').hidden = false;
   }
 
+  function accuracyMessage(stateName) {
+    if (stateName === 'market_leading') return 'The model cleared the paired Brier and Beat Close confidence gates.';
+    if (stateName === 'not_market_leading') return 'The verified evidence does not support a market-leading accuracy claim.';
+    if (stateName === 'insufficient_clv_sample') return 'Paired accuracy is promising, but the verified CLV sample is still too small.';
+    return 'The verified paired sample is still below the 500-decision claim threshold.';
+  }
+
+  function renderAccuracy(payload) {
+    var overall = payload.overall || {};
+    var coverage = payload.coverage || {};
+    var stateNode = byId('accuracyGateState');
+    setText('accuracyPairedSample', String(overall.pairedSampleSize || 0));
+    setText('accuracyModelBrier', number(overall.modelBrier, 3));
+    setText('accuracyClosingBrier', number(overall.closingMarketBrier, 3));
+    setText('accuracyBrierDelta', number(overall.pairedBrierDelta, 3));
+    setText('accuracyBeatClose', percent(overall.beatCloseRate, false));
+    setText('accuracyClvSample', (overall.clvGradedCount || 0) + ' CLV-graded');
+    setText('accuracyClaim', payload.industryClaimMade === true ? 'Supported' : 'Withheld');
+    setText('accuracyGateCopy', accuracyMessage(payload.state));
+    setText('accuracyCoverage',
+      (coverage.pairedEligibleCount || 0) + ' paired · ' +
+      (coverage.rejectedCount || 0) + ' withheld · no row-level Tracker data published'
+    );
+    if (stateNode) {
+      stateNode.textContent = String(payload.state || 'unavailable').replace(/_/g, ' ');
+      stateNode.className = 'accuracy-state accuracy-state--' + String(payload.state || 'unavailable');
+    }
+  }
+
+  function renderAccuracyUnavailable() {
+    var stateNode = byId('accuracyGateState');
+    if (stateNode) {
+      stateNode.textContent = 'Unavailable';
+      stateNode.className = 'accuracy-state accuracy-state--unavailable';
+    }
+    setText('accuracyGateCopy', 'The paired accuracy contract could not be verified, so no model-vs-market claim is shown.');
+    setText('accuracyClaim', 'Withheld');
+  }
+
   function fact(label, value) {
     var node = document.createElement('div');
     node.className = 'fact';
@@ -152,6 +191,21 @@
       });
   }
 
+  function loadAccuracy() {
+    fetch('/api/accuracy/control-plane?window=' + state.window, { credentials: 'omit' })
+      .then(function (response) {
+        if (!response.ok) throw new Error('Accuracy endpoint returned ' + response.status);
+        return response.json();
+      })
+      .then(function (payload) {
+        if (!payload || payload.success !== true || payload.version !== '6.0' || !payload.overall) {
+          throw new Error('Accuracy contract did not validate');
+        }
+        renderAccuracy(payload);
+      })
+      .catch(renderAccuracyUnavailable);
+  }
+
   document.querySelectorAll('[data-window]').forEach(function (button) {
     button.addEventListener('click', function () {
       state.window = Number(button.dataset.window);
@@ -161,6 +215,7 @@
         peer.setAttribute('aria-pressed', active ? 'true' : 'false');
       });
       loadLedger();
+      loadAccuracy();
     });
   });
 
@@ -177,4 +232,5 @@
   });
 
   loadLedger();
+  loadAccuracy();
 })();
