@@ -219,6 +219,29 @@ def test_unmeasured_same_game_correlation_is_visible_and_not_trackable():
     assert result["decision"]["trackable"] is False
 
 
+def test_verified_measured_same_game_correlation_is_applied_and_trackable():
+    result = build_guided_parlay(
+        [verified_edge(1, game_pk=510), verified_edge(2, game_pk=510)],
+        name="Measured Same Game",
+        risk_tier="moderate",
+        generated_at=NOW,
+        measured_correlation_pairs=[{
+            "pairKey": "batter_hits:over|batter_total_bases:over",
+            "sampleSize": 60,
+            "state": "positive",
+            "factor": 1.2,
+            "verified": True,
+        }],
+    )
+
+    assert result["state"] == "ready"
+    assert result["correlation"]["state"] == "measured"
+    assert result["correlation"]["measuredPairCount"] == 1
+    assert result["correlation"]["unresolvedPairCount"] == 0
+    assert result["correlation"]["adjustmentFactor"] == 1.2
+    assert result["decision"]["trackable"] is True
+
+
 def test_auto_payload_uses_verified_edge_snapshot_and_contract(monkeypatch):
     rows = [verified_edge(i) for i in range(1, 6)]
     monkeypatch.setattr(

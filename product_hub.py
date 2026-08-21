@@ -7,6 +7,14 @@ from pathlib import Path
 from flask import Blueprint, jsonify, make_response
 
 from accuracy_control_plane import ACCURACY_CONTROL_PLANE_VERSION
+from intelligence_control_plane import (
+    CHAMPION_CHALLENGER_VERSION,
+    DRIFT_CONTROL_VERSION,
+    ERROR_ATLAS_VERSION,
+    INTELLIGENCE_CONTROL_PLANE_VERSION,
+    POLICY_LAB_VERSION,
+    SIMULATION_CALIBRATION_VERSION,
+)
 from monetization_growth import (
     CONVERSION_LEDGER_STORAGE_KEY,
     MONETIZATION_GROWTH_VERSION,
@@ -221,6 +229,36 @@ def product_journey():
                 "privateTrackerFieldsIncluded": False,
                 "automaticModelChange": False,
                 "automaticThresholdChange": False,
+                "serverMutation": False,
+                "failClosed": True,
+            },
+            "accuracyIntelligenceProgram": {
+                "version": INTELLIGENCE_CONTROL_PLANE_VERSION,
+                "sourceEndpoint": "/api/accuracy/intelligence?window=120",
+                "surface": "/verification#intelligenceProgram",
+                "phaseVersions": {
+                    "errorAtlas": ERROR_ATLAS_VERSION,
+                    "championChallenger": CHAMPION_CHALLENGER_VERSION,
+                    "driftControl": DRIFT_CONTROL_VERSION,
+                    "simulationCalibration": SIMULATION_CALIBRATION_VERSION,
+                    "policyLab": POLICY_LAB_VERSION,
+                },
+                "requiresPredictionReceiptVersion": "5.4.0",
+                "requiresClosingBenchmarkReceiptVersion": "6.0",
+                "requiresIntelligenceEvidenceReceiptVersion": "6.5.0",
+                "minimumContextSample": 30,
+                "minimumChallengerTotalSample": 300,
+                "minimumSimulationSample": 100,
+                "minimumCorrelationPairs": 50,
+                "driftMayDowngradeOrSuppress": True,
+                "unverifiedCorrelationTrackable": False,
+                "rawRowsIncluded": False,
+                "automaticModelPromotion": False,
+                "automaticRetraining": False,
+                "automaticProbabilityChange": False,
+                "automaticThresholdChange": False,
+                "automaticStakingChange": False,
+                "humanReviewRequired": True,
                 "serverMutation": False,
                 "failClosed": True,
             },

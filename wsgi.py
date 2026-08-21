@@ -7,6 +7,7 @@ from canonical_consistency import (
     install_canonical_consistency_api,
 )
 from intelligence_integration import install_intelligence_api
+from intelligence_control_plane import install_intelligence_control_plane
 from tracker_confidence_integration import install_tracker_confidence
 from cache_warmup import cache_warmup_bp
 from monetization_growth import monetization_growth_bp
@@ -18,6 +19,7 @@ install_intelligence_api(app_module)
 install_canonical_consistency_api(app_module)
 install_public_verification(app_module)
 install_accuracy_control_plane(app_module)
+install_intelligence_control_plane(app_module)
 
 # Phase 4.59: expose bounded warmup state once per worker.
 if not getattr(app_module.app, "_phase_459_warmup_installed", False):
