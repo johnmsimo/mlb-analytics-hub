@@ -439,6 +439,17 @@ def test_completed_market_gate_abstention_is_cacheable_not_a_failed_job(monkeypa
     assert payload['simulationReady'] is False
     assert payload['recommendationSource'] == 'market_validation_abstention'
     assert payload['quickPicks'] == []
+    assert payload['analysisReady'] is True
+    assert payload['watchlistCount'] == 3
+    assert {
+        pick['intelligenceCategory'] for pick in payload['watchlistPicks']
+    } == {'hitter_hits', 'pitcher_strikeouts', 'game_winner'}
+    assert all(
+        pick['recommendationGrade'] == 'Watchlist'
+        and pick['isActionable'] is False
+        and pick['promotionStatus'] == 'research_only'
+        for pick in payload['watchlistPicks']
+    )
     assert all(
         decision['recommendationGrade'] == 'Pass'
         for decision in payload['marketDecisions']

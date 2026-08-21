@@ -25,6 +25,7 @@
   ];
   var state = {
     edges: [],
+    watchlistEdges: [],
     edgePayload: null,
     edgeState: 'loading',
     markets: null,
@@ -683,7 +684,7 @@
   function admissionReasons(payload) {
     var totals = {};
     auditObjects(payload).forEach(function (audit) {
-      var reasons = audit.rejectionReasons;
+      var reasons = audit.primaryRejectionReasons || audit.rejectionReasons;
       if (!reasons || typeof reasons !== 'object' || Array.isArray(reasons)) return;
       Object.keys(reasons).forEach(function (reason) {
         var count = number(reasons[reason]);
@@ -710,6 +711,42 @@
     return state.edges.slice().sort(function (left, right) {
       return (edgeValue(right) || 0) - (edgeValue(left) || 0);
     }).slice(0, 8);
+  }
+
+  function dailyWatchlistRows() {
+    return state.watchlistEdges.slice().sort(function (left, right) {
+      return (edgeValue(right) || 0) - (edgeValue(left) || 0);
+    }).slice(0, 5);
+  }
+
+  function watchlistBoardCardHtml(row) {
+    var edge = edgeValue(row);
+    var modelProb = probability(row.modelProb);
+    var fairProb = probability(row.marketFairProbability);
+    var price = priceOf(row);
+    var book = bookOf(row);
+    var player = playerKey(row.player);
+    var saved = state.watchlist.has(player);
+    var context = [row.team, row.matchup].filter(Boolean).join(' · ');
+    return '<article class="decision-card watchlist-card" data-opportunity-state="research_only">' +
+      '<div class="decision-card-top"><span>WATCHLIST · ANALYSIS ONLY</span><small>' +
+      esc(freshnessLabel(row)) + '</small></div>' +
+      '<div class="decision-card-title"><div><strong>' + esc(row.player) +
+      '</strong><small>' + esc(context) + '</small></div><b>+' +
+      (edge == null ? '—' : edge.toFixed(1)) + '% MODEL EDGE</b></div>' +
+      '<p class="decision-selection">' + esc(marketLabelOf(row)) + ' · ' +
+      esc(row.side || 'Over') + ' ' + esc(row.line) + '</p>' +
+      '<div class="decision-proof">' +
+      '<span><small>MODEL</small><b>' + (modelProb == null ? '—' : (modelProb * 100).toFixed(1) + '%') + '</b></span>' +
+      '<span><small>FAIR MARKET</small><b>' + (fairProb == null ? '—' : (fairProb * 100).toFixed(1) + '%') + '</b></span>' +
+      '<span><small>REFERENCE PRICE</small><b>' + esc(book || '—') + ' ' +
+      (price == null ? '—' : (price > 0 ? '+' : '') + price) + '</b></span></div>' +
+      '<p class="decision-explanation"><strong>Why it is not a verified bet:</strong> ' +
+      esc(row.watchlistReason || 'Market validation has not promoted this candidate.') + '</p>' +
+      '<div class="decision-card-actions"><button type="button" data-board-save-player="' +
+      esc(player) + '" aria-pressed="' + (saved ? 'true' : 'false') + '">' +
+      (saved ? '★ Saved player' : '☆ Save to watchlist') + '</button>' +
+      '<span class="analysis-only-note">Tracking and parlays stay disabled</span></div></article>';
   }
 
   function decisionBoardCardHtml(row) {
@@ -751,7 +788,7 @@
     var text = document.getElementById('admissionSummaryText');
     var reasons = admissionReasons(state.edgePayload);
     if (reasons.length) {
-      text.textContent = 'Aggregate gate results from today’s candidate audits. Rejected rows remain hidden.';
+      text.textContent = 'One primary blocker per candidate from today’s audit. Rejected rows remain hidden.';
       host.innerHTML = reasons.slice(0, 6).map(function (reason) {
         return '<div class="admission-reason"><span>' + esc(reason.label) +
           '</span><strong>' + esc(reason.count) + '</strong></div>';
@@ -772,6 +809,7 @@
     var board = document.getElementById('dailyDecisionBoard');
     if (!board) return;
     var rows = dailyDecisionRows();
+    var watchlistRows = dailyWatchlistRows();
     var sourceState = String(state.edgeState || 'loading').toLowerCase();
     var boardState = ['loading', 'computing'].indexOf(sourceState) >= 0 ? 'computing' :
       ['failed', 'unavailable'].indexOf(sourceState) >= 0 ? 'unavailable' :
@@ -791,7 +829,9 @@
       no_bet: {
         status: 'NO BET',
         headline: 'No verified play qualifies right now',
-        detail: 'The scan is ready. No candidate cleared identity, price, freshness, calibration, edge, and receipt gates.'
+        detail: watchlistRows.length
+          ? watchlistRows.length + ' priced positive-edge model signal' + (watchlistRows.length === 1 ? '' : 's') + ' remain visible as analysis-only watchlist opportunities.'
+          : 'The scan is ready. No candidate cleared identity, price, freshness, calibration, edge, and receipt gates.'
       },
       verified_plays: {
         status: 'VERIFIED',
@@ -806,6 +846,8 @@
     document.getElementById('decisionBoardDetail').textContent = copy.detail;
     document.getElementById('boardQualifiedCount').textContent =
       boardState === 'computing' ? '—' : String(rows.length);
+    document.getElementById('boardWatchlistCount').textContent =
+      boardState === 'computing' ? '—' : String(watchlistRows.length);
     document.getElementById('boardRejectedCount').textContent =
       boardState === 'computing' ? '—' : String(auditRejectedCount(state.edgePayload));
     document.getElementById('boardSourceState').textContent = sourceState.toUpperCase();
@@ -813,6 +855,10 @@
     var host = document.getElementById('decisionBoardList');
     if (boardState === 'verified_plays') {
       host.innerHTML = rows.map(decisionBoardCardHtml).join('');
+    } else if (boardState === 'no_bet' && watchlistRows.length) {
+      host.innerHTML = '<div class="watchlist-board-intro"><strong>Watchlist opportunities</strong>' +
+        '<span>These have current model and price evidence, but failed the historical market-validation gate. They are not bets.</span></div>' +
+        watchlistRows.map(watchlistBoardCardHtml).join('');
     } else {
       host.innerHTML = '<div class="decision-board-empty" data-empty-state="' +
         esc(boardState) + '"><strong>' + esc(copy.headline) + '</strong><span>' +
@@ -1420,15 +1466,20 @@
     Promise.all([
       requestJson('/api/edges/today?minEdge=0.03').then(function (payload) {
         var rows = payload && Array.isArray(payload.edges) ? payload.edges : [];
+        var watchlistRows = payload && Array.isArray(payload.watchlistEdges) ? payload.watchlistEdges : [];
         state.edgePayload = payload;
         state.edgeState = String(payload.computationState || 'ready').toLowerCase();
         state.edges = rows.filter(isActionable);
+        state.watchlistEdges = watchlistRows.filter(function (row) {
+          return row && row.actionable === false && row.promotionStatus === 'research_only';
+        });
         renderSignals();
       }).catch(function () {
         failures += 1;
         state.edgePayload = null;
         state.edgeState = 'unavailable';
         state.edges = [];
+        state.watchlistEdges = [];
         renderSignals();
       }),
       requestJson('/api/calibration/markets').then(function (payload) { state.markets = payload; renderValidation(); })

@@ -151,6 +151,45 @@ def _decision_payload(
     )
     interventions = apply_drift_interventions(market_gates['promoted'], phase6)
     integrity_eligible = interventions['promoted']
+    promoted_categories = {
+        classify_pick(row) for row in integrity_eligible
+        if classify_pick(row) in CATEGORY_ORDER
+    }
+    watchlist_sources = [
+        row for row in (
+            list(market_gates['rejected']) + list(interventions['rejected'])
+        )
+        if row.get('sharedSimulationBacked') is True
+        and classify_pick(row) in CATEGORY_ORDER
+        and classify_pick(row) not in promoted_categories
+    ]
+    watchlist_decisions = select_game_card_quick_picks(
+        watchlist_sources,
+        learning=learning,
+    )
+    watchlist_picks = []
+    for source in watchlist_decisions.get('quickPicks') or []:
+        row = dict(source)
+        gate_reasons = (
+            row.get('promotionReasons')
+            or row.get('marketGateReasons')
+            or row.get('actionabilityReasons')
+            or ['Historical market validation has not promoted this signal.']
+        )
+        row.update({
+            'recommendationGrade': 'Watchlist',
+            'selectionMode': 'research_only',
+            'isActionable': False,
+            'actionable': False,
+            'promotionStatus': 'research_only',
+            'watchlistReason': str(gate_reasons[0]),
+            'watchlistReasons': list(gate_reasons)[:3],
+            'recommendedAction': (
+                'Analysis only. Do not track or add this signal to a parlay '
+                'until its market-validation gate passes.'
+            ),
+        })
+        watchlist_picks.append(row)
     audit = simulation_audit(integrity_eligible)
     simulation_backed = [
         row for row in integrity_eligible
@@ -168,10 +207,6 @@ def _decision_payload(
             classify_pick(row) == category for row in simulation_backed
         )
         for category in CATEGORY_ORDER
-    }
-    promoted_categories = {
-        classify_pick(row) for row in integrity_eligible
-        if classify_pick(row) in CATEGORY_ORDER
     }
     required_markets_ready = bool(promoted_categories) and all(
         backed_category_counts[category] >= 1
@@ -236,9 +271,12 @@ def _decision_payload(
             if drift_abstention else 'market_validation_abstention'
         ),
         'simulationReady': fully_backed,
+        'analysisReady': bool(watchlist_picks) or fully_backed,
         'decisionReady': decision_ready,
         'simulationAudit': audit,
         'explanationVersion': '4.32',
+        'watchlistPicks': watchlist_picks,
+        'watchlistCount': len(watchlist_picks),
         **decisions,
     }
 
@@ -270,9 +308,12 @@ def _pending_payload(game_pk, date_str, source_count):
         'deliveryArchitecture': 'redis_durable_worker',
         'recommendationSource': 'simulation_refresh_pending',
         'simulationReady': False,
+        'analysisReady': False,
         'decisionReady': False,
         'simulationAudit': simulation_audit([]),
         'explanationVersion': '4.32',
+        'watchlistPicks': [],
+        'watchlistCount': 0,
         **decisions,
     }
 
@@ -846,6 +887,19 @@ def install_intelligence_api(app_module):
             dict(row) for row in current_entries
             if str(row.get('gamePk')) == str(game_pk)
         ]
+        # Tracker capture is not guaranteed to run before a user opens a game.
+        # Reuse the durable slate producer that already powers My Hub so Quick
+        # Props can return analyzed rows immediately while its complete
+        # per-game candidate pool refreshes in the worker.
+        if not rows:
+            scan_loader = getattr(app_module, '_props_scan_today_payload', None)
+            if callable(scan_loader):
+                scan = scan_loader(date_str) or {}
+                rows = [
+                    dict(row) for row in (scan.get('props') or [])
+                    if str(row.get('gamePk')) == str(game_pk)
+                ]
+        pool_ready = _candidate_pool_ready(rows) if rows else False
         payload = (
             _decision_payload(
                 game_pk,
@@ -857,10 +911,10 @@ def install_intelligence_api(app_module):
                     app_module, date_str, all_tracker_entries,
                 ),
             )
-            if _candidate_pool_ready(rows)
+            if rows
             else _pending_payload(game_pk, date_str, len(rows))
         )
-        if payload.get('decisionReady') and not refresh:
+        if payload.get('decisionReady') and pool_ready and not refresh:
             _write_cached_payload(game_pk, date_str, payload)
             return app_module.jsonify(dict(payload, cached=False, computing=False))
 
@@ -871,8 +925,13 @@ def install_intelligence_api(app_module):
             'refreshStatus': job,
             'retryAfterSeconds': 4,
             'message': (
-                'Refreshing the linked matchup simulation in the background. '
-                'This card will update automatically.'
+                (
+                    'Analysis is available now; refreshing the complete linked '
+                    'matchup simulation in the background.'
+                    if payload.get('analysisReady') else
+                    'Refreshing the linked matchup simulation in the background. '
+                    'This card will update automatically.'
+                )
                 if computing else
                 ((job or {}).get('error') or 'Matchup simulation unavailable.')
             ),

@@ -45,6 +45,7 @@ def test_daily_board_is_the_primary_workspace_surface():
         'id="dailyDecisionBoard"',
         'id="decisionBoardStatus"',
         'id="decisionBoardList"',
+        'id="boardWatchlistCount"',
         'id="admissionReasonList"',
         'id="decisionBoardRefresh"',
         "What matters today",
@@ -68,6 +69,18 @@ def test_daily_board_uses_only_canonical_actionable_receipted_rows():
     assert "actionabilityAudit" in source
     assert "raw rejected" not in source.lower()
     assert "No candidate cleared identity, price, freshness, calibration, edge, and receipt gates." in source
+
+
+def test_daily_board_surfaces_sanitized_analysis_without_bet_actions():
+    source = (ROOT / "static" / "product-hub.js").read_text(encoding="utf-8")
+
+    assert "payload.watchlistEdges" in source
+    assert "function watchlistBoardCardHtml(row)" in source
+    assert "WATCHLIST · ANALYSIS ONLY" in source
+    assert "Tracking and parlays stay disabled" in source
+    assert "row.actionable === false" in source
+    assert "row.promotionStatus === 'research_only'" in source
+    assert "audit.primaryRejectionReasons || audit.rejectionReasons" in source
 
 
 def test_daily_board_preserves_no_bet_and_unavailable_states():

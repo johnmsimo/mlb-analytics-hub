@@ -603,17 +603,21 @@ def _gate(market: str, metrics: Mapping[str, Any], folds: int,
     if str(metrics.get("driftStatus") or "unknown") == "drifted":
         failed.append("calibration drift exceeds policy")
 
-    if insufficient:
-        status = "warming_up"
-    elif failed:
+    # A missing measurement must not hide an already observed policy failure.
+    # Live reports previously labeled strongly negative ROI/drawdown markets as
+    # merely "warming up" because CLV was absent. Disabled is the truthful
+    # state whenever any measured failure exists.
+    if failed:
         status = "disabled"
+    elif insufficient:
+        status = "warming_up"
     else:
         status = "promoted"
     return {
         "marketKey": market,
         "status": status,
         "promoted": status == "promoted",
-        "reasons": insufficient + failed,
+        "reasons": (failed + insufficient) if failed else insufficient,
         "metrics": dict(metrics),
     }
 
