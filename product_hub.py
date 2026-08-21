@@ -6,6 +6,7 @@ from pathlib import Path
 
 from flask import Blueprint, jsonify, make_response
 
+from accuracy_control_plane import ACCURACY_CONTROL_PLANE_VERSION
 from monetization_growth import (
     CONVERSION_LEDGER_STORAGE_KEY,
     MONETIZATION_GROWTH_VERSION,
@@ -199,6 +200,27 @@ def product_journey():
                 "growthPersistence": "device_private",
                 "serverAnalyticsCollection": False,
                 "rawPersonalDataIncluded": False,
+                "serverMutation": False,
+                "failClosed": True,
+            },
+            "accuracyControlPlane": {
+                "version": ACCURACY_CONTROL_PLANE_VERSION,
+                "sourceEndpoint": "/api/accuracy/control-plane?window=90",
+                "surface": "/verification#accuracyControlPlane",
+                "benchmarkType": "side_correct_two_way_power_devig_close",
+                "minimumPairedSample": 500,
+                "minimumClvSample": 500,
+                "beatCloseTarget": 0.524,
+                "requiresImmutablePredictionReceipt": True,
+                "requiresClosingBenchmarkReceipt": True,
+                "requiresExactLine": True,
+                "requiresAcceptedClosingIntegrity": True,
+                "requiresBrierConfidence": True,
+                "requiresBeatCloseConfidence": True,
+                "industryClaimDefaultsToFalse": True,
+                "privateTrackerFieldsIncluded": False,
+                "automaticModelChange": False,
+                "automaticThresholdChange": False,
                 "serverMutation": False,
                 "failClosed": True,
             },

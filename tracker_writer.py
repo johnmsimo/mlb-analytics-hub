@@ -101,10 +101,12 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from config import settings
+from accuracy_control_plane import build_closing_benchmark_receipt
 from continuous_learning import build_prediction_receipt
 from closing_line_integrity import accept_closing_capture
 from odds_lineage import build_odds_lineage
 from public_verification import build_publication_receipt
+from value_engine import american_to_implied
 
 _HERE        = os.path.dirname(os.path.abspath(__file__))
 _DATA_DIR    = settings.data_dir
@@ -133,6 +135,8 @@ def build_pick_payload(
     # Book / market data
     opening_price:    Optional[int]   = None,
     closing_price:    Optional[int]   = None,
+    closing_over_price: Optional[int] = None,
+    closing_under_price: Optional[int] = None,
     opening_implied:  Optional[float] = None,
     closing_implied:  Optional[float] = None,
     book:             Optional[str]   = None,
@@ -187,6 +191,13 @@ def build_pick_payload(
     if _adj_prob is not None and opening_implied is not None:
         _edge = round(float(_adj_prob) - float(opening_implied), 4)
 
+    normalized_side = str(side or "").strip().lower()
+    selected_closing_price = closing_price
+    if normalized_side.startswith("over") and closing_over_price is not None:
+        selected_closing_price = closing_over_price
+    elif normalized_side.startswith("under") and closing_under_price is not None:
+        selected_closing_price = closing_under_price
+
     _clv_edge = None
     if closing_implied is not None and opening_implied is not None:
         _clv_edge = round(float(closing_implied) - float(opening_implied), 4)
@@ -196,7 +207,9 @@ def build_pick_payload(
         first_pitch,
         opening_captured_at,
         closing_captured_at,
-        closing_price,
+        selected_closing_price,
+        closing_over_price,
+        closing_under_price,
         closing_implied,
         closing_book,
     )):
@@ -204,7 +217,7 @@ def build_pick_payload(
             opening={"capturedAt": opening_captured_at},
             closing={
                 "capturedAt": closing_captured_at,
-                "price": closing_price,
+                "price": selected_closing_price,
                 "book": closing_book or book,
                 "source": closing_source,
             },
@@ -230,7 +243,7 @@ def build_pick_payload(
             "source": current_source or source,
         },
         closing={
-            "price": closing_price,
+            "price": selected_closing_price,
             "impliedProbability": closing_implied,
             "book": closing_book or book,
             "capturedAt": closing_captured_at,
@@ -290,7 +303,10 @@ def build_pick_payload(
 
         # Book / market
         "openingPrice":   opening_price,
-        "closingPrice":   closing_price,
+        "closingPrice":   selected_closing_price,
+        "closingOverPrice": closing_over_price,
+        "closingUnderPrice": closing_under_price,
+        "closingLine": line,
         "currentPrice":    current_price,
         "openingImplied": round(opening_implied, 4) if opening_implied is not None else None,
         "closingImplied": round(closing_implied, 4) if closing_implied is not None else None,
@@ -329,6 +345,63 @@ def build_pick_payload(
     # Merge any extra fields last (caller overrides)
     if extra:
         payload.update(extra)
+
+    # Phase 6.0 requires a complete, side-correct two-way close before the
+    # market can benchmark model accuracy. A one-sided legacy close remains
+    # available for compatibility but cannot enter the Phase 6 scorecard.
+    if (
+        payload.get("closingOverPrice") is not None
+        or payload.get("closingUnderPrice") is not None
+    ):
+        benchmark = build_closing_benchmark_receipt(payload)
+        payload["closingBenchmarkReceipt"] = benchmark
+        if benchmark["accepted"]:
+            snapshot = benchmark["snapshot"]
+            selected_implied = american_to_implied(snapshot["selectedPrice"])
+            payload["closingPrice"] = snapshot["selectedPrice"]
+            payload["closingImplied"] = selected_implied
+            payload["closingFairProbability"] = snapshot["selectedFairProbability"]
+            payload["clvEdge"] = (
+                round(
+                    float(selected_implied)
+                    - float(payload["openingImplied"]),
+                    4,
+                )
+                if payload.get("openingImplied") is not None
+                and selected_implied is not None
+                else None
+            )
+            refreshed_lineage = build_odds_lineage(
+                line=line,
+                opening={
+                    "price": opening_price,
+                    "impliedProbability": opening_implied,
+                    "book": book,
+                    "capturedAt": opening_captured_at,
+                    "source": source,
+                },
+                current={
+                    "price": current_price,
+                    "impliedProbability": current_implied,
+                    "book": current_book or book,
+                    "capturedAt": current_captured_at,
+                    "source": current_source or source,
+                },
+                closing={
+                    "price": snapshot["selectedPrice"],
+                    "impliedProbability": selected_implied,
+                    "book": snapshot["book"],
+                    "capturedAt": snapshot["capturedAt"],
+                    "source": snapshot["source"],
+                },
+                closing_integrity=closing_integrity,
+            )
+            payload["oddsLineageVersion"] = refreshed_lineage["version"]
+            payload["oddsLineage"] = refreshed_lineage
+            payload["clvEligible"] = refreshed_lineage["clvEligible"]
+            payload["clvEligibilityReason"] = refreshed_lineage["clvReason"]
+        else:
+            payload["closingFairProbability"] = None
 
     # Phase 5.4 freezes every pre-outcome learning input before grading. The
     # receipt excludes grade/profit fields and is preserved on later upserts.
