@@ -16,6 +16,7 @@ from scripts.production_contract_gate import (
     validate_actionable_edges,
     validate_page,
     _validate_accuracy_control_plane,
+    _validate_accuracy_intelligence,
     _validate_public_verification,
 )
 
@@ -310,6 +311,36 @@ class FakeProduction:
                         "serverMutation": False,
                         "failClosed": True,
                     },
+                    "accuracyIntelligenceProgram": {
+                        "version": "6.5",
+                        "sourceEndpoint": "/api/accuracy/intelligence?window=120",
+                        "surface": "/verification#intelligenceProgram",
+                        "phaseVersions": {
+                            "errorAtlas": "6.1",
+                            "championChallenger": "6.2",
+                            "driftControl": "6.3",
+                            "simulationCalibration": "6.4",
+                            "policyLab": "6.5",
+                        },
+                        "requiresPredictionReceiptVersion": "5.4.0",
+                        "requiresClosingBenchmarkReceiptVersion": "6.0",
+                        "requiresIntelligenceEvidenceReceiptVersion": "6.5.0",
+                        "minimumContextSample": 30,
+                        "minimumChallengerTotalSample": 300,
+                        "minimumSimulationSample": 100,
+                        "minimumCorrelationPairs": 50,
+                        "driftMayDowngradeOrSuppress": True,
+                        "unverifiedCorrelationTrackable": False,
+                        "rawRowsIncluded": False,
+                        "automaticModelPromotion": False,
+                        "automaticRetraining": False,
+                        "automaticProbabilityChange": False,
+                        "automaticThresholdChange": False,
+                        "automaticStakingChange": False,
+                        "humanReviewRequired": True,
+                        "serverMutation": False,
+                        "failClosed": True,
+                    },
                     "alerts": {
                         "failClosed": True,
                         "serverPersistence": False,
@@ -473,6 +504,62 @@ class FakeProduction:
                     "privateTrackerFieldsIncluded": False,
                     "automaticModelChange": False,
                     "automaticThresholdChange": False,
+                    "serverMutation": False,
+                }
+            )
+        if clean_path == "/api/accuracy/intelligence":
+            return json_response(
+                {
+                    "success": True,
+                    "version": "6.5",
+                    "state": "insufficient_sample",
+                    "generatedAt": "2026-08-21T12:00:00+00:00",
+                    "window": {"days": 120, "from": "2026-04-24", "through": "2026-08-21"},
+                    "coverage": {
+                        "verifiedObservationCount": 0,
+                        "rejectedObservationCount": 0,
+                        "rejectedReasonCounts": {},
+                        "rawRowsIncluded": False,
+                    },
+                    "phases": {
+                        "errorAtlas": {
+                            "version": "6.1", "state": "insufficient_sample",
+                            "minimumVisibleSample": 30, "cohorts": [],
+                            "rawRowsIncluded": False,
+                        },
+                        "championChallenger": {
+                            "version": "6.2", "state": "insufficient_sample",
+                            "challengers": [], "automaticPromotion": False,
+                            "humanReviewRequired": True,
+                        },
+                        "driftControl": {
+                            "version": "6.3", "state": "insufficient_sample",
+                            "markets": {}, "mayRetrainModel": False,
+                            "mayPromoteModel": False,
+                        },
+                        "simulationCalibration": {
+                            "version": "6.4", "state": "insufficient_sample",
+                            "simulation": {"sampleSize": 0}, "correlationPairs": [],
+                            "unverifiedCorrelationTrackable": False,
+                            "rawRowsIncluded": False,
+                        },
+                        "policyLab": {
+                            "version": "6.5", "state": "insufficient_sample",
+                            "proposals": [], "automaticThresholdChange": False,
+                            "automaticStakingChange": False,
+                        },
+                    },
+                    "safety": {
+                        "readOnly": True,
+                        "failClosed": True,
+                        "privateTrackerFieldsIncluded": False,
+                        "automaticModelPromotion": False,
+                        "automaticRetraining": False,
+                        "automaticProbabilityChange": False,
+                        "automaticThresholdChange": False,
+                        "automaticStakingChange": False,
+                        "humanReviewRequired": True,
+                    },
                     "serverMutation": False,
                 }
             )
@@ -665,7 +752,7 @@ def test_full_gate_uses_only_get_contracts_and_reports_coverage():
         "pages": 21,
         "assets": 1,
         "admin_boundaries": 8,
-        "api_contracts": 11,
+        "api_contracts": 12,
         "worker_convergence": 1,
     }
     assert all(call[1] for call in fake.calls)
@@ -694,6 +781,16 @@ def test_accuracy_control_plane_contract_withholds_unqualified_claims():
         _validate_accuracy_control_plane(payload)
 
 
+def test_accuracy_intelligence_contract_keeps_review_and_privacy_boundaries():
+    fake = FakeProduction()
+    payload = fake("https://production.example", "/api/accuracy/intelligence", 5).json()
+    _validate_accuracy_intelligence(payload)
+
+    payload["safety"]["automaticModelPromotion"] = True
+    with pytest.raises(ContractError, match="opened automaticModelPromotion"):
+        _validate_accuracy_intelligence(payload)
+
+
 def test_baseline_gate_defers_new_deployed_api_contracts():
     fake = FakeProduction()
     summary = run_gate(
@@ -715,6 +812,7 @@ def test_baseline_gate_defers_new_deployed_api_contracts():
     assert "/api/tracker/performance" not in paths
     assert "/api/verification/ledger" not in paths
     assert "/api/accuracy/control-plane" not in paths
+    assert "/api/accuracy/intelligence" not in paths
     assert "/verification" not in paths
     assert "/pricing" not in paths
     assert "/api/monetization/status" not in paths

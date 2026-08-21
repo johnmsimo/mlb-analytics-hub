@@ -1,6 +1,6 @@
 # MLB Analytics Hub Roadmap
 
-Status: Phase 5.11 is merged and deployed. Phases 5.7 and 5.8 remain deferred; Phase 6.0 is active.
+Status: Phase 6.0 is merged and deployed. Phases 6.1–6.5 are implemented on the current phase branch; Phases 5.7 and 5.8 remain deferred.
 
 This roadmap is the durable handoff from the top-to-bottom production audit of
 the live MLB Analytics Hub. The work remains incremental, fail-closed, and
@@ -817,7 +817,7 @@ de-vigged closing benchmark with enough paired observations.
 
 ### Phase 6.0 — Verified Closing Benchmark and Accuracy Control Plane
 
-Implementation status: active.
+Implementation status: merged and deployed.
 
 Capture both over and under prices from the same sportsbook at the exact
 closing line, select the recommendation side explicitly, remove vig with the
@@ -840,33 +840,67 @@ above 52.4%, and its 95% Wilson lower bound is above 50%.
 
 ### Phase 6.1 — Contextual Error Atlas
 
+Implementation status: implemented on the current phase branch; awaiting review, merge, and deployment.
+
 Measure calibration, Brier skill, and misses by market, side, line, sportsbook,
 lineup status, pitcher hand, park, weather, umpire, model version, confidence
 tier, and freshness cohort. Require minimum samples and suppress raw rows.
 
+Exit gate: only rows with intact 5.4, 6.0, and 6.5 evidence receipts enter;
+cohorts below 30 observations are suppressed; directional labels require 100;
+the public response contains aggregates and fixed rejection codes only.
+
 ### Phase 6.2 — Champion/Challenger Intelligence
+
+Implementation status: implemented on the current phase branch; awaiting review, merge, and deployment.
 
 Generate shadow challenger reports that identify exactly which cohorts improve,
 which regress, and whether gains survive temporal holdout, serve parity,
 calibration, and market baselines. Promotion remains review and merge gated.
 
+Exit gate: each challenger needs 300 total and 100 temporal-holdout observations;
+its 95% paired Brier intervals must beat both the served champion and verified
+close without materially degrading ECE; the system can emit a review candidate
+but cannot promote it.
+
 ### Phase 6.3 — Live Drift Intervention
+
+Implementation status: implemented on the current phase branch; awaiting review, merge, and deployment.
 
 Unify feature drift, probability drift, calibration drift, provider health, and
 CLV decay into bounded market states. Drift can downgrade or suppress a market,
 but cannot silently retrain or promote a model.
 
+Exit gate: a market needs 30 recent and 100 baseline observations; `watch`
+downgrades confidence, `degraded` becomes research-only, and `suppressed`
+becomes no-bet before recommendations are returned. Probabilities and model
+artifacts remain unchanged.
+
 ### Phase 6.4 — Simulation and Correlation Calibration
+
+Implementation status: implemented on the current phase branch; awaiting review, merge, and deployment.
 
 Grade Monte Carlo distributions, interval coverage, game simulations, and
 parlay correlation assumptions against realized outcomes. Block correlation
 claims that lack verified joint samples.
 
+Exit gate: simulation calibration needs 100 prospective observations; a
+same-game market/side correlation factor needs 50 verified joint outcomes and
+a directional confidence interval. Guided parlays apply only those measured
+pairs; unresolved pairs remain visible and untrackable.
+
 ### Phase 6.5 — Decision Policy Optimization
+
+Implementation status: implemented on the current phase branch; awaiting review, merge, and deployment.
 
 Use strictly out-of-sample shadow experiments to test no-bet zones and
 market-specific edge/EV thresholds. Optimize decision quality rather than pick
 volume; changes require explicit review and rollback evidence.
+
+Exit gate: threshold proposals use a temporal 70/30 split with at least 150
+reference and 75 holdout selections, report ROI, CLV, and drawdown together,
+and retain a selection-bias warning. No threshold or staking change is applied
+automatically.
 
 ## Audit findings carried into the roadmap
 

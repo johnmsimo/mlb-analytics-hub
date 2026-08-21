@@ -1,7 +1,7 @@
 """Flask integration for prediction, explanation, and game-card intelligence."""
 import math
 import time
-from datetime import datetime
+from datetime import date, datetime
 
 from actionability import ACTIONABILITY_VERSION, evaluate_actionability
 from candidate_integrity import (
@@ -17,6 +17,10 @@ from game_card_intelligence import (
     select_game_card_quick_picks,
 )
 from intelligence_core import build_recommendations, classify_pick
+from intelligence_control_plane import (
+    apply_drift_interventions,
+    build_intelligence_control_plane,
+)
 from learning_engine import analyze_learning
 from market_validation import VALIDATION_VERSION, apply_market_gates
 from odds_lineage import ODDS_LINEAGE_VERSION, clv_summary
@@ -114,7 +118,27 @@ def _merge_candidate_rows(captured, generated):
     return list(merged.values())
 
 
-def _decision_payload(game_pk, date_str, rows, all_tracker_entries, generated_count=0):
+def _phase6_report(app_module, date_str, entries):
+    cached_builder = getattr(
+        app_module, '_current_phase6_intelligence_report', None,
+    ) if app_module is not None else None
+    if callable(cached_builder):
+        return cached_builder(date_str)
+    return build_intelligence_control_plane(
+        entries,
+        as_of=date.fromisoformat(date_str),
+        window_days=120,
+    )
+
+
+def _decision_payload(
+    game_pk,
+    date_str,
+    rows,
+    all_tracker_entries,
+    generated_count=0,
+    phase6_report=None,
+):
     candidates = prepare_game_card_candidates(rows)
     contextual = enrich_context(candidates)
     matchups = enrich_matchups(contextual)
@@ -122,7 +146,11 @@ def _decision_payload(game_pk, date_str, rows, all_tracker_entries, generated_co
     learning = analyze_learning(all_tracker_entries)
     integrity = evaluate_candidates(simulated)
     market_gates = apply_market_gates(integrity['eligible'], learning)
-    integrity_eligible = market_gates['promoted']
+    phase6 = phase6_report or _phase6_report(
+        None, date_str, all_tracker_entries,
+    )
+    interventions = apply_drift_interventions(market_gates['promoted'], phase6)
+    integrity_eligible = interventions['promoted']
     audit = simulation_audit(integrity_eligible)
     simulation_backed = [
         row for row in integrity_eligible
@@ -131,7 +159,9 @@ def _decision_payload(game_pk, date_str, rows, all_tracker_entries, generated_co
     decisions = select_game_card_quick_picks(
         simulation_backed,
         learning=learning,
-        market_gate_rejections=market_gates['rejected'],
+        market_gate_rejections=(
+            list(market_gates['rejected']) + list(interventions['rejected'])
+        ),
     )
     backed_category_counts = {
         category: sum(
@@ -169,6 +199,9 @@ def _decision_payload(game_pk, date_str, rows, all_tracker_entries, generated_co
         not promoted_categories
         and market_gates['audit']['candidateCount'] > 0
     )
+    drift_abstention = bool(
+        not promoted_categories and interventions['rejected']
+    )
     decision_ready = fully_backed or validation_abstention
     # Never promote a partial market pool as a finished set of simulated picks.
     # A previously cached complete snapshot may still be served while this one
@@ -189,6 +222,8 @@ def _decision_payload(game_pk, date_str, rows, all_tracker_entries, generated_co
         'actionabilityAudit': (market_gates['audit'].get('actionabilityAudit') or {}),
         'marketValidationVersion': VALIDATION_VERSION,
         'marketGateAudit': market_gates['audit'],
+        'phase6IntelligenceVersion': phase6['version'],
+        'phase6DriftAudit': interventions['audit'],
         'marketValidation': learning.get('marketValidation'),
         'pickConfidenceVersion': '4.34',
         'matchupSimulationVersion': '4.35',
@@ -197,7 +232,8 @@ def _decision_payload(game_pk, date_str, rows, all_tracker_entries, generated_co
         'recommendationSource': (
             'shared_game_matchup_simulation'
             if fully_backed else 'simulation_refresh_pending'
-            if not validation_abstention else 'market_validation_abstention'
+            if not validation_abstention else 'phase6_drift_abstention'
+            if drift_abstention else 'market_validation_abstention'
         ),
         'simulationReady': fully_backed,
         'decisionReady': decision_ready,
@@ -272,6 +308,9 @@ def _generate_game_card_payload(app_module, game_pk, date_str):
         merged,
         all_tracker_entries,
         generated_count=len(generated),
+        phase6_report=_phase6_report(
+            app_module, date_str, all_tracker_entries,
+        ),
     )
 
 
@@ -477,8 +516,12 @@ def install_intelligence_api(app_module):
         history = _validation_history(app_module, effective_date, entries)
         learning = analyze_learning(history)
         market_gates = apply_market_gates(simulated_entries, learning)
+        phase6 = _phase6_report(app_module, effective_date, history)
+        interventions = apply_drift_interventions(
+            market_gates['promoted'], phase6,
+        )
         decisions = explain_decisions(
-            build_recommendations(market_gates['promoted']),
+            build_recommendations(interventions['promoted']),
             learning=learning,
         )
         return {
@@ -491,6 +534,8 @@ def install_intelligence_api(app_module):
             'learningVersion': VALIDATION_VERSION,
             'marketValidationVersion': VALIDATION_VERSION,
             'marketGateAudit': market_gates['audit'],
+            'phase6IntelligenceVersion': phase6['version'],
+            'phase6DriftAudit': interventions['audit'],
             'marketValidation': learning.get('marketValidation'),
             'calibrationVersion': '4.54',
             'oddsLineageVersion': ODDS_LINEAGE_VERSION,
@@ -808,6 +853,9 @@ def install_intelligence_api(app_module):
                 rows,
                 all_tracker_entries,
                 generated_count=0,
+                phase6_report=_phase6_report(
+                    app_module, date_str, all_tracker_entries,
+                ),
             )
             if _candidate_pool_ready(rows)
             else _pending_payload(game_pk, date_str, len(rows))

@@ -104,6 +104,7 @@ from config import settings
 from accuracy_control_plane import build_closing_benchmark_receipt
 from continuous_learning import build_prediction_receipt
 from closing_line_integrity import accept_closing_capture
+from intelligence_control_plane import build_intelligence_evidence_receipt
 from odds_lineage import build_odds_lineage
 from public_verification import build_publication_receipt
 from value_engine import american_to_implied
@@ -406,6 +407,7 @@ def build_pick_payload(
     # Phase 5.4 freezes every pre-outcome learning input before grading. The
     # receipt excludes grade/profit fields and is preserved on later upserts.
     payload["learningReceipt"] = build_prediction_receipt(payload)
+    payload["intelligenceEvidenceReceipt"] = build_intelligence_evidence_receipt(payload)
 
     # Phase 5.6 separately freezes the exact public release price. Only
     # integrity-eligible system recommendations receive a publication receipt.
@@ -469,10 +471,18 @@ def write_pick(
             merged = {**payload}
             for preserve_key in (
                 "grade", "gradedAt", "profitUnits", "profitDollars",
-                "learningReceipt", "publicationReceipt",
+                "learningReceipt", "intelligenceEvidenceReceipt",
+                "publicationReceipt",
             ):
                 if existing.get(preserve_key) not in (None, "pending"):
                     merged[preserve_key] = existing[preserve_key]
+            if (
+                isinstance(existing.get("learningReceipt"), dict)
+                and not isinstance(existing.get("intelligenceEvidenceReceipt"), dict)
+            ):
+                # Do not backfill the Phase 6.5 pre-outcome receipt onto a
+                # legacy prediction during a later refresh.
+                merged.pop("intelligenceEvidenceReceipt", None)
             entries[existing_idx] = merged
         else:
             entries.append(payload)

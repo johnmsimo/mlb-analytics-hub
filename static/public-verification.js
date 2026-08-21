@@ -86,6 +86,60 @@
     setText('accuracyClaim', 'Withheld');
   }
 
+  function phaseState(value) {
+    return String(value || 'insufficient_sample').replace(/_/g, ' ');
+  }
+
+  function renderIntelligence(payload) {
+    var phases = payload.phases || {};
+    var coverage = payload.coverage || {};
+    var atlas = phases.errorAtlas || {};
+    var challengers = phases.championChallenger || {};
+    var drift = phases.driftControl || {};
+    var simulation = phases.simulationCalibration || {};
+    var policy = phases.policyLab || {};
+    var stateNode = byId('intelligenceState');
+    var challengerRows = Array.isArray(challengers.challengers) ? challengers.challengers : [];
+    var marketRows = drift.markets && typeof drift.markets === 'object' ? Object.keys(drift.markets).map(function (key) { return drift.markets[key]; }) : [];
+    var proposals = Array.isArray(policy.proposals) ? policy.proposals : [];
+    var interventions = marketRows.filter(function (row) { return row && row.recommendedAction !== 'none'; }).length;
+    var reviewCandidates = challengerRows.filter(function (row) { return row && row.state === 'review_candidate'; }).length;
+    var policyCandidates = proposals.filter(function (row) { return row && row.state === 'review_candidate'; }).length;
+    var simulationMetrics = simulation.simulation || {};
+
+    if (stateNode) {
+      stateNode.textContent = phaseState(payload.state);
+      stateNode.className = 'accuracy-state accuracy-state--' + String(payload.state || 'insufficient_sample');
+    }
+    setText('intelligenceCopy', payload.state === 'ready'
+      ? 'Verified pre-outcome evidence now drives cohort diagnosis, shadow evaluation, drift interventions, simulation checks, and review-only policy proposals.'
+      : 'The program is live, but evidence-gated outputs remain withheld until their required samples verify.');
+    setText('errorAtlasState', phaseState(atlas.state));
+    setText('errorAtlasDetail', (Array.isArray(atlas.cohorts) ? atlas.cohorts.length : 0) + ' visible cohorts · ' + (atlas.suppressedCohortCount || 0) + ' suppressed');
+    setText('challengerState', phaseState(challengers.state));
+    setText('challengerDetail', reviewCandidates + ' review candidates · ' + challengerRows.length + ' shadow models');
+    setText('driftState', phaseState(drift.state));
+    setText('driftDetail', interventions ? interventions + ' market interventions' : 'No market intervention');
+    setText('simulationState', phaseState(simulation.state));
+    setText('simulationDetail', (simulationMetrics.sampleSize || 0) + ' verified observations · ' + ((simulation.correlationPairs || []).length) + ' measured pairs');
+    setText('policyState', phaseState(policy.state));
+    setText('policyDetail', policyCandidates + ' review proposals · ' + proposals.length + ' markets tested');
+    setText('intelligenceCoverage',
+      (coverage.verifiedObservationCount || 0) + ' verified · ' +
+      (coverage.rejectedObservationCount || 0) + ' withheld · read only · no automatic model, probability, threshold, or staking changes'
+    );
+  }
+
+  function renderIntelligenceUnavailable() {
+    var stateNode = byId('intelligenceState');
+    if (stateNode) {
+      stateNode.textContent = 'Unavailable';
+      stateNode.className = 'accuracy-state accuracy-state--unavailable';
+    }
+    setText('intelligenceCopy', 'The intelligence contract could not be verified, so diagnostics, interventions, and policy proposals are withheld.');
+    setText('intelligenceCoverage', 'Fail closed · no automatic changes');
+  }
+
   function fact(label, value) {
     var node = document.createElement('div');
     node.className = 'fact';
@@ -206,6 +260,21 @@
       .catch(renderAccuracyUnavailable);
   }
 
+  function loadIntelligence() {
+    fetch('/api/accuracy/intelligence?window=' + state.window, { credentials: 'omit' })
+      .then(function (response) {
+        if (!response.ok) throw new Error('Intelligence endpoint returned ' + response.status);
+        return response.json();
+      })
+      .then(function (payload) {
+        if (!payload || payload.success !== true || payload.version !== '6.5' || !payload.phases || !payload.safety) {
+          throw new Error('Intelligence contract did not validate');
+        }
+        renderIntelligence(payload);
+      })
+      .catch(renderIntelligenceUnavailable);
+  }
+
   document.querySelectorAll('[data-window]').forEach(function (button) {
     button.addEventListener('click', function () {
       state.window = Number(button.dataset.window);
@@ -216,6 +285,7 @@
       });
       loadLedger();
       loadAccuracy();
+      loadIntelligence();
     });
   });
 
@@ -233,4 +303,5 @@
 
   loadLedger();
   loadAccuracy();
+  loadIntelligence();
 })();

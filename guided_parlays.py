@@ -210,6 +210,12 @@ def _correlation_assessment(
     same_game_pairs = 0
     factor = 1.0
     measured = list(measured_pairs or [])
+    measured_by_key = {
+        str(item.get("pairKey") or ""): item
+        for item in measured
+        if isinstance(item, Mapping) and item.get("verified") is True
+    }
+    matched_pairs = 0
     for index, left in enumerate(legs):
         for right in legs[index + 1:]:
             if str(left.get("gamePk")) == str(right.get("gamePk")):
@@ -222,6 +228,17 @@ def _correlation_assessment(
                         "their outcomes may not be independent."
                     ),
                 })
+                pair_key = "|".join(sorted((
+                    f"{left.get('marketKey')}:{str(left.get('side') or '').lower()}",
+                    f"{right.get('marketKey')}:{str(right.get('side') or '').lower()}",
+                )))
+                measured_pair = measured_by_key.get(pair_key)
+                pair_factor = _number(
+                    measured_pair.get("factor") if measured_pair else None
+                )
+                if pair_factor is not None and 0.50 <= pair_factor <= 1.50:
+                    factor *= pair_factor
+                    matched_pairs += 1
             if left.get("playerId") and left.get("playerId") == right.get("playerId"):
                 warnings.append({
                     "severity": "critical",
@@ -240,11 +257,8 @@ def _correlation_assessment(
                         "scoring conditions can move them together."
                     ),
                 })
-    for pair in measured:
-        pair_factor = _number(pair.get("factor"))
-        if pair_factor is not None and pair_factor > 0:
-            factor *= pair_factor
-    unresolved = same_game_pairs > len(measured)
+    unresolved = same_game_pairs > matched_pairs
+    factor = max(0.50, min(1.50, factor))
     if not warnings:
         warnings.append({
             "severity": "low",
@@ -255,10 +269,16 @@ def _correlation_assessment(
             ),
         })
     return {
-        "state": "unresolved" if unresolved else "warning" if same_game_pairs else "clear",
+        "state": (
+            "unresolved" if unresolved
+            else "measured" if matched_pairs
+            else "clear"
+        ),
         "sameGamePairCount": same_game_pairs,
-        "measuredPairCount": len(measured),
-        "method": "pairwise_adjusted" if measured else "independence_assumption",
+        "measuredPairCount": matched_pairs,
+        "unresolvedPairCount": max(0, same_game_pairs - matched_pairs),
+        "adjustmentFactor": round(factor, 6),
+        "method": "pairwise_adjusted" if matched_pairs else "independence_assumption",
         "warnings": warnings,
     }, factor
 

@@ -676,6 +676,55 @@ def _validate_accuracy_control_plane_journey(contract: Any) -> None:
         _require(contract.get(field) is False, f"accuracy contract opened {field}")
 
 
+def _validate_accuracy_intelligence_journey(contract: Any) -> None:
+    _require(isinstance(contract, dict), "accuracy intelligence program must be an object")
+    _require(contract.get("version") == "6.5", "accuracy intelligence version changed")
+    _require(
+        contract.get("sourceEndpoint") == "/api/accuracy/intelligence?window=120",
+        "accuracy intelligence endpoint changed",
+    )
+    _require(
+        contract.get("phaseVersions") == {
+            "errorAtlas": "6.1",
+            "championChallenger": "6.2",
+            "driftControl": "6.3",
+            "simulationCalibration": "6.4",
+            "policyLab": "6.5",
+        },
+        "accuracy intelligence phase versions changed",
+    )
+    _require(
+        contract.get("requiresPredictionReceiptVersion") == "5.4.0"
+        and contract.get("requiresClosingBenchmarkReceiptVersion") == "6.0"
+        and contract.get("requiresIntelligenceEvidenceReceiptVersion") == "6.5.0",
+        "accuracy intelligence receipt chain changed",
+    )
+    for field, expected in (
+        ("minimumContextSample", 30),
+        ("minimumChallengerTotalSample", 300),
+        ("minimumSimulationSample", 100),
+        ("minimumCorrelationPairs", 50),
+    ):
+        _require(contract.get(field) == expected, f"accuracy intelligence changed {field}")
+    for field in (
+        "driftMayDowngradeOrSuppress",
+        "humanReviewRequired",
+        "failClosed",
+    ):
+        _require(contract.get(field) is True, f"accuracy intelligence lost {field}")
+    for field in (
+        "unverifiedCorrelationTrackable",
+        "rawRowsIncluded",
+        "automaticModelPromotion",
+        "automaticRetraining",
+        "automaticProbabilityChange",
+        "automaticThresholdChange",
+        "automaticStakingChange",
+        "serverMutation",
+    ):
+        _require(contract.get(field) is False, f"accuracy intelligence opened {field}")
+
+
 def _validate_journey(
     payload: Any,
     *,
@@ -684,6 +733,7 @@ def _validate_journey(
     require_guided_parlays: bool = True,
     require_monetization_growth: bool = True,
     require_accuracy_control_plane: bool = True,
+    require_accuracy_intelligence: bool = True,
 ) -> None:
     _require(isinstance(payload, dict), "journey payload must be an object")
     stages = [stage.get("key") for stage in payload.get("stages", [])]
@@ -693,6 +743,7 @@ def _validate_journey(
     guided = payload.get("guidedParlays", {})
     monetization = payload.get("monetizationGrowth", {})
     accuracy = payload.get("accuracyControlPlane", {})
+    intelligence = payload.get("accuracyIntelligenceProgram", {})
     _require(payload.get("success") is True, "journey payload is not successful")
     _require(payload.get("version") == "4.64", "journey version changed unexpectedly")
     _require(
@@ -715,6 +766,8 @@ def _validate_journey(
         _validate_monetization_growth_contract(monetization)
     if require_accuracy_control_plane or accuracy:
         _validate_accuracy_control_plane_journey(accuracy)
+    if require_accuracy_intelligence or intelligence:
+        _validate_accuracy_intelligence_journey(intelligence)
 
 
 def _validate_journey_baseline(payload: Any) -> None:
@@ -727,6 +780,7 @@ def _validate_journey_baseline(payload: Any) -> None:
         require_guided_parlays=False,
         require_monetization_growth=False,
         require_accuracy_control_plane=False,
+        require_accuracy_intelligence=False,
     )
 
 
@@ -892,9 +946,24 @@ def _validate_guided_parlays(payload: Any) -> None:
         correlation = parlay.get("correlation")
         _require(isinstance(correlation, dict), f"guided parlay {index} lacks correlation")
         _require(
-            correlation.get("state") == "clear",
+            correlation.get("state") in {"clear", "measured"},
             f"guided parlay {index} exposed unresolved correlation",
         )
+        if correlation.get("state") == "measured":
+            _require(
+                isinstance(correlation.get("sameGamePairCount"), int)
+                and correlation.get("sameGamePairCount") > 0
+                and correlation.get("measuredPairCount")
+                == correlation.get("sameGamePairCount")
+                and correlation.get("unresolvedPairCount") == 0,
+                f"guided parlay {index} has incomplete measured correlation",
+            )
+            _require(
+                correlation.get("method") == "pairwise_adjusted"
+                and isinstance(correlation.get("adjustmentFactor"), (int, float))
+                and 0.5 <= correlation.get("adjustmentFactor") <= 1.5,
+                f"guided parlay {index} has invalid measured adjustment",
+            )
         _require(
             isinstance(correlation.get("warnings"), list)
             and correlation.get("warnings"),
@@ -1097,6 +1166,121 @@ def _validate_accuracy_control_plane(payload: Any) -> None:
     _require(isinstance(claim, bool), "accuracy claim flag is invalid")
     _require(claim == (payload.get("state") == "market_leading"), "accuracy claim escaped its gate")
     _require(overall.get("claimEligible") is claim, "accuracy overall claim disagrees")
+
+
+def _validate_accuracy_intelligence(payload: Any) -> None:
+    _require(isinstance(payload, dict), "accuracy intelligence must be an object")
+    _require(payload.get("success") is True, "accuracy intelligence is not successful")
+    _require(payload.get("version") == "6.5", "accuracy intelligence version changed")
+    _require(
+        payload.get("state") in {"ready", "insufficient_sample"},
+        "accuracy intelligence has an invalid state",
+    )
+    _require(payload.get("serverMutation") is False, "accuracy intelligence read mutated state")
+    coverage = payload.get("coverage")
+    phases = payload.get("phases")
+    safety = payload.get("safety")
+    _require(isinstance(coverage, dict), "accuracy intelligence coverage is missing")
+    _require(isinstance(phases, dict), "accuracy intelligence phases are missing")
+    _require(isinstance(safety, dict), "accuracy intelligence safety receipt is missing")
+    _require(
+        isinstance(coverage.get("verifiedObservationCount"), int)
+        and coverage.get("verifiedObservationCount") >= 0,
+        "accuracy intelligence verified denominator is invalid",
+    )
+    _require(
+        isinstance(coverage.get("rejectedObservationCount"), int)
+        and coverage.get("rejectedObservationCount") >= 0,
+        "accuracy intelligence rejected denominator is invalid",
+    )
+    _require(coverage.get("rawRowsIncluded") is False, "accuracy intelligence exposed raw rows")
+    expected_versions = {
+        "errorAtlas": "6.1",
+        "championChallenger": "6.2",
+        "driftControl": "6.3",
+        "simulationCalibration": "6.4",
+        "policyLab": "6.5",
+    }
+    for name, version in expected_versions.items():
+        phase = phases.get(name)
+        _require(isinstance(phase, dict), f"accuracy intelligence lacks {name}")
+        _require(phase.get("version") == version, f"accuracy intelligence changed {name}")
+    atlas = phases["errorAtlas"]
+    challenger = phases["championChallenger"]
+    drift = phases["driftControl"]
+    simulation = phases["simulationCalibration"]
+    policy = phases["policyLab"]
+    _require(atlas.get("minimumVisibleSample") == 30, "error atlas sample gate changed")
+    _require(atlas.get("rawRowsIncluded") is False, "error atlas exposed raw rows")
+    _require(challenger.get("automaticPromotion") is False, "challenger auto-promoted")
+    _require(challenger.get("humanReviewRequired") is True, "challenger bypassed review")
+    _require(drift.get("mayRetrainModel") is False, "drift auto-retrained")
+    _require(drift.get("mayPromoteModel") is False, "drift auto-promoted")
+    _require(simulation.get("unverifiedCorrelationTrackable") is False, "unverified correlation became trackable")
+    _require(simulation.get("rawRowsIncluded") is False, "simulation exposed raw rows")
+    _require(policy.get("automaticThresholdChange") is False, "policy auto-changed threshold")
+    _require(policy.get("automaticStakingChange") is False, "policy auto-changed staking")
+    for cohort in atlas.get("cohorts") or []:
+        _require(
+            isinstance(cohort, dict) and cohort.get("sampleSize", 0) >= 30,
+            "error atlas exposed a sub-threshold cohort",
+        )
+    for report in challenger.get("challengers") or []:
+        _require(isinstance(report, dict), "challenger report is invalid")
+        if report.get("promotionEligible") is True:
+            _require(
+                report.get("state") == "review_candidate"
+                and report.get("totalSampleSize", 0) >= 300
+                and report.get("holdoutSampleSize", 0) >= 100
+                and report.get("humanReviewRequired") is True,
+                "challenger escaped its evidence gate",
+            )
+    markets = drift.get("markets")
+    _require(isinstance(markets, dict), "drift markets are invalid")
+    for market, report in markets.items():
+        _require(isinstance(report, dict), f"drift market {market} is invalid")
+        _require(
+            report.get("recommendedAction")
+            in {"none", "downgrade_confidence", "research_only", "no_bet"},
+            f"drift market {market} has an invalid intervention",
+        )
+        _require(
+            isinstance(report.get("featureDrift"), dict)
+            and isinstance(report.get("providerHealth"), dict),
+            f"drift market {market} lost feature or provider evidence",
+        )
+    for pair in simulation.get("correlationPairs") or []:
+        _require(isinstance(pair, dict), "correlation pair is invalid")
+        if pair.get("verified") is True:
+            _require(
+                pair.get("sampleSize", 0) >= 50
+                and 0.5 <= pair.get("factor", 0) <= 1.5,
+                "correlation pair escaped its sample or factor gate",
+            )
+    for proposal in policy.get("proposals") or []:
+        _require(isinstance(proposal, dict), "policy proposal is invalid")
+        _require(
+            proposal.get("automaticApplication") is False
+            and proposal.get("humanReviewRequired") is True
+            and "currentMinimumExpectedValue" in proposal
+            and "proposedMinimumExpectedValue" in proposal,
+            "policy proposal escaped review or lost EV thresholds",
+        )
+    for field in (
+        "readOnly",
+        "failClosed",
+        "humanReviewRequired",
+    ):
+        _require(safety.get(field) is True, f"accuracy intelligence safety lost {field}")
+    for field in (
+        "privateTrackerFieldsIncluded",
+        "automaticModelPromotion",
+        "automaticRetraining",
+        "automaticProbabilityChange",
+        "automaticThresholdChange",
+        "automaticStakingChange",
+    ):
+        _require(safety.get(field) is False, f"accuracy intelligence safety opened {field}")
 
 
 def _json_contract_with_retry(
@@ -1337,6 +1521,12 @@ def run_gate(
             "accuracy control plane",
             5.0,
             _validate_accuracy_control_plane,
+        ),
+        (
+            "/api/accuracy/intelligence?window=120",
+            "accuracy intelligence program",
+            5.0,
+            _validate_accuracy_intelligence,
         ),
         (
             "/api/monetization/status",

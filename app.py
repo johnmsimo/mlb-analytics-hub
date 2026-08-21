@@ -4,7 +4,7 @@ import requests
 import numpy as np
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 ET = ZoneInfo("America/New_York")
@@ -40,6 +40,12 @@ from guided_parlays import (
 from accuracy_control_plane import build_closing_benchmark_receipt
 from closing_line_integrity import accept_closing_capture
 from continuous_learning import build_prediction_receipt
+from intelligence_control_plane import (
+    apply_drift_interventions,
+    build_intelligence_control_plane,
+    build_intelligence_evidence_receipt,
+    verified_correlation_pairs,
+)
 from odds_lineage import build_odds_lineage
 from canonical_consistency import normalize_candidate
 
@@ -17654,7 +17660,18 @@ _IMMUTABLE_TRACKER_PREDICTION_FIELDS = (
     'book', 'bestAvailableBook', 'openingBookmaker', 'oddsObservedAt',
     'source', 'modelSource', 'modelVersion', 'modelArtifactVersion',
     'componentProbabilities', 'modelProbabilities', 'modelProbs', 'savedAt',
-    'predictionTimestamp', 'generatedAt',
+    'predictionTimestamp', 'generatedAt', 'confidenceTier',
+    'recommendationGrade', 'recommendationClass', 'pitcherHand',
+    'pitcher_hand', 'throws', 'parkFactor', 'park_factor', 'weather',
+    'weatherImpact', 'weatherAdjustment', 'wxAdj', 'umpireKMult',
+    'umpire_k_mult', 'gameContext', 'quoteAgeSeconds', 'oddsAgeSeconds',
+    'quoteCapturedAt', 'edge', 'edgePct', 'canonicalEdge', 'evPct',
+    'canonicalEv', 'expectedValue', 'hubRating', 'gameSimProbability',
+    'gameSimN', 'gameSimPlo', 'gameSimPhi', 'gameSimMean',
+    'matchupSimulationVersion', 'matchupSimulationMode', 'mc_prob_over',
+    'mc_n_sims', 'mc_mean', 'mc_p10', 'mc_p90', 'simulationProbability',
+    'simulationSampleSize', 'simulationPlo', 'simulationPhi',
+    'simulationMean', 'simulationP10', 'simulationP90',
 )
 
 
@@ -17675,8 +17692,15 @@ def _merge_tracker_entries(existing_rows, new_rows):
                     if field in previous:
                         prepared[field] = previous[field]
                 prepared['learningReceipt'] = previous['learningReceipt']
+                if isinstance(previous.get('intelligenceEvidenceReceipt'), dict):
+                    prepared['intelligenceEvidenceReceipt'] = previous['intelligenceEvidenceReceipt']
+                else:
+                    # Phase 6.5 evidence must be prospective. A refresh cannot
+                    # manufacture the missing pre-outcome receipt for legacy rows.
+                    prepared.pop('intelligenceEvidenceReceipt', None)
             elif str(prepared.get('grade') or 'pending').lower() == 'pending':
                 prepared['learningReceipt'] = build_prediction_receipt(prepared)
+                prepared['intelligenceEvidenceReceipt'] = build_intelligence_evidence_receipt(prepared)
             out[key] = prepared
     rows = list(out.values())
     rows.sort(key=lambda x: x.get('score', 0), reverse=True)
@@ -18439,11 +18463,19 @@ _market_validation_state = {
     'date': None, 'builtAt': 0.0, 'report': None,
 }
 _market_validation_lock = threading.Lock()
+_PHASE6_INTELLIGENCE_WINDOW_DAYS = 120
+_PHASE6_INTELLIGENCE_TTL_SECONDS = 180
+_phase6_intelligence_state = {'date': None, 'builtAt': 0.0, 'report': None}
+_phase6_intelligence_lock = threading.Lock()
 
 
 def _invalidate_market_validation():
     with _market_validation_lock:
         _market_validation_state.update({
+            'date': None, 'builtAt': 0.0, 'report': None,
+        })
+    with _phase6_intelligence_lock:
+        _phase6_intelligence_state.update({
             'date': None, 'builtAt': 0.0, 'report': None,
         })
 
@@ -18473,18 +18505,55 @@ def _current_market_validation_report(date_str=None, *, force=False):
         return report
 
 
+def _current_phase6_intelligence_report(date_str=None, *, force=False):
+    date_str = date_str or datetime.now(ET).strftime('%Y-%m-%d')
+    now = time.time()
+    with _phase6_intelligence_lock:
+        fresh = (
+            not force
+            and _phase6_intelligence_state['report'] is not None
+            and _phase6_intelligence_state['date'] == date_str
+            and now - _phase6_intelligence_state['builtAt']
+            < _PHASE6_INTELLIGENCE_TTL_SECONDS
+        )
+        if fresh:
+            return _phase6_intelligence_state['report']
+        entries = _collect_window_entries(
+            date_str, _PHASE6_INTELLIGENCE_WINDOW_DAYS,
+        )
+        report = build_intelligence_control_plane(
+            entries,
+            as_of=date.fromisoformat(date_str),
+            window_days=_PHASE6_INTELLIGENCE_WINDOW_DAYS,
+        )
+        _phase6_intelligence_state.update({
+            'date': date_str,
+            'builtAt': now,
+            'report': report,
+        })
+        return report
+
+
 def _evaluate_promotable_candidates(sources, date_str=None):
-    """Apply Phase 4.37 integrity, then Phase 4.38 market promotion gates."""
+    """Apply integrity, market promotion, then Phase 6.3 drift gates."""
     integrity = evaluate_candidates(sources or [])
     validation = _current_market_validation_report(date_str)
     gated = apply_market_gates(integrity['eligible'], validation)
+    phase6 = _current_phase6_intelligence_report(date_str)
+    interventions = apply_drift_interventions(gated['promoted'], phase6)
     gate_rejected = []
-    for source in gated['rejected']:
+    for source, prefix in (
+        [(row, 'market validation') for row in gated['rejected']]
+        + [(row, 'Phase 6.3 drift control') for row in interventions['rejected']]
+    ):
         row = dict(source)
         row['integrityReasons'] = list(dict.fromkeys(
             list(row.get('integrityReasons') or [])
             + [
-                f"market validation: {reason}"
+                (
+                    reason if str(reason).lower().startswith(prefix.lower())
+                    else f"{prefix}: {reason}"
+                )
                 for reason in row.get('marketGateReasons') or []
             ]
         ))
@@ -18498,22 +18567,32 @@ def _evaluate_promotable_candidates(sources, date_str=None):
             rejection_reasons.get(f'market validation: {reason}', 0)
             + int(count)
         )
+    for state, count in (
+        interventions['audit'].get('interventionCounts') or {}
+    ).items():
+        if state not in {'degraded', 'suppressed'}:
+            continue
+        reason = f'Phase 6.3 drift control: {state}'
+        rejection_reasons[reason] = rejection_reasons.get(reason, 0) + int(count)
     audit.update({
         'structurallyEligibleCount': integrity['audit']['eligibleCount'],
-        'eligibleCount': len(gated['promoted']),
+        'eligibleCount': len(interventions['promoted']),
         'rejectedCount': len(integrity['rejected']) + len(gate_rejected),
         'marketValidationVersion': MARKET_VALIDATION_VERSION,
-        'marketGateRejectedCount': len(gate_rejected),
+        'marketGateRejectedCount': len(gated['rejected']),
         'marketGateAudit': gated['audit'],
+        'phase6IntelligenceVersion': phase6.get('version'),
+        'phase6DriftAudit': interventions['audit'],
         'promotedMarkets': validation.get('promotedMarkets') or [],
         'rejectionReasons': rejection_reasons,
     })
     return {
         'version': integrity['version'],
-        'eligible': gated['promoted'],
+        'eligible': interventions['promoted'],
         'rejected': list(integrity['rejected']) + gate_rejected,
         'audit': audit,
         'marketValidation': validation,
+        'phase6Intelligence': phase6,
     }
 
 
@@ -20861,6 +20940,10 @@ def api_tracker_pick():
                  ('clvEdge',None),('profitUnits',None), ('profitDollars', None), ('parlayId', None), ('parlayLeg', None)]:
         entry.setdefault(k, v)
     entry.setdefault('learningReceipt', build_prediction_receipt(entry))
+    entry.setdefault(
+        'intelligenceEvidenceReceipt',
+        build_intelligence_evidence_receipt(entry),
+    )
 
     with _TRACKER_STORE_LOCK:
         store = _tracker_store_for_dates([today])
@@ -23971,11 +24054,15 @@ def _auto_parlays_payload(date_str):
         (moderate, 'Three-Leg Guided', 'moderate'),
         (aggressive, 'Four-Leg High Variance', 'aggressive'),
     ]
+    measured_correlations = verified_correlation_pairs(
+        _current_phase6_intelligence_report(date_str)
+    )
     parlays = [
         build_guided_parlay(
             rows,
             name=name,
             risk_tier=risk,
+            measured_correlation_pairs=measured_correlations,
             generated_at=generated_at,
         )
         for rows, name, risk in plans
@@ -24109,6 +24196,9 @@ def api_parlay_to_tracker():
             trusted_rows,
             name=parlay.get('name') or f'{len(trusted_rows)}-Leg Guided Parlay',
             risk_tier=parlay.get('riskTier') or 'guided',
+            measured_correlation_pairs=verified_correlation_pairs(
+                _current_phase6_intelligence_report(date_str)
+            ),
         )
         if rebuilt.get('state') != 'ready' or (
             rebuilt.get('decision') or {}
