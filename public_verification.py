@@ -596,7 +596,14 @@ def install_public_verification(app_module: Any) -> None:
         return
     from flask import Blueprint, jsonify, render_template, request
 
-    blueprint = Blueprint("public_verification", __name__)
+    # This project keeps its page documents at the repository root rather than
+    # Flask's default ``templates/`` directory.  Bind that directory to the
+    # blueprint so the production WSGI route resolves the real ledger page.
+    blueprint = Blueprint(
+        "public_verification",
+        __name__,
+        template_folder=os.path.dirname(__file__),
+    )
 
     @blueprint.get("/verification")
     def verification_page():
