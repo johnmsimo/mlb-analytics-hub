@@ -714,6 +714,16 @@ duplicate, and malformed rows are withheld without exposing their contents; the
 production gate defers the new surface against the pre-merge baseline and
 verifies it strictly after deployment.
 
+Prospective publication repair: the durable props worker now freezes the same
+bounded cohort used by the Daily Decision Board (3%+ canonical edge, maximum
+eight cards) before publishing its terminal snapshot. Every release must carry
+an intact Phase 4.69 evidence receipt and receives immutable Phase 5.4
+prediction and Phase 5.6 publication receipts in the automatic grading path.
+Manual, private, My Hub draft, unpriced, stale, tampered, and analysis-only rows
+remain withheld. Existing historical private Tracker rows are not retroactively
+published, so the public sample begins accumulating prospectively after this
+repair is deployed.
+
 
 ### Phase 5.7 — Customer Accounts (deferred)
 

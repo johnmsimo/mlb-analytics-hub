@@ -49,6 +49,7 @@ from intelligence_control_plane import (
 )
 from odds_lineage import build_odds_lineage
 from canonical_consistency import normalize_candidate
+from public_verification import select_public_release_entries
 
 
 def _parse_candidate_start(value):
@@ -17837,12 +17838,19 @@ _TRACKER_AUTO_SYNC_STARTED = False
 
 
 def _tracker_row_key(row):
+    scope = 'candidate'
+    if row.get('recordType') == 'public_recommendation_release':
+        release_identity = (
+            row.get('canonicalCandidateId') or row.get('id') or 'unknown'
+        )
+        scope = f'public_release:{release_identity}'
     return (
         row.get('date'),
         row.get('gamePk'),
         row.get('player'),
         row.get('marketKey'),
         float(row.get('line') or 0),
+        scope,
     )
 
 
@@ -17866,6 +17874,8 @@ _IMMUTABLE_TRACKER_PREDICTION_FIELDS = (
     'mc_n_sims', 'mc_mean', 'mc_p10', 'mc_p90', 'simulationProbability',
     'simulationSampleSize', 'simulationPlo', 'simulationPhi',
     'simulationMean', 'simulationP10', 'simulationP90',
+    'publicRelease', 'visibility', 'releaseOrigin', 'recordType',
+    'recommendationEvidenceReceipt', 'publicationReceipt',
 )
 
 
@@ -17899,6 +17909,115 @@ def _merge_tracker_entries(existing_rows, new_rows):
     rows = list(out.values())
     rows.sort(key=lambda x: x.get('score', 0), reverse=True)
     return rows
+
+
+def _publish_public_recommendations(date_str, candidates, released_at=None):
+    """Persist the prospective Phase 5.6 cohort before the board is published."""
+    release_time = released_at or datetime.now(timezone.utc).isoformat()
+    normalized = [
+        normalize_candidate(row, surface='edge_lab')
+        for row in (candidates or [])
+        if isinstance(row, dict)
+    ]
+    releases = select_public_release_entries(
+        normalized,
+        released_at=release_time,
+        minimum_edge=0.03,
+        limit=8,
+    )
+    if not releases:
+        return {
+            'version': '5.6',
+            'persisted': True,
+            'selectedCount': 0,
+            'newReleaseCount': 0,
+            'existingReleaseCount': 0,
+            'privateTrackerFieldsIncluded': False,
+        }
+
+    with _TRACKER_STORE_LOCK:
+        store = _tracker_store_for_dates([date_str])
+        day = _normalize_tracker_day(store.get(date_str))
+        rows = list(day.get('entries') or [])
+        new_count = 0
+        existing_count = 0
+        for release in releases:
+            release['date'] = date_str
+            release_key = _tracker_row_key(release)
+            existing_index = next(
+                (
+                    index for index, row in enumerate(rows)
+                    if _tracker_row_key(row) == release_key
+                ),
+                None,
+            )
+            if existing_index is None:
+                private_markers = (
+                    'admin', 'draft', 'manual', 'my_hub', 'private',
+                    'tracker', 'user',
+                )
+                release_identity = (
+                    release.get('gamePk'), release.get('player'),
+                    release.get('marketKey'), float(release.get('line') or 0),
+                    str(release.get('recommendedSide') or '').lower(),
+                )
+                for index, row in enumerate(rows):
+                    row_identity = (
+                        row.get('gamePk'), row.get('player'),
+                        row.get('marketKey'), float(row.get('line') or 0),
+                        str(
+                            row.get('canonicalSide')
+                            or row.get('recommendedSide') or ''
+                        ).lower(),
+                    )
+                    source = str(row.get('source') or '').lower()
+                    is_private = (
+                        row.get('private') is True
+                        or str(row.get('visibility') or '').lower()
+                        in {'admin', 'private', 'user'}
+                        or any(marker in source for marker in private_markers)
+                    )
+                    if row_identity == release_identity and not is_private:
+                        existing_index = index
+                        # Keep the ordinary candidate scope so later automated
+                        # recaptures update this same official release instead
+                        # of creating a duplicate Tracker row.
+                        release.pop('recordType', None)
+                        break
+            if existing_index is not None:
+                existing = rows[existing_index]
+                if isinstance(existing.get('publicationReceipt'), dict):
+                    existing_count += 1
+                    continue
+                merged = {**existing, **release}
+                for key in (
+                    'grade', 'status', 'actual', 'gradedAt',
+                    'closingPrice', 'closingBookmaker', 'closingBook',
+                    'closingCapturedAt', 'closingIntegrity',
+                    'closingBenchmarkReceipt', 'oddsLineage', 'clvEligible',
+                    'clvEdge', 'profitUnits', 'profitDollars',
+                ):
+                    if existing.get(key) not in (None, 'pending'):
+                        merged[key] = existing[key]
+                rows[existing_index] = merged
+            else:
+                rows.append(release)
+            new_count += 1
+
+        if new_count:
+            day['entries'] = rows
+            if not day.get('capturedAt'):
+                day['capturedAt'] = str(release_time)
+            if not _tracker_commit_day(date_str, day):
+                raise RuntimeError('Phase 5.6 public release persistence failed')
+    return {
+        'version': '5.6',
+        'persisted': True,
+        'selectedCount': len(releases),
+        'newReleaseCount': new_count,
+        'existingReleaseCount': existing_count,
+        'privateTrackerFieldsIncluded': False,
+    }
 
 
 def _tracker_capture_continue_bg(date_str, remaining_games, sched, adjustments, include_odds):
@@ -18371,6 +18490,10 @@ def api_tracker_grade(date_str):
         except Exception:
             print('[tracker_grade_row]', traceback.format_exc())
     day['entries'] = _recalc_tracker_entries(day.get('entries', []))
+    graded_at = datetime.now(ET).isoformat()
+    for row in day['entries']:
+        if row.get('grade') in ('win', 'loss', 'push') and not row.get('gradedAt'):
+            row['gradedAt'] = graded_at
     day['gradedAt'] = datetime.now().isoformat()
     _tracker_commit_day(date_str, day)
     return jsonify({'success': True, 'date': date_str, 'entries': day.get('entries', []), 'summary': _tracker_summary(day.get('entries', [])), 'gradedAt': day.get('gradedAt')})
@@ -20772,6 +20895,7 @@ def _edge_finder_payload(
         ),
         'scanJob': base.get('scanJob'),
         'completionReceipt': base.get('completionReceipt'),
+        'publicVerificationRelease': base.get('publicVerificationRelease'),
         'message': base.get('message'),
         'generatedAt': datetime.now(timezone.utc).isoformat(),
         'recommendationEvidenceVersion': '4.69',

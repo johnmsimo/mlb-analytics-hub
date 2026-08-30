@@ -1029,6 +1029,29 @@ def validate_completion_receipt(
             receipt.get("release") == expected_sha,
             f"completion receipt release mismatch: {receipt.get('release')}",
         )
+    publication = payload.get("publicVerificationRelease")
+    _require(
+        isinstance(publication, dict),
+        "ready scan is missing its Phase 5.6 publication receipt",
+    )
+    _require(
+        publication.get("version") == "5.6",
+        "public verification publication version changed",
+    )
+    _require(
+        publication.get("persisted") is True,
+        "public verification cohort was not persisted before publication",
+    )
+    for field in ("selectedCount", "newReleaseCount", "existingReleaseCount"):
+        _require(
+            isinstance(publication.get(field), int)
+            and publication.get(field) >= 0,
+            f"public verification publication field {field} is invalid",
+        )
+    _require(
+        publication.get("privateTrackerFieldsIncluded") is False,
+        "public verification publication receipt crossed the privacy boundary",
+    )
 
 
 def convergence_probe_date(

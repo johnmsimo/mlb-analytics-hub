@@ -89,6 +89,14 @@ class ConvergingProduction:
                         "completedAt": "2026-08-15T12:00:00+00:00",
                         "release": self.expected_sha,
                     },
+                    "publicVerificationRelease": {
+                        "version": "5.6",
+                        "persisted": True,
+                        "selectedCount": 0,
+                        "newReleaseCount": 0,
+                        "existingReleaseCount": 0,
+                        "privateTrackerFieldsIncluded": False,
+                    },
                     "edges": [],
                     "count": 0,
                 }
@@ -129,6 +137,14 @@ def test_completion_receipt_is_bound_to_worker_date_and_release():
             "date": "2026-08-18",
             "completedAt": "2026-08-15T12:00:00+00:00",
             "release": "expected-sha",
+        },
+        "publicVerificationRelease": {
+            "version": "5.6",
+            "persisted": True,
+            "selectedCount": 0,
+            "newReleaseCount": 0,
+            "existingReleaseCount": 0,
+            "privateTrackerFieldsIncluded": False,
         },
     }
     validate_completion_receipt(

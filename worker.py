@@ -101,13 +101,21 @@ def _handlers():
         if not payload or payload.get("success") is not True:
             raise RuntimeError("Props scan did not complete.")
         payload = dict(payload)
+        completed_at = datetime.now(timezone.utc).isoformat()
         payload["completionReceipt"] = {
             "contractVersion": "4.68",
             "source": "durable-worker",
             "date": date_str,
-            "completedAt": datetime.now(timezone.utc).isoformat(),
+            "completedAt": completed_at,
             "release": app_module._APP_VERSION,
         }
+        payload["publicVerificationRelease"] = (
+            app_module._publish_public_recommendations(
+                date_str,
+                payload.get("actionableProps") or [],
+                released_at=completed_at,
+            )
+        )
         app_module._write_props_scan_durable_snapshot(date_str, payload)
 
     return {
