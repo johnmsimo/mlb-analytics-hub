@@ -3,7 +3,10 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Mapping
 
-from candidate_integrity import evaluate_candidates
+from candidate_integrity import (
+    evaluate_candidates,
+    projection_analysis_candidate,
+)
 from confidence_service import enrich_pick_confidence
 from explanation_engine import explain_recommendation
 from intelligence_core import (
@@ -176,6 +179,18 @@ def _rank_key(row: Mapping[str, Any]) -> tuple[float, float, float, float]:
     )
 
 
+def _projection_rank_key(
+    row: Mapping[str, Any],
+) -> tuple[float, float, float, float]:
+    """Rank analysis by modeled outcome strength, not unavailable price edge."""
+    return (
+        _probability(row),
+        _num(row.get('modelReliabilityScore'), 0.0) or 0.0,
+        _num(row.get('pickScore'), 0.0) or 0.0,
+        _num(row.get('simulationTrials', row.get('gameSimN')), 0.0) or 0.0,
+    )
+
+
 def _edge(row: Mapping[str, Any]) -> float:
     value = _num(row.get('edge'), -1.0)
     if value is None:
@@ -218,6 +233,76 @@ def _standard_risk(reason: str) -> str:
         ),
         'edge below threshold': 'edge is below the standard play threshold',
     }.get(reason, reason)
+
+
+def _projection_reason(row: Mapping[str, Any]) -> str:
+    reasons = list(row.get('projectionAnalysisReasons') or [])
+    if 'sportsbook price is stale' in reasons:
+        return (
+            'The linked simulation is ready, but the sportsbook quote is stale; '
+            'verify the current line and price before considering a wager.'
+        )
+    if 'no positive edge after de-vigging' in reasons:
+        return (
+            'The model direction is available, but the current two-sided price '
+            'does not verify positive betting edge.'
+        )
+    return (
+        'The linked simulation is ready, but a complete fresh two-sided '
+        'sportsbook quote is unavailable.'
+    )
+
+
+def select_game_card_projection_picks(
+    candidates: Iterable[Mapping[str, Any]],
+    *,
+    learning: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Return one safe, non-actionable model projection per game-card market."""
+    grouped: dict[str, list[dict[str, Any]]] = {
+        category: [] for category in CATEGORY_ORDER
+    }
+    for source in candidates:
+        candidate = projection_analysis_candidate(source)
+        if candidate is None:
+            continue
+        category = classify_pick(candidate)
+        if category not in grouped:
+            continue
+        enriched = enrich_pick_score(candidate, learning=learning)
+        enriched['intelligenceCategory'] = category
+        grouped[category].append(enriched)
+
+    selections = []
+    for category in CATEGORY_ORDER:
+        if not grouped[category]:
+            continue
+        chosen = max(grouped[category], key=_projection_rank_key)
+        explained = explain_recommendation(chosen, learning=learning)
+        reason = _projection_reason(chosen)
+        risks = list(dict.fromkeys(
+            [reason] + list(explained.get('pickScoreRisks') or [])
+        ))[:3]
+        explained.update({
+            'intelligenceCategory': category,
+            'categoryLabel': CATEGORY_LABELS[category],
+            'recommendationGrade': 'Projection',
+            'selectionMode': 'projection_only',
+            'meetsStandardThresholds': False,
+            'isActionable': False,
+            'actionable': False,
+            'promotionStatus': 'projection_only',
+            'watchlistReason': reason,
+            'watchlistReasons': risks,
+            'topRisks': risks,
+            'recommendedAction': (
+                'Model projection only. Confirm the current sportsbook line '
+                'and price before treating this as a betting candidate.'
+            ),
+        })
+        selections.append(explained)
+
+    return sorted(selections, key=_projection_rank_key, reverse=True)
 
 
 def _explain_best_available(

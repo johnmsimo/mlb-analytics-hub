@@ -456,6 +456,93 @@ def test_completed_market_gate_abstention_is_cacheable_not_a_failed_job(monkeypa
     )
 
 
+def test_unpriced_simulated_markets_return_terminal_projection_analysis(monkeypatch):
+    rows = [
+        row('batter_hits', player='Hitter', probability=.69),
+        row('pitcher_strikeouts', player='Starter', probability=.42, line=6.5),
+        row(
+            'h2h', player='NYY@BOS', team='NYY', probability=.64,
+            recommendedSide='NYY', line=0,
+        ),
+        row(
+            'h2h', player='NYY@BOS', team='BOS', probability=.36,
+            recommendedSide='BOS', line=0,
+        ),
+    ]
+    for source in rows:
+        for key in (
+            'bestOverPrice', 'bestOverBook', 'bestUnderPrice',
+            'bestUnderBook', 'bestAvailablePrice', 'bestAvailableBook',
+            'marketPrice', 'bookmaker', 'oddsUpdatedAt',
+        ):
+            source[key] = None
+    monkeypatch.setattr(
+        intelligence_integration, 'analyze_learning',
+        lambda _values: promoted_learning(),
+    )
+    monkeypatch.setattr(
+        intelligence_integration, 'enrich_context', lambda values: values,
+    )
+    monkeypatch.setattr(
+        intelligence_integration, 'enrich_matchups', lambda values: values,
+    )
+    monkeypatch.setattr(
+        intelligence_integration, 'enrich_simulations', lambda values: values,
+    )
+
+    payload = intelligence_integration._decision_payload(
+        7, '2026-08-06', rows, [], generated_count=4,
+    )
+
+    assert payload['decisionReady'] is True
+    assert payload['analysisReady'] is True
+    assert payload['computationState'] == 'ready'
+    assert payload['recommendationSource'] == 'projection_analysis'
+    assert payload['quickPicks'] == []
+    assert payload['watchlistCount'] == 3
+    assert {
+        pick['intelligenceCategory'] for pick in payload['watchlistPicks']
+    } == {'hitter_hits', 'pitcher_strikeouts', 'game_winner'}
+    assert all(
+        pick['recommendationGrade'] == 'Projection'
+        and pick['selectionMode'] == 'projection_only'
+        and pick['isActionable'] is False
+        for pick in payload['watchlistPicks']
+    )
+    strikeouts = next(
+        pick for pick in payload['watchlistPicks']
+        if pick['intelligenceCategory'] == 'pitcher_strikeouts'
+    )
+    assert strikeouts['recommendedSide'] == 'Under'
+
+
+def test_worker_caches_terminal_unavailable_result_instead_of_retrying(monkeypatch):
+    pending = intelligence_integration._pending_payload(7, '2026-08-06', 0)
+    monkeypatch.setattr(
+        intelligence_integration,
+        '_generate_game_card_payload',
+        lambda *_args: dict(pending),
+    )
+    saved = []
+    monkeypatch.setattr(
+        intelligence_integration,
+        '_write_cached_payload',
+        lambda game_pk, date_str, payload: saved.append(
+            (game_pk, date_str, dict(payload))
+        ),
+    )
+
+    payload = intelligence_integration.run_game_card_job(
+        SimpleNamespace(),
+        {'gamePk': 7, 'date': '2026-08-06'},
+    )
+
+    assert payload['computing'] is False
+    assert payload['computationState'] == 'unavailable'
+    assert payload['recommendationSource'] == 'simulation_unavailable'
+    assert saved[0][2]['computationState'] == 'unavailable'
+
+
 def test_learning_api_uses_historical_window_instead_of_empty_today():
     class FakeApp:
         def __init__(self):

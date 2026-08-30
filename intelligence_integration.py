@@ -14,6 +14,7 @@ from explanation_engine import explain_decisions
 from game_card_intelligence import (
     CATEGORY_ORDER,
     prepare_game_card_candidates,
+    select_game_card_projection_picks,
     select_game_card_quick_picks,
 )
 from intelligence_core import build_recommendations, classify_pick
@@ -39,6 +40,7 @@ from task_queue import (
 
 _GAME_CARD_CACHE_TTL = 300
 _GAME_CARD_STALE_TTL = 3600
+_GAME_CARD_JOB_TIMEOUT_SECONDS = 150
 _MAX_ACTIONABLE_CACHE_AGE = CandidateIntegrityPolicy().maximum_odds_age_seconds
 
 
@@ -61,7 +63,9 @@ def _has_price(row, category):
 
 
 def _cache_key(game_pk, date_str):
-    return normalize_cache_key('game_card_intelligence_v438', game_pk, date_str)
+    # Version the cache whenever the terminal response contract changes so a
+    # deploy cannot keep serving an older indefinitely-computing payload.
+    return normalize_cache_key('game_card_intelligence_v439', game_pk, date_str)
 
 
 def _read_cached_payload(game_pk, date_str):
@@ -190,6 +194,17 @@ def _decision_payload(
             ),
         })
         watchlist_picks.append(row)
+    covered_watchlist_categories = {
+        classify_pick(row) for row in watchlist_picks
+    }
+    projection_picks = [
+        row for row in select_game_card_projection_picks(
+            integrity['rejected'],
+            learning=learning,
+        )
+        if classify_pick(row) not in covered_watchlist_categories
+    ]
+    watchlist_picks.extend(projection_picks)
     audit = simulation_audit(integrity_eligible)
     simulation_backed = [
         row for row in integrity_eligible
@@ -237,7 +252,8 @@ def _decision_payload(
     drift_abstention = bool(
         not promoted_categories and interventions['rejected']
     )
-    decision_ready = fully_backed or validation_abstention
+    analysis_ready = bool(watchlist_picks) or fully_backed
+    decision_ready = fully_backed or validation_abstention or analysis_ready
     # Never promote a partial market pool as a finished set of simulated picks.
     # A previously cached complete snapshot may still be served while this one
     # rebuilds, but a cold partial response is only a progress state.
@@ -267,12 +283,14 @@ def _decision_payload(
         'recommendationSource': (
             'shared_game_matchup_simulation'
             if fully_backed else 'simulation_refresh_pending'
-            if not validation_abstention else 'phase6_drift_abstention'
+            if not decision_ready else 'phase6_drift_abstention'
             if drift_abstention else 'market_validation_abstention'
+            if validation_abstention else 'projection_analysis'
         ),
         'simulationReady': fully_backed,
-        'analysisReady': bool(watchlist_picks) or fully_backed,
+        'analysisReady': analysis_ready,
         'decisionReady': decision_ready,
+        'computationState': 'ready' if decision_ready else 'computing',
         'simulationAudit': audit,
         'explanationVersion': '4.32',
         'watchlistPicks': watchlist_picks,
@@ -310,6 +328,7 @@ def _pending_payload(game_pk, date_str, source_count):
         'simulationReady': False,
         'analysisReady': False,
         'decisionReady': False,
+        'computationState': 'computing',
         'simulationAudit': simulation_audit([]),
         'explanationVersion': '4.32',
         'watchlistPicks': [],
@@ -362,8 +381,8 @@ def _schedule_game_card_refresh(_app_module, game_pk, date_str):
             'game_card',
             {'gamePk': int(game_pk), 'date': date_str},
             dedupe_key=cache_key,
-            timeout_seconds=300,
-            max_attempts=2,
+            timeout_seconds=_GAME_CARD_JOB_TIMEOUT_SECONDS,
+            max_attempts=1,
         )
         return get_job_queue().snapshot(job)
     except JobQueueUnavailable:
@@ -380,7 +399,18 @@ def run_game_card_job(app_module, args):
     date_str = str(args['date'])
     payload = _generate_game_card_payload(app_module, game_pk, date_str)
     if not payload.get('decisionReady'):
-        raise RuntimeError('shared simulation candidate pool is incomplete')
+        # A completed worker must always leave a terminal cache record.  A
+        # missing or incomplete simulation is an explicit unavailable answer,
+        # not a retry loop that leaves the game card "updating" indefinitely.
+        payload.update({
+            'computing': False,
+            'computationState': 'unavailable',
+            'recommendationSource': 'simulation_unavailable',
+            'message': (
+                'No complete linked player-prop simulation is available for '
+                'this game. Refresh after lineup or source data updates.'
+            ),
+        })
     _write_cached_payload(game_pk, date_str, payload)
     return payload
 
@@ -856,11 +886,25 @@ def install_intelligence_api(app_module):
             if integrity_expired:
                 # Keep stale-while-refresh responsive without presenting an
                 # expired sportsbook snapshot as a current recommendation.
+                safe_projection_picks = [
+                    dict(row) for row in (
+                        cached['payload'].get('watchlistPicks') or []
+                    )
+                    if row.get('selectionMode') == 'projection_only'
+                    and row.get('isActionable') is False
+                ]
                 cached_payload = _pending_payload(
                     game_pk,
                     date_str,
                     int(cached['payload'].get('sourceCount') or 0),
                 )
+                if safe_projection_picks:
+                    cached_payload.update({
+                        'analysisReady': True,
+                        'watchlistPicks': safe_projection_picks,
+                        'watchlistCount': len(safe_projection_picks),
+                        'recommendationSource': 'cached_projection_analysis',
+                    })
             return app_module.jsonify(dict(
                 cached_payload,
                 cached=True,
