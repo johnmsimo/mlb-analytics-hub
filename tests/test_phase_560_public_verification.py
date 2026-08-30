@@ -132,11 +132,9 @@ def test_flask_installer_serves_mobile_page_and_read_only_api(tmp_path):
         json.dumps({"2026-08-19": {"entries": [recommendation(identity="api")]}}),
         encoding="utf-8",
     )
-    app = Flask(__name__, template_folder=str(tmp_path))
-    (tmp_path / "public_verification.html").write_text(
-        '<!doctype html><meta name="viewport" content="width=device-width">Public Verification Ledger',
-        encoding="utf-8",
-    )
+    # Use Flask's default template path so this test exercises the blueprint's
+    # production root-template binding instead of masking it with a fixture.
+    app = Flask(__name__)
     module = SimpleNamespace(app=app, TRACKER_STORE=str(tracker))
     install_public_verification(module)
     install_public_verification(module)
@@ -148,6 +146,8 @@ def test_flask_installer_serves_mobile_page_and_read_only_api(tmp_path):
         mutation = client.post("/api/verification/ledger")
 
     assert page.status_code == 200
+    assert b"Public Verification Ledger" in page.data
+    assert b'name="viewport"' in page.data
     assert response.status_code == 200
     assert response.headers["X-Verification-Contract"] == "5.6"
     assert response.get_json()["metrics"]["releasedCount"] == 1
