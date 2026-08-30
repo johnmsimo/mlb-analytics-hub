@@ -14,6 +14,7 @@ from scripts.production_contract_gate import (
     PageContract,
     run_gate,
     validate_actionable_edges,
+    validate_completion_receipt,
     validate_page,
     _validate_accuracy_control_plane,
     _validate_accuracy_intelligence,
@@ -394,6 +395,14 @@ class FakeProduction:
                         "completedAt": "2026-08-15T12:00:00+00:00",
                         "release": "tested-sha",
                     },
+                    "publicVerificationRelease": {
+                        "version": "5.6",
+                        "persisted": True,
+                        "selectedCount": 1,
+                        "newReleaseCount": 1,
+                        "existingReleaseCount": 0,
+                        "privateTrackerFieldsIncluded": False,
+                    },
                     "edges": edges,
                     "count": len(edges),
                 }
@@ -769,6 +778,29 @@ def test_public_verification_contract_keeps_losses_and_public_allowlist():
     payload["lossesOmitted"] = True
     with pytest.raises(ContractError, match="omit losses"):
         _validate_public_verification(payload)
+
+
+def test_worker_completion_requires_persisted_publication_receipt():
+    fake = FakeProduction()
+    probe_date = "2026-08-31"
+    payload = fake(
+        "https://production.example",
+        f"/api/edges/today?date={probe_date}",
+        10,
+    ).json()
+    validate_completion_receipt(
+        payload,
+        expected_sha="tested-sha",
+        probe_date=probe_date,
+    )
+
+    payload.pop("publicVerificationRelease")
+    with pytest.raises(ContractError, match="publication receipt"):
+        validate_completion_receipt(
+            payload,
+            expected_sha="tested-sha",
+            probe_date=probe_date,
+        )
 
 
 def test_accuracy_control_plane_contract_withholds_unqualified_claims():

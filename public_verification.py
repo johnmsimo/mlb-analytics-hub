@@ -19,6 +19,7 @@ from typing import Any
 
 from continuous_learning import (
     CONTINUOUS_LEARNING_VERSION,
+    SUPPORTED_MARKETS as LEARNING_SUPPORTED_MARKETS,
     build_prediction_receipt,
 )
 
@@ -26,6 +27,9 @@ from continuous_learning import (
 PUBLIC_VERIFICATION_VERSION = "5.6"
 DEFAULT_WINDOW_DAYS = 90
 MAX_WINDOW_DAYS = 366
+RECOMMENDATION_EVIDENCE_VERSION = "4.69"
+PUBLIC_RELEASE_MINIMUM_EDGE = 0.03
+PUBLIC_RELEASE_LIMIT = 8
 
 # Legacy rows predate an explicit visibility flag.  Only model-owned sources
 # qualify for that compatibility path; user/manual/draft sources always fail
@@ -178,6 +182,189 @@ def build_publication_receipt(row: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _same_number(left: Any, right: Any, *, tolerance: float = 1e-9) -> bool:
+    left_number = _number(left)
+    right_number = _number(right)
+    return bool(
+        left_number is not None
+        and right_number is not None
+        and abs(left_number - right_number) <= tolerance
+    )
+
+
+def _verified_recommendation_evidence(
+    row: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    """Return the canonical 4.69 receipt only when it still matches the row."""
+    receipt = row.get("evidenceReceipt")
+    if not isinstance(receipt, Mapping):
+        return None
+    selection = receipt.get("selection")
+    price = receipt.get("price")
+    model = receipt.get("model")
+    market = receipt.get("market")
+    validation = receipt.get("validation")
+    if not all(isinstance(value, Mapping) for value in (
+        selection, price, model, market, validation,
+    )):
+        return None
+
+    candidate_id = str(row.get("canonicalCandidateId") or "").strip()
+    fingerprint = str(row.get("canonicalFingerprint") or "").strip()
+    market_key = str(row.get("canonicalMarketKey") or row.get("marketKey") or "").strip()
+    side = str(row.get("canonicalSide") or row.get("recommendedSide") or "").strip()
+    book = str(row.get("canonicalBook") or "").strip()
+    observed_at = _time(price.get("observedAt"))
+    age_seconds = _number(price.get("ageSeconds"))
+    return receipt if (
+        receipt.get("contractVersion") == RECOMMENDATION_EVIDENCE_VERSION
+        and receipt.get("candidateId") == candidate_id
+        and receipt.get("fingerprint") == fingerprint
+        and candidate_id
+        and fingerprint
+        and market_key in LEARNING_SUPPORTED_MARKETS
+        and selection.get("marketKey") == market_key
+        and str(selection.get("side") or "").strip() == side
+        and _same_number(selection.get("line"), row.get("line"))
+        and _same_number(price.get("american"), row.get("canonicalPrice"))
+        and str(price.get("book") or "").strip() == book
+        and observed_at is not None
+        and age_seconds is not None
+        and 0 <= age_seconds <= 900
+        and price.get("fresh") is True
+        and _same_number(model.get("probability"), row.get("canonicalProbability"))
+        and _same_number(market.get("edge"), row.get("canonicalEdge"))
+        and validation.get("actionable") is True
+        and str(validation.get("actionabilityStage") or "").lower() == "actionable"
+        and str(validation.get("calibrationStatus") or "").lower() == "passed"
+        and str(validation.get("marketGateStatus") or "").lower() == "promoted"
+        and row.get("actionable") is True
+        and str(row.get("actionabilityStage") or "").lower() == "actionable"
+    ) else None
+
+
+def build_public_release_entry(
+    row: Mapping[str, Any],
+    *,
+    released_at: datetime | str | None = None,
+) -> dict[str, Any] | None:
+    """Freeze one verified Daily Decision Board recommendation prospectively."""
+    evidence = _verified_recommendation_evidence(row)
+    release_time = (
+        datetime.now(timezone.utc)
+        if released_at is None
+        else _time(released_at)
+    )
+    if evidence is None or release_time is None:
+        return None
+
+    selection = evidence["selection"]
+    price = evidence["price"]
+    model = evidence["model"]
+    market = evidence["market"]
+    candidate_id = str(evidence["candidateId"])
+    stable_identity = "|".join((
+        release_time.date().isoformat(),
+        candidate_id,
+        str(selection["marketKey"]),
+        str(selection["side"]),
+        str(selection["line"]),
+    ))
+    release_id = "public-release:" + hashlib.sha256(
+        stable_identity.encode("utf-8")
+    ).hexdigest()[:32]
+    player = str(row.get("player") or row.get("team") or "").strip()
+    entry = {
+        "id": release_id,
+        "date": release_time.date().isoformat(),
+        "savedAt": release_time.isoformat(),
+        "gradedAt": None,
+        "source": "recommendation_engine",
+        "publicRelease": True,
+        "visibility": "public",
+        "releaseOrigin": "daily_decision_board",
+        "recordType": "public_recommendation_release",
+        "canonicalCandidateId": candidate_id,
+        "canonicalFingerprint": evidence["fingerprint"],
+        "recommendationEvidenceReceipt": dict(evidence),
+        "gamePk": row.get("gamePk"),
+        "player": player,
+        "playerId": row.get("playerId"),
+        "team": row.get("team"),
+        "marketKey": selection["marketKey"],
+        "canonicalMarketKey": selection["marketKey"],
+        "recommendedSide": selection["side"],
+        "canonicalSide": selection["side"],
+        "line": selection["line"],
+        "adjProb": model["probability"],
+        "canonicalProbability": model["probability"],
+        "openingPrice": int(float(price["american"])),
+        "openingImplied": market.get("impliedProbability"),
+        "marketImplied": market.get("impliedProbability"),
+        "marketFairProbability": market.get("fairProbability"),
+        "edge": market["edge"],
+        "canonicalEdge": market["edge"],
+        "book": price["book"],
+        "bestAvailableBook": price["book"],
+        "oddsObservedAt": price["observedAt"],
+        "modelVersion": model.get("version"),
+        "componentProbabilities": row.get("componentProbabilities") or {},
+        "grade": "pending",
+        "status": "pending",
+        "actual": None,
+        "stakeUnits": 1.0,
+        "publicRiskUnits": 1.0,
+        "profitUnits": None,
+    }
+    entry["learningReceipt"] = build_prediction_receipt(entry)
+    publication = build_publication_receipt(entry)
+    if not publication["publicReleaseEligible"]:
+        return None
+    entry["publicationReceipt"] = publication
+    return entry
+
+
+def select_public_release_entries(
+    candidates: Iterable[Mapping[str, Any]],
+    *,
+    released_at: datetime | str | None = None,
+    minimum_edge: float = PUBLIC_RELEASE_MINIMUM_EDGE,
+    limit: int = PUBLIC_RELEASE_LIMIT,
+) -> list[dict[str, Any]]:
+    """Select exactly the bounded Daily Decision Board release cohort."""
+    ranked: list[tuple[float, float, str, Mapping[str, Any]]] = []
+    seen: set[str] = set()
+    for row in candidates or ():
+        if not isinstance(row, Mapping):
+            continue
+        evidence = _verified_recommendation_evidence(row)
+        if evidence is None:
+            continue
+        edge = _number(row.get("canonicalEdge"))
+        probability = _number(row.get("canonicalProbability"))
+        candidate_id = str(row.get("canonicalCandidateId") or "").strip()
+        if (
+            edge is None
+            or edge < float(minimum_edge)
+            or probability is None
+            or not candidate_id
+            or candidate_id in seen
+        ):
+            continue
+        seen.add(candidate_id)
+        ranked.append((edge, probability, candidate_id, row))
+    ranked.sort(key=lambda item: (-item[0], -item[1], item[2]))
+
+    releases = []
+    for _edge, _probability, _candidate_id, row in ranked:
+        entry = build_public_release_entry(row, released_at=released_at)
+        if entry is not None:
+            releases.append(entry)
+        if len(releases) >= max(0, int(limit)):
+            break
+    return releases
+
+
 def _publication_receipt_is_intact(row: Mapping[str, Any]) -> bool:
     receipt = row.get("publicationReceipt")
     if not isinstance(receipt, Mapping):
@@ -281,7 +468,9 @@ def _metrics(public_rows: list[dict[str, Any]], raw_by_id: Mapping[str, Mapping[
     roi_pairs: list[tuple[float, float]] = []
     for row in decision_rows:
         raw = raw_by_id.get(row["receiptFingerprint"], {})
-        risk = _number(raw.get("stakeUnits"))
+        risk = _number(raw.get("publicRiskUnits"))
+        if risk is None:
+            risk = _number(raw.get("stakeUnits"))
         profit = _number(raw.get("profitUnits"))
         if risk is not None and risk > 0 and profit is not None:
             roi_pairs.append((risk, profit))
