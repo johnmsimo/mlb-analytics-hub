@@ -725,23 +725,35 @@
     var fairProb = probability(row.marketFairProbability);
     var price = priceOf(row);
     var book = bookOf(row);
+    var projectionOnly = row.promotionStatus === 'projection_only' ||
+      row.selectionMode === 'projection_only';
+    var simulationTrials = number(row.simulationTrials);
     var player = playerKey(row.player);
     var saved = state.watchlist.has(player);
     var context = [row.team, row.matchup].filter(Boolean).join(' · ');
-    return '<article class="decision-card watchlist-card" data-opportunity-state="research_only">' +
-      '<div class="decision-card-top"><span>WATCHLIST · ANALYSIS ONLY</span><small>' +
+    return '<article class="decision-card watchlist-card" data-opportunity-state="' +
+      (projectionOnly ? 'projection_only' : 'research_only') + '">' +
+      '<div class="decision-card-top"><span>' +
+      (projectionOnly ? 'MODEL PROJECTION · VERIFY PRICE' : 'WATCHLIST · ANALYSIS ONLY') +
+      '</span><small>' +
       esc(freshnessLabel(row)) + '</small></div>' +
       '<div class="decision-card-title"><div><strong>' + esc(row.player) +
-      '</strong><small>' + esc(context) + '</small></div><b>+' +
-      (edge == null ? '—' : edge.toFixed(1)) + '% MODEL EDGE</b></div>' +
+      '</strong><small>' + esc(context) + '</small></div><b>' +
+      (projectionOnly
+        ? (modelProb == null ? '—' : (modelProb * 100).toFixed(1) + '% MODEL')
+        : '+' + (edge == null ? '—' : edge.toFixed(1)) + '% MODEL EDGE') +
+      '</b></div>' +
       '<p class="decision-selection">' + esc(marketLabelOf(row)) + ' · ' +
       esc(row.side || 'Over') + ' ' + esc(row.line) + '</p>' +
       '<div class="decision-proof">' +
       '<span><small>MODEL</small><b>' + (modelProb == null ? '—' : (modelProb * 100).toFixed(1) + '%') + '</b></span>' +
-      '<span><small>FAIR MARKET</small><b>' + (fairProb == null ? '—' : (fairProb * 100).toFixed(1) + '%') + '</b></span>' +
-      '<span><small>REFERENCE PRICE</small><b>' + esc(book || '—') + ' ' +
-      (price == null ? '—' : (price > 0 ? '+' : '') + price) + '</b></span></div>' +
-      '<p class="decision-explanation"><strong>Why it is not a verified bet:</strong> ' +
+      (projectionOnly
+        ? '<span><small>SIMULATION</small><b>' + (simulationTrials == null ? 'LINKED' : Math.round(simulationTrials).toLocaleString()) + '</b></span>' +
+          '<span><small>PRICE STATUS</small><b>' + esc(String(row.priceStatus || 'VERIFY').toUpperCase()) + '</b></span>'
+        : '<span><small>FAIR MARKET</small><b>' + (fairProb == null ? '—' : (fairProb * 100).toFixed(1) + '%') + '</b></span>' +
+          '<span><small>REFERENCE PRICE</small><b>' + esc(book || '—') + ' ' +
+          (price == null ? '—' : (price > 0 ? '+' : '') + price) + '</b></span>') +
+      '</div><p class="decision-explanation"><strong>Why it is analysis only:</strong> ' +
       esc(row.watchlistReason || 'Market validation has not promoted this candidate.') + '</p>' +
       '<div class="decision-card-actions"><button type="button" data-board-save-player="' +
       esc(player) + '" aria-pressed="' + (saved ? 'true' : 'false') + '">' +
@@ -811,7 +823,8 @@
     var rows = dailyDecisionRows();
     var watchlistRows = dailyWatchlistRows();
     var sourceState = String(state.edgeState || 'loading').toLowerCase();
-    var boardState = ['loading', 'computing'].indexOf(sourceState) >= 0 ? 'computing' :
+    var boardState = ['loading', 'computing'].indexOf(sourceState) >= 0
+      ? (watchlistRows.length ? 'no_bet' : 'computing') :
       ['failed', 'unavailable'].indexOf(sourceState) >= 0 ? 'unavailable' :
       rows.length ? 'verified_plays' : 'no_bet';
     var payloadMessage = state.edgePayload && String(state.edgePayload.message || '').trim();
@@ -827,10 +840,12 @@
         detail: payloadMessage || 'The board is failing closed. Refresh after the evidence source recovers.'
       },
       no_bet: {
-        status: 'NO BET',
-        headline: 'No verified play qualifies right now',
+        status: watchlistRows.length ? 'PROP ANALYSIS' : 'NO BET',
+        headline: watchlistRows.length
+          ? 'Top player-prop analysis is ready'
+          : 'No verified play qualifies right now',
         detail: watchlistRows.length
-          ? watchlistRows.length + ' priced positive-edge model signal' + (watchlistRows.length === 1 ? '' : 's') + ' remain visible as analysis-only watchlist opportunities.'
+          ? watchlistRows.length + ' ranked model signal' + (watchlistRows.length === 1 ? '' : 's') + ' remain visible while price and validation gates determine whether any can become verified bets.'
           : 'The scan is ready. No candidate cleared identity, price, freshness, calibration, edge, and receipt gates.'
       },
       verified_plays: {
@@ -856,8 +871,15 @@
     if (boardState === 'verified_plays') {
       host.innerHTML = rows.map(decisionBoardCardHtml).join('');
     } else if (boardState === 'no_bet' && watchlistRows.length) {
-      host.innerHTML = '<div class="watchlist-board-intro"><strong>Watchlist opportunities</strong>' +
-        '<span>These have current model and price evidence, but failed the historical market-validation gate. They are not bets.</span></div>' +
+      var hasProjectionOnly = watchlistRows.some(function (row) {
+        return row.promotionStatus === 'projection_only';
+      });
+      host.innerHTML = '<div class="watchlist-board-intro"><strong>' +
+        (hasProjectionOnly ? 'Top model prop projections' : 'Watchlist opportunities') +
+        '</strong><span>' + (hasProjectionOnly
+          ? 'Linked matchup simulations are ranked now. Verify live sportsbook pricing before treating any projection as a bet.'
+          : 'These have current model and price evidence, but failed the historical market-validation gate. They are not bets.') +
+        '</span></div>' +
         watchlistRows.map(watchlistBoardCardHtml).join('');
     } else {
       host.innerHTML = '<div class="decision-board-empty" data-empty-state="' +
@@ -1471,7 +1493,8 @@
         state.edgeState = String(payload.computationState || 'ready').toLowerCase();
         state.edges = rows.filter(isActionable);
         state.watchlistEdges = watchlistRows.filter(function (row) {
-          return row && row.actionable === false && row.promotionStatus === 'research_only';
+          return row && row.actionable === false &&
+            ['research_only', 'projection_only'].indexOf(row.promotionStatus) >= 0;
         });
         renderSignals();
       }).catch(function () {

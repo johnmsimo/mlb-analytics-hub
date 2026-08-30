@@ -4,6 +4,7 @@ from candidate_integrity import (
     INTEGRITY_VERSION,
     evaluate_candidate,
     evaluate_candidates,
+    projection_analysis_candidate,
 )
 
 
@@ -121,6 +122,60 @@ def test_missing_quote_does_not_invent_a_negative_edge_rejection():
     assert "no positive edge after de-vigging" not in result["integrityReasons"]
     assert result["canonicalEdge"] is None
     assert result["oddsUpdatedAt"] is None
+
+
+def test_price_only_failure_can_be_sanitized_as_projection_analysis():
+    result = projection_analysis_candidate(
+        candidate(
+            bestAvailablePrice=None,
+            bestAvailableBook=None,
+            bestOverPrice=None,
+            bestUnderPrice=None,
+            oddsUpdatedAt=None,
+            sharedSimulationBacked=True,
+        ),
+        now=NOW,
+    )
+
+    assert result is not None
+    assert result["actionable"] is False
+    assert result["selectionMode"] == "projection_only"
+    assert result["promotionStatus"] == "projection_only"
+    assert set(result["projectionAnalysisReasons"]) == {
+        "missing sportsbook price",
+        "missing real sportsbook",
+        "missing opposite-side price for de-vigging",
+        "missing odds freshness timestamp",
+    }
+
+
+def test_projection_analysis_still_rejects_lineup_or_simulation_failures():
+    lineup_failure = projection_analysis_candidate(
+        candidate(
+            lineupStatus="roster",
+            bestAvailablePrice=None,
+            bestAvailableBook=None,
+            bestOverPrice=None,
+            bestUnderPrice=None,
+            oddsUpdatedAt=None,
+            sharedSimulationBacked=True,
+        ),
+        now=NOW,
+    )
+    simulation_failure = projection_analysis_candidate(
+        candidate(
+            bestAvailablePrice=None,
+            bestAvailableBook=None,
+            bestOverPrice=None,
+            bestUnderPrice=None,
+            oddsUpdatedAt=None,
+            sharedSimulationBacked=False,
+        ),
+        now=NOW,
+    )
+
+    assert lineup_failure is None
+    assert simulation_failure is None
 
 
 def test_projection_labels_and_non_american_prices_are_not_sportsbooks():

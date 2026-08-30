@@ -20,6 +20,7 @@ from candidate_integrity import (
     evaluate_candidate,
     evaluate_candidates,
     market_role,
+    projection_analysis_candidate,
 )
 from market_validation import (
     VALIDATION_VERSION as MARKET_VALIDATION_VERSION,
@@ -20417,6 +20418,123 @@ def _edge_letter_grade(edge):
     return 'D'
 
 
+def _projection_analysis_reason(row):
+    reasons = list(row.get('projectionAnalysisReasons') or [])
+    if 'sportsbook price is stale' in reasons:
+        return (
+            'Model and linked simulation are ready, but the sportsbook quote '
+            'is stale. Verify the current line and price.'
+        )
+    if 'no positive edge after de-vigging' in reasons:
+        return (
+            'Model direction is available, but the current price does not '
+            'verify positive betting edge.'
+        )
+    return (
+        'Model and linked simulation are ready, but a complete fresh '
+        'two-sided sportsbook quote is unavailable.'
+    )
+
+
+def _projection_analysis_edges(rows, market=None, limit=150):
+    """Sanitize the strongest simulated prop directions for analysis only."""
+    by_identity = {}
+    for source in rows or []:
+        candidate = projection_analysis_candidate(source)
+        if candidate is None:
+            continue
+        market_key = candidate.get('canonicalMarketKey')
+        if market and market_key != market:
+            continue
+        probability = candidate.get('canonicalProbability')
+        try:
+            probability = float(probability)
+        except (TypeError, ValueError):
+            continue
+        side = candidate.get('canonicalSide') or 'Over'
+        if market_key == 'pitcher_strikeouts':
+            if probability < .5:
+                probability = 1.0 - probability
+                side = 'Under'
+            else:
+                side = 'Over'
+        elif market_key == 'batter_hits':
+            side = 'Over'
+        if probability < .55:
+            continue
+
+        identity = (
+            candidate.get('gamePk'),
+            candidate.get('playerId') or candidate.get('team'),
+            market_key,
+            candidate.get('line'),
+        )
+        row = {
+            'player': candidate.get('player') or candidate.get('team'),
+            'playerId': candidate.get('playerId'),
+            'team': candidate.get('team'),
+            'opp': candidate.get('opp'),
+            'gamePk': candidate.get('gamePk'),
+            'matchup': candidate.get('matchup'),
+            'gameStartIso': candidate.get('gameStartIso'),
+            'lineupStatus': candidate.get('lineupStatus'),
+            'lineupProjectionMethod': candidate.get('lineupProjectionMethod'),
+            'marketKey': market_key,
+            'canonicalMarketKey': market_key,
+            'marketLabel': _EDGE_MARKET_LABELS.get(market_key, market_key),
+            'line': candidate.get('line'),
+            'side': side,
+            'modelProb': round(probability, 6),
+            'marketFairProbability': None,
+            'edge': None,
+            'edgePct': None,
+            'evPct': None,
+            'bestPrice': candidate.get('canonicalPrice'),
+            'bestBook': candidate.get('canonicalBook'),
+            'priceStatus': (
+                'stale'
+                if 'sportsbook price is stale' in (
+                    candidate.get('projectionAnalysisReasons') or []
+                )
+                else 'unverified'
+            ),
+            'oddsUpdatedAt': candidate.get('oddsUpdatedAt'),
+            'oddsAgeSeconds': candidate.get('oddsAgeSeconds'),
+            'simulationVersion': candidate.get('simulationVersion'),
+            'simulationTrials': candidate.get('simulationTrials'),
+            'hubRating': candidate.get('hubRating'),
+            'recommendationGrade': 'Projection',
+            'selectionMode': 'projection_only',
+            'promotionStatus': 'projection_only',
+            'watchlistReason': _projection_analysis_reason(candidate),
+            'watchlistReasons': list(
+                candidate.get('projectionAnalysisReasons') or []
+            )[:3],
+            'candidateIntegrityReasons': list(
+                candidate.get('integrityReasons') or []
+            ),
+            'actionabilityStage': 'Modeled',
+            'actionable': False,
+        }
+        current = by_identity.get(identity)
+        if current is None or (
+            probability,
+            float(candidate.get('hubRating') or 0),
+        ) > (
+            float(current.get('modelProb') or 0),
+            float(current.get('hubRating') or 0),
+        ):
+            by_identity[identity] = row
+
+    result = list(by_identity.values())
+    result.sort(key=lambda row: (
+        -(float(row.get('modelProb') or 0)),
+        -(float(row.get('hubRating') or 0)),
+        str(row.get('player') or ''),
+    ))
+    return result[:int(limit)]
+
+
 def _edge_finder_payload(
     date_str,
     min_edge=0.02,
@@ -20614,6 +20732,25 @@ def _edge_finder_payload(
         -(float(row.get('modelProb') or 0)),
         str(row.get('player') or ''),
     ))
+    existing_watchlist = {
+        (
+            row.get('gamePk'), row.get('playerId') or row.get('team'),
+            row.get('marketKey'), row.get('line'),
+        )
+        for row in watchlist_edges
+    }
+    for row in _projection_analysis_edges(
+        base.get('props') or [],
+        market=market,
+        limit=limit,
+    ):
+        identity = (
+            row.get('gamePk'), row.get('playerId') or row.get('team'),
+            row.get('marketKey'), row.get('line'),
+        )
+        if identity not in existing_watchlist:
+            watchlist_edges.append(row)
+            existing_watchlist.add(identity)
     watchlist_edges = watchlist_edges[:int(limit)]
 
     grade_counts = {}
@@ -23504,6 +23641,7 @@ def _mc_board_payload(date_str, force_refresh=False):
         base.get('props') or [], date_str,
     )
     rows = []
+    filtered_skip_count = 0
     for p in integrity['eligible']:
         mk = p.get('marketKey')
         if mk not in _MC_BOARD_MARKETS:
@@ -23537,6 +23675,12 @@ def _mc_board_payload(date_str, force_refresh=False):
         if edge is None:
             continue
         edge = round(float(edge), 4)
+        recommendation = _mc_rec(edge, side)
+        if recommendation == 'SKIP':
+            # This is a picks surface. Preserve marginal candidates in the
+            # audit denominator instead of rendering them as "skip plays."
+            filtered_skip_count += 1
+            continue
         rows.append({
             'player': p.get('player'), 'playerId': p.get('playerId'),
             'team': p.get('team'), 'gamePk': p.get('gamePk'),
@@ -23547,7 +23691,7 @@ def _mc_board_payload(date_str, force_refresh=False):
             'hubRating': p.get('hubRating'),
             'modelSource': p.get('modelSource') or 'mc',
             'source': source,
-            'grade': _mc_grade(edge), 'recommendation': _mc_rec(edge, side),
+            'grade': _mc_grade(edge), 'recommendation': recommendation,
             'reasoning': p.get('reason') or '',
             'canonicalCandidateId': p.get('canonicalCandidateId'),
             'candidateIntegrityVersion': p.get('integrityVersion'),
@@ -23579,6 +23723,7 @@ def _mc_board_payload(date_str, force_refresh=False):
         'generatedAt': base.get('generatedAt'),
         'candidateIntegrityVersion': CANDIDATE_INTEGRITY_VERSION,
         'candidateIntegrityAudit': integrity['audit'],
+        'filteredSkipCount': filtered_skip_count,
     }
     if computing and not rows:
         payload['message'] = 'Computing… auto-refreshing in 20s'

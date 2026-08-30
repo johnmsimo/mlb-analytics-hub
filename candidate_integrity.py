@@ -44,6 +44,19 @@ TEAM_MARKETS = {
 SUPPORTED_MARKETS = BATTER_MARKETS | PITCHER_MARKETS | TEAM_MARKETS
 SIMULATION_REQUIRED_MARKETS = {"batter_hits", "pitcher_strikeouts", "h2h"}
 
+# A simulated row may remain useful as a clearly labeled model projection when
+# its identity, game, lineup, model, line, and simulation evidence are valid but
+# it cannot become a bet because live price evidence is absent, stale, or does
+# not create positive edge.  Every other integrity failure remains excluded.
+PROJECTION_ANALYSIS_ALLOWED_REASONS = frozenset({
+    "missing sportsbook price",
+    "missing real sportsbook",
+    "missing opposite-side price for de-vigging",
+    "no positive edge after de-vigging",
+    "missing odds freshness timestamp",
+    "sportsbook price is stale",
+})
+
 _MARKET_ALIASES = {
     "batterhits": "batter_hits",
     "batter_rbi": "batter_rbis",
@@ -385,6 +398,62 @@ def evaluate_candidate(
     row["integrityReasons"] = list(dict.fromkeys(reasons))
     row["integrityStatus"] = "eligible" if not reasons else "rejected"
     row["actionable"] = not reasons
+    return row
+
+
+def projection_analysis_candidate(
+    source: Mapping[str, Any],
+    *,
+    now: datetime | None = None,
+    policy: CandidateIntegrityPolicy | None = None,
+) -> dict[str, Any] | None:
+    """Return a sanitized projection-only row or ``None``.
+
+    This boundary never promotes a wager.  It exists so product surfaces can
+    still answer the user's player-prop question when the model and linked
+    simulation are ready but a sportsbook quote cannot pass the actionable
+    contract.  Identity, schedule, lineup, line, model, and simulation failures
+    remain fail-closed.
+    """
+    effective_policy = policy or CandidateIntegrityPolicy()
+    row = dict(source)
+    if (
+        row.get("integrityVersion") != INTEGRITY_VERSION
+        or not isinstance(row.get("integrityReasons"), list)
+    ):
+        row = evaluate_candidate(
+            row,
+            now=now,
+            policy=effective_policy,
+        )
+
+    reasons = set(row.get("integrityReasons") or [])
+    probability = _number(row.get("canonicalProbability"))
+    trials = _number(row.get("simulationTrials"))
+    if (
+        not reasons
+        or not reasons.issubset(PROJECTION_ANALYSIS_ALLOWED_REASONS)
+        or row.get("entityValidation", {}).get("valid") is not True
+        or row.get("canonicalMarketKey") not in SIMULATION_REQUIRED_MARKETS
+        or row.get("sharedSimulationBacked") is not True
+        or probability is None
+        or not 0.0 < probability < 1.0
+        or trials is None
+        or trials < effective_policy.minimum_simulation_trials
+    ):
+        return None
+
+    ordered_reasons = [
+        reason for reason in row.get("integrityReasons") or []
+        if reason in PROJECTION_ANALYSIS_ALLOWED_REASONS
+    ]
+    row.update({
+        "actionable": False,
+        "integrityStatus": "projection_only",
+        "promotionStatus": "projection_only",
+        "selectionMode": "projection_only",
+        "projectionAnalysisReasons": ordered_reasons,
+    })
     return row
 
 

@@ -79,7 +79,8 @@ def test_daily_board_surfaces_sanitized_analysis_without_bet_actions():
     assert "WATCHLIST · ANALYSIS ONLY" in source
     assert "Tracking and parlays stay disabled" in source
     assert "row.actionable === false" in source
-    assert "row.promotionStatus === 'research_only'" in source
+    assert "['research_only', 'projection_only']" in source
+    assert "MODEL PROJECTION · VERIFY PRICE" in source
     assert "audit.primaryRejectionReasons || audit.rejectionReasons" in source
 
 

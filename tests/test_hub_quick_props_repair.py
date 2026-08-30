@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import app as mlb_app
+from matchup_simulation_intelligence import build_simulation_signal
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -88,3 +89,100 @@ def test_projected_lineup_and_quick_prop_analysis_contracts_are_explicit():
     assert "'watchlistPicks': watchlist_picks" in integration
     assert "WATCHLIST · ANALYSIS ONLY" in dashboard
     assert "Tracking and parlay actions are disabled" in dashboard
+
+
+def test_hub_surfaces_simulated_prop_when_only_live_price_evidence_is_missing():
+    now = datetime.now(timezone.utc)
+    candidate = {
+        "gamePk": 7,
+        "gameStatus": "Scheduled",
+        "gameAbstractState": "Preview",
+        "gameStartIso": (now + timedelta(hours=3)).isoformat(),
+        "player": "Projection Hitter",
+        "playerId": 101,
+        "team": "NYY",
+        "playerRole": "batter",
+        "playerPosition": "CF",
+        "lineupStatus": "projected",
+        "marketKey": "batter_hits",
+        "line": 0.5,
+        "recommendedSide": "Over",
+        "adjProb": 0.68,
+        "bestAvailablePrice": None,
+        "bestAvailableBook": None,
+        "bestOverPrice": None,
+        "bestUnderPrice": None,
+        "oddsUpdatedAt": None,
+        "modelVersion": "hits-xgb-2026.08",
+        "grade": "pending",
+        "hubRating": 82,
+    }
+    candidate.update(build_simulation_signal(
+        .68,
+        1500,
+        mode="linked_test_game_simulation",
+        matchup="Projection Hitter versus starter",
+    ))
+
+    rows = mlb_app._projection_analysis_edges([candidate])
+
+    assert len(rows) == 1
+    assert rows[0]["player"] == "Projection Hitter"
+    assert rows[0]["modelProb"] == .68
+    assert rows[0]["selectionMode"] == "projection_only"
+    assert rows[0]["promotionStatus"] == "projection_only"
+    assert rows[0]["actionable"] is False
+    assert "two-sided sportsbook quote" in rows[0]["watchlistReason"]
+
+
+def test_monte_carlo_board_does_not_render_skip_rows(monkeypatch):
+    monkeypatch.setattr(
+        mlb_app,
+        "_props_scan_today_payload",
+        lambda _date: {"props": [], "computing": False, "cached": True},
+    )
+    monkeypatch.setattr(
+        mlb_app,
+        "_evaluate_promotable_candidates",
+        lambda _rows, _date: {
+            "eligible": [{
+                "player": "Marginal Hitter",
+                "marketKey": "batter_hits",
+                "line": .5,
+                "adjProb": .60,
+                "marketFairProbability": .59,
+                "canonicalEdge": .01,
+                "canonicalPrice": -110,
+                "canonicalBook": "Book A",
+                "integrityVersion": "4.37",
+            }],
+            "audit": {"sourceCount": 1, "eligibleCount": 1},
+        },
+    )
+
+    payload = mlb_app._mc_board_payload("2026-08-21")
+
+    assert payload["topProps"] == []
+    assert payload["filteredSkipCount"] == 1
+
+
+def test_hub_ui_accepts_projection_only_rows_during_refresh():
+    source = (ROOT / "static" / "product-hub.js").read_text(
+        encoding="utf-8",
+    )
+
+    assert "MODEL PROJECTION · VERIFY PRICE" in source
+    assert "['research_only', 'projection_only']" in source
+    assert "watchlistRows.length ? 'no_bet' : 'computing'" in source
+    assert "Top player-prop analysis is ready" in source
+
+
+def test_game_card_refresh_is_bounded_and_cache_contract_is_versioned():
+    source = (ROOT / "intelligence_integration.py").read_text(
+        encoding="utf-8",
+    )
+
+    assert "_GAME_CARD_JOB_TIMEOUT_SECONDS = 150" in source
+    assert "timeout_seconds=_GAME_CARD_JOB_TIMEOUT_SECONDS" in source
+    assert "max_attempts=1" in source
+    assert "game_card_intelligence_v439" in source

@@ -1491,6 +1491,7 @@ function renderQuickProps(pk,d){
   }).join('');
   var watchlistCards=watchlist.map(function(p){
     var category=p.intelligenceCategory||'';
+    var projectionOnly=p.selectionMode==='projection_only'||p.promotionStatus==='projection_only';
     var player=p.player||p.team||'Analysis candidate';
     var side=p.recommendedSide||p.sideLabel||'';
     var line=(p.line!=null)?p.line:null;
@@ -1500,18 +1501,23 @@ function renderQuickProps(pk,d){
       :'<span class="qp-player">'+player+'</span><span class="qp-side">'+side+' '+(line!=null?line+' ':'')+unit+'</span>';
     var price=(p.bestAvailablePrice!=null)?p.bestAvailablePrice:p.marketPrice;
     var probability=Number(p.modelProbabilityPct);
-    var edge=Number(p.estimatedEdgePct);
+    var edge=(p.estimatedEdgePct!=null)?Number(p.estimatedEdgePct):null;
+    var hasEdge=edge!=null&&isFinite(edge);
+    var reliability=Number(p.modelReliabilityScore);
     var simN=Number(p.gameSimN)||0;
     var risk=p.watchlistReason||(p.watchlistReasons||[])[0]||'Historical market validation has not promoted this signal.';
     return '<div class="qp-pick watchlist">'
       +'<div class="qp-pick-top"><span class="qp-cat">'+(p.categoryLabel||category)+'</span>'
-      +'<span class="qp-grade watchlist">WATCHLIST · ANALYSIS ONLY</span></div>'
+      +'<span class="qp-grade watchlist">'+(projectionOnly?'MODEL PROJECTION · VERIFY PRICE':'WATCHLIST · ANALYSIS ONLY')+'</span></div>'
       +'<div class="qp-selection">'+selection+(price!=null?'<span class="qp-price">'+(Number(price)>0?'+':'')+price+(p.bestAvailableBook?' · '+p.bestAvailableBook:'')+'</span>':'')+'</div>'
       +'<div class="qp-metrics"><span class="qp-metric">MODEL <strong>'+probability.toFixed(1)+'%</strong></span>'
-      +'<span class="qp-metric">EDGE <strong>'+(edge>=0?'+':'')+edge.toFixed(1)+'%</strong></span>'
+      +(hasEdge?'<span class="qp-metric">EDGE <strong>'+(edge>=0?'+':'')+edge.toFixed(1)+'%</strong></span>':'')
+      +(projectionOnly&&isFinite(reliability)?'<span class="qp-metric">RELIABILITY <strong>'+Math.round(reliability)+'</strong></span>':'')
       +(simN?'<span class="qp-metric">SIM <strong>'+simN.toLocaleString()+'</strong></span>':'')+'</div>'
       +'<div class="qp-proof risk">⚠ '+risk+'</div>'
-      +'<div class="qp-summary">Tracking and parlay actions are disabled until validation promotes this market.</div></div>';
+      +'<div class="qp-summary">'+(projectionOnly
+        ?'The matchup direction is available now. Confirm the live line and price before considering a bet.'
+        :'Tracking and parlay actions are disabled until validation promotes this market.')+'</div></div>';
   }).join('');
   var jobError=d&&d.refreshStatus&&d.refreshStatus.status==='error'
     ?'<div class="qp-unavailable">Simulation refresh failed: '+(d.refreshStatus.error||d.message||'retry required')+'</div>'
