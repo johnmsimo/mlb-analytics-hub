@@ -22,6 +22,19 @@ QUEUE_KEY = "mlb:jobs:queue:v1"
 HEARTBEAT_KEY = "mlb:jobs:worker-heartbeat:v1"
 JOB_PREFIX = "mlb:jobs:data:v1:"
 DEDUPE_PREFIX = "mlb:jobs:dedupe:v1:"
+STALE_JOB_ERROR = "Background job exceeded its bounded completion window."
+_DELETE_DEDUPE_IF_OWNER = """
+if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("del", KEYS[1])
+end
+return 0
+"""
+_EXPIRE_DEDUPE_IF_OWNER = """
+if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("expire", KEYS[1], ARGV[2])
+end
+return 0
+"""
 
 
 class JobQueueUnavailable(RuntimeError):
@@ -48,6 +61,27 @@ class RedisJobQueue:
 
     def _dedupe_key(self, dedupe_key: str) -> str:
         return f"{DEDUPE_PREFIX}{dedupe_key}"
+
+    def _delete_dedupe_if_owner(self, dedupe: str, job_id: str) -> bool:
+        """Release a dedupe lease only while it still belongs to this job."""
+        return bool(self.client.eval(_DELETE_DEDUPE_IF_OWNER, 1, dedupe, job_id))
+
+    def _expire_dedupe_if_owner(
+        self,
+        dedupe: str,
+        job_id: str,
+        ttl: int,
+    ) -> bool:
+        """Shorten a failed job lease without touching a replacement lease."""
+        return bool(
+            self.client.eval(
+                _EXPIRE_DEDUPE_IF_OWNER,
+                1,
+                dedupe,
+                job_id,
+                max(1, int(ttl)),
+            )
+        )
 
     def _save(self, job: Mapping[str, Any]) -> dict[str, Any]:
         value = dict(job)
@@ -81,19 +115,33 @@ class RedisJobQueue:
         status = str(existing.get("status") or "")
         started = float(existing.get("startedAt") or existing.get("queuedAt") or 0)
         timeout = max(30, int(existing.get("timeoutSeconds") or 300))
-        if (
+        timed_out = (
             fail_stale
             and status in {"queued", "running"}
             and started
             and time.time() - started > timeout
-        ):
+        )
+        if timed_out:
             existing.update({
                 "status": "error",
                 "finishedAt": time.time(),
-                "error": "Background job exceeded its bounded completion window.",
+                "error": STALE_JOB_ERROR,
             })
             self._save(existing)
-            self.client.expire(dedupe, 30)
+
+        # A timed-out lease is terminal, but retaining it briefly makes every
+        # request fail with the same stale job. Release only this job's lease
+        # so the caller can enqueue a fresh bounded attempt immediately. The
+        # ownership check prevents a late worker from deleting a replacement.
+        if timed_out or (
+            fail_stale
+            and status == "error"
+            and existing.get("error") == STALE_JOB_ERROR
+        ):
+            if self._delete_dedupe_if_owner(dedupe, str(existing["id"])):
+                return None
+            replacement_id = self.client.get(dedupe)
+            return self.get(str(replacement_id)) if replacement_id else None
         return existing
 
     def enqueue(
@@ -254,10 +302,11 @@ class RedisJobQueue:
         })
         self._save(job)
         dedupe = self._dedupe_key(str(job.get("dedupeKey") or ""))
+        job_id = str(job.get("id") or "")
         if error:
-            self.client.expire(dedupe, 30)
+            self._expire_dedupe_if_owner(dedupe, job_id, 30)
         else:
-            self.client.delete(dedupe)
+            self._delete_dedupe_if_owner(dedupe, job_id)
 
 
 _queue: RedisJobQueue | None = None

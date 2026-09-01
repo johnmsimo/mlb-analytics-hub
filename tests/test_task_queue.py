@@ -31,6 +31,18 @@ class FakeRedis:
     def delete(self, key):
         self.values.pop(key, None)
 
+    def eval(self, script, key_count, key, *args):
+        assert key_count == 1
+        owner = str(args[0])
+        if self.values.get(key) != owner:
+            return 0
+        if 'redis.call("del"' in script:
+            self.delete(key)
+            return 1
+        if 'redis.call("expire"' in script:
+            return self.expire(key, int(args[1]))
+        raise AssertionError("unexpected Redis script")
+
     def expire(self, key, ttl):
         self.expired[key] = ttl
         return True
@@ -95,15 +107,22 @@ def test_deduped_job_fails_closed_after_completion_window():
     queue._save(job)
 
     stale = queue.get_deduped('props-scan:2026-08-14')
-    snapshot = queue.snapshot(stale)
+    saved = queue.get(job['id'])
 
-    assert stale['status'] == 'error'
-    assert stale['finishedAt'] is not None
-    assert 'bounded completion window' in stale['error']
-    assert snapshot['status'] == 'error'
-    assert snapshot['timeoutSeconds'] == 30
-    assert snapshot['maxAttempts'] == 2
-    assert redis.expired[queue._dedupe_key('props-scan:2026-08-14')] == 30
+    assert stale is None
+    assert saved['status'] == 'error'
+    assert saved['finishedAt'] is not None
+    assert 'bounded completion window' in saved['error']
+    assert redis.get(queue._dedupe_key('props-scan:2026-08-14')) is None
+
+    replacement = queue.enqueue(
+        'props_scan',
+        {'date': '2026-08-14'},
+        dedupe_key='props-scan:2026-08-14',
+        timeout_seconds=30,
+    )
+    assert replacement['id'] != job['id']
+    assert replacement['status'] == 'queued'
 
 
 def test_queue_health_requires_recent_worker_heartbeat():
@@ -136,3 +155,18 @@ def test_redis_socket_timeout_exceeds_block_timeout():
 
     assert _redis_socket_timeout(5) > 5
     assert _redis_socket_timeout(30) > 30
+
+
+def test_late_worker_cannot_release_replacement_dedupe_lease():
+    redis = FakeRedis()
+    queue = RedisJobQueue(redis)
+    stale = queue.enqueue('props_scan', {'date': '2026-08-15'}, dedupe_key='scan')
+    dedupe = queue._dedupe_key('scan')
+
+    redis.values[dedupe] = 'replacement-job'
+    queue._finish(stale)
+    assert redis.get(dedupe) == 'replacement-job'
+
+    queue._finish(stale, error='late failure')
+    assert redis.get(dedupe) == 'replacement-job'
+    assert dedupe not in redis.expired
