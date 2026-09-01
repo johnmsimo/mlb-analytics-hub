@@ -187,6 +187,41 @@ def validate_page(contract: PageContract, response: HttpResponse) -> set[str]:
     return parser.paths
 
 
+def validate_page_with_retry(
+    *,
+    base_url: str,
+    contract: PageContract,
+    fetcher: Callable[[str, str, float], HttpResponse],
+    attempts: int,
+    retry_delay: float,
+    sleeper: Callable[[float], None],
+) -> set[str]:
+    """Require one fast, valid page response while tolerating transient warm-up."""
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            response = fetcher(base_url, contract.path, 5)
+            assets = validate_page(contract, response)
+            print(
+                f"PASS page {contract.path} ({response.elapsed_seconds:.2f}s)",
+                flush=True,
+            )
+            return assets
+        except ContractError as exc:
+            last_error = exc
+            if attempt == attempts:
+                break
+            print(
+                f"WAIT page {contract.path}: {exc}; retrying "
+                f"({attempt + 1}/{attempts})",
+                flush=True,
+            )
+            sleeper(retry_delay)
+    raise ContractError(
+        f"page {contract.path} failed after {attempts} attempts: {last_error}"
+    )
+
+
 def validate_recommendation_evidence(row: dict[str, Any], index: int) -> None:
     receipt = row.get("evidenceReceipt")
     _require(isinstance(receipt, dict), f"edge {index} lacks evidence receipt")
@@ -1475,11 +1510,15 @@ def run_gate(
         else PUBLIC_PAGE_CONTRACTS + PHASE_56_PAGE_CONTRACTS + PHASE_511_PAGE_CONTRACTS
     )
     for contract in page_contracts:
-        response = fetcher(base_url, contract.path, 5)
-        assets.update(validate_page(contract, response))
-        print(
-            f"PASS page {contract.path} ({response.elapsed_seconds:.2f}s)",
-            flush=True,
+        assets.update(
+            validate_page_with_retry(
+                base_url=base_url,
+                contract=contract,
+                fetcher=fetcher,
+                attempts=contract_attempts,
+                retry_delay=retry_delay,
+                sleeper=sleeper,
+            )
         )
 
     for path in sorted(assets):
