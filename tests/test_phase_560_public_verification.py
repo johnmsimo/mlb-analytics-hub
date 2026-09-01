@@ -148,6 +148,8 @@ def test_flask_installer_serves_mobile_page_and_read_only_api(tmp_path):
     assert page.status_code == 200
     assert b"Public Verification Ledger" in page.data
     assert b'name="viewport"' in page.data
+    assert b'href="/static/mobile.css"' in page.data
+    assert b"mobile-nav.css" not in page.data
     assert response.status_code == 200
     assert response.headers["X-Verification-Contract"] == "5.6"
     assert response.get_json()["metrics"]["releasedCount"] == 1
