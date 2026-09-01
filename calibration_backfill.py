@@ -79,7 +79,7 @@ def fetch_season_logs(season: int):
             continue
         if sc is None or len(sc) == 0:
             continue
-        b, p = rm._agg_chunk(sc, season)
+        b, p, *_ = rm._agg_chunk(sc, season)
         if len(b):
             bf.append(b)
         if len(p):
